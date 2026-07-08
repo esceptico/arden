@@ -23,7 +23,7 @@ export function SliceActivity({ sessions }: { sessions: SliceSessionRow[] }) {
             key={session.session_id}
             type="button"
             onClick={() => void switchSession(session.session_id)}
-            className="app-row flex min-w-0 items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-ink-soft focus-visible:shadow-[0_0_0_2px_var(--color-accent-soft)] focus-visible:outline-none"
+            className="app-row -mx-2 flex min-w-0 items-center gap-2 rounded-lg px-2 py-2 text-left text-sm text-ink-soft focus-visible:shadow-[0_0_0_2px_var(--color-accent-soft)] focus-visible:outline-none"
           >
             <span className="min-w-0 flex-1 truncate">{session.name || "Untitled session"}</span>
             {session.last_activity && (

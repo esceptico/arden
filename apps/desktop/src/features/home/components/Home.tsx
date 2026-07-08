@@ -109,23 +109,24 @@ export function Home() {
       transition={{ duration: MOTION.trace, ease: EASE_DECELERATE }}
       className="h-full overflow-hidden"
     >
-      {/* Fixed viewport column — Home never scrolls as a whole. The header,
-          greeting and slices strip are pinned; only the focus list scrolls
-          internally when the asks outgrow the space, so the composer and the
-          strip always stay put. */}
-      <div className="mx-auto flex h-full w-[640px] max-w-full flex-col gap-6 px-4 pt-[12vh] pb-8">
+      {/* One vertically-centered cluster — Home never scrolls as a whole, and
+          it reads as a single composed instrument rather than fragments pinned
+          to opposite edges. The focus list is the only shrinkable child: it
+          caps at 48vh and scrolls internally when the asks outgrow the space,
+          so the composer and the strip always stay in view and balanced. */}
+      <div className="mx-auto flex h-full w-[640px] max-w-full flex-col justify-center gap-6 px-4 py-10">
         <div className="grid shrink-0 gap-3">
           <span className="text-2xs font-medium tracking-[0.08em] text-faint uppercase">{dateLabel}</span>
           <HeroInput />
         </div>
         <div className="grid shrink-0 gap-1">
-          <h2 className="m-0 text-2xl font-medium tracking-[-0.01em] text-ink">{greeting(focus.length)}</h2>
+          <h2 className="m-0 text-2xl font-medium tracking-[-0.01em] text-ink text-balance">{greeting(focus.length)}</h2>
           {watchLine && <p className="m-0 text-xs text-faint">{watchLine}</p>}
         </div>
         {focus.length > 0 && (
-          <div className="flex min-h-0 flex-1 flex-col gap-2">
+          <div className="grid min-h-0 gap-2">
             <span className="shrink-0 text-2xs font-semibold tracking-wide text-faint uppercase">Focus</span>
-            <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden scroll-thin">
+            <div className="min-h-0 max-h-[48vh] overflow-y-auto overflow-x-hidden scroll-thin">
               <ScrollFadeTop />
               <ScrollFadeBottom />
               <div className="grid gap-1.5 pb-1">
@@ -138,7 +139,7 @@ export function Home() {
             </div>
           </div>
         )}
-        <div className="mt-auto shrink-0">
+        <div className="shrink-0">
           <SlicesStrip slices={slices} suggested={overview?.suggested} />
         </div>
       </div>

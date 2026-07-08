@@ -14,11 +14,14 @@ import { X } from "lucide-react";
 
 /** Agent asks read as "headline — elaboration"; split on the first em-dash
  *  so the card can render the mock's title/description hierarchy. Asks
- *  without one are all title. */
+ *  without one are all title. The detail is capitalized: split on the dash
+ *  leaves a lowercase continuation ("…Friday" / "decide which…") that reads
+ *  as a broken fragment, so promote it to its own sentence. */
 function splitAsk(text: string): { title: string; detail: string | null } {
   const i = text.indexOf(" — ");
   if (i === -1) return { title: text, detail: null };
-  return { title: text.slice(0, i), detail: text.slice(i + 3) };
+  const detail = text.slice(i + 3);
+  return { title: text.slice(0, i), detail: detail.charAt(0).toUpperCase() + detail.slice(1) };
 }
 
 /** Attention card for a slice's top ask: severity dot, title/detail, a
