@@ -240,7 +240,7 @@ export function App() {
             data-right-open={rightPanelCollapsed ? "false" : "true"}
             className="absolute top-0 right-0 bottom-0 left-[var(--sidebar-width,272px)] data-[sidebar-hidden=true]:left-0 data-[right-open=true]:right-[var(--right-panel-width,320px)] bg-bg overflow-hidden"
           >
-            {openSliceKey ? <SliceRoom sliceKey={openSliceKey} /> : <Home />}
+            {openSliceKey ? <SliceRoom key={openSliceKey} sliceKey={openSliceKey} /> : <Home />}
           </main>
         ) : (
           <Chat />
