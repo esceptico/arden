@@ -1,39 +1,15 @@
 import { useLayoutEffect, useRef, type CSSProperties } from "react";
 import clsx from "clsx";
-import { ArrowLeft, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { useStore } from "@/stores";
 import { switchSession } from "@/actions/sessions";
 import { Messages } from "@/features/chat/components/Messages";
 import { Composer } from "@/features/chat/components/Composer";
 import { ApprovalBanner } from "@/features/chat/components/ApprovalBanner";
-import { IconButton } from "@/components/ui/IconButton";
 import { Button } from "@/components/ui/Button";
-import { BlurSwap } from "@/components/ui/BlurSwap";
 import { ICON } from "@/lib/icons";
 import { DURATION_RIGHT_PANEL_HIDE, MOTION } from "@/lib/tokens/motion";
 import { useHasTrafficLights } from "@/lib/platform";
-
-function SidebarToggle() {
-  const sidebarHidden = useStore((s) => s.prefs.sidebarHidden);
-  const toggleSidebar = useStore((s) => s.toggleSidebar);
-  return (
-    <IconButton
-      size="xs"
-      className="sidebar-toggle"
-      onClick={toggleSidebar}
-      title={sidebarHidden ? "Show sidebar (⌘B)" : "Hide sidebar (⌘B)"}
-      aria-label={sidebarHidden ? "Show sidebar" : "Hide sidebar"}
-    >
-      <BlurSwap swapKey={sidebarHidden ? "show" : "hide"} scaleFrom={0.25}>
-        {sidebarHidden ? (
-          <PanelLeftOpen size={ICON.MD} strokeWidth={2} />
-        ) : (
-          <PanelLeftClose size={ICON.MD} strokeWidth={2} />
-        )}
-      </BlurSwap>
-    </IconButton>
-  );
-}
 
 function ChatHeader() {
   const sessionId = useStore((s) => s.currentSessionId);
@@ -185,9 +161,6 @@ export function Chat() {
         <div className="absolute top-0 left-0 right-0 z-10">
           <ChatHeader />
         </div>
-        {/* SidebarToggle lives outside the header so it keeps its fixed
-            viewport anchor near the macOS traffic lights. */}
-        <SidebarToggle />
         <div
           ref={bottomStackRef}
           className="absolute bottom-0 left-0 right-0 z-10"

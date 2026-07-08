@@ -10,6 +10,7 @@ import { CommandPalette } from "@/features/command-palette/components/CommandPal
 import { MarkdownViewer } from "@/components/ui/MarkdownViewer";
 import { ApprovalReviewModal } from "@/features/chat/components/ApprovalReviewModal";
 import { SidebarResizeHandle } from "@/features/sessions/components/SidebarResizeHandle";
+import { SidebarToggle } from "@/components/ui/SidebarToggle";
 import { AgentRightSidebar } from "@/features/background-agents/components/AgentRightSidebar";
 import { ErrorBoundary } from "@/app/ErrorBoundary";
 import { Toaster } from "@/components/ui/Toaster";
@@ -230,6 +231,10 @@ export function App() {
         <Sidebar />
         <SidebarResizeHandle />
       </motion.div>
+      {/* App-global sidebar toggle: fixed-viewport chrome (`.sidebar-toggle`),
+          rendered once here so it is present on every screen — Chat, Home,
+          and the slice rooms — not only where Chat mounts. */}
+      <SidebarToggle />
       <ErrorBoundary>
         {openSliceKey || showHome ? (
           /* Home/SliceRoom get the same pane geometry Chat's <main> claims
