@@ -176,12 +176,13 @@ export function SliceRoom({ sliceKey }: { sliceKey: string }) {
             observe (reads + updates the page only), Zap = act (may run this
             slice's automations/workflows). A plain click toggles — the
             "irreversible steps still ask you" contract is the safety net, so
-            no hold-to-arm ceremony. */}
+            no hold-to-arm ceremony. Absent entirely on plain containers
+            (autonomy null = no standing agent to dial). */}
         <div className="flex min-w-0 items-center gap-3">
           <h1 className="m-0 min-w-0 truncate text-2xl font-medium tracking-[-0.015em] text-ink">
             {detail.title}
           </h1>
-          {detail.autonomy === "observe" ? (
+          {detail.autonomy === null ? null : detail.autonomy === "observe" ? (
             <button
               type="button"
               onClick={() => void grantAct()}
