@@ -374,7 +374,10 @@ export function CheckboxGroup({
         }}
         role="group"
         aria-label={ariaLabel}
-        className={clsx("relative flex flex-col select-none", className)}
+        /* gap-0.5 matches Select/RadioGroup row rhythm — a merged selection
+           block still spans its rows contiguously (union rect), but a hovered
+           row next to it stays visibly separate. */
+        className={clsx("relative flex flex-col gap-0.5 select-none", className)}
         onKeyDown={onKeyDown}
         onFocus={(e) => {
           const attr = (e.target as HTMLElement)

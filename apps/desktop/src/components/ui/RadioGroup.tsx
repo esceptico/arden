@@ -130,7 +130,9 @@ export function RadioGroup({
       }}
       role="radiogroup"
       aria-label={ariaLabel}
-      className={clsx("relative flex w-full max-w-full select-none flex-col", className)}
+      /* gap-0.5 matches Select's option list: a selected fill and an adjacent
+         hovered row stay visibly separate instead of fusing into one blob. */
+      className={clsx("relative flex w-full max-w-full select-none flex-col gap-0.5", className)}
       onFocus={(e) => {
         const indexAttr = (e.target as HTMLElement)
           .closest("[data-item-index]")
