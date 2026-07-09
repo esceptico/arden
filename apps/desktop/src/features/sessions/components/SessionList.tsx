@@ -233,7 +233,7 @@ export function SessionList() {
                     type="button"
                     onClick={() => toggleGroup(group.key)}
                     aria-expanded={!isCollapsed}
-                    className="flex-1 flex items-center gap-2 min-w-0 pl-[18px] py-1 text-base font-medium text-muted hover:text-ink transition-colors select-none"
+                    className="flex-1 flex items-center gap-2 min-w-0 pl-[18px] py-1 text-base text-muted hover:text-ink transition-colors select-none"
                   >
                     {/* Fixed 16px glyph slot — the same rail the rows' icon
                         column sits on, so header labels and chat titles share

@@ -82,7 +82,7 @@ export function SessionRow({
               onCancelRename();
             }
           }}
-          className="min-w-0 w-full bg-transparent border-0 p-0 text-base font-medium tracking-[-0.005em] text-ink outline-none"
+          className="min-w-0 w-full bg-transparent border-0 p-0 text-base tracking-[-0.005em] text-ink outline-none"
         />
       </div>
     );
@@ -125,7 +125,7 @@ export function SessionRow({
       {/* Title uses the full width at rest; on hover its right edge fades under
           the overlaid time + ⋯ cluster (mask is color-independent, so it works
           on any row background and needs no reserved gutter). */}
-      <span title={name || "untitled"} className="min-w-0 truncate text-base font-medium tracking-[-0.005em] group-hover/row:[mask-image:linear-gradient(to_right,#000_calc(100%_-_6.25rem),transparent_calc(100%_-_4.5rem))]">
+      <span title={name || "untitled"} className="min-w-0 truncate text-base tracking-[-0.005em] group-hover/row:[mask-image:linear-gradient(to_right,#000_calc(100%_-_6.25rem),transparent_calc(100%_-_4.5rem))]">
         {name || "untitled"}
       </span>
       <span
