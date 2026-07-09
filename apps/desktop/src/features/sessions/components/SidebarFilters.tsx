@@ -72,8 +72,11 @@ export function SidebarFilters() {
             checked={unreadOnly}
             onChange={(next) => setPref("sidebarUnreadOnly", next)}
           />
+          {/* Channels are hidden from the default list (machinery, not
+              conversations) — this toggle swaps the list to the agents' and
+              automations' own transcripts. */}
           <FilterSwitch
-            label="Channels only"
+            label="Agent channels"
             checked={channelsOnly}
             onChange={(next) => setPref("sidebarChannelsOnly", next)}
           />
