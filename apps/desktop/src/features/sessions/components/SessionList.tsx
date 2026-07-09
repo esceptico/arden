@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { ArrowUpRight, ChevronDown, Inbox, MoreHorizontal, Pin, Plus, Settings } from "lucide-react";
+import { ArrowUpRight, ChevronDown, Inbox, Pin, Plus, Settings } from "lucide-react";
 import clsx from "clsx";
 import { MOTION, EASE_EMPHASIZED, EASE_OUT } from "@/lib/tokens/motion";
 import { useStore } from "@/stores";
@@ -182,7 +182,12 @@ export function SessionList() {
 
   return (
     <div className="group/sessions flex flex-col flex-1 min-h-0">
-      <div className="flex items-center justify-end px-2.5 pt-2 pb-1">
+      {/* Zone label: the list is a named region (mirrors Home's SLICES
+          strip label), so the nav above doesn't bleed into the groups. */}
+      <div className="flex items-center justify-between pl-[18px] pr-2.5 pt-3 pb-1">
+        <span className="text-2xs font-semibold tracking-wide text-faint uppercase select-none">
+          Slices
+        </span>
         <SidebarFilters />
       </div>
 
@@ -212,7 +217,9 @@ export function SessionList() {
             const head = group.sessions.slice(0, MAX_VISIBLE);
             const rest = group.sessions.slice(MAX_VISIBLE);
             return (
-              <div key={group.key} className={clsx(groupIndex > 0 && "mt-2")}>
+              /* Compact rows, air BETWEEN groups — the group gap is what
+                 makes the zones scannable, not taller rows. */
+              <div key={group.key} className={clsx(groupIndex > 0 && "mt-3.5")}>
                 <div className="group/prow flex items-center gap-1 pr-[18px]">
                   <button
                     type="button"
@@ -262,7 +269,10 @@ export function SessionList() {
                       exit={{ opacity: 0, transition: { duration: MOTION.fast, ease: EASE_OUT } }}
                       transition={{ duration: MOTION.row, ease: EASE_OUT }}
                     >
-                      <div role="list" aria-label={group.label} className="px-2.5 flex flex-col gap-0">
+                      {/* Rows indent one step past the group header so the
+                          tree reads at a glance (header at 18px, row text
+                          at ~28px) — hierarchy from geometry, not chrome. */}
+                      <div role="list" aria-label={group.label} className="pl-5 pr-2.5 flex flex-col gap-0">
                         {head.map(renderRow)}
                         <AnimatePresence initial={false}>
                           {isExpanded && rest.length > 0 && (
@@ -285,14 +295,14 @@ export function SessionList() {
                             aria-label={isExpanded ? "Show fewer sessions" : `Show ${overflow} more session${overflow === 1 ? "" : "s"}`}
                             className="app-row grid grid-cols-[16px_minmax(0,1fr)] items-center gap-2 w-full px-2 py-0.5 rounded-lg text-faint hover:text-ink transition-colors"
                           >
-                            {/* Empty icon column keeps the dots in the title column,
-                                aligned directly under the session names above. */}
+                            {/* Empty icon column keeps the label in the title
+                                column, aligned under the session names above.
+                                Words, not "…" — the affordance says what it
+                                does. */}
                             <span aria-hidden />
-                            <MoreHorizontal
-                              size={ICON.SM}
-                              strokeWidth={2}
-                              className={clsx("shrink-0 transition-opacity duration-row", isExpanded && "opacity-60")}
-                            />
+                            <span className="text-left text-xs">
+                              {isExpanded ? "Show less" : `Show ${overflow} more`}
+                            </span>
                           </button>
                         )}
                       </div>
