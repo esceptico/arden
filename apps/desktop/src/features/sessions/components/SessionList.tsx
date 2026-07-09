@@ -242,11 +242,11 @@ export function SessionList() {
                         one text edge (Codex-style tree without extra indent). */}
                     <span aria-hidden className="grid w-4 shrink-0 place-items-center text-faint">
                       {group.pinned ? (
-                        <Pin size={ICON.SM} strokeWidth={2} />
+                        <Pin size={ICON.LG} strokeWidth={2} />
                       ) : group.key === "inbox" ? (
-                        <Inbox size={ICON.SM} strokeWidth={2} />
+                        <Inbox size={ICON.LG} strokeWidth={2} />
                       ) : group.project ? (
-                        <Folder size={ICON.SM} strokeWidth={2} />
+                        <Folder size={ICON.LG} strokeWidth={2} />
                       ) : null}
                     </span>
                     <span className="min-w-0 truncate">{group.label}</span>
