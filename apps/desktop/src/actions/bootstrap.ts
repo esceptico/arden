@@ -11,12 +11,14 @@ import { fetchSkills } from "@/actions/skills";
 import { fetchServerConfig } from "@/actions/server";
 
 const RESYNC_DEBOUNCE_MS = 800;
+const SERVER_CONNECTION_POLL_MS = 3_000;
 // Don't resync more than once per window: under reconnect churn (a busy server
 // delaying keepalives, rapid session switches) onConnect can fire repeatedly,
 // and we must not stampede an already-loaded server with 5-fetch bursts.
 const RESYNC_MIN_INTERVAL_MS = 8_000;
 let resyncTimer: ReturnType<typeof setTimeout> | null = null;
 let lastResyncAt = 0;
+let connectionPollTimer: ReturnType<typeof setInterval> | null = null;
 
 /** Re-fetch the collections that have no live SSE delta feed (sessions list,
  *  automations, loops, goal, server config) after a chat-stream (re)connect or
@@ -74,6 +76,24 @@ export async function refresh(): Promise<void> {
     s.setConnected(false);
     s.setError(error instanceof Error ? error.message : String(error));
   }
+}
+
+export async function pollServerConnectionOnce(refreshFn: () => Promise<void> = refresh): Promise<void> {
+  if (getState().connected) return;
+  await refreshFn();
+}
+
+export function startServerConnectionPolling(intervalMs = SERVER_CONNECTION_POLL_MS): () => void {
+  if (connectionPollTimer) clearInterval(connectionPollTimer);
+  connectionPollTimer = setInterval(() => {
+    void pollServerConnectionOnce();
+  }, intervalMs);
+  return () => {
+    if (connectionPollTimer) {
+      clearInterval(connectionPollTimer);
+      connectionPollTimer = null;
+    }
+  };
 }
 
 export async function bootstrap(): Promise<void> {
