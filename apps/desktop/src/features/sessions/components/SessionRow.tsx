@@ -13,8 +13,6 @@ export function SessionRow({
   active,
   streaming,
   unread,
-  isChannel,
-  isAgent,
   depth = 0,
   tabbable,
   renaming,
@@ -30,8 +28,6 @@ export function SessionRow({
   active: boolean;
   streaming: boolean;
   unread: boolean;
-  isChannel: boolean;
-  isAgent: boolean;
   depth?: number;
   /** Roving tabindex: exactly one row per list is the Tab stop; arrows on
    *  the list container move focus between rows. */
@@ -125,7 +121,7 @@ export function SessionRow({
       style={depth > 0 ? { paddingLeft: 8 + depth * 16 } : undefined}
       className="app-row session-row group/row relative grid grid-cols-[16px_minmax(0,1fr)] items-center gap-2 w-full px-2 py-0.5 rounded-lg text-ink-soft text-left"
     >
-      <SessionStateIcon streaming={streaming} unread={unread} isChannel={isChannel} isAgent={isAgent} />
+      <SessionStateIcon streaming={streaming} unread={unread} />
       {/* Title uses the full width at rest; on hover its right edge fades under
           the overlaid time + ⋯ cluster (mask is color-independent, so it works
           on any row background and needs no reserved gutter). */}

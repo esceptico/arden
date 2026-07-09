@@ -159,8 +159,6 @@ export function SessionList() {
         backgroundedRunSessionIds.has(session.session_id)
       }
       unread={unreadDoneSessionIds.has(session.session_id)}
-      isChannel={session.session_type === "channel"}
-      isAgent={false}
       depth={0}
       tabbable={session.session_id === tabbableId}
       renaming={renamingId === session.session_id}
