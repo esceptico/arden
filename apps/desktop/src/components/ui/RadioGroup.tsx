@@ -12,12 +12,13 @@ import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 import clsx from "clsx";
 import { Check } from "lucide-react";
 import { useProximityHover, useRegisterProximityItem } from "@/hooks/useProximityHover";
-import { SPRING_LAYOUT, SPRING_TAP, EXIT_FAST, MOTION } from "@/lib/tokens/motion";
+import { SPRING_LAYOUT, SPRING_TAP, SPRING_PROXIMITY, EXIT_FAST, MOTION } from "@/lib/tokens/motion";
 
 interface RadioGroupContextValue {
   value: string;
   onChange: (value: string) => void;
   reduced: boolean;
+  dense: boolean;
   registerItem: (index: number, el: HTMLElement | null) => void;
   registerValue: (index: number, value: string) => void;
   activeIndex: number | null;
@@ -71,6 +72,9 @@ interface RadioGroupProps {
   children: ReactNode;
   "aria-label"?: string;
   className?: string;
+  /** Compact rows + instant highlight travel — for popovers/menus, where the
+   *  settings-page density and layout spring read oversized and slow. */
+  dense?: boolean;
   ref?: Ref<HTMLDivElement>;
 }
 
@@ -92,6 +96,7 @@ export function RadioGroup({
   children,
   "aria-label": ariaLabel,
   className,
+  dense = false,
   ref,
 }: RadioGroupProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -121,6 +126,7 @@ export function RadioGroup({
     value,
     onChange,
     reduced,
+    dense,
     registerItem,
     registerValue,
     activeIndex,
@@ -159,7 +165,7 @@ export function RadioGroup({
       {selectedRect && (
         <motion.div
           aria-hidden
-          className="pointer-events-none absolute rounded-lg"
+          className={clsx("pointer-events-none absolute", dense ? "rounded-md" : "rounded-lg")}
           style={{ background: SELECTED_FILL }}
           initial={false}
           animate={{
@@ -172,7 +178,7 @@ export function RadioGroup({
           transition={
             reduced
               ? { duration: 0 }
-              : { ...SPRING_LAYOUT, opacity: { duration: MOTION.fast } }
+              : { ...(dense ? SPRING_PROXIMITY : SPRING_LAYOUT), opacity: { duration: MOTION.fast } }
           }
         />
       )}
@@ -182,7 +188,7 @@ export function RadioGroup({
           <motion.div
             key={sessionRef.current}
             aria-hidden
-            className="pointer-events-none absolute rounded-lg"
+            className={clsx("pointer-events-none absolute", dense ? "rounded-md" : "rounded-lg")}
             style={{ background: HOVER_FILL }}
             initial={{
               opacity: 0,
@@ -202,7 +208,7 @@ export function RadioGroup({
             transition={
               reduced
                 ? { duration: 0 }
-                : { ...SPRING_TAP, opacity: { duration: MOTION.fast } }
+                : { ...(dense ? SPRING_PROXIMITY : SPRING_TAP), opacity: { duration: MOTION.fast } }
             }
           />
         )}
@@ -221,7 +227,7 @@ export function RadioGroup({
               height: focusRect.height + 4,
             }}
             exit={{ opacity: 0, transition: EXIT_FAST }}
-            transition={reduced ? { duration: 0 } : SPRING_TAP}
+            transition={reduced ? { duration: 0 } : dense ? SPRING_PROXIMITY : SPRING_TAP}
           />
         )}
       </AnimatePresence>
@@ -250,7 +256,7 @@ export function RadioGroupItem({
   indicator = "radio",
   children,
 }: RadioGroupItemProps) {
-  const { value: selectedValue, onChange, reduced, registerItem, registerValue, activeIndex } =
+  const { value: selectedValue, onChange, reduced, dense, registerItem, registerValue, activeIndex } =
     useRadioGroupContext();
   const itemRef = useRef<HTMLDivElement | null>(null);
 
@@ -278,7 +284,10 @@ export function RadioGroupItem({
           onChange(value);
         }
       }}
-      className="relative z-10 flex items-center gap-2.5 rounded-lg px-3 py-2 outline-none"
+      className={clsx(
+        "relative z-10 flex items-center outline-none",
+        dense ? "gap-2 rounded-md px-2 py-[5px]" : "gap-2.5 rounded-lg px-3 py-2",
+      )}
     >
       <span className="relative h-[15px] w-[15px] shrink-0">
         {indicator === "radio" && (
@@ -299,10 +308,10 @@ export function RadioGroupItem({
             <motion.span
               aria-hidden
               className="absolute inset-0 flex items-center justify-center"
-              initial={reduced ? false : { opacity: 0, scale: 0.3 }}
+              initial={reduced ? false : { opacity: 0, scale: dense ? 0.6 : 0.3 }}
               animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.3, transition: { duration: MOTION.fast } }}
-              transition={reduced ? { duration: 0 } : SPRING_TAP}
+              exit={{ opacity: 0, scale: dense ? 0.6 : 0.3, transition: { duration: MOTION.fast } }}
+              transition={reduced ? { duration: 0 } : dense ? SPRING_PROXIMITY : SPRING_TAP}
             >
               {indicator === "check" ? (
                 <Check size={13} strokeWidth={2.25} className="text-ink" />

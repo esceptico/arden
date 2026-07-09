@@ -55,6 +55,7 @@ export function SidebarFilters() {
       >
         <SectionLabel>Group by</SectionLabel>
         <RadioGroup
+          dense
           value={groupBy}
           onChange={(v) => setPref("sidebarGroupBy", v as SidebarGroupBy)}
           aria-label="Group sessions by"
@@ -78,6 +79,7 @@ export function SidebarFilters() {
         {/* Codex-style checkmark pair: both poles named, the ✓ marks which
             list you're on — nothing to misread as additive. */}
         <RadioGroup
+          dense
           value={channelsOnly ? "agents" : "chats"}
           onChange={(v) => setPref("sidebarChannelsOnly", v === "agents")}
           aria-label="Show in the sidebar"
