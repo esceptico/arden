@@ -229,13 +229,13 @@ export function SessionList() {
             return (
               /* Compact rows, air BETWEEN groups — the group gap is what
                  makes the zones scannable, not taller rows. */
-              <div key={group.key} className={clsx(groupIndex > 0 && "mt-3.5")}>
+              <div key={group.key} className={clsx(groupIndex > 0 && "mt-2")}>
                 <div className="group/prow flex items-center gap-1 pr-[18px]">
                   <button
                     type="button"
                     onClick={() => toggleGroup(group.key)}
                     aria-expanded={!isCollapsed}
-                    className="flex-1 flex items-center gap-2 min-w-0 pl-[18px] pt-1.5 pb-0.5 text-base font-medium text-muted hover:text-ink transition-colors select-none"
+                    className="flex-1 flex items-center gap-2 min-w-0 pl-[18px] py-1 text-base font-medium text-muted hover:text-ink transition-colors select-none"
                   >
                     {/* Fixed 16px glyph slot — the same rail the rows' icon
                         column sits on, so header labels and chat titles share

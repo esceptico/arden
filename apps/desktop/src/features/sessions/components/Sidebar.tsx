@@ -20,7 +20,7 @@ export function Sidebar() {
       {/* Drag region. Height tuned so nav rows start just below the
           macOS traffic-lights zone, not below a 38px chrome ribbon. */}
       <div className="drag-spacer shrink-0 h-[22px]" />
-      <nav className="flex flex-col gap-0.5 px-2.5 pt-2">
+      <nav className="flex flex-col gap-0 px-2.5 pt-2">
         {/* Home doubles as "new session": the hero input starts a chat, so
             one destination covers both (⌘N lands here too). */}
         <NavRow
