@@ -226,8 +226,7 @@ function SelectionBackgrounds({ blocks, reduced }: { blocks: SelBlock[]; reduced
           <motion.div
             key={b.key}
             aria-hidden
-            className="absolute pointer-events-none"
-            style={{ background: "var(--color-accent-soft)" }}
+            className="absolute pointer-events-none bg-accent-soft"
             initial={
               b.enterFrom
                 ? {
@@ -465,7 +464,7 @@ export function CheckboxGroupItem({ value, label, description }: CheckboxGroupIt
           ctx.toggle(value);
         }
       }}
-      className="group relative z-10 flex items-start gap-2.5 rounded-lg px-3 py-2 outline-none hover:bg-ink/[0.04] transition-colors duration-check ease-out"
+      className="group relative z-10 flex items-start gap-2.5 rounded-lg px-3 py-2 outline-none hover:bg-fill-hover transition-colors duration-check ease-out"
     >
       {/* Checkbox glyph. */}
       <span

@@ -61,6 +61,12 @@
   --color-accent-soft: rgba(0,112,243,0.1);
   --color-accent-strong: #0060d1;
 
+  /* Row-list fills — THE hover/selected tint for every menu, select, and
+     option list (MenuItem, Select, model picker, RadioGroup, CheckboxGroup).
+     ink-mix so one declaration reads on any surface in both themes. */
+  --color-fill-hover: color-mix(in oklab, var(--color-ink) 5%, transparent);
+  --color-fill-selected: color-mix(in oklab, var(--color-ink) 7%, transparent);
+
   --color-ok: #45a557;
   --color-ok-soft: rgba(69,165,87,0.12);
   --color-warn: #f5a623;
@@ -728,6 +734,18 @@ button,
    color. Mark the active row with `data-active="true"` (current
    session, keyboard-highlighted entry, etc.) or
    `aria-selected="true"` if the row already exposes it. */
+/* Session-row title fade: on hover the title's right edge dissolves under
+   the overlaid time + actions cluster. Mask (not a bg gradient) so it works
+   on any row background. */
+.session-row:hover .session-row-title,
+.session-row:focus-within .session-row-title {
+  mask-image: linear-gradient(
+    to right,
+    #000 calc(100% - 6.25rem),
+    transparent calc(100% - 4.5rem)
+  );
+}
+
 .app-row {
   position: relative;
   transition:

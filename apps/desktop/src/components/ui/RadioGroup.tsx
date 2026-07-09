@@ -31,9 +31,6 @@ function useRadioGroupContext() {
   return ctx;
 }
 
-// Translucent fill that reads in both themes (FF's bg-active).
-const SELECTED_FILL = "color-mix(in oklab, var(--color-ink) 7%, transparent)";
-
 /**
  * Roving keyboard for any `[role="radio"]` group: Arrow/Home/End move focus AND
  * auto-select via each radio's `data-value`. The single definition — used by
@@ -151,8 +148,10 @@ export function RadioGroup({
       {selectedRect && (
         <motion.div
           aria-hidden
-          className={clsx("pointer-events-none absolute", dense ? "rounded-md" : "rounded-lg")}
-          style={{ background: SELECTED_FILL }}
+          className={clsx(
+            "pointer-events-none absolute bg-fill-selected",
+            dense ? "rounded-md" : "rounded-lg",
+          )}
           initial={false}
           animate={{
             top: selectedRect.top,
@@ -235,7 +234,7 @@ export function RadioGroupItem({
       }}
       className={clsx(
         "group relative z-10 flex items-center outline-none",
-        "hover:bg-ink/[0.04] transition-colors duration-check ease-out",
+        "hover:bg-fill-hover transition-colors duration-check ease-out",
         dense ? "gap-2 rounded-md px-2 py-[5px]" : "gap-2.5 rounded-lg px-3 py-2",
       )}
     >

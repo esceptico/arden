@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { MoreHorizontal } from "lucide-react";
+import { Archive, MoreHorizontal } from "lucide-react";
 import { renameSession, switchSession } from "@/actions/sessions";
 import { ICON } from "@/lib/icons";
 import { formatRelativePast } from "@/lib/format";
 import { SessionStateIcon } from "@/features/sessions/components/SessionStateIcon";
-import { ConfirmDeleteButton } from "@/components/ui/ConfirmDeleteButton";
 
 export function SessionRow({
   sessionId,
@@ -40,7 +39,6 @@ export function SessionRow({
   onArchive: () => void;
 }) {
   const [draft, setDraft] = useState(name ?? "");
-  const [deleting, setDeleting] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -122,34 +120,33 @@ export function SessionRow({
       className="app-row session-row group/row relative grid grid-cols-[16px_minmax(0,1fr)] items-center gap-2 w-full px-2 py-0.5 rounded-lg text-ink-soft text-left"
     >
       <SessionStateIcon streaming={streaming} unread={unread} />
-      {/* Title uses the full width at rest; on hover its right edge fades under
-          the overlaid time + ⋯ cluster (mask is color-independent, so it works
-          on any row background and needs no reserved gutter). */}
-      <span title={name || "untitled"} className="min-w-0 truncate text-base tracking-[-0.005em] group-hover/row:[mask-image:linear-gradient(to_right,#000_calc(100%_-_6.25rem),transparent_calc(100%_-_4.5rem))]">
+      {/* Title uses the full width at rest; on hover its right edge fades
+          under the overlaid time + actions cluster (.session-row-title mask
+          in styles.css — color-independent, no reserved gutter). */}
+      <span title={name || "untitled"} className="session-row-title min-w-0 truncate text-base tracking-[-0.005em]">
         {name || "untitled"}
       </span>
-      <span
-        className={`absolute right-2 top-0 bottom-0 flex items-center gap-1 group-hover/row:opacity-100 focus-within:opacity-100 transition-opacity duration-row ${deleting ? "opacity-100" : "opacity-0"}`}
-      >
+      <span className="absolute right-2 top-0 bottom-0 flex items-center gap-1 opacity-0 group-hover/row:opacity-100 focus-within:opacity-100 transition-opacity duration-row">
         <span className="text-xs tabular-nums text-faint">
           {formatRelativePast(lastActivity)}
         </span>
-        {/* Inline countdown-archive — the destructive session gesture, on
-            every row's hover instead of buried in a settings tab. Wrapper
-            swallows the click so it doesn't also open the session. */}
-        <span
-          onClick={(e) => e.stopPropagation()}
+        {/* Instant archive — archiving is reversible (Settings → Archive),
+            so no confirm ceremony. stopPropagation so it doesn't also open
+            the session. */}
+        <button
+          type="button"
+          aria-label="Archive session"
+          title="Archive"
+          tabIndex={-1}
+          onClick={(e) => {
+            e.stopPropagation();
+            onArchive();
+          }}
           onMouseDown={(e) => e.stopPropagation()}
-          className="contents"
+          className="grid place-items-center w-5 h-5 shrink-0 rounded-[5px] text-faint hover:text-ink hover:bg-surface-soft/70 transition-[background-color,color,scale] duration-check ease-out active:scale-[0.97]"
         >
-          <ConfirmDeleteButton
-            size="sm"
-            label="Archive session"
-            tabIndex={-1}
-            onConfirm={onArchive}
-            onActiveChange={setDeleting}
-          />
-        </span>
+          <Archive size={ICON.SM} strokeWidth={2} />
+        </button>
         <button
           type="button"
           aria-label="Session actions"

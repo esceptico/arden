@@ -197,7 +197,7 @@ export function ModelReasoningPicker({
                           setQuery("");
                         }}
                         data-active={isCurrent ? "true" : undefined}
-                        className="app-row w-full flex items-center gap-2 px-3 py-1.5 text-left text-sm font-mono text-ink-soft hover:bg-ink/[0.06] focus-visible:bg-ink/[0.06]"
+                        className="app-row w-full flex items-center gap-2 px-3 py-1.5 text-left text-sm font-mono text-ink-soft hover:bg-fill-hover focus-visible:bg-fill-hover"
                       >
                         <span className="grid place-items-center w-3 h-3 shrink-0">
                           {isCurrent && <Check size={ICON.SM} strokeWidth={2.4} className="text-accent" />}

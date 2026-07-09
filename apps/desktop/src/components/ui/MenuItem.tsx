@@ -28,7 +28,7 @@ export const MenuItem = forwardRef<HTMLButtonElement, MenuItemProps>(function Me
       type={type ?? "button"}
       className={clsx(
         "w-full flex items-center gap-2 px-2.5 text-left text-sm text-ink-soft",
-        "hover:bg-surface-soft/60 hover:text-ink focus-visible:bg-surface-soft/60 focus-visible:text-ink focus-visible:outline-none",
+        "hover:bg-fill-hover hover:text-ink focus-visible:bg-fill-hover focus-visible:text-ink focus-visible:outline-none",
         "transition-[background-color,color,scale] duration-check ease-out active:scale-[0.98]",
         dense ? "py-1" : "py-1.5",
         className,

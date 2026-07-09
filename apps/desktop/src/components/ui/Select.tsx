@@ -188,8 +188,6 @@ export function Select({
   );
 }
 
-const SELECTED_FILL = "color-mix(in oklab, var(--color-ink) 7%, transparent)";
-
 function SelectItem({
   option,
   selected,
@@ -213,10 +211,9 @@ function SelectItem({
         "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none",
         "transition-[background-color,color,scale] duration-check ease-out active:scale-[0.98]",
         selected
-          ? "text-ink"
-          : "text-ink-soft hover:bg-ink/[0.06] hover:text-ink focus-visible:bg-ink/[0.06] focus-visible:text-ink",
+          ? "bg-fill-selected text-ink"
+          : "text-ink-soft hover:bg-fill-hover hover:text-ink focus-visible:bg-fill-hover focus-visible:text-ink",
       )}
-      style={selected ? { background: SELECTED_FILL } : undefined}
     >
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="truncate">{option.label}</span>
