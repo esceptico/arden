@@ -410,6 +410,7 @@ export interface State {
   toasts: Toast[];
   prefs: Prefs;
   slices: SlicesDomainState;
+  triage: import("@/stores/triage-domain").TriageDomainState;
 }
 
 export interface Actions {
@@ -589,4 +590,7 @@ export interface Actions {
   sliceAskResolved: (key: string, askId: string) => void;
   openSlice: (key: string | null) => void;
   sliceAutonomyUpdated: (key: string, autonomy: "observe" | "act") => void;
+  markTriageSeen: (sessionId: string) => void;
+  setTriageProposal: (sessionId: string, decision: import("@/api/sessions").TriageDecision) => void;
+  clearTriageProposal: (sessionId: string) => void;
 }

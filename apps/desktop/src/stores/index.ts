@@ -59,6 +59,12 @@ import {
   type SlicesDomainState,
 } from "@/stores/slices-domain";
 import {
+  createTriageDomainState,
+  reduceTriageSeen,
+  reduceTriageProposal,
+  reduceTriageCleared,
+} from "@/stores/triage-domain";
+import {
   reduceApprovalRequested,
   reduceApprovalResolved,
   reduceCancellingQueuedMessagesReset,
@@ -239,6 +245,7 @@ export const useStore = create<State & Actions>((set) => ({
   toasts: [],
   prefs: loadPrefs(),
   slices: createSlicesDomainState(),
+  triage: createTriageDomainState(),
 
   setConfig: (config) => set({ config, connectionDraft: { ...config } }),
   setProjects: (projects) => set({ projects }),
@@ -768,6 +775,12 @@ export const useStore = create<State & Actions>((set) => ({
     set((s) => ({ slices: reduceAskResolved(s.slices, key, askId) })),
   openSlice: (key) =>
     set((s) => ({ slices: reduceOpenSlice(s.slices, key) })),
+  markTriageSeen: (sessionId) =>
+    set((s) => ({ triage: reduceTriageSeen(s.triage, sessionId) })),
+  setTriageProposal: (sessionId, decision) =>
+    set((s) => ({ triage: reduceTriageProposal(s.triage, sessionId, decision) })),
+  clearTriageProposal: (sessionId) =>
+    set((s) => ({ triage: reduceTriageCleared(s.triage, sessionId) })),
   sliceAutonomyUpdated: (key, autonomy) =>
     set((s) => ({ slices: reduceAutonomyUpdated(s.slices, key, autonomy) })),
 }));

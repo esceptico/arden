@@ -57,6 +57,11 @@ export async function createSessionWithSlice(sliceKey: string): Promise<string> 
     body: JSON.stringify({ slice_key: sliceKey }),
   });
   s.prependSession(session);
+  // First filing into a slice mints its backing project server-side; sync
+  // the projects list when the response names one we don't know yet.
+  if (session.project_id && !s.projects.some((p) => p.project_id === session.project_id)) {
+    await refreshProjects();
+  }
   await switchSession(session.session_id);
   return session.session_id;
 }

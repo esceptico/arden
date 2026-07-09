@@ -21,6 +21,7 @@ from ntrp.server.schemas import (
     CreateSessionRequest,
     GoalProposalResponse,
     MoveSessionProjectRequest,
+    MoveSessionSliceRequest,
     ProjectResponse,
     RenameSessionRequest,
     RevertRequest,
@@ -35,6 +36,7 @@ from ntrp.server.schemas import (
 )
 from ntrp.server.state import RunRegistry
 from ntrp.services.session import SessionService
+from ntrp.slices.triage import TriageDecision, triage_chat
 
 router = APIRouter(tags=["session"])
 
@@ -297,12 +299,42 @@ async def _project_for_slice(svc: SessionService, slice_key: str) -> str | None:
     """Slice↔project bridge: a slice-tagged session joins the project whose
     slugified name equals the slice key ("Dex" → dex, "O-1A" → o-1a), so it
     groups in the sidebar and inherits project context instead of landing
-    in Inbox next to an identically-named group. Link-only — no project is
-    created for slices without one."""
+    in Inbox next to an identically-named group."""
     for project in await svc.list_projects():
         if _slug(project.get("name", "")) == slice_key:
             return project["project_id"]
     return None
+
+
+async def ensure_project_for_slice(svc: SessionService, runtime: Runtime, slice_key: str) -> str | None:
+    """Slices and projects are one container: filing a chat into a slice must
+    land it in the slice's project group, so the backing project is created on
+    first filing (named after the slice's title). Lazy on purpose — a slice
+    nobody files into never mints an empty sidebar group. Returns None only
+    for keys missing from the registry."""
+    existing = await _project_for_slice(svc, slice_key)
+    if existing:
+        return existing
+    try:
+        slice_ = runtime.automation.slice_registry.get(slice_key)
+    except KeyError:
+        return None
+    project = await svc.create_project(name=slice_.title)
+    return project["project_id"]
+
+
+async def _triage_candidates(svc: SessionService, runtime: Runtime) -> list[dict]:
+    """The homes a chat can be filed into: every slice, plus projects that do
+    not already back a slice (those appear once, as the richer slice)."""
+    slices = runtime.automation.slice_registry.load()
+    slice_keys = {s.key for s in slices}
+    out: list[dict] = [{"kind": "slice", "key": s.key, "title": s.title} for s in slices]
+    for project in await svc.list_projects():
+        name = project.get("name", "")
+        if _slug(name) in slice_keys:
+            continue
+        out.append({"kind": "project", "key": project["project_id"], "title": name})
+    return out
 
 
 @router.get("/session/history")
@@ -722,7 +754,7 @@ async def create_session(
     slice_key = req.slice_key if req else None
     await _require_project(svc, project_id)
     if slice_key and not project_id:
-        project_id = await _project_for_slice(svc, slice_key)
+        project_id = await ensure_project_for_slice(svc, runtime, slice_key)
     state = svc.create(name=name, project_id=project_id, chat_model=runtime.config.chat_model, slice_key=slice_key)
     await svc.save(state, [])
     return {
@@ -820,6 +852,47 @@ async def move_session_to_project(
     if not moved:
         raise HTTPException(status_code=404, detail="Session not found")
     return {"session_id": session_id, "project_id": req.project_id}
+
+
+@router.post("/sessions/{session_id}/slice")
+async def move_session_to_slice(
+    session_id: str,
+    req: MoveSessionSliceRequest,
+    svc: SessionService = Depends(require_session_service),
+    runtime: Runtime = Depends(get_runtime),
+):
+    if not await svc.load(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+    project_id = await ensure_project_for_slice(svc, runtime, req.slice_key)
+    if project_id is None:
+        raise HTTPException(status_code=404, detail="Slice not found")
+    moved = await svc.move_session_to_slice(session_id, req.slice_key, project_id)
+    if not moved:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"session_id": session_id, "slice_key": req.slice_key, "project_id": project_id}
+
+
+@router.post("/sessions/{session_id}/triage", response_model=TriageDecision)
+@observed_trace("session.triage", tags="session")
+async def triage_session(
+    session_id: str,
+    svc: SessionService = Depends(require_session_service),
+    runtime: Runtime = Depends(get_runtime),
+):
+    """Classify a just-started chat against existing homes and return a filing
+    proposal (move / create / none). Read-only — the client runs the chosen
+    action. Degrades to `none` whenever the cheap model is unavailable or the
+    chat has no substance yet."""
+    data = await svc.load(session_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="Session not found")
+    cheap_llm = runtime.automation.get_cheap_llm()
+    model = runtime.automation.cheap_model
+    transcript = _goal_proposal_context(data.messages)
+    if cheap_llm is None or not model or not transcript:
+        return TriageDecision(decision="none")
+    candidates = await _triage_candidates(svc, runtime)
+    return await triage_chat(transcript=transcript, candidates=candidates, cheap_llm=cheap_llm, model=model)
 
 
 @router.post("/sessions/{session_id}/auto")

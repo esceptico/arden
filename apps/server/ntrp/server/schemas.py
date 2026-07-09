@@ -376,6 +376,10 @@ class MoveSessionProjectRequest(BaseModel):
     project_id: str | None = None
 
 
+class MoveSessionSliceRequest(BaseModel):
+    slice_key: str
+
+
 class CompactRequest(BaseModel):
     session_id: str | None = None
 

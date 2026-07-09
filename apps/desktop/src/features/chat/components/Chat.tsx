@@ -6,6 +6,8 @@ import { switchSession } from "@/actions/sessions";
 import { Messages } from "@/features/chat/components/Messages";
 import { Composer } from "@/features/chat/components/Composer";
 import { ApprovalBanner } from "@/features/chat/components/ApprovalBanner";
+import { TriageChip } from "@/features/chat/components/TriageChip";
+import { useChatTriage } from "@/hooks/useChatTriage";
 import { Button } from "@/components/ui/Button";
 import { ICON } from "@/lib/icons";
 import { DURATION_RIGHT_PANEL_HIDE, MOTION } from "@/lib/tokens/motion";
@@ -100,6 +102,7 @@ export function Chat() {
   const rightPanelCollapsed = useStore((s) => s.prefs.rightPanelCollapsed);
   const sessionId = useStore((s) => s.currentSessionId);
   const hasApproval = useStore((s) => s.pendingApprovals.length > 0);
+  useChatTriage();
 
   // Composer overlays the bottom of the message scroll area. The scroll
   // area needs padding-bottom equal to the bottom stack's actual height
@@ -165,6 +168,7 @@ export function Chat() {
           ref={bottomStackRef}
           className="absolute bottom-0 left-0 right-0 z-10"
         >
+          <TriageChip />
           <ApprovalBanner />
           <Composer />
         </div>

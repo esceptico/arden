@@ -69,6 +69,38 @@ export async function moveSessionToProjectApi(
   });
 }
 
+export interface TriageTarget {
+  kind: "slice" | "project";
+  key: string;
+  title: string;
+}
+
+export interface TriageDecision {
+  decision: "move" | "create" | "none";
+  target?: TriageTarget | null;
+  new_title?: string | null;
+  rationale: string;
+}
+
+/** Ask the server where this just-started chat belongs. Read-only — the
+ *  caller runs the chosen action. */
+export async function triageSessionApi(config: AppConfig, sessionId: string): Promise<TriageDecision> {
+  return apiWithConfig<TriageDecision>(config, `/sessions/${encodeURIComponent(sessionId)}/triage`, {
+    method: "POST",
+  });
+}
+
+export async function moveSessionToSliceApi(
+  config: AppConfig,
+  sessionId: string,
+  sliceKey: string,
+): Promise<{ session_id: string; slice_key: string; project_id: string | null }> {
+  return apiWithConfig(config, `/sessions/${encodeURIComponent(sessionId)}/slice`, {
+    method: "POST",
+    body: JSON.stringify({ slice_key: sliceKey }),
+  });
+}
+
 export async function updateSessionModelApi(
   config: AppConfig,
   sessionId: string,
