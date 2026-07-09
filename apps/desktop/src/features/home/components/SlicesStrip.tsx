@@ -1,9 +1,8 @@
-import { useRef } from "react";
+import clsx from "clsx";
 import { Plus, X } from "lucide-react";
 import type { SliceSuggestion, SliceSummary } from "@/api/slices";
 import { useStore } from "@/stores";
 import { dismissSliceSuggestion, promoteSuggestedSlice } from "@/actions/slices";
-import { TravelingHighlight } from "@/components/ui/TravelingHighlight";
 import { ICON } from "@/lib/icons";
 
 /** Horizontal strip of every slice as a tonal chip: a live dot marks slices
@@ -22,23 +21,24 @@ export function SlicesStrip({
   suggested?: SliceSuggestion[];
 }) {
   const openSlice = useStore((s) => s.openSlice);
-  const listRef = useRef<HTMLDivElement | null>(null);
 
   if (slices.length === 0 && suggested.length === 0) return null;
 
   return (
     <div className="grid gap-2">
       <span className="text-2xs font-semibold tracking-wide text-faint uppercase">Slices</span>
-      <div ref={listRef} className="relative flex flex-wrap gap-1.5">
-        <TravelingHighlight listRef={listRef} watch="focus" className="rounded-full" />
+      <div className="flex flex-wrap gap-1.5">
         {slices.map((slice) => (
           <button
             key={slice.key}
             type="button"
-            role="menuitem"
             onClick={() => openSlice(slice.key)}
-            className="relative z-[1] inline-flex h-8 items-center rounded-full bg-surface-soft px-3 text-xs font-medium text-ink transition-transform active:scale-[0.96]"
-            style={{ opacity: slice.live ? 1 : 0.5 }}
+            className={clsx(
+              "inline-flex h-8 items-center rounded-full bg-surface-soft px-3 text-xs font-medium text-ink",
+              "transition-[opacity,background-color,scale] duration-check ease-out",
+              "hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent active:scale-[0.96]",
+              !slice.live && "opacity-50 hover:opacity-100",
+            )}
           >
             <span className="truncate">{slice.title}</span>
           </button>
@@ -46,7 +46,7 @@ export function SlicesStrip({
         {suggested.map((s) => (
           <span
             key={s.key}
-            className="relative z-[1] inline-flex h-8 items-center gap-1 rounded-full border border-dashed border-line pr-1.5 pl-3 text-xs text-muted"
+            className="inline-flex h-8 items-center gap-1 rounded-full border border-dashed border-line pr-1.5 pl-3 text-xs text-muted"
             title={s.rationale}
           >
             <button

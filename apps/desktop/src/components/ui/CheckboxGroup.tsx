@@ -13,7 +13,7 @@ import {
 } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import clsx from "clsx";
-import { useProximityHover, type ItemRect } from "@/hooks/useProximityHover";
+import { useItemRects, type ItemRect } from "@/hooks/useItemRects";
 import { MOTION, SPRING_TAP } from "@/lib/tokens/motion";
 
 // Corner radius the selected-background blocks round to. Matches the item's
@@ -21,15 +21,14 @@ import { MOTION, SPRING_TAP } from "@/lib/tokens/motion";
 const RADIUS = 8;
 
 // ── Context ──────────────────────────────────────────────────
-// The parent owns selection (value[]), proximity activeIndex, and roving focus;
-// items self-register their index + ref so the hover/selection geometry can be
-// measured from the live DOM.
+// The parent owns selection (value[]) and roving focus; items self-register
+// their index + ref so the selection geometry can be measured from the live
+// DOM.
 
 interface CheckboxGroupContextValue {
   checked: Set<string>;
   toggle: (value: string) => void;
   register: (value: string, index: number, el: HTMLElement | null) => void;
-  activeIndex: number | null;
   focusIndex: number;
 }
 
@@ -59,8 +58,8 @@ const useIsoLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : use
 // Duration-based spring (not a stiffness/damping token) ON PURPOSE: the
 // merge/split choreography arms a SPLIT_MS timer that must match the morph's
 // settle time, and a stiffness/damping spring has no fixed duration to key it
-// off. The fluid hover-ghost + focus-ring layers (which need no timer) use the
-// shared SPRING_TAP token instead, matching RadioGroup's equivalent layers.
+// off. The focus-ring layer (which needs no timer) uses the shared SPRING_TAP
+// token instead, matching RadioGroup's equivalent layer.
 const EDGE_SPRING = { type: "spring" as const, duration: 0.16, bounce: 0 };
 const SPLIT_MS = EDGE_SPRING.duration * 1000 + 80;
 
@@ -218,11 +217,11 @@ function useMergeSplitBlocks(runs: Run[], itemRects: ItemRect[], reduced: boolea
   return blocks;
 }
 
-function SelectionBackgrounds({ blocks, dimmed, reduced }: { blocks: SelBlock[]; dimmed: boolean; reduced: boolean }) {
+function SelectionBackgrounds({ blocks, reduced }: { blocks: SelBlock[]; reduced: boolean }) {
   return (
     <AnimatePresence>
       {blocks.map((b) => {
-        const opacity = dimmed ? 0.7 : 1;
+        const opacity = 1;
         return (
           <motion.div
             key={b.key}
@@ -296,8 +295,7 @@ export function CheckboxGroup({
   const indexToValue = useRef(new Map<number, string>());
   const checked = new Set(value);
 
-  const { activeIndex, setActiveIndex, itemRects, sessionRef, handlers, registerItem, measureItems } =
-    useProximityHover(containerRef);
+  const { itemRects, registerItem, measureItems } = useItemRects();
 
   const [focusIndex, setFocusIndex] = useState(0);
   const [hasFocusVisible, setHasFocusVisible] = useState(false);
@@ -337,10 +335,7 @@ export function CheckboxGroup({
 
   const blocks = useMergeSplitBlocks(runs, itemRects, reduced);
 
-  const activeRect = activeIndex !== null ? itemRects[activeIndex] : null;
   const focusRect = hasFocusVisible ? itemRects[focusIndex] : null;
-  const isHoveringUnchecked =
-    activeIndex !== null && !checked.has(indexToValue.current.get(activeIndex) ?? "");
 
   const moveFocus = (next: number) => {
     const items = Array.from(
@@ -367,7 +362,6 @@ export function CheckboxGroup({
     checked,
     toggle,
     register,
-    activeIndex,
     focusIndex,
   };
 
@@ -382,9 +376,6 @@ export function CheckboxGroup({
         role="group"
         aria-label={ariaLabel}
         className={clsx("relative flex flex-col select-none", className)}
-        onMouseEnter={handlers.onMouseEnter}
-        onMouseMove={handlers.onMouseMove}
-        onMouseLeave={handlers.onMouseLeave}
         onKeyDown={onKeyDown}
         onFocus={(e) => {
           const attr = (e.target as HTMLElement)
@@ -393,33 +384,15 @@ export function CheckboxGroup({
           if (attr == null) return;
           const idx = Number(attr);
           setFocusIndex(idx);
-          setActiveIndex(idx);
           setHasFocusVisible((e.target as HTMLElement).matches(":focus-visible"));
         }}
         onBlur={(e) => {
           if (containerRef.current?.contains(e.relatedTarget as Node)) return;
           setHasFocusVisible(false);
-          setActiveIndex(null);
         }}
       >
         {/* Selected backgrounds — merged for contiguous checked rows. */}
-        <SelectionBackgrounds blocks={blocks} dimmed={isHoveringUnchecked} reduced={reduced} />
-
-        {/* Proximity hover ghost. */}
-        <AnimatePresence>
-          {activeRect && (
-            <motion.div
-              key={sessionRef.current}
-              aria-hidden
-              className="absolute rounded-lg pointer-events-none"
-              style={{ background: "color-mix(in oklab, var(--color-ink) 6%, transparent)" }}
-              initial={{ opacity: 0, top: activeRect.top, left: activeRect.left, width: activeRect.width, height: activeRect.height }}
-              animate={{ opacity: 1, top: activeRect.top, left: activeRect.left, width: activeRect.width, height: activeRect.height }}
-              exit={{ opacity: 0, transition: { duration: reduced ? 0 : MOTION.fast } }}
-              transition={reduced ? { duration: 0 } : { ...SPRING_TAP, opacity: { duration: MOTION.fast } }}
-            />
-          )}
-        </AnimatePresence>
+        <SelectionBackgrounds blocks={blocks} reduced={reduced} />
 
         {/* Focus ring — concentric, 2px outside the row. */}
         <AnimatePresence>
@@ -473,7 +446,6 @@ export function CheckboxGroupItem({ value, label, description }: CheckboxGroupIt
   }, [value, register]);
 
   const checked = ctx.checked.has(value);
-  const isActive = ctx.activeIndex === i;
   const descId = useId();
 
   return (
@@ -493,18 +465,14 @@ export function CheckboxGroupItem({ value, label, description }: CheckboxGroupIt
           ctx.toggle(value);
         }
       }}
-      className="relative z-10 flex items-start gap-2.5 rounded-lg px-3 py-2 outline-none"
+      className="group relative z-10 flex items-start gap-2.5 rounded-lg px-3 py-2 outline-none hover:bg-ink/[0.04] transition-colors duration-check ease-out"
     >
       {/* Checkbox glyph. */}
       <span
         aria-hidden
         className={clsx(
           "relative mt-px h-[15px] w-[15px] shrink-0 rounded-[5px] border-[1.5px] transition-colors",
-          checked
-            ? "border-accent bg-accent"
-            : isActive
-              ? "border-line-strong"
-              : "border-line",
+          checked ? "border-accent bg-accent" : "border-line group-hover:border-line-strong",
         )}
         style={{ transitionDuration: `${MOTION.fast * 1000}ms` }}
       >
@@ -535,7 +503,7 @@ export function CheckboxGroupItem({ value, label, description }: CheckboxGroupIt
         <span
           className={clsx(
             "text-[13px] transition-colors",
-            checked || isActive ? "text-ink" : "text-ink-soft",
+            checked ? "text-ink" : "text-ink-soft group-hover:text-ink",
           )}
           style={{ fontWeight: checked ? 600 : 400, transitionDuration: `${MOTION.fast * 1000}ms` }}
         >

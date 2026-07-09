@@ -11,8 +11,8 @@ import {
 import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 import clsx from "clsx";
 import { Check } from "lucide-react";
-import { useProximityHover, useRegisterProximityItem } from "@/hooks/useProximityHover";
-import { SPRING_LAYOUT, SPRING_TAP, SPRING_PROXIMITY, EXIT_FAST, MOTION } from "@/lib/tokens/motion";
+import { useItemRects, useRegisterItem } from "@/hooks/useItemRects";
+import { SPRING_LAYOUT, SPRING_TAP, SPRING_SNAP, EXIT_FAST, MOTION } from "@/lib/tokens/motion";
 
 interface RadioGroupContextValue {
   value: string;
@@ -21,8 +21,6 @@ interface RadioGroupContextValue {
   dense: boolean;
   registerItem: (index: number, el: HTMLElement | null) => void;
   registerValue: (index: number, value: string) => void;
-  activeIndex: number | null;
-  selectedIndex: number;
 }
 
 const RadioGroupContext = createContext<RadioGroupContextValue | null>(null);
@@ -33,9 +31,8 @@ function useRadioGroupContext() {
   return ctx;
 }
 
-// Translucent fills that read in both themes (FF's bg-active / bg-hover).
+// Translucent fill that reads in both themes (FF's bg-active).
 const SELECTED_FILL = "color-mix(in oklab, var(--color-ink) 7%, transparent)";
-const HOVER_FILL = "color-mix(in oklab, var(--color-ink) 4%, transparent)";
 
 /**
  * Roving keyboard for any `[role="radio"]` group: Arrow/Home/End move focus AND
@@ -81,10 +78,9 @@ interface RadioGroupProps {
 /**
  * Vertical list where the whole row is the radio target. Absolutely-positioned
  * motion layers float over the rows: the selected-row background (springs
- * between rows, dims slightly while another row is hovered), a proximity hover
- * background (springs to the row under the pointer via useProximityHover), and
- * a focus ring. Ported from Fluid Functionalism's RadioGroup — visible row +
- * motion + hand-rolled a11y only.
+ * between rows on selection change) and a focus ring. Hover is a plain
+ * per-row `:hover` background. Ported from Fluid Functionalism's RadioGroup —
+ * visible row + motion + hand-rolled a11y only.
  *
  * a11y: role="radiogroup" on the container, role="radio" + aria-checked per
  * row, roving tabIndex (only the checked row tabbable, first if none),
@@ -102,8 +98,7 @@ export function RadioGroup({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const valuesRef = useRef<Map<number, string>>(new Map());
   const reduced = !!useReducedMotion();
-  const { activeIndex, setActiveIndex, itemRects, sessionRef, handlers, registerItem } =
-    useProximityHover(containerRef);
+  const { itemRects, registerItem } = useItemRects();
   const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
 
   const registerValue = (index: number, v: string) => {
@@ -116,9 +111,7 @@ export function RadioGroup({
   })();
 
   const selectedRect = selectedIndex >= 0 ? itemRects[selectedIndex] : null;
-  const activeRect = activeIndex !== null ? itemRects[activeIndex] : null;
   const focusRect = focusedIndex !== null ? itemRects[focusedIndex] : null;
-  const isHoveringOther = activeIndex !== null && activeIndex !== selectedIndex;
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => radioGroupKeyDown(e, value, onChange);
 
@@ -129,8 +122,6 @@ export function RadioGroup({
     dense,
     registerItem,
     registerValue,
-    activeIndex,
-    selectedIndex,
   };
 
   return (
@@ -143,22 +134,17 @@ export function RadioGroup({
       role="radiogroup"
       aria-label={ariaLabel}
       className={clsx("relative flex w-full max-w-full select-none flex-col", className)}
-      onMouseEnter={handlers.onMouseEnter}
-      onMouseMove={handlers.onMouseMove}
-      onMouseLeave={handlers.onMouseLeave}
       onFocus={(e) => {
         const indexAttr = (e.target as HTMLElement)
-          .closest("[data-proximity-index]")
-          ?.getAttribute("data-proximity-index");
+          .closest("[data-item-index]")
+          ?.getAttribute("data-item-index");
         if (indexAttr == null) return;
         const idx = Number(indexAttr);
-        setActiveIndex(idx);
         setFocusedIndex((e.target as HTMLElement).matches(":focus-visible") ? idx : null);
       }}
       onBlur={(e) => {
         if (containerRef.current?.contains(e.relatedTarget as Node)) return;
         setFocusedIndex(null);
-        setActiveIndex(null);
       }}
       onKeyDown={onKeyDown}
     >
@@ -173,46 +159,10 @@ export function RadioGroup({
             left: selectedRect.left,
             width: selectedRect.width,
             height: selectedRect.height,
-            opacity: isHoveringOther ? 0.7 : 1,
           }}
-          transition={
-            reduced
-              ? { duration: 0 }
-              : { ...(dense ? SPRING_PROXIMITY : SPRING_LAYOUT), opacity: { duration: MOTION.fast } }
-          }
+          transition={reduced ? { duration: 0 } : dense ? SPRING_SNAP : SPRING_LAYOUT}
         />
       )}
-
-      <AnimatePresence>
-        {activeRect && (
-          <motion.div
-            key={sessionRef.current}
-            aria-hidden
-            className={clsx("pointer-events-none absolute", dense ? "rounded-md" : "rounded-lg")}
-            style={{ background: HOVER_FILL }}
-            initial={{
-              opacity: 0,
-              top: activeRect.top,
-              left: activeRect.left,
-              width: activeRect.width,
-              height: activeRect.height,
-            }}
-            animate={{
-              opacity: 1,
-              top: activeRect.top,
-              left: activeRect.left,
-              width: activeRect.width,
-              height: activeRect.height,
-            }}
-            exit={{ opacity: 0, transition: EXIT_FAST }}
-            transition={
-              reduced
-                ? { duration: 0 }
-                : { ...(dense ? SPRING_PROXIMITY : SPRING_TAP), opacity: { duration: MOTION.fast } }
-            }
-          />
-        )}
-      </AnimatePresence>
 
       <AnimatePresence>
         {focusRect && (
@@ -227,7 +177,7 @@ export function RadioGroup({
               height: focusRect.height + 4,
             }}
             exit={{ opacity: 0, transition: EXIT_FAST }}
-            transition={reduced ? { duration: 0 } : dense ? SPRING_PROXIMITY : SPRING_TAP}
+            transition={reduced ? { duration: 0 } : dense ? SPRING_SNAP : SPRING_TAP}
           />
         )}
       </AnimatePresence>
@@ -256,22 +206,21 @@ export function RadioGroupItem({
   indicator = "radio",
   children,
 }: RadioGroupItemProps) {
-  const { value: selectedValue, onChange, reduced, dense, registerItem, registerValue, activeIndex } =
+  const { value: selectedValue, onChange, reduced, dense, registerItem, registerValue } =
     useRadioGroupContext();
   const itemRef = useRef<HTMLDivElement | null>(null);
 
-  useRegisterProximityItem(registerItem, index, itemRef);
+  useRegisterItem(registerItem, index, itemRef);
   useEffect(() => {
     registerValue(index, value);
   }, [index, value, registerValue]);
 
   const isSelected = selectedValue === value;
-  const isActive = activeIndex === index;
 
   return (
     <div
       ref={itemRef}
-      data-proximity-index={index}
+      data-item-index={index}
       data-value={value}
       role="radio"
       aria-checked={isSelected}
@@ -285,7 +234,8 @@ export function RadioGroupItem({
         }
       }}
       className={clsx(
-        "relative z-10 flex items-center outline-none",
+        "group relative z-10 flex items-center outline-none",
+        "hover:bg-ink/[0.04] transition-colors duration-check ease-out",
         dense ? "gap-2 rounded-md px-2 py-[5px]" : "gap-2.5 rounded-lg px-3 py-2",
       )}
     >
@@ -295,11 +245,7 @@ export function RadioGroupItem({
             aria-hidden
             className={clsx(
               "absolute inset-0 rounded-full border-[1.5px] transition-colors duration-100",
-              isSelected
-                ? "border-transparent"
-                : isActive
-                  ? "border-line-strong"
-                  : "border-line",
+              isSelected ? "border-transparent" : "border-line group-hover:border-line-strong",
             )}
           />
         )}
@@ -311,7 +257,7 @@ export function RadioGroupItem({
               initial={reduced ? false : { opacity: 0, scale: dense ? 0.6 : 0.3 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: dense ? 0.6 : 0.3, transition: { duration: MOTION.fast } }}
-              transition={reduced ? { duration: 0 } : dense ? SPRING_PROXIMITY : SPRING_TAP}
+              transition={reduced ? { duration: 0 } : dense ? SPRING_SNAP : SPRING_TAP}
             >
               {indicator === "check" ? (
                 <Check size={13} strokeWidth={2.25} className="text-ink" />
@@ -328,7 +274,7 @@ export function RadioGroupItem({
           <span
             className={clsx(
               "text-[13px] leading-snug transition-colors duration-100",
-              isSelected ? "font-semibold text-ink" : isActive ? "text-ink" : "text-muted",
+              isSelected ? "font-semibold text-ink" : "text-muted group-hover:text-ink",
             )}
           >
             {label}

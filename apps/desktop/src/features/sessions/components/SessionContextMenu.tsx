@@ -39,7 +39,6 @@ export function SessionContextMenu({
       variant="menu"
       ariaLabel="Session actions"
       closeOnScroll
-      proximity
       className="w-[220px] py-1"
     >
       <ContextItem

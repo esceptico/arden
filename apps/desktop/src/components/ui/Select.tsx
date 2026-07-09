@@ -27,8 +27,8 @@ interface SelectProps {
 /**
  * Unified select. A trigger button (role="combobox") shows the selected label +
  * a chevron and opens a portaled listbox of options. The portal, outside-click,
- * Escape, entrance/exit motion, and the single traveling proximity highlight all
- * come from AnchoredPopover (`proximity` mode) — never re-implemented here.
+ * Escape and entrance/exit motion all come from AnchoredPopover — never
+ * re-implemented here.
  *
  * The listbox a11y is hand-rolled on the visible rows (role="listbox" +
  * role="option", roving tabindex, Arrow/Home/End, Enter/Space select, type-ahead)
@@ -163,7 +163,6 @@ export function Select({
         open={open}
         onClose={close}
         anchor={triggerRef}
-        proximity
         ariaLabel={ariaLabel}
         className="max-h-[min(20rem,60vh)] min-w-[12rem] overflow-y-auto p-1"
       >
@@ -208,13 +207,14 @@ function SelectItem({
       role="option"
       aria-selected={selected}
       data-value={option.value}
-      data-proximity-item=""
       tabIndex={tabbable ? 0 : -1}
       onClick={onSelect}
       className={clsx(
-        "relative z-[1] flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none",
+        "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none",
         "transition-[background-color,color,scale] duration-check ease-out active:scale-[0.98]",
-        selected ? "text-ink" : "text-ink-soft hover:text-ink focus-visible:text-ink",
+        selected
+          ? "text-ink"
+          : "text-ink-soft hover:bg-ink/[0.06] hover:text-ink focus-visible:bg-ink/[0.06] focus-visible:text-ink",
       )}
       style={selected ? { background: SELECTED_FILL } : undefined}
     >

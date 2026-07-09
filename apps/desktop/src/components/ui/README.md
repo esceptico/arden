@@ -21,7 +21,7 @@ Props live in each file (kept here as a map, not a spec, so it can't go stale).
 - **Callout** — alert/notice box (`tone bad|warn|ok|neutral`, icon/title/action). **Badge** / **Chip** / **Pill** — labels/tags. **StatusDot** — status/tone dot (+pulse). **Skeleton** — loading. **EmptyState** — icon + copy + action (the store-wired home screen lives at `features/home/components/Home.tsx`, not here — not generic). **EmptyNote** — compact inline "list is empty" italic note for sub-lists (settings tabs, MCP servers), not the full icon-chip state.
 
 ## Overlays & menus
-- **PageModal** — portal+scrim+panel modal shell (`origin`, `elevated`, `grid`, `header`). **AnchoredPopover** — cursor/trigger-anchored popover (`variant menu|popover`, `proximity`). **HoverPopover** / **Tooltip** — hover surfaces. **MenuItem** — one menu/popover row (reads `ProximityContext`).
+- **PageModal** — portal+scrim+panel modal shell (`origin`, `elevated`, `grid`, `header`). **AnchoredPopover** — cursor/trigger-anchored popover (`variant menu|popover`). **HoverPopover** / **Tooltip** — hover surfaces. **MenuItem** — one menu/popover row.
 
 ## Layout, lists, content
 - **SurfaceCard** — interactive card shell (stretched click-target). **ListColumn** / **DividedList** — list containers. **PaneShell** / **DetailShell** — pane scaffolds. **MetaGrid** — label/value grid. **SectionHeader** — section title + count. **Collapse** / **Tabs** + **TabPanels** / **ShowMore** / **PickerRow**.
@@ -34,7 +34,7 @@ Props live in each file (kept here as a map, not a spec, so it can't go stale).
 - **ThinkingStep** — one step in a vertical "thinking" timeline: a gutter `node` (icon/dot) topping the row with a connector drawn below it (hidden on `last`), and content stacked to the right (label + optional description + chips). One unified treatment for both the live tail and the settled view. Span-based, so it's valid inside a `<button>`. The activity trace composes it (see `features/chat`: `operationLabel` turns a tool kind into a natural-language verb + icon, `stepSources` into domain chips).
 
 ## Hooks (`@/lib/hooks`)
-`useFocusTrap` · `useEscapeKey` · `useReanchor` (overlay re-anchor) · `useProximityHover` (traveling menu highlight) · `useListNav` (roving keyboard) · `useMutationState` (busy/saved/error) · `useTimeoutFlag` · `useTimeTicker` · `useVisibilityPoll`.
+`useFocusTrap` · `useEscapeKey` · `useReanchor` (overlay re-anchor) · `useListNav` (roving keyboard) · `useMutationState` (busy/saved/error) · `useTimeoutFlag` · `useTimeTicker` · `useVisibilityPoll`.
 
 ## CSS primitives (`styles.css`)
 `.input-field` / `.input-field-sm` (input chrome) · `.app-row` (list-row: hover=colour, selected=bg tint) · `.surface-*` (elevation ladder).

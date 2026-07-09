@@ -1,7 +1,5 @@
-import { forwardRef, useContext, type ButtonHTMLAttributes, type ReactNode } from "react";
+import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from "react";
 import clsx from "clsx";
-import { ProximityContext } from "@/components/ui/AnchoredPopover";
-import { PROXIMITY_ITEM_ATTR } from "@/lib/hooks";
 
 /**
  * One row in a portaled menu / popover (SessionContextMenu, SidebarFilters).
@@ -24,21 +22,13 @@ export const MenuItem = forwardRef<HTMLButtonElement, MenuItemProps>(function Me
   { leading, dense, type, className, children, ...rest },
   ref,
 ) {
-  // Inside a proximity popover a single traveling highlight paints the hover
-  // background; suppress the per-row `hover:bg-*` (it would double-paint over
-  // the highlight) but keep the text-colour hover. Outside, behaviour is
-  // unchanged. The marker lets the hook discover this row in DOM order.
-  const proximity = useContext(ProximityContext);
   return (
     <button
       ref={ref}
       type={type ?? "button"}
-      {...(proximity ? { [PROXIMITY_ITEM_ATTR]: "" } : {})}
       className={clsx(
         "w-full flex items-center gap-2 px-2.5 text-left text-sm text-ink-soft",
-        proximity
-          ? "relative z-[1] hover:text-ink focus-visible:text-ink focus-visible:outline-none"
-          : "hover:bg-surface-soft/60 hover:text-ink focus-visible:bg-surface-soft/60 focus-visible:text-ink focus-visible:outline-none",
+        "hover:bg-surface-soft/60 hover:text-ink focus-visible:bg-surface-soft/60 focus-visible:text-ink focus-visible:outline-none",
         "transition-[background-color,color,scale] duration-check ease-out active:scale-[0.98]",
         dense ? "py-1" : "py-1.5",
         className,
