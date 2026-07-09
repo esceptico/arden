@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { ArrowUpRight, ChevronDown, Inbox, Pin, Plus, Settings } from "lucide-react";
+import { ArrowUpRight, ChevronDown, Folder, Inbox, Pin, Plus, Settings } from "lucide-react";
 import clsx from "clsx";
 import { MOTION, EASE_EMPHASIZED, EASE_OUT } from "@/lib/tokens/motion";
 import { useStore } from "@/stores";
@@ -194,7 +194,7 @@ export function SessionList() {
       {/* Zone label: the list is a named region (mirrors Home's SLICES
           strip label), so the nav above doesn't bleed into the groups. */}
       <div className="flex items-center justify-between pl-[18px] pr-2.5 pt-3 pb-1">
-        <span className="text-2xs font-semibold tracking-wide text-faint uppercase select-none">
+        <span className="text-xs font-semibold tracking-wide text-faint uppercase select-none">
           Slices
         </span>
         <SidebarFilters />
@@ -235,11 +235,20 @@ export function SessionList() {
                     type="button"
                     onClick={() => toggleGroup(group.key)}
                     aria-expanded={!isCollapsed}
-                    className="flex-1 flex items-center gap-1 min-w-0 pl-[18px] pt-1.5 pb-0.5 text-base font-medium text-muted hover:text-ink transition-colors select-none"
+                    className="flex-1 flex items-center gap-2 min-w-0 pl-[18px] pt-1.5 pb-0.5 text-base font-medium text-muted hover:text-ink transition-colors select-none"
                   >
-                    {group.pinned && (
-                      <Pin size={ICON.XS} strokeWidth={2} className="shrink-0 -ml-[2px] mr-0.5 text-faint" />
-                    )}
+                    {/* Fixed 16px glyph slot — the same rail the rows' icon
+                        column sits on, so header labels and chat titles share
+                        one text edge (Codex-style tree without extra indent). */}
+                    <span aria-hidden className="grid w-4 shrink-0 place-items-center text-faint">
+                      {group.pinned ? (
+                        <Pin size={ICON.SM} strokeWidth={2} />
+                      ) : group.key === "inbox" ? (
+                        <Inbox size={ICON.SM} strokeWidth={2} />
+                      ) : group.project ? (
+                        <Folder size={ICON.SM} strokeWidth={2} />
+                      ) : null}
+                    </span>
                     <span className="min-w-0 truncate">{group.label}</span>
                     <ChevronDown
                       size={ICON.XS}
@@ -279,10 +288,11 @@ export function SessionList() {
                       exit={{ opacity: 0, transition: { duration: MOTION.fast, ease: EASE_OUT } }}
                       transition={{ duration: MOTION.row, ease: EASE_OUT }}
                     >
-                      {/* Rows indent one step past the group header so the
-                          tree reads at a glance (header at 18px, row text
-                          at ~28px) — hierarchy from geometry, not chrome. */}
-                      <div role="list" aria-label={group.label} className="pl-5 pr-2.5 flex flex-col gap-0">
+                      {/* px-2.5 puts the rows' 16px icon column on the same
+                          rail as the header glyph, so chat titles align with
+                          the group name — hierarchy from the glyph, not a
+                          second indent level. */}
+                      <div role="list" aria-label={group.label} className="px-2.5 flex flex-col gap-0">
                         {head.map(renderRow)}
                         <AnimatePresence initial={false}>
                           {rest.length > 0 && (
@@ -316,7 +326,7 @@ export function SessionList() {
                                 Words, not "…" — and long groups unfold
                                 REVEAL_STEP at a time instead of exploding. */}
                             <span aria-hidden />
-                            <span className="text-left text-xs">
+                            <span className="text-left text-base">
                               {remaining > 0 ? `Show ${Math.min(REVEAL_STEP, remaining)} more` : "Show less"}
                             </span>
                           </button>
