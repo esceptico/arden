@@ -75,16 +75,19 @@ export function SidebarFilters() {
         </div>
         <div className="my-1 h-px bg-line-soft" />
         <SectionLabel>Show</SectionLabel>
-        <div className="px-2.5 py-0.5">
-          {/* A view switch, not a filter: off = your conversations, on = the
-              agents' and automations' channel transcripts. Channels stay out
-              of the default list entirely (machinery, not conversations). */}
-          <FilterSwitch
-            label="Channels"
-            checked={channelsOnly}
-            onChange={(next) => setPref("sidebarChannelsOnly", next)}
-          />
-        </div>
+        {/* An explicit either/or, not a toggle: the list is your own
+            conversations OR the agents'/automations' activity threads —
+            never mixed. A radio pair says that; a switch named after a
+            noun doesn't. */}
+        <RadioGroup
+          value={channelsOnly ? "agents" : "chats"}
+          onChange={(v) => setPref("sidebarChannelsOnly", v === "agents")}
+          aria-label="Show in the sidebar"
+          className="px-1"
+        >
+          <RadioGroupItem index={0} value="chats" label="Your chats" />
+          <RadioGroupItem index={1} value="agents" label="Agent activity" />
+        </RadioGroup>
       </AnchoredPopover>
     </>
   );
