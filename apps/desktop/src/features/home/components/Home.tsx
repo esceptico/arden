@@ -12,7 +12,7 @@ import { SlicesStrip } from "@/features/home/components/SlicesStrip";
 import { ScrollFadeTop, ScrollFadeBottom } from "@/components/ui/ScrollBlur";
 import { Button } from "@/components/ui/Button";
 import { ICON } from "@/lib/icons";
-import { RISE_IN, RISE_SETTLED, MOTION, EASE_DECELERATE, originFromEvent } from "@/lib/tokens/motion";
+import { RISE_IN, RISE_SETTLED, DISSOLVE_OUT, withExit, EXIT_ROW, MOTION, EASE_DECELERATE, originFromEvent } from "@/lib/tokens/motion";
 
 const DATE_FORMAT: Intl.DateTimeFormatOptions = {
   weekday: "long",
@@ -106,8 +106,12 @@ export function Home() {
     <motion.div
       initial={RISE_IN}
       animate={RISE_SETTLED}
+      exit={withExit(DISSOLVE_OUT, EXIT_ROW)}
       transition={{ duration: MOTION.trace, ease: EASE_DECELERATE }}
-      className="h-full overflow-hidden"
+      /* absolute inset-0 (not h-full): during the Home↔room crossfade both
+         surfaces are mounted — absolute keeps them overlapping instead of
+         stacking in flow, and preserves height for the inner h-full column. */
+      className="absolute inset-0 overflow-hidden"
     >
       {/* One vertically-centered cluster — Home never scrolls as a whole, and
           it reads as a single composed instrument rather than fragments pinned

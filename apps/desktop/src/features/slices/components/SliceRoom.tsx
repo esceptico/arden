@@ -11,7 +11,7 @@ import { AgentPresence, type AgentInfo } from "@/features/slices/components/Agen
 import { OpenLoops } from "@/features/slices/components/OpenLoops";
 import { SliceActivity } from "@/features/slices/components/SliceActivity";
 import { ScrollFadeTop, ScrollFadeBottom } from "@/components/ui/ScrollBlur";
-import { RISE_IN, RISE_SETTLED, MOTION, EASE_DECELERATE } from "@/lib/tokens/motion";
+import { RISE_IN, RISE_SETTLED, DISSOLVE_OUT, withExit, EXIT_ROW, MOTION, EASE_DECELERATE } from "@/lib/tokens/motion";
 
 /** Slice room: the full-screen detail view for one slice, opened from the
  *  Home slices strip / focus rows / related chips (`openSlice(key)` — same
@@ -34,7 +34,16 @@ export function SliceRoom({ sliceKey }: { sliceKey: string }) {
 
   if (!detail) {
     return (
-      <div className="mx-auto grid w-[640px] max-w-full gap-6 px-4 pt-[12vh]">
+      <motion.div
+        initial={RISE_IN}
+        animate={RISE_SETTLED}
+        exit={withExit(DISSOLVE_OUT, EXIT_ROW)}
+        transition={{ duration: MOTION.trace, ease: EASE_DECELERATE }}
+        /* absolute inset-0 like the loaded room: this branch is a crossfade
+           surface too — in flow it would stack under the overlapping peer. */
+        className="absolute inset-0 px-4 pt-[12vh]"
+      >
+        <div className="mx-auto grid w-[640px] max-w-full gap-6">
         <button
           type="button"
           onClick={() => openSlice(null)}
@@ -42,8 +51,9 @@ export function SliceRoom({ sliceKey }: { sliceKey: string }) {
         >
           ← Home
         </button>
-        <p className="text-sm text-faint">Loading…</p>
-      </div>
+          <p className="text-sm text-faint">Loading…</p>
+        </div>
+      </motion.div>
     );
   }
 
@@ -137,8 +147,12 @@ export function SliceRoom({ sliceKey }: { sliceKey: string }) {
     <motion.div
       initial={RISE_IN}
       animate={RISE_SETTLED}
+      exit={withExit(DISSOLVE_OUT, EXIT_ROW)}
       transition={{ duration: MOTION.trace, ease: EASE_DECELERATE }}
-      className="h-full overflow-hidden"
+      /* absolute inset-0 (not h-full): mirrors Home — the crossfade mounts
+         both surfaces, and popping/flow-stacking must never move the pinned
+         composer. */
+      className="absolute inset-0 overflow-hidden"
     >
       {/* Fixed-viewport column — the room never scrolls as a whole. The
           title, agent status, ask, and composer stay pinned; only the open
@@ -170,7 +184,7 @@ export function SliceRoom({ sliceKey }: { sliceKey: string }) {
               type="button"
               onClick={() => void grantAct()}
               title="The agent only reads this slice and updates its page — it takes no action on its own. Click to let it act: run this slice's automations and workflows. Irreversible steps still ask you first."
-              className="shrink-0 self-center inline-flex h-7 items-center gap-1.5 rounded-full border border-line-soft px-3 text-xs font-medium text-muted transition-colors hover:border-line-strong hover:text-ink"
+              className="shrink-0 self-center inline-flex h-7 items-center gap-1.5 rounded-full border border-line-soft px-3 text-xs font-medium text-muted transition-[color,border-color,scale] duration-check ease-out hover:border-line-strong hover:text-ink active:scale-[0.97]"
             >
               <Eye size={13} strokeWidth={2} />
               Observing
@@ -180,7 +194,7 @@ export function SliceRoom({ sliceKey }: { sliceKey: string }) {
               type="button"
               onClick={() => void revokeAct()}
               title="The agent can run this slice's automations and workflows on its own. Click to return it to observe-only."
-              className="shrink-0 self-center inline-flex h-7 items-center gap-1.5 rounded-full border border-accent-soft px-3 text-xs font-medium text-accent transition-colors hover:opacity-80"
+              className="shrink-0 self-center inline-flex h-7 items-center gap-1.5 rounded-full border border-accent-soft px-3 text-xs font-medium text-accent transition-[opacity,scale] duration-check ease-out hover:opacity-80 active:scale-[0.97]"
             >
               <Zap size={13} strokeWidth={2} />
               Acting
@@ -233,7 +247,7 @@ export function SliceRoom({ sliceKey }: { sliceKey: string }) {
                       key={key}
                       type="button"
                       onClick={() => openSlice(key)}
-                      className="rounded-full bg-surface-soft px-2.5 py-1 text-xs text-ink-soft hover:text-ink"
+                      className="rounded-full bg-surface-soft px-2.5 py-1 text-xs text-ink-soft transition-[color,scale] duration-check ease-out hover:text-ink active:scale-[0.97]"
                     >
                       {relatedTitle(key)}
                     </button>

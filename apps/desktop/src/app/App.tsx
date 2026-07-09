@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect, useState } from "react";
-import { MotionConfig, motion } from "motion/react";
+import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import { MOTION, EASE_EMPHASIZED, EASE_OUT, DURATION_RIGHT_PANEL_HIDE } from "@/lib/tokens/motion";
 import { IS_DESKTOP_MAC } from "@/lib/platform";
 import { Sidebar } from "@/features/sessions/components/Sidebar";
@@ -20,7 +20,7 @@ import { useActiveRuns } from "@/features/background-agents/hooks/useActiveRuns"
 import { useAutomationEvents } from "@/features/automations/hooks/useAutomationEvents";
 import { useTaskResultToasts } from "@/hooks/useTaskResultToasts";
 import { useThemeEffect } from "@/lib/theme";
-import { bootstrap } from "@/actions/bootstrap";
+import { bootstrap, startServerConnectionPolling } from "@/actions/bootstrap";
 import { createSession, goToNewSessionHome, switchSession } from "@/actions/sessions";
 import { sendMessage } from "@/actions/messages";
 
@@ -106,7 +106,9 @@ export function App() {
 
   useEffect(() => {
     if (hash === "#trace-demo") return;
+    const stopPolling = startServerConnectionPolling();
     void bootstrap();
+    return stopPolling;
   }, [hash]);
 
   useEffect(() => {
@@ -245,7 +247,20 @@ export function App() {
             data-right-open={rightPanelCollapsed ? "false" : "true"}
             className="absolute top-0 right-0 bottom-0 left-[var(--sidebar-width,272px)] data-[sidebar-hidden=true]:left-0 data-[right-open=true]:right-[var(--right-panel-width,320px)] bg-bg overflow-hidden"
           >
-            {openSliceKey ? <SliceRoom key={openSliceKey} sliceKey={openSliceKey} /> : <Home />}
+            {/* Symmetric surface swap: the leaving surface dissolves while the
+                arriving one rises, so Home↔room reads as one spatial move rather
+                than a hard cut. Both surfaces are absolute inset-0 (their own
+                className) so enter/exit overlap by construction — popLayout is
+                NOT used because popping strips the exiting column's h-full
+                height reference, collapsing it and teleporting the room's
+                pinned composer to the top mid-dissolve. */}
+            <AnimatePresence initial={false}>
+              {openSliceKey ? (
+                <SliceRoom key={openSliceKey} sliceKey={openSliceKey} />
+              ) : (
+                <Home key="home" />
+              )}
+            </AnimatePresence>
           </main>
         ) : (
           <Chat />
