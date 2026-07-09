@@ -14,6 +14,21 @@ Stuff.
 """
 
 
+def test_slices_from_projects_projection():
+    from ntrp.slices.models import slices_from_projects
+
+    rows = [
+        {"project_id": "p1", "name": "Health", "page_path": "topics/health.md", "autonomy": "observe"},
+        {"project_id": "p2", "name": "Design", "page_path": None, "autonomy": None},
+        {"project_id": "p3", "name": "Reading", "page_path": "topics/reading.md", "autonomy": None},
+    ]
+    slices = slices_from_projects(rows)
+    assert [(s.key, s.title, s.autonomy) for s in slices] == [
+        ("p1", "Health", "observe"),
+        ("p3", "Reading", None),  # page-only container IS a slice; plain Design is not
+    ]
+
+
 def test_parse_open_loops_extracts_bullets_until_next_heading():
     loops = parse_open_loops(PROSE)
     assert len(loops) == 2

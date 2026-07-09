@@ -3,17 +3,16 @@ from pathlib import Path
 from ntrp.memory.pages import parse_page
 from ntrp.slices.asks import AskStore
 from ntrp.slices.models import Slice
-from ntrp.slices.registry import SliceRegistry
 from ntrp.slices.service import SliceService
 
 PAGE = "---\ntitle: O-1A\nupdated: 2026-07-05\n---\n# O-1A\n\n## Open loops\n- Find counsel.\n"
 
+SLICES = [Slice(key="o-1a", title="O-1A", page_path="topics/o-1a.md", autonomy="observe")]
+
 
 def make_service(tmp_path: Path) -> SliceService:
-    reg = SliceRegistry(tmp_path / "slices.json")
-    reg.save([Slice(key="o-1a", title="O-1A", page_path="topics/o-1a.md", autonomy="observe")])
     return SliceService(
-        registry=reg,
+        slices=lambda: SLICES,
         asks=AskStore(tmp_path / "state.json"),
         get_page=lambda path: parse_page(PAGE),
         pending_approvals=lambda: [
@@ -22,6 +21,7 @@ def make_service(tmp_path: Path) -> SliceService:
         session_slice=lambda sid: "o-1a" if sid == "s1" else None,
         slice_automations=lambda key: [],
         slice_sessions=lambda key: [{"session_id": "s1", "name": "counsel"}],
+        get_project=lambda pid: None,
     )
 
 

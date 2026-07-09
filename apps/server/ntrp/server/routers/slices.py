@@ -67,21 +67,27 @@ async def resolve_ask(request: Request, key: str, ask_id: str, body: ResolveBody
     return ask
 
 
+# INTERIM (dies in the unification's router rewrite): autonomy + create still
+# write the registry file until the boot migration folds it into projects.
 @router.put("/{key}")
 async def update_slice_autonomy(request: Request, key: str, body: AutonomyBody):
+    from dataclasses import asdict
+
     try:
-        slice_ = _svc(request).update_autonomy(key, body.autonomy)
+        slice_ = request.app.state.slice_registry.update_autonomy(key, body.autonomy)
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     await request.app.state.emit_slices_changed([key])
-    return slice_
+    return asdict(slice_)
 
 
 @router.post("")
 async def create_slice(request: Request, body: CreateBody):
+    from dataclasses import asdict
+
     try:
-        slice_ = _svc(request).create_slice(body.key, body.title, body.page_path)
+        slice_ = request.app.state.slice_registry.create(body.key, body.title, body.page_path)
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
     await request.app.state.emit_slices_changed([body.key])
-    return slice_
+    return asdict(slice_)

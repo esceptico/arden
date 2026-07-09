@@ -29,7 +29,7 @@ def client(tmp_path: Path):
     reg.save([Slice(key="o-1a", title="O-1A", page_path="topics/o-1a.md", autonomy="observe")])
     asks = AskStore(tmp_path / "state.json")
     svc = SliceService(
-        registry=reg,
+        slices=reg.load,
         asks=asks,
         get_page=lambda path: parse_page(PAGE),
         pending_approvals=lambda: [
@@ -38,6 +38,7 @@ def client(tmp_path: Path):
         session_slice=lambda sid: "o-1a" if sid == "s1" else None,
         slice_automations=lambda key: [],
         slice_sessions=lambda key: [{"session_id": "s1", "name": "counsel"}],
+        get_project=lambda pid: None,
     )
 
     emitted: list[list[str]] = []
@@ -57,6 +58,7 @@ def client(tmp_path: Path):
         [{"id": "sg1", "key": "health", "title": "Health", "page_path": "topics/health.md", "rationale": "r", "created_at": "2026-07-07"}]
     )
     test_app.state.slice_service = svc
+    test_app.state.slice_registry = reg
     test_app.state.emit_slices_changed = _emit_slices_changed
     test_app.state.hydrate_slice_snapshot = _hydrate_slice_snapshot
     test_app.state.slice_suggestions = suggestions
@@ -122,7 +124,8 @@ def test_resolve_ask_404s_when_ask_belongs_to_a_different_slice(client):
     {key} path segment must 404, not silently resolve + emit under the
     wrong slice."""
     c, svc, emitted = client
-    svc.create_slice("dex", "Dex", "topics/dex.md")
+    c.post("/slices", json={"key": "dex", "title": "Dex", "page_path": "topics/dex.md"})
+    emitted.clear()  # the create above legitimately emitted; the resolve below must NOT
     svc._asks.upsert(Ask(
         id="agent:dex:1", slice_key="dex", text="Dex thing", kind="review", source="agent",
         actions=[], state="active", created_at="2026-07-06T10:00:00",

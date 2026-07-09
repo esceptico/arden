@@ -13,7 +13,13 @@ class SliceRegistry:
         if not self._path.exists():
             return []
         data = json.loads(self._path.read_text())
-        return [Slice(**s) for s in data["slices"]]
+        # Tolerate legacy fields (e.g. `related`, dropped from the projection);
+        # this whole file is deleted once the boot migration folds slices.json
+        # into the projects table.
+        return [
+            Slice(key=s["key"], title=s["title"], page_path=s.get("page_path"), autonomy=s.get("autonomy"))
+            for s in data["slices"]
+        ]
 
     def save(self, slices: list[Slice]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
