@@ -10,6 +10,7 @@ import {
 } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 import clsx from "clsx";
+import { Check } from "lucide-react";
 import { useProximityHover, useRegisterProximityItem } from "@/hooks/useProximityHover";
 import { SPRING_LAYOUT, SPRING_TAP, EXIT_FAST, MOTION } from "@/lib/tokens/motion";
 
@@ -235,6 +236,9 @@ interface RadioGroupItemProps {
   index: number;
   label?: string;
   description?: string;
+  /** Selection glyph: the default radio circle, or a menu-style checkmark
+   *  (no resting ring — unselected rows show an empty slot). */
+  indicator?: "radio" | "check";
   children?: ReactNode;
 }
 
@@ -243,6 +247,7 @@ export function RadioGroupItem({
   index,
   label,
   description,
+  indicator = "radio",
   children,
 }: RadioGroupItemProps) {
   const { value: selectedValue, onChange, reduced, registerItem, registerValue, activeIndex } =
@@ -276,17 +281,19 @@ export function RadioGroupItem({
       className="relative z-10 flex items-center gap-2.5 rounded-lg px-3 py-2 outline-none"
     >
       <span className="relative h-[15px] w-[15px] shrink-0">
-        <span
-          aria-hidden
-          className={clsx(
-            "absolute inset-0 rounded-full border-[1.5px] transition-colors duration-100",
-            isSelected
-              ? "border-transparent"
-              : isActive
-                ? "border-line-strong"
-                : "border-line",
-          )}
-        />
+        {indicator === "radio" && (
+          <span
+            aria-hidden
+            className={clsx(
+              "absolute inset-0 rounded-full border-[1.5px] transition-colors duration-100",
+              isSelected
+                ? "border-transparent"
+                : isActive
+                  ? "border-line-strong"
+                  : "border-line",
+            )}
+          />
+        )}
         <AnimatePresence>
           {isSelected && (
             <motion.span
@@ -297,7 +304,11 @@ export function RadioGroupItem({
               exit={{ opacity: 0, scale: 0.3, transition: { duration: MOTION.fast } }}
               transition={reduced ? { duration: 0 } : SPRING_TAP}
             >
-              <span className="h-[8px] w-[8px] rounded-full bg-accent" />
+              {indicator === "check" ? (
+                <Check size={13} strokeWidth={2.25} className="text-ink" />
+              ) : (
+                <span className="h-[8px] w-[8px] rounded-full bg-accent" />
+              )}
             </motion.span>
           )}
         </AnimatePresence>

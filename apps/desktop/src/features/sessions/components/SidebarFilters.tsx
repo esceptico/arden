@@ -61,7 +61,7 @@ export function SidebarFilters() {
           className="px-1"
         >
           {GROUP_OPTIONS.map((opt, i) => (
-            <RadioGroupItem key={opt.value} index={i} value={opt.value} label={opt.label} />
+            <RadioGroupItem key={opt.value} index={i} value={opt.value} label={opt.label} indicator="check" />
           ))}
         </RadioGroup>
         <div className="my-1 h-px bg-line-soft" />
@@ -75,15 +75,17 @@ export function SidebarFilters() {
         </div>
         <div className="my-1 h-px bg-line-soft" />
         <SectionLabel>Show</SectionLabel>
-        <div className="px-2.5 py-0.5">
-          {/* "view" = a mode that REPLACES the list (agents' threads instead
-              of your chats) — a bare noun here read as adding to it. */}
-          <FilterSwitch
-            label="Agent view"
-            checked={channelsOnly}
-            onChange={(next) => setPref("sidebarChannelsOnly", next)}
-          />
-        </div>
+        {/* Codex-style checkmark pair: both poles named, the ✓ marks which
+            list you're on — nothing to misread as additive. */}
+        <RadioGroup
+          value={channelsOnly ? "agents" : "chats"}
+          onChange={(v) => setPref("sidebarChannelsOnly", v === "agents")}
+          aria-label="Show in the sidebar"
+          className="px-1"
+        >
+          <RadioGroupItem index={0} value="chats" label="Your chats" indicator="check" />
+          <RadioGroupItem index={1} value="agents" label="Agent activity" indicator="check" />
+        </RadioGroup>
       </AnchoredPopover>
     </>
   );
