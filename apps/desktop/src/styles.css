@@ -132,7 +132,7 @@
   --duration-route: 300ms;
   /* Traveling-indicator tier (transitions.dev) — was tabs-only (--tabs-dur);
      promoted so TravelingHighlight can share it. --tabs-dur now aliases it. */
-  --duration-travel: 250ms;
+  --duration-travel: 180ms;
 
   --ease-emphasized: cubic-bezier(0.32, 0.72, 0, 1);
   --ease-geist: cubic-bezier(0.175, 0.885, 0.32, 1.1);
