@@ -76,10 +76,10 @@ export function SidebarFilters() {
         <div className="my-1 h-px bg-line-soft" />
         <SectionLabel>Show</SectionLabel>
         <div className="px-2.5 py-0.5">
-          {/* View switch: off = your chats, on = the agents'/automations'
-              activity threads. Never mixed in one list. */}
+          {/* "view" = a mode that REPLACES the list (agents' threads instead
+              of your chats) — a bare noun here read as adding to it. */}
           <FilterSwitch
-            label="Agent activity"
+            label="Agent view"
             checked={channelsOnly}
             onChange={(next) => setPref("sidebarChannelsOnly", next)}
           />
