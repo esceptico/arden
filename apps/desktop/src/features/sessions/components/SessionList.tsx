@@ -19,10 +19,12 @@ import { ProjectSettingsModal } from "@/features/sessions/components/ProjectSett
 import { SidebarFilters } from "@/features/sessions/components/SidebarFilters";
 import { RowAction } from "@/features/sessions/components/RowAction";
 
-// Rows shown per group before the "…" toggle reveals the rest. Keeps each
-// group scannable; full list is one click away. New project / search /
-// archived live in ⌘K; filter & group-by live in the SidebarFilters popover.
+// Rows shown per group before the "Show more" toggle reveals the rest, in
+// steps of REVEAL_STEP — a 40-chat group unfolds gradually instead of
+// exploding. New project / search / archived live in ⌘K; filter & group-by
+// live in the SidebarFilters popover.
 const MAX_VISIBLE = 4;
+const REVEAL_STEP = 5;
 
 export function SessionList() {
   useTimeTicker();
@@ -43,7 +45,9 @@ export function SessionList() {
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  // Per-group count of rows revealed past MAX_VISIBLE (in REVEAL_STEP
+  // increments); absent key = collapsed to the cap.
+  const [revealedCounts, setRevealedCounts] = useState<Map<string, number>>(new Map());
 
   const toggleSet = (set: Set<string>, key: string) => {
     const next = new Set(set);
@@ -52,7 +56,14 @@ export function SessionList() {
     return next;
   };
   const toggleGroup = (key: string) => setCollapsedGroups((prev) => toggleSet(prev, key));
-  const toggleExpanded = (key: string) => setExpandedGroups((prev) => toggleSet(prev, key));
+  const revealMore = (key: string) =>
+    setRevealedCounts((prev) => new Map(prev).set(key, (prev.get(key) ?? 0) + REVEAL_STEP));
+  const revealReset = (key: string) =>
+    setRevealedCounts((prev) => {
+      const next = new Map(prev);
+      next.delete(key);
+      return next;
+    });
 
   // Every group opens as a room (slices and projects are one container) —
   // the ↗ action is the sidebar's door into it.
@@ -86,15 +97,15 @@ export function SessionList() {
   );
   const editingProject = projects.find((project) => project.project_id === editingProjectId) ?? null;
 
-  // Drop "expanded" state for groups that no longer overflow, so a group that
+  // Drop reveal state for groups that no longer overflow, so a group that
   // shrinks below the cap and later grows back doesn't silently auto-expand.
   useEffect(() => {
-    setExpandedGroups((prev) => {
+    setRevealedCounts((prev) => {
       if (prev.size === 0) return prev;
       const overflowing = new Set(
         grouped.filter((g) => g.sessions.length > MAX_VISIBLE).map((g) => g.key),
       );
-      const next = new Set([...prev].filter((k) => overflowing.has(k)));
+      const next = new Map([...prev].filter(([k]) => overflowing.has(k)));
       return next.size === prev.size ? prev : next;
     });
   }, [grouped]);
@@ -109,13 +120,11 @@ export function SessionList() {
     const ids: string[] = [];
     for (const group of grouped) {
       if (collapsedGroups.has(group.key)) continue;
-      const visible = expandedGroups.has(group.key)
-        ? group.sessions
-        : group.sessions.slice(0, MAX_VISIBLE);
+      const visible = group.sessions.slice(0, MAX_VISIBLE + (revealedCounts.get(group.key) ?? 0));
       for (const session of visible) ids.push(session.session_id);
     }
     return ids;
-  }, [grouped, collapsedGroups, expandedGroups]);
+  }, [grouped, collapsedGroups, revealedCounts]);
   const tabbableId =
     currentSessionId && renderedSessionIds.includes(currentSessionId)
       ? currentSessionId
@@ -212,10 +221,11 @@ export function SessionList() {
         ) : (
           grouped.map((group, groupIndex) => {
             const isCollapsed = collapsedGroups.has(group.key);
-            const isExpanded = expandedGroups.has(group.key);
-            const overflow = group.sessions.length - MAX_VISIBLE;
+            const revealed = revealedCounts.get(group.key) ?? 0;
+            const visibleCount = Math.min(group.sessions.length, MAX_VISIBLE + revealed);
             const head = group.sessions.slice(0, MAX_VISIBLE);
-            const rest = group.sessions.slice(MAX_VISIBLE);
+            const rest = group.sessions.slice(MAX_VISIBLE, visibleCount);
+            const remaining = group.sessions.length - visibleCount;
             return (
               /* Compact rows, air BETWEEN groups — the group gap is what
                  makes the zones scannable, not taller rows. */
@@ -275,7 +285,7 @@ export function SessionList() {
                       <div role="list" aria-label={group.label} className="pl-5 pr-2.5 flex flex-col gap-0">
                         {head.map(renderRow)}
                         <AnimatePresence initial={false}>
-                          {isExpanded && rest.length > 0 && (
+                          {rest.length > 0 && (
                             <motion.div
                               key="more"
                               initial={{ opacity: 0, y: -4, filter: "blur(2px)" }}
@@ -287,21 +297,27 @@ export function SessionList() {
                             </motion.div>
                           )}
                         </AnimatePresence>
-                        {overflow > 0 && (
+                        {group.sessions.length > MAX_VISIBLE && (
                           <button
                             type="button"
-                            onClick={() => toggleExpanded(group.key)}
-                            aria-expanded={isExpanded}
-                            aria-label={isExpanded ? "Show fewer sessions" : `Show ${overflow} more session${overflow === 1 ? "" : "s"}`}
+                            onClick={() =>
+                              remaining > 0 ? revealMore(group.key) : revealReset(group.key)
+                            }
+                            aria-expanded={revealed > 0}
+                            aria-label={
+                              remaining > 0
+                                ? `Show ${Math.min(REVEAL_STEP, remaining)} more session${remaining === 1 ? "" : "s"}`
+                                : "Show fewer sessions"
+                            }
                             className="app-row grid grid-cols-[16px_minmax(0,1fr)] items-center gap-2 w-full px-2 py-0.5 rounded-lg text-faint hover:text-ink transition-colors"
                           >
                             {/* Empty icon column keeps the label in the title
-                                column, aligned under the session names above.
-                                Words, not "…" — the affordance says what it
-                                does. */}
+                                column, flush with the session names above.
+                                Words, not "…" — and long groups unfold
+                                REVEAL_STEP at a time instead of exploding. */}
                             <span aria-hidden />
                             <span className="text-left text-xs">
-                              {isExpanded ? "Show less" : `Show ${overflow} more`}
+                              {remaining > 0 ? `Show ${Math.min(REVEAL_STEP, remaining)} more` : "Show less"}
                             </span>
                           </button>
                         )}

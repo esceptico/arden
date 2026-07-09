@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { useStore } from "@/stores";
 import { fetchSliceDetail, updateSliceAutonomy } from "@/actions/slices";
 import { runAutomation } from "@/actions/automations";
-import { createSession, switchSession } from "@/actions/sessions";
+import { createSession, goToNewSessionHome, switchSession } from "@/actions/sessions";
 import { sendMessage } from "@/actions/messages";
 import { Eye, Zap } from "lucide-react";
 import { AskCard } from "@/features/slices/components/AskCard";
@@ -46,7 +46,7 @@ export function SliceRoom({ sliceKey }: { sliceKey: string }) {
         <div className="mx-auto grid w-[640px] max-w-full gap-6">
         <button
           type="button"
-          onClick={() => openSlice(null)}
+          onClick={() => goToNewSessionHome()}
           className="justify-self-start text-sm text-faint hover:text-ink-soft"
         >
           ← Home
@@ -165,7 +165,7 @@ export function SliceRoom({ sliceKey }: { sliceKey: string }) {
         <div className="grid shrink-0 gap-6">
       <button
         type="button"
-        onClick={() => openSlice(null)}
+        onClick={() => goToNewSessionHome()}
         className="justify-self-start text-sm text-faint hover:text-ink-soft"
       >
         ← Home
