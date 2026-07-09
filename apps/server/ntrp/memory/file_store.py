@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import asyncio
 import re
-from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import uuid4

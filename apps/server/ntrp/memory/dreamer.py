@@ -126,7 +126,7 @@ async def run_dream(
 
     raw = await _ask(
         llm, model, reasoning_effort, _with_preamble(_INSIGHTS_SYSTEM, conventions, learnings),
-        f"QUESTIONS:\n" + "\n".join(qs) + f"\n\nEVIDENCE:\n{evidence}",
+        "QUESTIONS:\n" + "\n".join(qs) + f"\n\nEVIDENCE:\n{evidence}",
     )
     insight_lines = [ln.strip("-• ").strip() for ln in (raw or "").splitlines() if ln.strip()]
 
