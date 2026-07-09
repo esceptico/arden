@@ -71,7 +71,7 @@ export function AgentPresence({
             type="button"
             onClick={onRunNow}
             title="Run the agent now"
-            className="inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium text-muted transition-colors hover:bg-surface-soft hover:text-ink"
+            className="inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium text-muted transition-[color,background-color,scale] duration-check ease-out hover:bg-surface-soft hover:text-ink active:scale-[0.97]"
           >
             <Play size={ICON.XS} strokeWidth={2} />
             Run now
