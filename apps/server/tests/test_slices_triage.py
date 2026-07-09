@@ -9,8 +9,8 @@ import pytest
 from ntrp.slices.triage import triage_chat
 
 CANDIDATES = [
-    {"kind": "slice", "key": "o-1a", "title": "O-1A Visa"},
-    {"kind": "project", "key": "proj_123", "title": "Marathon Training"},
+    {"key": "o-1a", "title": "O-1A Visa"},
+    {"key": "proj_123", "title": "Marathon Training"},
 ]
 
 
@@ -46,20 +46,19 @@ async def _run(payload=None, raises=False, candidates=CANDIDATES):
 
 @pytest.mark.asyncio
 async def test_move_restamps_from_catalog_not_model_echo():
-    # Model echoes a wrong kind/title; we trust our catalog for both.
+    # Model echoes a wrong title; we trust our catalog.
     d = await _run({
         "decision": "move",
-        "target": {"kind": "project", "key": "o-1a", "title": "WRONG"},
+        "target": {"key": "o-1a", "title": "WRONG"},
         "rationale": "About the visa.",
     })
     assert d.decision == "move"
-    assert d.target.kind == "slice"
     assert d.target.title == "O-1A Visa"
 
 
 @pytest.mark.asyncio
 async def test_move_to_unknown_home_drops_to_none():
-    d = await _run({"decision": "move", "target": {"kind": "slice", "key": "ghost", "title": "Ghost"}})
+    d = await _run({"decision": "move", "target": {"key": "ghost", "title": "Ghost"}})
     assert d.decision == "none"
 
 

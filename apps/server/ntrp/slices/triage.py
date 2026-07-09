@@ -24,8 +24,7 @@ plain-language rationale grounded in what the chat is actually about."""
 
 
 class TriageTarget(BaseModel):
-    kind: str  # "slice" | "project"
-    key: str
+    key: str  # the container's project_id
     title: str
 
 
@@ -40,7 +39,7 @@ async def triage_chat(*, transcript: str, candidates: list[dict], cheap_llm, mod
     """One cheap classify: file this chat into an existing home, propose a new
     one, or stay silent. Any failure degrades to `none` — triage is additive,
     a broken call must never surface anything."""
-    homes = [{"kind": c["kind"], "key": c["key"], "title": c["title"]} for c in candidates]
+    homes = [{"key": c["key"], "title": c["title"]} for c in candidates]
     payload = json.dumps({"conversation": transcript, "homes": homes}, ensure_ascii=False)
     try:
         response = await cheap_llm.completion(
@@ -61,7 +60,7 @@ async def triage_chat(*, transcript: str, candidates: list[dict], cheap_llm, mod
 
 def _validated(decision: TriageDecision, candidates: list[dict]) -> TriageDecision:
     """Trust our own catalog over the model's echo: a `move` must name a real
-    home (else drop to none), and we re-stamp kind/title from the catalog so a
+    home (else drop to none), and we re-stamp the title from the catalog so a
     hallucinated label can't reach the UI."""
     if decision.decision == "move":
         by_key = {c["key"]: c for c in candidates}
@@ -71,7 +70,7 @@ def _validated(decision: TriageDecision, candidates: list[dict]) -> TriageDecisi
             return TriageDecision(decision="none")
         return TriageDecision(
             decision="move",
-            target=TriageTarget(kind=home["kind"], key=home["key"], title=home["title"]),
+            target=TriageTarget(key=home["key"], title=home["title"]),
             rationale=decision.rationale,
         )
     if decision.decision == "create":

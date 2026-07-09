@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from ntrp.agent import Agent, Role
 from ntrp.agent.types.events import Result, ToolCompleted
 from ntrp.config import get_config
-from ntrp.constants import CONVERSATION_GAP_THRESHOLD, LOOP_ITERATION_HISTORY_WINDOW, SLICES_FILE
+from ntrp.constants import CONVERSATION_GAP_THRESHOLD, LOOP_ITERATION_HISTORY_WINDOW
 from ntrp.context.models import ProjectContext, SessionData, SessionState
 from ntrp.core.content import ContextContent, ImageContent, TextContent
 from ntrp.core.factory import AgentConfig, create_agent
@@ -625,12 +625,9 @@ async def prepare_chat(
         await deps.session_service.get_project(session_state.project_id) if session_state.project_id else None
     )
     project_context = _project_context_from_record(project_record)
-    slice_context = None
-    if session_state.slice_key:
-        config = get_config()
-        slice_context = load_slice_context(
-            config.ntrp_dir / SLICES_FILE, config.memory_artifacts_dir, session_state.slice_key
-        )
+    # Slice context = the container's topic page (a capability on the project
+    # row); plain project chats get None and stay ordinary.
+    slice_context = load_slice_context(get_config().memory_artifacts_dir, project_record)
     messages = await _prepare_messages(
         deps,
         messages,

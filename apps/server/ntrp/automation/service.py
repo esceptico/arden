@@ -164,7 +164,7 @@ class AutomationService:
         return resolved
 
     async def _provision_channel(
-        self, name: str, task_id: str, project_id: str | None = None, slice_key: str | None = None
+        self, name: str, task_id: str, project_id: str | None = None
     ) -> SessionState:
         """Create the durable channel session that owns an automation's
         activity. SessionService.provision announces it (SESSION_CREATED) so
@@ -174,7 +174,6 @@ class AutomationService:
             session_type="channel",
             origin_automation_id=task_id,
             project_id=project_id,
-            slice_key=slice_key,
         )
 
     @property
@@ -388,7 +387,6 @@ class AutomationService:
         attempt_n: int | None = None,
         tool_scope: list[str] | None = None,
         output_schema: str | None = None,
-        slice_key: str | None = None,
         task_id: str | None = None,
     ) -> Automation | None:
         triggers = await self._resolve_message_triggers(triggers)
@@ -419,7 +417,7 @@ class AutomationService:
         # through the existing session-bound iteration path (no new
         # execution path), which persists the full turn and emits live SSE.
         if thread_id is None:
-            channel = await self._provision_channel(name, task_id, project_id=project_id, slice_key=slice_key)
+            channel = await self._provision_channel(name, task_id, project_id=project_id)
             thread_id = channel.session_id
             read_history = True
 

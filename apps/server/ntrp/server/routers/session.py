@@ -21,7 +21,6 @@ from ntrp.server.schemas import (
     CreateSessionRequest,
     GoalProposalResponse,
     MoveSessionProjectRequest,
-    MoveSessionSliceRequest,
     ProjectResponse,
     RenameSessionRequest,
     RevertRequest,
@@ -291,50 +290,10 @@ async def _require_project(svc: SessionService, project_id: str | None) -> dict 
     return project
 
 
-def _slug(name: str) -> str:
-    return name.strip().lower().replace(" ", "-")
-
-
-async def _project_for_slice(svc: SessionService, slice_key: str) -> str | None:
-    """Slice↔project bridge: a slice-tagged session joins the project whose
-    slugified name equals the slice key ("Dex" → dex, "O-1A" → o-1a), so it
-    groups in the sidebar and inherits project context instead of landing
-    in Inbox next to an identically-named group."""
-    for project in await svc.list_projects():
-        if _slug(project.get("name", "")) == slice_key:
-            return project["project_id"]
-    return None
-
-
-async def ensure_project_for_slice(svc: SessionService, runtime: Runtime, slice_key: str) -> str | None:
-    """Slices and projects are one container: filing a chat into a slice must
-    land it in the slice's project group, so the backing project is created on
-    first filing (named after the slice's title). Lazy on purpose — a slice
-    nobody files into never mints an empty sidebar group. Returns None only
-    for keys missing from the registry."""
-    existing = await _project_for_slice(svc, slice_key)
-    if existing:
-        return existing
-    try:
-        slice_ = runtime.automation.slice_registry.get(slice_key)
-    except KeyError:
-        return None
-    project = await svc.create_project(name=slice_.title)
-    return project["project_id"]
-
-
-async def _triage_candidates(svc: SessionService, runtime: Runtime) -> list[dict]:
-    """The homes a chat can be filed into: every slice, plus projects that do
-    not already back a slice (those appear once, as the richer slice)."""
-    slices = runtime.automation.slice_registry.load()
-    slice_keys = {s.key for s in slices}
-    out: list[dict] = [{"kind": "slice", "key": s.key, "title": s.title} for s in slices]
-    for project in await svc.list_projects():
-        name = project.get("name", "")
-        if _slug(name) in slice_keys:
-            continue
-        out.append({"kind": "project", "key": project["project_id"], "title": name})
-    return out
+async def _triage_candidates(svc: SessionService) -> list[dict]:
+    """The homes a chat can be filed into: every container (slices and
+    projects are one concept, keyed by project_id)."""
+    return [{"key": p["project_id"], "title": p.get("name", "")} for p in await svc.list_projects()]
 
 
 @router.get("/session/history")
@@ -559,7 +518,6 @@ async def get_session(
         name=session_state.name,
         project_id=session_state.project_id,
         chat_model=session_state.chat_model,
-        slice_key=session_state.slice_key,
     )
 
 
@@ -739,7 +697,6 @@ async def branch_session(
         "started_at": state.started_at.isoformat(),
         "last_activity": state.last_activity.isoformat(),
         "project_id": state.project_id,
-        "slice_key": state.slice_key,
     }
 
 
@@ -751,11 +708,8 @@ async def create_session(
 ):
     name = req.name if req else None
     project_id = req.project_id if req else None
-    slice_key = req.slice_key if req else None
     await _require_project(svc, project_id)
-    if slice_key and not project_id:
-        project_id = await ensure_project_for_slice(svc, runtime, slice_key)
-    state = svc.create(name=name, project_id=project_id, chat_model=runtime.config.chat_model, slice_key=slice_key)
+    state = svc.create(name=name, project_id=project_id, chat_model=runtime.config.chat_model)
     await svc.save(state, [])
     return {
         "session_id": state.session_id,
@@ -765,7 +719,6 @@ async def create_session(
         "message_count": 0,
         "project_id": state.project_id,
         "chat_model": state.chat_model,
-        "slice_key": state.slice_key,
     }
 
 
@@ -854,24 +807,6 @@ async def move_session_to_project(
     return {"session_id": session_id, "project_id": req.project_id}
 
 
-@router.post("/sessions/{session_id}/slice")
-async def move_session_to_slice(
-    session_id: str,
-    req: MoveSessionSliceRequest,
-    svc: SessionService = Depends(require_session_service),
-    runtime: Runtime = Depends(get_runtime),
-):
-    if not await svc.load(session_id):
-        raise HTTPException(status_code=404, detail="Session not found")
-    project_id = await ensure_project_for_slice(svc, runtime, req.slice_key)
-    if project_id is None:
-        raise HTTPException(status_code=404, detail="Slice not found")
-    moved = await svc.move_session_to_slice(session_id, req.slice_key, project_id)
-    if not moved:
-        raise HTTPException(status_code=404, detail="Session not found")
-    return {"session_id": session_id, "slice_key": req.slice_key, "project_id": project_id}
-
-
 @router.post("/sessions/{session_id}/triage", response_model=TriageDecision)
 @observed_trace("session.triage", tags="session")
 async def triage_session(
@@ -891,7 +826,7 @@ async def triage_session(
     transcript = _goal_proposal_context(data.messages)
     if cheap_llm is None or not model or not transcript:
         return TriageDecision(decision="none")
-    candidates = await _triage_candidates(svc, runtime)
+    candidates = await _triage_candidates(svc)
     return await triage_chat(transcript=transcript, candidates=candidates, cheap_llm=cheap_llm, model=model)
 
 

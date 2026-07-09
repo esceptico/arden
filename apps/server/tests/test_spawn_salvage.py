@@ -267,8 +267,9 @@ async def test_spawn_persists_child_agent_session(monkeypatch, tmp_path: Path):
             emitted.append(event)
 
         executor = make_executor()
+        project = await store.create_project(name="Slice One")
         parent = SessionState(
-            session_id="parent", started_at=datetime.now(UTC), project_id=None, slice_key="slice-1"
+            session_id="parent", started_at=datetime.now(UTC), project_id=project["project_id"]
         )
         ctx = ToolContext(
             session_state=parent,
@@ -298,7 +299,7 @@ async def test_spawn_persists_child_agent_session(monkeypatch, tmp_path: Path):
         assert child.state.parent_tool_call_id == "call-research"
         assert child.state.agent_type == "research"
         assert child.state.agent_status == "completed"
-        assert child.state.slice_key == "slice-1"
+        assert child.state.project_id == project["project_id"]  # child inherits the container
         assert [message["role"] for message in child.messages] == ["system", "user", "assistant"]
         assert child.messages[-1]["content"] == "done"
 

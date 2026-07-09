@@ -85,22 +85,20 @@ def test_observe_scope_covers_memory_and_read_but_not_action_tools():
 
 def test_load_slice_context_reads_page_or_degrades(tmp_path):
     from ntrp.slices.context import load_slice_context
-    from ntrp.slices.models import Slice
-    from ntrp.slices.registry import SliceRegistry
 
-    reg_path = tmp_path / "slices.json"
-    SliceRegistry(reg_path).save([Slice(key="o-1a", title="O-1A", page_path="topics/o-1a.md", autonomy="observe")])
     vault = tmp_path / "memory"
     (vault / "topics").mkdir(parents=True)
     (vault / "topics" / "o-1a.md").write_text("---\ntitle: O-1A\n---\n# O-1A\n\n## Open loops\n- Find counsel.\n")
+    project = {"project_id": "p1", "name": "O-1A", "page_path": "topics/o-1a.md"}
 
-    ctx = load_slice_context(reg_path, vault, "o-1a")
+    ctx = load_slice_context(vault, project)
     assert ctx["title"] == "O-1A"
     assert "Find counsel." in ctx["page"]
 
-    assert load_slice_context(reg_path, vault, "nope") is None  # unknown slice → plain chat
+    assert load_slice_context(vault, None) is None  # unfiled chat → plain chat
+    assert load_slice_context(vault, {"project_id": "p2", "name": "Design", "page_path": None}) is None  # pageless
     (vault / "topics" / "o-1a.md").unlink()
-    assert load_slice_context(reg_path, vault, "o-1a") is None  # missing page → plain chat
+    assert load_slice_context(vault, project) is None  # missing page → plain chat
 
 
 def test_system_blocks_include_slice_block():

@@ -7,7 +7,6 @@ from pydantic import BaseModel
 
 from ntrp.logging import get_logger
 from ntrp.memory.pages import parse_page
-from ntrp.slices.registry import SliceRegistry
 
 _logger = get_logger(__name__)
 
@@ -71,14 +70,14 @@ class SliceSuggestionStore:
         return self._path.exists()
 
 
-def candidate_pages(vault_dir: Path, registry: SliceRegistry) -> list[dict]:
-    """Unpromoted topic pages with enough content to judge: slug, title,
+def candidate_pages(vault_dir: Path, attached_page_slugs: set[str]) -> list[dict]:
+    """Unattached topic pages with enough content to judge: slug, title,
     updated date, and the prose head (the LLM sees substance, not just
-    names)."""
+    names). `attached_page_slugs` = page stems already attached to a slice."""
     topics = vault_dir / "topics"
     if not topics.exists():
         return []
-    existing = {s.key for s in registry.load()}
+    existing = attached_page_slugs
     out = []
     for path in sorted(topics.glob("*.md")):
         slug = path.stem
@@ -97,15 +96,15 @@ def candidate_pages(vault_dir: Path, registry: SliceRegistry) -> list[dict]:
 
 
 class SliceSuggester:
-    def __init__(self, *, registry: SliceRegistry, vault_dir: Path, store: SliceSuggestionStore, cheap_llm, model):
-        self.registry = registry
+    def __init__(self, *, attached_page_slugs: set[str], vault_dir: Path, store: SliceSuggestionStore, cheap_llm, model):
+        self.attached_page_slugs = attached_page_slugs
         self.vault_dir = vault_dir
         self.store = store
         self.cheap_llm = cheap_llm
         self.model = model
 
     async def run(self) -> str:
-        candidates = candidate_pages(self.vault_dir, self.registry)
+        candidates = candidate_pages(self.vault_dir, self.attached_page_slugs)
         if not candidates:
             self.store.replace_suggestions([])
             return "No unpromoted topic pages to consider."

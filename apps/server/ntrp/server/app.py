@@ -40,6 +40,7 @@ from ntrp.server.routers.slices import router as slices_router
 from ntrp.server.runtime import Runtime
 from ntrp.services.chat import submit_chat_message
 from ntrp.slices.migrate import migrate_slices_to_projects
+from ntrp.slices.models import slices_from_projects
 from ntrp.slices.projection import slice_automation_match
 from ntrp.slices.service import SliceService
 
@@ -127,14 +128,14 @@ async def lifespan(app: FastAPI):
 
     runtime.knowledge.start_memory_watch(_publish_memory_changed)
 
-    # Slices: a project's automations/sessions/asks grouped under slice_key
-    # (mirrors project_id). Registry/asks live under ~/.ntrp next to the
-    # other flat-file stores; callables read live off the session/automation
-    # stores so overview()/detail() never go stale. Reuse AutomationRuntime's
+    # Slices: a container's automations/sessions/asks, keyed by project_id
+    # (slices and projects are one concept; a slice = a project with
+    # capabilities). Asks live under ~/.ntrp next to the other flat-file
+    # stores; callables read live off the session/automation stores so
+    # overview()/detail() never go stale. Reuse AutomationRuntime's
     # instances (not fresh ones) — AskStore caches in memory after __init__,
     # so a second instance would never see agent-nominated asks the slice
     # agent handler upserts through AutomationRuntime.slice_asks.
-    slice_registry = runtime.automation.slice_registry
     slice_asks = runtime.automation.slice_asks
 
     def _slice_get_page(page_path: str):
@@ -147,7 +148,9 @@ async def lifespan(app: FastAPI):
     # hydrate snapshots the live data into these closures right before each
     # sync SliceService call, so the callables stay plain sync lookups over
     # a fresh snapshot instead of needing their own event loop.
-    slice_snapshot: dict[str, object] = {"sessions": [], "approvals": [], "automations": [], "projects": []}
+    slice_snapshot: dict[str, object] = {
+        "sessions": [], "approvals": [], "automations": [], "projects": [], "slices": [],
+    }
 
     async def hydrate_slice_snapshot() -> None:
         sessions = await runtime.session_service.list_sessions(limit=1000) if runtime.session_service else []
@@ -163,14 +166,17 @@ async def lifespan(app: FastAPI):
         slice_snapshot["approvals"] = approvals
         slice_snapshot["automations"] = automations
         slice_snapshot["projects"] = projects
+        slice_snapshot["slices"] = slices_from_projects(projects)
 
     def _slice_pending_approvals() -> list[dict]:
         return slice_snapshot["approvals"]
 
     def _slice_session_slice(session_id: str) -> str | None:
+        slice_ids = {s.key for s in slice_snapshot["slices"]}
         for row in slice_snapshot["sessions"]:
             if row["session_id"] == session_id:
-                return row["slice_key"]
+                pid = row.get("project_id")
+                return pid if pid in slice_ids else None
         return None
 
     def _slice_automations(key: str) -> list[dict]:
@@ -189,15 +195,14 @@ async def lifespan(app: FastAPI):
         ]
 
     def _slice_sessions(key: str) -> list[dict]:
-        # Primary conversations only — child agent sessions inherit the
-        # slice_key of the chat that spawned them, but the room's activity
-        # list shows what the USER talked about, not internal subagent runs
-        # (mirrors the sidebar's primary-session filter).
+        # Primary conversations only — the room's activity list shows what
+        # the USER talked about, not child agent sessions or the agent's own
+        # channel (mirrors the sidebar's primary-session filter).
         return [
             row
             for row in slice_snapshot["sessions"]
-            if row["slice_key"] == key
-            and row.get("session_type") != "agent"
+            if row.get("project_id") == key
+            and row.get("session_type") == "chat"
             and not row.get("parent_session_id")
         ]
 
@@ -208,9 +213,8 @@ async def lifespan(app: FastAPI):
         return None
 
     app.state.slice_suggestions = runtime.automation.slice_suggestions
-    app.state.slice_registry = slice_registry  # INTERIM: dies with the registry
     app.state.slice_service = SliceService(
-        slices=slice_registry.load,
+        slices=lambda: slice_snapshot["slices"],
         asks=slice_asks,
         get_page=_slice_get_page,
         pending_approvals=_slice_pending_approvals,

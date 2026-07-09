@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
 
 from ntrp.agent_surface.schedules import compile_schedules_to_automations
 from ntrp.automation.builtins import seed_builtins
@@ -12,7 +13,6 @@ from ntrp.constants import (
     BUILTIN_SLICE_SUGGESTER_ID,
     SLICE_AGENT_DAILY_AT,
     SLICE_AGENT_HANDLER,
-    SLICES_FILE,
     SLICES_STATE_FILE,
     SLICES_SUGGESTIONS_FILE,
 )
@@ -27,7 +27,7 @@ from ntrp.server.runtime.outbox import RuntimeOutbox
 from ntrp.server.stores import Stores
 from ntrp.slices.agent import OBSERVE_TOOL_SCOPE, record_slice_run, slice_agent_instructions
 from ntrp.slices.asks import AskStore
-from ntrp.slices.registry import SliceRegistry
+from ntrp.slices.models import Slice, slices_from_projects
 from ntrp.slices.suggester import SliceSuggester, SliceSuggestionStore
 
 _logger = get_logger(__name__)
@@ -66,7 +66,6 @@ class AutomationRuntime:
         self.get_integration_clients = get_integration_clients
         self.cheap_model = cheap_model
         self.build_operator_deps = build_operator_deps
-        self.slice_registry = SliceRegistry(config.ntrp_dir / SLICES_FILE)
         self.slice_asks = AskStore(config.ntrp_dir / SLICES_STATE_FILE)
         self.slice_suggestions = SliceSuggestionStore(config.ntrp_dir / SLICES_SUGGESTIONS_FILE)
         self.scheduler = Scheduler(
@@ -89,6 +88,11 @@ class AutomationRuntime:
         )
         self.monitor: Monitor | None = None
 
+    async def load_slices(self) -> list[Slice]:
+        """Slices are the capability-bearing projects (unification: one
+        container concept, project_id as identity)."""
+        return slices_from_projects(await self.stores.sessions.list_projects())
+
     async def stop(self) -> None:
         if self.monitor:
             await self.monitor.stop()
@@ -106,9 +110,8 @@ class AutomationRuntime:
             if not auto.task_id.startswith("slice:"):
                 continue
             key = auto.task_id.removeprefix("slice:")
-            try:
-                slice_ = self.slice_registry.get(key)
-            except KeyError:
+            slice_ = next((s for s in await self.load_slices() if s.key == key), None)
+            if slice_ is None or slice_.page_path is None:
                 continue
             record_slice_run(
                 self.slice_asks,
@@ -258,8 +261,11 @@ class AutomationRuntime:
             cheap_llm = self.get_cheap_llm()
             if cheap_llm is None:
                 return "slice suggester unavailable (no cheap model configured)"
+            attached = {
+                Path(s.page_path).stem for s in await self.load_slices() if s.page_path
+            }
             suggester = SliceSuggester(
-                registry=self.slice_registry,
+                attached_page_slugs=attached,
                 vault_dir=self.config.memory_artifacts_dir,
                 store=self.slice_suggestions,
                 cheap_llm=cheap_llm,
@@ -297,7 +303,8 @@ class AutomationRuntime:
         approvals surface in the session), iteration mode gives run-to-run
         memory, and the observe contract lives in tool_scope as editable
         data. Also migrates rows from the earlier handler-based shape."""
-        for index, slice_ in enumerate(self.slice_registry.load()):
+        agented = [s for s in await self.load_slices() if s.autonomy is not None]
+        for index, slice_ in enumerate(agented):
             task_id = f"slice:{slice_.key}"
             run_at = self._slice_run_at(index)
             trigger = {"type": "time", "at": run_at, "days": "daily"}
@@ -305,7 +312,7 @@ class AutomationRuntime:
             channel_name = f"{slice_.title} agent"
             if existing is None:
                 channel = await self.automation_service._provision_channel(
-                    channel_name, task_id, slice_key=slice_.key
+                    channel_name, task_id, project_id=slice_.key
                 )
                 await self.automation_service.create(
                     task_id=task_id,
@@ -324,7 +331,7 @@ class AutomationRuntime:
                 # Migrate the handler-based, thread-less shape: provision the
                 # slice-tagged channel and convert in place.
                 channel = await self.automation_service._provision_channel(
-                    channel_name, task_id, slice_key=slice_.key
+                    channel_name, task_id, project_id=slice_.key
                 )
                 time_trigger = TimeTrigger(at=run_at, days="daily")
                 existing.name = channel_name

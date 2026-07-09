@@ -18,7 +18,6 @@ class SessionState:
     agent_status: str | None = None
     project_id: str | None = None
     chat_model: str | None = None
-    slice_key: str | None = None
 
 
 @dataclass(frozen=True)

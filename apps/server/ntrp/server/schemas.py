@@ -315,7 +315,6 @@ class SessionResponse(BaseModel):
     name: str | None = None
     project_id: str | None = None
     chat_model: str | None = None
-    slice_key: str | None = None
 
 
 class ProjectResponse(BaseModel):
@@ -346,7 +345,6 @@ class UpdateProjectRequest(BaseModel):
 class CreateSessionRequest(BaseModel):
     name: str | None = None
     project_id: str | None = None
-    slice_key: str | None = None
 
 
 class UpdateSessionModelRequest(BaseModel):
@@ -374,10 +372,6 @@ class RenameSessionRequest(BaseModel):
 
 class MoveSessionProjectRequest(BaseModel):
     project_id: str | None = None
-
-
-class MoveSessionSliceRequest(BaseModel):
-    slice_key: str
 
 
 class CompactRequest(BaseModel):

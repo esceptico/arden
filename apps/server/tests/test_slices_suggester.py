@@ -5,8 +5,6 @@ import json
 
 import pytest
 
-from ntrp.slices.models import Slice
-from ntrp.slices.registry import SliceRegistry
 from ntrp.slices.suggester import (
     SliceSuggester,
     SliceSuggestionStore,
@@ -27,9 +25,7 @@ def test_candidate_pages_excludes_promoted_slices(tmp_path):
         "o-1a": "---\ntitle: O-1A\n---\n# O-1A\nvisa case",
         "letta": "---\ntitle: Letta\n---\n# Letta\nagent framework notes",
     })
-    reg = SliceRegistry(tmp_path / "slices.json")
-    reg.save([Slice(key="o-1a", title="O-1A", page_path="topics/o-1a.md", autonomy="observe")])
-    cands = candidate_pages(vault, reg)
+    cands = candidate_pages(vault, {"o-1a"})
     assert [c["key"] for c in cands] == ["letta"]
     assert "agent framework" in cands[0]["head"]
 
@@ -57,13 +53,12 @@ async def test_suggester_validates_keys_and_respects_dismissals(tmp_path):
         "mats": "---\ntitle: MATS\n---\n# MATS\nfellowship application arc",
         "letta": "---\ntitle: Letta\n---\n# Letta\nframework reference",
     })
-    reg = SliceRegistry(tmp_path / "slices.json")
     store = SliceSuggestionStore(tmp_path / "suggestions.json")
     llm = _FakeLLM({"suggestions": [
         {"key": "mats", "rationale": "Active application with deadlines."},
         {"key": "nonexistent", "rationale": "hallucinated"},
     ]})
-    suggester = SliceSuggester(registry=reg, vault_dir=vault, store=store, cheap_llm=llm, model="cheap")
+    suggester = SliceSuggester(attached_page_slugs=set(), vault_dir=vault, store=store, cheap_llm=llm, model="cheap")
 
     await suggester.run()
     listed = store.list(exclude_keys=set())

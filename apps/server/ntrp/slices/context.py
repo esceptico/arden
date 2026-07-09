@@ -1,19 +1,16 @@
 from pathlib import Path
 
 from ntrp.memory.pages import parse_page
-from ntrp.slices.registry import SliceRegistry
 
 
-def load_slice_context(registry_path: Path, vault_dir: Path, key: str) -> dict | None:
-    """Prompt context for a slice-tagged chat: the slice's title + topic
-    page prose. None when the key is unknown or the page is missing —
-    a scoped chat degrades to a plain chat rather than failing the run."""
-    try:
-        slice_ = SliceRegistry(registry_path).get(key)
-    except KeyError:
+def load_slice_context(vault_dir: Path, project: dict | None) -> dict | None:
+    """Prompt context for a chat filed into a slice: the container's title +
+    topic page prose. None for plain containers or a missing page — the chat
+    degrades to an ordinary project chat rather than failing the run."""
+    if not project or not project.get("page_path"):
         return None
-    page_file = vault_dir / slice_.page_path
+    page_file = vault_dir / project["page_path"]
     if not page_file.exists():
         return None
     page = parse_page(page_file.read_text())
-    return {"title": slice_.title, "page": page.prose.strip()}
+    return {"title": project["name"], "page": page.prose.strip()}

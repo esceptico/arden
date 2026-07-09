@@ -388,7 +388,6 @@ def create_spawn_fn(
             child_state.agent_type = resolved_agent_type
             child_state.agent_status = "running"
             child_state.project_id = calling_ctx.session_state.project_id
-            child_state.slice_key = calling_ctx.session_state.slice_key
             child_state.chat_model = child_model
         child_reasoning_effort = (
             model_reasoning_efforts.get(child_model) if model_reasoning_efforts is not None else reasoning_effort
