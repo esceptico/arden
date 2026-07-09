@@ -1,5 +1,5 @@
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 
@@ -163,6 +163,13 @@ FALLBACK_DEFAULTS = [
     ),
     # --- OpenAI account auth via Codex endpoint ---
     Model(
+        "openai-codex/gpt-5.6-sol",
+        provider=Provider.OPENAI_CODEX,
+        max_context_tokens=272_000,
+        max_output_tokens=128_000,
+        reasoning_efforts=("low", "medium", "high"),
+    ),
+    Model(
         "openai-codex/gpt-5.5",
         provider=Provider.OPENAI_CODEX,
         max_context_tokens=272_000,
@@ -266,10 +273,24 @@ FALLBACK_DEFAULTS = [
     ),
 ]
 
-OAUTH_DEFAULTS = [m for m in FALLBACK_DEFAULTS if m.provider == Provider.OPENAI_CODEX]
-DEFAULTS = (
-    _load_generated_models() or [m for m in FALLBACK_DEFAULTS if m.provider != Provider.OPENAI_CODEX]
-) + OAUTH_DEFAULTS
+def _derive_codex_models(generated: list[Model]) -> list[Model]:
+    # Codex serves OpenAI models under ChatGPT account auth (no per-token pricing);
+    # models.dev has no codex provider, so mirror the generated OpenAI gpt-5 entries.
+    return [
+        replace(m, id=f"openai-codex/{m.id}", provider=Provider.OPENAI_CODEX, pricing=Pricing(0, 0))
+        for m in generated
+        if m.provider == Provider.OPENAI
+        and m.id.startswith("gpt-5")
+        and "chat-latest" not in m.id
+        and not m.id.endswith("-pro")
+    ]
+
+
+_GENERATED = _load_generated_models()
+OAUTH_DEFAULTS = _derive_codex_models(_GENERATED) or [
+    m for m in FALLBACK_DEFAULTS if m.provider == Provider.OPENAI_CODEX
+]
+DEFAULTS = (_GENERATED or [m for m in FALLBACK_DEFAULTS if m.provider != Provider.OPENAI_CODEX]) + OAUTH_DEFAULTS
 
 
 @dataclass(frozen=True)
@@ -373,9 +394,9 @@ def supports_native_deferred_tools(model_id: str) -> bool:
     if model.provider == Provider.ANTHROPIC:
         return True
     if model.provider == Provider.OPENAI:
-        return model.id.startswith(("gpt-5.4", "gpt-5.5"))
+        return model.id.startswith(("gpt-5.4", "gpt-5.5", "gpt-5.6"))
     if model.provider == Provider.OPENAI_CODEX:
-        return model.id.removeprefix("openai-codex/").startswith(("gpt-5.4", "gpt-5.5"))
+        return model.id.removeprefix("openai-codex/").startswith(("gpt-5.4", "gpt-5.5", "gpt-5.6"))
     return False
 
 
