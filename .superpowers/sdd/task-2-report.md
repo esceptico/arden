@@ -1,116 +1,69 @@
-# Task 2 Report
+# Task 2: Page Projection — Open Loops from Prose
 
-## Files changed
+## Summary
 
-- `apps/server/ntrp/constants.py`
-- `apps/server/ntrp/automation/builtins.py`
-- `apps/server/ntrp/automation/scheduler.py`
-- `apps/server/ntrp/server/runtime/automation.py`
-- `apps/server/tests/automation/test_memory_maintenance_handler.py`
-- `apps/server/tests/automation/test_scheduler_catchup.py`
+Implemented prose parsing to extract "## Open loops" bullets from memory topic pages.
 
-## Tests run
+## Files Created
 
-Command:
+- `apps/server/ntrp/slices/projection.py` — Core implementation
+  - `parse_open_loops(prose: str) -> list[str]` — Extracts bullet texts under `## Open loops` heading, strips markdown bold, strips provenance suffixes `(from chat)` and `(record:...)`
+  - `page_summary(page: Page) -> dict` — Returns dict with title, updated timestamp, and open_loops list
 
-```bash
-./.venv/bin/python -m pytest -q tests/automation/test_memory_maintenance_handler.py tests/automation/test_scheduler_catchup.py
+- `apps/server/tests/test_slices_projection.py` — Test suite
+  - `test_parse_open_loops_extracts_bullets_until_next_heading()` — Verifies extraction stops at next heading and provenance is stripped
+  - `test_parse_open_loops_missing_section_is_empty()` — Verifies missing section returns empty list
+
+## Implementation Details
+
+The parser uses regex patterns to:
+1. Detect the `## Open loops` heading (case-insensitive, any spacing)
+2. Collect markdown bullets (`-` or `*` prefix) until the next heading
+3. Strip markdown bold markers (`**text**` → `text`)
+4. Strip provenance suffixes: `(from chat)` and `(record:...)` patterns
+
+## Test Results
+
+```
+tests/test_slices_projection.py::test_parse_open_loops_extracts_bullets_until_next_heading PASSED
+tests/test_slices_projection.py::test_parse_open_loops_missing_section_is_empty PASSED
+
+======================== 2 passed in 1.35s ========================
 ```
 
-Summary:
+## Commit
 
-- `17 passed in 1.65s`
+`4b6c4ac0` — feat(slices): open-loop projection from topic-page prose
 
-## Self-review
+---
 
-- Kept `memory_consolidate` reconcile-only; it no longer calls `knowledge.rebuild_artifacts()`.
-- Added separate builtin wiring for `memory_publish`, with its own constant, schedule, seeded builtin, runtime handler, and catch-up eligibility.
-- `memory_consolidate` summary still reports all mutating fields from the Task 1 contract, including `reclassified` and `pruned`.
-- `memory_publish` reports refreshed artifact count and returns unavailable when knowledge is absent or memory is not ready.
-- Touched only the requested server/runtime/test files.
+## Post-Implementation Fix: Indented Heading Termination
 
-## Concerns
+**Issue:** The `parse_open_loops()` function had an inconsistency in line stripping:
+- Line 16 checked `_LOOP_HEADING.match(line.strip())` on the stripped line
+- Line 19 checked `_HEADING.match(line)` on the UNstripped line
+- Result: indented headings (e.g., `  ## Indented heading`) failed to terminate the Open loops section
 
-- I set `MEMORY_PUBLISH_AT` to `03:30` so publish runs after the `03:00` reconcile pass. The brief required a separate builtin but did not specify the exact time.
+**Fix:** Strip once per iteration and use the same variable for all three regex checks.
 
-## Fix: review sequencing issue
-
-### Files changed
-
-- `apps/server/ntrp/automation/scheduler.py`
-- `apps/server/tests/automation/test_scheduler_catchup.py`
-- `.superpowers/sdd/task-2-report.md`
-
-### Tests run
-
-Command:
-
-```bash
-cd /Users/escept1co/src/ntrp/apps/server && ./.venv/bin/python -m pytest -q tests/automation/test_scheduler_catchup.py tests/automation/test_memory_maintenance_handler.py
+**Test Added:**
+```python
+def test_parse_open_loops_indented_heading_terminates_section():
+    prose = "# T\n\n## Open loops\n- Loop one.\n  ## Indented heading\n- Not a loop.\n"
+    assert parse_open_loops(prose) == ["Loop one."]
 ```
 
-### Output summary
+**Test Results:**
+```
+tests/test_slices_projection.py::test_parse_open_loops_extracts_bullets_until_next_heading PASSED [ 33%]
+tests/test_slices_projection.py::test_parse_open_loops_missing_section_is_empty PASSED [ 66%]
+tests/test_slices_projection.py::test_parse_open_loops_indented_heading_terminates_section PASSED [100%]
 
-- `17 passed in 2.54s`
-
-### Self-review
-
-- Removed `memory_publish` from missed-run catch-up eligibility so a boot-time catch-up cannot race ahead of `integration_sync` or `memory_consolidate`.
-- Kept the nominal `03:30` publish schedule unchanged; normal nightly ordering still stays `integration_sync` -> `memory_consolidate` -> `memory_publish`.
-- Did not add dirty/no-op publish gating from Task 3.
-
-## Fix: ordered catch-up sequencing
-
-### Files changed
-
-- `apps/server/ntrp/automation/scheduler.py`
-- `apps/server/tests/automation/test_scheduler_catchup.py`
-- `.superpowers/sdd/task-2-report.md`
-
-### Tests run
-
-Command:
-
-```bash
-cd /Users/escept1co/src/ntrp/apps/server && ./.venv/bin/python -m pytest -q tests/automation/test_scheduler_catchup.py tests/automation/test_memory_maintenance_handler.py
+======================== 3 passed in 0.97s ========================
 ```
 
-### Output summary
+**Commit:** `a46e937c` — fix(slices): terminate open-loops section on indented headings too
 
-- `18 passed in 2.08s`
+---
 
-### Self-review
-
-- Superseded the earlier workaround that removed `memory_publish` from catch-up.
-- Restored `memory_publish` catch-up eligibility so a missed overnight reconcile still publishes on the same boot.
-- Added ordered catch-up sequencing for overdue builtins: `integration_sync` runs first, `memory_consolidate` waits for it, and `memory_publish` waits for both.
-- Woke the scheduler when one catch-up phase finishes so the next overdue phase starts immediately instead of waiting for the next 60s poll.
-- Kept Task 3 dirty/no-op publish gating out of scope.
-
-## Fix: missed-slot catch-up detection
-
-### Files changed
-
-- `apps/server/ntrp/automation/scheduler.py`
-- `apps/server/tests/automation/test_scheduler_catchup.py`
-- `.superpowers/sdd/task-2-report.md`
-
-### Tests run
-
-Command:
-
-```bash
-cd /Users/escept1co/src/ntrp/apps/server && ./.venv/bin/python -m pytest -q tests/automation/test_scheduler_catchup.py tests/automation/test_memory_maintenance_handler.py
-```
-
-### Output summary
-
-- `19 passed in 2.07s`
-
-### Self-review
-
-- Replaced the 24-hour cadence heuristic in `_should_catch_up_missed()` with a missed-slot check keyed to `next_run_at`.
-- Catch-up now fires when the scheduled slot is overdue and `last_run_at` has not yet satisfied that specific slot.
-- Preserved the ordered same-boot sequencing from the prior fix: `integration_sync` -> `memory_consolidate` -> `memory_publish`.
-- Added a regression for the late previous-day catch-up case (`2026-06-18 16:00` run, missed `2026-06-19 03:30`, boot at `2026-06-19 09:00`).
-- Kept Task 3 dirty/no-op publish gating out of scope.
+**STATUS:** COMPLETE | Commit: `a46e937c` | All 3 tests passing (2 original + 1 new)

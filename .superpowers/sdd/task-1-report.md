@@ -1,70 +1,58 @@
-# Task 1 Report
+# Task 1: Slice + Ask Models and Slice Registry - Report
 
-## Files changed
-- `apps/server/ntrp/memory/consolidate.py`
-- `apps/server/tests/test_memory_consolidate.py`
+## Summary
+Completed foundational data models for the Slices feature, including Slice/Ask dataclasses and a file-backed SliceRegistry. All tests passing.
 
-## Tests run
-- `cd /Users/escept1co/src/ntrp/apps/server && uv run pytest -q tests/test_memory_consolidate.py -k 'empty_delta or idle_sweep_skips_label_hygiene_when_fingerprint_is_unchanged or consolidate_report_changed_memory_tracks_all_mutations'`
-  - Result: `3 passed, 17 deselected in 0.94s`
-- `cd /Users/escept1co/src/ntrp/apps/server && uv run pytest -q tests/test_memory_consolidate.py`
-  - Result: `20 passed in 1.09s`
+## Implementation Details
 
-## Self-review
-- Added a durable `consolidate_label_fingerprint` in the shared `meta` table.
-- Fingerprint input is deterministic and includes `label`, `count`, and `kind`.
-- Idle `run_once()` now skips `_lint_labels()` only when the persisted fingerprint matches current labels.
-- Idle `run_once()` still prunes and advances the watermark when label hygiene is skipped.
-- `ConsolidateReport` now exposes `mutating_count` and `changed_memory`, and includes `reclassified` in that logic.
-- Tests cover idle re-run on fingerprint change, idle skip on unchanged fingerprint across a new `Consolidate` instance, prune/watermark behavior, and the report helper.
+### Files Created
+1. **apps/server/ntrp/slices/__init__.py** - Empty module init
+2. **apps/server/ntrp/slices/models.py** - Data models:
+   - `AskKind` type alias: `Literal["review", "decide", "act", "drift"]`
+   - `AskState` type alias: `Literal["active", "done", "dismissed", "snoozed"]`
+   - `Autonomy` type alias: `Literal["observe", "act"]`
+   - `Slice` dataclass with: `key`, `title`, `page_path`, `autonomy`, `related` (list, default factory)
+   - `Ask` dataclass with: `id`, `slice_key`, `text`, `kind`, `source`, `actions`, `state`, `created_at`, optional `snoozed_until` and `provenance`
 
-## Concerns
-- None.
+3. **apps/server/ntrp/slices/registry.py** - SliceRegistry class:
+   - `__init__(path: Path)` - stores path to JSON file
+   - `load() -> list[Slice]` - reads from JSON, returns empty list if file missing
+   - `save(slices: list[Slice])` - writes slices to JSON with indentation
+   - `get(key: str) -> Slice` - retrieves slice by key, raises KeyError with valid keys list on miss
 
-## Fix review findings
+4. **apps/server/tests/test_slices_registry.py** - Two tests:
+   - `test_registry_roundtrip` - verifies save/load roundtrip with dataclass equality and JSON structure
+   - `test_registry_get_unknown_lists_valid_keys` - verifies self-correcting interface on KeyError
 
-### Files changed
-- `apps/server/ntrp/server/runtime/automation.py`
-- `apps/server/tests/automation/test_memory_maintenance_handler.py`
-- `apps/server/ntrp/memory/consolidate.py`
-- `apps/server/tests/test_memory_consolidate.py`
+### Files Modified
+- **apps/server/ntrp/constants.py** - Added two constants:
+  - `SLICES_FILE = "slices.json"` - under ~/.ntrp dir
+  - `SLICES_STATE_FILE = "slices-state.json"`
 
-### Tests run
-- `cd /Users/escept1co/src/ntrp/apps/server && uv run pytest -q tests/automation/test_memory_maintenance_handler.py tests/test_memory_consolidate.py -k 'consolidates_then_refreshes_prose or continues_when_only_new_report_fields_changed or empty_delta or changed_memory_tracks_all_mutations or idle_sweep_skips_label_hygiene_when_fingerprint_is_unchanged'`
-  - Result: `5 passed, 22 deselected in 1.37s`
-- `cd /Users/escept1co/src/ntrp/apps/server && uv run pytest -q tests/automation/test_memory_maintenance_handler.py tests/test_memory_consolidate.py`
-  - Result: `27 passed in 1.51s`
+## Test Results
+```
+============================= test session starts ==============================
+tests/test_slices_registry.py::test_registry_roundtrip PASSED            [ 50%]
+tests/test_slices_registry.py::test_registry_get_unknown_lists_valid_keys PASSED [100%]
 
-### Output summary
-- Memory-maintenance automation now aggregates `ConsolidateReport.summary_counts` instead of a hard-coded field list.
-- The handler now uses `ConsolidateReport.changed_memory` for its loop stop condition.
-- Nightly summary output now includes `reclassified` and `pruned`.
-- `consolidate.py` comments now describe fingerprint-gated idle label hygiene instead of saying it runs every sweep.
-- The renamed consolidate test now reflects fingerprint-changed idle behavior.
+============================== 2 passed in 0.04s ======================
+```
 
-### Self-review
-- Kept the automation fix local to the existing handler; no Task 2 artifact-flow changes.
-- Reused the report contract already introduced in Task 1 instead of duplicating count logic again in automation tests or runtime code.
-- Left unrelated untracked work (`apps/server/tool-harness-audit.md`) untouched.
+## Process
+1. ✅ Wrote failing test - confirmed ModuleNotFoundError
+2. ✅ Implemented models and registry per brief verbatim
+3. ✅ Added constants following existing NTRP_DIR-style pattern
+4. ✅ All tests pass
+5. ✅ Committed: `70a99a2c feat(slices): Slice/Ask models + file-backed registry`
 
-## Fix important finding
+## No Deviations
+- All code matches brief specification exactly
+- No defensive fallbacks or backward compatibility hacks
+- Minimal docstrings (code speaks for itself per project style)
+- Imports at top, dataclasses for models, no inheritance
+- Registry's self-correcting error message implemented as specified
 
-### Files changed
-- `apps/server/ntrp/memory/consolidate.py`
-- `apps/server/tests/test_memory_consolidate.py`
-
-### Tests run
-- `cd /Users/escept1co/src/ntrp/apps/server && uv run pytest -q tests/test_memory_consolidate.py -k 'failed_label_hygiene_does_not_persist_fingerprint_and_idle_sweep_retries'`
-  - Result: `1 passed, 20 deselected in 1.23s`
-- `cd /Users/escept1co/src/ntrp/apps/server && uv run pytest -q tests/test_memory_consolidate.py`
-  - Result: `21 passed in 1.46s`
-
-### Output summary
-- Label-vocabulary fingerprints now persist only when label hygiene actually completes.
-- Failed / empty / unparseable label judgments leave the fingerprint unset, so the next idle sweep retries hygiene instead of skipping it forever.
-- The new regression test proves both conditions: no persisted fingerprint after failed judgment, and retry on the following idle sweep.
-
-### Self-review
-- Kept the fix local to `_sync_label_hygiene()` / `_lint_labels()`; no wider consolidate flow changes.
-- Treated `< 2 labels` as a successful no-op so existing skip behavior stays cheap.
-- Left unrelated worktree changes untouched.
+## Notes
+- Constants added to ntrp/constants.py in new "--- Slices ---" section at file end
+- All implementations are straightforward TDD: test → code → verify
+- No external dependencies beyond stdlib (json, dataclasses, pathlib, typing)
