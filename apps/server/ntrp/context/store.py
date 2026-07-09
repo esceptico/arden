@@ -2802,6 +2802,18 @@ class SessionStore:
     async def update_session_slice(self, session_id: str, slice_key: str, project_id: str | None) -> bool:
         return await self._update(SQL_UPDATE_SESSION_SLICE, (slice_key, project_id, session_id))
 
+    async def list_slice_tagged_sessions(self) -> list[dict]:
+        """Migration-only raw read of the retired slice_key column."""
+        rows = await self.read_conn.execute_fetchall(
+            "SELECT session_id, slice_key, project_id FROM sessions WHERE slice_key IS NOT NULL"
+        )
+        return [dict(r) for r in rows]
+
+    async def rewrite_origin_automation_id(self, old: str, new: str) -> bool:
+        return await self._update(
+            "UPDATE sessions SET origin_automation_id = ? WHERE origin_automation_id = ?", (new, old)
+        )
+
     async def update_session_chat_model(self, session_id: str, chat_model: str | None) -> bool:
         return await self._update(SQL_UPDATE_SESSION_CHAT_MODEL, (chat_model, session_id))
 

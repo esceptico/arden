@@ -13,6 +13,7 @@ from ntrp.automation.models import Automation
 from ntrp.automation.output_schemas import resolve_output_schema
 from ntrp.automation.prompts import AUTOMATION_PROMPT, AUTOMATION_SUFFIX
 from ntrp.automation.scheduler import AUTOMATION_BUS_KEY
+from ntrp.constants import SLICES_FILE
 from ntrp.core.tool_result_files import prune_offload_store
 from ntrp.events.sse import MemoryChangedEvent, SlicesChangedEvent
 from ntrp.logging import get_logger
@@ -31,7 +32,6 @@ from ntrp.server.routers.memory import router as memory_router
 from ntrp.server.routers.ops import router as ops_router
 from ntrp.server.routers.providers import router as providers_router
 from ntrp.server.routers.runtime_info import router as runtime_info_router
-from ntrp.server.routers.session import ensure_project_for_slice
 from ntrp.server.routers.session import router as session_router
 from ntrp.server.routers.settings import router as settings_router
 from ntrp.server.routers.setup import router as setup_router
@@ -39,6 +39,7 @@ from ntrp.server.routers.skills import router as skills_router
 from ntrp.server.routers.slices import router as slices_router
 from ntrp.server.runtime import Runtime
 from ntrp.services.chat import submit_chat_message
+from ntrp.slices.migrate import migrate_slices_to_projects
 from ntrp.slices.projection import slice_automation_match
 from ntrp.slices.service import SliceService
 
@@ -107,19 +108,16 @@ async def lifespan(app: FastAPI):
 
         runtime.session_service.set_event_sink(_publish_session_event)
 
-        # Slices↔projects unification backfill: chats filed into a slice
-        # before backing projects were auto-created (the link-only era) sat
-        # in Inbox with slice_key set but no project. One idempotent scan on
-        # boot mints the missing project and links them.
-        for row in await runtime.session_service.list_sessions(limit=1000):
-            if row.get("slice_key") and not row.get("project_id"):
-                backfill_project = await ensure_project_for_slice(
-                    runtime.session_service, runtime, row["slice_key"]
-                )
-                if backfill_project:
-                    await runtime.session_service.move_session_to_slice(
-                        row["session_id"], row["slice_key"], backfill_project
-                    )
+        # Slices↔projects unification: one-shot fold of slices.json into the
+        # projects table (capabilities + re-keyed asks/automations/sessions).
+        # No-op once the file has been renamed to .migrated.
+        await migrate_slices_to_projects(
+            slices_file=runtime.config.ntrp_dir / SLICES_FILE,
+            session_service=runtime.session_service,
+            ask_store=runtime.automation.slice_asks,
+            automation_store=runtime.stores.automations,
+            session_store=runtime.session_service.store,
+        )
 
     # Live memory vault: the store polls the memory dir for external edits
     # (Obsidian, feed automations, git) and fans each absorbed batch out on the

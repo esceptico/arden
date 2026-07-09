@@ -1174,6 +1174,12 @@ class AutomationStore:
         )
         await self.conn.commit()
 
+    async def rewrite_task_id(self, old: str, new: str) -> None:
+        """Migration helper: rename a task across every task_id-keyed table."""
+        for table in ("scheduled_tasks", "automation_runs", "automation_event_dedupe", "automation_event_queue"):
+            await self.conn.execute(f"UPDATE {table} SET task_id = ? WHERE task_id = ?", (new, old))
+        await self.conn.commit()
+
     async def get(self, task_id: str) -> Automation | None:
         rows = await self.conn.execute_fetchall(_SQL_GET_BY_ID, (task_id,))
         if not rows:
