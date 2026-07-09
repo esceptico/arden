@@ -43,6 +43,8 @@ CREATE TABLE IF NOT EXISTS projects (
     default_cwds TEXT NOT NULL DEFAULT '[]',
     instructions TEXT,
     knowledge_scope TEXT,
+    page_path TEXT,
+    autonomy TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     archived_at TEXT
@@ -416,6 +418,7 @@ ON CONFLICT(session_id) DO UPDATE SET
 SQL_UPDATE_NAME = "UPDATE sessions SET name = ? WHERE session_id = ?"
 SQL_UPDATE_NAME_IF_EMPTY = "UPDATE sessions SET name = ? WHERE session_id = ? AND (name IS NULL OR name = '')"
 SQL_UPDATE_SESSION_PROJECT = "UPDATE sessions SET project_id = ? WHERE session_id = ?"
+SQL_UPDATE_SESSION_SLICE = "UPDATE sessions SET slice_key = ?, project_id = ? WHERE session_id = ?"
 SQL_UPDATE_SESSION_CHAT_MODEL = "UPDATE sessions SET chat_model = ? WHERE session_id = ?"
 SQL_ARCHIVE = "UPDATE sessions SET archived_at = ? WHERE session_id = ? AND archived_at IS NULL"
 SQL_RESTORE = "UPDATE sessions SET archived_at = NULL WHERE session_id = ? AND archived_at IS NOT NULL"
@@ -620,6 +623,8 @@ class SessionStore:
             "default_cwd": (json.loads(row["default_cwds"] or "[]") or [None])[0],
             "instructions": row["instructions"],
             "knowledge_scope": row["knowledge_scope"] or f"project:{row['project_id']}",
+            "page_path": dict(row).get("page_path"),
+            "autonomy": dict(row).get("autonomy"),
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
             "archived_at": row["archived_at"],
@@ -643,6 +648,15 @@ class SessionStore:
         ):
             try:
                 await self.conn.execute(f"ALTER TABLE sessions ADD COLUMN {col}")
+                await self.conn.commit()
+            except Exception:
+                pass
+        # Slice capabilities on the container itself (slices/projects
+        # unification): a project with a page is a slice; autonomy set means
+        # it has a standing agent.
+        for col in ("page_path TEXT", "autonomy TEXT"):
+            try:
+                await self.conn.execute(f"ALTER TABLE projects ADD COLUMN {col}")
                 await self.conn.commit()
             except Exception:
                 pass
@@ -691,6 +705,8 @@ class SessionStore:
         default_cwd: str | None = None,
         instructions: str | None = None,
         knowledge_scope: str | None = None,
+        page_path: str | None = None,
+        autonomy: str | None = None,
     ) -> dict:
         trimmed_name = name.strip()
         if not trimmed_name:
@@ -702,9 +718,9 @@ class SessionStore:
             """
             INSERT INTO projects (
                 project_id, name, default_cwds, instructions, knowledge_scope,
-                created_at, updated_at, archived_at
+                page_path, autonomy, created_at, updated_at, archived_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
             """,
             (
                 project_id,
@@ -712,6 +728,8 @@ class SessionStore:
                 json.dumps([self._normalize_cwd(default_cwd)] if self._normalize_cwd(default_cwd) else []),
                 instructions.strip() if instructions and instructions.strip() else None,
                 scope,
+                page_path,
+                autonomy,
                 now,
                 now,
             ),
@@ -749,6 +767,8 @@ class SessionStore:
         default_cwd: str | None | object = _PROJECT_PATCH_UNSET,
         instructions: str | None | object = _PROJECT_PATCH_UNSET,
         knowledge_scope: str | None | object = _PROJECT_PATCH_UNSET,
+        page_path: str | None | object = _PROJECT_PATCH_UNSET,
+        autonomy: str | None | object = _PROJECT_PATCH_UNSET,
     ) -> dict | None:
         assignments = ["updated_at = ?"]
         params: list[object] = [datetime.now(UTC).isoformat()]
@@ -770,6 +790,12 @@ class SessionStore:
             assignments.append("knowledge_scope = ?")
             scope = knowledge_scope if isinstance(knowledge_scope, str) else None
             params.append(scope.strip() if scope and scope.strip() else f"project:{project_id}")
+        if page_path is not _PROJECT_PATCH_UNSET:
+            assignments.append("page_path = ?")
+            params.append(page_path if isinstance(page_path, str) else None)
+        if autonomy is not _PROJECT_PATCH_UNSET:
+            assignments.append("autonomy = ?")
+            params.append(autonomy if isinstance(autonomy, str) else None)
         params.append(project_id)
         cursor = await self.conn.execute(
             f"UPDATE projects SET {', '.join(assignments)} WHERE project_id = ? AND archived_at IS NULL",
@@ -2772,6 +2798,9 @@ class SessionStore:
 
     async def update_session_project(self, session_id: str, project_id: str | None) -> bool:
         return await self._update(SQL_UPDATE_SESSION_PROJECT, (project_id, session_id))
+
+    async def update_session_slice(self, session_id: str, slice_key: str, project_id: str | None) -> bool:
+        return await self._update(SQL_UPDATE_SESSION_SLICE, (slice_key, project_id, session_id))
 
     async def update_session_chat_model(self, session_id: str, chat_model: str | None) -> bool:
         return await self._update(SQL_UPDATE_SESSION_CHAT_MODEL, (chat_model, session_id))

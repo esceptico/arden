@@ -436,12 +436,16 @@ class SessionService:
         default_cwd: str | None = None,
         instructions: str | None = None,
         knowledge_scope: str | None = None,
+        page_path: str | None = None,
+        autonomy: str | None = None,
     ) -> dict:
         return await self.store.create_project(
             name=name,
             default_cwd=default_cwd,
             instructions=instructions,
             knowledge_scope=knowledge_scope,
+            page_path=page_path,
+            autonomy=autonomy,
         )
 
     async def get_project(self, project_id: str | None) -> dict | None:
@@ -458,6 +462,9 @@ class SessionService:
 
     async def move_session_to_project(self, session_id: str, project_id: str | None) -> bool:
         return await self.store.update_session_project(session_id, project_id)
+
+    async def move_session_to_slice(self, session_id: str, slice_key: str, project_id: str | None) -> bool:
+        return await self.store.update_session_slice(session_id, slice_key, project_id)
 
     async def archive(self, session_id: str) -> bool:
         return await self.store.archive_session(session_id)
