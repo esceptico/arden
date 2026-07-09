@@ -24,17 +24,17 @@ export function Sidebar() {
         {/* Home doubles as "new session": the hero input starts a chat, so
             one destination covers both (⌘N lands here too). */}
         <NavRow
-          icon={<House size={ICON.LG} strokeWidth={2} />}
+          icon={<House size={ICON.MD} strokeWidth={2} />}
           label="Home"
           onClick={() => goToNewSessionHome()}
         />
         <NavRow
-          icon={<Zap size={ICON.LG} strokeWidth={2} />}
+          icon={<Zap size={ICON.MD} strokeWidth={2} />}
           label="Automations"
           onClick={(e) => openAutomations(originFromEvent(e.currentTarget))}
         />
         <NavRow
-          icon={<Brain size={ICON.LG} strokeWidth={2} />}
+          icon={<Brain size={ICON.MD} strokeWidth={2} />}
           label="Memory"
           onClick={(e) => openMemory(originFromEvent(e.currentTarget))}
         />
@@ -43,7 +43,7 @@ export function Sidebar() {
       <nav className="flex items-center gap-1 px-2.5 pt-1.5 pb-3">
         <div className="min-w-0 flex-1">
           <NavRow
-            icon={<SettingsIcon size={ICON.LG} strokeWidth={2} />}
+            icon={<SettingsIcon size={ICON.MD} strokeWidth={2} />}
             label="Settings"
             onClick={(e) => openSettings(originFromEvent(e.currentTarget))}
           />

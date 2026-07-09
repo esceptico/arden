@@ -229,7 +229,7 @@ export function SessionList() {
             return (
               /* Compact rows, air BETWEEN groups — the group gap is what
                  makes the zones scannable, not taller rows. */
-              <div key={group.key} className={clsx(groupIndex > 0 && "mt-2")}>
+              <div key={group.key} className={clsx(groupIndex > 0 && "mt-0.5")}>
                 <div className="group/prow flex items-center gap-1 pr-[18px]">
                   <button
                     type="button"
@@ -242,11 +242,11 @@ export function SessionList() {
                         one text edge (Codex-style tree without extra indent). */}
                     <span aria-hidden className="grid w-4 shrink-0 place-items-center text-faint">
                       {group.pinned ? (
-                        <Pin size={ICON.LG} strokeWidth={2} />
+                        <Pin size={ICON.MD} strokeWidth={2} />
                       ) : group.key === "inbox" ? (
-                        <Inbox size={ICON.LG} strokeWidth={2} />
+                        <Inbox size={ICON.MD} strokeWidth={2} />
                       ) : group.project ? (
-                        <Folder size={ICON.LG} strokeWidth={2} />
+                        <Folder size={ICON.MD} strokeWidth={2} />
                       ) : null}
                     </span>
                     <span className="min-w-0 truncate">{group.label}</span>
