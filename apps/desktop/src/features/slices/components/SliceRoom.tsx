@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { useStore } from "@/stores";
 import { fetchSliceDetail, updateSliceAutonomy } from "@/actions/slices";
 import { runAutomation } from "@/actions/automations";
-import { createSessionWithSlice, switchSession } from "@/actions/sessions";
+import { createSession, switchSession } from "@/actions/sessions";
 import { sendMessage } from "@/actions/messages";
 import { Eye, Zap } from "lucide-react";
 import { AskCard } from "@/features/slices/components/AskCard";
@@ -128,7 +128,9 @@ export function SliceRoom({ sliceKey }: { sliceKey: string }) {
     setSending(true);
     setDraft("");
     try {
-      await createSessionWithSlice(sliceKey);
+      // sliceKey IS the project_id (unification) — filing is a plain
+      // create-in-project; the room's sessions list keys off project_id.
+      await createSession(sliceKey);
       await sendMessage(text);
     } catch {
       setDraft(text);

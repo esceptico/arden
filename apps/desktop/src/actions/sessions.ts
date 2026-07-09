@@ -43,32 +43,9 @@ export async function createSession(projectId?: string | null): Promise<void> {
   await switchSession(session.session_id);
 }
 
-/** Provisions a session tagged with `slice_key` (mirrors `createSession`'s
- *  project_id path — the server's `POST /sessions` accepts both) and
- *  switches to it. Used by the slice room's scoped composer: a message sent
- *  from within a slice needs a session the server can attribute back to
- *  that slice (`/slices/{key}` detail's `sessions` list), which the base
- *  `sendMessage` has no way to express since it only ever posts into an
- *  already-current session. */
-export async function createSessionWithSlice(sliceKey: string): Promise<string> {
-  const s = getState();
-  const session = await apiWithConfig<SessionListItem>(s.config, "/sessions", {
-    method: "POST",
-    body: JSON.stringify({ slice_key: sliceKey }),
-  });
-  s.prependSession(session);
-  // First filing into a slice mints its backing project server-side; sync
-  // the projects list when the response names one we don't know yet.
-  if (session.project_id && !s.projects.some((p) => p.project_id === session.project_id)) {
-    await refreshProjects();
-  }
-  await switchSession(session.session_id);
-  return session.session_id;
-}
-
 export async function createProject(): Promise<Project> {
   const s = getState();
-  const project = await createProjectApi(s.config, { name: "New project" });
+  const project = await createProjectApi(s.config, { name: "New slice" });
   s.setProjects([project, ...s.projects]);
   await createSession(project.project_id);
   return project;

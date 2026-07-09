@@ -54,17 +54,9 @@ export function SessionList() {
   const toggleGroup = (key: string) => setCollapsedGroups((prev) => toggleSet(prev, key));
   const toggleExpanded = (key: string) => setExpandedGroups((prev) => toggleSet(prev, key));
 
-  // Slice-backed project groups (project name slugs to a slice key) get an
-  // "open room" action: the project group and the slice room are the same
-  // container seen from two sides.
-  const sliceKeys = useStore((s) => s.slices.overview?.slices);
+  // Every group opens as a room (slices and projects are one container) —
+  // the ↗ action is the sidebar's door into it.
   const openSlice = useStore((s) => s.openSlice);
-  const sliceKeySet = useMemo(() => new Set((sliceKeys ?? []).map((sl) => sl.key)), [sliceKeys]);
-  const sliceKeyForGroup = (name: string | undefined): string | null => {
-    if (!name) return null;
-    const slug = name.trim().toLowerCase().replaceAll(" ", "-");
-    return sliceKeySet.has(slug) ? slug : null;
-  };
 
   const pinnedSet = useMemo(() => new Set(pinnedSessionIds), [pinnedSessionIds]);
   const togglePin = (sessionId: string) => {
@@ -243,16 +235,14 @@ export function SessionList() {
                   </button>
                   {group.project && (
                     <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover/prow:opacity-100 focus-within:opacity-100 transition-opacity duration-row">
-                      {sliceKeyForGroup(group.project.name) && (
-                        <RowAction
-                          icon={<ArrowUpRight size={ICON.SM} strokeWidth={2} />}
-                          label={`Open the ${group.label} room`}
-                          onClick={() => openSlice(sliceKeyForGroup(group.project?.name) ?? null)}
-                        />
-                      )}
+                      <RowAction
+                        icon={<ArrowUpRight size={ICON.SM} strokeWidth={2} />}
+                        label={`Open the ${group.label} room`}
+                        onClick={() => openSlice(group.project?.project_id ?? null)}
+                      />
                       <RowAction
                         icon={<Settings size={ICON.SM} strokeWidth={2} />}
-                        label={`Project settings — ${group.project.name}`}
+                        label={`Slice settings — ${group.project.name}`}
                         onClick={() => setEditingProjectId(group.project?.project_id ?? null)}
                       />
                       <RowAction

@@ -28,12 +28,12 @@ export async function resolveAsk(key: string, askId: string, state: string, snoo
 export async function updateSliceAutonomy(key: string, autonomy: "observe" | "act"): Promise<void> {
   const s = getState();
   const record = await updateSliceAutonomyApi(s.config, key, autonomy);
-  s.sliceAutonomyUpdated(key, record.autonomy);
+  s.sliceAutonomyUpdated(key, record.autonomy ?? "observe");
 }
 
-export async function promoteSuggestedSlice(key: string, title: string, pagePath: string): Promise<void> {
+export async function promoteSuggestedSlice(title: string, pagePath: string): Promise<void> {
   const s = getState();
-  await createSliceApi(s.config, key, title, pagePath);
+  await createSliceApi(s.config, title, pagePath);
   await fetchSlicesOverview();
 }
 

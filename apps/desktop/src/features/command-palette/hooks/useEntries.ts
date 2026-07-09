@@ -69,7 +69,7 @@ export function useEntries(): CommandEntry[] {
     entries.push({
       id: "suggested:new-project",
       section: "suggested",
-      label: "New project",
+      label: "New slice",
       icon: FolderPlus,
       run: () => void createProject(),
       search: "new project create folder group",

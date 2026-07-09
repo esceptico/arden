@@ -1,9 +1,11 @@
 import { apiWithConfig, type AppConfig } from "@/api/core";
 
 export interface SliceSummary {
+  /** The container's project_id (slices and projects are one concept). */
   key: string;
   title: string;
-  autonomy: "observe" | "act";
+  autonomy: "observe" | "act" | null;
+  page_path: string | null;
   live: boolean;
   updated: string;
   ask_count: number;
@@ -40,8 +42,8 @@ export interface SlicesOverview {
 export interface SliceDetail {
   key: string;
   title: string;
-  autonomy: "observe" | "act";
-  page_path: string;
+  autonomy: "observe" | "act" | null;
+  page_path: string | null;
   related: string[];
   open_loops: string[];
   updated: string;
@@ -73,37 +75,30 @@ export async function resolveAsk(
   });
 }
 
-// Server returns the slice registry record (key/title/autonomy/page_path/
-// related) — not a full SliceDetail (no asks/sessions/automations). The
-// action layer merges just the autonomy field into any cached detail.
-export interface SliceRegistryRecord {
-  key: string;
-  title: string;
-  autonomy: "observe" | "act";
-  page_path: string;
-  related: string[];
-}
-
+// Server returns the updated project row — not a full SliceDetail (no
+// asks/sessions/automations). The action layer merges just the autonomy
+// field into any cached detail.
 export async function updateSliceAutonomy(
   config: AppConfig,
   key: string,
   autonomy: "observe" | "act",
-): Promise<SliceRegistryRecord> {
-  return apiWithConfig<SliceRegistryRecord>(config, `/slices/${encodeURIComponent(key)}`, {
+): Promise<{ project_id: string; name: string; autonomy: "observe" | "act" | null }> {
+  return apiWithConfig(config, `/slices/${encodeURIComponent(key)}`, {
     method: "PUT",
     body: JSON.stringify({ autonomy }),
   });
 }
 
+/** Attach capabilities: mint a new container (name) or grow an existing one
+ *  (project_id) with a page + observing agent. */
 export async function createSlice(
   config: AppConfig,
-  key: string,
   title: string,
   pagePath: string,
 ): Promise<void> {
   await apiWithConfig(config, "/slices", {
     method: "POST",
-    body: JSON.stringify({ key, title, page_path: pagePath }),
+    body: JSON.stringify({ name: title, page_path: pagePath }),
   });
 }
 

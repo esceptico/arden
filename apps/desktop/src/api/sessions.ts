@@ -70,7 +70,7 @@ export async function moveSessionToProjectApi(
 }
 
 export interface TriageTarget {
-  kind: "slice" | "project";
+  /** The container's project_id (slices and projects are one concept). */
   key: string;
   title: string;
 }
@@ -87,17 +87,6 @@ export interface TriageDecision {
 export async function triageSessionApi(config: AppConfig, sessionId: string): Promise<TriageDecision> {
   return apiWithConfig<TriageDecision>(config, `/sessions/${encodeURIComponent(sessionId)}/triage`, {
     method: "POST",
-  });
-}
-
-export async function moveSessionToSliceApi(
-  config: AppConfig,
-  sessionId: string,
-  sliceKey: string,
-): Promise<{ session_id: string; slice_key: string; project_id: string | null }> {
-  return apiWithConfig(config, `/sessions/${encodeURIComponent(sessionId)}/slice`, {
-    method: "POST",
-    body: JSON.stringify({ slice_key: sliceKey }),
   });
 }
 

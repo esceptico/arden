@@ -91,7 +91,7 @@ export function ProjectSettingsModal({ project, onClose }: ProjectSettingsModalP
       onClose={busy ? () => {} : onClose}
       disableEscape={busy}
       size="w-[min(640px,calc(100vw-32px))] h-[min(520px,calc(100vh-32px))]"
-      header={{ title: project?.name ?? "Project" }}
+      header={{ title: project?.name ?? "Slice" }}
     >
       <form onSubmit={submit} className="min-h-0 grid grid-rows-[minmax(0,1fr)_auto]">
         <div className="min-h-0 overflow-y-auto scroll-thin px-5 pb-4 space-y-4">
@@ -130,7 +130,7 @@ export function ProjectSettingsModal({ project, onClose }: ProjectSettingsModalP
         <footer className="flex items-center justify-between gap-2 px-5 py-4 border-t border-line-soft">
           <ConfirmDeleteButton
             size="md"
-            label={`Archive ${project?.name ?? "project"}`}
+            label={`Archive ${project?.name ?? "slice"}`}
             busy={busy}
             onConfirm={() => void archive()}
           />

@@ -51,7 +51,7 @@ export function SlicesStrip({
           >
             <button
               type="button"
-              onClick={() => void promoteSuggestedSlice(s.key, s.title, s.page_path)}
+              onClick={() => void promoteSuggestedSlice(s.title, s.page_path)}
               className="inline-flex items-center gap-1 hover:text-ink"
               title={`${s.rationale} — click to add`}
             >

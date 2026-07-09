@@ -18,16 +18,23 @@ function ChatHeader() {
   const sessions = useStore((s) => s.sessions);
   const sidebarHidden = useStore((s) => s.prefs.sidebarHidden);
   const openSlice = useStore((s) => s.openSlice);
+  // Rooms are universal (slices/projects are one container), so any filed
+  // chat gets a breadcrumb back to its room — titled from the slices
+  // overview when live, else the plain project name.
   const sliceTitle = useStore((s) => {
-    const key = s.sessions.find((x) => x.session_id === s.currentSessionId)?.slice_key;
-    if (!key) return null;
-    return s.slices.overview?.slices.find((sl) => sl.key === key)?.title ?? key;
+    const pid = s.sessions.find((x) => x.session_id === s.currentSessionId)?.project_id;
+    if (!pid) return null;
+    return (
+      s.slices.overview?.slices.find((sl) => sl.key === pid)?.title ??
+      s.projects.find((p) => p.project_id === pid)?.name ??
+      null
+    );
   });
   const hasTrafficLights = useHasTrafficLights();
   const session = sessions.find((s) => s.session_id === sessionId);
 
   const title = session?.name || (sessionId ? "untitled" : "no session");
-  const sliceKey = session?.slice_key ?? null;
+  const sliceKey = session?.project_id ?? null;
 
   // A child agent session gets a breadcrumb back to its parent in the header —
   // the discoverable spot, mirroring the hub's "← parent" chip.
@@ -72,9 +79,9 @@ function ChatHeader() {
             </span>
           </>
         )}
-        {/* Slice-scoped chats breadcrumb back to their room, mirroring the
-            agent parent chip: the room is this conversation's context. */}
-        {sliceKey && (
+        {/* Filed chats breadcrumb back to their room, mirroring the agent
+            parent chip: the room is this conversation's context. */}
+        {sliceKey && sliceTitle && (
           <>
             <button
               type="button"

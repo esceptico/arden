@@ -9,7 +9,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/RadioGroup";
 import { SwitchControl } from "@/components/ui/SwitchControl";
 
 const GROUP_OPTIONS: { value: SidebarGroupBy; label: string }[] = [
-  { value: "project", label: "Project" },
+  { value: "project", label: "Slice" },
   { value: "time", label: "Time" },
   { value: "type", label: "Type" },
   { value: "status", label: "Status" },
