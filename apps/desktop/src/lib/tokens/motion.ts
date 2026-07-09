@@ -21,21 +21,22 @@ export const GEIST_EASE = [0.175, 0.885, 0.32, 1.1] as const;
 // scale consistent with framer-motion defaults.
 
 /** Modals, sheets, drawers. Confident settle, no perceptible bounce. */
-export const SPRING_MODAL = { type: "spring", stiffness: 380, damping: 32, mass: 1 } as const;
+export const SPRING_MODAL = { type: "spring", stiffness: 480, damping: 36, mass: 1 } as const;
 /** Press/release feedback. Snappy so an interrupted release re-targets. */
-export const SPRING_TAP = { type: "spring", stiffness: 380, damping: 30, mass: 1 } as const;
-/** Layout / FLIP / list reorders. Slower, longer settle for shared element. */
-export const SPRING_LAYOUT = { type: "spring", stiffness: 220, damping: 28, mass: 1 } as const;
-/** Popover / menu reveal — origin-anchored, snappy with a hint of bounce. */
-export const SPRING_POPOVER = { type: "spring", stiffness: 350, damping: 26, mass: 1 } as const;
+export const SPRING_TAP = { type: "spring", stiffness: 520, damping: 34, mass: 1 } as const;
+/** Layout / FLIP / list reorders. Slowest tier, but still settles ~250ms —
+ *  a shared element should glide, not float. */
+export const SPRING_LAYOUT = { type: "spring", stiffness: 380, damping: 34, mass: 1 } as const;
+/** Popover / menu reveal — origin-anchored. Opened dozens of times a day,
+ *  so it lands fast with barely-there overshoot, never a wobble. */
+export const SPRING_POPOVER = { type: "spring", stiffness: 550, damping: 36, mass: 1 } as const;
 /** Traveling proximity-hover highlight (ProximityHighlight). Should track the
  *  pointer near-instantly — much higher stiffness than POPOVER and heavy
  *  damping so it snaps to the hovered row with no floaty lag or overshoot. */
 export const SPRING_PROXIMITY = { type: "spring", stiffness: 700, damping: 42, mass: 0.7 } as const;
 /** Row settles — Control Center–style spring for sibling-row entrances.
- *  Used by `TurnGroup`'s work-block stagger. Snappier than SPRING_MODAL;
- *  livelier than SPRING_MODAL. */
-export const SPRING_ROW_ENTRY = { type: "spring", stiffness: 360, damping: 28, mass: 0.8 } as const;
+ *  Used by `TurnGroup`'s work-block stagger. Snappier than SPRING_MODAL. */
+export const SPRING_ROW_ENTRY = { type: "spring", stiffness: 480, damping: 32, mass: 0.8 } as const;
 /** Trace ticker rows. Heavier damping than ROW_ENTRY — zero overshoot so
  *  the most-fired animation in the app never wobbles mid-stream. */
 export const SPRING_TRACE_ROW = { type: "spring", stiffness: 350, damping: 40, mass: 0.8 } as const;
