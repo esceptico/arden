@@ -37,9 +37,12 @@ export function groupSessions(
   // survives an active Unread/Channels filter; filters apply to the remainder.
   const pinned = sessions.filter((s) => opts.pinned.has(s.session_id));
   let rest = sessions.filter((s) => !opts.pinned.has(s.session_id));
-  if (opts.channelsOnly) rest = rest.filter((s) => s.session_type === "channel");
+  // The sidebar answers "what was I talking about?" — agent/automation
+  // channel transcripts are machinery, reachable from their rooms and the
+  // Automations modal, and their news reaches the user as asks on Home.
+  // The Channels filter is the explicit way to list them here.
+  rest = rest.filter((s) => (s.session_type === "channel") === opts.channelsOnly);
   if (opts.unreadOnly) rest = rest.filter((s) => opts.unread.has(s.session_id));
-  const hasFilter = opts.channelsOnly || opts.unreadOnly;
 
   if (pinned.length) {
     groups.push({ key: "__pinned", label: "Pinned", project: null, sessions: pinned, pinned: true });
@@ -56,7 +59,7 @@ export function groupSessions(
       groups.push(...groupByStatus(rest, opts.active, opts.unread));
       break;
     default:
-      groups.push(...groupByProject(projects, rest, !hasFilter));
+      groups.push(...groupByProject(projects, rest));
   }
   return groups;
 }
@@ -64,7 +67,6 @@ export function groupSessions(
 function groupByProject(
   projects: Project[],
   sessions: SessionListItem[],
-  keepEmpty: boolean,
 ): ProjectSessionGroup[] {
   const projectById = new Map(projects.map((p) => [p.project_id, p]));
   const byProject = new Map<string | null, SessionListItem[]>();
@@ -79,9 +81,9 @@ function groupByProject(
   const groups: ProjectSessionGroup[] = [];
   for (const project of projects) {
     const projectSessions = byProject.get(project.project_id) ?? [];
-    // Empty project groups stay visible (so the +/settings actions remain
-    // reachable) unless a filter is narrowing the list, where empties are noise.
-    if (projectSessions.length || keepEmpty) {
+    // A group earns its sidebar row through conversations — an empty slice
+    // still lives on Home's strip and its room is one click away there.
+    if (projectSessions.length) {
       groups.push({ key: project.project_id, label: project.name, project, sessions: projectSessions });
     }
   }

@@ -52,10 +52,10 @@ test("project grouping keeps inbox and project folders separate", () => {
   ]);
 });
 
-test("empty project folders stay visible without a filter", () => {
+test("empty project folders are dropped — a group earns its row through conversations", () => {
+  // dex has no chats: no sidebar group (the slice still lives on Home's strip).
   expect(groupSessions(projects, [sessions[0]], opts())).toEqual([
     { key: "p1", label: "ntrp", project: projects[0], sessions: [sessions[0]] },
-    { key: "p2", label: "dex", project: projects[1], sessions: [] },
   ]);
 });
 
@@ -71,7 +71,7 @@ test("pinned sessions lift into a Pinned group and leave their normal group", ()
   const groups = groupSessions(projects, sessions, opts({ pinned: new Set(["s1"]) }));
   expect(groups).toEqual([
     { key: "__pinned", label: "Pinned", project: null, sessions: [sessions[0]], pinned: true },
-    { key: "p1", label: "ntrp", project: projects[0], sessions: [] },
+    // p1 emptied by the pin lift → no group row (its chat is right there in Pinned).
     { key: "p2", label: "dex", project: projects[1], sessions: [sessions[2]] },
     { key: "inbox", label: "Inbox", project: null, sessions: [sessions[1]] },
   ]);
@@ -85,12 +85,17 @@ test("pins survive an active filter (sticky pin-to-top)", () => {
   ]);
 });
 
-test("group by type splits chats and channels", () => {
+test("channels are machinery: hidden by default, listed under the Channels filter", () => {
   const channel = { ...session("c1", "alerts", null), session_type: "channel" as const };
-  const groups = groupSessions(projects, [sessions[0], channel], opts({ groupBy: "type" }));
-  expect(groups.map((g) => [g.key, g.sessions.map((s) => s.session_id)])).toEqual([
+  // Default view: the channel transcript never appears, in any grouping.
+  const byType = groupSessions(projects, [sessions[0], channel], opts({ groupBy: "type" }));
+  expect(byType.map((g) => [g.key, g.sessions.map((s) => s.session_id)])).toEqual([
     ["type:chat", ["s1"]],
-    ["type:channel", ["c1"]],
+  ]);
+  // Channels filter: the explicit way to list them (and only them).
+  const channelsView = groupSessions(projects, [sessions[0], channel], opts({ channelsOnly: true }));
+  expect(channelsView.map((g) => [g.key, g.sessions.map((s) => s.session_id)])).toEqual([
+    ["inbox", ["c1"]],
   ]);
 });
 
