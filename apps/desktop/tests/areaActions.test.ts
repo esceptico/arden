@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 
 import { archiveArea } from "@/actions/sessions";
-import { replyToAsk } from "@/actions/areas";
+import { createAreaOutcome, replyToAsk, updateAreaOutcome, updateAreaWorkItem } from "@/actions/areas";
 import type { Area, SessionListItem } from "@/api/types";
 import { getState, setState } from "@/stores/index";
 
@@ -91,6 +91,60 @@ test("replyToAsk targets the typed Custodian reply endpoint", async () => {
       timeout: 60_000,
     },
   ]);
+});
+
+test("area work actions use encoded typed paths and refresh room plus overview", async () => {
+  const requests: { path: string; method?: string; body?: string; timeout?: number }[] = [];
+  (globalThis as typeof globalThis & { window?: unknown }).window = {
+    ntrpDesktop: {
+      api: {
+        request: async (_config: unknown, req: { path: string; method?: string; body?: string; timeout?: number }) => {
+          requests.push(req);
+          return {
+            ok: true, status: 200, statusText: "OK", contentType: "application/json",
+            data: req.path.endsWith("/overview")
+              ? { areas: [], focus: [], brief: { done: [], in_progress: [], needs_you: [] } }
+              : req.method
+                ? {}
+                : {
+                    key: "p/1", title: "O-1A", autonomy: "observe", page_path: "topics/o-1a.md",
+                    related: [], open_loops: [], updated: "", attention: "ambient", interrupts: "asks",
+                    paused: false, agent: null, asks: [], sessions: [], automations: [],
+                    work: { outcomes: [], work_items: [], events: [] },
+                  },
+            text: "",
+          };
+        },
+      },
+    },
+  };
+
+  await createAreaOutcome("p/1", {
+    key: "petition-filed", title: "Petition filed", success_criteria: "Receipt exists", priority: 5,
+  });
+  await updateAreaOutcome("p/1", "petition-filed", { expected_updated_at: "v1", status: "paused" });
+  await updateAreaWorkItem("p/1", "collect evidence", {
+    expected_updated_at: "v2", status: "completed",
+  });
+
+  const mutations = requests.filter((request) => request.method !== "GET");
+  expect(mutations).toEqual([
+    {
+      path: "/areas/p%2F1/outcomes", method: "POST",
+      body: JSON.stringify({
+        key: "petition-filed", title: "Petition filed", success_criteria: "Receipt exists", priority: 5,
+      }), timeout: 60_000,
+    },
+    {
+      path: "/areas/p%2F1/outcomes/petition-filed", method: "PATCH",
+      body: JSON.stringify({ expected_updated_at: "v1", status: "paused" }), timeout: 60_000,
+    },
+    {
+      path: "/areas/p%2F1/work/collect%20evidence", method: "PATCH",
+      body: JSON.stringify({ expected_updated_at: "v2", status: "completed" }), timeout: 60_000,
+    },
+  ]);
+  expect(requests.filter((request) => request.method === "GET")).toHaveLength(6);
 });
 
 function area(area_id: string, name: string): Area {

@@ -11,6 +11,7 @@ import { AgentPresence, type AgentInfo } from "@/features/areas/components/Agent
 import { AgentStatusLine, AreaSettingsButton } from "@/features/areas/components/AreaControls";
 import { OpenLoops } from "@/features/areas/components/OpenLoops";
 import { AreaActivity } from "@/features/areas/components/AreaActivity";
+import { AreaWork } from "@/features/areas/components/AreaWork";
 import { ScrollFadeTop, ScrollFadeBottom } from "@/components/ui/ScrollBlur";
 import { RISE_IN, RISE_SETTLED, DISSOLVE_OUT, withExit, EXIT_ROW, MOTION, EASE_DECELERATE } from "@/lib/tokens/motion";
 
@@ -74,7 +75,8 @@ export function AreaRoom({ areaKey }: { areaKey: string }) {
   const userSessions = detail.sessions.filter((s) => s.session_id !== agentChannelId);
 
   const isEmpty =
-    detail.open_loops.length === 0 && detail.asks.length === 0 && userSessions.length === 0;
+    detail.open_loops.length === 0 && detail.asks.length === 0 && userSessions.length === 0
+    && detail.work.outcomes.length === 0 && detail.work.work_items.length === 0;
 
   const runAgentNow = async () => {
     if (!agentAuto?.task_id) return;
@@ -304,6 +306,8 @@ export function AreaRoom({ areaKey }: { areaKey: string }) {
                   : "This Area has conversations but no shared page yet. Create one when the domain needs durable context."}
               </p>
             )}
+
+            <AreaWork areaKey={areaKey} work={detail.work} />
 
             <OpenLoops
               loops={detail.open_loops}

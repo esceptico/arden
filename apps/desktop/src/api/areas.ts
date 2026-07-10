@@ -61,10 +61,80 @@ export interface AreaSuggestion {
   created_at: string;
 }
 
+export type AreaOutcomeStatus = "active" | "paused" | "completed" | "cancelled";
+export type AreaWorkStatus = "active" | "in_progress" | "completed" | "cancelled";
+
+export interface AreaOutcome {
+  outcome_id: string;
+  area_id: string;
+  stable_key: string;
+  title: string;
+  success_criteria: string;
+  status: AreaOutcomeStatus;
+  priority: number;
+  source: "inferred" | "user" | "migration";
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
+export interface AreaWorkItem {
+  item_id: string;
+  area_id: string;
+  stable_key: string;
+  outcome_id: string | null;
+  kind: "loop" | "action" | "blocker";
+  text: string;
+  status: AreaWorkStatus;
+  owner: "custodian" | "user" | "external";
+  due_at: string | null;
+  next_attempt_at: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
+export interface AreaWorkEvent {
+  event_id: number;
+  area_id: string;
+  outcome_id: string | null;
+  item_id: string | null;
+  run_ref: string | null;
+  event_type: string;
+  summary: string;
+  source_refs: string[];
+  created_at: string;
+}
+
+export interface AreaWorkSnapshot {
+  outcomes: AreaOutcome[];
+  work_items: AreaWorkItem[];
+  events: AreaWorkEvent[];
+}
+
+export interface AreaBriefItem {
+  area_id: string;
+  area_title: string;
+  stable_key: string;
+  text: string;
+  type?: "outcome" | "work";
+  status?: AreaWorkStatus;
+  owner?: AreaWorkItem["owner"];
+  completed_at?: string | null;
+  updated_at?: string;
+}
+
+export interface AreasBrief {
+  done: AreaBriefItem[];
+  in_progress: AreaBriefItem[];
+  needs_you: AreaAsk[];
+}
+
 export interface AreasOverview {
   areas: AreaSummary[];
   focus: AreaAsk[];
   suggested?: AreaSuggestion[];
+  brief: AreasBrief;
 }
 
 export interface AreaDetail {
@@ -82,6 +152,7 @@ export interface AreaDetail {
   asks: AreaAsk[];
   sessions: { session_id: string; name: string }[];
   automations: unknown[];
+  work: AreaWorkSnapshot;
 }
 
 export async function fetchAreasOverview(config: AppConfig): Promise<AreasOverview> {
@@ -90,6 +161,48 @@ export async function fetchAreasOverview(config: AppConfig): Promise<AreasOvervi
 
 export async function fetchAreaDetail(config: AppConfig, key: string): Promise<AreaDetail> {
   return apiWithConfig<AreaDetail>(config, `/areas/${encodeURIComponent(key)}`);
+}
+
+export async function createAreaOutcome(
+  config: AppConfig,
+  key: string,
+  body: { key: string; title: string; success_criteria: string; priority: number },
+): Promise<AreaOutcome> {
+  return apiWithConfig(config, `/areas/${encodeURIComponent(key)}/outcomes`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function updateAreaOutcome(
+  config: AppConfig,
+  key: string,
+  outcomeKey: string,
+  body: { expected_updated_at: string; title?: string; success_criteria?: string; priority?: number; status?: AreaOutcomeStatus },
+): Promise<AreaOutcome> {
+  return apiWithConfig(config, `/areas/${encodeURIComponent(key)}/outcomes/${encodeURIComponent(outcomeKey)}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function updateAreaWorkItem(
+  config: AppConfig,
+  key: string,
+  workKey: string,
+  body: {
+    expected_updated_at: string;
+    text?: string;
+    status?: AreaWorkStatus;
+    owner?: AreaWorkItem["owner"];
+    due_at?: string | null;
+    next_attempt_at?: string | null;
+  },
+): Promise<AreaWorkItem> {
+  return apiWithConfig(config, `/areas/${encodeURIComponent(key)}/work/${encodeURIComponent(workKey)}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
 }
 
 export async function resolveAsk(

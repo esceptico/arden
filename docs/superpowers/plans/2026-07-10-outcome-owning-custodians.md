@@ -43,8 +43,12 @@
   Home receives capped, active-Area-only Done/In progress/Needs you projections;
   typed outcome/work edits use optimistic versions, emit refreshes, and wake the
   Custodian. Evidence: 71 focused server regressions and Ruff pass.
-- Current: Task 5 pending.
-- Remaining: Tasks 5–7 below.
+- 2026-07-10: Task 5 complete. The Area room now presents a dense ownership
+  surface with the primary outcome, current action, user blockers, collapsed
+  remainder, and inline outcome controls. Typed desktop mutations refetch the
+  room and Home. Evidence: 20 focused desktop tests, typecheck, and lint pass.
+- Current: Task 6 pending.
+- Remaining: Tasks 6–7 below.
 
 ---
 
@@ -329,30 +333,30 @@ Commit: `feat(server): expose area outcomes and work brief`
 - Consumes: server `AreaWorkSnapshot` and typed mutation responses.
 - Produces: `AreaWork` component and actions `createAreaOutcome`, `updateAreaOutcome`, `updateAreaWorkItem`.
 
-- [ ] **Step 1: Write failing component and action tests**
+- [x] **Step 1: Write failing component and action tests**
 
 Render a primary outcome, current Custodian action, user blocker, and collapsed
 remaining work. Exercise add, title edit, complete, pause/resume, and cancel;
 assert encoded API paths, optimistic timestamp body, refetched room, and overview.
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run: `cd apps/desktop && bun test tests/areaWork.test.tsx tests/areaActions.test.ts`  
 Expected: missing types, actions, and component.
 
-- [ ] **Step 3: Implement API types/actions**
+- [x] **Step 3: Implement API types/actions**
 
 Add exact TypeScript unions matching server enums. Mutations update through the
 API then refetch both `fetchAreaDetail(key)` and `fetchAreasOverview()`; do not
 invent an optimistic parallel work store.
 
-- [ ] **Step 4: Implement compact Area Work UI**
+- [x] **Step 4: Implement compact Area Work UI**
 
 Render current work before `OpenLoops`. Use inline text inputs only while
 editing, small status actions, and a native collapsed details section for
 remaining outcomes/loops. No board, drag/drop, dependency editor, or modal.
 
-- [ ] **Step 5: Run desktop focused gates and commit**
+- [x] **Step 5: Run desktop focused gates and commit**
 
 Run: `cd apps/desktop && bun test tests/areaWork.test.tsx tests/areaActions.test.ts && bun run typecheck && bun run lint`  
 Commit: `feat(desktop): make area outcomes editable`
