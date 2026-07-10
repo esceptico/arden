@@ -41,6 +41,7 @@ from ntrp.agent import (
     ToolInputStarted,
     ToolStarted,
 )
+from ntrp.agent.types.tools import normalize_source_refs
 
 
 class EventType(StrEnum):
@@ -313,6 +314,7 @@ class ToolCallResultEvent(SSEEvent):
     preview: str = ""
     duration_ms: int = 0
     data: dict | None = None
+    source_refs: list[dict[str, str]] = field(default_factory=list)
     display_name: str = ""
     name: str = ""  # tool name, convenience
     depth: int = 0
@@ -815,6 +817,7 @@ def agent_events_to_sse(event) -> tuple[SSEEvent, ...]:
                     preview=event.preview,
                     duration_ms=event.duration_ms,
                     data=event.data,
+                    source_refs=[ref.to_dict() for ref in normalize_source_refs(event.source_refs)],
                     display_name=event.display_name,
                     depth=event.depth,
                     parent_id=event.parent_id,

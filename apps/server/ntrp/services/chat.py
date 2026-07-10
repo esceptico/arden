@@ -1033,7 +1033,8 @@ async def _drain_backgrounded(
     try:
         async for item in gen:
             if isinstance(item, ToolCompleted):
-                ctx.run.add_source_ref(item.source_ref)
+                for source_ref in item.source_refs:
+                    ctx.run.add_source_ref(source_ref.to_dict())
             if isinstance(item, Result):
                 drain_result = item
                 ctx.run.stop_reason = item.stop_reason.value

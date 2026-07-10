@@ -92,7 +92,8 @@ async def run_agent_loop(
                 await close_open_text()
                 return None, gen
             if isinstance(item, ToolCompleted):
-                ctx.run.add_source_ref(item.source_ref)
+                for source_ref in item.source_refs:
+                    ctx.run.add_source_ref(source_ref.to_dict())
             if isinstance(item, Result):
                 if ctx.run.cancelled:
                     break

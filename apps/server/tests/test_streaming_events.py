@@ -16,6 +16,8 @@ from ntrp.agent import (
     TextStarted,
     Usage,
 )
+from ntrp.agent.types.events import ToolCompleted
+from ntrp.agent.types.tools import ToolSourceRef
 from ntrp.context.models import SessionData, SessionState
 from ntrp.core import spawner as spawner_module
 from ntrp.core.spawner import create_spawn_fn
@@ -61,6 +63,87 @@ def test_text_boundary_events_convert_to_sse():
     assert isinstance(end, TextMessageEndEvent)
     assert end.message_id == "text-1"
     assert end.content == "hello"
+
+
+def test_tool_result_sse_exposes_source_refs_outside_result_content():
+    source = ToolSourceRef(
+        provider="slack",
+        kind="message",
+        ref="C1:1.0",
+        title="Decision",
+        url="https://example.slack.com/archives/C1/p1",
+    )
+    page = ToolSourceRef(
+        provider="web",
+        kind="page",
+        ref="https://example.com/docs",
+        title="Documentation",
+        url="https://example.com/docs",
+    )
+
+    (event,) = agent_events_to_sse(
+        ToolCompleted(
+            tool_id="call-1",
+            name="slack_thread",
+            result="thread text",
+            preview="thread",
+            duration_ms=1,
+            is_error=False,
+            data=None,
+            display_name="Slack Thread",
+            source_refs=(source, page),
+        )
+    )
+    payload = json.loads(event.to_sse()["data"])
+
+    assert isinstance(event, ToolCallResultEvent)
+    assert payload["content"] == "thread text"
+    assert payload["source_refs"] == [source.to_dict(), page.to_dict()]
+    assert payload["data"] is None
+
+
+@pytest.mark.asyncio
+async def test_run_agent_loop_collects_each_tool_source_ref_for_episode_provenance():
+    source = ToolSourceRef(provider="slack", kind="message", ref="C1:1.0", title="Decision")
+    duplicate = ToolSourceRef(provider="slack", kind="message", ref="C1:1.0", title="Duplicate")
+    second = ToolSourceRef(provider="web", kind="page", ref="https://example.com", title="Example")
+    run = RunState(run_id="run-1", session_id="session-1")
+
+    class _Agent:
+        async def stream(self, _messages):
+            yield ToolCompleted(
+                tool_id="call-1",
+                name="slack_thread",
+                result="thread text",
+                preview="thread",
+                duration_ms=1,
+                is_error=False,
+                data=None,
+                display_name="Slack Thread",
+                source_refs=(source, duplicate, second),
+            )
+            yield Result(text="done", stop_reason=StopReason.END_TURN, steps=1, usage=Usage())
+
+    await run_agent_loop(SimpleNamespace(run=run), _Agent(), SessionBus(session_id="session-1"))
+
+    assert run.source_refs == [source.to_dict(), second.to_dict()]
+
+
+def test_run_source_refs_are_stably_deduplicated_and_capped_at_50():
+    run = RunState(run_id="run-1", session_id="session-1")
+    first = ToolSourceRef(provider="slack", kind="message", ref="C1:1.0", title="First")
+    duplicate = ToolSourceRef(provider="slack", kind="message", ref="C1:1.0", title="Duplicate")
+
+    run.add_source_ref(first.to_dict())
+    run.add_source_ref(duplicate.to_dict())
+    for index in range(55):
+        run.add_source_ref(
+            ToolSourceRef(provider="slack", kind="message", ref=f"C1:{index}", title=f"Message {index}").to_dict()
+        )
+
+    assert len(run.source_refs) == 50
+    assert run.source_refs[0] == first.to_dict()
+    assert run.source_refs[-1]["ref"] == "C1:48"
 
 
 def test_reasoning_sse_preserves_nested_scope():
@@ -2390,6 +2473,8 @@ async def test_backgrounded_drain_cancel_does_not_save_merged_output():
 async def test_backgrounded_drain_persists_budget_stop_reason():
     run = RunState(run_id="run-1", session_id="sess-1", backgrounded=True)
     session_state = SessionState(session_id="sess-1", started_at=datetime.now(UTC))
+    source = ToolSourceRef(provider="slack", kind="message", ref="C1:1.0", title="Decision")
+    duplicate = ToolSourceRef(provider="slack", kind="message", ref="C1:1.0", title="Duplicate")
 
     class RecordingSessionService:
         def __init__(self):
@@ -2405,6 +2490,17 @@ async def test_backgrounded_drain_persists_budget_stop_reason():
             self.statuses.append((status, stop_reason))
 
     async def gen():
+        yield ToolCompleted(
+            tool_id="call-1",
+            name="slack_thread",
+            result="thread text",
+            preview="thread",
+            duration_ms=1,
+            is_error=False,
+            data=None,
+            display_name="Slack Thread",
+            source_refs=(source, duplicate),
+        )
         yield Result(text="", stop_reason=StopReason.MAX_COST, steps=0, usage=Usage())
 
     service = RecordingSessionService()
@@ -2431,6 +2527,7 @@ async def test_backgrounded_drain_persists_budget_stop_reason():
     )
 
     assert service.statuses[-1] == (RunStatus.COMPLETED.value, StopReason.MAX_COST.value)
+    assert run.source_refs == [source.to_dict()]
 
 
 @pytest.mark.asyncio

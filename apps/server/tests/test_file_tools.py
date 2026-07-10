@@ -32,14 +32,21 @@ def _make_execution(tool_name: str, *, project_cwd: str | None = None) -> ToolEx
 
 
 @pytest.mark.asyncio
-async def test_read_file_self_reports_source_ref(tmp_path):
+async def test_read_file_self_reports_source_refs(tmp_path):
     note = tmp_path / "q3.md"
     note.write_text("dashboard notes", encoding="utf-8")
 
     result = await read_file_tool.execute(_make_execution("read_file"), path=str(note))
 
     assert not result.is_error
-    assert result.source_ref == {"kind": "file", "ref": str(note.resolve()), "title": "q3.md"}
+    assert [ref.to_dict() for ref in result.source_refs] == [
+        {
+            "provider": "filesystem",
+            "kind": "file",
+            "ref": str(note.resolve()),
+            "title": "q3.md",
+        }
+    ]
 
 
 def test_project_prompt_tells_agent_to_use_relative_paths():

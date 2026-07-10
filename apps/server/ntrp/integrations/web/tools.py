@@ -5,6 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from ntrp.agent.types.tools import ToolSourceRef
 from ntrp.constants import WEB_SEARCH_MAX_RESULTS
 from ntrp.integrations.web.exceptions import NoSearchResultsException, WebSearchProviderException
 from ntrp.integrations.web.types import WebClient
@@ -127,7 +128,15 @@ async def web_fetch(execution: ToolExecution, args: WebFetchInput) -> ToolResult
             return ToolResult(
                 content="\n".join(output),
                 preview=f"Fetched {lines} lines",
-                source_ref={"kind": "web", "ref": args.url, "title": r.title or None},
+                source_refs=(
+                    ToolSourceRef(
+                        provider="web",
+                        kind="page",
+                        ref=args.url,
+                        title=(r.title or "").strip() or args.url,
+                        url=args.url,
+                    ),
+                ),
             )
         return ToolResult(content="No content fetched. Page may be empty or require JavaScript.", preview="Empty")
     except Exception as e:

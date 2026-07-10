@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from coolname import generate_slug
 
 from ntrp.agent import Usage
+from ntrp.agent.types.tools import normalize_source_refs
 from ntrp.tools.core.context import ApprovalControls, BackgroundTaskRegistry
 
 if TYPE_CHECKING:
@@ -101,9 +102,8 @@ class RunState:
     source_refs: list[dict] = field(default_factory=list)
 
     def add_source_ref(self, ref: dict | None) -> None:
-        if not ref or ref in self.source_refs:
-            return
-        self.source_refs.append(ref)
+        refs = normalize_source_refs((*self.source_refs, ref) if ref is not None else self.source_refs)
+        self.source_refs = [source_ref.to_dict() for source_ref in refs]
 
     @property
     def pending_injection_count(self) -> int:

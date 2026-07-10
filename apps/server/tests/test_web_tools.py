@@ -69,14 +69,31 @@ async def test_web_search_tells_model_to_simplify_empty_queries():
 
 
 @pytest.mark.asyncio
-async def test_web_fetch_self_reports_source_ref():
+async def test_web_fetch_self_reports_source_refs():
     source = FakeWebSource(
         contents=[WebContentResult(title="Example Page", url="https://example.com/x", text="body text")]
     )
     result = await web_fetch(_execution(source), WebFetchInput(url="https://example.com/x"))
 
     assert result.is_error is False
-    assert result.source_ref == {"kind": "web", "ref": "https://example.com/x", "title": "Example Page"}
+    assert [ref.to_dict() for ref in result.source_refs] == [
+        {
+            "provider": "web",
+            "kind": "page",
+            "ref": "https://example.com/x",
+            "title": "Example Page",
+            "url": "https://example.com/x",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_uses_url_when_page_title_is_blank():
+    source = FakeWebSource(contents=[WebContentResult(title="   ", url="https://example.com/x", text="body text")])
+
+    result = await web_fetch(_execution(source), WebFetchInput(url="https://example.com/x"))
+
+    assert result.source_refs[0].title == "https://example.com/x"
 
 
 @pytest.mark.asyncio

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from ntrp.agent.tools.executor import AgentToolExecutor
 from ntrp.agent.types.events import ToolCompleted, ToolStarted
 from ntrp.agent.types.tool_call import PendingToolCall
-from ntrp.agent.types.tools import ToolResult
+from ntrp.agent.types.tools import ToolResult, normalize_source_refs
 
 _SENTINEL = object()
 
@@ -93,7 +93,7 @@ class ToolRunner:
             display_name=rc.display_name,
             kind=rc.kind,
             model_content=result.model_content,
-            source_ref=result.source_ref,
+            source_refs=normalize_source_refs(result.source_refs),
         )
 
     async def execute_all(self, calls: list[PendingToolCall]) -> AsyncGenerator[ToolStarted | ToolCompleted]:

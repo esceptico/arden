@@ -219,7 +219,7 @@ class NtrpToolExecutor:
             is_error=result.is_error,
             data=result.data,
             model_content=result.model_content,
-            source_ref=result.source_ref,
+            source_refs=result.source_refs,
         )
 
     def get_meta(self, name: str) -> ToolMeta | None:
@@ -264,7 +264,7 @@ class NtrpToolExecutor:
             is_error=result.is_error,
             data=data,
             model_content=result.model_content,
-            source_ref=result.source_ref,
+            source_refs=result.source_refs,
         )
 
 

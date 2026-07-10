@@ -23,7 +23,7 @@ async def dispatch_tools(
         async for event in runner.execute_all(calls):
             if isinstance(event, ToolCompleted):
                 results[event.tool_id] = event.result
-                if data := persistable_tool_result_data(event.data):
+                if data := persistable_tool_result_data(event.data, event.source_refs):
                     result_data[event.tool_id] = data
                 if event.model_content:
                     model_content[event.tool_id] = event.model_content
