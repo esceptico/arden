@@ -63,6 +63,7 @@ class OutcomeChange(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=300)
     success_criteria: str | None = Field(default=None, min_length=1, max_length=2_000)
     priority: int | None = Field(default=None, ge=1, le=5)
+    expected_updated_at: str | None = None
 
     @model_validator(mode="after")
     def validate_operation(self):
@@ -72,6 +73,8 @@ class OutcomeChange(BaseModel):
             raise ValueError("create outcome requires title, success_criteria, and priority")
         if self.op == "update" and self.title is None and self.success_criteria is None and self.priority is None:
             raise ValueError("update outcome requires at least one changed field")
+        if self.op != "create" and self.expected_updated_at is None:
+            raise ValueError("non-create outcome operation requires expected_updated_at")
         return self
 
 
@@ -86,6 +89,7 @@ class WorkChange(BaseModel):
     owner: WorkOwner | None = None
     due_at: str | None = None
     next_attempt_at: str | None = None
+    expected_updated_at: str | None = None
 
     @model_validator(mode="after")
     def validate_operation(self):
@@ -96,6 +100,8 @@ class WorkChange(BaseModel):
             for value in (self.outcome_key, self.text, self.owner, self.due_at, self.next_attempt_at)
         ):
             raise ValueError("update work item requires at least one changed field")
+        if self.op != "create" and self.expected_updated_at is None:
+            raise ValueError("non-create work operation requires expected_updated_at")
         return self
 
 

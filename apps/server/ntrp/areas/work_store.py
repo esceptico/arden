@@ -132,15 +132,17 @@ class AreaWorkStore:
         ids = tuple(sorted(area_ids))
         cutoff = ((now or datetime.now(UTC)) - timedelta(hours=72)).isoformat()
         completed = await self.read_conn.execute_fetchall(
-            f"SELECT area_id, 'outcome' AS type, stable_key, title AS text, "
-            f"completed_at, updated_at FROM area_work_outcomes "
-            f"WHERE area_id IN ({placeholders}) AND status = 'completed' AND completed_at >= ? "
-            f"UNION ALL "
-            f"SELECT area_id, 'work' AS type, stable_key, text, completed_at, updated_at "
-            f"FROM area_work_items WHERE area_id IN ({placeholders}) "
-            f"AND status = 'completed' AND completed_at >= ? "
-            f"ORDER BY completed_at DESC LIMIT 6",
-            (*ids, cutoff, *ids, cutoff),
+            f"SELECT events.area_id, CASE WHEN events.item_id IS NOT NULL THEN 'work' "
+            f"ELSE 'outcome' END AS type, "
+            f"COALESCE(items.stable_key, outcomes.stable_key, 'event-' || events.event_id) AS stable_key, "
+            f"events.summary AS text, events.created_at AS completed_at, events.created_at AS updated_at "
+            f"FROM area_work_events events "
+            f"LEFT JOIN area_work_items items ON items.item_id = events.item_id "
+            f"LEFT JOIN area_work_outcomes outcomes ON outcomes.outcome_id = events.outcome_id "
+            f"WHERE events.area_id IN ({placeholders}) AND events.event_type = 'completed' "
+            f"AND events.run_ref IS NOT NULL AND events.created_at >= ? "
+            f"ORDER BY events.created_at DESC, events.event_id DESC LIMIT 6",
+            (*ids, cutoff),
         )
         active = await self.read_conn.execute_fetchall(
             f"WITH ranked AS ("
@@ -341,8 +343,10 @@ class AreaWorkStore:
                 outcome_keys.add(change.key)
             elif not exists:
                 raise AreaWorkReportError(f"Unknown outcome '{change.key}'")
-            elif outcomes[change.key].status in {"completed", "cancelled"} and change.op == "update":
-                raise AreaWorkReportError(f"Terminal outcome '{change.key}' cannot be reopened by an agent")
+            elif outcomes[change.key].status in {"completed", "cancelled"}:
+                raise AreaWorkReportError(f"Terminal outcome '{change.key}' cannot be changed by an agent")
+            elif outcomes[change.key].updated_at != change.expected_updated_at:
+                raise AreaWorkReportError(f"Outcome '{change.key}' changed since the run started")
         for change in work_changes:
             exists = change.key in work_keys
             if change.op == "create":
@@ -351,8 +355,10 @@ class AreaWorkStore:
                 work_keys.add(change.key)
             elif not exists:
                 raise AreaWorkReportError(f"Unknown work item '{change.key}'")
-            elif work_items[change.key].status in {"completed", "cancelled"} and change.op == "update":
-                raise AreaWorkReportError(f"Terminal work item '{change.key}' cannot be reopened by an agent")
+            elif work_items[change.key].status in {"completed", "cancelled"}:
+                raise AreaWorkReportError(f"Terminal work item '{change.key}' cannot be changed by an agent")
+            elif work_items[change.key].updated_at != change.expected_updated_at:
+                raise AreaWorkReportError(f"Work item '{change.key}' changed since the run started")
             if change.outcome_key is not None and change.outcome_key not in outcome_keys:
                 raise AreaWorkReportError(f"Unknown outcome '{change.outcome_key}'")
         for draft in evidence:

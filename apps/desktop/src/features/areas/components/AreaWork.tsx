@@ -42,6 +42,10 @@ export function AreaWork({ areaKey, work }: { areaKey: string; work: AreaWorkSna
     [work.outcomes],
   );
   const primary = outcomes.find((outcome) => outcome.status === "active" || outcome.status === "paused");
+  const remainingOutcomes = outcomes.filter(
+    (outcome) => outcome.outcome_id !== primary?.outcome_id
+      && (outcome.status === "active" || outcome.status === "paused"),
+  );
   const activeItems = work.work_items.filter((item) => item.status === "active" || item.status === "in_progress");
   const current = activeItems.find((item) => item.status === "in_progress") ?? activeItems.find((item) => item.kind !== "blocker");
   const blockers = activeItems.filter((item) => item.kind === "blocker");
@@ -182,10 +186,18 @@ export function AreaWork({ areaKey, work }: { areaKey: string; work: AreaWorkSna
 
       {current && <WorkRow areaKey={areaKey} item={current} label="Now" />}
       {blockers.map((item) => <WorkRow key={item.item_id} areaKey={areaKey} item={item} label="Needs you" />)}
-      {remaining.length > 0 && (
+      {(remainingOutcomes.length > 0 || remaining.length > 0) && (
         <details className="text-xs text-muted">
-          <summary className="cursor-pointer select-none text-faint hover:text-muted">{remaining.length} more</summary>
+          <summary className="cursor-pointer select-none text-faint hover:text-muted">
+            {remainingOutcomes.length + remaining.length} more
+          </summary>
           <div className="mt-2 grid gap-2 pl-2">
+            {remainingOutcomes.map((outcome) => (
+              <div key={outcome.outcome_id} className="grid gap-0.5 rounded-md bg-surface-soft/35 px-2.5 py-2">
+                <span className="truncate text-xs font-medium text-ink-soft">{outcome.title}</span>
+                <span className="truncate text-2xs text-faint">Done when {outcome.success_criteria}</span>
+              </div>
+            ))}
             {remaining.map((item) => <WorkRow key={item.item_id} areaKey={areaKey} item={item} />)}
           </div>
         </details>

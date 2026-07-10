@@ -15,6 +15,10 @@ const work: AreaWorkSnapshot = {
     outcome_id: "outcome:o-1a:file", area_id: "o-1a", stable_key: "file",
     title: "Petition filed", success_criteria: "Receipt exists", status: "active",
     priority: 5, source: "user", created_at: "t0", updated_at: "v1", completed_at: null,
+  }, {
+    outcome_id: "outcome:o-1a:approval", area_id: "o-1a", stable_key: "approval",
+    title: "Petition approved", success_criteria: "Approval notice exists", status: "active",
+    priority: 4, source: "inferred", created_at: "t0", updated_at: "v4", completed_at: null,
   }],
   work_items: [
     {
@@ -39,6 +43,7 @@ test("AreaWork prioritizes the outcome, current action, and user blocker", async
     expect(host.textContent).toContain("Petition filed");
     expect(host.textContent).toContain("Draft final petition");
     expect(host.textContent).toContain("Choose filing counsel");
+    expect(host.textContent).toContain("Petition approved");
     expect(host.textContent).toContain("Needs you");
     expect(host.querySelector('button[aria-label="Complete outcome Petition filed"]')).not.toBeNull();
   } finally {

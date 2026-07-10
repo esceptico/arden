@@ -121,20 +121,30 @@ async def test_brief_caps_recent_completions_and_selects_one_active_item_per_are
                     area["area_id"], item.stable_key,
                     expected_updated_at=item.updated_at, status="in_progress",
                 )
-    completed = await work.create_work_item(
-        health["area_id"], key="recent-done", outcome_key=None,
-        kind="action", text="Recent completion", owner="custodian",
+    target = next(
+        row for row in (await work.snapshot(health["area_id"])).work_items
+        if row.stable_key == "health-1"
     )
-    await work.update_work_item(
-        health["area_id"], completed.stable_key,
-        expected_updated_at=completed.updated_at, status="completed",
+    completion = report(
+        outcome_changes=[],
+        work_changes=[{
+            "op": "complete", "key": target.stable_key,
+            "expected_updated_at": target.updated_at,
+        }],
+        evidence=[{
+            "target_type": "work", "target_key": target.stable_key,
+            "event_type": "completed", "summary": "Finished the health action",
+            "source_refs": ["session:proof"],
+        }],
     )
+    assert await work.apply_report(health["area_id"], "run:brief", completion)
 
     brief = await work.brief(
         {health["area_id"], visa["area_id"]}, now=datetime.now(UTC),
     )
 
-    assert [row["stable_key"] for row in brief["done"]] == ["recent-done"]
+    assert [row["stable_key"] for row in brief["done"]] == ["health-1"]
+    assert brief["done"][0]["text"] == "Finished the health action"
     assert {row["area_id"] for row in brief["in_progress"]} == {
         health["area_id"], visa["area_id"],
     }
@@ -202,10 +212,67 @@ async def test_report_applies_atomically_once_with_evidence(work_env) -> None:
 @pytest.mark.asyncio
 async def test_invalid_report_rolls_back_every_operation(work_env) -> None:
     _conn, _sessions, work, health, _visa = work_env
-    invalid = report(work_changes=[{"op": "complete", "key": "unknown"}])
+    invalid = report(work_changes=[{
+        "op": "complete", "key": "unknown", "expected_updated_at": "missing",
+    }])
 
     with pytest.raises(AreaWorkReportError):
         await work.apply_report(health["area_id"], "run:bad", invalid)
 
     snapshot = await work.snapshot(health["area_id"])
     assert snapshot.outcomes == [] and snapshot.work_items == [] and snapshot.events == []
+
+
+@pytest.mark.asyncio
+async def test_agent_report_loses_to_a_newer_user_edit(work_env) -> None:
+    _conn, _sessions, work, health, _visa = work_env
+    outcome = await work.create_outcome(
+        health["area_id"], key="labs-normal", title="Labs normalized",
+        success_criteria="All values in range", priority=5, source="user",
+    )
+    stale_report = report(
+        outcome_changes=[{
+            "op": "update", "key": outcome.stable_key, "title": "Agent title",
+            "expected_updated_at": outcome.updated_at,
+        }],
+        work_changes=[], evidence=[],
+    )
+    await work.update_outcome(
+        health["area_id"], outcome.stable_key,
+        expected_updated_at=outcome.updated_at, title="User title",
+    )
+
+    with pytest.raises(AreaWorkReportError, match="changed since the run started"):
+        await work.apply_report(health["area_id"], "run:stale", stale_report)
+
+    assert (await work.snapshot(health["area_id"])).outcomes[0].title == "User title"
+
+
+@pytest.mark.asyncio
+async def test_schema_restart_archive_restore_and_report_replay_are_idempotent(tmp_path: Path) -> None:
+    db_path = tmp_path / "restart.db"
+    conn = await database.connect(db_path)
+    sessions = SessionService(SessionStore(conn))
+    await sessions.store.init_schema()
+    work = AreaWorkStore(conn)
+    await work.init_schema()
+    await work.init_schema()
+    area = await sessions.create_area(name="Health")
+    assert await work.apply_report(area["area_id"], "run:restart", report())
+    assert await sessions.archive_area(area["area_id"])
+    await conn.close()
+
+    reopened = await database.connect(db_path)
+    sessions = SessionService(SessionStore(reopened))
+    await sessions.store.init_schema()
+    work = AreaWorkStore(reopened)
+    await work.init_schema()
+    restored = await sessions.restore_area(area["area_id"])
+
+    assert restored is not None
+    assert not await work.apply_report(area["area_id"], "run:restart", report())
+    snapshot = await work.snapshot(area["area_id"])
+    assert [row.stable_key for row in snapshot.outcomes] == ["labs-normal"]
+    assert [row.summary for row in snapshot.events] == ["Found the correct lab and opening hours"]
+    assert (await work.brief({area["area_id"]}))["in_progress"][0]["stable_key"] == "book-labs"
+    await reopened.close()
