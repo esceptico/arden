@@ -95,6 +95,12 @@ test("validates after stripping embedded CR LF and TAB but retains the original 
   expect(normalizeSourceRefs([source({ url })])[0]?.url).toBe(url);
 });
 
+test("validates after left-stripping WHATWG C0 controls but retains the original URL", () => {
+  const url = "\x00https://example.com/path";
+
+  expect(normalizeSourceRefs([source({ url })])[0]?.url).toBe(url);
+});
+
 test("deduplicates normalized identities before capping each payload at 50", () => {
   const refs = normalizeSourceRefs([
     source({ title: "First" }),

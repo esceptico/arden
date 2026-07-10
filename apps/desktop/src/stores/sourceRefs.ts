@@ -92,7 +92,7 @@ export function sourceRefsForTurn(
 function safeUrl(value: unknown): string | undefined {
   const url = trimmedString(value);
   if (!url || url.length > URL_MAX_CHARS) return undefined;
-  const validationCandidate = url.replace(/[\r\n\t]/g, "");
+  const validationCandidate = url.replace(/[\r\n\t]/g, "").replace(/^[\u0000-\u0020]+/, "");
   const separator = validationCandidate.indexOf("://");
   const scheme = separator > 0 ? validationCandidate.slice(0, separator).toLowerCase() : "";
   if (scheme !== "http" && scheme !== "https") return undefined;
