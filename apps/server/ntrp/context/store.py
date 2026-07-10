@@ -696,6 +696,21 @@ class SessionStore:
             cols = {row["name"] for row in await self.conn.execute_fetchall("PRAGMA table_info(sessions)")}
             if "project_id" in cols and "area_id" not in cols:
                 await self.conn.execute("ALTER TABLE sessions RENAME COLUMN project_id TO area_id")
+        # Area-agent automations + their channels re-key from the slice: id
+        # prefix (missing this made the seeder mint duplicate agents).
+        if "scheduled_tasks" in tables:
+            await self.conn.execute(
+                "UPDATE scheduled_tasks SET task_id = 'area:' || substr(task_id, 7) WHERE task_id LIKE 'slice:%'"
+            )
+        if "automation_runs" in tables:
+            await self.conn.execute(
+                "UPDATE automation_runs SET task_id = 'area:' || substr(task_id, 7) WHERE task_id LIKE 'slice:%'"
+            )
+        if "sessions" in tables:
+            await self.conn.execute(
+                "UPDATE sessions SET origin_automation_id = 'area:' || substr(origin_automation_id, 7) "
+                "WHERE origin_automation_id LIKE 'slice:%'"
+            )
         # The renamed indexes are recreated under their new names by SCHEMA.
         await self.conn.execute("DROP INDEX IF EXISTS idx_projects_archived_updated")
         await self.conn.execute("DROP INDEX IF EXISTS idx_sessions_project_activity")
