@@ -51,8 +51,22 @@
   Done/In progress/Needs you order, preserves server ranking, routes each row
   to its Area, and always ends once. Evidence: 7 focused desktop tests plus
   typecheck/lint and 42 server projection regressions pass.
-- Current: Task 7 pending.
-- Remaining: Task 7 below.
+- 2026-07-10: Task 7 complete. Storage and reconciliation evidence:
+  `test_area_work_store.py` covers schema constraints, Area isolation, atomic
+  reports, replay, archive/restart durability, event-backed briefs, and user
+  conflict wins; `test_areas_runtime.py` covers malformed-run preservation and
+  apply-before-ask ordering. Execution evidence: `test_areas_custodian.py`
+  covers progress reset plus paused/capped continuations; `test_area_tools.py`
+  and `test_areas_agent.py` preserve Observe/Act scope. Projection evidence:
+  `test_areas_service.py`, `test_areas_router.py`, and
+  `homeWorkBrief.test.tsx` cover caps, ordering, active-Area filtering, and
+  typed conflicts; `areaWork.test.tsx` and `areaActions.test.ts` cover room
+  projection, editing, and canonical refetch. Full gates: 1,443 server tests,
+  repo-wide Ruff, 580 desktop tests, typecheck, lint, and production build pass.
+  Audit found one `AreaWorkStore`, no implementation TODO/FIXME markers, and no
+  widened global automation scope.
+- Current: implementation complete.
+- Remaining: none.
 
 ---
 
@@ -417,33 +431,33 @@ Commit: `feat(desktop): add chief of staff work brief`
 - Consumes every prior task.
 - Produces an idempotent deployed schema and closed requirement ledger.
 
-- [ ] **Step 1: Add migration and restart tests**
+- [x] **Step 1: Add migration and restart tests**
 
 Initialize the schema twice over an existing Areas database, apply a report,
 reopen both connections, and prove outcomes/events/brief survive with no
 duplicates. Archive and restore the Area and prove work returns unchanged.
 
-- [ ] **Step 2: Run all focused Area/Custodian tests**
+- [x] **Step 2: Run all focused Area/Custodian tests**
 
 Run: `cd apps/server && uv run pytest tests/test_area_work_store.py tests/test_area_tools.py tests/test_areas_agent.py tests/test_areas_asks.py tests/test_areas_custodian.py tests/test_areas_lifecycle.py tests/test_areas_migration.py tests/test_areas_router.py tests/test_areas_service.py tests/test_areas_runtime.py -q`
 
-- [ ] **Step 3: Run full server gates**
+- [x] **Step 3: Run full server gates**
 
 Run: `cd apps/server && uv run pytest -q && uv run ruff check ntrp tests`  
 Expected: all tests and Ruff pass.
 
-- [ ] **Step 4: Run full desktop gates**
+- [x] **Step 4: Run full desktop gates**
 
 Run: `cd apps/desktop && bun test && bun run typecheck && bun run lint && bun run build`  
 Expected: all tests, typecheck, lint, and production build pass; existing
 non-failing React `act()` and Vite chunk-size warnings may remain.
 
-- [ ] **Step 5: Audit every design requirement**
+- [x] **Step 5: Audit every design requirement**
 
 For every Verification bullet in the design, record the exact test/file
 evidence in the Progress Ledger. Search changed files for `TODO`, `FIXME`,
 unresolved placeholders, unrestricted tool scopes, and duplicate work stores.
 
-- [ ] **Step 6: Commit the closed ledger**
+- [x] **Step 6: Commit the closed ledger**
 
 Commit: `docs: close outcome custodian implementation ledger`
