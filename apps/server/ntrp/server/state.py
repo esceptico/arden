@@ -102,8 +102,14 @@ class RunState:
     source_refs: list[dict] = field(default_factory=list)
 
     def add_source_ref(self, ref: dict | None) -> None:
-        refs = normalize_source_refs((*self.source_refs, ref) if ref is not None else self.source_refs)
-        self.source_refs = [source_ref.to_dict() for source_ref in refs]
+        refs = normalize_source_refs((ref,)) if ref is not None else ()
+        if not refs:
+            return
+        source_ref = refs[0].to_dict()
+        identity = (source_ref["provider"], source_ref["ref"])
+        if any((existing.get("provider"), existing.get("ref")) == identity for existing in self.source_refs):
+            return
+        self.source_refs.append(source_ref)
 
     @property
     def pending_injection_count(self) -> int:

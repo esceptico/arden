@@ -129,21 +129,43 @@ async def test_run_agent_loop_collects_each_tool_source_ref_for_episode_provenan
     assert run.source_refs == [source.to_dict(), second.to_dict()]
 
 
-def test_run_source_refs_are_stably_deduplicated_and_capped_at_50():
+@pytest.mark.asyncio
+async def test_run_source_refs_keep_more_than_50_unique_refs_across_tool_completions():
     run = RunState(run_id="run-1", session_id="session-1")
-    first = ToolSourceRef(provider="slack", kind="message", ref="C1:1.0", title="First")
-    duplicate = ToolSourceRef(provider="slack", kind="message", ref="C1:1.0", title="Duplicate")
+    first_batch = tuple(
+        ToolSourceRef(provider="slack", kind="message", ref=f"C1:{index}", title=f"Message {index}")
+        for index in range(30)
+    )
+    duplicate = ToolSourceRef(provider="slack", kind="message", ref="C1:0", title="Duplicate")
+    second_batch = (
+        duplicate,
+        *(
+            ToolSourceRef(provider="slack", kind="message", ref=f"C1:{index}", title=f"Message {index}")
+            for index in range(30, 60)
+        ),
+    )
 
-    run.add_source_ref(first.to_dict())
-    run.add_source_ref(duplicate.to_dict())
-    for index in range(55):
-        run.add_source_ref(
-            ToolSourceRef(provider="slack", kind="message", ref=f"C1:{index}", title=f"Message {index}").to_dict()
-        )
+    class _Agent:
+        async def stream(self, _messages):
+            for call_id, source_refs in (("call-1", first_batch), ("call-2", second_batch)):
+                yield ToolCompleted(
+                    tool_id=call_id,
+                    name="slack_search",
+                    result="messages",
+                    preview="messages",
+                    duration_ms=1,
+                    is_error=False,
+                    data=None,
+                    display_name="Slack Search",
+                    source_refs=source_refs,
+                )
+            yield Result(text="done", stop_reason=StopReason.END_TURN, steps=1, usage=Usage())
 
-    assert len(run.source_refs) == 50
-    assert run.source_refs[0] == first.to_dict()
-    assert run.source_refs[-1]["ref"] == "C1:48"
+    await run_agent_loop(SimpleNamespace(run=run), _Agent(), SessionBus(session_id="session-1"))
+
+    assert len(run.source_refs) == 60
+    assert [ref["ref"] for ref in run.source_refs] == [f"C1:{index}" for index in range(60)]
+    assert run.source_refs[0]["title"] == "Message 0"
 
 
 def test_reasoning_sse_preserves_nested_scope():
