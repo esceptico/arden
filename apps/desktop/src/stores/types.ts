@@ -339,7 +339,6 @@ export interface CachedSessionState {
 
 export interface State {
   config: AppConfig;
-  areaRecords: Area[];
   sessions: SessionListItem[];
   sessionView: SessionViewState;
   currentSessionId: string | null;
@@ -431,6 +430,8 @@ export interface State {
 export interface Actions {
   setConfig: (config: AppConfig) => void;
   setAreaRecords: (areas: Area[]) => void;
+  upsertAreaRecord: (area: Area) => void;
+  archiveAreaRecord: (areaId: string) => void;
   setSessions: (sessions: SessionListItem[]) => void;
   prependSession: (session: SessionListItem) => void;
   patchSession: (session: SessionListItem) => void;

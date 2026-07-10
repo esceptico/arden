@@ -1,4 +1,5 @@
 import { apiWithConfig, type AppConfig } from "@/api/core";
+import type { Area } from "@/api/types";
 
 export interface AreaSummary {
   /** The area's id. */
@@ -107,22 +108,21 @@ export async function resolveAsk(
 export async function updateAreaAutonomy(
   config: AppConfig,
   key: string,
-  autonomy: "observe" | "act",
-): Promise<{ area_id: string; name: string; autonomy: "observe" | "act" | null }> {
+  autonomy: "observe" | "act" | null,
+): Promise<Area> {
   return apiWithConfig(config, `/areas/${encodeURIComponent(key)}/autonomy`, {
     method: "PUT",
     body: JSON.stringify({ autonomy }),
   });
 }
 
-/** Attach capabilities: mint a new container (name) or grow an existing one
- *  (area_id) with a page + observing agent. */
+/** Attach a page capability without implicitly delegating a Custodian. */
 export async function createArea(
   config: AppConfig,
   title: string,
   pagePath: string,
-): Promise<void> {
-  await apiWithConfig(config, "/areas", {
+): Promise<Area> {
+  return apiWithConfig(config, "/areas", {
     method: "POST",
     body: JSON.stringify({ name: title, page_path: pagePath }),
   });
@@ -139,11 +139,23 @@ export async function updateAreaSettings(
     paused?: boolean;
     instructions?: string | null;
   },
-): Promise<{ area_id: string; instructions: string | null }> {
+): Promise<Area> {
   return apiWithConfig(config, `/areas/${encodeURIComponent(key)}`, {
     method: "PATCH",
     body: JSON.stringify(patch),
   });
+}
+
+export async function createAreaPage(config: AppConfig, key: string): Promise<Area> {
+  return apiWithConfig(config, `/areas/${encodeURIComponent(key)}/page`, { method: "POST" });
+}
+
+export async function detachAreaPage(config: AppConfig, key: string): Promise<Area> {
+  return apiWithConfig(config, `/areas/${encodeURIComponent(key)}/page`, { method: "DELETE" });
+}
+
+export async function restoreArea(config: AppConfig, key: string): Promise<Area> {
+  return apiWithConfig(config, `/areas/${encodeURIComponent(key)}/restore`, { method: "POST" });
 }
 
 export async function dismissAreaSuggestion(config: AppConfig, key: string): Promise<void> {

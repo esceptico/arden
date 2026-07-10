@@ -57,6 +57,9 @@ import {
   reduceAskResolved,
   reduceOpenArea,
   reduceAutonomyUpdated,
+  reduceRecordsLoaded,
+  reduceRecordUpserted,
+  reduceRecordArchived,
   type AreasDomainState,
 } from "@/stores/areas-domain";
 import {
@@ -219,7 +222,6 @@ export function selectSentUserMessages(state: {
 
 export const useStore = create<State & Actions>((set) => ({
   config: { ...DEFAULT_CONFIG },
-  areaRecords: [],
   sessions: [],
   sessionView: createInitialSessionViewState(),
   currentSessionId: null,
@@ -287,7 +289,12 @@ export const useStore = create<State & Actions>((set) => ({
   triage: createTriageDomainState(),
 
   setConfig: (config) => set({ config, connectionDraft: { ...config } }),
-  setAreaRecords: (areaRecords) => set({ areaRecords }),
+  setAreaRecords: (areaRecords) =>
+    set((s) => ({ areas: reduceRecordsLoaded(s.areas, areaRecords) })),
+  upsertAreaRecord: (area) =>
+    set((s) => ({ areas: reduceRecordUpserted(s.areas, area) })),
+  archiveAreaRecord: (areaId) =>
+    set((s) => ({ areas: reduceRecordArchived(s.areas, areaId) })),
   setSessions: (sessions) =>
     set((s) => ({
       sessions,

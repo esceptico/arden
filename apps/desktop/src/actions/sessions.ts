@@ -46,7 +46,7 @@ export async function createSession(areaId?: string | null): Promise<void> {
 export async function createArea(): Promise<Area> {
   const s = getState();
   const area = await createAreaApi(s.config, { name: "New area" });
-  s.setAreaRecords([area, ...s.areaRecords]);
+  s.upsertAreaRecord(area);
   await createSession(area.area_id);
   return area;
 }
@@ -57,19 +57,14 @@ export async function saveArea(
 ): Promise<Area> {
   const s = getState();
   const area = await updateAreaApi(s.config, areaId, patch);
-  s.setAreaRecords(s.areaRecords.map((item) => (item.area_id === area.area_id ? area : item)));
+  s.upsertAreaRecord(area);
   return area;
 }
 
 export async function archiveArea(areaId: string): Promise<void> {
   const s = getState();
   await archiveAreaApi(s.config, areaId);
-  s.setAreaRecords(s.areaRecords.filter((area) => area.area_id !== areaId));
-  s.setSessions(
-    s.sessions.map((session) =>
-      session.area_id === areaId ? { ...session, area_id: null } : session,
-    ),
-  );
+  s.archiveAreaRecord(areaId);
 }
 
 export async function moveSessionToArea(sessionId: string, areaId: string | null): Promise<void> {

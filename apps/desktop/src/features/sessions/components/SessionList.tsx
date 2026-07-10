@@ -28,7 +28,12 @@ const REVEAL_STEP = 5;
 
 export function SessionList() {
   useTimeTicker();
-  const areas = useStore((s) => s.areaRecords);
+  const recordsById = useStore((s) => s.areas.recordsById);
+  const recordOrder = useStore((s) => s.areas.recordOrder);
+  const areas = useMemo(
+    () => recordOrder.flatMap((id) => (recordsById[id] ? [recordsById[id]] : [])),
+    [recordOrder, recordsById],
+  );
   const sessions = useStore((s) => s.sessions);
   const currentSessionId = useStore((s) => s.currentSessionId);
   const activeRunSessionIds = useStore((s) => s.activeRunSessionIds);

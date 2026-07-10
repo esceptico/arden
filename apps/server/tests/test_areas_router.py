@@ -277,6 +277,16 @@ def test_put_area_updates_autonomy(client):
     assert svc.detail(o1a)["autonomy"] == "act"  # projection reads the same rows
 
 
+def test_put_area_can_disable_delegation(client):
+    c, svc, _, o1a, _ = client
+
+    res = c.put(f"/areas/{o1a}/autonomy", json={"autonomy": None})
+
+    assert res.status_code == 200
+    assert res.json()["autonomy"] is None
+    assert svc.detail(o1a)["autonomy"] is None
+
+
 def test_put_unknown_area_404(client):
     c, *_ = client
     res = c.put("/areas/nope/autonomy", json={"autonomy": "act"})

@@ -26,7 +26,7 @@ function ChatHeader() {
     if (!pid) return null;
     return (
       s.areas.overview?.areas.find((sl) => sl.key === pid)?.title ??
-      s.areaRecords.find((p) => p.area_id === pid)?.name ??
+      s.areas.recordsById[pid]?.name ??
       null
     );
   });

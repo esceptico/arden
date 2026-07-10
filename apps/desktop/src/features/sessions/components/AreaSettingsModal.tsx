@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { FolderOpen } from "lucide-react";
 import type { Area } from "@/api/types";
 import { archiveArea, saveArea } from "@/actions/sessions";
+import { detachAreaPage, updateAreaAutonomy } from "@/actions/areas";
 import { selectDirectory } from "@/features/sessions/lib/directoryPicker";
 import { PageModal } from "@/components/ui/PageModal";
 import { Button } from "@/components/ui/Button";
@@ -22,6 +23,7 @@ export function AreaSettingsModal({ area, onClose }: AreaSettingsModalProps) {
   const [saving, setSaving] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [pickingCwd, setPickingCwd] = useState(false);
+  const [capabilityBusy, setCapabilityBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -35,7 +37,7 @@ export function AreaSettingsModal({ area, onClose }: AreaSettingsModalProps) {
     setPickingCwd(false);
   }, [area]);
 
-  const busy = saving || archiving;
+  const busy = saving || archiving || capabilityBusy;
   const canSave = useMemo(() => Boolean(area && name.trim() && !busy), [area, name, busy]);
 
   async function submit(event: React.FormEvent) {
@@ -85,6 +87,32 @@ export function AreaSettingsModal({ area, onClose }: AreaSettingsModalProps) {
     }
   }
 
+  async function disableCustodian() {
+    if (!area || capabilityBusy) return;
+    setCapabilityBusy(true);
+    setError(null);
+    try {
+      await updateAreaAutonomy(area.area_id, null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCapabilityBusy(false);
+    }
+  }
+
+  async function detachPage() {
+    if (!area || capabilityBusy) return;
+    setCapabilityBusy(true);
+    setError(null);
+    try {
+      await detachAreaPage(area.area_id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCapabilityBusy(false);
+    }
+  }
+
   return (
     <PageModal
       open={Boolean(area)}
@@ -125,6 +153,24 @@ export function AreaSettingsModal({ area, onClose }: AreaSettingsModalProps) {
             value={instructions}
             onChange={(event) => setInstructions(event.target.value)}
           />
+          {area?.page_path && (
+            <LabeledField label="Area page">
+              <div className="flex items-center gap-2 rounded-lg bg-surface-soft px-3 py-2">
+                <span className="min-w-0 flex-1 truncate font-mono text-xs text-ink-soft">
+                  {area.page_path}
+                </span>
+                {area.autonomy !== null ? (
+                  <Button variant="ghost" size="sm" disabled={busy} onClick={() => void disableCustodian()}>
+                    Disable custodian
+                  </Button>
+                ) : (
+                  <Button variant="ghost" size="sm" disabled={busy} onClick={() => void detachPage()}>
+                    Detach
+                  </Button>
+                )}
+              </div>
+            </LabeledField>
+          )}
           {error && <div className="text-sm text-bad">{error}</div>}
         </div>
         <footer className="flex items-center justify-between gap-2 px-5 py-4 border-t border-line-soft">

@@ -9,7 +9,11 @@ const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).
 beforeEach(() => {
   setState({
     config: { serverUrl: "http://localhost:6877", apiKey: "" },
-    areaRecords: [area("p1", "ntrp"), area("p2", "dex")],
+    areas: {
+      ...getState().areas,
+      recordsById: { p1: area("p1", "ntrp"), p2: area("p2", "dex") },
+      recordOrder: ["p1", "p2"],
+    },
     sessions: [
       session("s1", "ntrp bug", "p1"),
       session("s2", "dex bug", "p2"),
@@ -22,7 +26,7 @@ afterEach(() => {
   (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
 });
 
-test("archiveArea removes the area and moves its sessions to Inbox locally", async () => {
+test("archiveArea removes the area view but preserves session membership for restore", async () => {
   const requests: { path: string; method?: string; body?: string; timeout?: number }[] = [];
   (globalThis as typeof globalThis & { window?: unknown }).window = {
     ntrpDesktop: {
@@ -48,9 +52,9 @@ test("archiveArea removes the area and moves its sessions to Inbox locally", asy
   await archiveArea("p1");
 
   expect(requests).toEqual([{ path: "/areas/p1", method: "DELETE", body: undefined, timeout: 60_000 }]);
-  expect(getState().areaRecords.map((p) => p.area_id)).toEqual(["p2"]);
+  expect(getState().areas.recordOrder).toEqual(["p2"]);
   expect(getState().sessions.map((s) => [s.session_id, s.area_id])).toEqual([
-    ["s1", null],
+    ["s1", "p1"],
     ["s2", "p2"],
     ["s3", null],
   ]);
@@ -65,6 +69,11 @@ function area(area_id: string, name: string): Area {
     default_cwd: null,
     instructions: null,
     knowledge_scope: `area:${area_id}`,
+    page_path: null,
+    autonomy: null,
+    attention: "ambient",
+    interrupts: "asks",
+    paused_at: null,
     archived_at: null,
   };
 }

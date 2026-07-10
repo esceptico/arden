@@ -1,6 +1,15 @@
 import {
   createArea as createAreaApi,
-  dismissAreaSuggestion as dismissAreaSuggestionApi, fetchAreasOverview as fetchAreasOverviewApi, fetchAreaDetail as fetchAreaDetailApi, resolveAsk as resolveAskApi, updateAreaAutonomy as updateAreaAutonomyApi, updateAreaSettings as updateAreaSettingsApi } from "@/api/areas";
+  createAreaPage as createAreaPageApi,
+  detachAreaPage as detachAreaPageApi,
+  dismissAreaSuggestion as dismissAreaSuggestionApi,
+  fetchAreasOverview as fetchAreasOverviewApi,
+  fetchAreaDetail as fetchAreaDetailApi,
+  resolveAsk as resolveAskApi,
+  restoreArea as restoreAreaApi,
+  updateAreaAutonomy as updateAreaAutonomyApi,
+  updateAreaSettings as updateAreaSettingsApi,
+} from "@/api/areas";
 import type { AreaAsk, AreaAttention, AreaInterrupts } from "@/api/areas";
 import { getState } from "@/stores";
 
@@ -26,15 +35,16 @@ export async function resolveAsk(key: string, askId: string, state: string, snoo
   s.areaAskResolved(key, askId);
 }
 
-export async function updateAreaAutonomy(key: string, autonomy: "observe" | "act"): Promise<void> {
+export async function updateAreaAutonomy(key: string, autonomy: "observe" | "act" | null): Promise<void> {
   const s = getState();
   const record = await updateAreaAutonomyApi(s.config, key, autonomy);
-  s.areaAutonomyUpdated(key, record.autonomy ?? "observe");
+  s.upsertAreaRecord(record);
 }
 
 export async function promoteSuggestedArea(title: string, pagePath: string): Promise<void> {
   const s = getState();
-  await createAreaApi(s.config, title, pagePath);
+  const record = await createAreaApi(s.config, title, pagePath);
+  s.upsertAreaRecord(record);
   await fetchAreasOverview();
 }
 
@@ -50,7 +60,8 @@ export async function updateAreaSettings(
   patch: { attention?: AreaAttention; interrupts?: AreaInterrupts; paused?: boolean },
 ): Promise<void> {
   const s = getState();
-  await updateAreaSettingsApi(s.config, key, patch);
+  const record = await updateAreaSettingsApi(s.config, key, patch);
+  s.upsertAreaRecord(record);
   // The room shows these live; refetch is the source of truth (the row
   // PATCH response lacks the agent block).
   await fetchAreaDetail(key);
@@ -61,9 +72,31 @@ export async function updateAreaSettings(
  *  block — the ask itself is dismissed. */
 export async function fewerLikeThis(ask: AreaAsk): Promise<void> {
   const s = getState();
-  const record = s.areaRecords.find((r) => r.area_id === ask.area_key);
+  const record = s.areas.recordsById[ask.area_key];
   const line = `- Fewer asks like: "${ask.text.slice(0, 120)}"`;
   const instructions = record?.instructions ? `${record.instructions}\n${line}` : line;
-  await updateAreaSettingsApi(s.config, ask.area_key, { instructions });
+  const updated = await updateAreaSettingsApi(s.config, ask.area_key, { instructions });
+  s.upsertAreaRecord(updated);
   await resolveAsk(ask.area_key, ask.id, "dismissed");
+}
+
+export async function createAreaPage(key: string): Promise<void> {
+  const s = getState();
+  const record = await createAreaPageApi(s.config, key);
+  s.upsertAreaRecord(record);
+  await Promise.all([fetchAreaDetail(key), fetchAreasOverview()]);
+}
+
+export async function detachAreaPage(key: string): Promise<void> {
+  const s = getState();
+  const record = await detachAreaPageApi(s.config, key);
+  s.upsertAreaRecord(record);
+  await Promise.all([fetchAreaDetail(key), fetchAreasOverview()]);
+}
+
+export async function restoreArea(key: string): Promise<void> {
+  const s = getState();
+  const record = await restoreAreaApi(s.config, key);
+  s.upsertAreaRecord(record);
+  await fetchAreasOverview();
 }

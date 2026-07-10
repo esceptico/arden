@@ -20,7 +20,7 @@ class ResolveBody(BaseModel):
 
 
 class AutonomyBody(BaseModel):
-    autonomy: Literal["observe", "act"]
+    autonomy: Literal["observe", "act"] | None
 
 
 def _svc(request: Request):
@@ -153,7 +153,7 @@ async def update_area_autonomy(request: Request, area_id: str, body: AutonomyBod
     existing = await svc.get_area(area_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Area not found")
-    if not existing.get("page_path"):
+    if body.autonomy is not None and not existing.get("page_path"):
         raise HTTPException(status_code=409, detail="Attach a page before granting an agent")
     try:
         area = await _lifecycle(request).update(area_id, autonomy=body.autonomy)

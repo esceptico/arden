@@ -8,6 +8,11 @@ export interface Area {
   default_cwd: string | null;
   instructions: string | null;
   knowledge_scope: string;
+  page_path: string | null;
+  autonomy: "observe" | "act" | null;
+  attention: "dormant" | "ambient" | "active";
+  interrupts: "asks" | "all" | "none";
+  paused_at: string | null;
   created_at: string;
   updated_at: string;
   archived_at: string | null;

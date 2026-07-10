@@ -7,7 +7,11 @@ import {
   reduceOpenArea,
   reduceDetailLoaded,
   reduceAutonomyUpdated,
+  reduceRecordsLoaded,
+  reduceRecordUpserted,
+  reduceRecordArchived,
 } from "@/stores/areas-domain";
+import type { Area } from "@/api/types";
 
 const ask = {
   id: "a1",
@@ -80,4 +84,41 @@ test("setCurrentSession closes an open area room (navigating away from an area)"
   getState().setCurrentSession("s1");
 
   expect(getState().areas.openAreaKey).toBeNull();
+});
+
+const record = (area_id: string, name: string): Area => ({
+  area_id,
+  name,
+  default_cwd: null,
+  instructions: null,
+  knowledge_scope: `area:${area_id}`,
+  page_path: null,
+  autonomy: null,
+  attention: "ambient",
+  interrupts: "asks",
+  paused_at: null,
+  created_at: "2026-01-01T00:00:00Z",
+  updated_at: "2026-01-01T00:00:00Z",
+  archived_at: null,
+});
+
+test("canonical area records load, upsert, and archive all cached projections", () => {
+  let s = reduceRecordsLoaded(createAreasDomainState(), [record("a1", "Health"), record("a2", "Dex")]);
+  s = reduceOverviewLoaded(s, {
+    ...overview,
+    areas: [{ ...overview.areas[0], key: "a1", title: "Health" }],
+  });
+  s = reduceDetailLoaded(s, { ...detail, key: "a1", title: "Health" });
+  s = reduceOpenArea(s, "a1");
+
+  s = reduceRecordUpserted(s, { ...record("a1", "Wellbeing"), updated_at: "2026-02-01" });
+  expect(s.recordsById.a1.name).toBe("Wellbeing");
+  expect(s.overview?.areas[0].title).toBe("Wellbeing");
+  expect(s.detailByKey.a1.title).toBe("Wellbeing");
+
+  s = reduceRecordArchived(s, "a1");
+  expect(s.recordsById.a1).toBeUndefined();
+  expect(s.overview?.areas).toEqual([]);
+  expect(s.detailByKey.a1).toBeUndefined();
+  expect(s.openAreaKey).toBeNull();
 });

@@ -3,6 +3,7 @@ import { useStore } from "@/stores";
 import { refreshLoops } from "@/actions/loops";
 import { fetchAutomations, fetchAutomationSuggestions } from "@/actions/automations";
 import { fetchAreasOverview, fetchAreaDetail } from "@/actions/areas";
+import { refreshAreas } from "@/actions/sessions";
 import type { AppConfig } from "@/api/core";
 import type { SessionListItem } from "@/api/types";
 import { createStallWatchdog } from "@/lib/streamWatchdog";
@@ -126,6 +127,7 @@ export function useAutomationEvents(): void {
         // automation write) — refetch so the Home focus set and strip
         // reflect it without waiting for the next mount.
         void fetchAreasOverview();
+        void refreshAreas();
         // If the changed area's room is currently open, refetch its detail
         // too — otherwise the open room goes stale until the user re-opens it.
         const openKey = useStore.getState().areas.openAreaKey;

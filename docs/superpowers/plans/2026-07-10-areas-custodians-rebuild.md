@@ -53,8 +53,15 @@ Update this section after every completed task.
   archived-area asks are filtered; mechanical approval and automation-failure
   asks reconcile against canonical state and retire when cleared. Evidence: 49
   focused projection/ask tests and Ruff pass.
-- Current: Task 5 pending.
-- Remaining: Tasks 5-10 below.
+- 2026-07-10: Task 5 complete. Desktop Area records are normalized under one
+  domain; create/update/archive/restore/page/delegation reconcile projections;
+  every room offers page creation and explicit delegation; settings can disable
+  delegation and detach a page. Evidence: 62 server tests, 31 desktop tests,
+  typecheck, ESLint, and Ruff pass (two pre-existing React `act()` warnings in
+  `askCardOpenPage.test.tsx`).
+- Current: Task 6 pending. Areas foundation phase complete; Custodian rebuild
+  begins here.
+- Remaining: Tasks 6-10 below.
 
 ---
 
@@ -159,12 +166,12 @@ against current approvals/run failures and retire when resolved.
 **Produces:** One `recordsById` Area source, reconciled overview/detail, restore,
 and page capability setup in every room.
 
-- [ ] Write failing reducer/action tests for create, rename, archive, restore,
+- [x] Write failing reducer/action tests for create, rename, archive, restore,
   open-room invalidation, and SSE reconciliation.
-- [ ] Verify red.
-- [ ] Remove root `areaRecords` and migrate consumers to the Area domain.
-- [ ] Add page create/attach/detach controls using existing UI primitives.
-- [ ] Run focused tests, typecheck, and lint to green.
+- [x] Verify red.
+- [x] Remove root `areaRecords` and migrate consumers to the Area domain.
+- [x] Add page create/attach/detach controls using existing UI primitives.
+- [x] Run focused tests, typecheck, and lint to green.
 
 ### Task 6: Add Area-locked page and transcript tools
 

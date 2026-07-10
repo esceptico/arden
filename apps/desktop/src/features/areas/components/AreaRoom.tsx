@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useStore } from "@/stores";
-import { fetchAreaDetail, updateAreaAutonomy } from "@/actions/areas";
+import { createAreaPage, fetchAreaDetail, updateAreaAutonomy } from "@/actions/areas";
 import { runAutomation } from "@/actions/automations";
 import { createSession, goToNewSessionHome, switchSession } from "@/actions/sessions";
 import { sendMessage } from "@/actions/messages";
-import { Eye, Zap } from "lucide-react";
+import { Bot, Eye, FilePlus2, Zap } from "lucide-react";
 import { AskCard } from "@/features/areas/components/AskCard";
 import { AgentPresence, type AgentInfo } from "@/features/areas/components/AgentPresence";
 import { AgentStatusLine, AreaSettingsButton } from "@/features/areas/components/AreaControls";
@@ -28,6 +28,7 @@ export function AreaRoom({ areaKey }: { areaKey: string }) {
   const openArea = useStore((s) => s.openArea);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [setupBusy, setSetupBusy] = useState(false);
 
   useEffect(() => {
     void fetchAreaDetail(areaKey);
@@ -122,6 +123,41 @@ export function AreaRoom({ areaKey }: { areaKey: string }) {
     }
   };
 
+  const setupPage = async () => {
+    if (setupBusy) return;
+    setSetupBusy(true);
+    try {
+      await createAreaPage(areaKey);
+    } catch {
+      useStore.getState().pushToast({
+        id: `area-page-fail:${areaKey}`,
+        title: "Couldn’t create the Area page",
+        status: "failed",
+        target: { kind: "automation" },
+      });
+    } finally {
+      setSetupBusy(false);
+    }
+  };
+
+  const delegate = async () => {
+    if (setupBusy) return;
+    setSetupBusy(true);
+    try {
+      await updateAreaAutonomy(areaKey, "observe");
+      await fetchAreaDetail(areaKey);
+    } catch {
+      useStore.getState().pushToast({
+        id: `area-delegate-fail:${areaKey}`,
+        title: "Couldn’t delegate this Area",
+        status: "failed",
+        target: { kind: "automation" },
+      });
+    } finally {
+      setSetupBusy(false);
+    }
+  };
+
   const send = async () => {
     const text = draft.trim();
     if (!text || sending) return;
@@ -182,7 +218,27 @@ export function AreaRoom({ areaKey }: { areaKey: string }) {
           <h1 className="m-0 min-w-0 truncate text-2xl font-medium tracking-[-0.015em] text-ink">
             {detail.title}
           </h1>
-          {detail.autonomy === null ? null : detail.autonomy === "observe" ? (
+          {detail.page_path === null ? (
+            <button
+              type="button"
+              disabled={setupBusy}
+              onClick={() => void setupPage()}
+              className="shrink-0 inline-flex h-7 items-center gap-1.5 rounded-full border border-line-soft px-3 text-xs font-medium text-muted hover:border-line-strong hover:text-ink disabled:opacity-50"
+            >
+              <FilePlus2 size={13} strokeWidth={2} />
+              Create page
+            </button>
+          ) : detail.autonomy === null ? (
+            <button
+              type="button"
+              disabled={setupBusy}
+              onClick={() => void delegate()}
+              className="shrink-0 inline-flex h-7 items-center gap-1.5 rounded-full border border-line-soft px-3 text-xs font-medium text-muted hover:border-line-strong hover:text-ink disabled:opacity-50"
+            >
+              <Bot size={13} strokeWidth={2} />
+              Delegate
+            </button>
+          ) : detail.autonomy === "observe" ? (
             <button
               type="button"
               onClick={() => void grantAct()}
@@ -203,7 +259,7 @@ export function AreaRoom({ areaKey }: { areaKey: string }) {
               Acting
             </button>
           )}
-          <AreaSettingsButton detail={detail} />
+          {detail.autonomy !== null && <AreaSettingsButton detail={detail} />}
         </div>
         <AgentStatusLine detail={detail} />
       </div>
@@ -236,7 +292,9 @@ export function AreaRoom({ areaKey }: { areaKey: string }) {
           <div className="grid content-start gap-6 pb-1">
             {isEmpty && (
               <p className="m-0 text-sm text-faint">
-                Nothing on file yet — message the area below, or its agent will report after its next run.
+                {detail.page_path
+                  ? "Nothing needs attention yet — start a conversation below or delegate the Area."
+                  : "This Area has conversations but no shared page yet. Create one when the domain needs durable context."}
               </p>
             )}
 

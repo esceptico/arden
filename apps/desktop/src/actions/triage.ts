@@ -38,7 +38,7 @@ export async function acceptTriage(sessionId: string): Promise<void> {
       await moveSessionToArea(sessionId, decision.target.key);
     } else if (decision.decision === "create" && decision.new_title) {
       const area = await createAreaApi(s.config, { name: decision.new_title });
-      getState().setAreaRecords([area, ...getState().areaRecords]);
+      getState().upsertAreaRecord(area);
       await moveSessionToArea(sessionId, area.area_id);
     }
     getState().clearTriageProposal(sessionId);
