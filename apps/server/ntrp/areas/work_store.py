@@ -4,7 +4,15 @@ from datetime import UTC, datetime
 
 import aiosqlite
 
-from ntrp.areas.work_models import AreaOutcome, AreaWorkEvent, AreaWorkItem, AreaWorkSnapshot
+from ntrp.areas.work_models import (
+    AreaOutcome,
+    AreaWorkEvent,
+    AreaWorkItem,
+    AreaWorkSnapshot,
+    EvidenceDraft,
+    OutcomeChange,
+    WorkChange,
+)
 
 _KEY = re.compile(r"^[a-z0-9][a-z0-9_-]{0,79}$")
 
@@ -70,6 +78,10 @@ CREATE TABLE IF NOT EXISTS area_work_reports (
 
 
 class AreaWorkConflict(RuntimeError):
+    pass
+
+
+class AreaWorkReportError(RuntimeError):
     pass
 
 
@@ -234,6 +246,178 @@ class AreaWorkStore:
         )
         await self.conn.commit()
         return await self._get_work_item(area_id, stable_key)
+
+    async def apply_report(self, area_id: str, run_ref: str, report: object) -> bool:
+        prior = await self.read_conn.execute_fetchall(
+            "SELECT 1 FROM area_work_reports WHERE run_ref = ?",
+            (run_ref,),
+        )
+        if prior:
+            return False
+
+        outcome_changes: list[OutcomeChange] = list(getattr(report, "outcome_changes", []))
+        work_changes: list[WorkChange] = list(getattr(report, "work_changes", []))
+        evidence: list[EvidenceDraft] = list(getattr(report, "evidence", []))
+        snapshot = await self.snapshot(area_id)
+        outcomes = {row.stable_key: row for row in snapshot.outcomes}
+        work_items = {row.stable_key: row for row in snapshot.work_items}
+        self._validate_report(outcomes, work_items, outcome_changes, work_changes, evidence)
+
+        now = _now()
+        await self.conn.execute("SAVEPOINT area_work_report")
+        try:
+            await self.conn.execute(
+                "INSERT INTO area_work_reports (run_ref, area_id, applied_at) VALUES (?, ?, ?)",
+                (run_ref, area_id, now),
+            )
+            for change in outcome_changes:
+                await self._apply_outcome_change(area_id, change, now)
+            for change in work_changes:
+                await self._apply_work_change(area_id, change, now)
+            for index, draft in enumerate(evidence):
+                await self._append_evidence(area_id, run_ref, index, draft, now)
+            await self.conn.execute("RELEASE SAVEPOINT area_work_report")
+            await self.conn.commit()
+        except Exception:
+            await self.conn.execute("ROLLBACK TO SAVEPOINT area_work_report")
+            await self.conn.execute("RELEASE SAVEPOINT area_work_report")
+            raise
+        return True
+
+    @staticmethod
+    def _validate_report(
+        outcomes: dict[str, AreaOutcome],
+        work_items: dict[str, AreaWorkItem],
+        outcome_changes: list[OutcomeChange],
+        work_changes: list[WorkChange],
+        evidence: list[EvidenceDraft],
+    ) -> None:
+        outcome_keys = set(outcomes)
+        work_keys = set(work_items)
+        for change in outcome_changes:
+            exists = change.key in outcome_keys
+            if change.op == "create":
+                if exists:
+                    raise AreaWorkReportError(f"Outcome '{change.key}' already exists")
+                outcome_keys.add(change.key)
+            elif not exists:
+                raise AreaWorkReportError(f"Unknown outcome '{change.key}'")
+            elif outcomes[change.key].status in {"completed", "cancelled"} and change.op == "update":
+                raise AreaWorkReportError(f"Terminal outcome '{change.key}' cannot be reopened by an agent")
+        for change in work_changes:
+            exists = change.key in work_keys
+            if change.op == "create":
+                if exists:
+                    raise AreaWorkReportError(f"Work item '{change.key}' already exists")
+                work_keys.add(change.key)
+            elif not exists:
+                raise AreaWorkReportError(f"Unknown work item '{change.key}'")
+            elif work_items[change.key].status in {"completed", "cancelled"} and change.op == "update":
+                raise AreaWorkReportError(f"Terminal work item '{change.key}' cannot be reopened by an agent")
+            if change.outcome_key is not None and change.outcome_key not in outcome_keys:
+                raise AreaWorkReportError(f"Unknown outcome '{change.outcome_key}'")
+        for draft in evidence:
+            if draft.target_type == "outcome" and draft.target_key not in outcome_keys:
+                raise AreaWorkReportError(f"Unknown evidence outcome '{draft.target_key}'")
+            if draft.target_type == "work" and draft.target_key not in work_keys:
+                raise AreaWorkReportError(f"Unknown evidence work item '{draft.target_key}'")
+
+    async def _apply_outcome_change(self, area_id: str, change: OutcomeChange, now: str) -> None:
+        if change.op == "create":
+            await self.conn.execute(
+                "INSERT INTO area_work_outcomes "
+                "(outcome_id, area_id, stable_key, title, success_criteria, status, priority, source, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, 'active', ?, 'inferred', ?, ?)",
+                (
+                    f"outcome:{area_id}:{change.key}", area_id, change.key, change.title,
+                    change.success_criteria, change.priority, now, now,
+                ),
+            )
+            return
+        if change.op in {"complete", "cancel"}:
+            status = "completed" if change.op == "complete" else "cancelled"
+            await self.conn.execute(
+                "UPDATE area_work_outcomes SET status = ?, updated_at = ?, completed_at = ? "
+                "WHERE area_id = ? AND stable_key = ?",
+                (status, now, now, area_id, change.key),
+            )
+            return
+        values = {
+            name: value
+            for name, value in {
+                "title": change.title,
+                "success_criteria": change.success_criteria,
+                "priority": change.priority,
+            }.items()
+            if value is not None
+        }
+        values["updated_at"] = now
+        await self.conn.execute(
+            f"UPDATE area_work_outcomes SET {', '.join(f'{name} = ?' for name in values)} "
+            "WHERE area_id = ? AND stable_key = ?",
+            (*values.values(), area_id, change.key),
+        )
+
+    async def _apply_work_change(self, area_id: str, change: WorkChange, now: str) -> None:
+        if change.op == "create":
+            outcome_id = f"outcome:{area_id}:{change.outcome_key}" if change.outcome_key else None
+            await self.conn.execute(
+                "INSERT INTO area_work_items "
+                "(item_id, area_id, stable_key, outcome_id, kind, text, status, owner, due_at, next_attempt_at, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)",
+                (
+                    f"work:{area_id}:{change.key}", area_id, change.key, outcome_id, change.kind,
+                    change.text, change.owner, change.due_at, change.next_attempt_at, now, now,
+                ),
+            )
+            return
+        if change.op in {"complete", "cancel"}:
+            status = "completed" if change.op == "complete" else "cancelled"
+            await self.conn.execute(
+                "UPDATE area_work_items SET status = ?, updated_at = ?, completed_at = ? "
+                "WHERE area_id = ? AND stable_key = ?",
+                (status, now, now, area_id, change.key),
+            )
+            return
+        values = {
+            name: value
+            for name, value in {
+                "outcome_id": f"outcome:{area_id}:{change.outcome_key}" if change.outcome_key else None,
+                "text": change.text,
+                "owner": change.owner,
+                "due_at": change.due_at,
+                "next_attempt_at": change.next_attempt_at,
+            }.items()
+            if value is not None
+        }
+        values["updated_at"] = now
+        await self.conn.execute(
+            f"UPDATE area_work_items SET {', '.join(f'{name} = ?' for name in values)} "
+            "WHERE area_id = ? AND stable_key = ?",
+            (*values.values(), area_id, change.key),
+        )
+
+    async def _append_evidence(
+        self,
+        area_id: str,
+        run_ref: str,
+        index: int,
+        draft: EvidenceDraft,
+        now: str,
+    ) -> None:
+        outcome_id = (
+            f"outcome:{area_id}:{draft.target_key}" if draft.target_type == "outcome" else None
+        )
+        item_id = f"work:{area_id}:{draft.target_key}" if draft.target_type == "work" else None
+        await self.conn.execute(
+            "INSERT INTO area_work_events "
+            "(area_id, outcome_id, item_id, run_ref, operation_index, event_type, summary, source_refs, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                area_id, outcome_id, item_id, run_ref, index, draft.event_type,
+                draft.summary, json.dumps(draft.source_refs), now,
+            ),
+        )
 
     async def _get_outcome(self, area_id: str, key: str, *, required: bool = True) -> AreaOutcome | None:
         rows = await self.read_conn.execute_fetchall(

@@ -13,6 +13,7 @@ from ntrp.areas.agent import (
     ACT_TOOL_SCOPE,
     OBSERVE_TOOL_SCOPE,
     AreaAskNomination,
+    AreaCustodianReport,
     area_agent_instructions,
     custodian_contract,
     record_area_run,
@@ -53,6 +54,40 @@ def test_nomination_schema_validates_at_the_trust_boundary():
         AreaAskNomination.model_validate(_nom([dict(_draft("x", "notify"), salience=9)]))
     with pytest.raises(ValidationError):  # ask cap
         AreaAskNomination.model_validate(_nom([_draft(str(i), "notify") for i in range(4)]))
+
+
+def test_custodian_report_requires_complete_explicit_work_operations():
+    report = AreaCustodianReport.model_validate({
+        **_nom([], report="Started evidence collection"),
+        "made_progress": True,
+        "work_remaining": True,
+        "outcome_changes": [{
+            "op": "create",
+            "key": "petition-filed",
+            "title": "Petition filed",
+            "success_criteria": "Receipt notice exists",
+            "priority": 5,
+        }],
+        "work_changes": [{
+            "op": "create",
+            "key": "collect-exhibits",
+            "outcome_key": "petition-filed",
+            "kind": "action",
+            "text": "Collect final exhibits",
+            "owner": "custodian",
+        }],
+        "evidence": [],
+    })
+    assert report.outcome_changes[0].key == "petition-filed"
+    assert report.work_changes[0].outcome_key == "petition-filed"
+
+    with pytest.raises(ValidationError):
+        AreaCustodianReport.model_validate({
+            **_nom([]),
+            "made_progress": True,
+            "work_remaining": True,
+            "outcome_changes": [{"op": "create", "key": "missing-fields"}],
+        })
 
 
 def test_record_area_run_nominates_and_supersedes(tmp_path):
@@ -201,6 +236,14 @@ async def test_runtime_reconciles_permission_downgrades_in_place():
     assert automation.tool_scope == OBSERVE_TOOL_SCOPE
     assert automation.auto_approve is False
     assert "observe" in automation.description
+    assert automation.output_schema == "area_custodian"
+
+
+def test_custodian_report_is_the_registered_runtime_schema():
+    from ntrp.automation.output_schemas import resolve_output_schema
+
+    assert resolve_output_schema("area_custodian") is AreaCustodianReport
+    assert resolve_output_schema("area_ask") is AreaCustodianReport
 
 
 def test_load_area_context_reads_page_or_degrades(tmp_path):

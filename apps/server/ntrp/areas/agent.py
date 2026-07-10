@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from ntrp.areas.asks import AskStore
 from ntrp.areas.models import Area, Ask
+from ntrp.areas.work_models import EvidenceDraft, OutcomeChange, WorkChange
 
 # Observe-mode toolset as DATA: the automation's tool_scope allowlist
 # (visible and editable on the automation itself) instead of a code-side
@@ -88,6 +89,16 @@ class AreaAskNomination(BaseModel):
     # attention bounds) and the reason the user sees in the room.
     next_check_hours: float = Field(gt=0, le=24 * 14)
     next_check_reason: str
+
+
+class AreaCustodianReport(AreaAskNomination):
+    outcome_changes: list[OutcomeChange] = Field(default_factory=list, max_length=20)
+    work_changes: list[WorkChange] = Field(default_factory=list, max_length=30)
+    evidence: list[EvidenceDraft] = Field(default_factory=list, max_length=30)
+    made_progress: bool
+    work_remaining: bool
+    continuation_minutes: int | None = Field(default=None, ge=5, le=240)
+    continuation_reason: str | None = Field(default=None, min_length=1, max_length=500)
 
 
 def area_agent_instructions(area: Area) -> str:

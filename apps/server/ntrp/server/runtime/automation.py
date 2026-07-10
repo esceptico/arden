@@ -2,8 +2,10 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from ntrp.agent_surface.schedules import compile_schedules_to_automations
-from ntrp.areas.agent import custodian_contract, record_area_run
+from ntrp.areas.agent import AreaCustodianReport, custodian_contract, record_area_run
 from ntrp.areas.asks import AskStore
 from ntrp.areas.custodian import CustodianStore
 from ntrp.areas.migrate import migrate_state_files
@@ -125,8 +127,7 @@ class AutomationRuntime:
             # Asks still active at run time went unanswered a whole cycle;
             # three strikes steps the area's attention down one level.
             ignored = any(a.source == "agent" for a in self.area_asks.list(key))
-            created = record_area_run(
-                self.area_asks,
+            created = await self._commit_area_report(
                 key,
                 area_.page_path,
                 run_completed.structured_output,
@@ -152,6 +153,30 @@ class AutomationRuntime:
             if run_completed.result:
                 await self.stores.automations.set_last_result(auto.task_id, run_completed.result)
             await self.scheduler.emit_automation_event(AreasChangedEvent(keys=[key]))
+
+    async def _commit_area_report(
+        self,
+        area_id: str,
+        page_path: str,
+        structured_output: dict | None,
+        run_ref: str,
+    ) -> list:
+        """Commit canonical work before deriving asks from the same report."""
+        if structured_output is None:
+            return []
+        try:
+            report = AreaCustodianReport.model_validate(structured_output)
+        except ValidationError:
+            _logger.warning("Ignoring malformed Custodian report for %s", area_id, exc_info=True)
+            return []
+        await self.stores.area_work.apply_report(area_id, run_ref, report)
+        return record_area_run(
+            self.area_asks,
+            area_id,
+            page_path,
+            report.model_dump(mode="json"),
+            run_ref=run_ref,
+        )
 
     async def _notify_asks(self, area_, record: dict | None, created: list) -> None:
         """Push newly nominated asks through the user's notifiers, gated by
@@ -428,7 +453,7 @@ class AutomationRuntime:
                 triggers=[trigger],
                 auto_approve=contract.auto_approve,
                 tool_scope=contract.tool_scope,
-                output_schema="area_ask",
+                output_schema="area_custodian",
                 thread_id=channel.session_id,
                 read_history=True,
             )
@@ -455,7 +480,7 @@ class AutomationRuntime:
         existing.description = contract.description
         existing.auto_approve = contract.auto_approve
         existing.tool_scope = contract.tool_scope
-        existing.output_schema = "area_ask"
+        existing.output_schema = "area_custodian"
         existing.enabled = not paused
         if existing.last_result and "without a report" in existing.last_result:
             existing.last_result = None

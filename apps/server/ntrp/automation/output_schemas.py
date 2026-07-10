@@ -4,10 +4,11 @@ the object — delivered on RunCompleted.structured_output."""
 
 from pydantic import BaseModel
 
-from ntrp.areas.agent import AreaAskNomination
+from ntrp.areas.agent import AreaCustodianReport
 
 OUTPUT_SCHEMAS: dict[str, type[BaseModel]] = {
-    "area_ask": AreaAskNomination,
+    "area_ask": AreaCustodianReport,
+    "area_custodian": AreaCustodianReport,
 }
 
 

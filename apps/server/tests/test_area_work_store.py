@@ -4,7 +4,8 @@ import pytest
 import pytest_asyncio
 
 import ntrp.database as database
-from ntrp.areas.work_store import AreaWorkConflict, AreaWorkStore
+from ntrp.areas.agent import AreaCustodianReport
+from ntrp.areas.work_store import AreaWorkConflict, AreaWorkReportError, AreaWorkStore
 from ntrp.context.store import SessionStore
 from ntrp.services.session import SessionService
 
@@ -123,3 +124,53 @@ async def test_archive_preserves_work_and_permanent_delete_cascades(work_env) ->
     await conn.execute("DELETE FROM areas WHERE area_id = ?", (health["area_id"],))
     await conn.commit()
     assert (await work.snapshot(health["area_id"])).outcomes == []
+
+
+def report(**overrides) -> AreaCustodianReport:
+    data = {
+        "asks": [],
+        "report": "advanced work",
+        "next_check_hours": 24,
+        "next_check_reason": "continue tomorrow",
+        "made_progress": True,
+        "work_remaining": True,
+        "outcome_changes": [{
+            "op": "create", "key": "labs-normal", "title": "Lab values normalized",
+            "success_criteria": "All flagged values are in range", "priority": 5,
+        }],
+        "work_changes": [{
+            "op": "create", "key": "book-labs", "outcome_key": "labs-normal",
+            "kind": "action", "text": "Book the follow-up panel", "owner": "custodian",
+        }],
+        "evidence": [{
+            "target_type": "work", "target_key": "book-labs", "event_type": "progress",
+            "summary": "Found the correct lab and opening hours", "source_refs": ["https://example.test/lab"],
+        }],
+    }
+    data.update(overrides)
+    return AreaCustodianReport.model_validate(data)
+
+
+@pytest.mark.asyncio
+async def test_report_applies_atomically_once_with_evidence(work_env) -> None:
+    _conn, _sessions, work, health, _visa = work_env
+
+    assert await work.apply_report(health["area_id"], "run:r1", report())
+    assert not await work.apply_report(health["area_id"], "run:r1", report())
+
+    snapshot = await work.snapshot(health["area_id"])
+    assert [row.stable_key for row in snapshot.outcomes] == ["labs-normal"]
+    assert [row.stable_key for row in snapshot.work_items] == ["book-labs"]
+    assert [row.summary for row in snapshot.events] == ["Found the correct lab and opening hours"]
+
+
+@pytest.mark.asyncio
+async def test_invalid_report_rolls_back_every_operation(work_env) -> None:
+    _conn, _sessions, work, health, _visa = work_env
+    invalid = report(work_changes=[{"op": "complete", "key": "unknown"}])
+
+    with pytest.raises(AreaWorkReportError):
+        await work.apply_report(health["area_id"], "run:bad", invalid)
+
+    snapshot = await work.snapshot(health["area_id"])
+    assert snapshot.outcomes == [] and snapshot.work_items == [] and snapshot.events == []

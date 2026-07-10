@@ -28,8 +28,14 @@
   user updates, archive preservation, and permanent-delete cascades. Evidence:
   8 store/architecture tests and focused Ruff pass. Atomic model-report
   application remains correctly scoped to Task 2.
-- Current: Task 2 pending.
-- Remaining: Tasks 2–7 below.
+- 2026-07-10: Task 2 complete. `AreaCustodianReport` validates explicit
+  outcome/work/evidence operations; reports apply under a savepoint exactly
+  once per run before asks or scheduling; malformed reports preserve state;
+  live automations reconcile to the new schema while `area_ask` remains a
+  compatible alias. Evidence: 55 store/runtime/schema regression tests and
+  focused Ruff pass.
+- Current: Task 3 pending.
+- Remaining: Tasks 3–7 below.
 
 ---
 
@@ -138,7 +144,7 @@ Commit: `feat(server): add durable area work store`
 - Produces: `AreaCustodianReport` registered as output schema `area_custodian`.
 - Produces: runtime order `apply work report → reconcile asks → schedule → emit areas_changed`.
 
-- [ ] **Step 1: Write failing report validation tests**
+- [x] **Step 1: Write failing report validation tests**
 
 Cover create/update/complete/cancel operations, required create fields, key
 format, maximum operation counts, unknown references, and duplicate keys.
@@ -159,31 +165,31 @@ report = AreaCustodianReport.model_validate({
 })
 ```
 
-- [ ] **Step 2: Verify report tests fail**
+- [x] **Step 2: Verify report tests fail**
 
 Run: `cd apps/server && uv run pytest tests/test_areas_agent.py tests/test_area_work_store.py -q`  
 Expected: failures for missing `AreaCustodianReport` and `apply_report` behavior.
 
-- [ ] **Step 3: Implement explicit report operations**
+- [x] **Step 3: Implement explicit report operations**
 
 Use discriminated operation models. Create operations require complete content;
 update/complete/cancel require an existing stable key. `apply_report` validates
 all references before opening a savepoint, inserts `run_ref` exactly once, and
 appends indexed evidence events with `UNIQUE(run_ref, operation_index)`.
 
-- [ ] **Step 4: Replace `area_ask` runtime output with `area_custodian`**
+- [x] **Step 4: Replace `area_ask` runtime output with `area_custodian`**
 
 Keep `area_ask` as a read-compatible registry alias, but reconcile every live
 Area automation to `output_schema="area_custodian"`. In the completed-run hook,
 validate/apply work before asks. A `None` structured output leaves both stores
 unchanged.
 
-- [ ] **Step 5: Prove idempotency and failure ordering**
+- [x] **Step 5: Prove idempotency and failure ordering**
 
 Tests deliver the same `run_ref` twice and assert one event; inject an unknown
 work key and assert no outcome, work item, ask, or schedule mutation occurred.
 
-- [ ] **Step 6: Run focused tests and commit**
+- [x] **Step 6: Run focused tests and commit**
 
 Run: `cd apps/server && uv run pytest tests/test_areas_agent.py tests/test_area_work_store.py tests/test_areas_runtime.py -q`  
 Commit: `feat(server): reconcile custodian work reports`
