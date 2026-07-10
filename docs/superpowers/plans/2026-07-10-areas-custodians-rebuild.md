@@ -67,8 +67,13 @@ Update this section after every completed task.
   reconciliation path; observe and act use exact allowlists; neither mode
   bypasses tool approval policy. Evidence: 18 lifecycle/permission tests and
   Ruff pass.
-- Current: Task 8 pending.
-- Remaining: Tasks 8-10 below.
+- 2026-07-10: Task 8 complete. All autonomous Custodian dispatches share the
+  attention cap while manual runs bypass it; state writes are atomic and
+  malformed legacy state recovers; exact page digests suppress only the
+  matching self-write event. Evidence: 74 runtime/scheduling tests and Ruff
+  pass.
+- Current: Task 9 pending.
+- Remaining: Tasks 9-10 below.
 
 ---
 
@@ -233,14 +238,14 @@ observe allowlist containing Area-scoped transcript reads but no global writes.
 **Produces:** Atomic custodian state, all-path autonomous cap enforcement, and
 digest-based self-write suppression.
 
-- [ ] Write failing tests for heartbeat cap, event cap, manual bypass, atomic
+- [x] Write failing tests for heartbeat cap, event cap, manual bypass, atomic
   recovery, matching self-write suppression, and immediate external edits.
-- [ ] Verify red.
-- [ ] Move budget gating before autonomous dispatch.
-- [ ] Record exact post-write digests from Area page tools and consume only a
+- [x] Verify red.
+- [x] Move budget gating before autonomous dispatch.
+- [x] Record exact post-write digests from Area page tools and consume only a
   matching watcher event.
-- [ ] Delete time-window self-echo logic.
-- [ ] Run scheduling/provenance tests to green.
+- [x] Delete time-window self-echo logic.
+- [x] Run scheduling/provenance tests to green.
 
 ### Task 9: Rebuild durable asks and reply/review flows
 

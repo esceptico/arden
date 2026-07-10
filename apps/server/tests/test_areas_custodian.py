@@ -91,3 +91,36 @@ def test_state_persists_across_reload(tmp_path):
     c.note_event("a1", "chat filed", attention="active", paused=False, now=NOW)
     reloaded = CustodianStore(tmp_path / "agent-state.json")
     assert reloaded.state("a1")["pending_events"] == ["chat filed"]
+
+
+def test_all_autonomous_runs_share_cap_while_manual_runs_bypass(tmp_path):
+    c = _store(tmp_path)
+    cap = AREA_ATTENTION_PRESETS["ambient"]["runs_per_day"]
+
+    for _ in range(cap):
+        allowed, _ = c.begin_run("a1", attention="ambient", manual=False, now=NOW)
+        assert allowed
+
+    allowed, _ = c.begin_run("a1", attention="ambient", manual=False, now=NOW)
+    assert not allowed
+    manual, _ = c.begin_run("a1", attention="ambient", manual=True, now=NOW)
+    assert manual
+    assert c.runs_today("a1", now=NOW) == cap
+
+
+def test_exact_page_write_digest_is_consumed_once(tmp_path):
+    c = _store(tmp_path)
+    c.record_page_write("a1", "digest-1")
+
+    assert not c.consume_self_write("a1", "different")
+    assert c.consume_self_write("a1", "digest-1")
+    assert not c.consume_self_write("a1", "digest-1")
+
+
+def test_partial_legacy_state_recovers_without_blocking_startup(tmp_path):
+    path = tmp_path / "agent-state.json"
+    path.write_text('{"a1":')
+
+    recovered = CustodianStore(path)
+
+    assert recovered.state("a1")["runs_today"] == 0

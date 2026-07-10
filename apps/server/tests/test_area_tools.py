@@ -30,6 +30,14 @@ def execution(vault: Path, page_path: str | None = "topics/health.md") -> ToolEx
     return ToolExecution(tool_id="t1", tool_name="area_page", ctx=ctx)
 
 
+class WriteProvenance:
+    def __init__(self) -> None:
+        self.writes: list[tuple[str, str]] = []
+
+    def record_page_write(self, area_id: str, digest: str) -> None:
+        self.writes.append((area_id, digest))
+
+
 def seed(vault: Path) -> Path:
     page = vault / "topics" / "health.md"
     page.parent.mkdir(parents=True)
@@ -63,6 +71,21 @@ async def test_area_page_write_preserves_frontmatter(tmp_path: Path) -> None:
     assert not result.is_error
     assert page.read_text().startswith("---\ntitle: Health\n---")
     assert page.read_text().endswith("# Health\n\nNew body\n")
+
+
+@pytest.mark.asyncio
+async def test_area_page_writes_record_exact_post_write_digest(tmp_path: Path) -> None:
+    vault = tmp_path / "memory"
+    seed(vault)
+    run = execution(vault)
+    provenance = WriteProvenance()
+    run.ctx.services["area_custodians"] = provenance
+
+    result = await area_page_patch(run, AreaPagePatchInput(old_text="Old status", new_text="Current status"))
+
+    assert not result.is_error
+    assert provenance.writes[0][0] == "area_health"
+    assert len(provenance.writes[0][1]) == 64
 
 
 @pytest.mark.asyncio

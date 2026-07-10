@@ -7,6 +7,8 @@ area_id — small, human-readable, and owned by the areas domain the same way
 asks are."""
 
 import json
+import os
+import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -36,11 +38,24 @@ class CustodianStore:
         self._path = path
         self._state: dict[str, dict] = {}
         if path.exists():
-            self._state = json.loads(path.read_text())
+            try:
+                self._state = json.loads(path.read_text())
+            except (OSError, json.JSONDecodeError):
+                _logger.exception("Ignoring unreadable Custodian state at %s", path)
 
     def _flush(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(json.dumps(self._state, indent=2))
+        payload = json.dumps(self._state, indent=2)
+        fd, temporary = tempfile.mkstemp(prefix=f".{self._path.name}.", dir=self._path.parent)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, self._path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
 
     def state(self, area_id: str) -> dict:
         return self._state.setdefault(
@@ -53,6 +68,7 @@ class CustodianStore:
                 "last_woken_by": [],
                 "runs_day": None,
                 "runs_today": 0,
+                "page_write_digests": [],
             },
         )
 
@@ -110,6 +126,43 @@ class CustodianStore:
         self._count_run(area_id, now)
         self._flush()
         return woken_by
+
+    def begin_run(
+        self,
+        area_id: str,
+        *,
+        attention: str,
+        manual: bool,
+        now: datetime | None = None,
+    ) -> tuple[bool, list[str]]:
+        """Atomically gate and begin a run before autonomous dispatch."""
+        now = now or datetime.now(UTC)
+        preset = AREA_ATTENTION_PRESETS.get(attention, AREA_ATTENTION_PRESETS["ambient"])
+        if not manual and self.runs_today(area_id, now) >= preset["runs_per_day"]:
+            return False, []
+        st = self.state(area_id)
+        woken_by = st["pending_events"]
+        st["pending_events"] = []
+        st["last_woken_by"] = woken_by
+        if not manual:
+            self._count_run(area_id, now)
+        self._flush()
+        return True, woken_by
+
+    def record_page_write(self, area_id: str, digest: str) -> None:
+        st = self.state(area_id)
+        digests = st.setdefault("page_write_digests", [])
+        st["page_write_digests"] = (digests + [digest])[-8:]
+        self._flush()
+
+    def consume_self_write(self, area_id: str, digest: str) -> bool:
+        st = self.state(area_id)
+        digests = st.setdefault("page_write_digests", [])
+        if digest not in digests:
+            return False
+        digests.remove(digest)
+        self._flush()
+        return True
 
     # ── attention decay on ignored asks ─────────────────────
 

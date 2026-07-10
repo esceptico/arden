@@ -739,7 +739,7 @@ class Scheduler:
         if automation.running_since:
             _logger.warning("Automation %s already running, skipping manual run", task_id)
             return
-        await self._start_run(automation)
+        await self._start_run(automation, context={"_ntrp_manual_run": True})
 
     async def _drain_event_backlog(self) -> None:
         for task_id in await self.store.list_tasks_with_pending_events():
