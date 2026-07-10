@@ -1,7 +1,9 @@
 # Area Custodians — product shape
 
 2026-07-10. Product spec for delegating the information side of a life-domain
-to its area's standing agent. Shape is locked here; mechanics marked
+to its area's standing agent. IMPLEMENTED on branch feat/area-custodians
+(same date) — see the implementation notes at the bottom for what shipped
+and the mechanics chosen for each (adjustable). Shape is locked here; mechanics marked
 (adjustable) are implementation details to settle at plan time. Grounded in a
 5-lens research sweep (labs, chief-of-staff startups, devtools agents,
 ambient-agent architecture, interrupt UX) — findings + sources inline;
@@ -220,3 +222,26 @@ Pulse/Tasks (sunset postmortem coverage); OpenAI Operator; Linear agents;
 Swimm/Dosu; Lindy/Fyxer/Reclaim/Duckbill reviews; ProactiveBench (ICLR'25),
 Inner Thoughts (CHI'25), PRISM, ProAct, Codellaborator (CHI'25), arXiv
 2605.30152 (cheap trigger gates), arXiv 2604.04660 (decision traces).
+
+## Implementation notes (feat/area-custodians)
+
+Shipped 2026-07-10, commits 2efe8405 (server) + bc516eca/... (desktop):
+- Asks: notify/question/review + salience 1-5 (threshold 3), ≤3/run, why_now
+  + what_next, notify TTL 72h; legacy kinds migrate on state-file load.
+- Attention presets: active 2h–48h/8 runs·day, ambient 12h–7d/3, dormant
+  3d–14d/1; quiet decay ×1.5 from the 2nd quiet run; ignored asks (3 runs)
+  step attention down.
+- Events wired: chat filed into area, topic page edited (memory watch), ask
+  resolved; 10-min debounce coalescing; WOKEN BY lines injected into runs;
+  budget + pause gate wakes (heartbeat still carries noted events).
+- Self-pacing: run's structured output picks next_check_hours + reason;
+  post-run set_next_run overrides the trigger advance; fallback = ceiling.
+- Notifications: all configured notifiers, per-area interrupts policy
+  (asks = question+review default / all / none).
+- Intake: first run (iteration_count 0) gets the intake addendum.
+- Pause disables the agent automation outright; resume fires promptly.
+- Room: AgentStatusLine + settings popover (attention/interrupts/pause +
+  runs-today budget); ask cards typed (Got it / Reply / Approve+Reject);
+  "Fewer like this" appends to area instructions; Home queue ends visibly.
+- NOT shipped (per spec's out-of-scope): outward high-stakes actions,
+  cross-area synthesis, learned gates/salience.
