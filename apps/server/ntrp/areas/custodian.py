@@ -188,6 +188,7 @@ class CustodianStore:
         structured_output: dict | None,
         *,
         attention: str,
+        paused: bool = False,
         now: datetime | None = None,
     ) -> datetime:
         """Digest a completed run: persist the report + reason for the room,
@@ -199,10 +200,23 @@ class CustodianStore:
         so = structured_output or {}
         st = self.state(area_id)
 
-        quiet = not so.get("asks")
+        made_progress = bool(so.get("made_progress"))
+        quiet = not so.get("asks") and not made_progress
         st["quiet_streak"] = st["quiet_streak"] + 1 if quiet else 0
         st["last_report"] = so.get("report") or st["last_report"]
-        st["next_check_reason"] = so.get("next_check_reason")
+        continuation = so.get("continuation_minutes")
+        may_continue = (
+            made_progress
+            and bool(so.get("work_remaining"))
+            and isinstance(continuation, int)
+            and 5 <= continuation <= 240
+            and not paused
+            and self.runs_today(area_id, now) < preset["runs_per_day"]
+        )
+        st["next_check_reason"] = (
+            so.get("continuation_reason") if may_continue and so.get("continuation_reason")
+            else so.get("next_check_reason")
+        )
 
         hours = so.get("next_check_hours")
         if not isinstance(hours, (int, float)) or hours <= 0:
@@ -214,4 +228,6 @@ class CustodianStore:
             hours *= AREA_QUIET_DECAY_FACTOR ** (st["quiet_streak"] - 1)
         hours = max(preset["min_hours"], min(hours, preset["max_hours"]))
         self._flush()
+        if may_continue:
+            return now + timedelta(minutes=continuation)
         return now + timedelta(hours=hours)

@@ -34,8 +34,13 @@
   live automations reconcile to the new schema while `area_ask` remains a
   compatible alias. Evidence: 55 store/runtime/schema regression tests and
   focused Ruff pass.
-- Current: Task 3 pending.
-- Remaining: Tasks 3–7 below.
+- 2026-07-10: Task 3 complete. Every run receives bounded canonical work
+  context; the prompt drives multi-step execution and explicit reconciliation;
+  material progress resets quiet decay; short continuations require remaining
+  work, a valid delay, an unpaused Area, and spare daily budget. Evidence: 80
+  cadence/runtime/agent/chat regression tests and focused Ruff pass.
+- Current: Task 4 pending.
+- Remaining: Tasks 4–7 below.
 
 ---
 
@@ -212,7 +217,7 @@ Commit: `feat(server): reconcile custodian work reports`
 - Produces: `render_work_context(snapshot) -> str` and progress-aware `record_run(...) -> datetime`.
 - `AreaCustodianReport.continuation_minutes`: optional integer from 5–240.
 
-- [ ] **Step 1: Write failing context and cadence tests**
+- [x] **Step 1: Write failing context and cadence tests**
 
 Prove each run receives current outcomes/actions/blockers, progress resets quiet
 decay, executable remaining work can request a 5-minute continuation, waiting
@@ -225,26 +230,26 @@ nxt = store.record_run(
 assert nxt == NOW + timedelta(minutes=5)
 ```
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run: `cd apps/server && uv run pytest tests/test_areas_custodian.py tests/test_areas_runtime.py -q`  
 Expected: continuation and structured work context assertions fail.
 
-- [ ] **Step 3: Implement work context and multi-step prompt**
+- [x] **Step 3: Implement work context and multi-step prompt**
 
 Before dispatch, append a bounded JSON `CURRENT AREA WORK` block to the wake
 context. Update the standing prompt to select the highest-leverage unblocked
 action, use multiple tool calls, stop only after progress/completion/blockage,
 and emit explicit operations plus evidence.
 
-- [ ] **Step 4: Implement progress-aware scheduling**
+- [x] **Step 4: Implement progress-aware scheduling**
 
 `made_progress=True` resets quiet streak. Honor `continuation_minutes` only when
 `work_remaining=True`, the value is within 5–240, the Area is not paused, and
 another autonomous run remains in today's attention cap. Otherwise use the
 existing attention-clamped heartbeat.
 
-- [ ] **Step 5: Run focused tests and commit**
+- [x] **Step 5: Run focused tests and commit**
 
 Run: `cd apps/server && uv run pytest tests/test_areas_custodian.py tests/test_areas_runtime.py -q`  
 Commit: `feat(server): let custodians continue useful work`

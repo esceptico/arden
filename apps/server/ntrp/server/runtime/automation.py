@@ -138,7 +138,10 @@ class AutomationRuntime:
             # Self-paced heartbeat: the run's own next-check (clamped +
             # quiet-decayed) replaces the pre-run trigger advance.
             next_run = self.custodians.record_run(
-                key, run_completed.structured_output, attention=attention
+                key,
+                run_completed.structured_output,
+                attention=attention,
+                paused=bool((record or {}).get("paused_at")),
             )
             await self.stores.automations.set_next_run(auto.task_id, next_run)
             if self.custodians.note_ignored_asks(key, ignored):

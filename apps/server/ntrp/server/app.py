@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from ntrp.agent import Role
-from ntrp.areas.agent import INTAKE_ADDENDUM
+from ntrp.areas.agent import INTAKE_ADDENDUM, render_work_context
 from ntrp.areas.lifecycle import AreaLifecycleService, AreaPageService
 from ntrp.areas.migrate import migrate_legacy_areas
 from ntrp.areas.models import areas_from_records
@@ -330,6 +330,8 @@ async def lifespan(app: FastAPI):
             if not allowed:
                 return "Skipped: autonomous daily run cap reached."
             parts = []
+            work_snapshot = await runtime.stores.area_work.snapshot(area_id)
+            parts.append(render_work_context(work_snapshot))
             if woken_by:
                 parts.append("WOKEN BY (events since your last run):\n" + "\n".join(f"- {w}" for w in woken_by))
             if automation.iteration_count == 0:

@@ -1,3 +1,4 @@
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal
@@ -6,7 +7,7 @@ from pydantic import BaseModel, Field
 
 from ntrp.areas.asks import AskStore
 from ntrp.areas.models import Area, Ask
-from ntrp.areas.work_models import EvidenceDraft, OutcomeChange, WorkChange
+from ntrp.areas.work_models import AreaWorkSnapshot, EvidenceDraft, OutcomeChange, WorkChange
 
 # Observe-mode toolset as DATA: the automation's tool_scope allowlist
 # (visible and editable on the automation itself) instead of a code-side
@@ -110,14 +111,16 @@ def area_agent_instructions(area: Area) -> str:
         f"You are the standing custodian of the '{area.title}' area of the user's life. "
         f"Its topic page is in your AREA context block.\n"
         f"Autonomy contract ({area.autonomy}): {_CONTRACT[area.autonomy]}\n\n"
-        "This turn: absorb what changed in this domain since your last turn (your channel "
-        "history is your own past runs; a WOKEN BY line, when present, tells you which "
-        "events triggered this run), ADVANCE the open loops you can (research, verify, "
-        "draft — don't just track), update the topic page with what you learned "
-        "(Area page tools), and decide what, if anything, needs the user.\n"
+        "This turn: reconcile new evidence with CURRENT AREA WORK, then choose the "
+        "highest-leverage unblocked action. Execute multiple useful steps with tools; "
+        "do not stop at describing or tracking work. Stop only after material progress, "
+        "completion, or a genuine blocker. Update the topic page when its narrative "
+        "should change, and return explicit outcome/work operations plus evidence. "
+        "Never remove work by omission.\n"
         "End with a short prose report. Afterwards you will be asked for a structured "
-        "nomination: your findings triaged into at most three asks (empty on a quiet "
-        "day — silence is correct), a one-line report, and when to check next.\n"
+        "report: atomic outcome/work/evidence changes, findings triaged into at most "
+        "three asks, whether material progress happened, whether work remains, and when "
+        "to continue. A short continuation is for executable work, not external waiting.\n"
         "Ask kinds — pick the dimmest that's true:\n"
         "- notify: an FYI worth a glance; no decision needed. Expires on its own.\n"
         "- question: you are blocked on the user's judgment and cannot proceed without it.\n"
@@ -129,6 +132,15 @@ def area_agent_instructions(area: Area) -> str:
         "(a deadline, an expected reply, 'quiet — nothing moves until X'). Routine "
         "tracking does not justify a short interval."
     )
+
+
+def render_work_context(snapshot: AreaWorkSnapshot) -> str:
+    payload = {
+        "outcomes": [row.model_dump(mode="json") for row in snapshot.outcomes],
+        "work_items": [row.model_dump(mode="json") for row in snapshot.work_items],
+        "recent_evidence": [row.model_dump(mode="json") for row in snapshot.events[:10]],
+    }
+    return "CURRENT AREA WORK (canonical structured state):\n" + json.dumps(payload, ensure_ascii=False)
 
 
 @dataclass(frozen=True)
