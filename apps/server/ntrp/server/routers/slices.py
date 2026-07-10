@@ -104,6 +104,14 @@ async def attach_slice(request: Request, body: AttachBody):
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
     else:
-        project = await svc.create_project(name=body.name, page_path=body.page_path, autonomy="observe")
+        existing = await svc.find_project_by_name(body.name)
+        if existing:
+            project = await svc.update_project(
+                existing["project_id"],
+                page_path=body.page_path,
+                autonomy=existing.get("autonomy") or "observe",
+            )
+        else:
+            project = await svc.create_project(name=body.name, page_path=body.page_path, autonomy="observe")
     await request.app.state.emit_slices_changed([project["project_id"]])
     return project

@@ -446,6 +446,15 @@ class SessionService:
     async def get_project(self, project_id: str | None) -> dict | None:
         return await self.store.get_project(project_id)
 
+    async def find_project_by_name(self, name: str) -> dict | None:
+        # Case-insensitive: "MATS" must resolve to an existing "mats" project
+        # instead of minting a duplicate (suggestion promote, triage create).
+        target = name.strip().casefold()
+        for project in await self.store.list_projects():
+            if project["name"].strip().casefold() == target:
+                return project
+        return None
+
     async def list_projects(self) -> list[dict]:
         return await self.store.list_projects()
 

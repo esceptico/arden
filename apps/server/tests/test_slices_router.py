@@ -54,6 +54,13 @@ class _FakeProjectStore:
     async def list_projects(self):
         return [dict(r) for r in self._rows.values()]
 
+    async def find_project_by_name(self, name):
+        target = name.strip().casefold()
+        for row in self._rows.values():
+            if row["name"].strip().casefold() == target:
+                return dict(row)
+        return None
+
 
 @pytest.fixture
 def client(tmp_path: Path):
@@ -250,6 +257,17 @@ def test_post_slices_attaches_to_existing_container(client):
     assert res.status_code == 200
     assert res.json()["page_path"] == "topics/design.md"
     assert plain["project_id"] in {s["key"] for s in svc.overview()["slices"]}
+
+
+def test_post_slices_by_name_reuses_existing_project_case_insensitive(client):
+    c, _, _, _, projects = client
+    plain = projects._seed(name="mats")
+    res = c.post("/slices", json={"name": "MATS", "page_path": "topics/mats.md"})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["project_id"] == plain["project_id"]
+    assert body["page_path"] == "topics/mats.md"
+    assert sum(1 for r in projects._rows.values() if r["name"].casefold() == "mats") == 1
 
 
 def test_post_slices_requires_exactly_one_of_project_id_or_name(client):

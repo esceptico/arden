@@ -464,6 +464,11 @@ async def create_project(
     req: CreateProjectRequest,
     svc: SessionService = Depends(require_session_service),
 ):
+    # Idempotent on name (case-insensitive): triage "create" and suggestion
+    # promotion race against projects the user already has.
+    existing = await svc.find_project_by_name(req.name)
+    if existing:
+        return existing
     try:
         return await svc.create_project(
             name=req.name,
