@@ -1,4 +1,8 @@
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
+from pathlib import Path
+
+from ntrp.areas.paths import resolve_area_page
 
 
 class AreaLifecycleService:
@@ -77,3 +81,64 @@ class AreaLifecycleService:
                 await self._sessions.archive_area(area_id)
                 raise
         return restored
+
+
+class AreaPageService:
+    def __init__(self, *, vault_root: Path, sessions, lifecycle: AreaLifecycleService) -> None:
+        self._vault_root = vault_root
+        self._sessions = sessions
+        self._lifecycle = lifecycle
+
+    async def create(self, area_id: str) -> dict:
+        area = await self._sessions.get_area(area_id)
+        if area is None:
+            raise KeyError(area_id)
+        if area.get("page_path"):
+            raise ValueError("Area already has a page")
+        slug = self._slug(area["name"])
+        suffix = 1
+        while True:
+            candidate_slug = slug if suffix == 1 else f"{slug}-{suffix}"
+            page_path = f"topics/{candidate_slug}.md"
+            page_file = resolve_area_page(self._vault_root, page_path)
+            if not page_file.exists():
+                break
+            suffix += 1
+        page_file.parent.mkdir(parents=True, exist_ok=True)
+        page_file.write_text(
+            "---\n"
+            f"title: {area['name']}\n"
+            f"updated: {datetime.now(UTC).date().isoformat()}\n"
+            "---\n\n"
+            f"# {area['name']}\n\n"
+            "## Open loops\n\n"
+            "## Related\n",
+            encoding="utf-8",
+        )
+        try:
+            return await self._lifecycle.update(area_id, page_path=page_path)
+        except Exception:
+            page_file.unlink(missing_ok=True)
+            raise
+
+    async def detach(self, area_id: str) -> dict:
+        area = await self._sessions.get_area(area_id)
+        if area is None:
+            raise KeyError(area_id)
+        if area.get("autonomy") is not None:
+            raise ValueError("Disable the Custodian before detaching its page")
+        return await self._lifecycle.update(area_id, page_path=None)
+
+    @staticmethod
+    def _slug(name: str) -> str:
+        chars: list[str] = []
+        pending_dash = False
+        for char in name.casefold():
+            if char.isalnum():
+                if pending_dash and chars:
+                    chars.append("-")
+                chars.append(char)
+                pending_dash = False
+            else:
+                pending_dash = True
+        return "".join(chars) or "area"

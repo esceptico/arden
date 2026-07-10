@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from ntrp.areas.lifecycle import AreaLifecycleService
+from ntrp.areas.lifecycle import AreaLifecycleService, AreaPageService
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -156,3 +156,31 @@ async def test_failed_runtime_sync_rolls_back_area_update() -> None:
         await svc.update(area["area_id"], name="Broken")
 
     assert (await areas.get_area(area["area_id"]))["name"] == "Health"
+
+
+@pytest.mark.asyncio
+async def test_create_page_writes_safe_topic_and_attaches_it(tmp_path) -> None:
+    areas = FakeAreas()
+    area_lifecycle = lifecycle(areas)
+    area = await area_lifecycle.create(name="O-1A / Visa")
+    pages = AreaPageService(vault_root=tmp_path / "memory", sessions=areas, lifecycle=area_lifecycle)
+
+    updated = await pages.create(area["area_id"])
+
+    assert updated["page_path"] == "topics/o-1a-visa.md"
+    text = (tmp_path / "memory" / updated["page_path"]).read_text()
+    assert "title: O-1A / Visa" in text
+    assert "## Open loops" in text
+
+
+@pytest.mark.asyncio
+async def test_detach_page_requires_custodian_to_be_disabled(tmp_path) -> None:
+    areas = FakeAreas()
+    area_lifecycle = lifecycle(areas)
+    area = await area_lifecycle.create(
+        name="Health", page_path="topics/health.md", autonomy="observe"
+    )
+    pages = AreaPageService(vault_root=tmp_path / "memory", sessions=areas, lifecycle=area_lifecycle)
+
+    with pytest.raises(ValueError, match="Disable the Custodian"):
+        await pages.detach(area["area_id"])

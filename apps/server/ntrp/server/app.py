@@ -11,9 +11,10 @@ from pydantic import BaseModel
 
 from ntrp.agent import Role
 from ntrp.areas.agent import INTAKE_ADDENDUM
-from ntrp.areas.lifecycle import AreaLifecycleService
+from ntrp.areas.lifecycle import AreaLifecycleService, AreaPageService
 from ntrp.areas.migrate import migrate_legacy_areas
 from ntrp.areas.models import areas_from_records
+from ntrp.areas.paths import resolve_area_page
 from ntrp.areas.projection import area_automation_match
 from ntrp.areas.service import AreaService
 from ntrp.automation.models import Automation
@@ -169,9 +170,14 @@ async def lifespan(app: FastAPI):
         sync_custodian=runtime.automation.sync_area_custodian,
         disable_custodian=runtime.automation.disable_area_custodian,
     )
+    app.state.area_pages = AreaPageService(
+        vault_root=runtime.config.memory_artifacts_dir,
+        sessions=runtime.session_service,
+        lifecycle=app.state.area_lifecycle,
+    )
 
     def _area_get_page(page_path: str):
-        full_path = runtime.config.memory_artifacts_dir / page_path
+        full_path = resolve_area_page(runtime.config.memory_artifacts_dir, page_path)
         text = full_path.read_text(encoding="utf-8") if full_path.exists() else ""
         return parse_page(text)
 

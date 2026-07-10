@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from ntrp.areas.asks import AskStore
-from ntrp.areas.lifecycle import AreaLifecycleService
+from ntrp.areas.lifecycle import AreaLifecycleService, AreaPageService
 from ntrp.areas.models import Ask, areas_from_records
 from ntrp.areas.service import AreaService
 from ntrp.areas.suggester import AreaSuggestionStore
@@ -132,6 +132,11 @@ def client(tmp_path: Path):
         sync_custodian=_sync_custodian,
         disable_custodian=_disable_custodian,
     )
+    test_app.state.area_pages = AreaPageService(
+        vault_root=tmp_path / "memory",
+        sessions=areas,
+        lifecycle=test_app.state.area_lifecycle,
+    )
     test_app.state.emit_areas_changed = _emit_areas_changed
 
     wakes: list[tuple[str, str]] = []
@@ -154,6 +159,7 @@ def test_routes_registered():
         "/areas",
         "/areas/overview",
         "/areas/{area_id}",
+        "/areas/{area_id}/page",
         "/areas/{area_id}/restore",
         "/areas/{area_id}/autonomy",
         "/areas/{area_id}/asks/{ask_id}/resolve",
@@ -310,6 +316,28 @@ def test_archive_and_restore_area(client):
     restored = c.post(f"/areas/{o1a}/restore")
     assert restored.status_code == 200
     assert restored.json()["area_id"] == o1a
+
+
+def test_create_and_detach_area_page(client):
+    c, _, _, _, areas = client
+    plain = areas._seed(name="Design")
+
+    created = c.post(f"/areas/{plain['area_id']}/page")
+    assert created.status_code == 200
+    assert created.json()["page_path"] == "topics/design.md"
+
+    detached = c.delete(f"/areas/{plain['area_id']}/page")
+    assert detached.status_code == 200
+    assert detached.json()["page_path"] is None
+
+
+def test_detach_area_page_rejects_delegated_area(client):
+    c, _, _, o1a, _ = client
+
+    detached = c.delete(f"/areas/{o1a}/page")
+
+    assert detached.status_code == 409
+    assert "Disable the Custodian" in detached.json()["detail"]
 
 
 def test_patch_area_attaches_page_to_existing_container(client):

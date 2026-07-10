@@ -45,8 +45,12 @@ Update this section after every completed task.
   live delegation sync, pause, archive, and restore; page attachment no longer
   silently delegates; failed runtime updates restore persisted state. Evidence:
   70 focused Areas tests and Ruff pass.
-- Current: Task 3 pending.
-- Remaining: Tasks 3-10 below.
+- 2026-07-10: Task 3 complete. One containment resolver protects all Area page
+  reads; absolute/traversal/symlink escapes fail closed; explicit create and
+  detach page operations are lifecycle-backed. Evidence: 47 focused tests and
+  Ruff pass.
+- Current: Task 4 pending.
+- Remaining: Tasks 4-10 below.
 
 ---
 
@@ -105,13 +109,13 @@ page attachment, reversible archive/restore.
 **Produces:** `resolve_area_page(vault_root, page_path)` containment check and
 create/attach/detach page lifecycle endpoints.
 
-- [ ] Write failing traversal, absolute-path, symlink-escape, duplicate attach,
+- [x] Write failing traversal, absolute-path, symlink-escape, duplicate attach,
   create-page, and delegated-detach tests.
-- [ ] Verify every security test fails on the old resolver.
-- [ ] Implement one containment resolver used by prompt context, room reads, and
+- [x] Verify every security test fails on the old resolver.
+- [x] Implement one containment resolver used by prompt context, room reads, and
   page writes.
-- [ ] Add page create/attach/detach lifecycle operations.
-- [ ] Run focused capability tests to green.
+- [x] Add page create/attach/detach lifecycle operations.
+- [x] Run focused capability tests to green.
 
 ### Task 4: Make Area projections canonical and mechanical asks truthful
 

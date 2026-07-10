@@ -35,6 +35,10 @@ def _lifecycle(request: Request):
     return request.app.state.area_lifecycle
 
 
+def _pages(request: Request):
+    return request.app.state.area_pages
+
+
 @router.get("", response_model=dict[str, list[AreaResponse]])
 async def list_areas(request: Request):
     return {"areas": await _sessions(request).list_areas()}
@@ -85,6 +89,30 @@ async def area_detail(request: Request, area_id: str):
         return _svc(request).detail(area_id)
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@router.post("/{area_id}/page", response_model=AreaResponse)
+async def create_area_page(request: Request, area_id: str):
+    try:
+        area = await _pages(request).create(area_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Area not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await request.app.state.emit_areas_changed([area_id])
+    return area
+
+
+@router.delete("/{area_id}/page", response_model=AreaResponse)
+async def detach_area_page(request: Request, area_id: str):
+    try:
+        area = await _pages(request).detach(area_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Area not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await request.app.state.emit_areas_changed([area_id])
+    return area
 
 
 @router.patch("/{area_id}", response_model=AreaResponse)
