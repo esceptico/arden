@@ -25,15 +25,15 @@ export function sourceInspectorSelection({
   const segments = transcriptSegments(messages, order);
   const segment = sourceTurnId === null
     ? latestSourceBearingTurn(messages, segments)
-    : segments.find((candidate) => candidate.userId === sourceTurnId);
+    : segments.find((candidate) => candidate.turnId === sourceTurnId);
 
-  if (!segment?.userId) {
+  if (!segment?.turnId) {
     return { turnId: sourceTurnId, sources: [] };
   }
 
   const toolCalls = activityItemsById(messages, segment.childIds);
   return {
-    turnId: segment.userId,
+    turnId: segment.turnId,
     sources: sourceRefsForTurn(messages, segment.childIds).map((source) => {
       const toolCall = source.toolCallId ? toolCalls.get(source.toolCallId) : undefined;
       return toolCall ? { source, toolCall } : { source };
@@ -61,7 +61,7 @@ function latestSourceBearingTurn(
 ): MessageSegment | undefined {
   for (let index = segments.length - 1; index >= 0; index -= 1) {
     const segment = segments[index];
-    if (segment.userId && sourceRefsForTurn(messages, segment.childIds).length > 0) {
+    if (segment.turnId && sourceRefsForTurn(messages, segment.childIds).length > 0) {
       return segment;
     }
   }

@@ -19,6 +19,10 @@ function user(id: string): UiMessage {
   return { id, role: "user", content: "hi" };
 }
 
+function metaUser(id: string): UiMessage {
+  return { id, role: "user", content: "hidden", isMeta: true };
+}
+
 // Regression: during an active run the projection could list one activity id
 // twice in `order` (a stale cached copy beside the freshly projected one),
 // separated by a visible boundary so the positional collapse missed it. That
@@ -55,6 +59,20 @@ test("normalizeActivityGroups still merges distinct consecutive activities", () 
   expect(out.order).toEqual(["a1"]);
   expect(out.messages.get("a1")?.activity?.items.map((i) => i.id)).toEqual(["t1", "t2"]);
   expect(out.activeActivityId).toBe("a1");
+});
+
+test("normalizeActivityGroups keeps activities separate across a hidden meta boundary", () => {
+  const messages = new Map<string, UiMessage>([
+    ["a1", activity("a1", ["t1"])],
+    ["meta-1", metaUser("meta-1")],
+    ["a2", activity("a2", ["t2"])],
+  ]);
+
+  const out = normalizeActivityGroups(messages, ["a1", "meta-1", "a2"], "a2");
+
+  expect(out.order).toEqual(["a1", "meta-1", "a2"]);
+  expect(out.messages.get("a1")?.activity?.items.map((item) => item.id)).toEqual(["t1"]);
+  expect(out.messages.get("a2")?.activity?.items.map((item) => item.id)).toEqual(["t2"]);
 });
 
 // Regression: a live-built activity (uuid id) and a history rebuild of the SAME

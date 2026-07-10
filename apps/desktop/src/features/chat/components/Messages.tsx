@@ -212,7 +212,9 @@ export function Messages() {
             ? null
             : segments.map((seg, index) =>
                 seg.userId
-                  ? <TurnGroup key={seg.userId} userId={seg.userId} childIds={seg.childIds} onManualResize={stopScroll} />
+                  ? <TurnGroup key={seg.turnId} turnId={seg.turnId!} userId={seg.userId} childIds={seg.childIds} onManualResize={stopScroll} />
+                  : seg.turnId
+                    ? <TurnGroup key={seg.turnId} turnId={seg.turnId} userId={null} childIds={seg.childIds} onManualResize={stopScroll} />
                   : <div key={`preamble-${index}`} className="contents">{seg.childIds.map((id) => <Message key={id} id={id} />)}</div>
               )}
           <CompactionIndicator />

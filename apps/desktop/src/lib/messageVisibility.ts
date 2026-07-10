@@ -18,12 +18,12 @@ export function messageDisplayPolicy(message: MessageVisibilityInput): MessageDi
     message.role === "assistant" && (message.content ?? "").trim().length === 0;
   const isMetaUser = message.role === "user" && message.isMeta === true;
   const isTodoState = message.role === "todo";
-  const isContinuation = isReasoning || isEmptyAssistant || isMetaUser || isTodoState;
+  const isContinuation = isReasoning || isEmptyAssistant || isTodoState;
 
   return {
-    hiddenInTranscript: isContinuation,
+    hiddenInTranscript: isContinuation || isMetaUser,
     breaksTurn: isMetaUser,
-    breaksActivity: !isContinuation,
+    breaksActivity: isMetaUser || !isContinuation,
   };
 }
 

@@ -120,6 +120,7 @@ export function applyChatEventToTranscript(
           role: "user",
           content: "",
           isMeta: true,
+          turn: { startedAt: ts, endedAt: null, durationMs: null },
           suppressEntryMotion,
         });
       }
@@ -527,10 +528,8 @@ export function rebuildTranscriptFromHistory(
     const stampedAt = msg.created_at ? Date.parse(msg.created_at) : 0;
 
     if (msg.role === "user") {
-      if (!msg.is_meta) {
-        activeActivityId = null;
-        activeTodoId = null;
-      }
+      activeActivityId = null;
+      activeTodoId = null;
       items.push({
         id: stableId,
         role: "user",

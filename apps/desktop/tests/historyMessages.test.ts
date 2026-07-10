@@ -38,7 +38,7 @@ test("keeps one loaded activity group across reasoning-only history messages", (
   ]);
 });
 
-test("keeps one loaded activity group across hidden meta user messages", () => {
+test("splits loaded activity groups across hidden meta user messages", () => {
   const messages: HistoryMessage[] = [
     { role: "user", content: "check it", id: "user-1" },
     {
@@ -59,10 +59,10 @@ test("keeps one loaded activity group across hidden meta user messages", () => {
   const items = historyMessagesToUi(messages, null);
   const activityItems = items.filter((item) => item.role === "activity");
 
-  expect(activityItems).toHaveLength(1);
-  expect(activityItems[0].activity?.items.map((item) => item.id)).toEqual([
-    "tool-1",
-    "tool-2",
+  expect(activityItems).toHaveLength(2);
+  expect(activityItems.map((activity) => activity.activity?.items.map((item) => item.id))).toEqual([
+    ["tool-1"],
+    ["tool-2"],
   ]);
 });
 
@@ -549,7 +549,7 @@ test("does not reopen active history activity before visible final assistant", (
   });
 });
 
-test("reopens newest trailing history activity across hidden meta user messages", () => {
+test("does not reopen activity from before a trailing hidden meta user boundary", () => {
   const messages: HistoryMessage[] = [
     { role: "user", content: "keep checking", id: "user-1" },
     {
@@ -565,5 +565,5 @@ test("reopens newest trailing history activity across hidden meta user messages"
   const items = historyMessagesToUi(messages, "run-active");
   const activity = items.find((item) => item.role === "activity");
 
-  expect(activity?.activity).toMatchObject({ done: false, label: "Calling" });
+  expect(activity?.activity).toMatchObject({ done: true, label: "Called" });
 });

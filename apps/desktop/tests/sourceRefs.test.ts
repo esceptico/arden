@@ -1,6 +1,11 @@
 import { expect, test } from "bun:test";
 import type { UiMessage } from "@/stores/types";
-import { normalizeSourceRefs, sourceRefsForTurn } from "@/stores/sourceRefs";
+import {
+  browserOpenableSourceUrl,
+  mergeSourceRefs,
+  normalizeSourceRefs,
+  sourceRefsForTurn,
+} from "@/stores/sourceRefs";
 
 const source = (overrides: Record<string, unknown> = {}) => ({
   provider: "slack",
@@ -114,6 +119,59 @@ test("deduplicates normalized identities before capping each payload at 50", () 
   expect(refs[0]?.title).toBe("First");
   expect(refs.slice(0, 3).map((ref) => ref.ref)).toEqual(["C1:1.0", "C1:1", "C1:2"]);
   expect(refs.at(-1)?.ref).toBe("C1:49");
+});
+
+test("mergeSourceRefs keeps stable first-win order and caps one tool call at 50", () => {
+  const first = Array.from({ length: 50 }, (_, index) => source({ ref: `first-${index}` }));
+  const second = Array.from({ length: 50 }, (_, index) => source({ ref: `second-${index}` }));
+
+  const merged = mergeSourceRefs(
+    normalizeSourceRefs(first, "tool-1"),
+    normalizeSourceRefs(second, "tool-1"),
+  );
+
+  expect(merged).toHaveLength(50);
+  expect(merged?.map((ref) => ref.ref)).toEqual(first.map((ref) => ref.ref));
+});
+
+test("source limits and title truncation count Unicode code points", () => {
+  const provider = "😀".repeat(64);
+  const kind = "🧰".repeat(64);
+  const ref = "📄".repeat(2048);
+  const title = "✨".repeat(300);
+
+  const [normalized] = normalizeSourceRefs([source({ provider, kind, ref, title, url: undefined })]);
+
+  expect(normalized).toMatchObject({ provider, kind, ref });
+  expect(Array.from(normalized?.title ?? "")).toHaveLength(256);
+  expect(normalized?.title).toBe("✨".repeat(256));
+  expect(normalizeSourceRefs([source({ provider: "😀".repeat(65) })])).toEqual([]);
+});
+
+test("URL limits count Unicode code points without splitting non-BMP characters", () => {
+  const prefix = "https://example.com/";
+  const atLimit = prefix + "😀".repeat(4096 - Array.from(prefix).length);
+  const overLimit = `${atLimit}😀`;
+
+  expect(normalizeSourceRefs([source({ ref: "at-limit", url: atLimit })])[0]?.url).toBe(atLimit);
+  expect(normalizeSourceRefs([source({ ref: "over-limit", url: overLimit })])[0]?.url).toBeUndefined();
+});
+
+test("rejects credential-bearing HTTP refs and replaces credential-bearing titles", () => {
+  expect(normalizeSourceRefs([
+    source({ ref: "https://user:secret@example.com/private", title: "Private" }),
+  ])).toEqual([]);
+
+  expect(normalizeSourceRefs([
+    source({ ref: "opaque-1", title: "https://user:secret@example.com/private", url: undefined }),
+  ])[0]?.title).toBe("opaque-1");
+});
+
+test("browserOpenableSourceUrl requires a WHATWG-valid credential-free HTTP URL", () => {
+  expect(browserOpenableSourceUrl("https://example.com/path")).toBe("https://example.com/path");
+  expect(browserOpenableSourceUrl("HTTPS://example.com:opaque-port/path")).toBeUndefined();
+  expect(browserOpenableSourceUrl("https://[::1]junk/path")).toBeUndefined();
+  expect(browserOpenableSourceUrl("https://user:secret@example.com/private")).toBeUndefined();
 });
 
 test("aggregates only ordered turn children and keeps the first source identity", () => {

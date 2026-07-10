@@ -1,7 +1,11 @@
 import type { Role } from "@/stores";
 import { isHiddenTurnBoundary } from "@/lib/messageVisibility";
 
-export type MessageSegment = { userId: string | null; childIds: string[] };
+export type MessageSegment = {
+  turnId: string | null;
+  userId: string | null;
+  childIds: string[];
+};
 
 export function messageSegments({
   ids,
@@ -17,33 +21,34 @@ export function messageSegments({
   const visible = new Set(visibleIds);
   const out: MessageSegment[] = [];
   let current: MessageSegment | null = null;
+  const flush = () => {
+    if (current && (current.userId !== null || current.childIds.length > 0)) out.push(current);
+    current = null;
+  };
 
   for (let i = 0; i < ids.length; i += 1) {
     const id = ids[i];
     const role = roles[i];
 
     if (isHiddenTurnBoundary({ role, isMeta: metaFlags[i] })) {
-      if (current) out.push(current);
-      current = null;
+      flush();
+      current = { turnId: id, userId: null, childIds: [] };
       continue;
     }
     if (!visible.has(id)) continue;
 
     if (role === "user") {
-      if (current) out.push(current);
-      current = { userId: id, childIds: [] };
+      flush();
+      current = { turnId: id, userId: id, childIds: [] };
     } else if (role === "status" || role === "error") {
-      if (current) {
-        out.push(current);
-        current = null;
-      }
-      out.push({ userId: null, childIds: [id] });
+      flush();
+      out.push({ turnId: null, userId: null, childIds: [id] });
     } else {
-      if (!current) current = { userId: null, childIds: [] };
+      if (!current) current = { turnId: null, userId: null, childIds: [] };
       current.childIds.push(id);
     }
   }
 
-  if (current) out.push(current);
+  flush();
   return out;
 }

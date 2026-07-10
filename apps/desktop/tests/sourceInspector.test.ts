@@ -141,3 +141,63 @@ test("changing sessions clears exact Sources scope", () => {
   expect(getState().sourceTurnId).toBeNull();
   expect(getState().rightInspectorTab).toBe("sources");
 });
+
+test("hidden meta assistant turns support exact and latest source selection", () => {
+  const metaSource = source({ ref: "meta-source", title: "Meta source" });
+  const state = transcript([
+    { id: "meta-user-1", role: "user", content: "hidden", isMeta: true },
+    activity("meta", [metaSource]),
+    { id: "assistant-meta", role: "assistant", content: "automated answer" },
+  ]);
+
+  expect(sourceInspectorSelection({ ...state, sourceTurnId: "meta-user-1" })).toMatchObject({
+    turnId: "meta-user-1",
+    sources: [{ source: metaSource }],
+  });
+  expect(sourceInspectorSelection({ ...state, sourceTurnId: null })).toMatchObject({
+    turnId: "meta-user-1",
+    sources: [{ source: metaSource }],
+  });
+});
+
+test("edit truncation and canonical history replacement clear stale exact scope", () => {
+  setState({
+    messages: new Map([
+      ["user-1", { id: "user-1", role: "user", content: "first" }],
+      ["user-2", { id: "user-2", role: "user", content: "second" }],
+    ]),
+    order: ["user-1", "user-2"],
+    sourceTurnId: "user-2",
+  });
+
+  getState().truncateFrom("user-2");
+  expect(getState().sourceTurnId).toBeNull();
+
+  setState({ sourceTurnId: "user-1" });
+  getState().setHistory([{ id: "user-3", role: "user", content: "replacement" }]);
+  expect(getState().sourceTurnId).toBeNull();
+});
+
+test("source revision ignores streamed content and bumps for live and history source changes", () => {
+  setState({
+    sourceRefsRevision: 10,
+    messages: new Map([
+      ["assistant-1", { id: "assistant-1", role: "assistant", content: "a" }],
+      ["activity-1", activity("1", [])],
+    ]),
+    order: ["assistant-1", "activity-1"],
+  });
+
+  getState().mutateMessage("assistant-1", { content: "a streamed token" });
+  expect(getState().sourceRefsRevision).toBe(10);
+
+  getState().mergeActivityItem("tool-1", { sourceRefs: [source({ ref: "live" })] });
+  expect(getState().sourceRefsRevision).toBeGreaterThan(10);
+  const afterLive = getState().sourceRefsRevision;
+
+  getState().setHistory([
+    { id: "user-history", role: "user", content: "history" },
+    activity("history", [source({ ref: "history" })]),
+  ]);
+  expect(getState().sourceRefsRevision).toBeGreaterThan(afterLive);
+});

@@ -20,15 +20,17 @@ export function normalizeSourceRefs(raw: unknown, toolCallId?: string): SourceRe
     const title = trimmedString(value.title);
     if (
       !provider ||
-      provider.length > PROVIDER_MAX_CHARS ||
+      codePointLength(provider) > PROVIDER_MAX_CHARS ||
       !kind ||
-      kind.length > KIND_MAX_CHARS ||
+      codePointLength(kind) > KIND_MAX_CHARS ||
       !ref ||
-      ref.length > REF_MAX_CHARS ||
+      codePointLength(ref) > REF_MAX_CHARS ||
       !title
     ) {
       continue;
     }
+    if (hasHttpCredentials(ref)) continue;
+    const safeTitle = hasHttpCredentials(title) ? ref : title;
 
     const identity = sourceIdentity(provider, ref);
     if (seen.has(identity)) continue;
@@ -38,7 +40,7 @@ export function normalizeSourceRefs(raw: unknown, toolCallId?: string): SourceRe
       provider,
       kind,
       ref,
-      title: title.slice(0, TITLE_MAX_CHARS),
+      title: truncateCodePoints(safeTitle, TITLE_MAX_CHARS),
       ...(url ? { url } : {}),
       ...(toolCallId === undefined ? {} : { toolCallId }),
     });
@@ -64,6 +66,7 @@ export function mergeSourceRefs(
     if (seen.has(identity)) continue;
     seen.add(identity);
     merged.push(source);
+    if (merged.length === SOURCE_REFS_MAX) break;
   }
   return merged;
 }
@@ -91,7 +94,7 @@ export function sourceRefsForTurn(
 
 function safeUrl(value: unknown): string | undefined {
   const url = trimmedString(value);
-  if (!url || url.length > URL_MAX_CHARS) return undefined;
+  if (!url || codePointLength(url) > URL_MAX_CHARS) return undefined;
   const validationCandidate = url.replace(/[\r\n\t]/g, "").replace(/^[\u0000-\u0020]+/, "");
   const separator = validationCandidate.indexOf("://");
   const scheme = separator > 0 ? validationCandidate.slice(0, separator).toLowerCase() : "";
@@ -104,6 +107,45 @@ function safeUrl(value: unknown): string | undefined {
   const hostname = hostnameFromAuthority(rawAuthority);
   if (!hostname) return undefined;
   return url;
+}
+
+export function browserOpenableSourceUrl(value: unknown): string | undefined {
+  const url = trimmedString(value);
+  if (!url) return undefined;
+  try {
+    const parsed = new URL(url);
+    if (
+      (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
+      !parsed.hostname ||
+      parsed.username ||
+      parsed.password
+    ) {
+      return undefined;
+    }
+    return url;
+  } catch {
+    return undefined;
+  }
+}
+
+function hasHttpCredentials(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return (
+      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+      Boolean(parsed.username || parsed.password)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function codePointLength(value: string): number {
+  return Array.from(value).length;
+}
+
+function truncateCodePoints(value: string, max: number): string {
+  return Array.from(value).slice(0, max).join("");
 }
 
 function authority(url: string, start: number): string {

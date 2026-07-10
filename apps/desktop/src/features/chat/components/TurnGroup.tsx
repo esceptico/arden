@@ -16,17 +16,19 @@ import { ICON } from "@/lib/icons";
 import { sourceRefsForTurn } from "@/stores/sourceRefs";
 
 export function TurnGroup({
+  turnId,
   userId,
   childIds,
   onManualResize,
 }: {
-  userId: string;
+  turnId: string;
+  userId: string | null;
   childIds: string[];
   onManualResize?: () => void;
 }) {
-  const turn = useStore((s) => s.messages.get(userId)?.turn);
+  const turn = useStore((s) => s.messages.get(turnId)?.turn);
   const motionDisabled = useStore((s) =>
-    Boolean(s.messages.get(userId)?.suppressEntryMotion || s.streamReplaying),
+    Boolean(s.messages.get(turnId)?.suppressEntryMotion || s.streamReplaying),
   );
 
   const childSummaryKeys = useStore(
@@ -57,7 +59,11 @@ export function TurnGroup({
   // tools. A turn with just reasoning + a final reply has no work to
   // collapse — render its children inline instead.
   const hasTools = children.some((child) => child.role === "activity");
-  const sourceCount = useStore((s) => sourceRefsForTurn(s.messages, childIds).length);
+  const sourceRefsRevision = useStore((s) => s.sourceRefsRevision);
+  const sourceCount = useMemo(
+    () => sourceRefsForTurn(useStore.getState().messages, childIds).length,
+    [childIds, sourceRefsRevision],
+  );
 
   const hasActiveChildAgent = useStore((s) =>
     turnHasActiveChildAgent({
@@ -174,8 +180,8 @@ export function TurnGroup({
   ) : null;
 
   return (
-    <div className="flex flex-col gap-1.5" data-turn-id={userId}>
-      <Message id={userId} />
+    <div className="flex flex-col gap-1.5" data-turn-id={turnId}>
+      {userId && <Message id={userId} />}
 
       {isDone && workBlock}
 
@@ -186,7 +192,7 @@ export function TurnGroup({
             key={id}
             id={id}
             isFinal={isFinal}
-            {...(isFinal ? { sourceTurnId: userId, sourceCount } : {})}
+            {...(isFinal ? { sourceTurnId: turnId, sourceCount } : {})}
           />
         );
       })}

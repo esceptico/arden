@@ -8,8 +8,8 @@ test("hidden meta user messages split visible turns without rendering", () => {
     metaFlags: [false, false, true, false],
     visibleIds: ["user-1", "activity-1", "assistant-1"],
   })).toEqual([
-    { userId: "user-1", childIds: ["activity-1"] },
-    { userId: null, childIds: ["assistant-1"] },
+    { turnId: "user-1", userId: "user-1", childIds: ["activity-1"] },
+    { turnId: "meta-user-1", userId: null, childIds: ["assistant-1"] },
   ]);
 });
 
@@ -20,7 +20,7 @@ test("trailing hidden meta user messages do not create empty render segments", (
     metaFlags: [false, false, true],
     visibleIds: ["user-1", "activity-1"],
   })).toEqual([
-    { userId: "user-1", childIds: ["activity-1"] },
+    { turnId: "user-1", userId: "user-1", childIds: ["activity-1"] },
   ]);
 });
 
@@ -30,8 +30,8 @@ test("status messages stay between turns", () => {
     roles: ["user", "assistant", "status", "assistant"],
     visibleIds: ["user-1", "assistant-1", "status-1", "assistant-2"],
   })).toEqual([
-    { userId: "user-1", childIds: ["assistant-1"] },
-    { userId: null, childIds: ["status-1"] },
-    { userId: null, childIds: ["assistant-2"] },
+    { turnId: "user-1", userId: "user-1", childIds: ["assistant-1"] },
+    { turnId: null, userId: null, childIds: ["status-1"] },
+    { turnId: null, userId: null, childIds: ["assistant-2"] },
   ]);
 });

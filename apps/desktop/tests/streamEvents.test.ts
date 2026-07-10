@@ -99,6 +99,25 @@ test("live goal meta run stays visually hidden", () => {
   const state = getState();
   expect(state.order).toEqual(["meta-user-goal-run-1"]);
   expect(state.messages.get("meta-user-goal-run-1")?.isMeta).toBe(true);
+  expect(state.messages.get("meta-user-goal-run-1")?.turn).toMatchObject({ endedAt: null });
+});
+
+test("streamed token updates do not invalidate source derivation", () => {
+  handleServerEvent({ type: "TEXT_MESSAGE_START", message_id: "assistant-source-revision" });
+  const revision = getState().sourceRefsRevision;
+
+  handleServerEvent({
+    type: "TEXT_MESSAGE_CONTENT",
+    message_id: "assistant-source-revision",
+    delta: "first",
+  });
+  handleServerEvent({
+    type: "TEXT_MESSAGE_CONTENT",
+    message_id: "assistant-source-revision",
+    delta: " second",
+  });
+
+  expect(getState().sourceRefsRevision).toBe(revision);
 });
 
 test("non-goal meta run stays visually hidden", () => {
@@ -628,6 +647,7 @@ test("projects and stably merges normalized source refs onto live tool activity"
     tool_call_id: "source-tool",
     tool_call_name: "slack_thread",
   });
+  const beforeSources = getState().sourceRefsRevision;
   handleServerEvent({
     type: "TOOL_CALL_RESULT",
     tool_call_id: "source-tool",
@@ -644,6 +664,7 @@ test("projects and stably merges normalized source refs onto live tool activity"
       },
     ],
   });
+  expect(getState().sourceRefsRevision).toBeGreaterThan(beforeSources);
   handleServerEvent({
     type: "TOOL_CALL_RESULT",
     tool_call_id: "source-tool",
@@ -676,6 +697,7 @@ test("projects and stably merges normalized source refs onto live tool activity"
 });
 
 test("buffers and unions source refs when results arrive before their tool row", () => {
+  const beforeSources = getState().sourceRefsRevision;
   handleServerEvent({
     type: "TOOL_CALL_RESULT",
     tool_call_id: "early-source-tool",
@@ -685,6 +707,7 @@ test("buffers and unions source refs when results arrive before their tool row",
       { provider: "slack", kind: "message", ref: "C1:1.0", title: "First" },
     ],
   });
+  expect(getState().sourceRefsRevision).toBe(beforeSources);
   handleServerEvent({
     type: "TOOL_CALL_RESULT",
     tool_call_id: "early-source-tool",
@@ -694,11 +717,13 @@ test("buffers and unions source refs when results arrive before their tool row",
       { provider: "web", kind: "page", ref: "https://example.test/a", title: "Second" },
     ],
   });
+  expect(getState().sourceRefsRevision).toBe(beforeSources);
   handleServerEvent({
     type: "TOOL_CALL_START",
     tool_call_id: "early-source-tool",
     tool_call_name: "search",
   });
+  expect(getState().sourceRefsRevision).toBeGreaterThan(beforeSources);
 
   const activityId = getState().order.find((id) => getState().messages.get(id)?.role === "activity");
   expect(
@@ -2227,7 +2252,7 @@ test("loadHistory lets replayed tools continue the active trailing history group
   }
 });
 
-test("loadHistory lets replayed tools continue across trailing hidden meta user messages", async () => {
+test("loadHistory starts replayed tools after a trailing hidden meta boundary", async () => {
   const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
   const messages: HistoryMessage[] = [
     { role: "user", content: "watch it", id: "user-1" },
@@ -2278,8 +2303,8 @@ test("loadHistory lets replayed tools continue across trailing hidden meta user 
     await loadHistory("active-hidden-meta-session");
     const loadedActivityId = getState().order.find((id) => getState().messages.get(id)?.role === "activity");
     expect(getState().messages.get(loadedActivityId!)?.activity).toMatchObject({
-      done: false,
-      label: "Calling",
+      done: true,
+      label: "Called",
     });
     handleServerEvent({
       type: "TOOL_CALL_START",
@@ -2292,15 +2317,13 @@ test("loadHistory lets replayed tools continue across trailing hidden meta user 
 
     const state = getState();
     const activityIds = state.order.filter((id) => state.messages.get(id)?.role === "activity");
-    expect(activityIds).toHaveLength(1);
-    expect(state.messages.get(activityIds[0])?.activity).toMatchObject({
+    expect(activityIds).toHaveLength(2);
+    expect(state.messages.get(activityIds[1])?.activity).toMatchObject({
       done: false,
       label: "Calling",
     });
-    expect(state.messages.get(activityIds[0])?.activity?.items.map((item) => item.id)).toEqual([
-      "tool-1",
-      "tool-2",
-    ]);
+    expect(state.messages.get(activityIds[0])?.activity?.items.map((item) => item.id)).toEqual(["tool-1"]);
+    expect(state.messages.get(activityIds[1])?.activity?.items.map((item) => item.id)).toEqual(["tool-2"]);
   } finally {
     (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
   }

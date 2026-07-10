@@ -265,6 +265,7 @@ export const useStore = create<State & Actions>((set) => ({
   sourceFocus: null,
   rightInspectorTab: "activity",
   sourceTurnId: null,
+  sourceRefsRevision: 0,
   paletteOpen: false,
   pendingApprovals: [],
   reviewingApprovalToolId: null,
@@ -374,6 +375,7 @@ export const useStore = create<State & Actions>((set) => ({
         sessionView,
         currentSessionId: sessionView.currentSessionId,
         sourceTurnId: null,
+        sourceRefsRevision: s.sourceRefsRevision + 1,
         sessionCache: cache,
         messages: view.messages,
         order: view.order,
@@ -413,6 +415,9 @@ export const useStore = create<State & Actions>((set) => ({
         messages: normalized.messages,
         order: normalized.order,
         activeActivityId: normalized.activeActivityId,
+        sourceTurnId:
+          s.sourceTurnId && !normalized.messages.has(s.sourceTurnId) ? null : s.sourceTurnId,
+        sourceRefsRevision: s.sourceRefsRevision + 1,
         thinkingRunId: null,
         thinkingStatus: null,
         ...reduceQueuedMessagesPersisted(s, persistedIds),
@@ -438,6 +443,7 @@ export const useStore = create<State & Actions>((set) => ({
         messages: normalized.messages,
         order: normalized.order,
         activeActivityId: normalized.activeActivityId,
+        sourceRefsRevision: s.sourceRefsRevision + 1,
       };
     }),
 
@@ -460,6 +466,7 @@ export const useStore = create<State & Actions>((set) => ({
         messages: normalized.messages,
         order: normalized.order,
         activeActivityId: normalized.activeActivityId,
+        sourceRefsRevision: s.sourceRefsRevision + 1,
       };
     }),
 
@@ -474,7 +481,11 @@ export const useStore = create<State & Actions>((set) => ({
       const messages = new Map(s.messages);
       messages.set(message.id, message);
       if (s.messages.has(message.id)) return { messages };
-      return { messages, order: [...s.order, message.id] };
+      return {
+        messages,
+        order: [...s.order, message.id],
+        sourceRefsRevision: s.sourceRefsRevision + 1,
+      };
     }),
 
   insertMessageBefore: (message, beforeId) =>
@@ -484,11 +495,17 @@ export const useStore = create<State & Actions>((set) => ({
       if (s.messages.has(message.id)) return { messages };
 
       const beforeIndex = beforeId ? s.order.indexOf(beforeId) : -1;
-      if (beforeIndex < 0) return { messages, order: [...s.order, message.id] };
+      if (beforeIndex < 0) {
+        return {
+          messages,
+          order: [...s.order, message.id],
+          sourceRefsRevision: s.sourceRefsRevision + 1,
+        };
+      }
 
       const order = s.order.slice();
       order.splice(beforeIndex, 0, message.id);
-      return { messages, order };
+      return { messages, order, sourceRefsRevision: s.sourceRefsRevision + 1 };
     }),
 
   mutateMessage: (id, patch) =>
@@ -528,7 +545,12 @@ export const useStore = create<State & Actions>((set) => ({
         const m = s.messages.get(k);
         if (m) messages.set(k, m);
       }
-      return { messages, order: keep };
+      return {
+        messages,
+        order: keep,
+        sourceTurnId: s.sourceTurnId && !messages.has(s.sourceTurnId) ? null : s.sourceTurnId,
+        sourceRefsRevision: s.sourceRefsRevision + 1,
+      };
     }),
 
   setConnected: (connected) => set({ connected }),
@@ -596,7 +618,7 @@ export const useStore = create<State & Actions>((set) => ({
         ...existing,
         activity: { ...activity, done: false, label: "Calling", items: [...activity.items, nextItem] },
       });
-      return { messages };
+      return { messages, sourceRefsRevision: s.sourceRefsRevision + 1 };
     }),
 
   mergeActivityItem: (itemId, patch) => {
@@ -621,7 +643,14 @@ export const useStore = create<State & Actions>((set) => ({
         break;
       }
       didTouch = touched;
-      return touched ? { messages } : s;
+      return touched
+        ? {
+            messages,
+            ...(patch.sourceRefs === undefined
+              ? {}
+              : { sourceRefsRevision: s.sourceRefsRevision + 1 }),
+          }
+        : s;
     });
     return didTouch;
   },

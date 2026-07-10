@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { visibleMessageIds } from "@/lib/messageVisibility";
+import { messageDisplayPolicy, visibleMessageIds } from "@/lib/messageVisibility";
 
 test("hides reasoning without hiding tool activity", () => {
   expect(visibleMessageIds({
@@ -14,6 +14,14 @@ test("hides meta user messages instead of using them as visible separators", () 
     roles: ["user", "activity", "user", "assistant"],
     metaFlags: [false, false, true, false],
   })).toEqual(["user-1", "activity-1", "assistant-1"]);
+});
+
+test("hidden meta users break both turn and activity ownership", () => {
+  expect(messageDisplayPolicy({ role: "user", isMeta: true })).toEqual({
+    hiddenInTranscript: true,
+    breaksTurn: true,
+    breaksActivity: true,
+  });
 });
 
 test("hides empty assistant placeholders", () => {
