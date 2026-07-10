@@ -5,6 +5,7 @@ from pathlib import Path
 from ntrp.agent_surface.schedules import compile_schedules_to_automations
 from ntrp.areas.agent import OBSERVE_TOOL_SCOPE, area_agent_instructions, record_area_run
 from ntrp.areas.asks import AskStore
+from ntrp.areas.custodian import CustodianStore
 from ntrp.areas.migrate import migrate_state_files
 from ntrp.areas.models import Area, areas_from_records
 from ntrp.areas.suggester import AreaSuggester, AreaSuggestionStore
@@ -17,6 +18,7 @@ from ntrp.config import Config
 from ntrp.constants import (
     AREA_AGENT_DAILY_AT,
     AREA_AGENT_HANDLER,
+    AREAS_AGENT_STATE_FILE,
     AREAS_STATE_FILE,
     AREAS_SUGGESTIONS_FILE,
     BUILTIN_AREA_SUGGESTER_ID,
@@ -55,6 +57,7 @@ class AutomationRuntime:
         get_consolidate: Callable[[], object | None] = lambda: None,
         get_knowledge: Callable[[], object | None] = lambda: None,
         get_integration_clients: Callable[[], dict[str, object]] = dict,
+        get_notifiers: Callable[[], object | None] = lambda: None,
     ):
         self.stores = stores
         self.config = config
@@ -71,6 +74,8 @@ class AutomationRuntime:
         # before the stores read them.
         migrate_state_files(config.ntrp_dir)
         self.area_asks = AskStore(config.ntrp_dir / AREAS_STATE_FILE)
+        self.custodians = CustodianStore(config.ntrp_dir / AREAS_AGENT_STATE_FILE)
+        self.get_notifiers = get_notifiers
         self.area_suggestions = AreaSuggestionStore(config.ntrp_dir / AREAS_SUGGESTIONS_FILE)
         self.scheduler = Scheduler(
             store=stores.automations,
@@ -117,19 +122,85 @@ class AutomationRuntime:
             area_ = next((s for s in await self.load_areas() if s.key == key), None)
             if area_ is None or area_.page_path is None:
                 continue
-            record_area_run(
+            # Asks still active at run time went unanswered a whole cycle;
+            # three strikes steps the area's attention down one level.
+            ignored = any(a.source == "agent" for a in self.area_asks.list(key))
+            created = record_area_run(
                 self.area_asks,
                 key,
                 area_.page_path,
                 run_completed.structured_output,
                 run_ref=f"run:{run_completed.run_id}",
             )
+            record = await self.stores.sessions.get_area(key)
+            attention = (record or {}).get("attention") or "ambient"
+            # Self-paced heartbeat: the run's own next-check (clamped +
+            # quiet-decayed) replaces the pre-run trigger advance.
+            next_run = self.custodians.record_run(
+                key, run_completed.structured_output, attention=attention
+            )
+            await self.stores.automations.set_next_run(auto.task_id, next_run)
+            if self.custodians.note_ignored_asks(key, ignored):
+                stepped = {"active": "ambient", "ambient": "dormant"}.get(attention)
+                if stepped:
+                    await self.stores.sessions.update_area(key, attention=stepped)
+                    _logger.info("Area %s attention stepped down to %s (asks unanswered)", key, stepped)
+            await self._notify_asks(area_, record, created)
             # The channel automation's finally-block recorded the run_id (a
             # coolname slug) as last_result; overwrite it with the agent's
             # actual report so the room's agent line shows what it found.
             if run_completed.result:
                 await self.stores.automations.set_last_result(auto.task_id, run_completed.result)
             await self.scheduler.emit_automation_event(AreasChangedEvent(keys=[key]))
+
+    async def _notify_asks(self, area_, record: dict | None, created: list) -> None:
+        """Push newly nominated asks through the user's notifiers, gated by
+        the area's interrupts policy. One ask, one canonical channel: the
+        push IS the interrupt; Home holds the queue either way."""
+        policy = (record or {}).get("interrupts") or "asks"
+        pushable = {"asks": {"question", "review"}, "all": {"notify", "question", "review"}, "none": set()}[policy]
+        to_send = [a for a in created if a.kind in pushable]
+        if not to_send:
+            return
+        service = self.get_notifiers()
+        if service is None or not getattr(service, "notifiers", None):
+            return
+        for ask in to_send:
+            subject = f"ntrp · {area_.title}: {ask.kind}"
+            lines = [ask.text]
+            if ask.why_now:
+                lines.append(f"Why now: {ask.why_now}")
+            if ask.what_next:
+                lines.append(f"Next: {ask.what_next}")
+            body = "\n".join(lines)
+            for name, notifier in service.notifiers.items():
+                try:
+                    await notifier.send(subject, body)
+                except Exception:
+                    _logger.exception("Notifier %s failed for area ask", name)
+
+    async def request_area_wake(self, area_id: str, description: str) -> None:
+        """A domain event happened: note it for the custodian and, budget and
+        pause permitting, pull the next run earlier (debounced so a burst of
+        events coalesces into one run)."""
+        record = await self.stores.sessions.get_area(area_id)
+        if record is None or record.get("autonomy") is None:
+            return  # no standing agent to wake
+        deadline = self.custodians.note_event(
+            area_id,
+            description,
+            attention=record.get("attention") or "ambient",
+            paused=bool(record.get("paused_at")),
+        )
+        if deadline is None:
+            return
+        task_id = f"area:{area_id}"
+        auto = await self.stores.automations.get(task_id)
+        if auto is None or not auto.enabled:
+            return
+        if auto.next_run_at is None or auto.next_run_at > deadline:
+            await self.stores.automations.set_next_run(task_id, deadline)
+            _logger.info("Area %s wake requested (%s), due %s", area_id, description, deadline.isoformat())
 
     async def start_scheduler(self) -> None:
         self.scheduler.register_handler(
@@ -372,6 +443,13 @@ class AutomationRuntime:
                 changed = True
             if existing.last_result and "without a report" in existing.last_result:
                 existing.last_result = None
+                changed = True
+            fresh = area_agent_instructions(area_)
+            if existing.description != fresh:
+                # The description is code-generated (operator steering lives on
+                # the area's own instructions field, injected via the AREA
+                # block) — so instruction-protocol upgrades deploy on boot.
+                existing.description = fresh
                 changed = True
             if changed:
                 await self.stores.automations.save(existing)

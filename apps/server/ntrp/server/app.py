@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from ntrp.agent import Role
+from ntrp.areas.agent import INTAKE_ADDENDUM
 from ntrp.areas.migrate import migrate_legacy_areas
 from ntrp.areas.models import areas_from_records
 from ntrp.areas.projection import area_automation_match
@@ -125,6 +126,16 @@ async def lifespan(app: FastAPI):
     # global stream so the desktop memory view refreshes itself — no restarts.
     async def _publish_memory_changed(paths: list[str]) -> None:
         await bus_registry.get_or_create(AUTOMATION_BUS_KEY).emit(MemoryChangedEvent(paths=paths))
+        # Event beats polling: an external edit to an area's topic page (the
+        # user in Obsidian, another agent) wakes that area's custodian.
+        if runtime.session_service:
+            changed = set(paths)
+            for record in await runtime.session_service.list_areas():
+                page = record.get("page_path")
+                if page and page in changed:
+                    await runtime.automation.request_area_wake(
+                        record["area_id"], f"topic page edited ({page})"
+                    )
 
     runtime.knowledge.start_memory_watch(_publish_memory_changed)
 
@@ -212,6 +223,12 @@ async def lifespan(app: FastAPI):
                 return p
         return None
 
+    def _custodian_state(key: str) -> dict:
+        cust = runtime.automation.custodians
+        state = dict(cust.state(key))
+        state["runs_today_display"] = cust.runs_today(key)
+        return state
+
     app.state.area_suggestions = runtime.automation.area_suggestions
     app.state.area_service = AreaService(
         areas=lambda: area_snapshot["areas"],
@@ -222,6 +239,7 @@ async def lifespan(app: FastAPI):
         area_automations=_area_automations,
         area_sessions=_area_sessions,
         get_area=_get_area_record,
+        custodian_state=_custodian_state,
     )
     app.state.hydrate_area_snapshot = hydrate_area_snapshot
 
@@ -271,9 +289,19 @@ async def lifespan(app: FastAPI):
         # no context the prompt collapses to the bare description, so
         # non-event iterations submit exactly what they did before.
         ctx_str = json.dumps(context) if isinstance(context, dict) else context
+        if automation.task_id.startswith("area:"):
+            area_id = automation.task_id.removeprefix("area:")
+            woken_by = runtime.automation.custodians.consume_pending(area_id)
+            parts = []
+            if woken_by:
+                parts.append("WOKEN BY (events since your last run):\n" + "\n".join(f"- {w}" for w in woken_by))
+            if automation.iteration_count == 0:
+                parts.append(INTAKE_ADDENDUM.strip())
+            if parts:
+                ctx_str = "\n\n".join(([ctx_str] if ctx_str else []) + parts)
         message = (
             AUTOMATION_PROMPT.render(description=automation.description, context=ctx_str)
-            if context
+            if ctx_str
             else automation.description
         )
         return await _dispatch_session_message(
@@ -286,6 +314,7 @@ async def lifespan(app: FastAPI):
         )
 
     runtime.scheduler.set_iteration_dispatcher(_dispatch_iteration)
+    app.state.request_area_wake = runtime.automation.request_area_wake
     runtime.dispatch_session_message = _dispatch_session_message
 
     async def _dispatch_post(automation: Automation, context: str | dict | None = None) -> str | None:

@@ -5,7 +5,11 @@ from pathlib import Path
 
 from ntrp.areas.models import Ask, AskState
 
-_KIND_PRIORITY = {"decide": 0, "drift": 1, "review": 2, "act": 3}
+_KIND_PRIORITY = {"question": 0, "review": 1, "notify": 2}
+
+# Pre-taxonomy kinds (review/decide/act/drift) fold into the three-verb
+# vocabulary (notify/question/review) on load — one-way, idempotent.
+_LEGACY_KINDS = {"review": "notify", "decide": "question", "act": "question", "drift": "notify"}
 
 
 def _parse(ts: str) -> datetime:
@@ -19,7 +23,14 @@ class AskStore:
         self._asks: dict[str, Ask] = {}
         if path.exists():
             data = json.loads(path.read_text())
+            migrated = False
+            for a in data["asks"]:
+                if a.get("kind") in _LEGACY_KINDS:
+                    a["kind"] = _LEGACY_KINDS[a["kind"]]
+                    migrated = True
             self._asks = {a["id"]: Ask(**a) for a in data["asks"]}
+            if migrated:
+                self._flush()
 
     def _flush(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -52,15 +63,21 @@ class AskStore:
 
     def list(self, area_key: str | None = None, include_resolved: bool = False) -> list[Ask]:
         now = datetime.now(UTC)
+        self._expired = False
         out = []
         for a in self._asks.values():
             if area_key and a.area_key != area_key:
                 continue
+            if a.state == "active" and a.expires_at is not None and _parse(a.expires_at) <= now:
+                a.state = "dismissed"  # quiet expiry; lazily persisted below
+                self._expired = True
             active = a.state == "active" or (
                 a.state == "snoozed" and a.snoozed_until is not None and _parse(a.snoozed_until) <= now
             )
             if include_resolved or active:
                 out.append(a)
+        if self._expired:
+            self._flush()
         return sorted(out, key=lambda a: a.created_at, reverse=True)
 
 

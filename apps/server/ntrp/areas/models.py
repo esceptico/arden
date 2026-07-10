@@ -1,7 +1,10 @@
 from dataclasses import dataclass
 from typing import Literal
 
-AskKind = Literal["review", "decide", "act", "drift"]
+# notify: FYI, no decision (Home only, expires quietly).
+# question: the agent is blocked on the user's judgment (push).
+# review: a proposed action awaiting approve/edit/reject (push).
+AskKind = Literal["notify", "question", "review"]
 AskState = Literal["active", "done", "dismissed", "snoozed"]
 Autonomy = Literal["observe", "act"]
 
@@ -43,3 +46,10 @@ class Ask:
     created_at: str  # ISO
     snoozed_until: str | None = None
     provenance: str | None = None  # run/source that produced it
+    # Ask anatomy (interrupt-UX research): the concrete why-now and
+    # what-happens-next make an ask answerable instead of rubber-stampable.
+    why_now: str | None = None
+    what_next: str | None = None
+    # notify-kind asks expire quietly instead of accumulating (Pulse's 24h
+    # card expiry, stretched — a stale FYI is noise, not a queue item).
+    expires_at: str | None = None

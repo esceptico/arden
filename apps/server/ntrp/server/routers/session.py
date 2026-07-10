@@ -1,6 +1,6 @@
 from collections.abc import Callable
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from ntrp.agent import Role
 from ntrp.areas.triage import TriageDecision, triage_chat
@@ -748,14 +748,20 @@ async def update_session_model(
 async def move_session_to_area(
     session_id: str,
     req: MoveSessionAreaRequest,
+    request: Request,
     svc: SessionService = Depends(require_session_service),
 ):
-    if not await svc.load(session_id):
+    data = await svc.load(session_id)
+    if not data:
         raise HTTPException(status_code=404, detail="Session not found")
     await _require_area(svc, req.area_id)
     moved = await svc.move_session_to_area(session_id, req.area_id)
     if not moved:
         raise HTTPException(status_code=404, detail="Session not found")
+    if req.area_id:
+        # A chat filed into the area is domain activity — wake its custodian.
+        name = data.state.name or "untitled chat"
+        await request.app.state.request_area_wake(req.area_id, f"chat filed into area: '{name}'")
     return {"session_id": session_id, "area_id": req.area_id}
 
 

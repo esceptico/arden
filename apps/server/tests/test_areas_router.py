@@ -109,6 +109,14 @@ def client(tmp_path: Path):
     test_app.state.area_service = svc
     test_app.state.runtime = SimpleNamespace(session_service=areas)
     test_app.state.emit_areas_changed = _emit_areas_changed
+
+    wakes: list[tuple[str, str]] = []
+
+    async def _request_area_wake(area_id: str, description: str) -> None:
+        wakes.append((area_id, description))
+
+    test_app.state.request_area_wake = _request_area_wake
+    test_app.state.wakes = wakes
     test_app.state.hydrate_area_snapshot = _hydrate_area_snapshot
     test_app.state.area_suggestions = suggestions
 

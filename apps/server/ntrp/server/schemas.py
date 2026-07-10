@@ -325,6 +325,9 @@ class AreaResponse(BaseModel):
     knowledge_scope: str
     page_path: str | None = None
     autonomy: str | None = None
+    attention: str = "ambient"
+    interrupts: str = "asks"
+    paused_at: str | None = None
     created_at: str
     updated_at: str
     archived_at: str | None = None
@@ -346,6 +349,9 @@ class UpdateAreaRequest(BaseModel):
     knowledge_scope: str | None = Field(default=None, max_length=500)
     page_path: str | None = Field(default=None, max_length=1_000)
     autonomy: str | None = Field(default=None, max_length=20)
+    attention: Literal["dormant", "ambient", "active"] | None = None
+    interrupts: Literal["asks", "all", "none"] | None = None
+    paused: bool | None = None
 
 
 class CreateSessionRequest(BaseModel):

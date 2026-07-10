@@ -19,55 +19,92 @@ from ntrp.tools.core.scope import matches_scope
 AREA = Area(key="o-1a", title="O-1A", page_path="topics/o-1a.md", autonomy="observe")
 
 
-def test_instructions_state_contract_and_one_ask_protocol():
+def test_instructions_state_contract_and_ask_protocol():
     text = area_agent_instructions(AREA)
     assert "O-1A" in text
     assert "observe" in text
-    assert "at most ONE ask" in text
+    assert "at most three asks" in text
     assert "AREA context block" in text  # page comes from context, not embedded
-    assert "stale decision-ready open loop" in text  # nomination calibration
+    assert "notify" in text and "question" in text and "review" in text
+    assert "salience" in text
+    assert "Next check" in text  # self-paced heartbeat protocol
+
+
+def _nom(asks, report="tended", hours=24.0, reason="routine"):
+    return {"asks": asks, "report": report, "next_check_hours": hours, "next_check_reason": reason}
+
+
+def _draft(text, kind, salience=4):
+    return {"text": text, "kind": kind, "salience": salience, "why_now": "deadline", "what_next": "opens page"}
 
 
 def test_nomination_schema_validates_at_the_trust_boundary():
-    ok = AreaAskNomination.model_validate({"ask": {"text": "Review counsel memo", "kind": "review"}})
-    assert ok.ask.kind == "review"
-    assert AreaAskNomination.model_validate({"ask": None}).ask is None
+    ok = AreaAskNomination.model_validate(_nom([_draft("Review counsel memo", "review")]))
+    assert ok.asks[0].kind == "review"
+    assert AreaAskNomination.model_validate(_nom([])).asks == []
     with pytest.raises(ValidationError):
-        AreaAskNomination.model_validate({"ask": {"text": "x", "kind": "urgent"}})
+        AreaAskNomination.model_validate(_nom([_draft("x", "urgent")]))
+    with pytest.raises(ValidationError):  # salience bounds
+        AreaAskNomination.model_validate(_nom([dict(_draft("x", "notify"), salience=9)]))
+    with pytest.raises(ValidationError):  # ask cap
+        AreaAskNomination.model_validate(_nom([_draft(str(i), "notify") for i in range(4)]))
 
 
 def test_record_area_run_nominates_and_supersedes(tmp_path):
     store = AskStore(tmp_path / "state.json")
     record_area_run(
         store, "o-1a", "topics/o-1a.md",
-        {"ask": {"text": "First ask", "kind": "review"}},
+        _nom([_draft("First ask", "review")]),
         run_ref="run:r1",
     )
     first = store.list("o-1a")
     assert len(first) == 1 and first[0].text == "First ask" and first[0].provenance == "run:r1"
+    assert first[0].why_now == "deadline" and first[0].what_next == "opens page"
 
     record_area_run(
         store, "o-1a", "topics/o-1a.md",
-        {"ask": {"text": "Second ask", "kind": "decide"}},
+        _nom([_draft("Second ask", "question")]),
         run_ref="run:r2",
     )
     active = store.list("o-1a")
     assert [a.text for a in active] == ["Second ask"]  # superseded, not stacked
 
 
+def test_record_area_run_salience_threshold_and_notify_expiry(tmp_path):
+    store = AskStore(tmp_path / "state.json")
+    record_area_run(
+        store, "o-1a", "topics/o-1a.md",
+        _nom([
+            _draft("Big thing", "notify", salience=4),
+            _draft("Marginal thing", "notify", salience=2),  # below threshold → page only
+        ]),
+        run_ref="run:r1",
+    )
+    active = store.list("o-1a")
+    assert [a.text for a in active] == ["Big thing"]
+    assert active[0].expires_at is not None  # notify asks expire quietly
+    record_area_run(
+        store, "o-1a", "topics/o-1a.md",
+        _nom([_draft("Needs you", "question", salience=5)]),
+        run_ref="run:r2",
+    )
+    q = store.list("o-1a")[0]
+    assert q.kind == "question" and q.expires_at is None  # questions wait for the user
+
+
 def test_record_area_run_silence_retires_previous(tmp_path):
     store = AskStore(tmp_path / "state.json")
     record_area_run(
         store, "o-1a", "topics/o-1a.md",
-        {"ask": {"text": "Old ask", "kind": "review"}},
+        _nom([_draft("Old ask", "review")]),
         run_ref="run:r1",
     )
-    record_area_run(store, "o-1a", "topics/o-1a.md", {"ask": None}, run_ref="run:r2")
+    record_area_run(store, "o-1a", "topics/o-1a.md", _nom([]), run_ref="run:r2")
     assert store.list("o-1a") == []  # the agent re-decided: silence
     # A failed constrained step (None) is silence too, never a crash.
     record_area_run(
         store, "o-1a", "topics/o-1a.md",
-        {"ask": {"text": "Back", "kind": "review"}},
+        _nom([_draft("Back", "review")]),
         run_ref="run:r3",
     )
     record_area_run(store, "o-1a", "topics/o-1a.md", None, run_ref="run:r4")

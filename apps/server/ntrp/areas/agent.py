@@ -1,8 +1,8 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 from uuid import uuid4
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ntrp.areas.asks import AskStore
 from ntrp.areas.models import Area, Ask
@@ -31,19 +31,40 @@ _CONTRACT = {
     "act": "You may run this area's automations and workflows; irreversible actions still require approval.",
 }
 
+# Only findings that clear this salience become asks; the rest belong on the
+# page. Calibration research says a proactive agent's "worth telling you"
+# judgment misfires ~1/3 of the time — marginal findings never reach the user.
+SALIENCE_THRESHOLD = 3
+MAX_ASKS_PER_RUN = 3
+NOTIFY_ASK_TTL_HOURS = 72
+
 
 class AreaAskDraft(BaseModel):
     text: str
-    kind: Literal["review", "decide", "act", "drift"]
+    # notify = FYI (no decision, expires quietly); question = blocked on the
+    # user's judgment; review = proposed action awaiting approval.
+    kind: Literal["notify", "question", "review"]
+    # 1 = barely worth the page, 5 = drop everything. Below the threshold the
+    # finding stays on the page and never becomes an ask.
+    salience: int = Field(ge=1, le=5)
+    why_now: str
+    what_next: str
 
 
 class AreaAskNomination(BaseModel):
-    """The run's structured output (registered as "area_ask"): at most ONE
-    ask, or null when the day is quiet. Schema-validated by the constrained
-    final step, so the transcript stays prose and the nomination arrives as
-    a guaranteed-shaped object."""
+    """The run's structured output (registered as "area_ask"): the run's
+    findings triaged into at most a few asks (empty on a quiet day), plus the
+    self-paced next check. Schema-validated by the constrained final step, so
+    the transcript stays prose and the nomination arrives as a guaranteed-
+    shaped object."""
 
-    ask: AreaAskDraft | None
+    asks: list[AreaAskDraft] = Field(default_factory=list, max_length=MAX_ASKS_PER_RUN)
+    # One line the room shows as "what the agent did this run".
+    report: str
+    # Self-paced heartbeat: when to look next (clamped by the area's
+    # attention bounds) and the reason the user sees in the room.
+    next_check_hours: float = Field(gt=0, le=24 * 14)
+    next_check_reason: str
 
 
 def area_agent_instructions(area: Area) -> str:
@@ -52,45 +73,78 @@ def area_agent_instructions(area: Area) -> str:
     block on the area-tagged channel session, so every turn sees current
     state while these instructions stay static."""
     return (
-        f"You are the standing agent for the '{area.title}' area of the user's life. "
+        f"You are the standing custodian of the '{area.title}' area of the user's life. "
         f"Its topic page is in your AREA context block.\n"
         f"Autonomy contract ({area.autonomy}): {_CONTRACT[area.autonomy]}\n\n"
         "This turn: absorb what changed in this domain since your last turn (your channel "
-        "history is your own past runs), update the topic page if warranted (memory tools), "
-        "and decide whether ANYTHING needs the user.\n"
-        "Ask-worthy: something new that needs their judgment, a drift between a commitment "
-        "and reality, or a stale decision-ready open loop they haven't touched. Routine "
-        "tracking is not ask-worthy.\n"
+        "history is your own past runs; a WOKEN BY line, when present, tells you which "
+        "events triggered this run), ADVANCE the open loops you can (research, verify, "
+        "draft — don't just track), update the topic page with what you learned "
+        "(memory tools), and decide what, if anything, needs the user.\n"
         "End with a short prose report. Afterwards you will be asked for a structured "
-        "nomination: at most ONE ask — the single highest-leverage item — or none. "
-        "Silence is correct on a quiet day.\n"
-        "Pick the kind that fits, dimmest that's true:\n"
-        "- review: an FYI — you did or noticed something worth a glance, no decision needed.\n"
-        "- decide: a choice or judgment call is waiting on them.\n"
-        "- act: they need to take a concrete external step (send, book, pay, submit).\n"
-        "- drift: a commitment and reality have diverged and it's slipping."
+        "nomination: your findings triaged into at most three asks (empty on a quiet "
+        "day — silence is correct), a one-line report, and when to check next.\n"
+        "Ask kinds — pick the dimmest that's true:\n"
+        "- notify: an FYI worth a glance; no decision needed. Expires on its own.\n"
+        "- question: you are blocked on the user's judgment and cannot proceed without it.\n"
+        "- review: you propose a concrete action and want approval before it happens.\n"
+        "Every ask must name the concrete object, why now, and what happens next. "
+        "Score each 1-5 on salience; low-salience findings belong on the page, not in an ask.\n"
+        "Next check: pick when you should genuinely look again and say why in one line "
+        "(a deadline, an expected reply, 'quiet — nothing moves until X'). Routine "
+        "tracking does not justify a short interval."
     )
 
 
-def record_area_run(asks: AskStore, area_key: str, page_path: str, structured_output: dict | None, run_ref: str) -> None:
+INTAKE_ADDENDUM = (
+    "\n\nINTAKE (first run): you have no run history yet. This run, instead of routine "
+    "tending: (1) read the topic page and recent area conversations, (2) write a short "
+    "WATCHING section onto the topic page — the concrete things you will track and what "
+    "you will never touch, (3) if one thing genuinely needs the user's calibration "
+    "(a boundary, a priority, a missing fact), raise it as a single question ask; "
+    "otherwise stay silent and set your first next-check."
+)
+
+
+def record_area_run(
+    asks: AskStore,
+    area_key: str,
+    page_path: str,
+    structured_output: dict | None,
+    run_ref: str,
+) -> list[Ask]:
     """Post-run ask sync (called from the outbox run-completed pipeline):
-    every run re-decides the area's ONE ask — silence retires the previous
-    nomination just like a new one supersedes it. `structured_output` is the
-    schema-validated AreaAskNomination dump from the run (or None when the
-    constrained step failed — treated as silence)."""
-    nominated = (structured_output or {}).get("ask")
+    every run re-decides the area's agent asks — silence retires previous
+    nominations just like new ones supersede them. `structured_output` is the
+    schema-validated AreaAskNomination dump (or None when the constrained
+    step failed — treated as silence)."""
+    nominated = (structured_output or {}).get("asks") or []
     asks.retire_active_agent_asks(area_key)
-    if nominated:
-        asks.upsert(
+    now = datetime.now(UTC)
+    created: list[Ask] = []
+    kept = [n for n in nominated if n.get("salience", 0) >= SALIENCE_THRESHOLD]
+    for n in kept[:MAX_ASKS_PER_RUN]:
+        expires = (
+            (now + timedelta(hours=NOTIFY_ASK_TTL_HOURS)).isoformat()
+            if n["kind"] == "notify"
+            else None
+        )
+        ask = (
             Ask(
                 id=f"agent:{area_key}:{uuid4().hex[:8]}",
                 area_key=area_key,
-                text=nominated["text"],
-                kind=nominated["kind"],
+                text=n["text"],
+                kind=n["kind"],
                 source="agent",
                 actions=[{"verb": "open_page", "ref": page_path}],
                 state="active",
-                created_at=datetime.now(UTC).isoformat(),
+                created_at=now.isoformat(),
                 provenance=run_ref,
+                why_now=n.get("why_now"),
+                what_next=n.get("what_next"),
+                expires_at=expires,
             )
         )
+        asks.upsert(ask)
+        created.append(ask)
+    return created

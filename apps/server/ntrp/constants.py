@@ -223,7 +223,20 @@ assert AUTOMATION_EVENT_APPROACHING_DEFAULT_LEAD_MINUTES <= MONITOR_EVENT_APPROA
 LEGACY_AREAS_FILE = "slices.json"  # under the ~/.ntrp dir
 AREAS_STATE_FILE = "areas-state.json"
 AREAS_SUGGESTIONS_FILE = "areas-suggestions.json"
+AREAS_AGENT_STATE_FILE = "areas-agent-state.json"
 BUILTIN_AREA_SUGGESTER_ID = "builtin-area-suggester"
 AREA_SUGGESTER_DAILY_AT = "07:15"
 AREA_AGENT_HANDLER = "area_agent"
 AREA_AGENT_DAILY_AT = "06:30"
+
+# Attention presets: the one dial that sets the custodian's envelope.
+# min/max clamp the agent's self-chosen next check; runs/day caps event
+# wakes + heartbeats together (budget guard); quiet_decay stretches the
+# interval after consecutive quiet runs.
+AREA_ATTENTION_PRESETS = {
+    "active": {"min_hours": 2.0, "max_hours": 48.0, "runs_per_day": 8},
+    "ambient": {"min_hours": 12.0, "max_hours": 24.0 * 7, "runs_per_day": 3},
+    "dormant": {"min_hours": 24.0 * 3, "max_hours": 24.0 * 14, "runs_per_day": 1},
+}
+AREA_QUIET_DECAY_FACTOR = 1.5  # applied after 2+ consecutive quiet runs
+AREA_ASK_IGNORED_DAYS = 7  # unanswered this long → attention steps down

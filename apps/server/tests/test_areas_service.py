@@ -25,14 +25,14 @@ def make_service(tmp_path: Path) -> AreaService:
     )
 
 
-def test_mechanical_approval_becomes_decide_ask(tmp_path: Path):
+def test_mechanical_approval_becomes_review_ask(tmp_path: Path):
     svc = make_service(tmp_path)
     svc.refresh_mechanical()
     svc.refresh_mechanical()  # idempotent — no duplicates
     overview = svc.overview()
     assert len(overview["focus"]) == 1
     ask = overview["focus"][0]
-    assert ask["kind"] == "decide" and ask["area_key"] == "o-1a"
+    assert ask["kind"] == "review" and ask["area_key"] == "o-1a"
     assert {"verb": "open_session", "ref": "s1"} in ask["actions"]
 
 

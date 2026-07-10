@@ -6,6 +6,7 @@ from pathlib import Path
 from ntrp.areas.asks import AskStore, nominate_focus
 from ntrp.areas.models import Area, Ask, AskState
 from ntrp.areas.projection import page_summary
+from ntrp.constants import AREA_ATTENTION_PRESETS
 from ntrp.memory.pages import Page
 
 
@@ -20,6 +21,7 @@ class AreaService:
         area_automations: Callable[[str], list[dict]],
         area_sessions: Callable[[str], list[dict]],
         get_area: Callable[[str], dict | None],
+        custodian_state: Callable[[str], dict] | None = None,
     ) -> None:
         self._areas = areas
         self._asks = asks
@@ -29,6 +31,7 @@ class AreaService:
         self._area_automations = area_automations
         self._area_sessions = area_sessions
         self._get_area = get_area
+        self._custodian_state = custodian_state or (lambda key: {})
 
     def refresh_mechanical(self) -> None:
         now = datetime.now(UTC).isoformat()
@@ -43,7 +46,7 @@ class AreaService:
             self._asks.upsert(Ask(
                 id=ask_id, area_key=key,
                 text=f"{row['tool_name']} wants: {row['preview'] or row['tool_name']}",
-                kind="decide", source="approval",
+                kind="review", source="approval",
                 actions=[{"verb": "open_session", "ref": row["session_id"]}],
                 state="active", created_at=now,
                 provenance=f"run:{row['run_id']}",
@@ -58,7 +61,7 @@ class AreaService:
                 self._asks.upsert(Ask(
                     id=ask_id, area_key=s.key,
                     text=f"{auto['name']} failed — {auto['last_result']}",
-                    kind="review", source="run_failed",
+                    kind="notify", source="run_failed",
                     actions=[{"verb": "retry", "ref": auto["name"]}],
                     state="active", created_at=now,
                 ))
@@ -109,11 +112,34 @@ class AreaService:
             for slug in dict.fromkeys(summary["related"])
             if slug in slug_to_key and slug_to_key[slug] != key
         ]
+        record = self._get_area(key) or {}
+        autos = self._area_automations(key)
+        agent_auto = next((a for a in autos if a.get("task_id") == f"area:{key}"), None)
+        cust = self._custodian_state(key)
+        agent = None
+        if s.autonomy is not None:
+            attention = record.get("attention") or "ambient"
+            agent = {
+                # The room's liveness line — a silent-stalled custodian is the
+                # documented trust killer, so this is always present.
+                "last_checked": (agent_auto or {}).get("last_run_at"),
+                "next_check": (agent_auto or {}).get("next_run_at"),
+                "next_check_reason": cust.get("next_check_reason"),
+                "last_report": cust.get("last_report"),
+                "woken_by": cust.get("last_woken_by") or [],
+                "runs_today": cust.get("runs_today_display", 0),
+                "runs_cap": AREA_ATTENTION_PRESETS.get(attention, AREA_ATTENTION_PRESETS["ambient"])["runs_per_day"],
+                "running_since": (agent_auto or {}).get("running_since"),
+            }
         return {
             "key": s.key, "title": s.title, "autonomy": s.autonomy,
             "page_path": s.page_path, "related": related,
+            "attention": record.get("attention") or "ambient",
+            "interrupts": record.get("interrupts") or "asks",
+            "paused": bool(record.get("paused_at")),
+            "agent": agent,
             "open_loops": summary["open_loops"], "updated": summary["updated"],
             "asks": [asdict(a) for a in self._asks.list(key)],
             "sessions": self._area_sessions(key),
-            "automations": self._area_automations(key),
+            "automations": autos,
         }

@@ -29,11 +29,11 @@ def test_snoozed_asks_hidden_until_deadline(tmp_path: Path):
 
 def test_nominate_focus_one_per_area_kind_priority():
     asks = [
-        ask("r", "dex", "review"), ask("d", "dex", "decide"),
-        ask("x", "aside", "drift"), ask("y", "health", "act"),
+        ask("r", "dex", "notify"), ask("d", "dex", "question"),
+        ask("x", "aside", "review"), ask("y", "health", "notify"),
     ]
     focus = nominate_focus(asks, cap=2)
-    assert [a.id for a in focus] == ["d", "x"]  # decide beats review; drift beats act; cap 2
+    assert [a.id for a in focus] == ["d", "x"]  # question beats notify; review beats notify; cap 2
 
 
 def test_nominate_focus_same_kind_prefers_newer():
@@ -67,7 +67,7 @@ def test_snooze_comparison_handles_aware_and_naive(tmp_path: Path):
 def test_retire_active_agent_asks_marks_only_active_source_agent_asks_done(tmp_path: Path):
     store = AskStore(tmp_path / "state.json")
     store.upsert(ask("agent-1", "o-1a", "review", source="agent"))
-    store.upsert(ask("approval-1", "o-1a", "decide", source="approval"))
+    store.upsert(ask("approval-1", "o-1a", "review", source="approval"))
     store.upsert(ask("agent-2", "dex", "review", source="agent"))
 
     store.retire_active_agent_asks("o-1a")

@@ -105,6 +105,13 @@ async def update_area(request: Request, area_id: str, req: UpdateAreaRequest):
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if not area:
         raise HTTPException(status_code=404, detail="Area not found")
+    if "paused" in patch:
+        # Pause is enforced at the switch: the agent automation is disabled
+        # outright (no half-alive runs), re-enabled on resume — a stale due
+        # time then fires promptly, so resuming reads as waking up.
+        automations = request.app.state.runtime.stores.automations
+        if await automations.get(f"area:{area_id}"):
+            await automations.set_enabled(f"area:{area_id}", not patch["paused"])
     await request.app.state.emit_areas_changed([area_id])
     return area
 
@@ -142,4 +149,9 @@ async def resolve_ask(request: Request, area_id: str, ask_id: str, body: Resolve
             detail=f"ask '{ask_id}' belongs to area '{ask['area_key']}', not '{area_id}'",
         )
     await request.app.state.emit_areas_changed([ask["area_key"]])
+    # The user engaged — that's domain activity the custodian should absorb
+    # (an approved review unblocks it; a dismissal is steering).
+    await request.app.state.request_area_wake(
+        area_id, f"user resolved ask '{ask['text'][:80]}' as {body.state}"
+    )
     return ask

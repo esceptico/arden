@@ -231,6 +231,7 @@ class Runtime:
             get_consolidate=lambda: self.knowledge._consolidate,
             get_knowledge=lambda: self.knowledge,
             get_integration_clients=lambda: self.integrations.clients,
+            get_notifiers=lambda: self.notifier_service,
         )
 
     async def _init_mcp(self) -> None:

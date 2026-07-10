@@ -631,6 +631,9 @@ class SessionStore:
             "knowledge_scope": row["knowledge_scope"] or f"area:{row['area_id']}",
             "page_path": dict(row).get("page_path"),
             "autonomy": dict(row).get("autonomy"),
+            "attention": dict(row).get("attention") or "ambient",
+            "interrupts": dict(row).get("interrupts") or "asks",
+            "paused_at": dict(row).get("paused_at"),
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
             "archived_at": row["archived_at"],
@@ -659,7 +662,13 @@ class SessionStore:
                 pass
         # Area capabilities on the container itself : an area with a page is an area; autonomy set means
         # it has a standing agent.
-        for col in ("page_path TEXT", "autonomy TEXT"):
+        for col in (
+            "page_path TEXT",
+            "autonomy TEXT",
+            "attention TEXT",
+            "interrupts TEXT",
+            "paused_at TEXT",
+        ):
             try:
                 await self.conn.execute(f"ALTER TABLE areas ADD COLUMN {col}")
                 await self.conn.commit()
@@ -809,6 +818,9 @@ class SessionStore:
         knowledge_scope: str | None | object = _AREA_PATCH_UNSET,
         page_path: str | None | object = _AREA_PATCH_UNSET,
         autonomy: str | None | object = _AREA_PATCH_UNSET,
+        attention: str | object = _AREA_PATCH_UNSET,
+        interrupts: str | object = _AREA_PATCH_UNSET,
+        paused: bool | object = _AREA_PATCH_UNSET,
     ) -> dict | None:
         assignments = ["updated_at = ?"]
         params: list[object] = [datetime.now(UTC).isoformat()]
@@ -836,6 +848,19 @@ class SessionStore:
         if autonomy is not _AREA_PATCH_UNSET:
             assignments.append("autonomy = ?")
             params.append(autonomy if isinstance(autonomy, str) else None)
+        if attention is not _AREA_PATCH_UNSET:
+            if attention not in ("dormant", "ambient", "active"):
+                raise ValueError("attention must be dormant | ambient | active")
+            assignments.append("attention = ?")
+            params.append(attention)
+        if interrupts is not _AREA_PATCH_UNSET:
+            if interrupts not in ("asks", "all", "none"):
+                raise ValueError("interrupts must be asks | all | none")
+            assignments.append("interrupts = ?")
+            params.append(interrupts)
+        if paused is not _AREA_PATCH_UNSET:
+            assignments.append("paused_at = ?")
+            params.append(datetime.now(UTC).isoformat() if paused else None)
         params.append(area_id)
         cursor = await self.conn.execute(
             f"UPDATE areas SET {', '.join(assignments)} WHERE area_id = ? AND archived_at IS NULL",
