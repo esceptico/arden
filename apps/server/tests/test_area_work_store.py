@@ -1,0 +1,125 @@
+from pathlib import Path
+
+import pytest
+import pytest_asyncio
+
+import ntrp.database as database
+from ntrp.areas.work_store import AreaWorkConflict, AreaWorkStore
+from ntrp.context.store import SessionStore
+from ntrp.services.session import SessionService
+
+
+@pytest_asyncio.fixture
+async def work_env(tmp_path: Path):
+    conn = await database.connect(tmp_path / "sessions.db")
+    sessions_store = SessionStore(conn)
+    await sessions_store.init_schema()
+    sessions = SessionService(sessions_store)
+    work = AreaWorkStore(conn)
+    await work.init_schema()
+    first = await sessions.create_area(name="Health")
+    second = await sessions.create_area(name="Visa")
+    yield conn, sessions, work, first, second
+    await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_outcomes_are_stable_and_isolated_by_area(work_env) -> None:
+    _conn, _sessions, work, health, visa = work_env
+
+    created = await work.create_outcome(
+        health["area_id"],
+        key="labs-normal",
+        title="Lab values normalized",
+        success_criteria="All flagged values are in range",
+        priority=5,
+        source="user",
+    )
+
+    assert created.outcome_id == f"outcome:{health['area_id']}:labs-normal"
+    assert [item.stable_key for item in (await work.snapshot(health["area_id"])).outcomes] == ["labs-normal"]
+    assert (await work.snapshot(visa["area_id"])).outcomes == []
+    assert await work.update_outcome(visa["area_id"], "labs-normal", title="wrong") is None
+
+
+@pytest.mark.asyncio
+async def test_user_updates_require_current_version(work_env) -> None:
+    _conn, _sessions, work, health, _visa = work_env
+    created = await work.create_outcome(
+        health["area_id"],
+        key="labs-normal",
+        title="Lab values normalized",
+        success_criteria="All flagged values are in range",
+        priority=5,
+        source="user",
+    )
+
+    updated = await work.update_outcome(
+        health["area_id"],
+        "labs-normal",
+        expected_updated_at=created.updated_at,
+        title="Labs stable",
+    )
+    assert updated is not None and updated.title == "Labs stable"
+
+    with pytest.raises(AreaWorkConflict):
+        await work.update_outcome(
+            health["area_id"],
+            "labs-normal",
+            expected_updated_at=created.updated_at,
+            title="stale",
+        )
+
+
+@pytest.mark.asyncio
+async def test_work_items_reference_outcomes_and_use_stable_identity(work_env) -> None:
+    _conn, _sessions, work, health, _visa = work_env
+    outcome = await work.create_outcome(
+        health["area_id"],
+        key="labs-normal",
+        title="Lab values normalized",
+        success_criteria="All flagged values are in range",
+        priority=5,
+        source="user",
+    )
+
+    item = await work.create_work_item(
+        health["area_id"],
+        key="book-labs",
+        outcome_key=outcome.stable_key,
+        kind="action",
+        text="Book the follow-up panel",
+        owner="custodian",
+    )
+
+    assert item.item_id == f"work:{health['area_id']}:book-labs"
+    assert item.outcome_id == outcome.outcome_id
+    assert [row.stable_key for row in (await work.snapshot(health["area_id"])).work_items] == ["book-labs"]
+
+    completed = await work.update_work_item(
+        health["area_id"],
+        "book-labs",
+        expected_updated_at=item.updated_at,
+        status="completed",
+    )
+    assert completed is not None and completed.status == "completed" and completed.completed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_archive_preserves_work_and_permanent_delete_cascades(work_env) -> None:
+    conn, sessions, work, health, _visa = work_env
+    await work.create_outcome(
+        health["area_id"],
+        key="labs-normal",
+        title="Lab values normalized",
+        success_criteria="All flagged values are in range",
+        priority=5,
+        source="user",
+    )
+
+    assert await sessions.archive_area(health["area_id"])
+    assert len((await work.snapshot(health["area_id"])).outcomes) == 1
+
+    await conn.execute("DELETE FROM areas WHERE area_id = ?", (health["area_id"],))
+    await conn.commit()
+    assert (await work.snapshot(health["area_id"])).outcomes == []

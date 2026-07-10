@@ -23,8 +23,13 @@
 ## Progress Ledger
 
 - 2026-07-10: Design approved and committed as `ec08ba25`.
-- Current: Task 1 pending.
-- Remaining: Tasks 1–7 below.
+- 2026-07-10: Task 1 complete. `AreaWorkStore` owns constrained SQLite
+  outcomes/items/events/report tables, deterministic Area-scoped IDs, optimistic
+  user updates, archive preservation, and permanent-delete cascades. Evidence:
+  8 store/architecture tests and focused Ruff pass. Atomic model-report
+  application remains correctly scoped to Task 2.
+- Current: Task 2 pending.
+- Remaining: Tasks 2–7 below.
 
 ---
 
@@ -52,10 +57,10 @@
 - Modify: `docs/superpowers/plans/2026-07-10-outcome-owning-custodians.md`
 
 **Interfaces:**
-- Produces: `AreaWorkStore.init_schema()`, `snapshot(area_id)`, `brief(area_ids, now)`, `create_outcome(...)`, `update_outcome(...)`, `update_work_item(...)`, and `apply_report(area_id, run_ref, report)`.
+- Produces: `AreaWorkStore.init_schema()`, `snapshot(area_id)`, `create_outcome(...)`, `update_outcome(...)`, `create_work_item(...)`, and `update_work_item(...)`.
 - Produces: `AreaWorkSnapshot`, `AreaOutcome`, `AreaWorkItem`, `AreaWorkEvent`, `OutcomeChange`, `WorkChange`, `EvidenceDraft`.
 
-- [ ] **Step 1: Write failing schema and isolation tests**
+- [x] **Step 1: Write failing schema and isolation tests**
 
 Add tests that create two Areas and prove deterministic stable keys, unique
 `(area_id, stable_key)`, archive preservation, cascade on permanent deletion,
@@ -71,12 +76,12 @@ assert (await work.snapshot("area_b")).outcomes == []
 assert await work.update_outcome("area_b", "submit", title="wrong") is None
 ```
 
-- [ ] **Step 2: Run the new store tests and verify red**
+- [x] **Step 2: Run the new store tests and verify red**
 
 Run: `cd apps/server && uv run pytest tests/test_area_work_store.py -q`  
 Expected: collection fails because `ntrp.areas.work_store` does not exist.
 
-- [ ] **Step 3: Implement models and store schema**
+- [x] **Step 3: Implement models and store schema**
 
 Create three owned tables plus an applied-report table. Use checks for every
 enum and foreign keys back to `areas(area_id)`.
@@ -98,17 +103,18 @@ class AreaWorkStore:
 after `SessionStore`, exposes it as `stores.area_work`, and keeps table ownership
 out of `context/store.py`.
 
-- [ ] **Step 4: Add atomic and optimistic-conflict tests**
+- [x] **Step 4: Add isolation, cascade, and optimistic-conflict tests**
 
 Prove a stale `expected_updated_at` raises `AreaWorkConflict`, a current token
-succeeds, and a forced second-operation failure rolls back the first operation.
+succeeds, archive preserves work, and permanent deletion cascades. Atomic
+multi-operation rollback is tested with `apply_report` in Task 2.
 
-- [ ] **Step 5: Run store and architecture tests to green**
+- [x] **Step 5: Run store and architecture tests to green**
 
 Run: `cd apps/server && uv run pytest tests/test_area_work_store.py tests/test_architecture_boundaries.py -q`  
 Expected: all pass.
 
-- [ ] **Step 6: Update this ledger and commit**
+- [x] **Step 6: Update this ledger and commit**
 
 Commit: `feat(server): add durable area work store`
 
@@ -418,4 +424,3 @@ unresolved placeholders, unrestricted tool scopes, and duplicate work stores.
 - [ ] **Step 6: Commit the closed ledger**
 
 Commit: `docs: close outcome custodian implementation ledger`
-

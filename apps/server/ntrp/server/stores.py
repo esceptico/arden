@@ -1,6 +1,7 @@
 from typing import Self
 
 import ntrp.database as database
+from ntrp.areas.work_store import AreaWorkStore
 from ntrp.automation.store import AutomationStore
 from ntrp.config import Config
 from ntrp.context.store import SessionStore
@@ -27,6 +28,7 @@ class Stores:
         notifiers: NotifierStore,
         monitor: MonitorStateStore,
         outbox: OutboxStore,
+        area_work: AreaWorkStore,
     ):
         self.conn = conn
         self.read_conn = read_conn
@@ -35,6 +37,7 @@ class Stores:
         self.notifiers = notifiers
         self.monitor = monitor
         self.outbox = outbox
+        self.area_work = area_work
 
     @classmethod
     async def connect(cls, config: Config) -> Self:
@@ -53,6 +56,9 @@ class Stores:
         automations = AutomationStore(conn)
         await automations.init_schema()
 
+        area_work = AreaWorkStore(conn, read_conn)
+        await area_work.init_schema()
+
         notifiers = NotifierStore(conn)
         await notifiers.init_schema()
 
@@ -70,6 +76,7 @@ class Stores:
             notifiers=notifiers,
             monitor=monitor,
             outbox=outbox,
+            area_work=area_work,
         )
 
     async def close(self) -> None:
