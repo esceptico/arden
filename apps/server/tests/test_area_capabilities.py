@@ -6,6 +6,7 @@ import pytest
 import pytest_asyncio
 
 import ntrp.database as database
+from ntrp.areas.models import areas_from_records
 from ntrp.context.store import SessionStore
 from ntrp.services.session import SessionService
 
@@ -47,3 +48,11 @@ async def test_service_restores_archived_area_without_losing_capabilities(svc):
     assert restored is not None
     assert restored["page_path"] == "topics/health.md"
     assert restored["autonomy"] == "observe"
+
+
+def test_plain_area_is_a_first_class_area_projection():
+    projected = areas_from_records(
+        [{"area_id": "area_1", "name": "Design", "page_path": None, "autonomy": None}]
+    )
+
+    assert [area.key for area in projected] == ["area_1"]

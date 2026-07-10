@@ -61,6 +61,31 @@ class AskStore:
         if changed:
             self._flush()
 
+    def reconcile(self, source: str, desired: list[Ask]) -> None:
+        """Make one mechanically-derived source match canonical runtime state.
+
+        Resolved asks stay resolved while the same condition persists; active
+        asks disappear when their underlying approval/failure disappears.
+        """
+        desired_by_id = {ask.id: ask for ask in desired}
+        changed = False
+        for ask in self._asks.values():
+            if ask.source == source and ask.state == "active" and ask.id not in desired_by_id:
+                ask.state = "done"
+                changed = True
+        for ask_id, desired_ask in desired_by_id.items():
+            existing = self._asks.get(ask_id)
+            if existing is None:
+                self._asks[ask_id] = desired_ask
+                changed = True
+            elif existing.state == "active" and existing != desired_ask:
+                desired_ask.state = existing.state
+                desired_ask.created_at = existing.created_at
+                self._asks[ask_id] = desired_ask
+                changed = True
+        if changed:
+            self._flush()
+
     def list(self, area_key: str | None = None, include_resolved: bool = False) -> list[Ask]:
         now = datetime.now(UTC)
         self._expired = False

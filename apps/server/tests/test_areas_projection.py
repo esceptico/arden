@@ -25,7 +25,8 @@ def test_areas_from_records_projection():
     areas = areas_from_records(rows)
     assert [(s.key, s.title, s.autonomy) for s in areas] == [
         ("p1", "Health", "observe"),
-        ("p3", "Reading", None),  # page-only container IS an area; plain Design is not
+        ("p2", "Design", None),  # every durable container is a first-class Area
+        ("p3", "Reading", None),
     ]
 
 

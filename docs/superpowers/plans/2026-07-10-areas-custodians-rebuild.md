@@ -49,8 +49,12 @@ Update this section after every completed task.
   reads; absolute/traversal/symlink escapes fail closed; explicit create and
   detach page operations are lifecycle-backed. Evidence: 47 focused tests and
   Ruff pass.
-- Current: Task 4 pending.
-- Remaining: Tasks 4-10 below.
+- 2026-07-10: Task 4 complete. Every active Area projects into Home/rooms;
+  archived-area asks are filtered; mechanical approval and automation-failure
+  asks reconcile against canonical state and retire when cleared. Evidence: 49
+  focused projection/ask tests and Ruff pass.
+- Current: Task 5 pending.
+- Remaining: Tasks 5-10 below.
 
 ---
 
@@ -130,12 +134,12 @@ create/attach/detach page lifecycle endpoints.
 **Produces:** Every active Area appears in overview; mechanical asks reconcile
 against current approvals/run failures and retire when resolved.
 
-- [ ] Write failing tests for plain Area visibility, archived-ask filtering,
+- [x] Write failing tests for plain Area visibility, archived-ask filtering,
   approval retirement, and canonical automation failure detection.
-- [ ] Verify red.
-- [ ] Replace additive `refresh_mechanical` with keyed reconciliation.
-- [ ] Read failure state from canonical automation-run records.
-- [ ] Run projection/ask tests to green.
+- [x] Verify red.
+- [x] Replace additive `refresh_mechanical` with keyed reconciliation.
+- [x] Read failure state from canonical automation-run records.
+- [x] Run projection/ask tests to green.
 
 ### Task 5: Normalize desktop Area state and lifecycle UX
 

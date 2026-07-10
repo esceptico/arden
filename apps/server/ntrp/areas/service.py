@@ -35,15 +35,13 @@ class AreaService:
 
     def refresh_mechanical(self) -> None:
         now = datetime.now(UTC).isoformat()
-        existing = {a.id for a in self._asks.list(include_resolved=True)}
+        approvals: list[Ask] = []
         for row in self._pending_approvals():
             key = self._session_area(row["session_id"])
             if key is None:
                 continue
             ask_id = f"approval:{row['run_id']}:{row['tool_call_id']}"
-            if ask_id in existing:
-                continue
-            self._asks.upsert(Ask(
+            approvals.append(Ask(
                 id=ask_id, area_key=key,
                 text=f"{row['tool_name']} wants: {row['preview'] or row['tool_name']}",
                 kind="review", source="approval",
@@ -51,20 +49,24 @@ class AreaService:
                 state="active", created_at=now,
                 provenance=f"run:{row['run_id']}",
             ))
+        self._asks.reconcile("approval", approvals)
+        failures: list[Ask] = []
         for s in self._areas():
             for auto in self._area_automations(s.key):
-                if not auto.get("last_result") or not str(auto["last_result"]).startswith("error"):
+                latest = auto.get("latest_run") or {}
+                if latest.get("status") != "failed":
                     continue
-                ask_id = f"runfail:{auto['name']}:{auto['last_run_at']}"
-                if ask_id in existing:
-                    continue
-                self._asks.upsert(Ask(
+                ask_id = f"runfail:{auto['task_id']}:{latest.get('id')}"
+                error = latest.get("error") or "unknown failure"
+                failures.append(Ask(
                     id=ask_id, area_key=s.key,
-                    text=f"{auto['name']} failed — {auto['last_result']}",
+                    text=f"{auto['name']} failed — {error}",
                     kind="notify", source="run_failed",
                     actions=[{"verb": "retry", "ref": auto["name"]}],
                     state="active", created_at=now,
+                    provenance=f"automation-run:{latest.get('id')}",
                 ))
+        self._asks.reconcile("run_failed", failures)
 
     def _page_summary(self, s: Area) -> dict:
         if not s.page_path:
@@ -73,7 +75,8 @@ class AreaService:
 
     def overview(self) -> dict:
         areas = self._areas()
-        all_asks = self._asks.list()
+        active_keys = {area.key for area in areas}
+        all_asks = [ask for ask in self._asks.list() if ask.area_key in active_keys]
         focus = nominate_focus(all_asks)
         out = []
         for s in areas:

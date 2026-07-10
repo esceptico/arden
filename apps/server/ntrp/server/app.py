@@ -187,7 +187,8 @@ async def lifespan(app: FastAPI):
     # sync AreaService call, so the callables stay plain sync lookups over
     # a fresh snapshot instead of needing their own event loop.
     area_snapshot: dict[str, object] = {
-        "sessions": [], "approvals": [], "automations": [], "records": [], "areas": [],
+        "sessions": [], "approvals": [], "automations": [], "automation_runs": {},
+        "records": [], "areas": [],
     }
 
     async def hydrate_area_snapshot() -> None:
@@ -199,10 +200,15 @@ async def lifespan(app: FastAPI):
             for session_id in {run.session_id for run in runtime.run_registry.list_active_runs()}:
                 approvals.extend(await runtime.session_service.store.list_pending_tool_approvals(session_id))
         automations = await runtime.stores.automations.list_all() if runtime.stores else []
+        automation_runs = {
+            automation.task_id: runs[0] if (runs := await runtime.stores.automations.list_runs(automation.task_id, 1)) else None
+            for automation in automations
+        } if runtime.stores else {}
         areas = await runtime.session_service.list_areas() if runtime.session_service else []
         area_snapshot["sessions"] = sessions
         area_snapshot["approvals"] = approvals
         area_snapshot["automations"] = automations
+        area_snapshot["automation_runs"] = automation_runs
         area_snapshot["records"] = areas
         area_snapshot["areas"] = areas_from_records(areas)
 
@@ -227,6 +233,7 @@ async def lifespan(app: FastAPI):
                 "last_run_at": a.last_run_at.isoformat() if a.last_run_at else None,
                 "running_since": a.running_since.isoformat() if a.running_since else None,
                 "next_run_at": a.next_run_at.isoformat() if a.next_run_at else None,
+                "latest_run": area_snapshot["automation_runs"].get(a.task_id),
             }
             for a in area_snapshot["automations"]
             if area_automation_match(a.task_id, key)

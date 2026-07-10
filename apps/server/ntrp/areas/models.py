@@ -30,7 +30,6 @@ def areas_from_records(areas: list[dict]) -> list[Area]:
             autonomy=p.get("autonomy"),
         )
         for p in areas
-        if p.get("page_path") or p.get("autonomy")
     ]
 
 
