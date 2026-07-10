@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -104,6 +105,40 @@ async def test_work_items_reference_outcomes_and_use_stable_identity(work_env) -
         status="completed",
     )
     assert completed is not None and completed.status == "completed" and completed.completed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_brief_caps_recent_completions_and_selects_one_active_item_per_area(work_env) -> None:
+    _conn, _sessions, work, health, visa = work_env
+    for area, prefix in ((health, "health"), (visa, "visa")):
+        for index in range(2):
+            item = await work.create_work_item(
+                area["area_id"], key=f"{prefix}-{index}", outcome_key=None,
+                kind="action", text=f"{prefix} action {index}", owner="custodian",
+            )
+            if index == 0:
+                await work.update_work_item(
+                    area["area_id"], item.stable_key,
+                    expected_updated_at=item.updated_at, status="in_progress",
+                )
+    completed = await work.create_work_item(
+        health["area_id"], key="recent-done", outcome_key=None,
+        kind="action", text="Recent completion", owner="custodian",
+    )
+    await work.update_work_item(
+        health["area_id"], completed.stable_key,
+        expected_updated_at=completed.updated_at, status="completed",
+    )
+
+    brief = await work.brief(
+        {health["area_id"], visa["area_id"]}, now=datetime.now(UTC),
+    )
+
+    assert [row["stable_key"] for row in brief["done"]] == ["recent-done"]
+    assert {row["area_id"] for row in brief["in_progress"]} == {
+        health["area_id"], visa["area_id"],
+    }
+    assert all(row["status"] == "in_progress" for row in brief["in_progress"])
 
 
 @pytest.mark.asyncio

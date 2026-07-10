@@ -354,6 +354,36 @@ class UpdateAreaRequest(BaseModel):
     paused: bool | None = None
 
 
+AreaWorkKey = Annotated[
+    str,
+    Field(min_length=1, max_length=80, pattern=r"^[a-z0-9][a-z0-9_-]*$"),
+]
+
+
+class CreateAreaOutcomeRequest(BaseModel):
+    key: AreaWorkKey
+    title: str = Field(min_length=1, max_length=300)
+    success_criteria: str = Field(min_length=1, max_length=2_000)
+    priority: int = Field(ge=1, le=5)
+
+
+class UpdateAreaOutcomeRequest(BaseModel):
+    expected_updated_at: str
+    title: str | None = Field(default=None, min_length=1, max_length=300)
+    success_criteria: str | None = Field(default=None, min_length=1, max_length=2_000)
+    priority: int | None = Field(default=None, ge=1, le=5)
+    status: Literal["active", "paused", "completed", "cancelled"] | None = None
+
+
+class UpdateAreaWorkItemRequest(BaseModel):
+    expected_updated_at: str
+    text: str | None = Field(default=None, min_length=1, max_length=2_000)
+    status: Literal["active", "in_progress", "completed", "cancelled"] | None = None
+    owner: Literal["custodian", "user", "external"] | None = None
+    due_at: str | None = None
+    next_attempt_at: str | None = None
+
+
 class CreateSessionRequest(BaseModel):
     name: str | None = None
     area_id: str | None = None

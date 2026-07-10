@@ -6,6 +6,7 @@ from pathlib import Path
 from ntrp.areas.asks import AskStore, nominate_focus
 from ntrp.areas.models import Area, Ask, AskState
 from ntrp.areas.projection import page_summary
+from ntrp.areas.work_models import AreaWorkSnapshot
 from ntrp.constants import AREA_ATTENTION_PRESETS
 from ntrp.memory.pages import Page
 
@@ -22,6 +23,8 @@ class AreaService:
         area_sessions: Callable[[str], list[dict]],
         get_area: Callable[[str], dict | None],
         custodian_state: Callable[[str], dict] | None = None,
+        area_work: Callable[[str], AreaWorkSnapshot] | None = None,
+        work_brief: Callable[[set[str]], dict] | None = None,
     ) -> None:
         self._areas = areas
         self._asks = asks
@@ -32,6 +35,8 @@ class AreaService:
         self._area_sessions = area_sessions
         self._get_area = get_area
         self._custodian_state = custodian_state or (lambda key: {})
+        self._area_work = area_work or (lambda key: AreaWorkSnapshot())
+        self._work_brief = work_brief or (lambda area_ids: {"done": [], "in_progress": []})
 
     def refresh_mechanical(self) -> None:
         now = datetime.now(UTC).isoformat()
@@ -90,7 +95,22 @@ class AreaService:
                 ),
                 "updated": summary["updated"], "ask_count": len(area_asks),
             })
-        return {"areas": out, "focus": [asdict(a) for a in focus]}
+        titles = {area.key: area.title for area in areas}
+        work_brief = self._work_brief(active_keys)
+
+        def enrich(rows: list[dict]) -> list[dict]:
+            return [{**row, "area_title": titles.get(row["area_id"], row["area_id"])} for row in rows]
+
+        focus_rows = [asdict(a) for a in focus]
+        return {
+            "areas": out,
+            "focus": focus_rows,
+            "brief": {
+                "done": enrich(work_brief["done"]),
+                "in_progress": enrich(work_brief["in_progress"]),
+                "needs_you": focus_rows,
+            },
+        }
 
     def resolve_ask(
         self,
@@ -163,4 +183,5 @@ class AreaService:
             "asks": [asdict(a) for a in self._asks.list(key)],
             "sessions": self._area_sessions(key),
             "automations": autos,
+            "work": self._area_work(key).model_dump(mode="json"),
         }

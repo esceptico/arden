@@ -1,6 +1,6 @@
 import json
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import aiosqlite
 
@@ -124,6 +124,40 @@ class AreaWorkStore:
             work_items=[AreaWorkItem.model_validate(dict(row)) for row in items],
             events=[self._event(row) for row in events],
         )
+
+    async def brief(self, area_ids: set[str], *, now: datetime | None = None) -> dict:
+        if not area_ids:
+            return {"done": [], "in_progress": []}
+        placeholders = ", ".join("?" for _ in area_ids)
+        ids = tuple(sorted(area_ids))
+        cutoff = ((now or datetime.now(UTC)) - timedelta(hours=72)).isoformat()
+        completed = await self.read_conn.execute_fetchall(
+            f"SELECT area_id, 'outcome' AS type, stable_key, title AS text, "
+            f"completed_at, updated_at FROM area_work_outcomes "
+            f"WHERE area_id IN ({placeholders}) AND status = 'completed' AND completed_at >= ? "
+            f"UNION ALL "
+            f"SELECT area_id, 'work' AS type, stable_key, text, completed_at, updated_at "
+            f"FROM area_work_items WHERE area_id IN ({placeholders}) "
+            f"AND status = 'completed' AND completed_at >= ? "
+            f"ORDER BY completed_at DESC LIMIT 6",
+            (*ids, cutoff, *ids, cutoff),
+        )
+        active = await self.read_conn.execute_fetchall(
+            f"WITH ranked AS ("
+            f"SELECT wi.*, ROW_NUMBER() OVER (PARTITION BY wi.area_id ORDER BY "
+            f"CASE wi.status WHEN 'in_progress' THEN 0 ELSE 1 END, "
+            f"CASE wi.owner WHEN 'custodian' THEN 0 ELSE 1 END, wi.updated_at DESC) AS rank "
+            f"FROM area_work_items wi WHERE wi.area_id IN ({placeholders}) "
+            f"AND wi.status IN ('active', 'in_progress')) "
+            f"SELECT * FROM ranked WHERE rank = 1 ORDER BY updated_at DESC LIMIT 6",
+            ids,
+        )
+        return {
+            "done": [dict(row) for row in completed],
+            "in_progress": [
+                AreaWorkItem.model_validate(dict(row)).model_dump(mode="json") for row in active
+            ],
+        }
 
     async def create_outcome(
         self,

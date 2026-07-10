@@ -39,8 +39,12 @@
   material progress resets quiet decay; short continuations require remaining
   work, a valid delay, an unpaused Area, and spare daily budget. Evidence: 80
   cadence/runtime/agent/chat regression tests and focused Ruff pass.
-- Current: Task 4 pending.
-- Remaining: Tasks 4–7 below.
+- 2026-07-10: Task 4 complete. Area detail exposes its canonical work snapshot;
+  Home receives capped, active-Area-only Done/In progress/Needs you projections;
+  typed outcome/work edits use optimistic versions, emit refreshes, and wake the
+  Custodian. Evidence: 71 focused server regressions and Ruff pass.
+- Current: Task 5 pending.
+- Remaining: Tasks 5–7 below.
 
 ---
 
@@ -272,19 +276,19 @@ Commit: `feat(server): let custodians continue useful work`
 - Produces: `AreaDetail.work` and `AreasOverview.brief`.
 - Produces endpoints `POST /areas/{area_id}/outcomes`, `PATCH /areas/{area_id}/outcomes/{key}`, and `PATCH /areas/{area_id}/work/{key}`.
 
-- [ ] **Step 1: Write failing detail, brief, and mutation tests**
+- [x] **Step 1: Write failing detail, brief, and mutation tests**
 
 Assert Home data is ranked/capped as: recent material completions ≤6, one active
 item per Area ≤6, and existing question/review asks ≤4. Assert archived Areas
 never appear. API tests cover create/edit/complete/pause/resume/cancel and stale
 `expected_updated_at` returning HTTP 409.
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run: `cd apps/server && uv run pytest tests/test_areas_service.py tests/test_areas_router.py -q`  
 Expected: missing `work`, `brief`, and endpoints.
 
-- [ ] **Step 3: Hydrate one canonical work snapshot**
+- [x] **Step 3: Hydrate one canonical work snapshot**
 
 Extend the existing async `hydrate_area_snapshot()` to fetch work once per
 request and feed synchronous `AreaService` closures. `overview()` returns:
@@ -297,13 +301,13 @@ request and feed synchronous `AreaService` closures. `overview()` returns:
 }
 ```
 
-- [ ] **Step 4: Implement typed user mutations**
+- [x] **Step 4: Implement typed user mutations**
 
 Pydantic bodies constrain keys, states, priority, and timestamps. Every endpoint
 first verifies the active Area, mutates `AreaWorkStore`, emits `areas_changed`,
 and requests an Area wake describing the authoritative user edit.
 
-- [ ] **Step 5: Run focused tests and commit**
+- [x] **Step 5: Run focused tests and commit**
 
 Run: `cd apps/server && uv run pytest tests/test_areas_service.py tests/test_areas_router.py tests/test_area_work_store.py -q`  
 Commit: `feat(server): expose area outcomes and work brief`

@@ -17,6 +17,7 @@ from ntrp.areas.models import areas_from_records
 from ntrp.areas.paths import resolve_area_page
 from ntrp.areas.projection import area_automation_match
 from ntrp.areas.service import AreaService
+from ntrp.areas.work_models import AreaWorkSnapshot
 from ntrp.automation.models import Automation
 from ntrp.automation.output_schemas import resolve_output_schema
 from ntrp.automation.prompts import AUTOMATION_PROMPT, AUTOMATION_SUFFIX
@@ -182,7 +183,8 @@ async def lifespan(app: FastAPI):
     # a fresh snapshot instead of needing their own event loop.
     area_snapshot: dict[str, object] = {
         "sessions": [], "approvals": [], "automations": [], "automation_runs": {},
-        "records": [], "areas": [],
+        "records": [], "areas": [], "work": {},
+        "work_brief": {"done": [], "in_progress": []},
     }
 
     async def hydrate_area_snapshot() -> None:
@@ -199,12 +201,18 @@ async def lifespan(app: FastAPI):
             for automation in automations
         } if runtime.stores else {}
         areas = await runtime.session_service.list_areas() if runtime.session_service else []
+        area_ids = {area["area_id"] for area in areas}
+        work_rows = await asyncio.gather(*(
+            runtime.stores.area_work.snapshot(area_id) for area_id in area_ids
+        ))
         area_snapshot["sessions"] = sessions
         area_snapshot["approvals"] = approvals
         area_snapshot["automations"] = automations
         area_snapshot["automation_runs"] = automation_runs
         area_snapshot["records"] = areas
         area_snapshot["areas"] = areas_from_records(areas)
+        area_snapshot["work"] = dict(zip(area_ids, work_rows, strict=True))
+        area_snapshot["work_brief"] = await runtime.stores.area_work.brief(area_ids)
 
     def _area_pending_approvals() -> list[dict]:
         return area_snapshot["approvals"]
@@ -268,6 +276,8 @@ async def lifespan(app: FastAPI):
         area_sessions=_area_sessions,
         get_area=_get_area_record,
         custodian_state=_custodian_state,
+        area_work=lambda key: area_snapshot["work"].get(key, AreaWorkSnapshot()),
+        work_brief=lambda area_ids: area_snapshot["work_brief"],
     )
     app.state.hydrate_area_snapshot = hydrate_area_snapshot
 

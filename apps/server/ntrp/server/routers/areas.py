@@ -9,7 +9,15 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from ntrp.server.schemas import AreaResponse, CreateAreaRequest, UpdateAreaRequest
+from ntrp.areas.work_store import AreaWorkConflict
+from ntrp.server.schemas import (
+    AreaResponse,
+    CreateAreaOutcomeRequest,
+    CreateAreaRequest,
+    UpdateAreaOutcomeRequest,
+    UpdateAreaRequest,
+    UpdateAreaWorkItemRequest,
+)
 
 router = APIRouter(prefix="/areas", tags=["areas"])
 
@@ -94,6 +102,71 @@ async def area_detail(request: Request, area_id: str):
         return _svc(request).detail(area_id)
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+async def _require_active_area(request: Request, area_id: str) -> None:
+    if not await _sessions(request).get_area(area_id):
+        raise HTTPException(status_code=404, detail="Area not found")
+
+
+async def _finish_work_edit(request: Request, area_id: str, description: str) -> None:
+    await request.app.state.emit_areas_changed([area_id])
+    await request.app.state.request_area_wake(area_id, description)
+
+
+@router.post("/{area_id}/outcomes")
+async def create_area_outcome(request: Request, area_id: str, body: CreateAreaOutcomeRequest):
+    await _require_active_area(request, area_id)
+    try:
+        outcome = await request.app.state.runtime.stores.area_work.create_outcome(
+            area_id, **body.model_dump(), source="user"
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await _finish_work_edit(request, area_id, f"user created outcome '{body.title}'")
+    return outcome
+
+
+@router.patch("/{area_id}/outcomes/{key}")
+async def update_area_outcome(
+    request: Request, area_id: str, key: str, body: UpdateAreaOutcomeRequest,
+):
+    await _require_active_area(request, area_id)
+    values = body.model_dump(exclude_unset=True)
+    expected_updated_at = values.pop("expected_updated_at")
+    try:
+        outcome = await request.app.state.runtime.stores.area_work.update_outcome(
+            area_id, key, expected_updated_at=expected_updated_at, **values
+        )
+    except AreaWorkConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if outcome is None:
+        raise HTTPException(status_code=404, detail="Outcome not found")
+    await _finish_work_edit(request, area_id, f"user updated outcome '{key}'")
+    return outcome
+
+
+@router.patch("/{area_id}/work/{key}")
+async def update_area_work_item(
+    request: Request, area_id: str, key: str, body: UpdateAreaWorkItemRequest,
+):
+    await _require_active_area(request, area_id)
+    values = body.model_dump(exclude_unset=True)
+    expected_updated_at = values.pop("expected_updated_at")
+    try:
+        item = await request.app.state.runtime.stores.area_work.update_work_item(
+            area_id, key, expected_updated_at=expected_updated_at, **values
+        )
+    except AreaWorkConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if item is None:
+        raise HTTPException(status_code=404, detail="Work item not found")
+    await _finish_work_edit(request, area_id, f"user updated work item '{key}'")
+    return item
 
 
 @router.post("/{area_id}/page", response_model=AreaResponse)

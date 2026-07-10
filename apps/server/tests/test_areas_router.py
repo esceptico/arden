@@ -18,6 +18,8 @@ from ntrp.areas.lifecycle import AreaLifecycleService, AreaPageService
 from ntrp.areas.models import Ask, areas_from_records
 from ntrp.areas.service import AreaService
 from ntrp.areas.suggester import AreaSuggestionStore
+from ntrp.areas.work_models import AreaWorkSnapshot
+from ntrp.areas.work_store import AreaWorkConflict
 from ntrp.memory.pages import parse_page
 from ntrp.server.app import app
 from ntrp.server.routers.areas import router as areas_router
@@ -86,6 +88,42 @@ class _FakeAreaStore:
         return dict(row)
 
 
+class _FakeWorkStore:
+    def __init__(self):
+        self.outcomes: dict[tuple[str, str], dict] = {}
+        self.items: dict[tuple[str, str], dict] = {}
+
+    async def create_outcome(self, area_id: str, **values):
+        row = {
+            "outcome_id": f"outcome:{area_id}:{values['key']}", "area_id": area_id,
+            "stable_key": values.pop("key"), "status": "active",
+            "created_at": "2026-07-10T00:00:00Z", "updated_at": "v1", "completed_at": None,
+            **values,
+        }
+        self.outcomes[(area_id, row["stable_key"])] = row
+        return SimpleNamespace(model_dump=lambda mode=None: row, **row)
+
+    async def update_outcome(self, area_id: str, key: str, *, expected_updated_at=None, **patch):
+        row = self.outcomes.get((area_id, key))
+        if row is None:
+            return None
+        if expected_updated_at is not None and expected_updated_at != row["updated_at"]:
+            raise AreaWorkConflict("stale")
+        row.update(patch)
+        row["updated_at"] = "v2"
+        return SimpleNamespace(model_dump=lambda mode=None: row, **row)
+
+    async def update_work_item(self, area_id: str, key: str, *, expected_updated_at=None, **patch):
+        row = self.items.get((area_id, key))
+        if row is None:
+            return None
+        if expected_updated_at is not None and expected_updated_at != row["updated_at"]:
+            raise AreaWorkConflict("stale")
+        row.update(patch)
+        row["updated_at"] = "v2"
+        return SimpleNamespace(model_dump=lambda mode=None: row, **row)
+
+
 
 @pytest.fixture
 def client(tmp_path: Path):
@@ -103,6 +141,8 @@ def client(tmp_path: Path):
         area_automations=lambda key: [],
         area_sessions=lambda key: [{"session_id": "s1", "name": "counsel"}],
         get_area=lambda pid: areas._rows.get(pid),
+        area_work=lambda key: AreaWorkSnapshot(),
+        work_brief=lambda area_ids: {"done": [], "in_progress": []},
     )
 
     emitted: list[list[str]] = []
@@ -129,9 +169,10 @@ def client(tmp_path: Path):
     async def _dispatch_session_message(session_id, message, **kwargs):
         dispatched.append((session_id, message))
 
+    work = _FakeWorkStore()
     test_app.state.runtime = SimpleNamespace(
         session_service=areas,
-        stores=SimpleNamespace(automations=_Automations()),
+        stores=SimpleNamespace(automations=_Automations(), area_work=work),
         dispatch_session_message=_dispatch_session_message,
     )
     test_app.state.dispatched = dispatched
@@ -178,6 +219,9 @@ def test_routes_registered():
         "/areas/{area_id}/autonomy",
         "/areas/{area_id}/asks/{ask_id}/resolve",
         "/areas/{area_id}/asks/{ask_id}/reply",
+        "/areas/{area_id}/outcomes",
+        "/areas/{area_id}/outcomes/{key}",
+        "/areas/{area_id}/work/{key}",
     ):
         assert p in paths
 
@@ -200,6 +244,49 @@ def test_get_area_detail_happy_path(client):
     assert body["key"] == o1a
     assert body["open_loops"] == ["Find counsel."]
     assert body["sessions"][0]["session_id"] == "s1"
+    assert body["work"] == {"outcomes": [], "work_items": [], "events": []}
+
+
+def test_create_and_update_outcome_emit_and_wake(client):
+    c, _, emitted, o1a, _ = client
+
+    created = c.post(f"/areas/{o1a}/outcomes", json={
+        "key": "petition-filed", "title": "Petition filed",
+        "success_criteria": "Receipt exists", "priority": 5,
+    })
+    assert created.status_code == 200
+    assert created.json()["source"] == "user"
+
+    updated = c.patch(f"/areas/{o1a}/outcomes/petition-filed", json={
+        "expected_updated_at": "v1", "status": "completed",
+    })
+    assert updated.status_code == 200
+    assert updated.json()["status"] == "completed"
+    assert emitted == [[o1a], [o1a]]
+    assert len(c.app.state.wakes) == 2
+
+
+def test_work_mutations_validate_area_key_and_optimistic_version(client):
+    c, _, emitted, o1a, _ = client
+    work = c.app.state.runtime.stores.area_work
+    work.items[(o1a, "collect-evidence")] = {
+        "item_id": f"work:{o1a}:collect-evidence", "area_id": o1a,
+        "stable_key": "collect-evidence", "outcome_id": None, "kind": "action",
+        "text": "Collect evidence", "status": "active", "owner": "custodian",
+        "due_at": None, "next_attempt_at": None, "created_at": "t0",
+        "updated_at": "v1", "completed_at": None,
+    }
+
+    stale = c.patch(f"/areas/{o1a}/work/collect-evidence", json={
+        "expected_updated_at": "old", "status": "in_progress",
+    })
+    missing_area = c.patch("/areas/nope/work/collect-evidence", json={
+        "expected_updated_at": "v1", "status": "completed",
+    })
+
+    assert stale.status_code == 409
+    assert missing_area.status_code == 404
+    assert emitted == []
 
 
 def test_get_area_detail_unknown_key_404(client):
