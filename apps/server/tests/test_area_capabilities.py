@@ -35,3 +35,15 @@ async def test_plain_area_has_null_capabilities(svc):
     area = await svc.create_area(name="Design")
     assert area["page_path"] is None
     assert area["autonomy"] is None
+
+
+@pytest.mark.asyncio
+async def test_service_restores_archived_area_without_losing_capabilities(svc):
+    area = await svc.create_area(name="Health", page_path="topics/health.md", autonomy="observe")
+    assert await svc.archive_area(area["area_id"])
+
+    restored = await svc.restore_area(area["area_id"])
+
+    assert restored is not None
+    assert restored["page_path"] == "topics/health.md"
+    assert restored["autonomy"] == "observe"

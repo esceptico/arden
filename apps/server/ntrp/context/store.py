@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 from datetime import UTC, datetime, timedelta
+from pathlib import PurePosixPath
 from typing import Any
 from uuid import uuid4
 
@@ -50,6 +51,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS areas (
     area_id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
+    name_key TEXT NOT NULL,
     default_cwds TEXT NOT NULL DEFAULT '[]',
     instructions TEXT,
     knowledge_scope TEXT,
@@ -622,6 +624,44 @@ class SessionStore:
         return cwd or None
 
     @staticmethod
+    def _area_name_key(name: str) -> str:
+        return name.strip().casefold()
+
+    @staticmethod
+    def _normalize_area_page_path(page_path: str | None) -> str | None:
+        if page_path is None:
+            return None
+        raw = page_path.strip().replace("\\", "/")
+        path = PurePosixPath(raw)
+        if not raw or path.is_absolute() or ".." in path.parts or path.suffix.lower() != ".md":
+            raise ValueError("page_path must be a vault-relative Markdown path")
+        return path.as_posix()
+
+    async def _assert_area_name_available(self, name_key: str, *, exclude_area_id: str | None = None) -> None:
+        sql = "SELECT area_id FROM areas WHERE name_key = ? AND archived_at IS NULL"
+        params: list[object] = [name_key]
+        if exclude_area_id is not None:
+            sql += " AND area_id != ?"
+            params.append(exclude_area_id)
+        rows = await self.read_conn.execute_fetchall(sql, tuple(params))
+        if rows:
+            raise ValueError("An active Area with that name already exists")
+
+    async def _assert_area_page_available(
+        self, page_path: str | None, *, exclude_area_id: str | None = None
+    ) -> None:
+        if page_path is None:
+            return
+        sql = "SELECT area_id FROM areas WHERE page_path = ?"
+        params: list[object] = [page_path]
+        if exclude_area_id is not None:
+            sql += " AND area_id != ?"
+            params.append(exclude_area_id)
+        rows = await self.read_conn.execute_fetchall(sql, tuple(params))
+        if rows:
+            raise ValueError("That page is already attached to another Area")
+
+    @staticmethod
     def _area_payload(row: aiosqlite.Row) -> dict:
         return {
             "area_id": row["area_id"],
@@ -663,6 +703,7 @@ class SessionStore:
         # Area capabilities on the container itself : an area with a page is an area; autonomy set means
         # it has a standing agent.
         for col in (
+            "name_key TEXT",
             "page_path TEXT",
             "autonomy TEXT",
             "attention TEXT",
@@ -674,6 +715,22 @@ class SessionStore:
                 await self.conn.commit()
             except Exception:
                 pass
+        await self.conn.execute(
+            "UPDATE areas SET name_key = lower(trim(name)) WHERE name_key IS NULL OR name_key = ''"
+        )
+        try:
+            await self.conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_areas_active_name_key "
+                "ON areas(name_key) WHERE archived_at IS NULL"
+            )
+            await self.conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_areas_page_path "
+                "ON areas(page_path) WHERE page_path IS NOT NULL"
+            )
+        except aiosqlite.IntegrityError as exc:
+            raise RuntimeError(
+                "Existing Areas violate name/page uniqueness; resolve duplicate Areas before starting"
+            ) from exc
         await self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_sessions_area_activity ON sessions(area_id, last_activity DESC)"
         )
@@ -760,24 +817,29 @@ class SessionStore:
         trimmed_name = name.strip()
         if not trimmed_name:
             raise ValueError("Area name cannot be blank")
-        area_id = f"proj_{uuid4().hex[:12]}"
+        name_key = self._area_name_key(trimmed_name)
+        normalized_page_path = self._normalize_area_page_path(page_path)
+        await self._assert_area_name_available(name_key)
+        await self._assert_area_page_available(normalized_page_path)
+        area_id = f"area_{uuid4().hex[:12]}"
         now = datetime.now(UTC).isoformat()
         scope = (knowledge_scope or "").strip() or f"area:{area_id}"
         await self.conn.execute(
             """
             INSERT INTO areas (
-                area_id, name, default_cwds, instructions, knowledge_scope,
+                area_id, name, name_key, default_cwds, instructions, knowledge_scope,
                 page_path, autonomy, created_at, updated_at, archived_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
             """,
             (
                 area_id,
                 trimmed_name,
+                name_key,
                 json.dumps([self._normalize_cwd(default_cwd)] if self._normalize_cwd(default_cwd) else []),
                 instructions.strip() if instructions and instructions.strip() else None,
                 scope,
-                page_path,
+                normalized_page_path,
                 autonomy,
                 now,
                 now,
@@ -828,8 +890,12 @@ class SessionStore:
             trimmed_name = str(name).strip()
             if not trimmed_name:
                 raise ValueError("Area name cannot be blank")
+            name_key = self._area_name_key(trimmed_name)
+            await self._assert_area_name_available(name_key, exclude_area_id=area_id)
             assignments.append("name = ?")
             params.append(trimmed_name)
+            assignments.append("name_key = ?")
+            params.append(name_key)
         if default_cwd is not _AREA_PATCH_UNSET:
             assignments.append("default_cwds = ?")
             cwd = self._normalize_cwd(default_cwd if isinstance(default_cwd, str) else None)
@@ -843,8 +909,12 @@ class SessionStore:
             scope = knowledge_scope if isinstance(knowledge_scope, str) else None
             params.append(scope.strip() if scope and scope.strip() else f"area:{area_id}")
         if page_path is not _AREA_PATCH_UNSET:
+            normalized_page_path = self._normalize_area_page_path(
+                page_path if isinstance(page_path, str) else None
+            )
+            await self._assert_area_page_available(normalized_page_path, exclude_area_id=area_id)
             assignments.append("page_path = ?")
-            params.append(page_path if isinstance(page_path, str) else None)
+            params.append(normalized_page_path)
         if autonomy is not _AREA_PATCH_UNSET:
             assignments.append("autonomy = ?")
             params.append(autonomy if isinstance(autonomy, str) else None)
@@ -877,10 +947,26 @@ class SessionStore:
             "UPDATE areas SET archived_at = ?, updated_at = ? WHERE area_id = ? AND archived_at IS NULL",
             (now, now, area_id),
         )
-        if cursor.rowcount:
-            await self.conn.execute("UPDATE sessions SET area_id = NULL WHERE area_id = ?", (area_id,))
         await self.conn.commit()
         return cursor.rowcount > 0
+
+    async def restore_area(self, area_id: str) -> dict | None:
+        rows = await self.read_conn.execute_fetchall(
+            "SELECT * FROM areas WHERE area_id = ? AND archived_at IS NOT NULL",
+            (area_id,),
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        await self._assert_area_name_available(row["name_key"], exclude_area_id=area_id)
+        now = datetime.now(UTC).isoformat()
+        cursor = await self.conn.execute(
+            "UPDATE areas SET archived_at = NULL, updated_at = ? "
+            "WHERE area_id = ? AND archived_at IS NOT NULL",
+            (now, area_id),
+        )
+        await self.conn.commit()
+        return await self.get_area(area_id) if cursor.rowcount else None
 
     async def set_goal(
         self,

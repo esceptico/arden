@@ -37,8 +37,12 @@ Update this section after every completed task.
   missing immediate provisioning, lossy ask replacement, cap bypass, and
   heuristic self-echo suppression.
 - 2026-07-10: Rebuild design and executable plan written before implementation.
-- Current: Task 1 pending.
-- Remaining: Tasks 1-10 below.
+- 2026-07-10: Task 1 complete. New Areas mint `area_*`; active names are
+  casefold-unique; page ownership is unique across active/archived Areas;
+  archive preserves chat membership; restore is implemented. Evidence: 73
+  storage/capability tests and focused Ruff pass.
+- Current: Task 2 pending.
+- Remaining: Tasks 2-10 below.
 
 ---
 
@@ -53,15 +57,15 @@ Update this section after every completed task.
 **Produces:** Safe `area_*` creation, casefold uniqueness, normalized unique
 page attachment, reversible archive/restore.
 
-- [ ] Add failing tests proving new IDs use `area_`, duplicate active names are
+- [x] Add failing tests proving new IDs use `area_`, duplicate active names are
   rejected case-insensitively, duplicate page ownership is rejected, archive
   preserves session `area_id`, and restore returns the Area.
-- [ ] Run each new test and confirm it fails for the intended old behavior.
-- [ ] Add normalized Area-name and page-path columns/index migration where
+- [x] Run each new test and confirm it fails for the intended old behavior.
+- [x] Add normalized Area-name and page-path columns/index migration where
   needed; validate page paths as relative `.md` paths without `..`.
-- [ ] Change `create_area`, `update_area`, and archive semantics; add
+- [x] Change `create_area`, `update_area`, and archive semantics; add
   `restore_area(area_id)`.
-- [ ] Run focused storage tests and refactor only after green.
+- [x] Run focused storage tests and refactor only after green.
 
 ### Task 2: Add a transactional Area lifecycle boundary
 
@@ -259,4 +263,3 @@ requirement ledger.
 - [ ] Audit every design invariant against code/tests and record evidence in the
   progress ledger.
 - [ ] Review the final diff for unrelated changes and unresolved placeholders.
-

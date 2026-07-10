@@ -464,6 +464,9 @@ class SessionService:
     async def archive_area(self, area_id: str) -> bool:
         return await self.store.archive_area(area_id)
 
+    async def restore_area(self, area_id: str) -> dict | None:
+        return await self.store.restore_area(area_id)
+
     async def move_session_to_area(self, session_id: str, area_id: str | None) -> bool:
         return await self.store.update_session_area(session_id, area_id)
 

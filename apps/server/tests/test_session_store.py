@@ -43,6 +43,7 @@ async def test_area_round_trip_and_session_scoping(store: SessionStore):
         instructions="Prefer small focused changes.",
     )
 
+    assert area["area_id"].startswith("area_")
     assert area["name"] == "ntrp"
     assert area["default_cwd"] == "/Users/me/src/ntrp"
     assert area["instructions"] == "Prefer small focused changes."
@@ -88,7 +89,43 @@ async def test_area_round_trip_and_session_scoping(store: SessionStore):
 
     loaded_after_area_archive = await store.load_session("archived-area-session")
     assert loaded_after_area_archive is not None
-    assert loaded_after_area_archive.state.area_id is None
+    assert loaded_after_area_archive.state.area_id == area["area_id"]
+
+    restored = await store.restore_area(area["area_id"])
+    assert restored is not None
+    assert restored["area_id"] == area["area_id"]
+    assert await store.get_area(area["area_id"]) is not None
+
+
+@pytest.mark.asyncio
+async def test_area_names_are_unique_case_insensitively(store: SessionStore):
+    first = await store.create_area(name="Health")
+
+    with pytest.raises(ValueError, match="already exists"):
+        await store.create_area(name=" health ")
+
+    second = await store.create_area(name="Immigration")
+    with pytest.raises(ValueError, match="already exists"):
+        await store.update_area(second["area_id"], name="HEALTH")
+
+    assert (await store.get_area(first["area_id"]))["name"] == "Health"
+    assert (await store.get_area(second["area_id"]))["name"] == "Immigration"
+
+
+@pytest.mark.asyncio
+async def test_area_page_has_one_owner_including_archived_areas(store: SessionStore):
+    first = await store.create_area(name="Health", page_path="topics/health.md")
+
+    with pytest.raises(ValueError, match="already attached"):
+        await store.create_area(name="Medical", page_path="topics/health.md")
+
+    second = await store.create_area(name="Medical")
+    with pytest.raises(ValueError, match="already attached"):
+        await store.update_area(second["area_id"], page_path="topics/health.md")
+
+    assert await store.archive_area(first["area_id"])
+    with pytest.raises(ValueError, match="already attached"):
+        await store.update_area(second["area_id"], page_path="topics/health.md")
 
 
 @pytest.mark.asyncio
