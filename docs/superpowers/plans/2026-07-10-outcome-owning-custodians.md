@@ -47,8 +47,12 @@
   surface with the primary outcome, current action, user blockers, collapsed
   remainder, and inline outcome controls. Typed desktop mutations refetch the
   room and Home. Evidence: 20 focused desktop tests, typecheck, and lint pass.
-- Current: Task 6 pending.
-- Remaining: Tasks 6–7 below.
+- 2026-07-10: Task 6 complete. Home renders a bounded chief-of-staff brief in
+  Done/In progress/Needs you order, preserves server ranking, routes each row
+  to its Area, and always ends once. Evidence: 7 focused desktop tests plus
+  typecheck/lint and 42 server projection regressions pass.
+- Current: Task 7 pending.
+- Remaining: Task 7 below.
 
 ---
 
@@ -377,25 +381,25 @@ Commit: `feat(desktop): make area outcomes editable`
 - Consumes: `AreasOverview.brief.done`, `.in_progress`, and `.needs_you`.
 - Produces: bounded Home sections that route every row to its Area room.
 
-- [ ] **Step 1: Write failing ordering and empty-state tests**
+- [x] **Step 1: Write failing ordering and empty-state tests**
 
 Prove order is Done for you → In progress → Needs you, server order is
 preserved, no section renders when empty, rows open their Area, and the final
 “That’s it for today.” appears exactly once even when all sections are empty.
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run: `cd apps/desktop && bun test tests/homeWorkBrief.test.tsx`  
 Expected: missing `WorkBrief` and `brief` contract.
 
-- [ ] **Step 3: Implement the finite brief**
+- [x] **Step 3: Implement the finite brief**
 
 Completed rows show the evidence summary and Area name without requiring an
 acknowledgement. In-progress rows show the outcome and concrete current action.
 Needs-you retains the typed ask controls. Avoid timestamps and metadata unless
 they change the user's next action.
 
-- [ ] **Step 4: Run focused desktop gates and commit**
+- [x] **Step 4: Run focused desktop gates and commit**
 
 Run: `cd apps/desktop && bun test tests/homeWorkBrief.test.tsx tests/areasDomain.test.ts && bun run typecheck && bun run lint`  
 Commit: `feat(desktop): add chief of staff work brief`

@@ -108,7 +108,10 @@ class AreaService:
             "brief": {
                 "done": enrich(work_brief["done"]),
                 "in_progress": enrich(work_brief["in_progress"]),
-                "needs_you": focus_rows,
+                "needs_you": [
+                    {**ask, "area_title": titles.get(ask["area_key"], ask["area_key"])}
+                    for ask in focus_rows
+                ],
             },
         }
 

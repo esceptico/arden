@@ -1,13 +1,13 @@
 import { useMemo } from "react";
-import { AnimatePresence, motion } from "motion/react";
+import { motion } from "motion/react";
 import { Settings, Sparkles } from "lucide-react";
-import type { AreaAsk, AreaSummary } from "@/api/areas";
+import type { AreaSummary, AreasBrief } from "@/api/areas";
 import type { Automation } from "@/api/types";
 import { useStore } from "@/stores";
 import { formatRelativePast } from "@/lib/format";
 import { useAreasData } from "@/features/home/hooks/useAreasData";
 import { HeroInput } from "@/features/home/components/HeroInput";
-import { FocusRow } from "@/features/home/components/FocusRow";
+import { WorkBrief } from "@/features/home/components/WorkBrief";
 import { AreasStrip } from "@/features/home/components/AreasStrip";
 import { ScrollFadeTop, ScrollFadeBottom } from "@/components/ui/ScrollBlur";
 import { Button } from "@/components/ui/Button";
@@ -22,8 +22,8 @@ const DATE_FORMAT: Intl.DateTimeFormatOptions = {
 
 // Stable references for "not loaded yet" fallbacks — see HeroInput's
 // NO_AREAS/NO_AUTOMATIONS for why an inline `?? []` is unsafe with zustand.
-const NO_FOCUS: AreaAsk[] = [];
 const NO_AREAS: AreaSummary[] = [];
+const NO_BRIEF: AreasBrief = { done: [], in_progress: [], needs_you: [] };
 
 function greeting(focusCount: number): string {
   if (focusCount === 0) return "All clear.";
@@ -60,13 +60,9 @@ export function Home() {
   const connected = useStore((s) => s.connected);
   const openSettings = useStore((s) => s.openSettings);
   const automations = useStore((s) => s.automations);
-  const focus = overview?.focus ?? NO_FOCUS;
+  const brief = overview?.brief ?? NO_BRIEF;
   const areas = overview?.areas ?? NO_AREAS;
   const dateLabel = useMemo(() => new Date().toLocaleDateString(undefined, DATE_FORMAT), []);
-  const titleFor = useMemo(() => {
-    const map = new Map(areas.map((s) => [s.key, s.title]));
-    return (key: string) => map.get(key) ?? key;
-  }, [areas]);
   const watchLine = agentWatchLine(automations);
 
   if (!connected) {
@@ -124,30 +120,14 @@ export function Home() {
           <HeroInput />
         </div>
         <div className="grid shrink-0 gap-1">
-          <h2 className="m-0 text-2xl font-medium tracking-[-0.01em] text-ink text-balance">{greeting(focus.length)}</h2>
+          <h2 className="m-0 text-2xl font-medium tracking-[-0.01em] text-ink text-balance">{greeting(brief.needs_you.length)}</h2>
           {watchLine && <p className="m-0 text-xs text-faint">{watchLine}</p>}
         </div>
-        {focus.length > 0 && (
-          <div className="grid min-h-0 gap-2">
-            <span className="shrink-0 text-2xs font-semibold tracking-wide text-faint uppercase">Focus</span>
-            <div className="min-h-0 max-h-[48vh] overflow-y-auto overflow-x-hidden scroll-thin">
-              <ScrollFadeTop />
-              <ScrollFadeBottom />
-              <div className="grid gap-1.5 pb-1">
-                <AnimatePresence initial={false}>
-                  {focus.map((ask) => (
-                    <FocusRow key={ask.id} ask={ask} areaTitle={titleFor(ask.area_key)} />
-                  ))}
-                </AnimatePresence>
-                {/* The queue visibly ENDS — completeness is the feature, not
-                    an infinite feed (the one universally praised Pulse idiom). */}
-                <p className="m-0 px-1 pt-1 text-2xs text-whisper select-none">
-                  That’s it for today.
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
+        <div className="relative min-h-0 max-h-[48vh] overflow-y-auto overflow-x-hidden scroll-thin">
+          <ScrollFadeTop />
+          <ScrollFadeBottom />
+          <WorkBrief brief={brief} />
+        </div>
         <div className="shrink-0">
           <AreasStrip areas={areas} suggested={overview?.suggested} />
         </div>

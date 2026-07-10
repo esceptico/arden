@@ -144,10 +144,11 @@ class AreaWorkStore:
         )
         active = await self.read_conn.execute_fetchall(
             f"WITH ranked AS ("
-            f"SELECT wi.*, ROW_NUMBER() OVER (PARTITION BY wi.area_id ORDER BY "
+            f"SELECT wi.*, outcomes.title AS outcome_title, ROW_NUMBER() OVER (PARTITION BY wi.area_id ORDER BY "
             f"CASE wi.status WHEN 'in_progress' THEN 0 ELSE 1 END, "
             f"CASE wi.owner WHEN 'custodian' THEN 0 ELSE 1 END, wi.updated_at DESC) AS rank "
-            f"FROM area_work_items wi WHERE wi.area_id IN ({placeholders}) "
+            f"FROM area_work_items wi LEFT JOIN area_work_outcomes outcomes "
+            f"ON outcomes.outcome_id = wi.outcome_id WHERE wi.area_id IN ({placeholders}) "
             f"AND wi.status IN ('active', 'in_progress')) "
             f"SELECT * FROM ranked WHERE rank = 1 ORDER BY updated_at DESC LIMIT 6",
             ids,
@@ -155,7 +156,11 @@ class AreaWorkStore:
         return {
             "done": [dict(row) for row in completed],
             "in_progress": [
-                AreaWorkItem.model_validate(dict(row)).model_dump(mode="json") for row in active
+                {
+                    **AreaWorkItem.model_validate(dict(row)).model_dump(mode="json"),
+                    "outcome_title": row["outcome_title"],
+                }
+                for row in active
             ],
         }
 

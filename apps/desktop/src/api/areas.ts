@@ -32,6 +32,7 @@ export interface AreaAsk {
   stable_key?: string | null;
   resolution?: string | null;
   resolved_at?: string | null;
+  area_title?: string;
 }
 
 export type AreaAttention = "dormant" | "ambient" | "active";
@@ -122,6 +123,7 @@ export interface AreaBriefItem {
   owner?: AreaWorkItem["owner"];
   completed_at?: string | null;
   updated_at?: string;
+  outcome_title?: string | null;
 }
 
 export interface AreasBrief {
