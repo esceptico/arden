@@ -2,6 +2,7 @@ import asyncio
 import json
 import signal
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from importlib.metadata import version
 
 from fastapi import FastAPI
@@ -18,7 +19,7 @@ from ntrp.automation.models import Automation
 from ntrp.automation.output_schemas import resolve_output_schema
 from ntrp.automation.prompts import AUTOMATION_PROMPT, AUTOMATION_SUFFIX
 from ntrp.automation.scheduler import AUTOMATION_BUS_KEY
-from ntrp.constants import LEGACY_AREAS_FILE
+from ntrp.constants import AREA_SELF_ECHO_WINDOW_MINUTES, LEGACY_AREAS_FILE
 from ntrp.core.tool_result_files import prune_offload_store
 from ntrp.events.sse import AreasChangedEvent, MemoryChangedEvent
 from ntrp.logging import get_logger
@@ -128,14 +129,28 @@ async def lifespan(app: FastAPI):
         await bus_registry.get_or_create(AUTOMATION_BUS_KEY).emit(MemoryChangedEvent(paths=paths))
         # Event beats polling: an external edit to an area's topic page (the
         # user in Obsidian, another agent) wakes that area's custodian.
+        # Edits made by the custodian's own just-finished run must NOT — that
+        # echo is the classic standing-agent feedback loop (run → page write →
+        # watcher → wake → run), so edits while the agent runs or shortly
+        # after it finished are its own and are dropped.
         if runtime.session_service:
             changed = set(paths)
             for record in await runtime.session_service.list_areas():
                 page = record.get("page_path")
-                if page and page in changed:
-                    await runtime.automation.request_area_wake(
-                        record["area_id"], f"topic page edited ({page})"
+                if not page or page not in changed:
+                    continue
+                auto = await runtime.stores.automations.get(f"area:{record['area_id']}")
+                if auto is not None and (
+                    auto.running_since is not None
+                    or (
+                        auto.last_run_at is not None
+                        and datetime.now(UTC) - auto.last_run_at < timedelta(minutes=AREA_SELF_ECHO_WINDOW_MINUTES)
                     )
+                ):
+                    continue
+                await runtime.automation.request_area_wake(
+                    record["area_id"], f"topic page edited ({page})"
+                )
 
     runtime.knowledge.start_memory_watch(_publish_memory_changed)
 
