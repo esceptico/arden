@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 from uuid import uuid4
@@ -26,6 +27,31 @@ OBSERVE_TOOL_SCOPE = [
     "find_files",
     "search_text",
     "current_time",
+]
+
+# Acting expands only to named integration tools. Their own policies still
+# require approval for consequential writes, so autonomy never becomes a
+# wildcard or an approval bypass.
+ACT_TOOL_SCOPE = [
+    *OBSERVE_TOOL_SCOPE,
+    "emails",
+    "read_email",
+    "send_email",
+    "calendar",
+    "create_calendar_event",
+    "edit_calendar_event",
+    "delete_calendar_event",
+    "slack_search",
+    "slack_channel",
+    "slack_thread",
+    "slack_channels",
+    "slack_dms",
+    "slack_dm",
+    "slack_users",
+    "slack_user",
+    "slack_file",
+    "slack_post_message",
+    "slack_post_blocks",
 ]
 
 _CONTRACT = {
@@ -95,6 +121,26 @@ def area_agent_instructions(area: Area) -> str:
         "Next check: pick when you should genuinely look again and say why in one line "
         "(a deadline, an expected reply, 'quiet — nothing moves until X'). Routine "
         "tracking does not justify a short interval."
+    )
+
+
+@dataclass(frozen=True)
+class CustodianContract:
+    description: str
+    tool_scope: list[str]
+    auto_approve: bool = False
+
+
+def custodian_contract(area: Area) -> CustodianContract:
+    """Return the complete runtime permission contract for an Area.
+
+    Tool policies remain the approval authority. In particular, acting mode
+    expands the allowlist but never disables approvals globally.
+    """
+    scope = ACT_TOOL_SCOPE if area.autonomy == "act" else OBSERVE_TOOL_SCOPE
+    return CustodianContract(
+        description=area_agent_instructions(area),
+        tool_scope=list(scope),
     )
 
 

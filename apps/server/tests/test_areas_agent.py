@@ -3,13 +3,18 @@ page arrives via the AREA system block, not the prompt), validated one-ask
 nomination, and the outbox-driven ask sync where every run re-decides the
 area's single ask."""
 
+from dataclasses import replace
+from types import SimpleNamespace
+
 import pytest
 from pydantic import ValidationError
 
 from ntrp.areas.agent import (
+    ACT_TOOL_SCOPE,
     OBSERVE_TOOL_SCOPE,
     AreaAskNomination,
     area_agent_instructions,
+    custodian_contract,
     record_area_run,
 )
 from ntrp.areas.asks import AskStore
@@ -126,6 +131,64 @@ def test_observe_scope_is_area_locked_and_can_read_area_transcripts():
     assert not matches_scope(tuple(OBSERVE_TOOL_SCOPE), "send_email")
     assert not matches_scope(tuple(OBSERVE_TOOL_SCOPE), "bash")
     assert not matches_scope(tuple(OBSERVE_TOOL_SCOPE), "create_calendar_event")
+
+
+def test_live_autonomy_contracts_are_exact_and_never_globally_auto_approve():
+    observe = custodian_contract(AREA)
+    acting = custodian_contract(replace(AREA, autonomy="act"))
+
+    assert observe.tool_scope == OBSERVE_TOOL_SCOPE
+    assert acting.tool_scope == ACT_TOOL_SCOPE
+    assert observe.auto_approve is False
+    assert acting.auto_approve is False
+    assert "observe" in observe.description
+    assert "act" in acting.description
+
+    assert matches_scope(tuple(ACT_TOOL_SCOPE), "send_email")
+    assert matches_scope(tuple(ACT_TOOL_SCOPE), "create_calendar_event")
+    assert matches_scope(tuple(ACT_TOOL_SCOPE), "slack_post_message")
+    assert not matches_scope(tuple(ACT_TOOL_SCOPE), "bash")
+    assert not matches_scope(tuple(ACT_TOOL_SCOPE), "write_file")
+    assert not matches_scope(tuple(ACT_TOOL_SCOPE), "memory_write")
+    assert not matches_scope(tuple(ACT_TOOL_SCOPE), "create_automation")
+
+
+@pytest.mark.asyncio
+async def test_runtime_reconciles_permission_downgrades_in_place():
+    from ntrp.server.runtime.automation import AutomationRuntime
+
+    automation = SimpleNamespace(
+        task_id="area:o-1a",
+        handler=None,
+        thread_id="thread-1",
+        name="old",
+        description="old",
+        auto_approve=True,
+        tool_scope=None,
+        output_schema=None,
+        enabled=True,
+        last_result=None,
+    )
+
+    class Automations:
+        async def get(self, task_id):
+            return automation
+
+        async def save(self, value):
+            return None
+
+    class Sessions:
+        async def rename(self, session_id, name):
+            return None
+
+    runtime = AutomationRuntime.__new__(AutomationRuntime)
+    runtime.stores = SimpleNamespace(automations=Automations(), sessions=Sessions())
+
+    await runtime._sync_area_automation(AREA, paused=False, index=0)
+
+    assert automation.tool_scope == OBSERVE_TOOL_SCOPE
+    assert automation.auto_approve is False
+    assert "observe" in automation.description
 
 
 def test_load_area_context_reads_page_or_degrades(tmp_path):

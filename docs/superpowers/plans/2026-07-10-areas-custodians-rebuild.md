@@ -63,8 +63,12 @@ Update this section after every completed task.
   locked to the execution Area and preserve frontmatter; observe scope contains
   no global memory writes and includes Area-scoped transcript reads for intake.
   Evidence: 71 tool/scope tests and Ruff pass.
-- Current: Task 7 pending.
-- Remaining: Tasks 7-10 below.
+- 2026-07-10: Task 7 complete. Boot and live updates share one idempotent
+  reconciliation path; observe and act use exact allowlists; neither mode
+  bypasses tool approval policy. Evidence: 18 lifecycle/permission tests and
+  Ruff pass.
+- Current: Task 8 pending.
+- Remaining: Tasks 8-10 below.
 
 ---
 
@@ -208,13 +212,13 @@ observe allowlist containing Area-scoped transcript reads but no global writes.
 
 **Produces:** Immediate create/update/revoke of the exact automation contract.
 
-- [ ] Write failing tests showing observe→act and act→observe synchronously
+- [x] Write failing tests showing observe→act and act→observe synchronously
   update description, tool scope, and approval behavior.
-- [ ] Verify downgrade test fails on the current branch.
-- [ ] Implement one idempotent `sync_custodian(area)` operation used at boot and
+- [x] Verify downgrade test fails on the current branch.
+- [x] Implement one idempotent `sync_custodian(area)` operation used at boot and
   by live lifecycle calls.
-- [ ] Define a bounded act allowlist; never use `tool_scope=None` as autonomy.
-- [ ] Run lifecycle/permission tests to green.
+- [x] Define a bounded act allowlist; never use `tool_scope=None` as autonomy.
+- [x] Run lifecycle/permission tests to green.
 
 ### Task 8: Rebuild scheduling, budgets, and write provenance
 

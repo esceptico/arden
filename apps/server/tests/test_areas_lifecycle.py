@@ -118,6 +118,23 @@ async def test_delegate_and_rename_sync_live_custodian() -> None:
 
 
 @pytest.mark.asyncio
+async def test_autonomy_changes_sync_before_update_returns() -> None:
+    areas = FakeAreas()
+    synced: list[str] = []
+
+    async def sync(area: dict) -> None:
+        synced.append(area["autonomy"])
+
+    svc = lifecycle(areas, sync=sync)
+    area = await svc.create(name="Health", page_path="topics/health.md", autonomy="observe")
+
+    await svc.update(area["area_id"], autonomy="act")
+    await svc.update(area["area_id"], autonomy="observe")
+
+    assert synced == ["observe", "act", "observe"]
+
+
+@pytest.mark.asyncio
 async def test_archive_disables_and_restore_resyncs_custodian() -> None:
     areas = FakeAreas()
     disabled: list[str] = []

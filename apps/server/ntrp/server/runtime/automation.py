@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from ntrp.agent_surface.schedules import compile_schedules_to_automations
-from ntrp.areas.agent import OBSERVE_TOOL_SCOPE, area_agent_instructions, record_area_run
+from ntrp.areas.agent import custodian_contract, record_area_run
 from ntrp.areas.asks import AskStore
 from ntrp.areas.custodian import CustodianStore
 from ntrp.areas.migrate import migrate_state_files
@@ -203,30 +203,20 @@ class AutomationRuntime:
             _logger.info("Area %s wake requested (%s), due %s", area_id, description, deadline.isoformat())
 
     async def sync_area_custodian(self, area: dict) -> None:
-        """Reconcile Area delegation into the ordinary automation runtime.
-
-        The seeder is idempotent and remains the single construction path while
-        the permission-specific reconciliation is tightened in the Custodian
-        phase of the rebuild.
-        """
-        await self._seed_area_automations()
-        task_id = f"area:{area['area_id']}"
-        automation = await self.stores.automations.get(task_id)
-        if automation is None:
-            return
+        """Synchronously reconcile one live Area into its exact contract."""
         projected = Area(
             key=area["area_id"],
             title=area["name"],
             page_path=area.get("page_path"),
             autonomy=area.get("autonomy"),
         )
-        channel_name = f"{projected.title} agent"
-        automation.name = channel_name
-        automation.description = area_agent_instructions(projected)
-        automation.enabled = not bool(area.get("paused_at"))
-        await self.stores.automations.save(automation)
-        if automation.thread_id:
-            await self.stores.sessions.rename(automation.thread_id, channel_name)
+        if projected.autonomy is None:
+            await self.disable_area_custodian(projected.key)
+            return
+        records = await self.stores.sessions.list_areas()
+        delegated = [record for record in records if record.get("autonomy") is not None]
+        index = next((i for i, record in enumerate(delegated) if record["area_id"] == projected.key), 0)
+        await self._sync_area_automation(projected, paused=bool(area.get("paused_at")), index=index)
 
     async def disable_area_custodian(self, area_id: str) -> None:
         task_id = f"area:{area_id}"
@@ -409,81 +399,67 @@ class AutomationRuntime:
         approvals surface in the session), iteration mode gives run-to-run
         memory, and the observe contract lives in tool_scope as editable
         data. Also migrates rows from the earlier handler-based shape."""
-        agented = [s for s in await self.load_areas() if s.autonomy is not None]
-        for index, area_ in enumerate(agented):
-            task_id = f"area:{area_.key}"
-            run_at = self._area_run_at(index)
-            trigger = {"type": "time", "at": run_at, "days": "daily"}
-            existing = await self.stores.automations.get(task_id)
-            channel_name = f"{area_.title} agent"
-            if existing is None:
-                channel = await self.automation_service._provision_channel(
-                    channel_name, task_id, area_id=area_.key
-                )
-                await self.automation_service.create(
-                    task_id=task_id,
-                    name=channel_name,
-                    description=area_agent_instructions(area_),
-                    triggers=[trigger],
-                    auto_approve=area_.autonomy == "observe",
-                    tool_scope=OBSERVE_TOOL_SCOPE if area_.autonomy == "observe" else None,
-                    output_schema="area_ask",
-                    thread_id=channel.session_id,
-                    read_history=True,
-                )
-                _logger.info("Seeded area channel automation: %s (at=%s)", task_id, run_at)
-                continue
-            if existing.handler == AREA_AGENT_HANDLER or existing.thread_id is None:
-                # Migrate the handler-based, thread-less shape: provision the
-                # area-tagged channel and convert in place.
-                channel = await self.automation_service._provision_channel(
-                    channel_name, task_id, area_id=area_.key
-                )
-                time_trigger = TimeTrigger(at=run_at, days="daily")
-                existing.name = channel_name
-                existing.handler = None
-                existing.thread_id = channel.session_id
-                existing.read_history = True
-                existing.description = area_agent_instructions(area_)
-                existing.auto_approve = area_.autonomy == "observe"
-                existing.tool_scope = OBSERVE_TOOL_SCOPE if area_.autonomy == "observe" else None
-                existing.output_schema = "area_ask"
-                existing.triggers = [time_trigger]
-                existing.next_run_at = time_trigger.next_run(datetime.now(UTC))
-                existing.last_result = None  # pre-rebuild diagnostics would read as current state
-                await self.stores.automations.save(existing)
-                _logger.info("Migrated area automation %s to a channel (session %s)", task_id, channel.session_id)
-                continue
-            # Repair channels from the first migration pass: cryptic task_id
-            # names + stale pre-rebuild diagnostics leaking into the room UI.
-            if existing.thread_id:
-                await self.stores.sessions.rename_if_empty(existing.thread_id, channel_name)
-                data = await self.stores.sessions.load(existing.thread_id)
-                if data is not None and data.state.name == task_id:
-                    await self.stores.sessions.rename(existing.thread_id, channel_name)
-            changed = False
-            if existing.name == task_id:
-                # First passes named the automation after its task_id; the row
-                # is an ordinary automation, so it gets an ordinary name.
-                existing.name = channel_name
-                changed = True
-            if existing.output_schema is None:
-                # Pre-structured-output rows nominated asks via a fenced json
-                # convention; upgrade them to the schema the hook now expects.
-                existing.output_schema = "area_ask"
-                changed = True
-            if existing.last_result and "without a report" in existing.last_result:
-                existing.last_result = None
-                changed = True
-            fresh = area_agent_instructions(area_)
-            if existing.description != fresh:
-                # The description is code-generated (operator steering lives on
-                # the area's own instructions field, injected via the AREA
-                # block) — so instruction-protocol upgrades deploy on boot.
-                existing.description = fresh
-                changed = True
-            if changed:
-                await self.stores.automations.save(existing)
+        records = [record for record in await self.stores.sessions.list_areas() if record.get("autonomy") is not None]
+        for index, record in enumerate(records):
+            area_ = Area(
+                key=record["area_id"],
+                title=record["name"],
+                page_path=record.get("page_path"),
+                autonomy=record.get("autonomy"),
+            )
+            await self._sync_area_automation(area_, paused=bool(record.get("paused_at")), index=index)
+
+    async def _sync_area_automation(self, area_: Area, *, paused: bool, index: int) -> None:
+        """Idempotent boot/live construction path for one Custodian."""
+        contract = custodian_contract(area_)
+        task_id = f"area:{area_.key}"
+        run_at = self._area_run_at(index)
+        trigger = {"type": "time", "at": run_at, "days": "daily"}
+        existing = await self.stores.automations.get(task_id)
+        channel_name = f"{area_.title} agent"
+        if existing is None:
+            channel = await self.automation_service._provision_channel(
+                channel_name, task_id, area_id=area_.key
+            )
+            await self.automation_service.create(
+                task_id=task_id,
+                name=channel_name,
+                description=contract.description,
+                triggers=[trigger],
+                auto_approve=contract.auto_approve,
+                tool_scope=contract.tool_scope,
+                output_schema="area_ask",
+                thread_id=channel.session_id,
+                read_history=True,
+            )
+            if paused:
+                await self.stores.automations.set_enabled(task_id, False)
+            _logger.info("Seeded area channel automation: %s (at=%s)", task_id, run_at)
+            return
+
+        if existing.handler == AREA_AGENT_HANDLER or existing.thread_id is None:
+            channel = await self.automation_service._provision_channel(
+                channel_name, task_id, area_id=area_.key
+            )
+            existing.handler = None
+            existing.thread_id = channel.session_id
+            existing.read_history = True
+            existing.triggers = [TimeTrigger(at=run_at, days="daily")]
+            existing.next_run_at = existing.triggers[0].next_run(datetime.now(UTC))
+            existing.last_result = None
+
+        if existing.thread_id:
+            await self.stores.sessions.rename(existing.thread_id, channel_name)
+
+        existing.name = channel_name
+        existing.description = contract.description
+        existing.auto_approve = contract.auto_approve
+        existing.tool_scope = contract.tool_scope
+        existing.output_schema = "area_ask"
+        existing.enabled = not paused
+        if existing.last_result and "without a report" in existing.last_result:
+            existing.last_result = None
+        await self.stores.automations.save(existing)
 
     def _suggester_available(self) -> bool:
         return self.get_records() is not None and self.get_cheap_llm() is not None
