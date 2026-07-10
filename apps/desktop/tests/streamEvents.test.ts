@@ -641,7 +641,7 @@ test("live tool calls move from ongoing to executed on result", () => {
   expect(getState().messages.get(activityId!)?.activity?.items[0]?.status).toBe("executed");
 });
 
-test("projects and stably merges normalized source refs onto live tool activity", () => {
+test("areas and stably merges normalized source refs onto live tool activity", () => {
   handleServerEvent({
     type: "TOOL_CALL_START",
     tool_call_id: "source-tool",

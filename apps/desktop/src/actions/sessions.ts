@@ -1,6 +1,6 @@
 import { apiWithConfig } from "@/api/core";
-import { archiveProjectApi, archiveSessionApi, branchSessionApi, createProjectApi, listProjectsApi, listArchivedSessionsApi, listPrimarySessionsApi, moveSessionToProjectApi, permanentlyDeleteSessionApi, renameSessionApi, updateSessionModelApi, restoreSessionApi, updateProjectApi } from "@/api/sessions";
-import type { Project, SessionListItem } from "@/api/types";
+import { archiveAreaApi, archiveSessionApi, branchSessionApi, createAreaApi, listAreasApi, listArchivedSessionsApi, listPrimarySessionsApi, moveSessionToAreaApi, permanentlyDeleteSessionApi, renameSessionApi, updateSessionModelApi, restoreSessionApi, updateAreaApi } from "@/api/sessions";
+import type { Area, SessionListItem } from "@/api/types";
 import { getState } from "@/stores";
 import { fetchGoal } from "@/actions/goals";
 import { loadHistory, type LoadHistoryOptions } from "@/actions/history";
@@ -19,72 +19,72 @@ export async function switchSession(sessionId: string, historyOptions: LoadHisto
  *  Home's hero input creates the actual session lazily on first send (see
  *  sendMessage) — this just clears the current session/room so Home's
  *  no-session branch in App.tsx renders. Other createSession() callers
- *  (quick-capture, new-project, in-project "new session" rows) still want
+ *  (quick-capture, new-area, in-area "new session" rows) still want
  *  an eagerly-provisioned session and are unaffected. */
 export function goToNewSessionHome(): void {
   const s = getState();
   s.setCurrentSession(null);
-  s.openSlice(null);
+  s.openArea(null);
 }
 
-export async function createSession(projectId?: string | null): Promise<void> {
+export async function createSession(areaId?: string | null): Promise<void> {
   const s = getState();
-  const targetProjectId =
-    projectId !== undefined
-      ? projectId
+  const targetAreaId =
+    areaId !== undefined
+      ? areaId
       : s.currentSessionId
-        ? (s.sessions.find((session) => session.session_id === s.currentSessionId)?.project_id ?? null)
+        ? (s.sessions.find((session) => session.session_id === s.currentSessionId)?.area_id ?? null)
         : null;
   const session = await apiWithConfig<SessionListItem>(s.config, "/sessions", {
     method: "POST",
-    body: JSON.stringify({ project_id: targetProjectId }),
+    body: JSON.stringify({ area_id: targetAreaId }),
   });
   s.prependSession(session);
   await switchSession(session.session_id);
 }
 
-export async function createProject(): Promise<Project> {
+export async function createArea(): Promise<Area> {
   const s = getState();
-  const project = await createProjectApi(s.config, { name: "New slice" });
-  s.setProjects([project, ...s.projects]);
-  await createSession(project.project_id);
-  return project;
+  const area = await createAreaApi(s.config, { name: "New area" });
+  s.setAreaRecords([area, ...s.areaRecords]);
+  await createSession(area.area_id);
+  return area;
 }
 
-export async function saveProject(
-  projectId: string,
+export async function saveArea(
+  areaId: string,
   patch: { name?: string; default_cwd?: string | null; instructions?: string | null; knowledge_scope?: string },
-): Promise<Project> {
+): Promise<Area> {
   const s = getState();
-  const project = await updateProjectApi(s.config, projectId, patch);
-  s.setProjects(s.projects.map((item) => (item.project_id === project.project_id ? project : item)));
-  return project;
+  const area = await updateAreaApi(s.config, areaId, patch);
+  s.setAreaRecords(s.areaRecords.map((item) => (item.area_id === area.area_id ? area : item)));
+  return area;
 }
 
-export async function archiveProject(projectId: string): Promise<void> {
+export async function archiveArea(areaId: string): Promise<void> {
   const s = getState();
-  await archiveProjectApi(s.config, projectId);
-  s.setProjects(s.projects.filter((project) => project.project_id !== projectId));
+  await archiveAreaApi(s.config, areaId);
+  s.setAreaRecords(s.areaRecords.filter((area) => area.area_id !== areaId));
   s.setSessions(
     s.sessions.map((session) =>
-      session.project_id === projectId ? { ...session, project_id: null } : session,
+      session.area_id === areaId ? { ...session, area_id: null } : session,
     ),
   );
 }
 
-export async function moveSessionToProject(sessionId: string, projectId: string | null): Promise<void> {
+export async function moveSessionToArea(sessionId: string, areaId: string | null): Promise<void> {
   const s = getState();
-  await moveSessionToProjectApi(s.config, sessionId, projectId);
+  await moveSessionToAreaApi(s.config, sessionId, areaId);
   s.setSessions(
     s.sessions.map((session) =>
-      session.session_id === sessionId ? { ...session, project_id: projectId } : session,
+      session.session_id === sessionId ? { ...session, area_id: areaId } : session,
     ),
   );
 }
 
-export async function refreshProjects(): Promise<void> {
+export async function refreshAreas(): Promise<void> {
   const s = getState();
-  s.setProjects(await listProjectsApi(s.config));
+  s.setAreaRecords(await listAreasApi(s.config));
 }
 
 export async function refreshSessions(): Promise<void> {

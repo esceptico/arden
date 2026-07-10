@@ -1,6 +1,6 @@
 import type { AppConfig } from "@/api/core";
 import type { ArchivedSession } from "@/api/sessions";
-import type { Automation, AutomationSuggestion, ModelsResponse, Project, ServerConfig, SessionGoal, SessionListItem, SkillDescriptor, TodoListItem } from "@/api/types";
+import type { Automation, AutomationSuggestion, ModelsResponse, Area, ServerConfig, SessionGoal, SessionListItem, SkillDescriptor, TodoListItem } from "@/api/types";
 import type { TransportDiagnosticsSnapshot } from "@/lib/transportDiagnostics";
 import type { MessageSourceFocus } from "@/lib/messageSourceFocus";
 import type { Toast } from "@/lib/taskToast";
@@ -12,7 +12,7 @@ import type {
   WorkflowTokenUsageInput,
 } from "@/stores/workflow-domain";
 import type { SessionViewState } from "@/stores/session-view";
-import type { SlicesDomainState } from "@/stores/slices-domain";
+import type { AreasDomainState } from "@/stores/areas-domain";
 
 export type { SessionViewState } from "@/stores/session-view";
 
@@ -54,7 +54,7 @@ export type ThinkingIntensity = "subtle" | "normal" | "strong";
 
 export type ThemeChoice = "light" | "dark" | "system";
 
-export type SidebarGroupBy = "project" | "time" | "type" | "status";
+export type SidebarGroupBy = "area" | "time" | "type" | "status";
 
 export interface Prefs {
   thinkingAnimation: ThinkingAnimation;
@@ -339,7 +339,7 @@ export interface CachedSessionState {
 
 export interface State {
   config: AppConfig;
-  projects: Project[];
+  areaRecords: Area[];
   sessions: SessionListItem[];
   sessionView: SessionViewState;
   currentSessionId: string | null;
@@ -424,13 +424,13 @@ export interface State {
   pendingGoalProposal: PendingGoalProposal | null;
   toasts: Toast[];
   prefs: Prefs;
-  slices: SlicesDomainState;
+  areas: AreasDomainState;
   triage: import("@/stores/triage-domain").TriageDomainState;
 }
 
 export interface Actions {
   setConfig: (config: AppConfig) => void;
-  setProjects: (projects: Project[]) => void;
+  setAreaRecords: (areas: Area[]) => void;
   setSessions: (sessions: SessionListItem[]) => void;
   prependSession: (session: SessionListItem) => void;
   patchSession: (session: SessionListItem) => void;
@@ -602,11 +602,11 @@ export interface Actions {
   togglePalette: () => void;
   setPref: <K extends keyof Prefs>(key: K, value: Prefs[K]) => void;
   toggleSidebar: () => void;
-  slicesOverviewLoaded: (overview: import("@/api/slices").SlicesOverview) => void;
-  sliceDetailLoaded: (detail: import("@/api/slices").SliceDetail) => void;
-  sliceAskResolved: (key: string, askId: string) => void;
-  openSlice: (key: string | null) => void;
-  sliceAutonomyUpdated: (key: string, autonomy: "observe" | "act") => void;
+  areasOverviewLoaded: (overview: import("@/api/areas").AreasOverview) => void;
+  areaDetailLoaded: (detail: import("@/api/areas").AreaDetail) => void;
+  areaAskResolved: (key: string, askId: string) => void;
+  openArea: (key: string | null) => void;
+  areaAutonomyUpdated: (key: string, autonomy: "observe" | "act") => void;
   markTriageSeen: (sessionId: string) => void;
   setTriageProposal: (sessionId: string, decision: import("@/api/sessions").TriageDecision) => void;
   clearTriageProposal: (sessionId: string) => void;

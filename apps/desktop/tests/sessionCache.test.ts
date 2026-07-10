@@ -310,8 +310,8 @@ test("switchSession preserves cached preview until canonical history replaces it
   }
 });
 
-test("refresh loads projects/sessions but does not auto-select a current session", async () => {
-  // Home is the app's entrypoint (Slices spec, "Placement") — refresh() must
+test("refresh loads areas/sessions but does not auto-select a current session", async () => {
+  // Home is the app's entrypoint (Areas spec, "Placement") — refresh() must
   // not resurrect the old GET /session "load the latest session" behavior,
   // or every boot would land back in Chat instead of Home.
   const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
@@ -324,8 +324,8 @@ test("refresh loads projects/sessions but does not auto-select a current session
           if (request.path === "/health") {
             return { ok: true, status: 200, statusText: "OK", contentType: "application/json", data: { auth: true }, text: "" };
           }
-          if (request.path === "/projects") {
-            return { ok: true, status: 200, statusText: "OK", contentType: "application/json", data: { projects: [] }, text: "" };
+          if (request.path === "/areas") {
+            return { ok: true, status: 200, statusText: "OK", contentType: "application/json", data: { areas: [] }, text: "" };
           }
           if (request.path === "/sessions" || request.path.startsWith("/sessions?limit=500&offset=")) {
             return { ok: true, status: 200, statusText: "OK", contentType: "application/json", data: { sessions: [{ session_id: "A", name: "A" }] }, text: "" };
@@ -342,7 +342,7 @@ test("refresh loads projects/sessions but does not auto-select a current session
     setState({ config: { serverUrl: "http://localhost:6877", apiKey: "" }, currentSessionId: null });
     await refresh();
 
-    expect(requests).toEqual(["/health", "/projects", "/sessions?limit=500&offset=0&include_agents=false"]);
+    expect(requests).toEqual(["/health", "/areas", "/sessions?limit=500&offset=0&include_agents=false"]);
     expect(getState().connected).toBe(true);
     expect(getState().error).toBeNull();
     expect(getState().sessions.map((s) => s.session_id)).toEqual(["A"]);
@@ -819,18 +819,18 @@ test("resetCancellingQueuedMessages flips cancelling back to pending", () => {
   expect(getState().queuedMessages.map((q) => q.status)).toEqual(["pending", "pending"]);
 });
 
-test("goToNewSessionHome clears the current session and closes an open slice room", () => {
+test("goToNewSessionHome clears the current session and closes an open area room", () => {
   // "New session" (sidebar nav row / ⌘N / command palette) must land on
   // Home, not eagerly provision an empty session — Home's hero input
   // creates the session lazily on first send.
   const s = getState();
   s.setCurrentSession("A");
-  s.openSlice("o-1a");
-  expect(getState().slices.openSliceKey).toBe("o-1a");
+  s.openArea("o-1a");
+  expect(getState().areas.openAreaKey).toBe("o-1a");
 
   goToNewSessionHome();
 
   expect(getState().currentSessionId).toBeNull();
-  expect(getState().slices.openSliceKey).toBeNull();
+  expect(getState().areas.openAreaKey).toBeNull();
   expect(getState().order).toEqual([]);
 });

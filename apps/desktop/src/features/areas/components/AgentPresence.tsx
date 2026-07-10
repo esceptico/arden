@@ -25,7 +25,7 @@ function useElapsed(since: string | null | undefined): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
-/** The slice's standing agent as a quiet two-line presence, not a block:
+/** The area's standing agent as a quiet two-line presence, not a block:
  *  line one is its state ("Agent · swept 2h ago") with Run now at the far
  *  end; line two is the last run's summary, on its own so it reads in full
  *  instead of truncating mid-word against the button. The status line is the

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { historyMessagesToUi } from "@/actions/history";
 import type { HistoryMessage } from "@/api/chat";
 import { turnLayout } from "@/features/chat/lib/turnLayout";
-import { projectHistoryResponse } from "@/stores/history-response";
+import { areaHistoryResponse } from "@/stores/history-response";
 import type { CachedSessionState } from "@/stores/types";
 
 test("keeps one loaded activity group across reasoning-only history messages", () => {
@@ -237,7 +237,7 @@ test("rehydrates child agent metadata from persisted tool result data", () => {
   });
 });
 
-test("projects normalized persisted source refs onto their matching tool calls", () => {
+test("areas normalized persisted source refs onto their matching tool calls", () => {
   const messages: HistoryMessage[] = [
     { role: "user", content: "research it", id: "user-1" },
     {
@@ -376,7 +376,7 @@ test("unions live and restored source refs when active history projections merge
     activeActivityId: "live-activity",
   } satisfies Pick<CachedSessionState, "messages" | "order" | "activeActivityId">;
 
-  const projection = projectHistoryResponse(
+  const projection = areaHistoryResponse(
     { messages: history, active_run_id: "run-active" },
     true,
     existing,
@@ -451,7 +451,7 @@ test("preserves persisted switch-back order when assistant text is between tool 
   expect(layout.afterWorkIds).toEqual(["progress-assistant", "progress-assistant-activity"]);
 });
 
-test("projects provider tool calls with embedded result", () => {
+test("areas provider tool calls with embedded result", () => {
   const items = historyMessagesToUi(
     [
       { role: "user", content: "search tools", id: "user-1" },

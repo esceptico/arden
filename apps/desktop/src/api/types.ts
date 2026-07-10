@@ -2,8 +2,8 @@ import type { RuntimeRunStatus } from "@/api/events";
 
 export type SessionType = "chat" | "channel" | "agent";
 
-export interface Project {
-  project_id: string;
+export interface Area {
+  area_id: string;
   name: string;
   default_cwd: string | null;
   instructions: string | null;
@@ -19,9 +19,9 @@ export interface SessionListItem {
   last_activity: string;
   name: string | null;
   message_count: number;
-  project_id?: string | null;
-  /** Set when the session was provisioned from a slice room's scoped
-   *  composer — attributes the session back to `/slices/{key}` detail. */
+  area_id?: string | null;
+  /** Set when the session was provisioned from an area room's scoped
+   *  composer — attributes the session back to `/areas/{key}` detail. */
   /** Per-chat model override. null/undefined → falls back to the global
    *  default (config.chat_model), which is also what new chats inherit. */
   chat_model?: string | null;
@@ -93,7 +93,7 @@ export interface ToolMetadata {
 export interface SkillDescriptor {
   name: string;
   description: string;
-  /** Where the skill came from: "builtin", "user", "global", "project". */
+  /** Where the skill came from: "builtin", "user", "global", "area". */
   location?: string;
   /** Absolute filesystem path to the SKILL.md file (when available). */
   path?: string;

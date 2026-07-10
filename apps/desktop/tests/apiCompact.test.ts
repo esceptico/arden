@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { getChildAgentResultApi } from "@/api/agents";
 import { apiWithConfig, compactSessionApi } from "@/api/core";
-import { archiveProjectApi, listProjectsApi } from "@/api/sessions";
+import { archiveAreaApi, listAreasApi } from "@/api/sessions";
 import { runBuiltinCommand } from "@/actions/builtins";
 import { getState, setState } from "@/stores/index";
 import { searchMemory } from "@/api/memoryItems";
@@ -64,17 +64,17 @@ test("standard API calls use the default timeout", async () => {
     },
   };
 
-  await listProjectsApi({ serverUrl: "http://localhost:6877", apiKey: "" });
+  await listAreasApi({ serverUrl: "http://localhost:6877", apiKey: "" });
 
   expect(request).toEqual({
-    path: "/projects",
+    path: "/areas",
     method: "GET",
     body: undefined,
     timeout: 60_000,
   });
 });
 
-test("archiveProjectApi sends DELETE to the project route", async () => {
+test("archiveAreaApi sends DELETE to the area route", async () => {
   let request: { path: string; method?: string; body?: string; timeout?: number } | null = null;
   (globalThis as typeof globalThis & { window?: unknown }).window = {
     ntrpDesktop: {
@@ -86,7 +86,7 @@ test("archiveProjectApi sends DELETE to the project route", async () => {
             status: 200,
             statusText: "OK",
             contentType: "application/json",
-            data: { status: "archived", project_id: "proj/1" },
+            data: { status: "archived", area_id: "proj/1" },
             text: "",
           };
         },
@@ -94,10 +94,10 @@ test("archiveProjectApi sends DELETE to the project route", async () => {
     },
   };
 
-  await archiveProjectApi({ serverUrl: "http://localhost:6877", apiKey: "" }, "proj/1");
+  await archiveAreaApi({ serverUrl: "http://localhost:6877", apiKey: "" }, "proj/1");
 
   expect(request).toEqual({
-    path: "/projects/proj%2F1",
+    path: "/areas/proj%2F1",
     method: "DELETE",
     body: undefined,
     timeout: 60_000,

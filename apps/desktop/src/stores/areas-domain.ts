@@ -1,25 +1,25 @@
-import type { SliceDetail, SlicesOverview } from "@/api/slices";
+import type { AreaDetail, AreasOverview } from "@/api/areas";
 
-export interface SlicesDomainState {
-  overview: SlicesOverview | null;
-  detailByKey: Record<string, SliceDetail>;
-  openSliceKey: string | null;
+export interface AreasDomainState {
+  overview: AreasOverview | null;
+  detailByKey: Record<string, AreaDetail>;
+  openAreaKey: string | null;
   loading: boolean;
 }
 
-export function createSlicesDomainState(): SlicesDomainState {
+export function createAreasDomainState(): AreasDomainState {
   return {
     overview: null,
     detailByKey: {},
-    openSliceKey: null,
+    openAreaKey: null,
     loading: false,
   };
 }
 
 export function reduceOverviewLoaded(
-  state: SlicesDomainState,
-  overview: SlicesOverview,
-): SlicesDomainState {
+  state: AreasDomainState,
+  overview: AreasOverview,
+): AreasDomainState {
   return {
     ...state,
     overview,
@@ -27,7 +27,7 @@ export function reduceOverviewLoaded(
   };
 }
 
-export function reduceDetailLoaded(state: SlicesDomainState, detail: SliceDetail): SlicesDomainState {
+export function reduceDetailLoaded(state: AreasDomainState, detail: AreaDetail): AreasDomainState {
   return {
     ...state,
     detailByKey: { ...state.detailByKey, [detail.key]: detail },
@@ -35,11 +35,11 @@ export function reduceDetailLoaded(state: SlicesDomainState, detail: SliceDetail
   };
 }
 
-export function reduceAskResolved(state: SlicesDomainState, key: string, askId: string): SlicesDomainState {
+export function reduceAskResolved(state: AreasDomainState, key: string, askId: string): AreasDomainState {
   const overview = state.overview
     ? {
         ...state.overview,
-        focus: state.overview.focus.filter((a) => !(a.id === askId && a.slice_key === key)),
+        focus: state.overview.focus.filter((a) => !(a.id === askId && a.area_key === key)),
       }
     : null;
 
@@ -59,18 +59,18 @@ export function reduceAskResolved(state: SlicesDomainState, key: string, askId: 
   };
 }
 
-export function reduceOpenSlice(state: SlicesDomainState, key: string | null): SlicesDomainState {
+export function reduceOpenArea(state: AreasDomainState, key: string | null): AreasDomainState {
   return {
     ...state,
-    openSliceKey: key,
+    openAreaKey: key,
   };
 }
 
 export function reduceAutonomyUpdated(
-  state: SlicesDomainState,
+  state: AreasDomainState,
   key: string,
   autonomy: "observe" | "act",
-): SlicesDomainState {
+): AreasDomainState {
   const detail = state.detailByKey[key];
   const detailByKey = detail
     ? { ...state.detailByKey, [key]: { ...detail, autonomy } }
@@ -79,7 +79,7 @@ export function reduceAutonomyUpdated(
   const overview = state.overview
     ? {
         ...state.overview,
-        slices: state.overview.slices.map((s) => (s.key === key ? { ...s, autonomy } : s)),
+        areas: state.overview.areas.map((s) => (s.key === key ? { ...s, autonomy } : s)),
       }
     : null;
 

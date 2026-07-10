@@ -1,12 +1,12 @@
 import { expect, test } from "bun:test";
 import { primaryActionFor } from "@/lib/askActions";
-import type { SliceAsk } from "@/api/slices";
+import type { AreaAsk } from "@/api/areas";
 import type { Automation } from "@/api/types";
 
-function ask(verb: string, ref: string): SliceAsk {
+function ask(verb: string, ref: string): AreaAsk {
   return {
     id: "ask1",
-    slice_key: "o-1a",
+    area_key: "o-1a",
     text: "some ask",
     kind: "review",
     source: "test",
@@ -34,7 +34,7 @@ function automation(taskId: string, name: string): Automation {
 const handlers = {
   switchSession: () => {},
   runAutomation: () => {},
-  openSlice: () => {},
+  openArea: () => {},
 };
 
 test("open_session maps to switchSession with Open label", () => {
@@ -70,11 +70,11 @@ test("retry with unresolvable automation name returns null", () => {
   expect(action).toBeNull();
 });
 
-test("open_page maps to openSlice with Review label", () => {
+test("open_page maps to openArea with Review label", () => {
   let called: string | null = null;
   const action = primaryActionFor(ask("open_page", "/some/page"), null, {
     ...handlers,
-    openSlice: (key) => {
+    openArea: (key) => {
       called = key;
     },
   });

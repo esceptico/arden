@@ -149,7 +149,7 @@ export function AutomationEditor({
 
             {isMessage && (
               <Callout key="message-info" tone="neutral" className="mx-5 mb-3">
-                To search a specific repo, move this automation's channel to the target project
+                To search a specific repo, move this automation's channel to the target area
                 from the sidebar after it's created.
               </Callout>
             )}

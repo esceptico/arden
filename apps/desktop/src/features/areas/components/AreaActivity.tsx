@@ -1,17 +1,17 @@
 import { switchSession } from "@/actions/sessions";
 import { formatRelativePast } from "@/lib/format";
 
-interface SliceSessionRow {
+interface AreaSessionRow {
   session_id: string;
   name: string;
   last_activity?: string;
 }
 
-/** ACTIVITY: the slice's sessions, click-through. Automation bookkeeping
+/** ACTIVITY: the area's sessions, click-through. Automation bookkeeping
  *  rows were dropped — the room header already carries the agent's last
- *  run, so repeating `slice:{key}` here was noise. Section renders only
+ *  run, so repeating `area:{key}` here was noise. Section renders only
  *  when there is actually something to show. */
-export function SliceActivity({ sessions }: { sessions: SliceSessionRow[] }) {
+export function AreaActivity({ sessions }: { sessions: AreaSessionRow[] }) {
   if (sessions.length === 0) return null;
 
   return (

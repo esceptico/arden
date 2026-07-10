@@ -9,7 +9,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/RadioGroup";
 import { SwitchControl } from "@/components/ui/SwitchControl";
 
 const GROUP_OPTIONS: { value: SidebarGroupBy; label: string }[] = [
-  { value: "project", label: "Slice" },
+  { value: "area", label: "Area" },
   { value: "time", label: "Time" },
   { value: "type", label: "Type" },
   { value: "status", label: "Status" },
@@ -26,7 +26,7 @@ export function SidebarFilters() {
 
   // Non-default view = surfaced on the trigger so the user knows a filter
   // is hiding sessions even when the popover is closed.
-  const active = groupBy !== "project" || unreadOnly || channelsOnly;
+  const active = groupBy !== "area" || unreadOnly || channelsOnly;
 
   return (
     <>

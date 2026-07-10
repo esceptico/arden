@@ -1,14 +1,14 @@
 import { useMemo } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Settings, Sparkles } from "lucide-react";
-import type { SliceAsk, SliceSummary } from "@/api/slices";
+import type { AreaAsk, AreaSummary } from "@/api/areas";
 import type { Automation } from "@/api/types";
 import { useStore } from "@/stores";
 import { formatRelativePast } from "@/lib/format";
-import { useSlicesData } from "@/features/home/hooks/useSlicesData";
+import { useAreasData } from "@/features/home/hooks/useAreasData";
 import { HeroInput } from "@/features/home/components/HeroInput";
 import { FocusRow } from "@/features/home/components/FocusRow";
-import { SlicesStrip } from "@/features/home/components/SlicesStrip";
+import { AreasStrip } from "@/features/home/components/AreasStrip";
 import { ScrollFadeTop, ScrollFadeBottom } from "@/components/ui/ScrollBlur";
 import { Button } from "@/components/ui/Button";
 import { ICON } from "@/lib/icons";
@@ -21,9 +21,9 @@ const DATE_FORMAT: Intl.DateTimeFormatOptions = {
 };
 
 // Stable references for "not loaded yet" fallbacks — see HeroInput's
-// NO_SLICES/NO_AUTOMATIONS for why an inline `?? []` is unsafe with zustand.
-const NO_FOCUS: SliceAsk[] = [];
-const NO_SLICES: SliceSummary[] = [];
+// NO_AREAS/NO_AUTOMATIONS for why an inline `?? []` is unsafe with zustand.
+const NO_FOCUS: AreaAsk[] = [];
+const NO_AREAS: AreaSummary[] = [];
 
 function greeting(focusCount: number): string {
   if (focusCount === 0) return "All clear.";
@@ -32,10 +32,10 @@ function greeting(focusCount: number): string {
 }
 
 /** The standing agents made legible: how many are watching, and when one
- *  last swept. Slice agents are automations keyed `slice:{key}`; the line
+ *  last swept. Area agents are automations keyed `area:{key}`; the line
  *  reassures the focus set is a fresh read, not a stale to-do list. */
 function agentWatchLine(automations: Automation[] | null): string | null {
-  const agents = (automations ?? []).filter((a) => a.task_id.startsWith("slice:"));
+  const agents = (automations ?? []).filter((a) => a.task_id.startsWith("area:"));
   if (agents.length === 0) return null;
   const running = agents.filter((a) => a.running_since != null).length;
   const runs = agents
@@ -52,21 +52,21 @@ function agentWatchLine(automations: Automation[] | null): string | null {
 
 /** Home entrypoint: centered 640px column, nothing else on the screen.
  *  date line → hero input (the composer, promoted) → greeting stating the
- *  focus count → FOCUS rows → SLICES strip. Replaces HomeHero as the empty-
+ *  focus count → FOCUS rows → AREAS strip. Replaces HomeHero as the empty-
  *  state surface Chat.tsx renders when the current session has no visible
  *  messages and nothing is running. */
 export function Home() {
-  const { overview } = useSlicesData();
+  const { overview } = useAreasData();
   const connected = useStore((s) => s.connected);
   const openSettings = useStore((s) => s.openSettings);
   const automations = useStore((s) => s.automations);
   const focus = overview?.focus ?? NO_FOCUS;
-  const slices = overview?.slices ?? NO_SLICES;
+  const areas = overview?.areas ?? NO_AREAS;
   const dateLabel = useMemo(() => new Date().toLocaleDateString(undefined, DATE_FORMAT), []);
   const titleFor = useMemo(() => {
-    const map = new Map(slices.map((s) => [s.key, s.title]));
+    const map = new Map(areas.map((s) => [s.key, s.title]));
     return (key: string) => map.get(key) ?? key;
-  }, [slices]);
+  }, [areas]);
   const watchLine = agentWatchLine(automations);
 
   if (!connected) {
@@ -136,7 +136,7 @@ export function Home() {
               <div className="grid gap-1.5 pb-1">
                 <AnimatePresence initial={false}>
                   {focus.map((ask) => (
-                    <FocusRow key={ask.id} ask={ask} sliceTitle={titleFor(ask.slice_key)} />
+                    <FocusRow key={ask.id} ask={ask} areaTitle={titleFor(ask.area_key)} />
                   ))}
                 </AnimatePresence>
               </div>
@@ -144,7 +144,7 @@ export function Home() {
           </div>
         )}
         <div className="shrink-0">
-          <SlicesStrip slices={slices} suggested={overview?.suggested} />
+          <AreasStrip areas={areas} suggested={overview?.suggested} />
         </div>
       </div>
     </motion.div>

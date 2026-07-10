@@ -150,7 +150,7 @@ export function resultSnippet(
       inFence = !inFence;
       continue;
     }
-    // Fenced content (code, a slice agent's json ask nomination) is never a
+    // Fenced content (code, an area agent's json ask nomination) is never a
     // useful one-line preview — skip the whole block, not just its markers.
     if (!line || inFence) continue;
     line = line

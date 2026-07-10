@@ -88,11 +88,11 @@ export function ActiveList({
       </Empty>
     );
   }
-  // Slice agents are ordinary automations (edit, pause, reschedule like any
+  // Area agents are ordinary automations (edit, pause, reschedule like any
   // other) — the section split only keeps the user's own from being
-  // interleaved with the seeded per-slice set.
-  const sliceAgents = automations.filter((a) => a.task_id.startsWith("slice:"));
-  const own = automations.filter((a) => !a.task_id.startsWith("slice:"));
+  // interleaved with the seeded per-area set.
+  const areaAgents = automations.filter((a) => a.task_id.startsWith("area:"));
+  const own = automations.filter((a) => !a.task_id.startsWith("area:"));
 
   return (
     <div className="grid content-start gap-6">
@@ -107,14 +107,14 @@ export function ActiveList({
           ))}
         </AnimatePresence>
       </div>
-      {sliceAgents.length > 0 && (
+      {areaAgents.length > 0 && (
         <section className="grid gap-2">
           <h3 className="m-0 text-xs font-medium uppercase tracking-[0.08em] text-muted">
-            Slice agents
+            Area agents
           </h3>
           <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-2.5">
             <AnimatePresence mode="popLayout" initial={false}>
-              {sliceAgents.map((automation) => (
+              {areaAgents.map((automation) => (
                 <AutomationCard
                   key={automation.task_id}
                   automation={automation}

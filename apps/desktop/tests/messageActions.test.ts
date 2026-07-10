@@ -171,7 +171,7 @@ test("sendMessage with no current session lazily creates one, then sends into it
             return {
               ok: true,
               contentType: "application/json",
-              data: { session_id: "new-1", name: null, project_id: null },
+              data: { session_id: "new-1", name: null, area_id: null },
             };
           }
           if (request.path === "/session/history?session_id=new-1") {

@@ -1,5 +1,5 @@
-import { createProjectApi, triageSessionApi } from "@/api/sessions";
-import { moveSessionToProject } from "@/actions/sessions";
+import { createAreaApi, triageSessionApi } from "@/api/sessions";
+import { moveSessionToArea } from "@/actions/sessions";
 import { getState } from "@/stores";
 
 /** Fire once when a just-started, unfiled, top-level chat gets its first
@@ -11,7 +11,7 @@ export async function maybeTriageChat(sessionId: string): Promise<void> {
   if (s.triage.seen.has(sessionId)) return;
   const session = s.sessions.find((x) => x.session_id === sessionId);
   if (!session) return;
-  if (session.project_id) return; // already filed
+  if (session.area_id) return; // already filed
   if (session.session_type === "agent" || session.parent_session_id) return; // not top-level
   const hasAssistantReply = s.order.some((id) => s.messages.get(id)?.role === "assistant");
   if (!hasAssistantReply) return;
@@ -25,8 +25,8 @@ export async function maybeTriageChat(sessionId: string): Promise<void> {
   }
 }
 
-/** Run the proposed filing. Slices and projects are one container, so both
- *  branches end in a plain move-to-project. Keeps the chip on failure
+/** Run the proposed filing. Areas and areas are one container, so both
+ *  branches end in a plain move-to-area. Keeps the chip on failure
  *  (toast + no clear) so the user can retry; the ChatHeader breadcrumb picks
  *  up the new home on success. */
 export async function acceptTriage(sessionId: string): Promise<void> {
@@ -35,11 +35,11 @@ export async function acceptTriage(sessionId: string): Promise<void> {
   if (!decision) return;
   try {
     if (decision.decision === "move" && decision.target) {
-      await moveSessionToProject(sessionId, decision.target.key);
+      await moveSessionToArea(sessionId, decision.target.key);
     } else if (decision.decision === "create" && decision.new_title) {
-      const project = await createProjectApi(s.config, { name: decision.new_title });
-      getState().setProjects([project, ...getState().projects]);
-      await moveSessionToProject(sessionId, project.project_id);
+      const area = await createAreaApi(s.config, { name: decision.new_title });
+      getState().setAreaRecords([area, ...getState().areaRecords]);
+      await moveSessionToArea(sessionId, area.area_id);
     }
     getState().clearTriageProposal(sessionId);
   } catch {

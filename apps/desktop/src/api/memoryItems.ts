@@ -1,7 +1,7 @@
 import { apiWithConfig, type AppConfig } from "@/api/core";
 
 // ── Scope ─────────────────────────────────────────────────────────────────
-export type ScopeKind = "global" | "project" | "session" | "integration" | "user";
+export type ScopeKind = "global" | "area" | "session" | "integration" | "user";
 export interface ScopeParams {
   scope_kind?: ScopeKind;
   scope_key?: string;

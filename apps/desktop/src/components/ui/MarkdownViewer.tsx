@@ -8,7 +8,7 @@ import { ScrollFadeTop } from "@/components/ui/ScrollBlur";
 
 /** Generic markdown viewer modal. State lives in the store as `viewingMarkdown`
  *  so any code can pop the viewer with a `setViewingMarkdown({title, content, ...})`
- *  call. Used today for skill files; reusable for memory notes, project docs,
+ *  call. Used today for skill files; reusable for memory notes, area docs,
  *  anything else that's markdown. */
 export function MarkdownViewer() {
   const view = useStore((s) => s.viewingMarkdown);

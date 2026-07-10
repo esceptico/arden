@@ -31,10 +31,10 @@ export async function sendMessage(
   const trimmedText = text.trim();
   if (!trimmedText && images.length === 0) return;
 
-  // Home has no current session (the door, not a room — see Slices spec
+  // Home has no current session (the door, not a room — see Areas spec
   // Placement) — the FIRST message from its hero input is what actually
   // provisions the session, lazily, reusing the same createSession path
-  // the sidebar's "new session in project" rows use.
+  // the sidebar's "new session in area" rows use.
   if (!getState().currentSessionId) {
     await createSession();
   }

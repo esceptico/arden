@@ -22,7 +22,7 @@ export const DEFAULT_PREFS: Prefs = {
   thinkingIntensity: "normal",
   theme: "system",
   accent: DEFAULT_ACCENT,
-  sidebarGroupBy: "project",
+  sidebarGroupBy: "area",
   sidebarUnreadOnly: false,
   sidebarChannelsOnly: false,
   pinnedSessionIds: [],

@@ -69,7 +69,7 @@ export function historyMessagesToUi(
   return items;
 }
 
-export function projectHistoryResponse(
+export function areaHistoryResponse(
   history: HistoryResponse,
   isNewestPage: boolean,
   existing?: Pick<CachedSessionState, "messages" | "order" | "activeActivityId">,
@@ -137,7 +137,7 @@ export function cachedSessionFromHistory(
 ): CachedSessionState {
   const base = existing ?? blankSessionView();
   const { runtime, page, usage } = history;
-  const { activeForegroundRunId, activeActivityId, items } = projectHistoryResponse(
+  const { activeForegroundRunId, activeActivityId, items } = areaHistoryResponse(
     history,
     page?.has_more_after !== true,
     existing,

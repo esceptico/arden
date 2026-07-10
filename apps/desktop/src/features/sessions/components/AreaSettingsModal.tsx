@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { FolderOpen } from "lucide-react";
-import type { Project } from "@/api/types";
-import { archiveProject, saveProject } from "@/actions/sessions";
+import type { Area } from "@/api/types";
+import { archiveArea, saveArea } from "@/actions/sessions";
 import { selectDirectory } from "@/features/sessions/lib/directoryPicker";
 import { PageModal } from "@/components/ui/PageModal";
 import { Button } from "@/components/ui/Button";
@@ -10,12 +10,12 @@ import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
 import { LabeledField } from "@/components/ui/LabeledField";
 
-interface ProjectSettingsModalProps {
-  project: Project | null;
+interface AreaSettingsModalProps {
+  area: Area | null;
   onClose: () => void;
 }
 
-export function ProjectSettingsModal({ project, onClose }: ProjectSettingsModalProps) {
+export function AreaSettingsModal({ area, onClose }: AreaSettingsModalProps) {
   const [name, setName] = useState("");
   const [cwd, setCwd] = useState("");
   const [instructions, setInstructions] = useState("");
@@ -25,26 +25,26 @@ export function ProjectSettingsModal({ project, onClose }: ProjectSettingsModalP
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!project) return;
-    setName(project.name);
-    setCwd(project.default_cwd ?? "");
-    setInstructions(project.instructions ?? "");
+    if (!area) return;
+    setName(area.name);
+    setCwd(area.default_cwd ?? "");
+    setInstructions(area.instructions ?? "");
     setError(null);
     setSaving(false);
     setArchiving(false);
     setPickingCwd(false);
-  }, [project]);
+  }, [area]);
 
   const busy = saving || archiving;
-  const canSave = useMemo(() => Boolean(project && name.trim() && !busy), [project, name, busy]);
+  const canSave = useMemo(() => Boolean(area && name.trim() && !busy), [area, name, busy]);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (!project || !canSave) return;
+    if (!area || !canSave) return;
     setSaving(true);
     setError(null);
     try {
-      await saveProject(project.project_id, {
+      await saveArea(area.area_id, {
         name: name.trim(),
         default_cwd: cwd.trim() || null,
         instructions: instructions.trim() || null,
@@ -72,11 +72,11 @@ export function ProjectSettingsModal({ project, onClose }: ProjectSettingsModalP
   }
 
   async function archive() {
-    if (!project || archiving) return;
+    if (!area || archiving) return;
     setArchiving(true);
     setError(null);
     try {
-      await archiveProject(project.project_id);
+      await archiveArea(area.area_id);
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -87,11 +87,11 @@ export function ProjectSettingsModal({ project, onClose }: ProjectSettingsModalP
 
   return (
     <PageModal
-      open={Boolean(project)}
+      open={Boolean(area)}
       onClose={busy ? () => {} : onClose}
       disableEscape={busy}
       size="w-[min(640px,calc(100vw-32px))] h-[min(520px,calc(100vh-32px))]"
-      header={{ title: project?.name ?? "Slice" }}
+      header={{ title: area?.name ?? "Area" }}
     >
       <form onSubmit={submit} className="min-h-0 grid grid-rows-[minmax(0,1fr)_auto]">
         <div className="min-h-0 overflow-y-auto scroll-thin px-5 pb-4 space-y-4">
@@ -130,7 +130,7 @@ export function ProjectSettingsModal({ project, onClose }: ProjectSettingsModalP
         <footer className="flex items-center justify-between gap-2 px-5 py-4 border-t border-line-soft">
           <ConfirmDeleteButton
             size="md"
-            label={`Archive ${project?.name ?? "slice"}`}
+            label={`Archive ${area?.name ?? "area"}`}
             busy={busy}
             onConfirm={() => void archive()}
           />

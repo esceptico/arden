@@ -1,4 +1,4 @@
-import type { SliceAsk } from "@/api/slices";
+import type { AreaAsk } from "@/api/areas";
 import type { Automation } from "@/api/types";
 
 /** Primary action derived from an ask's first action verb. `run` is a
@@ -14,15 +14,15 @@ export interface AskPrimaryAction {
 interface AskActionHandlers {
   switchSession: (sessionId: string) => void;
   runAutomation: (taskId: string) => void;
-  openSlice: (sliceKey: string) => void;
+  openArea: (areaKey: string) => void;
 }
 
-/** Maps an ask's declared verb (server contract: ntrp/slices/service.py +
+/** Maps an ask's declared verb (server contract: ntrp/areas/service.py +
  *  agent.py) to a primary action. `retry`'s ref is an automation NAME, not a
  *  task_id — the client run API takes task_id, so we resolve it against the
  *  live automations list. */
 export function primaryActionFor(
-  ask: SliceAsk,
+  ask: AreaAsk,
   automations: Automation[] | null,
   handlers: AskActionHandlers,
 ): AskPrimaryAction | null {
@@ -38,7 +38,7 @@ export function primaryActionFor(
       return { label: "Retry", run: () => handlers.runAutomation(taskId) };
     }
     case "open_page":
-      return { label: "Review", run: () => handlers.openSlice(ask.slice_key) };
+      return { label: "Review", run: () => handlers.openArea(ask.area_key) };
     default:
       return null;
   }

@@ -11,12 +11,12 @@ import { ICON } from "@/lib/icons";
 // Stable references for "not loaded yet" fallbacks — a selector that falls
 // back to `?? []` inline returns a NEW array every render, which zustand
 // treats as a changed value and forces an infinite re-render loop.
-const NO_SLICES: { key: string; title: string }[] = [];
+const NO_AREAS: { key: string; title: string }[] = [];
 const NO_AUTOMATIONS: { task_id: string; name: string }[] = [];
 
 const KIND_LABEL: Record<HeroSuggestion["kind"], string> = {
   chat: "Chat",
-  slice: "Ask in",
+  area: "Ask in",
   session: "Session",
   automation: "Automation",
   skill: "Skill",
@@ -29,9 +29,9 @@ const KIND_LABEL: Record<HeroSuggestion["kind"], string> = {
 export function HeroInput() {
   const draft = useStore((s) => s.draft);
   const setDraft = useStore((s) => s.setDraft);
-  const openSlice = useStore((s) => s.openSlice);
+  const openArea = useStore((s) => s.openArea);
   const sessions = useStore((s) => s.sessions);
-  const slices = useStore((s) => s.slices.overview?.slices ?? NO_SLICES);
+  const areas = useStore((s) => s.areas.overview?.areas ?? NO_AREAS);
   const automations = useStore((s) => s.automations ?? NO_AUTOMATIONS);
   const skills = useStore((s) => s.skills);
 
@@ -39,8 +39,8 @@ export function HeroInput() {
   const [dismissed, setDismissed] = useState(false);
 
   const suggestions = useMemo(
-    () => routeHeroInput(draft, { sessions, slices, automations, skills }),
-    [draft, sessions, slices, automations, skills],
+    () => routeHeroInput(draft, { sessions, areas, automations, skills }),
+    [draft, sessions, areas, automations, skills],
   );
   const showSuggestions = draft.trim().length > 0 && suggestions.length > 1 && !dismissed;
 
@@ -57,15 +57,15 @@ export function HeroInput() {
         void sendMessage(suggestion.label);
         setDraft("");
         break;
-      case "slice": {
-        // Route the chat INTO the slice: ref is the container's project_id,
-        // so filing is a plain create-in-project (the session inherits the
-        // slice's page as context). A bare slice name with nothing to ask
+      case "area": {
+        // Route the chat INTO the area: ref is the container's area_id,
+        // so filing is a plain create-in-area (the session inherits the
+        // area's page as context). A bare area name with nothing to ask
         // just opens the room to browse.
         const msg = draft.trim();
         const nameOnly = msg.toLowerCase() === suggestion.label.toLowerCase();
         if (nameOnly) {
-          openSlice(suggestion.ref);
+          openArea(suggestion.ref);
         } else {
           void createSession(suggestion.ref).then(() => sendMessage(msg));
         }

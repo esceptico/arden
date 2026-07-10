@@ -129,7 +129,7 @@ test("terminal run states clear active running state", () => {
   }
 });
 
-test("automation domain projects stream phase and per-task status", () => {
+test("automation domain areas stream phase and per-task status", () => {
   const connecting = reduceAutomationStreamConnecting(
     createAutomationStreamDomainState(),
     1,

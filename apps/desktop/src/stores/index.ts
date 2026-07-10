@@ -51,14 +51,14 @@ import {
   type WorkflowsDomainState,
 } from "@/stores/workflow-domain";
 import {
-  createSlicesDomainState,
+  createAreasDomainState,
   reduceOverviewLoaded,
   reduceDetailLoaded,
   reduceAskResolved,
-  reduceOpenSlice,
+  reduceOpenArea,
   reduceAutonomyUpdated,
-  type SlicesDomainState,
-} from "@/stores/slices-domain";
+  type AreasDomainState,
+} from "@/stores/areas-domain";
 import {
   createTriageDomainState,
   reduceTriageSeen,
@@ -115,7 +115,7 @@ export type {
   BackgroundAgentsDomainState,
   AutomationStreamDomainState,
   WorkflowsDomainState,
-  SlicesDomainState,
+  AreasDomainState,
 };
 export type { Workflow, WorkflowAgent, WorkflowPhase } from "@/stores/workflow-domain";
 export { selectWorkflowsForSession } from "@/stores/workflow-domain";
@@ -219,7 +219,7 @@ export function selectSentUserMessages(state: {
 
 export const useStore = create<State & Actions>((set) => ({
   config: { ...DEFAULT_CONFIG },
-  projects: [],
+  areaRecords: [],
   sessions: [],
   sessionView: createInitialSessionViewState(),
   currentSessionId: null,
@@ -283,11 +283,11 @@ export const useStore = create<State & Actions>((set) => ({
   pendingGoalProposal: null,
   toasts: [],
   prefs: loadPrefs(),
-  slices: createSlicesDomainState(),
+  areas: createAreasDomainState(),
   triage: createTriageDomainState(),
 
   setConfig: (config) => set({ config, connectionDraft: { ...config } }),
-  setProjects: (projects) => set({ projects }),
+  setAreaRecords: (areaRecords) => set({ areaRecords }),
   setSessions: (sessions) =>
     set((s) => ({
       sessions,
@@ -338,11 +338,11 @@ export const useStore = create<State & Actions>((set) => ({
     ),
   setCurrentSession: (currentSessionId) =>
     set((s) => {
-      // Navigating to a chat session always closes the slice room — a room
+      // Navigating to a chat session always closes the area room — a room
       // stays open across the *current* session but must not silently trail
       // along underneath a session switch (e.g. clicking a session row in
-      // SliceActivity while a room is open).
-      const slices = s.slices.openSliceKey ? reduceOpenSlice(s.slices, null) : s.slices;
+      // AreaActivity while a room is open).
+      const areas = s.areas.openAreaKey ? reduceOpenArea(s.areas, null) : s.areas;
       let unread = s.unreadDoneSessionIds;
       if (currentSessionId && unread.has(currentSessionId)) {
         unread = new Set(unread);
@@ -354,7 +354,7 @@ export const useStore = create<State & Actions>((set) => ({
       if (s.currentSessionId === currentSessionId) {
         const patch: Partial<State> = {};
         if (unread !== s.unreadDoneSessionIds) patch.unreadDoneSessionIds = unread;
-        if (slices !== s.slices) patch.slices = slices;
+        if (areas !== s.areas) patch.areas = areas;
         return patch;
       }
       // Snapshot outgoing session into cache so a switch-back can
@@ -371,7 +371,7 @@ export const useStore = create<State & Actions>((set) => ({
         sessionView = reduceCachePreviewRestored(view.sessionView, currentSessionId);
       }
       return {
-        slices,
+        areas,
         sessionView,
         currentSessionId: sessionView.currentSessionId,
         sourceTurnId: null,
@@ -854,22 +854,22 @@ export const useStore = create<State & Actions>((set) => ({
       persistPrefs(next);
       return { prefs: next };
     }),
-  slicesOverviewLoaded: (overview) =>
-    set((s) => ({ slices: reduceOverviewLoaded(s.slices, overview) })),
-  sliceDetailLoaded: (detail) =>
-    set((s) => ({ slices: reduceDetailLoaded(s.slices, detail) })),
-  sliceAskResolved: (key, askId) =>
-    set((s) => ({ slices: reduceAskResolved(s.slices, key, askId) })),
-  openSlice: (key) =>
-    set((s) => ({ slices: reduceOpenSlice(s.slices, key) })),
+  areasOverviewLoaded: (overview) =>
+    set((s) => ({ areas: reduceOverviewLoaded(s.areas, overview) })),
+  areaDetailLoaded: (detail) =>
+    set((s) => ({ areas: reduceDetailLoaded(s.areas, detail) })),
+  areaAskResolved: (key, askId) =>
+    set((s) => ({ areas: reduceAskResolved(s.areas, key, askId) })),
+  openArea: (key) =>
+    set((s) => ({ areas: reduceOpenArea(s.areas, key) })),
   markTriageSeen: (sessionId) =>
     set((s) => ({ triage: reduceTriageSeen(s.triage, sessionId) })),
   setTriageProposal: (sessionId, decision) =>
     set((s) => ({ triage: reduceTriageProposal(s.triage, sessionId, decision) })),
   clearTriageProposal: (sessionId) =>
     set((s) => ({ triage: reduceTriageCleared(s.triage, sessionId) })),
-  sliceAutonomyUpdated: (key, autonomy) =>
-    set((s) => ({ slices: reduceAutonomyUpdated(s.slices, key, autonomy) })),
+  areaAutonomyUpdated: (key, autonomy) =>
+    set((s) => ({ areas: reduceAutonomyUpdated(s.areas, key, autonomy) })),
 }));
 
 // Dev-only: expose the store so connection-gated surfaces can be driven for

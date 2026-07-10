@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { projectHistoryResponse, type HistoryResponse } from "@/stores/history-response";
+import { areaHistoryResponse, type HistoryResponse } from "@/stores/history-response";
 import type { UiMessage } from "@/stores/types";
 
 test("active history merge keeps child agent metadata from durable result data", () => {
@@ -72,12 +72,12 @@ test("active history merge keeps child agent metadata from durable result data",
     },
   };
 
-  const projected = projectHistoryResponse(history, true, {
+  const areaed = areaHistoryResponse(history, true, {
     messages: new Map([[liveActivity.id, liveActivity]]),
     order: [liveActivity.id],
     activeActivityId: liveActivity.id,
   });
-  const activity = projected.items.find((item) => item.role === "activity");
+  const activity = areaed.items.find((item) => item.role === "activity");
 
   expect(activity?.activity?.items[0].childAgent).toEqual({
     childRunId: "child-run-123456",

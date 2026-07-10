@@ -7,28 +7,28 @@ import { useStore } from "@/stores";
 import { compactSessionApi } from "@/api/core";
 import type { SessionListItem } from "@/api/types";
 import { loadHistory } from "@/actions/history";
-import { archiveSession, createSession, moveSessionToProject } from "@/actions/sessions";
+import { archiveSession, createSession, moveSessionToArea } from "@/actions/sessions";
 import { ICON } from "@/lib/icons";
 import { useTimeTicker } from "@/lib/hooks";
 import { ScrollFadeBottom, ScrollFadeTop } from "@/components/ui/ScrollBlur";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { groupSessions, primarySidebarSessions } from "@/features/sessions/lib/projects";
+import { groupSessions, primarySidebarSessions } from "@/features/sessions/lib/areas";
 import { SessionRow } from "@/features/sessions/components/SessionRow";
 import { SessionContextMenu, type ContextMenuState } from "@/features/sessions/components/SessionContextMenu";
-import { ProjectSettingsModal } from "@/features/sessions/components/ProjectSettingsModal";
+import { AreaSettingsModal } from "@/features/sessions/components/AreaSettingsModal";
 import { SidebarFilters } from "@/features/sessions/components/SidebarFilters";
 import { RowAction } from "@/features/sessions/components/RowAction";
 
 // Rows shown per group before the "Show more" toggle reveals the rest, in
 // steps of REVEAL_STEP — a 40-chat group unfolds gradually instead of
-// exploding. New project / search / archived live in ⌘K; filter & group-by
+// exploding. New area / search / archived live in ⌘K; filter & group-by
 // live in the SidebarFilters popover.
 const MAX_VISIBLE = 4;
 const REVEAL_STEP = 5;
 
 export function SessionList() {
   useTimeTicker();
-  const projects = useStore((s) => s.projects);
+  const areas = useStore((s) => s.areaRecords);
   const sessions = useStore((s) => s.sessions);
   const currentSessionId = useStore((s) => s.currentSessionId);
   const activeRunSessionIds = useStore((s) => s.activeRunSessionIds);
@@ -43,7 +43,7 @@ export function SessionList() {
 
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
-  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+  const [editingAreaId, setEditingAreaId] = useState<string | null>(null);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   // Per-group count of rows revealed past MAX_VISIBLE (in REVEAL_STEP
   // increments); absent key = collapsed to the cap.
@@ -65,9 +65,9 @@ export function SessionList() {
       return next;
     });
 
-  // Every group opens as a room (slices and projects are one container) —
+  // Every group opens as a room —
   // the ↗ action is the sidebar's door into it.
-  const openSlice = useStore((s) => s.openSlice);
+  const openArea = useStore((s) => s.openArea);
 
   const pinnedSet = useMemo(() => new Set(pinnedSessionIds), [pinnedSessionIds]);
   const togglePin = (sessionId: string) => {
@@ -85,7 +85,7 @@ export function SessionList() {
   );
   const grouped = useMemo(
     () =>
-      groupSessions(projects, chatSessions, {
+      groupSessions(areas, chatSessions, {
         groupBy,
         unreadOnly,
         channelsOnly,
@@ -93,9 +93,9 @@ export function SessionList() {
         unread: unreadDoneSessionIds,
         active: activeSet,
       }),
-    [projects, chatSessions, groupBy, unreadOnly, channelsOnly, pinnedSet, unreadDoneSessionIds, activeSet],
+    [areas, chatSessions, groupBy, unreadOnly, channelsOnly, pinnedSet, unreadDoneSessionIds, activeSet],
   );
-  const editingProject = projects.find((project) => project.project_id === editingProjectId) ?? null;
+  const editingArea = areas.find((area) => area.area_id === editingAreaId) ?? null;
 
   // Drop reveal state for groups that no longer overflow, so a group that
   // shrinks below the cap and later grows back doesn't silently auto-expand.
@@ -189,11 +189,11 @@ export function SessionList() {
 
   return (
     <div className="group/sessions flex flex-col flex-1 min-h-0">
-      {/* Zone label: the list is a named region (mirrors Home's SLICES
+      {/* Zone label: the list is a named region (mirrors Home's AREAS
           strip label), so the nav above doesn't bleed into the groups. */}
       <div className="flex items-center justify-between pl-[18px] pr-2.5 pt-3 pb-1">
         <span className="text-xs font-semibold tracking-wide text-faint uppercase select-none">
-          Slices
+          Areas
         </span>
         <SidebarFilters />
       </div>
@@ -243,7 +243,7 @@ export function SessionList() {
                         <Pin size={ICON.MD} strokeWidth={2} />
                       ) : group.key === "inbox" ? (
                         <Inbox size={ICON.MD} strokeWidth={2} />
-                      ) : group.project ? (
+                      ) : group.area ? (
                         <Folder size={ICON.MD} strokeWidth={2} />
                       ) : null}
                     </span>
@@ -257,22 +257,22 @@ export function SessionList() {
                       )}
                     />
                   </button>
-                  {group.project && (
+                  {group.area && (
                     <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover/prow:opacity-100 focus-within:opacity-100 transition-opacity duration-row">
                       <RowAction
                         icon={<ArrowUpRight size={ICON.SM} strokeWidth={2} />}
                         label={`Open the ${group.label} room`}
-                        onClick={() => openSlice(group.project?.project_id ?? null)}
+                        onClick={() => openArea(group.area?.area_id ?? null)}
                       />
                       <RowAction
                         icon={<Settings size={ICON.SM} strokeWidth={2} />}
-                        label={`Slice settings — ${group.project.name}`}
-                        onClick={() => setEditingProjectId(group.project?.project_id ?? null)}
+                        label={`Area settings — ${group.area.name}`}
+                        onClick={() => setEditingAreaId(group.area?.area_id ?? null)}
                       />
                       <RowAction
                         icon={<Plus size={ICON.SM} strokeWidth={2} />}
                         label={`New session in ${group.label}`}
-                        onClick={() => void createSession(group.project?.project_id ?? null)}
+                        onClick={() => void createSession(group.area?.area_id ?? null)}
                       />
                     </div>
                   )}
@@ -382,19 +382,19 @@ export function SessionList() {
             });
           }
         }}
-        onMoveProject={async (projectId) => {
+        onMoveArea={async (areaId) => {
           if (!menu) return;
           const sessionId = menu.sessionId;
           closeMenu();
           try {
-            await moveSessionToProject(sessionId, projectId);
+            await moveSessionToArea(sessionId, areaId);
           } catch {
             /* ignore */
           }
         }}
-        projects={projects}
+        areas={areas}
       />
-      <ProjectSettingsModal project={editingProject} onClose={() => setEditingProjectId(null)} />
+      <AreaSettingsModal area={editingArea} onClose={() => setEditingAreaId(null)} />
     </div>
   );
 }

@@ -3,7 +3,7 @@ import { routeHeroInput } from "@/features/home/lib/heroRouting";
 
 const ctx = {
   sessions: [{ session_id: "s1", name: "counsel requirements" }],
-  slices: [{ key: "o-1a", title: "O-1A" }],
+  areas: [{ key: "o-1a", title: "O-1A" }],
   automations: [{ task_id: "t1", name: "morning-digest" }],
   skills: [{ name: "research", description: "" }],
 };
@@ -13,9 +13,9 @@ test("plain text routes to chat first", () => {
   expect(s[0].kind).toBe("chat");
 });
 
-test("prefix matches surface slices, sessions, automations", () => {
+test("prefix matches surface areas, sessions, automations", () => {
   const s = routeHeroInput("o-1", ctx);
-  expect(s.some((x) => x.kind === "slice" && x.ref === "o-1a")).toBe(true);
+  expect(s.some((x) => x.kind === "area" && x.ref === "o-1a")).toBe(true);
   const t = routeHeroInput("morning", ctx);
   expect(t.some((x) => x.kind === "automation" && x.ref === "t1")).toBe(true);
 });
@@ -38,8 +38,8 @@ test("matches session names case-insensitively", () => {
 });
 
 test("caps suggestions at 6", () => {
-  const manySlices = Array.from({ length: 10 }, (_, i) => ({ key: `slice-${i}`, title: `Slice ${i}` }));
-  const s = routeHeroInput("slice", { ...ctx, slices: manySlices });
+  const manyAreas = Array.from({ length: 10 }, (_, i) => ({ key: `area-${i}`, title: `Area ${i}` }));
+  const s = routeHeroInput("area", { ...ctx, areas: manyAreas });
   expect(s.length).toBeLessThanOrEqual(6);
 });
 
@@ -48,15 +48,15 @@ test("no matches returns only the chat suggestion", () => {
   expect(s).toEqual([{ kind: "chat", label: "zzz-nonexistent-zzz", ref: "" }]);
 });
 
-test("a question mentioning a slice's distinctive word surfaces that slice", () => {
-  const ctx2 = { ...ctx, slices: [{ key: "apartment-hunt", title: "Apartment hunt" }] };
+test("a question mentioning an area's distinctive word surfaces that area", () => {
+  const ctx2 = { ...ctx, areas: [{ key: "apartment-hunt", title: "Apartment hunt" }] };
   const s = routeHeroInput("should I apply to the apartment on Elsie", ctx2);
   expect(s[0].kind).toBe("chat"); // chat still default
-  expect(s.some((x) => x.kind === "slice" && x.ref === "apartment-hunt")).toBe(true);
+  expect(s.some((x) => x.kind === "area" && x.ref === "apartment-hunt")).toBe(true);
 });
 
-test("short filler words never trigger a slice match", () => {
-  const ctx2 = { ...ctx, slices: [{ key: "aside", title: "Aside" }] };
+test("short filler words never trigger an area match", () => {
+  const ctx2 = { ...ctx, areas: [{ key: "aside", title: "Aside" }] };
   // "the" / "a" / "on" are < 4 chars; nothing distinctive from Aside appears.
-  expect(routeHeroInput("what a day on the road", ctx2).some((x) => x.kind === "slice")).toBe(false);
+  expect(routeHeroInput("what a day on the road", ctx2).some((x) => x.kind === "area")).toBe(false);
 });

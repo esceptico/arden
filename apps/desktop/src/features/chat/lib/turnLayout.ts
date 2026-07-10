@@ -44,7 +44,7 @@ export function turnLayout({
   }
 
   // The final answer is the last assistant message that appears after work
-  // has started. If activity follows it, keep that trailing slice inline so
+  // has started. If activity follows it, keep that trailing area inline so
   // replayed history preserves the original order.
   let finalAssistantIndex = -1;
   for (let i = children.length - 1; i > firstWorkIndex; i--) {

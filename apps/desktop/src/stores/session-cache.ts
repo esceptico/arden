@@ -94,7 +94,7 @@ export function normalizeActivityGroups(
       // Already emitted this exact activity id — `sourceOrder` can list an
       // id twice even though `sourceMessages` (a Map) holds one entry, e.g.
       // a stale cached copy of the group lingering beside the freshly
-      // projected one during an active run, separated by a visible boundary
+      // areaed one during an active run, separated by a visible boundary
       // so the positional `openActivityId` check misses it. Same id = same
       // group already in place, so skip rather than push a duplicate React
       // key (merging would double the group's items, since both order slots

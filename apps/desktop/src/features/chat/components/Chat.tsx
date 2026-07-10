@@ -17,16 +17,16 @@ function ChatHeader() {
   const sessionId = useStore((s) => s.currentSessionId);
   const sessions = useStore((s) => s.sessions);
   const sidebarHidden = useStore((s) => s.prefs.sidebarHidden);
-  const openSlice = useStore((s) => s.openSlice);
-  // Rooms are universal (slices/projects are one container), so any filed
-  // chat gets a breadcrumb back to its room — titled from the slices
-  // overview when live, else the plain project name.
-  const sliceTitle = useStore((s) => {
-    const pid = s.sessions.find((x) => x.session_id === s.currentSessionId)?.project_id;
+  const openArea = useStore((s) => s.openArea);
+  // Rooms are universal , so any filed
+  // chat gets a breadcrumb back to its room — titled from the areas
+  // overview when live, else the plain area name.
+  const areaTitle = useStore((s) => {
+    const pid = s.sessions.find((x) => x.session_id === s.currentSessionId)?.area_id;
     if (!pid) return null;
     return (
-      s.slices.overview?.slices.find((sl) => sl.key === pid)?.title ??
-      s.projects.find((p) => p.project_id === pid)?.name ??
+      s.areas.overview?.areas.find((sl) => sl.key === pid)?.title ??
+      s.areaRecords.find((p) => p.area_id === pid)?.name ??
       null
     );
   });
@@ -34,7 +34,7 @@ function ChatHeader() {
   const session = sessions.find((s) => s.session_id === sessionId);
 
   const title = session?.name || (sessionId ? "untitled" : "no session");
-  const sliceKey = session?.project_id ?? null;
+  const areaKey = session?.area_id ?? null;
 
   // A child agent session gets a breadcrumb back to its parent in the header —
   // the discoverable spot, mirroring the hub's "← parent" chip.
@@ -81,15 +81,15 @@ function ChatHeader() {
         )}
         {/* Filed chats breadcrumb back to their room, mirroring the agent
             parent chip: the room is this conversation's context. */}
-        {sliceKey && sliceTitle && (
+        {areaKey && areaTitle && (
           <>
             <button
               type="button"
-              onClick={() => openSlice(sliceKey)}
-              title={`Back to the ${sliceTitle} slice`}
+              onClick={() => openArea(areaKey)}
+              title={`Back to the ${areaTitle} area`}
               className="shrink-0 max-w-[160px] truncate rounded-md bg-surface-soft px-2 py-0.5 text-xs font-medium text-ink-soft hover:text-ink"
             >
-              {sliceTitle}
+              {areaTitle}
             </button>
             <span className="shrink-0 text-faint select-none" aria-hidden>
               /

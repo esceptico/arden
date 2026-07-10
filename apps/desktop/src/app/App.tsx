@@ -5,7 +5,7 @@ import { IS_DESKTOP_MAC } from "@/lib/platform";
 import { Sidebar } from "@/features/sessions/components/Sidebar";
 import { Chat } from "@/features/chat/components/Chat";
 import { Home } from "@/features/home/components/Home";
-import { SliceRoom } from "@/features/slices/components/SliceRoom";
+import { AreaRoom } from "@/features/areas/components/AreaRoom";
 import { CommandPalette } from "@/features/command-palette/components/CommandPalette";
 import { MarkdownViewer } from "@/components/ui/MarkdownViewer";
 import { ApprovalReviewModal } from "@/features/chat/components/ApprovalReviewModal";
@@ -90,7 +90,7 @@ export function App() {
   // own empty state), not Home — the old transcript-emptiness derivation
   // made a freshly opened session flash Home while history loaded.
   const showHome = useStore((s) => s.currentSessionId === null);
-  const openSliceKey = useStore((s) => s.slices.openSliceKey);
+  const openAreaKey = useStore((s) => s.areas.openAreaKey);
 
   // Publish dock widths as CSS vars so the chat shell can stay flush with
   // both sidebars as they resize. Drag handles update these imperatively
@@ -168,8 +168,8 @@ export function App() {
 
   // Receive submissions from the quick-capture floating window. The
   // Electron main process forwards each one via `quick:message`; we
-  // route into the chosen chat (or a fresh project-less chat — Inbox,
-  // NOT the current session's project) and send. Capture is silent —
+  // route into the chosen chat (or a fresh area-less chat — Inbox,
+  // NOT the current session's area) and send. Capture is silent —
   // this window is NOT brought forward — so the session (and its
   // streamed response) is simply waiting the next time the user
   // switches to ntrp.
@@ -236,11 +236,11 @@ export function App() {
       </motion.div>
       {/* App-global sidebar toggle: fixed-viewport chrome (`.sidebar-toggle`),
           rendered once here so it is present on every screen — Chat, Home,
-          and the slice rooms — not only where Chat mounts. */}
+          and the area rooms — not only where Chat mounts. */}
       <SidebarToggle />
       <ErrorBoundary>
-        {openSliceKey || showHome ? (
-          /* Home/SliceRoom get the same pane geometry Chat's <main> claims
+        {openAreaKey || showHome ? (
+          /* Home/AreaRoom get the same pane geometry Chat's <main> claims
              (flush with both sidebars) plus a scroll container — they are
              full screens, not floating columns. */
           <main
@@ -256,8 +256,8 @@ export function App() {
                 height reference, collapsing it and teleporting the room's
                 pinned composer to the top mid-dissolve. */}
             <AnimatePresence initial={false}>
-              {openSliceKey ? (
-                <SliceRoom key={openSliceKey} sliceKey={openSliceKey} />
+              {openAreaKey ? (
+                <AreaRoom key={openAreaKey} areaKey={openAreaKey} />
               ) : (
                 <Home key="home" />
               )}

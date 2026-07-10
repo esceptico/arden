@@ -6,7 +6,7 @@ import { ICON } from "@/lib/icons";
 
 /** The fixed-viewport sidebar collapse control, anchored near the macOS
  *  traffic lights (`.sidebar-toggle`). Rendered once at the app level so it
- *  is present on every screen — Chat, Home, and the slice rooms — rather
+ *  is present on every screen — Chat, Home, and the area rooms — rather
  *  than only where Chat mounts (⌘B was otherwise the sole way back). */
 export function SidebarToggle() {
   const sidebarHidden = useStore((s) => s.prefs.sidebarHidden);

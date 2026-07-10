@@ -111,7 +111,7 @@ describe("resultSnippet", () => {
 
   it("skips blank lines and entire fenced blocks, not just their markers", () => {
     expect(resultSnippet("\n```ts\ncode line\n```\nReal summary")).toBe("Real summary");
-    // A slice agent's ask nomination: prose first, fenced json tail — the
+    // An area agent's ask nomination: prose first, fenced json tail — the
     // json must never become the one-line preview.
     expect(resultSnippet('```json\n{"ask": {"text": "hi"}}\n```\nQuiet day.')).toBe("Quiet day.");
     expect(resultSnippet('```json\n{"ask": {"text": "hi"}}\n```')).toBeUndefined();

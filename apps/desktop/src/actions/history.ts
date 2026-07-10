@@ -26,7 +26,7 @@ import {
   cachedSessionFromHistory,
   historyMessagesToUi,
   pendingApprovalsFromRuntime,
-  projectHistoryResponse,
+  areaHistoryResponse,
   queuedMessagesFromRuntime,
   runtimeView,
   type HistoryResponse,
@@ -309,7 +309,7 @@ export async function loadHistory(sessionId: string, options: LoadHistoryOptions
 
   const { messages, runtime, page, usage } = history;
   const isNewestPage = mode !== "prepend" && page?.has_more_after !== true;
-  const { activeForegroundRunId, activeActivityId, items } = projectHistoryResponse(
+  const { activeForegroundRunId, activeActivityId, items } = areaHistoryResponse(
     history,
     isNewestPage,
     getState(),

@@ -8,7 +8,7 @@ export type TreeNode = {
   children: TreeNode[];
 };
 
-// Folder sort + default-expand order, post topics/-unification (entities/ & projects/
+// Folder sort + default-expand order, post topics/-unification (entities/ & areas/
 // are folded into topics/).
 const DIRECTORY_ORDER = ["topics", "feeds", "daily", "insights", "context", "facts", "changelog"];
 // Only the subject pages open by default — dated logs / feeds / audit stay folded

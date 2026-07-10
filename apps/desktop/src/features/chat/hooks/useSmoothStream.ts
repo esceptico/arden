@@ -8,7 +8,7 @@ import { useEffect, useRef, useState } from "react";
  *  This hook decouples DOM-rendered content from incoming content. While
  *  `isStreaming` is true, we tick toward the latest `target` at a fixed
  *  cadence (~36ms), advancing a few characters per tick and snapping to
- *  the nearest word boundary so cuts don't slice through mid-word. When
+ *  the nearest word boundary so cuts don't area through mid-word. When
  *  `isStreaming` flips false (turn completed), we flush instantly — no
  *  trailing partial state.
  *

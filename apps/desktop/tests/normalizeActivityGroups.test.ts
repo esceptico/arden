@@ -24,7 +24,7 @@ function metaUser(id: string): UiMessage {
 }
 
 // Regression: during an active run the projection could list one activity id
-// twice in `order` (a stale cached copy beside the freshly projected one),
+// twice in `order` (a stale cached copy beside the freshly areaed one),
 // separated by a visible boundary so the positional collapse missed it. That
 // surfaced two children with the same React key. The id must appear once and
 // the group's items must not be doubled.

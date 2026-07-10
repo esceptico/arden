@@ -1,5 +1,5 @@
 import { apiWithConfig, type AppConfig } from "@/api/core";
-import type { Project, SessionListItem, SessionType } from "@/api/types";
+import type { Area, SessionListItem, SessionType } from "@/api/types";
 
 const SESSION_PAGE_SIZE = 500;
 
@@ -26,51 +26,51 @@ export async function renameSessionApi(
   });
 }
 
-export async function listProjectsApi(config: AppConfig): Promise<Project[]> {
-  const response = await apiWithConfig<{ projects: Project[] }>(config, "/projects");
-  return response.projects;
+export async function listAreasApi(config: AppConfig): Promise<Area[]> {
+  const response = await apiWithConfig<{ areas: Area[] }>(config, "/areas");
+  return response.areas;
 }
 
-export async function createProjectApi(
+export async function createAreaApi(
   config: AppConfig,
   payload: { name: string; default_cwd?: string | null; instructions?: string | null },
-): Promise<Project> {
-  return apiWithConfig<Project>(config, "/projects", {
+): Promise<Area> {
+  return apiWithConfig<Area>(config, "/areas", {
     method: "POST",
     body: JSON.stringify(payload),
   });
 }
 
-export async function updateProjectApi(
+export async function updateAreaApi(
   config: AppConfig,
-  projectId: string,
-  patch: Partial<Pick<Project, "name" | "default_cwd" | "instructions" | "knowledge_scope">>,
-): Promise<Project> {
-  return apiWithConfig<Project>(config, `/projects/${encodeURIComponent(projectId)}`, {
+  areaId: string,
+  patch: Partial<Pick<Area, "name" | "default_cwd" | "instructions" | "knowledge_scope">>,
+): Promise<Area> {
+  return apiWithConfig<Area>(config, `/areas/${encodeURIComponent(areaId)}`, {
     method: "PATCH",
     body: JSON.stringify(patch),
   });
 }
 
-export async function archiveProjectApi(config: AppConfig, projectId: string): Promise<void> {
-  await apiWithConfig(config, `/projects/${encodeURIComponent(projectId)}`, {
+export async function archiveAreaApi(config: AppConfig, areaId: string): Promise<void> {
+  await apiWithConfig(config, `/areas/${encodeURIComponent(areaId)}`, {
     method: "DELETE",
   });
 }
 
-export async function moveSessionToProjectApi(
+export async function moveSessionToAreaApi(
   config: AppConfig,
   sessionId: string,
-  projectId: string | null,
+  areaId: string | null,
 ): Promise<void> {
-  await apiWithConfig(config, `/sessions/${encodeURIComponent(sessionId)}/project`, {
+  await apiWithConfig(config, `/sessions/${encodeURIComponent(sessionId)}/area`, {
     method: "POST",
-    body: JSON.stringify({ project_id: projectId }),
+    body: JSON.stringify({ area_id: areaId }),
   });
 }
 
 export interface TriageTarget {
-  /** The container's project_id (slices and projects are one concept). */
+  /** The container's area_id. */
   key: string;
   title: string;
 }
@@ -114,7 +114,7 @@ export interface ArchivedSession {
   name: string | null;
   archived_at: string;
   message_count: number;
-  project_id?: string | null;
+  area_id?: string | null;
   session_type?: SessionType;
   origin_automation_id?: string | null;
   parent_session_id?: string | null;
@@ -144,7 +144,7 @@ export async function branchSessionApi(
   config: AppConfig,
   sessionId: string,
   payload: { name?: string; up_to_message_id?: string; from_end_index?: number },
-): Promise<{ session_id: string; name: string | null; started_at: string; last_activity: string; project_id?: string | null }> {
+): Promise<{ session_id: string; name: string | null; started_at: string; last_activity: string; area_id?: string | null }> {
   return apiWithConfig(config, `/sessions/${encodeURIComponent(sessionId)}/branch`, {
     method: "POST",
     body: JSON.stringify(payload),

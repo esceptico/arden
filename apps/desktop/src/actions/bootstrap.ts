@@ -1,5 +1,5 @@
 import { checkHealth, loadInitialConfig } from "@/api/core";
-import { listPrimarySessionsApi, listProjectsApi } from "@/api/sessions";
+import { listPrimarySessionsApi, listAreasApi } from "@/api/sessions";
 import { getState } from "@/stores";
 import { isAgentSessionId, parentSessionIdOf } from "@/lib/agentRun";
 import { fetchAutomations } from "@/actions/automations";
@@ -60,14 +60,14 @@ export async function refresh(): Promise<void> {
     s.setConnected(true);
     s.setError(null);
 
-    const [projects, sessions] = await Promise.all([
-      listProjectsApi(s.config),
+    const [areas, sessions] = await Promise.all([
+      listAreasApi(s.config),
       listPrimarySessionsApi(s.config),
     ]);
-    s.setProjects(projects);
+    s.setAreaRecords(areas);
     s.setSessions(sessions);
     // Deliberately does NOT auto-select the most recent session (that was
-    // GET /session's job pre-Slices) — the app opens on Home per the Slices
+    // GET /session's job pre-Areas) — the app opens on Home per the Areas
     // spec ("Placement": Home is the no-session state of the main pane).
     // currentSessionId stays whatever it already was (null on a fresh boot),
     // and App.tsx's showHome derivation renders Home from that. The sidebar

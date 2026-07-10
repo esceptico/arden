@@ -6,7 +6,7 @@ beforeEach(() => {
   setState({
     connected: false,
     error: null,
-    projects: [],
+    areas: [],
     sessions: [],
   });
 });

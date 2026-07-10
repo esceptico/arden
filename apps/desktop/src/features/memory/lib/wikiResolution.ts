@@ -17,7 +17,7 @@ export function preferredAlias(map: Map<string, Set<string>>, key: string): stri
   if (!paths) return null;
   if (paths.size === 1) return [...paths][0];
   const slug = wikiSlug(key);
-  for (const candidate of [`topics/${slug}.md`, `entities/${slug}.md`, `projects/${slug}.md`, `context/integrations/${slug}.md`]) {
+  for (const candidate of [`topics/${slug}.md`, `entities/${slug}.md`, `areas/${slug}.md`, `context/integrations/${slug}.md`]) {
     if (paths.has(candidate)) return candidate;
   }
   return null;

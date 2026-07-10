@@ -74,7 +74,7 @@ export async function cancelRun(
 }
 
 /** Pin a fact to memory by writing it as an atomic, pinned record in the flat
- *  records pool. There is no scope/project partition — one pool. */
+ *  records pool. There is no scope/area partition — one pool. */
 export async function pinToMemoryApi(
   config: AppConfig,
   fact: string,

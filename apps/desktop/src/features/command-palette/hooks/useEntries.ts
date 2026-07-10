@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import { useStore } from "@/stores";
 import { loadHistory } from "@/actions/history";
-import { archiveSession, branchAtMessage, createProject, goToNewSessionHome, renameSession, switchSession } from "@/actions/sessions";
+import { archiveSession, branchAtMessage, createArea, goToNewSessionHome, renameSession, switchSession } from "@/actions/sessions";
 import { stopRun } from "@/actions/messages";
 import { runBuiltinCommand } from "@/actions/builtins";
 import { toggleAuto } from "@/actions/loops";
@@ -67,12 +67,12 @@ export function useEntries(): CommandEntry[] {
       search: "new session create chat",
     });
     entries.push({
-      id: "suggested:new-project",
+      id: "suggested:new-area",
       section: "suggested",
-      label: "New slice",
+      label: "New area",
       icon: FolderPlus,
-      run: () => void createProject(),
-      search: "new project create folder group",
+      run: () => void createArea(),
+      search: "new area create folder group",
     });
     entries.push({
       id: "suggested:toggle-sidebar",

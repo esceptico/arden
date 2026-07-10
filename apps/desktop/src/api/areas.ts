@@ -1,7 +1,7 @@
 import { apiWithConfig, type AppConfig } from "@/api/core";
 
-export interface SliceSummary {
-  /** The container's project_id (slices and projects are one concept). */
+export interface AreaSummary {
+  /** The area's id. */
   key: string;
   title: string;
   autonomy: "observe" | "act" | null;
@@ -11,9 +11,9 @@ export interface SliceSummary {
   ask_count: number;
 }
 
-export interface SliceAsk {
+export interface AreaAsk {
   id: string;
-  slice_key: string;
+  area_key: string;
   text: string;
   kind: "review" | "decide" | "act" | "drift";
   source: string;
@@ -24,7 +24,7 @@ export interface SliceAsk {
   provenance?: string | null;
 }
 
-export interface SliceSuggestion {
+export interface AreaSuggestion {
   id: string;
   key: string;
   title: string;
@@ -33,13 +33,13 @@ export interface SliceSuggestion {
   created_at: string;
 }
 
-export interface SlicesOverview {
-  slices: SliceSummary[];
-  focus: SliceAsk[];
-  suggested?: SliceSuggestion[];
+export interface AreasOverview {
+  areas: AreaSummary[];
+  focus: AreaAsk[];
+  suggested?: AreaSuggestion[];
 }
 
-export interface SliceDetail {
+export interface AreaDetail {
   key: string;
   title: string;
   autonomy: "observe" | "act" | null;
@@ -47,17 +47,17 @@ export interface SliceDetail {
   related: string[];
   open_loops: string[];
   updated: string;
-  asks: SliceAsk[];
+  asks: AreaAsk[];
   sessions: { session_id: string; name: string }[];
   automations: unknown[];
 }
 
-export async function fetchSlicesOverview(config: AppConfig): Promise<SlicesOverview> {
-  return apiWithConfig<SlicesOverview>(config, "/slices");
+export async function fetchAreasOverview(config: AppConfig): Promise<AreasOverview> {
+  return apiWithConfig<AreasOverview>(config, "/areas/overview");
 }
 
-export async function fetchSliceDetail(config: AppConfig, key: string): Promise<SliceDetail> {
-  return apiWithConfig<SliceDetail>(config, `/slices/${encodeURIComponent(key)}`);
+export async function fetchAreaDetail(config: AppConfig, key: string): Promise<AreaDetail> {
+  return apiWithConfig<AreaDetail>(config, `/areas/${encodeURIComponent(key)}`);
 }
 
 export async function resolveAsk(
@@ -66,44 +66,44 @@ export async function resolveAsk(
   askId: string,
   state: string,
   snoozedUntil?: string,
-): Promise<SliceAsk> {
+): Promise<AreaAsk> {
   const body: { state: string; snoozed_until?: string } = { state };
   if (snoozedUntil) body.snoozed_until = snoozedUntil;
-  return apiWithConfig<SliceAsk>(config, `/slices/${encodeURIComponent(key)}/asks/${encodeURIComponent(askId)}/resolve`, {
+  return apiWithConfig<AreaAsk>(config, `/areas/${encodeURIComponent(key)}/asks/${encodeURIComponent(askId)}/resolve`, {
     method: "POST",
     body: JSON.stringify(body),
   });
 }
 
-// Server returns the updated project row — not a full SliceDetail (no
+// Server returns the updated area row — not a full AreaDetail (no
 // asks/sessions/automations). The action layer merges just the autonomy
 // field into any cached detail.
-export async function updateSliceAutonomy(
+export async function updateAreaAutonomy(
   config: AppConfig,
   key: string,
   autonomy: "observe" | "act",
-): Promise<{ project_id: string; name: string; autonomy: "observe" | "act" | null }> {
-  return apiWithConfig(config, `/slices/${encodeURIComponent(key)}`, {
+): Promise<{ area_id: string; name: string; autonomy: "observe" | "act" | null }> {
+  return apiWithConfig(config, `/areas/${encodeURIComponent(key)}/autonomy`, {
     method: "PUT",
     body: JSON.stringify({ autonomy }),
   });
 }
 
 /** Attach capabilities: mint a new container (name) or grow an existing one
- *  (project_id) with a page + observing agent. */
-export async function createSlice(
+ *  (area_id) with a page + observing agent. */
+export async function createArea(
   config: AppConfig,
   title: string,
   pagePath: string,
 ): Promise<void> {
-  await apiWithConfig(config, "/slices", {
+  await apiWithConfig(config, "/areas", {
     method: "POST",
     body: JSON.stringify({ name: title, page_path: pagePath }),
   });
 }
 
-export async function dismissSliceSuggestion(config: AppConfig, key: string): Promise<void> {
-  await apiWithConfig(config, `/slices/suggestions/${encodeURIComponent(key)}/dismiss`, {
+export async function dismissAreaSuggestion(config: AppConfig, key: string): Promise<void> {
+  await apiWithConfig(config, `/areas/suggestions/${encodeURIComponent(key)}/dismiss`, {
     method: "POST",
   });
 }

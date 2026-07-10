@@ -1,36 +1,36 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useStore } from "@/stores";
-import { fetchSliceDetail, updateSliceAutonomy } from "@/actions/slices";
+import { fetchAreaDetail, updateAreaAutonomy } from "@/actions/areas";
 import { runAutomation } from "@/actions/automations";
 import { createSession, goToNewSessionHome, switchSession } from "@/actions/sessions";
 import { sendMessage } from "@/actions/messages";
 import { Eye, Zap } from "lucide-react";
-import { AskCard } from "@/features/slices/components/AskCard";
-import { AgentPresence, type AgentInfo } from "@/features/slices/components/AgentPresence";
-import { OpenLoops } from "@/features/slices/components/OpenLoops";
-import { SliceActivity } from "@/features/slices/components/SliceActivity";
+import { AskCard } from "@/features/areas/components/AskCard";
+import { AgentPresence, type AgentInfo } from "@/features/areas/components/AgentPresence";
+import { OpenLoops } from "@/features/areas/components/OpenLoops";
+import { AreaActivity } from "@/features/areas/components/AreaActivity";
 import { ScrollFadeTop, ScrollFadeBottom } from "@/components/ui/ScrollBlur";
 import { RISE_IN, RISE_SETTLED, DISSOLVE_OUT, withExit, EXIT_ROW, MOTION, EASE_DECELERATE } from "@/lib/tokens/motion";
 
-/** Slice room: the full-screen detail view for one slice, opened from the
- *  Home slices strip / focus rows / related chips (`openSlice(key)` — same
+/** Area room: the full-screen detail view for one area, opened from the
+ *  Home areas strip / focus rows / related chips (`openArea(key)` — same
  *  store-mediated slot Task 10 wired for Home vs Chat). Renders in App.tsx
- *  wherever `openSliceKey` is set, ahead of the Home/Chat branch.
+ *  wherever `openAreaKey` is set, ahead of the Home/Chat branch.
  *
  *  Layout: back link → title + autonomy control → last-activity line →
- *  top ask's AskCard → OpenLoops → SliceActivity → RELATED chips → a
- *  scoped composer that provisions a slice-tagged session on first send. */
-export function SliceRoom({ sliceKey }: { sliceKey: string }) {
-  const detail = useStore((s) => s.slices.detailByKey[sliceKey]);
-  const overviewSlices = useStore((s) => s.slices.overview?.slices);
-  const openSlice = useStore((s) => s.openSlice);
+ *  top ask's AskCard → OpenLoops → AreaActivity → RELATED chips → a
+ *  scoped composer that provisions an area-tagged session on first send. */
+export function AreaRoom({ areaKey }: { areaKey: string }) {
+  const detail = useStore((s) => s.areas.detailByKey[areaKey]);
+  const overviewAreas = useStore((s) => s.areas.overview?.areas);
+  const openArea = useStore((s) => s.openArea);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
 
   useEffect(() => {
-    void fetchSliceDetail(sliceKey);
-  }, [sliceKey]);
+    void fetchAreaDetail(areaKey);
+  }, [areaKey]);
 
   if (!detail) {
     return (
@@ -58,15 +58,15 @@ export function SliceRoom({ sliceKey }: { sliceKey: string }) {
   }
 
   const topAsk = detail.asks[0] ?? null;
-  const relatedTitle = (key: string) => overviewSlices?.find((s) => s.key === key)?.title ?? key;
+  const relatedTitle = (key: string) => overviewAreas?.find((s) => s.key === key)?.title ?? key;
 
-  // The slice's standing agent (an automation keyed `slice:{key}`), rendered
+  // The area's standing agent (an automation keyed `area:{key}`), rendered
   // as a first-class presence (AgentPresence) rather than a footnote. Its
   // channel session is excluded from ACTIVITY — that list is the user's own
   // chats, not infrastructure.
   const agentAuto = detail.automations.find(
     (a): a is AgentInfo & { task_id: string } =>
-      typeof a === "object" && a !== null && (a as { task_id?: string }).task_id === `slice:${sliceKey}`,
+      typeof a === "object" && a !== null && (a as { task_id?: string }).task_id === `area:${areaKey}`,
   );
   const agentChannelId = agentAuto?.thread_id ?? null;
   const userSessions = detail.sessions.filter((s) => s.session_id !== agentChannelId);
@@ -78,10 +78,10 @@ export function SliceRoom({ sliceKey }: { sliceKey: string }) {
     if (!agentAuto?.task_id) return;
     try {
       await runAutomation(agentAuto.task_id);
-      await fetchSliceDetail(sliceKey);
+      await fetchAreaDetail(areaKey);
     } catch {
       useStore.getState().pushToast({
-        id: `slice-run-fail:${sliceKey}`,
+        id: `area-run-fail:${areaKey}`,
         title: "Couldn’t start the agent",
         status: "failed",
         target: { kind: "automation" },
@@ -91,34 +91,34 @@ export function SliceRoom({ sliceKey }: { sliceKey: string }) {
 
   const discussAsk = (ask: { text: string }) => {
     setDraft(`About "${ask.text}" — `);
-    document.getElementById("slice-composer-input")?.focus();
+    document.getElementById("area-composer-input")?.focus();
   };
 
   const grantAct = async () => {
     try {
-      await updateSliceAutonomy(sliceKey, "act");
+      await updateAreaAutonomy(areaKey, "act");
     } catch {
       useStore.getState().pushToast({
-        id: `slice-autonomy-fail:${sliceKey}`,
+        id: `area-autonomy-fail:${areaKey}`,
         title: "Couldn’t grant act autonomy",
         status: "failed",
         target: { kind: "automation" },
       });
-      await fetchSliceDetail(sliceKey);
+      await fetchAreaDetail(areaKey);
     }
   };
 
   const revokeAct = async () => {
     try {
-      await updateSliceAutonomy(sliceKey, "observe");
+      await updateAreaAutonomy(areaKey, "observe");
     } catch {
       useStore.getState().pushToast({
-        id: `slice-autonomy-fail:${sliceKey}`,
+        id: `area-autonomy-fail:${areaKey}`,
         title: "Couldn’t revoke act autonomy",
         status: "failed",
         target: { kind: "automation" },
       });
-      await fetchSliceDetail(sliceKey);
+      await fetchAreaDetail(areaKey);
     }
   };
 
@@ -128,14 +128,14 @@ export function SliceRoom({ sliceKey }: { sliceKey: string }) {
     setSending(true);
     setDraft("");
     try {
-      // sliceKey IS the project_id (unification) — filing is a plain
-      // create-in-project; the room's sessions list keys off project_id.
-      await createSession(sliceKey);
+      // areaKey IS the area_id (unification) — filing is a plain
+      // create-in-area; the room's sessions list keys off area_id.
+      await createSession(areaKey);
       await sendMessage(text);
     } catch {
       setDraft(text);
       useStore.getState().pushToast({
-        id: `slice-send-fail:${sliceKey}`,
+        id: `area-send-fail:${areaKey}`,
         title: "Couldn’t send message",
         status: "failed",
         target: { kind: "automation" },
@@ -174,7 +174,7 @@ export function SliceRoom({ sliceKey }: { sliceKey: string }) {
       <div className="grid gap-1.5">
         {/* The agent's permission dial, a clear pill beside the title: Eye =
             observe (reads + updates the page only), Zap = act (may run this
-            slice's automations/workflows). A plain click toggles — the
+            area's automations/workflows). A plain click toggles — the
             "irreversible steps still ask you" contract is the safety net, so
             no hold-to-arm ceremony. Absent entirely on plain containers
             (autonomy null = no standing agent to dial). */}
@@ -186,7 +186,7 @@ export function SliceRoom({ sliceKey }: { sliceKey: string }) {
             <button
               type="button"
               onClick={() => void grantAct()}
-              title="The agent only reads this slice and updates its page — it takes no action on its own. Click to let it act: run this slice's automations and workflows. Irreversible steps still ask you first."
+              title="The agent only reads this area and updates its page — it takes no action on its own. Click to let it act: run this area's automations and workflows. Irreversible steps still ask you first."
               className="shrink-0 self-center inline-flex h-7 items-center gap-1.5 rounded-full border border-line-soft px-3 text-xs font-medium text-muted transition-[color,border-color,scale] duration-check ease-out hover:border-line-strong hover:text-ink active:scale-[0.97]"
             >
               <Eye size={13} strokeWidth={2} />
@@ -196,7 +196,7 @@ export function SliceRoom({ sliceKey }: { sliceKey: string }) {
             <button
               type="button"
               onClick={() => void revokeAct()}
-              title="The agent can run this slice's automations and workflows on its own. Click to return it to observe-only."
+              title="The agent can run this area's automations and workflows on its own. Click to return it to observe-only."
               className="shrink-0 self-center inline-flex h-7 items-center gap-1.5 rounded-full border border-accent-soft px-3 text-xs font-medium text-accent transition-[opacity,scale] duration-check ease-out hover:opacity-80 active:scale-[0.97]"
             >
               <Zap size={13} strokeWidth={2} />
@@ -221,14 +221,14 @@ export function SliceRoom({ sliceKey }: { sliceKey: string }) {
       )}
         </div>
 
-        {/* The only scroller: the slice's reference material. */}
+        {/* The only scroller: the area's reference material. */}
         <div className="relative mt-6 min-h-0 flex-1 overflow-y-auto overflow-x-hidden scroll-thin">
           <ScrollFadeTop />
           <ScrollFadeBottom />
           <div className="grid content-start gap-6 pb-1">
             {isEmpty && (
               <p className="m-0 text-sm text-faint">
-                Nothing on file yet — message the slice below, or its agent will report after its next run.
+                Nothing on file yet — message the area below, or its agent will report after its next run.
               </p>
             )}
 
@@ -236,10 +236,10 @@ export function SliceRoom({ sliceKey }: { sliceKey: string }) {
               loops={detail.open_loops}
               onDiscuss={(loop) => {
                 setDraft(`About the open loop "${loop}" — `);
-                document.getElementById("slice-composer-input")?.focus();
+                document.getElementById("area-composer-input")?.focus();
               }}
             />
-            <SliceActivity sessions={userSessions} />
+            <AreaActivity sessions={userSessions} />
 
             {detail.related.length > 0 && (
               <div className="grid gap-2">
@@ -249,7 +249,7 @@ export function SliceRoom({ sliceKey }: { sliceKey: string }) {
                     <button
                       key={key}
                       type="button"
-                      onClick={() => openSlice(key)}
+                      onClick={() => openArea(key)}
                       className="rounded-full bg-surface-soft px-2.5 py-1 text-xs text-ink-soft transition-[color,scale] duration-check ease-out hover:text-ink active:scale-[0.97]"
                     >
                       {relatedTitle(key)}
@@ -264,7 +264,7 @@ export function SliceRoom({ sliceKey }: { sliceKey: string }) {
         <div className="shrink-0 pt-3">
           <div className="flex h-[52px] w-full items-center gap-2 rounded-xl border border-line bg-surface-2 px-4 shadow-md">
             <input
-              id="slice-composer-input"
+              id="area-composer-input"
               type="text"
               value={draft}
               onChange={(e) => setDraft(e.target.value)}

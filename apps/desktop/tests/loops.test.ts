@@ -28,7 +28,7 @@ test("truncatePrompt exactly at the limit returns as-is", () => {
   expect(truncatePrompt(text, 80)).toBe(text);
 });
 
-test("truncatePrompt over the limit slices and ellipsizes", () => {
+test("truncatePrompt over the limit areas and ellipsizes", () => {
   const text = "a".repeat(120);
   const out = truncatePrompt(text);
   expect(out.length).toBe(80);

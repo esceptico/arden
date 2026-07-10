@@ -1,5 +1,5 @@
 import { Archive, FolderInput, Pencil, Pin, PinOff, Sparkles } from "lucide-react";
-import type { Project } from "@/api/types";
+import type { Area } from "@/api/types";
 import { ICON } from "@/lib/icons";
 import { MenuItem } from "@/components/ui/MenuItem";
 import { AnchoredPopover } from "@/components/ui/AnchoredPopover";
@@ -16,20 +16,20 @@ export function SessionContextMenu({
   onRename,
   onCompact,
   onArchive,
-  onMoveProject,
+  onMoveArea,
   onTogglePin,
   isPinned,
-  projects,
+  areas,
 }: {
   state: ContextMenuState | null;
   onClose: () => void;
   onRename: () => void;
   onCompact: () => void;
   onArchive: () => void;
-  onMoveProject: (projectId: string | null) => void;
+  onMoveArea: (areaId: string | null) => void;
   onTogglePin: () => void;
   isPinned: boolean;
-  projects: Project[];
+  areas: Area[];
 }) {
   return (
     <AnchoredPopover
@@ -50,13 +50,13 @@ export function SessionContextMenu({
       <ContextItem icon={<Sparkles size={ICON.MD} strokeWidth={2} />} label="Compact context" onClick={onCompact} />
       <ContextItem icon={<Archive size={ICON.MD} strokeWidth={2} />} label="Archive" onClick={onArchive} />
       <div className="my-1 h-px bg-line-soft" />
-      <ContextItem icon={<FolderInput size={ICON.MD} strokeWidth={2} />} label="Move to Inbox" onClick={() => onMoveProject(null)} />
-      {projects.map((project) => (
+      <ContextItem icon={<FolderInput size={ICON.MD} strokeWidth={2} />} label="Move to Inbox" onClick={() => onMoveArea(null)} />
+      {areas.map((area) => (
         <ContextItem
-          key={project.project_id}
+          key={area.area_id}
           icon={<FolderInput size={ICON.MD} strokeWidth={2} />}
-          label={project.name}
-          onClick={() => onMoveProject(project.project_id)}
+          label={area.name}
+          onClick={() => onMoveArea(area.area_id)}
         />
       ))}
     </AnchoredPopover>
