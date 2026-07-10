@@ -32,7 +32,15 @@ async def test_mcp_tool_executes_remote_tool_and_adapts_result():
     session = FakeMCPSession(
         CallToolResult(
             content=[TextContent(type="text", text="Found 1 note")],
-            structuredContent={"hits": [{"path": "Note.md"}]},
+            structuredContent={
+                "results": [
+                    {
+                        "id": "Note.md",
+                        "title": "Note",
+                        "url": "https://notes.example.test/Note.md",
+                    }
+                ]
+            },
         )
     )
     tool = MCPTool("obsidian", mcp_tool, session)
@@ -51,7 +59,26 @@ async def test_mcp_tool_executes_remote_tool_and_adapts_result():
 
     assert session.calls == [("search", {"query": "notes"})]
     assert result.content == "Found 1 note"
-    assert result.data == {"structuredContent": {"hits": [{"path": "Note.md"}]}}
+    assert result.data == {
+        "structuredContent": {
+            "results": [
+                {
+                    "id": "Note.md",
+                    "title": "Note",
+                    "url": "https://notes.example.test/Note.md",
+                }
+            ]
+        }
+    }
+    assert [ref.to_dict() for ref in result.source_refs] == [
+        {
+            "provider": "obsidian",
+            "kind": "search_result",
+            "ref": "Note.md",
+            "title": "Note",
+            "url": "https://notes.example.test/Note.md",
+        }
+    ]
 
 
 def test_mcp_tool_uses_explicit_policy_override():

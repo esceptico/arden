@@ -5,7 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from ntrp.agent.types.tools import ToolSourceRef
+from ntrp.agent.types.tools import ToolSourceRef, normalize_source_refs
 from ntrp.constants import WEB_SEARCH_MAX_RESULTS
 from ntrp.integrations.web.exceptions import NoSearchResultsException, WebSearchProviderException
 from ntrp.integrations.web.types import WebClient
@@ -85,7 +85,20 @@ async def web_search(execution: ToolExecution, args: WebSearchInput) -> ToolResu
             return ToolResult(content=_empty_search_content(args.query), preview="0 results")
 
         content = json.dumps({"query": args.query, "results": formatted}, indent=2, ensure_ascii=False)
-        return ToolResult(content=content, preview=f"{len(formatted)} results")
+        return ToolResult(
+            content=content,
+            preview=f"{len(formatted)} results",
+            source_refs=normalize_source_refs(
+                ToolSourceRef(
+                    provider="web",
+                    kind="page",
+                    ref=result.url,
+                    title=(result.title or "").strip() or result.url,
+                    url=result.url,
+                )
+                for result in results
+            ),
+        )
 
     except NoSearchResultsException:
         return ToolResult(content=_empty_search_content(args.query), preview="0 results")
@@ -128,14 +141,16 @@ async def web_fetch(execution: ToolExecution, args: WebFetchInput) -> ToolResult
             return ToolResult(
                 content="\n".join(output),
                 preview=f"Fetched {lines} lines",
-                source_refs=(
-                    ToolSourceRef(
-                        provider="web",
-                        kind="page",
-                        ref=args.url,
-                        title=(r.title or "").strip() or args.url,
-                        url=args.url,
-                    ),
+                source_refs=normalize_source_refs(
+                    (
+                        ToolSourceRef(
+                            provider="web",
+                            kind="page",
+                            ref=r.url,
+                            title=(r.title or "").strip() or r.url,
+                            url=r.url,
+                        ),
+                    )
                 ),
             )
         return ToolResult(content="No content fetched. Page may be empty or require JavaScript.", preview="Empty")

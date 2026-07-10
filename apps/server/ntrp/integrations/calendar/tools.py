@@ -2,6 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from ntrp.agent.types.tools import ToolSourceRef, normalize_source_refs
 from ntrp.integrations.calendar.client import MultiCalendarSource
 from ntrp.tools.core import ToolResult, tool
 from ntrp.tools.core.context import ToolExecution
@@ -29,6 +30,19 @@ DELETE_CALENDAR_EVENT_DESCRIPTION = """Delete a calendar event by ID.
 
 Use calendar() or calendar(query) first to find the event ID.
 Requires user approval before deleting."""
+
+
+def _event_source_refs(events: list) -> tuple[ToolSourceRef, ...]:
+    return normalize_source_refs(
+        ToolSourceRef(
+            provider="calendar",
+            kind="event",
+            ref=event.source_id,
+            title=(event.title or "").strip() or f"Calendar event {event.source_id}",
+            url=event.metadata.get("html_link"),
+        )
+        for event in events
+    )
 
 
 def _parse_datetime(value: str) -> datetime | None:
@@ -95,7 +109,11 @@ def _calendar_search(source: MultiCalendarSource, query: str, limit: int) -> Too
             )
 
         content = _format_events(events)
-        return ToolResult(content=content, preview=f"{len(events)} events")
+        return ToolResult(
+            content=content,
+            preview=f"{len(events)} events",
+            source_refs=_event_source_refs(events),
+        )
     except Exception as e:
         return ToolResult(content=f"Error searching events: {e}", preview="Search failed", is_error=True)
 
@@ -118,7 +136,11 @@ def _calendar_list(source: MultiCalendarSource, days_forward: int, days_back: in
     trimmed = events[:limit]
 
     content = _format_events(trimmed)
-    return ToolResult(content=content, preview=f"{len(events)} events")
+    return ToolResult(
+        content=content,
+        preview=f"{len(events)} events",
+        source_refs=_event_source_refs(trimmed),
+    )
 
 
 async def calendar(execution: ToolExecution, args: CalendarInput) -> ToolResult:

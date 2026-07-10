@@ -1,9 +1,11 @@
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
 from mcp import types as mcp_types
 
+from ntrp.agent.types.tools import ToolSourceRef, normalize_source_refs
 from ntrp.tools.core.base import ToolResult
 
 
@@ -14,7 +16,12 @@ class ContentProjection:
     metadata: tuple[dict[str, Any], ...] = ()
 
 
-def call_tool_result_to_tool_result(result: mcp_types.CallToolResult) -> ToolResult:
+def call_tool_result_to_tool_result(
+    result: mcp_types.CallToolResult,
+    *,
+    provider: str,
+    tool_name: str,
+) -> ToolResult:
     projection = _project_content(result.content)
     content = _model_content(result, projection)
     return ToolResult(
@@ -22,7 +29,88 @@ def call_tool_result_to_tool_result(result: mcp_types.CallToolResult) -> ToolRes
         preview=content[:100] if content else "Empty result",
         is_error=bool(result.isError),
         data=_metadata(result, projection),
+        source_refs=extract_mcp_source_refs(result, provider=provider, tool_name=tool_name),
     )
+
+
+def extract_mcp_source_refs(
+    result: mcp_types.CallToolResult,
+    *,
+    provider: str,
+    tool_name: str,
+) -> tuple[ToolSourceRef, ...]:
+    refs: list[ToolSourceRef] = []
+
+    for block in result.content:
+        match block:
+            case mcp_types.ResourceLink():
+                uri = str(block.uri)
+                refs.append(
+                    ToolSourceRef(
+                        provider=provider,
+                        kind="resource",
+                        ref=uri,
+                        title=_first_nonempty(block.title, block.name, uri),
+                        url=uri,
+                    )
+                )
+            case mcp_types.EmbeddedResource():
+                uri = str(block.resource.uri)
+                refs.append(
+                    ToolSourceRef(
+                        provider=provider,
+                        kind="resource",
+                        ref=uri,
+                        title=uri,
+                        url=uri,
+                    )
+                )
+
+    structured = result.structuredContent
+    if tool_name == "search" and isinstance(structured, Mapping):
+        results = structured.get("results")
+        if isinstance(results, list):
+            for item in results:
+                if not isinstance(item, Mapping):
+                    continue
+                source_id = item.get("id")
+                title = item.get("title")
+                if not isinstance(source_id, str) or not isinstance(title, str):
+                    continue
+                url = item.get("url")
+                refs.append(
+                    ToolSourceRef(
+                        provider=provider,
+                        kind="search_result",
+                        ref=source_id,
+                        title=_first_nonempty(title, source_id),
+                        url=url if isinstance(url, str) else None,
+                    )
+                )
+    elif tool_name == "fetch" and isinstance(structured, Mapping):
+        source_id = structured.get("id")
+        title = structured.get("title")
+        text = structured.get("text")
+        if isinstance(source_id, str) and isinstance(title, str) and isinstance(text, str) and text.strip():
+            url = structured.get("url")
+            refs.append(
+                ToolSourceRef(
+                    provider=provider,
+                    kind="document",
+                    ref=source_id,
+                    title=_first_nonempty(title, source_id),
+                    url=url if isinstance(url, str) else None,
+                )
+            )
+
+    return normalize_source_refs(refs)
+
+
+def _first_nonempty(*values: str | None) -> str:
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value
+    return "resource"
 
 
 def _model_content(result: mcp_types.CallToolResult, projection: ContentProjection) -> str:

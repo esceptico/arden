@@ -69,9 +69,38 @@ async def test_web_search_tells_model_to_simplify_empty_queries():
 
 
 @pytest.mark.asyncio
+async def test_web_search_self_reports_each_result_source():
+    source = FakeWebSource(
+        results=[
+            WebSearchResult(title="First result", url="https://example.com/first"),
+            WebSearchResult(title="   ", url="https://example.com/second"),
+        ]
+    )
+
+    result = await web_search(_execution(source), WebSearchInput(query="examples", num_results=5))
+
+    assert [ref.to_dict() for ref in result.source_refs] == [
+        {
+            "provider": "web",
+            "kind": "page",
+            "ref": "https://example.com/first",
+            "title": "First result",
+            "url": "https://example.com/first",
+        },
+        {
+            "provider": "web",
+            "kind": "page",
+            "ref": "https://example.com/second",
+            "title": "https://example.com/second",
+            "url": "https://example.com/second",
+        },
+    ]
+
+
+@pytest.mark.asyncio
 async def test_web_fetch_self_reports_source_refs():
     source = FakeWebSource(
-        contents=[WebContentResult(title="Example Page", url="https://example.com/x", text="body text")]
+        contents=[WebContentResult(title="Example Page", url="https://example.com/canonical", text="body text")]
     )
     result = await web_fetch(_execution(source), WebFetchInput(url="https://example.com/x"))
 
@@ -80,9 +109,9 @@ async def test_web_fetch_self_reports_source_refs():
         {
             "provider": "web",
             "kind": "page",
-            "ref": "https://example.com/x",
+            "ref": "https://example.com/canonical",
             "title": "Example Page",
-            "url": "https://example.com/x",
+            "url": "https://example.com/canonical",
         }
     ]
 

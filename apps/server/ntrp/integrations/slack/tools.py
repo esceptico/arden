@@ -2,6 +2,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from ntrp.agent.types.tools import ToolSourceRef, normalize_source_refs
 from ntrp.integrations.slack.client import SlackClient
 from ntrp.tools.core import ToolResult, tool
 from ntrp.tools.core.context import ToolExecution
@@ -10,6 +11,32 @@ from ntrp.utils import truncate
 
 _TEXT_TRUNCATE = 280
 _DEFAULT_LIMIT = 20
+
+
+def _message_source_refs(items: list) -> tuple[ToolSourceRef, ...]:
+    return normalize_source_refs(
+        ToolSourceRef(
+            provider="slack",
+            kind="message",
+            ref=item.source_id,
+            title=(item.title or "").strip() or f"Slack message {item.source_id}",
+            url=item.metadata.get("permalink"),
+        )
+        for item in items
+    )
+
+
+def _message_source_ref(message_id: str, *, title: str) -> tuple[ToolSourceRef, ...]:
+    return normalize_source_refs(
+        (
+            ToolSourceRef(
+                provider="slack",
+                kind="message",
+                ref=message_id,
+                title=title,
+            ),
+        )
+    )
 
 
 def _format_messages(items: list, *, show_thread_hint: bool = True) -> str:
@@ -61,7 +88,11 @@ async def slack_search(execution: ToolExecution, args: SlackSearchInput) -> Tool
     results = await source.search_messages(args.query, limit=args.limit, channel_types=channel_types)
     if not results:
         return ToolResult(content=f"No Slack messages found for {args.query!r}", preview="0 results")
-    return ToolResult(content=_format_messages(results), preview=f"{len(results)} messages")
+    return ToolResult(
+        content=_format_messages(results),
+        preview=f"{len(results)} messages",
+        source_refs=_message_source_refs(results),
+    )
 
 
 class SlackChannelInput(BaseModel):
@@ -74,7 +105,11 @@ async def slack_channel(execution: ToolExecution, args: SlackChannelInput) -> To
     results = await source.read_channel(args.channel, limit=args.limit)
     if not results:
         return ToolResult(content=f"No messages in #{args.channel}", preview="0 messages")
-    return ToolResult(content=_format_messages(results), preview=f"{len(results)} messages")
+    return ToolResult(
+        content=_format_messages(results),
+        preview=f"{len(results)} messages",
+        source_refs=_message_source_refs(results),
+    )
 
 
 class SlackThreadInput(BaseModel):
@@ -92,7 +127,12 @@ async def slack_thread(execution: ToolExecution, args: SlackThreadInput) -> Tool
     if not result:
         return ToolResult(content=f"Message not found: {args.message_id}", preview="Not found")
     lines = result.text.count("\n") + 1
-    return ToolResult(content=result.text, preview=f"Read {lines} lines", model_content=result.model_content)
+    return ToolResult(
+        content=result.text,
+        preview=f"Read {lines} lines",
+        model_content=result.model_content,
+        source_refs=_message_source_ref(args.message_id, title=f"Slack message {args.message_id}"),
+    )
 
 
 class SlackChannelsInput(BaseModel):
@@ -290,7 +330,11 @@ async def slack_dm(execution: ToolExecution, args: SlackDmInput) -> ToolResult:
     results = await source.read_channel(channel_id, limit=args.limit)
     if not results:
         return ToolResult(content=f"No messages in DM with {args.target!r}", preview="0 messages")
-    return ToolResult(content=_format_messages(results), preview=f"{len(results)} messages")
+    return ToolResult(
+        content=_format_messages(results),
+        preview=f"{len(results)} messages",
+        source_refs=_message_source_refs(results),
+    )
 
 
 slack_search_tool = tool(

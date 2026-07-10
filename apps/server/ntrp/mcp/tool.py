@@ -51,7 +51,11 @@ class MCPTool(Tool):
     async def execute(self, execution: ToolExecution, **kwargs: Any) -> ToolResult:
         try:
             result = await self._session.call_tool(self._mcp_tool.name, kwargs)
-            return call_tool_result_to_tool_result(result)
+            return call_tool_result_to_tool_result(
+                result,
+                provider=self._server_name,
+                tool_name=self._mcp_tool.name,
+            )
         except Exception as e:
             return ToolResult(
                 content=f"MCP tool error ({self._server_name}/{self._mcp_tool.name}): {e}",

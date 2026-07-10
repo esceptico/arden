@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field
 
+from ntrp.agent.types.tools import ToolSourceRef, normalize_source_refs
 from ntrp.constants import EMAIL_FROM_TRUNCATE, EMAIL_SUBJECT_TRUNCATE
 from ntrp.integrations.gmail.client import MultiGmailSource
 from ntrp.tools.core import ToolResult, tool
@@ -19,6 +20,34 @@ Without query: lists recent emails (subjects and senders). Use days to control t
 With query: searches email content. Use specific keywords like names, subjects, or phrases.
 
 Use read_email(id) to get full content of a specific email."""
+
+
+def _message_source_ref(message_id: str, title: str | None = None) -> tuple[ToolSourceRef, ...]:
+    return normalize_source_refs(
+        (
+            ToolSourceRef(
+                provider="gmail",
+                kind="message",
+                ref=message_id,
+                title=(title or "").strip() or f"Gmail message {message_id}",
+            ),
+        )
+    )
+
+
+def _message_source_refs(items: list) -> tuple[ToolSourceRef, ...]:
+    refs = []
+    for item in items:
+        message_id = getattr(item, "source_id", None) or getattr(item, "identity", "")
+        refs.append(
+            ToolSourceRef(
+                provider="gmail",
+                kind="message",
+                ref=message_id,
+                title=(item.title or "").strip() or f"Gmail message {message_id}",
+            )
+        )
+    return normalize_source_refs(refs)
 
 
 class SendEmailInput(BaseModel):
@@ -52,7 +81,11 @@ async def read_email(execution: ToolExecution, args: ReadEmailInput) -> ToolResu
         )
 
     lines = content.count("\n") + 1
-    return ToolResult(content=content, preview=f"Read {lines} lines")
+    return ToolResult(
+        content=content,
+        preview=f"Read {lines} lines",
+        source_refs=_message_source_ref(args.email_id),
+    )
 
 
 def _format_email_list(emails: list) -> str:
@@ -105,7 +138,11 @@ def _list_emails(source: MultiGmailSource, days: int, limit: int) -> ToolResult:
 
     trimmed = emails[:limit]
     content = _format_email_list(trimmed)
-    return ToolResult(content=content, preview=f"{len(emails)} emails")
+    return ToolResult(
+        content=content,
+        preview=f"{len(emails)} emails",
+        source_refs=_message_source_refs(trimmed),
+    )
 
 
 def _search_emails(source: MultiGmailSource, query: str, limit: int) -> ToolResult:
@@ -115,7 +152,11 @@ def _search_emails(source: MultiGmailSource, query: str, limit: int) -> ToolResu
 
     trimmed = results[:limit]
     content = _format_email_search(trimmed)
-    return ToolResult(content=content, preview=f"{len(results)} emails")
+    return ToolResult(
+        content=content,
+        preview=f"{len(results)} emails",
+        source_refs=_message_source_refs(trimmed),
+    )
 
 
 async def emails(execution: ToolExecution, args: EmailsInput) -> ToolResult:
