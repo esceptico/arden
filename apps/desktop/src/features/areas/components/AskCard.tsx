@@ -4,7 +4,7 @@ import type { Automation } from "@/api/types";
 import { useStore } from "@/stores";
 import { runAutomation } from "@/actions/automations";
 import { switchSession } from "@/actions/sessions";
-import { fetchAreaDetail, resolveAsk } from "@/actions/areas";
+import { fetchAreaDetail, fewerLikeThis, resolveAsk } from "@/actions/areas";
 import { primaryActionFor } from "@/lib/askActions";
 import { IconButton } from "@/components/ui/IconButton";
 import { Button } from "@/components/ui/Button";
@@ -24,14 +24,18 @@ function splitAsk(text: string): { title: string; detail: string | null } {
   return { title: text.slice(0, i), detail: detail.charAt(0).toUpperCase() + detail.slice(1) };
 }
 
-/** Attention card for an area's top ask: severity dot, title/detail, a
- *  buttons row (primary action + Discuss), dismiss ✕ in the corner.
- *  Discuss hands the ask to the room's scoped composer via `onDiscuss`.
- *  Retires with ROW_EXIT; list membership is the caller's AnimatePresence.
+/** Attention card for an area's ask. The buttons follow the ask's kind
+ *  (three-verb taxonomy) so every ask presents exactly the affordances it
+ *  can answer with:
+ *    notify   — Got it (done). An FYI is cleared, not decided.
+ *    question — Reply (hands the ask to the room's composer) / Dismiss.
+ *    review   — Approve (done) / Reject (dismissed) / Discuss.
+ *  The why-now and what-happens-next lines make the ask answerable instead
+ *  of rubber-stampable; "fewer like this" steers the agent's standing
+ *  instructions from the card itself.
  *
  *  `open_page` actions route to `openArea(ask.area_key)` — a no-op
- *  inside the ask's own room, so the primary button is suppressed there
- *  and Discuss carries the card. */
+ *  inside the ask's own room, so the primary button is suppressed there. */
 export function AskCard({ ask, onDiscuss }: { ask: AreaAsk; onDiscuss?: (ask: AreaAsk) => void }) {
   const automations = useStore((s) => s.automations);
   const { title, detail } = splitAsk(ask.text);
@@ -45,17 +49,30 @@ export function AskCard({ ask, onDiscuss }: { ask: AreaAsk; onDiscuss?: (ask: Ar
         openArea: (key) => useStore.getState().openArea(key),
       });
 
-  const dismiss = async () => {
+  const settle = async (state: "done" | "dismissed", failTitle: string) => {
     try {
-      await resolveAsk(ask.area_key, ask.id, "dismissed");
+      await resolveAsk(ask.area_key, ask.id, state);
     } catch {
       useStore.getState().pushToast({
-        id: `ask-dismiss-fail:${ask.area_key}:${ask.id}`,
-        title: "Couldn’t dismiss",
+        id: `ask-resolve-fail:${ask.area_key}:${ask.id}`,
+        title: failTitle,
         status: "failed",
         target: { kind: "automation" },
       });
       await fetchAreaDetail(ask.area_key);
+    }
+  };
+
+  const steer = async () => {
+    try {
+      await fewerLikeThis(ask);
+    } catch {
+      useStore.getState().pushToast({
+        id: `ask-steer-fail:${ask.area_key}:${ask.id}`,
+        title: "Couldn’t update instructions",
+        status: "failed",
+        target: { kind: "automation" },
+      });
     }
   };
 
@@ -68,30 +85,77 @@ export function AskCard({ ask, onDiscuss }: { ask: AreaAsk; onDiscuss?: (ask: Ar
       className="grid min-w-0 gap-1.5 rounded-xl bg-surface-soft px-4 py-3.5"
     >
       {/* Eyebrow: the kind is a text LABEL, not an action; dismiss at the
-          far end. Keeps the kind out of the button position where it read
-          as a control. */}
+          far end. */}
       <div className="flex min-w-0 items-center gap-2">
         <span className="text-2xs font-medium uppercase tracking-wide text-faint">
           {ASK_KIND[ask.kind].label}
         </span>
-        <IconButton size="sm" title="Dismiss" onClick={() => void dismiss()} className="-my-1 ml-auto">
+        <IconButton
+          size="sm"
+          title="Dismiss"
+          onClick={() => void settle("dismissed", "Couldn’t dismiss")}
+          className="-my-1 ml-auto"
+        >
           <X className="size-3.5" />
         </IconButton>
       </div>
       <div className="min-w-0">
         <p className="m-0 text-base font-medium leading-snug text-ink [overflow-wrap:anywhere]">{title}</p>
         {detail && <p className="m-0 mt-1 text-sm leading-snug text-ink-soft [overflow-wrap:anywhere]">{detail}</p>}
+        {(ask.why_now || ask.what_next) && (
+          <div className="mt-1.5 grid gap-0.5">
+            {ask.why_now && (
+              <p className="m-0 text-xs leading-snug text-muted [overflow-wrap:anywhere]">
+                <span className="text-faint">Why now:</span> {ask.why_now}
+              </p>
+            )}
+            {ask.what_next && (
+              <p className="m-0 text-xs leading-snug text-muted [overflow-wrap:anywhere]">
+                <span className="text-faint">Next:</span> {ask.what_next}
+              </p>
+            )}
+          </div>
+        )}
       </div>
       <div className="mt-2 flex items-center gap-2">
+        {ask.kind === "review" && (
+          <>
+            <Button variant="primary" size="sm" onClick={() => void settle("done", "Couldn’t approve")}>
+              Approve
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => void settle("dismissed", "Couldn’t reject")}>
+              Reject
+            </Button>
+          </>
+        )}
+        {ask.kind === "question" && onDiscuss && (
+          <Button variant="primary" size="sm" onClick={() => onDiscuss(ask)}>
+            Reply
+          </Button>
+        )}
+        {ask.kind === "notify" && (
+          <Button variant="primary" size="sm" onClick={() => void settle("done", "Couldn’t clear")}>
+            Got it
+          </Button>
+        )}
         {primaryAction && (
-          <Button variant="primary" size="sm" onClick={primaryAction.run}>
+          <Button variant="ghost" size="sm" onClick={primaryAction.run}>
             {primaryAction.label}
           </Button>
         )}
-        {onDiscuss && (
-          <Button variant={primaryAction ? "ghost" : "primary"} size="sm" onClick={() => onDiscuss(ask)}>
+        {ask.kind !== "question" && onDiscuss && (
+          <Button variant="ghost" size="sm" onClick={() => onDiscuss(ask)}>
             Discuss
           </Button>
+        )}
+        {ask.source === "agent" && (
+          <button
+            type="button"
+            onClick={() => void steer()}
+            className="ml-auto text-2xs text-whisper transition-colors duration-check ease-out hover:text-muted"
+          >
+            Fewer like this
+          </button>
         )}
       </div>
     </motion.div>

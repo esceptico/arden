@@ -8,6 +8,7 @@ import { sendMessage } from "@/actions/messages";
 import { Eye, Zap } from "lucide-react";
 import { AskCard } from "@/features/areas/components/AskCard";
 import { AgentPresence, type AgentInfo } from "@/features/areas/components/AgentPresence";
+import { AgentStatusLine, AreaSettingsButton } from "@/features/areas/components/AreaControls";
 import { OpenLoops } from "@/features/areas/components/OpenLoops";
 import { AreaActivity } from "@/features/areas/components/AreaActivity";
 import { ScrollFadeTop, ScrollFadeBottom } from "@/components/ui/ScrollBlur";
@@ -203,7 +204,9 @@ export function AreaRoom({ areaKey }: { areaKey: string }) {
               Acting
             </button>
           )}
+          <AreaSettingsButton detail={detail} />
         </div>
+        <AgentStatusLine detail={detail} />
       </div>
 
       {agentAuto && (

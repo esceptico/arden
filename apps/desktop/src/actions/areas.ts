@@ -1,6 +1,7 @@
 import {
   createArea as createAreaApi,
-  dismissAreaSuggestion as dismissAreaSuggestionApi, fetchAreasOverview as fetchAreasOverviewApi, fetchAreaDetail as fetchAreaDetailApi, resolveAsk as resolveAskApi, updateAreaAutonomy as updateAreaAutonomyApi } from "@/api/areas";
+  dismissAreaSuggestion as dismissAreaSuggestionApi, fetchAreasOverview as fetchAreasOverviewApi, fetchAreaDetail as fetchAreaDetailApi, resolveAsk as resolveAskApi, updateAreaAutonomy as updateAreaAutonomyApi, updateAreaSettings as updateAreaSettingsApi } from "@/api/areas";
+import type { AreaAsk, AreaAttention, AreaInterrupts } from "@/api/areas";
 import { getState } from "@/stores";
 
 export async function fetchAreasOverview(): Promise<void> {
@@ -41,4 +42,28 @@ export async function dismissAreaSuggestion(key: string): Promise<void> {
   const s = getState();
   await dismissAreaSuggestionApi(s.config, key);
   await fetchAreasOverview();
+}
+
+
+export async function updateAreaSettings(
+  key: string,
+  patch: { attention?: AreaAttention; interrupts?: AreaInterrupts; paused?: boolean },
+): Promise<void> {
+  const s = getState();
+  await updateAreaSettingsApi(s.config, key, patch);
+  // The room shows these live; refetch is the source of truth (the row
+  // PATCH response lacks the agent block).
+  await fetchAreaDetail(key);
+}
+
+/** Contextual tuning ("fewer like this"): the feedback lands on the area's
+ *  standing instructions, which the agent reads every turn via the AREA
+ *  block — the ask itself is dismissed. */
+export async function fewerLikeThis(ask: AreaAsk): Promise<void> {
+  const s = getState();
+  const record = s.areaRecords.find((r) => r.area_id === ask.area_key);
+  const line = `- Fewer asks like: "${ask.text.slice(0, 120)}"`;
+  const instructions = record?.instructions ? `${record.instructions}\n${line}` : line;
+  await updateAreaSettingsApi(s.config, ask.area_key, { instructions });
+  await resolveAsk(ask.area_key, ask.id, "dismissed");
 }

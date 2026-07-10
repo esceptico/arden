@@ -139,6 +139,11 @@ export function Home() {
                     <FocusRow key={ask.id} ask={ask} areaTitle={titleFor(ask.area_key)} />
                   ))}
                 </AnimatePresence>
+                {/* The queue visibly ENDS — completeness is the feature, not
+                    an infinite feed (the one universally praised Pulse idiom). */}
+                <p className="m-0 px-1 pt-1 text-2xs text-whisper select-none">
+                  That’s it for today.
+                </p>
               </div>
             </div>
           </div>

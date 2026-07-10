@@ -15,13 +15,35 @@ export interface AreaAsk {
   id: string;
   area_key: string;
   text: string;
-  kind: "review" | "decide" | "act" | "drift";
+  /** Three-verb taxonomy: notify = FYI (expires quietly), question = the
+   *  agent is blocked on the user's judgment, review = a proposed action
+   *  awaiting approval. */
+  kind: "notify" | "question" | "review";
   source: string;
   actions: { verb: string; ref: string }[];
   state: string;
   created_at: string;
   snoozed_until: string | null;
   provenance?: string | null;
+  why_now?: string | null;
+  what_next?: string | null;
+  expires_at?: string | null;
+}
+
+export type AreaAttention = "dormant" | "ambient" | "active";
+export type AreaInterrupts = "asks" | "all" | "none";
+
+/** The custodian's liveness block — the room's "last checked / next check"
+ *  line and run budget come from here. Null on agentless areas. */
+export interface AreaAgentStatus {
+  last_checked: string | null;
+  next_check: string | null;
+  next_check_reason: string | null;
+  last_report: string | null;
+  woken_by: string[];
+  runs_today: number;
+  runs_cap: number;
+  running_since: string | null;
 }
 
 export interface AreaSuggestion {
@@ -47,6 +69,10 @@ export interface AreaDetail {
   related: string[];
   open_loops: string[];
   updated: string;
+  attention: AreaAttention;
+  interrupts: AreaInterrupts;
+  paused: boolean;
+  agent: AreaAgentStatus | null;
   asks: AreaAsk[];
   sessions: { session_id: string; name: string }[];
   automations: unknown[];
@@ -99,6 +125,24 @@ export async function createArea(
   await apiWithConfig(config, "/areas", {
     method: "POST",
     body: JSON.stringify({ name: title, page_path: pagePath }),
+  });
+}
+
+/** PATCH the custodian's operator settings (attention / interrupts / pause /
+ *  instructions). Returns the updated area row, not a full detail. */
+export async function updateAreaSettings(
+  config: AppConfig,
+  key: string,
+  patch: {
+    attention?: AreaAttention;
+    interrupts?: AreaInterrupts;
+    paused?: boolean;
+    instructions?: string | null;
+  },
+): Promise<{ area_id: string; instructions: string | null }> {
+  return apiWithConfig(config, `/areas/${encodeURIComponent(key)}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
   });
 }
 
