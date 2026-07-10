@@ -50,7 +50,7 @@ debt ("otherwise we will have 100500 different names for one concept").
        SSE event name; gates = typecheck + lint + bun test tests/.
 - [x] 6. Live verify: migration dry-run against a COPY of ~/.ntrp/sessions.db;
        preview harness pass on sidebar/home/popover/room.
-- [x] 7. Docs sweep (CLAUDE.md project map mentions slices) + memory update.
+- [x] 7. Docs sweep (CLAUDE.md has no slices mentions — no change) + memory update.
 
 ## Session traps (for any executor)
 
