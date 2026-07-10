@@ -22,6 +22,7 @@ import { visibleMessageIds } from "@/lib/messageVisibility";
 import { getState, setState } from "@/stores/index";
 import { createBackgroundAgentsDomainState } from "@/stores/background-agent-domain";
 import type { HistoryMessage } from "@/api/chat";
+import type { SourceRef, UiMessage } from "@/stores/types";
 
 beforeEach(() => {
   resetStreamStateForTest();
@@ -704,6 +705,144 @@ test("buffers and unions source refs when results arrive before their tool row",
     getState().messages.get(activityId!)?.activity?.items[0]?.sourceRefs?.map((source) => source.ref),
   ).toEqual(["C1:1.0", "https://example.test/a"]);
 });
+
+test("prepend history preserves source refs on an overlapping activity message", () => {
+  const existing = activityMessageWithSources([
+    { provider: "slack", kind: "message", ref: "C1:1.0", title: "Existing" },
+  ]);
+  setState({ messages: new Map([[existing.id, existing]]), order: [existing.id] });
+
+  getState().prependHistory([activityMessageWithSources()]);
+
+  expect(getState().messages.get(existing.id)?.activity?.items[0]?.sourceRefs).toEqual([
+    { provider: "slack", kind: "message", ref: "C1:1.0", title: "Existing" },
+  ]);
+});
+
+test("append history stably unions source refs on an overlapping activity message", () => {
+  const existing = activityMessageWithSources([
+    { provider: "slack", kind: "message", ref: "C1:1.0", title: "Existing first" },
+  ]);
+  setState({ messages: new Map([[existing.id, existing]]), order: [existing.id] });
+
+  getState().appendHistoryPage([
+    activityMessageWithSources([
+      { provider: "slack", kind: "message", ref: "C1:1.0", title: "Incoming duplicate" },
+      { provider: "web", kind: "page", ref: "https://example.test/a", title: "Incoming page" },
+    ]),
+  ]);
+
+  expect(
+    getState().messages.get(existing.id)?.activity?.items[0]?.sourceRefs?.map((source) => source.title),
+  ).toEqual(["Existing first", "Incoming page"]);
+});
+
+test("buffers a stable source union across partial history results until their row loads", async () => {
+  const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
+  const responses = [
+    {
+      messages: [
+        {
+          role: "tool",
+          content: "first partial",
+          id: "result-1",
+          tool_call_id: "buffered-source-call",
+          data: {
+            source_refs: [
+              { provider: "slack", kind: "message", ref: "C1:1.0", title: "First" },
+            ],
+          },
+        },
+      ],
+      active_run_id: null,
+      page: { has_more_before: false, has_more_after: true },
+    },
+    {
+      messages: [
+        {
+          role: "tool",
+          content: "second partial",
+          id: "result-2",
+          tool_call_id: "buffered-source-call",
+          data: {
+            source_refs: [
+              { provider: "web", kind: "page", ref: "https://example.test/a", title: "Second" },
+            ],
+          },
+        },
+      ],
+      active_run_id: null,
+      page: { has_more_before: false, has_more_after: true },
+    },
+    {
+      messages: [
+        {
+          role: "assistant",
+          content: "",
+          id: "assistant-buffered-source",
+          tool_calls: [{ id: "buffered-source-call", name: "search", arguments: "{}" }],
+        },
+      ],
+      active_run_id: null,
+      page: { has_more_before: false, has_more_after: false },
+    },
+  ] satisfies Array<{ messages: HistoryMessage[]; active_run_id: null; page: { has_more_before: boolean; has_more_after: boolean } }>;
+  (globalThis as typeof globalThis & { window?: unknown }).window = {
+    ntrpDesktop: {
+      api: {
+        request: async () => ({
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          contentType: "application/json",
+          data: responses.shift(),
+          text: "",
+        }),
+      },
+    },
+    setTimeout,
+    clearTimeout,
+  };
+
+  try {
+    setState({
+      config: { serverUrl: "http://localhost:6877", apiKey: "" },
+      currentSessionId: "buffered-history-sources",
+    });
+
+    await loadHistory("buffered-history-sources", { mode: "append", after: "first" });
+    await loadHistory("buffered-history-sources", { mode: "append", after: "second" });
+    await loadHistory("buffered-history-sources", { mode: "append", after: "third" });
+
+    const activity = [...getState().messages.values()].find((message) => message.role === "activity");
+    expect(activity?.activity?.items[0]?.sourceRefs?.map((source) => source.title)).toEqual([
+      "First",
+      "Second",
+    ]);
+  } finally {
+    (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
+  }
+});
+
+function activityMessageWithSources(sourceRefs?: SourceRef[]): UiMessage {
+  return {
+    id: "overlapping-activity",
+    role: "activity",
+    content: "",
+    activity: {
+      label: "Called",
+      done: true,
+      items: [
+        {
+          id: "overlapping-tool",
+          kind: "search",
+          target: "Search",
+          ...(sourceRefs === undefined ? {} : { sourceRefs }),
+        },
+      ],
+    },
+  };
+}
 
 test("active history hydrates old calls as executed and new tail as ongoing", async () => {
   const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;

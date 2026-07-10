@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { DEFAULT_CONFIG } from "@/api/core";
 import { isActivityContinuationMessage } from "@/lib/messageVisibility";
 import { isLiveRunStatus } from "@/lib/runStatus";
-import type { State, Actions, UiMessage } from "@/stores/types";
+import type { ActivityItem, State, Actions, UiMessage } from "@/stores/types";
 import { mergeSourceRefs } from "@/stores/sourceRefs";
 import { loadPrefs, loadSkipApprovals, persistPrefs, persistSkipApprovals } from "@/stores/prefs";
 import {
@@ -132,6 +132,40 @@ export {
   SIDEBAR_SNAP_THRESHOLD_PX,
 } from "@/stores/prefs";
 
+function mergePagedHistoryMessage(existing: UiMessage | undefined, incoming: UiMessage): UiMessage {
+  if (!existing?.activity || !incoming.activity) return incoming;
+  return {
+    ...incoming,
+    activity: {
+      ...incoming.activity,
+      items: mergePagedActivityItems(existing.activity.items, incoming.activity.items),
+    },
+  };
+}
+
+function mergePagedActivityItems(
+  existingItems: ActivityItem[],
+  incomingItems: ActivityItem[],
+): ActivityItem[] {
+  const items = existingItems.slice();
+  const indexById = new Map(items.map((item, index) => [item.id, index] as const));
+  for (const incoming of incomingItems) {
+    const index = indexById.get(incoming.id);
+    if (index === undefined) {
+      indexById.set(incoming.id, items.length);
+      items.push(incoming);
+      continue;
+    }
+    const existing = items[index];
+    const sourceRefs = mergeSourceRefs(existing.sourceRefs, incoming.sourceRefs);
+    items[index] = {
+      ...existing,
+      ...incoming,
+      ...(sourceRefs === undefined ? {} : { sourceRefs }),
+    };
+  }
+  return items;
+}
 
 function activeRunsFromSessions(sessions: import("@/api/types").SessionListItem[]) {
   return sessions
@@ -387,9 +421,9 @@ export const useStore = create<State & Actions>((set) => ({
       const map = new Map(s.messages);
       const ids: string[] = [];
       for (const m of messages) {
-        const exists = map.has(m.id);
-        map.set(m.id, m);
-        if (!exists) ids.push(m.id);
+        const existing = map.get(m.id);
+        map.set(m.id, mergePagedHistoryMessage(existing, m));
+        if (!existing) ids.push(m.id);
       }
       const sessionView = s.currentSessionId
         ? reduceHistoryLoadSucceeded(s.sessionView, s.currentSessionId, page, "prepend")
@@ -409,9 +443,9 @@ export const useStore = create<State & Actions>((set) => ({
       const map = new Map(s.messages);
       const ids: string[] = [];
       for (const m of messages) {
-        const exists = map.has(m.id);
-        map.set(m.id, m);
-        if (!exists) ids.push(m.id);
+        const existing = map.get(m.id);
+        map.set(m.id, mergePagedHistoryMessage(existing, m));
+        if (!existing) ids.push(m.id);
       }
       const sessionView = s.currentSessionId
         ? reduceHistoryLoadSucceeded(s.sessionView, s.currentSessionId, page, "append")

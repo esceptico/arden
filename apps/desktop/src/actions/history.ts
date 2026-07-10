@@ -33,7 +33,7 @@ import {
 } from "@/stores/history-response";
 import { isForegroundRunStatus } from "@/lib/runStatus";
 import { refreshChildAgents } from "@/actions/childAgents";
-import { sourceRefsFromToolResultData } from "@/stores/sourceRefs";
+import { mergeSourceRefs, sourceRefsFromToolResultData } from "@/stores/sourceRefs";
 import type { ActivityItem } from "@/stores/types";
 
 export { historyMessagesToUi };
@@ -138,7 +138,13 @@ function applyHistoryToolResults(sessionId: string, messages: HistoryMessage[]):
       pending = new Map();
       pendingHistoryToolResultsBySession.set(sessionId, pending);
     }
-    pending.set(msg.tool_call_id, patch);
+    const buffered = pending.get(msg.tool_call_id);
+    const bufferedSourceRefs = mergeSourceRefs(buffered?.sourceRefs, patch.sourceRefs);
+    pending.set(msg.tool_call_id, {
+      ...buffered,
+      ...patch,
+      ...(bufferedSourceRefs === undefined ? {} : { sourceRefs: bufferedSourceRefs }),
+    });
   }
 }
 

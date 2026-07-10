@@ -92,12 +92,15 @@ export function sourceRefsForTurn(
 function safeUrl(value: unknown): string | undefined {
   const url = trimmedString(value);
   if (!url || url.length > URL_MAX_CHARS) return undefined;
-  const separator = url.indexOf("://");
-  const scheme = separator > 0 ? url.slice(0, separator).toLowerCase() : "";
+  const validationCandidate = url.replace(/[\r\n\t]/g, "");
+  const separator = validationCandidate.indexOf("://");
+  const scheme = separator > 0 ? validationCandidate.slice(0, separator).toLowerCase() : "";
   if (scheme !== "http" && scheme !== "https") return undefined;
 
-  const rawAuthority = authority(url, separator + 3);
-  if (!rawAuthority || rawAuthority.includes("@")) return undefined;
+  const rawAuthority = authority(validationCandidate, separator + 3);
+  if (!rawAuthority || !hasSafeNormalizedAuthority(rawAuthority) || rawAuthority.includes("@")) {
+    return undefined;
+  }
   const hostname = hostnameFromAuthority(rawAuthority);
   if (!hostname) return undefined;
   return url;
@@ -123,6 +126,12 @@ function hostnameFromAuthority(value: string): string | undefined {
   }
   if (value.includes("[") || value.includes("]")) return undefined;
   return value.split(":", 1)[0] || undefined;
+}
+
+function hasSafeNormalizedAuthority(value: string): boolean {
+  const delimiterFree = value.replace(/[@:#?]/g, "");
+  const normalized = delimiterFree.normalize("NFKC");
+  return normalized === delimiterFree || !/[/?#@:]/.test(normalized);
 }
 
 function sourceIdentity(provider: string, ref: string): string {

@@ -54,6 +54,11 @@ test("omits unsafe URLs without discarding their source refs", () => {
     "http:example.com",
     "https:///missing-host",
     "https://[bad]/path",
+    "https://exam／ple.com/path",
+    "https://exam＠ple.com/path",
+    "https://exam？ple.com/path",
+    "https://exam＃ple.com/path",
+    "https://exam：ple.com/path",
     "https://@example.com/private",
     "https://user@example.com/private",
     "https://user:secret@example.com/private",
@@ -74,6 +79,7 @@ test("does not impose URL rules beyond the server source contract", () => {
   const urls = [
     "HTTPS://example.com:opaque-port/path",
     "https://[v1.future-host]/path",
+    "https://[::1]junk/path",
   ];
 
   expect(
@@ -81,6 +87,12 @@ test("does not impose URL rules beyond the server source contract", () => {
       (ref) => ref.url,
     ),
   ).toEqual(urls);
+});
+
+test("validates after stripping embedded CR LF and TAB but retains the original URL", () => {
+  const url = "ht\ttps://exa\r\nmple.com/path";
+
+  expect(normalizeSourceRefs([source({ url })])[0]?.url).toBe(url);
 });
 
 test("deduplicates normalized identities before capping each payload at 50", () => {
