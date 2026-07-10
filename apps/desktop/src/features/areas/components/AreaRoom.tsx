@@ -58,7 +58,6 @@ export function AreaRoom({ areaKey }: { areaKey: string }) {
     );
   }
 
-  const topAsk = detail.asks[0] ?? null;
   const relatedTitle = (key: string) => overviewAreas?.find((s) => s.key === key)?.title ?? key;
 
   // The area's standing agent (an automation keyed `area:{key}`), rendered
@@ -217,10 +216,16 @@ export function AreaRoom({ areaKey }: { areaKey: string }) {
         />
       )}
 
-      {topAsk && (
-        <AnimatePresence initial={false}>
-          <AskCard key={topAsk.id} ask={topAsk} onDiscuss={discussAsk} />
-        </AnimatePresence>
+      {detail.asks.length > 0 && (
+        /* Every active ask gets its card — a run nominates up to three, each
+           with its own kind-typed affordances. */
+        <div className="grid gap-2">
+          <AnimatePresence initial={false}>
+            {detail.asks.map((ask) => (
+              <AskCard key={ask.id} ask={ask} onDiscuss={discussAsk} />
+            ))}
+          </AnimatePresence>
+        </div>
       )}
         </div>
 
