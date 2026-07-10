@@ -35,6 +35,16 @@ LATEST_VISIBLE_ANCHOR_ROW_LIMIT = 1000
 # (so the except-fallback below never fires). Real search queries are short; an
 # oversized one (e.g. a whole document passed as a query) is truncated here.
 MAX_FTS_QUERY_CHARS = 500
+_DURABLE_TOOL_RESULT_DATA_KEYS = (
+    "child_agent",
+    "workflow",
+    "workflow_id",
+    "usage",
+    "cost",
+    "html",
+    "title",
+    "mode",
+)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS projects (
@@ -2342,6 +2352,13 @@ class SessionStore:
                 payload.pop(key, None)
         return payload
 
+    @staticmethod
+    def _allowlisted_durable_tool_result_data(data: dict | None) -> dict | None:
+        if not isinstance(data, dict):
+            return None
+        allowed = {key: data[key] for key in _DURABLE_TOOL_RESULT_DATA_KEYS if key in data}
+        return allowed or None
+
     @classmethod
     def _prepare_durable_tool_result_payload(
         cls,
@@ -2353,18 +2370,19 @@ class SessionStore:
         if payload.get("type") != "TOOL_CALL_RESULT":
             return payload, None, None
 
-        tool_call_id = payload.get("tool_call_id")
-        if not isinstance(tool_call_id, str) or not tool_call_id:
-            return payload, None, None
-
         payload = dict(payload)
         content = payload.get("content")
         blob: RawToolResultBlob | None = internal_blob_from_data(payload.get("data"))
         cleaned_data = strip_internal_raw_tool_result_data(payload.get("data"))
+        cleaned_data = cls._allowlisted_durable_tool_result_data(cleaned_data)
         if cleaned_data is None:
             payload.pop("data", None)
         else:
             payload["data"] = cleaned_data
+
+        tool_call_id = payload.get("tool_call_id")
+        if not isinstance(tool_call_id, str) or not tool_call_id:
+            return cls._strip_empty_raw_tool_result_fields(payload), None, None
 
         if blob is None:
             if not isinstance(content, str) or len(content.encode("utf-8")) <= RAW_TOOL_RESULT_INLINE_MAX_BYTES:

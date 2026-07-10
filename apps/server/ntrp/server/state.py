@@ -100,6 +100,13 @@ class RunState:
     # etc.). Folded into the episode's source_refs when the run completes so
     # memory records what the turn actually touched, not just the chat text.
     source_refs: list[dict] = field(default_factory=list)
+    _source_ref_identities: set[tuple[str, str]] = field(default_factory=set, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        supplied = self.source_refs
+        self.source_refs = []
+        for ref in supplied:
+            self.add_source_ref(ref)
 
     def add_source_ref(self, ref: dict | None) -> None:
         refs = normalize_source_refs((ref,)) if ref is not None else ()
@@ -107,8 +114,9 @@ class RunState:
             return
         source_ref = refs[0].to_dict()
         identity = (source_ref["provider"], source_ref["ref"])
-        if any((existing.get("provider"), existing.get("ref")) == identity for existing in self.source_refs):
+        if identity in self._source_ref_identities:
             return
+        self._source_ref_identities.add(identity)
         self.source_refs.append(source_ref)
 
     @property

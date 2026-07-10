@@ -40,12 +40,25 @@ def extract_mcp_source_refs(
     tool_name: str,
 ) -> tuple[ToolSourceRef, ...]:
     refs: list[ToolSourceRef] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(candidate: ToolSourceRef) -> bool:
+        normalized = normalize_source_refs((candidate,))
+        if not normalized:
+            return False
+        source = normalized[0]
+        identity = (source.provider, source.ref)
+        if identity in seen:
+            return False
+        seen.add(identity)
+        refs.append(source)
+        return len(refs) == 50
 
     for block in result.content:
         match block:
             case mcp_types.ResourceLink():
                 uri = str(block.uri)
-                refs.append(
+                if add(
                     ToolSourceRef(
                         provider=provider,
                         kind="resource",
@@ -53,10 +66,11 @@ def extract_mcp_source_refs(
                         title=_first_nonempty(block.title, block.name, uri),
                         url=uri,
                     )
-                )
+                ):
+                    return tuple(refs)
             case mcp_types.EmbeddedResource():
                 uri = str(block.resource.uri)
-                refs.append(
+                if add(
                     ToolSourceRef(
                         provider=provider,
                         kind="resource",
@@ -64,7 +78,8 @@ def extract_mcp_source_refs(
                         title=uri,
                         url=uri,
                     )
-                )
+                ):
+                    return tuple(refs)
 
     structured = result.structuredContent
     if tool_name == "search" and isinstance(structured, Mapping):
@@ -78,7 +93,7 @@ def extract_mcp_source_refs(
                 if not isinstance(source_id, str) or not isinstance(title, str):
                     continue
                 url = item.get("url")
-                refs.append(
+                if add(
                     ToolSourceRef(
                         provider=provider,
                         kind="search_result",
@@ -86,14 +101,15 @@ def extract_mcp_source_refs(
                         title=_first_nonempty(title, source_id),
                         url=url if isinstance(url, str) else None,
                     )
-                )
+                ):
+                    return tuple(refs)
     elif tool_name == "fetch" and isinstance(structured, Mapping):
         source_id = structured.get("id")
         title = structured.get("title")
         text = structured.get("text")
         if isinstance(source_id, str) and isinstance(title, str) and isinstance(text, str) and text.strip():
             url = structured.get("url")
-            refs.append(
+            add(
                 ToolSourceRef(
                     provider=provider,
                     kind="document",
@@ -103,7 +119,7 @@ def extract_mcp_source_refs(
                 )
             )
 
-    return normalize_source_refs(refs)
+    return tuple(refs)
 
 
 def _first_nonempty(*values: str | None) -> str:

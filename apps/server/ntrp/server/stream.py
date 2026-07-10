@@ -88,12 +88,12 @@ async def run_agent_loop(
 
     try:
         async for item in gen:
-            if ctx.run.backgrounded:
-                await close_open_text()
-                return None, gen
             if isinstance(item, ToolCompleted):
                 for source_ref in item.source_refs:
                     ctx.run.add_source_ref(source_ref.to_dict())
+            if ctx.run.backgrounded:
+                await close_open_text()
+                return None, gen
             if isinstance(item, Result):
                 if ctx.run.cancelled:
                     break

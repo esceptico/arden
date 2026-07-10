@@ -275,3 +275,51 @@ def test_mcp_extraction_ignores_nested_or_inexact_contracts():
     assert mcp_results.extract_mcp_source_refs(inexact_name, provider="demo", tool_name="search_notes") == ()
     assert mcp_results.extract_mcp_source_refs(incomplete_fetch, provider="demo", tool_name="fetch") == ()
     assert mcp_results.extract_mcp_source_refs(empty_fetch, provider="demo", tool_name="fetch") == ()
+
+
+def test_mcp_resource_uri_with_credentials_is_not_a_source():
+    result = CallToolResult(
+        content=[
+            ResourceLink(
+                type="resource_link",
+                name="private",
+                title="https://user:secret@example.test/private",
+                uri="https://user:secret@example.test/private",
+            )
+        ]
+    )
+
+    assert mcp_results.extract_mcp_source_refs(result, provider="demo", tool_name="read") == ()
+
+
+def test_mcp_search_stops_iterating_after_50_normalized_unique_refs():
+    class BoundedResults(list):
+        def __iter__(self):
+            for index, item in enumerate(super().__iter__()):
+                if index >= 50:
+                    raise AssertionError("extractor iterated past the per-call source bound")
+                yield item
+
+    resource_refs = [
+        ResourceLink(
+            type="resource_link",
+            name=f"resource-{index}",
+            title=f"Resource {index}",
+            uri=f"https://example.test/resource-{index}",
+        )
+        for index in range(2)
+    ]
+    results = BoundedResults(
+        [
+            {"id": "", "title": "Invalid"},
+            {"id": "https://example.test/resource-0", "title": "Duplicate"},
+            *({"id": f"doc-{index}", "title": f"Document {index}"} for index in range(48)),
+            {"id": "overflow", "title": "Must not be read"},
+        ]
+    )
+    result = CallToolResult(content=resource_refs, structuredContent={"results": results})
+
+    refs = mcp_results.extract_mcp_source_refs(result, provider="demo", tool_name="search")
+
+    assert len(refs) == 50
+    assert refs[-1].ref == "doc-47"

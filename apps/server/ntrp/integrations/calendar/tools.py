@@ -37,7 +37,11 @@ def _event_source_refs(events: list) -> tuple[ToolSourceRef, ...]:
         ToolSourceRef(
             provider="calendar",
             kind="event",
-            ref=event.source_id,
+            ref=(
+                f"{calendar_id}:{event.source_id}"
+                if (calendar_id := str(event.metadata.get("calendar_id") or "").strip()) and event.source_id
+                else ""
+            ),
             title=(event.title or "").strip() or f"Calendar event {event.source_id}",
             url=event.metadata.get("html_link"),
         )

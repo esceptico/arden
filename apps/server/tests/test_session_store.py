@@ -1037,6 +1037,81 @@ async def test_small_tool_result_event_stays_inline(store: SessionStore):
 
 
 @pytest.mark.asyncio
+async def test_tool_result_live_data_stays_rich_while_durable_data_is_allowlisted(store: SessionStore):
+    event = ToolCallResultEvent(
+        tool_call_id="call-rich",
+        name="mcp_search",
+        content="small raw result",
+        data={
+            "structuredContent": {"results": [{"secret": "must-not-persist"}]},
+            "_meta": {"bearer": "must-not-persist"},
+            "matches": [{"text": "must-not-persist"}],
+            "child_agent": {"child_run_id": "child-1", "wait": False},
+            "workflow": "Audit",
+            "workflow_id": "workflow-1",
+            "usage": {"prompt": 2, "completion": 3, "total": 5},
+            "cost": 0.01,
+            "html": "<p>Safe widget</p>",
+            "title": "Widget",
+            "mode": "display",
+        },
+        source_refs=[
+            {
+                "provider": "demo",
+                "kind": "search_result",
+                "ref": "doc-1",
+                "title": "Document",
+            }
+        ],
+    )
+
+    live_payload = json.loads(event.to_sse()["data"])
+    assert live_payload["data"]["structuredContent"]["results"][0]["secret"] == "must-not-persist"
+    assert live_payload["data"]["_meta"]["bearer"] == "must-not-persist"
+
+    await store.record_session_event(StreamRecord(seq=15, session_id="sess-rich", event=event))
+
+    rows = await store.read_conn.execute_fetchall(
+        "SELECT event_json FROM session_events WHERE session_id = 'sess-rich'"
+    )
+    payload = json.loads(rows[0]["event_json"])
+    assert payload["source_refs"] == live_payload["source_refs"]
+    assert payload["data"] == {
+        "child_agent": {"child_run_id": "child-1", "wait": False},
+        "workflow": "Audit",
+        "workflow_id": "workflow-1",
+        "usage": {"prompt": 2, "completion": 3, "total": 5},
+        "cost": 0.01,
+        "html": "<p>Safe widget</p>",
+        "title": "Widget",
+        "mode": "display",
+    }
+    assert "must-not-persist" not in rows[0]["event_json"]
+
+
+@pytest.mark.asyncio
+async def test_durable_tool_result_data_is_allowlisted_without_a_tool_call_id(store: SessionStore):
+    event = ToolCallResultEvent(
+        tool_call_id="",
+        name="mcp_search",
+        content="small result",
+        data={
+            "structuredContent": {"secret": "must-not-persist"},
+            "child_agent": {"child_run_id": "child-1"},
+        },
+    )
+
+    await store.record_session_event(StreamRecord(seq=16, session_id="sess-no-call", event=event))
+
+    rows = await store.read_conn.execute_fetchall(
+        "SELECT event_json FROM session_events WHERE session_id = 'sess-no-call'"
+    )
+    payload = json.loads(rows[0]["event_json"])
+    assert payload["data"] == {"child_agent": {"child_run_id": "child-1"}}
+    assert "must-not-persist" not in rows[0]["event_json"]
+
+
+@pytest.mark.asyncio
 async def test_offloaded_tool_result_event_registers_existing_raw_blob(store: SessionStore):
     raw = "offloaded raw line\n" * 5000
     blob = persist_raw_tool_result(raw)

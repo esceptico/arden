@@ -1,3 +1,4 @@
+import hashlib
 from datetime import UTC, datetime
 
 import pytest
@@ -123,6 +124,45 @@ async def test_web_fetch_uses_url_when_page_title_is_blank():
     result = await web_fetch(_execution(source), WebFetchInput(url="https://example.com/x"))
 
     assert result.source_refs[0].title == "https://example.com/x"
+
+
+@pytest.mark.asyncio
+async def test_web_search_uses_opaque_identity_for_query_urls_without_persisting_secrets():
+    secret_url = "https://example.com/private?signature=super-secret#download"
+    source = FakeWebSource(results=[WebSearchResult(title="Private result", url=secret_url)])
+
+    result = await web_search(_execution(source), WebSearchInput(query="private", num_results=5))
+
+    expected_ref = f"url-sha256:{hashlib.sha256(secret_url.encode()).hexdigest()}"
+    assert [ref.to_dict() for ref in result.source_refs] == [
+        {
+            "provider": "web",
+            "kind": "page",
+            "ref": expected_ref,
+            "title": "Private result",
+        }
+    ]
+    assert "super-secret" not in repr(result.source_refs)
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_uses_opaque_identity_for_credential_urls_with_generic_title():
+    private_url = "https://user:password@example.com/private"
+    source = FakeWebSource(contents=[WebContentResult(title="   ", url=private_url, text="body text")])
+
+    result = await web_fetch(_execution(source), WebFetchInput(url="https://example.com/request"))
+
+    expected_ref = f"url-sha256:{hashlib.sha256(private_url.encode()).hexdigest()}"
+    assert [ref.to_dict() for ref in result.source_refs] == [
+        {
+            "provider": "web",
+            "kind": "page",
+            "ref": expected_ref,
+            "title": "Web page",
+        }
+    ]
+    assert "user" not in repr(result.source_refs)
+    assert "password" not in repr(result.source_refs)
 
 
 @pytest.mark.asyncio

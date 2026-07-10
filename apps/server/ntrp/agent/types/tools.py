@@ -62,6 +62,10 @@ def normalize_source_refs(
             or not title
         ):
             continue
+        if _has_http_credentials(ref):
+            continue
+        if _has_http_credentials(title):
+            title = ref
 
         identity = (provider, ref)
         if identity in seen:
@@ -103,6 +107,16 @@ def _safe_url(value: object) -> str | None:
     except ValueError:
         return None
     return url
+
+
+def _has_http_credentials(value: str) -> bool:
+    try:
+        parsed = urlsplit(value)
+        return parsed.scheme.lower() in {"http", "https"} and (
+            parsed.username is not None or parsed.password is not None
+        )
+    except ValueError:
+        return False
 
 
 @dataclass(frozen=True)

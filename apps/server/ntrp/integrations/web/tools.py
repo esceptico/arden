@@ -1,7 +1,9 @@
 import asyncio
+import hashlib
 import json
 from enum import StrEnum
 from typing import Any
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field
 
@@ -28,6 +30,40 @@ class WebSearchCategory(StrEnum):
 
 
 _DEFAULT_SEARCH_RESULTS = 5
+
+
+def _web_page_source(url: str, title: str | None) -> ToolSourceRef | None:
+    raw_url = url.strip()
+    if not raw_url:
+        return None
+    display_title = (title or "").strip()
+    try:
+        parsed = urlsplit(raw_url)
+        public_url = (
+            parsed.scheme.lower() in {"http", "https"}
+            and bool(parsed.hostname)
+            and parsed.username is None
+            and parsed.password is None
+            and not parsed.query
+            and not parsed.fragment
+        )
+    except ValueError:
+        public_url = False
+    if public_url:
+        return ToolSourceRef(
+            provider="web",
+            kind="page",
+            ref=raw_url,
+            title=display_title or raw_url,
+            url=raw_url,
+        )
+    digest = hashlib.sha256(raw_url.encode()).hexdigest()
+    return ToolSourceRef(
+        provider="web",
+        kind="page",
+        ref=f"url-sha256:{digest}",
+        title=display_title or "Web page",
+    )
 
 
 def _empty_search_content(query: str) -> str:
@@ -89,14 +125,9 @@ async def web_search(execution: ToolExecution, args: WebSearchInput) -> ToolResu
             content=content,
             preview=f"{len(formatted)} results",
             source_refs=normalize_source_refs(
-                ToolSourceRef(
-                    provider="web",
-                    kind="page",
-                    ref=result.url,
-                    title=(result.title or "").strip() or result.url,
-                    url=result.url,
-                )
+                source_ref
                 for result in results
+                if (source_ref := _web_page_source(result.url, result.title)) is not None
             ),
         )
 
@@ -142,15 +173,7 @@ async def web_fetch(execution: ToolExecution, args: WebFetchInput) -> ToolResult
                 content="\n".join(output),
                 preview=f"Fetched {lines} lines",
                 source_refs=normalize_source_refs(
-                    (
-                        ToolSourceRef(
-                            provider="web",
-                            kind="page",
-                            ref=r.url,
-                            title=(r.title or "").strip() or r.url,
-                            url=r.url,
-                        ),
-                    )
+                    (source_ref,) if (source_ref := _web_page_source(r.url, r.title)) is not None else ()
                 ),
             )
         return ToolResult(content="No content fetched. Page may be empty or require JavaScript.", preview="Empty")

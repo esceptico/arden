@@ -168,6 +168,44 @@ async def test_run_source_refs_keep_more_than_50_unique_refs_across_tool_complet
     assert run.source_refs[0]["title"] == "Message 0"
 
 
+def test_run_source_refs_use_constant_time_dedupe_and_initialize_supplied_refs():
+    initial = [
+        {
+            "provider": "demo",
+            "kind": "document",
+            "ref": f"doc-{index}",
+            "title": f"Document {index}",
+        }
+        for index in range(75)
+    ]
+    initial.append(
+        {"provider": "demo", "kind": "document", "ref": "doc-0", "title": "Duplicate"},
+    )
+    run = RunState(run_id="run-1", session_id="session-1", source_refs=initial)
+
+    class NoScanList(list):
+        def __iter__(self):
+            raise AssertionError("add_source_ref scanned the ordered refs list")
+
+    assert len(run.source_refs) == 75
+    assert run.source_refs[0] == initial[0]
+    assert run.source_refs[-1]["ref"] == "doc-74"
+    run.source_refs = NoScanList(run.source_refs)
+    for index in range(75, 2075):
+        run.add_source_ref(
+            {
+                "provider": "demo",
+                "kind": "document",
+                "ref": f"doc-{index}",
+                "title": f"Document {index}",
+            }
+        )
+    run.add_source_ref({"provider": "demo", "kind": "document", "ref": "doc-2074", "title": "Replay"})
+
+    assert len(run.source_refs) == 2075
+    assert run.source_refs[-1]["ref"] == "doc-2074"
+
+
 def test_reasoning_sse_preserves_nested_scope():
     (event,) = agent_events_to_sse(
         ReasoningDelta(depth=1, parent_id="call-research", message_id="reasoning-1", content="internal thought")
@@ -1006,6 +1044,37 @@ async def test_run_agent_loop_closes_text_before_backgrounding():
         "TEXT_MESSAGE_CONTENT",
         "TEXT_MESSAGE_END",
     ]
+
+
+@pytest.mark.asyncio
+async def test_run_agent_loop_collects_current_tool_sources_before_background_handoff():
+    run = RunState(run_id="run-1", session_id="sess-1")
+    bus = SessionBus(session_id="sess-1")
+    source = ToolSourceRef(provider="web", kind="page", ref="https://example.com", title="Example")
+
+    class BackgroundingAgent:
+        async def stream(self, messages):
+            run.backgrounded = True
+            yield ToolCompleted(
+                tool_id="call-1",
+                name="web_fetch",
+                result="body",
+                preview="body",
+                duration_ms=1,
+                is_error=False,
+                data=None,
+                display_name="Web Fetch",
+                source_refs=(source,),
+            )
+            yield Result(text="done", stop_reason=StopReason.END_TURN, steps=1, usage=Usage())
+
+    result, bg_gen = await run_agent_loop(SimpleNamespace(run=run), BackgroundingAgent(), bus)
+
+    assert result is None
+    assert bg_gen is not None
+    assert run.source_refs == [source.to_dict()]
+    assert [record.event.type.value for record in bus._recent] == []
+    assert isinstance(await anext(bg_gen), Result)
 
 
 @pytest.mark.asyncio

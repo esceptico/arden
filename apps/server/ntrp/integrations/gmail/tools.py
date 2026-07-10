@@ -22,13 +22,19 @@ With query: searches email content. Use specific keywords like names, subjects, 
 Use read_email(id) to get full content of a specific email."""
 
 
-def _message_source_ref(message_id: str, title: str | None = None) -> tuple[ToolSourceRef, ...]:
+def _qualified_message_ref(account: str, message_id: str) -> str:
+    account = account.strip()
+    message_id = message_id.strip()
+    return f"{account}:{message_id}" if account and message_id else ""
+
+
+def _message_source_ref(account: str, message_id: str, title: str | None = None) -> tuple[ToolSourceRef, ...]:
     return normalize_source_refs(
         (
             ToolSourceRef(
                 provider="gmail",
                 kind="message",
-                ref=message_id,
+                ref=_qualified_message_ref(account, message_id),
                 title=(title or "").strip() or f"Gmail message {message_id}",
             ),
         )
@@ -39,11 +45,12 @@ def _message_source_refs(items: list) -> tuple[ToolSourceRef, ...]:
     refs = []
     for item in items:
         message_id = getattr(item, "source_id", None) or getattr(item, "identity", "")
+        account = getattr(item, "metadata", {}).get("account", "") or getattr(item, "account", "")
         refs.append(
             ToolSourceRef(
                 provider="gmail",
                 kind="message",
-                ref=message_id,
+                ref=_qualified_message_ref(account, message_id),
                 title=(item.title or "").strip() or f"Gmail message {message_id}",
             )
         )
@@ -73,18 +80,18 @@ class ReadEmailInput(BaseModel):
 
 async def read_email(execution: ToolExecution, args: ReadEmailInput) -> ToolResult:
     source = execution.ctx.get_client("gmail", MultiGmailSource)
-    content = source.read(args.email_id)
-    if not content:
+    email = source.read(args.email_id)
+    if not email:
         return ToolResult(
             content=f"Email not found: {args.email_id}. Use emails() or emails(query) to find valid email IDs.",
             preview="Not found",
         )
 
-    lines = content.count("\n") + 1
+    lines = email.content.count("\n") + 1
     return ToolResult(
-        content=content,
+        content=email.content,
         preview=f"Read {lines} lines",
-        source_refs=_message_source_ref(args.email_id),
+        source_refs=_message_source_ref(email.account, args.email_id),
     )
 
 

@@ -126,6 +126,27 @@ def test_source_refs_keep_safe_urls_at_the_length_limit():
     assert normalized.url == url
 
 
+@pytest.mark.parametrize(
+    "ref",
+    [
+        "https://user@example.com/private",
+        "https://user:secret@example.com/private",
+    ],
+)
+def test_source_refs_reject_http_identities_with_credentials(ref: str):
+    assert normalize_source_refs([_source(ref=ref, title=ref, url=ref)]) == ()
+
+
+def test_source_refs_replace_credential_bearing_titles_for_opaque_ids():
+    (normalized,) = normalize_source_refs(
+        [_source(ref="opaque-123", title="https://user:secret@example.com/private", url=None)]
+    )
+
+    assert normalized.title == "opaque-123"
+    assert "user" not in normalized.title
+    assert "secret" not in normalized.title
+
+
 def test_source_refs_deduplicate_normalized_provider_and_ref_then_cap_at_50():
     refs = [
         _source(title="First"),

@@ -1,11 +1,12 @@
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 
 from ntrp.context.models import SessionState
 from ntrp.integrations.calendar.client import MultiCalendarSource
 from ntrp.integrations.calendar.tools import CalendarInput, calendar
-from ntrp.integrations.gmail.client import MultiGmailSource, SourceItem
+from ntrp.integrations.gmail.client import MultiGmailSource
 from ntrp.integrations.gmail.tools import EmailsInput, ReadEmailInput, emails, read_email
 from ntrp.integrations.slack.client import SlackClient, SlackThreadResult
 from ntrp.integrations.slack.tools import SlackSearchInput, SlackThreadInput, slack_search, slack_thread
@@ -68,11 +69,22 @@ class FakeGmailSource(MultiGmailSource):
     def list_accounts(self) -> list[str]:
         return ["me@example.test"]
 
-    def list_recent(self, days: int = 7, limit: int = 50) -> list[SourceItem]:
-        return [SourceItem(identity="message-recent", title="Recent message", source="gmail")]
+    def list_recent(self, days: int = 7, limit: int = 50) -> list[object]:
+        return [
+            SimpleNamespace(
+                identity="message-recent",
+                title="Recent message",
+                source="gmail",
+                account="me@example.test",
+                preview=None,
+            )
+        ]
 
-    def read(self, source_id: str) -> str | None:
-        return "From: sender@example.test\nSubject: Read message\n\nBody"
+    def read(self, source_id: str) -> object | None:
+        return SimpleNamespace(
+            content="From: sender@example.test\nSubject: Read message\n\nBody",
+            account="me@example.test",
+        )
 
 
 class FakeCalendarSource(MultiCalendarSource):
@@ -136,7 +148,12 @@ async def test_gmail_search_uses_returned_message_id_without_inventing_a_url():
                 "gmail",
                 "message-123",
                 "Quarterly plan",
-                metadata={"thread_id": "thread-456", "subject": "Quarterly plan", "from": "ada@example.test"},
+                metadata={
+                    "account": "me@example.test",
+                    "thread_id": "thread-456",
+                    "subject": "Quarterly plan",
+                    "from": "ada@example.test",
+                },
             )
         ]
     )
@@ -150,7 +167,7 @@ async def test_gmail_search_uses_returned_message_id_without_inventing_a_url():
         {
             "provider": "gmail",
             "kind": "message",
-            "ref": "message-123",
+            "ref": "me@example.test:message-123",
             "title": "Quarterly plan",
         }
     ]
@@ -160,8 +177,18 @@ async def test_gmail_search_uses_returned_message_id_without_inventing_a_url():
 async def test_gmail_search_drops_empty_ids_and_falls_back_only_for_blank_titles():
     source = FakeGmailSource(
         [
-            _item("gmail", "", "Missing identity", metadata={"subject": "Missing identity"}),
-            _item("gmail", "message-123", "   ", metadata={"subject": "", "from": "ada@example.test"}),
+            _item(
+                "gmail",
+                "",
+                "Missing identity",
+                metadata={"account": "me@example.test", "subject": "Missing identity"},
+            ),
+            _item(
+                "gmail",
+                "message-123",
+                "   ",
+                metadata={"account": "me@example.test", "subject": "", "from": "ada@example.test"},
+            ),
         ]
     )
 
@@ -174,7 +201,7 @@ async def test_gmail_search_drops_empty_ids_and_falls_back_only_for_blank_titles
         {
             "provider": "gmail",
             "kind": "message",
-            "ref": "message-123",
+            "ref": "me@example.test:message-123",
             "title": "Gmail message message-123",
         }
     ]
@@ -193,10 +220,24 @@ async def test_gmail_read_uses_requested_message_id_with_stable_fallback_title()
         {
             "provider": "gmail",
             "kind": "message",
-            "ref": "message-123",
+            "ref": "me@example.test:message-123",
             "title": "Gmail message message-123",
         }
     ]
+
+
+def test_multi_gmail_read_returns_the_matching_account_identity():
+    source = object.__new__(MultiGmailSource)
+    source.sources = [
+        SimpleNamespace(read=lambda _source_id: None, get_email_address=lambda: "first@example.test"),
+        SimpleNamespace(read=lambda _source_id: "message body", get_email_address=lambda: "second@example.test"),
+    ]
+
+    result = source.read("message-123")
+
+    assert result is not None
+    assert result.content == "message body"
+    assert result.account == "second@example.test"
 
 
 @pytest.mark.asyncio
@@ -208,6 +249,7 @@ async def test_calendar_search_uses_event_id_title_and_html_link():
                 "event-123",
                 "Planning review",
                 metadata={
+                    "calendar_id": "primary@example.test",
                     "start": "2026-07-10T09:00:00+00:00",
                     "html_link": "https://calendar.google.com/calendar/event?eid=event-123",
                 },
@@ -224,8 +266,80 @@ async def test_calendar_search_uses_event_id_title_and_html_link():
         {
             "provider": "calendar",
             "kind": "event",
-            "ref": "event-123",
+            "ref": "primary@example.test:event-123",
             "title": "Planning review",
             "url": "https://calendar.google.com/calendar/event?eid=event-123",
         }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_gmail_equal_local_ids_from_two_accounts_remain_distinct():
+    source = FakeGmailSource(
+        [
+            _item("gmail", "same-id", "First", metadata={"account": "first@example.test"}),
+            _item("gmail", "same-id", "Second", metadata={"account": "second@example.test"}),
+        ]
+    )
+
+    result = await emails(_execution("gmail", source, "emails"), EmailsInput(query="same"))
+
+    assert [ref.ref for ref in result.source_refs] == [
+        "first@example.test:same-id",
+        "second@example.test:same-id",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_gmail_list_equal_local_ids_from_two_accounts_remain_distinct():
+    source = FakeGmailSource()
+    source.list_recent = lambda **_kwargs: [
+        SimpleNamespace(
+            identity="same-id",
+            title="First",
+            source="gmail",
+            account="first@example.test",
+            preview=None,
+        ),
+        SimpleNamespace(
+            identity="same-id",
+            title="Second",
+            source="gmail",
+            account="second@example.test",
+            preview=None,
+        ),
+    ]
+
+    result = await emails(_execution("gmail", source, "emails"), EmailsInput())
+
+    assert [ref.ref for ref in result.source_refs] == [
+        "first@example.test:same-id",
+        "second@example.test:same-id",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_calendar_equal_local_ids_from_two_calendars_remain_distinct():
+    source = FakeCalendarSource(
+        [
+            _item(
+                "calendar",
+                "same-id",
+                "First",
+                metadata={"calendar_id": "first@example.test", "start": "2026-07-10T09:00:00+00:00"},
+            ),
+            _item(
+                "calendar",
+                "same-id",
+                "Second",
+                metadata={"calendar_id": "second@example.test", "start": "2026-07-10T10:00:00+00:00"},
+            ),
+        ]
+    )
+
+    result = await calendar(_execution("calendar", source, "calendar"), CalendarInput(query="same"))
+
+    assert [ref.ref for ref in result.source_refs] == [
+        "first@example.test:same-id",
+        "second@example.test:same-id",
     ]

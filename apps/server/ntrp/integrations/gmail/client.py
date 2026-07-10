@@ -30,8 +30,15 @@ class SourceItem:
     identity: str
     title: str
     source: str
+    account: str = ""
     timestamp: datetime | None = None
     preview: str | None = None
+
+
+@dataclass(frozen=True)
+class ReadEmailResult:
+    content: str
+    account: str
 
 
 EMAIL_HTML_TEMPLATE = env.from_string("""<!DOCTYPE html>
@@ -385,6 +392,7 @@ class GmailSource:
             created_at=email_date,
             updated_at=email_date,
             metadata={
+                "account": self.get_email_address(),
                 "thread_id": raw.get("threadId", ""),
                 "labels": raw.get("labelIds", []),
                 "from": sender,
@@ -484,6 +492,7 @@ class GmailSource:
                         identity=raw_item.source_id,
                         title=raw_item.title,
                         source=self.name,
+                        account=str(raw_item.metadata.get("account") or ""),
                         timestamp=raw_item.created_at,
                         preview=raw_item.metadata.get("snippet"),
                     )
@@ -545,11 +554,11 @@ class MultiGmailSource:
             return f"Error: account not found. Available: {', '.join(accounts)}"
         return "Error: no Gmail accounts available"
 
-    def read(self, source_id: str) -> str | None:
+    def read(self, source_id: str) -> ReadEmailResult | None:
         for src in self.sources:
             result = src.read(source_id)
             if result and not result.startswith("Email not found"):
-                return result
+                return ReadEmailResult(content=result, account=src.get_email_address())
         return None
 
     def _handle_source_error(self, src: GmailSource, e: Exception) -> None:
