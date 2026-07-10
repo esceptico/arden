@@ -10,6 +10,7 @@ import {
   reduceRunStopRequested,
 } from "@/stores/run-lifecycle";
 import { clearCachedStoppingRun } from "@/stores/session-cache";
+import { mergeSourceRefs } from "@/stores/sourceRefs";
 import { createSession } from "@/actions/sessions";
 
 interface SendMessageOptions {
@@ -331,7 +332,13 @@ function mergeActivityItemForSession(
       const itemIndex = message.activity.items.findIndex((item) => item.id === itemId);
       if (itemIndex < 0) continue;
       const items = message.activity.items.slice();
-      items[itemIndex] = { ...items[itemIndex], ...patch };
+      const existingItem = items[itemIndex];
+      const sourceRefs = mergeSourceRefs(existingItem.sourceRefs, patch.sourceRefs);
+      items[itemIndex] = {
+        ...existingItem,
+        ...patch,
+        ...(sourceRefs === undefined ? {} : { sourceRefs }),
+      };
       messages.set(messageId, { ...message, activity: { ...message.activity, items } });
       touched = true;
       break;

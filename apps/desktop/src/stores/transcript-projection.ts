@@ -4,6 +4,7 @@ import { SEMANTIC_KIND_AGENT } from "@/lib/agent";
 import { htmlWidgetFromHistory } from "@/lib/htmlWidget";
 import { childAgentFromToolResultData, type ToolResultData } from "@/stores/child-agent-metadata";
 import { getState, setState, type ActivityItem, type QueuedMessage, type UiMessage } from "@/stores/index";
+import { normalizeSourceRefs, sourceRefsFromToolResultData } from "@/stores/sourceRefs";
 import {
   reduceActiveActivityBackgrounded,
   reduceBackgroundedRunObserved,
@@ -352,6 +353,8 @@ export function applyChatEventToTranscript(
       if (isTodoToolName(event.name)) break;
       const result = event.content ?? event.preview ?? "";
       const patch: Partial<ActivityItem> = { result, status: "executed" };
+      const sourceRefs = normalizeSourceRefs(event.source_refs, event.tool_call_id);
+      if (sourceRefs.length > 0) patch.sourceRefs = sourceRefs;
       if (liftedKind(event.kind)) patch.semanticKind = liftedKind(event.kind);
       const wid = workflowIdFromData(event.data);
       if (wid) patch.workflowId = wid;
@@ -616,6 +619,7 @@ export function rebuildTranscriptFromHistory(
           const result = resultsById.get(toolCall.id);
           const resultContent = toolCall.result ?? result?.content;
           const childAgent = childAgentFromToolResultData(result?.data);
+          const sourceRefs = sourceRefsFromToolResultData(result?.data, toolCall.id);
           const htmlWidget = toolCall.kind === "html_widget" ? htmlWidgetFromHistory(args, resultContent) : undefined;
           activity.items.push({
             id: toolCall.id,
@@ -627,6 +631,7 @@ export function rebuildTranscriptFromHistory(
             result: resultContent,
             status: "executed",
             childAgent,
+            sourceRefs: sourceRefs.length > 0 ? sourceRefs : undefined,
             htmlWidget,
           });
         }

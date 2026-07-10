@@ -81,7 +81,7 @@ export type ServerEvent = CommonServerEventFields & (
   | { type: "TOOL_CALL_START"; tool_call_id: string; tool_call_name: string; description?: string; display_name?: string; parent_message_id?: string | null; depth?: number; parent_id?: string | null; kind?: string; icon?: string | null; noun?: string | null; source?: string | null }
   | { type: "TOOL_CALL_ARGS"; tool_call_id: string; delta: string; depth?: number; parent_id?: string | null }
   | { type: "TOOL_CALL_END"; tool_call_id: string; depth?: number; parent_id?: string | null }
-  | { type: "TOOL_CALL_RESULT"; tool_call_id: string; name: string; content?: string; preview?: string; display_name?: string; depth?: number; parent_id?: string | null; kind?: string; is_error?: boolean; duration_ms?: number; data?: Record<string, unknown> | null }
+  | { type: "TOOL_CALL_RESULT"; tool_call_id: string; name: string; content?: string; preview?: string; display_name?: string; depth?: number; parent_id?: string | null; kind?: string; is_error?: boolean; duration_ms?: number; data?: Record<string, unknown> | null; source_refs?: unknown }
 
   // ─── Reasoning ─────────────────────────────────────────────────────
   | { type: "REASONING_START"; message_id: string; depth?: number }

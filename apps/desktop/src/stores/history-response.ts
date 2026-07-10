@@ -14,6 +14,7 @@ import {
   createInitialSessionViewState,
   reduceHistoryLoadSucceeded,
 } from "@/stores/session-view";
+import { mergeSourceRefs } from "@/stores/sourceRefs";
 import type {
   ActivityItem,
   ApprovalState,
@@ -281,6 +282,7 @@ function mergeActivityItem(historyItem: ActivityItem, liveItem: ActivityItem): A
     error: liveItem.error ?? historyItem.error,
     usage: liveItem.usage ?? historyItem.usage,
     cost: liveItem.cost ?? historyItem.cost,
+    sourceRefs: mergeSourceRefs(historyItem.sourceRefs, liveItem.sourceRefs),
   };
 }
 

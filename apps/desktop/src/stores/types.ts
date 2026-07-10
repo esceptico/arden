@@ -153,6 +153,15 @@ export interface ChildAgentRef {
   status: string;
 }
 
+export interface SourceRef {
+  provider: string;
+  kind: string;
+  ref: string;
+  title: string;
+  url?: string;
+  toolCallId?: string;
+}
+
 export interface ActivityItem {
   id: string;
   /** Tool name (used for display + inspector lookup). Despite the name this
@@ -207,6 +216,8 @@ export interface ActivityItem {
   cost?: number;
   /** Durable child-agent identity/control metadata from tool result data. */
   childAgent?: ChildAgentRef;
+  /** Normalized resources returned by this tool call. */
+  sourceRefs?: SourceRef[];
   /** Real workflow id (from the workflow tool's result data) when
    *  `semanticKind === "workflow"`. Lets the lifted card open the panel even
    *  after reload, before any live workflow-domain event repopulates it. */

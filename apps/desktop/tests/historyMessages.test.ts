@@ -2,6 +2,8 @@ import { expect, test } from "bun:test";
 import { historyMessagesToUi } from "@/actions/history";
 import type { HistoryMessage } from "@/api/chat";
 import { turnLayout } from "@/features/chat/lib/turnLayout";
+import { projectHistoryResponse } from "@/stores/history-response";
+import type { CachedSessionState } from "@/stores/types";
 
 test("keeps one loaded activity group across reasoning-only history messages", () => {
   const messages: HistoryMessage[] = [
@@ -233,6 +235,158 @@ test("rehydrates child agent metadata from persisted tool result data", () => {
     wait: false,
     status: "running",
   });
+});
+
+test("projects normalized persisted source refs onto their matching tool calls", () => {
+  const messages: HistoryMessage[] = [
+    { role: "user", content: "research it", id: "user-1" },
+    {
+      role: "assistant",
+      content: "",
+      id: "assistant-tools",
+      tool_calls: [
+        { id: "tool-1", name: "slack_thread", arguments: '{"message_id":"C1:1.0"}' },
+        { id: "tool-2", name: "web_fetch", arguments: '{"url":"https://docs.example.test/a"}' },
+      ],
+    },
+    {
+      role: "tool",
+      content: "thread",
+      id: "tool-result-1",
+      tool_call_id: "tool-1",
+      data: {
+        source_refs: [
+          {
+            provider: " slack ",
+            kind: " message ",
+            ref: " C1:1.0 ",
+            title: " Decision ",
+            url: "https://user:secret@example.test/private",
+            toolCallId: "forged-wire-id",
+          },
+        ],
+      },
+    },
+    {
+      role: "tool",
+      content: "docs",
+      id: "tool-result-2",
+      tool_call_id: "tool-2",
+      data: {
+        source_refs: [
+          {
+            provider: "web",
+            kind: "page",
+            ref: "https://docs.example.test/a",
+            title: "Docs",
+            url: "https://docs.example.test/a",
+          },
+        ],
+      },
+    },
+  ];
+
+  const items = historyMessagesToUi(messages, null);
+  const activity = items.find((item) => item.role === "activity");
+
+  expect(activity?.activity?.items.map((item) => item.sourceRefs)).toEqual([
+    [
+      {
+        provider: "slack",
+        kind: "message",
+        ref: "C1:1.0",
+        title: "Decision",
+        toolCallId: "tool-1",
+      },
+    ],
+    [
+      {
+        provider: "web",
+        kind: "page",
+        ref: "https://docs.example.test/a",
+        title: "Docs",
+        url: "https://docs.example.test/a",
+        toolCallId: "tool-2",
+      },
+    ],
+  ]);
+});
+
+test("unions live and restored source refs when active history projections merge", () => {
+  const history: HistoryMessage[] = [
+    { role: "user", content: "research it", id: "user-1" },
+    {
+      role: "assistant",
+      content: "",
+      id: "assistant-tools",
+      tool_calls: [{ id: "tool-1", name: "search", arguments: "{}" }],
+    },
+    {
+      role: "tool",
+      content: "history result",
+      id: "tool-result-1",
+      tool_call_id: "tool-1",
+      data: {
+        source_refs: [
+          { provider: "slack", kind: "message", ref: "C1:1.0", title: "History first" },
+        ],
+      },
+    },
+  ];
+  const existing = {
+    messages: new Map([
+      [
+        "live-activity",
+        {
+          id: "live-activity",
+          role: "activity" as const,
+          content: "",
+          activity: {
+            label: "Calling" as const,
+            done: false,
+            items: [
+              {
+                id: "tool-1",
+                kind: "search",
+                target: "Search",
+                status: "ongoing" as const,
+                sourceRefs: [
+                  {
+                    provider: "slack",
+                    kind: "message",
+                    ref: "C1:1.0",
+                    title: "Live duplicate",
+                    toolCallId: "tool-1",
+                  },
+                  {
+                    provider: "web",
+                    kind: "page",
+                    ref: "https://docs.example.test/a",
+                    title: "Live docs",
+                    toolCallId: "tool-1",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    ]),
+    order: ["live-activity"],
+    activeActivityId: "live-activity",
+  } satisfies Pick<CachedSessionState, "messages" | "order" | "activeActivityId">;
+
+  const projection = projectHistoryResponse(
+    { messages: history, active_run_id: "run-active" },
+    true,
+    existing,
+  );
+  const activity = projection.items.find((item) => item.role === "activity");
+
+  expect(activity?.activity?.items[0]?.sourceRefs?.map((source) => source.title)).toEqual([
+    "History first",
+    "Live docs",
+  ]);
 });
 
 test("keeps persisted goal meta turns visually hidden", () => {

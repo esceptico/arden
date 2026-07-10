@@ -621,6 +621,90 @@ test("live tool calls move from ongoing to executed on result", () => {
   expect(getState().messages.get(activityId!)?.activity?.items[0]?.status).toBe("executed");
 });
 
+test("projects and stably merges normalized source refs onto live tool activity", () => {
+  handleServerEvent({
+    type: "TOOL_CALL_START",
+    tool_call_id: "source-tool",
+    tool_call_name: "slack_thread",
+  });
+  handleServerEvent({
+    type: "TOOL_CALL_RESULT",
+    tool_call_id: "source-tool",
+    name: "slack_thread",
+    content: "thread",
+    source_refs: [
+      {
+        provider: " slack ",
+        kind: " message ",
+        ref: " C1:1.0 ",
+        title: " Decision ",
+        url: "javascript:alert(1)",
+        toolCallId: "forged-wire-id",
+      },
+    ],
+  });
+  handleServerEvent({
+    type: "TOOL_CALL_RESULT",
+    tool_call_id: "source-tool",
+    name: "slack_thread",
+    content: "thread",
+    source_refs: [
+      { provider: "slack", kind: "message", ref: "C1:1.0", title: "Duplicate" },
+      { provider: "slack", kind: "message", ref: "C1:2.0", title: "Follow-up" },
+    ],
+  });
+  handleServerEvent({ type: "TOOL_CALL_END", tool_call_id: "source-tool" });
+
+  const activityId = getState().order.find((id) => getState().messages.get(id)?.role === "activity");
+  expect(getState().messages.get(activityId!)?.activity?.items[0]?.sourceRefs).toEqual([
+    {
+      provider: "slack",
+      kind: "message",
+      ref: "C1:1.0",
+      title: "Decision",
+      toolCallId: "source-tool",
+    },
+    {
+      provider: "slack",
+      kind: "message",
+      ref: "C1:2.0",
+      title: "Follow-up",
+      toolCallId: "source-tool",
+    },
+  ]);
+});
+
+test("buffers and unions source refs when results arrive before their tool row", () => {
+  handleServerEvent({
+    type: "TOOL_CALL_RESULT",
+    tool_call_id: "early-source-tool",
+    name: "search",
+    content: "first",
+    source_refs: [
+      { provider: "slack", kind: "message", ref: "C1:1.0", title: "First" },
+    ],
+  });
+  handleServerEvent({
+    type: "TOOL_CALL_RESULT",
+    tool_call_id: "early-source-tool",
+    name: "search",
+    content: "second",
+    source_refs: [
+      { provider: "web", kind: "page", ref: "https://example.test/a", title: "Second" },
+    ],
+  });
+  handleServerEvent({
+    type: "TOOL_CALL_START",
+    tool_call_id: "early-source-tool",
+    tool_call_name: "search",
+  });
+
+  const activityId = getState().order.find((id) => getState().messages.get(id)?.role === "activity");
+  expect(
+    getState().messages.get(activityId!)?.activity?.items[0]?.sourceRefs?.map((source) => source.ref),
+  ).toEqual(["C1:1.0", "https://example.test/a"]);
+});
+
 test("active history hydrates old calls as executed and new tail as ongoing", async () => {
   const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
   (globalThis as typeof globalThis & { window?: unknown }).window = {

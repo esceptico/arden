@@ -23,6 +23,7 @@ export interface HistoryMessage {
   reasoning_content?: string;
   tool_calls?: HistoryToolCall[];
   tool_call_id?: string;
+  /** Untrusted persisted tool-result metadata. Validate fields at projection boundaries. */
   data?: unknown;
   images?: HistoryImage[];
   /** Stable client-side id (the same one we streamed for assistant turns).

@@ -3,6 +3,7 @@ import { DEFAULT_CONFIG } from "@/api/core";
 import { isActivityContinuationMessage } from "@/lib/messageVisibility";
 import { isLiveRunStatus } from "@/lib/runStatus";
 import type { State, Actions, UiMessage } from "@/stores/types";
+import { mergeSourceRefs } from "@/stores/sourceRefs";
 import { loadPrefs, loadSkipApprovals, persistPrefs, persistSkipApprovals } from "@/stores/prefs";
 import {
   blankSessionView,
@@ -99,6 +100,7 @@ export type {
   ServerLoop,
   SessionUsage,
   SessionViewState,
+  SourceRef,
   State,
   ThemeChoice,
   ThinkingAnimation,
@@ -570,7 +572,13 @@ export const useStore = create<State & Actions>((set) => ({
         const idx = msg.activity.items.findIndex((it) => it.id === itemId);
         if (idx < 0) continue;
         const items = msg.activity.items.slice();
-        items[idx] = { ...items[idx], ...patch };
+        const existingItem = items[idx];
+        const sourceRefs = mergeSourceRefs(existingItem.sourceRefs, patch.sourceRefs);
+        items[idx] = {
+          ...existingItem,
+          ...patch,
+          ...(sourceRefs === undefined ? {} : { sourceRefs }),
+        };
         messages.set(mid, { ...msg, activity: { ...msg.activity, items } });
         touched = true;
         break;

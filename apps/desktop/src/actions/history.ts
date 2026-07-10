@@ -33,11 +33,16 @@ import {
 } from "@/stores/history-response";
 import { isForegroundRunStatus } from "@/lib/runStatus";
 import { refreshChildAgents } from "@/actions/childAgents";
+import { sourceRefsFromToolResultData } from "@/stores/sourceRefs";
+import type { ActivityItem } from "@/stores/types";
 
 export { historyMessagesToUi };
 
 type HistoryLoadMode = "replace" | "prepend" | "append";
-const pendingHistoryToolResultsBySession = new Map<string, Map<string, string>>();
+const pendingHistoryToolResultsBySession = new Map<
+  string,
+  Map<string, Partial<ActivityItem>>
+>();
 const cachedHistoryRefreshes = new Map<string, Promise<boolean>>();
 const cachedHistoryRefreshedAt = new Map<string, number>();
 const ACTIVE_SESSION_CACHE_REFRESH_MS = 5_000;
@@ -121,13 +126,19 @@ function applyHistoryToolResults(sessionId: string, messages: HistoryMessage[]):
   for (const msg of messages) {
     if (msg.role !== "tool" || !msg.tool_call_id) continue;
     if (todoToolCallIds.has(msg.tool_call_id)) continue;
-    if (state.mergeActivityItem(msg.tool_call_id, { result: msg.content, status: "executed" })) continue;
+    const sourceRefs = sourceRefsFromToolResultData(msg.data, msg.tool_call_id);
+    const patch: Partial<ActivityItem> = {
+      result: msg.content,
+      status: "executed",
+      ...(sourceRefs.length > 0 ? { sourceRefs } : {}),
+    };
+    if (state.mergeActivityItem(msg.tool_call_id, patch)) continue;
     let pending = pendingHistoryToolResultsBySession.get(sessionId);
     if (!pending) {
       pending = new Map();
       pendingHistoryToolResultsBySession.set(sessionId, pending);
     }
-    pending.set(msg.tool_call_id, msg.content);
+    pending.set(msg.tool_call_id, patch);
   }
 }
 
@@ -135,8 +146,8 @@ function applyPendingHistoryToolResults(sessionId: string): void {
   const pending = pendingHistoryToolResultsBySession.get(sessionId);
   if (!pending) return;
   const state = getState();
-  for (const [toolCallId, result] of pending) {
-    if (state.mergeActivityItem(toolCallId, { result, status: "executed" })) {
+  for (const [toolCallId, patch] of pending) {
+    if (state.mergeActivityItem(toolCallId, patch)) {
       pending.delete(toolCallId);
     }
   }

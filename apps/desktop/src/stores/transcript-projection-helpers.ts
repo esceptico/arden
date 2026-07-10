@@ -1,6 +1,7 @@
 import { isActivityContinuationMessage } from "@/lib/messageVisibility";
 import { getState, type ActivityItem, type TodoListState, type UiMessage } from "@/stores/index";
 import type { ChildAgentRef } from "@/stores/types";
+import { mergeSourceRefs } from "@/stores/sourceRefs";
 import {
   TODO_TOOL_NAME,
   type PendingToolCall,
@@ -274,6 +275,7 @@ function activityPatchFromItem(item: ActivityItem): Partial<ActivityItem> {
     parentToolId: item.parentToolId,
     semanticKind: item.semanticKind,
     childAgent: item.childAgent,
+    sourceRefs: item.sourceRefs,
   };
   if (item.displayName) patch.displayName = item.displayName;
   return patch;
@@ -342,9 +344,12 @@ export function bufferActivityPatch(
   patch: Partial<ActivityItem>,
 ) {
   const pendingResultPatches = new Map(context.state.pendingResultPatches);
+  const existing = pendingResultPatches.get(itemId);
+  const sourceRefs = mergeSourceRefs(existing?.sourceRefs, patch.sourceRefs);
   pendingResultPatches.set(itemId, {
-    ...pendingResultPatches.get(itemId),
+    ...existing,
     ...patch,
+    ...(sourceRefs === undefined ? {} : { sourceRefs }),
   });
   context.update({ ...context.state, pendingResultPatches });
 }

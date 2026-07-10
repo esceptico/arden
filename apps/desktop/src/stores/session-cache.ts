@@ -1,6 +1,7 @@
 import type { CachedSessionState, SessionUsage, State, UiMessage } from "@/stores/types";
 import { createInitialSessionViewState } from "@/stores/session-view";
 import { isActivityContinuationMessage } from "@/lib/messageVisibility";
+import { mergeSourceRefs } from "@/stores/sourceRefs";
 
 export const initialUsage: SessionUsage = {
   lastPrompt: 0,
@@ -145,7 +146,12 @@ function mergeActivity(messages: Map<string, UiMessage>, targetId: string, sourc
     const filler = Object.fromEntries(
       Object.entries(item).filter(([key, value]) => value !== undefined && kept[key as keyof typeof kept] === undefined),
     );
-    items[at] = { ...kept, ...filler };
+    const sourceRefs = mergeSourceRefs(kept.sourceRefs, item.sourceRefs);
+    items[at] = {
+      ...kept,
+      ...filler,
+      ...(sourceRefs === undefined ? {} : { sourceRefs }),
+    };
   }
   messages.set(targetId, {
     ...target,
