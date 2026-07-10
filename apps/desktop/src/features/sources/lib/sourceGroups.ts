@@ -31,6 +31,7 @@ interface ActionBuilder extends SourceActionGroup {
 }
 
 interface ProviderBuilder extends SourceProviderGroup {
+  actions: ActionBuilder[];
   actionsByKey: Map<string, ActionBuilder>;
 }
 

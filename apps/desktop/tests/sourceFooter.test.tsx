@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { AssistantMessage } from "@/features/chat/components/AssistantMessage";
 import { TurnGroup } from "@/features/chat/components/TurnGroup";
 import { SourcesPanel } from "@/features/sources/components/SourcesPanel";
-import { setState } from "@/stores";
+import { getState, setState, type SourceRef } from "@/stores";
 
 beforeEach(() => {
   setState({
@@ -117,6 +117,98 @@ test("browser-invalid stored URLs are non-clickable and retain Show call", () =>
 
   expect(markup).not.toContain("<a");
   expect(markup).toContain("Show call");
+});
+
+test("groups unknown MCP calls and progressively reveals returned sources", async () => {
+  const teamSources: SourceRef[] = Array.from({ length: 7 }, (_, index) => ({
+    provider: "mcp.crm",
+    kind: "contact",
+    ref: `team-${index + 1}`,
+    title: `Team ${index + 1}`,
+    toolCallId: "tool-team",
+  }));
+  setState({
+    sourceRefsRevision: 1,
+    messages: new Map([
+      ["user-1", { id: "user-1", role: "user", content: "Find contacts" }],
+      [
+        "activity-1",
+        {
+          id: "activity-1",
+          role: "activity",
+          content: "",
+          activity: {
+            label: "Called",
+            done: true,
+            items: [
+              {
+                id: "tool-alice",
+                kind: "lookup_contact",
+                displayName: "Lookup contact",
+                target: "query=alice",
+                sourceRefs: [{
+                  provider: "mcp.crm",
+                  kind: "contact",
+                  ref: "alice",
+                  title: "Alice",
+                  toolCallId: "tool-alice",
+                }],
+              },
+              {
+                id: "tool-team",
+                kind: "lookup_contact",
+                displayName: "Lookup contact",
+                target: "query=team",
+                sourceRefs: teamSources,
+              },
+            ],
+          },
+        },
+      ],
+      ["assistant-1", { id: "assistant-1", role: "assistant", content: "Found them" }],
+    ]),
+    order: ["user-1", "activity-1", "assistant-1"],
+    sourceTurnId: "user-1",
+    viewingTool: null,
+  });
+
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<SourcesPanel />));
+
+    expect(host.textContent).toContain("mcp.crm");
+    expect(host.textContent).toContain("Lookup contact");
+    expect(host.textContent).toContain("2 calls");
+    expect(host.textContent).toContain("8 sources");
+    expect(host.textContent).toContain("Alice");
+    expect(host.textContent).not.toContain("Team 1");
+
+    const expandTeam = host.querySelector(
+      'button[aria-label="Expand source call query=team"]',
+    ) as HTMLButtonElement;
+    expect(expandTeam?.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => expandTeam.click());
+
+    expect(host.textContent).toContain("Team 5");
+    expect(host.textContent).not.toContain("Team 6");
+    const showMore = Array.from(host.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Show 2 more",
+    );
+    expect(showMore).toBeDefined();
+    await act(async () => showMore?.click());
+    expect(host.textContent).toContain("Team 7");
+
+    const showAliceCall = host.querySelector(
+      'button[aria-label="Show tool call for Alice"]',
+    ) as HTMLButtonElement;
+    await act(async () => showAliceCall.click());
+    expect(getState().viewingTool?.id).toBe("tool-alice");
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
 });
 
 test("hidden meta turns render through TurnGroup without rendering the hidden user row", async () => {
