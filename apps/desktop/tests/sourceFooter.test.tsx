@@ -19,6 +19,10 @@ beforeEach(() => {
   });
 });
 
+test("rendered component tests run in standards mode", () => {
+  expect(document.compatMode).toBe("CSS1Compat");
+});
+
 test("final assistant source footer renders between Markdown and message actions", async () => {
   const host = document.createElement("div");
   document.body.appendChild(host);
