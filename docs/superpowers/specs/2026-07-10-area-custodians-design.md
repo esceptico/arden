@@ -245,3 +245,27 @@ Shipped 2026-07-10, commits 2efe8405 (server) + bc516eca/... (desktop):
   "Fewer like this" appends to area instructions; Home queue ends visibly.
 - NOT shipped (per spec's out-of-scope): outward high-stakes actions,
   cross-area synthesis, learned gates/salience.
+
+## E2E verification (2026-07-10, isolated sandbox server on live-data copy)
+
+Booted the branch server against a copy of the live NTRP dir (neutralized
+notifiers, API-key model). Proven end-to-end, over HTTP, with a real LLM run:
+migrations (settings columns, ask-kind fold: 15 question + 2 notify, 0
+legacy); PATCH attention/interrupts; pause disables the agent automation,
+resume re-enables; chat-filed event pulled next_run from tomorrow 03:00 to
++10 min with the event coalesced into custodian state; the run consumed
+WOKEN BY, executed INTAKE (wrote a WATCHING section to the page), nominated
+one question ask with why_now/what_next, pushed it through every configured
+notifier with the ask-anatomy copy, persisted report + next-check reason,
+and self-paced to the active preset's 48h ceiling; room API serves the full
+agent block; resolving the ask wakes the custodian.
+
+Bug found by e2e and fixed (26a8699d): **self-echo loop** — the run's own
+page write triggered the page-edited watcher, scheduling another run in 10
+minutes (bounded only by the daily budget). Page-edit events are now
+dropped while the agent runs or within 5 minutes after (in-window edit
+verified ignored; out-of-window external edit verified to wake).
+
+Honest note: the room's audit trail is the channel transcript + report +
+woken-by + next-check reason; per-edit page DIFF rendering in the room
+itself is not built (the transcript shows the edits).
