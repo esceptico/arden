@@ -1,0 +1,129 @@
+import os
+import tempfile
+from pathlib import Path
+
+from pydantic import BaseModel, Field
+
+from ntrp.areas.paths import resolve_area_page
+from ntrp.tools.core import ToolResult, tool
+from ntrp.tools.core.context import ToolExecution
+from ntrp.tools.core.types import ToolAction, ToolPolicy, ToolScope
+
+AREA_PAGES_SERVICE = "area_pages"
+
+
+class AreaPageReadInput(BaseModel):
+    offset: int = Field(default=1, ge=1)
+    limit: int = Field(default=2_000, ge=1, le=4_000)
+
+
+class AreaPagePatchInput(BaseModel):
+    old_text: str = Field(min_length=1)
+    new_text: str
+
+
+class AreaPageWriteInput(BaseModel):
+    content: str = Field(min_length=1, max_length=100_000, description="Complete Markdown body; frontmatter is preserved.")
+
+
+def _target(execution: ToolExecution) -> Path | ToolResult:
+    area = execution.ctx.area
+    vault = execution.ctx.services.get(AREA_PAGES_SERVICE)
+    if area is None or not area.page_path:
+        return ToolResult(content="This Area has no attached page.", preview="No Area page", is_error=True)
+    if not isinstance(vault, Path):
+        return ToolResult(content="Area page service is unavailable.", preview="Unavailable", is_error=True)
+    try:
+        return resolve_area_page(vault, area.page_path)
+    except ValueError as exc:
+        return ToolResult(content=f"Invalid Area page: {exc}", preview="Invalid Area page", is_error=True)
+
+
+def _atomic_write(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def _frontmatter_prefix(raw: str) -> str:
+    if not raw.startswith("---\n"):
+        return ""
+    end = raw.find("\n---\n", 4)
+    return raw[: end + 5] if end >= 0 else ""
+
+
+async def area_page_read(execution: ToolExecution, args: AreaPageReadInput) -> ToolResult:
+    target = _target(execution)
+    if isinstance(target, ToolResult):
+        return target
+    if not target.is_file():
+        return ToolResult(content="The attached Area page is missing.", preview="Page missing", is_error=True)
+    lines = target.read_text(encoding="utf-8").splitlines()
+    selected = lines[args.offset - 1 : args.offset - 1 + args.limit]
+    return ToolResult(
+        content="\n".join(selected),
+        preview=f"Read {len(selected)} lines",
+        data={"page_path": execution.ctx.area.page_path, "offset": args.offset},
+    )
+
+
+async def area_page_patch(execution: ToolExecution, args: AreaPagePatchInput) -> ToolResult:
+    target = _target(execution)
+    if isinstance(target, ToolResult):
+        return target
+    raw = target.read_text(encoding="utf-8") if target.exists() else ""
+    matches = raw.count(args.old_text)
+    if matches != 1:
+        return ToolResult(
+            content=f"Patch requires exactly one match; found {matches}.",
+            preview="Patch not applied",
+            is_error=True,
+        )
+    _atomic_write(target, raw.replace(args.old_text, args.new_text, 1))
+    return ToolResult(content="Patched this Area's page.", preview="Area page patched")
+
+
+async def area_page_write(execution: ToolExecution, args: AreaPageWriteInput) -> ToolResult:
+    target = _target(execution)
+    if isinstance(target, ToolResult):
+        return target
+    existing = target.read_text(encoding="utf-8") if target.exists() else ""
+    body = args.content.strip() + "\n"
+    prefix = _frontmatter_prefix(existing)
+    _atomic_write(target, f"{prefix}\n{body}" if prefix else body)
+    return ToolResult(content="Updated this Area's page.", preview="Area page updated")
+
+
+_AREA_PERMISSION = frozenset({AREA_PAGES_SERVICE})
+
+area_page_read_tool = tool(
+    display_name="AreaPageRead",
+    description="Read the current Area's attached page. The path is fixed by the Area and cannot be overridden.",
+    input_model=AreaPageReadInput,
+    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=_AREA_PERMISSION),
+    execute=area_page_read,
+)
+
+area_page_patch_tool = tool(
+    display_name="AreaPagePatch",
+    description="Replace one exact block in the current Area's attached page. Cannot edit any other page.",
+    input_model=AreaPagePatchInput,
+    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=_AREA_PERMISSION),
+    execute=area_page_patch,
+)
+
+area_page_write_tool = tool(
+    display_name="AreaPageWrite",
+    description="Replace the Markdown body of the current Area's attached page while preserving frontmatter.",
+    input_model=AreaPageWriteInput,
+    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=_AREA_PERMISSION),
+    execute=area_page_write,
+)

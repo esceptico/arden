@@ -12,10 +12,13 @@ from ntrp.areas.models import Area, Ask
 # toolset hack. Read/search surfaces + the memory tools that edit the
 # area's own page — nothing that acts on the outside world.
 OBSERVE_TOOL_SCOPE = [
-    "memory_*",
+    "area_page_read",
+    "area_page_patch",
+    "area_page_write",
     "recall",
-    "remember",
-    "forget",
+    "list_recent_sessions",
+    "read_session",
+    "search_transcripts",
     "web_search",
     "web_fetch",
     "read_file",
@@ -23,7 +26,6 @@ OBSERVE_TOOL_SCOPE = [
     "find_files",
     "search_text",
     "current_time",
-    "update_todos",
 ]
 
 _CONTRACT = {
@@ -80,7 +82,7 @@ def area_agent_instructions(area: Area) -> str:
         "history is your own past runs; a WOKEN BY line, when present, tells you which "
         "events triggered this run), ADVANCE the open loops you can (research, verify, "
         "draft — don't just track), update the topic page with what you learned "
-        "(memory tools), and decide what, if anything, needs the user.\n"
+        "(Area page tools), and decide what, if anything, needs the user.\n"
         "End with a short prose report. Afterwards you will be asked for a structured "
         "nomination: your findings triaged into at most three asks (empty on a quiet "
         "day — silence is correct), a one-line report, and when to check next.\n"

@@ -128,6 +128,7 @@ class Runtime:
     @property
     def tool_services(self) -> dict[str, object]:
         services: dict[str, object] = dict(self.integrations.clients)
+        services["area_pages"] = self.config.memory_artifacts_dir
         services.update(self.knowledge.tool_services())
         if self.automation_service:
             services["automation"] = self.automation_service

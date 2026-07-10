@@ -24,6 +24,7 @@ class SessionState:
 class AreaContext:
     area_id: str
     name: str
+    page_path: str | None = None
     default_cwd: str | None = None
     instructions: str | None = None
     knowledge_scope: str | None = None

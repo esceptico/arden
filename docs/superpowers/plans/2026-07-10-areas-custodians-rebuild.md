@@ -59,9 +59,12 @@ Update this section after every completed task.
   delegation and detach a page. Evidence: 62 server tests, 31 desktop tests,
   typecheck, ESLint, and Ruff pass (two pre-existing React `act()` warnings in
   `askCardOpenPage.test.tsx`).
-- Current: Task 6 pending. Areas foundation phase complete; Custodian rebuild
-  begins here.
-- Remaining: Tasks 6-10 below.
+- 2026-07-10: Task 6 complete. Dedicated Area-page read/patch/write tools are
+  locked to the execution Area and preserve frontmatter; observe scope contains
+  no global memory writes and includes Area-scoped transcript reads for intake.
+  Evidence: 71 tool/scope tests and Ruff pass.
+- Current: Task 7 pending.
+- Remaining: Tasks 7-10 below.
 
 ---
 
@@ -186,13 +189,13 @@ and page capability setup in every room.
 **Produces:** `area_page_read`, `area_page_patch`, `area_page_write`, and an
 observe allowlist containing Area-scoped transcript reads but no global writes.
 
-- [ ] Write failing tests proving traversal and cross-Area writes are impossible,
+- [x] Write failing tests proving traversal and cross-Area writes are impossible,
   observe excludes all global memory mutation, and intake can list/read recent
   Area chats.
-- [ ] Verify red.
-- [ ] Implement dedicated tools using the active execution Area only.
-- [ ] Replace wildcard observe scope with an exact allowlist.
-- [ ] Run tool/agent tests to green.
+- [x] Verify red.
+- [x] Implement dedicated tools using the active execution Area only.
+- [x] Replace wildcard observe scope with an exact allowlist.
+- [x] Run tool/agent tests to green.
 
 ### Task 7: Rebuild live delegation permissions and provisioning
 

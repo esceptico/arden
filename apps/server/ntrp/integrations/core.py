@@ -7,6 +7,7 @@ belong to an Integration, including the ones ntrp ships out of the box.
 
 from ntrp.integrations.base import Integration
 from ntrp.skills.tool import create_skill_tool, use_skill_tool
+from ntrp.tools.area import area_page_patch_tool, area_page_read_tool, area_page_write_tool
 from ntrp.tools.automation import (
     create_automation_tool,
     create_loop_tool,
@@ -158,6 +159,16 @@ SESSIONS = Integration(
     },
 )
 
+AREA = Integration(
+    id="_area",
+    label="Area",
+    tools={
+        "area_page_read": area_page_read_tool,
+        "area_page_patch": area_page_patch_tool,
+        "area_page_write": area_page_write_tool,
+    },
+)
+
 # Memory record and artifact tools stay hidden until the knowledge runtime wires
 # the memory_records service — each tool's permission — so they never appear when
 # memory is off.
@@ -190,5 +201,6 @@ CORE_INTEGRATIONS = [
     TASK_TRACKING,
     SKILLS,
     SESSIONS,
+    AREA,
     MEMORY,
 ]
