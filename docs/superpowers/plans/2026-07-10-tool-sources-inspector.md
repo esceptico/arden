@@ -13,7 +13,7 @@
 - A source is an explicit resource returned by a read tool that contributed usable content; it is not a claim-level citation.
 - Never recursively scan arbitrary tool JSON for URLs.
 - Prefer canonical MCP `search`/`fetch` shapes and MCP resource content; support nonstandard servers only through named adapters.
-- Normalize at the server boundary: require `provider`, `kind`, `ref`, and `title`; allow only safe `http`/`https` URLs; cap values and keep at most 50 references per tool call.
+- Normalize at the server boundary: trim all strings; require `provider`, `kind`, `ref`, and `title`; discard refs whose provider/kind exceed 64 characters or ref exceeds 2048; truncate titles to 256; keep URLs only up to 4096 characters when they use `http`/`https`, have a hostname, and contain no credentials; keep at most 50 references per tool call.
 - Deduplicate by `(provider, ref)` while preserving first-seen order.
 - Persist source references in existing schemaless tool-message data; do not add a database migration.
 - Preserve unrelated user changes and keep the diff scoped to source provenance and its inspector.
@@ -31,9 +31,16 @@
 - Modify: `apps/server/ntrp/core/tool_result_data.py`
 - Modify: `apps/server/ntrp/agent/tools/dispatch.py`
 - Modify: `apps/server/ntrp/events/sse.py`
+- Modify: `apps/server/ntrp/server/state.py`
+- Modify: `apps/server/ntrp/server/stream.py`
+- Modify: `apps/server/ntrp/services/chat.py`
 - Modify: `apps/server/ntrp/server/routers/session.py`
+- Modify: `apps/server/ntrp/integrations/web/tools.py` (existing singular emitter only)
+- Modify: `apps/server/ntrp/tools/files.py` (existing singular emitter only)
 - Test: `apps/server/tests/test_tool_sources.py`
 - Test: `apps/server/tests/test_streaming_events.py`
+- Test: `apps/server/tests/test_web_tools.py` (existing singular assertion only)
+- Test: `apps/server/tests/test_file_tools.py` (existing singular assertion only)
 
 - [ ] **Step 1: Write failing source-contract tests**
 
@@ -72,6 +79,7 @@ class ToolSourceRef:
 ```
 
 Replace `ToolResult.source_ref` with `ToolResult.source_refs: tuple[ToolSourceRef, ...] = ()`.
+Migrate the two pre-existing singular emitters to one-item tuples: `web_fetch` uses `(provider="web", kind="page")`, while `read_file` uses `(provider="filesystem", kind="file")`. Broader native extraction remains Task 2.
 
 - [ ] **Step 4: Propagate references through execution and SSE**
 
