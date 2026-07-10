@@ -145,11 +145,11 @@ call_tool_result_to_tool_result(result, *, provider: str, tool_name: str)
 
 Extract only:
 
-- MCP resource links and embedded resource URIs.
-- Top-level canonical `results[]` items with `id`, `title`, and optional `url` for search tools.
-- Top-level fetched document objects with explicit identity/title/content fields for fetch tools.
+- MCP resource links and embedded resource URIs as `resource` refs.
+- Exact tool `search`: top-level canonical `results[]` items with string `id`, `title`, and optional `url`, emitted as `search_result` refs.
+- Exact tool `fetch`: a top-level object with string `id`, `title`, and nonempty `text`, plus optional `url`, emitted as a `document` ref.
 
-Do not recurse. Keep any server-specific mapping isolated and keyed by server/tool name.
+Use the MCP server name as provider. Do not recurse or match tool-name substrings. Keep any server-specific mapping isolated and keyed by server/tool name.
 
 - [ ] **Step 4: Write failing native-tool tests**
 
@@ -158,8 +158,8 @@ Cover web search result URLs, fetched pages, Slack message permalinks, Gmail mes
 - [ ] **Step 5: Add native source adapters**
 
 - Web search: one ref per result; web fetch: one ref for the fetched URL.
-- Slack: use returned message IDs and existing `metadata.permalink`; never make an extra API call only for provenance.
-- Gmail: use message/thread IDs even when no safe browser URL exists.
+- Slack: use provider/kind `slack/message`, returned message IDs, and existing `metadata.permalink`; never make an extra API call only for provenance.
+- Gmail: use provider/kind `gmail/message` and message IDs even when no safe browser URL exists.
 - Calendar: use event IDs plus `html_link` when present.
 - Files: use the normalized local path as `ref`, with no external URL.
 
