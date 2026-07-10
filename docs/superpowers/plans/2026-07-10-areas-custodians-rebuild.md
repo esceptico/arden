@@ -41,8 +41,12 @@ Update this section after every completed task.
   casefold-unique; page ownership is unique across active/archived Areas;
   archive preserves chat membership; restore is implemented. Evidence: 73
   storage/capability tests and focused Ruff pass.
-- Current: Task 2 pending.
-- Remaining: Tasks 2-10 below.
+- 2026-07-10: Task 2 complete. `AreaLifecycleService` now owns create/update,
+  live delegation sync, pause, archive, and restore; page attachment no longer
+  silently delegates; failed runtime updates restore persisted state. Evidence:
+  70 focused Areas tests and Ruff pass.
+- Current: Task 3 pending.
+- Remaining: Tasks 3-10 below.
 
 ---
 
@@ -80,12 +84,12 @@ page attachment, reversible archive/restore.
 **Produces:** `AreaLifecycleService` methods `create`, `update`, `delegate`,
 `pause`, `archive`, and `restore`, with runtime compensation.
 
-- [ ] Write failing tests for immediate agent provisioning, rename propagation,
+- [x] Write failing tests for immediate agent provisioning, rename propagation,
   archive disable, restore enable, and failed-runtime compensation.
-- [ ] Verify failures before creating the service.
-- [ ] Route every Area mutation through the lifecycle service.
-- [ ] Remove router-owned automation side effects.
-- [ ] Run lifecycle/router tests to green.
+- [x] Verify failures before creating the service.
+- [x] Route every Area mutation through the lifecycle service.
+- [x] Remove router-owned automation side effects.
+- [x] Run lifecycle/router tests to green.
 
 ### Task 3: Secure and expose the page capability
 

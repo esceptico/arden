@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from ntrp.areas.asks import AskStore
+from ntrp.areas.lifecycle import AreaLifecycleService
 from ntrp.areas.models import Ask, areas_from_records
 from ntrp.areas.service import AreaService
 from ntrp.areas.suggester import AreaSuggestionStore
@@ -29,6 +30,7 @@ class _FakeAreaStore:
 
     def __init__(self):
         self._rows: dict[str, dict] = {}
+        self._archived: dict[str, dict] = {}
         self._n = 0
 
     def _seed(self, *, name, page_path=None, autonomy=None, **_kw) -> dict:
@@ -70,7 +72,18 @@ class _FakeAreaStore:
         return None
 
     async def archive_area(self, area_id):
-        return self._rows.pop(area_id, None) is not None
+        row = self._rows.pop(area_id, None)
+        if row is None:
+            return False
+        self._archived[area_id] = row
+        return True
+
+    async def restore_area(self, area_id):
+        row = self._archived.pop(area_id, None)
+        if row is None:
+            return None
+        self._rows[area_id] = row
+        return dict(row)
 
 
 
@@ -108,6 +121,17 @@ def client(tmp_path: Path):
     )
     test_app.state.area_service = svc
     test_app.state.runtime = SimpleNamespace(session_service=areas)
+    async def _sync_custodian(area: dict) -> None:
+        return None
+
+    async def _disable_custodian(area_id: str) -> None:
+        return None
+
+    test_app.state.area_lifecycle = AreaLifecycleService(
+        sessions=areas,
+        sync_custodian=_sync_custodian,
+        disable_custodian=_disable_custodian,
+    )
     test_app.state.emit_areas_changed = _emit_areas_changed
 
     wakes: list[tuple[str, str]] = []
@@ -130,6 +154,7 @@ def test_routes_registered():
         "/areas",
         "/areas/overview",
         "/areas/{area_id}",
+        "/areas/{area_id}/restore",
         "/areas/{area_id}/autonomy",
         "/areas/{area_id}/asks/{ask_id}/resolve",
     ):
@@ -271,9 +296,20 @@ def test_post_areas_creates_container_with_capabilities(client):
     res = c.post("/areas", json={"name": "O-1B", "page_path": "topics/o-1b.md"})
     assert res.status_code == 200
     body = res.json()
-    assert body["autonomy"] == "observe"
+    assert body["autonomy"] is None
     keys = {s["key"] for s in svc.overview()["areas"]}
     assert keys == {o1a, body["area_id"]}
+
+
+def test_archive_and_restore_area(client):
+    c, _, _, o1a, areas = client
+
+    assert c.delete(f"/areas/{o1a}").status_code == 200
+    assert o1a not in areas._rows
+
+    restored = c.post(f"/areas/{o1a}/restore")
+    assert restored.status_code == 200
+    assert restored.json()["area_id"] == o1a
 
 
 def test_patch_area_attaches_page_to_existing_container(client):

@@ -31,6 +31,10 @@ def _sessions(request: Request):
     return request.app.state.runtime.session_service
 
 
+def _lifecycle(request: Request):
+    return request.app.state.area_lifecycle
+
+
 @router.get("", response_model=dict[str, list[AreaResponse]])
 async def list_areas(request: Request):
     return {"areas": await _sessions(request).list_areas()}
@@ -53,29 +57,17 @@ async def areas_overview(request: Request):
 async def create_area(request: Request, req: CreateAreaRequest):
     """Create-or-reuse by name (case-insensitive): promoting a suggested page
     for a container the user already has must attach, not duplicate."""
-    svc = _sessions(request)
-    existing = await svc.find_area_by_name(req.name)
-    if existing:
-        if req.page_path:
-            area = await svc.update_area(
-                existing["area_id"],
-                page_path=req.page_path,
-                autonomy=existing.get("autonomy") or "observe",
-            )
-        else:
-            area = existing
-    else:
-        try:
-            area = await svc.create_area(
-                name=req.name,
-                default_cwd=req.default_cwd,
-                instructions=req.instructions,
-                knowledge_scope=req.knowledge_scope,
-                page_path=req.page_path,
-                autonomy="observe" if req.page_path else None,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        area = await _lifecycle(request).create(
+            name=req.name,
+            default_cwd=req.default_cwd,
+            instructions=req.instructions,
+            knowledge_scope=req.knowledge_scope,
+            page_path=req.page_path,
+            autonomy=None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     await request.app.state.emit_areas_changed([area["area_id"]])
     return area
 
@@ -97,31 +89,34 @@ async def area_detail(request: Request, area_id: str):
 
 @router.patch("/{area_id}", response_model=AreaResponse)
 async def update_area(request: Request, area_id: str, req: UpdateAreaRequest):
-    svc = _sessions(request)
     patch = {key: getattr(req, key) for key in req.model_fields_set}
     try:
-        area = await svc.update_area(area_id, **patch)
+        area = await _lifecycle(request).update(area_id, **patch)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Area not found") from exc
     if not area:
         raise HTTPException(status_code=404, detail="Area not found")
-    if "paused" in patch:
-        # Pause is enforced at the switch: the agent automation is disabled
-        # outright (no half-alive runs), re-enabled on resume — a stale due
-        # time then fires promptly, so resuming reads as waking up.
-        automations = request.app.state.runtime.stores.automations
-        if await automations.get(f"area:{area_id}"):
-            await automations.set_enabled(f"area:{area_id}", not patch["paused"])
     await request.app.state.emit_areas_changed([area_id])
     return area
 
 
 @router.delete("/{area_id}")
 async def archive_area(request: Request, area_id: str):
-    archived = await _sessions(request).archive_area(area_id)
+    archived = await _lifecycle(request).archive(area_id)
     if not archived:
         raise HTTPException(status_code=404, detail="Area not found")
     return {"status": "archived", "area_id": area_id}
+
+
+@router.post("/{area_id}/restore", response_model=AreaResponse)
+async def restore_area(request: Request, area_id: str):
+    area = await _lifecycle(request).restore(area_id)
+    if area is None:
+        raise HTTPException(status_code=404, detail="Archived Area not found")
+    await request.app.state.emit_areas_changed([area_id])
+    return area
 
 
 @router.put("/{area_id}/autonomy")
@@ -132,7 +127,10 @@ async def update_area_autonomy(request: Request, area_id: str, body: AutonomyBod
         raise HTTPException(status_code=404, detail="Area not found")
     if not existing.get("page_path"):
         raise HTTPException(status_code=409, detail="Attach a page before granting an agent")
-    area = await svc.update_area(area_id, autonomy=body.autonomy)
+    try:
+        area = await _lifecycle(request).update(area_id, autonomy=body.autonomy)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Area not found") from exc
     await request.app.state.emit_areas_changed([area_id])
     return area
 

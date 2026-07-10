@@ -202,6 +202,37 @@ class AutomationRuntime:
             await self.stores.automations.set_next_run(task_id, deadline)
             _logger.info("Area %s wake requested (%s), due %s", area_id, description, deadline.isoformat())
 
+    async def sync_area_custodian(self, area: dict) -> None:
+        """Reconcile Area delegation into the ordinary automation runtime.
+
+        The seeder is idempotent and remains the single construction path while
+        the permission-specific reconciliation is tightened in the Custodian
+        phase of the rebuild.
+        """
+        await self._seed_area_automations()
+        task_id = f"area:{area['area_id']}"
+        automation = await self.stores.automations.get(task_id)
+        if automation is None:
+            return
+        projected = Area(
+            key=area["area_id"],
+            title=area["name"],
+            page_path=area.get("page_path"),
+            autonomy=area.get("autonomy"),
+        )
+        channel_name = f"{projected.title} agent"
+        automation.name = channel_name
+        automation.description = area_agent_instructions(projected)
+        automation.enabled = not bool(area.get("paused_at"))
+        await self.stores.automations.save(automation)
+        if automation.thread_id:
+            await self.stores.sessions.rename(automation.thread_id, channel_name)
+
+    async def disable_area_custodian(self, area_id: str) -> None:
+        task_id = f"area:{area_id}"
+        if await self.stores.automations.get(task_id) is not None:
+            await self.stores.automations.set_enabled(task_id, False)
+
     async def start_scheduler(self) -> None:
         self.scheduler.register_handler(
             "automation_suggester_daily",
