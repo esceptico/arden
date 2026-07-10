@@ -249,7 +249,7 @@ export function AreaRoom({ areaKey }: { areaKey: string }) {
             <button
               type="button"
               onClick={() => void grantAct()}
-              title="The agent only reads this area and updates its page — it takes no action on its own. Click to let it act: run this area's automations and workflows. Irreversible steps still ask you first."
+              title="The agent reads connected sources and updates this Area’s page, but takes no outward action. Click to let it run automations owned by this Area; consequential steps still require approval."
               className="shrink-0 self-center inline-flex h-7 items-center gap-1.5 rounded-full border border-line-soft px-3 text-xs font-medium text-muted transition-[color,border-color,scale] duration-check ease-out hover:border-line-strong hover:text-ink active:scale-[0.97]"
             >
               <Eye size={13} strokeWidth={2} />
@@ -259,7 +259,7 @@ export function AreaRoom({ areaKey }: { areaKey: string }) {
             <button
               type="button"
               onClick={() => void revokeAct()}
-              title="The agent can run this area's automations and workflows on its own. Click to return it to observe-only."
+              title="The agent can run child automations owned by this Area; consequential steps still require approval. Click to return it to observe-only."
               className="shrink-0 self-center inline-flex h-7 items-center gap-1.5 rounded-full border border-accent-soft px-3 text-xs font-medium text-accent transition-[opacity,scale] duration-check ease-out hover:opacity-80 active:scale-[0.97]"
             >
               <Zap size={13} strokeWidth={2} />

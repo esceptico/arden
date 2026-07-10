@@ -92,7 +92,7 @@ async def test_dream_learnings_partitioned_and_conventions_injected(tmp_path: Pa
     await store.add("Regina runs a weekly 1:1.", kind="fact", source_ref=SourceRef("user", ""))
 
     llm = _DreamLLM(b.id, a.id)
-    summary, learnings = await run_dream(
+    _summary, learnings = await run_dream(
         store, llm, "memory-model",
         conventions=load_conventions(), learnings="- prior gotcha to avoid",
     )

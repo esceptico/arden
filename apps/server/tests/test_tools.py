@@ -69,9 +69,10 @@ def test_function_tool_metadata_exposes_policy():
     metadata = t.get_metadata("read_state")
 
     assert metadata["policy"] == {
-        "action": "read",
-        "scope": "internal",
-        "requires_approval": False,
+            "action": "read",
+            "scope": "internal",
+            "requires_approval": False,
+            "approval_mode": "never",
         "permissions": [],
         "timeout_seconds": None,
         "audit": True,

@@ -1136,6 +1136,14 @@ class AutomationStore:
         # no longer swallow exceptions, the ordering bug is loud.
         await self.conn.executescript(_SCHEMA)
         await _migrate(self.conn)
+        # Pre-Areas Custodians used slice:{slug}. Keep this migration beside
+        # the automation tables it owns; SessionStore repairs channel origins.
+        await self.conn.execute(
+            "UPDATE scheduled_tasks SET task_id = 'area:' || substr(task_id, 7) WHERE task_id LIKE 'slice:%'"
+        )
+        await self.conn.execute(
+            "UPDATE automation_runs SET task_id = 'area:' || substr(task_id, 7) WHERE task_id LIKE 'slice:%'"
+        )
         await _set_schema_version(self.conn, CURRENT_SCHEMA_VERSION)
         await self.conn.commit()
 

@@ -26,20 +26,9 @@ OBSERVE_TOOL_SCOPE = [
     "find_files",
     "search_text",
     "current_time",
-]
-
-# Acting expands only to named integration tools. Their own policies still
-# require approval for consequential writes, so autonomy never becomes a
-# wildcard or an approval bypass.
-ACT_TOOL_SCOPE = [
-    *OBSERVE_TOOL_SCOPE,
     "emails",
     "read_email",
-    "send_email",
     "calendar",
-    "create_calendar_event",
-    "edit_calendar_event",
-    "delete_calendar_event",
     "slack_search",
     "slack_channel",
     "slack_thread",
@@ -49,13 +38,19 @@ ACT_TOOL_SCOPE = [
     "slack_users",
     "slack_user",
     "slack_file",
-    "slack_post_message",
-    "slack_post_blocks",
+]
+
+# Acting expands only to named integration tools. Their own policies still
+# require approval for consequential writes, so autonomy never becomes a
+# wildcard or an approval bypass.
+ACT_TOOL_SCOPE = [
+    *OBSERVE_TOOL_SCOPE,
+    "area_run_automation",
 ]
 
 _CONTRACT = {
     "observe": "You may read anything and update this area's topic page, but take no external action.",
-    "act": "You may run this area's automations and workflows; irreversible actions still require approval.",
+    "act": "You may run child automations owned by this area; their consequential actions still require approval.",
 }
 
 # Only findings that clear this salience become asks; the rest belong on the

@@ -85,8 +85,9 @@ async def migrate_legacy_areas(
     # 4. Automations: area:{slug} → area:{area_id} across task tables,
     #    plus the channel sessions that reference the automation as origin.
     for key, area_id in key_to_area.items():
-        await automation_store.rewrite_task_id(f"slice:{key}", f"area:{area_id}")
-        await session_store.rewrite_origin_automation_id(f"slice:{key}", f"area:{area_id}")
+        for legacy_id in (f"slice:{key}", f"area:{key}"):
+            await automation_store.rewrite_task_id(legacy_id, f"area:{area_id}")
+            await session_store.rewrite_origin_automation_id(legacy_id, f"area:{area_id}")
 
     areas_file.rename(areas_file.with_suffix(".json.migrated"))
     summary = {"areas": len(entries), "sessions": len(rows)}

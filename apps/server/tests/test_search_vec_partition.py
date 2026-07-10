@@ -39,7 +39,7 @@ async def test_small_partition_not_starved_by_large_one(tmp_path):
         mem = await store.vector_search(q, sources=["memory_line"], limit=10)
         mem_ids = {r[0] for r in mem}
         rows = await conn.execute_fetchall(
-            "SELECT id, source FROM items WHERE id IN (%s)" % ",".join("?" * len(mem_ids)),
+            f"SELECT id, source FROM items WHERE id IN ({','.join('?' * len(mem_ids))})",
             list(mem_ids),
         )
         # memory_line search returns ONLY memory_line rows, and isn't starved to 0.

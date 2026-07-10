@@ -48,6 +48,8 @@ export interface AreaAgentStatus {
   runs_today: number;
   runs_cap: number;
   running_since: string | null;
+  availability: "ready" | "unavailable" | "error";
+  last_error: string | null;
 }
 
 export interface AreaSuggestion {

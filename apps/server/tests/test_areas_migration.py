@@ -79,6 +79,7 @@ async def test_migration_folds_rekeys_and_renames(env):
 
     assert asks.list(health_id)[0].id == "a1"  # ask re-keyed to area_id
     assert ("slice:health", f"area:{health_id}") in autos.rewrites
+    assert ("area:health", f"area:{health_id}") in autos.rewrites
     assert not areas_file.exists()
     assert areas_file.with_suffix(".json.migrated").exists()
     assert summary["areas"] == 2

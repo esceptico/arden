@@ -44,6 +44,17 @@ async def test_run_history_records_start_then_finish(automation_store: Automatio
     assert runs[0]["ended_at"] is not None
 
 
+async def test_init_rekeys_legacy_slice_custodian_rows(automation_store: AutomationStore):
+    await automation_store.save(_automation("slice:health"))
+    await automation_store.record_run_start("slice:health", datetime(2026, 1, 1, tzinfo=UTC))
+
+    await automation_store.init_schema()
+
+    assert await automation_store.get("slice:health") is None
+    assert await automation_store.get("area:health") is not None
+    assert len(await automation_store.list_runs("area:health")) == 1
+
+
 async def test_run_history_newest_first_and_limited(automation_store: AutomationStore):
     base = datetime(2026, 1, 1, tzinfo=UTC)
     for i in range(5):

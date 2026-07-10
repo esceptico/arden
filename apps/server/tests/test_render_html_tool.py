@@ -47,7 +47,7 @@ async def test_display_mode_returns_immediately():
 
     result = await render_html_tool.execute(execution, html="<div>x</div>", title="T", mode="display")
 
-    assert result.content == 'Rendered HTML widget "T".'
+    assert result.content == "Rendered HTML T."
     assert result.preview == "T"
     assert result.data == {"html": "<div>x</div>", "title": "T", "mode": "display"}
     assert result.is_error is False

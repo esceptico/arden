@@ -5,12 +5,14 @@ import pytest
 
 from ntrp.context.models import AreaContext, SessionState
 from ntrp.tools.area import (
+    AreaAutomationRunInput,
     AreaPagePatchInput,
     AreaPageReadInput,
     AreaPageWriteInput,
     area_page_patch,
     area_page_read,
     area_page_write,
+    area_run_automation,
 )
 from ntrp.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
 from ntrp.tools.core.registry import ToolRegistry
@@ -94,3 +96,23 @@ async def test_area_page_tools_fail_closed_without_attached_page(tmp_path: Path)
 
     assert result.is_error
     assert "attached page" in result.content
+
+
+@pytest.mark.asyncio
+async def test_area_automation_run_is_locked_to_owned_children(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    class Automations:
+        async def run_now(self, task_id: str) -> None:
+            calls.append(task_id)
+
+    run = execution(tmp_path / "memory")
+    run.ctx.services["automation"] = Automations()
+
+    allowed = await area_run_automation(run, AreaAutomationRunInput(task_id="area:area_health:daily"))
+    foreign = await area_run_automation(run, AreaAutomationRunInput(task_id="area:other:daily"))
+    recursive = await area_run_automation(run, AreaAutomationRunInput(task_id="area:area_health"))
+
+    assert not allowed.is_error
+    assert foreign.is_error and recursive.is_error
+    assert calls == ["area:area_health:daily"]

@@ -41,6 +41,28 @@ def test_detail_includes_open_loops_and_sessions(tmp_path: Path):
     d = svc.detail("o-1a")
     assert d["open_loops"] == ["Find counsel."]
     assert d["sessions"][0]["session_id"] == "s1"
+    assert d["agent"]["availability"] == "unavailable"
+
+
+def test_detail_surfaces_latest_custodian_failure(tmp_path: Path):
+    svc = AreaService(
+        areas=lambda: AREAS,
+        asks=AskStore(tmp_path / "state.json"),
+        get_page=lambda path: parse_page(PAGE),
+        pending_approvals=lambda: [],
+        session_area=lambda sid: None,
+        area_automations=lambda key: [{
+            "task_id": "area:o-1a", "enabled": True,
+            "latest_run": {"status": "failed", "error": "provider unavailable"},
+        }],
+        area_sessions=lambda key: [],
+        get_area=lambda pid: None,
+    )
+
+    agent = svc.detail("o-1a")["agent"]
+
+    assert agent["availability"] == "error"
+    assert agent["last_error"] == "provider unavailable"
 
 
 def test_mechanical_approval_retires_when_no_longer_pending(tmp_path: Path):

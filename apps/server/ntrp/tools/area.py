@@ -27,6 +27,10 @@ class AreaPageWriteInput(BaseModel):
     content: str = Field(min_length=1, max_length=100_000, description="Complete Markdown body; frontmatter is preserved.")
 
 
+class AreaAutomationRunInput(BaseModel):
+    task_id: str = Field(min_length=1, max_length=200)
+
+
 def _target(execution: ToolExecution) -> Path | ToolResult:
     area = execution.ctx.area
     vault = execution.ctx.services.get(AREA_PAGES_SERVICE)
@@ -112,6 +116,27 @@ async def area_page_write(execution: ToolExecution, args: AreaPageWriteInput) ->
     return ToolResult(content="Updated this Area's page.", preview="Area page updated")
 
 
+async def area_run_automation(execution: ToolExecution, args: AreaAutomationRunInput) -> ToolResult:
+    area = execution.ctx.area
+    service = execution.ctx.services.get("automation")
+    prefix = f"area:{area.area_id}:" if area is not None else None
+    if prefix is None or not args.task_id.startswith(prefix):
+        return ToolResult(
+            content="Only child automations owned by the current Area can be run.",
+            preview="Outside Area boundary",
+            is_error=True,
+        )
+    if service is None:
+        return ToolResult(content="Automation service unavailable.", preview="Unavailable", is_error=True)
+    try:
+        await service.run_now(args.task_id)
+    except KeyError:
+        return ToolResult(content="Area automation not found.", preview="Not found", is_error=True)
+    except RuntimeError as exc:
+        return ToolResult(content=f"Could not start Area automation: {exc}", preview="Unavailable", is_error=True)
+    return ToolResult(content=f"Started Area automation {args.task_id}.", preview="Area automation started")
+
+
 _AREA_PERMISSION = frozenset({AREA_PAGES_SERVICE})
 
 area_page_read_tool = tool(
@@ -136,4 +161,12 @@ area_page_write_tool = tool(
     input_model=AreaPageWriteInput,
     policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=_AREA_PERMISSION),
     execute=area_page_write,
+)
+
+area_run_automation_tool = tool(
+    display_name="RunAreaAutomation",
+    description="Run a child automation owned by the current Area. Cannot target the Custodian itself or another Area.",
+    input_model=AreaAutomationRunInput,
+    policy=ToolPolicy(action=ToolAction.EXECUTE, scope=ToolScope.INTERNAL, permissions=frozenset({"automation"})),
+    execute=area_run_automation,
 )

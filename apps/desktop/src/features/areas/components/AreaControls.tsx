@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import clsx from "clsx";
 import { Settings2 } from "lucide-react";
-import type { AreaDetail } from "@/api/areas";
+import type { AreaAgentStatus, AreaDetail } from "@/api/areas";
 import { updateAreaSettings } from "@/actions/areas";
 import { useStore } from "@/stores";
 import { formatRelativeFuture, formatRelativePast } from "@/lib/format";
@@ -25,11 +25,23 @@ const INTERRUPT_OPTIONS = [
 /** The custodian's liveness line — always present when an agent exists.
  *  A silent-stalled agent is the documented trust killer, so the room
  *  states plainly when it last looked, when it looks next, and why. */
+export function agentExceptionalStatus(
+  paused: boolean,
+  availability: AreaAgentStatus["availability"],
+  lastError: string | null,
+): string | null {
+  if (paused) return "Paused — the agent isn’t watching this area.";
+  if (availability === "unavailable") return "Custodian unavailable — no check is scheduled.";
+  if (availability === "error") return `Last check failed — ${lastError || "unknown error"}`;
+  return null;
+}
+
 export function AgentStatusLine({ detail }: { detail: AreaDetail }) {
   const agent = detail.agent;
   if (!agent) return null;
-  if (detail.paused) {
-    return <p className="m-0 text-xs text-faint">Paused — the agent isn’t watching this area.</p>;
+  const exceptional = agentExceptionalStatus(detail.paused, agent.availability, agent.last_error);
+  if (exceptional) {
+    return <p className="m-0 text-xs text-faint">{exceptional}</p>;
   }
   if (agent.running_since) {
     return <p className="m-0 text-xs text-faint">Checking now…</p>;

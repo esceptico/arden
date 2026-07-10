@@ -131,6 +131,13 @@ class AreaService:
         agent = None
         if s.autonomy is not None:
             attention = record.get("attention") or "ambient"
+            latest_run = (agent_auto or {}).get("latest_run") or {}
+            if agent_auto is None or not agent_auto.get("enabled", True):
+                availability = "unavailable"
+            elif latest_run.get("status") == "failed":
+                availability = "error"
+            else:
+                availability = "ready"
             agent = {
                 # The room's liveness line — a silent-stalled custodian is the
                 # documented trust killer, so this is always present.
@@ -142,6 +149,8 @@ class AreaService:
                 "runs_today": cust.get("runs_today_display", 0),
                 "runs_cap": AREA_ATTENTION_PRESETS.get(attention, AREA_ATTENTION_PRESETS["ambient"])["runs_per_day"],
                 "running_since": (agent_auto or {}).get("running_since"),
+                "availability": availability,
+                "last_error": latest_run.get("error") if availability == "error" else None,
             }
         return {
             "key": s.key, "title": s.title, "autonomy": s.autonomy,

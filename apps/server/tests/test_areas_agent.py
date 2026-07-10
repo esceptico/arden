@@ -131,6 +131,9 @@ def test_observe_scope_is_area_locked_and_can_read_area_transcripts():
     assert matches_scope(tuple(OBSERVE_TOOL_SCOPE), "list_recent_sessions")
     assert matches_scope(tuple(OBSERVE_TOOL_SCOPE), "read_session")
     assert matches_scope(tuple(OBSERVE_TOOL_SCOPE), "web_search")
+    assert matches_scope(tuple(OBSERVE_TOOL_SCOPE), "emails")
+    assert matches_scope(tuple(OBSERVE_TOOL_SCOPE), "calendar")
+    assert matches_scope(tuple(OBSERVE_TOOL_SCOPE), "slack_search")
     assert not matches_scope(tuple(OBSERVE_TOOL_SCOPE), "memory_patch")
     assert not matches_scope(tuple(OBSERVE_TOOL_SCOPE), "memory_write")
     assert not matches_scope(tuple(OBSERVE_TOOL_SCOPE), "memory_rebuild")
@@ -152,9 +155,10 @@ def test_live_autonomy_contracts_are_exact_and_never_globally_auto_approve():
     assert "observe" in observe.description
     assert "act" in acting.description
 
-    assert matches_scope(tuple(ACT_TOOL_SCOPE), "send_email")
-    assert matches_scope(tuple(ACT_TOOL_SCOPE), "create_calendar_event")
-    assert matches_scope(tuple(ACT_TOOL_SCOPE), "slack_post_message")
+    assert matches_scope(tuple(ACT_TOOL_SCOPE), "area_run_automation")
+    assert not matches_scope(tuple(ACT_TOOL_SCOPE), "send_email")
+    assert not matches_scope(tuple(ACT_TOOL_SCOPE), "create_calendar_event")
+    assert not matches_scope(tuple(ACT_TOOL_SCOPE), "slack_post_message")
     assert not matches_scope(tuple(ACT_TOOL_SCOPE), "bash")
     assert not matches_scope(tuple(ACT_TOOL_SCOPE), "write_file")
     assert not matches_scope(tuple(ACT_TOOL_SCOPE), "memory_write")

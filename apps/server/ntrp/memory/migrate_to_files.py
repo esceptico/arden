@@ -13,7 +13,10 @@ from __future__ import annotations
 
 import shutil
 from datetime import UTC, datetime
-from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 from ntrp.logging import get_logger
 from ntrp.memory.file_store import FilePageStore

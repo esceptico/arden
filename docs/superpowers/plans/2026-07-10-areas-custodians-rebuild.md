@@ -77,8 +77,15 @@ Update this section after every completed task.
   re-notifying, resolutions carry explicit metadata, and replies dispatch to
   the linked Custodian channel. Evidence: 44 server tests, 4 desktop tests,
   typecheck, ESLint, and Ruff pass (two pre-existing React `act()` warnings).
-- Current: Task 10 pending.
-- Remaining: Task 10 below.
+- 2026-07-10: Task 10 complete. Legacy Custodian IDs migrate in their owning
+  stores; the room distinguishes paused, running, unavailable, failed, and
+  scheduled states; Acting is confined to Area-owned child automations. Final
+  evidence: 1,422 server tests, 575 desktop tests, repo-wide Ruff, desktop
+  typecheck, ESLint, and production build pass. Existing non-failing warnings:
+  React `act()` test warnings, pytest asyncio/thread cleanup warnings, and the
+  Vite chunk-size advisory.
+- Current: complete.
+- Remaining: none.
 
 ---
 
@@ -291,11 +298,11 @@ Custodian-channel replies, and deduplicated notifications.
 **Produces:** Honest liveness/error/budget UI, idempotent migration, and a closed
 requirement ledger.
 
-- [ ] Add failing migration and UI tests for repaired legacy state and honest
+- [x] Add failing migration and UI tests for repaired legacy state and honest
   unavailable/paused/error states.
-- [ ] Verify red, implement, and return to green.
-- [ ] Run full server pytest and Ruff gates.
-- [ ] Run full desktop tests, typecheck, lint, and build.
-- [ ] Audit every design invariant against code/tests and record evidence in the
+- [x] Verify red, implement, and return to green.
+- [x] Run full server pytest and Ruff gates.
+- [x] Run full desktop tests, typecheck, lint, and build.
+- [x] Audit every design invariant against code/tests and record evidence in the
   progress ledger.
-- [ ] Review the final diff for unrelated changes and unresolved placeholders.
+- [x] Review the final diff for unrelated changes and unresolved placeholders.

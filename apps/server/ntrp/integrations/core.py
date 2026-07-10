@@ -7,7 +7,7 @@ belong to an Integration, including the ones ntrp ships out of the box.
 
 from ntrp.integrations.base import Integration
 from ntrp.skills.tool import create_skill_tool, use_skill_tool
-from ntrp.tools.area import area_page_patch_tool, area_page_read_tool, area_page_write_tool
+from ntrp.tools.area import area_page_patch_tool, area_page_read_tool, area_page_write_tool, area_run_automation_tool
 from ntrp.tools.automation import (
     create_automation_tool,
     create_loop_tool,
@@ -166,6 +166,7 @@ AREA = Integration(
         "area_page_read": area_page_read_tool,
         "area_page_patch": area_page_patch_tool,
         "area_page_write": area_page_write_tool,
+        "area_run_automation": area_run_automation_tool,
     },
 )
 

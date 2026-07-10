@@ -458,10 +458,6 @@ class FilePageStore:
         return list(self._pages[path].frontmatter.get("meta_labels", [])) if path in self._pages else []
 
     def _scope_for(self, path: Path, kind: str) -> tuple[str | None, str | None]:
-        try:
-            rel = path.relative_to(self._root)
-        except ValueError:
-            rel = path
         # Scope is a property of the page (frontmatter scope_key), not its folder — a
         # project page and an emergent topic both live in topics/; only the scope_key
         # tells them apart. This keeps active-work's project view working after the
