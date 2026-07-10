@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useStore } from "@/stores";
-import { createAreaPage, fetchAreaDetail, updateAreaAutonomy } from "@/actions/areas";
+import { createAreaPage, fetchAreaDetail, replyToAsk, updateAreaAutonomy } from "@/actions/areas";
 import { runAutomation } from "@/actions/automations";
 import { createSession, goToNewSessionHome, switchSession } from "@/actions/sessions";
 import { sendMessage } from "@/actions/messages";
@@ -29,6 +29,7 @@ export function AreaRoom({ areaKey }: { areaKey: string }) {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [setupBusy, setSetupBusy] = useState(false);
+  const [replyingTo, setReplyingTo] = useState<string | null>(null);
 
   useEffect(() => {
     void fetchAreaDetail(areaKey);
@@ -90,8 +91,9 @@ export function AreaRoom({ areaKey }: { areaKey: string }) {
     }
   };
 
-  const discussAsk = (ask: { text: string }) => {
-    setDraft(`About "${ask.text}" — `);
+  const discussAsk = (ask: { id: string; text: string }) => {
+    setReplyingTo(ask.id);
+    setDraft("");
     document.getElementById("area-composer-input")?.focus();
   };
 
@@ -164,6 +166,11 @@ export function AreaRoom({ areaKey }: { areaKey: string }) {
     setSending(true);
     setDraft("");
     try {
+      if (replyingTo) {
+        await replyToAsk(areaKey, replyingTo, text);
+        setReplyingTo(null);
+        return;
+      }
       // areaKey IS the area_id (unification) — filing is a plain
       // create-in-area; the room's sessions list keys off area_id.
       await createSession(areaKey);
@@ -340,7 +347,7 @@ export function AreaRoom({ areaKey }: { areaKey: string }) {
                   void send();
                 }
               }}
-              placeholder={`Message in ${detail.title}…`}
+              placeholder={replyingTo ? "Reply to the Custodian…" : `Message in ${detail.title}…`}
               disabled={sending}
               className="min-w-0 flex-1 bg-transparent text-sm text-ink placeholder:text-faint focus:outline-none disabled:opacity-60"
             />

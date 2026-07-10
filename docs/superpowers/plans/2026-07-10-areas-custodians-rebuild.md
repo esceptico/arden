@@ -72,8 +72,13 @@ Update this section after every completed task.
   malformed legacy state recovers; exact page digests suppress only the
   matching self-write event. Evidence: 74 runtime/scheduling tests and Ruff
   pass.
-- Current: Task 9 pending.
-- Remaining: Tasks 9-10 below.
+- 2026-07-10: Task 9 complete. Agent asks use stable keys, quiet or malformed
+  runs preserve unresolved decisions, repeated nominations update without
+  re-notifying, resolutions carry explicit metadata, and replies dispatch to
+  the linked Custodian channel. Evidence: 44 server tests, 4 desktop tests,
+  typecheck, ESLint, and Ruff pass (two pre-existing React `act()` warnings).
+- Current: Task 10 pending.
+- Remaining: Task 10 below.
 
 ---
 
@@ -265,14 +270,14 @@ digest-based self-write suppression.
 **Produces:** Stable ask keys, durable decisions, explicit resolution events,
 Custodian-channel replies, and deduplicated notifications.
 
-- [ ] Write failing tests proving quiet/malformed runs preserve decisions,
+- [x] Write failing tests proving quiet/malformed runs preserve decisions,
   repeated nominations update instead of re-push, reply targets the Custodian
   channel, and approve/reject state is explicit.
-- [ ] Verify red.
-- [ ] Reconcile nominations by stable key and persist resolution metadata.
-- [ ] Add ask reply endpoint which writes a linked user message to the channel.
-- [ ] Wire desktop buttons to typed reply/resolve APIs.
-- [ ] Run server and desktop ask tests to green.
+- [x] Verify red.
+- [x] Reconcile nominations by stable key and persist resolution metadata.
+- [x] Add ask reply endpoint which writes a linked user message to the channel.
+- [x] Wire desktop buttons to typed reply/resolve APIs.
+- [x] Run server and desktop ask tests to green.
 
 ### Task 10: Final UX, migration, and completion audit
 

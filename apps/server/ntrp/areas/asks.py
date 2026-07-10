@@ -40,14 +40,41 @@ class AskStore:
         self._asks[ask.id] = ask
         self._flush()
 
-    def resolve(self, ask_id: str, state: AskState, snoozed_until: str | None = None) -> Ask:
+    def resolve(
+        self,
+        ask_id: str,
+        state: AskState,
+        snoozed_until: str | None = None,
+        resolution: str | None = None,
+    ) -> Ask:
         if ask_id not in self._asks:
             raise KeyError(f"unknown ask '{ask_id}'; valid: {list(self._asks)}")
         ask = self._asks[ask_id]
         ask.state = state
         ask.snoozed_until = snoozed_until
+        if state in {"done", "dismissed"}:
+            ask.resolution = resolution or state
+            ask.resolved_at = datetime.now(UTC).isoformat()
         self._flush()
         return ask
+
+    def upsert_agent_nomination(self, ask: Ask) -> bool:
+        """Create or refresh one stable nomination without resurrecting it.
+
+        Returns True only for a genuinely new ask, which is also the notifier
+        deduplication boundary.
+        """
+        existing = self._asks.get(ask.id)
+        if existing is None:
+            self._asks[ask.id] = ask
+            self._flush()
+            return True
+        if existing.state != "active":
+            return False
+        ask.created_at = existing.created_at
+        self._asks[ask.id] = ask
+        self._flush()
+        return False
 
     def retire_active_agent_asks(self, area_key: str) -> None:
         """Mark this area's active source=="agent" asks "done" — called

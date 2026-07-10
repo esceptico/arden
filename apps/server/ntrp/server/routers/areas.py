@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ntrp.server.schemas import AreaResponse, CreateAreaRequest, UpdateAreaRequest
 
@@ -17,6 +17,11 @@ router = APIRouter(prefix="/areas", tags=["areas"])
 class ResolveBody(BaseModel):
     state: Literal["dismissed", "done", "snoozed"]
     snoozed_until: str | None = None
+    resolution: Literal["approved", "rejected", "dismissed", "acknowledged"] | None = None
+
+
+class ReplyBody(BaseModel):
+    message: str = Field(min_length=1, max_length=20_000)
 
 
 class AutonomyBody(BaseModel):
@@ -165,15 +170,13 @@ async def update_area_autonomy(request: Request, area_id: str, body: AutonomyBod
 
 @router.post("/{area_id}/asks/{ask_id}/resolve")
 async def resolve_ask(request: Request, area_id: str, ask_id: str, body: ResolveBody):
+    existing = _svc(request).get_ask(area_id, ask_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Ask not found in this Area")
     try:
-        ask = _svc(request).resolve_ask(ask_id, body.state, body.snoozed_until)
+        ask = _svc(request).resolve_ask(ask_id, body.state, body.snoozed_until, body.resolution)
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
-    if ask["area_key"] != area_id:
-        raise HTTPException(
-            status_code=404,
-            detail=f"ask '{ask_id}' belongs to area '{ask['area_key']}', not '{area_id}'",
-        )
     await request.app.state.emit_areas_changed([ask["area_key"]])
     # The user engaged — that's domain activity the custodian should absorb
     # (an approved review unblocks it; a dismissal is steering).
@@ -181,3 +184,25 @@ async def resolve_ask(request: Request, area_id: str, ask_id: str, body: Resolve
         area_id, f"user resolved ask '{ask['text'][:80]}' as {body.state}"
     )
     return ask
+
+
+@router.post("/{area_id}/asks/{ask_id}/reply")
+async def reply_to_ask(request: Request, area_id: str, ask_id: str, body: ReplyBody):
+    ask = _svc(request).get_ask(area_id, ask_id)
+    if ask is None:
+        raise HTTPException(status_code=404, detail="Ask not found")
+    runtime = request.app.state.runtime
+    automation = await runtime.stores.automations.get(f"area:{area_id}")
+    dispatch = runtime.dispatch_session_message
+    if automation is None or not automation.thread_id or dispatch is None:
+        raise HTTPException(status_code=409, detail="Custodian channel unavailable")
+    message = f"REPLY TO ASK [{ask.id}]\n{body.message.strip()}"
+    await dispatch(
+        automation.thread_id,
+        message,
+        client_id=f"area-ask-reply:{ask.id}",
+        skip_approvals=False,
+    )
+    resolved = _svc(request).resolve_ask(ask.id, "done", None, "replied")
+    await request.app.state.emit_areas_changed([area_id])
+    return resolved

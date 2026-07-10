@@ -120,7 +120,21 @@ def client(tmp_path: Path):
         [{"id": "sg1", "key": "health", "title": "Health", "page_path": "topics/health.md", "rationale": "r", "created_at": "2026-07-07"}]
     )
     test_app.state.area_service = svc
-    test_app.state.runtime = SimpleNamespace(session_service=areas)
+    class _Automations:
+        async def get(self, task_id: str):
+            return SimpleNamespace(thread_id="custodian-thread") if task_id == f"area:{o1a['area_id']}" else None
+
+    dispatched: list[tuple[str, str]] = []
+
+    async def _dispatch_session_message(session_id, message, **kwargs):
+        dispatched.append((session_id, message))
+
+    test_app.state.runtime = SimpleNamespace(
+        session_service=areas,
+        stores=SimpleNamespace(automations=_Automations()),
+        dispatch_session_message=_dispatch_session_message,
+    )
+    test_app.state.dispatched = dispatched
     async def _sync_custodian(area: dict) -> None:
         return None
 
@@ -163,6 +177,7 @@ def test_routes_registered():
         "/areas/{area_id}/restore",
         "/areas/{area_id}/autonomy",
         "/areas/{area_id}/asks/{ask_id}/resolve",
+        "/areas/{area_id}/asks/{ask_id}/reply",
     ):
         assert p in paths
 
@@ -221,6 +236,21 @@ def test_resolve_ask_and_unknown_area_404(client):
     assert o1a in res.json()["detail"]
 
 
+def test_reply_posts_linked_message_to_custodian_channel(client):
+    c, svc, emitted, o1a, _ = client
+    svc._asks.upsert(Ask(
+        id=f"agent:{o1a}:dose", area_key=o1a, text="Which dose?", kind="question", source="agent",
+        actions=[], state="active", created_at="2026-07-06T10:00:00", stable_key="dose",
+    ))
+
+    res = c.post(f"/areas/{o1a}/asks/agent:{o1a}:dose/reply", json={"message": "Use 5 mg."})
+
+    assert res.status_code == 200
+    assert res.json()["resolution"] == "replied"
+    assert c.app.state.dispatched == [("custodian-thread", f"REPLY TO ASK [agent:{o1a}:dose]\nUse 5 mg.")]
+    assert emitted == [[o1a]]
+
+
 def test_resolve_unknown_ask_404(client):
     c, _, _, o1a, _ = client
     res = c.post(f"/areas/{o1a}/asks/missing/resolve", json={"state": "done"})
@@ -242,7 +272,7 @@ def test_resolve_ask_404s_when_ask_belongs_to_a_different_area(client):
 
     res = c.post(f"/areas/{o1a}/asks/agent:dex:1/resolve", json={"state": "dismissed"})
     assert res.status_code == 404
-    assert dex in res.json()["detail"]
+    assert res.json()["detail"] == "Ask not found in this Area"
     assert emitted == []
 
     # sanity: resolving it under its real area still works and emits ask.area_key

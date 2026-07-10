@@ -49,9 +49,9 @@ export function AskCard({ ask, onDiscuss }: { ask: AreaAsk; onDiscuss?: (ask: Ar
         openArea: (key) => useStore.getState().openArea(key),
       });
 
-  const settle = async (state: "done" | "dismissed", failTitle: string) => {
+  const settle = async (state: "done" | "dismissed", resolution: string, failTitle: string) => {
     try {
-      await resolveAsk(ask.area_key, ask.id, state);
+      await resolveAsk(ask.area_key, ask.id, state, undefined, resolution);
     } catch {
       useStore.getState().pushToast({
         id: `ask-resolve-fail:${ask.area_key}:${ask.id}`,
@@ -93,7 +93,7 @@ export function AskCard({ ask, onDiscuss }: { ask: AreaAsk; onDiscuss?: (ask: Ar
         <IconButton
           size="sm"
           title="Dismiss"
-          onClick={() => void settle("dismissed", "Couldn’t dismiss")}
+          onClick={() => void settle("dismissed", "dismissed", "Couldn’t dismiss")}
           className="-my-1 ml-auto"
         >
           <X className="size-3.5" />
@@ -120,10 +120,10 @@ export function AskCard({ ask, onDiscuss }: { ask: AreaAsk; onDiscuss?: (ask: Ar
       <div className="mt-2 flex items-center gap-2">
         {ask.kind === "review" && (
           <>
-            <Button variant="primary" size="sm" onClick={() => void settle("done", "Couldn’t approve")}>
+            <Button variant="primary" size="sm" onClick={() => void settle("done", "approved", "Couldn’t approve")}>
               Approve
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => void settle("dismissed", "Couldn’t reject")}>
+            <Button variant="ghost" size="sm" onClick={() => void settle("dismissed", "rejected", "Couldn’t reject")}>
               Reject
             </Button>
           </>
@@ -134,7 +134,7 @@ export function AskCard({ ask, onDiscuss }: { ask: AreaAsk; onDiscuss?: (ask: Ar
           </Button>
         )}
         {ask.kind === "notify" && (
-          <Button variant="primary" size="sm" onClick={() => void settle("done", "Couldn’t clear")}>
+          <Button variant="primary" size="sm" onClick={() => void settle("done", "acknowledged", "Couldn’t clear")}>
             Got it
           </Button>
         )}

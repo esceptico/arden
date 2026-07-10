@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 
 import { archiveArea } from "@/actions/sessions";
+import { replyToAsk } from "@/actions/areas";
 import type { Area, SessionListItem } from "@/api/types";
 import { getState, setState } from "@/stores/index";
 
@@ -57,6 +58,38 @@ test("archiveArea removes the area view but preserves session membership for res
     ["s1", "p1"],
     ["s2", "p2"],
     ["s3", null],
+  ]);
+});
+
+test("replyToAsk targets the typed Custodian reply endpoint", async () => {
+  const requests: { path: string; method?: string; body?: string; timeout?: number }[] = [];
+  (globalThis as typeof globalThis & { window?: unknown }).window = {
+    ntrpDesktop: {
+      api: {
+        request: async (_config: unknown, req: { path: string; method?: string; body?: string; timeout?: number }) => {
+          requests.push(req);
+          return {
+            ok: true,
+            status: 200,
+            statusText: "OK",
+            contentType: "application/json",
+            data: {},
+            text: "",
+          };
+        },
+      },
+    },
+  };
+
+  await replyToAsk("p1", "agent:p1:dose", "Use 5 mg.");
+
+  expect(requests).toEqual([
+    {
+      path: "/areas/p1/asks/agent%3Ap1%3Adose/reply",
+      method: "POST",
+      body: JSON.stringify({ message: "Use 5 mg." }),
+      timeout: 60_000,
+    },
   ]);
 });
 

@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal
-from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
@@ -68,6 +67,7 @@ NOTIFY_ASK_TTL_HOURS = 72
 
 
 class AreaAskDraft(BaseModel):
+    key: str = Field(min_length=1, max_length=80, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     text: str
     # notify = FYI (no decision, expires quietly); question = blocked on the
     # user's judgment; review = proposed action awaiting approval.
@@ -117,6 +117,7 @@ def area_agent_instructions(area: Area) -> str:
         "- question: you are blocked on the user's judgment and cannot proceed without it.\n"
         "- review: you propose a concrete action and want approval before it happens.\n"
         "Every ask must name the concrete object, why now, and what happens next. "
+        "Give it a short stable key reused across runs until that exact decision is resolved. "
         "Score each 1-5 on salience; low-salience findings belong on the page, not in an ask.\n"
         "Next check: pick when you should genuinely look again and say why in one line "
         "(a deadline, an expected reply, 'quiet — nothing moves until X'). Routine "
@@ -166,8 +167,11 @@ def record_area_run(
     nominations just like new ones supersede them. `structured_output` is the
     schema-validated AreaAskNomination dump (or None when the constrained
     step failed — treated as silence)."""
-    nominated = (structured_output or {}).get("asks") or []
-    asks.retire_active_agent_asks(area_key)
+    if structured_output is None:
+        return []
+    nominated = structured_output.get("asks") or []
+    if not nominated:
+        return []
     now = datetime.now(UTC)
     created: list[Ask] = []
     kept = [n for n in nominated if n.get("salience", 0) >= SALIENCE_THRESHOLD]
@@ -177,9 +181,10 @@ def record_area_run(
             if n["kind"] == "notify"
             else None
         )
+        stable_key = n["key"]
         ask = (
             Ask(
-                id=f"agent:{area_key}:{uuid4().hex[:8]}",
+                id=f"agent:{area_key}:{stable_key}",
                 area_key=area_key,
                 text=n["text"],
                 kind=n["kind"],
@@ -191,8 +196,9 @@ def record_area_run(
                 why_now=n.get("why_now"),
                 what_next=n.get("what_next"),
                 expires_at=expires,
+                stable_key=stable_key,
             )
         )
-        asks.upsert(ask)
-        created.append(ask)
+        if asks.upsert_agent_nomination(ask):
+            created.append(ask)
     return created

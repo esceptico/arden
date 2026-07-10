@@ -6,6 +6,7 @@ import {
   fetchAreasOverview as fetchAreasOverviewApi,
   fetchAreaDetail as fetchAreaDetailApi,
   resolveAsk as resolveAskApi,
+  replyToAsk as replyToAskApi,
   restoreArea as restoreAreaApi,
   updateAreaAutonomy as updateAreaAutonomyApi,
   updateAreaSettings as updateAreaSettingsApi,
@@ -29,9 +30,21 @@ export async function fetchAreaDetail(key: string): Promise<void> {
   s.areaDetailLoaded(detail);
 }
 
-export async function resolveAsk(key: string, askId: string, state: string, snoozedUntil?: string): Promise<void> {
+export async function resolveAsk(
+  key: string,
+  askId: string,
+  state: string,
+  snoozedUntil?: string,
+  resolution?: string,
+): Promise<void> {
   const s = getState();
-  await resolveAskApi(s.config, key, askId, state, snoozedUntil);
+  await resolveAskApi(s.config, key, askId, state, snoozedUntil, resolution);
+  s.areaAskResolved(key, askId);
+}
+
+export async function replyToAsk(key: string, askId: string, message: string): Promise<void> {
+  const s = getState();
+  await replyToAskApi(s.config, key, askId, message);
   s.areaAskResolved(key, askId);
 }
 
@@ -77,7 +90,7 @@ export async function fewerLikeThis(ask: AreaAsk): Promise<void> {
   const instructions = record?.instructions ? `${record.instructions}\n${line}` : line;
   const updated = await updateAreaSettingsApi(s.config, ask.area_key, { instructions });
   s.upsertAreaRecord(updated);
-  await resolveAsk(ask.area_key, ask.id, "dismissed");
+  await resolveAsk(ask.area_key, ask.id, "dismissed", undefined, "dismissed");
 }
 
 export async function createAreaPage(key: string): Promise<void> {

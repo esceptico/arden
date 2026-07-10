@@ -13,9 +13,11 @@ def ask(id: str, area_key: str, kind: str, created: str = "2026-07-06T10:00:00",
 def test_store_upsert_resolve_roundtrip(tmp_path: Path):
     store = AskStore(tmp_path / "state.json")
     store.upsert(ask("a1", "o-1a", "review"))
-    store.resolve("a1", "dismissed")
+    store.resolve("a1", "dismissed", resolution="rejected")
     assert store.list("o-1a") == []
     assert store.list("o-1a", include_resolved=True)[0].state == "dismissed"
+    assert store.list("o-1a", include_resolved=True)[0].resolution == "rejected"
+    assert store.list("o-1a", include_resolved=True)[0].resolved_at is not None
 
 
 def test_snoozed_asks_hidden_until_deadline(tmp_path: Path):

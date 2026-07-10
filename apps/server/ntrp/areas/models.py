@@ -52,3 +52,6 @@ class Ask:
     # notify-kind asks expire quietly instead of accumulating (Pulse's 24h
     # card expiry, stretched — a stale FYI is noise, not a queue item).
     expires_at: str | None = None
+    stable_key: str | None = None
+    resolution: str | None = None
+    resolved_at: str | None = None

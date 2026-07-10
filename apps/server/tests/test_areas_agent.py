@@ -40,7 +40,7 @@ def _nom(asks, report="tended", hours=24.0, reason="routine"):
 
 
 def _draft(text, kind, salience=4):
-    return {"text": text, "kind": kind, "salience": salience, "why_now": "deadline", "what_next": "opens page"}
+    return {"key": "deadline", "text": text, "kind": kind, "salience": salience, "why_now": "deadline", "what_next": "opens page"}
 
 
 def test_nomination_schema_validates_at_the_trust_boundary():
@@ -97,7 +97,7 @@ def test_record_area_run_salience_threshold_and_notify_expiry(tmp_path):
     assert q.kind == "question" and q.expires_at is None  # questions wait for the user
 
 
-def test_record_area_run_silence_retires_previous(tmp_path):
+def test_quiet_or_malformed_run_preserves_unresolved_decision(tmp_path):
     store = AskStore(tmp_path / "state.json")
     record_area_run(
         store, "o-1a", "topics/o-1a.md",
@@ -105,15 +105,23 @@ def test_record_area_run_silence_retires_previous(tmp_path):
         run_ref="run:r1",
     )
     record_area_run(store, "o-1a", "topics/o-1a.md", _nom([]), run_ref="run:r2")
-    assert store.list("o-1a") == []  # the agent re-decided: silence
-    # A failed constrained step (None) is silence too, never a crash.
-    record_area_run(
-        store, "o-1a", "topics/o-1a.md",
-        _nom([_draft("Back", "review")]),
-        run_ref="run:r3",
-    )
+    assert [ask.text for ask in store.list("o-1a")] == ["Old ask"]
     record_area_run(store, "o-1a", "topics/o-1a.md", None, run_ref="run:r4")
-    assert store.list("o-1a") == []
+    assert [ask.text for ask in store.list("o-1a")] == ["Old ask"]
+
+
+def test_repeated_stable_nomination_updates_without_becoming_new(tmp_path):
+    store = AskStore(tmp_path / "state.json")
+    first = record_area_run(
+        store, "o-1a", "topics/o-1a.md", _nom([_draft("First wording", "question")]), run_ref="run:r1"
+    )
+    repeated = record_area_run(
+        store, "o-1a", "topics/o-1a.md", _nom([_draft("Clearer wording", "question")]), run_ref="run:r2"
+    )
+
+    assert len(first) == 1
+    assert repeated == []
+    assert [ask.text for ask in store.list("o-1a")] == ["Clearer wording"]
 
 
 def test_observe_scope_is_area_locked_and_can_read_area_transcripts():

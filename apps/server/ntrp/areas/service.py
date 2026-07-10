@@ -92,8 +92,17 @@ class AreaService:
             })
         return {"areas": out, "focus": [asdict(a) for a in focus]}
 
-    def resolve_ask(self, ask_id: str, state: AskState, snoozed_until: str | None) -> dict:
-        return asdict(self._asks.resolve(ask_id, state, snoozed_until))
+    def resolve_ask(
+        self,
+        ask_id: str,
+        state: AskState,
+        snoozed_until: str | None,
+        resolution: str | None = None,
+    ) -> dict:
+        return asdict(self._asks.resolve(ask_id, state, snoozed_until, resolution))
+
+    def get_ask(self, area_id: str, ask_id: str) -> Ask | None:
+        return next((ask for ask in self._asks.list(area_id) if ask.id == ask_id), None)
 
     def detail(self, key: str) -> dict:
         areas = self._areas()

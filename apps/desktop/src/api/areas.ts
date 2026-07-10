@@ -29,6 +29,9 @@ export interface AreaAsk {
   why_now?: string | null;
   what_next?: string | null;
   expires_at?: string | null;
+  stable_key?: string | null;
+  resolution?: string | null;
+  resolved_at?: string | null;
 }
 
 export type AreaAttention = "dormant" | "ambient" | "active";
@@ -93,13 +96,23 @@ export async function resolveAsk(
   askId: string,
   state: string,
   snoozedUntil?: string,
+  resolution?: string,
 ): Promise<AreaAsk> {
-  const body: { state: string; snoozed_until?: string } = { state };
+  const body: { state: string; snoozed_until?: string; resolution?: string } = { state };
   if (snoozedUntil) body.snoozed_until = snoozedUntil;
+  if (resolution) body.resolution = resolution;
   return apiWithConfig<AreaAsk>(config, `/areas/${encodeURIComponent(key)}/asks/${encodeURIComponent(askId)}/resolve`, {
     method: "POST",
     body: JSON.stringify(body),
   });
+}
+
+export async function replyToAsk(config: AppConfig, key: string, askId: string, message: string): Promise<AreaAsk> {
+  return apiWithConfig<AreaAsk>(
+    config,
+    `/areas/${encodeURIComponent(key)}/asks/${encodeURIComponent(askId)}/reply`,
+    { method: "POST", body: JSON.stringify({ message }) },
+  );
 }
 
 // Server returns the updated area row — not a full AreaDetail (no
