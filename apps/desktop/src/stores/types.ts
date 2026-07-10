@@ -389,6 +389,8 @@ export interface State {
   compacting: boolean;
   memoryOpen: boolean;
   sourceFocus: MessageSourceFocus | null;
+  rightInspectorTab: "activity" | "sources";
+  sourceTurnId: string | null;
   paletteOpen: boolean;
   /** Tool approvals waiting on the user. Lives outside `messages` so the
    *  approval UI can render as its own surface (sticky banner above the
@@ -591,6 +593,8 @@ export interface Actions {
   openMemory: (origin?: { x: number; y: number } | null) => void;
   closeMemory: () => void;
   setSourceFocus: (focus: MessageSourceFocus | null) => void;
+  setRightInspectorTab: (tab: "activity" | "sources") => void;
+  openSourcesForTurn: (turnId: string) => void;
   openPalette: () => void;
   closePalette: () => void;
   togglePalette: () => void;

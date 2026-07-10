@@ -13,6 +13,7 @@ import { Collapse } from "@/components/ui/Collapse";
 import { Reveal } from "@/components/ui/Reveal";
 import { Marker, MarkerContent } from "@/components/ui/Marker";
 import { ICON } from "@/lib/icons";
+import { sourceRefsForTurn } from "@/stores/sourceRefs";
 
 export function TurnGroup({
   userId,
@@ -56,6 +57,7 @@ export function TurnGroup({
   // tools. A turn with just reasoning + a final reply has no work to
   // collapse — render its children inline instead.
   const hasTools = children.some((child) => child.role === "activity");
+  const sourceCount = useStore((s) => sourceRefsForTurn(s.messages, childIds).length);
 
   const hasActiveChildAgent = useStore((s) =>
     turnHasActiveChildAgent({
@@ -177,9 +179,17 @@ export function TurnGroup({
 
       {isDone && workBlock}
 
-      {layout.afterWorkIds.map((id) => (
-        <Message key={id} id={id} isFinal={isDone && id === layout.finalAssistantId} />
-      ))}
+      {layout.afterWorkIds.map((id) => {
+        const isFinal = isDone && id === layout.finalAssistantId;
+        return (
+          <Message
+            key={id}
+            id={id}
+            isFinal={isFinal}
+            {...(isFinal ? { sourceTurnId: userId, sourceCount } : {})}
+          />
+        );
+      })}
 
       {!isDone && workBlock}
     </div>

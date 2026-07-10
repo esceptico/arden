@@ -31,7 +31,7 @@ Props live in each file (kept here as a map, not a spec, so it can't go stale).
 - **Reveal** — rise-in/dissolve row wrapper. **BlurSwap** — crossfade-on-key. **RollingToken** — odometer digit.
 
 ## Timeline
-- **ThinkingStep** — one step in a vertical "thinking" timeline: a gutter `node` (icon/dot) topping the row with a connector drawn below it (hidden on `last`), and content stacked to the right (label + optional description + chips). One unified treatment for both the live tail and the settled view. Span-based, so it's valid inside a `<button>`. The activity trace composes it (see `features/chat`: `operationLabel` turns a tool kind into a natural-language verb + icon, `stepSources` into domain chips).
+- **ThinkingStep** — one step in a vertical "thinking" timeline: a gutter `node` (icon/dot) topping the row with a connector drawn below it (hidden on `last`), and content stacked to the right (label + optional description). One unified treatment for both the live tail and the settled view. Span-based, so it's valid inside a `<button>`. The activity trace composes it with `operationLabel`, which turns a tool kind into a natural-language verb + icon.
 
 ## Hooks (`@/lib/hooks`)
 `useFocusTrap` · `useEscapeKey` · `useReanchor` (overlay re-anchor) · `useListNav` (roving keyboard) · `useMutationState` (busy/saved/error) · `useTimeoutFlag` · `useTimeTicker` · `useVisibilityPoll`.

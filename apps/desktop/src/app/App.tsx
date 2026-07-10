@@ -12,6 +12,7 @@ import { ApprovalReviewModal } from "@/features/chat/components/ApprovalReviewMo
 import { SidebarResizeHandle } from "@/features/sessions/components/SidebarResizeHandle";
 import { SidebarToggle } from "@/components/ui/SidebarToggle";
 import { AgentRightSidebar } from "@/features/background-agents/components/AgentRightSidebar";
+import { SourcesPanel } from "@/features/sources/components/SourcesPanel";
 import { ErrorBoundary } from "@/app/ErrorBoundary";
 import { Toaster } from "@/components/ui/Toaster";
 import { useStore } from "@/stores";
@@ -266,7 +267,7 @@ export function App() {
           <Chat />
         )}
       </ErrorBoundary>
-      <AgentRightSidebar />
+      <AgentRightSidebar sourcesPanel={<SourcesPanel />} />
       <ErrorBoundary>
         <Suspense fallback={null}>
           <SettingsModal />

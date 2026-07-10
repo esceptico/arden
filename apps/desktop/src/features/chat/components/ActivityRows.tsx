@@ -31,12 +31,11 @@ import { activityItemStatus, isAgent } from "@/lib/agent";
 import { switchSession } from "@/actions/sessions";
 import { cancelSubagent } from "@/actions/messages";
 import { ICON } from "@/lib/icons";
-import { Badge } from "@/components/ui/Badge";
 import { Reveal } from "@/components/ui/Reveal";
 import { StatusDot } from "@/components/ui/StatusDot";
 import { ThinkingStep } from "@/components/ui/ThinkingStep";
 import { Tooltip } from "@/components/ui/Tooltip";
-import { callTitle, groupSummary, operationLabel, stepSources, type StepIconKey } from "@/features/chat/lib/operationLabel";
+import { callTitle, groupSummary, operationLabel, type StepIconKey } from "@/features/chat/lib/operationLabel";
 import { agentRunFromActivityItem, isActiveAgentStatus } from "@/lib/agentRun";
 import { EASE_OUT, MOTION } from "@/lib/tokens/motion";
 import { MAX_NEST_DEPTH, NEST_PX } from "@/features/chat/lib/trace";
@@ -45,8 +44,6 @@ type RowProps = {
   item: ActivityItem;
   onOpen: (item: ActivityItem) => void;
   last?: boolean;
-  /** Suppress mount entrance motion (stream replay / history reload). */
-  motionDisabled?: boolean;
 };
 
 const ICON_BY_KEY: Record<StepIconKey, LucideIcon> = {
@@ -80,7 +77,7 @@ function StepGlyph({ iconKey, errored }: { iconKey: StepIconKey; errored: boolea
   return <Icon size={14} strokeWidth={1.5} className={errored ? "text-bad" : undefined} />;
 }
 
-export function ItemButton({ item, onOpen, last, motionDisabled }: RowProps) {
+export function ItemButton({ item, onOpen, last }: RowProps) {
   const depth = Math.min(item.depth ?? 0, MAX_NEST_DEPTH);
   if (isAgent(item)) {
     return <AgentRow item={item} depth={depth} onOpen={onOpen} last={last} />;
@@ -88,7 +85,6 @@ export function ItemButton({ item, onOpen, last, motionDisabled }: RowProps) {
   const running = activityItemStatus(item) === "ongoing";
   const errored = !!item.error;
   const { verb, detail, iconKey } = operationLabel(item);
-  const sources = stepSources(item);
 
   return (
     <ThinkingStep
@@ -114,25 +110,6 @@ export function ItemButton({ item, onOpen, last, motionDisabled }: RowProps) {
         </span>
         {detail && <span className="truncate text-sm text-muted leading-snug">{detail}</span>}
       </button>
-      {sources.length > 0 && (
-        <span className="mt-1.5 flex flex-wrap gap-1.5">
-          {sources.map((s, i) => (
-            // FF source pop-in: each chip scales + unblurs in, lightly
-            // staggered. Theme-agnostic translucent-ink fill so the pill is
-            // visible on both the white page and the near-black dark bg.
-            <motion.span
-              key={s}
-              initial={motionDisabled ? false : { opacity: 0, scale: 0.85, filter: "blur(3px)" }}
-              animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
-              transition={{ duration: MOTION.row, ease: EASE_OUT, delay: motionDisabled ? 0 : 0.05 * i }}
-            >
-              <Badge tone="neutral" size="md" shape="pill" className="!bg-ink/[0.08] !text-muted">
-                {s}
-              </Badge>
-            </motion.span>
-          ))}
-        </span>
-      )}
     </ThinkingStep>
   );
 }

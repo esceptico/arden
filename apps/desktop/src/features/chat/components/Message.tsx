@@ -6,12 +6,29 @@ import { ToolMessage, StatusMessage, ErrorMessage } from "@/features/chat/compon
 import { ActivityMessage } from "@/features/chat/components/ActivityMessage";
 import { TodoMessage } from "@/features/chat/components/TodoMessage";
 
-export function Message({ id, isFinal = true }: { id: string; isFinal?: boolean }) {
+export function Message({
+  id,
+  isFinal = true,
+  sourceTurnId,
+  sourceCount,
+}: {
+  id: string;
+  isFinal?: boolean;
+  sourceTurnId?: string;
+  sourceCount?: number;
+}) {
   const role = useStore((s) => s.messages.get(id)?.role);
   if (!role) return null;
   switch (role) {
     case "user": return <UserMessage id={id} />;
-    case "assistant": return <AssistantMessage id={id} isFinal={isFinal} />;
+    case "assistant": return (
+      <AssistantMessage
+        id={id}
+        isFinal={isFinal}
+        sourceTurnId={sourceTurnId}
+        sourceCount={sourceCount}
+      />
+    );
     case "reasoning": return <ReasoningMessage id={id} />;
     case "tool": return <ToolMessage id={id} />;
     case "activity": return <ActivityMessage id={id} />;

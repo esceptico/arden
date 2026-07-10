@@ -19,6 +19,7 @@ const FEATURES = [
   "background-agents",
   "home",
   "slices",
+  "sources",
 ];
 
 const SHARED = [

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { ArrowRight, Bot, MoreHorizontal, X } from "lucide-react";
 import { isInternalAutomation, isIterationLoop } from "@/lib/automationFilters";
@@ -17,7 +17,7 @@ import { isActiveWorkflow, workflowKey } from "@/stores/workflow-domain";
 import { ExpandableWorkflowCard } from "@/components/ui/WorkflowDetail";
 import { ScrollFadeTop } from "@/components/ui/ScrollBlur";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { Caption } from "@/components/ui/Caption";
+import { Tab, Tabs } from "@/components/ui/Tabs";
 import { BlurSwap } from "@/components/ui/BlurSwap";
 import { StatusDot } from "@/components/ui/StatusDot";
 import { Collapse } from "@/components/ui/Collapse";
@@ -47,7 +47,7 @@ const RIGHT_PANEL_HIDE_DRIFT = 48;
 
 const RECENT_AGENT_LIMIT = 6;
 
-export function AgentRightSidebar() {
+export function AgentRightSidebar({ sourcesPanel }: { sourcesPanel: ReactNode }) {
   const currentSessionId = useStore((s) => s.currentSessionId);
   const sessions = useStore((s) => s.sessions);
   const automations = useStore((s) => s.automations);
@@ -59,6 +59,8 @@ export function AgentRightSidebar() {
   const collapsed = useStore((s) => s.prefs.rightPanelCollapsed);
   const rightPanelWidth = useStore((s) => s.prefs.rightPanelWidth);
   const setPref = useStore((s) => s.setPref);
+  const rightInspectorTab = useStore((s) => s.rightInspectorTab);
+  const setRightInspectorTab = useStore((s) => s.setRightInspectorTab);
 
   const toggleCollapsed = () => setPref("rightPanelCollapsed", !collapsed);
 
@@ -176,8 +178,8 @@ export function AgentRightSidebar() {
       <button
         type="button"
         onClick={toggleCollapsed}
-        title={collapsed ? "Show active" : "Hide active"}
-        aria-label={collapsed ? `Show active${totalCount > 0 ? ` (${totalCount})` : ""}` : "Hide active"}
+        title={collapsed ? "Show inspector" : "Hide inspector"}
+        aria-label={collapsed ? `Show inspector${totalCount > 0 ? ` (${totalCount})` : ""}` : "Hide inspector"}
         className="right-sidebar-toggle inline-flex items-center gap-1.5 h-[22px] px-1 rounded-md text-muted hover:bg-surface-soft hover:text-ink transition-[background-color,color,scale] duration-row ease-out active:scale-[0.96]"
       >
         {collapsed && activeCount > 0 && <StatusDot status="running" pulse />}
@@ -224,22 +226,50 @@ export function AgentRightSidebar() {
           pointerEvents: collapsed ? "none" : "auto",
         }}
         aria-hidden={collapsed}
+        inert={collapsed ? true : undefined}
         className="surface-panel surface-radius-md absolute top-2 bottom-2 right-2 z-40 flex flex-col overflow-hidden"
       >
-        {/* Drag region height tuned so the "Active" label's vertical
+        {/* Drag region height tuned so the inspector tabs' vertical
             center sits at viewport y=25 — same eye-line as the fixed dots
             toggle and the macOS traffic-light center. (panel top-2 = 8px,
             label centered in h-[34px] → 8 + 17 = 25.) The dots toggle
             (z-panel-overlay 45, fixed right-14) floats over this header's right edge and
             is the single open/close control — no redundant in-panel X. */}
         <div className="drag-spacer flex items-center px-3 h-[34px] shrink-0">
-          <Caption tone="muted">Active</Caption>
+          <Tabs
+            value={rightInspectorTab}
+            onChange={(value) => setRightInspectorTab(value as "activity" | "sources")}
+            variant="underline"
+            label="Inspector sections"
+            className="h-full items-center gap-4"
+          >
+            <Tab
+              id="right-inspector-activity-tab"
+              value="activity"
+              className="inline-flex h-[34px] items-center text-xs font-medium text-muted transition-colors hover:text-ink data-[active=true]:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              Activity
+            </Tab>
+            <Tab
+              id="right-inspector-sources-tab"
+              value="sources"
+              className="inline-flex h-[34px] items-center text-xs font-medium text-muted transition-colors hover:text-ink data-[active=true]:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              Sources
+            </Tab>
+          </Tabs>
         </div>
         <RightPanelResizeHandle />
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="flex-1 min-h-0 overflow-y-auto scroll-thin px-3 pb-3 pt-1">
-            <ScrollFadeTop />
-            <div className="space-y-3">
+            <ScrollFadeTop key={rightInspectorTab} />
+            <div
+              id="right-inspector-activity-panel"
+              role="tabpanel"
+              aria-labelledby="right-inspector-activity-tab"
+              hidden={rightInspectorTab !== "activity"}
+              className="space-y-3"
+            >
               <Collapse open={hasBreadcrumb}>
                 {parentId && <ParentBreadcrumb parentId={parentId} parentName={parentName} />}
               </Collapse>
@@ -360,6 +390,15 @@ export function AgentRightSidebar() {
                 )}
               </AnimatePresence>
             </div>
+            {rightInspectorTab === "sources" && !collapsed && (
+              <div
+                id="right-inspector-sources-panel"
+                role="tabpanel"
+                aria-labelledby="right-inspector-sources-tab"
+              >
+                {sourcesPanel}
+              </div>
+            )}
           </div>
         </div>
       </motion.aside>

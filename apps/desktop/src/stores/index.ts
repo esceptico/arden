@@ -263,6 +263,8 @@ export const useStore = create<State & Actions>((set) => ({
   compacting: false,
   memoryOpen: false,
   sourceFocus: null,
+  rightInspectorTab: "activity",
+  sourceTurnId: null,
   paletteOpen: false,
   pendingApprovals: [],
   reviewingApprovalToolId: null,
@@ -371,6 +373,7 @@ export const useStore = create<State & Actions>((set) => ({
         slices,
         sessionView,
         currentSessionId: sessionView.currentSessionId,
+        sourceTurnId: null,
         sessionCache: cache,
         messages: view.messages,
         order: view.order,
@@ -794,6 +797,19 @@ export const useStore = create<State & Actions>((set) => ({
   openMemory: (origin) => set({ memoryOpen: true, modalOrigin: origin ?? null }),
   closeMemory: () => set({ memoryOpen: false }),
   setSourceFocus: (sourceFocus) => set({ sourceFocus }),
+  setRightInspectorTab: (rightInspectorTab) =>
+    set({
+      rightInspectorTab,
+      ...(rightInspectorTab === "sources" ? { sourceTurnId: null } : {}),
+    }),
+  openSourcesForTurn: (sourceTurnId) =>
+    set((s) => {
+      const prefs = s.prefs.rightPanelCollapsed
+        ? { ...s.prefs, rightPanelCollapsed: false }
+        : s.prefs;
+      if (prefs !== s.prefs) persistPrefs(prefs);
+      return { rightInspectorTab: "sources", sourceTurnId, prefs };
+    }),
   openPalette: () => set({ paletteOpen: true }),
   closePalette: () => set({ paletteOpen: false }),
   togglePalette: () => set((s) => ({ paletteOpen: !s.paletteOpen })),

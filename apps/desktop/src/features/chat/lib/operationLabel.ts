@@ -240,30 +240,3 @@ export function groupSummary(items: ActivityItem[]): { verb: string; iconKey: St
   }
   return { verb: `${verb} · ${n}`, iconKey };
 }
-
-function hostname(raw: string): string | null {
-  const s = raw.trim();
-  if (!s) return null;
-  try {
-    return new URL(s).hostname.replace(/^www\./, "");
-  } catch {
-    const m = s.match(/^(?:https?:\/\/)?([a-z0-9.-]+\.[a-z]{2,})(?:[/:?#]|$)/i);
-    return m ? m[1].replace(/^www\./, "") : null;
-  }
-}
-
-/** Source chips for a step — domains the call touched, read honestly from a
- *  `url`/`urls` arg. Empty for most tools. */
-export function stepSources(item: ActivityItem): string[] {
-  const obj = parseArgs(item.args);
-  if (!obj) return [];
-  const raw: string[] = [];
-  if (typeof obj.url === "string") raw.push(obj.url);
-  if (Array.isArray(obj.urls)) raw.push(...obj.urls.filter((u): u is string => typeof u === "string"));
-  const seen = new Set<string>();
-  for (const u of raw) {
-    const h = hostname(u);
-    if (h) seen.add(h);
-  }
-  return [...seen].slice(0, 3);
-}

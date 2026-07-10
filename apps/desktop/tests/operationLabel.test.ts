@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { groupSummary, operationLabel, stepSources } from "@/features/chat/lib/operationLabel";
+import { groupSummary, operationLabel } from "@/features/chat/lib/operationLabel";
 import type { ActivityItem } from "@/stores";
 
 function item(over: Partial<ActivityItem> = {}): ActivityItem {
@@ -101,9 +101,4 @@ test("group summaries stay stable per-kind, ignoring per-call model titles", () 
   ];
   // The header is the stable kind summary, not any one call's title.
   expect(groupSummary(rows).verb).toBe("Read 3 files");
-});
-
-test("stepSources extracts deduped hostnames from url/urls args", () => {
-  expect(stepSources(item({ kind: "web_fetch", args: '{"url":"https://www.github.com/x"}' }))).toEqual(["github.com"]);
-  expect(stepSources(item({ kind: "read_file", args: '{"path":"a.ts"}' }))).toEqual([]);
 });

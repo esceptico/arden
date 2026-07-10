@@ -1,5 +1,6 @@
 import { memo } from "react";
 import clsx from "clsx";
+import { Library } from "lucide-react";
 import { useStore } from "@/stores";
 import { Markdown } from "@/components/ui/Markdown";
 import { useSmoothStreamedContent } from "@/features/chat/hooks/useSmoothStream";
@@ -10,11 +11,23 @@ import {
   useMessage,
   useSourceFocused,
 } from "@/features/chat/lib/messageShared";
+import { ICON } from "@/lib/icons";
 
-export const AssistantMessage = memo(function AssistantMessage({ id, isFinal = true }: { id: string; isFinal?: boolean }) {
+export const AssistantMessage = memo(function AssistantMessage({
+  id,
+  isFinal = true,
+  sourceTurnId,
+  sourceCount = 0,
+}: {
+  id: string;
+  isFinal?: boolean;
+  sourceTurnId?: string;
+  sourceCount?: number;
+}) {
   const message = useMessage(id);
   const sourceFocused = useSourceFocused(id);
   const running = useStore((s) => s.running);
+  const openSourcesForTurn = useStore((s) => s.openSourcesForTurn);
   const isStreaming = Boolean(message && running && message.turn?.endedAt === null);
   // Hook order rule: call before any conditional return below.
   const smoothContent = useSmoothStreamedContent(message?.content ?? "", isStreaming);
@@ -41,6 +54,18 @@ export const AssistantMessage = memo(function AssistantMessage({ id, isFinal = t
         streaming={isStreaming}
         className="text-base leading-[1.5] text-ink break-words"
       />
+      {isFinal && sourceTurnId && sourceCount > 0 && (
+        <button
+          type="button"
+          onClick={() => openSourcesForTurn(sourceTurnId)}
+          aria-label={`Open ${sourceCount} ${sourceCount === 1 ? "source" : "sources"} for this turn`}
+          data-source-footer="true"
+          className="flex w-fit items-center gap-1.5 rounded-md px-1.5 py-1 text-xs font-medium text-muted transition-colors hover:bg-surface-soft hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        >
+          <Library aria-hidden size={ICON.XS} strokeWidth={1.75} />
+          {sourceCount} {sourceCount === 1 ? "source" : "sources"}
+        </button>
+      )}
       {isFinal && <MessageActions id={id} role="assistant" />}
     </article>
   );
