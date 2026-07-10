@@ -164,7 +164,7 @@ class AutomationService:
         return resolved
 
     async def _provision_channel(
-        self, name: str, task_id: str, project_id: str | None = None
+        self, name: str, task_id: str, area_id: str | None = None
     ) -> SessionState:
         """Create the durable channel session that owns an automation's
         activity. SessionService.provision announces it (SESSION_CREATED) so
@@ -173,7 +173,7 @@ class AutomationService:
             name=name,
             session_type="channel",
             origin_automation_id=task_id,
-            project_id=project_id,
+            area_id=area_id,
         )
 
     @property
@@ -379,7 +379,7 @@ class AutomationService:
         cooldown_minutes: int | None = None,
         thread_id: str | None = None,
         read_history: bool = False,
-        project_id: str | None = None,
+        area_id: str | None = None,
         idempotency_key: str | None = None,
         idempotency_scope: str | None = None,
         parent_automation_id: str | None = None,
@@ -405,7 +405,7 @@ class AutomationService:
         )
 
         now = datetime.now(UTC)
-        # Stable ids (e.g. slice:{key}) let seeding find its rows across boots;
+        # Stable ids (e.g. area:{key}) let seeding find its rows across boots;
         # everything else gets a random slug.
         task_id = task_id or generate_slug(2)
 
@@ -417,7 +417,7 @@ class AutomationService:
         # through the existing session-bound iteration path (no new
         # execution path), which persists the full turn and emits live SSE.
         if thread_id is None:
-            channel = await self._provision_channel(name, task_id, project_id=project_id)
+            channel = await self._provision_channel(name, task_id, area_id=area_id)
             thread_id = channel.session_id
             read_history = True
 

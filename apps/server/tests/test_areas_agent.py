@@ -1,44 +1,44 @@
-"""Slice agents as channel automations: standing instructions (the fresh
-page arrives via the SLICE system block, not the prompt), validated one-ask
+"""Area agents as channel automations: standing instructions (the fresh
+page arrives via the AREA system block, not the prompt), validated one-ask
 nomination, and the outbox-driven ask sync where every run re-decides the
-slice's single ask."""
+area's single ask."""
 
 import pytest
 from pydantic import ValidationError
 
-from ntrp.slices.agent import (
+from ntrp.areas.agent import (
     OBSERVE_TOOL_SCOPE,
-    SliceAskNomination,
-    record_slice_run,
-    slice_agent_instructions,
+    AreaAskNomination,
+    area_agent_instructions,
+    record_area_run,
 )
-from ntrp.slices.asks import AskStore
-from ntrp.slices.models import Slice
+from ntrp.areas.asks import AskStore
+from ntrp.areas.models import Area
 from ntrp.tools.core.scope import matches_scope
 
-SLICE = Slice(key="o-1a", title="O-1A", page_path="topics/o-1a.md", autonomy="observe")
+AREA = Area(key="o-1a", title="O-1A", page_path="topics/o-1a.md", autonomy="observe")
 
 
 def test_instructions_state_contract_and_one_ask_protocol():
-    text = slice_agent_instructions(SLICE)
+    text = area_agent_instructions(AREA)
     assert "O-1A" in text
     assert "observe" in text
     assert "at most ONE ask" in text
-    assert "SLICE context block" in text  # page comes from context, not embedded
+    assert "AREA context block" in text  # page comes from context, not embedded
     assert "stale decision-ready open loop" in text  # nomination calibration
 
 
 def test_nomination_schema_validates_at_the_trust_boundary():
-    ok = SliceAskNomination.model_validate({"ask": {"text": "Review counsel memo", "kind": "review"}})
+    ok = AreaAskNomination.model_validate({"ask": {"text": "Review counsel memo", "kind": "review"}})
     assert ok.ask.kind == "review"
-    assert SliceAskNomination.model_validate({"ask": None}).ask is None
+    assert AreaAskNomination.model_validate({"ask": None}).ask is None
     with pytest.raises(ValidationError):
-        SliceAskNomination.model_validate({"ask": {"text": "x", "kind": "urgent"}})
+        AreaAskNomination.model_validate({"ask": {"text": "x", "kind": "urgent"}})
 
 
-def test_record_slice_run_nominates_and_supersedes(tmp_path):
+def test_record_area_run_nominates_and_supersedes(tmp_path):
     store = AskStore(tmp_path / "state.json")
-    record_slice_run(
+    record_area_run(
         store, "o-1a", "topics/o-1a.md",
         {"ask": {"text": "First ask", "kind": "review"}},
         run_ref="run:r1",
@@ -46,7 +46,7 @@ def test_record_slice_run_nominates_and_supersedes(tmp_path):
     first = store.list("o-1a")
     assert len(first) == 1 and first[0].text == "First ask" and first[0].provenance == "run:r1"
 
-    record_slice_run(
+    record_area_run(
         store, "o-1a", "topics/o-1a.md",
         {"ask": {"text": "Second ask", "kind": "decide"}},
         run_ref="run:r2",
@@ -55,22 +55,22 @@ def test_record_slice_run_nominates_and_supersedes(tmp_path):
     assert [a.text for a in active] == ["Second ask"]  # superseded, not stacked
 
 
-def test_record_slice_run_silence_retires_previous(tmp_path):
+def test_record_area_run_silence_retires_previous(tmp_path):
     store = AskStore(tmp_path / "state.json")
-    record_slice_run(
+    record_area_run(
         store, "o-1a", "topics/o-1a.md",
         {"ask": {"text": "Old ask", "kind": "review"}},
         run_ref="run:r1",
     )
-    record_slice_run(store, "o-1a", "topics/o-1a.md", {"ask": None}, run_ref="run:r2")
+    record_area_run(store, "o-1a", "topics/o-1a.md", {"ask": None}, run_ref="run:r2")
     assert store.list("o-1a") == []  # the agent re-decided: silence
     # A failed constrained step (None) is silence too, never a crash.
-    record_slice_run(
+    record_area_run(
         store, "o-1a", "topics/o-1a.md",
         {"ask": {"text": "Back", "kind": "review"}},
         run_ref="run:r3",
     )
-    record_slice_run(store, "o-1a", "topics/o-1a.md", None, run_ref="run:r4")
+    record_area_run(store, "o-1a", "topics/o-1a.md", None, run_ref="run:r4")
     assert store.list("o-1a") == []
 
 
@@ -83,30 +83,30 @@ def test_observe_scope_covers_memory_and_read_but_not_action_tools():
     assert not matches_scope(tuple(OBSERVE_TOOL_SCOPE), "create_calendar_event")
 
 
-def test_load_slice_context_reads_page_or_degrades(tmp_path):
-    from ntrp.slices.context import load_slice_context
+def test_load_area_context_reads_page_or_degrades(tmp_path):
+    from ntrp.areas.context import load_area_context
 
     vault = tmp_path / "memory"
     (vault / "topics").mkdir(parents=True)
     (vault / "topics" / "o-1a.md").write_text("---\ntitle: O-1A\n---\n# O-1A\n\n## Open loops\n- Find counsel.\n")
-    project = {"project_id": "p1", "name": "O-1A", "page_path": "topics/o-1a.md"}
+    area = {"area_id": "p1", "name": "O-1A", "page_path": "topics/o-1a.md"}
 
-    ctx = load_slice_context(vault, project)
+    ctx = load_area_context(vault, area)
     assert ctx["title"] == "O-1A"
     assert "Find counsel." in ctx["page"]
 
-    assert load_slice_context(vault, None) is None  # unfiled chat → plain chat
-    assert load_slice_context(vault, {"project_id": "p2", "name": "Design", "page_path": None}) is None  # pageless
+    assert load_area_context(vault, None) is None  # unfiled chat → plain chat
+    assert load_area_context(vault, {"area_id": "p2", "name": "Design", "page_path": None}) is None  # pageless
     (vault / "topics" / "o-1a.md").unlink()
-    assert load_slice_context(vault, project) is None  # missing page → plain chat
+    assert load_area_context(vault, area) is None  # missing page → plain chat
 
 
-def test_system_blocks_include_slice_block():
+def test_system_blocks_include_area_block():
     from ntrp.core.prompts import build_system_blocks
 
-    blocks = build_system_blocks(source_details={}, slice_context={"title": "O-1A", "page": "# O-1A\ncase notes"})
+    blocks = build_system_blocks(source_details={}, area_page_context={"title": "O-1A", "page": "# O-1A\ncase notes"})
     joined = "\n".join(b["text"] for b in blocks)
-    assert "## SLICE: O-1A" in joined
+    assert "## AREA: O-1A" in joined
     assert "case notes" in joined
 
 

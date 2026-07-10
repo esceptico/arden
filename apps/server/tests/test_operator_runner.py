@@ -64,7 +64,7 @@ def _deps(skill_registry: SkillRegistry | None, executor=None) -> OperatorDeps:
 async def test_prepare_includes_skill_inventory_in_system_prompt(tmp_path, monkeypatch):
     _write_skill(tmp_path, "operator-helper", "Helps operator runs use skills")
     registry = SkillRegistry()
-    registry.load([(tmp_path, "project")])
+    registry.load([(tmp_path, "area")])
     monkeypatch.setattr(runner, "create_agent", lambda **kwargs: object())
 
     _, messages, _, _ = await runner._prepare(
@@ -113,7 +113,7 @@ async def test_prepare_auto_approve_ignores_extra_tool_names(monkeypatch):
 async def test_prepare_non_auto_approve_threads_extra_tool_names(monkeypatch):
     """The observe-mode decoupling: non-auto-approve still means read_only,
     but named extras (e.g. memory-write tools) ride along on top of it —
-    this is the fix for observe-mode slice agents being unable to write
+    this is the fix for observe-mode area agents being unable to write
     memory despite their contract promising it."""
     monkeypatch.setattr(runner, "create_agent", lambda **kwargs: object())
     executor = RecordingExecutor()

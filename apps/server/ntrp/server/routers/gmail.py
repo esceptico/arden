@@ -64,7 +64,7 @@ def _google_oauth_detail(exc: Exception) -> str:
     if "redirect" in lower and ("mismatch" in lower or "uri" in lower):
         return "Google OAuth redirect URI mismatch. Use OAuth client type Desktop app, not Web application."
     if "403" in lower or "api has not been used" in lower or "access not configured" in lower:
-        return "Google API returned 403. Enable the Gmail API and/or Google Calendar API for this Google Cloud project."
+        return "Google API returned 403. Enable the Gmail API and/or Google Calendar API for this Google Cloud area."
     if "missing google oauth scope" in lower or ("insufficient" in lower and "scope" in lower):
         return f"Missing Google OAuth scope: {text}. Re-run setup with the required Google service choice."
     return text

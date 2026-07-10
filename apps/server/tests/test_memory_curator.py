@@ -52,7 +52,7 @@ class StubSessions:
     """Minimal SessionService stand-in. Holds ordered transcript rows in the
     `_message_row_payload` shape (seq/role/message) and serves messages_since.
     `scopes` is the preset sweep worklist; rows carry the origin fields the
-    sweep gates on ({session_id, project_id, session_type, origin_automation_id})."""
+    sweep gates on ({session_id, area_id, session_type, origin_automation_id})."""
 
     def __init__(self, rows: dict[str, list[dict]] | None = None, scopes: list[dict] | None = None):
         self._rows = rows or {}
@@ -75,7 +75,7 @@ def _turn(seq: int, role: str, text: str) -> dict:
 def _scope(session_id: str, *, session_type: str = "chat", origin_automation_id: str | None = None) -> dict:
     return {
         "session_id": session_id,
-        "project_id": None,
+        "area_id": None,
         "session_type": session_type,
         "origin_automation_id": origin_automation_id,
     }
@@ -382,9 +382,9 @@ async def test_narrative_summary_kind_is_not_minted(tmp_path: Path):
 async def test_curator_add_kinds_exclude_summary(tmp_path: Path):
     """The curator's writable ADD kinds are directive|fact|source|lesson — the
     prompt no longer offers 'summary'. `lesson` is the continual-learning playbook kind."""
-    from ntrp.memory.curator import ALLOWED_KINDS, _SYSTEM_PROMPT
+    from ntrp.memory.curator import _SYSTEM_PROMPT, ALLOWED_KINDS
 
-    assert ALLOWED_KINDS == {"directive", "fact", "source", "lesson"}
+    assert {"directive", "fact", "source", "lesson"} == ALLOWED_KINDS
     assert "summary" not in ALLOWED_KINDS
     assert '"summary"' not in _SYSTEM_PROMPT
     assert "directive|fact|source|lesson" in _SYSTEM_PROMPT

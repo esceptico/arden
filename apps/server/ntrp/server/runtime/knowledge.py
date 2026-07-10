@@ -144,9 +144,9 @@ class KnowledgeRuntime:
             _logger.info("memory disabled by config")
             return
 
+        from ntrp.memory.area_names import load_area_names
         from ntrp.memory.curator import Curator
         from ntrp.memory.file_store import FilePageStore
-        from ntrp.memory.project_names import load_project_names
 
         # Filesystem-canonical memory: two-zone markdown pages are the single
         # source of truth. Mounted under the same surface tools/profile/curator
@@ -154,7 +154,7 @@ class KnowledgeRuntime:
         self._record_store = FilePageStore(
             root=self.config.memory_artifacts_dir,
             search_index=self.search_index,
-            project_names=load_project_names(self.config.memory_artifacts_dir),
+            area_names=load_area_names(self.config.memory_artifacts_dir),
         )
         self._consolidate = None  # set below once the memory model is resolved
 

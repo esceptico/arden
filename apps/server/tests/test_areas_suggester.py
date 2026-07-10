@@ -1,13 +1,13 @@
-"""Slice derivation from memory: candidate scan over unpromoted topic pages,
+"""Area derivation from memory: candidate scan over unpromoted topic pages,
 LLM classification (validated at the boundary), persistent dismissals."""
 
 import json
 
 import pytest
 
-from ntrp.slices.suggester import (
-    SliceSuggester,
-    SliceSuggestionStore,
+from ntrp.areas.suggester import (
+    AreaSuggester,
+    AreaSuggestionStore,
     candidate_pages,
 )
 
@@ -20,7 +20,7 @@ def _vault(tmp_path, pages: dict[str, str]):
     return tmp_path / "memory"
 
 
-def test_candidate_pages_excludes_promoted_slices(tmp_path):
+def test_candidate_pages_excludes_promoted_areas(tmp_path):
     vault = _vault(tmp_path, {
         "o-1a": "---\ntitle: O-1A\n---\n# O-1A\nvisa case",
         "letta": "---\ntitle: Letta\n---\n# Letta\nagent framework notes",
@@ -53,12 +53,12 @@ async def test_suggester_validates_keys_and_respects_dismissals(tmp_path):
         "mats": "---\ntitle: MATS\n---\n# MATS\nfellowship application arc",
         "letta": "---\ntitle: Letta\n---\n# Letta\nframework reference",
     })
-    store = SliceSuggestionStore(tmp_path / "suggestions.json")
+    store = AreaSuggestionStore(tmp_path / "suggestions.json")
     llm = _FakeLLM({"suggestions": [
         {"key": "mats", "rationale": "Active application with deadlines."},
         {"key": "nonexistent", "rationale": "hallucinated"},
     ]})
-    suggester = SliceSuggester(attached_page_slugs=set(), vault_dir=vault, store=store, cheap_llm=llm, model="cheap")
+    suggester = AreaSuggester(attached_page_slugs=set(), vault_dir=vault, store=store, cheap_llm=llm, model="cheap")
 
     await suggester.run()
     listed = store.list(exclude_keys=set())

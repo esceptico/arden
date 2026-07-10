@@ -36,7 +36,7 @@ async def test_changelog_redactor_preserves_meaningful_identifiers():
         "The stage-3-from-bridge-nl-400 dashed slug is also meaningful. "
         "Legacy unquoted [technical id] placeholder damage should read as a technical identifier. "
         "Sensitive values remain hidden: run_id=run_secret123456 span_id=span_secret123456 "
-        "project:proj_secret123456 abcdef1234567890abcdef1234567890 /Users/me/src/private/file.py",
+        "area:proj_secret123456 abcdef1234567890abcdef1234567890 /Users/me/src/private/file.py",
         max_chars=2000,
     )
     for token in (
@@ -59,7 +59,7 @@ async def test_changelog_redactor_preserves_meaningful_identifiers():
     for sensitive in (
         "run_secret123456",
         "span_secret123456",
-        "project:proj_secret123456",
+        "area:proj_secret123456",
         "abcdef1234567890abcdef1234567890",
         "/Users/me",
     ):
@@ -94,7 +94,7 @@ async def test_changelog_migration_sanitizes_existing_content(tmp_path: Path):
     (root / "changelog.md").write_text(
         "# Changelog\n\n"
         "- 2025-01-01T00:00:00+00:00 — pinned record abcdef1234567890abcdef1234567890 "
-        "scope=project:proj_readsecret123 /Users/me/src/ntrp run_id=run_readsecret123456\n",
+        "scope=area:proj_readsecret123 /Users/me/src/ntrp run_id=run_readsecret123456\n",
         encoding="utf-8",
     )
 
@@ -106,7 +106,7 @@ async def test_changelog_migration_sanitizes_existing_content(tmp_path: Path):
     for raw_token in (
         "abcdef1234567890abcdef1234567890",
         "scope=",
-        "project:proj_readsecret123",
+        "area:proj_readsecret123",
         "/Users/me",
         "run_readsecret",
     ):
@@ -191,7 +191,7 @@ async def test_existing_changelog_is_sanitized_on_rebuild_without_reconstruction
     root.mkdir()
     raw_event = (
         "- 2024-01-02T03:04:05+00:00 — added fact record "
-        "abcdef1234567890abcdef1234567890 scope=project:proj_forbidden123456 "
+        "abcdef1234567890abcdef1234567890 scope=area:proj_forbidden123456 "
         "source_ref=chat_turn:session path=/Users/escept1co/src/ntrp "
         "run_id=run_forbidden123456 span_id=span_forbidden123456 tool_id=toolu_forbidden123456 "
         "hash=abcdef1234567890abcdef1234567890\n"
@@ -205,7 +205,7 @@ async def test_existing_changelog_is_sanitized_on_rebuild_without_reconstruction
     for raw in (
         "abcdef1234567890abcdef1234567890",
         "scope=",
-        "project:proj_forbidden123456",
+        "area:proj_forbidden123456",
         "source_ref",
         "/Users/escept1co/src/ntrp",
         "run_forbidden123456",

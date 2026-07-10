@@ -3,6 +3,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from ntrp.agent_surface.schedules import compile_schedules_to_automations
+from ntrp.areas.agent import OBSERVE_TOOL_SCOPE, area_agent_instructions, record_area_run
+from ntrp.areas.asks import AskStore
+from ntrp.areas.migrate import migrate_state_files
+from ntrp.areas.models import Area, areas_from_records
+from ntrp.areas.suggester import AreaSuggester, AreaSuggestionStore
 from ntrp.automation.builtins import seed_builtins
 from ntrp.automation.scheduler import Scheduler
 from ntrp.automation.service import AutomationService
@@ -10,13 +15,13 @@ from ntrp.automation.suggestions import AutomationSuggester, AutomationSuggestio
 from ntrp.automation.triggers import TimeTrigger
 from ntrp.config import Config
 from ntrp.constants import (
-    BUILTIN_SLICE_SUGGESTER_ID,
-    SLICE_AGENT_DAILY_AT,
-    SLICE_AGENT_HANDLER,
-    SLICES_STATE_FILE,
-    SLICES_SUGGESTIONS_FILE,
+    AREA_AGENT_DAILY_AT,
+    AREA_AGENT_HANDLER,
+    AREAS_STATE_FILE,
+    AREAS_SUGGESTIONS_FILE,
+    BUILTIN_AREA_SUGGESTER_ID,
 )
-from ntrp.events.sse import AutomationSuggestionsUpdatedEvent, SlicesChangedEvent
+from ntrp.events.sse import AreasChangedEvent, AutomationSuggestionsUpdatedEvent
 from ntrp.integrations.calendar.client import MultiCalendarSource
 from ntrp.logging import get_logger
 from ntrp.monitor.calendar import CalendarMonitor
@@ -25,10 +30,6 @@ from ntrp.operator.runner import OperatorDeps
 from ntrp.server.indexer import Indexer
 from ntrp.server.runtime.outbox import RuntimeOutbox
 from ntrp.server.stores import Stores
-from ntrp.slices.agent import OBSERVE_TOOL_SCOPE, record_slice_run, slice_agent_instructions
-from ntrp.slices.asks import AskStore
-from ntrp.slices.models import Slice, slices_from_projects
-from ntrp.slices.suggester import SliceSuggester, SliceSuggestionStore
 
 _logger = get_logger(__name__)
 
@@ -66,8 +67,11 @@ class AutomationRuntime:
         self.get_integration_clients = get_integration_clients
         self.cheap_model = cheap_model
         self.build_operator_deps = build_operator_deps
-        self.slice_asks = AskStore(config.ntrp_dir / SLICES_STATE_FILE)
-        self.slice_suggestions = SliceSuggestionStore(config.ntrp_dir / SLICES_SUGGESTIONS_FILE)
+        # 2026-07-10 areas rename: fold slices-*.json state files forward
+        # before the stores read them.
+        migrate_state_files(config.ntrp_dir)
+        self.area_asks = AskStore(config.ntrp_dir / AREAS_STATE_FILE)
+        self.area_suggestions = AreaSuggestionStore(config.ntrp_dir / AREAS_SUGGESTIONS_FILE)
         self.scheduler = Scheduler(
             store=stores.automations,
             build_deps=build_operator_deps,
@@ -84,14 +88,14 @@ class AutomationRuntime:
             scheduler=self.scheduler,
             indexer=indexer,
             get_chat_connector=get_chat_connector,
-            on_slice_run=self._on_slice_run_completed,
+            on_area_run=self._on_area_run_completed,
         )
         self.monitor: Monitor | None = None
 
-    async def load_slices(self) -> list[Slice]:
-        """Slices are the capability-bearing projects (unification: one
-        container concept, project_id as identity)."""
-        return slices_from_projects(await self.stores.sessions.list_projects())
+    async def load_areas(self) -> list[Area]:
+        """Areas are the capability-bearing areas (unification: one
+        container concept, area_id as identity)."""
+        return areas_from_records(await self.stores.sessions.list_areas())
 
     async def stop(self) -> None:
         if self.monitor:
@@ -99,24 +103,24 @@ class AutomationRuntime:
         await self.outbox_runtime.stop()
         await self.scheduler.stop()
 
-    async def _on_slice_run_completed(self, run_completed) -> None:
-        """Ask sync for slice channel runs: when a completed run's session
-        belongs to a slice:* automation, every run re-decides the slice's one
-        ask (record_slice_run parses the fenced nomination; silence retires
+    async def _on_area_run_completed(self, run_completed) -> None:
+        """Ask sync for area channel runs: when a completed run's session
+        belongs to an area:* automation, every run re-decides the area's one
+        ask (record_area_run parses the fenced nomination; silence retires
         the previous one). Rides the outbox — the designed post-run pipeline
         — instead of a scheduler special case."""
         autos = await self.stores.automations.list_session_bound_by_session(run_completed.session_id)
         for auto in autos:
-            if not auto.task_id.startswith("slice:"):
+            if not auto.task_id.startswith("area:"):
                 continue
-            key = auto.task_id.removeprefix("slice:")
-            slice_ = next((s for s in await self.load_slices() if s.key == key), None)
-            if slice_ is None or slice_.page_path is None:
+            key = auto.task_id.removeprefix("area:")
+            area_ = next((s for s in await self.load_areas() if s.key == key), None)
+            if area_ is None or area_.page_path is None:
                 continue
-            record_slice_run(
-                self.slice_asks,
+            record_area_run(
+                self.area_asks,
                 key,
-                slice_.page_path,
+                area_.page_path,
                 run_completed.structured_output,
                 run_ref=f"run:{run_completed.run_id}",
             )
@@ -125,7 +129,7 @@ class AutomationRuntime:
             # actual report so the room's agent line shows what it found.
             if run_completed.result:
                 await self.stores.automations.set_last_result(auto.task_id, run_completed.result)
-            await self.scheduler.emit_automation_event(SlicesChangedEvent(keys=[key]))
+            await self.scheduler.emit_automation_event(AreasChangedEvent(keys=[key]))
 
     async def start_scheduler(self) -> None:
         self.scheduler.register_handler(
@@ -149,12 +153,12 @@ class AutomationRuntime:
             self._build_memory_retention_handler(),
         )
         self.scheduler.register_handler(
-            "slice_suggester_daily",
-            self._build_slice_suggester_handler(),
+            "area_suggester_daily",
+            self._build_area_suggester_handler(),
         )
         await seed_builtins(self.stores.automations)
-        await self._seed_slice_automations()
-        await self._kick_first_slice_suggestion()
+        await self._seed_area_automations()
+        await self._kick_first_area_suggestion()
         await compile_schedules_to_automations(".", self.stores.automations)
         await self.automation_service.backfill_channels()
         self.scheduler.start()
@@ -256,18 +260,18 @@ class AutomationRuntime:
 
         return handler
 
-    def _build_slice_suggester_handler(self):
+    def _build_area_suggester_handler(self):
         async def handler(context: dict | None) -> str | None:
             cheap_llm = self.get_cheap_llm()
             if cheap_llm is None:
-                return "slice suggester unavailable (no cheap model configured)"
+                return "area suggester unavailable (no cheap model configured)"
             attached = {
-                Path(s.page_path).stem for s in await self.load_slices() if s.page_path
+                Path(s.page_path).stem for s in await self.load_areas() if s.page_path
             }
-            suggester = SliceSuggester(
+            suggester = AreaSuggester(
                 attached_page_slugs=attached,
                 vault_dir=self.config.memory_artifacts_dir,
-                store=self.slice_suggestions,
+                store=self.area_suggestions,
                 cheap_llm=cheap_llm,
                 model=self.cheap_model,
             )
@@ -275,7 +279,7 @@ class AutomationRuntime:
 
         return handler
 
-    async def _kick_first_slice_suggestion(self) -> None:
+    async def _kick_first_area_suggestion(self) -> None:
         """Don't make a fresh install wait a day for its first suggestions:
         pull the builtin's next run to now so the scheduler fires it on this
         tick. Guard on last_run_at, NOT the suggestions file — a run killed
@@ -283,70 +287,70 @@ class AutomationRuntime:
         but never writes the file, so keying on 'has it ever completed'
         re-arms it every boot until the first real run lands, instead of
         stranding suggestions for a day."""
-        auto = await self.stores.automations.get(BUILTIN_SLICE_SUGGESTER_ID)
+        auto = await self.stores.automations.get(BUILTIN_AREA_SUGGESTER_ID)
         if auto and auto.enabled and auto.last_run_at is None:
-            await self.stores.automations.set_next_run(BUILTIN_SLICE_SUGGESTER_ID, datetime.now(UTC))
+            await self.stores.automations.set_next_run(BUILTIN_AREA_SUGGESTER_ID, datetime.now(UTC))
 
     @staticmethod
-    def _slice_run_at(index: int) -> str:
+    def _area_run_at(index: int) -> str:
         """Stagger the daily slots 5 minutes apart. Identical times made all
         agents stampede the LLM/embedding providers at once every morning —
         the observed 503 cascade under parallel load."""
-        hour, minute = (int(p) for p in SLICE_AGENT_DAILY_AT.split(":"))
+        hour, minute = (int(p) for p in AREA_AGENT_DAILY_AT.split(":"))
         total = hour * 60 + minute + index * 5
         return f"{total // 60 % 24:02d}:{total % 60:02d}"
 
-    async def _seed_slice_automations(self) -> None:
-        """Slice agents are ordinary CHANNEL automations — created through
-        AutomationService.create like everything else: a slice-tagged channel
+    async def _seed_area_automations(self) -> None:
+        """Area agents are ordinary CHANNEL automations — created through
+        AutomationService.create like everything else: an area-tagged channel
         session owns each agent's runs (visible transcript, replyable,
         approvals surface in the session), iteration mode gives run-to-run
         memory, and the observe contract lives in tool_scope as editable
         data. Also migrates rows from the earlier handler-based shape."""
-        agented = [s for s in await self.load_slices() if s.autonomy is not None]
-        for index, slice_ in enumerate(agented):
-            task_id = f"slice:{slice_.key}"
-            run_at = self._slice_run_at(index)
+        agented = [s for s in await self.load_areas() if s.autonomy is not None]
+        for index, area_ in enumerate(agented):
+            task_id = f"area:{area_.key}"
+            run_at = self._area_run_at(index)
             trigger = {"type": "time", "at": run_at, "days": "daily"}
             existing = await self.stores.automations.get(task_id)
-            channel_name = f"{slice_.title} agent"
+            channel_name = f"{area_.title} agent"
             if existing is None:
                 channel = await self.automation_service._provision_channel(
-                    channel_name, task_id, project_id=slice_.key
+                    channel_name, task_id, area_id=area_.key
                 )
                 await self.automation_service.create(
                     task_id=task_id,
                     name=channel_name,
-                    description=slice_agent_instructions(slice_),
+                    description=area_agent_instructions(area_),
                     triggers=[trigger],
-                    auto_approve=slice_.autonomy == "observe",
-                    tool_scope=OBSERVE_TOOL_SCOPE if slice_.autonomy == "observe" else None,
-                    output_schema="slice_ask",
+                    auto_approve=area_.autonomy == "observe",
+                    tool_scope=OBSERVE_TOOL_SCOPE if area_.autonomy == "observe" else None,
+                    output_schema="area_ask",
                     thread_id=channel.session_id,
                     read_history=True,
                 )
-                _logger.info("Seeded slice channel automation: %s (at=%s)", task_id, run_at)
+                _logger.info("Seeded area channel automation: %s (at=%s)", task_id, run_at)
                 continue
-            if existing.handler == SLICE_AGENT_HANDLER or existing.thread_id is None:
+            if existing.handler == AREA_AGENT_HANDLER or existing.thread_id is None:
                 # Migrate the handler-based, thread-less shape: provision the
-                # slice-tagged channel and convert in place.
+                # area-tagged channel and convert in place.
                 channel = await self.automation_service._provision_channel(
-                    channel_name, task_id, project_id=slice_.key
+                    channel_name, task_id, area_id=area_.key
                 )
                 time_trigger = TimeTrigger(at=run_at, days="daily")
                 existing.name = channel_name
                 existing.handler = None
                 existing.thread_id = channel.session_id
                 existing.read_history = True
-                existing.description = slice_agent_instructions(slice_)
-                existing.auto_approve = slice_.autonomy == "observe"
-                existing.tool_scope = OBSERVE_TOOL_SCOPE if slice_.autonomy == "observe" else None
-                existing.output_schema = "slice_ask"
+                existing.description = area_agent_instructions(area_)
+                existing.auto_approve = area_.autonomy == "observe"
+                existing.tool_scope = OBSERVE_TOOL_SCOPE if area_.autonomy == "observe" else None
+                existing.output_schema = "area_ask"
                 existing.triggers = [time_trigger]
                 existing.next_run_at = time_trigger.next_run(datetime.now(UTC))
                 existing.last_result = None  # pre-rebuild diagnostics would read as current state
                 await self.stores.automations.save(existing)
-                _logger.info("Migrated slice automation %s to a channel (session %s)", task_id, channel.session_id)
+                _logger.info("Migrated area automation %s to a channel (session %s)", task_id, channel.session_id)
                 continue
             # Repair channels from the first migration pass: cryptic task_id
             # names + stale pre-rebuild diagnostics leaking into the room UI.
@@ -364,7 +368,7 @@ class AutomationRuntime:
             if existing.output_schema is None:
                 # Pre-structured-output rows nominated asks via a fenced json
                 # convention; upgrade them to the schema the hook now expects.
-                existing.output_schema = "slice_ask"
+                existing.output_schema = "area_ask"
                 changed = True
             if existing.last_result and "without a report" in existing.last_result:
                 existing.last_result = None

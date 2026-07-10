@@ -50,7 +50,7 @@ class RunRequest:
     # separately controls whether irreversible tools skip the approval gate —
     # a caller can be non-auto-approve (approvals still required) while
     # granting a wider toolset than plain read-only, by naming specific
-    # additional tools here (e.g. slice observe mode: READ tools + the named
+    # additional tools here (e.g. area observe mode: READ tools + the named
     # memory-write tools, but not bash/send/automation-write).
     extra_tool_names: frozenset[str] = frozenset()
     # Allowlist patterns ('*', exact, 'slack_*') applied as the hard outer
@@ -81,7 +81,7 @@ async def _prepare(deps: OperatorDeps, request: RunRequest) -> tuple[Agent, list
     # gates; extra_tool_names narrows the set. Combined they mean "skip
     # approvals WITHIN this narrow set" — a detached run has no approval UI,
     # so an agent trusted with only read + its own notebook (observe-mode
-    # slice agents) must not stall on gates it can never answer.
+    # area agents) must not stall on gates it can never answer.
     scope_kw = {"scope": request.tool_scope} if request.tool_scope else {}
     if request.extra_tool_names:
         tools = executor.get_tools(read_only=True, extra_names=request.extra_tool_names, **scope_kw)

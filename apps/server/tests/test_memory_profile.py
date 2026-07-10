@@ -1,6 +1,6 @@
 """resident_profile — the always-resident memory block (ntrp/memory/profile.py).
 
-Projects directives + durable user facts + pins from the flat pool into the
+Areas directives + durable user facts + pins from the flat pool into the
 system-prompt block that rides every turn. Hermetic: a tmp memory.db, FTS-only.
 """
 
@@ -75,7 +75,7 @@ async def test_verbose_directives_do_not_starve_facts(tmp_path: Path):
 
     block = await resident_profile(store)
 
-    assert "the user is named Tim" in block  # facts get their own guaranteed slice
+    assert "the user is named Tim" in block  # facts get their own guaranteed area
     await store.close()
 
 

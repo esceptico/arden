@@ -2,8 +2,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from ntrp.context.models import ProjectContext, SessionState
-from ntrp.core.prompts import PROJECT_BLOCK
+from ntrp.context.models import AreaContext, SessionState
+from ntrp.core.prompts import AREA_BLOCK
 from ntrp.tools import files as file_tools_module
 from ntrp.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
 from ntrp.tools.core.registry import ToolRegistry
@@ -19,14 +19,14 @@ from ntrp.tools.files import (
 )
 
 
-def _make_execution(tool_name: str, *, project_cwd: str | None = None) -> ToolExecution:
+def _make_execution(tool_name: str, *, area_cwd: str | None = None) -> ToolExecution:
     ctx = ToolContext(
         session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
         registry=ToolRegistry(),
         run=RunContext(run_id="run-1"),
         io=IOBridge(),
         background_tasks=BackgroundTaskRegistry(session_id="test"),
-        project=(ProjectContext(project_id="proj-1", name="Project", default_cwd=project_cwd) if project_cwd else None),
+        area=(AreaContext(area_id="proj-1", name="Area", default_cwd=area_cwd) if area_cwd else None),
     )
     return ToolExecution(tool_id="t1", tool_name=tool_name, ctx=ctx)
 
@@ -49,20 +49,20 @@ async def test_read_file_self_reports_source_refs(tmp_path):
     ]
 
 
-def test_project_prompt_tells_agent_to_use_relative_paths():
-    prompt = PROJECT_BLOCK.render(
-        project=ProjectContext(project_id="proj-1", name="Project", default_cwd="/Users/me/src/project")
+def test_area_prompt_tells_agent_to_use_relative_paths():
+    prompt = AREA_BLOCK.render(
+        area=AreaContext(area_id="proj-1", name="Area", default_cwd="/Users/me/src/area")
     )
 
-    assert "Default cwd: /Users/me/src/project" in prompt
+    assert "Default cwd: /Users/me/src/area" in prompt
     assert "Use relative paths from the default cwd" in prompt
 
 
 @pytest.mark.asyncio
-async def test_project_file_tools_display_paths_relative_to_default_cwd(tmp_path):
+async def test_area_file_tools_display_paths_relative_to_default_cwd(tmp_path):
     (tmp_path / "README.md").write_text("hello", encoding="utf-8")
 
-    result = await list_files_tool.execute(_make_execution("list_files", project_cwd=str(tmp_path)), path=".")
+    result = await list_files_tool.execute(_make_execution("list_files", area_cwd=str(tmp_path)), path=".")
 
     assert not result.is_error
     assert result.content.startswith(". (1 entries)")
@@ -74,8 +74,8 @@ async def test_project_file_tools_display_paths_relative_to_default_cwd(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_project_write_and_edit_results_display_relative_paths(tmp_path):
-    execution = _make_execution("write_file", project_cwd=str(tmp_path))
+async def test_area_write_and_edit_results_display_relative_paths(tmp_path):
+    execution = _make_execution("write_file", area_cwd=str(tmp_path))
     write = await write_file_tool.execute(execution, path="notes.txt", content="hello")
 
     assert not write.is_error
@@ -85,7 +85,7 @@ async def test_project_write_and_edit_results_display_relative_paths(tmp_path):
     assert write.data["absolute_path"] == str(tmp_path / "notes.txt")
 
     edit = await edit_file_tool.execute(
-        _make_execution("edit_file", project_cwd=str(tmp_path)),
+        _make_execution("edit_file", area_cwd=str(tmp_path)),
         path="notes.txt",
         old_text="hello",
         new_text="bye",

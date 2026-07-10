@@ -27,7 +27,7 @@ class DeferredToolsModelRequestMiddleware:
         self._run = run
         self._get_services = get_services
 
-    def _project_visible_tools(self, request: ModelRequest) -> ModelRequest:
+    def _area_visible_tools(self, request: ModelRequest) -> ModelRequest:
         # Preserve upstream filtering. Operator/read-only paths may pass only non-mutating
         # schemas into Agent.tools; deferred loading must not re-add tools excluded there.
         allowed = {t.get("function", {}).get("name") for t in [*request.tools, *request.deferred_tools]}
@@ -76,6 +76,6 @@ class DeferredToolsModelRequestMiddleware:
                 )
             )
 
-        prepared = self._project_visible_tools(request)
+        prepared = self._area_visible_tools(request)
         prepared = await next_request(prepared)
-        return self._project_visible_tools(prepared)
+        return self._area_visible_tools(prepared)

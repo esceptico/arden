@@ -22,7 +22,7 @@ async def automation_store(tmp_path: Path):
     await conn.close()
 
 
-def test_project_agent_skills_dir_is_loaded(tmp_path, monkeypatch):
+def test_area_agent_skills_dir_is_loaded(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
     dirs = get_skills_dirs()

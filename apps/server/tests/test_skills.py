@@ -29,7 +29,7 @@ def test_registry_rejects_invalid_skill_metadata(tmp_path):
     )
     registry = SkillRegistry()
 
-    registry.load([(tmp_path, "project")])
+    registry.load([(tmp_path, "area")])
 
     assert registry.get("Bad_Name") is None
     assert registry.validation_issues[0]["reason"] == "invalid_name"
@@ -50,7 +50,7 @@ def test_registry_loads_skill_governance_metadata(tmp_path):
     )
     registry = SkillRegistry()
 
-    registry.load([(tmp_path, "project")])
+    registry.load([(tmp_path, "area")])
 
     skill = registry.get("research-helper")
     assert skill is not None
@@ -68,7 +68,7 @@ def test_registry_renders_skill_xml_with_arguments(tmp_path):
         body="# Research helper\nUse <skill_path> for local assets.\n",
     )
     registry = SkillRegistry()
-    registry.load([(tmp_path, "project")])
+    registry.load([(tmp_path, "area")])
 
     rendered = registry.render_skill_xml("research-helper", args="Current user request: audit it")
 
@@ -89,7 +89,7 @@ def test_skill_service_governance_report_marks_cleanup_candidates(tmp_path):
         ),
     )
     registry = SkillRegistry()
-    registry.load([(tmp_path, "project")])
+    registry.load([(tmp_path, "area")])
     service = SkillService(registry)
 
     report = service.governance_report(now_date="2026-05-16")
@@ -111,7 +111,7 @@ def test_skill_governance_endpoint_returns_report(tmp_path):
         ),
     )
     registry = SkillRegistry()
-    registry.load([(tmp_path, "project")])
+    registry.load([(tmp_path, "area")])
     service = SkillService(registry)
     app.dependency_overrides[require_skill_service] = lambda: service
 

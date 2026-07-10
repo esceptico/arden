@@ -55,7 +55,7 @@ async def test_mcp_server_exposes_structured_ntrp_research_tool():
 
 
 @pytest.mark.asyncio
-async def test_runtime_research_runner_projects_internal_ledger_notes(monkeypatch):
+async def test_runtime_research_runner_areas_internal_ledger_notes(monkeypatch):
     async def fake_research(execution, args):
         execution.ctx.ledger.add_note(
             FactNote(
@@ -64,7 +64,7 @@ async def test_runtime_research_runner_projects_internal_ledger_notes(monkeypatc
                 quote="consultation oracle",
             )
         )
-        execution.ctx.ledger.add_note(GapNote(what_missing="No polling mode in the first slice."))
+        execution.ctx.ledger.add_note(GapNote(what_missing="No polling mode in the first area."))
         execution.ctx.ledger.add_note(
             ContradictionNote(
                 claim_a="Expose raw memory APIs.",
@@ -112,7 +112,7 @@ async def test_runtime_research_runner_projects_internal_ledger_notes(monkeypatc
             "quote": "consultation oracle",
         }
     ]
-    assert result.gaps == ["No polling mode in the first slice."]
+    assert result.gaps == ["No polling mode in the first area."]
     assert [c.model_dump() for c in result.contradictions] == [
         {
             "claim_a": "Expose raw memory APIs.",

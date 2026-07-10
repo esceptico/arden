@@ -32,18 +32,18 @@ async def test_generate_conversation_name_uses_session_prompt(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_generate_agent_name_sends_task_only(monkeypatch):
-    fake = FakeLLM('{"name": "Summarize recent projects"}')
+    fake = FakeLLM('{"name": "Summarize recent areas"}')
     monkeypatch.setattr(naming, "llm_client", fake)
 
     result = await naming.generate_agent_name(
         "test-model",
-        "summarize recent projects",
+        "summarize recent areas",
     )
 
-    assert result == "Summarize recent projects"
+    assert result == "Summarize recent areas"
     assert fake.calls[0]["model"] == "test-model"
     assert fake.calls[0]["response_format"] is naming.NameOutput
-    assert fake.calls[0]["messages"][1]["content"] == "Task:\nsummarize recent projects"
+    assert fake.calls[0]["messages"][1]["content"] == "Task:\nsummarize recent areas"
     assert "Do not prefix" in fake.calls[0]["messages"][0]["content"]
 
 

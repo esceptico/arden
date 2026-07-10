@@ -8,7 +8,7 @@ _logger = get_logger(__name__)
 
 TRIAGE_SYSTEM = """You file a just-started chat into the user's existing \
 workspace. You are given the opening exchange of a conversation and a list of \
-existing HOMES — life-domain slices and projects the user already keeps.
+existing HOMES — life-domain areas the user already keeps.
 
 Choose exactly ONE:
 - move: the chat clearly belongs in an existing home. Return that home's key.
@@ -24,7 +24,7 @@ plain-language rationale grounded in what the chat is actually about."""
 
 
 class TriageTarget(BaseModel):
-    key: str  # the container's project_id
+    key: str  # the container's area_id
     title: str
 
 

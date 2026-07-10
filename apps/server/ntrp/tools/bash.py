@@ -78,7 +78,7 @@ BLOCKED_PATTERNS = frozenset(
 
 BASH_DESCRIPTION = """Execute a bash command in the user's shell.
 
-Each command runs in a fresh subprocess — no state (env vars, shell functions, cwd) persists between calls. Commands run in the project's default cwd when set, otherwise in the server's working directory. Use the working_dir parameter to run in a different directory instead of 'cd'.
+Each command runs in a fresh subprocess — no state (env vars, shell functions, cwd) persists between calls. Commands run in the area's default cwd when set, otherwise in the server's working directory. Use the working_dir parameter to run in a different directory instead of 'cd'.
 
 PREFER OTHER TOOLS:
 - For listing/finding files: use list_files() or find_files()
@@ -159,7 +159,7 @@ class BashInput(BaseModel):
 
 
 def _working_dir(execution: ToolExecution, args: BashInput) -> str | None:
-    return args.working_dir or (execution.ctx.project.default_cwd if execution.ctx.project else None)
+    return args.working_dir or (execution.ctx.area.default_cwd if execution.ctx.area else None)
 
 
 async def approve_bash(execution: ToolExecution, args: BashInput) -> ApprovalInfo | None:

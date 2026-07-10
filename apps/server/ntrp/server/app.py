@@ -9,18 +9,23 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from ntrp.agent import Role
+from ntrp.areas.migrate import migrate_legacy_areas
+from ntrp.areas.models import areas_from_records
+from ntrp.areas.projection import area_automation_match
+from ntrp.areas.service import AreaService
 from ntrp.automation.models import Automation
 from ntrp.automation.output_schemas import resolve_output_schema
 from ntrp.automation.prompts import AUTOMATION_PROMPT, AUTOMATION_SUFFIX
 from ntrp.automation.scheduler import AUTOMATION_BUS_KEY
-from ntrp.constants import SLICES_FILE
+from ntrp.constants import LEGACY_AREAS_FILE
 from ntrp.core.tool_result_files import prune_offload_store
-from ntrp.events.sse import MemoryChangedEvent, SlicesChangedEvent
+from ntrp.events.sse import AreasChangedEvent, MemoryChangedEvent
 from ntrp.logging import get_logger
 from ntrp.memory.pages import parse_page
 from ntrp.operator.runner import RunRequest, run_agent, run_agent_streaming
 from ntrp.server.bus import BusRegistry, prime_bus_cursor_from_store
 from ntrp.server.middleware import AuthMiddleware, TracingMiddleware
+from ntrp.server.routers.areas import router as areas_router
 from ntrp.server.routers.automation import router as automation_router
 from ntrp.server.routers.chat import router as chat_router
 from ntrp.server.routers.context import router as context_router
@@ -36,13 +41,8 @@ from ntrp.server.routers.session import router as session_router
 from ntrp.server.routers.settings import router as settings_router
 from ntrp.server.routers.setup import router as setup_router
 from ntrp.server.routers.skills import router as skills_router
-from ntrp.server.routers.slices import router as slices_router
 from ntrp.server.runtime import Runtime
 from ntrp.services.chat import submit_chat_message
-from ntrp.slices.migrate import migrate_slices_to_projects
-from ntrp.slices.models import slices_from_projects
-from ntrp.slices.projection import slice_automation_match
-from ntrp.slices.service import SliceService
 
 _logger = get_logger(__name__)
 
@@ -109,13 +109,13 @@ async def lifespan(app: FastAPI):
 
         runtime.session_service.set_event_sink(_publish_session_event)
 
-        # Slices↔projects unification: one-shot fold of slices.json into the
-        # projects table (capabilities + re-keyed asks/automations/sessions).
+        # areas unification: one-shot fold of areas.json into the
+        # areas table (capabilities + re-keyed asks/automations/sessions).
         # No-op once the file has been renamed to .migrated.
-        await migrate_slices_to_projects(
-            slices_file=runtime.config.ntrp_dir / SLICES_FILE,
+        await migrate_legacy_areas(
+            areas_file=runtime.config.ntrp_dir / LEGACY_AREAS_FILE,
             session_service=runtime.session_service,
-            ask_store=runtime.automation.slice_asks,
+            ask_store=runtime.automation.area_asks,
             automation_store=runtime.stores.automations,
             session_store=runtime.session_service.store,
         )
@@ -128,31 +128,31 @@ async def lifespan(app: FastAPI):
 
     runtime.knowledge.start_memory_watch(_publish_memory_changed)
 
-    # Slices: a container's automations/sessions/asks, keyed by project_id
-    # (slices and projects are one concept; a slice = a project with
+    # Areas: a container's automations/sessions/asks, keyed by area_id
+    # (areas and areas are one concept; an area = an area with
     # capabilities). Asks live under ~/.ntrp next to the other flat-file
     # stores; callables read live off the session/automation stores so
     # overview()/detail() never go stale. Reuse AutomationRuntime's
     # instances (not fresh ones) — AskStore caches in memory after __init__,
-    # so a second instance would never see agent-nominated asks the slice
-    # agent handler upserts through AutomationRuntime.slice_asks.
-    slice_asks = runtime.automation.slice_asks
+    # so a second instance would never see agent-nominated asks the area
+    # agent handler upserts through AutomationRuntime.area_asks.
+    area_asks = runtime.automation.area_asks
 
-    def _slice_get_page(page_path: str):
+    def _area_get_page(page_path: str):
         full_path = runtime.config.memory_artifacts_dir / page_path
         text = full_path.read_text(encoding="utf-8") if full_path.exists() else ""
         return parse_page(text)
 
-    # SliceService's injected callables are synchronous (Task 5's contract),
+    # AreaService's injected callables are synchronous (Task 5's contract),
     # but the session/automation stores are async-only. A per-request async
     # hydrate snapshots the live data into these closures right before each
-    # sync SliceService call, so the callables stay plain sync lookups over
+    # sync AreaService call, so the callables stay plain sync lookups over
     # a fresh snapshot instead of needing their own event loop.
-    slice_snapshot: dict[str, object] = {
-        "sessions": [], "approvals": [], "automations": [], "projects": [], "slices": [],
+    area_snapshot: dict[str, object] = {
+        "sessions": [], "approvals": [], "automations": [], "records": [], "areas": [],
     }
 
-    async def hydrate_slice_snapshot() -> None:
+    async def hydrate_area_snapshot() -> None:
         sessions = await runtime.session_service.list_sessions(limit=1000) if runtime.session_service else []
         # Pending approvals only exist under a live run, so scan the in-memory
         # active runs instead of querying every session row.
@@ -161,25 +161,25 @@ async def lifespan(app: FastAPI):
             for session_id in {run.session_id for run in runtime.run_registry.list_active_runs()}:
                 approvals.extend(await runtime.session_service.store.list_pending_tool_approvals(session_id))
         automations = await runtime.stores.automations.list_all() if runtime.stores else []
-        projects = await runtime.session_service.list_projects() if runtime.session_service else []
-        slice_snapshot["sessions"] = sessions
-        slice_snapshot["approvals"] = approvals
-        slice_snapshot["automations"] = automations
-        slice_snapshot["projects"] = projects
-        slice_snapshot["slices"] = slices_from_projects(projects)
+        areas = await runtime.session_service.list_areas() if runtime.session_service else []
+        area_snapshot["sessions"] = sessions
+        area_snapshot["approvals"] = approvals
+        area_snapshot["automations"] = automations
+        area_snapshot["records"] = areas
+        area_snapshot["areas"] = areas_from_records(areas)
 
-    def _slice_pending_approvals() -> list[dict]:
-        return slice_snapshot["approvals"]
+    def _area_pending_approvals() -> list[dict]:
+        return area_snapshot["approvals"]
 
-    def _slice_session_slice(session_id: str) -> str | None:
-        slice_ids = {s.key for s in slice_snapshot["slices"]}
-        for row in slice_snapshot["sessions"]:
+    def _area_session_area(session_id: str) -> str | None:
+        area_ids = {s.key for s in area_snapshot["areas"]}
+        for row in area_snapshot["sessions"]:
             if row["session_id"] == session_id:
-                pid = row.get("project_id")
-                return pid if pid in slice_ids else None
+                pid = row.get("area_id")
+                return pid if pid in area_ids else None
         return None
 
-    def _slice_automations(key: str) -> list[dict]:
+    def _area_automations(key: str) -> list[dict]:
         return [
             {
                 "name": a.name,
@@ -190,45 +190,45 @@ async def lifespan(app: FastAPI):
                 "running_since": a.running_since.isoformat() if a.running_since else None,
                 "next_run_at": a.next_run_at.isoformat() if a.next_run_at else None,
             }
-            for a in slice_snapshot["automations"]
-            if slice_automation_match(a.task_id, key)
+            for a in area_snapshot["automations"]
+            if area_automation_match(a.task_id, key)
         ]
 
-    def _slice_sessions(key: str) -> list[dict]:
+    def _area_sessions(key: str) -> list[dict]:
         # Primary conversations only — the room's activity list shows what
         # the USER talked about, not child agent sessions or the agent's own
         # channel (mirrors the sidebar's primary-session filter).
         return [
             row
-            for row in slice_snapshot["sessions"]
-            if row.get("project_id") == key
+            for row in area_snapshot["sessions"]
+            if row.get("area_id") == key
             and row.get("session_type") == "chat"
             and not row.get("parent_session_id")
         ]
 
-    def _slice_get_project(project_id: str) -> dict | None:
-        for p in slice_snapshot["projects"]:
-            if p["project_id"] == project_id:
+    def _get_area_record(area_id: str) -> dict | None:
+        for p in area_snapshot["records"]:
+            if p["area_id"] == area_id:
                 return p
         return None
 
-    app.state.slice_suggestions = runtime.automation.slice_suggestions
-    app.state.slice_service = SliceService(
-        slices=lambda: slice_snapshot["slices"],
-        asks=slice_asks,
-        get_page=_slice_get_page,
-        pending_approvals=_slice_pending_approvals,
-        session_slice=_slice_session_slice,
-        slice_automations=_slice_automations,
-        slice_sessions=_slice_sessions,
-        get_project=_slice_get_project,
+    app.state.area_suggestions = runtime.automation.area_suggestions
+    app.state.area_service = AreaService(
+        areas=lambda: area_snapshot["areas"],
+        asks=area_asks,
+        get_page=_area_get_page,
+        pending_approvals=_area_pending_approvals,
+        session_area=_area_session_area,
+        area_automations=_area_automations,
+        area_sessions=_area_sessions,
+        get_area=_get_area_record,
     )
-    app.state.hydrate_slice_snapshot = hydrate_slice_snapshot
+    app.state.hydrate_area_snapshot = hydrate_area_snapshot
 
-    async def _publish_slices_changed(keys: list[str]) -> None:
-        await bus_registry.get_or_create(AUTOMATION_BUS_KEY).emit(SlicesChangedEvent(keys=keys))
+    async def _publish_areas_changed(keys: list[str]) -> None:
+        await bus_registry.get_or_create(AUTOMATION_BUS_KEY).emit(AreasChangedEvent(keys=keys))
 
-    app.state.emit_slices_changed = _publish_slices_changed
+    app.state.emit_areas_changed = _publish_areas_changed
 
     # Per-session write locks. The post dispatcher holds one for its full
     # lifetime so two concurrent post-mode dispatches against the same
@@ -410,4 +410,4 @@ app.include_router(skills_router)
 app.include_router(mcp_router)
 app.include_router(loops_router)
 app.include_router(memory_router)
-app.include_router(slices_router)
+app.include_router(areas_router)

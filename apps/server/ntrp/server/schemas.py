@@ -313,38 +313,44 @@ class SessionResponse(BaseModel):
     integrations: list[str]
     integration_errors: dict[str, str]
     name: str | None = None
-    project_id: str | None = None
+    area_id: str | None = None
     chat_model: str | None = None
 
 
-class ProjectResponse(BaseModel):
-    project_id: str
+class AreaResponse(BaseModel):
+    area_id: str
     name: str
     default_cwd: str | None = None
     instructions: str | None = None
     knowledge_scope: str
+    page_path: str | None = None
+    autonomy: str | None = None
     created_at: str
     updated_at: str
     archived_at: str | None = None
 
 
-class CreateProjectRequest(BaseModel):
+class CreateAreaRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     default_cwd: str | None = Field(default=None, max_length=1_000)
     instructions: str | None = Field(default=None, max_length=20_000)
     knowledge_scope: str | None = Field(default=None, max_length=500)
+    # Attaching a page grows the area's capabilities (observe agent implied).
+    page_path: str | None = Field(default=None, max_length=1_000)
 
 
-class UpdateProjectRequest(BaseModel):
+class UpdateAreaRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     default_cwd: str | None = Field(default=None, max_length=1_000)
     instructions: str | None = Field(default=None, max_length=20_000)
     knowledge_scope: str | None = Field(default=None, max_length=500)
+    page_path: str | None = Field(default=None, max_length=1_000)
+    autonomy: str | None = Field(default=None, max_length=20)
 
 
 class CreateSessionRequest(BaseModel):
     name: str | None = None
-    project_id: str | None = None
+    area_id: str | None = None
 
 
 class UpdateSessionModelRequest(BaseModel):
@@ -370,8 +376,8 @@ class RenameSessionRequest(BaseModel):
     name: str
 
 
-class MoveSessionProjectRequest(BaseModel):
-    project_id: str | None = None
+class MoveSessionAreaRequest(BaseModel):
+    area_id: str | None = None
 
 
 class CompactRequest(BaseModel):
@@ -467,7 +473,7 @@ class RememberBody(BaseModel):
     """Manual user-authored memory write (e.g. desktop 'pin to memory')."""
 
     fact: str = Field(..., min_length=1, max_length=20_000)
-    project_id: str | None = None
+    area_id: str | None = None
 
 
 # --- Automations / notifiers ---

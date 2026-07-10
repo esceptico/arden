@@ -20,7 +20,7 @@ def get_skills_dirs() -> list[tuple[Path, str]]:
     return [
         (BUILTIN_SKILLS_DIR, "builtin"),
         (Path.cwd() / "agent" / "skills", "agent"),
-        (Path.cwd() / ".skills", "project"),
+        (Path.cwd() / ".skills", "area"),
         (NTRP_DIR / "skills", "global"),
     ]
 

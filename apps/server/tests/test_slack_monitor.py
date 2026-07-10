@@ -123,7 +123,7 @@ async def test_cold_start_emits_nothing_and_records_cursor(state_store: MonitorS
     # No history fetch on cold start; only a cursor gets persisted.
     assert slack.history_calls == []
     state = await state_store.get_state(NS)
-    assert "last_ts" in state and state["last_ts"]
+    assert state.get("last_ts")
 
 
 @pytest.mark.asyncio

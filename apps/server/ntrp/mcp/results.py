@@ -22,7 +22,7 @@ def call_tool_result_to_tool_result(
     provider: str,
     tool_name: str,
 ) -> ToolResult:
-    projection = _project_content(result.content)
+    projection = _area_content(result.content)
     content = _model_content(result, projection)
     return ToolResult(
         content=content,
@@ -139,7 +139,7 @@ def _model_content(result: mcp_types.CallToolResult, projection: ContentProjecti
     return ""
 
 
-def _project_content(blocks: list[mcp_types.ContentBlock]) -> ContentProjection:
+def _area_content(blocks: list[mcp_types.ContentBlock]) -> ContentProjection:
     text: list[str] = []
     fallback: list[str] = []
     metadata: list[dict[str, Any]] = []

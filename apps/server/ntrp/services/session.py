@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from typing import Literal
 
 from ntrp.context.models import SessionData, SessionState
-from ntrp.context.store import PROJECT_FILTER_UNSET, SessionStore
+from ntrp.context.store import AREA_FILTER_UNSET, SessionStore
 from ntrp.core.compactor import compact_messages, compactable_range
 from ntrp.core.tool_result_files import purge_session_results
 from ntrp.events.sse import SessionActivityEvent, SessionCreatedEvent, SSEEvent
@@ -31,7 +31,7 @@ def session_row(state: SessionState, message_count: int) -> dict:
         "parent_tool_call_id": state.parent_tool_call_id,
         "agent_type": state.agent_type,
         "agent_status": state.agent_status,
-        "project_id": state.project_id,
+        "area_id": state.area_id,
         "chat_model": state.chat_model,
     }
 
@@ -72,7 +72,7 @@ class SessionService:
         parent_tool_call_id: str | None = None,
         agent_type: str | None = None,
         agent_status: str | None = None,
-        project_id: str | None = None,
+        area_id: str | None = None,
         chat_model: str | None = None,
     ) -> SessionState:
         now = datetime.now(UTC)
@@ -86,7 +86,7 @@ class SessionService:
             parent_tool_call_id=parent_tool_call_id,
             agent_type=agent_type,
             agent_status=agent_status,
-            project_id=project_id,
+            area_id=area_id,
             chat_model=chat_model,
         )
 
@@ -100,7 +100,7 @@ class SessionService:
         parent_tool_call_id: str | None = None,
         agent_type: str | None = None,
         agent_status: str | None = None,
-        project_id: str | None = None,
+        area_id: str | None = None,
         chat_model: str | None = None,
     ) -> SessionState:
         """Create + persist a session and announce it (SESSION_CREATED) so
@@ -116,7 +116,7 @@ class SessionService:
             parent_tool_call_id=parent_tool_call_id,
             agent_type=agent_type,
             agent_status=agent_status,
-            project_id=project_id,
+            area_id=area_id,
             chat_model=chat_model,
         )
         await self.save(state, [])
@@ -347,13 +347,13 @@ class SessionService:
     async def list_sessions(
         self,
         limit: int = 20,
-        project_id: str | None | object = PROJECT_FILTER_UNSET,
+        area_id: str | None | object = AREA_FILTER_UNSET,
         include_agents: bool = True,
         offset: int = 0,
     ) -> list[dict]:
         return await self.store.list_sessions(
             limit=limit,
-            project_id=project_id,
+            area_id=area_id,
             include_agents=include_agents,
             offset=offset,
         )
@@ -368,7 +368,7 @@ class SessionService:
         around_seq: int | None = None,
         before_seq: int | None = None,
         after_seq: int | None = None,
-        project_id: str | None | object = PROJECT_FILTER_UNSET,
+        area_id: str | None | object = AREA_FILTER_UNSET,
     ) -> dict:
         return await self.store.list_session_messages(
             session_id,
@@ -379,7 +379,7 @@ class SessionService:
             around_seq=around_seq,
             before_seq=before_seq,
             after_seq=after_seq,
-            project_id=project_id,
+            area_id=area_id,
         )
 
     async def search_messages(
@@ -391,7 +391,7 @@ class SessionService:
         session_id: str | None = None,
         since: str | None = None,
         until: str | None = None,
-        project_id: str | None | object = PROJECT_FILTER_UNSET,
+        area_id: str | None | object = AREA_FILTER_UNSET,
     ) -> dict:
         return await self.store.search_messages(
             query,
@@ -400,7 +400,7 @@ class SessionService:
             session_id=session_id,
             since=since,
             until=until,
-            project_id=project_id,
+            area_id=area_id,
         )
 
     async def messages_since(self, session_id: str, seq: int) -> list[dict]:
@@ -424,7 +424,7 @@ class SessionService:
         await self.store.update_session_chat_model(session_id, chat_model)
         return True
 
-    async def create_project(
+    async def create_area(
         self,
         *,
         name: str,
@@ -434,7 +434,7 @@ class SessionService:
         page_path: str | None = None,
         autonomy: str | None = None,
     ) -> dict:
-        return await self.store.create_project(
+        return await self.store.create_area(
             name=name,
             default_cwd=default_cwd,
             instructions=instructions,
@@ -443,29 +443,29 @@ class SessionService:
             autonomy=autonomy,
         )
 
-    async def get_project(self, project_id: str | None) -> dict | None:
-        return await self.store.get_project(project_id)
+    async def get_area(self, area_id: str | None) -> dict | None:
+        return await self.store.get_area(area_id)
 
-    async def find_project_by_name(self, name: str) -> dict | None:
-        # Case-insensitive: "MATS" must resolve to an existing "mats" project
+    async def find_area_by_name(self, name: str) -> dict | None:
+        # Case-insensitive: "MATS" must resolve to an existing "mats" area
         # instead of minting a duplicate (suggestion promote, triage create).
         target = name.strip().casefold()
-        for project in await self.store.list_projects():
-            if project["name"].strip().casefold() == target:
-                return project
+        for area in await self.store.list_areas():
+            if area["name"].strip().casefold() == target:
+                return area
         return None
 
-    async def list_projects(self) -> list[dict]:
-        return await self.store.list_projects()
+    async def list_areas(self) -> list[dict]:
+        return await self.store.list_areas()
 
-    async def update_project(self, project_id: str, **kwargs) -> dict | None:
-        return await self.store.update_project(project_id, **kwargs)
+    async def update_area(self, area_id: str, **kwargs) -> dict | None:
+        return await self.store.update_area(area_id, **kwargs)
 
-    async def archive_project(self, project_id: str) -> bool:
-        return await self.store.archive_project(project_id)
+    async def archive_area(self, area_id: str) -> bool:
+        return await self.store.archive_area(area_id)
 
-    async def move_session_to_project(self, session_id: str, project_id: str | None) -> bool:
-        return await self.store.update_session_project(session_id, project_id)
+    async def move_session_to_area(self, session_id: str, area_id: str | None) -> bool:
+        return await self.store.update_session_area(session_id, area_id)
 
     async def archive(self, session_id: str) -> bool:
         return await self.store.archive_session(session_id)
@@ -579,7 +579,7 @@ class SessionService:
 
         new_state = self.create(
             name=name or (f"{data.state.name} (branch)" if data.state.name else None),
-            project_id=data.state.project_id,
+            area_id=data.state.area_id,
         )
         new_state.auto_approve = set(data.state.auto_approve)
         metadata = {"last_input_tokens": data.last_input_tokens} if data.last_input_tokens else None

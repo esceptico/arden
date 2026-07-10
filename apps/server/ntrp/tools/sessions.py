@@ -34,8 +34,8 @@ _DEFAULT_MESSAGE_LIMIT = 50
 _MAX_MESSAGE_LIMIT = 200
 
 
-def _active_project_id(execution: ToolExecution) -> str | None:
-    return execution.ctx.session_state.project_id
+def _active_area_id(execution: ToolExecution) -> str | None:
+    return execution.ctx.session_state.area_id
 
 
 class ListRecentSessionsInput(BaseModel):
@@ -219,7 +219,7 @@ async def list_recent_sessions(execution: ToolExecution, args: ListRecentSession
 
     sessions = await svc.list_sessions(
         limit=args.limit * 2 if args.within_days else args.limit,
-        project_id=_active_project_id(execution),
+        area_id=_active_area_id(execution),
     )
 
     if args.within_days is not None:
@@ -254,7 +254,7 @@ async def create_session(execution: ToolExecution, args: CreateSessionInput) -> 
         name=args.name,
         session_type=args.session_type,
         origin_automation_id=origin,
-        project_id=_active_project_id(execution),
+        area_id=_active_area_id(execution),
     )
 
     lines = [
@@ -289,7 +289,7 @@ async def read_session(execution: ToolExecution, args: ReadSessionInput) -> Tool
             after_seq=args.after_seq,
             before_seq=args.before_seq,
             around_seq=args.around_seq,
-            project_id=_active_project_id(execution),
+            area_id=_active_area_id(execution),
         )
     except Exception as e:
         return ToolResult(
@@ -365,7 +365,7 @@ async def search_transcripts(execution: ToolExecution, args: SearchTranscriptsIn
             offset=args.offset,
             session_id=args.session_id,
             since=since,
-            project_id=_active_project_id(execution),
+            area_id=_active_area_id(execution),
         )
     except Exception as e:
         return ToolResult(

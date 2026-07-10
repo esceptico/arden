@@ -589,8 +589,8 @@ class Scheduler:
                 ctx = {"event_context": context}
         else:
             ctx = {}
-        # Handlers shared by multiple automation instances (e.g. one "slice_agent"
-        # handler backing every slice:{key} automation) need to know which
+        # Handlers shared by multiple automation instances (e.g. one "area_agent"
+        # handler backing every area:{key} automation) need to know which
         # instance fired; singleton builtin handlers just ignore the extra key.
         ctx["task_id"] = automation.task_id
         return await handler(ctx)

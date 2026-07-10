@@ -6,20 +6,20 @@ from ntrp.automation.models import Automation
 from ntrp.automation.store import AutomationStore
 from ntrp.automation.triggers import CountTrigger, TimeTrigger, Trigger
 from ntrp.constants import (
+    AREA_SUGGESTER_DAILY_AT,
     AUTOMATION_SUGGESTER_DAILY_AT,
+    BUILTIN_AREA_SUGGESTER_ID,
     BUILTIN_AUTOMATION_SUGGESTER_DAILY_ID,
     BUILTIN_MEMORY_CONSOLIDATE_ID,
     BUILTIN_MEMORY_DREAM_ID,
     BUILTIN_MEMORY_RETENTION_ID,
     BUILTIN_MEMORY_SYNTHESIZE_ID,
-    BUILTIN_SLICE_SUGGESTER_ID,
     MEMORY_CONSOLIDATE_AT,
     MEMORY_DREAM_AT,
     MEMORY_RETENTION_AT,
     MEMORY_SYNTHESIZE_AT,
     MEMORY_SYNTHESIZE_COOLDOWN_MINUTES,
     MEMORY_SYNTHESIZE_EVERY_N_RUNS,
-    SLICE_SUGGESTER_DAILY_AT,
 )
 from ntrp.logging import get_logger
 
@@ -40,13 +40,13 @@ class BuiltinSpec:
 
 BUILTINS = [
     BuiltinSpec(
-        task_id=BUILTIN_SLICE_SUGGESTER_ID,
-        name="Slice Suggester",
-        description="Scan memory topic pages for life domains worth a standing slice agent",
+        task_id=BUILTIN_AREA_SUGGESTER_ID,
+        name="Area Suggester",
+        description="Scan memory topic pages for life domains worth a standing area agent",
         triggers=[
-            TimeTrigger(at=SLICE_SUGGESTER_DAILY_AT, days="daily"),
+            TimeTrigger(at=AREA_SUGGESTER_DAILY_AT, days="daily"),
         ],
-        handler="slice_suggester_daily",
+        handler="area_suggester_daily",
         auto_approve=True,
     ),
     BuiltinSpec(

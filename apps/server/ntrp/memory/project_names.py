@@ -20,7 +20,7 @@ def load_project_names(memory_root: Path) -> dict[str, str]:
     try:
         conn = sqlite3.connect(db_path)
         rows = conn.execute(
-            "SELECT project_id, name, knowledge_scope FROM projects WHERE archived_at IS NULL"
+            "SELECT area_id, name, knowledge_scope FROM areas WHERE archived_at IS NULL"
         ).fetchall()
     except sqlite3.Error:
         return {}

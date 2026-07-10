@@ -89,7 +89,7 @@ class EventType(StrEnum):
     GOAL_UPDATED = "goal_updated"
     GOAL_CLEARED = "goal_cleared"
     MEMORY_CHANGED = "memory_changed"
-    SLICES_CHANGED = "slices_changed"
+    AREAS_CHANGED = "areas_changed"
     TODO_UPDATED = "todo_updated"
     SESSION_UPDATED = "session_updated"
     SESSION_CREATED = "session_created"
@@ -178,13 +178,13 @@ class MemoryChangedEvent(SSEEvent):
 
 
 @dataclass(frozen=True)
-class SlicesChangedEvent(SSEEvent):
-    """A slice's asks/autonomy/registry changed (ask resolved, autonomy toggled,
-    slice created). Rides the global automation bus so the desktop's slices
+class AreasChangedEvent(SSEEvent):
+    """An area's asks/autonomy/registry changed (ask resolved, autonomy toggled,
+    area created). Rides the global automation bus so the desktop's areas
     surface refetches the listed keys without a reload."""
 
-    type: EventType = field(default=EventType.SLICES_CHANGED, init=False)
-    keys: list[str] = field(default_factory=list)  # affected slice keys
+    type: EventType = field(default=EventType.AREAS_CHANGED, init=False)
+    keys: list[str] = field(default_factory=list)  # affected area keys
 
 
 @dataclass(frozen=True)

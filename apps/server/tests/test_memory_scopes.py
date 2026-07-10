@@ -16,16 +16,16 @@ from ntrp.memory.scopes import (
 )
 
 
-def project(scope="ks", pid="pid"):
-    return SimpleNamespace(knowledge_scope=scope, project_id=pid)
+def area(scope="ks", pid="pid"):
+    return SimpleNamespace(knowledge_scope=scope, area_id=pid)
 
 
 def test_scope_for_write_rules():
     explicit = MemoryScope("session", "s0")
     assert scope_for_write(kind="fact", explicit_scope=explicit) == explicit
-    assert scope_for_write(kind=Kind.DIRECTIVE, project=project()) == GLOBAL_SCOPE
-    assert scope_for_write(kind="fact", project=project("ks1", "p1")) == MemoryScope("project", "ks1")
-    assert scope_for_write(kind="fact", project=project(None, "p1")) == MemoryScope("project", "p1")
+    assert scope_for_write(kind=Kind.DIRECTIVE, project=area()) == GLOBAL_SCOPE
+    assert scope_for_write(kind="fact", project=area("ks1", "p1")) == MemoryScope("project", "ks1")
+    assert scope_for_write(kind="fact", project=area(None, "p1")) == MemoryScope("project", "p1")
     src = SourceRef(kind="slack", ref="C123")
     assert scope_for_write(kind="source", source_ref=src) == MemoryScope("integration", "slack:C123")
     # 'summary' is no longer a writable kind: it routes like any plain fact (user scope),
@@ -36,8 +36,8 @@ def test_scope_for_write_rules():
 
 
 def test_scopes_for_read_and_source_mirroring():
-    assert project_scope(project("ks", "p")) == MemoryScope("project", "ks")
-    assert scopes_for_read(project=project("ks", "p"), session_id="s") == [GLOBAL_SCOPE, USER_SCOPE, MemoryScope("project", "ks")]
+    assert project_scope(area("ks", "p")) == MemoryScope("project", "ks")
+    assert scopes_for_read(project=area("ks", "p"), session_id="s") == [GLOBAL_SCOPE, USER_SCOPE, MemoryScope("project", "ks")]
     # No "session" read leg — nothing writes scope_kind="session", so reads are
     # global + user (session_id is accepted but does not scope reads).
     assert scopes_for_read(session_id="s") == [GLOBAL_SCOPE, USER_SCOPE]
@@ -51,14 +51,14 @@ def test_scopes_for_read_and_source_mirroring():
 async def test_record_store_scoped_list_and_search(tmp_path: Path):
     store = RecordStore(tmp_path / "memory.db")
     g = await store.add("global pineapple", kind="fact", scope_kind="global")
-    p = await store.add("project pineapple", kind="fact", scope_kind="project", scope_key="p1")
+    p = await store.add("area pineapple", kind="fact", scope_kind="area", scope_key="p1")
     await store.add("session pineapple", kind="fact", scope_kind="session", scope_key="s1")
 
-    scoped = await store.list(scopes=[("global", None), ("project", "p1")], limit=10)
+    scoped = await store.list(scopes=[("global", None), ("area", "p1")], limit=10)
     assert {r.id for r in scoped} == {g.id, p.id}
     assert await store.list(scopes=[], limit=10) == []
 
-    hits = await store.search("pineapple", scopes=[("project", "p1")], limit=10)
+    hits = await store.search("pineapple", scopes=[("area", "p1")], limit=10)
     assert [h.id for h in hits] == [p.id]
     all_hits = await store.search("pineapple", scopes=None, limit=10)
-    assert {h.scope_kind for h in all_hits} == {"global", "project", "session"}
+    assert {h.scope_kind for h in all_hits} == {"global", "area", "session"}

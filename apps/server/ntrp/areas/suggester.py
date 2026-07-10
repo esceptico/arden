@@ -10,10 +10,10 @@ from ntrp.memory.pages import parse_page
 
 _logger = get_logger(__name__)
 
-SLICE_SUGGESTER_SYSTEM = """You review the topic pages of a personal memory \
+AREA_SUGGESTER_SYSTEM = """You review the topic pages of a personal memory \
 vault and identify which are LIFE DOMAINS — areas the user actively lives or \
 works in, with personal stakes and an ongoing arc (a job, a visa process, a \
-health concern, a long-running project of their own). A life domain benefits \
+health concern, a long-running area of their own). A life domain benefits \
 from a standing agent that watches it daily.
 
 NOT life domains: reference notes about tools/companies/concepts, research \
@@ -24,16 +24,16 @@ trust. For each, one plain-language sentence on why it deserves a standing \
 agent, grounded in what the page shows."""
 
 
-class SliceSuggestionDraft(BaseModel):
+class AreaSuggestionDraft(BaseModel):
     key: str
     rationale: str
 
 
-class SliceSuggestionSet(BaseModel):
-    suggestions: list[SliceSuggestionDraft]
+class AreaSuggestionSet(BaseModel):
+    suggestions: list[AreaSuggestionDraft]
 
 
-class SliceSuggestionStore:
+class AreaSuggestionStore:
     """Suggestions + dismissals in one small file. Dismissals persist so a
     rejected page is never re-suggested — silence costs nothing, nagging
     costs trust."""
@@ -73,7 +73,7 @@ class SliceSuggestionStore:
 def candidate_pages(vault_dir: Path, attached_page_slugs: set[str]) -> list[dict]:
     """Unattached topic pages with enough content to judge: slug, title,
     updated date, and the prose head (the LLM sees substance, not just
-    names). `attached_page_slugs` = page stems already attached to a slice."""
+    names). `attached_page_slugs` = page stems already attached to an area."""
     topics = vault_dir / "topics"
     if not topics.exists():
         return []
@@ -95,8 +95,8 @@ def candidate_pages(vault_dir: Path, attached_page_slugs: set[str]) -> list[dict
     return out
 
 
-class SliceSuggester:
-    def __init__(self, *, attached_page_slugs: set[str], vault_dir: Path, store: SliceSuggestionStore, cheap_llm, model):
+class AreaSuggester:
+    def __init__(self, *, attached_page_slugs: set[str], vault_dir: Path, store: AreaSuggestionStore, cheap_llm, model):
         self.attached_page_slugs = attached_page_slugs
         self.vault_dir = vault_dir
         self.store = store
@@ -111,14 +111,14 @@ class SliceSuggester:
         context = json.dumps(candidates, ensure_ascii=False, indent=1)
         response = await self.cheap_llm.completion(
             messages=[
-                {"role": "system", "content": SLICE_SUGGESTER_SYSTEM},
+                {"role": "system", "content": AREA_SUGGESTER_SYSTEM},
                 {"role": "user", "content": context},
             ],
             model=self.model,
-            response_format=SliceSuggestionSet,
+            response_format=AreaSuggestionSet,
         )
         content = response.choices[0].message.content
-        parsed = content if isinstance(content, SliceSuggestionSet) else SliceSuggestionSet.model_validate_json(content)
+        parsed = content if isinstance(content, AreaSuggestionSet) else AreaSuggestionSet.model_validate_json(content)
         drafts = parsed.suggestions
         by_key = {c["key"]: c for c in candidates}
         kept = []
@@ -126,7 +126,7 @@ class SliceSuggester:
         for draft in drafts:
             candidate = by_key.get(draft.key)
             if candidate is None:
-                _logger.warning("Slice suggester proposed unknown page %r; dropped", draft.key)
+                _logger.warning("Area suggester proposed unknown page %r; dropped", draft.key)
                 continue
             kept.append(
                 {
@@ -139,4 +139,4 @@ class SliceSuggester:
                 }
             )
         self.store.replace_suggestions(kept)
-        return f"Suggested {len(kept)} slice(s) from {len(candidates)} candidate pages."
+        return f"Suggested {len(kept)} area(s) from {len(candidates)} candidate pages."

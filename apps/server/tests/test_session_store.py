@@ -36,65 +36,65 @@ def _make_state(session_id: str = "test-session", name: str | None = None) -> Se
 
 
 @pytest.mark.asyncio
-async def test_project_round_trip_and_session_scoping(store: SessionStore):
-    project = await store.create_project(
+async def test_area_round_trip_and_session_scoping(store: SessionStore):
+    area = await store.create_area(
         name="ntrp",
         default_cwd=" /Users/me/src/ntrp ",
         instructions="Prefer small focused changes.",
     )
 
-    assert project["name"] == "ntrp"
-    assert project["default_cwd"] == "/Users/me/src/ntrp"
-    assert project["instructions"] == "Prefer small focused changes."
-    assert project["knowledge_scope"] == f"project:{project['project_id']}"
+    assert area["name"] == "ntrp"
+    assert area["default_cwd"] == "/Users/me/src/ntrp"
+    assert area["instructions"] == "Prefer small focused changes."
+    assert area["knowledge_scope"] == f"area:{area['area_id']}"
 
-    project_state = _make_state(session_id="project-session", name="Project chat")
-    project_state.project_id = project["project_id"]
+    area_state = _make_state(session_id="area-session", name="Area chat")
+    area_state.area_id = area["area_id"]
     inbox_state = _make_state(session_id="inbox-session", name="Inbox chat")
-    await store.save_session(project_state, [{"role": "user", "content": "project"}])
+    await store.save_session(area_state, [{"role": "user", "content": "area"}])
     await store.save_session(inbox_state, [{"role": "user", "content": "inbox"}])
 
-    loaded = await store.load_session("project-session")
+    loaded = await store.load_session("area-session")
     assert loaded is not None
-    assert loaded.state.project_id == project["project_id"]
+    assert loaded.state.area_id == area["area_id"]
 
-    project_sessions = await store.list_sessions(project_id=project["project_id"])
-    assert [row["session_id"] for row in project_sessions] == ["project-session"]
-    assert project_sessions[0]["project_id"] == project["project_id"]
+    area_sessions = await store.list_sessions(area_id=area["area_id"])
+    assert [row["session_id"] for row in area_sessions] == ["area-session"]
+    assert area_sessions[0]["area_id"] == area["area_id"]
 
-    inbox_sessions = await store.list_sessions(project_id=None)
+    inbox_sessions = await store.list_sessions(area_id=None)
     assert [row["session_id"] for row in inbox_sessions] == ["inbox-session"]
 
-    stale_state = _make_state(session_id="project-session", name="Project chat")
-    stale_state.project_id = project["project_id"]
-    assert await store.update_session_project("project-session", None)
+    stale_state = _make_state(session_id="area-session", name="Area chat")
+    stale_state.area_id = area["area_id"]
+    assert await store.update_session_area("area-session", None)
     await store.update_progress(stale_state, [{"role": "user", "content": "still running"}])
-    loaded_after_move = await store.load_session("project-session")
+    loaded_after_move = await store.load_session("area-session")
     assert loaded_after_move is not None
-    assert loaded_after_move.state.project_id is None
+    assert loaded_after_move.state.area_id is None
     await store.save_session(stale_state, [{"role": "user", "content": "finished"}])
-    loaded_after_save = await store.load_session("project-session")
+    loaded_after_save = await store.load_session("area-session")
     assert loaded_after_save is not None
-    assert loaded_after_save.state.project_id is None
+    assert loaded_after_save.state.area_id is None
 
-    archived_state = _make_state(session_id="archived-project-session", name="Archived project chat")
-    archived_state.project_id = project["project_id"]
-    await store.save_session(archived_state, [{"role": "user", "content": "archive project"}])
+    archived_state = _make_state(session_id="archived-area-session", name="Archived area chat")
+    archived_state.area_id = area["area_id"]
+    await store.save_session(archived_state, [{"role": "user", "content": "archive area"}])
 
-    assert await store.archive_project(project["project_id"])
-    assert await store.get_project(project["project_id"]) is None
-    assert project["project_id"] not in {row["project_id"] for row in await store.list_projects()}
-    assert not await store.archive_project(project["project_id"])
+    assert await store.archive_area(area["area_id"])
+    assert await store.get_area(area["area_id"]) is None
+    assert area["area_id"] not in {row["area_id"] for row in await store.list_areas()}
+    assert not await store.archive_area(area["area_id"])
 
-    loaded_after_project_archive = await store.load_session("archived-project-session")
-    assert loaded_after_project_archive is not None
-    assert loaded_after_project_archive.state.project_id is None
+    loaded_after_area_archive = await store.load_session("archived-area-session")
+    assert loaded_after_area_archive is not None
+    assert loaded_after_area_archive.state.area_id is None
 
 
 @pytest.mark.asyncio
-async def test_project_schema_migrates_existing_sessions_table(tmp_path: Path):
-    conn = await database.connect(tmp_path / "legacy-projects.db")
-    read_conn = await database.connect(tmp_path / "legacy-projects.db", readonly=True)
+async def test_area_schema_migrates_existing_sessions_table(tmp_path: Path):
+    conn = await database.connect(tmp_path / "legacy-areas.db")
+    read_conn = await database.connect(tmp_path / "legacy-areas.db", readonly=True)
     await conn.executescript(
         """
         CREATE TABLE sessions (
@@ -118,13 +118,13 @@ async def test_project_schema_migrates_existing_sessions_table(tmp_path: Path):
     columns = await conn.execute_fetchall("PRAGMA table_info(sessions)")
     indexes = await conn.execute_fetchall("PRAGMA index_list(sessions)")
     column_names = {row["name"] for row in columns}
-    assert "project_id" in column_names
+    assert "area_id" in column_names
     assert "parent_session_id" in column_names
     assert "parent_tool_call_id" in column_names
     assert "agent_type" in column_names
     assert "agent_status" in column_names
     index_names = {row["name"] for row in indexes}
-    assert "idx_sessions_project_activity" in index_names
+    assert "idx_sessions_area_activity" in index_names
     assert "idx_sessions_parent_activity" in index_names
 
     await read_conn.close()
@@ -1702,7 +1702,7 @@ async def test_channel_session_type_and_origin_roundtrip(store: SessionStore):
 
 @pytest.mark.asyncio
 async def test_agent_session_parent_metadata_roundtrip(store: SessionStore):
-    project = await store.create_project(name="ntrp")
+    area = await store.create_area(name="ntrp")
     state = SessionState(
         session_id="parent::agent",
         started_at=datetime.now(UTC),
@@ -1712,7 +1712,7 @@ async def test_agent_session_parent_metadata_roundtrip(store: SessionStore):
         parent_tool_call_id="call-research",
         agent_type="research",
         agent_status="running",
-        project_id=project["project_id"],
+        area_id=area["area_id"],
         chat_model="openai/gpt-5",
     )
     await store.save_session(state, [{"role": "user", "content": "research blockers"}])
@@ -1725,7 +1725,7 @@ async def test_agent_session_parent_metadata_roundtrip(store: SessionStore):
     assert loaded.state.agent_type == "research"
     assert loaded.state.agent_status == "running"
 
-    rows = await store.list_sessions(project_id=project["project_id"])
+    rows = await store.list_sessions(area_id=area["area_id"])
     row = rows[0]
     assert row["session_id"] == "parent::agent"
     assert row["parent_session_id"] == "parent"

@@ -4,13 +4,13 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
-from ntrp.slices.asks import AskStore
-from ntrp.slices.models import Ask, Slice
+from ntrp.areas.asks import AskStore
+from ntrp.areas.models import Area, Ask
 
 # Observe-mode toolset as DATA: the automation's tool_scope allowlist
 # (visible and editable on the automation itself) instead of a code-side
 # toolset hack. Read/search surfaces + the memory tools that edit the
-# slice's own page — nothing that acts on the outside world.
+# area's own page — nothing that acts on the outside world.
 OBSERVE_TOOL_SCOPE = [
     "memory_*",
     "recall",
@@ -27,34 +27,34 @@ OBSERVE_TOOL_SCOPE = [
 ]
 
 _CONTRACT = {
-    "observe": "You may read anything and update this slice's topic page, but take no external action.",
-    "act": "You may run this slice's automations and workflows; irreversible actions still require approval.",
+    "observe": "You may read anything and update this area's topic page, but take no external action.",
+    "act": "You may run this area's automations and workflows; irreversible actions still require approval.",
 }
 
 
-class SliceAskDraft(BaseModel):
+class AreaAskDraft(BaseModel):
     text: str
     kind: Literal["review", "decide", "act", "drift"]
 
 
-class SliceAskNomination(BaseModel):
-    """The run's structured output (registered as "slice_ask"): at most ONE
+class AreaAskNomination(BaseModel):
+    """The run's structured output (registered as "area_ask"): at most ONE
     ask, or null when the day is quiet. Schema-validated by the constrained
     final step, so the transcript stays prose and the nomination arrives as
     a guaranteed-shaped object."""
 
-    ask: SliceAskDraft | None
+    ask: AreaAskDraft | None
 
 
-def slice_agent_instructions(slice: Slice) -> str:
+def area_agent_instructions(area: Area) -> str:
     """The automation's description = the standing per-turn message. The
-    fresh topic page is NOT embedded here — it arrives via the SLICE system
-    block on the slice-tagged channel session, so every turn sees current
+    fresh topic page is NOT embedded here — it arrives via the AREA system
+    block on the area-tagged channel session, so every turn sees current
     state while these instructions stay static."""
     return (
-        f"You are the standing agent for the '{slice.title}' slice of the user's life. "
-        f"Its topic page is in your SLICE context block.\n"
-        f"Autonomy contract ({slice.autonomy}): {_CONTRACT[slice.autonomy]}\n\n"
+        f"You are the standing agent for the '{area.title}' area of the user's life. "
+        f"Its topic page is in your AREA context block.\n"
+        f"Autonomy contract ({area.autonomy}): {_CONTRACT[area.autonomy]}\n\n"
         "This turn: absorb what changed in this domain since your last turn (your channel "
         "history is your own past runs), update the topic page if warranted (memory tools), "
         "and decide whether ANYTHING needs the user.\n"
@@ -72,19 +72,19 @@ def slice_agent_instructions(slice: Slice) -> str:
     )
 
 
-def record_slice_run(asks: AskStore, slice_key: str, page_path: str, structured_output: dict | None, run_ref: str) -> None:
+def record_area_run(asks: AskStore, area_key: str, page_path: str, structured_output: dict | None, run_ref: str) -> None:
     """Post-run ask sync (called from the outbox run-completed pipeline):
-    every run re-decides the slice's ONE ask — silence retires the previous
+    every run re-decides the area's ONE ask — silence retires the previous
     nomination just like a new one supersedes it. `structured_output` is the
-    schema-validated SliceAskNomination dump from the run (or None when the
+    schema-validated AreaAskNomination dump from the run (or None when the
     constrained step failed — treated as silence)."""
     nominated = (structured_output or {}).get("ask")
-    asks.retire_active_agent_asks(slice_key)
+    asks.retire_active_agent_asks(area_key)
     if nominated:
         asks.upsert(
             Ask(
-                id=f"agent:{slice_key}:{uuid4().hex[:8]}",
-                slice_key=slice_key,
+                id=f"agent:{area_key}:{uuid4().hex[:8]}",
+                area_key=area_key,
                 text=nominated["text"],
                 kind=nominated["kind"],
                 source="agent",

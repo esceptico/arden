@@ -1,12 +1,12 @@
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
-from ntrp.slices.asks import AskStore, nominate_focus
-from ntrp.slices.models import Ask
+from ntrp.areas.asks import AskStore, nominate_focus
+from ntrp.areas.models import Ask
 
 
-def ask(id: str, slice_key: str, kind: str, created: str = "2026-07-06T10:00:00", source: str = "open_loop") -> Ask:
-    return Ask(id=id, slice_key=slice_key, text=id, kind=kind, source=source,
+def ask(id: str, area_key: str, kind: str, created: str = "2026-07-06T10:00:00", source: str = "open_loop") -> Ask:
+    return Ask(id=id, area_key=area_key, text=id, kind=kind, source=source,
                actions=[], state="active", created_at=created)
 
 
@@ -27,7 +27,7 @@ def test_snoozed_asks_hidden_until_deadline(tmp_path: Path):
     assert [a.id for a in store.list("o-1a")] == ["a1"]  # snooze expired → active again
 
 
-def test_nominate_focus_one_per_slice_kind_priority():
+def test_nominate_focus_one_per_area_kind_priority():
     asks = [
         ask("r", "dex", "review"), ask("d", "dex", "decide"),
         ask("x", "aside", "drift"), ask("y", "health", "act"),
@@ -75,7 +75,7 @@ def test_retire_active_agent_asks_marks_only_active_source_agent_asks_done(tmp_p
     all_asks = {a.id: a for a in store.list(include_resolved=True)}
     assert all_asks["agent-1"].state == "done"
     assert all_asks["approval-1"].state == "active"  # not source=="agent" — untouched
-    assert all_asks["agent-2"].state == "active"  # different slice — untouched
+    assert all_asks["agent-2"].state == "active"  # different area — untouched
 
 
 def test_retire_active_agent_asks_leaves_already_resolved_agent_asks_alone(tmp_path: Path):

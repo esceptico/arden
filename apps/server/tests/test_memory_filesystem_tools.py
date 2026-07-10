@@ -49,7 +49,7 @@ def artifacts_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def _execution(store=None):
     services = {MEMORY_RECORDS_SERVICE: store} if store is not None else {}
     return types.SimpleNamespace(
-        ctx=types.SimpleNamespace(services=services, session_id="s1"),
+        ctx=types.SimpleNamespace(services=services, session_id="s1", area=None),
         tool_id="t1",
         tool_name="memory",
     )
@@ -64,7 +64,7 @@ async def _seed(artifacts_dir: Path):
     a._write("directives.md", "Directives", "directive", "global", None,
              "# Directives\n\n- keep projection docs concise\n", 1)
     a._write("topics/dex.md", "Dex", "topic", "entity", "dex",
-             "# Dex\n\nDex is the user's project; see [[Profile]].\n", 1)
+             "# Dex\n\nDex is the user's area; see [[Profile]].\n", 1)
     return list(artifacts_dir.rglob("*.md"))
 
 

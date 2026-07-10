@@ -3,6 +3,7 @@ from collections.abc import Callable
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ntrp.agent import Role
+from ntrp.areas.triage import TriageDecision, triage_chat
 from ntrp.constants import HISTORY_MESSAGE_LIMIT
 from ntrp.core.compactor import is_handoff_message
 from ntrp.core.content import blocks_to_text
@@ -17,11 +18,9 @@ from ntrp.server.runtime import Runtime, get_runtime
 from ntrp.server.schemas import (
     BranchRequest,
     ClearSessionRequest,
-    CreateProjectRequest,
     CreateSessionRequest,
     GoalProposalResponse,
-    MoveSessionProjectRequest,
-    ProjectResponse,
+    MoveSessionAreaRequest,
     RenameSessionRequest,
     RevertRequest,
     SessionGoalResponse,
@@ -29,13 +28,11 @@ from ntrp.server.schemas import (
     SetSessionAutoRequest,
     SetSessionGoalRequest,
     SetTodoOverrideRequest,
-    UpdateProjectRequest,
     UpdateSessionGoalRequest,
     UpdateSessionModelRequest,
 )
 from ntrp.server.state import RunRegistry
 from ntrp.services.session import SessionService
-from ntrp.slices.triage import TriageDecision, triage_chat
 
 router = APIRouter(tags=["session"])
 
@@ -45,7 +42,7 @@ GOAL_PROPOSAL_SYSTEM_PROMPT = (
     "Keep the user's wording and scope when possible. "
     "Use enough detail for the actual task; simple tasks can be short, complex tasks may need more context. "
     "Include the success definition when the conversation makes it clear. "
-    "Do not turn it into a step-by-step checklist or project plan. "
+    "Do not turn it into a step-by-step checklist or area plan. "
     "Return only the goal text: no labels, bullets, quotes, markdown, or explanation."
 )
 
@@ -281,19 +278,19 @@ def _history_tool_calls(msg: dict, tool_meta_for: Callable[[str], tuple[str, str
     return tool_calls
 
 
-async def _require_project(svc: SessionService, project_id: str | None) -> dict | None:
-    if project_id is None:
+async def _require_area(svc: SessionService, area_id: str | None) -> dict | None:
+    if area_id is None:
         return None
-    project = await svc.get_project(project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    return project
+    area = await svc.get_area(area_id)
+    if not area:
+        raise HTTPException(status_code=404, detail="Area not found")
+    return area
 
 
 async def _triage_candidates(svc: SessionService) -> list[dict]:
-    """The homes a chat can be filed into: every container (slices and
-    projects are one concept, keyed by project_id)."""
-    return [{"key": p["project_id"], "title": p.get("name", "")} for p in await svc.list_projects()]
+    """The homes a chat can be filed into: every container (areas and
+    areas are one concept, keyed by area_id)."""
+    return [{"key": p["area_id"], "title": p.get("name", "")} for p in await svc.list_areas()]
 
 
 @router.get("/session/history")
@@ -454,51 +451,6 @@ async def get_session_turns(
     return {"turns": await svc.list_turns(data.state.session_id, limit=limit)}
 
 
-@router.get("/projects", response_model=dict[str, list[ProjectResponse]])
-async def list_projects(svc: SessionService = Depends(require_session_service)):
-    return {"projects": await svc.list_projects()}
-
-
-@router.post("/projects", response_model=ProjectResponse)
-async def create_project(
-    req: CreateProjectRequest,
-    svc: SessionService = Depends(require_session_service),
-):
-    try:
-        return await svc.create_project(
-            name=req.name,
-            default_cwd=req.default_cwd,
-            instructions=req.instructions,
-            knowledge_scope=req.knowledge_scope,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-
-@router.patch("/projects/{project_id}", response_model=ProjectResponse)
-async def update_project(
-    project_id: str,
-    req: UpdateProjectRequest,
-    svc: SessionService = Depends(require_session_service),
-):
-    patch = {key: getattr(req, key) for key in req.model_fields_set}
-    try:
-        project = await svc.update_project(project_id, **patch)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    return project
-
-
-@router.delete("/projects/{project_id}")
-async def archive_project(project_id: str, svc: SessionService = Depends(require_session_service)):
-    archived = await svc.archive_project(project_id)
-    if not archived:
-        raise HTTPException(status_code=404, detail="Project not found")
-    return {"status": "archived", "project_id": project_id}
-
-
 @router.get("/session")
 async def get_session(
     runtime: Runtime = Depends(get_runtime),
@@ -516,7 +468,7 @@ async def get_session(
         integrations=runtime.get_available_integrations(),
         integration_errors=runtime.get_integration_errors(),
         name=session_state.name,
-        project_id=session_state.project_id,
+        area_id=session_state.area_id,
         chat_model=session_state.chat_model,
     )
 
@@ -696,7 +648,7 @@ async def branch_session(
         "name": state.name,
         "started_at": state.started_at.isoformat(),
         "last_activity": state.last_activity.isoformat(),
-        "project_id": state.project_id,
+        "area_id": state.area_id,
     }
 
 
@@ -707,9 +659,9 @@ async def create_session(
     req: CreateSessionRequest | None = None,
 ):
     name = req.name if req else None
-    project_id = req.project_id if req else None
-    await _require_project(svc, project_id)
-    state = svc.create(name=name, project_id=project_id, chat_model=runtime.config.chat_model)
+    area_id = req.area_id if req else None
+    await _require_area(svc, area_id)
+    state = svc.create(name=name, area_id=area_id, chat_model=runtime.config.chat_model)
     await svc.save(state, [])
     return {
         "session_id": state.session_id,
@@ -717,7 +669,7 @@ async def create_session(
         "started_at": state.started_at.isoformat(),
         "last_activity": state.last_activity.isoformat(),
         "message_count": 0,
-        "project_id": state.project_id,
+        "area_id": state.area_id,
         "chat_model": state.chat_model,
     }
 
@@ -727,7 +679,7 @@ async def list_sessions(
     svc: SessionService = Depends(require_session_service),
     runtime: Runtime = Depends(get_runtime),
     buses: BusRegistry = Depends(get_bus_registry),
-    project_id: str | None = Query(default=None),
+    area_id: str | None = Query(default=None),
     inbox: bool = Query(default=False),
     include_agents: bool = Query(default=True),
     limit: int = Query(default=100, ge=1, le=500),
@@ -735,18 +687,18 @@ async def list_sessions(
 ):
     # Tests call route functions directly, so FastAPI's Query defaults are
     # not resolved before the function body runs.
-    project_id = project_id if isinstance(project_id, str) else None
+    area_id = area_id if isinstance(area_id, str) else None
     inbox = inbox if isinstance(inbox, bool) else False
     include_agents = include_agents if isinstance(include_agents, bool) else True
     limit = limit if isinstance(limit, int) else 100
     offset = offset if isinstance(offset, int) else 0
     if inbox:
-        sessions = await svc.list_sessions(limit=limit, project_id=None, include_agents=include_agents, offset=offset)
-    elif project_id is not None:
-        await _require_project(svc, project_id)
+        sessions = await svc.list_sessions(limit=limit, area_id=None, include_agents=include_agents, offset=offset)
+    elif area_id is not None:
+        await _require_area(svc, area_id)
         sessions = await svc.list_sessions(
             limit=limit,
-            project_id=project_id,
+            area_id=area_id,
             include_agents=include_agents,
             offset=offset,
         )
@@ -792,19 +744,19 @@ async def update_session_model(
     return {"session_id": session_id, "chat_model": req.chat_model}
 
 
-@router.post("/sessions/{session_id}/project")
-async def move_session_to_project(
+@router.post("/sessions/{session_id}/area")
+async def move_session_to_area(
     session_id: str,
-    req: MoveSessionProjectRequest,
+    req: MoveSessionAreaRequest,
     svc: SessionService = Depends(require_session_service),
 ):
     if not await svc.load(session_id):
         raise HTTPException(status_code=404, detail="Session not found")
-    await _require_project(svc, req.project_id)
-    moved = await svc.move_session_to_project(session_id, req.project_id)
+    await _require_area(svc, req.area_id)
+    moved = await svc.move_session_to_area(session_id, req.area_id)
     if not moved:
         raise HTTPException(status_code=404, detail="Session not found")
-    return {"session_id": session_id, "project_id": req.project_id}
+    return {"session_id": session_id, "area_id": req.area_id}
 
 
 @router.post("/sessions/{session_id}/triage", response_model=TriageDecision)

@@ -35,7 +35,7 @@ def parse_open_loops(prose: str) -> list[str]:
 
 def parse_related(prose: str) -> list[str]:
     """Slugs of `[[Wiki Links]]` under the page's `## Related` heading —
-    lowercased, spaces to dashes, matching topic-page/slice keys."""
+    lowercased, spaces to dashes, matching topic-page/area keys."""
     slugs: list[str] = []
     for item in _section_bullets(prose, _RELATED_HEADING):
         for m in _WIKILINK.finditer(item):
@@ -52,13 +52,13 @@ def page_summary(page: Page) -> dict:
     }
 
 
-def slice_automation_match(task_id: str, key: str) -> bool:
-    """Match an automation task_id against a slice key.
+def area_automation_match(task_id: str, key: str) -> bool:
+    """Match an automation task_id against an area key.
 
-    Seeded slice automations carry the stable id `slice:{key}` (see
-    _seed_slice_automations) while their display name is ordinary prose;
-    colon-suffixed ids like `slice:{key}:daily` are reserved for future
+    Seeded area automations carry the stable id `area:{key}` (see
+    _seed_area_automations) while their display name is ordinary prose;
+    colon-suffixed ids like `area:{key}:daily` are reserved for future
     sub-automations.
     """
-    base = f"slice:{key}"
+    base = f"area:{key}"
     return task_id == base or task_id.startswith(f"{base}:")

@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 from ntrp.agent import Agent, AgentHooks, RunBudget
 from ntrp.agent.ledger import SharedLedger
-from ntrp.context.models import ProjectContext, SessionState
+from ntrp.context.models import AreaContext, SessionState
 from ntrp.core.compaction_model_request_middleware import CompactionModelRequestMiddleware
 from ntrp.core.compactor import Compactor, SummaryCompactor
 from ntrp.core.deferred_tools_middleware import DeferredToolsModelRequestMiddleware
@@ -89,7 +89,7 @@ def create_agent(
     parent_tracker: UsageTracker | None = None,
     initial_input_tokens: int | None = None,
     run_registry: "RunRegistry | None" = None,
-    project_context: ProjectContext | None = None,
+    area_context: AreaContext | None = None,
     token_budget: int | None = None,
     child_io_factory: ChildIOFactory | None = None,
     output_schema: type[BaseModel] | None = None,
@@ -129,7 +129,7 @@ def create_agent(
         run=run_ctx,
         io=io or IOBridge(),
         services=executor.tool_services,
-        project=project_context,
+        area=area_context,
         ledger=SharedLedger(),
         background_tasks=bg_tasks,
         run_registry=run_registry,

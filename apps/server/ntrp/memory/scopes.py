@@ -18,7 +18,7 @@ INTEGRATION_SOURCE_KINDS = {"file", "web", "email", "gmail", "calendar", "slack"
 
 
 def project_scope(project: Any) -> MemoryScope:
-    return MemoryScope("project", project.knowledge_scope or project.project_id)
+    return MemoryScope("project", project.knowledge_scope or project.area_id)
 
 
 def scope_for_write(

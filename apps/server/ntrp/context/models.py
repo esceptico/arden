@@ -16,13 +16,13 @@ class SessionState:
     parent_tool_call_id: str | None = None
     agent_type: str | None = None
     agent_status: str | None = None
-    project_id: str | None = None
+    area_id: str | None = None
     chat_model: str | None = None
 
 
 @dataclass(frozen=True)
-class ProjectContext:
-    project_id: str
+class AreaContext:
+    area_id: str
     name: str
     default_cwd: str | None = None
     instructions: str | None = None

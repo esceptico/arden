@@ -156,13 +156,13 @@ async def test_add_defaults_to_fact_kind(tmp_path: Path):
 
 async def test_provenance_round_trips_via_source_ref(tmp_path: Path):
     store = _store(tmp_path)
-    source = SourceRef(kind="curator", ref="sess-1", scope_kind="project", scope_key="proj-1")
+    source = SourceRef(kind="curator", ref="sess-1", scope_kind="area", scope_key="proj-1")
     rec = await store.add("auth uses JWT", source_ref=source)
 
     got = await store.get(rec.id)
     assert got.source_ref is not None
     assert got.source_ref.kind == "curator"
-    assert got.source_ref.scope_kind == "project"  # inert provenance, not a partition
+    assert got.source_ref.scope_kind == "area"  # inert provenance, not a partition
     assert got.source_ref.scope_key == "proj-1"
     await store.close()
 
@@ -192,7 +192,7 @@ async def test_search_spans_whole_flat_pool(tmp_path: Path):
     """No scope partition: records added with any provenance are all searchable."""
     store = _store(tmp_path)
     a = await store.add("the cat sleeps", source_ref=SourceRef("c", "1", scope_kind="user"))
-    b = await store.add("the cat sleeps", source_ref=SourceRef("c", "2", scope_kind="project", scope_key="p"))
+    b = await store.add("the cat sleeps", source_ref=SourceRef("c", "2", scope_kind="area", scope_key="p"))
 
     hits = await store.search("cat")
     assert {h.id for h in hits} == {a.id, b.id}
@@ -373,7 +373,7 @@ async def test_list_spans_whole_flat_pool(tmp_path: Path):
     """No scope: list returns every active record regardless of provenance."""
     store = _store(tmp_path)
     u = await store.add("user-prov", source_ref=SourceRef("c", "1", scope_kind="user"))
-    p = await store.add("proj-prov", source_ref=SourceRef("c", "2", scope_kind="project", scope_key="x"))
+    p = await store.add("proj-prov", source_ref=SourceRef("c", "2", scope_kind="area", scope_key="x"))
 
     ids = {r.id for r in await store.list()}
     assert ids == {u.id, p.id}

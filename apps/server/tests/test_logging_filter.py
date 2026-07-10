@@ -48,7 +48,7 @@ def _restore_logging_state():
 def _record(exc: BaseException) -> logging.LogRecord:
     try:
         raise exc
-    except BaseException as e:  # noqa: BLE001 - we want the exc_info tuple
+    except BaseException as e:
         return logging.LogRecord(
             "uvicorn.error", logging.ERROR, __file__, 0,
             "Exception in ASGI application", (), (type(e), e, e.__traceback__),
@@ -71,7 +71,7 @@ def _emit(exc: BaseException) -> str:
         log = logging.getLogger("uvicorn.error")
         try:
             raise exc
-        except BaseException as e:  # noqa: BLE001
+        except BaseException as e:
             log.error("Exception in ASGI application\n", exc_info=e)
     return buf.getvalue()
 

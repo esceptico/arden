@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from ntrp.slices.triage import triage_chat
+from ntrp.areas.triage import triage_chat
 
 CANDIDATES = [
     {"key": "o-1a", "title": "O-1A Visa"},

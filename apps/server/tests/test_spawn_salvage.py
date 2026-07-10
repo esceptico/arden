@@ -26,7 +26,7 @@ from ntrp.agent import (
 )
 from ntrp.agent.types.tools import ToolMeta
 from ntrp.agent.types.tools import ToolResult as AgentToolResult
-from ntrp.context.models import ProjectContext, SessionState
+from ntrp.context.models import AreaContext, SessionState
 from ntrp.context.store import SessionStore
 from ntrp.core import spawner as spawner_module
 from ntrp.core.isolation import IsolationLevel
@@ -56,7 +56,7 @@ class ParentTracker:
 
 
 @pytest.mark.asyncio
-async def test_spawned_agent_prompt_includes_project_context(monkeypatch):
+async def test_spawned_agent_prompt_includes_area_context(monkeypatch):
     captured = {}
 
     class FakeAgent:
@@ -73,12 +73,12 @@ async def test_spawned_agent_prompt_includes_project_context(monkeypatch):
         run=RunContext(run_id="run-1", current_depth=0, max_depth=3),
         io=IOBridge(),
         background_tasks=BackgroundTaskRegistry(session_id="test"),
-        project=ProjectContext(
-            project_id="proj-1",
+        area=AreaContext(
+            area_id="proj-1",
             name="Ntrp",
             default_cwd="/Users/me/src/ntrp",
             instructions="Use the repo conventions.",
-            knowledge_scope="project:proj-1",
+            knowledge_scope="area:proj-1",
         ),
     )
 
@@ -87,7 +87,7 @@ async def test_spawned_agent_prompt_includes_project_context(monkeypatch):
 
     assert result.text == "done"
     prompt = captured["messages"][0]["content"]
-    assert "## PROJECT" in prompt
+    assert "## AREA" in prompt
     assert "Name: Ntrp" in prompt
     assert "Default cwd: /Users/me/src/ntrp" in prompt
     assert "Instructions:\nUse the repo conventions." in prompt
@@ -267,9 +267,9 @@ async def test_spawn_persists_child_agent_session(monkeypatch, tmp_path: Path):
             emitted.append(event)
 
         executor = make_executor()
-        project = await store.create_project(name="Slice One")
+        area = await store.create_area(name="Area One")
         parent = SessionState(
-            session_id="parent", started_at=datetime.now(UTC), project_id=project["project_id"]
+            session_id="parent", started_at=datetime.now(UTC), area_id=area["area_id"]
         )
         ctx = ToolContext(
             session_state=parent,
@@ -299,7 +299,7 @@ async def test_spawn_persists_child_agent_session(monkeypatch, tmp_path: Path):
         assert child.state.parent_tool_call_id == "call-research"
         assert child.state.agent_type == "research"
         assert child.state.agent_status == "completed"
-        assert child.state.project_id == project["project_id"]  # child inherits the container
+        assert child.state.area_id == area["area_id"]  # child inherits the container
         assert [message["role"] for message in child.messages] == ["system", "user", "assistant"]
         assert child.messages[-1]["content"] == "done"
 

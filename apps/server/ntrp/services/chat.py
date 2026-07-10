@@ -11,9 +11,10 @@ from pydantic import BaseModel
 
 from ntrp.agent import Agent, Role
 from ntrp.agent.types.events import Result, ToolCompleted
+from ntrp.areas.context import load_area_context
 from ntrp.config import get_config
 from ntrp.constants import CONVERSATION_GAP_THRESHOLD, LOOP_ITERATION_HISTORY_WINDOW
-from ntrp.context.models import ProjectContext, SessionData, SessionState
+from ntrp.context.models import AreaContext, SessionData, SessionState
 from ntrp.core.content import ContextContent, ImageContent, TextContent
 from ntrp.core.factory import AgentConfig, create_agent
 from ntrp.core.naming import generate_conversation_name
@@ -47,7 +48,6 @@ from ntrp.services.goal_continuation import (
 from ntrp.services.session import SessionService
 from ntrp.services.token_directive import parse_token_budget
 from ntrp.skills.registry import SkillRegistry
-from ntrp.slices.context import load_slice_context
 from ntrp.tools.core.context import ChildIOFactory, ChildIOParams, ChildSession, IOBridge
 from ntrp.tools.core.types import ToolAction
 from ntrp.tools.deferred import (
@@ -165,7 +165,7 @@ class ChatContext:
     initial_input_tokens: int | None = None
     goal_id: str | None = None
     session_name_task: asyncio.Task[str] | None = None
-    project_context: ProjectContext | None = None
+    area_context: AreaContext | None = None
     enqueue_run_completed: Callable[[RunCompleted], Awaitable[bool]] | None = None
     dispatch_session_message: Callable[[str, str, str | None, bool | None], Awaitable[object]] | None = None
     memory_curator: object | None = None
@@ -408,12 +408,12 @@ async def _prepare_messages(
     session_id: str | None = None,
     run_id: str | None = None,
     goal_context: dict | None = None,
-    project_context: ProjectContext | None = None,
-    slice_context: dict | None = None,
+    area_context: AreaContext | None = None,
+    area_page_context: dict | None = None,
     todo_override: dict | None = None,
 ) -> list[dict]:
     memory_context = await resident_profile(
-        deps.memory_records, project_context=project_context, session_id=session_id
+        deps.memory_records, project_context=area_context, session_id=session_id
     )
 
     skills_context = deps.skill_registry.to_prompt_xml() if deps.skill_registry else None
@@ -438,8 +438,8 @@ async def _prepare_messages(
         notifiers=notifiers,
         deferred_tools_context=deferred_tools_context,
         goal_context=goal_context,
-        project_context=project_context,
-        slice_context=slice_context,
+        area_context=area_context,
+        area_page_context=area_page_context,
         todo_override=todo_override,
         use_cache_control=_is_anthropic(deps.chat_model),
         native_deferred_tools=native_deferred_tools,
@@ -478,15 +478,15 @@ async def _prepare_messages(
     return messages
 
 
-def _project_context_from_record(project: dict | None) -> ProjectContext | None:
-    if not project:
+def _area_context_from_record(area: dict | None) -> AreaContext | None:
+    if not area:
         return None
-    return ProjectContext(
-        project_id=project["project_id"],
-        name=project["name"],
-        default_cwd=project.get("default_cwd"),
-        instructions=project.get("instructions"),
-        knowledge_scope=project.get("knowledge_scope"),
+    return AreaContext(
+        area_id=area["area_id"],
+        name=area["name"],
+        default_cwd=area.get("default_cwd"),
+        instructions=area.get("instructions"),
+        knowledge_scope=area.get("knowledge_scope"),
     )
 
 
@@ -513,7 +513,7 @@ def _trim_for_loop_iteration(messages: list[dict]) -> tuple[list[dict], list[dic
     Returns (prefix_to_persist, view_for_agent). The view keeps the system
     row at index 0 (if present) plus the most recent
     LOOP_ITERATION_HISTORY_WINDOW user/assistant/tool messages; the prefix
-    is the middle slice that was dropped from the agent's view but must
+    is the middle area that was dropped from the agent's view but must
     be re-prepended at save time so disk history stays complete.
 
     The cut respects tool-call boundaries: if the naive WINDOW cut would
@@ -621,13 +621,13 @@ async def prepare_chat(
     goal_context = await get_goal(session_state.session_id) if get_goal else None
     get_todo_override = getattr(deps.session_service, "get_todo_override", None)
     todo_override = await get_todo_override(session_state.session_id) if get_todo_override else None
-    project_record = (
-        await deps.session_service.get_project(session_state.project_id) if session_state.project_id else None
+    area_record = (
+        await deps.session_service.get_area(session_state.area_id) if session_state.area_id else None
     )
-    project_context = _project_context_from_record(project_record)
-    # Slice context = the container's topic page (a capability on the project
-    # row); plain project chats get None and stay ordinary.
-    slice_context = load_slice_context(get_config().memory_artifacts_dir, project_record)
+    area_context = _area_context_from_record(area_record)
+    # Area context = the container's topic page (a capability on the area
+    # row); plain area chats get None and stay ordinary.
+    area_page_context = load_area_context(get_config().memory_artifacts_dir, area_record)
     messages = await _prepare_messages(
         deps,
         messages,
@@ -640,8 +640,8 @@ async def prepare_chat(
         session_id=session_state.session_id,
         run_id=run.run_id,
         goal_context=goal_context,
-        project_context=project_context,
-        slice_context=slice_context,
+        area_context=area_context,
+        area_page_context=area_page_context,
         todo_override=todo_override,
     )
 
@@ -667,7 +667,7 @@ async def prepare_chat(
         initial_input_tokens=session_data.last_input_tokens,
         goal_id=goal_context["goal_id"] if goal_context else None,
         session_name_task=session_name_task,
-        project_context=project_context,
+        area_context=area_context,
         enqueue_run_completed=deps.enqueue_run_completed,
         dispatch_session_message=deps.dispatch_session_message,
         memory_curator=deps.memory_curator,
@@ -1379,7 +1379,7 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
                 parent_tracker=tracker,
                 initial_input_tokens=ctx.initial_input_tokens,
                 run_registry=ctx.run_registry,
-                project_context=ctx.project_context,
+                area_context=ctx.area_context,
                 token_budget=run.token_budget,
                 child_io_factory=child_io_factory,
                 output_schema=ctx.output_schema,

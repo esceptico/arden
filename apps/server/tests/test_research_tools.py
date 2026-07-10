@@ -10,8 +10,8 @@ import ntrp.tools.research as research_module
 import ntrp.tools.research_artifacts as research_artifacts_module
 from ntrp.agent import Result, SharedLedger, StopReason, Usage
 from ntrp.context.models import SessionState
-from ntrp.core.agent_types import apply_profile
 from ntrp.context.store import SessionStore
+from ntrp.core.agent_types import apply_profile
 from ntrp.core.spawner import SpawnResult, create_spawn_fn
 from ntrp.tools.core import ToolAction, ToolPolicy, ToolResult, ToolScope, tool
 from ntrp.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
@@ -84,7 +84,7 @@ async def test_research_offers_scratchpad_and_returns_artifact_manifest(session_
 
     # The scratchpad tools reach the child via the research AgentType profile's
     # extra_tools (the spawner builds the actual toolset from the profile).
-    assert SCRATCHPAD_TOOL_NAMES <= set(captured["extra_tools"])
+    assert set(captured["extra_tools"]) >= SCRATCHPAD_TOOL_NAMES
     assert result.data is not None
     assert result.data["artifacts"][0]["path"] == "inv.md"
     assert result.data["artifacts"][0]["bytes"] == len(b"big inventory")
@@ -280,9 +280,9 @@ async def test_research_profile_builds_read_only_child_toolset(monkeypatch):
 
     names = {schema["function"]["name"] for schema in captured["tools"]}
     assert "read_tool" in names
-    assert SCRATCHPAD_TOOL_NAMES <= names
+    assert names >= SCRATCHPAD_TOOL_NAMES
     assert {"research_note", "research_outline", "research_cover"} <= names
-    assert HARNESS_TOOL_NAMES <= names
+    assert names >= HARNESS_TOOL_NAMES
     assert "write_tool" not in names  # WRITE filtered by actions={READ}
     assert "background" not in names  # excluded by the research spawn-tool set
     assert "workflow" not in names
@@ -313,8 +313,8 @@ async def test_nested_research_profile_does_not_double_register_ledger_tools(mon
     assert result.text == "done"
     names = {schema["function"]["name"] for schema in captured["tools"]}
     assert {"research_note", "research_outline", "research_cover"} <= names
-    assert SCRATCHPAD_TOOL_NAMES <= names
-    assert HARNESS_TOOL_NAMES <= names
+    assert names >= SCRATCHPAD_TOOL_NAMES
+    assert names >= HARNESS_TOOL_NAMES
     assert "read_tool" in names
     assert "write_tool" not in names
 

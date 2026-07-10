@@ -683,11 +683,11 @@ async def test_seed_builtins_respects_user_cadence_and_pause(automation_store: A
 async def test_output_schema_round_trips(automation_store: AutomationStore):
     from ntrp.automation.output_schemas import resolve_output_schema
 
-    auto = dc_replace(_automation("with-schema"), output_schema="slice_ask")
+    auto = dc_replace(_automation("with-schema"), output_schema="area_ask")
     await automation_store.save(auto)
     loaded = await automation_store.get("with-schema")
-    assert loaded.output_schema == "slice_ask"
-    assert resolve_output_schema("slice_ask") is not None
+    assert loaded.output_schema == "area_ask"
+    assert resolve_output_schema("area_ask") is not None
     assert resolve_output_schema(None) is None
-    with pytest.raises(ValueError, match="slice_ask"):
+    with pytest.raises(ValueError, match="area_ask"):
         resolve_output_schema("nope")

@@ -9,7 +9,6 @@ overridden with a tiny holder exposing `_record_store`."""
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from fastapi.testclient import TestClient

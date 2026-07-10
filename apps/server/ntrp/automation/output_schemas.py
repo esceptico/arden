@@ -4,10 +4,10 @@ the object — delivered on RunCompleted.structured_output."""
 
 from pydantic import BaseModel
 
-from ntrp.slices.agent import SliceAskNomination
+from ntrp.areas.agent import AreaAskNomination
 
 OUTPUT_SCHEMAS: dict[str, type[BaseModel]] = {
-    "slice_ask": SliceAskNomination,
+    "area_ask": AreaAskNomination,
 }
 
 

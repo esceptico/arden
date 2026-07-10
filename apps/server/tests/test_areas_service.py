@@ -1,27 +1,27 @@
 from pathlib import Path
 
+from ntrp.areas.asks import AskStore
+from ntrp.areas.models import Area
+from ntrp.areas.service import AreaService
 from ntrp.memory.pages import parse_page
-from ntrp.slices.asks import AskStore
-from ntrp.slices.models import Slice
-from ntrp.slices.service import SliceService
 
 PAGE = "---\ntitle: O-1A\nupdated: 2026-07-05\n---\n# O-1A\n\n## Open loops\n- Find counsel.\n"
 
-SLICES = [Slice(key="o-1a", title="O-1A", page_path="topics/o-1a.md", autonomy="observe")]
+AREAS = [Area(key="o-1a", title="O-1A", page_path="topics/o-1a.md", autonomy="observe")]
 
 
-def make_service(tmp_path: Path) -> SliceService:
-    return SliceService(
-        slices=lambda: SLICES,
+def make_service(tmp_path: Path) -> AreaService:
+    return AreaService(
+        areas=lambda: AREAS,
         asks=AskStore(tmp_path / "state.json"),
         get_page=lambda path: parse_page(PAGE),
         pending_approvals=lambda: [
             {"run_id": "r1", "tool_call_id": "t1", "session_id": "s1", "tool_name": "bash", "preview": "gh pr create"}
         ],
-        session_slice=lambda sid: "o-1a" if sid == "s1" else None,
-        slice_automations=lambda key: [],
-        slice_sessions=lambda key: [{"session_id": "s1", "name": "counsel"}],
-        get_project=lambda pid: None,
+        session_area=lambda sid: "o-1a" if sid == "s1" else None,
+        area_automations=lambda key: [],
+        area_sessions=lambda key: [{"session_id": "s1", "name": "counsel"}],
+        get_area=lambda pid: None,
     )
 
 
@@ -32,7 +32,7 @@ def test_mechanical_approval_becomes_decide_ask(tmp_path: Path):
     overview = svc.overview()
     assert len(overview["focus"]) == 1
     ask = overview["focus"][0]
-    assert ask["kind"] == "decide" and ask["slice_key"] == "o-1a"
+    assert ask["kind"] == "decide" and ask["area_key"] == "o-1a"
     assert {"verb": "open_session", "ref": "s1"} in ask["actions"]
 
 

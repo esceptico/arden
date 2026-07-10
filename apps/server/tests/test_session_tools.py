@@ -48,9 +48,9 @@ class _StubSessionService:
         return {"hits": [], "has_more": False}
 
 
-def _make_execution(services: dict | None = None, *, project_id: str | None = None) -> ToolExecution:
+def _make_execution(services: dict | None = None, *, area_id: str | None = None) -> ToolExecution:
     ctx = ToolContext(
-        session_state=SessionState(session_id="cur", started_at=datetime.now(UTC), project_id=project_id),
+        session_state=SessionState(session_id="cur", started_at=datetime.now(UTC), area_id=area_id),
         registry=ToolRegistry(),
         run=RunContext(run_id="run-1"),
         io=IOBridge(),
@@ -100,13 +100,13 @@ async def test_session_tools_pass_active_project_scope():
         ],
         messages={"s1": [{"seq": 0, "role": "user", "message": {"role": "user", "content": "hi"}}]},
     )
-    execution = _make_execution(services={"session": service}, project_id="proj-1")
+    execution = _make_execution(services={"session": service}, area_id="proj-1")
 
     await list_recent_sessions(execution, ListRecentSessionsInput())
     await read_session(execution, ReadSessionInput(session_id="s1"))
 
-    assert ("list_sessions", {"project_id": "proj-1"}) in service.calls
-    assert any(name == "list_messages" and kwargs.get("project_id") == "proj-1" for name, kwargs in service.calls)
+    assert ("list_sessions", {"area_id": "proj-1"}) in service.calls
+    assert any(name == "list_messages" and kwargs.get("area_id") == "proj-1" for name, kwargs in service.calls)
 
 
 @pytest.mark.asyncio

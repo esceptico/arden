@@ -35,6 +35,7 @@ def _execution(store):
     ctx = types.SimpleNamespace(
         services={MEMORY_RECORDS_SERVICE: store},
         session_id="s1",
+        area=None,
     )
     return types.SimpleNamespace(ctx=ctx, tool_id="t1")
 
@@ -182,7 +183,7 @@ async def test_forget_not_found(store: RecordStore):
 
 
 async def test_remember_unavailable_service_errors():
-    ctx = types.SimpleNamespace(services={}, session_id="s1")
+    ctx = types.SimpleNamespace(services={}, session_id="s1", area=None)
     execution = types.SimpleNamespace(ctx=ctx, tool_id="t1")
 
     result = await remember(execution, RememberInput(text="anything"))

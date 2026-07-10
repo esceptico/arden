@@ -23,8 +23,8 @@ async def store(tmp_path: Path):
     await conn.close()
 
 
-def _state(session_id: str, name: str | None = None, project_id: str | None = None) -> SessionState:
-    return SessionState(session_id=session_id, started_at=datetime.now(UTC), name=name, project_id=project_id)
+def _state(session_id: str, name: str | None = None, area_id: str | None = None) -> SessionState:
+    return SessionState(session_id=session_id, started_at=datetime.now(UTC), name=name, area_id=area_id)
 
 
 async def _seed(
@@ -33,10 +33,10 @@ async def _seed(
     texts: list[str],
     *,
     name: str | None = None,
-    project_id: str | None = None,
+    area_id: str | None = None,
 ):
     msgs = [{"role": "user" if i % 2 == 0 else "assistant", "content": t} for i, t in enumerate(texts)]
-    await store.save_session(_state(session_id, name=name, project_id=project_id), msgs)
+    await store.save_session(_state(session_id, name=name, area_id=area_id), msgs)
 
 
 @pytest.mark.asyncio
@@ -68,26 +68,26 @@ async def test_search_scoped_to_session(store: SessionStore):
 
 
 @pytest.mark.asyncio
-async def test_search_scoped_to_project(store: SessionStore):
-    project_a = await store.create_project(name="A")
-    project_b = await store.create_project(name="B")
-    await _seed(store, "s1", ["shared keyword here"], project_id=project_a["project_id"])
-    await _seed(store, "s2", ["shared keyword also here"], project_id=project_b["project_id"])
+async def test_search_scoped_to_area(store: SessionStore):
+    area_a = await store.create_area(name="A")
+    area_b = await store.create_area(name="B")
+    await _seed(store, "s1", ["shared keyword here"], area_id=area_a["area_id"])
+    await _seed(store, "s2", ["shared keyword also here"], area_id=area_b["area_id"])
 
-    scoped = await store.search_messages("keyword", project_id=project_a["project_id"])
+    scoped = await store.search_messages("keyword", area_id=area_a["area_id"])
 
     assert len(scoped["hits"]) == 1
     assert scoped["hits"][0]["session_id"] == "s1"
 
 
 @pytest.mark.asyncio
-async def test_list_session_messages_scoped_to_project(store: SessionStore):
-    project_a = await store.create_project(name="A")
-    project_b = await store.create_project(name="B")
-    await _seed(store, "s1", ["project private"], project_id=project_a["project_id"])
+async def test_list_session_messages_scoped_to_area(store: SessionStore):
+    area_a = await store.create_area(name="A")
+    area_b = await store.create_area(name="B")
+    await _seed(store, "s1", ["area private"], area_id=area_a["area_id"])
 
-    wrong = await store.list_session_messages("s1", project_id=project_b["project_id"])
-    right = await store.list_session_messages("s1", project_id=project_a["project_id"])
+    wrong = await store.list_session_messages("s1", area_id=area_b["area_id"])
+    right = await store.list_session_messages("s1", area_id=area_a["area_id"])
 
     assert wrong["messages"] == []
     assert len(right["messages"]) == 1

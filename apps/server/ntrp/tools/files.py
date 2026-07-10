@@ -17,27 +17,27 @@ from ntrp.tools.core.types import ApprovalInfo, ToolAction, ToolPolicy, ToolScop
 READ_FILE_DESCRIPTION = (
     "Read content from a file. Use for code, configs, logs, etc. "
     "For large files, use offset and limit parameters to read in chunks. "
-    "When a project default cwd is set, use paths relative to it unless reading outside the project."
+    "When an area default cwd is set, use paths relative to it unless reading outside the area."
 )
 LIST_FILES_DESCRIPTION = (
     "List files in a directory with compact type/size metadata. "
-    "When a project default cwd is set, use paths relative to it unless listing outside the project."
+    "When an area default cwd is set, use paths relative to it unless listing outside the area."
 )
 FIND_FILES_DESCRIPTION = (
     "Find files by glob pattern under a directory. "
-    "When a project default cwd is set, use paths relative to it unless searching outside the project."
+    "When an area default cwd is set, use paths relative to it unless searching outside the area."
 )
 SEARCH_TEXT_DESCRIPTION = (
     "Search local files for literal text. "
-    "When a project default cwd is set, use paths relative to it unless searching outside the project."
+    "When an area default cwd is set, use paths relative to it unless searching outside the area."
 )
 WRITE_FILE_DESCRIPTION = (
     "Write exact UTF-8 content to a file. Creates the file or replaces existing content. "
-    "When a project default cwd is set, use paths relative to it unless writing outside the project."
+    "When an area default cwd is set, use paths relative to it unless writing outside the area."
 )
 EDIT_FILE_DESCRIPTION = (
     "Edit a file by replacing one exact text block with another. "
-    "When a project default cwd is set, use paths relative to it unless editing outside the project."
+    "When an area default cwd is set, use paths relative to it unless editing outside the area."
 )
 
 
@@ -66,7 +66,7 @@ _RG_EXCLUDE_GLOBS = (
 
 
 def _session_cwd(execution: ToolExecution) -> str | None:
-    return execution.ctx.project.default_cwd if execution.ctx.project else None
+    return execution.ctx.area.default_cwd if execution.ctx.area else None
 
 
 def _resolve_path(path: str, cwd: str | None = None) -> Path:
@@ -132,7 +132,7 @@ def _unified_diff(path: Path, before: str, after: str, *, display_path: str | No
 
 
 class ReadFileInput(BaseModel):
-    path: str = Field(description="File path. Prefer relative paths from the project default cwd when set.")
+    path: str = Field(description="File path. Prefer relative paths from the area default cwd when set.")
     offset: int = Field(
         default=_DEFAULT_OFFSET, description=f"Line number to start from (1-based, default: {_DEFAULT_OFFSET})"
     )
@@ -197,7 +197,7 @@ async def read_file(execution: ToolExecution, args: ReadFileInput) -> ToolResult
 
 class ListFilesInput(BaseModel):
     path: str = Field(
-        default=".", description="Directory path to list. Prefer relative paths from the project default cwd when set."
+        default=".", description="Directory path to list. Prefer relative paths from the area default cwd when set."
     )
     limit: int = Field(default=_DEFAULT_ENTRY_LIMIT, ge=1, le=1000, description="Maximum entries to return.")
     include_hidden: bool = Field(default=False, description="Include dotfiles and dot-directories.")
@@ -285,7 +285,7 @@ def _wait_rg(process: subprocess.Popen[str]) -> int:
 class FindFilesInput(BaseModel):
     path: str = Field(
         default=".",
-        description="Directory path to search under. Prefer relative paths from the project default cwd when set.",
+        description="Directory path to search under. Prefer relative paths from the area default cwd when set.",
     )
     pattern: str = Field(default="*", description="Glob pattern, for example '*.py' or '**/README.md'.")
     limit: int = Field(default=_DEFAULT_ENTRY_LIMIT, ge=1, le=1000, description="Maximum files to return.")
@@ -364,7 +364,7 @@ class SearchTextInput(BaseModel):
     query: str = Field(min_length=1, description="Literal text to search for.")
     path: str = Field(
         default=".",
-        description="File or directory path to search. Prefer relative paths from the project default cwd when set.",
+        description="File or directory path to search. Prefer relative paths from the area default cwd when set.",
     )
     file_glob: str | None = Field(default=None, description="Optional file glob, for example '*.py'.")
     limit: int = Field(default=_DEFAULT_MATCH_LIMIT, ge=1, le=1000, description="Maximum matches to return.")
@@ -466,7 +466,7 @@ async def search_text(execution: ToolExecution, args: SearchTextInput) -> ToolRe
 
 
 class WriteFileInput(BaseModel):
-    path: str = Field(description="Path to write. Prefer relative paths from the project default cwd when set.")
+    path: str = Field(description="Path to write. Prefer relative paths from the area default cwd when set.")
     content: str = Field(description="Full file content to write.")
 
 
@@ -519,7 +519,7 @@ async def write_file(execution: ToolExecution, args: WriteFileInput) -> ToolResu
 
 
 class EditFileInput(BaseModel):
-    path: str = Field(description="Path to edit. Prefer relative paths from the project default cwd when set.")
+    path: str = Field(description="Path to edit. Prefer relative paths from the area default cwd when set.")
     old_text: str = Field(min_length=1, description="Exact existing text block to replace. Must match once.")
     new_text: str = Field(description="Replacement text.")
 

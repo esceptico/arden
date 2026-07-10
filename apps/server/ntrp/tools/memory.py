@@ -609,7 +609,7 @@ async def remember(execution: ToolExecution, args: RememberInput) -> ToolResult:
         return _unavailable()
 
     session_id = getattr(getattr(execution.ctx, "session_state", None), "session_id", None) or execution.ctx.session_id
-    project = getattr(execution.ctx, "project", None)
+    project = execution.ctx.area
     visible = [(s.kind, s.key) for s in scopes_for_read(project=project, session_id=session_id)]
 
     # Conservative pre-write dedup (the Curator owns the LLM-judged dedup; this is
@@ -642,7 +642,7 @@ async def forget(execution: ToolExecution, args: ForgetInput) -> ToolResult:
 
     session_id = getattr(getattr(execution.ctx, "session_state", None), "session_id", None) or execution.ctx.session_id
     visible = [
-        (s.kind, s.key) for s in scopes_for_read(project=getattr(execution.ctx, "project", None), session_id=session_id)
+        (s.kind, s.key) for s in scopes_for_read(project=execution.ctx.area, session_id=session_id)
     ]
     hits = await store.search(args.query, limit=5, scopes=visible)
     if not hits:
@@ -666,7 +666,7 @@ async def recall(execution: ToolExecution, args: RecallInput) -> ToolResult:
 
     session_id = getattr(getattr(execution.ctx, "session_state", None), "session_id", None) or execution.ctx.session_id
     visible = [
-        (s.kind, s.key) for s in scopes_for_read(project=getattr(execution.ctx, "project", None), session_id=session_id)
+        (s.kind, s.key) for s in scopes_for_read(project=execution.ctx.area, session_id=session_id)
     ]
     # Topical recall by default: facts + source pointers. Directives and lessons are
     # standing rules already in the resident context every turn — including them here

@@ -47,8 +47,8 @@ _DURABLE_TOOL_RESULT_DATA_KEYS = (
 )
 
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS projects (
-    project_id TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS areas (
+    area_id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     default_cwds TEXT NOT NULL DEFAULT '[]',
     instructions TEXT,
@@ -60,8 +60,8 @@ CREATE TABLE IF NOT EXISTS projects (
     archived_at TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_projects_archived_updated
-    ON projects(archived_at, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_areas_archived_updated
+    ON areas(archived_at, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS sessions (
     session_id TEXT PRIMARY KEY,
@@ -77,9 +77,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     parent_tool_call_id TEXT,
     agent_type TEXT,
     agent_status TEXT,
-    project_id TEXT REFERENCES projects(project_id) ON DELETE SET NULL,
-    chat_model TEXT,
-    slice_key TEXT
+    area_id TEXT REFERENCES areas(area_id) ON DELETE SET NULL,
+    chat_model TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_activity ON sessions(last_activity);
@@ -349,7 +348,7 @@ SQL_SAVE_SESSION = """
 INSERT INTO sessions (
     session_id, started_at, last_activity, messages, metadata, name,
     session_type, origin_automation_id, parent_session_id, parent_tool_call_id,
-    agent_type, agent_status, project_id, chat_model
+    agent_type, agent_status, area_id, chat_model
 )
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(session_id) DO UPDATE SET
@@ -363,7 +362,7 @@ ON CONFLICT(session_id) DO UPDATE SET
     parent_tool_call_id = excluded.parent_tool_call_id,
     agent_type = excluded.agent_type,
     agent_status = excluded.agent_status,
-    project_id = sessions.project_id,
+    area_id = sessions.area_id,
     chat_model = excluded.chat_model
 """
 
@@ -376,7 +375,7 @@ ORDER BY last_activity DESC LIMIT 1
 SQL_LIST_SESSIONS = """
 SELECT session_id, started_at, last_activity, name,
        session_type, origin_automation_id, parent_session_id, parent_tool_call_id,
-       agent_type, agent_status, project_id, chat_model,
+       agent_type, agent_status, area_id, chat_model,
        json_array_length(COALESCE(messages, '[]')) AS message_count
 FROM sessions
 WHERE archived_at IS NULL
@@ -387,7 +386,7 @@ LIMIT ? OFFSET ?
 SQL_LIST_PRIMARY_SESSIONS = """
 SELECT session_id, started_at, last_activity, name,
        session_type, origin_automation_id, parent_session_id, parent_tool_call_id,
-       agent_type, agent_status, project_id, chat_model,
+       agent_type, agent_status, area_id, chat_model,
        json_array_length(COALESCE(messages, '[]')) AS message_count
 FROM sessions
 WHERE archived_at IS NULL AND COALESCE(session_type, 'chat') != 'agent'
@@ -398,7 +397,7 @@ LIMIT ? OFFSET ?
 SQL_LIST_ARCHIVED = """
 SELECT session_id, started_at, last_activity, name, archived_at,
        session_type, origin_automation_id, parent_session_id, parent_tool_call_id,
-       agent_type, agent_status, project_id, chat_model,
+       agent_type, agent_status, area_id, chat_model,
        json_array_length(COALESCE(messages, '[]')) AS message_count
 FROM sessions
 WHERE archived_at IS NOT NULL
@@ -414,18 +413,18 @@ SQL_UPSERT_PROGRESS = """
 INSERT INTO sessions (
     session_id, started_at, last_activity, messages, metadata, name,
     session_type, origin_automation_id, parent_session_id, parent_tool_call_id,
-    agent_type, agent_status, project_id, chat_model
+    agent_type, agent_status, area_id, chat_model
 )
 VALUES (?, ?, ?, ?, '{}', ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(session_id) DO UPDATE SET
     messages = excluded.messages,
     last_activity = excluded.last_activity,
     agent_status = excluded.agent_status,
-    project_id = sessions.project_id
+    area_id = sessions.area_id
 """
 SQL_UPDATE_NAME = "UPDATE sessions SET name = ? WHERE session_id = ?"
 SQL_UPDATE_NAME_IF_EMPTY = "UPDATE sessions SET name = ? WHERE session_id = ? AND (name IS NULL OR name = '')"
-SQL_UPDATE_SESSION_PROJECT = "UPDATE sessions SET project_id = ? WHERE session_id = ?"
+SQL_UPDATE_SESSION_AREA = "UPDATE sessions SET area_id = ? WHERE session_id = ?"
 SQL_UPDATE_SESSION_CHAT_MODEL = "UPDATE sessions SET chat_model = ? WHERE session_id = ?"
 SQL_ARCHIVE = "UPDATE sessions SET archived_at = ? WHERE session_id = ? AND archived_at IS NULL"
 SQL_RESTORE = "UPDATE sessions SET archived_at = NULL WHERE session_id = ? AND archived_at IS NOT NULL"
@@ -435,8 +434,8 @@ SQL_LOAD_SESSION_MESSAGES_COUNT = "SELECT 1 FROM session_messages WHERE session_
 SQL_LOAD_SESSION_MESSAGES_JSON = "SELECT messages FROM sessions WHERE session_id = ?"
 CHAT_IDEMPOTENCY_TTL_DAYS = 30
 CHAT_IDEMPOTENCY_TERMINAL_STATUSES = ("completed", "cancelled", "error", "failed", "interrupted")
-PROJECT_FILTER_UNSET = object()
-_PROJECT_PATCH_UNSET = object()
+AREA_FILTER_UNSET = object()
+_AREA_PATCH_UNSET = object()
 
 
 class SessionStore:
@@ -623,13 +622,13 @@ class SessionStore:
         return cwd or None
 
     @staticmethod
-    def _project_payload(row: aiosqlite.Row) -> dict:
+    def _area_payload(row: aiosqlite.Row) -> dict:
         return {
-            "project_id": row["project_id"],
+            "area_id": row["area_id"],
             "name": row["name"],
             "default_cwd": (json.loads(row["default_cwds"] or "[]") or [None])[0],
             "instructions": row["instructions"],
-            "knowledge_scope": row["knowledge_scope"] or f"project:{row['project_id']}",
+            "knowledge_scope": row["knowledge_scope"] or f"area:{row['area_id']}",
             "page_path": dict(row).get("page_path"),
             "autonomy": dict(row).get("autonomy"),
             "created_at": row["created_at"],
@@ -638,6 +637,7 @@ class SessionStore:
         }
 
     async def init_schema(self) -> None:
+        await self._pre_migrate_areas_rename()
         await self._pre_migrate_tool_results_schema()
         await self.conn.executescript(SCHEMA)
         for col in (
@@ -649,26 +649,24 @@ class SessionStore:
             "parent_tool_call_id TEXT",
             "agent_type TEXT",
             "agent_status TEXT",
-            "project_id TEXT REFERENCES projects(project_id) ON DELETE SET NULL",
+            "area_id TEXT REFERENCES areas(area_id) ON DELETE SET NULL",
             "chat_model TEXT",
-            "slice_key TEXT",
         ):
             try:
                 await self.conn.execute(f"ALTER TABLE sessions ADD COLUMN {col}")
                 await self.conn.commit()
             except Exception:
                 pass
-        # Slice capabilities on the container itself (slices/projects
-        # unification): a project with a page is a slice; autonomy set means
+        # Area capabilities on the container itself : an area with a page is an area; autonomy set means
         # it has a standing agent.
         for col in ("page_path TEXT", "autonomy TEXT"):
             try:
-                await self.conn.execute(f"ALTER TABLE projects ADD COLUMN {col}")
+                await self.conn.execute(f"ALTER TABLE areas ADD COLUMN {col}")
                 await self.conn.commit()
             except Exception:
                 pass
         await self.conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_sessions_project_activity ON sessions(project_id, last_activity DESC)"
+            "CREATE INDEX IF NOT EXISTS idx_sessions_area_activity ON sessions(area_id, last_activity DESC)"
         )
         await self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_sessions_parent_activity ON sessions(parent_session_id, started_at)"
@@ -681,6 +679,26 @@ class SessionStore:
         await self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_chat_idempotency_expires ON chat_idempotency_keys(expires_at)"
         )
+        await self.conn.commit()
+
+    async def _pre_migrate_areas_rename(self) -> None:
+        """projects/slices -> areas rename (2026-07-10). RENAME TO/COLUMN
+        rewrites dependent FK references and indexes in SQLite, so the old
+        `projects` table with data becomes `areas` in place."""
+        tables = {
+            row["name"]
+            for row in await self.conn.execute_fetchall("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+        if "projects" in tables and "areas" not in tables:
+            await self.conn.execute("ALTER TABLE projects RENAME TO areas")
+            await self.conn.execute("ALTER TABLE areas RENAME COLUMN project_id TO area_id")
+        if "sessions" in tables:
+            cols = {row["name"] for row in await self.conn.execute_fetchall("PRAGMA table_info(sessions)")}
+            if "project_id" in cols and "area_id" not in cols:
+                await self.conn.execute("ALTER TABLE sessions RENAME COLUMN project_id TO area_id")
+        # The renamed indexes are recreated under their new names by SCHEMA.
+        await self.conn.execute("DROP INDEX IF EXISTS idx_projects_archived_updated")
+        await self.conn.execute("DROP INDEX IF EXISTS idx_sessions_project_activity")
         await self.conn.commit()
 
     async def _pre_migrate_tool_results_schema(self) -> None:
@@ -705,7 +723,7 @@ class SessionStore:
         await self.conn.execute(f"ALTER TABLE tool_results RENAME TO {legacy_name}")
         await self.conn.commit()
 
-    async def create_project(
+    async def create_area(
         self,
         *,
         name: str,
@@ -717,20 +735,20 @@ class SessionStore:
     ) -> dict:
         trimmed_name = name.strip()
         if not trimmed_name:
-            raise ValueError("Project name cannot be blank")
-        project_id = f"proj_{uuid4().hex[:12]}"
+            raise ValueError("Area name cannot be blank")
+        area_id = f"proj_{uuid4().hex[:12]}"
         now = datetime.now(UTC).isoformat()
-        scope = (knowledge_scope or "").strip() or f"project:{project_id}"
+        scope = (knowledge_scope or "").strip() or f"area:{area_id}"
         await self.conn.execute(
             """
-            INSERT INTO projects (
-                project_id, name, default_cwds, instructions, knowledge_scope,
+            INSERT INTO areas (
+                area_id, name, default_cwds, instructions, knowledge_scope,
                 page_path, autonomy, created_at, updated_at, archived_at
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
             """,
             (
-                project_id,
+                area_id,
                 trimmed_name,
                 json.dumps([self._normalize_cwd(default_cwd)] if self._normalize_cwd(default_cwd) else []),
                 instructions.strip() if instructions and instructions.strip() else None,
@@ -742,85 +760,85 @@ class SessionStore:
             ),
         )
         await self.conn.commit()
-        project = await self.get_project(project_id)
-        if project is None:
-            raise RuntimeError("project insert failed")
-        return project
+        area = await self.get_area(area_id)
+        if area is None:
+            raise RuntimeError("area insert failed")
+        return area
 
-    async def get_project(self, project_id: str | None) -> dict | None:
-        if not project_id:
+    async def get_area(self, area_id: str | None) -> dict | None:
+        if not area_id:
             return None
         rows = await self.read_conn.execute_fetchall(
-            "SELECT * FROM projects WHERE project_id = ? AND archived_at IS NULL",
-            (project_id,),
+            "SELECT * FROM areas WHERE area_id = ? AND archived_at IS NULL",
+            (area_id,),
         )
-        return self._project_payload(rows[0]) if rows else None
+        return self._area_payload(rows[0]) if rows else None
 
-    async def list_projects(self) -> list[dict]:
+    async def list_areas(self) -> list[dict]:
         rows = await self.read_conn.execute_fetchall(
             """
-            SELECT * FROM projects
+            SELECT * FROM areas
             WHERE archived_at IS NULL
             ORDER BY updated_at DESC, created_at DESC
             """
         )
-        return [self._project_payload(row) for row in rows]
+        return [self._area_payload(row) for row in rows]
 
-    async def update_project(
+    async def update_area(
         self,
-        project_id: str,
+        area_id: str,
         *,
-        name: str | object = _PROJECT_PATCH_UNSET,
-        default_cwd: str | None | object = _PROJECT_PATCH_UNSET,
-        instructions: str | None | object = _PROJECT_PATCH_UNSET,
-        knowledge_scope: str | None | object = _PROJECT_PATCH_UNSET,
-        page_path: str | None | object = _PROJECT_PATCH_UNSET,
-        autonomy: str | None | object = _PROJECT_PATCH_UNSET,
+        name: str | object = _AREA_PATCH_UNSET,
+        default_cwd: str | None | object = _AREA_PATCH_UNSET,
+        instructions: str | None | object = _AREA_PATCH_UNSET,
+        knowledge_scope: str | None | object = _AREA_PATCH_UNSET,
+        page_path: str | None | object = _AREA_PATCH_UNSET,
+        autonomy: str | None | object = _AREA_PATCH_UNSET,
     ) -> dict | None:
         assignments = ["updated_at = ?"]
         params: list[object] = [datetime.now(UTC).isoformat()]
-        if name is not _PROJECT_PATCH_UNSET:
+        if name is not _AREA_PATCH_UNSET:
             trimmed_name = str(name).strip()
             if not trimmed_name:
-                raise ValueError("Project name cannot be blank")
+                raise ValueError("Area name cannot be blank")
             assignments.append("name = ?")
             params.append(trimmed_name)
-        if default_cwd is not _PROJECT_PATCH_UNSET:
+        if default_cwd is not _AREA_PATCH_UNSET:
             assignments.append("default_cwds = ?")
             cwd = self._normalize_cwd(default_cwd if isinstance(default_cwd, str) else None)
             params.append(json.dumps([cwd] if cwd else []))
-        if instructions is not _PROJECT_PATCH_UNSET:
+        if instructions is not _AREA_PATCH_UNSET:
             assignments.append("instructions = ?")
             text = instructions if isinstance(instructions, str) else None
             params.append(text.strip() if text and text.strip() else None)
-        if knowledge_scope is not _PROJECT_PATCH_UNSET:
+        if knowledge_scope is not _AREA_PATCH_UNSET:
             assignments.append("knowledge_scope = ?")
             scope = knowledge_scope if isinstance(knowledge_scope, str) else None
-            params.append(scope.strip() if scope and scope.strip() else f"project:{project_id}")
-        if page_path is not _PROJECT_PATCH_UNSET:
+            params.append(scope.strip() if scope and scope.strip() else f"area:{area_id}")
+        if page_path is not _AREA_PATCH_UNSET:
             assignments.append("page_path = ?")
             params.append(page_path if isinstance(page_path, str) else None)
-        if autonomy is not _PROJECT_PATCH_UNSET:
+        if autonomy is not _AREA_PATCH_UNSET:
             assignments.append("autonomy = ?")
             params.append(autonomy if isinstance(autonomy, str) else None)
-        params.append(project_id)
+        params.append(area_id)
         cursor = await self.conn.execute(
-            f"UPDATE projects SET {', '.join(assignments)} WHERE project_id = ? AND archived_at IS NULL",
+            f"UPDATE areas SET {', '.join(assignments)} WHERE area_id = ? AND archived_at IS NULL",
             tuple(params),
         )
         await self.conn.commit()
         if cursor.rowcount == 0:
             return None
-        return await self.get_project(project_id)
+        return await self.get_area(area_id)
 
-    async def archive_project(self, project_id: str) -> bool:
+    async def archive_area(self, area_id: str) -> bool:
         now = datetime.now(UTC).isoformat()
         cursor = await self.conn.execute(
-            "UPDATE projects SET archived_at = ?, updated_at = ? WHERE project_id = ? AND archived_at IS NULL",
-            (now, now, project_id),
+            "UPDATE areas SET archived_at = ?, updated_at = ? WHERE area_id = ? AND archived_at IS NULL",
+            (now, now, area_id),
         )
         if cursor.rowcount:
-            await self.conn.execute("UPDATE sessions SET project_id = NULL WHERE project_id = ?", (project_id,))
+            await self.conn.execute("UPDATE sessions SET area_id = NULL WHERE area_id = ?", (area_id,))
         await self.conn.commit()
         return cursor.rowcount > 0
 
@@ -1535,7 +1553,7 @@ class SessionStore:
                     state.parent_tool_call_id,
                     state.agent_type,
                     state.agent_status,
-                    state.project_id,
+                    state.area_id,
                     state.chat_model,
                 ),
             )
@@ -2685,7 +2703,7 @@ class SessionStore:
                     state.parent_tool_call_id,
                     state.agent_type,
                     state.agent_status,
-                    state.project_id,
+                    state.area_id,
                     state.chat_model,
                 ),
             )
@@ -2719,7 +2737,7 @@ class SessionStore:
             parent_tool_call_id=dict(row).get("parent_tool_call_id"),
             agent_type=dict(row).get("agent_type"),
             agent_status=dict(row).get("agent_status"),
-            project_id=row["project_id"],
+            area_id=row["area_id"],
             chat_model=dict(row).get("chat_model"),
         )
 
@@ -2746,23 +2764,23 @@ class SessionStore:
     async def list_sessions(
         self,
         limit: int = 20,
-        project_id: str | None | object = PROJECT_FILTER_UNSET,
+        area_id: str | None | object = AREA_FILTER_UNSET,
         include_agents: bool = True,
         offset: int = 0,
     ) -> list[dict]:
-        if project_id is PROJECT_FILTER_UNSET:
+        if area_id is AREA_FILTER_UNSET:
             sql = SQL_LIST_SESSIONS if include_agents else SQL_LIST_PRIMARY_SESSIONS
             rows = await self.read_conn.execute_fetchall(sql, (limit, offset))
-        elif project_id is None:
+        elif area_id is None:
             rows = await self.read_conn.execute_fetchall(
                 """
                 SELECT session_id, started_at, last_activity, name,
                        session_type, origin_automation_id, parent_session_id, parent_tool_call_id,
-                       agent_type, agent_status, project_id, chat_model,
+                       agent_type, agent_status, area_id, chat_model,
                        json_array_length(COALESCE(messages, '[]')) AS message_count
                 FROM sessions
                 WHERE archived_at IS NULL
-                  AND project_id IS NULL
+                  AND area_id IS NULL
                   AND (? OR COALESCE(session_type, 'chat') != 'agent')
                 ORDER BY last_activity DESC
                 LIMIT ? OFFSET ?
@@ -2774,16 +2792,16 @@ class SessionStore:
                 """
                 SELECT session_id, started_at, last_activity, name,
                        session_type, origin_automation_id, parent_session_id, parent_tool_call_id,
-                       agent_type, agent_status, project_id, chat_model,
+                       agent_type, agent_status, area_id, chat_model,
                        json_array_length(COALESCE(messages, '[]')) AS message_count
                 FROM sessions
                 WHERE archived_at IS NULL
-                  AND project_id = ?
+                  AND area_id = ?
                   AND (? OR COALESCE(session_type, 'chat') != 'agent')
                 ORDER BY last_activity DESC
                 LIMIT ? OFFSET ?
                 """,
-                (project_id, include_agents, limit, offset),
+                (area_id, include_agents, limit, offset),
             )
         return [
             {
@@ -2798,7 +2816,7 @@ class SessionStore:
                 "parent_tool_call_id": row["parent_tool_call_id"],
                 "agent_type": row["agent_type"],
                 "agent_status": row["agent_status"],
-                "project_id": row["project_id"],
+                "area_id": row["area_id"],
                 "chat_model": dict(row).get("chat_model"),
             }
             for row in rows
@@ -2807,13 +2825,17 @@ class SessionStore:
     async def update_session_name(self, session_id: str, name: str) -> bool:
         return await self._update(SQL_UPDATE_NAME, (name, session_id))
 
-    async def update_session_project(self, session_id: str, project_id: str | None) -> bool:
-        return await self._update(SQL_UPDATE_SESSION_PROJECT, (project_id, session_id))
+    async def update_session_area(self, session_id: str, area_id: str | None) -> bool:
+        return await self._update(SQL_UPDATE_SESSION_AREA, (area_id, session_id))
 
-    async def list_slice_tagged_sessions(self) -> list[dict]:
-        """Migration-only raw read of the retired slice_key column."""
+    async def list_area_tagged_sessions(self) -> list[dict]:
+        """Migration-only raw read of the retired slice_key column (physical
+        name on pre-rename databases; fresh databases never have it)."""
+        cols = {row["name"] for row in await self.read_conn.execute_fetchall("PRAGMA table_info(sessions)")}
+        if "slice_key" not in cols:
+            return []
         rows = await self.read_conn.execute_fetchall(
-            "SELECT session_id, slice_key, project_id FROM sessions WHERE slice_key IS NOT NULL"
+            "SELECT session_id, slice_key AS area_key, area_id FROM sessions WHERE slice_key IS NOT NULL"
         )
         return [dict(r) for r in rows]
 
@@ -2850,7 +2872,7 @@ class SessionStore:
                 "parent_tool_call_id": row["parent_tool_call_id"],
                 "agent_type": row["agent_type"],
                 "agent_status": row["agent_status"],
-                "project_id": row["project_id"],
+                "area_id": row["area_id"],
                 "chat_model": dict(row).get("chat_model"),
             }
             for row in rows
@@ -2869,9 +2891,9 @@ class SessionStore:
         around_seq: int | None = None,
         before_seq: int | None = None,
         after_seq: int | None = None,
-        project_id: str | None | object = PROJECT_FILTER_UNSET,
+        area_id: str | None | object = AREA_FILTER_UNSET,
     ) -> dict:
-        if project_id is not PROJECT_FILTER_UNSET and not await self._session_matches_project(session_id, project_id):
+        if area_id is not AREA_FILTER_UNSET and not await self._session_matches_area(session_id, area_id):
             return {
                 "messages": [],
                 "has_more_before": False,
@@ -3001,11 +3023,11 @@ class SessionStore:
 
     async def recent_session_scopes(self, limit: int) -> list[dict]:
         """The `limit` most-recently-active live sessions (archived excluded),
-        as {session_id, project_id, session_type, origin_automation_id} — the
+        as {session_id, area_id, session_type, origin_automation_id} — the
         curation sweep's worklist (it gates on the origin fields)."""
         rows = await self.read_conn.execute_fetchall(
             """
-            SELECT session_id, project_id, session_type, origin_automation_id FROM sessions
+            SELECT session_id, area_id, session_type, origin_automation_id FROM sessions
             WHERE archived_at IS NULL
             ORDER BY last_activity DESC
             LIMIT ?
@@ -3015,7 +3037,7 @@ class SessionStore:
         return [
             {
                 "session_id": row["session_id"],
-                "project_id": row["project_id"],
+                "area_id": row["area_id"],
                 "session_type": row["session_type"] or "chat",
                 "origin_automation_id": row["origin_automation_id"],
             }
@@ -3031,7 +3053,7 @@ class SessionStore:
         session_id: str | None = None,
         since: str | None = None,
         until: str | None = None,
-        project_id: str | None | object = PROJECT_FILTER_UNSET,
+        area_id: str | None | object = AREA_FILTER_UNSET,
     ) -> dict:
         """Hybrid search across transcript messages: FTS (BM25) fused with the
         semantic index via RRF when a SearchIndex is attached, FTS-only otherwise.
@@ -3060,12 +3082,12 @@ class SessionStore:
         if until is not None:
             where.append("m.created_at <= ?")
             params.append(until)
-        if project_id is not PROJECT_FILTER_UNSET:
-            if project_id is None:
-                where.append("s.project_id IS NULL")
+        if area_id is not AREA_FILTER_UNSET:
+            if area_id is None:
+                where.append("s.area_id IS NULL")
             else:
-                where.append("s.project_id = ?")
-                params.append(project_id)
+                where.append("s.area_id = ?")
+                params.append(area_id)
 
         # FTS-only paginates directly in SQL (LIMIT limit+1 OFFSET offset — one
         # extra row signals a further page). Hybrid over-fetches a larger pool
@@ -3109,7 +3131,7 @@ class SessionStore:
             session_id=session_id,
             since=since,
             until=until,
-            project_id=project_id,
+            area_id=area_id,
         )
 
     @staticmethod
@@ -3133,7 +3155,7 @@ class SessionStore:
         session_id: str | None,
         since: str | None,
         until: str | None,
-        project_id: str | None | object,
+        area_id: str | None | object,
     ) -> dict:
         """Fuse the FTS ranking with the vector index via RRF, keyed on
         (session_id, seq) so the two separate databases bridge in Python."""
@@ -3164,7 +3186,7 @@ class SessionStore:
                     key[1],
                     since=since,
                     until=until,
-                    project_id=project_id,
+                    area_id=area_id,
                     indexed_content=item.content if item else None,
                 ):
                     continue
@@ -3186,7 +3208,7 @@ class SessionStore:
                 hits.append(self._search_hit(row))
             else:
                 hydrated = await self._hydrate_message_hit(
-                    key[0], key[1], since=since, until=until, project_id=project_id
+                    key[0], key[1], since=since, until=until, area_id=area_id
                 )
                 if hydrated is not None:
                     hits.append(hydrated)
@@ -3199,12 +3221,12 @@ class SessionStore:
         *,
         since: str | None,
         until: str | None,
-        project_id: str | None | object,
+        area_id: str | None | object,
         indexed_content: str | None = None,
     ) -> bool:
         rows = await self.read_conn.execute_fetchall(
             """
-            SELECT m.created_at AS created_at, m.search_text AS search_text, s.project_id AS project_id
+            SELECT m.created_at AS created_at, m.search_text AS search_text, s.area_id AS area_id
             FROM session_messages m
             LEFT JOIN sessions s ON s.session_id = m.session_id
             WHERE m.session_id = ? AND m.seq = ?
@@ -3219,18 +3241,18 @@ class SessionStore:
             return False
         if until is not None and row["created_at"] > until:
             return False
-        if project_id is not PROJECT_FILTER_UNSET and row["project_id"] != project_id:
+        if area_id is not AREA_FILTER_UNSET and row["area_id"] != area_id:
             return False
         if indexed_content is not None and (row["search_text"] or "").strip() != indexed_content.strip():
             return False
         return True
 
-    async def _session_matches_project(self, session_id: str, project_id: str | None | object) -> bool:
+    async def _session_matches_area(self, session_id: str, area_id: str | None | object) -> bool:
         rows = await self.read_conn.execute_fetchall(
-            "SELECT project_id FROM sessions WHERE session_id = ? LIMIT 1",
+            "SELECT area_id FROM sessions WHERE session_id = ? LIMIT 1",
             (session_id,),
         )
-        return bool(rows) and rows[0]["project_id"] == project_id
+        return bool(rows) and rows[0]["area_id"] == area_id
 
     async def _hydrate_message_hit(
         self,
@@ -3239,14 +3261,14 @@ class SessionStore:
         *,
         since: str | None = None,
         until: str | None = None,
-        project_id: str | None | object = PROJECT_FILTER_UNSET,
+        area_id: str | None | object = AREA_FILTER_UNSET,
     ) -> dict | None:
         if not await self._message_matches_search_scope(
             session_id,
             seq,
             since=since,
             until=until,
-            project_id=project_id,
+            area_id=area_id,
         ):
             return None
         rows = await self.read_conn.execute_fetchall(

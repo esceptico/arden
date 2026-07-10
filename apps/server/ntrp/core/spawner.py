@@ -30,7 +30,7 @@ from ntrp.core.isolation import IsolationLevel
 from ntrp.core.llm_client import llm_client
 from ntrp.core.model_context_budget import ToolResultContextBudgetMiddleware
 from ntrp.core.naming import generate_agent_name
-from ntrp.core.prompts import PROJECT_BLOCK
+from ntrp.core.prompts import AREA_BLOCK
 from ntrp.core.tool_executor import NtrpToolExecutor
 from ntrp.core.usage_tracker import UsageTracker
 from ntrp.events.sse import (
@@ -286,10 +286,10 @@ def _create_session_state(calling_ctx: ToolContext, isolation: IsolationLevel) -
     )
 
 
-def _with_project_context(system_prompt: str, calling_ctx: ToolContext) -> str:
-    if not calling_ctx.project:
+def _with_area_context(system_prompt: str, calling_ctx: ToolContext) -> str:
+    if not calling_ctx.area:
         return system_prompt
-    return f"{system_prompt}\n\n{PROJECT_BLOCK.render(project=calling_ctx.project)}"
+    return f"{system_prompt}\n\n{AREA_BLOCK.render(area=calling_ctx.area)}"
 
 
 def create_spawn_fn(
@@ -387,7 +387,7 @@ def create_spawn_fn(
             child_state.parent_tool_call_id = parent_id
             child_state.agent_type = resolved_agent_type
             child_state.agent_status = "running"
-            child_state.project_id = calling_ctx.session_state.project_id
+            child_state.area_id = calling_ctx.session_state.area_id
             child_state.chat_model = child_model
         child_reasoning_effort = (
             model_reasoning_efforts.get(child_model) if model_reasoning_efforts is not None else reasoning_effort
@@ -445,7 +445,7 @@ def create_spawn_fn(
             run=child_run,
             io=bg_io,
             services=calling_ctx.services,
-            project=calling_ctx.project,
+            area=calling_ctx.area,
             ledger=calling_ctx.ledger,
             background_tasks=calling_ctx.background_tasks,
             run_registry=calling_ctx.run_registry,
@@ -473,7 +473,7 @@ def create_spawn_fn(
             skip_duplicate_reads=True,
         )
         child_system_prompt = append_deferred_tools_prompt(
-            _with_project_context(system_prompt, calling_ctx),
+            _with_area_context(system_prompt, calling_ctx),
             child_registry,
             frozenset(child_ctx.services),
             filtered_tools,
