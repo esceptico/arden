@@ -15,6 +15,13 @@
 - Prefer canonical MCP `search`/`fetch` shapes and MCP resource content; support nonstandard servers only through named adapters.
 - Normalize at the server boundary: trim all strings; require `provider`, `kind`, `ref`, and `title`; discard refs whose provider/kind exceed 64 characters or ref exceeds 2048; truncate titles to 256; keep URLs only up to 4096 characters when they use `http`/`https`, have a hostname, and contain no credentials; keep at most 50 references per tool call.
 - Deduplicate by `(provider, ref)` while preserving first-seen order.
+- Reject credential-bearing HTTP(S) refs and replace credential-bearing URL
+  titles on opaque refs with the opaque ref.
+- Native web URLs with userinfo, query, or fragment use deterministic
+  `url-sha256:<digest>` refs without clickable URLs. Do not infer secret
+  parameter names.
+- Hidden/meta turns keep internal `turnId` ownership without a visible user row.
+  Source UI invalidates through `sourceRefsRevision`, not streamed text.
 - Persist source references in existing schemaless tool-message data; do not add a database migration.
 - Preserve unrelated user changes and keep the diff scoped to source provenance and its inspector.
 
@@ -143,7 +150,7 @@ Change the adapter to accept provenance:
 call_tool_result_to_tool_result(result, *, provider: str, tool_name: str)
 ```
 
-Extract only:
+Extract only, stopping once 50 normalized unique refs are retained:
 
 - MCP resource links and embedded resource URIs as `resource` refs.
 - Exact tool `search`: top-level canonical `results[]` items with string `id`, `title`, and optional `url`, emitted as `search_result` refs.
@@ -221,6 +228,8 @@ export interface SourceRef {
 ```
 
 Centralize validation, safe URL handling, deduplication, and turn aggregation in `stores/sourceRefs.ts`.
+Per-call merges remain capped at 50; aggregation across tool calls in one turn
+remains uncapped. Count and truncate limits by Unicode code point.
 
 - [ ] **Step 4: Project live and historical references identically**
 
@@ -276,10 +285,14 @@ openSourcesForTurn(turnId): void;
 ```
 
 `openSourcesForTurn` selects Sources, records the turn, and expands the existing right panel. Do not persist the selected tab or turn.
+Clear exact scope when canonical history or edit truncation removes its turn.
 
 - [ ] **Step 4: Render `Activity | Sources` in the existing sidebar**
 
 Keep current activity behavior intact. The Sources tab shows compact rows grouped only when grouping improves scanning, with provider icon, title, secondary identity, and external-link affordance for safe URLs. For non-URL references, offer `Show call` when a matching activity item exists.
+Only render an anchor when WHATWG `new URL()` accepts the stored URL as
+credential-free HTTP(S) with a hostname. Subscribe source UI to
+`sourceRefsRevision` and derive from a memoized store snapshot.
 
 - [ ] **Step 5: Add the answer footer**
 

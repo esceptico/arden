@@ -50,10 +50,13 @@ Rules:
 
 - Dedupe by `(provider, ref)`, preserving first-seen order.
 - `url` is optional and only stores validated, user-openable HTTP(S) URLs.
-- Reject embedded credentials and empty refs. Cap each tool result at 50 refs;
-  cap provider/kind at 64 characters, title at 512, and ref/url at 4096.
-- Native adapters must not emit signed, bearer, or private-download URLs.
-  Generic MCP extraction does not guess which query parameters are secrets.
+- Reject empty refs and HTTP(S) refs containing username/password. If an opaque
+  ref has a credential-bearing URL title, replace that title with the ref. Cap
+  each tool result at 50 refs; cap provider/kind at 64 Unicode code points, ref
+  at 2048, title at 256, and URL at 4096.
+- Native web URLs containing userinfo, a query, or a fragment use
+  `url-sha256:<digest>` as a non-secret ref and omit `url`. Query-free public
+  HTTP(S) URLs may remain normal refs/links. Do not guess secret parameter names.
 - Keep opaque ids in `ref`, never in `url`.
 - Source metadata is not appended to model-visible tool text.
 - Replace legacy singular `source_ref` and its private call sites atomically;
@@ -70,10 +73,10 @@ Extraction happens where the result shape is known.
 `mcp/results.py` receives the MCP server and raw tool name, then extracts only:
 
 - typed `ResourceLink` and embedded-resource URIs;
-- canonical `search` output: top-level `structuredContent.results[]` entries
-  containing `id`, `title`, and a non-empty string `url`;
-- canonical `fetch` output: a top-level object containing `id`, `title`, and a
-  non-empty string `url`.
+- exact `search` output: top-level `structuredContent.results[]` entries with
+  string `id`, string `title`, and an optional string `url`;
+- exact `fetch` output: a top-level object with string `id`, string `title`,
+  non-blank string `text`, and an optional string `url`.
 
 Arbitrary nested objects are not traversed. A future non-standard MCP provider
 must register an explicit extractor keyed by server/tool; it does not weaken the
@@ -106,9 +109,10 @@ tool adapter
 
 For reloads, `persistable_tool_result_data()` retains a compact
 `source_refs` payload beside `child_agent`. The saved tool message and history
-response round-trip the same refs. Raw MCP `structuredContent` and `_meta` remain
-excluded from transcript persistence unless another feature explicitly needs
-them.
+response round-trip the same refs. Raw MCP `structuredContent`, `_meta`, matches,
+and arbitrary result data remain live-only. Durable tool events allowlist
+child-agent metadata, workflow identity, usage/cost, and HTML-widget fields
+while preserving top-level `source_refs`.
 
 `session_events.event_json` and `session_messages.message_json` are schemaless
 JSON, so no database migration is required. Existing large-result blob/offload
@@ -138,6 +142,15 @@ Inspector UI state is ephemeral:
 - changing sessions resets the scope.
 
 The panel does not follow scroll position in v1.
+
+Segments carry an internal `turnId` separately from visible `userId`. Hidden
+meta-user boundaries therefore own their visible assistant/activity children
+without rendering a user row; status/error segments remain unkeyed.
+
+A monotonic `sourceRefsRevision` invalidates source derivation on source-bearing
+activity changes, transcript/history structure changes, session switches, and
+edit truncation. Source components subscribe to that primitive and read the
+message map only during memoized derivation, so text deltas do not rescan it.
 
 ## UI
 
@@ -180,7 +193,9 @@ domain chips. Provenance belongs in the inspector.
 ## Error and safety behavior
 
 - Invalid refs are dropped without failing the tool call.
-- Unsafe/non-openable URIs can remain as stable refs but never become clickable.
+- Unsafe/non-openable URIs can remain as stable refs but never become clickable;
+  desktop anchors additionally require WHATWG `new URL()` HTTP(S) validation,
+  a hostname, and no credentials.
 - Never persist auth tokens or Slack private-download URLs.
 - Source counts reflect normalized, deduped refs.
 - The panel says “Sources”, not “Citations”; no inline claim markers are added.
