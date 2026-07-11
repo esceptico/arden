@@ -21,7 +21,7 @@ from ntrp.areas.work_models import AreaWorkSnapshot
 from ntrp.automation.models import Automation
 from ntrp.automation.output_schemas import resolve_output_schema
 from ntrp.automation.prompts import AUTOMATION_PROMPT, AUTOMATION_SUFFIX
-from ntrp.automation.scheduler import AUTOMATION_BUS_KEY
+from ntrp.automation.scheduler import AUTOMATION_BUS_KEY, RunSkipped, split_manual_flag
 from ntrp.constants import LEGACY_AREAS_FILE
 from ntrp.core.tool_result_files import prune_offload_store
 from ntrp.events.sse import AreasChangedEvent, MemoryChangedEvent
@@ -196,10 +196,7 @@ async def lifespan(app: FastAPI):
             for session_id in {run.session_id for run in runtime.run_registry.list_active_runs()}:
                 approvals.extend(await runtime.session_service.store.list_pending_tool_approvals(session_id))
         automations = await runtime.stores.automations.list_all() if runtime.stores else []
-        automation_runs = {
-            automation.task_id: runs[0] if (runs := await runtime.stores.automations.list_runs(automation.task_id, 1)) else None
-            for automation in automations
-        } if runtime.stores else {}
+        automation_runs = await runtime.stores.automations.latest_runs() if runtime.stores else {}
         areas = await runtime.session_service.list_areas() if runtime.session_service else []
         area_ids = {area["area_id"] for area in areas}
         work_rows = await asyncio.gather(*(
@@ -231,6 +228,7 @@ async def lifespan(app: FastAPI):
                 "name": a.name,
                 "task_id": a.task_id,
                 "thread_id": a.thread_id,
+                "enabled": a.enabled,
                 "last_result": a.last_result,
                 "last_run_at": a.last_run_at.isoformat() if a.last_run_at else None,
                 "running_since": a.running_since.isoformat() if a.running_since else None,
@@ -326,19 +324,19 @@ async def lifespan(app: FastAPI):
         # turn via AUTOMATION_PROMPT, mirroring scheduler._run_agent. With
         # no context the prompt collapses to the bare description, so
         # non-event iterations submit exactly what they did before.
-        manual = isinstance(context, dict) and bool(context.get("_ntrp_manual_run"))
-        if isinstance(context, dict):
-            context = {key: value for key, value in context.items() if key != "_ntrp_manual_run"} or None
+        manual, context = split_manual_flag(context)
         ctx_str = json.dumps(context) if isinstance(context, dict) else context
-        if automation.task_id.startswith("area:"):
-            area_id = automation.task_id.removeprefix("area:")
+        # Custodian runs only: area:{id} exactly. Colon-suffixed children
+        # (area:{id}:{slug}) are ordinary automations — no cap, no intake.
+        area_id = automation.task_id.removeprefix("area:")
+        if automation.task_id.startswith("area:") and ":" not in area_id:
             record = await runtime.session_service.get_area(area_id)
             attention = (record or {}).get("attention") or "ambient"
             allowed, woken_by = runtime.automation.custodians.begin_run(
                 area_id, attention=attention, manual=manual
             )
             if not allowed:
-                return "Skipped: autonomous daily run cap reached."
+                raise RunSkipped("autonomous daily run cap reached")
             parts = []
             work_snapshot = await runtime.stores.area_work.snapshot(area_id)
             parts.append(render_work_context(work_snapshot))
@@ -384,6 +382,7 @@ async def lifespan(app: FastAPI):
             return None
 
         async with _get_or_create_session_lock(session_write_locks, target_id):
+            _, context = split_manual_flag(context)
             ctx_str = json.dumps(context) if isinstance(context, dict) else context
             prompt = AUTOMATION_PROMPT.render(description=automation.description, context=ctx_str)
             request = RunRequest(

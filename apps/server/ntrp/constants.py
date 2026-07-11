@@ -240,6 +240,3 @@ AREA_ATTENTION_PRESETS = {
 }
 AREA_QUIET_DECAY_FACTOR = 1.5  # applied after 2+ consecutive quiet runs
 AREA_ASK_IGNORED_DAYS = 7  # unanswered this long → attention steps down
-# Page edits within this window of the agent's own run are treated as the
-# run's own writes and never wake it (self-echo suppression).
-AREA_SELF_ECHO_WINDOW_MINUTES = 5

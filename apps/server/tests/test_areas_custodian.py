@@ -130,14 +130,14 @@ def test_events_coalesce_and_respect_budget_and_pause(tmp_path):
     c.note_event("a1", "chat filed", attention="ambient", paused=False, now=NOW)
     c.note_event("a1", "page edited", attention="ambient", paused=False, now=NOW)
     assert c.state("a1")["pending_events"] == ["chat filed", "page edited"]
-    woken = c.consume_pending("a1", now=NOW)
-    assert woken == ["chat filed", "page edited"]
+    allowed, woken = c.begin_run("a1", attention="ambient", manual=False, now=NOW)
+    assert allowed and woken == ["chat filed", "page edited"]
     assert c.state("a1")["pending_events"] == []
     # Paused: noted, never wakes.
     assert c.note_event("a1", "x", attention="ambient", paused=True, now=NOW) is None
     # Budget: ambient allows 3 runs/day; burn them, then events stop waking.
-    c.consume_pending("a1", now=NOW)
-    c.consume_pending("a1", now=NOW)
+    assert c.begin_run("a1", attention="ambient", manual=False, now=NOW)[0]
+    assert c.begin_run("a1", attention="ambient", manual=False, now=NOW)[0]
     assert c.runs_today("a1", now=NOW) == 3
     assert c.note_event("a1", "y", attention="ambient", paused=False, now=NOW) is None
     # ...but the event is still noted for the heartbeat run.

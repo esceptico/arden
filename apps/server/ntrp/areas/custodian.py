@@ -7,11 +7,10 @@ area_id — small, human-readable, and owned by the areas domain the same way
 asks are."""
 
 import json
-import os
-import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from ntrp.areas.paths import atomic_write_text
 from ntrp.constants import (
     AREA_ATTENTION_PRESETS,
     AREA_QUIET_DECAY_FACTOR,
@@ -44,18 +43,7 @@ class CustodianStore:
                 _logger.exception("Ignoring unreadable Custodian state at %s", path)
 
     def _flush(self) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        payload = json.dumps(self._state, indent=2)
-        fd, temporary = tempfile.mkstemp(prefix=f".{self._path.name}.", dir=self._path.parent)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, self._path)
-        finally:
-            if os.path.exists(temporary):
-                os.unlink(temporary)
+        atomic_write_text(self._path, json.dumps(self._state, indent=2))
 
     def state(self, area_id: str) -> dict:
         return self._state.setdefault(
@@ -114,18 +102,6 @@ class CustodianStore:
             _logger.info("Area %s at run budget; event noted for next heartbeat", area_id)
             return None
         return now + timedelta(minutes=EVENT_WAKE_DEBOUNCE_MINUTES)
-
-    def consume_pending(self, area_id: str, now: datetime | None = None) -> list[str]:
-        """Called when a run starts: the pending events become this run's
-        WOKEN BY context and the run counts against the daily budget."""
-        now = now or datetime.now(UTC)
-        st = self.state(area_id)
-        woken_by = st["pending_events"]
-        st["pending_events"] = []
-        st["last_woken_by"] = woken_by
-        self._count_run(area_id, now)
-        self._flush()
-        return woken_by
 
     def begin_run(
         self,

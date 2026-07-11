@@ -49,6 +49,25 @@ rendered context (None for non-event runs)."""
 # `LoopDispatcher`. New code should reach for `IterationDispatcher`.
 LoopDispatcher = IterationDispatcher
 
+# Manual "run now" rides the context dict under this key. It is transport,
+# not content: every prompt/handler consumer must split it back out via
+# split_manual_flag before rendering.
+MANUAL_RUN_CONTEXT_KEY = "_ntrp_manual_run"
+
+
+def split_manual_flag(context: str | dict | None) -> tuple[bool, str | dict | None]:
+    """Pop the manual-run marker off an automation context."""
+    if isinstance(context, dict):
+        manual = bool(context.get(MANUAL_RUN_CONTEXT_KEY))
+        rest = {k: v for k, v in context.items() if k != MANUAL_RUN_CONTEXT_KEY}
+        return manual, rest or None
+    return False, context
+
+
+class RunSkipped(Exception):
+    """Raised by a dispatcher that declined to run (e.g. autonomous cap).
+    The scheduler records the skip without consuming an iteration."""
+
 # True ⇒ ok to fire this loop right now; False ⇒ defer to next tick. Used
 # to keep loop iterations from being injected mid-turn into a user's
 # active conversation — they should render as fresh turns once the
@@ -580,6 +599,7 @@ class Scheduler:
         if not handler:
             raise RuntimeError(f"No handler registered for '{automation.handler}'")
         _logger.info("Executing internal automation %s: %s", automation.task_id, automation.description[:80])
+        _, context = split_manual_flag(context)
         if isinstance(context, dict):
             ctx = context
         elif context:
@@ -596,6 +616,7 @@ class Scheduler:
         return await handler(ctx)
 
     async def _run_agent(self, automation: Automation, context: str | dict | None = None) -> str | None:
+        _, context = split_manual_flag(context)
         ctx_str = json.dumps(context) if isinstance(context, dict) else context
         prompt = AUTOMATION_PROMPT.render(description=automation.description, context=ctx_str)
 
@@ -657,7 +678,6 @@ class Scheduler:
                 raise RuntimeError(f"Post loop {automation.task_id} missing thread_id")
         if dispatcher is None:
             raise RuntimeError(f"{mode} dispatcher not wired")
-        await self.store.increment_iteration(automation.task_id)
         _logger.info(
             "Firing %s loop %s (iter %d) into session %s",
             mode,
@@ -665,7 +685,14 @@ class Scheduler:
             automation.iteration_count + 1,
             automation.thread_id,
         )
-        result = await dispatcher(automation, context)
+        try:
+            result = await dispatcher(automation, context)
+        except RunSkipped as skip:
+            # The run never happened — no iteration consumed, so the intake
+            # first-run trigger and max_iterations accounting stay truthful.
+            _logger.info("Loop %s skipped: %s", automation.task_id, skip)
+            return f"Skipped: {skip}"
+        await self.store.increment_iteration(automation.task_id)
         # Disable after max_iterations is hit. iteration_count was already
         # incremented in the store; compare against the in-memory value + 1
         # since `automation` is a snapshot taken before the increment.
@@ -739,7 +766,7 @@ class Scheduler:
         if automation.running_since:
             _logger.warning("Automation %s already running, skipping manual run", task_id)
             return
-        await self._start_run(automation, context={"_ntrp_manual_run": True})
+        await self._start_run(automation, context={MANUAL_RUN_CONTEXT_KEY: True})
 
     async def _drain_event_backlog(self) -> None:
         for task_id in await self.store.list_tasks_with_pending_events():

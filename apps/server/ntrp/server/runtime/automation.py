@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -20,6 +20,7 @@ from ntrp.config import Config
 from ntrp.constants import (
     AREA_AGENT_DAILY_AT,
     AREA_AGENT_HANDLER,
+    AREA_ASK_IGNORED_DAYS,
     AREAS_AGENT_STATE_FILE,
     AREAS_STATE_FILE,
     AREAS_SUGGESTIONS_FILE,
@@ -124,9 +125,14 @@ class AutomationRuntime:
             area_ = next((s for s in await self.load_areas() if s.key == key), None)
             if area_ is None or area_.page_path is None:
                 continue
-            # Asks still active at run time went unanswered a whole cycle;
-            # three strikes steps the area's attention down one level.
-            ignored = any(a.source == "agent" for a in self.area_asks.list(key))
+            # Only asks the user has had a real chance to answer count as
+            # ignored (asks are durable now — a fresh question must not start
+            # decaying attention on the very next run).
+            stale_cutoff = (datetime.now(UTC) - timedelta(days=AREA_ASK_IGNORED_DAYS)).isoformat()
+            ignored = any(
+                a.source == "agent" and a.created_at <= stale_cutoff
+                for a in self.area_asks.list(key)
+            )
             created = await self._commit_area_report(
                 key,
                 area_.page_path,
@@ -465,6 +471,7 @@ class AutomationRuntime:
             _logger.info("Seeded area channel automation: %s (at=%s)", task_id, run_at)
             return
 
+        repaired = False
         if existing.handler == AREA_AGENT_HANDLER or existing.thread_id is None:
             channel = await self.automation_service._provision_channel(
                 channel_name, task_id, area_id=area_.key
@@ -475,18 +482,41 @@ class AutomationRuntime:
             existing.triggers = [TimeTrigger(at=run_at, days="daily")]
             existing.next_run_at = existing.triggers[0].next_run(datetime.now(UTC))
             existing.last_result = None
+            repaired = True
 
         if existing.thread_id:
-            await self.stores.sessions.rename(existing.thread_id, channel_name)
+            if existing.name != channel_name:
+                # The area was retitled — retitle the seeder-owned channel.
+                await self.stores.sessions.rename(existing.thread_id, channel_name)
+            else:
+                # Repair empty/slug channel names; a user rename of the
+                # channel session is theirs to keep.
+                await self.stores.sessions.rename_if_empty(existing.thread_id, channel_name)
 
+        # enabled derives from paused_at — the single pause control. An
+        # out-of-band disable of the automation row heals on the next sync.
+        desired_enabled = not paused
+        stale_result = bool(existing.last_result and "without a report" in existing.last_result)
+        changed = (
+            repaired
+            or stale_result
+            or existing.name != channel_name
+            or existing.description != contract.description
+            or existing.auto_approve != contract.auto_approve
+            or existing.tool_scope != contract.tool_scope
+            or existing.output_schema != "area_custodian"
+            or existing.enabled != desired_enabled
+        )
+        if not changed:
+            return
+        if stale_result:
+            existing.last_result = None
         existing.name = channel_name
         existing.description = contract.description
         existing.auto_approve = contract.auto_approve
         existing.tool_scope = contract.tool_scope
         existing.output_schema = "area_custodian"
-        existing.enabled = not paused
-        if existing.last_result and "without a report" in existing.last_result:
-            existing.last_result = None
+        existing.enabled = desired_enabled
         await self.stores.automations.save(existing)
 
     def _suggester_available(self) -> bool:

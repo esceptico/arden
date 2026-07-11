@@ -363,6 +363,10 @@ _SQL_LIST_RUNS = (
 _SQL_RECENT_STATUSES = (
     "SELECT status FROM automation_runs WHERE task_id = ? ORDER BY started_at DESC, id DESC LIMIT ?"
 )
+_SQL_LATEST_RUNS = (
+    "SELECT id, task_id, started_at, ended_at, status, result, error "
+    "FROM automation_runs WHERE id IN (SELECT max(id) FROM automation_runs GROUP BY task_id)"
+)
 
 _SQL_DELETE = "DELETE FROM scheduled_tasks WHERE task_id = ?"
 
@@ -1273,6 +1277,23 @@ class AutomationStore:
             rows = await cursor.fetchall()
             out[task_id] = [row["status"] for row in rows]
         return out
+
+    async def latest_runs(self) -> dict[str, dict]:
+        """Newest run per task in one query — the overview hydration path."""
+        cursor = await self.conn.execute(_SQL_LATEST_RUNS)
+        rows = await cursor.fetchall()
+        return {
+            row["task_id"]: {
+                "id": row["id"],
+                "task_id": row["task_id"],
+                "started_at": row["started_at"],
+                "ended_at": row["ended_at"],
+                "status": row["status"],
+                "result": row["result"],
+                "error": row["error"],
+            }
+            for row in rows
+        }
 
     async def list_runs(self, task_id: str, limit: int = 20) -> list[dict]:
         cursor = await self.conn.execute(_SQL_LIST_RUNS, (task_id, limit))
