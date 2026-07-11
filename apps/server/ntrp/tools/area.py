@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from ntrp.areas.paths import atomic_write_text, resolve_area_page
 from ntrp.tools.core import ToolResult, tool
 from ntrp.tools.core.context import ToolExecution
+from ntrp.tools.core.formatting import format_lines_with_pagination
 from ntrp.tools.core.types import ToolAction, ToolPolicy, ToolScope
 
 AREA_PAGES_SERVICE = "area_pages"
@@ -49,7 +50,7 @@ def _frontmatter_prefix(raw: str) -> str:
     return raw[: end + 5] if end >= 0 else ""
 
 
-def _record_write(execution: ToolExecution, target: Path) -> None:
+def _record_write(execution: ToolExecution, written: str) -> None:
     """Self-write provenance: only the Custodian's own automation runs record
     digests. An edit made from any other session (the user working through
     the room's assistant, another agent) must still wake the Custodian."""
@@ -58,7 +59,9 @@ def _record_write(execution: ToolExecution, target: Path) -> None:
         return
     provenance = execution.ctx.services.get("area_custodians")
     if provenance is not None:
-        provenance.record_page_write(area.area_id, sha256(target.read_bytes()).hexdigest())
+        # Hash the written string — atomic_write_text wrote exactly these
+        # utf-8 bytes, so this matches the watcher's read_bytes() digest.
+        provenance.record_page_write(area.area_id, sha256(written.encode("utf-8")).hexdigest())
 
 
 async def area_page_read(execution: ToolExecution, args: AreaPageReadInput) -> ToolResult:
@@ -67,11 +70,10 @@ async def area_page_read(execution: ToolExecution, args: AreaPageReadInput) -> T
         return target
     if not target.is_file():
         return ToolResult(content="The attached Area page is missing.", preview="Page missing", is_error=True)
-    lines = target.read_text(encoding="utf-8").splitlines()
-    selected = lines[args.offset - 1 : args.offset - 1 + args.limit]
+    content = format_lines_with_pagination(target.read_text(encoding="utf-8"), args.offset, args.limit)
     return ToolResult(
-        content="\n".join(selected),
-        preview=f"Read {len(selected)} lines",
+        content=content,
+        preview=content.splitlines()[0],
         data={"page_path": execution.ctx.area.page_path, "offset": args.offset},
     )
 
@@ -82,14 +84,21 @@ async def area_page_patch(execution: ToolExecution, args: AreaPagePatchInput) ->
         return target
     raw = target.read_text(encoding="utf-8") if target.exists() else ""
     matches = raw.count(args.old_text)
-    if matches != 1:
+    if matches == 0:
         return ToolResult(
-            content=f"Patch requires exactly one match; found {matches}.",
+            content="old_text not found in the page. Read the page and copy the exact block (whitespace included).",
             preview="Patch not applied",
             is_error=True,
         )
-    atomic_write_text(target, raw.replace(args.old_text, args.new_text, 1))
-    _record_write(execution, target)
+    if matches > 1:
+        return ToolResult(
+            content=f"old_text matches {matches} places. Include more surrounding lines so the block is unique.",
+            preview="Patch not applied",
+            is_error=True,
+        )
+    written = raw.replace(args.old_text, args.new_text, 1)
+    atomic_write_text(target, written)
+    _record_write(execution, written)
     return ToolResult(content="Patched this Area's page.", preview="Area page patched")
 
 
@@ -100,8 +109,9 @@ async def area_page_write(execution: ToolExecution, args: AreaPageWriteInput) ->
     existing = target.read_text(encoding="utf-8") if target.exists() else ""
     body = args.content.strip() + "\n"
     prefix = _frontmatter_prefix(existing)
-    atomic_write_text(target, f"{prefix}\n{body}" if prefix else body)
-    _record_write(execution, target)
+    written = f"{prefix}\n{body}" if prefix else body
+    atomic_write_text(target, written)
+    _record_write(execution, written)
     return ToolResult(content="Updated this Area's page.", preview="Area page updated")
 
 
