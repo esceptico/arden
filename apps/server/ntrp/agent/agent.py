@@ -328,7 +328,11 @@ class Agent:
         try:
             response = await self.client.complete(
                 self.model,
-                [*messages, {"role": Role.SYSTEM, "content": "Return the structured result for this run now."}],
+                # A USER message, not SYSTEM: Anthropic hoists system content
+                # out of the message list, leaving the conversation ending on
+                # the assistant turn — which newer Claude models reject as
+                # unsupported prefill. Every provider accepts a trailing user turn.
+                [*messages, {"role": Role.USER, "content": "Return the structured result for this run now."}],
                 response_format=self.output_schema,
             )
             content = response.choices[0].message.content

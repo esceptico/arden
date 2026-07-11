@@ -299,7 +299,16 @@ class AnthropicClient(CompletionClient):
 
     def _convert_assistant(self, msg: dict) -> dict:
         if content := msg.get("anthropic_content"):
-            return {"role": Role.ASSISTANT, "content": content}
+            # Replay COPIES with any stale cache_control stripped: anchors are
+            # per-request (the API allows 4 total), and mutating the stored
+            # blocks would persist an anchor into session history forever.
+            return {
+                "role": Role.ASSISTANT,
+                "content": [
+                    {k: v for k, v in block.items() if k != "cache_control"} if isinstance(block, dict) else block
+                    for block in content
+                ],
+            }
 
         content_blocks: list[dict] = []
         if text := msg["content"]:
