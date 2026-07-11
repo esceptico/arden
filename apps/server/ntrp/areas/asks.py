@@ -58,14 +58,20 @@ class AskStore:
         self._flush()
         return ask
 
-    def upsert_agent_nomination(self, ask: Ask) -> bool:
-        """Create or refresh one stable nomination without resurrecting it.
+    def get(self, ask_id: str) -> Ask | None:
+        return self._asks.get(ask_id)
 
-        Returns True only for a genuinely new ask, which is also the notifier
-        deduplication boundary.
+    def upsert_agent_nomination(self, ask: Ask) -> bool:
+        """Create or refresh one stable nomination without re-nagging.
+
+        A user decision (resolution set) is durable — re-nominations of that
+        key stay silent. A quiet TTL expiry is not a decision: the user never
+        saw it, so a fresh nomination surfaces (and notifies) as new.
+
+        Returns True only when the ask should notify.
         """
         existing = self._asks.get(ask.id)
-        if existing is None:
+        if existing is None or (existing.state != "active" and existing.resolution is None):
             self._asks[ask.id] = ask
             self._flush()
             return True
@@ -76,18 +82,6 @@ class AskStore:
         self._flush()
         return False
 
-    def retire_active_agent_asks(self, area_key: str) -> None:
-        """Mark this area's active source=="agent" asks "done" — called
-        before upserting a fresh nomination so a new run's ask supersedes,
-        rather than piles on top of, its predecessor."""
-        changed = False
-        for ask in self._asks.values():
-            if ask.area_key == area_key and ask.source == "agent" and ask.state == "active":
-                ask.state = "done"
-                changed = True
-        if changed:
-            self._flush()
-
     def reconcile(self, source: str, desired: list[Ask]) -> None:
         """Make one mechanically-derived source match canonical runtime state.
 
@@ -97,7 +91,7 @@ class AskStore:
         desired_by_id = {ask.id: ask for ask in desired}
         changed = False
         for ask in self._asks.values():
-            if ask.source == source and ask.state == "active" and ask.id not in desired_by_id:
+            if ask.source == source and ask.state in ("active", "snoozed") and ask.id not in desired_by_id:
                 ask.state = "done"
                 changed = True
         for ask_id, desired_ask in desired_by_id.items():

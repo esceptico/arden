@@ -125,7 +125,9 @@ class AreaService:
         return asdict(self._asks.resolve(ask_id, state, snoozed_until, resolution))
 
     def get_ask(self, area_id: str, ask_id: str) -> Ask | None:
-        return next((ask for ask in self._asks.list(area_id) if ask.id == ask_id), None)
+        # Direct lookup, not list(): a snoozed ask must stay resolvable.
+        ask = self._asks.get(ask_id)
+        return ask if ask is not None and ask.area_key == area_id else None
 
     def detail(self, key: str) -> dict:
         areas = self._areas()

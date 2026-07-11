@@ -66,25 +66,40 @@ def test_snooze_comparison_handles_aware_and_naive(tmp_path: Path):
     assert sorted(a.id for a in store.list("o-1a")) == ["a1", "a2"]
 
 
-def test_retire_active_agent_asks_marks_only_active_source_agent_asks_done(tmp_path: Path):
+def test_renomination_after_quiet_expiry_surfaces_again(tmp_path: Path):
     store = AskStore(tmp_path / "state.json")
-    store.upsert(ask("agent-1", "o-1a", "review", source="agent"))
+    first = ask("agent:o-1a:refill", "o-1a", "notify", source="agent")
+    first.expires_at = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
+    assert store.upsert_agent_nomination(first) is True
+    assert store.list("o-1a") == []  # lazy expiry flipped it to dismissed
+
+    again = ask("agent:o-1a:refill", "o-1a", "notify", source="agent")
+    assert store.upsert_agent_nomination(again) is True  # never user-resolved → new surface
+    assert [a.id for a in store.list("o-1a")] == ["agent:o-1a:refill"]
+
+
+def test_renomination_after_user_resolution_stays_silent(tmp_path: Path):
+    store = AskStore(tmp_path / "state.json")
+    assert store.upsert_agent_nomination(ask("agent:o-1a:dose", "o-1a", "question", source="agent")) is True
+    store.resolve("agent:o-1a:dose", "dismissed", resolution="rejected")
+
+    again = ask("agent:o-1a:dose", "o-1a", "question", source="agent")
+    assert store.upsert_agent_nomination(again) is False  # user decided — don't re-nag
+    assert store.list("o-1a") == []
+
+
+def test_get_finds_snoozed_ask(tmp_path: Path):
+    store = AskStore(tmp_path / "state.json")
+    store.upsert(ask("a1", "o-1a", "review"))
+    store.resolve("a1", "snoozed", snoozed_until="2099-01-01T00:00:00")
+    assert store.get("a1") is not None  # list() hides it; direct lookup must not
+
+
+def test_reconcile_retires_snoozed_mechanical_asks(tmp_path: Path):
+    store = AskStore(tmp_path / "state.json")
     store.upsert(ask("approval-1", "o-1a", "review", source="approval"))
-    store.upsert(ask("agent-2", "dex", "review", source="agent"))
+    store.resolve("approval-1", "snoozed", snoozed_until="2099-01-01T00:00:00")
 
-    store.retire_active_agent_asks("o-1a")
+    store.reconcile("approval", [])  # underlying approval disappeared
 
-    all_asks = {a.id: a for a in store.list(include_resolved=True)}
-    assert all_asks["agent-1"].state == "done"
-    assert all_asks["approval-1"].state == "active"  # not source=="agent" — untouched
-    assert all_asks["agent-2"].state == "active"  # different area — untouched
-
-
-def test_retire_active_agent_asks_leaves_already_resolved_agent_asks_alone(tmp_path: Path):
-    store = AskStore(tmp_path / "state.json")
-    store.upsert(ask("agent-1", "o-1a", "review", source="agent"))
-    store.resolve("agent-1", "dismissed")
-
-    store.retire_active_agent_asks("o-1a")
-
-    assert store.list("o-1a", include_resolved=True)[0].state == "dismissed"  # not clobbered to "done"
+    assert store.list("o-1a", include_resolved=True)[0].state == "done"  # no ghost after the snooze
