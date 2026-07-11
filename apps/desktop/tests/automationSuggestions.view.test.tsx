@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
-import { act } from "react";
-import { createRoot } from "react-dom/client";
-import { renderToStaticMarkup } from "react-dom/server";
-import { SuggestionCard, SuggestionsSection } from "@/features/automations/components/AutomationsModal";
-import type { AutomationSuggestion } from "@/api/types";
+import { act, createRef } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { NewAutomationMenu } from "@/features/automations/components/NewAutomationMenu";
+import { useStore } from "@/stores";
+import type { AutomationSuggestion, CreateAutomationPayload } from "@/api/types";
 
 function suggestion(overrides: Partial<AutomationSuggestion> = {}): AutomationSuggestion {
   return {
@@ -19,110 +19,105 @@ function suggestion(overrides: Partial<AutomationSuggestion> = {}): AutomationSu
   };
 }
 
-// ─── Static render ───────────────────────────────────────────────────
-
-test("an empty suggestion list renders nothing (cold-start hides the section)", () => {
-  expect(renderToStaticMarkup(<SuggestionsSection suggestions={[]} onPick={() => {}} />)).toBe("");
-  expect(renderToStaticMarkup(<SuggestionsSection suggestions={null} onPick={() => {}} />)).toBe("");
-});
-
-test("the section renders the heading and a card per suggestion", () => {
-  const html = renderToStaticMarkup(
-    <SuggestionsSection
-      suggestions={[suggestion(), suggestion({ id: "s2", name: "Inbox triage" })]}
-      onPick={() => {}}
-    />,
-  );
-  expect(html).toContain("Suggested for you");
-  expect(html).toContain("Weekly ntrp PR digest");
-  expect(html).toContain("Inbox triage");
-});
-
-test("a card shows the rationale as its blurb and a schedule chip", () => {
-  const html = renderToStaticMarkup(<SuggestionCard suggestion={suggestion()} onPick={() => {}} />);
-  expect(html).toContain("You review ntrp PRs most mornings");
-  // Schedule chip derived from the trigger formatter.
-  expect(html).toContain("at 09:00 · mon");
-  // The card does not surface the raw prompt/description.
-  expect(html).not.toContain("Summarize merged PRs in ntrp this week.");
-});
-
-test("an event-trigger card formats the event schedule chip", () => {
-  const html = renderToStaticMarkup(
-    <SuggestionCard
-      suggestion={suggestion({ triggers: [{ type: "event", event_type: "approaching", lead_minutes: 15 }] })}
-      onPick={() => {}}
-    />,
-  );
-  expect(html).toContain("on:approaching (15m)");
-});
-
-// ─── Interaction (global DOM) ────────────────────────────────────────
-
-test("clicking a card seeds the editor with the mapped payload", async () => {
-  const { rootEl, root, restore } = setupDom();
-  try {
-    let picked: AutomationSuggestion | null = null;
-    await act(async () => {
-      root.render(<SuggestionCard suggestion={suggestion()} onPick={(s) => (picked = s)} />);
-    });
-
-    // The card's open action is the stretched accessible overlay <button>.
-    const trigger = rootEl.querySelector('[data-suggestion="s1"] button[aria-label^="Use suggestion"]');
-    if (!trigger) throw new Error("missing suggestion open button");
-    await act(async () => {
-      trigger.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
-
-    expect(picked).not.toBeNull();
-    expect((picked as AutomationSuggestion).id).toBe("s1");
-
-    await act(async () => root.unmount());
-  } finally {
-    restore();
-  }
-});
-
-test("the dismiss button fires onDismiss without triggering the card click", async () => {
-  const { rootEl, root, restore } = setupDom();
-  try {
-    let picked = 0;
-    let dismissed: string | null = null;
-    await act(async () => {
-      root.render(
-        <SuggestionCard
-          suggestion={suggestion()}
-          onPick={() => (picked += 1)}
-          onDismiss={(id) => (dismissed = id)}
-        />,
-      );
-    });
-
-    const dismissButton = [...rootEl.querySelectorAll("button")].find(
-      (b) => b.getAttribute("aria-label") === "Dismiss suggestion",
-    );
-    if (!dismissButton) throw new Error("missing dismiss button");
-    await act(async () => {
-      dismissButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
-
-    expect(dismissed).toBe("s1");
-    expect(picked).toBe(0);
-
-    await act(async () => root.unmount());
-  } finally {
-    restore();
-  }
-});
-
-// ─── helpers ─────────────────────────────────────────────────────────
-
-function setupDom() {
-  const rootEl = document.createElement("div");
-  document.body.append(rootEl);
-  const root = createRoot(rootEl);
-  const restore = () => {
-    rootEl.remove();
+/** The menu portals into #app; render it open and hand back both roots. */
+async function renderMenu(onPick: (p: CreateAutomationPayload | null) => void) {
+  const appEl = document.createElement("div");
+  appEl.id = "app";
+  document.body.append(appEl);
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root: Root = createRoot(host);
+  const anchor = createRef<HTMLElement>();
+  await act(async () => {
+    root.render(<NewAutomationMenu open onClose={() => {}} anchor={anchor} onPick={onPick} />);
+  });
+  return {
+    appEl,
+    root,
+    restore: () => {
+      appEl.remove();
+      host.remove();
+    },
   };
-  return { rootEl, root, restore };
 }
+
+// ─── Rendering ───────────────────────────────────────────────────────
+
+test("suggestions lead the New menu with their rationale; templates follow", async () => {
+  useStore.getState().setAutomationSuggestions([
+    suggestion(),
+    suggestion({ id: "s2", name: "Inbox triage sweep" }),
+  ]);
+  const { appEl, root, restore } = await renderMenu(() => {});
+  try {
+    const text = appEl.textContent ?? "";
+    expect(text).toContain("For you");
+    expect(text).toContain("Weekly ntrp PR digest");
+    expect(text).toContain("You review ntrp PRs most mornings");
+    expect(text).toContain("Inbox triage sweep");
+    // The raw prompt/description never surfaces in the menu.
+    expect(text).not.toContain("Summarize merged PRs in ntrp this week.");
+    expect(text).toContain("Templates");
+    expect(text).toContain("Start from scratch");
+    // Suggestions sort above templates.
+    expect(text.indexOf("For you")).toBeLessThan(text.indexOf("Templates"));
+
+    await act(async () => root.unmount());
+  } finally {
+    restore();
+  }
+});
+
+test("with no suggestions the For-you section disappears entirely", async () => {
+  useStore.getState().setAutomationSuggestions([]);
+  const { appEl, root, restore } = await renderMenu(() => {});
+  try {
+    const text = appEl.textContent ?? "";
+    expect(text).not.toContain("For you");
+    expect(text).toContain("Templates");
+    await act(async () => root.unmount());
+  } finally {
+    restore();
+  }
+});
+
+// ─── Interaction ─────────────────────────────────────────────────────
+
+test("picking a suggestion hands over the mapped payload with from_suggestion_id", async () => {
+  useStore.getState().setAutomationSuggestions([suggestion()]);
+  let picked: CreateAutomationPayload | null | undefined;
+  const { appEl, root, restore } = await renderMenu((p) => (picked = p));
+  try {
+    const item = [...appEl.querySelectorAll('[role="menuitem"]')].find((el) =>
+      el.textContent?.includes("Weekly ntrp PR digest"),
+    );
+    if (!item) throw new Error("missing suggestion menu item");
+    await act(async () => {
+      item.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(picked?.from_suggestion_id).toBe("s1");
+    expect(picked?.name).toBe("Weekly ntrp PR digest");
+    await act(async () => root.unmount());
+  } finally {
+    restore();
+  }
+});
+
+test("start from scratch hands over a null preset", async () => {
+  useStore.getState().setAutomationSuggestions([]);
+  let picked: CreateAutomationPayload | null | undefined = undefined;
+  const { appEl, root, restore } = await renderMenu((p) => (picked = p));
+  try {
+    const item = [...appEl.querySelectorAll('[role="menuitem"]')].find((el) =>
+      el.textContent?.includes("Start from scratch"),
+    );
+    if (!item) throw new Error("missing scratch menu item");
+    await act(async () => {
+      item.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(picked).toBeNull();
+    await act(async () => root.unmount());
+  } finally {
+    restore();
+  }
+});

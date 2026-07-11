@@ -4,9 +4,10 @@ import { createRoot, type Root } from "react-dom/client";
 import type { AutomationSuggestion, CreateAutomationPayload } from "@/api/types";
 import { suggestionToPayload } from "@/api/automations";
 
-// Capture what the editor hands to the create action. The component imports
-// `createAutomation` from `@/actions/automations`, which resolves to the same
-// module file we mock here, so the stub intercepts the real submit path.
+// Capture what the detail pane hands to the create action. The component
+// imports `createAutomation` from `@/actions/automations`, which resolves to
+// the same module file we mock here, so the stub intercepts the real submit
+// path.
 let created: CreateAutomationPayload[] = [];
 let updated: { taskId: string; patch: unknown }[] = [];
 
@@ -17,13 +18,14 @@ mock.module("@/actions/automations", () => ({
   updateAutomation: async (taskId: string, patch: unknown) => {
     updated.push({ taskId, patch });
   },
+  deleteAutomation: async () => {},
+  runAutomation: async () => {},
+  toggleAutomation: async () => {},
 }));
 
-// Imported after the mock is registered so the component picks up the stub,
-// and so the module-local helpers are available for focused unit tests.
-const { AutomationEditor, formFromPreset, buildPayload } = await import(
-  "@/features/automations/components/AutomationEditor"
-);
+// Imported after the mock is registered so the component picks up the stub.
+const { AutomationDetail } = await import("@/features/automations/components/AutomationDetail");
+const { formFromPreset, buildPayload } = await import("@/features/automations/lib/schedule");
 
 beforeEach(() => {
   created = [];
@@ -73,14 +75,15 @@ test("a preset without a suggestion id yields no from_suggestion_id", () => {
 
 // ─── Integration: clicking Create submits the suggestion id ─────────────
 
-test("a create seeded from a suggestion preset submits with from_suggestion_id", async () => {
+test("a draft seeded from a suggestion preset submits with from_suggestion_id", async () => {
   const { appEl, root, restore } = setupDom();
   try {
     await act(async () => {
       root.render(
-        <AutomationEditor
-          seed={{ kind: "create", preset: suggestionToPayload(suggestion()) }}
+        <AutomationDetail
+          seed={{ kind: "draft", preset: suggestionToPayload(suggestion()) }}
           onClose={() => {}}
+          onCreated={() => {}}
         />,
       );
     });
@@ -96,19 +99,20 @@ test("a create seeded from a suggestion preset submits with from_suggestion_id",
   }
 });
 
-test("a plain create (no preset) submits without from_suggestion_id", async () => {
+test("a plain draft (no suggestion) submits without from_suggestion_id", async () => {
   const { appEl, root, restore } = setupDom();
   try {
     // Seed via a preset that carries no suggestion id so the prompt is valid
     // (valid submit needs a non-empty prompt) but the id stays absent.
     await act(async () => {
       root.render(
-        <AutomationEditor
+        <AutomationDetail
           seed={{
-            kind: "create",
+            kind: "draft",
             preset: { name: "Morning brief", description: "Do a thing every morning." },
           }}
           onClose={() => {}}
+          onCreated={() => {}}
         />,
       );
     });

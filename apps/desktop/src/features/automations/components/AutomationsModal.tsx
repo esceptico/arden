@@ -1,31 +1,37 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Plus } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { CalendarClock, Plus, X } from "lucide-react";
 import { useStore } from "@/stores";
 import { fetchAutomations, fetchAutomationSuggestions } from "@/actions/automations";
+import type { CreateAutomationPayload } from "@/api/types";
 import { suggestionToPayload } from "@/api/automations";
-import { splitAutomationsForTabs } from "@/lib/automationFilters";
-import { AutomationEditor, type EditorSeed } from "@/features/automations/components/AutomationEditor";
+import { isIterationLoop } from "@/lib/automationFilters";
+import { AutomationRail, ScheduleTape, groupAutomations } from "@/features/automations/components/AutomationRail";
+import { AutomationDetail, type DetailSeed } from "@/features/automations/components/AutomationDetail";
+import { NewAutomationMenu } from "@/features/automations/components/NewAutomationMenu";
 import { Button } from "@/components/ui/Button";
+import { Empty } from "@/components/ui/EmptyState";
+import { IconButton } from "@/components/ui/IconButton";
 import { PageModal } from "@/components/ui/PageModal";
-import { ScrollFadeTop } from "@/components/ui/ScrollBlur";
-import { Tabs } from "@/components/ui/Tabs";
-import { TabPanels, useTabDirection } from "@/components/ui/TabPanels";
-import { ActiveList, AutomationTab, SystemList, TemplatesList } from "@/features/automations/components/AutomationLists";
+import { ICON } from "@/lib/icons";
 
-export { SuggestionsSection } from "@/features/automations/components/SuggestionsSection";
-export { SuggestionCard } from "@/features/automations/components/SuggestionCard";
-
-type Tab = "active" | "system" | "templates";
-
-const TAB_ORDER: Tab[] = ["active", "system", "templates"];
-
+/** Automations as a master-detail instrument panel: one rail of everything
+ *  (yours / area agents / system), one detail pane where the selected
+ *  automation is read, edited, and trusted — no tabs, no stacked editor
+ *  modal. Templates and suggestions live in the New menu. */
 export function AutomationsModal() {
   const open = useStore((s) => s.automationsOpen);
   const close = useStore((s) => s.closeAutomations);
   const origin = useStore((s) => s.modalOrigin);
-  const automations = useStore((s) => s.automations);
-  const [editor, setEditor] = useState<EditorSeed | null>(null);
-  const [tab, setTab] = useState<Tab>("active");
+  const allAutomations = useStore((s) => s.automations);
+
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [draft, setDraft] = useState<CreateAutomationPayload | null | false>(false);
+  // Bumped per draft so re-seeding (picking another suggestion/template)
+  // remounts the detail pane with the new preset — a constant "draft" key
+  // would keep the first draft's form state alive.
+  const [draftNonce, setDraftNonce] = useState(0);
+  const [newOpen, setNewOpen] = useState(false);
+  const newBtnRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -33,82 +39,125 @@ export function AutomationsModal() {
     void fetchAutomationSuggestions();
   }, [open]);
 
-  // When the user has nothing yet, default the page to Templates so the
-  // empty Active tab doesn't feel like a dead end.
+  // Loops surface in the composer chip; the automations window shows the
+  // scheduled/triggered population.
+  const automations = useMemo(
+    () => (allAutomations ? allAutomations.filter((a) => !isIterationLoop(a)) : null),
+    [allAutomations],
+  );
+
+  const selected = useMemo(
+    () => automations?.find((a) => a.task_id === selectedId) ?? null,
+    [automations, selectedId],
+  );
+
+  // Default selection: first of the user's own, else first of anything.
   useEffect(() => {
-    if (!open) return;
-    if (automations !== null && automations.length === 0) setTab("templates");
-  }, [open, automations]);
+    if (!open || draft !== false || !automations || automations.length === 0) return;
+    if (selected) return;
+    const groups = groupAutomations(automations);
+    const first = groups.user[0] ?? groups.area[0] ?? groups.system[0];
+    if (first) setSelectedId(first.task_id);
+  }, [open, automations, selected, draft]);
 
-  const automationGroups = useMemo(() => (automations ? splitAutomationsForTabs(automations) : null), [automations]);
-  const activeCount = automationGroups?.user.length ?? 0;
-  const systemCount = automationGroups?.internal.length ?? 0;
+  // Reset transient state when the window closes.
+  useEffect(() => {
+    if (open) return;
+    setDraft(false);
+    setNewOpen(false);
+  }, [open]);
 
-  const direction = useTabDirection(TAB_ORDER, tab);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const startDraft = (preset: CreateAutomationPayload | null) => {
+    setDraft(preset);
+    setDraftNonce((n) => n + 1);
+    setSelectedId(null);
+  };
 
-  useLayoutEffect(() => {
-    if (!open) return;
-    scrollRef.current?.scrollTo({ top: 0, behavior: "instant" });
-  }, [open, tab]);
+  const seed: DetailSeed | null =
+    draft !== false
+      ? { kind: "draft", preset: draft }
+      : selected
+        ? { kind: "existing", automation: selected }
+        : null;
 
   return (
-    <>
-      <PageModal
-        open={open}
-        onClose={close}
-        origin={origin}
-        disableEscape={!!editor}
-        header={{
-          title: "Automations",
-          actions: (
-            <Button size="sm" leadingIcon={Plus} onClick={() => setEditor({ kind: "create" })}>
+    <PageModal
+      open={open}
+      onClose={close}
+      origin={origin}
+      ariaLabel="Automations"
+      size="w-[min(1120px,calc(100vw-32px))] h-[min(720px,calc(100vh-32px))] sm:w-[min(1120px,calc(100vw-80px))] sm:h-[min(720px,calc(100vh-80px))]"
+      grid="grid-rows-[minmax(0,1fr)]"
+    >
+      <div className="grid grid-cols-[280px_minmax(0,1fr)] min-h-0 h-full">
+        {/* rail — anchored chrome, one ladder step below the pane */}
+        <aside className="grid grid-rows-[auto_minmax(0,1fr)_auto] min-h-0 bg-surface-sunken/50">
+          <div className="flex items-center justify-between pl-[18px] pr-3.5 pt-4 pb-2.5">
+            <h2 className="m-0 text-md font-semibold tracking-[-0.01em] text-ink">Automations</h2>
+            <Button
+              ref={newBtnRef}
+              size="sm"
+              leadingIcon={Plus}
+              onClick={() => setNewOpen((v) => !v)}
+            >
               New
             </Button>
-          ),
-        }}
-      >
-        <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)]">
-          <Tabs
-            value={tab}
-            onChange={(v) => setTab(v as Tab)}
-            variant="underline"
-            className="items-center gap-5 px-5"
-          >
-            <AutomationTab value="active" label="Active" count={activeCount} />
-            <AutomationTab value="system" label="System" count={systemCount} />
-            <AutomationTab value="templates" label="Templates" />
-          </Tabs>
-
-          <div className="relative min-h-0 overflow-hidden">
-            {/* Scroll lives outside TabPanels — motion transform breaks sticky overlays. */}
-            <div ref={scrollRef} className="h-full min-h-0 overflow-y-auto scroll-thin">
-              <ScrollFadeTop key={tab} />
-              <TabPanels value={tab} direction={direction} className="px-5 py-5">
-                {tab === "active" ? (
-                  <ActiveList
-                    automations={automationGroups?.user ?? null}
-                    onEdit={(automation) => setEditor({ kind: "edit", automation })}
-                    onPickTemplate={() => setTab("templates")}
-                    onCreate={() => setEditor({ kind: "create" })}
-                  />
-                ) : tab === "system" ? (
-                  <SystemList
-                    automations={automationGroups?.internal ?? null}
-                    onEdit={(automation) => setEditor({ kind: "edit", automation })}
-                  />
-                ) : (
-                  <TemplatesList
-                    onPick={(template) => setEditor({ kind: "create", preset: template.payload })}
-                    onPickSuggestion={(s) => setEditor({ kind: "create", preset: suggestionToPayload(s) })}
-                  />
-                )}
-              </TabPanels>
-            </div>
           </div>
-        </div>
-      </PageModal>
-      <AutomationEditor seed={editor} onClose={() => setEditor(null)} />
-    </>
+          <AutomationRail
+            automations={automations}
+            selectedId={draft === false ? selectedId : null}
+            onSelect={(id) => {
+              setDraft(false);
+              setSelectedId(id);
+            }}
+            onPickSuggestion={(s) => startDraft(suggestionToPayload(s))}
+          />
+          <ScheduleTape automations={automations} />
+        </aside>
+
+        {/* detail */}
+        <section className="relative grid min-h-0">
+          {!seed && (
+            <div className="absolute top-3.5 right-3.5 z-[1]">
+              <IconButton onClick={close} aria-label="Close">
+                <X size={ICON.SM} strokeWidth={2} />
+              </IconButton>
+            </div>
+          )}
+          {seed ? (
+            <AutomationDetail
+              key={seed.kind === "existing" ? seed.automation.task_id : `draft-${draftNonce}`}
+              seed={seed}
+              onClose={close}
+              onCreated={() => setDraft(false)}
+            />
+          ) : (
+            <Empty
+              icon={CalendarClock}
+              hint="Start from a template, or write a prompt and a schedule from scratch."
+              action={
+                <div className="flex items-center gap-2">
+                  <Button variant="secondary" size="md" onClick={() => setNewOpen(true)}>
+                    Browse templates
+                  </Button>
+                  <Button variant="quiet" size="md" onClick={() => startDraft(null)}>
+                    Start from scratch
+                  </Button>
+                </div>
+              }
+            >
+              No automations yet.
+            </Empty>
+          )}
+        </section>
+      </div>
+
+      <NewAutomationMenu
+        open={newOpen}
+        onClose={() => setNewOpen(false)}
+        anchor={newBtnRef}
+        onPick={startDraft}
+      />
+    </PageModal>
   );
 }

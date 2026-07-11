@@ -56,6 +56,8 @@ export interface FormState {
   prompt: string;
   schedule: Schedule;
   auto_approve: boolean;
+  /** Explicit model override; null = the session default. */
+  model: string | null;
   /** Rides along from a "Suggested for you" preset so the create payload can
    *  tell the server which suggestion to mark accepted. Editing fields never
    *  clears it; an `edit` seed never sets it. */
@@ -63,13 +65,14 @@ export interface FormState {
 }
 
 export function emptyForm(): FormState {
-  return { name: "", prompt: "", schedule: { ...DEFAULT_SCHEDULE }, auto_approve: false };
+  return { name: "", prompt: "", schedule: { ...DEFAULT_SCHEDULE }, auto_approve: false, model: null };
 }
 
 export function formFromPreset(p: CreateAutomationPayload): FormState {
   const f = emptyForm();
   f.name = p.name ?? "";
   f.prompt = p.description ?? "";
+  f.model = p.model ?? null;
   f.from_suggestion_id = p.from_suggestion_id;
   if (p.auto_approve) f.auto_approve = true;
   const msg = p.trigger_type === "message" ? p.triggers?.[0] : undefined;
@@ -109,6 +112,7 @@ export function formFromAutomation(a: Automation): FormState {
   f.name = a.name;
   f.prompt = a.description;
   f.auto_approve = a.auto_approve;
+  f.model = a.model;
   if (!t) return f;
   if (t.type === "time" && t.every) {
     f.schedule = {
@@ -145,6 +149,7 @@ export function buildPayload(f: FormState): CreateAutomationPayload {
     name: f.name.trim() || "Untitled automation",
     description: f.prompt.trim(),
     auto_approve: f.auto_approve,
+    model: f.model,
   };
   const s = f.schedule;
   if (s.kind === "at") {

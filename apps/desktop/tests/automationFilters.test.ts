@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { Automation } from "@/api/types";
-import { splitAutomationsForTabs } from "@/lib/automationFilters";
+import { isIterationLoop } from "@/lib/automationFilters";
+import { groupAutomations } from "@/features/automations/components/AutomationRail";
 
 function automation(patch: Partial<Automation>): Automation {
   return {
@@ -28,53 +29,46 @@ test("keeps user automations separate from internal automations", () => {
   const internal = automation({
     task_id: "knowledge-retention",
     name: "Knowledge Retention",
-    handler: "knowledge_retention",
     builtin: true,
   });
-
-  expect(splitAutomationsForTabs([internal, user])).toEqual({
-    user: [user],
-    internal: [internal],
-  });
+  const groups = groupAutomations([internal, user]);
+  expect(groups.user).toEqual([user]);
+  expect(groups.system).toEqual([internal]);
+  expect(groups.area).toEqual([]);
 });
 
 test("treats known knowledge handlers as internal even before builtin metadata is set", () => {
   const health = automation({
-    task_id: "health",
+    task_id: "knowledge-health",
     handler: "knowledge_health",
-    builtin: false,
   });
-
-  expect(splitAutomationsForTabs([health])).toEqual({
-    user: [],
-    internal: [health],
-  });
+  expect(groupAutomations([health]).system).toEqual([health]);
 });
 
-test("keeps post-mode channel automations in active list", () => {
+test("splits seeded area agents from the user's own automations", () => {
+  const custodian = automation({ task_id: "area:ntrp:custodian", name: "ntrp custodian" });
+  const own = automation({ task_id: "own", name: "Daily brief" });
+  const groups = groupAutomations([custodian, own]);
+  expect(groups.user).toEqual([own]);
+  expect(groups.area).toEqual([custodian]);
+});
+
+test("keeps post-mode channel automations in the user group", () => {
   const channel = automation({
     task_id: "channel",
-    name: "News feed",
     kind: "loop",
     read_history: false,
   });
-
-  expect(splitAutomationsForTabs([channel])).toEqual({
-    user: [channel],
-    internal: [],
-  });
+  expect(groupAutomations([channel]).user).toEqual([channel]);
 });
 
-test("drops iteration loops from all buckets", () => {
+test("iteration loops are identified for the modal to drop", () => {
   const iteration = automation({
-    task_id: "iteration",
-    name: "Self-paced loop",
+    task_id: "loop",
     kind: "loop",
     read_history: true,
   });
-
-  expect(splitAutomationsForTabs([iteration])).toEqual({
-    user: [],
-    internal: [],
-  });
+  expect(isIterationLoop(iteration)).toBe(true);
+  const channel = automation({ task_id: "c", kind: "loop", read_history: false });
+  expect(isIterationLoop(channel)).toBe(false);
 });

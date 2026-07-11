@@ -95,16 +95,3 @@ export const TEMPLATES: AutomationTemplate[] = [
     },
   },
 ];
-
-export function templatesByCategory(): { category: string; items: AutomationTemplate[] }[] {
-  const order: string[] = [];
-  const groups = new Map<string, AutomationTemplate[]>();
-  for (const t of TEMPLATES) {
-    if (!groups.has(t.category)) {
-      order.push(t.category);
-      groups.set(t.category, []);
-    }
-    groups.get(t.category)!.push(t);
-  }
-  return order.map((category) => ({ category, items: groups.get(category) ?? [] }));
-}
