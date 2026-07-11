@@ -162,12 +162,14 @@ def client(tmp_path: Path):
     test_app.state.area_service = svc
     class _Automations:
         async def get(self, task_id: str):
-            return SimpleNamespace(thread_id="custodian-thread") if task_id == f"area:{o1a['area_id']}" else None
+            if task_id != f"area:{o1a['area_id']}":
+                return None
+            return SimpleNamespace(thread_id="custodian-thread", tool_scope=["area_page_read", "recall"])
 
-    dispatched: list[tuple[str, str]] = []
+    dispatched: list[tuple] = []
 
     async def _dispatch_session_message(session_id, message, **kwargs):
-        dispatched.append((session_id, message))
+        dispatched.append((session_id, message, kwargs.get("tool_scope")))
 
     work = _FakeWorkStore()
     test_app.state.runtime = SimpleNamespace(
@@ -334,7 +336,10 @@ def test_reply_posts_linked_message_to_custodian_channel(client):
 
     assert res.status_code == 200
     assert res.json()["resolution"] == "replied"
-    assert c.app.state.dispatched == [("custodian-thread", f"REPLY TO ASK [agent:{o1a}:dose]\nUse 5 mg.")]
+    # The reply turn runs under the custodian's own permission contract.
+    assert c.app.state.dispatched == [
+        ("custodian-thread", f"REPLY TO ASK [agent:{o1a}:dose]\nUse 5 mg.", ("area_page_read", "recall"))
+    ]
     assert emitted == [[o1a]]
 
 

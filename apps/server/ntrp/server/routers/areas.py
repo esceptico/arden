@@ -218,7 +218,10 @@ async def archive_area(request: Request, area_id: str):
 
 @router.post("/{area_id}/restore", response_model=AreaResponse)
 async def restore_area(request: Request, area_id: str):
-    area = await _lifecycle(request).restore(area_id)
+    try:
+        area = await _lifecycle(request).restore(area_id)
+    except ValueError as exc:  # active Area already holds this name
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if area is None:
         raise HTTPException(status_code=404, detail="Archived Area not found")
     await request.app.state.emit_areas_changed([area_id])
@@ -275,6 +278,9 @@ async def reply_to_ask(request: Request, area_id: str, ask_id: str, body: ReplyB
         message,
         client_id=f"area-ask-reply:{ask.id}",
         skip_approvals=False,
+        # The reply turn runs under the same permission contract as the
+        # custodian's own runs — the allowlist is dispatch-borne.
+        tool_scope=tuple(automation.tool_scope) if automation.tool_scope else None,
     )
     resolved = _svc(request).resolve_ask(ask.id, "done", None, "replied")
     await request.app.state.emit_areas_changed([area_id])

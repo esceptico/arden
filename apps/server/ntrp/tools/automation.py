@@ -336,10 +336,14 @@ async def create_automation(execution: ToolExecution, args: CreateAutomationInpu
         if args.contains:
             message_trigger["contains"] = args.contains
         message_triggers = [message_trigger]
+    # Automations created from inside an Area (an acting Custodian, or the
+    # room's assistant) belong to that Area: namespaced id + room channel.
+    area = execution.ctx.area
     try:
         automation = await svc.create(
             name=args.name,
             description=args.description,
+            area_id=area.area_id if area is not None else None,
             trigger_type=args.trigger_type,
             triggers=message_triggers,
             at=args.at,

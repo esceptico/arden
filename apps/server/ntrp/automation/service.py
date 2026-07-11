@@ -405,9 +405,13 @@ class AutomationService:
         )
 
         now = datetime.now(UTC)
-        # Stable ids (e.g. area:{key}) let seeding find its rows across boots;
-        # everything else gets a random slug.
-        task_id = task_id or generate_slug(2)
+        # Stable ids (e.g. area:{key}) let seeding find its rows across boots.
+        # Area-owned children mint under area:{key}:{slug} — that prefix IS
+        # the ownership boundary area_run_automation enforces. Everything
+        # else gets a random slug.
+        if task_id is None:
+            slug = generate_slug(2)
+            task_id = f"area:{area_id}:{slug}" if area_id else slug
 
         if idempotency_key is not None and idempotency_scope is None:
             raise ValueError("idempotency_scope required when idempotency_key is set")

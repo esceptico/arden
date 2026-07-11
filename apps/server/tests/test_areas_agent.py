@@ -191,13 +191,15 @@ def test_live_autonomy_contracts_are_exact_and_never_globally_auto_approve():
     assert "act" in acting.description
 
     assert matches_scope(tuple(ACT_TOOL_SCOPE), "area_run_automation")
+    # Acting may propose child automations — creation itself is approval-gated.
+    assert matches_scope(tuple(ACT_TOOL_SCOPE), "create_automation")
+    assert not matches_scope(tuple(OBSERVE_TOOL_SCOPE), "create_automation")
     assert not matches_scope(tuple(ACT_TOOL_SCOPE), "send_email")
     assert not matches_scope(tuple(ACT_TOOL_SCOPE), "create_calendar_event")
     assert not matches_scope(tuple(ACT_TOOL_SCOPE), "slack_post_message")
     assert not matches_scope(tuple(ACT_TOOL_SCOPE), "bash")
     assert not matches_scope(tuple(ACT_TOOL_SCOPE), "write_file")
     assert not matches_scope(tuple(ACT_TOOL_SCOPE), "memory_write")
-    assert not matches_scope(tuple(ACT_TOOL_SCOPE), "create_automation")
 
 
 @pytest.mark.asyncio

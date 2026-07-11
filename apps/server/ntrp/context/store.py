@@ -2,13 +2,13 @@ import asyncio
 import hashlib
 import json
 from datetime import UTC, datetime, timedelta
-from pathlib import PurePosixPath
 from typing import Any
 from uuid import uuid4
 
 import aiosqlite
 from pydantic import BaseModel
 
+from ntrp.areas.paths import normalize_area_page_path
 from ntrp.constants import (
     RAW_TOOL_RESULT_INLINE_MAX_BYTES,
     SESSION_EVENT_DURABLE_RETENTION,
@@ -629,13 +629,7 @@ class SessionStore:
 
     @staticmethod
     def _normalize_area_page_path(page_path: str | None) -> str | None:
-        if page_path is None:
-            return None
-        raw = page_path.strip().replace("\\", "/")
-        path = PurePosixPath(raw)
-        if not raw or path.is_absolute() or ".." in path.parts or path.suffix.lower() != ".md":
-            raise ValueError("page_path must be a vault-relative Markdown path")
-        return path.as_posix()
+        return None if page_path is None else normalize_area_page_path(page_path)
 
     async def _assert_area_name_available(self, name_key: str, *, exclude_area_id: str | None = None) -> None:
         sql = "SELECT area_id FROM areas WHERE name_key = ? AND archived_at IS NULL"

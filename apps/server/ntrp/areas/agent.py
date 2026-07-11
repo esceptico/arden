@@ -43,10 +43,15 @@ OBSERVE_TOOL_SCOPE = [
 ]
 
 # Acting expands only to named integration tools. Their own policies still
-# require approval for consequential writes, so autonomy never becomes a
-# wildcard or an approval bypass.
+# require approval for consequential writes (create_automation is
+# approval-gated), so autonomy never becomes a wildcard or an approval
+# bypass. Children mint under area:{key}:{slug} — the boundary
+# area_run_automation enforces.
 ACT_TOOL_SCOPE = [
     *OBSERVE_TOOL_SCOPE,
+    "create_automation",
+    "list_automations",
+    "get_automation_result",
     "area_run_automation",
 ]
 

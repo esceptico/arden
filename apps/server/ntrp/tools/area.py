@@ -1,11 +1,9 @@
-import os
-import tempfile
 from hashlib import sha256
 from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from ntrp.areas.paths import resolve_area_page
+from ntrp.areas.paths import atomic_write_text, resolve_area_page
 from ntrp.tools.core import ToolResult, tool
 from ntrp.tools.core.context import ToolExecution
 from ntrp.tools.core.types import ToolAction, ToolPolicy, ToolScope
@@ -44,20 +42,6 @@ def _target(execution: ToolExecution) -> Path | ToolResult:
         return ToolResult(content=f"Invalid Area page: {exc}", preview="Invalid Area page", is_error=True)
 
 
-def _atomic_write(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
-
-
 def _frontmatter_prefix(raw: str) -> str:
     if not raw.startswith("---\n"):
         return ""
@@ -66,9 +50,14 @@ def _frontmatter_prefix(raw: str) -> str:
 
 
 def _record_write(execution: ToolExecution, target: Path) -> None:
-    provenance = execution.ctx.services.get("area_custodians")
+    """Self-write provenance: only the Custodian's own automation runs record
+    digests. An edit made from any other session (the user working through
+    the room's assistant, another agent) must still wake the Custodian."""
     area = execution.ctx.area
-    if provenance is not None and area is not None:
+    if area is None or execution.ctx.run.loop_task_id != f"area:{area.area_id}":
+        return
+    provenance = execution.ctx.services.get("area_custodians")
+    if provenance is not None:
         provenance.record_page_write(area.area_id, sha256(target.read_bytes()).hexdigest())
 
 
@@ -99,7 +88,7 @@ async def area_page_patch(execution: ToolExecution, args: AreaPagePatchInput) ->
             preview="Patch not applied",
             is_error=True,
         )
-    _atomic_write(target, raw.replace(args.old_text, args.new_text, 1))
+    atomic_write_text(target, raw.replace(args.old_text, args.new_text, 1))
     _record_write(execution, target)
     return ToolResult(content="Patched this Area's page.", preview="Area page patched")
 
@@ -111,7 +100,7 @@ async def area_page_write(execution: ToolExecution, args: AreaPageWriteInput) ->
     existing = target.read_text(encoding="utf-8") if target.exists() else ""
     body = args.content.strip() + "\n"
     prefix = _frontmatter_prefix(existing)
-    _atomic_write(target, f"{prefix}\n{body}" if prefix else body)
+    atomic_write_text(target, f"{prefix}\n{body}" if prefix else body)
     _record_write(execution, target)
     return ToolResult(content="Updated this Area's page.", preview="Area page updated")
 

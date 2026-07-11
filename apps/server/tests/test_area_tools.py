@@ -18,12 +18,16 @@ from ntrp.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext
 from ntrp.tools.core.registry import ToolRegistry
 
 
-def execution(vault: Path, page_path: str | None = "topics/health.md") -> ToolExecution:
+def execution(
+    vault: Path,
+    page_path: str | None = "topics/health.md",
+    loop_task_id: str | None = "area:area_health",
+) -> ToolExecution:
     area = AreaContext(area_id="area_health", name="Health", page_path=page_path)
     ctx = ToolContext(
         session_state=SessionState(session_id="custodian", started_at=datetime.now(UTC), area_id=area.area_id),
         registry=ToolRegistry(),
-        run=RunContext(run_id="run-1"),
+        run=RunContext(run_id="run-1", loop_task_id=loop_task_id),
         io=IOBridge(),
         services={"area_pages": vault},
         background_tasks=BackgroundTaskRegistry(session_id="custodian"),
@@ -88,6 +92,22 @@ async def test_area_page_writes_record_exact_post_write_digest(tmp_path: Path) -
     assert not result.is_error
     assert provenance.writes[0][0] == "area_health"
     assert len(provenance.writes[0][1]) == 64
+
+
+@pytest.mark.asyncio
+async def test_non_custodian_page_writes_record_no_digest(tmp_path: Path) -> None:
+    """A user-directed assistant edit in the room must still wake the
+    Custodian — only the Custodian's own runs record self-write digests."""
+    vault = tmp_path / "memory"
+    seed(vault)
+    run = execution(vault, loop_task_id=None)  # ordinary room chat, not a custodian run
+    provenance = WriteProvenance()
+    run.ctx.services["area_custodians"] = provenance
+
+    result = await area_page_patch(run, AreaPagePatchInput(old_text="Old status", new_text="Current status"))
+
+    assert not result.is_error
+    assert provenance.writes == []
 
 
 @pytest.mark.asyncio
