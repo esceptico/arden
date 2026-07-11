@@ -284,10 +284,6 @@ export async function detachAreaPage(config: AppConfig, key: string): Promise<Ar
   return apiWithConfig(config, `/areas/${encodeURIComponent(key)}/page`, { method: "DELETE" });
 }
 
-export async function restoreArea(config: AppConfig, key: string): Promise<Area> {
-  return apiWithConfig(config, `/areas/${encodeURIComponent(key)}/restore`, { method: "POST" });
-}
-
 export async function dismissAreaSuggestion(config: AppConfig, key: string): Promise<void> {
   await apiWithConfig(config, `/areas/suggestions/${encodeURIComponent(key)}/dismiss`, {
     method: "POST",

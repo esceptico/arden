@@ -141,27 +141,3 @@ export function reduceOpenArea(state: AreasDomainState, key: string | null): Are
   };
 }
 
-export function reduceAutonomyUpdated(
-  state: AreasDomainState,
-  key: string,
-  autonomy: "observe" | "act",
-): AreasDomainState {
-  const detail = state.detailByKey[key];
-  const detailByKey = detail
-    ? { ...state.detailByKey, [key]: { ...detail, autonomy } }
-    : state.detailByKey;
-
-  const overview = state.overview
-    ? {
-        ...state.overview,
-        areas: state.overview.areas.map((s) => (s.key === key ? { ...s, autonomy } : s)),
-      }
-    : null;
-
-  const record = state.recordsById[key];
-  const recordsById = record
-    ? { ...state.recordsById, [key]: { ...record, autonomy } }
-    : state.recordsById;
-
-  return { ...state, recordsById, detailByKey, overview };
-}

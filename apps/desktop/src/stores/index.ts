@@ -56,7 +56,6 @@ import {
   reduceDetailLoaded,
   reduceAskResolved,
   reduceOpenArea,
-  reduceAutonomyUpdated,
   reduceRecordsLoaded,
   reduceRecordUpserted,
   reduceRecordArchived,
@@ -875,8 +874,6 @@ export const useStore = create<State & Actions>((set) => ({
     set((s) => ({ triage: reduceTriageProposal(s.triage, sessionId, decision) })),
   clearTriageProposal: (sessionId) =>
     set((s) => ({ triage: reduceTriageCleared(s.triage, sessionId) })),
-  areaAutonomyUpdated: (key, autonomy) =>
-    set((s) => ({ areas: reduceAutonomyUpdated(s.areas, key, autonomy) })),
 }));
 
 // Dev-only: expose the store so connection-gated surfaces can be driven for

@@ -6,7 +6,6 @@ import {
   reduceAskResolved,
   reduceOpenArea,
   reduceDetailLoaded,
-  reduceAutonomyUpdated,
   reduceRecordsLoaded,
   reduceRecordUpserted,
   reduceRecordArchived,
@@ -63,19 +62,6 @@ const detail = {
   sessions: [],
   automations: [],
 };
-
-test("autonomy update patches both cached detail and overview summary", () => {
-  let s = reduceOverviewLoaded(createAreasDomainState(), overview);
-  s = reduceDetailLoaded(s, detail);
-  s = reduceAutonomyUpdated(s, "o-1a", "act");
-  expect(s.detailByKey["o-1a"].autonomy).toBe("act");
-  expect(s.overview?.areas[0].autonomy).toBe("act");
-});
-
-test("autonomy update is a no-op when the area has no cached detail", () => {
-  const s = reduceAutonomyUpdated(createAreasDomainState(), "unknown", "act");
-  expect(s.detailByKey["unknown"]).toBeUndefined();
-});
 
 test("setCurrentSession closes an open area room (navigating away from an area)", () => {
   getState().openArea("o-1a");

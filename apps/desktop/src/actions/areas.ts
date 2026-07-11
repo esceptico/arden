@@ -8,7 +8,6 @@ import {
   fetchAreaDetail as fetchAreaDetailApi,
   resolveAsk as resolveAskApi,
   replyToAsk as replyToAskApi,
-  restoreArea as restoreAreaApi,
   updateAreaAutonomy as updateAreaAutonomyApi,
   updateAreaOutcome as updateAreaOutcomeApi,
   updateAreaSettings as updateAreaSettingsApi,
@@ -161,11 +160,4 @@ export async function detachAreaPage(key: string): Promise<void> {
   const record = await detachAreaPageApi(s.config, key);
   s.upsertAreaRecord(record);
   await Promise.all([fetchAreaDetail(key), fetchAreasOverview()]);
-}
-
-export async function restoreArea(key: string): Promise<void> {
-  const s = getState();
-  const record = await restoreAreaApi(s.config, key);
-  s.upsertAreaRecord(record);
-  await fetchAreasOverview();
 }

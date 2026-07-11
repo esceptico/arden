@@ -607,7 +607,6 @@ export interface Actions {
   areaDetailLoaded: (detail: import("@/api/areas").AreaDetail) => void;
   areaAskResolved: (key: string, askId: string) => void;
   openArea: (key: string | null) => void;
-  areaAutonomyUpdated: (key: string, autonomy: "observe" | "act") => void;
   markTriageSeen: (sessionId: string) => void;
   setTriageProposal: (sessionId: string, decision: import("@/api/sessions").TriageDecision) => void;
   clearTriageProposal: (sessionId: string) => void;
