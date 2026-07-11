@@ -644,9 +644,22 @@ async def test_seed_builtins_removes_retired_pipeline_jobs(automation_store: Aut
     )
     await automation_store.save(retired)
 
+    # The pre-rename slice suggester (superseded by builtin-area-suggester)
+    # must be swept too — it dangles on the unregistered slice_suggester_daily.
+    legacy_slice = _automation(
+        "builtin-slice-suggester",
+        name="Slice Suggester",
+        handler="slice_suggester_daily",
+        builtin=True,
+        enabled=True,
+        next_run_at=None,
+    )
+    await automation_store.save(legacy_slice)
+
     await seed_builtins(automation_store)
 
     assert await automation_store.get("builtin:pattern-finder-daily") is None
+    assert await automation_store.get("builtin-slice-suggester") is None
 
 
 @pytest.mark.asyncio

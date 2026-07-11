@@ -109,8 +109,15 @@ _CURRENT_BUILTIN_IDS = {spec.task_id for spec in BUILTINS}
 # Handlers we seed today, plus retired ones whose registration is gone — both
 # must be swept so previously-seeded automations don't dangle on a missing
 # handler. (pattern_finder/skill_inducer died with the claims+lens pipeline;
-# integration_sync died with the observation ingest — feeds replaced it.)
-_RETIRED_HANDLERS = {"pattern_finder_daily", "skill_inducer_daily", "memory_publish", "integration_sync"}
+# integration_sync died with the observation ingest — feeds replaced it;
+# slice_suggester_daily was renamed to area_suggester_daily in the areas rename.)
+_RETIRED_HANDLERS = {
+    "pattern_finder_daily",
+    "skill_inducer_daily",
+    "memory_publish",
+    "integration_sync",
+    "slice_suggester_daily",
+}
 _KNOWLEDGE_HANDLERS = {spec.handler for spec in BUILTINS} | _RETIRED_HANDLERS
 
 
