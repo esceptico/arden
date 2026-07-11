@@ -8,6 +8,7 @@ import { fetchAreaDetail, fewerLikeThis, resolveAsk } from "@/actions/areas";
 import { primaryActionFor } from "@/lib/askActions";
 import { IconButton } from "@/components/ui/IconButton";
 import { Button } from "@/components/ui/Button";
+import { Tooltip } from "@/components/ui/Tooltip";
 import { ASK_KIND } from "@/lib/areaKind";
 import { RISE_IN, RISE_SETTLED, ROW_EXIT, SPRING_ROW_ENTRY, MOTION, EASE_OUT } from "@/lib/tokens/motion";
 import { X } from "lucide-react";
@@ -149,13 +150,15 @@ export function AskCard({ ask, onDiscuss }: { ask: AreaAsk; onDiscuss?: (ask: Ar
           </Button>
         )}
         {ask.source === "agent" && (
-          <button
-            type="button"
-            onClick={() => void steer()}
-            className="ml-auto text-2xs text-whisper transition-colors duration-check ease-out hover:text-muted"
-          >
-            Fewer like this
-          </button>
+          <Tooltip label="Dismisses this and adds a standing instruction so the agent raises fewer asks like it">
+            <button
+              type="button"
+              onClick={() => void steer()}
+              className="ml-auto text-2xs text-whisper transition-colors duration-check ease-out hover:text-muted"
+            >
+              Fewer like this
+            </button>
+          </Tooltip>
         )}
       </div>
     </motion.div>

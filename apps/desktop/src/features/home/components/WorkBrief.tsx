@@ -45,22 +45,24 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 export function WorkBrief({ brief }: { brief: AreasBrief }) {
   return (
     <div className="grid gap-4">
+      {/* Chief-of-staff order: your blocked decisions first (agents wait
+          on them), then what the agents are driving, then their receipts. */}
       <AnimatePresence initial={false}>
-        {brief.done.length > 0 && (
-          <Section key="done" title="Done for you">
-            {brief.done.map((item) => <BriefRow key={`${item.area_id}:${item.stable_key}`} item={item} done />)}
-          </Section>
-        )}
-        {brief.in_progress.length > 0 && (
-          <Section key="in-progress" title="In progress">
-            {brief.in_progress.map((item) => <BriefRow key={`${item.area_id}:${item.stable_key}`} item={item} />)}
-          </Section>
-        )}
         {brief.needs_you.length > 0 && (
           <Section key="needs-you" title="Needs you">
             {brief.needs_you.map((ask) => (
               <FocusRow key={ask.id} ask={ask} areaTitle={ask.area_title ?? ask.area_key} />
             ))}
+          </Section>
+        )}
+        {brief.in_progress.length > 0 && (
+          <Section key="in-progress" title="Agents on it">
+            {brief.in_progress.map((item) => <BriefRow key={`${item.area_id}:${item.stable_key}`} item={item} />)}
+          </Section>
+        )}
+        {brief.done.length > 0 && (
+          <Section key="done" title="Done for you">
+            {brief.done.map((item) => <BriefRow key={`${item.area_id}:${item.stable_key}`} item={item} done />)}
           </Section>
         )}
       </AnimatePresence>
