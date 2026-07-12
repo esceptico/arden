@@ -18,6 +18,7 @@ wheels/
 .context/
 .features/
 .superpowers/
+.worktrees/
 .ntrp-tmp/
 docs/internal/sandbox/
 data/
