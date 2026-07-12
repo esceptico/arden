@@ -41,11 +41,18 @@ function response(data: unknown) {
   return { ok: true, status: 200, statusText: "OK", contentType: "application/json", data, text: "" };
 }
 
+function failure(message: string) {
+  return { ok: false, status: 500, statusText: "Error", contentType: "application/json", data: { detail: message }, text: "" };
+}
+
 function detail(raw: ReturnType<typeof artifact>, content = `${raw.title} prose`, timeline: unknown[] = []) {
   return { ...raw, content, editable_content: content, timeline, frontmatter: {} };
 }
 
-function installBridge(handler: (path: string, method: string) => Promise<ReturnType<typeof response>> | ReturnType<typeof response>) {
+function installBridge(handler: (
+  path: string,
+  method: string,
+) => Promise<ReturnType<typeof response> | ReturnType<typeof failure>> | ReturnType<typeof response> | ReturnType<typeof failure>) {
   const requests: Array<{ path: string; method: string }> = [];
   window.ntrpDesktop = {
     api: {
@@ -327,4 +334,107 @@ test("raw diagnostic manages focus and Escape restores its trigger", async () =>
   await settle();
   expect(host.querySelector('section[aria-label="Raw records diagnostic"]')).toBeNull();
   expect(document.activeElement === trigger).toBe(true);
+});
+
+test("root index failure blocks silent file demotion and retry recovers", async () => {
+  const index = artifact("index.md", "Index", null, { generated: true, editable: false });
+  const me = artifact("me.md", "Me");
+  let failIndex = true;
+  installBridge((path) => {
+    if (path === "/admin/memory/artifacts") return response({ artifacts: [index, me] });
+    const artifactPath = decodeURIComponent(path.replace("/admin/memory/artifacts/", ""));
+    if (artifactPath === "index.md" && failIndex) return failure("Index temporarily unavailable");
+    const raw = artifactPath === "index.md" ? index : me;
+    return response({ artifact: detail(raw, artifactPath === "index.md" ? managed([["me.md", "Profile"]]) : "Me prose") });
+  });
+  const { host, root } = setupDom();
+  await act(async () => root.render(<ArtifactMemoryView config={config} />));
+  await settle(220);
+
+  const alert = host.querySelector<HTMLElement>('[data-memory-zone="rail"] [role="alert"]');
+  expect(alert?.textContent).toContain("Index temporarily unavailable");
+  expect(host.querySelector('[data-memory-entry="me.md"]')).toBeNull();
+  expect(host.querySelector("details[data-memory-files]")).toBeNull();
+
+  failIndex = false;
+  await act(async () => Array.from(alert?.querySelectorAll("button") ?? []).find((button) => button.textContent === "Retry")?.click());
+  await settle(220);
+  expect(host.querySelector('[data-memory-entry="me.md"]')).not.toBeNull();
+  expect(host.querySelector('[data-memory-zone="rail"] [role="alert"]')).toBeNull();
+});
+
+test("nested index failure preserves its last-good hierarchy and retry refreshes it", async () => {
+  useStore.setState({ memoryVaultVersion: 0 });
+  const index = artifact("index.md", "Index", null, { generated: true, editable: false });
+  const guideV1 = artifact("lab/README.md", "Lab", null, { revision: "sha256:lab-v1" });
+  const guideV2 = artifact("lab/README.md", "Lab", null, { revision: "sha256:lab-v2" });
+  const first = artifact("lab/first.md", "First");
+  const second = artifact("lab/second.md", "Second");
+  let listReads = 0;
+  let failNested = false;
+  installBridge((path) => {
+    if (path === "/admin/memory/artifacts") {
+      listReads += 1;
+      return response({ artifacts: [index, listReads === 1 ? guideV1 : guideV2, first, second] });
+    }
+    const artifactPath = decodeURIComponent(path.replace("/admin/memory/artifacts/", ""));
+    if (artifactPath === "lab/README.md" && failNested) return failure("Lab index unavailable");
+    if (artifactPath === "index.md") return response({ artifact: detail(index, managed([["lab/", "Lab notes"]])) });
+    if (artifactPath === "lab/README.md") {
+      const guide = listReads === 1 ? guideV1 : guideV2;
+      const rows: Array<[string, string]> = listReads === 1
+        ? [["first.md", "First note"]]
+        : [["second.md", "Second note"]];
+      return response({ artifact: detail(guide, managed(rows)) });
+    }
+    const raw = artifactPath === "lab/first.md" ? first : second;
+    return response({ artifact: detail(raw) });
+  });
+  const { host, root } = setupDom();
+  await act(async () => root.render(<ArtifactMemoryView config={config} />));
+  await settle(220);
+  expect(host.querySelector('[data-memory-directory="lab"] [data-memory-entry="lab/first.md"]')).not.toBeNull();
+
+  failNested = true;
+  await act(async () => useStore.getState().memoryVaultChanged());
+  await settle(220);
+  const alert = host.querySelector<HTMLElement>('[data-memory-zone="rail"] [role="alert"]');
+  expect(alert?.textContent).toContain("Lab index unavailable");
+  expect(host.querySelector('[data-memory-directory="lab"] [data-memory-entry="lab/first.md"]')).not.toBeNull();
+
+  failNested = false;
+  await act(async () => Array.from(alert?.querySelectorAll("button") ?? []).find((button) => button.textContent === "Retry")?.click());
+  await settle(220);
+  expect(host.querySelector('[data-memory-directory="lab"] [data-memory-entry="lab/second.md"]')).not.toBeNull();
+  expect(host.querySelector('[data-memory-directory="lab"] [data-memory-entry="lab/first.md"]')).toBeNull();
+  expect(host.querySelector('[data-memory-zone="rail"] [role="alert"]')).toBeNull();
+});
+
+test("navigating from raw diagnostics focuses the selected note instead of the raw trigger", async () => {
+  const index = artifact("index.md", "Index", null, { generated: true, editable: false });
+  const first = artifact("first.md", "First");
+  const second = artifact("second.md", "Second");
+  installBridge((path) => {
+    if (path === "/admin/memory/artifacts") return response({ artifacts: [index, first, second] });
+    if (path.startsWith("/admin/memory/items")) return response({ items: [], limit: 100 });
+    const artifactPath = decodeURIComponent(path.replace("/admin/memory/artifacts/", ""));
+    const raw = artifactPath === "index.md" ? index : artifactPath === "first.md" ? first : second;
+    return response({ artifact: detail(raw, artifactPath === "index.md"
+      ? managed([["first.md", "First note"], ["second.md", "Second note"]])
+      : `${raw.title} prose`) });
+  });
+  const { host, root } = setupDom();
+  await act(async () => root.render(<ArtifactMemoryView config={config} />));
+  await settle(220);
+  const trigger = host.querySelector<HTMLButtonElement>('button[aria-label="Open raw records diagnostic"]')!;
+  await act(async () => trigger.click());
+  await settle();
+
+  const secondButton = host.querySelector<HTMLButtonElement>('[data-memory-entry="second.md"]')!;
+  secondButton.focus();
+  await act(async () => secondButton.click());
+  await settle();
+  expect(host.querySelector('section[aria-label="Raw records diagnostic"]')).toBeNull();
+  expect(document.activeElement === secondButton).toBe(true);
+  expect(document.activeElement === trigger).toBe(false);
 });

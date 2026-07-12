@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import {
   buildNotebookRailModel,
   isNotebookPage,
+  parseManagedIndex,
   selectIndexDocuments,
 } from "@/features/memory/lib/notebookIndex";
 import type { MemoryArtifactSummary } from "@/features/memory/lib/notebookTypes";
@@ -17,6 +18,20 @@ test("memory modal uses the directory-first artifact browser instead of pane tab
   expect(pane).toContain("ArtifactMemoryView");
   expect(pane).not.toContain("GraphView");
   expect(pane).not.toContain("LensesView");
+});
+
+test("managed rows use their encoded identity when labels and descriptions contain em dashes", () => {
+  const content = [
+    "<!-- ntrp:index:start -->",
+    "- a — b.md — Decision — with context <!-- ntrp:path=a%20%E2%80%94%20b.md -->",
+    "<!-- ntrp:index:end -->",
+  ].join("\n");
+
+  expect(parseManagedIndex("index.md", content)).toEqual([{
+    path: "a — b.md",
+    description: "Decision — with context",
+    directory: false,
+  }]);
 });
 
 test("notebook hierarchy keeps described directories semantic and machine pages hidden", () => {

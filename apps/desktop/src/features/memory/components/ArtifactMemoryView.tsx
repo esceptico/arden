@@ -39,6 +39,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const reduce = useReducedMotion();
   const [artifacts, setArtifacts] = useState<MemoryArtifactSummary[]>([]);
   const [indexDocuments, setIndexDocuments] = useState<Map<string, string>>(() => new Map());
+  const [indexErrors, setIndexErrors] = useState<Map<string, string>>(() => new Map());
   const [indexLoading, setIndexLoading] = useState(true);
   const [selected, setSelected] = useState<string | null>(null);
   const [activeDetail, setActiveDetail] = useState<MemoryArtifactDetail | null>(null);
@@ -74,6 +75,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const selectedMetaRef = useRef<MemoryArtifactSummary | null>(null);
   const recordsTriggerRef = useRef<HTMLButtonElement>(null);
   const recordsHeadingRef = useRef<HTMLHeadingElement>(null);
+  const layoutRef = useRef<HTMLDivElement>(null);
 
   artifactsRef.current = artifacts;
   queryRef.current = query.trim();
@@ -100,20 +102,35 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     const generation = ++indexGeneration.current;
     setIndexLoading(true);
     const selectedDocuments = selectIndexDocuments(summaries);
-    const pairs = await Promise.all(selectedDocuments.map(async (summary) => {
+    const results = await Promise.all(selectedDocuments.map(async (summary) => {
       const key = `${summary.path}@${summary.revision ?? "unknown"}`;
       const cached = indexDetailCache.current.get(key);
-      if (cached != null) return [summary.path, cached] as const;
+      if (cached != null) return { path: summary.path, content: cached, error: null };
       try {
         const response = await readMemoryArtifactDetail(config, summary.path);
         indexDetailCache.current.set(`${summary.path}@${response.artifact.revision}`, response.artifact.content);
-        return [summary.path, response.artifact.content] as const;
-      } catch {
-        return null;
+        return { path: summary.path, content: response.artifact.content, error: null };
+      } catch (reason) {
+        return {
+          path: summary.path,
+          content: null,
+          error: reason instanceof Error ? reason.message : String(reason),
+        };
       }
     }));
     if (generation !== indexGeneration.current) return;
-    setIndexDocuments(new Map(pairs.filter((pair): pair is readonly [string, string] => pair != null)));
+    setIndexDocuments((current) => {
+      const next = new Map<string, string>();
+      for (const result of results) {
+        if (result.content != null) next.set(result.path, result.content);
+        else {
+          const lastGood = current.get(result.path);
+          if (lastGood != null) next.set(result.path, lastGood);
+        }
+      }
+      return next;
+    });
+    setIndexErrors(new Map(results.flatMap((result) => result.error == null ? [] : [[result.path, result.error]])));
     setIndexLoading(false);
   }, [config]);
 
@@ -204,6 +221,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   }, [beginSummaryRequest, config, isCurrentSummaryRequest, load, query]);
 
   const railModel = useMemo(() => buildNotebookRailModel(artifacts, indexDocuments), [artifacts, indexDocuments]);
+  const indexBlocked = indexErrors.has("index.md") && !indexDocuments.has("index.md");
   const navigableArtifacts = useMemo(() => artifacts.filter((artifact) => isNotebookResourcePath(artifact.path)), [artifacts]);
   const selectedMeta = navigableArtifacts.find((artifact) => artifact.path === selected)
     ?? searchResults?.find((artifact) => artifact.path === selected)
@@ -236,14 +254,25 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     queueMicrotask(() => recordsTriggerRef.current?.focus());
   }, []);
 
+  const focusRailNote = useCallback((path: string) => {
+    queueMicrotask(() => {
+      const note = Array.from(layoutRef.current?.querySelectorAll<HTMLElement>("[data-memory-entry]") ?? [])
+        .find((entry) => entry.dataset.memoryEntry === path && entry.matches("button"));
+      note?.focus();
+    });
+  }, []);
+
   const selectFile = useCallback((path: string) => {
     const from = primaryOrder.indexOf(selectedMeta?.path ?? selected ?? "");
     const to = primaryOrder.indexOf(path);
     if (from !== -1 && to !== -1 && from !== to) setDirection(to > from ? 1 : -1);
     setContentNotice(null);
     setSelected(path);
-    if (recordsOpen) closeRecords();
-  }, [closeRecords, primaryOrder, recordsOpen, selected, selectedMeta?.path]);
+    if (recordsOpen) {
+      setRecordsOpen(false);
+      focusRailNote(path);
+    }
+  }, [focusRailNote, primaryOrder, recordsOpen, selected, selectedMeta?.path]);
 
   useEffect(() => {
     if (!recordsOpen) return;
@@ -422,6 +451,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
 
   return (
     <div
+      ref={layoutRef}
       data-memory-layout="notebook"
       className={clsx(
         "grid h-full min-h-0",
@@ -440,12 +470,15 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
           searchLoading={searchLoading}
           error={error}
           searchError={searchError}
+          indexErrors={[...indexErrors.entries()].map(([path, message]) => `${path}: ${message}`)}
+          indexBlocked={indexBlocked}
           rebuilding={rebuilding}
           recordsOpen={recordsOpen}
           recordsTriggerRef={recordsTriggerRef}
           onQueryChange={setQuery}
           onSelect={selectFile}
           onRetry={() => void load()}
+          onRetryIndex={() => void refreshIndexDocuments(artifactsRef.current)}
           onRebuild={rebuild}
           onToggleRecords={() => recordsOpen ? closeRecords() : setRecordsOpen(true)}
         />

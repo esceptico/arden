@@ -2,7 +2,7 @@ import type { MemoryArtifactSummary } from "@/features/memory/lib/notebookTypes"
 
 const INDEX_START = "<!-- ntrp:index:start -->";
 const INDEX_END = "<!-- ntrp:index:end -->";
-const MANAGED_ROW = /^-\s+.+?\s+—\s+(.*?)\s+<!--\s*ntrp:path=([^\s>]+)\s*-->\s*$/;
+const MANAGED_ID = /^(?<line>- .*) <!-- ntrp:path=(?<path>\S+) -->$/;
 const RESERVED_DIRECTORIES = new Set(["raw", ".ntrp", ".index", ".maintenance"]);
 const RESERVED_ROOT_FILES = new Set(["README.md", "AGENTS.md", "health.md", "tooling.md"]);
 
@@ -74,16 +74,10 @@ export function selectIndexDocuments(artifacts: MemoryArtifactSummary[]): Memory
   return selected;
 }
 
-function resolveManagedPath(documentPath: string, encoded: string): { path: string; directory: boolean } | null {
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(encoded);
-  } catch {
-    return null;
-  }
-  if (!decoded || decoded.startsWith("/") || decoded.includes("\\")) return null;
-  const directory = decoded.endsWith("/");
-  const relative = decoded.replace(/\/+$/, "");
+function resolveManagedPath(documentPath: string, label: string): { path: string; directory: boolean } | null {
+  if (!label || label.startsWith("/") || label.includes("\\")) return null;
+  const directory = label.endsWith("/");
+  const relative = label.replace(/\/+$/, "");
   const parts = relative.split("/");
   if (!parts.length || parts.some((part) => !part || part === "." || part === "..")) return null;
   const base = parentDirectory(documentPath);
@@ -99,11 +93,20 @@ export function parseManagedIndex(documentPath: string, content: string): Manage
   const block = content.slice(start + INDEX_START.length, end);
   const entries: ManagedIndexEntry[] = [];
   for (const line of block.split(/\r?\n/)) {
-    const match = MANAGED_ROW.exec(line.trim());
-    if (!match) continue;
-    const resolved = resolveManagedPath(documentPath, match[2]!);
+    const identity = MANAGED_ID.exec(line.trim());
+    if (!identity?.groups) continue;
+    let label: string;
+    try {
+      label = decodeURIComponent(identity.groups.path!);
+    } catch {
+      continue;
+    }
+    const prefix = `- ${label} — `;
+    const rendered = identity.groups.line!;
+    if (!rendered.startsWith(prefix)) continue;
+    const resolved = resolveManagedPath(documentPath, label);
     if (!resolved) continue;
-    entries.push({ path: resolved.path, description: match[1]!.trim(), directory: resolved.directory });
+    entries.push({ path: resolved.path, description: rendered.slice(prefix.length).trim(), directory: resolved.directory });
   }
   return entries;
 }

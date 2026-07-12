@@ -94,12 +94,15 @@ export function NotebookRail({
   searchLoading,
   error,
   searchError,
+  indexErrors,
+  indexBlocked,
   rebuilding,
   recordsOpen,
   recordsTriggerRef,
   onQueryChange,
   onSelect,
   onRetry,
+  onRetryIndex,
   onRebuild,
   onToggleRecords,
 }: {
@@ -111,23 +114,34 @@ export function NotebookRail({
   searchLoading: boolean;
   error: string | null;
   searchError: string | null;
+  indexErrors: string[];
+  indexBlocked: boolean;
   rebuilding: boolean;
   recordsOpen: boolean;
   recordsTriggerRef: RefObject<HTMLButtonElement | null>;
   onQueryChange: (value: string) => void;
   onSelect: (path: string) => void;
   onRetry: () => void;
+  onRetryIndex: () => void;
   onRebuild: () => void;
   onToggleRecords: () => void;
 }) {
   const searchActive = query.trim().length > 0;
   const empty = model.entries.length === 0 && model.files.length === 0;
+  const indexAlert = indexErrors.length > 0 ? (
+    <ListError
+      title="Couldn't load memory index"
+      message={indexErrors.join("\n")}
+      onRetry={onRetryIndex}
+    />
+  ) : null;
 
   return (
     <>
       <TreeSearch value={query} onChange={onQueryChange} placeholder="Search memory notes…" />
       <div className="flex-1 min-h-0 overflow-y-auto scroll-thin px-3 py-3">
         <ScrollFadeBottom />
+        {indexAlert}
         {searchActive ? (
           searchLoading && searchResults == null ? (
             <ListSkeleton />
@@ -163,6 +177,8 @@ export function NotebookRail({
           <ListSkeleton />
         ) : error ? (
           <ListError title="Couldn't load memory notes" message={error} onRetry={onRetry} />
+        ) : indexBlocked ? (
+          null
         ) : empty ? (
           <Empty
             icon={FileText}
