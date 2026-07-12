@@ -78,6 +78,78 @@ def test_context_is_a_bounded_snippet_that_keeps_the_link(tmp_path: Path):
     assert link.context.startswith("…") and link.context.endswith("…")
 
 
+def test_commonmark_scanner_excludes_escaped_comments_and_all_code_forms(tmp_path: Path):
+    _write(tmp_path / "visible.md", "# Visible\n")
+    _write(
+        tmp_path / "source.md",
+        r"""# Source
+
+\[[Escaped]]
+
+<!--
+[[Comment]]
+-->
+
+    [[Indented]]
+
+`inline
+[[Multiline inline code]]
+still inline`
+
+````md
+[[Fence]]
+```
+[[Still fenced]]
+````
+
+[[Visible]]
+""",
+    )
+
+    outgoing = LinkIndex(tmp_path).rebuild(ArtifactMemoryStore(tmp_path), "revision-1").outgoing("source.md")
+
+    assert [(link.target, link.resolved_path) for link in outgoing] == [("Visible", "visible.md")]
+
+
+def test_fragment_only_and_nested_basename_resolution_are_explicit(tmp_path: Path):
+    _write(tmp_path / "nested/alpha.md", "---\ntitle: Different title\n---\n# Different title\n")
+    _write(
+        tmp_path / "source.md",
+        "# Source\n\n[[#Local section]] [[alpha.md]] [[alpha]]\n",
+    )
+    index = LinkIndex(tmp_path)
+
+    unique = index.rebuild(ArtifactMemoryStore(tmp_path), "revision-1").outgoing("source.md")
+
+    assert [(link.target, link.status, link.resolved_path) for link in unique] == [
+        ("#Local section", "resolved", "source.md"),
+        ("alpha.md", "resolved", "nested/alpha.md"),
+        ("alpha", "resolved", "nested/alpha.md"),
+    ]
+
+    _write(tmp_path / "other/alpha.md", "---\ntitle: Another title\n---\n# Another title\n")
+    ambiguous = index.rebuild(ArtifactMemoryStore(tmp_path), "revision-2").outgoing("source.md")
+
+    assert ambiguous[0].resolved_path == "source.md"
+    assert ambiguous[1].status == ambiguous[2].status == "ambiguous"
+    assert ambiguous[1].candidates == ambiguous[2].candidates == (
+        "nested/alpha.md",
+        "other/alpha.md",
+    )
+
+
+def test_oversized_target_or_display_is_not_indexed(tmp_path: Path):
+    _write(tmp_path / "target.md", "# Target\n")
+    _write(
+        tmp_path / "source.md",
+        f"[[{'t' * 1001}]]\n[[Target|{'d' * 1001}]]\n[[Target]]\n",
+    )
+
+    outgoing = LinkIndex(tmp_path).rebuild(ArtifactMemoryStore(tmp_path), "revision-1").outgoing("source.md")
+
+    assert [(link.target, link.display) for link in outgoing] == [("Target", "Target")]
+
+
 def test_rebuild_replaces_renamed_pages_and_round_trips_snapshot(tmp_path: Path):
     _write(tmp_path / "old.md", "---\ntitle: Nova\n---\n# Nova\n")
     _write(tmp_path / "source.md", "# Source\n\nSee [[Nova]].\n")
@@ -123,19 +195,96 @@ def test_failed_snapshot_publish_keeps_last_valid_snapshot(tmp_path: Path, monke
     index = LinkIndex(tmp_path)
     first = index.rebuild(ArtifactMemoryStore(tmp_path), "revision-1")
     persisted = (tmp_path / ".ntrp/indexes/links.json").read_bytes()
-    real_replace = os.replace
+    real_rename = os.rename
 
-    def fail_snapshot(source, target):
-        if Path(target) == tmp_path / ".ntrp/indexes/links.json":
+    def fail_snapshot(source, target, **kwargs):
+        if target == "links.json" or Path(target) == tmp_path / ".ntrp/indexes/links.json":
             raise OSError("index unavailable")
-        return real_replace(source, target)
+        return real_rename(source, target, **kwargs)
 
-    monkeypatch.setattr(os, "replace", fail_snapshot)
+    monkeypatch.setattr(os, "rename", fail_snapshot)
     with pytest.raises(OSError, match="index unavailable"):
         index.rebuild(ArtifactMemoryStore(tmp_path), "revision-2")
 
     assert index.snapshot == first
     assert (tmp_path / ".ntrp/indexes/links.json").read_bytes() == persisted
+
+
+def test_snapshot_publish_stays_anchored_when_parent_path_is_swapped(tmp_path: Path, monkeypatch):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    _write(tmp_path / "source.md", "[[Missing]]\n")
+    index = LinkIndex(tmp_path)
+    index.rebuild(ArtifactMemoryStore(tmp_path), "revision-1")
+    real_rename = os.rename
+    swapped = False
+
+    def swap_parent_before_publish(source, target, **kwargs):
+        nonlocal swapped
+        if target == "links.json" and not swapped:
+            swapped = True
+            real_rename(tmp_path / ".ntrp/indexes", tmp_path / ".ntrp/indexes-real")
+            (tmp_path / ".ntrp/indexes").symlink_to(outside, target_is_directory=True)
+        return real_rename(source, target, **kwargs)
+
+    monkeypatch.setattr(os, "rename", swap_parent_before_publish)
+    index.rebuild(ArtifactMemoryStore(tmp_path), "revision-2")
+
+    assert tuple(outside.iterdir()) == ()
+    assert json.loads((tmp_path / ".ntrp/indexes-real/links.json").read_text())["revision"] == "revision-2"
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda data: data.update(pages=["source.md", "source.md"]),
+        lambda data: data.update(pages=["../source.md"]),
+        lambda data: (
+            data.update(pages=["source//x.md", "target.md"]),
+            data["links"][0].update(source_path="source//x.md"),
+        ),
+        lambda data: (
+            data.update(pages=["source\x00.md", "target.md"]),
+            data["links"][0].update(source_path="source\x00.md"),
+        ),
+        lambda data: data["links"][0].update(source_path="missing.md"),
+        lambda data: data["links"][0].update(status="resolved", resolved_path="missing.md", candidates=["missing.md"]),
+        lambda data: data["links"][0].update(status="ambiguous", resolved_path=None, candidates=["target.md"]),
+        lambda data: data["links"][0].update(source_revision="different"),
+        lambda data: data["links"][0].update(target="x" * 1001),
+        lambda data: data["links"][0].update(context="x" * 281),
+    ],
+    ids=[
+        "duplicate-pages",
+        "unsafe-page",
+        "noncanonical-page",
+        "nul-page",
+        "missing-source",
+        "missing-target",
+        "invalid-ambiguity",
+        "wrong-revision",
+        "long-target",
+        "long-context",
+    ],
+)
+def test_semantically_corrupt_persisted_snapshot_loads_empty_and_stale(tmp_path: Path, mutate):
+    _write(tmp_path / "target.md", "# Target\n")
+    _write(tmp_path / "source.md", "[[Target]]\n")
+    LinkIndex(tmp_path).rebuild(ArtifactMemoryStore(tmp_path), "revision-1")
+    path = tmp_path / ".ntrp/indexes/links.json"
+    data = json.loads(path.read_text())
+    mutate(data)
+    path.write_text(json.dumps(data), encoding="utf-8")
+    reloaded = LinkIndex(tmp_path)
+    projection = LinkIndexProjection(
+        reloaded,
+        artifacts=ArtifactMemoryStore(tmp_path),
+        revision=lambda: "",
+    )
+
+    assert reloaded.snapshot.revision == ""
+    assert reloaded.snapshot.pages == reloaded.snapshot.links == ()
+    assert projection.stale is True
 
 
 def test_snapshot_write_rejects_symlinked_index_parent(tmp_path: Path):
@@ -202,6 +351,39 @@ def test_projection_marks_persisted_snapshot_stale_when_canonical_revision_advan
     )
 
     assert projection.stale is True
+
+
+@pytest.mark.asyncio
+async def test_projection_rebuilds_again_when_revision_changes_during_worker(tmp_path: Path):
+    _write(tmp_path / "source.md", "[[Missing]]\n")
+    current_revision = "canonical-r1"
+    index = LinkIndex(tmp_path)
+    real_rebuild = index.rebuild
+    revisions: list[str] = []
+
+    def advance_after_first_rebuild(artifacts, revision):
+        nonlocal current_revision
+        revisions.append(revision)
+        snapshot = real_rebuild(artifacts, revision)
+        if revision == "canonical-r1":
+            current_revision = "canonical-r2"
+        return snapshot
+
+    index.rebuild = advance_after_first_rebuild
+    projection = LinkIndexProjection(
+        index,
+        artifacts=ArtifactMemoryStore(tmp_path),
+        revision=lambda: current_revision,
+        retry_delay=60,
+    )
+
+    projection.schedule()
+    await projection.wait_idle()
+
+    assert revisions == ["canonical-r1", "canonical-r2"]
+    assert index.snapshot.revision == "canonical-r2"
+    assert projection.stale is False
+    await projection.close()
 
 
 @pytest.mark.asyncio

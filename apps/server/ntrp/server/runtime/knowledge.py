@@ -199,7 +199,7 @@ class LinkIndexProjection:
         self._work_future: asyncio.Future | None = None
         self._dirty = False
         self._closed = False
-        self.stale = index.snapshot.revision != revision()
+        self.stale = not index.snapshot.revision or index.snapshot.revision != revision()
 
     @property
     def closed(self) -> bool:
@@ -230,12 +230,15 @@ class LinkIndexProjection:
                     work = loop.run_in_executor(None, self.index.rebuild, self._artifacts, revision)
                     self._work_future = work
                     try:
-                        await asyncio.shield(work)
+                        snapshot = await asyncio.shield(work)
                     except asyncio.CancelledError:
                         await asyncio.shield(work)
                         raise
                     finally:
                         self._work_future = None
+                    if snapshot.revision != self._revision():
+                        self._dirty = True
+                        self.stale = True
                 except Exception:
                     self.stale = True
                     _logger.warning("memory link index projection failed", exc_info=True)
