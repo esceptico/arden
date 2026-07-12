@@ -358,10 +358,18 @@ class ModelRegistry:
             raise ValueError(f"Replacement models must use provider {provider.value}")
         if replacement == self.get_models_by_provider(provider):
             return False
-        retained = {
-            mid: model for mid, model in self._models.items() if model.provider != provider
-        }
-        self._models = {**retained, **replacement}
+        updated: dict[str, Model] = {}
+        inserted = False
+        for mid, model in self._models.items():
+            if model.provider == provider:
+                if not inserted:
+                    updated.update(replacement)
+                    inserted = True
+                continue
+            updated[mid] = model
+        if not inserted:
+            updated.update(replacement)
+        self._models = updated
         return True
 
     def add_model(self, model: Model) -> None:
