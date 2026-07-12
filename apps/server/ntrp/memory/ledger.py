@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from typing import TYPE_CHECKING, Literal
 
 from ntrp.memory.models import Kind, SourceRef, TimePrecision
@@ -22,7 +22,7 @@ _LEGACY_RE = re.compile(
     r"^- (?P<date>\d{4}-\d{2}-\d{2}) \^(?P<id>[\w-]+) \[(?P<kind>[\w-]+)\]"
     r"(?P<tags>(?: \[(?:pin|imp:\d+|superseded|ent:[a-z0-9-]+)\])*) (?P<body>.*)$"
 )
-_RFC3339_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$")
+_RFC3339_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _AUTHORITATIVE_FIELDS = frozenset({"id", "text", "kind", "occurred_at", "pinned", "imp", "entity"})
 _META_FIELDS = frozenset({"recorded_at", "sequence", "time_precision", "scope", "sources", "supersedes", "operation"})
@@ -39,6 +39,7 @@ class LedgerMeta:
     supersedes: tuple[str, ...] = ()
     operation: Literal["record", "retract"] = "record"
     extra: Mapping[str, object] = field(default_factory=dict)
+    scope_extra: Mapping[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -55,6 +56,10 @@ class LedgerEntry:
 
 def _validate_rfc3339(value: str, *, allow_date: bool = False) -> None:
     if allow_date and _DATE_RE.fullmatch(value):
+        try:
+            date.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError(f"date must be a valid RFC 3339 full-date: {value!r}") from exc
         return
     if not _RFC3339_RE.fullmatch(value):
         raise ValueError(f"timestamp must be RFC 3339 with an explicit offset: {value!r}")
@@ -81,6 +86,8 @@ def _source_from_dict(data: object) -> SourceRef:
     source = SourceRef.from_dict(data)
     if source.time_precision not in ("millisecond", "second", "minute", "day", "unknown"):
         raise ValueError("invalid source time_precision")
+    if source.captured_at:
+        _validate_rfc3339(source.captured_at)
     if source.occurred_at:
         _validate_rfc3339(source.occurred_at, allow_date=source.time_precision == "day")
     return source
@@ -154,6 +161,7 @@ def _parse_v2(readable: str, metadata: str) -> LedgerEntry:
             supersedes=tuple(supersedes),
             operation=operation,
             extra={key: value for key, value in raw_meta.items() if key not in _META_FIELDS},
+            scope_extra={key: value for key, value in scope.items() if key not in {"kind", "key"}},
         ),
     )
 
@@ -170,6 +178,7 @@ def _parse_legacy(raw: str) -> LedgerEntry:
     text = source_match["text"] if source_match else body
     pinned, imp, entity, superseded = _parse_tags(match["tags"])
     date = match["date"]
+    _validate_rfc3339(date, allow_date=True)
     try:
         kind = Kind(match["kind"])
     except ValueError as exc:
@@ -177,7 +186,7 @@ def _parse_legacy(raw: str) -> LedgerEntry:
     source = SourceRef(
         kind=source_kind,
         ref=match["id"],
-        captured_at=date,
+        captured_at=None,
         occurred_at=date,
         time_precision="day",
     )
@@ -225,15 +234,17 @@ def render_ledger_entry(entry: LedgerEntry) -> str:
         tags += f" [imp:{entry.imp}]"
     tags += "".join(f" [ent:{entity}]" for entity in entry.entity)
     readable = f"- {occurred} ^{entry.id} [{entry.kind}]{tags} {entry.text}"
+    scope: dict[str, object] = dict(entry.meta.scope_extra)
+    scope["kind"] = entry.meta.scope_kind
+    if entry.meta.scope_key is not None:
+        scope["key"] = entry.meta.scope_key
     metadata: dict[str, object] = {
         "recorded_at": entry.meta.recorded_at,
         "sequence": entry.meta.sequence,
         "time_precision": entry.meta.time_precision,
-        "scope": {"kind": entry.meta.scope_kind},
+        "scope": scope,
         "sources": [source.to_dict() for source in entry.meta.sources],
     }
-    if entry.meta.scope_key is not None:
-        metadata["scope"]["key"] = entry.meta.scope_key  # type: ignore[index]
     if entry.meta.supersedes:
         metadata["supersedes"] = list(entry.meta.supersedes)
     if entry.meta.operation != "record":

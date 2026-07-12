@@ -4,6 +4,7 @@ Scopes are default visibility metadata, not a graph hierarchy. Records are
 atomic artifacts with sparse metadata and optional source evidence.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -20,39 +21,57 @@ def now_iso() -> str:
 class SourceRef:
     kind: str
     ref: str
-    captured_at: str = field(default_factory=now_iso)
+    captured_at: str | None = field(default_factory=now_iso)
     scope_kind: str | None = None
     scope_key: str | None = None
     occurred_at: str | None = None
     time_precision: TimePrecision = "unknown"
     role: str | None = None
     excerpt_hash: str | None = None
+    extra: Mapping[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
-        return {
-            "kind": self.kind,
-            "ref": self.ref,
-            "captured_at": self.captured_at,
-            "scope_kind": self.scope_kind,
-            "scope_key": self.scope_key,
-            "occurred_at": self.occurred_at,
-            "time_precision": self.time_precision,
-            "role": self.role,
-            "excerpt_hash": self.excerpt_hash,
-        }
+        data = dict(self.extra)
+        data.update(
+            {
+                "kind": self.kind,
+                "ref": self.ref,
+                "scope_kind": self.scope_kind,
+                "scope_key": self.scope_key,
+                "occurred_at": self.occurred_at,
+                "time_precision": self.time_precision,
+                "role": self.role,
+                "excerpt_hash": self.excerpt_hash,
+            }
+        )
+        if self.captured_at is not None:
+            data["captured_at"] = self.captured_at
+        return data
 
     @classmethod
     def from_dict(cls, data: dict) -> "SourceRef":
+        known = {
+            "kind",
+            "ref",
+            "captured_at",
+            "scope_kind",
+            "scope_key",
+            "occurred_at",
+            "time_precision",
+            "role",
+            "excerpt_hash",
+        }
         return cls(
             kind=str(data.get("kind") or "unknown"),
             ref=str(data.get("ref") or ""),
-            captured_at=str(data.get("captured_at") or now_iso()),
+            captured_at=(str(data["captured_at"]) if data.get("captured_at") is not None else None),
             scope_kind=data.get("scope_kind"),
             scope_key=data.get("scope_key"),
             occurred_at=data.get("occurred_at"),
             time_precision=data.get("time_precision") or "unknown",
             role=data.get("role"),
             excerpt_hash=data.get("excerpt_hash"),
+            extra={key: value for key, value in data.items() if key not in known},
         )
 
 

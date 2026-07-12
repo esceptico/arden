@@ -161,7 +161,10 @@ def parse_raw(text: str) -> tuple[dict, list[Line | LedgerEntry]]:
     fm, body = _split_frontmatter(text)
     rows = body.splitlines()
     first = next((index for index, row in enumerate(rows) if row.strip()), None)
-    if first is not None and _V2_HEADER_RE.fullmatch(rows[first]):
+    header_rows = [index for index, row in enumerate(rows) if _V2_HEADER_RE.fullmatch(row)]
+    if header_rows and first != header_rows[0]:
+        raise ValueError("schema-v2 header must be the first nonempty raw line")
+    if first is not None and header_rows:
         entries: list[LedgerEntry] = []
         index = first + 1
         while index < len(rows):
@@ -180,11 +183,11 @@ def merge_split(page: Page, raw_text: str | None) -> Page:
     """Attach a raw sidecar's frontmatter + timeline onto a parsed page."""
     if raw_text:
         _, raw_body = _split_frontmatter(raw_text)
+        fm, lines = parse_raw(raw_text)
         page.records_header = next(
             (row for row in raw_body.splitlines() if _V2_HEADER_RE.fullmatch(row)),
             None,
         )
-        fm, lines = parse_raw(raw_text)
         page.frontmatter.update(fm)
         page.lines.extend(lines)
     return page
