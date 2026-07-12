@@ -54,6 +54,10 @@ ARTIFACT_DIR_KINDS: dict[str, str] = {
 ARTIFACT_DIR_ORDER = {name: i for i, name in enumerate(ARTIFACT_DIR_KINDS)}
 _OPEN_RESOURCE_SUFFIXES = {".md", ".txt"}
 _ENGINE_RESOURCE_DIRS = {"raw", ".ntrp", ".index", ".maintenance"}
+_PAGE_EDIT_INTERNAL_PREFIXES = (
+    Path("raw/events"),
+    Path(".ntrp/maintenance/page-edit-previews"),
+)
 
 MAX_LOG_CHARS = 500
 MAX_DOSSIER_SNIPPET_CHARS = 280
@@ -786,6 +790,132 @@ class ArtifactMemoryStore:
             timeline=timeline,
             frontmatter=dict(fm),
         )
+
+    def read_resource_bytes(self, rel: str, *, page_edit_internal: bool = False) -> bytes:
+        """Read an exact open-vault resource without following symlinks."""
+        safe = Path(rel)
+        rel_posix = safe.as_posix()
+        if page_edit_internal:
+            if not self._allowed_page_edit_internal(safe):
+                raise FileNotFoundError(rel)
+        elif not self._allowed_artifact_rel(rel_posix):
+            raise FileNotFoundError(rel)
+        fd = self._open_anchored_regular(safe, os.O_RDONLY, create_parents=False)
+        with os.fdopen(fd, "rb") as stream:
+            return stream.read()
+
+    def write_page_edit_preview(self, rel: str, content: bytes) -> None:
+        safe = Path(rel)
+        if not self._allowed_page_edit_internal(safe) or safe.suffix != ".json":
+            raise FileNotFoundError(rel)
+        fd = self._open_anchored_regular(
+            safe,
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            create_parents=True,
+        )
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+
+    def delete_page_edit_preview(self, rel: str) -> None:
+        safe = Path(rel)
+        if not self._allowed_page_edit_internal(safe) or safe.suffix != ".json":
+            raise FileNotFoundError(rel)
+        parent_fd = -1
+        try:
+            parent_fd, name = self._open_anchored_parent(safe, create_parents=False)
+            target_st = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            if stat.S_ISLNK(target_st.st_mode) or not stat.S_ISREG(target_st.st_mode):
+                raise FileNotFoundError(rel)
+            os.unlink(name, dir_fd=parent_fd)
+            os.fsync(parent_fd)
+        except FileNotFoundError:
+            return
+        finally:
+            if parent_fd >= 0:
+                os.close(parent_fd)
+
+    def page_edit_event_resources(self) -> tuple[str, ...]:
+        directory = self.root / "raw" / "events"
+        try:
+            directory_st = directory.lstat()
+            children = sorted(directory.iterdir(), key=lambda path: path.name)
+        except OSError:
+            return ()
+        if stat.S_ISLNK(directory_st.st_mode) or not stat.S_ISDIR(directory_st.st_mode):
+            return ()
+        resources: list[str] = []
+        for path in children:
+            try:
+                path_st = path.lstat()
+            except OSError:
+                continue
+            if stat.S_ISREG(path_st.st_mode) and not stat.S_ISLNK(path_st.st_mode) and path.suffix == ".md":
+                resources.append(path.relative_to(self.root).as_posix())
+        return tuple(resources)
+
+    @staticmethod
+    def _allowed_page_edit_internal(path: Path) -> bool:
+        if path.is_absolute() or not path.parts or any(part in {"", ".", ".."} for part in path.parts):
+            return False
+        return any(path.is_relative_to(prefix) for prefix in _PAGE_EDIT_INTERNAL_PREFIXES)
+
+    def _open_anchored_regular(self, rel: Path, flags: int, *, create_parents: bool) -> int:
+        parent_fd = -1
+        descriptor = -1
+        try:
+            parent_fd, name = self._open_anchored_parent(rel, create_parents=create_parents)
+            descriptor = os.open(
+                name,
+                flags | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
+                0o600,
+                dir_fd=parent_fd,
+            )
+            opened = os.fstat(descriptor)
+            if not stat.S_ISREG(opened.st_mode):
+                raise FileNotFoundError(rel.as_posix())
+            result = descriptor
+            descriptor = -1
+            return result
+        except OSError as exc:
+            raise FileNotFoundError(rel.as_posix()) from exc
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+            if parent_fd >= 0:
+                os.close(parent_fd)
+
+    def _open_anchored_parent(self, rel: Path, *, create_parents: bool) -> tuple[int, str]:
+        if rel.is_absolute() or not rel.parts or any(part in {"", ".", ".."} for part in rel.parts):
+            raise FileNotFoundError(rel.as_posix())
+        directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        current = os.open(self.root, directory_flags)
+        try:
+            if not stat.S_ISDIR(os.fstat(current).st_mode):
+                raise FileNotFoundError(str(self.root))
+            for part in rel.parts[:-1]:
+                try:
+                    child = os.open(part, directory_flags, dir_fd=current)
+                except FileNotFoundError:
+                    if not create_parents:
+                        raise
+                    os.mkdir(part, mode=0o700, dir_fd=current)
+                    os.fsync(current)
+                    child = os.open(part, directory_flags, dir_fd=current)
+                if not stat.S_ISDIR(os.fstat(child).st_mode):
+                    os.close(child)
+                    raise FileNotFoundError(rel.as_posix())
+                os.close(current)
+                current = child
+            result = current
+            current = -1
+            return result, rel.parts[-1]
+        except OSError as exc:
+            raise FileNotFoundError(rel.as_posix()) from exc
+        finally:
+            if current >= 0:
+                os.close(current)
 
     def _artifact_meta(self, rel: str, content: str) -> tuple[str, str, str, str | None]:
         fm, _ = parse_frontmatter(content)
