@@ -1143,6 +1143,8 @@ class FilePageStore:
             self._journal.recover(prefer_rollback=True)
             self._reload_canonical_state()
             raise
+        if file_roles and CanonicalFileRole.USER_PAGE in file_roles.values():
+            self._reload_canonical_state()
         self._active_ledger_entries()
 
     def history(self, record_id: str) -> tuple[LedgerEntry, ...]:

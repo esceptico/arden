@@ -850,6 +850,40 @@ async def test_append_entries_stages_every_touched_page_and_caller_file_in_one_c
     await store.close()
 
 
+async def test_user_page_override_reloads_live_state_before_the_next_operation(tmp_path: Path):
+    from ntrp.memory.artifacts import ArtifactMemoryStore
+
+    vault = tmp_path / "memory"
+    original = _ledger_entry("original", "Original", sequence=1)
+    index = _LedgerIndex()
+    store = await _file_store_pages(vault, {"topics/a.md": [original]}, index=index)
+    page_path = vault / "topics" / "a.md"
+    caller_bytes = b"# Caller page\n\nCaller-authored briefing.\n"
+    successor = _ledger_entry("successor", "Successor", sequence=2, supersedes=(original.id,))
+
+    store.append_entries(
+        (successor,),
+        files={Path("topics/a.md"): caller_bytes},
+        file_roles={Path("topics/a.md"): CanonicalFileRole.USER_PAGE},
+    )
+    await _drain()
+
+    assert ArtifactMemoryStore(vault).read_artifact("topics/a.md").content == "Caller-authored briefing."
+    assert "Caller-authored briefing." in store._pages[page_path].prose
+    assert store._loc[successor.id] == page_path
+    assert store._next_sequence() == 3
+    assert index.store.ids == {successor.id}
+    assert store._file_state[page_path] == page_path.stat().st_mtime_ns
+
+    third = _ledger_entry("third", "Third", sequence=3, supersedes=(successor.id,))
+    store.append_entries((third,))
+
+    assert "Caller-authored briefing." in page_path.read_text(encoding="utf-8")
+    assert "Caller-authored briefing." in store._pages[page_path].prose
+    assert (await store.get(third.id)).text == "Third"
+    await store.close()
+
+
 async def test_generated_prose_only_write_is_excluded_from_canonical_revision(tmp_path: Path, monkeypatch):
     vault = tmp_path / "memory"
     store = await _file_store(vault, [_ledger_entry("record", "Fact", sequence=1)])

@@ -181,3 +181,24 @@ def test_recovery_rejects_symlinked_metadata_inside_a_commit(tmp_path: Path) -> 
 
     with pytest.raises(ValueError, match="symlink"):
         VaultJournal(tmp_path).recover()
+
+
+@pytest.mark.parametrize("artifact_dir", ["staged", "backups"])
+def test_recovery_rejects_substituted_artifact_directories(tmp_path: Path, artifact_dir: str) -> None:
+    (tmp_path / "me.md").write_bytes(b"old")
+    prepared = VaultJournal(tmp_path).prepare({Path("me.md"): b"new"})
+    original = prepared.path / artifact_dir
+    outside = tmp_path / "outside" / artifact_dir
+    outside.parent.mkdir()
+    shutil.copytree(original, outside)
+    outside_before = (outside / "0000").read_bytes()
+    shutil.rmtree(original)
+    original.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symlink"):
+        VaultJournal(tmp_path).recover()
+
+    assert (tmp_path / "me.md").read_bytes() == b"old"
+    assert (outside / "0000").read_bytes() == outside_before
+    assert prepared.path.exists()
+    assert original.is_symlink()

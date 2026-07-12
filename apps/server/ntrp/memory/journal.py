@@ -151,7 +151,7 @@ class VaultJournal:
 
     def _finish(self, commit_path: Path, manifest: dict, commit_id: str) -> None:
         for index, row in enumerate(manifest["files"]):
-            content = (commit_path / row["staged"]).read_bytes()
+            content = self._read_artifact(commit_path, row["staged"])
             self._replace_target(row["target"], content, commit_id, index)
             self._checkpoint(f"after_replace:{index}")
         if not self._targets_match(manifest):
@@ -167,7 +167,7 @@ class VaultJournal:
         for index, row in enumerate(manifest["files"]):
             target = self._target_path(row["target"])
             if row["existed"]:
-                self._replace_target(row["target"], (commit_path / row["backup"]).read_bytes(), commit_path.name, index)
+                self._replace_target(row["target"], self._read_artifact(commit_path, row["backup"]), commit_path.name, index)
             else:
                 target.unlink(missing_ok=True)
                 self._fsync_dir(target.parent)
@@ -213,6 +213,7 @@ class VaultJournal:
             row["target"] = target
             row["staged"] = staged.relative_to(commit_path).as_posix()
             row["backup"] = backup.relative_to(commit_path).as_posix()
+        self._validate_artifact_paths(commit_path, manifest)
         return manifest
 
     def _targets_match(self, manifest: dict) -> bool:
@@ -233,11 +234,13 @@ class VaultJournal:
                 return False
         return True
 
-    @staticmethod
-    def _artifacts_match(commit_path: Path, manifest: dict, field: str, hash_field: str) -> bool:
+    def _artifacts_match(self, commit_path: Path, manifest: dict, field: str, hash_field: str) -> bool:
         for row in manifest["files"]:
-            artifact = commit_path / row[field]
-            if artifact.is_symlink() or not artifact.is_file() or VaultJournal._sha256(artifact.read_bytes()) != row[hash_field]:
+            try:
+                content = self._read_artifact(commit_path, row[field])
+            except FileNotFoundError:
+                return False
+            if self._sha256(content) != row[hash_field]:
                 return False
         return True
 
@@ -275,6 +278,7 @@ class VaultJournal:
     def _remove_commit(self, commit_path: Path) -> None:
         self._validate_metadata_paths()
         self._validate_commit_path(commit_path)
+        self._validate_artifact_directories(commit_path)
         shutil.rmtree(commit_path)
         self._fsync_dir(self._journal_root)
 
@@ -326,6 +330,51 @@ class VaultJournal:
         resolved = path.resolve(strict=False)
         if self.root not in resolved.parents:
             raise ValueError(f"journal metadata file escapes vault root: {path}")
+
+    def _validate_artifact_directories(self, commit_path: Path) -> None:
+        self._validate_commit_path(commit_path)
+        for name in ("staged", "backups"):
+            directory = commit_path / name
+            if directory.is_symlink():
+                raise ValueError(f"journal artifact directory is a symlink: {directory}")
+            resolved = directory.resolve(strict=False)
+            if resolved != commit_path and commit_path not in resolved.parents:
+                raise ValueError(f"journal artifact directory escapes commit: {directory}")
+            if directory.exists() and not directory.is_dir():
+                raise ValueError(f"journal artifact path is not a directory: {directory}")
+
+    def _validate_artifact_paths(self, commit_path: Path, manifest: dict) -> None:
+        self._validate_artifact_directories(commit_path)
+        for row in manifest["files"]:
+            self._validate_artifact_file(commit_path, commit_path / row["staged"], require_file=False)
+            self._validate_artifact_file(commit_path, commit_path / row["backup"], require_file=False)
+
+    def _validate_artifact_file(self, commit_path: Path, artifact: Path, *, require_file: bool) -> None:
+        try:
+            relative = artifact.relative_to(commit_path)
+        except ValueError as exc:
+            raise ValueError(f"journal artifact escapes commit: {artifact}") from exc
+        current = commit_path
+        for part in relative.parts[:-1]:
+            current /= part
+            if current.is_symlink():
+                raise ValueError(f"journal artifact parent is a symlink: {current}")
+            if current.exists() and not current.is_dir():
+                raise ValueError(f"journal artifact parent is not a directory: {current}")
+        if artifact.is_symlink():
+            raise ValueError(f"journal artifact file is a symlink: {artifact}")
+        resolved = artifact.resolve(strict=False)
+        if commit_path not in resolved.parents:
+            raise ValueError(f"journal artifact escapes commit: {artifact}")
+        if artifact.exists() and not artifact.is_file():
+            raise ValueError(f"journal artifact is not a file: {artifact}")
+        if require_file and not artifact.is_file():
+            raise FileNotFoundError(artifact)
+
+    def _read_artifact(self, commit_path: Path, relative: str) -> bytes:
+        artifact = commit_path / relative
+        self._validate_artifact_file(commit_path, artifact, require_file=True)
+        return artifact.read_bytes()
 
     def _mkdir_durable(self, path: Path) -> None:
         try:
