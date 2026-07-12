@@ -64,6 +64,7 @@ function runStamp(iso: string): string {
 }
 
 function runSummary(run: AutomationRun): string {
+  if (run.status === "running") return "running…";
   if (run.status === "failed") return `Failed — ${run.error ?? "no error recorded"}`;
   // First line that reads as prose. Automation results often open with the
   // spawned session's codename ("onyx-skua") — a single wordless token is a
@@ -241,11 +242,7 @@ export function AutomationDetail({
             aria-label="Automation name"
             className="flex-1 min-w-0 h-8 bg-transparent border-0 text-xl font-semibold tracking-[-0.014em] text-ink outline-none placeholder:text-muted read-only:text-muted"
           />
-          {running && (
-            <Badge tone="accent">
-              <span className="animate-pulse-soft motion-reduce:animate-none">running</span>
-            </Badge>
-          )}
+          {running && <Badge tone="accent">running</Badge>}
           {automation && isChannelAutomation(automation) && (
             <Badge tone="neutral" leading={<Radio size={9} strokeWidth={2.2} />}>
               channel

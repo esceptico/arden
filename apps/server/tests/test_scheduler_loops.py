@@ -12,6 +12,7 @@ from ntrp.automation.scheduler import Scheduler
 from ntrp.automation.service import AutomationService
 from ntrp.automation.store import AutomationStore
 from ntrp.automation.triggers import MessageTrigger, TimeTrigger
+from ntrp.events.internal import RunCompleted
 from ntrp.events.triggers import MessageReceived
 
 
@@ -173,7 +174,10 @@ async def test_start_next_queued_event_clears_running_when_claim_fails(store: Au
 
 
 @pytest.mark.asyncio
-async def test_run_finalize_clears_running_when_result_write_fails(store: AutomationStore):
+async def test_run_finalize_keeps_detached_running_when_result_write_fails(store: AutomationStore):
+    """Detached (iteration) dispatches keep the running flag on purpose —
+    the run is genuinely in flight; RunCompleted (or the reaper) releases
+    it. A failed last-run bookkeeping write must not change that."""
     auto = _loop(running_since=datetime.now(UTC))
     await store.save(auto)
     await store.conn.execute(
@@ -193,12 +197,38 @@ async def test_run_finalize_clears_running_when_result_write_fails(store: Automa
     assert len(dispatched) == 1
     reloaded = await store.get(auto.task_id)
     assert reloaded is not None
+    assert reloaded.running_since is not None
+    assert auto.task_id in sched._detached_task_ids
+
+
+async def test_run_finalize_clears_running_for_post_mode_when_result_write_fails(store: AutomationStore):
+    """Post-mode loops await their run — the old invariant holds: a failed
+    bookkeeping write must not leave a zombie running flag."""
+    auto = _loop(running_since=datetime.now(UTC), read_history=False)
+    await store.save(auto)
+    await store.conn.execute(
+        """
+        CREATE TRIGGER fail_last_run_update
+        BEFORE UPDATE OF last_run_at ON scheduled_tasks
+        BEGIN
+            SELECT RAISE(ABORT, 'last run update failed');
+        END
+        """
+    )
+    await store.conn.commit()
+    sched, dispatched, _results = _make_post_scheduler(store)
+
+    await sched._run_and_finalize(auto)
+
+    assert len(dispatched) == 1
+    reloaded = await store.get(auto.task_id)
+    assert reloaded is not None
     assert reloaded.running_since is None
 
 
 @pytest.mark.asyncio
 async def test_run_finalize_does_not_silently_complete_when_clear_running_fails(store: AutomationStore):
-    auto = _loop()
+    auto = _loop(read_history=False)
     await store.save(auto)
     await store.conn.execute(
         """
@@ -217,10 +247,10 @@ async def test_run_finalize_does_not_silently_complete_when_clear_running_fails(
     async def dispatcher(_auto: Automation, context: str | dict | None = None) -> str | None:
         started.set()
         await release.wait()
-        return "fake-run-id"
+        return "agent result"
 
     sched = Scheduler(store=store, build_deps=lambda: None)
-    sched.set_iteration_dispatcher(dispatcher)
+    sched.set_post_dispatcher(dispatcher)
 
     await sched._start_run(auto)
     await asyncio.wait_for(started.wait(), timeout=1)
@@ -1228,3 +1258,68 @@ async def test_list_session_bound_excludes_disabled(store: AutomationStore):
     rows = await store.list_session_bound_by_session("sess-shared")
     task_ids = {r.task_id for r in rows}
     assert task_ids == {"loop-enabled"}
+
+
+@pytest.mark.asyncio
+async def test_detached_run_settles_on_run_completed(store: AutomationStore):
+    """The proper lifecycle: an iteration dispatch leaves the run row (and
+    the running flag) in flight; RunCompleted settles both with the agent's
+    real report."""
+    auto = _loop()
+    await store.save(auto)
+    # Mirror _start_run: the claim sets the running flag before finalize.
+    assert await store.try_mark_running(auto.task_id, datetime.now(UTC))
+    sched, dispatched = _make_scheduler(store)
+
+    await sched._run_and_finalize(auto)
+
+    assert len(dispatched) == 1
+    runs = await store.list_runs(auto.task_id)
+    assert runs[0]["status"] == "running"
+    assert runs[0]["result"] is None
+    inflight = await store.get(auto.task_id)
+    assert inflight.running_since is not None
+    assert inflight.last_result is None
+
+    await sched.handle_run_completed(
+        RunCompleted(
+            run_id="run-1",
+            session_id=auto.thread_id,
+            messages=(),
+            usage=Usage(),
+            result="two emails need replies",
+        )
+    )
+
+    runs = await store.list_runs(auto.task_id)
+    assert runs[0]["status"] == "completed"
+    assert runs[0]["result"] == "two emails need replies"
+    assert runs[0]["ended_at"] is not None
+    settled = await store.get(auto.task_id)
+    assert settled.running_since is None
+    assert settled.last_result == "two emails need replies"
+    assert auto.task_id not in sched._detached_task_ids
+
+
+@pytest.mark.asyncio
+async def test_detached_run_reaped_when_completion_never_arrives(store: AutomationStore):
+    from ntrp.constants import DETACHED_RUN_MAX_AGE
+
+    auto = _loop()
+    await store.save(auto)
+    assert await store.try_mark_running(auto.task_id, datetime.now(UTC))
+    sched, _dispatched = _make_scheduler(store)
+    await sched._run_and_finalize(auto)
+
+    # Backdate the dispatch past the max age — RunCompleted was lost.
+    sched._detached_task_ids[auto.task_id] = (
+        datetime.now(UTC) - DETACHED_RUN_MAX_AGE - timedelta(minutes=1)
+    )
+    await sched._release_untracked_running()
+
+    runs = await store.list_runs(auto.task_id)
+    assert runs[0]["status"] == "failed"
+    assert runs[0]["error"] == "run never reported back"
+    reaped = await store.get(auto.task_id)
+    assert reaped.running_since is None
+    assert auto.task_id not in sched._detached_task_ids

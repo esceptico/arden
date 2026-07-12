@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import dataclass
 import json
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
@@ -17,6 +18,7 @@ from ntrp.constants import (
 )
 from ntrp.events.internal import RunCompleted
 from ntrp.events.sse import AutomationFinishedEvent, AutomationProgressEvent, SSEEvent
+from ntrp.constants import DETACHED_RUN_MAX_AGE
 from ntrp.events.triggers import EVENT_APPROACHING, EventApproaching, MessageReceived, TriggerEvent
 from ntrp.logging import get_logger
 from ntrp.operator.runner import OperatorDeps, RunRequest, run_agent, run_agent_streaming
@@ -64,6 +66,15 @@ def split_manual_flag(context: str | dict | None) -> tuple[bool, str | dict | No
     return False, context
 
 
+@dataclass(frozen=True)
+class DetachedRun:
+    """Marker returned by fire-and-accept dispatches (iteration loops): the
+    agent run continues detached, so the scheduler must NOT settle the run
+    row / running flag — RunCompleted does that in handle_run_completed."""
+
+    handle: str | None
+
+
 class RunSkipped(Exception):
     """Raised by a dispatcher that declined to run (e.g. autonomous cap).
     The scheduler records the skip without consuming an iteration."""
@@ -93,6 +104,9 @@ class Scheduler:
         self._running: set[asyncio.Task] = set()
         self._running_task_ids: dict[asyncio.Task, str] = {}
         self._pending_running_task_ids: set[str] = set()
+        # task_id → dispatch time for in-flight detached runs; settled by
+        # handle_run_completed, reaped by _release_untracked_running.
+        self._detached_task_ids: dict[str, datetime] = {}
         self._handlers: dict[str, Callable[[dict | None], Awaitable[str | None]]] = {}
         self._iteration_dispatcher: IterationDispatcher | None = None
         self._post_dispatcher: PostDispatcher | None = None
@@ -161,6 +175,7 @@ class Scheduler:
             self._running.clear()
             self._running_task_ids.clear()
             self._pending_running_task_ids.clear()
+            self._detached_task_ids.clear()
 
         _logger.info("Scheduler stopped")
 
@@ -184,8 +199,27 @@ class Scheduler:
 
     async def _release_untracked_running(self) -> None:
         tracked_ids = set(self._running_task_ids.values()) | self._pending_running_task_ids
+        now = datetime.now(UTC)
         for automation in await self.store.list_running():
             if automation.task_id in tracked_ids:
+                continue
+            dispatched_at = self._detached_task_ids.get(automation.task_id)
+            if dispatched_at is not None:
+                if now - dispatched_at <= DETACHED_RUN_MAX_AGE:
+                    continue  # detached run legitimately in flight
+                # RunCompleted never arrived (the detached run died without
+                # reporting) — fail the row so history stays terminal.
+                _logger.warning(
+                    "Detached run for %s never reported back; failing it", automation.task_id
+                )
+                self._detached_task_ids.pop(automation.task_id, None)
+                await self.store.fail_latest_running_run(
+                    automation.task_id, now, "run never reported back"
+                )
+                await self.store.clear_running(automation.task_id)
+                await self.emit_automation_event(
+                    AutomationFinishedEvent(task_id=automation.task_id, result=None),
+                )
                 continue
             _logger.warning("Clearing untracked running flag for automation %s", automation.task_id)
             await self.store.clear_running(automation.task_id)
@@ -210,6 +244,11 @@ class Scheduler:
         cleared = await self.store.clear_all_running()
         if cleared:
             _logger.info("Cleared %d stale running flags", cleared)
+        orphaned = await self.store.fail_orphaned_runs(
+            datetime.now(UTC), "interrupted by server restart"
+        )
+        if orphaned:
+            _logger.info("Failed %d orphaned run rows from the previous process", orphaned)
         released = await self.store.release_all_claimed_events()
         if released:
             _logger.info("Released %d stale claimed event rows", released)
@@ -414,12 +453,33 @@ class Scheduler:
         self.update_activity()
         now = datetime.now(UTC)
 
+        session_bound = await self.store.list_session_bound_by_session(event.session_id)
+
+        # Settle detached (fire-and-accept) iteration runs FIRST: their run
+        # row sat in status='running' since dispatch — write the real report
+        # and end time, release the running flag, and only now announce the
+        # finish. The status guard in finalize_latest_run makes this
+        # idempotent across duplicate/late outbox deliveries.
+        for auto in session_bound:
+            if not auto.read_history:
+                continue
+            settled = await self.store.finalize_latest_run(auto.task_id, event.result, now)
+            if not settled:
+                continue
+            self._detached_task_ids.pop(auto.task_id, None)
+            if event.result:
+                await self.store.set_last_result(auto.task_id, event.result)
+            await self.store.clear_running(auto.task_id)
+            await self.emit_automation_event(
+                AutomationFinishedEvent(task_id=auto.task_id, result=event.result),
+            )
+
         # Fast-path for session-bound automations targeting this session
         # (loops AND channel automations created via service.create with
         # thread_id): the session just went idle, so anything deferred by
         # the fire gate (or whose next_run_at has already passed) can fire
         # now as a fresh turn without waiting for the next 60s poll tick.
-        for auto in await self.store.list_session_bound_by_session(event.session_id):
+        for auto in session_bound:
             if not auto.enabled or auto.next_run_at is None or auto.next_run_at > now:
                 continue
             if not self._loop_can_fire(auto):
@@ -497,7 +557,7 @@ class Scheduler:
         await self.emit_automation_event(
             AutomationProgressEvent(task_id=automation.task_id, status="starting..."),
         )
-        result: str | None = None
+        result: str | DetachedRun | None = None
         success = False
         error_message = ""
         started_at = datetime.now(UTC)
@@ -518,8 +578,15 @@ class Scheduler:
             error_message = f"{type(e).__name__}: {e}"
             _logger.exception("Failed to execute automation %s", automation.task_id)
         finally:
+            detached = isinstance(result, DetachedRun)
+            result_text = None if detached else result
+            # A detached run is still going — the "finished" event (with the
+            # real result) is emitted when RunCompleted settles it; this one
+            # only nudges the UI to refresh schedule/running state.
             await self.emit_automation_event(
-                AutomationFinishedEvent(task_id=automation.task_id, result=result),
+                AutomationFinishedEvent(
+                    task_id=automation.task_id, result=result_text
+                ),
             )
             now = datetime.now(UTC)
             # If _run_session_bound disabled this automation (aged_out / max_iterations),
@@ -529,17 +596,21 @@ class Scheduler:
             event_settlement_error: Exception | None = None
             try:
                 next_run = self._advance_to_future(automation, now) if automation.enabled else None
-                await self.store.update_last_run(automation.task_id, now, next_run, result=result)
+                # Detached: advance the clock but keep last_result — the real
+                # report lands via RunCompleted.
+                await self.store.update_last_run(
+                    automation.task_id, now, next_run, result=result_text, preserve_result=detached
+                )
                 if any(t.one_shot for t in automation.triggers):
                     await self.store.set_enabled(automation.task_id, False)
             except Exception:
                 _logger.exception("Failed to update automation run result %s", automation.task_id)
-            if run_id is not None:
+            if run_id is not None and not (detached and success):
                 try:
                     await self.store.record_run_finish(
                         run_id,
                         status="completed" if success else "failed",
-                        result=result,
+                        result=result_text,
                         error=error_message or None,
                         ended_at=now,
                     )
@@ -576,11 +647,16 @@ class Scheduler:
                             await self.store.release_event_claim(event_queue_id)
                         except Exception:
                             _logger.exception("Failed to release queued automation event %s", event_queue_id)
-            try:
-                await self.store.clear_running(automation.task_id)
-            except Exception as exc:
-                _logger.exception("Failed to clear running flag for automation %s", automation.task_id)
-                raise RuntimeError(f"Failed to clear running flag for automation {automation.task_id}") from exc
+            if detached and success:
+                # The run row stays 'running' and the flag stays set until
+                # RunCompleted settles both — the automation IS running.
+                self._detached_task_ids[automation.task_id] = now
+            else:
+                try:
+                    await self.store.clear_running(automation.task_id)
+                except Exception as exc:
+                    _logger.exception("Failed to clear running flag for automation %s", automation.task_id)
+                    raise RuntimeError(f"Failed to clear running flag for automation {automation.task_id}") from exc
             if automation.handler in _CATCH_UP_HANDLERS:
                 self._wake_event.set()
             if event_queue_id is not None and event_settlement_error is None:
@@ -686,12 +762,18 @@ class Scheduler:
             automation.thread_id,
         )
         try:
-            result = await dispatcher(automation, context)
+            dispatched = await dispatcher(automation, context)
         except RunSkipped as skip:
             # The run never happened — no iteration consumed, so the intake
             # first-run trigger and max_iterations accounting stay truthful.
             _logger.info("Loop %s skipped: %s", automation.task_id, skip)
             return f"Skipped: {skip}"
+        # Post mode awaited the run and returns its text; iteration mode is
+        # fire-and-accept — the returned value is only the run-id slug, so
+        # hand back a DetachedRun marker instead of a fake result.
+        result: str | DetachedRun | None = (
+            DetachedRun(dispatched) if automation.read_history else dispatched
+        )
         await self.store.increment_iteration(automation.task_id)
         # Disable after max_iterations is hit. iteration_count was already
         # incremented in the store; compare against the in-memory value + 1

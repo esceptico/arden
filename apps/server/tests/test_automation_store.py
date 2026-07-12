@@ -21,6 +21,70 @@ async def automation_store(tmp_path: Path):
     await conn.close()
 
 
+async def test_finalize_latest_run_settles_only_in_flight_rows(automation_store: AutomationStore):
+    """Detached (fire-and-accept) runs leave their row status='running';
+    finalize settles it with the real report. Already-terminal rows are
+    never rewritten — the guard is what makes late/duplicate outbox
+    deliveries safe."""
+    t0 = datetime(2026, 1, 1, tzinfo=UTC)
+    done_id = await automation_store.record_run_start("loop-1", t0)
+    await automation_store.record_run_finish(
+        done_id, status="completed", result="old report", error=None, ended_at=t0
+    )
+    # settled row → no-op
+    assert not await automation_store.finalize_latest_run("loop-1", "late duplicate", t0)
+    runs = await automation_store.list_runs("loop-1")
+    assert runs[0]["result"] == "old report"
+
+    # in-flight row → settled with report + end time + completed status
+    await automation_store.record_run_start("loop-1", t0 + timedelta(hours=1))
+    done = datetime(2026, 1, 1, 1, 2, tzinfo=UTC)
+    assert await automation_store.finalize_latest_run("loop-1", "two emails need replies", done)
+    runs = await automation_store.list_runs("loop-1")
+    assert runs[0]["status"] == "completed"
+    assert runs[0]["result"] == "two emails need replies"
+    assert runs[0]["ended_at"] == done.isoformat()
+
+
+async def test_orphaned_running_rows_fail_terminal(automation_store: AutomationStore):
+    t0 = datetime(2026, 1, 1, tzinfo=UTC)
+    await automation_store.record_run_start("loop-1", t0)
+    await automation_store.record_run_start("loop-2", t0)
+
+    swept = await automation_store.fail_orphaned_runs(
+        t0 + timedelta(minutes=5), "interrupted by server restart"
+    )
+    assert swept == 2
+    for task in ("loop-1", "loop-2"):
+        runs = await automation_store.list_runs(task)
+        assert runs[0]["status"] == "failed"
+        assert runs[0]["error"] == "interrupted by server restart"
+
+
+async def test_fail_latest_running_run_targets_one_task(automation_store: AutomationStore):
+    t0 = datetime(2026, 1, 1, tzinfo=UTC)
+    await automation_store.record_run_start("loop-1", t0)
+    await automation_store.record_run_start("loop-2", t0)
+
+    await automation_store.fail_latest_running_run(
+        "loop-1", t0 + timedelta(hours=3), "run never reported back"
+    )
+    assert (await automation_store.list_runs("loop-1"))[0]["status"] == "failed"
+    assert (await automation_store.list_runs("loop-2"))[0]["status"] == "running"
+
+
+async def test_update_last_run_preserve_result(automation_store: AutomationStore):
+    await automation_store.save(_automation("loop-1"))
+    t0 = datetime(2026, 1, 1, tzinfo=UTC)
+    await automation_store.update_last_run("loop-1", t0, None, result="real report")
+    await automation_store.update_last_run(
+        "loop-1", t0 + timedelta(hours=1), None, preserve_result=True
+    )
+    auto = await automation_store.get("loop-1")
+    assert auto.last_result == "real report"
+    assert auto.last_run_at == t0 + timedelta(hours=1)
+
+
 async def test_run_history_records_start_then_finish(automation_store: AutomationStore):
     t0 = datetime(2026, 1, 1, tzinfo=UTC)
     run_id = await automation_store.record_run_start("task-1", t0)

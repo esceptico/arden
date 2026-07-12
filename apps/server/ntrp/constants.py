@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 # --- Content Truncation Limits ---
 
 EMBEDDING_TEXT_LIMIT = 8000  # for embedder input only — see embedder.py
@@ -240,3 +242,7 @@ AREA_ATTENTION_PRESETS = {
 }
 AREA_QUIET_DECAY_FACTOR = 1.5  # applied after 2+ consecutive quiet runs
 AREA_ASK_IGNORED_DAYS = 7  # unanswered this long → attention steps down
+
+# How long a detached (fire-and-accept) automation run may stay in flight
+# before the scheduler assumes its RunCompleted was lost and fails the run.
+DETACHED_RUN_MAX_AGE = timedelta(hours=3)

@@ -332,6 +332,12 @@ SET last_run_at = ?, next_run_at = ?, last_result = ?
 WHERE task_id = ?
 """
 
+_SQL_UPDATE_LAST_RUN_KEEP_RESULT = """
+UPDATE scheduled_tasks
+SET last_run_at = ?, next_run_at = ?
+WHERE task_id = ?
+"""
+
 _SQL_SET_NEXT_RUN = """
 UPDATE scheduled_tasks SET next_run_at = ? WHERE task_id = ?
 """
@@ -355,6 +361,18 @@ _SQL_INSERT_RUN = (
 )
 _SQL_FINISH_RUN = (
     "UPDATE automation_runs SET ended_at = ?, status = ?, result = ?, error = ? WHERE id = ?"
+)
+_SQL_FINALIZE_LATEST_RUN = (
+    "UPDATE automation_runs SET status = 'completed', result = ?, ended_at = ? "
+    "WHERE id = (SELECT id FROM automation_runs WHERE task_id = ? ORDER BY id DESC LIMIT 1) "
+    "AND status = 'running'"
+)
+_SQL_FAIL_ORPHANED_RUNS = (
+    "UPDATE automation_runs SET status = 'failed', error = ?, ended_at = ? WHERE status = 'running'"
+)
+_SQL_FAIL_LATEST_RUNNING_RUN = (
+    "UPDATE automation_runs SET status = 'failed', error = ?, ended_at = ? "
+    "WHERE task_id = ? AND status = 'running'"
 )
 _SQL_LIST_RUNS = (
     "SELECT id, task_id, started_at, ended_at, status, result, error "
@@ -1236,12 +1254,26 @@ class AutomationStore:
         await self.conn.commit()
 
     async def update_last_run(
-        self, task_id: str, last_run: datetime, next_run: datetime | None, result: str | None = None
+        self,
+        task_id: str,
+        last_run: datetime,
+        next_run: datetime | None,
+        result: str | None = None,
+        *,
+        preserve_result: bool = False,
     ) -> None:
-        await self.conn.execute(
-            _SQL_UPDATE_LAST_RUN,
-            (last_run.isoformat(), next_run.isoformat() if next_run else None, result, task_id),
-        )
+        """`preserve_result` advances the clock without touching last_result —
+        detached (fire-and-accept) runs have no result yet at this point."""
+        if preserve_result:
+            await self.conn.execute(
+                _SQL_UPDATE_LAST_RUN_KEEP_RESULT,
+                (last_run.isoformat(), next_run.isoformat() if next_run else None, task_id),
+            )
+        else:
+            await self.conn.execute(
+                _SQL_UPDATE_LAST_RUN,
+                (last_run.isoformat(), next_run.isoformat() if next_run else None, result, task_id),
+            )
         await self.conn.commit()
 
     async def record_run_start(self, task_id: str, started_at: datetime) -> int:
@@ -1263,6 +1295,36 @@ class AutomationStore:
         await self.conn.execute(
             _SQL_FINISH_RUN,
             (ended_at.isoformat(), status, clip(result), clip(error), run_id),
+        )
+        await self.conn.commit()
+
+    async def finalize_latest_run(
+        self, task_id: str, result: str | None, ended_at: datetime
+    ) -> bool:
+        """Settle the newest IN-FLIGHT run row with the run's real outcome.
+        Iteration loops dispatch fire-and-accept, so their row stays
+        status='running' until the detached run's RunCompleted arrives here.
+        The status guard makes this idempotent — an already-settled (or
+        restart-failed) row is never rewritten. Returns whether a row was
+        settled."""
+        clipped = result if result is None or len(result) <= 4000 else result[:4000] + "…"
+        cursor = await self.conn.execute(
+            _SQL_FINALIZE_LATEST_RUN, (clipped, ended_at.isoformat(), task_id)
+        )
+        await self.conn.commit()
+        return cursor.rowcount > 0
+
+    async def fail_orphaned_runs(self, ended_at: datetime, error: str) -> int:
+        """Boot-time sweep: any row still 'running' belongs to a run the
+        previous process never settled — mark it failed so history stays
+        terminal."""
+        cursor = await self.conn.execute(_SQL_FAIL_ORPHANED_RUNS, (error, ended_at.isoformat()))
+        await self.conn.commit()
+        return cursor.rowcount
+
+    async def fail_latest_running_run(self, task_id: str, ended_at: datetime, error: str) -> None:
+        await self.conn.execute(
+            _SQL_FAIL_LATEST_RUNNING_RUN, (error, ended_at.isoformat(), task_id)
         )
         await self.conn.commit()
 

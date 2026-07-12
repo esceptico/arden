@@ -156,11 +156,6 @@ class AutomationRuntime:
                     await self.stores.sessions.update_area(key, attention=stepped)
                     _logger.info("Area %s attention stepped down to %s (asks unanswered)", key, stepped)
             await self._notify_asks(area_, record, created)
-            # The channel automation's finally-block recorded the run_id (a
-            # coolname slug) as last_result; overwrite it with the agent's
-            # actual report so the room's agent line shows what it found.
-            if run_completed.result:
-                await self.stores.automations.set_last_result(auto.task_id, run_completed.result)
             await self.scheduler.emit_automation_event(AreasChangedEvent(keys=[key]))
 
     async def _commit_area_report(
