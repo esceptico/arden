@@ -20,6 +20,7 @@ _HEADER = "<!-- ntrp:records schema=2 page={page} -->"
 _HEADER_RE = re.compile(r"^<!-- ntrp:records schema=(?P<version>\d+)(?: [^>]*)? -->$")
 _READABLE_ID_RE = re.compile(r"^- \S+ \^(?P<id>[\w-]+) ")
 _VALID_SCOPES = frozenset({"global", "user", "area"})
+_INTERNAL_SOURCE_KINDS = frozenset({"record", "memory_record", "derived_record"})
 _MIGRATION_META = Path(".ntrp/maintenance/migration-v2.json")
 
 
@@ -63,6 +64,8 @@ class VaultHealth:
 
     @property
     def first_error(self) -> str | None:
+        if self.schema_versions not in ((), (2,)):
+            return f"unsupported schema versions: {list(self.schema_versions)}"
         if self.malformed_metadata:
             return self.malformed_metadata[0]
         if self.duplicate_ids:
@@ -246,9 +249,11 @@ def _resolve_reference(
         candidates = [item for item in candidates if item.page.rel.as_posix() == target_path]
         if len(candidates) != 1:
             raise VaultMigrationError(page.rel, f"reference {raw!r} resolves to {len(candidates)} targets")
-        return f"{explicit['path']}#^{candidates[0].new_id}"
+        return candidates[0].new_id
     if not candidates:
         return raw
+    if referring is not None and old_id == referring.old_id:
+        return referring.new_id
     same_page = [item for item in candidates if item.page.rel == page.rel]
     if len(same_page) == 1:
         return same_page[0].new_id
@@ -312,7 +317,8 @@ def _render_pages(pages: list[_LegacyPage], migration_time: str) -> tuple[dict[P
         sources = []
         for source in entry.meta.sources:
             ref = source.ref
-            if source.kind in {"record", "derived-record", "derived_record"} or ref in reserved or _EXPLICIT_REF_RE.fullmatch(ref):
+            owned_kind = source.kind.lower().replace("-", "_")
+            if owned_kind in _INTERNAL_SOURCE_KINDS:
                 ref = _resolve_reference(ref, referring=occurrence, page=page, by_old_id=by_old_id)
             sources.append(replace(source, ref=ref))
         entry = replace(
@@ -376,6 +382,8 @@ def _migration_meta(root: Path) -> dict[str, str]:
         return {}
     except json.JSONDecodeError as exc:
         raise VaultMigrationError(_MIGRATION_META, f"invalid migration status JSON: {exc.msg}") from exc
+    if not isinstance(data, dict):
+        raise VaultMigrationError(_MIGRATION_META, "migration status must be a JSON object")
     return {key: str(value) for key, value in data.items() if value is not None}
 
 

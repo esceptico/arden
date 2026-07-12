@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import pytest
+
 from ntrp.memory.artifacts import ArtifactMemoryStore
 from ntrp.memory.file_store import FilePageStore
 from ntrp.memory.migrate_ledger_v2 import validate_vault
@@ -161,9 +163,22 @@ def test_health_preserves_mixed_schema_versions_and_rejects_bad_status(tmp_path:
     health = validate_vault(tmp_path)
     assert health.schema_versions == (2, 3)
     assert not health.healthy
+    assert health.first_error == "unsupported schema versions: [2, 3]"
 
     status = tmp_path / ".ntrp/maintenance/migration-v2.json"
     status.parent.mkdir(parents=True)
     status.write_text("{bad", encoding="utf-8")
     health = validate_vault(tmp_path)
     assert health.malformed_metadata[0].startswith(".ntrp/maintenance/migration-v2.json:")
+
+
+@pytest.mark.parametrize("payload", ["[]", '"text"', "42", "null"])
+def test_health_rejects_non_object_migration_status_json(tmp_path: Path, payload: str) -> None:
+    status = tmp_path / ".ntrp/maintenance/migration-v2.json"
+    status.parent.mkdir(parents=True)
+    status.write_text(payload, encoding="utf-8")
+    health = validate_vault(tmp_path)
+    assert not health.healthy
+    assert health.malformed_metadata == (
+        ".ntrp/maintenance/migration-v2.json: migration status must be a JSON object",
+    )

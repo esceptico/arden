@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -417,3 +418,41 @@ def test_occurrence_resolver_remaps_cross_page_scope_refs_without_redirecting_ca
     assert keep.meta.supersedes == ("shared",) and keep.meta.sources[0].ref == "shared"
     assert moved.meta.supersedes == (remapped,) and moved.meta.sources[0].ref == remapped
     assert pages["topics/b.md"].frontmatter["prose_cites"] == [remapped]
+
+
+def test_external_source_ref_collision_is_not_remapped(tmp_path: Path) -> None:
+    _legacy_page(tmp_path, "me.md", "- 2025-01-03 ^trigger [fact] (src:user) Trigger")
+    first = _v2_entry("same", scope="area", key="a1", sources=(SourceRef("chat", "same"),))
+    second = _v2_entry("same", scope="area", key="a2", sources=(SourceRef("session", "same"),))
+    _v2_page(tmp_path, "topics/a.md", [first])
+    _v2_page(tmp_path, "topics/b.md", [second])
+    migrate_vault_to_v2(tmp_path)
+    migrated = merge_split(parse_page(""), (tmp_path / "raw/topics/b.md").read_text(encoding="utf-8")).lines[0]
+    assert migrated.id != "same"
+    assert migrated.meta.sources[0].ref == "same"
+
+
+def test_conflicting_same_page_self_sources_follow_their_own_occurrences(tmp_path: Path) -> None:
+    _legacy_page(tmp_path, "me.md", "- 2025-01-03 ^trigger [fact] (src:user) Trigger")
+    one = _v2_entry("same", scope="area", key="a1", sources=(SourceRef("memory_record", "same"),))
+    two = replace(one, text="different", meta=replace(one.meta, sequence=2))
+    _v2_page(tmp_path, "topics/a.md", [one, two])
+    migrate_vault_to_v2(tmp_path)
+    entries = merge_split(parse_page(""), (tmp_path / "raw/topics/a.md").read_text(encoding="utf-8")).lines
+    assert len(entries) == 2 and entries[0].id != entries[1].id
+    assert [entry.meta.sources[0].ref for entry in entries] == [entry.id for entry in entries]
+
+
+def test_explicit_path_record_references_normalize_to_bare_resolved_id(tmp_path: Path) -> None:
+    _legacy_page(tmp_path, "me.md", "- 2025-01-03 ^trigger [fact] (src:user) Trigger")
+    target = _v2_entry("target", scope="area", key="a1", sources=(SourceRef("chat", "m"),))
+    ref = _v2_entry(
+        "ref", scope="area", key="a1", supersedes=("topics/a.md#^target",),
+        sources=(SourceRef("record", "raw/topics/a.md#^target"),),
+    )
+    _v2_page(tmp_path, "topics/a.md", [target])
+    _v2_page(tmp_path, "topics/ref.md", [ref])
+    migrate_vault_to_v2(tmp_path)
+    migrated = merge_split(parse_page(""), (tmp_path / "raw/topics/ref.md").read_text(encoding="utf-8")).lines[0]
+    assert migrated.meta.supersedes == ("target",)
+    assert migrated.meta.sources[0].ref == "target"
