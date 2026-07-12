@@ -150,6 +150,13 @@ class KnowledgeRuntime:
 
         VaultJournal(self.config.memory_artifacts_dir).recover()
 
+        from ntrp.memory.migrate_ledger_v2 import migrate_vault_to_v2, validate_vault
+
+        migrate_vault_to_v2(self.config.memory_artifacts_dir)
+        health = validate_vault(self.config.memory_artifacts_dir)
+        if not health.healthy:
+            raise RuntimeError(f"memory vault validation failed: {health.first_error or 'unknown vault error'}")
+
         from ntrp.memory.curator import Curator
         from ntrp.memory.file_store import FilePageStore
         from ntrp.memory.project_names import load_project_names

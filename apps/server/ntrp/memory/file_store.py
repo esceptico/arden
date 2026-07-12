@@ -222,6 +222,11 @@ class FilePageStore:
     def canonical_revision(self) -> str:
         return self._journal.canonical_revision
 
+    def vault_health(self):
+        from ntrp.memory.migrate_ledger_v2 import validate_vault
+
+        return validate_vault(self._root)
+
     # -- lifecycle -----------------------------------------------------------
 
     async def open(self) -> None:

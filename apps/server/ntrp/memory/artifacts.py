@@ -467,6 +467,12 @@ class ArtifactMemoryStore:
         self.project_names = project_names or self._load_project_names()
         self._scope_keys_by_rel: dict[str, str] = {}
 
+    def vault_health(self):
+        """Return the exact ledger safety report used by the startup gate."""
+        from ntrp.memory.migrate_ledger_v2 import validate_vault
+
+        return validate_vault(self.root)
+
     def _load_project_names(self) -> dict[str, str]:
         db_path = self.root.parent / "sessions.db"
         if not db_path.exists() or db_path.is_symlink():
