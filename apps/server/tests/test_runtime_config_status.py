@@ -7,6 +7,7 @@ from ntrp.server.runtime.config import RuntimeConfig
 from ntrp.server.runtime.core import Runtime
 from ntrp.server.runtime.knowledge import KnowledgeRuntime
 from ntrp.server.schemas import UpdateConfigRequest
+from ntrp.tools.memory import MEMORY_RECONCILER_SERVICE
 
 
 class _Integrations:
@@ -145,6 +146,9 @@ async def test_knowledge_runtime_syncs_indexer_with_embedding_config(tmp_path, m
     initial = Config(ntrp_dir=tmp_path, memory=False, embedding_model=None)
     initial.db_dir.mkdir(parents=True, exist_ok=True)
     knowledge = KnowledgeRuntime(initial)
+
+    assert MEMORY_RECONCILER_SERVICE in knowledge.tool_services()
+    assert knowledge.tool_services()[MEMORY_RECONCILER_SERVICE] is None
 
     assert knowledge.indexer is None
     assert knowledge.search_index is None

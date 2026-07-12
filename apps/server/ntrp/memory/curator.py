@@ -254,6 +254,45 @@ class Curator:
     def pending_question(self, session_id: str) -> str | None:
         return self._pending_questions.get(session_id)
 
+    async def reconcile_direct_memory(
+        self,
+        *,
+        text: str,
+        kind: str,
+        scope: MemoryScope,
+        sources: tuple[SourceRef, ...],
+        session_id: str,
+        tool_call_id: str,
+    ) -> tuple[RecordOperation, ...] | None:
+        """Reconcile one direct remember call through the canonical curator path.
+
+        ``None`` means judgment was unavailable. Valid operations are applied as
+        one retry-safe batch; ASK remains non-mutating for the caller to surface.
+        """
+        raw = await self._complete(
+            [
+                {
+                    "message_id": tool_call_id,
+                    "role": "assistant",
+                    "content": text,
+                    "kind": kind,
+                }
+            ],
+            header="DIRECT REMEMBER TOOL CALL",
+            explicit_scope=scope,
+        )
+        if raw is None:
+            return None
+        operations = await self._typed_operations(raw, sources, scope)
+        if not any(operation.op == "ASK" for operation in operations):
+            await self._apply_operations(
+                operations,
+                session_id,
+                sources,
+                batch_key=f"direct-remember:{session_id}:{tool_call_id}",
+            )
+        return operations
+
     async def sweep_once(self) -> int:
         """Schedule curation for the most-recent live USER CHATS. Automation
         channels and spawned agent sessions are operational transcripts —

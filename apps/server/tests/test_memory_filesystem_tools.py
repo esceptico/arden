@@ -11,6 +11,7 @@ from ntrp.integrations.core import MEMORY
 from ntrp.memory.records import RecordStore
 from ntrp.tools.core.registry import ToolRegistry
 from ntrp.tools.memory import (
+    MEMORY_RECONCILER_SERVICE,
     MEMORY_RECORDS_SERVICE,
     MemoryPatchInput,
     MemoryReadInput,
@@ -91,10 +92,18 @@ async def test_memory_filesystem_tools_registered_and_permission_gated():
 
     names_without = {s["function"]["name"] for s in registry.get_schemas(capabilities=frozenset())}
     names_with = {s["function"]["name"] for s in registry.get_schemas(capabilities=frozenset({MEMORY_RECORDS_SERVICE}))}
+    names_with_reconciler = {
+        s["function"]["name"]
+        for s in registry.get_schemas(
+            capabilities=frozenset({MEMORY_RECORDS_SERVICE, MEMORY_RECONCILER_SERVICE})
+        )
+    }
 
     expected = {"memory_tree", "memory_read", "memory_search", "memory_patch", "memory_rebuild"}
     assert expected.isdisjoint(names_without)
     assert expected.issubset(names_with)
+    assert "remember" not in names_with
+    assert "remember" in names_with_reconciler
     assert MEMORY.tools["memory_patch"].policy.requires_approval is True
     assert MEMORY.tools["memory_rebuild"].policy.requires_approval is True
 

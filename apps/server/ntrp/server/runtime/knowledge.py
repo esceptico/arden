@@ -90,13 +90,15 @@ class KnowledgeRuntime:
         if self.indexer:
             await self.indexer.close()
 
-    def tool_services(self) -> dict[str, object]:
-        services: dict[str, object] = {}
+    def tool_services(self) -> dict[str, object | None]:
+        from ntrp.tools.memory import MEMORY_RECONCILER_SERVICE, MEMORY_RECORDS_SERVICE
+
+        services: dict[str, object | None] = {
+            MEMORY_RECONCILER_SERVICE: self.memory_curator,
+        }
         if self.search_index:
             services["search_index"] = self.search_index
         if self._record_store is not None:
-            from ntrp.tools.memory import MEMORY_RECORDS_SERVICE
-
             services[MEMORY_RECORDS_SERVICE] = self._record_store
         return services
 

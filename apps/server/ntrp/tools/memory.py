@@ -30,7 +30,8 @@ from ntrp.logging import get_logger
 from ntrp.memory.artifacts import ArtifactMemoryStore
 from ntrp.memory.frontmatter import parse_frontmatter
 from ntrp.memory.models import SourceRef
-from ntrp.memory.scopes import apply_scope_to_source, scope_for_write, scopes_for_read
+from ntrp.memory.reconciler import RecordOperation, validate_operations
+from ntrp.memory.scopes import MemoryScope, apply_scope_to_source, scope_for_write, scopes_for_read
 from ntrp.tools.core import ToolResult, tool
 from ntrp.tools.core.context import ToolExecution
 from ntrp.tools.core.types import ApprovalInfo, ToolAction, ToolPolicy, ToolScope
@@ -38,6 +39,7 @@ from ntrp.tools.core.types import ApprovalInfo, ToolAction, ToolPolicy, ToolScop
 _logger = get_logger(__name__)
 
 MEMORY_RECORDS_SERVICE = "memory_records"
+MEMORY_RECONCILER_SERVICE = "memory_reconciler"
 
 
 class RememberInput(BaseModel):
@@ -603,6 +605,49 @@ def _normalize_text(text: str) -> str:
     return " ".join(text.split()).strip().lower().rstrip(".!?")
 
 
+async def _direct_sources(
+    execution: ToolExecution,
+    scope: MemoryScope,
+) -> tuple[SourceRef, ...]:
+    session_id = getattr(getattr(execution.ctx, "session_state", None), "session_id", None) or execution.ctx.session_id
+    tool_source = apply_scope_to_source(
+        SourceRef(
+            kind="tool_call",
+            ref=execution.tool_id,
+            extra={"session_id": session_id, "tool_name": getattr(execution, "tool_name", "memory")},
+        ),
+        scope,
+    )
+    sources = [tool_source]
+    sessions = execution.ctx.services.get("session")
+    if sessions is None:
+        return tuple(sources)
+    try:
+        page = await sessions.list_messages(session_id, limit=20)
+        messages = page.get("messages", []) if isinstance(page, dict) else []
+    except Exception:
+        _logger.warning("failed to load triggering user evidence for memory tool", exc_info=True)
+        return tuple(sources)
+    triggering = next(
+        (row for row in reversed(messages) if row.get("role") == "user" and row.get("message_id")),
+        None,
+    )
+    if triggering is not None:
+        sources.append(
+            SourceRef(
+                kind="chat_message",
+                ref=triggering["message_id"],
+                scope_kind=scope.kind,
+                scope_key=scope.key,
+                occurred_at=triggering.get("created_at"),
+                time_precision="unknown",
+                role="user",
+                extra={"session_id": session_id, "seq": triggering.get("seq")},
+            )
+        )
+    return tuple(sources)
+
+
 async def remember(execution: ToolExecution, args: RememberInput) -> ToolResult:
     store = execution.ctx.services.get(MEMORY_RECORDS_SERVICE)
     if store is None:
@@ -612,26 +657,48 @@ async def remember(execution: ToolExecution, args: RememberInput) -> ToolResult:
     project = execution.ctx.area
     visible = [(s.kind, s.key) for s in scopes_for_read(project=project, session_id=session_id)]
 
-    # Conservative pre-write dedup (the Curator owns the LLM-judged dedup; this is
-    # the cheap guard on the hot path). If an active record over the same read
-    # scopes is lexically equivalent to — or fully subsumes — the new text, confirm
-    # it instead of minting a duplicate.
-    normalized = _normalize_text(args.text)
-    for hit in await store.search(args.text, limit=3, scopes=visible):
-        existing = _normalize_text(hit.text)
-        if normalized == existing or normalized in existing:
-            await store.confirm(hit.id)
-            return ToolResult(content=f"Already known: {hit.text}", preview="Already known")
-
-    base = SourceRef(kind="chat_turn", ref=f"{session_id}:{execution.tool_id}")
+    base = SourceRef(kind="tool_call", ref=execution.tool_id)
     scope = scope_for_write(
         kind=args.kind,
         project=project,
         session_id=session_id,
         source_ref=base,
     )
-    source = apply_scope_to_source(base, scope)
-    await store.add(args.text, kind=args.kind, scope_kind=scope.kind, scope_key=scope.key, source_ref=source)
+    sources = await _direct_sources(execution, scope)
+
+    # Exact normalized equality is the only deterministic shortcut. Every other
+    # candidate is reconciled by the same typed model path as background curation.
+    normalized = _normalize_text(args.text)
+    for hit in await store.search(args.text, limit=20, scopes=visible):
+        if normalized == _normalize_text(hit.text):
+            validate_operations([RecordOperation.noop()], (), sources)
+            return ToolResult(content=f"Already known: {hit.text}", preview="Already known")
+
+    reconciler = execution.ctx.services.get(MEMORY_RECONCILER_SERVICE)
+    if reconciler is None:
+        return ToolResult(
+            content="Memory reconciliation is unavailable; nothing was changed.",
+            preview="Reconciliation unavailable",
+            is_error=True,
+        )
+    operations = await reconciler.reconcile_direct_memory(
+        text=args.text,
+        kind=args.kind,
+        scope=scope,
+        sources=sources,
+        session_id=session_id,
+        tool_call_id=execution.tool_id,
+    )
+    if operations is None:
+        return ToolResult(
+            content="Memory reconciliation is unavailable; nothing was changed.",
+            preview="Reconciliation unavailable",
+            is_error=True,
+        )
+    if question := next((operation.question for operation in operations if operation.op == "ASK"), None):
+        return ToolResult(content=question, preview="Clarification required", is_error=True)
+    if not operations or all(operation.op == "NOOP" for operation in operations):
+        return ToolResult(content="No memory change was needed.", preview="Already known")
     return ToolResult(content="Remembered", preview="Remembered")
 
 
@@ -649,7 +716,18 @@ async def forget(execution: ToolExecution, args: ForgetInput) -> ToolResult:
         return ToolResult(content="No matching memory to forget.", preview="Not found")
 
     best = hits[0]
-    await store.delete(best.id)
+    scope = MemoryScope(best.scope_kind or "user", best.scope_key)
+    sources = await _direct_sources(execution, scope)
+    records = tuple(await store.list(limit=None, scopes=None))
+    operations = validate_operations([RecordOperation.retract(best.id)], records, sources)
+    if hasattr(store, "apply_operations"):
+        store.apply_operations(
+            operations,
+            sources,
+            batch_key=f"direct-forget:{session_id}:{execution.tool_id}",
+        )
+    else:
+        await store.delete(best.id)
     others = hits[1:]
     content = f"Forgot: {best.text}"
     if others:
@@ -778,7 +856,7 @@ remember_tool = tool(
     policy=ToolPolicy(
         action=ToolAction.WRITE,
         scope=ToolScope.INTERNAL,
-        permissions=frozenset({MEMORY_RECORDS_SERVICE}),
+        permissions=frozenset({MEMORY_RECORDS_SERVICE, MEMORY_RECONCILER_SERVICE}),
     ),
     execute=remember,
 )

@@ -151,9 +151,10 @@ class Consolidate:
                 break  # cost cap; the remaining changed hoods are re-selected next run
             judged += 1
             ops = await self._judge(hood)
-            await self._write_fingerprint(seed.id, fp)  # this exact hood has now been judged
-            if ops is not None:
-                await self._apply(ops, hood, report)
+            if ops is None:
+                continue
+            await self._apply(ops, hood, report)
+            await self._write_fingerprint(seed.id, fp)
 
         # Prune against the TRUE active pool, not the (judge-capped) delta, so a large
         # corpus doesn't wrongly evict + re-judge fingerprints below the cap.

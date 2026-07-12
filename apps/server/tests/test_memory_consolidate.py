@@ -535,6 +535,41 @@ async def test_failed_label_hygiene_does_not_persist_fingerprint_and_idle_sweep_
     await records.close()
 
 
+async def test_failed_neighborhood_judgment_does_not_persist_fingerprint(tmp_path: Path):
+    records = RecordStore(tmp_path / "memory.db", search_index=None)
+    await records.add("the user prefers tea")
+    consolidate = _consolidate(tmp_path, records, StubLLM())
+
+    async def _fail_judge(hood):
+        return None
+
+    consolidate._judge = _fail_judge  # type: ignore[method-assign]
+
+    await consolidate.run_once()
+
+    assert await consolidate._read_fingerprints() == {}
+    await consolidate.close()
+    await records.close()
+
+
+async def test_failed_neighborhood_apply_does_not_persist_fingerprint(tmp_path: Path):
+    records = RecordStore(tmp_path / "memory.db", search_index=None)
+    await records.add("the user prefers tea")
+    consolidate = _consolidate(tmp_path, records, StubLLM())
+
+    async def _fail_apply(ops, hood, report):
+        raise RuntimeError("injected apply failure")
+
+    consolidate._apply = _fail_apply  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="injected apply failure"):
+        await consolidate.run_once()
+
+    assert await consolidate._read_fingerprints() == {}
+    await consolidate.close()
+    await records.close()
+
+
 async def test_consolidate_report_changed_memory_tracks_all_mutations():
     assert ConsolidateReport().changed_memory is False
     assert ConsolidateReport(reclassified=1).changed_memory is True
