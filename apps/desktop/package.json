@@ -47,7 +47,6 @@
   "dependencies": {
     "@fontsource-variable/geist": "^5.2.9",
     "@microsoft/fetch-event-source": "^2.0.1",
-    "@pierre/diffs": "^1.2.12",
     "clsx": "^2.1.1",
     "d3-force": "^3.0.0",
     "highlight.js": "^11.11.1",

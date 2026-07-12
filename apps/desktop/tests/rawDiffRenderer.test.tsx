@@ -13,48 +13,14 @@ function setup() {
   return { host, root };
 }
 
-async function waitFor(read: () => Element | null) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    const value = read();
-    if (value) return value;
-    await act(async () => new Promise((resolve) => setTimeout(resolve, 10)));
-  }
-  return null;
-}
-
 afterEach(async () => {
   for (const root of roots) await act(async () => root.unmount());
   roots.clear();
+  document.documentElement.classList.remove("dark");
   document.body.replaceChildren();
 });
 
-test("declares exact raw Markdown presentation without leaking renderer vocabulary", async () => {
-  const { host, root } = setup();
-  await act(async () => root.render(
-    <RawDiffRenderer
-      before={{ path: "topics/a.md", content: "---\nscope: user\n---\n# A\nold  " }}
-      after={{ path: "topics/a.md", content: "---\nscope: user\n---\n# A\nnew\t" }}
-      layout="split"
-      reducedMotion
-    />,
-  ));
-
-  const renderer = host.querySelector<HTMLElement>('[data-raw-diff-renderer]')!;
-  expect(renderer.dataset.layout).toBe("split");
-  expect(renderer.dataset.language).toBe("markdown");
-  expect(renderer.dataset.wrap).toBe("true");
-  expect(renderer.dataset.lineNumbers).toBe("true");
-  expect(renderer.dataset.collapsedHunks).toBe("true");
-  expect(renderer.dataset.workerPool).toBe("disabled");
-  expect(renderer.dataset.motion).toBe("reduced");
-  expect(renderer.getAttribute("aria-label")).toBe("Raw Markdown changes for topics/a.md");
-  expect(renderer.style.userSelect).toBe("text");
-  expect(renderer.style.getPropertyValue("--diffs-light-bg")).toBe("var(--color-bg-main)");
-  expect(renderer.style.getPropertyValue("--diffs-dark-bg")).toBe("var(--color-bg-main)");
-  expect(renderer.textContent).toContain("Exact Markdown diff preserves frontmatter and whitespace");
-});
-
-test("mounts the controlled exact renderer with wrapped numbered collapsed hunks", async () => {
+test("renders exact raw Markdown locally with wrapping, line numbers, and selectable whitespace", async () => {
   const before = "---\nscope: user\n---\n# A\nold  ";
   const after = "---\nscope: user\n---\n# A\nnew\t";
   const { host, root } = setup();
@@ -67,22 +33,59 @@ test("mounts the controlled exact renderer with wrapped numbered collapsed hunks
     />,
   ));
 
-  const pre = await waitFor(() => host.querySelector("diffs-container")?.shadowRoot?.querySelector('pre[data-overflow="wrap"]') ?? null);
-  const exact = host.querySelector("diffs-container");
-  expect(exact).not.toBeNull();
-  const shadow = exact?.shadowRoot;
-  expect(shadow).not.toBeNull();
-  expect(pre).not.toBeNull();
-  expect(pre?.getAttribute("data-diff-type")).toBe("split");
-  expect(shadow?.textContent).toContain("scope: user");
-  expect(shadow?.textContent).toContain("new\t");
-  expect(shadow?.querySelector("[data-line-number-content]")).not.toBeNull();
-  expect(shadow?.querySelector('style[data-unsafe-css]')?.textContent).toContain("transition-duration: 0.001ms");
+  const renderer = host.querySelector<HTMLElement>('[data-raw-diff-renderer]')!;
+  expect(renderer.dataset.layout).toBe("split");
+  expect(renderer.dataset.language).toBe("markdown");
+  expect(renderer.dataset.wrap).toBe("true");
+  expect(renderer.dataset.lineNumbers).toBe("true");
+  expect(renderer.dataset.renderer).toBe("local");
+  expect(renderer.dataset.motion).toBe("reduced");
+  expect(renderer.getAttribute("aria-label")).toBe("Raw Markdown changes for topics/a.md");
+  expect(renderer.style.userSelect).toBe("text");
+  expect(renderer.style.transition).toBe("none");
+  expect(host.querySelector("diffs-container")).toBeNull();
+
+  const beforePane = host.querySelector<HTMLElement>('[aria-label="Before raw Markdown"]')!;
+  const afterPane = host.querySelector<HTMLElement>('[aria-label="After raw Markdown"]')!;
+  expect(beforePane.textContent).toContain("scope: user");
+  expect(beforePane.textContent).toContain("old  ");
+  expect(afterPane.textContent).toContain("new\t");
+  expect(beforePane.querySelector('[data-line-number="5"]')).not.toBeNull();
+  expect(afterPane.querySelector('[data-line-number="5"]')).not.toBeNull();
+  expect(afterPane.querySelector<HTMLElement>('[data-raw-line]')?.style.whiteSpace).toBe("pre-wrap");
 });
 
-test("accepts stacked layout and preserves a 5,000-line Markdown payload", async () => {
-  const beforeContent = Array.from({ length: 5_000 }, (_, index) => `line ${index + 1}`).join("\n");
-  const afterContent = `${beforeContent}\nline 5001`;
+test("collapses unchanged regions and expands them with keyboard activation", async () => {
+  const prefix = Array.from({ length: 20 }, (_, index) => `shared ${index + 1}`);
+  const before = [...prefix, "old fact", "tail"].join("\n");
+  const after = [...prefix, "new fact", "tail"].join("\n");
+  const { host, root } = setup();
+  await act(async () => root.render(
+    <RawDiffRenderer
+      before={{ path: "topic.md", content: before }}
+      after={{ path: "topic.md", content: after }}
+      layout="split"
+    />,
+  ));
+
+  const expand = host.querySelector<HTMLButtonElement>('button[aria-label="Show 17 unchanged lines"]')!;
+  expect(expand).not.toBeNull();
+  expect(host.textContent).not.toContain("shared 10");
+  await act(async () => {
+    expand.focus();
+    expand.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  });
+  expect(host.textContent).toContain("shared 10");
+  expect(document.activeElement).toBe(expand);
+});
+
+test("renders a 5,000-line file with a substantial changed block", async () => {
+  const changedBefore = Array.from({ length: 1_000 }, (_, index) => `old changed line ${index + 1}`);
+  const changedAfter = Array.from({ length: 1_000 }, (_, index) => `new changed line ${index + 1}`);
+  const stable = Array.from({ length: 4_000 }, (_, index) => `stable line ${index + 1001}`);
+  const beforeContent = [...changedBefore, ...stable].join("\n");
+  const afterContent = [...changedAfter, ...stable].join("\n");
+  const startedAt = performance.now();
   const { host, root } = setup();
   await act(async () => root.render(
     <RawDiffRenderer
@@ -91,34 +94,58 @@ test("accepts stacked layout and preserves a 5,000-line Markdown payload", async
       layout="stacked"
     />,
   ));
+  const elapsedMs = performance.now() - startedAt;
 
   const renderer = host.querySelector<HTMLElement>('[data-raw-diff-renderer]')!;
   expect(renderer.dataset.layout).toBe("stacked");
   expect(renderer.dataset.beforeLines).toBe("5000");
-  expect(renderer.dataset.afterLines).toBe("5001");
+  expect(renderer.dataset.afterLines).toBe("5000");
   expect(renderer.dataset.beforeBytes).toBe(String(beforeContent.length));
   expect(renderer.dataset.afterBytes).toBe(String(afterContent.length));
-  const pre = await waitFor(() => host.querySelector("diffs-container")?.shadowRoot?.querySelector('pre[data-overflow="wrap"]') ?? null);
-  expect(pre).not.toBeNull();
-  expect(pre?.getAttribute("data-diff-type")).toBe("single");
-  const shadow = host.querySelector("diffs-container")?.shadowRoot;
-  expect(shadow?.textContent).toContain("line 5001");
-  expect(shadow?.querySelector("[data-separator]")).not.toBeNull();
+  expect(host.querySelectorAll('[data-change-line="removed"]').length).toBe(1_000);
+  expect(host.querySelectorAll('[data-change-line="added"]').length).toBe(1_000);
+  expect(host.textContent).toContain("old changed line 1000");
+  expect(host.textContent).toContain("new changed line 1000");
+  expect(host.textContent).not.toContain("stable line 3000");
+  expect(elapsedMs).toBeLessThan(2_000);
 });
 
-test("uses ntrp light and dark theme state across the renderer host", async () => {
-  document.documentElement.classList.add("dark");
+test("updates theme and layout inputs without motion or selection regressions", async () => {
   const { host, root } = setup();
   await act(async () => root.render(
     <RawDiffRenderer
       before={{ path: "theme.md", content: "old" }}
       after={{ path: "theme.md", content: "new" }}
       layout="split"
+      reducedMotion
     />,
   ));
   const renderer = host.querySelector<HTMLElement>('[data-raw-diff-renderer]')!;
+  expect(renderer.dataset.theme).toBe("light");
+  expect(renderer.dataset.layout).toBe("split");
+  expect(renderer.style.getPropertyValue("--diff-review-bg")).toBe("var(--color-bg-main)");
+
+  await act(async () => document.documentElement.classList.add("dark"));
   expect(renderer.dataset.theme).toBe("dark");
-  expect(renderer.style.getPropertyValue("--diffs-bg")).toBe("var(--color-bg-main)");
-  expect(renderer.style.getPropertyValue("--diffs-fg")).toBe("var(--color-ink)");
-  await act(async () => document.documentElement.classList.remove("dark"));
+  await act(async () => root.render(
+    <RawDiffRenderer
+      before={{ path: "theme.md", content: "old" }}
+      after={{ path: "theme.md", content: "new" }}
+      layout="stacked"
+      reducedMotion
+    />,
+  ));
+  expect(renderer.dataset.layout).toBe("stacked");
+  expect(renderer.style.userSelect).toBe("text");
+  expect(renderer.style.transition).toBe("none");
+});
+
+test("contains no rejected renderer dependency or import", async () => {
+  const manifest = await Bun.file("package.json").text();
+  const lockfile = await Bun.file("bun.lock").text();
+  const source = await Bun.file("src/components/ui/RawDiffRenderer.tsx").text();
+  const rejectedPackage = ["@pierre", "diffs"].join("/");
+  expect(manifest).not.toContain(rejectedPackage);
+  expect(lockfile).not.toContain(rejectedPackage);
+  expect(source).not.toContain(rejectedPackage);
 });

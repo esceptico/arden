@@ -97,13 +97,24 @@ function MemoryEffects({
   operations,
   decisions,
   onDecision,
+  layout,
 }: {
   operations: readonly DiffReviewOperation[];
   decisions: NonNullable<DiffReviewProps["decisions"]>;
   onDecision: NonNullable<DiffReviewProps["onDecision"]>;
+  layout: NonNullable<DiffReviewProps["layout"]>;
 }) {
   return (
-    <aside aria-label="Memory effects" className="min-w-0 bg-surface px-3 py-4">
+    <aside
+      data-memory-effects-scroll
+      role="region"
+      aria-label="Memory effects"
+      tabIndex={0}
+      className={clsx(
+        "min-h-0 min-w-0 overflow-y-auto overscroll-contain bg-surface px-3 py-4 scroll-thin",
+        layout === "split" ? "h-full" : "max-h-[min(40vh,420px)] border-t border-line-soft",
+      )}
+    >
       <h2 className="text-sm font-semibold text-ink">Memory effects</h2>
       <p className="mt-0.5 text-2xs text-faint">Server-proposed record changes</p>
       <ul className="mt-3 grid gap-2">
@@ -247,7 +258,9 @@ export function DiffReview({
             </Suspense>
           )}
         </div>
-        {operations !== undefined && <MemoryEffects operations={operations} decisions={decisions} onDecision={onDecision} />}
+        {operations !== undefined && (
+          <MemoryEffects operations={operations} decisions={decisions} onDecision={onDecision} layout={layout} />
+        )}
       </div>
 
       <footer className="flex items-center gap-2 border-t border-line-soft bg-surface px-3 py-2.5">

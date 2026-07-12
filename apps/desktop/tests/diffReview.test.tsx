@@ -132,7 +132,7 @@ test("exposes rendered and raw modes with ntrp split and stacked layout inputs",
   expect(host.querySelector<HTMLElement>('[data-diff-review]')?.dataset.layout).toBe("stacked");
 });
 
-test("rendered prose uses semantic headings, word marks, and expandable unchanged hunks", async () => {
+test("rendered prose uses semantic headings and word marks without flattening context", async () => {
   const unchanged = Array.from({ length: 12 }, (_, index) => `Shared paragraph ${index + 1}.`);
   const before = { path: "topics/long.md", content: ["# Topic", ...unchanged, "The old durable fact."].join("\n") };
   const after = { path: "topics/long.md", content: ["# Topic", ...unchanged, "The new durable fact."].join("\n") };
@@ -144,14 +144,10 @@ test("rendered prose uses semantic headings, word marks, and expandable unchange
   expect(host.querySelector("h1")?.textContent).toBe("Topic");
   expect(host.querySelector('[data-change="removed"]')?.textContent).toContain("old");
   expect(host.querySelector('[data-change="added"]')?.textContent).toContain("new");
-  const collapsed = host.querySelector<HTMLButtonElement>('button[aria-label^="Show 10 unchanged lines"]')!;
-  expect(collapsed).not.toBeNull();
-  expect(host.textContent).not.toContain("Shared paragraph 6.");
-  await act(async () => collapsed.click());
   expect(host.textContent).toContain("Shared paragraph 6.");
 });
 
-test("rendered prose preserves collapsed unchanged sections between separate changes", async () => {
+test("rendered prose preserves real context between separate changes", async () => {
   const middle = Array.from({ length: 10 }, (_, index) => `Stable middle ${index + 1}.`);
   const before = { path: "topics/two.md", content: ["# Topic", "Old introduction.", ...middle, "Old ending."].join("\n") };
   const after = { path: "topics/two.md", content: ["# Topic", "New introduction.", ...middle, "New ending."].join("\n") };
@@ -164,8 +160,7 @@ test("rendered prose preserves collapsed unchanged sections between separate cha
   expect(host.textContent).toContain("New introduction.");
   expect(host.textContent).toContain("Old ending.");
   expect(host.textContent).toContain("New ending.");
-  expect(host.querySelector('button[aria-label="Show 7 unchanged lines"]')).not.toBeNull();
-  expect(host.textContent).not.toContain("Stable middle 5.");
+  expect(host.textContent).toContain("Stable middle 5.");
 });
 
 test("rendered prose omits raw frontmatter syntax", async () => {
@@ -183,6 +178,68 @@ test("rendered prose omits raw frontmatter syntax", async () => {
   expect(prose.textContent).not.toContain("scope:");
   expect(prose.textContent).not.toContain("---");
   expect(prose.textContent).toContain("New prose.");
+});
+
+test("rendered mode uses the real Markdown pipeline for rich block semantics", async () => {
+  const before = [
+    "---", "scope: user", "---",
+    "# Heading one", "## Heading two", "### Heading three",
+    "#### Heading four", "##### Heading five", "###### Heading six",
+    "", "1. First", "2. Second", "",
+    "[Source](https://example.com/source)", "",
+    "| Name | State |", "| --- | --- |", "| ntrp | old |", "",
+    "```ts", "const state = 'old';", "```", "",
+    "![Diagram](https://example.com/diagram.png)",
+  ].join("\n");
+  const after = before.replace("| ntrp | old |", "| ntrp | new |").replace("'old'", "'new'");
+  const { host, root } = setup();
+  await act(async () => root.render(
+    <DiffReview
+      before={{ path: "rich.md", content: before }}
+      after={{ path: "rich.md", content: after }}
+      operations={[]}
+      decisions={{}}
+      onDecision={() => {}}
+    />,
+  ));
+
+  const prose = host.querySelector('[data-rendered-prose-diff]')!;
+  expect(prose.querySelectorAll(".md h1").length).toBe(2);
+  expect(prose.querySelectorAll(".md h2").length).toBe(2);
+  expect(prose.querySelectorAll(".md h3").length).toBe(2);
+  expect(prose.querySelectorAll(".md h4").length).toBe(2);
+  expect(prose.querySelectorAll(".md h5").length).toBe(2);
+  expect(prose.querySelectorAll(".md h6").length).toBe(2);
+  expect(prose.querySelectorAll("ol").length).toBe(2);
+  expect(prose.querySelectorAll("table").length).toBe(2);
+  expect(prose.querySelectorAll('code[class*="language-ts"]').length).toBe(2);
+  expect(prose.querySelector<HTMLAnchorElement>('a[href="https://example.com/source"]')?.target).toBe("_blank");
+  expect(prose.querySelector<HTMLImageElement>('img[alt="Diagram"]')?.src).toBe("https://example.com/diagram.png");
+  expect(prose.querySelector('[data-change="removed"]')?.textContent).toContain("old");
+  expect(prose.querySelector('[data-change="added"]')?.textContent).toContain("new");
+  expect(prose.textContent).not.toContain("scope:");
+});
+
+test("memory effects own a bounded accessible scroll region", async () => {
+  const operations: DiffReviewOperation[] = Array.from({ length: 60 }, (_, index) => ({
+    kind: "ADD",
+    id: `operation-${index}`,
+    text: `Durable operation ${index}`,
+    memoryKind: "fact",
+    scope: { kind: "user", key: null },
+  }));
+  const { host, root } = setup();
+  await act(async () => root.render(
+    <DiffReview {...files} operations={operations} decisions={{}} onDecision={() => {}} />,
+  ));
+  const effects = host.querySelector<HTMLElement>('[data-memory-effects-scroll]')!;
+  expect(effects).not.toBeNull();
+  expect(effects.getAttribute("role")).toBe("region");
+  expect(effects.getAttribute("aria-label")).toBe("Memory effects");
+  expect(effects.tabIndex).toBe(0);
+  expect(effects.className).toContain("overflow-y-auto");
+  expect(effects.className).toContain("min-h-0");
+  expect(effects.textContent).toContain("Durable operation 59");
 });
 
 test("reduced motion disables review transitions", async () => {
