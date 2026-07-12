@@ -4,10 +4,8 @@ import {
   applyPageEdit,
   getPageHistory,
   getPageLinks,
-  listMemoryArtifacts,
   listMemoryArtifactSummaries,
   previewPageEdit,
-  readMemoryArtifact,
   readMemoryArtifactDetail,
   rebuildMemoryArtifactSummaries,
 } from "@/api/memoryArtifacts";
@@ -469,22 +467,6 @@ test("notebook artifact list is camelCase metadata-only and detail owns content"
   });
   expect("editable_content" in detail.artifact).toBe(false);
   expect("record_count" in detail.artifact).toBe(false);
-});
-
-test("legacy artifact adapters remain explicit for current components", async () => {
-  const raw = {
-    path: "topics/a.md", title: "A", kind: "topic", type: "file", directory: "topics",
-    scope: { kind: "user", key: null }, content: "", snippet: "Summary", record_count: 2,
-    generated: false, editable: true, readonly_reason: null, updated_at: null, labels: [], source: null,
-    timeline: [], frontmatter: {},
-  };
-  bridgeResponse({ artifacts: [raw] });
-  const list = await listMemoryArtifacts(config);
-  expect(list.artifacts[0]).toMatchObject({ record_count: 2, readonly_reason: null, updated_at: null });
-
-  bridgeResponse({ artifact: { ...raw, content: "body", revision: "rev", editable_content: "exact" } });
-  const detail = await readMemoryArtifact(config, "topics/a.md");
-  expect(detail.artifact).toMatchObject({ content: "body", editableContent: "exact", revision: "rev" });
 });
 
 test("rebuild returns summary-only notebook metadata", async () => {

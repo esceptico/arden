@@ -6,6 +6,7 @@ import { ArtifactMemoryView } from "@/features/memory/components/ArtifactMemoryV
 
 const config: AppConfig = { serverUrl: "http://localhost:6877", apiKey: "test-key" };
 const originalDesktop = window.ntrpDesktop;
+const mountedRoots = new Set<Root>();
 
 const base = {
   kind: "topic",
@@ -23,7 +24,9 @@ const base = {
 };
 
 const summaries = [
+  { ...base, path: "index.md", directory: "", title: "Index", summary: null, generated: true, editable: false },
   { ...base, path: "me.md", directory: "", title: "Me", summary: "Identity, preferences, and durable context." },
+  { ...base, path: "topics/index.md", directory: "topics", title: "Topics", summary: "Active subjects and decisions.", generated: true, editable: false },
   { ...base, path: "topics/dex.md", directory: "topics", title: "Dex", summary: "Current work and decisions about Dex." },
   { ...base, path: "research/README.md", directory: "research", title: "Research", summary: "Research notes and experiments." },
   { ...base, path: "research/latency.md", directory: "research", title: "Latency", summary: "Observed latency behavior." },
@@ -33,12 +36,31 @@ const summaries = [
   { ...base, path: ".ntrp/maintenance/state.md", directory: ".ntrp/maintenance", title: "State", summary: "Machine state." },
 ];
 
+function managed(rows: Array<[string, string]>) {
+  return [
+    "<!-- ntrp:index:start -->",
+    ...rows.map(([path, description]) => `- ${path} — ${description} <!-- ntrp:path=${encodeURIComponent(path)} -->`),
+    "<!-- ntrp:index:end -->",
+  ].join("\n");
+}
+
 function detail(path: string) {
   const item = summaries.find((artifact) => artifact.path === path)!;
+  const indexContent = path === "index.md"
+    ? managed([
+        ["me.md", "Identity, preferences, and durable context."],
+        ["topics/", "Current topics and decisions."],
+        ["research/", "Research notes and experiments."],
+      ])
+    : path === "topics/index.md"
+      ? managed([["dex.md", "Current work and decisions about Dex."]])
+      : path === "research/README.md"
+        ? managed([["latency.md", "Observed latency behavior."]])
+        : null;
   return {
     ...item,
     revision: `sha256:${path}`,
-    content: path === "me.md" ? "I build personal tools.\n\nSee [[topics/dex|Dex]]." : item.summary,
+    content: indexContent ?? (path === "me.md" ? "I build personal tools.\n\nSee [[topics/dex|Dex]]." : item.summary),
     editable_content: `# ${item.title}\n\n${item.summary}\n`,
     timeline: path === "me.md" ? [{
       id: "record-me", text: "I build personal tools.", kind: "fact", date: "2026-07-12",
@@ -61,7 +83,11 @@ function installBridge(options: { list?: typeof summaries; failList?: string; de
           if (options.failList) {
             return { ok: false, status: 500, statusText: "Error", contentType: "application/json", data: { detail: options.failList }, text: "" };
           }
-          return { ok: true, status: 200, statusText: "OK", contentType: "application/json", data: { artifacts: options.list ?? summaries }, text: "" };
+          const source = options.list ?? summaries;
+          const artifacts = request.path.includes("?q=")
+            ? source.filter((artifact) => artifact.path === "topics/dex.md")
+            : source;
+          return { ok: true, status: 200, statusText: "OK", contentType: "application/json", data: { artifacts }, text: "" };
         }
         if (request.path.startsWith("/admin/memory/items")) {
           return {
@@ -90,7 +116,9 @@ function setupDom(): { host: HTMLElement; root: Root } {
   const host = document.createElement("div");
   host.style.height = "800px";
   document.body.append(host);
-  return { host, root: createRoot(host) };
+  const root = createRoot(host);
+  mountedRoots.add(root);
+  return { host, root };
 }
 
 async function settle(delay = 0) {
@@ -99,7 +127,14 @@ async function settle(delay = 0) {
   });
 }
 
-afterEach(() => {
+async function unmountRoot(root: Root) {
+  await act(async () => root.unmount());
+  mountedRoots.delete(root);
+}
+
+afterEach(async () => {
+  for (const root of mountedRoots) await act(async () => root.unmount());
+  mountedRoots.clear();
   window.ntrpDesktop = originalDesktop;
   document.body.replaceChildren();
 });
@@ -162,6 +197,7 @@ test("memory opens as a meaning-first notebook, not a database inspector", async
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(search, "decisions");
     search.dispatchEvent(new Event("input", { bubbles: true }));
   });
+  await settle(220);
   expect(rail?.querySelector("#memory-search-results")?.textContent).toBe("Results");
   expect(rail?.textContent).toContain("Dex");
   expect(rail?.textContent).not.toContain("Identity, preferences, and durable context.");
@@ -173,7 +209,7 @@ test("memory opens as a meaning-first notebook, not a database inspector", async
   expect(host.querySelector('button[aria-label="Close raw records diagnostic"]')).not.toBeNull();
   expect(host.textContent).toContain("Raw diagnostic fact");
 
-  await act(async () => root.unmount());
+  await unmountRoot(root);
 });
 
 test("loading, error, and empty states keep the notebook zones stable", async () => {
@@ -185,7 +221,7 @@ test("loading, error, and empty states keep the notebook zones stable", async ()
   expect(loadingDom.host.querySelector('[data-memory-zone="inspector"]')).not.toBeNull();
   loadingBridge.releaseList();
   await settle();
-  await act(async () => loadingDom.root.unmount());
+  await unmountRoot(loadingDom.root);
 
   installBridge({ failList: "Vault unavailable" });
   const errorDom = setupDom();
@@ -193,7 +229,7 @@ test("loading, error, and empty states keep the notebook zones stable", async ()
   await settle();
   expect(errorDom.host.querySelector('[data-memory-zone="rail"] [role="alert"]')?.textContent).toContain("Vault unavailable");
   expect(errorDom.host.querySelector('[data-memory-zone="workspace"]')).not.toBeNull();
-  await act(async () => errorDom.root.unmount());
+  await unmountRoot(errorDom.root);
 
   installBridge({ list: [] });
   const emptyDom = setupDom();
@@ -201,16 +237,17 @@ test("loading, error, and empty states keep the notebook zones stable", async ()
   await settle();
   expect(emptyDom.host.querySelector('[data-memory-zone="rail"]')?.textContent).toContain("No memory notes yet");
   expect(emptyDom.host.querySelector('[data-memory-zone="workspace"]')).not.toBeNull();
-  await act(async () => emptyDom.root.unmount());
+  await unmountRoot(emptyDom.root);
 });
 
 test("default selection follows notebook meaning instead of transport order", async () => {
-  installBridge({ list: [summaries[4]!, summaries[1]!, summaries[0]!] });
+  const byPath = (path: string) => summaries.find((artifact) => artifact.path === path)!;
+  installBridge({ list: [byPath("scratch.md"), byPath("topics/dex.md"), byPath("me.md"), byPath("index.md"), byPath("topics/index.md")] });
   const { host, root } = setupDom();
   await act(async () => root.render(<ArtifactMemoryView config={config} />));
   await settle(250);
 
   expect(host.querySelector('[data-memory-zone="workspace"] h1')?.textContent).toBe("Me");
 
-  await act(async () => root.unmount());
+  await unmountRoot(root);
 });

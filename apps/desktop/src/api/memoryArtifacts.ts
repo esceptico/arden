@@ -175,38 +175,6 @@ export interface MemoryArtifactDetail extends Omit<MemoryArtifactSummary, "revis
   frontmatter: MemoryFrontmatter;
 }
 
-/** @deprecated Current memory components use the server-shaped artifact until the notebook shell replaces them. */
-export interface MemoryArtifact {
-  path: string;
-  title: string;
-  kind: MemoryArtifactKind;
-  type: "file";
-  directory: string;
-  scope: { kind: string; key: string | null };
-  content: string;
-  snippet: string | null;
-  summary: string | null;
-  revision: string | null;
-  editableContent: string | null;
-  record_count: number | null;
-  generated: boolean;
-  editable: boolean;
-  readonly_reason: string | null;
-  updated_at: string | null;
-  labels: string[];
-  source: string | null;
-  timeline: MemoryTimelineEntry[];
-  frontmatter?: MemoryFrontmatter;
-}
-
-export interface MemoryArtifactsResponse {
-  artifacts: MemoryArtifact[];
-}
-
-export interface MemoryArtifactResponse {
-  artifact: MemoryArtifact;
-}
-
 export interface MemoryArtifactSummariesResponse {
   artifacts: MemoryArtifactSummary[];
 }
@@ -395,31 +363,6 @@ function mapArtifactDetail(raw: MemoryArtifactTransport): MemoryArtifactDetail {
   };
 }
 
-function mapLegacyArtifact(raw: MemoryArtifactTransport): MemoryArtifact {
-  return {
-    path: raw.path,
-    title: raw.title,
-    kind: raw.kind,
-    type: raw.type,
-    directory: raw.directory,
-    scope: { kind: raw.scope.kind, key: raw.scope.key },
-    content: raw.content,
-    snippet: raw.snippet,
-    summary: raw.summary ?? null,
-    revision: raw.revision ?? null,
-    editableContent: raw.editable_content ?? null,
-    record_count: raw.record_count,
-    generated: raw.generated,
-    editable: raw.editable,
-    readonly_reason: raw.readonly_reason,
-    updated_at: raw.updated_at,
-    labels: raw.labels,
-    source: raw.source,
-    timeline: raw.timeline,
-    frontmatter: raw.frontmatter,
-  };
-}
-
 function mapScope(raw: RawScope | null | undefined): MemoryScope | null {
   if (!raw) return null;
   if (!["global", "user", "area", "integration", "session"].includes(raw.kind)) {
@@ -573,20 +516,15 @@ function mapLink(raw: RawLink): MemoryLink {
   };
 }
 
-export function listMemoryArtifacts(config: AppConfig, params: { kind?: MemoryArtifactKind; q?: string } = {}) {
-  return apiWithConfig<MemoryArtifactsTransport>(
-    config,
-    `/admin/memory/artifacts${queryString({ kind: params.kind, q: params.q })}`,
-  ).then((response) => ({ artifacts: response.artifacts.map(mapLegacyArtifact) }));
-}
-
 export function listMemoryArtifactSummaries(
   config: AppConfig,
   params: { kind?: MemoryArtifactKind; q?: string } = {},
+  options: { signal?: AbortSignal } = {},
 ): Promise<MemoryArtifactSummariesResponse> {
   return apiWithConfig<MemoryArtifactsTransport>(
     config,
     `/admin/memory/artifacts${queryString({ kind: params.kind, q: params.q })}`,
+    { signal: options.signal },
   ).then((response) => ({ artifacts: response.artifacts.map(mapArtifactSummary) }));
 }
 
@@ -608,30 +546,26 @@ function encodeArtifactPath(path: string): string {
   return canonicalArtifactPath(path).split("/").map(encodeURIComponent).join("/");
 }
 
-export async function readMemoryArtifact(config: AppConfig, path: string) {
-  return apiWithConfig<{ artifact: MemoryArtifactTransport }>(
-    config,
-    `/admin/memory/artifacts/${encodeArtifactPath(path)}`,
-  ).then((response) => ({ artifact: mapLegacyArtifact(response.artifact) }));
-}
-
 export async function readMemoryArtifactDetail(
   config: AppConfig,
   path: string,
+  options: { signal?: AbortSignal } = {},
 ): Promise<MemoryArtifactDetailResponse> {
   return apiWithConfig<{ artifact: MemoryArtifactTransport }>(
     config,
     `/admin/memory/artifacts/${encodeArtifactPath(path)}`,
+    { signal: options.signal },
   ).then((response) => ({ artifact: mapArtifactDetail(response.artifact) }));
 }
 
-export function rebuildMemoryArtifacts(config: AppConfig) {
-  return apiWithConfig<MemoryArtifactsTransport>(config, "/admin/memory/artifacts/rebuild", { method: "POST" })
-    .then((response) => ({ artifacts: response.artifacts.map(mapLegacyArtifact) }));
-}
-
-export function rebuildMemoryArtifactSummaries(config: AppConfig): Promise<MemoryArtifactSummariesResponse> {
-  return apiWithConfig<MemoryArtifactsTransport>(config, "/admin/memory/artifacts/rebuild", { method: "POST" })
+export function rebuildMemoryArtifactSummaries(
+  config: AppConfig,
+  options: { signal?: AbortSignal } = {},
+): Promise<MemoryArtifactSummariesResponse> {
+  return apiWithConfig<MemoryArtifactsTransport>(config, "/admin/memory/artifacts/rebuild", {
+    method: "POST",
+    signal: options.signal,
+  })
     .then((response) => ({ artifacts: response.artifacts.map(mapArtifactSummary) }));
 }
 

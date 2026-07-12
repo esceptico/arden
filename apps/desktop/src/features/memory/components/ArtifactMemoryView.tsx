@@ -13,23 +13,33 @@ import {
 import { listMemoryItems, setRecordPinned, type MemoryItem, type MemoryKind } from "@/api/memoryItems";
 import { Select } from "@/components/ui/Select";
 import { TreeSearch } from "@/features/memory/components/MemoryFileTree";
-import {
-  buildNotebookSections,
-  NotebookRail,
-  isNotebookArtifact,
-  isNotebookResource,
-} from "@/features/memory/components/NotebookRail";
+import { NotebookRail } from "@/features/memory/components/NotebookRail";
 import { FileDetailPane } from "@/features/memory/components/FileDetailPane";
 import { RecordDetailPane } from "@/features/memory/components/RecordDetailPane";
 import { RecordListPane } from "@/features/memory/components/RecordListPane";
 import { addAlias, isMissingArtifactError, preferredAlias } from "@/features/memory/lib/wikiResolution";
+import {
+  buildNotebookRailModel,
+  firstNotebookPath,
+  isNotebookPage,
+  isNotebookResourcePath,
+  selectIndexDocuments,
+} from "@/features/memory/lib/notebookIndex";
 import type { MemoryArtifactDetail, MemoryArtifactSummary } from "@/features/memory/lib/notebookTypes";
 
 const RECORD_PAGE_SIZE = 100;
+const SEARCH_DEBOUNCE_MS = 180;
+
+interface SummaryRequest {
+  epoch: number;
+  controller: AbortController;
+}
 
 export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const reduce = useReducedMotion();
   const [artifacts, setArtifacts] = useState<MemoryArtifactSummary[]>([]);
+  const [indexDocuments, setIndexDocuments] = useState<Map<string, string>>(() => new Map());
+  const [indexLoading, setIndexLoading] = useState(true);
   const [selected, setSelected] = useState<string | null>(null);
   const [activeDetail, setActiveDetail] = useState<MemoryArtifactDetail | null>(null);
   const [contentLoading, setContentLoading] = useState(false);
@@ -37,6 +47,9 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const [contentNotice, setContentNotice] = useState<string | null>(null);
   const [contentRefreshKey, setContentRefreshKey] = useState(0);
   const [query, setQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<MemoryArtifactSummary[] | null>(null);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const [direction, setDirection] = useState(1);
   const [loading, setLoading] = useState(true);
   const [rebuilding, setRebuilding] = useState(false);
@@ -50,60 +63,199 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
   const [pinningId, setPinningId] = useState<string | null>(null);
   const [recordsRefreshKey, setRecordsRefreshKey] = useState(0);
-  const loadRequestId = useRef(0);
+
+  const summaryRequest = useRef<SummaryRequest | null>(null);
+  const indexGeneration = useRef(0);
   const recordsRequestId = useRef(0);
   const detailCache = useRef(new Map<string, MemoryArtifactDetail>());
+  const indexDetailCache = useRef(new Map<string, string>());
+  const artifactsRef = useRef<MemoryArtifactSummary[]>([]);
+  const queryRef = useRef("");
+  const selectedMetaRef = useRef<MemoryArtifactSummary | null>(null);
+  const recordsTriggerRef = useRef<HTMLButtonElement>(null);
+  const recordsHeadingRef = useRef<HTMLHeadingElement>(null);
 
-  const applySummaries = useCallback((next: MemoryArtifactSummary[]) => {
-    setArtifacts(next);
-    const visible = next.filter(isNotebookResource);
-    const hierarchy = buildNotebookSections(next);
-    const defaultPath = hierarchy.sections[0]?.artifacts[0]?.path ?? hierarchy.files[0]?.path ?? null;
-    setSelected((previous) => previous && visible.some((artifact) => artifact.path === previous)
-      ? previous
-      : defaultPath);
+  artifactsRef.current = artifacts;
+  queryRef.current = query.trim();
+
+  const beginSummaryRequest = useCallback((): SummaryRequest => {
+    summaryRequest.current?.controller.abort();
+    const next = {
+      epoch: (summaryRequest.current?.epoch ?? 0) + 1,
+      controller: new AbortController(),
+    };
+    summaryRequest.current = next;
+    setLoading(false);
+    setSearchLoading(false);
+    setRebuilding(false);
     return next;
   }, []);
 
-  const load = useCallback(() => {
-    const requestId = ++loadRequestId.current;
+  const isCurrentSummaryRequest = useCallback((request: SummaryRequest) =>
+    summaryRequest.current?.epoch === request.epoch, []);
+
+  useEffect(() => () => summaryRequest.current?.controller.abort(), []);
+
+  const refreshIndexDocuments = useCallback(async (summaries: MemoryArtifactSummary[]) => {
+    const generation = ++indexGeneration.current;
+    setIndexLoading(true);
+    const selectedDocuments = selectIndexDocuments(summaries);
+    const pairs = await Promise.all(selectedDocuments.map(async (summary) => {
+      const key = `${summary.path}@${summary.revision ?? "unknown"}`;
+      const cached = indexDetailCache.current.get(key);
+      if (cached != null) return [summary.path, cached] as const;
+      try {
+        const response = await readMemoryArtifactDetail(config, summary.path);
+        indexDetailCache.current.set(`${summary.path}@${response.artifact.revision}`, response.artifact.content);
+        return [summary.path, response.artifact.content] as const;
+      } catch {
+        return null;
+      }
+    }));
+    if (generation !== indexGeneration.current) return;
+    setIndexDocuments(new Map(pairs.filter((pair): pair is readonly [string, string] => pair != null)));
+    setIndexLoading(false);
+  }, [config]);
+
+  const acceptSummaries = useCallback((next: MemoryArtifactSummary[]) => {
+    artifactsRef.current = next;
+    setArtifacts(next);
+    void refreshIndexDocuments(next);
+  }, [refreshIndexDocuments]);
+
+  const load = useCallback(async (): Promise<boolean> => {
+    const request = beginSummaryRequest();
     setLoading(true);
     setError(null);
-    return listMemoryArtifactSummaries(config)
-      .then((response) => requestId === loadRequestId.current ? applySummaries(response.artifacts) : [])
-      .catch((reason) => {
-        if (requestId !== loadRequestId.current) return [];
-        setError(reason instanceof Error ? reason.message : String(reason));
-        return [];
-      })
-      .finally(() => {
-        if (requestId === loadRequestId.current) setLoading(false);
-      });
-  }, [applySummaries, config]);
+    try {
+      const response = await listMemoryArtifactSummaries(config, {}, { signal: request.controller.signal });
+      if (!isCurrentSummaryRequest(request)) return false;
+      acceptSummaries(response.artifacts);
+      return true;
+    } catch (reason) {
+      if (!isCurrentSummaryRequest(request)) return false;
+      setIndexLoading(false);
+      setError(reason instanceof Error ? reason.message : String(reason));
+      return false;
+    } finally {
+      if (isCurrentSummaryRequest(request)) setLoading(false);
+    }
+  }, [acceptSummaries, beginSummaryRequest, config, isCurrentSummaryRequest]);
+
+  const search = useCallback(async (value: string): Promise<boolean> => {
+    const queryValue = value.trim();
+    if (!queryValue) return false;
+    const request = beginSummaryRequest();
+    setSearchLoading(true);
+    setSearchError(null);
+    setSearchResults(null);
+    try {
+      const response = await listMemoryArtifactSummaries(config, { q: queryValue }, { signal: request.controller.signal });
+      if (!isCurrentSummaryRequest(request) || queryRef.current !== queryValue) return false;
+      setSearchResults(response.artifacts.filter(isNotebookPage));
+      return true;
+    } catch (reason) {
+      if (!isCurrentSummaryRequest(request)) return false;
+      setSearchError(reason instanceof Error ? reason.message : String(reason));
+      return false;
+    } finally {
+      if (isCurrentSummaryRequest(request)) setSearchLoading(false);
+    }
+  }, [beginSummaryRequest, config, isCurrentSummaryRequest]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const memoryVaultVersion = useStore((state) => state.memoryVaultVersion);
+  const previousQuery = useRef("");
   useEffect(() => {
-    if (memoryVaultVersion === 0) return;
-    void load();
-    if (recordsOpen) setRecordsRefreshKey((key) => key + 1);
-  }, [load, memoryVaultVersion, recordsOpen]);
+    const value = query.trim();
+    const previous = previousQuery.current;
+    previousQuery.current = value;
+    if (!value) {
+      setSearchResults(null);
+      setSearchError(null);
+      setSearchLoading(false);
+      if (previous) {
+        beginSummaryRequest();
+        if (artifactsRef.current.length === 0) void load();
+      }
+      return;
+    }
+    const request = beginSummaryRequest();
+    setSearchResults(null);
+    setSearchError(null);
+    setSearchLoading(true);
+    const timer = window.setTimeout(() => {
+      if (!isCurrentSummaryRequest(request)) return;
+      void listMemoryArtifactSummaries(config, { q: value }, { signal: request.controller.signal })
+        .then((response) => {
+          if (!isCurrentSummaryRequest(request) || queryRef.current !== value) return;
+          setSearchResults(response.artifacts.filter(isNotebookPage));
+        })
+        .catch((reason) => {
+          if (isCurrentSummaryRequest(request)) setSearchError(reason instanceof Error ? reason.message : String(reason));
+        })
+        .finally(() => {
+          if (isCurrentSummaryRequest(request)) setSearchLoading(false);
+        });
+    }, SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [beginSummaryRequest, config, isCurrentSummaryRequest, load, query]);
 
-  const visibleArtifacts = useMemo(() => artifacts.filter(isNotebookArtifact), [artifacts]);
-  const navigableArtifacts = useMemo(() => artifacts.filter(isNotebookResource), [artifacts]);
-  const selectedMeta = navigableArtifacts.find((artifact) => artifact.path === selected) ?? visibleArtifacts[0] ?? null;
+  const railModel = useMemo(() => buildNotebookRailModel(artifacts, indexDocuments), [artifacts, indexDocuments]);
+  const navigableArtifacts = useMemo(() => artifacts.filter((artifact) => isNotebookResourcePath(artifact.path)), [artifacts]);
+  const selectedMeta = navigableArtifacts.find((artifact) => artifact.path === selected)
+    ?? searchResults?.find((artifact) => artifact.path === selected)
+    ?? null;
+  selectedMetaRef.current = selectedMeta;
+
+  useEffect(() => {
+    if (indexLoading) return;
+    const fallback = firstNotebookPath(railModel.entries) ?? railModel.files[0]?.path ?? null;
+    setSelected((current) => current && (
+      navigableArtifacts.some((artifact) => artifact.path === current)
+      || searchResults?.some((artifact) => artifact.path === current)
+    ) ? current : fallback);
+  }, [indexLoading, navigableArtifacts, railModel.entries, railModel.files, searchResults]);
+
+  const primaryOrder = useMemo(() => {
+    const paths: string[] = [];
+    const visit = (entries: typeof railModel.entries) => {
+      for (const entry of entries) {
+        if (entry.kind === "note") paths.push(entry.path);
+        else visit(entry.children);
+      }
+    };
+    visit(railModel.entries);
+    return [...paths, ...railModel.files.map((artifact) => artifact.path)];
+  }, [railModel]);
+
+  const closeRecords = useCallback(() => {
+    setRecordsOpen(false);
+    queueMicrotask(() => recordsTriggerRef.current?.focus());
+  }, []);
+
   const selectFile = useCallback((path: string) => {
-    const order = visibleArtifacts.map((artifact) => artifact.path);
-    const from = order.indexOf(selectedMeta?.path ?? selected ?? "");
-    const to = order.indexOf(path);
+    const from = primaryOrder.indexOf(selectedMeta?.path ?? selected ?? "");
+    const to = primaryOrder.indexOf(path);
     if (from !== -1 && to !== -1 && from !== to) setDirection(to > from ? 1 : -1);
     setContentNotice(null);
     setSelected(path);
-    setRecordsOpen(false);
-  }, [selected, selectedMeta?.path, visibleArtifacts]);
+    if (recordsOpen) closeRecords();
+  }, [closeRecords, primaryOrder, recordsOpen, selected, selectedMeta?.path]);
+
+  useEffect(() => {
+    if (!recordsOpen) return;
+    recordsHeadingRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      closeRecords();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [closeRecords, recordsOpen]);
 
   useEffect(() => {
     let cancelled = false;
@@ -155,6 +307,24 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       cancelled = true;
     };
   }, [config, contentRefreshKey, load, selectedMeta?.path, selectedMeta?.revision]);
+
+  const memoryVaultVersion = useStore((state) => state.memoryVaultVersion);
+  const observedVaultVersion = useRef(memoryVaultVersion);
+  useEffect(() => {
+    if (memoryVaultVersion === observedVaultVersion.current) return;
+    observedVaultVersion.current = memoryVaultVersion;
+    const current = selectedMetaRef.current;
+    if (current) {
+      for (const key of detailCache.current.keys()) {
+        if (key.startsWith(`${current.path}@`)) detailCache.current.delete(key);
+      }
+      setContentRefreshKey((key) => key + 1);
+    }
+    void load().then((accepted) => {
+      if (accepted && queryRef.current) void search(queryRef.current);
+    });
+    if (recordsOpen) setRecordsRefreshKey((key) => key + 1);
+  }, [load, memoryVaultVersion, recordsOpen, search]);
 
   const artifactPaths = useMemo(() => new Set(navigableArtifacts.map((artifact) => artifact.path)), [navigableArtifacts]);
   const artifactAliasMap = useMemo(() => {
@@ -229,12 +399,25 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   };
 
   const rebuild = () => {
+    const request = beginSummaryRequest();
     setRebuilding(true);
     setContentNotice(null);
-    rebuildMemoryArtifactSummaries(config)
-      .then((response) => applySummaries(response.artifacts))
-      .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))
-      .finally(() => setRebuilding(false));
+    setError(null);
+    rebuildMemoryArtifactSummaries(config, { signal: request.controller.signal })
+      .then((response) => {
+        if (!isCurrentSummaryRequest(request)) return false;
+        acceptSummaries(response.artifacts);
+        return true;
+      })
+      .then((accepted) => {
+        if (accepted && queryRef.current) void search(queryRef.current);
+      })
+      .catch((reason) => {
+        if (isCurrentSummaryRequest(request)) setError(reason instanceof Error ? reason.message : String(reason));
+      })
+      .finally(() => {
+        if (isCurrentSummaryRequest(request)) setRebuilding(false);
+      });
   };
 
   return (
@@ -249,18 +432,22 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     >
       <nav data-memory-zone="rail" aria-label="Memory notebook" className="flex min-h-0 flex-col border-r border-line-soft">
         <NotebookRail
-          artifacts={artifacts}
+          model={railModel}
+          searchResults={searchResults}
           selectedPath={selectedMeta?.path ?? null}
           query={query}
-          loading={loading}
+          loading={loading || indexLoading}
+          searchLoading={searchLoading}
           error={error}
+          searchError={searchError}
           rebuilding={rebuilding}
           recordsOpen={recordsOpen}
+          recordsTriggerRef={recordsTriggerRef}
           onQueryChange={setQuery}
           onSelect={selectFile}
           onRetry={() => void load()}
           onRebuild={rebuild}
-          onToggleRecords={() => setRecordsOpen((open) => !open)}
+          onToggleRecords={() => recordsOpen ? closeRecords() : setRecordsOpen(true)}
         />
       </nav>
 
@@ -278,13 +465,20 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
             detail={activeDetail?.path === selectedMeta?.path && activeDetail?.revision === selectedMeta?.revision
               ? activeDetail
               : null}
-            loading={loading}
+            loading={loading || indexLoading}
             direction={direction}
             contentNotice={contentNotice}
             contentError={contentError}
             contentLoading={contentLoading}
             wikiHandlers={wikiHandlers}
-            onRetry={() => setContentRefreshKey((key) => key + 1)}
+            onRetry={() => {
+              if (selectedMeta) {
+                for (const key of detailCache.current.keys()) {
+                  if (key.startsWith(`${selectedMeta.path}@`)) detailCache.current.delete(key);
+                }
+              }
+              setContentRefreshKey((key) => key + 1);
+            }}
           />
         )}
       </main>
@@ -299,12 +493,12 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
           <section aria-label="Raw records diagnostic" className="flex h-full min-h-0 flex-col">
             <div className="flex items-center justify-between px-3 pb-1 pt-3">
               <div>
-                <h2 className="text-sm font-semibold text-ink">Raw records</h2>
+                <h2 ref={recordsHeadingRef} tabIndex={-1} className="text-sm font-semibold text-ink outline-none">Raw records</h2>
                 <p className="text-2xs text-muted">Diagnostic view</p>
               </div>
               <button
                 type="button"
-                onClick={() => setRecordsOpen(false)}
+                onClick={closeRecords}
                 aria-label="Close raw records diagnostic"
                 className="grid size-7 place-items-center rounded-[8px] text-muted hover:bg-surface-soft hover:text-ink"
               >

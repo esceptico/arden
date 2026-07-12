@@ -1,19 +1,8 @@
-import type { MemoryArtifact } from "@/api/memoryArtifacts";
-
 // Pages whose body already IS their records (never prose-synthesized) — keep in sync
 // with the server's artifacts._is_record_list_page.
 const RECORD_LIST_PAGES = new Set(["directives.md", "lessons.md", "references.md"]);
 export function isRecordListPage(path: string): boolean {
   return RECORD_LIST_PAGES.has(path) || path.split("/")[0] === "insights";
-}
-
-export function displayFileName(a: MemoryArtifact) {
-  const leaf = a.path.split("/").pop() ?? a.path;
-  return leaf.replace(/\.md$/, "");
-}
-
-export function displayTitle(a: MemoryArtifact) {
-  return a.title || displayFileName(a);
 }
 
 // Strip inline (record:XXXXXXXX) provenance groups from synthesized prose for the
@@ -43,11 +32,4 @@ const _KIND_LABELS: Record<string, string> = {
 };
 export function kindLabel(kind: string) {
   return _KIND_LABELS[kind] ?? kind;
-}
-
-export function searchMatches(a: MemoryArtifact, q: string) {
-  return [a.path, a.title, a.kind, a.directory, ...a.labels, a.source ?? "", a.snippet ?? ""]
-    .join(" ")
-    .toLowerCase()
-    .includes(q);
 }

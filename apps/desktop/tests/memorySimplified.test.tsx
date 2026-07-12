@@ -1,6 +1,10 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { buildNotebookSections, isNotebookArtifact } from "@/features/memory/components/NotebookRail";
+import {
+  buildNotebookRailModel,
+  isNotebookPage,
+  selectIndexDocuments,
+} from "@/features/memory/lib/notebookIndex";
 import type { MemoryArtifactSummary } from "@/features/memory/lib/notebookTypes";
 
 test("memory modal uses the directory-first artifact browser instead of pane tabs", () => {
@@ -23,6 +27,7 @@ test("notebook hierarchy keeps described directories semantic and machine pages 
   });
   const artifacts = [
     artifact("me.md", "Me", "Personal context"),
+    artifact("topics/index.md", "Topics", "Current topics"),
     artifact("topics/dex.md", "Dex", "Dex decisions"),
     artifact("research/README.md", "Research", "Experiments and findings"),
     artifact("research/index.md", "Research index", "Older generated index description"),
@@ -43,22 +48,51 @@ test("notebook hierarchy keeps described directories semantic and machine pages 
     artifact("archive/note.md", "Archived note", "A retained note"),
   ];
 
-  const hierarchy = buildNotebookSections(artifacts);
+  artifacts.push(artifact("index.md", "Index", "Root index"));
+  const managed = (rows: Array<[string, string]>) => [
+    "<!-- ntrp:index:start -->",
+    ...rows.map(([path, description]) => `- ${path} — ${description} <!-- ntrp:path=${encodeURIComponent(path)} -->`),
+    "<!-- ntrp:index:end -->",
+  ].join("\n");
+  const documents = new Map([
+    ["index.md", managed([
+      ["me.md", "Personal context"],
+      ["topics/", "Current topics"],
+      ["archive/", "Older but useful notes"],
+      ["research/", "Experiments and findings"],
+    ])],
+    ["topics/index.md", managed([["dex.md", "Dex decisions"]])],
+    ["research/README.md", managed([
+      ["result.md", "Latest result"],
+      ["sub/", "One focused investigation"],
+      ["empty/", "No notes yet"],
+      ["health.md", "Legitimate nested health"],
+      ["AGENTS.md", "Legitimate nested instructions"],
+    ])],
+    ["research/sub/README.md", managed([["deep-result.md", "Nested finding"]])],
+    ["research/empty/README.md", managed([])],
+    ["archive/index.md", managed([["note.md", "A retained note"]])],
+  ]);
 
-  expect(hierarchy.sections.map((section) => section.title)).toEqual(["Memory", "Topics", "Archive", "Research", "Focused research"]);
-  expect(hierarchy.sections.find((section) => section.title === "Archive")?.description).toBe("Older but useful notes");
-  expect(hierarchy.sections.find((section) => section.title === "Archive")?.artifacts.map((item) => item.title)).toEqual(["Archived note"]);
-  expect(hierarchy.sections.find((section) => section.title === "Research")?.description).toBe("Experiments and findings");
-  expect(hierarchy.sections.find((section) => section.title === "Research")?.artifacts.map((item) => item.title)).toEqual(["Result"]);
-  expect(hierarchy.sections.find((section) => section.title === "Focused research")?.artifacts.map((item) => item.title)).toEqual(["Deep result"]);
-  expect(hierarchy.sections.some((section) => section.title === "Empty research")).toBe(false);
+  const hierarchy = buildNotebookRailModel(artifacts, documents);
+  expect(hierarchy.entries.map((entry) => entry.kind === "note" ? entry.path : entry.path)).toEqual([
+    "me.md", "topics", "archive", "research",
+  ]);
+  const research = hierarchy.entries.find((entry) => entry.kind === "directory" && entry.path === "research");
+  expect(research?.kind).toBe("directory");
+  if (research?.kind !== "directory") throw new Error("research directory missing");
+  expect(research.description).toBe("Experiments and findings");
+  expect(research.children.map((entry) => entry.path)).toEqual([
+    "research/result.md", "research/sub", "research/empty", "research/health.md", "research/AGENTS.md",
+  ]);
   expect(hierarchy.files.map((item) => item.title)).toEqual(["Scratch"]);
-  expect(artifacts.filter(isNotebookArtifact).map((item) => item.title)).not.toContain("Health");
-  expect(artifacts.filter(isNotebookArtifact).map((item) => item.title)).not.toContain("Events");
-  expect(artifacts.filter(isNotebookArtifact).map((item) => item.title)).not.toContain("Nested event");
-  expect(artifacts.filter(isNotebookArtifact).map((item) => item.title)).not.toContain("Nested state");
-  expect(artifacts.filter(isNotebookArtifact).map((item) => item.title)).not.toContain("Candidate");
-  expect(artifacts.filter(isNotebookArtifact).map((item) => item.title)).not.toContain("Nested health");
-  expect(artifacts.filter(isNotebookArtifact).map((item) => item.title)).not.toContain("Nested agents");
-  expect(artifacts.filter(isNotebookArtifact).map((item) => item.title)).not.toContain("Fact index");
+  expect(selectIndexDocuments(artifacts).map((item) => item.path)).not.toContain("research/index.md");
+  expect(artifacts.filter(isNotebookPage).map((item) => item.title)).not.toContain("Health");
+  expect(artifacts.filter(isNotebookPage).map((item) => item.title)).not.toContain("Events");
+  expect(artifacts.filter(isNotebookPage).map((item) => item.title)).not.toContain("Nested event");
+  expect(artifacts.filter(isNotebookPage).map((item) => item.title)).not.toContain("Nested state");
+  expect(artifacts.filter(isNotebookPage).map((item) => item.title)).not.toContain("Candidate");
+  expect(artifacts.filter(isNotebookPage).map((item) => item.title)).toContain("Nested health");
+  expect(artifacts.filter(isNotebookPage).map((item) => item.title)).toContain("Nested agents");
+  expect(artifacts.filter(isNotebookPage).map((item) => item.title)).not.toContain("Fact index");
 });
