@@ -72,6 +72,22 @@ def test_recovery_restores_all_backups_when_staged_content_is_invalid(tmp_path: 
     assert not (tmp_path / ".ntrp" / "journal").exists()
 
 
+def test_projection_rollback_preserves_a_newer_canonical_revision(tmp_path: Path) -> None:
+    (tmp_path / "me.md").write_bytes(b"old projection")
+    journal = VaultJournal(tmp_path)
+    previous = journal.commit({Path("canonical.md"): b"v1"})
+    journal.prepare({Path("me.md"): b"new projection"}, _publish_revision=False)
+    newer = "f" * 64
+    assert newer != previous
+    journal._publish_revision(newer)
+
+    VaultJournal(tmp_path).recover(prefer_rollback=True)
+
+    assert (tmp_path / "me.md").read_bytes() == b"old projection"
+    assert VaultJournal(tmp_path).canonical_revision == newer
+    assert not (tmp_path / ".ntrp" / "journal").exists()
+
+
 def test_recovery_resumes_cleanup_after_a_completed_rollback(tmp_path: Path, monkeypatch) -> None:
     _seed_pair(tmp_path)
     journal = VaultJournal(tmp_path)

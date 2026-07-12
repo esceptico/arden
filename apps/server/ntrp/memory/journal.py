@@ -273,7 +273,8 @@ class VaultJournal:
                 self._fsync_dir(target.parent)
         if not self._backup_targets_match(manifest):
             raise RuntimeError(f"journal {commit_path.name} backup hash validation failed")
-        self._restore_revision(manifest["previous_revision"])
+        if manifest.get("publish_revision", True):
+            self._restore_revision(manifest["previous_revision"])
         self._write_fsynced(commit_path / "ROLLED_BACK", b"")
         self._fsync_dir(commit_path)
 
