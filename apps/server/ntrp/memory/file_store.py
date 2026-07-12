@@ -21,6 +21,7 @@ import asyncio
 import re
 from dataclasses import replace
 from datetime import UTC, date, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -169,6 +170,12 @@ def load_conventions() -> str:
 
 
 _PARKABLE = (_ME, _REFERENCES)  # generic pages whose records may promote to an entity page
+
+
+class CanonicalFileRole(StrEnum):
+    USER_PAGE = "user_page"
+    EVENT = "event"
+    PROJECTION = "projection"
 
 
 def _slug(label: str) -> str:
@@ -334,6 +341,42 @@ class FilePageStore:
             self._loc[ln.id] = path
             if not self._ledger_mode() and ln in page.active_lines():
                 self._index_line(ln)
+
+    def _reload_canonical_state(self) -> None:
+        """Replace live record and index state from the recovered vault bytes."""
+        old_ids = set(self._loc)
+        self._pages.clear()
+        self._loc.clear()
+        for path in sorted(self._root.rglob("*.md")):
+            rel_parts = path.relative_to(self._root).parts
+            if {".index", ".maintenance", _RAW} & set(rel_parts) or (path.parent == self._root and path.name in _GENERATED_FILES):
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+                raw_path = self._raw_path(path)
+                page = merge_split(parse_page(text), raw_path.read_text(encoding="utf-8") if raw_path.exists() else None)
+            except Exception:
+                _logger.warning("skip unparseable recovered memory page", path=str(path))
+                continue
+            self._pages[path] = page
+            for line in page.lines:
+                self._loc[line.id] = path
+        for raw_path in self._orphan_raw_files():
+            page_path = self._root / raw_path.relative_to(self._root / _RAW)
+            try:
+                page = merge_split(Page(), raw_path.read_text(encoding="utf-8"))
+            except Exception:
+                _logger.warning("skip unparseable recovered raw timeline", path=str(raw_path))
+                continue
+            self._pages[page_path] = page
+            for line in page.lines:
+                self._loc[line.id] = page_path
+        active = self._active_ledger_entries() if self._ledger_mode() else tuple(line for page in self._pages.values() for line in page.active_lines())
+        for record_id in old_ids:
+            self._unindex_line(record_id)
+        for line in active:
+            self._index_line(line)
+        self._file_state = self._scan_files()
 
     async def refresh_from_disk(self) -> list[str]:
         """Absorb external edits (Obsidian, feeds, git, memory_write): reload every
@@ -991,6 +1034,21 @@ class FilePageStore:
     def _persist(self, path: Path) -> None:
         self._persist_many((path,))
 
+    @staticmethod
+    def _validate_caller_files(
+        files: Mapping[Path, bytes] | None,
+        file_roles: Mapping[Path, CanonicalFileRole] | None,
+    ) -> dict[Path, bytes]:
+        payload = dict(files or {})
+        roles = dict(file_roles or {})
+        if set(payload) != set(roles):
+            raise ValueError("every caller file requires exactly one matching role")
+        if any(not isinstance(role, CanonicalFileRole) for role in roles.values()):
+            raise ValueError("caller file role must be a CanonicalFileRole")
+        if any(role not in {CanonicalFileRole.USER_PAGE, CanonicalFileRole.EVENT} for role in roles.values()):
+            raise ValueError("projection caller files cannot enter a canonical commit")
+        return payload
+
     def _persist_many(self, paths: Sequence[Path], *, files: Mapping[Path, bytes] | None = None) -> None:
         extra = dict(files or {})
         staged: dict[Path, bytes] = {}
@@ -1052,8 +1110,15 @@ class FilePageStore:
         self._loc[line.id] = path
         self._persist(path)
 
-    def append_entries(self, entries: Sequence[LedgerEntry], *, files: Mapping[Path, bytes] | None = None) -> None:
+    def append_entries(
+        self,
+        entries: Sequence[LedgerEntry],
+        *,
+        files: Mapping[Path, bytes] | None = None,
+        file_roles: Mapping[Path, CanonicalFileRole] | None = None,
+    ) -> None:
         """Validate and append immutable schema-v2 entries without rewriting history."""
+        caller_files = self._validate_caller_files(files, file_roles)
         additions = tuple(entries)
         if not additions:
             return
@@ -1072,7 +1137,12 @@ class FilePageStore:
             page.lines.append(entry)
             self._loc[entry.id] = path
             touched.add(path)
-        self._persist_many(tuple(touched), files=files)
+        try:
+            self._persist_many(tuple(touched), files=caller_files)
+        except Exception:
+            self._journal.recover(prefer_rollback=True)
+            self._reload_canonical_state()
+            raise
         self._active_ledger_entries()
 
     def history(self, record_id: str) -> tuple[LedgerEntry, ...]:

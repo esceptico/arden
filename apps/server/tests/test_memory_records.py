@@ -22,7 +22,7 @@ from shutil import move
 import numpy as np
 import pytest
 
-from ntrp.memory.file_store import FilePageStore
+from ntrp.memory.file_store import CanonicalFileRole, FilePageStore
 from ntrp.memory.ledger import LedgerEntry, LedgerMeta, render_ledger_entry
 from ntrp.memory.models import Kind, SourceRef
 from ntrp.memory.pages import Page
@@ -715,6 +715,7 @@ async def test_ledger_write_recovers_visible_and_raw_files_as_one_commit(tmp_pat
     visible = vault / "topics" / "a.md"
     raw = vault / "raw" / "topics" / "a.md"
     before = visible.read_bytes(), raw.read_bytes()
+    revision = store.canonical_revision
 
     def inject(point: str) -> None:
         if point == "after_replace:0":
@@ -729,8 +730,72 @@ async def test_ledger_write_recovers_visible_and_raw_files_as_one_commit(tmp_pat
     store._journal.recover()
     after = visible.read_bytes(), raw.read_bytes()
 
-    assert after == before or (b"updated:" in after[0] and b"^successor" in after[1])
-    assert store.canonical_revision
+    assert after == before
+    assert store.canonical_revision == revision
+    await store.close()
+
+
+@pytest.mark.parametrize("failpoint", ["after_replace:0", "after_committed"])
+async def test_failed_append_reloads_live_state_and_same_id_can_retry(tmp_path: Path, monkeypatch, failpoint: str):
+    vault = tmp_path / "memory"
+    original = _ledger_entry("original", "Original", sequence=1)
+    index = _LedgerIndex()
+    store = await _file_store_pages(vault, {"topics/a.md": [original]}, index=index)
+    failed_once = False
+
+    def inject(point: str) -> None:
+        nonlocal failed_once
+        if point == failpoint and not failed_once:
+            failed_once = True
+            raise RuntimeError("injected journal failure")
+
+    monkeypatch.setattr(store._journal, "_checkpoint", inject)
+    successor = _ledger_entry("retry-id", "Successor", sequence=2, supersedes=(original.id,))
+    with pytest.raises(RuntimeError, match="injected journal failure"):
+        store.append_entries((successor,))
+
+    assert await store.get(successor.id) is None
+    assert store.history(original.id) == (original,)
+    assert store._next_sequence() == 2
+    await _drain()
+    assert index.store.ids == {original.id}
+
+    store.append_entries((successor,))
+    assert (await store.get(successor.id)).text == "Successor"
+    await store.close()
+
+
+async def test_caller_files_without_roles_are_rejected_before_ledger_mutation(tmp_path: Path):
+    vault = tmp_path / "memory"
+    original = _ledger_entry("original", "Original", sequence=1)
+    store = await _file_store(vault, [original])
+    successor = _ledger_entry("unclassified", "Unclassified", sequence=2, supersedes=(original.id,))
+
+    with pytest.raises(ValueError, match="role"):
+        store.append_entries((successor,), files={Path("notes/user.md"): b"# User\n"})
+
+    assert await store.get(successor.id) is None
+    assert not (vault / "notes" / "user.md").exists()
+    await store.close()
+
+
+async def test_projection_role_is_rejected_before_ledger_mutation(tmp_path: Path):
+    vault = tmp_path / "memory"
+    original = _ledger_entry("original", "Original", sequence=1)
+    store = await _file_store(vault, [original])
+    revision = store.canonical_revision
+    successor = _ledger_entry("projection", "Projection", sequence=2, supersedes=(original.id,))
+
+    with pytest.raises(ValueError, match="projection"):
+        store.append_entries(
+            (successor,),
+            files={Path("health.md"): b"# Generated health\n"},
+            file_roles={Path("health.md"): CanonicalFileRole.PROJECTION},
+        )
+
+    assert await store.get(successor.id) is None
+    assert store.canonical_revision == revision
+    assert not (vault / "health.md").exists()
     await store.close()
 
 
@@ -752,7 +817,18 @@ async def test_append_entries_stages_every_touched_page_and_caller_file_in_one_c
             _ledger_entry("first-new", "First new", sequence=3, supersedes=(first.id,)),
             _ledger_entry("second-new", "Second new", sequence=4, supersedes=(second.id,)),
         ),
-        files={Path("topics/a.md"): b"# User-edited A\n", Path("notes/user.md"): b"# User note\n"},
+        files={
+            Path("topics/a.md"): b"# User-edited A\n",
+            Path("notes/events.jsonl"): b'{"event":"edited"}\n',
+            Path("index.md"): b"# User-owned index\n",
+            Path("daily/2026-07-12.md"): b"# User-owned daily note\n",
+        },
+        file_roles={
+            Path("topics/a.md"): CanonicalFileRole.USER_PAGE,
+            Path("notes/events.jsonl"): CanonicalFileRole.EVENT,
+            Path("index.md"): CanonicalFileRole.USER_PAGE,
+            Path("daily/2026-07-12.md"): CanonicalFileRole.USER_PAGE,
+        },
     )
 
     assert len(commits) == 1
@@ -761,10 +837,14 @@ async def test_append_entries_stages_every_touched_page_and_caller_file_in_one_c
         Path("raw/topics/a.md"),
         Path("notes/b.md"),
         Path("raw/notes/b.md"),
-        Path("notes/user.md"),
+        Path("notes/events.jsonl"),
+        Path("index.md"),
+        Path("daily/2026-07-12.md"),
     }
     assert commits[0][Path("topics/a.md")] == b"# User-edited A\n"
     assert (vault / "topics" / "a.md").read_bytes() == b"# User-edited A\n"
+    assert (vault / "index.md").read_bytes() == b"# User-owned index\n"
+    assert (vault / "daily" / "2026-07-12.md").read_bytes() == b"# User-owned daily note\n"
     assert len(store.canonical_revision) == 64
     assert FilePageStore(vault).canonical_revision == store.canonical_revision
     await store.close()
