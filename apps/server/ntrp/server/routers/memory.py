@@ -49,6 +49,13 @@ def _page_edit_service(knowledge: KnowledgeRuntime = Depends(require_knowledge_r
     return knowledge.page_edit_service
 
 
+def _link_index_projection(knowledge: KnowledgeRuntime = Depends(require_knowledge_runtime)):
+    projection = knowledge._link_index
+    if projection is None:
+        raise HTTPException(status_code=503, detail="memory link index not ready")
+    return projection
+
+
 # --- JSON adapters (record -> item) ------------------------------------------
 
 # The lens.ts color ramp / badges key on these exact strings — emit nothing else.
@@ -357,6 +364,35 @@ def page_edit_history(
         "total": len(all_events),
         "limit": limit,
         "next_before_sequence": page[-1].sequence if len(events) > len(page) else None,
+    }
+
+
+@router.get("/links")
+def page_links(
+    path: str = Query(..., min_length=1, max_length=1000),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    projection=Depends(_link_index_projection),
+) -> dict:
+    _reject_machine_page(path)
+    safe = Path(path)
+    if safe.is_absolute() or ".." in safe.parts:
+        raise HTTPException(status_code=422, detail="invalid memory page path")
+    snapshot = projection.index.snapshot
+    if not snapshot.contains(path):
+        raise HTTPException(status_code=404, detail="memory page not found")
+    outgoing = snapshot.outgoing(path)
+    backlinks = snapshot.backlinks(path)
+    return {
+        "path": path,
+        "revision": snapshot.revision,
+        "stale": projection.stale,
+        "outgoing": [link.to_dict() for link in outgoing[offset : offset + limit]],
+        "backlinks": [link.to_dict() for link in backlinks[offset : offset + limit]],
+        "total_outgoing": len(outgoing),
+        "total_backlinks": len(backlinks),
+        "limit": limit,
+        "offset": offset,
     }
 
 

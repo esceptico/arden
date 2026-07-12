@@ -186,6 +186,96 @@ class DailyProjectionCoordinator:
             await asyncio.gather(task, return_exceptions=True)
 
 
+class LinkIndexProjection:
+    """Coalesced link-index rebuild with durable last-good snapshots."""
+
+    def __init__(self, index, *, artifacts, revision: Callable[[], str], retry_delay: float = 2.0):
+        self.index = index
+        self._artifacts = artifacts
+        self._revision = revision
+        self._retry_delay = retry_delay
+        self._task: asyncio.Task | None = None
+        self._retry_handle: asyncio.TimerHandle | None = None
+        self._work_future: asyncio.Future | None = None
+        self._dirty = False
+        self._closed = False
+        self.stale = index.snapshot.revision != revision()
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    @property
+    def retry_scheduled(self) -> bool:
+        return not self._closed and self._retry_handle is not None and not self._retry_handle.cancelled()
+
+    def schedule(self) -> None:
+        if self._closed:
+            return
+        self.stale = True
+        self._dirty = True
+        if self._retry_handle is not None:
+            self._retry_handle.cancel()
+            self._retry_handle = None
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self._run())
+
+    async def _run(self) -> None:
+        try:
+            while self._dirty:
+                self._dirty = False
+                revision = self._revision()
+                try:
+                    loop = asyncio.get_running_loop()
+                    work = loop.run_in_executor(None, self.index.rebuild, self._artifacts, revision)
+                    self._work_future = work
+                    try:
+                        await asyncio.shield(work)
+                    except asyncio.CancelledError:
+                        await asyncio.shield(work)
+                        raise
+                    finally:
+                        self._work_future = None
+                except Exception:
+                    self.stale = True
+                    _logger.warning("memory link index projection failed", exc_info=True)
+                    if not self._closed:
+                        self._retry_handle = asyncio.get_running_loop().call_later(
+                            self._retry_delay, self.schedule
+                        )
+                    return
+            self.stale = False
+        finally:
+            self._task = None
+
+    async def wait_idle(self) -> None:
+        task = self._task
+        if task is not None:
+            await task
+
+    def retry_now(self) -> None:
+        if self._closed:
+            return
+        if self._retry_handle is not None:
+            self._retry_handle.cancel()
+            self._retry_handle = None
+        self.schedule()
+
+    async def close(self) -> None:
+        self._closed = True
+        self._dirty = False
+        if self._retry_handle is not None:
+            self._retry_handle.cancel()
+            self._retry_handle = None
+        task = self._task
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        work = self._work_future
+        if work is not None:
+            await asyncio.shield(work)
+
+
 class KnowledgeRuntime:
     def __init__(self, config: Config):
         self.config = config
@@ -201,6 +291,7 @@ class KnowledgeRuntime:
         self._artifact_refresh_task: asyncio.Task | None = None
         self._vault_index = VaultIndexProjection(config.memory_artifacts_dir)
         self._daily_projection: DailyProjectionCoordinator | None = None
+        self._link_index: LinkIndexProjection | None = None
 
     @property
     def memory_ready(self) -> bool:
@@ -242,6 +333,9 @@ class KnowledgeRuntime:
                                 revision = event.result_revision
                                 review_required = event.reconciliation == "needs_review"
                         self._vault_index.schedule()
+                        link_index = getattr(self, "_link_index", None)
+                        if link_index is not None:
+                            link_index.schedule()
                         await on_change(
                             [change.path],
                             revision=revision,
@@ -251,6 +345,9 @@ class KnowledgeRuntime:
                         plain_paths.append(change)
                 if plain_paths:
                     self._vault_index.schedule()
+                    link_index = getattr(self, "_link_index", None)
+                    if link_index is not None:
+                        link_index.schedule()
                     await on_change(plain_paths, revision=None, review_required=False)
 
             store.start_watch(_indexed_change)
@@ -290,8 +387,12 @@ class KnowledgeRuntime:
             self._record_store.attach_search_index(self.search_index)
 
     async def stop(self) -> None:
-        if self._daily_projection is not None:
-            await self._daily_projection.close()
+        link_index = getattr(self, "_link_index", None)
+        if link_index is not None:
+            await link_index.close()
+        daily_projection = getattr(self, "_daily_projection", None)
+        if daily_projection is not None:
+            await daily_projection.close()
         self._page_edit_service = None
         await self._vault_index.close()
         if self._artifact_refresh_task is not None:
@@ -306,8 +407,12 @@ class KnowledgeRuntime:
             await self.indexer.stop()
 
     async def close(self) -> None:
-        if self._daily_projection is not None:
-            await self._daily_projection.close()
+        link_index = getattr(self, "_link_index", None)
+        if link_index is not None:
+            await link_index.close()
+        daily_projection = getattr(self, "_daily_projection", None)
+        if daily_projection is not None:
+            await daily_projection.close()
         self._page_edit_service = None
         await self._vault_index.close()
         if self._consolidate:
@@ -455,6 +560,14 @@ class KnowledgeRuntime:
             self._record_store,
             reconciler=self._reconcile_page_edit,
         )
+        from ntrp.memory.artifacts import ArtifactMemoryStore
+        from ntrp.memory.link_index import LinkIndex
+
+        self._link_index = LinkIndexProjection(
+            LinkIndex(self.config.memory_artifacts_dir),
+            artifacts=ArtifactMemoryStore(self.config.memory_artifacts_dir),
+            revision=lambda: self._record_store.canonical_revision,
+        )
         from ntrp.memory.daily import DailyProjector
 
         daily_projector = DailyProjector(
@@ -477,6 +590,7 @@ class KnowledgeRuntime:
                 _logger.warning("clear stale record vectors failed", exc_info=True)
         _logger.info("memory ready (file-canonical)", root=str(self.config.memory_artifacts_dir))
         self._vault_index.schedule()
+        self._link_index.schedule()
         self._daily_projection.schedule()
 
         # Synthesize the prose layer (the wiki view) off the hot path: stale-gated,
@@ -490,6 +604,8 @@ class KnowledgeRuntime:
 
     def _schedule_memory_projections(self) -> None:
         self._vault_index.schedule()
+        if self._link_index is not None:
+            self._link_index.schedule()
         if self._daily_projection is not None:
             self._daily_projection.schedule()
 

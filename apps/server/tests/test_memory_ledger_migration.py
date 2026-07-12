@@ -209,6 +209,7 @@ async def test_runtime_recovers_migrates_validates_before_constructing_store(
     class FakeStore:
         def __init__(self, **kwargs):
             events.append("store:init")
+            self.canonical_revision = "revision-1"
 
         def attach_scorer(self, scorer) -> None:
             pass
@@ -218,6 +219,12 @@ async def test_runtime_recovers_migrates_validates_before_constructing_store(
 
         async def count_active(self) -> int:
             return 1
+
+        def _ledger_entries(self):
+            return ()
+
+        def commit_generated_projection(self, rel, content, expected, expected_revision) -> None:
+            raise AssertionError("empty daily projection must not write")
 
     monkeypatch.setattr("ntrp.memory.journal.VaultJournal", FakeJournal)
     monkeypatch.setattr(
@@ -236,6 +243,7 @@ async def test_runtime_recovers_migrates_validates_before_constructing_store(
         memory_model=None,
         memory_artifacts_dir=tmp_path / "memory",
         memory_db_path=tmp_path / "memory.db",
+        memory_timezone="Asia/Yerevan",
     )
     runtime = KnowledgeRuntime.__new__(KnowledgeRuntime)
     runtime.config = config
@@ -246,8 +254,13 @@ async def test_runtime_recovers_migrates_validates_before_constructing_store(
     runtime._artifact_refresh_task = None
 
     await runtime._init_memory(SimpleNamespace(sessions=None))
+    await runtime._vault_index.wait_idle()
+    await runtime._link_index.wait_idle()
 
     assert events[:5] == ["recover", "migrate", "validate", "store:init", "store:open"]
+    await runtime._vault_index.close()
+    await runtime._link_index.close()
+    await runtime._daily_projection.close()
 
 
 @pytest.mark.asyncio
@@ -323,7 +336,13 @@ async def test_runtime_converts_nonempty_sqlite_import_to_healthy_v2_before_read
     await legacy.open()
     await legacy.add("Imported fact", source_ref=None)
     await legacy.close()
-    config = SimpleNamespace(memory=True, memory_model=None, memory_artifacts_dir=tmp_path / "vault", memory_db_path=db)
+    config = SimpleNamespace(
+        memory=True,
+        memory_model=None,
+        memory_artifacts_dir=tmp_path / "vault",
+        memory_db_path=db,
+        memory_timezone="Asia/Yerevan",
+    )
     runtime = KnowledgeRuntime.__new__(KnowledgeRuntime)
     runtime.config = config
     runtime.search_index = None
@@ -338,6 +357,9 @@ async def test_runtime_converts_nonempty_sqlite_import_to_healthy_v2_before_read
     assert health.schema_version == 2
     assert health.healthy
     assert await runtime._record_store.count_active() == 1
+    await runtime._vault_index.close()
+    await runtime._link_index.close()
+    await runtime._daily_projection.close()
     await runtime._record_store.close()
 
 

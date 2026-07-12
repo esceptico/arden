@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 from ntrp.memory.artifacts import ArtifactMemoryStore
 from ntrp.memory.file_store import FilePageStore
 from ntrp.memory.journal import JournalConflictError
+from ntrp.memory.link_index import LinkIndex
 from ntrp.memory.page_edit_service import PageEditService
 from ntrp.memory.page_events import PageEditAnalysis, page_revision
 from ntrp.memory.reconciler import RecordOperation
@@ -29,9 +30,10 @@ from ntrp.server.runtime.knowledge import KnowledgeRuntime
 
 
 class _Knowledge:
-    def __init__(self, records, artifacts_dir: Path, page_edits=None):
+    def __init__(self, records, artifacts_dir: Path, page_edits=None, link_projection=None):
         self._record_store = records
         self._page_edit_service = page_edits
+        self._link_index = link_projection
         self.config = SimpleNamespace(memory_artifacts_dir=artifacts_dir, memory_model=None)
 
     @property
@@ -118,10 +120,65 @@ def test_routes_registered():
         "/admin/memory/page-edits/preview",
         "/admin/memory/page-edits/apply",
         "/admin/memory/page-edits/history",
+        "/admin/memory/links",
         "/admin/memory/items",
         "/admin/memory/search",
     ):
         assert p in paths
+
+
+def test_links_route_returns_paginated_outgoing_and_backlinks(tmp_path: Path):
+    vault = tmp_path / "artifacts"
+    (vault / "topics").mkdir(parents=True)
+    (vault / "topics/a.md").write_text("# A\n\n[[B]] [[C]] [[D]]\n", encoding="utf-8")
+    for name in ("b", "c", "d"):
+        (vault / f"topics/{name}.md").write_text(f"# {name.upper()}\n\n[[A]]\n", encoding="utf-8")
+    index = LinkIndex(vault)
+    index.rebuild(ArtifactMemoryStore(vault), "revision-7")
+    projection = SimpleNamespace(index=index, stale=False)
+    knowledge = _Knowledge(None, vault, link_projection=projection)
+    test_app = FastAPI()
+    test_app.include_router(memory_router)
+    test_app.dependency_overrides[require_knowledge_runtime] = lambda: knowledge
+
+    with TestClient(test_app) as c:
+        response = c.get(
+            "/admin/memory/links",
+            params={"path": "topics/a.md", "limit": 2, "offset": 1},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["revision"] == "revision-7"
+    assert body["stale"] is False
+    assert body["total_outgoing"] == 3
+    assert body["total_backlinks"] == 3
+    assert [link["resolved_path"] for link in body["outgoing"]] == [
+        "topics/c.md",
+        "topics/d.md",
+    ]
+    assert [link["source_path"] for link in body["backlinks"]] == [
+        "topics/c.md",
+        "topics/d.md",
+    ]
+    assert body["limit"] == 2 and body["offset"] == 1
+
+
+def test_links_route_reports_stale_and_rejects_unknown_or_machine_paths(tmp_path: Path):
+    vault = tmp_path / "artifacts"
+    vault.mkdir()
+    (vault / "a.md").write_text("[[Missing]]\n", encoding="utf-8")
+    index = LinkIndex(vault)
+    index.rebuild(ArtifactMemoryStore(vault), "revision-1")
+    knowledge = _Knowledge(None, vault, link_projection=SimpleNamespace(index=index, stale=True))
+    test_app = FastAPI()
+    test_app.include_router(memory_router)
+    test_app.dependency_overrides[require_knowledge_runtime] = lambda: knowledge
+
+    with TestClient(test_app) as c:
+        assert c.get("/admin/memory/links", params={"path": "a.md"}).json()["stale"] is True
+        assert c.get("/admin/memory/links", params={"path": "missing.md"}).status_code == 404
+        assert c.get("/admin/memory/links", params={"path": "raw/a.md"}).status_code == 403
 
 
 def test_page_edit_preview_is_non_mutating(page_edit_client):
