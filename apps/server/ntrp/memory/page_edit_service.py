@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 
 from ntrp.memory.artifacts import ArtifactMemoryStore
 from ntrp.memory.file_store import CanonicalFileRole, FilePageStore
+from ntrp.memory.journal import JournalConflictError
 from ntrp.memory.models import SourceRef
 from ntrp.memory.page_events import (
     AppliedPageOperation,
@@ -37,10 +38,28 @@ _VAULT_APPLY_LOCKS: WeakValueDictionary[Path, asyncio.Lock] = WeakValueDictionar
 
 
 class StalePageRevisionError(ValueError):
-    pass
+    def __init__(
+        self,
+        path: str,
+        *,
+        current_content: bytes,
+        base_revision: str,
+        candidate_revision: str,
+        message: str | None = None,
+    ) -> None:
+        super().__init__(message or path)
+        self.path = path
+        self.current_content = current_content
+        self.current_revision = page_revision(current_content)
+        self.base_revision = base_revision
+        self.candidate_revision = candidate_revision
 
 
 class PreviewExpiredError(ValueError):
+    pass
+
+
+class PreviewNotFoundError(ValueError):
     pass
 
 
@@ -82,7 +101,12 @@ class PageEditService:
             raise ValueError("page edit actor is required")
         base = self._resources.read_resource_bytes(safe_path)
         if page_revision(base) != base_revision:
-            raise StalePageRevisionError(safe_path)
+            raise StalePageRevisionError(
+                safe_path,
+                current_content=base,
+                base_revision=base_revision,
+                candidate_revision=page_revision(content),
+            )
         patch = unified_patch(base, content)
         analysis = _analyze(safe_path, base, content, patch)
         answer = await self._reconcile(analysis)
@@ -148,6 +172,9 @@ class PageEditService:
         expected_revision = self._store.canonical_revision
         envelope = self._load_preview(preview_id)
         preview, candidate, analysis, current = self._validate_persisted_preview(preview_id, envelope)
+        unknown_decisions = set(decisions).difference(question.id for question in preview.questions)
+        if unknown_decisions:
+            raise ValueError(f"invalid decision id: {sorted(unknown_decisions)[0]}")
         if preview.analysis_pending and not save_as_pending:
             raise ReconciliationPendingError("page edit analysis is unavailable; explicit pending save is required")
         occurred = self._local_now()
@@ -182,11 +209,21 @@ class PageEditService:
         }
         files = dict(planned)
         files.update(self._store._validate_caller_files(caller_files, caller_roles))
-        self._commit(
-            files,
-            expected_files={Path(preview.path): current, event_rel: expected_event},
-            expected_revision=expected_revision,
-        )
+        try:
+            self._commit(
+                files,
+                expected_files={Path(preview.path): current, event_rel: expected_event},
+                expected_revision=expected_revision,
+            )
+        except JournalConflictError as exc:
+            latest = self._resources.read_resource_bytes(preview.path)
+            raise StalePageRevisionError(
+                preview.path,
+                current_content=latest,
+                base_revision=preview.base_revision,
+                candidate_revision=preview.result_revision,
+                message=str(exc),
+            ) from exc
         self._resources.delete_page_edit_preview(self._preview_rel(preview.id))
         return event
 
@@ -420,7 +457,12 @@ class PageEditService:
             raise ValueError("invalid persisted preview candidate revision")
         current = self._resources.read_resource_bytes(preview.path)
         if page_revision(current) != preview.base_revision:
-            raise StalePageRevisionError(preview.path)
+            raise StalePageRevisionError(
+                preview.path,
+                current_content=current,
+                base_revision=preview.base_revision,
+                candidate_revision=preview.result_revision,
+            )
         patch = unified_patch(current, candidate)
         if patch != preview.patch:
             raise ValueError("invalid persisted preview patch")
@@ -434,7 +476,7 @@ class PageEditService:
         try:
             raw = self._resources.read_resource_bytes(rel, page_edit_internal=True)
         except FileNotFoundError as exc:
-            raise ValueError("page edit preview not found") from exc
+            raise PreviewNotFoundError(preview_id) from exc
         envelope = json.loads(raw)
         expires = datetime.fromisoformat(envelope["expires_at"])
         if self._local_now().astimezone(UTC) > expires.astimezone(UTC):
@@ -551,6 +593,7 @@ def _analyze(path: str, base: bytes, result: bytes, patch: str) -> PageEditAnaly
 __all__ = [
     "PageEditService",
     "PreviewExpiredError",
+    "PreviewNotFoundError",
     "ReconciliationPendingError",
     "StalePageRevisionError",
 ]

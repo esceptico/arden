@@ -20,6 +20,7 @@ import json
 import os
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ntrp.database import connect as db_connect
 from ntrp.logging import get_logger
@@ -28,6 +29,9 @@ from ntrp.memory.reconciler import RecordOperation, validate_operations
 from ntrp.memory.records import RecordStore
 from ntrp.memory.scopes import USER_SCOPE, MemoryScope, apply_scope_to_source, scope_for_write
 from ntrp.observability import observed_trace
+
+if TYPE_CHECKING:
+    from ntrp.memory.page_events import PageEditAnalysis
 
 _logger = get_logger(__name__)
 
@@ -159,6 +163,18 @@ _SYSTEM_PROMPT = (
     "Never expose internal ids/provenance strings like project-proj_..., source=curator:..., facts/project-..., or summaries/project-... in record text. "
     "Write record text as clean human prose: keep meaningful names (people, products, experiment/metric names) but omit raw absolute file paths, commit hashes, UUIDs, and opaque run/tool ids — they are noise the projection now renders verbatim.\n"
     "(5) Output ONLY the JSON object, no preamble."
+)
+
+_PAGE_EDIT_SYSTEM_PROMPT = (
+    "You reconcile structural memory page edits against existing atomic records. "
+    "Return one JSON object with a `records` array. Each record uses one op: ADD, UPDATE, SUPERSEDE, "
+    "MERGE, RETRACT, NOOP, or ASK. Formatting, ordering, and wording-only changes are NOOP. "
+    "Use mutation target ids only from EXISTING SIMILAR RECORDS. RETRACT only when the edit is an "
+    "unambiguous request to forget exact durable memory. When semantic deletion is ambiguous, return ASK "
+    "with only a concise `question`; never choose semantics from keywords or regex-like text matching. "
+    "ADD requires self-contained `text`, `kind` (directive|fact|source|lesson), and optional entity_labels/meta_labels. "
+    "UPDATE/SUPERSEDE require `id` and replacement `text`; MERGE requires `target_ids` and `text`; "
+    "RETRACT requires `target_ids`; NOOP carries no fields. Output only the JSON object."
 )
 
 _ENTITY_BACKFILL_SYSTEM = (
@@ -294,6 +310,39 @@ class Curator:
                 batch_key=f"direct-remember:{session_id}:{tool_call_id}",
             )
         return operations
+
+    async def reconcile_page_edit(self, analysis: "PageEditAnalysis") -> tuple[RecordOperation, ...] | None:
+        """Return typed page-diff operations without applying them."""
+        raw = await self._complete(
+            [
+                {
+                    "message_id": f"page-edit:{analysis.path}",
+                    "role": "user",
+                    "kind": "page_edit",
+                    "content": analysis.model_dump_json(),
+                }
+            ],
+            header=(
+                "PAGE EDIT RECONCILIATION. The content is a structural before/after diff, not a conversation. "
+                "Return NOOP for formatting, ordering, or wording-only changes. Return ADD, UPDATE/SUPERSEDE, "
+                "MERGE, or RETRACT only for unambiguous semantic changes using listed record ids. Return ASK "
+                "with only a question when forgetting durable memory is ambiguous; never infer a deletion from words."
+            ),
+            explicit_scope=USER_SCOPE,
+            system_prompt=_PAGE_EDIT_SYSTEM_PROMPT,
+        )
+        if raw is None:
+            return None
+        source = SourceRef(
+            kind="page_edit",
+            ref=f"page_edit_preview:{analysis.path}",
+            captured_at=now_iso(),
+            scope_kind=USER_SCOPE.kind,
+            scope_key=USER_SCOPE.key,
+            time_precision="unknown",
+            role="user:desktop",
+        )
+        return await self._typed_operations(raw, (source,), USER_SCOPE)
 
     async def sweep_once(self) -> int:
         """Schedule curation for the most-recent live USER CHATS. Automation
@@ -551,6 +600,7 @@ class Curator:
         *,
         bulk: bool = False,
         explicit_scope: MemoryScope | None = None,
+        system_prompt: str | None = None,
     ) -> list[dict] | None:
         """ONE LLM call emitting the record-ops. Pre-searches the flat record pool
         for the candidate set so the model picks from REAL ids only, and carries
@@ -592,7 +642,7 @@ class Curator:
 
         messages = [
             {"role": "system", "content": f"<operating_manual>\n{load_conventions()}\n</operating_manual>\n\n"
-             + _SYSTEM_PROMPT + (_BULK_OVERRIDE if bulk else "")},
+             + (system_prompt or _SYSTEM_PROMPT) + (_BULK_OVERRIDE if bulk else "")},
             {"role": "user", "content": user_prompt},
         ]
         try:

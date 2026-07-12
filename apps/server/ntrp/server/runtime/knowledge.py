@@ -108,6 +108,7 @@ class KnowledgeRuntime:
         self.chat_connector = None
 
         self._record_store = None
+        self._page_edit_service = None
         self._consolidate = None
         self._artifact_refresh_task: asyncio.Task | None = None
         self._vault_index = VaultIndexProjection(config.memory_artifacts_dir)
@@ -119,6 +120,10 @@ class KnowledgeRuntime:
     @property
     def record_store(self):
         return self._record_store
+
+    @property
+    def page_edit_service(self):
+        return self._page_edit_service
 
     @property
     def consolidate(self):
@@ -142,6 +147,11 @@ class KnowledgeRuntime:
         if not self.config.memory_model:
             return None, ""
         return get_completion_client(self.config.memory_model), self.config.memory_model
+
+    async def _reconcile_page_edit(self, analysis):
+        if self.memory_curator is None:
+            return None
+        return await self.memory_curator.reconcile_page_edit(analysis)
 
     async def connect(self, stores: Stores) -> None:
         await self._init_search()
@@ -317,6 +327,13 @@ class KnowledgeRuntime:
         if not health.healthy:
             raise RuntimeError(f"memory vault validation failed: {health.first_error or 'unknown vault error'}")
         await self._record_store.open()
+        from ntrp.memory.page_edit_service import PageEditService
+
+        self._page_edit_service = PageEditService(
+            self.config.memory_artifacts_dir,
+            self._record_store,
+            reconciler=self._reconcile_page_edit,
+        )
         # Evict stale old-engine vectors (source="record") from the shared index.
         # Only touches that partition — transcripts + memory_line are untouched.
         if self.search_index is not None:

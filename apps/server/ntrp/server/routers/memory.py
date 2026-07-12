@@ -6,11 +6,22 @@ in the read/write contract; item detail returns empty edge arrays for one releas
 for compatibility.
 """
 
+from pathlib import Path
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ntrp.memory.artifacts import ArtifactMemoryStore
 from ntrp.memory.models import Record
+from ntrp.memory.page_edit_service import (
+    PageEditService,
+    PreviewExpiredError,
+    PreviewNotFoundError,
+    ReconciliationPendingError,
+    StalePageRevisionError,
+)
+from ntrp.memory.page_events import PageEditDecision, page_revision
 from ntrp.memory.scopes import MemoryScope, scope_for_write
 from ntrp.server.deps import require_knowledge_runtime
 from ntrp.server.runtime import Runtime, get_runtime
@@ -27,6 +38,12 @@ def _record_store(knowledge: KnowledgeRuntime = Depends(require_knowledge_runtim
 
 def _artifact_store(knowledge: KnowledgeRuntime = Depends(require_knowledge_runtime)) -> ArtifactMemoryStore:
     return ArtifactMemoryStore(knowledge.config.memory_artifacts_dir)
+
+
+def _page_edit_service(knowledge: KnowledgeRuntime = Depends(require_knowledge_runtime)) -> PageEditService:
+    if knowledge.page_edit_service is None:
+        raise HTTPException(status_code=503, detail="memory page edits not ready")
+    return knowledge.page_edit_service
 
 
 # --- JSON adapters (record -> item) ------------------------------------------
@@ -205,10 +222,150 @@ async def prune_records(store=Depends(_record_store)) -> dict:
     return await store.prune()
 
 
+class PageEditPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    base_revision: str
+    content: str
+    actor: str = "user:desktop"
+
+
+class PageEditDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    choice: Literal["note_only", "forget_memory"]
+    target_ids: tuple[str, ...] = ()
+
+
+class PageEditApplyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    preview_id: str
+    decisions: dict[str, Literal["note_only", "forget_memory"] | PageEditDecisionRequest]
+    save_pending: bool = False
+
+
+def _reject_machine_page(path: str) -> None:
+    parts = Path(path).parts
+    if parts and parts[0] in {"raw", "changelog", ".ntrp", ".index", ".maintenance"}:
+        raise HTTPException(status_code=403, detail="machine-only memory page")
+
+
+def _require_editable_page(path: str, artifacts: ArtifactMemoryStore) -> None:
+    _reject_machine_page(path)
+    try:
+        artifact = artifacts.read_artifact(path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="memory page not found") from exc
+    if not artifact.editable:
+        raise HTTPException(status_code=403, detail=artifact.readonly_reason or "machine-only memory page")
+
+
+def _revision_conflict(exc: StalePageRevisionError) -> HTTPException:
+    try:
+        current_content = exc.current_content.decode("utf-8")
+    except UnicodeDecodeError as decode_error:
+        raise HTTPException(status_code=422, detail="memory pages must be UTF-8") from decode_error
+    return HTTPException(
+        status_code=409,
+        detail={
+            "error": "page_revision_conflict",
+            "current_content": current_content,
+            "current_revision": exc.current_revision,
+            "base_revision": exc.base_revision,
+            "candidate_revision": exc.candidate_revision,
+        },
+    )
+
+
+@router.post("/page-edits/preview")
+async def preview_page_edit(
+    body: PageEditPreviewRequest,
+    service: PageEditService = Depends(_page_edit_service),
+    artifacts: ArtifactMemoryStore = Depends(_artifact_store),
+) -> dict:
+    _require_editable_page(body.path, artifacts)
+    try:
+        preview = await service.preview(
+            path=body.path,
+            base_revision=body.base_revision,
+            content=body.content.encode("utf-8"),
+            actor=body.actor,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="memory page not found") from exc
+    except StalePageRevisionError as exc:
+        raise _revision_conflict(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"preview": preview.model_dump(mode="json")}
+
+
+@router.put("/page-edits/apply")
+async def apply_page_edit(
+    body: PageEditApplyRequest,
+    service: PageEditService = Depends(_page_edit_service),
+) -> dict:
+    decisions: dict[str, PageEditDecision] = {}
+    for question_id, raw in body.decisions.items():
+        value = PageEditDecisionRequest(choice=raw) if isinstance(raw, str) else raw
+        decisions[question_id] = PageEditDecision(
+            choice="Note only" if value.choice == "note_only" else "Forget memory",
+            target_ids=value.target_ids,
+        )
+    try:
+        event = await service.apply(
+            body.preview_id,
+            decisions=decisions,
+            save_as_pending=body.save_pending,
+        )
+    except StalePageRevisionError as exc:
+        raise _revision_conflict(exc) from exc
+    except ReconciliationPendingError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except PreviewExpiredError as exc:
+        raise HTTPException(status_code=422, detail="page edit preview expired") from exc
+    except PreviewNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="page edit preview not found") from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="memory page not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"event": event.model_dump(mode="json"), "revision": event.result_revision}
+
+
+@router.get("/page-edits/history")
+def page_edit_history(
+    path: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    before_sequence: int | None = Query(default=None, ge=1),
+    service: PageEditService = Depends(_page_edit_service),
+) -> dict:
+    if path is not None:
+        _reject_machine_page(path)
+    all_events = tuple(sorted(service.history(path=path), key=lambda event: event.sequence, reverse=True))
+    events = tuple(
+        event for event in all_events if before_sequence is None or event.sequence < before_sequence
+    )
+    page = events[:limit]
+    return {
+        "events": [event.model_dump(mode="json") for event in page],
+        "total": len(all_events),
+        "limit": limit,
+        "next_before_sequence": page[-1].sequence if len(events) > len(page) else None,
+    }
+
+
 @router.get("/artifacts/{path:path}")
 def read_artifact(path: str, artifacts: ArtifactMemoryStore = Depends(_artifact_store)) -> dict:
     try:
-        return {"artifact": artifact_to_json(artifacts.read_artifact(path))}
+        artifact = artifacts.read_artifact(path)
+        payload = artifact_to_json(artifact)
+        exact = artifacts.read_resource_bytes(path)
+        payload["revision"] = page_revision(exact)
+        payload["editable_content"] = exact.decode("utf-8") if artifact.editable else None
+        return {"artifact": payload}
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="memory artifact not found") from exc
 

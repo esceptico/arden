@@ -31,6 +31,7 @@ from ntrp.memory.curator import Curator
 from ntrp.memory.file_store import FilePageStore
 from ntrp.memory.ledger import LedgerEntry, LedgerMeta, render_ledger_entry
 from ntrp.memory.models import Kind, SourceRef
+from ntrp.memory.page_events import PageEditAnalysis
 from ntrp.memory.records import RecordStore
 from ntrp.memory.scopes import MemoryScope
 from tests.conftest import completion_response
@@ -145,6 +146,34 @@ async def _make_file_curator(tmp_path: Path, llm, sessions) -> tuple[Curator, Fi
 
 
 # --- admit gate / watermark -----------------------------------------------------
+
+
+async def test_reconcile_page_edit_returns_typed_operations_without_applying(tmp_path: Path):
+    llm = StubLLM(_ops_json([{"op": "ADD", "text": "New durable statement.", "kind": "fact"}]))
+    curator, records = _make_curator(tmp_path, llm, StubSessions())
+    await records.open()
+    analysis = PageEditAnalysis(
+        path="topics/a.md",
+        before=("Old durable statement.",),
+        after=("New durable statement.",),
+        changed_before=("Old durable statement.",),
+        changed_after=("New durable statement.",),
+        patch="patch",
+    )
+
+    operations = await curator.reconcile_page_edit(analysis)
+
+    assert [operation.op for operation in operations] == ["ADD"]
+    assert operations[0].text == "New durable statement."
+    assert await records.list() == []
+    prompt = llm.calls[0]["messages"][1]["content"]
+    assert "PAGE EDIT RECONCILIATION" in prompt
+    assert json.loads(prompt.splitlines()[-1])["content"] == analysis.model_dump_json()
+    system = llm.calls[0]["messages"][0]["content"]
+    assert "structural memory page edits" in system
+    assert "ASK" in system and "RETRACT" in system
+    await curator.stop()
+    await records.close()
 
 
 async def test_empty_ops_skip_writes_but_advance_watermark(tmp_path: Path):
