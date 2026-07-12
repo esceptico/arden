@@ -28,6 +28,7 @@ from uuid import uuid4
 from ntrp.constants import MEMORY_MIN_ENTITY_RECORDS, RRF_K
 from ntrp.database import serialize_embedding
 from ntrp.logging import get_logger
+from ntrp.memory.journal import VaultJournal
 from ntrp.memory.ledger import LedgerEntry, LedgerMeta
 from ntrp.memory.models import TRUST_DEFAULT, TRUST_LEVEL, Kind, Record, SourceRef, now_iso, union_source_refs
 from ntrp.memory.pages import SENTINEL, Line, Page, merge_split, parse_page, render_page, render_raw
@@ -35,7 +36,7 @@ from ntrp.memory.scorer import salience
 from ntrp.search.retrieval import rrf_merge
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
 _logger = get_logger(__name__)
 
@@ -206,6 +207,11 @@ class FilePageStore:
         # edits (Obsidian, feeds, git) — our own writes never echo.
         self._file_state: dict[Path, int] = {}
         self._watch_task: asyncio.Task | None = None
+        self._journal = VaultJournal(self._root)
+
+    @property
+    def canonical_revision(self) -> str:
+        return self._journal.canonical_revision
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -983,15 +989,47 @@ class FilePageStore:
             pass
 
     def _persist(self, path: Path) -> None:
-        page = self._pages[path]
-        page.frontmatter["updated"] = now_iso()[:10]
-        self._write_atomic(path, render_page(page))
-        raw = render_raw(page)
-        raw_path = self._raw_path(path)
-        if raw:
-            self._write_atomic(raw_path, raw)
-        else:
+        self._persist_many((path,))
+
+    def _persist_many(self, paths: Sequence[Path], *, files: Mapping[Path, bytes] | None = None) -> None:
+        extra = dict(files or {})
+        staged: dict[Path, bytes] = {}
+        projections: dict[Path, str] = {}
+        empty_raw: list[Path] = []
+        for path in sorted(set(paths)):
+            page = self._pages[path]
+            page.frontmatter["updated"] = now_iso()[:10]
+            visible = render_page(page)
+            raw = render_raw(page)
+            raw_path = self._raw_path(path)
+            try:
+                raw_changed = bool(raw) and raw_path.read_bytes() != raw.encode()
+            except OSError:
+                raw_changed = bool(raw)
+            if raw_changed:
+                staged[path.relative_to(self._root)] = visible.encode()
+                staged[raw_path.relative_to(self._root)] = raw.encode()
+            else:
+                projections[path] = visible
+            if not raw:
+                empty_raw.append(raw_path)
+        staged.update(extra)
+        for rel in extra:
+            projections.pop(self._root / rel, None)
+            if self._root / rel in empty_raw:
+                empty_raw.remove(self._root / rel)
+        if staged:
+            self._journal.commit(staged)
+        for path, text in projections.items():
+            self._write_atomic(path, text)
+        for raw_path in empty_raw:
             raw_path.unlink(missing_ok=True)
+        for rel in staged:
+            path = self._root / rel
+            try:
+                self._file_state[path] = path.stat().st_mtime_ns
+            except OSError:
+                self._file_state.pop(path, None)
 
     def _remove_page_files(self, path: Path) -> None:
         path.unlink(missing_ok=True)
@@ -1014,7 +1052,7 @@ class FilePageStore:
         self._loc[line.id] = path
         self._persist(path)
 
-    def append_entries(self, entries: Sequence[LedgerEntry]) -> None:
+    def append_entries(self, entries: Sequence[LedgerEntry], *, files: Mapping[Path, bytes] | None = None) -> None:
         """Validate and append immutable schema-v2 entries without rewriting history."""
         additions = tuple(entries)
         if not additions:
@@ -1034,8 +1072,7 @@ class FilePageStore:
             page.lines.append(entry)
             self._loc[entry.id] = path
             touched.add(path)
-        for path in touched:
-            self._persist(path)
+        self._persist_many(tuple(touched), files=files)
         self._active_ledger_entries()
 
     def history(self, record_id: str) -> tuple[LedgerEntry, ...]:

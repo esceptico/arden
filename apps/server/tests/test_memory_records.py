@@ -708,6 +708,86 @@ async def test_forget_appends_retract_and_keeps_history(tmp_path: Path):
     await store.close()
 
 
+async def test_ledger_write_recovers_visible_and_raw_files_as_one_commit(tmp_path: Path, monkeypatch):
+    vault = tmp_path / "memory"
+    original = _ledger_entry("original", "Original", sequence=1)
+    store = await _file_store(vault, [original])
+    visible = vault / "topics" / "a.md"
+    raw = vault / "raw" / "topics" / "a.md"
+    before = visible.read_bytes(), raw.read_bytes()
+
+    def inject(point: str) -> None:
+        if point == "after_replace:0":
+            raise RuntimeError("injected journal failure")
+
+    monkeypatch.setattr(store._journal, "_checkpoint", inject)
+    successor = _ledger_entry("successor", "Successor", sequence=2, supersedes=(original.id,))
+    with pytest.raises(RuntimeError, match="injected journal failure"):
+        store.append_entries((successor,))
+
+    store._journal = type(store._journal)(vault)
+    store._journal.recover()
+    after = visible.read_bytes(), raw.read_bytes()
+
+    assert after == before or (b"updated:" in after[0] and b"^successor" in after[1])
+    assert store.canonical_revision
+    await store.close()
+
+
+async def test_append_entries_stages_every_touched_page_and_caller_file_in_one_commit(tmp_path: Path, monkeypatch):
+    vault = tmp_path / "memory"
+    first = _ledger_entry("first", "First", sequence=1)
+    second = _ledger_entry("second", "Second", sequence=2)
+    store = await _file_store_pages(vault, {"topics/a.md": [first], "notes/b.md": [second]})
+    commits = []
+    commit = store._journal.commit
+
+    def capture(files):
+        commits.append(dict(files))
+        return commit(files)
+
+    monkeypatch.setattr(store._journal, "commit", capture)
+    store.append_entries(
+        (
+            _ledger_entry("first-new", "First new", sequence=3, supersedes=(first.id,)),
+            _ledger_entry("second-new", "Second new", sequence=4, supersedes=(second.id,)),
+        ),
+        files={Path("topics/a.md"): b"# User-edited A\n", Path("notes/user.md"): b"# User note\n"},
+    )
+
+    assert len(commits) == 1
+    assert set(commits[0]) == {
+        Path("topics/a.md"),
+        Path("raw/topics/a.md"),
+        Path("notes/b.md"),
+        Path("raw/notes/b.md"),
+        Path("notes/user.md"),
+    }
+    assert commits[0][Path("topics/a.md")] == b"# User-edited A\n"
+    assert (vault / "topics" / "a.md").read_bytes() == b"# User-edited A\n"
+    assert len(store.canonical_revision) == 64
+    assert FilePageStore(vault).canonical_revision == store.canonical_revision
+    await store.close()
+
+
+async def test_generated_prose_only_write_is_excluded_from_canonical_revision(tmp_path: Path, monkeypatch):
+    vault = tmp_path / "memory"
+    store = await _file_store(vault, [_ledger_entry("record", "Fact", sequence=1)])
+    page_path = vault / "topics" / "a.md"
+    revision = store.canonical_revision
+
+    def reject_commit(files):
+        raise AssertionError(f"projection entered canonical commit: {files}")
+
+    monkeypatch.setattr(store._journal, "commit", reject_commit)
+    store._pages[page_path].prose = "Generated briefing."
+    store._persist(page_path)
+
+    assert "Generated briefing." in page_path.read_text(encoding="utf-8")
+    assert store.canonical_revision == revision
+    await store.close()
+
+
 async def test_update_appends_successor_and_preserves_evidence(tmp_path: Path):
     vault = tmp_path / "memory"
     original_source = SourceRef("chat_message", "s:m1", captured_at="2026-07-12T10:00:00Z")

@@ -144,6 +144,10 @@ class KnowledgeRuntime:
             _logger.info("memory disabled by config")
             return
 
+        from ntrp.memory.journal import VaultJournal
+
+        VaultJournal(self.config.memory_artifacts_dir).recover()
+
         from ntrp.memory.curator import Curator
         from ntrp.memory.file_store import FilePageStore
         from ntrp.memory.project_names import load_project_names
