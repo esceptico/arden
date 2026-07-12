@@ -6,6 +6,7 @@ function key(path: string, revision: string) {
 
 export class ArtifactCache {
   private readonly cache: RevisionCache<MemoryArtifactDetail>;
+  private readonly aliases = new Map<string, string>();
 
   constructor(limit = 50) {
     this.cache = new RevisionCache(limit);
@@ -14,22 +15,39 @@ export class ArtifactCache {
   get size() { return this.cache.size; }
 
   get(path: string, revision: string | null | undefined) {
-    return revision ? this.cache.get(path, revision) : null;
+    if (!revision) return null;
+    return this.cache.get(path, this.aliases.get(key(path, revision)) ?? revision);
   }
 
-  set(detail: MemoryArtifactDetail) {
+  set(detail: MemoryArtifactDetail, requestedRevision = detail.revision) {
+    this.clearAliases(detail.path);
     this.cache.set(detail.path, detail.revision, detail);
+    if (requestedRevision !== detail.revision) {
+      this.aliases.set(key(detail.path, requestedRevision), detail.revision);
+    }
   }
 
   invalidatePath(path: string) {
+    this.clearAliases(path);
     this.cache.invalidatePath(path);
   }
 
   retainRevision(path: string, revision: string | null | undefined) {
+    this.clearAliases(path);
     this.cache.retainRevision(path, revision);
   }
 
-  clear() { this.cache.clear(); }
+  clear() {
+    this.aliases.clear();
+    this.cache.clear();
+  }
+
+  private clearAliases(path: string) {
+    const prefix = `${path}\u0000`;
+    for (const cacheKey of this.aliases.keys()) {
+      if (cacheKey.startsWith(prefix)) this.aliases.delete(cacheKey);
+    }
+  }
 }
 
 export class RevisionCache<T> {

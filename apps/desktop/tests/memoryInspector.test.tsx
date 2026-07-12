@@ -42,7 +42,10 @@ const history: PageEditHistory = {
     actor: "user:desktop", origin: "desktop", path: page.path, baseRevision: "page:r1", resultRevision: "page:r2",
     patch: "@@", reconciliation: "needs_review", analysis: null, reconcilesEventId: null,
     reviewEventId: null, observationId: null, sourceCanonicalRevision: "ledger:r1",
-    operations: [],
+    operations: [{
+      kind: "RETRACT", id: "event-1:operation:0", targetIds: ["record-actual"],
+      sources: [{ kind: "web", ref: "https://example.com/applied", role: "support", occurredAt: null, capturedAt: "2026-07-13T04:19:00Z", timePrecision: "unknown", excerptHash: "sha256:applied", scope: null, metadata: {} }],
+    }],
     reviewOperations: [{
       kind: "SUPERSEDE", id: "event-1:operation:0", text: "Dex uses ledger v2", memoryKind: "fact",
       scope: { kind: "area", key: "engineering" }, targetIds: ["record-old"], metaLabels: [], entityLabels: [],
@@ -58,18 +61,31 @@ test("inspector separates placement, record scope, links, lifecycle, exact evide
   const navigated: Array<{ path: string; anchor: string | null }> = [];
   const { host, root } = setup();
   await act(async () => root.render(
-    <MemoryInspector page={page} links={links} history={history} loading={false} error={null} onNavigate={(path, anchor) => navigated.push({ path, anchor })} />,
+    <MemoryInspector
+      page={page}
+      links={links}
+      history={history}
+      linksLoading={false}
+      historyLoading={false}
+      linkError={null}
+      historyError={null}
+      onNavigate={(path, anchor) => navigated.push({ path, anchor })}
+    />,
   ));
 
   expect(host.querySelector('[data-memory-inspector-section="links"]')?.textContent).toContain("Worked on [[Dex]]");
   expect(host.textContent).toContain("daily/2026-07-13.md");
   expect(host.querySelector('[data-memory-inspector-section="scope"]')?.textContent).toContain("Page placementtopics/dex.md");
   expect(host.querySelector('[data-memory-inspector-section="scope"]')?.textContent).toContain("Page scopeuser");
-  expect(host.querySelector('[data-memory-inspector-section="scope"]')?.textContent).toContain("Record scopearea:engineering");
+  expect(host.querySelector('[data-memory-inspector-section="scope"]')?.textContent).toContain("Proposed scopearea:engineering");
   const lifecycle = host.querySelector('[data-memory-inspector-section="lifecycle"]')!;
   expect(lifecycle.textContent).toContain("record-old");
+  expect(lifecycle.textContent).toContain("Proposed target");
+  expect(lifecycle.textContent).toContain("Target record-actual");
   expect(lifecycle.textContent).not.toContain("successor event-1:operation:0");
   const evidence = host.querySelector('[data-memory-inspector-section="evidence"]')!;
+  expect(evidence.textContent).toContain("Applied evidence");
+  expect(evidence.textContent).toContain("Proposed evidence");
   expect(evidence.textContent).toContain("chat");
   expect(evidence.textContent).toContain("claim");
   expect(evidence.textContent).toContain("2026-07-13T08:18:00+04:00");
@@ -80,7 +96,7 @@ test("inspector separates placement, record scope, links, lifecycle, exact evide
   expect(event.textContent).toContain("user:desktop");
   expect(event.textContent).toContain("page:r1 → page:r2");
   expect(event.textContent).toContain("needs review");
-  expect(event.textContent).toContain("0 applied · 2 review");
+  expect(event.textContent).toContain("1 applied · 2 review");
   expect(host.querySelector('[data-memory-inspector-section="pending-review"]')?.textContent).toContain("Forget the old durable fact?");
 
   await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Open backlink from daily/2026-07-13.md"]')?.click());
@@ -100,9 +116,114 @@ test("inspector exposes safe URLs but never guesses a route for arbitrary refs",
     }] }],
   };
   const { host, root } = setup();
-  await act(async () => root.render(<MemoryInspector page={page} links={links} history={urlHistory} loading={false} error={null} onNavigate={() => {}} />));
+  await act(async () => root.render(<MemoryInspector page={page} links={links} history={urlHistory} linksLoading={false} historyLoading={false} linkError={null} historyError={null} onNavigate={() => {}} />));
   const source = host.querySelector<HTMLAnchorElement>('a[aria-label="Open source https://example.com/evidence"]')!;
   expect(source.href).toBe("https://example.com/evidence");
   expect(source.target).toBe("_blank");
   expect(host.querySelector('a[href^="session:"]')).toBeNull();
+});
+
+test("credentialed URLs and every non-URL source copy instead of opening or guessing routes", async () => {
+  const copied: string[] = [];
+  window.ntrpDesktop = { clipboard: { writeText: async (value) => (copied.push(value), true) } } as Window["ntrpDesktop"];
+  const unsafeHistory: PageEditHistory = {
+    ...history,
+    events: [{ ...history.events[0]!, reviewOperations: [], operations: [{
+      kind: "ADD", id: "unsafe", text: "Unsafe refs", memoryKind: "source", scope: { kind: "user", key: null }, metaLabels: [], entityLabels: [],
+      sources: [
+        { kind: "web", ref: "https://user:secret@example.com/private", role: null, occurredAt: null, capturedAt: null, timePrecision: "unknown", excerptHash: null, scope: null, metadata: {} },
+        { kind: "file", ref: "roadmap.md", role: null, occurredAt: null, capturedAt: null, timePrecision: "unknown", excerptHash: null, scope: null, metadata: {} },
+      ],
+    }] }],
+  };
+  const { host, root } = setup();
+  await act(async () => root.render(<MemoryInspector page={page} links={links} history={unsafeHistory} linksLoading={false} historyLoading={false} linkError={null} historyError={null} onNavigate={() => { throw new Error("must not navigate"); }} />));
+  expect(host.querySelector('a[href*="user:secret"]')).toBeNull();
+  const credentialed = host.querySelector<HTMLButtonElement>('button[aria-label="Copy source https://user:secret@example.com/private"]')!;
+  const path = host.querySelector<HTMLButtonElement>('button[aria-label="Copy source roadmap.md"]')!;
+  await act(async () => credentialed.click());
+  await act(async () => path.click());
+  expect(copied).toEqual(["https://user:secret@example.com/private", "roadmap.md"]);
+});
+
+test("stale links are visible but never activatable", async () => {
+  const navigated: string[] = [];
+  const { host, root } = setup();
+  await act(async () => root.render(<MemoryInspector page={page} links={{ ...links, stale: true }} history={history} linksLoading={false} historyLoading={false} linkError={null} historyError={null} onNavigate={(path) => navigated.push(path)} />));
+  expect(host.textContent).toContain("Link index is refreshing");
+  const backlink = host.querySelector<HTMLButtonElement>('button[aria-label="Open backlink from daily/2026-07-13.md"]')!;
+  expect(backlink.disabled).toBe(true);
+  await act(async () => backlink.click());
+  expect(navigated).toEqual([]);
+});
+
+test("link and history errors stay independent and pagination remains honest", async () => {
+  const more: string[] = [];
+  const partialLinks = { ...links, totalOutgoing: 4, totalBacklinks: 3 };
+  const partialHistory = { ...history, total: 3, nextBeforeSequence: 4 };
+  const { host, root } = setup();
+  await act(async () => root.render(
+    <MemoryInspector
+      page={page}
+      links={partialLinks}
+      history={partialHistory}
+      linksLoading={false}
+      historyLoading={false}
+      linkError={null}
+      historyError="History unavailable"
+      onNavigate={() => {}}
+      onLoadMoreLinks={() => more.push("links")}
+      onLoadMoreHistory={() => more.push("history")}
+    />,
+  ));
+  expect(host.querySelector('[data-memory-inspector-section="links"]')?.textContent).toContain("Worked on [[Dex]]");
+  expect(host.querySelector('[data-memory-inspector-section="page-events"]')?.textContent).toContain("History unavailable");
+  expect(host.textContent).toContain("Showing 1 of 4 outgoing");
+  expect(host.textContent).toContain("Based on 1 of 3 events");
+  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Load more memory links"]')?.click());
+  expect(more).toEqual(["links"]);
+
+  await act(async () => root.render(
+    <MemoryInspector
+      page={page}
+      links={null}
+      history={partialHistory}
+      linksLoading={false}
+      historyLoading={false}
+      linkError="Links unavailable"
+      historyError={null}
+      onNavigate={() => {}}
+      onLoadMoreHistory={() => more.push("history")}
+    />,
+  ));
+  expect(host.querySelector('[data-memory-inspector-section="links"]')?.textContent).toContain("Links unavailable");
+  expect(host.querySelector('[data-memory-inspector-section="page-events"]')?.textContent).toContain("user:desktop");
+  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Load older page events"]')?.click());
+  expect(more).toEqual(["links", "history"]);
+});
+
+test("pending questions disappear after a later applied event resolves the review event id", async () => {
+  const review = history.events[0]!;
+  const resolved: PageEditHistory = {
+    ...history,
+    total: 2,
+    events: [
+      {
+        ...review,
+        id: "event-applied",
+        reconciliation: "applied",
+        operations: [],
+        reviewOperations: [],
+        questions: [],
+        reconcilesEventId: "event-pending",
+        reviewEventId: review.id,
+        sequence: 6,
+      },
+      review,
+    ],
+  };
+  const { host, root } = setup();
+  await act(async () => root.render(<MemoryInspector page={page} links={links} history={resolved} linksLoading={false} historyLoading={false} linkError={null} historyError={null} onNavigate={() => {}} />));
+  expect(host.querySelector('[data-memory-inspector-section="pending-review"]')?.textContent).not.toContain("Forget the old durable fact?");
+  expect(host.querySelector('[data-memory-inspector-section="pending-review"]')?.textContent).toContain("No pending questions");
 });

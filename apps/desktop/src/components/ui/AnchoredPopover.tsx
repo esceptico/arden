@@ -27,6 +27,8 @@ interface AnchoredPopoverProps {
    *  (WAI-ARIA APG menu pattern); "popover" is a plain portaled panel. */
   variant?: "menu" | "popover";
   ariaLabel?: string;
+  id?: string;
+  role?: "dialog" | "tooltip";
   /** Close when any ancestor scrolls (capture phase). Context menus pin to a
    *  cursor point, so a scroll invalidates them; trigger popovers reflow. */
   closeOnScroll?: boolean;
@@ -62,6 +64,8 @@ export function AnchoredPopover({
   className,
   variant = "popover",
   ariaLabel,
+  id,
+  role,
   closeOnScroll = false,
   children,
 }: AnchoredPopoverProps) {
@@ -180,6 +184,7 @@ export function AnchoredPopover({
         <motion.div
           key={pointKey ?? undefined}
           ref={ref}
+          id={id}
           initial={{ opacity: 0, scale: 0.97, y: -4 }}
           animate={pos.ready ? { opacity: 1, scale: 1, y: 0 } : { opacity: 0, scale: 0.97, y: -4 }}
           exit={{ opacity: 0, scale: 0.97, transition: EXIT_FAST }}
@@ -187,7 +192,7 @@ export function AnchoredPopover({
           className={clsx("surface-panel surface-popover fixed z-[var(--z-popover)]", className)}
           style={{ left: pos.left, top: pos.top, transformOrigin: pos.transformOrigin }}
           onContextMenu={isMenu ? (e) => e.preventDefault() : undefined}
-          role={isMenu ? "menu" : undefined}
+          role={isMenu ? "menu" : role}
           aria-label={ariaLabel}
           onKeyDown={isMenu ? onMenuKeyDown : undefined}
         >

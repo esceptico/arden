@@ -31,7 +31,7 @@ import {
   isNotebookResourcePath,
   selectIndexDocuments,
 } from "@/features/memory/lib/notebookIndex";
-import type { MemoryArtifactDetail, MemoryArtifactSummary, PageEditHistory, PageLinks } from "@/features/memory/lib/notebookTypes";
+import type { MemoryArtifactDetail, MemoryArtifactSummary, MemoryLink, PageEditHistory, PageLinks } from "@/features/memory/lib/notebookTypes";
 
 const RECORD_PAGE_SIZE = 100;
 const SEARCH_DEBOUNCE_MS = 180;
@@ -39,6 +39,49 @@ const SEARCH_DEBOUNCE_MS = 180;
 interface SummaryRequest {
   epoch: number;
   controller: AbortController;
+}
+
+interface MemoryFocusToken {
+  kind: "wikilink" | "inline";
+  target: string;
+  occurrence: number;
+}
+
+function focusToken(element: HTMLElement, scroller: HTMLElement): string | null {
+  const kind = element.dataset.wikilink != null ? "wikilink"
+    : element.dataset.memoryInlinePath != null ? "inline"
+      : null;
+  const target = kind === "wikilink" ? element.dataset.wikilink : element.dataset.memoryInlinePath;
+  if (!kind || target == null) return null;
+  const attribute = kind === "wikilink" ? "data-wikilink" : "data-memory-inline-path";
+  const matches = Array.from(scroller.querySelectorAll<HTMLElement>(`[${attribute}]`))
+    .filter((candidate) => (kind === "wikilink" ? candidate.dataset.wikilink : candidate.dataset.memoryInlinePath) === target);
+  const occurrence = matches.indexOf(element);
+  return occurrence < 0 ? null : JSON.stringify({ kind, target, occurrence } satisfies MemoryFocusToken);
+}
+
+function restoreFocusToken(value: string, scroller: HTMLElement) {
+  let token: MemoryFocusToken;
+  try {
+    token = JSON.parse(value) as MemoryFocusToken;
+  } catch {
+    return;
+  }
+  if ((token.kind !== "wikilink" && token.kind !== "inline") || typeof token.target !== "string" || !Number.isInteger(token.occurrence) || token.occurrence < 0) return;
+  const attribute = token.kind === "wikilink" ? "data-wikilink" : "data-memory-inline-path";
+  const matches = Array.from(scroller.querySelectorAll<HTMLElement>(`[${attribute}]`))
+    .filter((candidate) => (token.kind === "wikilink" ? candidate.dataset.wikilink : candidate.dataset.memoryInlinePath) === token.target);
+  matches[token.occurrence]?.focus({ preventScroll: true });
+}
+
+function mergeLinks(current: MemoryLink[], incoming: MemoryLink[]) {
+  const seen = new Set(current.map((link) => `${link.sourcePath}\u0000${link.line}\u0000${link.column}\u0000${link.target}`));
+  return [...current, ...incoming.filter((link) => {
+    const key = `${link.sourcePath}\u0000${link.line}\u0000${link.column}\u0000${link.target}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  })];
 }
 
 export function ArtifactMemoryView({ config }: { config: AppConfig }) {
@@ -75,7 +118,10 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const [pageHistory, setPageHistory] = useState<PageEditHistory | null>(null);
   const [linksLoading, setLinksLoading] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
-  const [trustError, setTrustError] = useState<string | null>(null);
+  const [linksLoadingMore, setLinksLoadingMore] = useState(false);
+  const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
+  const [linkError, setLinkError] = useState<string | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const [historyVersion, setHistoryVersion] = useState(0);
   const [pageHistoryPath, setPageHistoryPath] = useState<string | null>(null);
 
@@ -290,8 +336,8 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     if (!path) return null;
     const scroller = layoutRef.current?.querySelector<HTMLElement>("[data-memory-note-scroll]");
     const active = document.activeElement;
-    const focusSelector = active instanceof HTMLElement && scroller?.contains(active) && active.dataset.wikilink
-      ? `wikilink:${active.dataset.wikilink}`
+    const focusSelector = active instanceof HTMLElement && scroller?.contains(active)
+      ? focusToken(active, scroller)
       : null;
     const current = navigationHistory.current.current;
     return {
@@ -425,10 +471,18 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     const detail = activeDetail;
     const location = pendingRestore.current;
     if (!detail || !location || location.path !== detail.path) return;
-    pendingRestore.current = null;
-    const frame = window.requestAnimationFrame(() => {
-      const scroller = layoutRef.current?.querySelector<HTMLElement>("[data-memory-note-scroll]");
-      if (!scroller) return;
+    let timer = 0;
+    let attempts = 0;
+    const restore = () => {
+      const article = Array.from(layoutRef.current?.querySelectorAll<HTMLElement>("[data-memory-note-path]") ?? [])
+        .find((candidate) => candidate.dataset.memoryNotePath === location.path);
+      const scroller = article?.querySelector<HTMLElement>("[data-memory-note-scroll]");
+      if (!scroller) {
+        attempts += 1;
+        if (attempts < 60) timer = window.setTimeout(restore, 16);
+        return;
+      }
+      pendingRestore.current = null;
       if (location.anchor) {
         const normalized = location.anchor.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
         const heading = Array.from(scroller.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,h6"))
@@ -441,13 +495,10 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
         }
       }
       scroller.scrollTop = location.scrollTop;
-      if (location.focusSelector?.startsWith("wikilink:")) {
-        const target = location.focusSelector.slice("wikilink:".length);
-        Array.from(scroller.querySelectorAll<HTMLElement>("[data-wikilink]"))
-          .find((element) => element.dataset.wikilink === target)?.focus({ preventScroll: true });
-      }
-    });
-    return () => window.cancelAnimationFrame(frame);
+      if (location.focusSelector) restoreFocusToken(location.focusSelector, scroller);
+    };
+    timer = window.setTimeout(restore, 0);
+    return () => window.clearTimeout(timer);
   }, [activeDetail, historyVersion]);
 
   const memoryVaultVersion = useStore((state) => state.memoryVaultVersion);
@@ -470,42 +521,45 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     && selectedMeta != null
     && activeDetail.path === selectedMeta.path
     && activeDetail.content.includes("[[");
+  const shouldLoadLinks = selectedHasWikilinks || inspectorOpen;
   useEffect(() => {
     const requestId = ++linksRequestId.current;
     setPageLinks(null);
-    if (!selectedMeta || (!selectedHasWikilinks && !inspectorOpen)) {
+    setLinksLoadingMore(false);
+    setLinkError(null);
+    if (!selectedMeta || !shouldLoadLinks) {
       setLinksLoading(false);
       return;
     }
     setLinksLoading(true);
-    setTrustError(null);
     getPageLinks(config, { path: selectedMeta.path, limit: 100, offset: 0 }).then((links) => {
       if (linksRequestId.current === requestId) setPageLinks(links);
     }).catch((reason) => {
       if (linksRequestId.current !== requestId) return;
-      setTrustError(reason instanceof Error ? reason.message : String(reason));
+      setLinkError(reason instanceof Error ? reason.message : String(reason));
     }).finally(() => {
       if (linksRequestId.current === requestId) setLinksLoading(false);
     });
-  }, [config, contentRefreshKey, inspectorOpen, selectedHasWikilinks, selectedMeta?.path]);
+  }, [config, contentRefreshKey, selectedMeta?.path, shouldLoadLinks]);
 
   useEffect(() => {
     const requestId = ++historyRequestId.current;
     setPageHistory(null);
     setPageHistoryPath(null);
+    setHistoryLoadingMore(false);
+    setHistoryError(null);
     if (!selectedMeta || !inspectorOpen) {
       setHistoryLoading(false);
       return;
     }
     setHistoryLoading(true);
-    setTrustError(null);
     getPageHistory(config, { path: selectedMeta.path, limit: 100 }).then((history) => {
       if (historyRequestId.current !== requestId) return;
       setPageHistory(history);
       setPageHistoryPath(selectedMeta.path);
     }).catch((reason) => {
       if (historyRequestId.current !== requestId) return;
-      setTrustError(reason instanceof Error ? reason.message : String(reason));
+      setHistoryError(reason instanceof Error ? reason.message : String(reason));
     }).finally(() => {
       if (historyRequestId.current === requestId) setHistoryLoading(false);
     });
@@ -535,6 +589,51 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     const response = await readMemoryArtifactDetail(config, path, { signal });
     return response.artifact;
   }, [config]);
+
+  const loadMoreLinks = useCallback(() => {
+    const current = currentPageLinks;
+    const path = selectedMeta?.path;
+    if (!current || !path || linksLoadingMore || current.stale) return;
+    const offset = current.offset + current.limit;
+    const requestId = linksRequestId.current;
+    setLinksLoadingMore(true);
+    setLinkError(null);
+    void getPageLinks(config, { path, limit: current.limit, offset }).then((page) => {
+      if (linksRequestId.current !== requestId || selectedMetaRef.current?.path !== path) return;
+      setPageLinks((previous) => previous?.path === path && previous.revision === page.revision
+        ? {
+            ...page,
+            outgoing: mergeLinks(previous.outgoing, page.outgoing),
+            backlinks: mergeLinks(previous.backlinks, page.backlinks),
+          }
+        : page);
+    }).catch((reason) => {
+      if (linksRequestId.current === requestId) setLinkError(reason instanceof Error ? reason.message : String(reason));
+    }).finally(() => {
+      if (linksRequestId.current === requestId) setLinksLoadingMore(false);
+    });
+  }, [config, currentPageLinks, linksLoadingMore, selectedMeta?.path]);
+
+  const loadMoreHistory = useCallback(() => {
+    const current = currentPageHistory;
+    const path = selectedMeta?.path;
+    if (!current || !path || historyLoadingMore || current.nextBeforeSequence == null) return;
+    const requestId = historyRequestId.current;
+    setHistoryLoadingMore(true);
+    setHistoryError(null);
+    void getPageHistory(config, { path, limit: current.limit, beforeSequence: current.nextBeforeSequence }).then((page) => {
+      if (historyRequestId.current !== requestId || selectedMetaRef.current?.path !== path) return;
+      setPageHistory((previous) => {
+        if (pageHistoryPath !== path || !previous) return page;
+        const ids = new Set(previous.events.map((event) => event.id));
+        return { ...page, events: [...previous.events, ...page.events.filter((event) => !ids.has(event.id))] };
+      });
+    }).catch((reason) => {
+      if (historyRequestId.current === requestId) setHistoryError(reason instanceof Error ? reason.message : String(reason));
+    }).finally(() => {
+      if (historyRequestId.current === requestId) setHistoryLoadingMore(false);
+    });
+  }, [config, currentPageHistory, historyLoadingMore, pageHistoryPath, selectedMeta?.path]);
 
   useEffect(() => {
     if (!recordsOpen) return;
@@ -770,9 +869,15 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
             page={visibleDetail}
             links={currentPageLinks}
             history={currentPageHistory}
-            loading={linksLoading || historyLoading}
-            error={trustError}
+            linksLoading={linksLoading}
+            historyLoading={historyLoading}
+            linksLoadingMore={linksLoadingMore}
+            historyLoadingMore={historyLoadingMore}
+            linkError={linkError}
+            historyError={historyError}
             onNavigate={navigateTo}
+            onLoadMoreLinks={loadMoreLinks}
+            onLoadMoreHistory={loadMoreHistory}
           />
         )}
       </aside>

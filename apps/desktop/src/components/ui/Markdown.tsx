@@ -179,6 +179,7 @@ function InlineCode({ className, children, ...rest }: React.HTMLAttributes<HTMLE
       <a
         href="#wikilink"
         className="wikilink"
+        data-memory-inline-path={target}
         onClick={(e) => {
           e.preventDefault();
           (wiki.onNavigateInline ?? wiki.onNavigate)(target);

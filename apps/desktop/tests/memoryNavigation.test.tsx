@@ -55,6 +55,11 @@ async function settle(ms = 0) {
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, ms)); });
 }
 
+async function settleUntil(predicate: () => boolean, timeout = 1_500) {
+  const started = Date.now();
+  while (!predicate() && Date.now() - started < timeout) await settle(50);
+}
+
 afterEach(async () => {
   for (const root of roots) await act(async () => root.unmount());
   roots.clear();
@@ -119,9 +124,10 @@ test("wikilink resolution follows the server result including aliases, headings,
   expect(resolveWikiTarget(links, "Dex alias#Decisions")).toEqual({ path: "topics/dex.md", anchor: "Decisions" });
   expect(resolveWikiTarget(links, "Shared")).toBeNull();
   expect(resolveWikiTarget(links, "topics/dex")).toBeNull();
+  expect(resolveWikiTarget({ ...links, stale: true }, "Dex alias#Decisions")).toBeNull();
 });
 
-test("preview waits for hover intent, opens on focus, caches by revision, and aborts stale targets", async () => {
+test("preview delays hover and focus, bridges into the tooltip, and exposes its description", async () => {
   const alpha = summary("alpha.md", "Alpha", "r1");
   const beta = summary("beta.md", "Beta", "r1");
   const links: PageLinks = {
@@ -156,15 +162,72 @@ test("preview waits for hover intent, opens on focus, caches by revision, and ab
   expect(requests).toHaveLength(0);
   await settle(70);
   expect(requests[0]?.path).toBe("alpha.md");
-  await act(async () => betaLink!.dispatchEvent(new FocusEvent("focusin", { bubbles: true })));
-  expect(requests[0]?.signal.aborted).toBe(true);
   await settle(30);
-  expect(document.querySelector('[aria-label="Beta link preview"]')?.textContent).toContain("First meaningful paragraph.");
+  const alphaPreview = document.querySelector<HTMLElement>('[role="tooltip"]')!;
+  expect(alphaPreview.id).not.toBe("");
+  expect(alphaLink?.getAttribute("aria-describedby")).toBe(alphaPreview.id);
+  await act(async () => alphaLink!.dispatchEvent(new MouseEvent("mouseout", { bubbles: true })));
+  await settle(60);
+  await act(async () => alphaPreview.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true })));
+  await settle(100);
+  expect(document.querySelector('[role="tooltip"]')).not.toBeNull();
+  await act(async () => alphaPreview.dispatchEvent(new MouseEvent("mouseleave", { bubbles: true })));
+  await settle(140);
+  expect(document.querySelector('[role="tooltip"]')).toBeNull();
+
+  await act(async () => betaLink!.dispatchEvent(new FocusEvent("focusin", { bubbles: true })));
+  await settle(250);
+  expect(requests.filter((request) => request.path === "beta.md")).toHaveLength(0);
+  await settle(80);
+  expect(document.querySelector('[role="tooltip"]')?.textContent).toContain("First meaningful paragraph.");
 
   await act(async () => betaLink!.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
   await act(async () => betaLink!.dispatchEvent(new FocusEvent("focusin", { bubbles: true })));
   await settle();
   expect(requests.filter((request) => request.path === "beta.md")).toHaveLength(1);
+});
+
+test("preview clears with its link snapshot and revision mismatch is cached without refetch", async () => {
+  const listed = summary("alpha.md", "Alpha", "listed-r1");
+  const current = detail(summary("alpha.md", "Alpha", "server-r2"), "Server paragraph.");
+  const links: PageLinks = {
+    path: "source.md", revision: "ledger:1", stale: false, backlinks: [], totalBacklinks: 0, totalOutgoing: 1, limit: 100, offset: 0,
+    outgoing: [{ sourcePath: "source.md", target: "Alpha", display: "Alpha", heading: null, context: "Alpha", line: 1, column: 1, status: "resolved", resolvedPath: "alpha.md", candidates: ["alpha.md"], sourceRevision: "ledger:1" }],
+  };
+  let reads = 0;
+  const containerRef = createRef<HTMLDivElement>();
+  const cache = new ArtifactCache();
+  const { host, root } = setup();
+  const renderPreview = async (snapshot: PageLinks | null) => {
+    await act(async () => root.render(
+      <div ref={containerRef}>
+        <a href="#wikilink" data-wikilink="Alpha">Alpha</a>
+        <WikiLinkPreview
+          containerRef={containerRef}
+          links={snapshot}
+          summaries={[listed]}
+          cache={cache}
+          loadDetail={async () => { reads += 1; return current; }}
+        />
+      </div>,
+    ));
+  };
+  await renderPreview(links);
+  const alpha = host.querySelector<HTMLAnchorElement>('[data-wikilink="Alpha"]')!;
+  await act(async () => alpha.dispatchEvent(new FocusEvent("focusin", { bubbles: true })));
+  await settle(320);
+  expect(reads).toBe(1);
+  await act(async () => alpha.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+  await settle(140);
+  await act(async () => alpha.dispatchEvent(new FocusEvent("focusin", { bubbles: true })));
+  await settle(320);
+  expect(reads).toBe(1);
+  expect(document.querySelector('[role="tooltip"]')).not.toBeNull();
+
+  await renderPreview({ ...links, revision: "ledger:2", outgoing: [] });
+  expect(alpha.getAttribute("aria-describedby")).toBeNull();
+  await settle(200);
+  expect(document.querySelector('[role="tooltip"]')).toBeNull();
 });
 
 test("notebook history shortcuts restore pages and ignore focused editors", async () => {
@@ -179,7 +242,8 @@ test("notebook history shortcuts restore pages and ignore focused editors", asyn
     if (request.path.startsWith("/admin/memory/links")) {
       const path = new URL(`http://x${request.path}`).searchParams.get("path")!;
       const outgoing = path === "a.md" ? [
-        { source_path: "a.md", target: "Bee", display: "B", heading: null, context: "Go to B", line: 1, column: 1, status: "resolved", resolved_path: "b.md", candidates: ["b.md"], source_revision: "ledger:1" },
+        { source_path: "a.md", target: "Bee", display: "B first", heading: null, context: "Go to B", line: 1, column: 1, status: "resolved", resolved_path: "b.md", candidates: ["b.md"], source_revision: "ledger:1" },
+        { source_path: "a.md", target: "Bee", display: "B second", heading: null, context: "Go to B again", line: 1, column: 20, status: "resolved", resolved_path: "b.md", candidates: ["b.md"], source_revision: "ledger:1" },
         { source_path: "a.md", target: "#Details", display: "Details", heading: null, context: "Jump to Details", line: 2, column: 1, status: "resolved", resolved_path: "a.md", candidates: ["a.md"], source_revision: "ledger:1" },
       ] : [];
       return response({ path, revision: "ledger:1", stale: false, outgoing, backlinks: [], total_outgoing: outgoing.length, total_backlinks: 0, limit: 100, offset: 0 });
@@ -187,7 +251,7 @@ test("notebook history shortcuts restore pages and ignore focused editors", asyn
     if (request.path.startsWith("/admin/memory/page-edits/history")) return response({ events: [], total: 0, limit: 100, next_before_sequence: null });
     const path = decodeURIComponent(request.path.replace("/admin/memory/artifacts/", ""));
     const item = rows.find((row) => row.path === path)!;
-    const content = path === "index.md" ? "<!-- ntrp:index:start -->\n- a.md <!-- ntrp:path=a.md -->\n- b.md <!-- ntrp:path=b.md -->\n<!-- ntrp:index:end -->" : path === "a.md" ? "[[Bee|B]] · `b.md` · [[#Details|Details]]\n\n## Details\n\nMore." : "B body";
+    const content = path === "index.md" ? "<!-- ntrp:index:start -->\n- a.md <!-- ntrp:path=a.md -->\n- b.md <!-- ntrp:path=b.md -->\n<!-- ntrp:index:end -->" : path === "a.md" ? "[[Bee|B first]] · [[Bee|B second]] · `b.md` · `b.md` · [[#Details|Details]]\n\n## Details\n\nMore." : "B body";
     return response({ artifact: rawArtifact(item, content) });
   } } } as Window["ntrpDesktop"];
   const { host, root } = setup();
@@ -196,21 +260,37 @@ test("notebook history shortcuts restore pages and ignore focused editors", asyn
   expect(host.querySelector("h1")?.textContent).toBe("A");
   expect(host.querySelector<HTMLButtonElement>('button[aria-label="Back in memory history"]')?.disabled).toBe(true);
   expect(requests.some((path) => path.startsWith("/admin/memory/page-edits/history"))).toBe(false);
+  let inlinePaths = Array.from(host.querySelectorAll<HTMLAnchorElement>('[data-memory-inline-path="b.md"]'));
+  inlinePaths[1]!.focus();
+  await act(async () => inlinePaths[1]!.click());
+  await settle(250);
+  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Back in memory history"]')?.click());
+  await settleUntil(() => {
+    const links = Array.from(host.querySelectorAll<HTMLAnchorElement>('[data-memory-inline-path="b.md"]'));
+    return links.indexOf(document.activeElement as HTMLAnchorElement) === 1;
+  });
+  inlinePaths = Array.from(host.querySelectorAll<HTMLAnchorElement>('[data-memory-inline-path="b.md"]'));
+  expect(inlinePaths.indexOf(document.activeElement as HTMLAnchorElement)).toBe(1);
+
   const detailsLink = host.querySelector<HTMLAnchorElement>('[data-wikilink="#Details"]')!;
   await act(async () => detailsLink.click());
   await settle(30);
   expect(document.activeElement?.textContent).toBe("Details");
-  const inlinePath = Array.from(host.querySelectorAll<HTMLAnchorElement>('a[href="#wikilink"]'))
-    .find((link) => link.textContent === "b.md")!;
-  expect(inlinePath).not.toBeNull();
-  await act(async () => inlinePath.click());
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-memory-entry="a.md"]')?.click());
+  await settle(30);
+  let beeLinks = Array.from(host.querySelectorAll<HTMLAnchorElement>('[data-wikilink="Bee"]'));
+  beeLinks[1]!.focus();
+  await act(async () => beeLinks[1]!.click());
   await settle(250);
-  expect(host.querySelector("h1")?.textContent).toBe("B");
   await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Back in memory history"]')?.click());
-  await settle(250);
-  const bee = host.querySelector<HTMLAnchorElement>('[data-wikilink="Bee"]')!;
-  expect(bee.classList.contains("wikilink--unresolved")).toBe(false);
-  await act(async () => bee.click());
+  await settleUntil(() => {
+    const links = Array.from(host.querySelectorAll<HTMLAnchorElement>('[data-wikilink="Bee"]'));
+    return links.indexOf(document.activeElement as HTMLAnchorElement) === 1;
+  });
+  beeLinks = Array.from(host.querySelectorAll<HTMLAnchorElement>('[data-wikilink="Bee"]'));
+  expect(beeLinks.indexOf(document.activeElement as HTMLAnchorElement)).toBe(1);
+  expect(beeLinks[1]!.classList.contains("wikilink--unresolved")).toBe(false);
+  await act(async () => beeLinks[1]!.click());
   await settle(250);
   expect(requests.some((path) => path === "/admin/memory/artifacts/b.md")).toBe(true);
   expect(host.querySelector("h1")?.textContent).toBe("B");
@@ -285,6 +365,50 @@ test("a delayed link snapshot cannot resolve the next page or overwrite a later 
   await act(async () => current.click());
   await settle(250);
   expect(host.querySelector("h1")?.textContent).toBe("X");
+});
+
+test("trust inspector loads shared link pages and older event cursors", async () => {
+  const index = summary("index.md", "Index");
+  const note = summary("note.md", "Note");
+  const rows = [index, note];
+  const requests: string[] = [];
+  const rawEvent = (id: string, sequence: number, actor: string) => ({
+    event_type: "PAGE_EDIT", id, occurred_at: `2026-07-13T08:20:3${sequence}.123+04:00`, sequence,
+    actor, origin: "desktop", path: "note.md", base_revision: `r${sequence - 1}`, result_revision: `r${sequence}`,
+    patch: "@@", operations: [], reconciliation: "applied", analysis: null, reconciles_event_id: null,
+    review_operations: [], questions: [], review_event_id: null, observation_id: null, source_canonical_revision: null,
+  });
+  window.ntrpDesktop = { api: { request: async (_config, request) => {
+    requests.push(request.path);
+    if (request.path === "/admin/memory/artifacts") return response({ artifacts: rows.map((item) => rawArtifact(item)) });
+    if (request.path.startsWith("/admin/memory/links")) {
+      const offset = Number(new URL(`http://x${request.path}`).searchParams.get("offset") ?? 0);
+      const outgoing = [{ source_path: "note.md", target: offset ? "Older" : "Current", display: offset ? "Older" : "Current", heading: null, context: offset ? "older outgoing context" : "current outgoing context", line: offset ? 101 : 1, column: 1, status: "unresolved", resolved_path: null, candidates: [], source_revision: "ledger:1" }];
+      return response({ path: "note.md", revision: "ledger:1", stale: false, outgoing, backlinks: [], total_outgoing: 101, total_backlinks: 0, limit: 100, offset });
+    }
+    if (request.path.startsWith("/admin/memory/page-edits/history")) {
+      const before = new URL(`http://x${request.path}`).searchParams.get("before_sequence");
+      return response({ events: [before ? rawEvent("older", 4, "agent:older") : rawEvent("latest", 5, "user:latest")], total: 2, limit: 100, next_before_sequence: before ? null : 5 });
+    }
+    const path = decodeURIComponent(request.path.replace("/admin/memory/artifacts/", ""));
+    if (path === "index.md") return response({ artifact: rawArtifact(index, "<!-- ntrp:index:start -->\n- note.md <!-- ntrp:path=note.md -->\n<!-- ntrp:index:end -->") });
+    return response({ artifact: rawArtifact(note, "Note body") });
+  } } } as Window["ntrpDesktop"];
+  const { host, root } = setup();
+  await act(async () => root.render(<ArtifactMemoryView config={config} />));
+  await settle(300);
+  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Open memory trust inspector"]')?.click());
+  await settle(100);
+  expect(host.textContent).toContain("current outgoing context");
+  expect(host.textContent).toContain("user:latest");
+
+  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Load more memory links"]')?.click());
+  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Load older page events"]')?.click());
+  await settle(100);
+  expect(requests.some((path) => path.includes("/admin/memory/links?") && path.includes("offset=100"))).toBe(true);
+  expect(requests.some((path) => path.includes("before_sequence=5"))).toBe(true);
+  expect(host.textContent).toContain("older outgoing context");
+  expect(host.textContent).toContain("agent:older");
 });
 
 test("vault revision refresh invalidates the selected detail cache", async () => {

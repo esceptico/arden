@@ -12,7 +12,7 @@ export interface ResolvedWikiTarget {
 /** Resolve only from the server-built link index. Client metadata is not a
  * substitute because aliases and ambiguity are vault semantics. */
 export function resolveWikiTarget(links: PageLinks | null, target: string): ResolvedWikiTarget | null {
-  if (!links) return null;
+  if (!links || links.stale) return null;
   const matches = links.outgoing.filter((link) => link.target === target);
   const paths = new Set(matches.flatMap((link) =>
     link.status === "resolved" && link.resolvedPath ? [link.resolvedPath] : []));
