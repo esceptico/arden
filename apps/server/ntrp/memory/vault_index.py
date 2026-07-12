@@ -24,6 +24,7 @@ _RESOURCE_SUFFIXES = {".md", ".txt"}
 _ENGINE_DIRS = {"raw", ".ntrp", ".index", ".maintenance"}
 _GENERATED_ROOT_FILES = {"index.md", "README.md", "AGENTS.md", "health.md"}
 _MANAGED_ID = re.compile(r"^(?P<line>- .*) <!-- ntrp:path=(?P<path>\S+) -->$")
+_MARKDOWN_LINK_ROW = re.compile(r"^- \[[^]]*\]\((?P<target>[^)]+)\) — (?P<description>.*)$")
 
 
 @dataclass(frozen=True)
@@ -94,7 +95,7 @@ class VaultIndexer:
                 continue
             self._write_atomic(rel, content)
             updated_paths.append(rel.as_posix())
-        missing = tuple(entry.path for entry in self.entries if entry.description == NEEDS_DESCRIPTION)
+        missing = tuple(entry.path for entry in self._indexed_entries() if entry.description == NEEDS_DESCRIPTION)
         health_lines = [*(f"- {path} — {NEEDS_DESCRIPTION}" for path in missing)]
         suffix = ": invalid managed index markers"
         health_lines.extend(f"- {error.removesuffix(suffix)} — Invalid managed index markers" for error in errors)
@@ -104,6 +105,19 @@ class VaultIndexer:
             health_output="\n".join(health_lines),
             errors=errors,
         )
+
+    def _indexed_entries(self) -> tuple[IndexEntry, ...]:
+        files, directories = self._resources()
+        entries: list[IndexEntry] = []
+        parents = (Path("."), *directories)
+        for parent in sorted(parents, key=lambda path: (len(path.parts), path.as_posix().casefold(), path.as_posix())):
+            for entry in self._children(parent, files, directories):
+                name = entry.path.rstrip("/")
+                full = (parent / name).as_posix()
+                if entry.is_dir:
+                    full += "/"
+                entries.append(IndexEntry(full, entry.description, entry.is_dir))
+        return tuple(entries)
 
     def _resources(self) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
         try:
@@ -197,7 +211,17 @@ class VaultIndexer:
                 if not rendered.startswith(prefix):
                     continue
                 description = rendered[len(prefix) :].strip()
-            elif stripped.startswith("- ") and " — " in stripped:
+            elif link := _MARKDOWN_LINK_ROW.match(stripped):
+                raw_target = link.group("target").strip().strip("<>").split("#", 1)[0]
+                decoded_target = unquote(raw_target)
+                target = Path(decoded_target)
+                if target.is_absolute() or not target.parts or ".." in target.parts:
+                    continue
+                label = target.as_posix().removeprefix("./")
+                if decoded_target.endswith("/"):
+                    label += "/"
+                description = link.group("description").strip()
+            elif stripped.startswith("- ") and stripped[2:].count(" — ") == 1:
                 label, _separator, description = stripped[2:].partition(" — ")
             else:
                 continue
@@ -211,6 +235,11 @@ class VaultIndexer:
             text = self._read_regular(path.relative_to(self.root))
         except (OSError, UnicodeError):
             text = ""
+        if path.name == "README.md":
+            try:
+                self._marker_bounds(text)
+            except ValueError:
+                return existing or NEEDS_DESCRIPTION
         try:
             frontmatter, body = parse_frontmatter(text)
         except Exception:

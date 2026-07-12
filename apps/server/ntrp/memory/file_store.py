@@ -226,7 +226,7 @@ class FilePageStore:
         # Live-vault state: mtimes of every tracked .md/.txt resource and raw sidecar as
         # last seen/written by THIS store, so the watch loop reloads only external
         # edits (Obsidian, feeds, git) — our own writes never echo.
-        self._file_state: dict[Path, int] = {}
+        self._file_state: dict[Path, tuple[str, int, int, int]] = {}
         self._watch_task: asyncio.Task | None = None
         self._journal = VaultJournal(self._root)
         self._post_canonical_commit = post_canonical_commit
@@ -284,6 +284,7 @@ class FilePageStore:
         *,
         suffixes: set[str],
         excluded_dirs: set[str] | None = None,
+        directories: list[Path] | None = None,
     ) -> list[Path]:
         excluded = excluded_dirs or set()
         try:
@@ -314,6 +315,8 @@ class FilePageStore:
                     continue
                 if stat.S_ISDIR(child_st.st_mode):
                     if child.name not in excluded:
+                        if directories is not None:
+                            directories.append(child)
                         walk(child)
                 elif stat.S_ISREG(child_st.st_mode) and child.suffix.casefold() in suffixes:
                     out.append(child)
@@ -388,13 +391,15 @@ class FilePageStore:
             for line in page.lines:
                 self._loc[line.id] = page_path
 
-    def _scan_files(self) -> dict[Path, int]:
-        """mtime_ns for safe user resources plus canonical raw sidecars."""
-        out: dict[Path, int] = {}
+    def _scan_files(self) -> dict[Path, tuple[str, int, int, int]]:
+        """Identity + mtime for safe user resources/directories and raw sidecars."""
+        out: dict[Path, tuple[str, int, int, int]] = {}
+        resource_directories: list[Path] = []
         paths = self._walk_regular_files(
             self._root,
             suffixes=_RESOURCE_SUFFIXES,
             excluded_dirs={*_INTERNAL_DIRS, _RAW},
+            directories=resource_directories,
         )
         paths.extend(self._canonical_raw_files())
         for path in paths:
@@ -403,7 +408,14 @@ class FilePageStore:
             try:
                 path_st = path.lstat()
                 if stat.S_ISREG(path_st.st_mode) and not stat.S_ISLNK(path_st.st_mode):
-                    out[path] = path_st.st_mtime_ns
+                    out[path] = ("file", path_st.st_dev, path_st.st_ino, path_st.st_mtime_ns)
+            except OSError:
+                continue
+        for directory in resource_directories:
+            try:
+                directory_st = directory.lstat()
+                if stat.S_ISDIR(directory_st.st_mode) and not stat.S_ISLNK(directory_st.st_mode):
+                    out[directory] = ("directory", directory_st.st_dev, directory_st.st_ino, directory_st.st_mtime_ns)
             except OSError:
                 continue
         return out
@@ -455,18 +467,22 @@ class FilePageStore:
         the vault-relative paths of reloaded pages (empty = nothing changed)."""
         current = self._scan_files()
         raw_root = self._root / _RAW
-        changed: set[Path] = set()
+        changed: set[str] = set()
         canonical_changed: set[Path] = set()
         for p in current.keys() | self._file_state.keys():
             if self._file_state.get(p) == current.get(p):
                 continue
             rel = p.relative_to(self._root)
+            state = current.get(p) or self._file_state[p]
+            if state[0] == "directory":
+                changed.add(rel.as_posix().rstrip("/") + "/")
+                continue
             if rel.parts[0] == _RAW:
                 page_path = self._root / p.relative_to(raw_root)
-                changed.add(page_path)
+                changed.add(page_path.relative_to(self._root).as_posix())
                 canonical_changed.add(page_path)
             else:
-                changed.add(p)
+                changed.add(rel.as_posix())
                 if p.suffix.casefold() == ".md" and self._safe_read_text(self._raw_path(p)) is not None:
                     canonical_changed.add(p)
         for page_path in sorted(canonical_changed):
@@ -479,7 +495,7 @@ class FilePageStore:
             else:
                 self._write_index()
                 self._write_health()
-        return [p.relative_to(self._root).as_posix() for p in sorted(changed)]
+        return sorted(changed)
 
     def start_watch(self, on_change=None, *, interval: float = 2.0) -> None:
         """Poll the vault for external edits (ponytail: mtime scan of ~100 files
@@ -1095,17 +1111,8 @@ class FilePageStore:
         return self._root / _RAW / path.relative_to(self._root)
 
     def _write_atomic(self, path: Path, text: str) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(text, encoding="utf-8")
-        tmp.replace(path)
-        if path.parent == self._root and path.name in _GENERATED_FILES:
-            self._file_state.pop(path, None)
-            return
-        try:
-            self._file_state[path] = path.stat().st_mtime_ns  # own write — not an external change
-        except OSError:
-            pass
+        self._journal.replace_file_safely(path.relative_to(self._root), text.encode("utf-8"))
+        self._file_state = self._scan_files()
 
     def _persist(self, path: Path) -> None:
         self._persist_many((path,))
@@ -1162,21 +1169,15 @@ class FilePageStore:
             self._journal.commit(staged)
         for path, text in projections.items():
             self._write_atomic(path, text)
-        for raw_path in empty_raw:
-            raw_path.unlink(missing_ok=True)
-        for rel in staged:
-            path = self._root / rel
-            try:
-                self._file_state[path] = path.stat().st_mtime_ns
-            except OSError:
-                self._file_state.pop(path, None)
+        self._journal.unlink_files_safely(tuple(path.relative_to(self._root) for path in empty_raw))
+        self._file_state = self._scan_files()
         self._notify_post_canonical_commit()
 
     def _remove_page_files(self, path: Path) -> None:
-        path.unlink(missing_ok=True)
-        self._raw_path(path).unlink(missing_ok=True)
-        self._file_state.pop(path, None)
-        self._file_state.pop(self._raw_path(path), None)
+        self._journal.unlink_files_safely(
+            (path.relative_to(self._root), self._raw_path(path).relative_to(self._root))
+        )
+        self._file_state = self._scan_files()
 
     def _find(self, record_id: str) -> tuple[Path, Line | LedgerEntry] | None:
         path = self._loc.get(record_id)

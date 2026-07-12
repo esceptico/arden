@@ -6,12 +6,14 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
 
 _VERSION = 1
 _HEX = frozenset("0123456789abcdef")
@@ -114,6 +116,56 @@ class VaultJournal:
         manifest = self._load_manifest(prepared.path)
         self._finish(prepared.path, manifest, prepared.commit_id)
         return prepared.manifest_hash
+
+    def replace_file_safely(self, target: Path, content: bytes) -> None:
+        """Replace one non-journal file without following vault symlinks.
+
+        Used by rebuildable projections. It does not publish a canonical revision.
+        """
+        if not isinstance(content, bytes):
+            raise TypeError("safe file content must be bytes")
+        path = self._safe_external_target(target)
+        self._mkdir_durable(path.parent)
+        self._validate_regular_leaf(path, allow_missing=True)
+        temp = path.parent / f".ntrp-projection-{uuid4().hex}.tmp"
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = -1
+        try:
+            descriptor = os.open(temp, flags, 0o600)
+            opened = os.fstat(descriptor)
+            if not stat.S_ISREG(opened.st_mode):
+                raise ValueError(f"safe temp is not a regular file: {temp}")
+            with os.fdopen(descriptor, "wb") as stream:
+                descriptor = -1
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            self._assert_safe_parents(path)
+            self._validate_regular_leaf(path, allow_missing=True)
+            os.replace(temp, path)
+            self._fsync_dir(path.parent)
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+            temp.unlink(missing_ok=True)
+
+    def unlink_files_safely(self, targets: Sequence[Path]) -> None:
+        """Prevalidate a file set, then unlink only regular vault-local leaves."""
+        checked: list[tuple[Path, bool]] = []
+        for target in targets:
+            path = self._safe_external_target(target)
+            exists = self._validate_regular_leaf(path, allow_missing=True)
+            checked.append((path, exists))
+        synced: set[Path] = set()
+        for path, exists in checked:
+            if not exists:
+                continue
+            self._assert_safe_parents(path)
+            self._validate_regular_leaf(path, allow_missing=False)
+            path.unlink()
+            synced.add(path.parent)
+        for directory in sorted(synced):
+            self._fsync_dir(directory)
 
     def recover(self, *, prefer_rollback: bool = False) -> tuple[str, ...]:
         self._validate_metadata_paths()
@@ -302,12 +354,52 @@ class VaultJournal:
         self._assert_safe_parents(target)
         return target
 
+    def _safe_external_target(self, target: Path) -> Path:
+        candidate = Path(target)
+        if candidate.is_absolute():
+            try:
+                relative = candidate.relative_to(self.root)
+            except ValueError as exc:
+                raise ValueError(f"safe target escapes vault root: {target}") from exc
+        else:
+            relative = candidate
+        rel = self._validate_relative(relative)
+        path = self.root.joinpath(*Path(rel).parts)
+        self._assert_safe_parents(path)
+        return path
+
+    def _validate_regular_leaf(self, path: Path, *, allow_missing: bool) -> bool:
+        self._assert_safe_parents(path)
+        try:
+            leaf = path.lstat()
+        except FileNotFoundError:
+            if allow_missing:
+                return False
+            raise
+        if stat.S_ISLNK(leaf.st_mode):
+            raise ValueError(f"safe target is a symlink: {path}")
+        if not stat.S_ISREG(leaf.st_mode):
+            raise ValueError(f"safe target is not a regular file: {path}")
+        return True
+
     def _assert_safe_parents(self, target: Path) -> None:
+        try:
+            root_st = self.root.lstat()
+        except OSError as exc:
+            raise ValueError(f"vault root is unavailable: {self.root}") from exc
+        if stat.S_ISLNK(root_st.st_mode) or not stat.S_ISDIR(root_st.st_mode):
+            raise ValueError(f"vault root must be an existing real directory: {self.root}")
         current = self.root
         for part in target.relative_to(self.root).parts[:-1]:
             current /= part
-            if current.exists() and current.is_symlink():
+            try:
+                current_st = current.lstat()
+            except FileNotFoundError:
+                return
+            if stat.S_ISLNK(current_st.st_mode):
                 raise ValueError(f"journal target traverses a symlink: {target}")
+            if not stat.S_ISDIR(current_st.st_mode):
+                raise ValueError(f"journal target parent is not a directory: {current}")
 
     def _validate_metadata_paths(self) -> None:
         for path, expected_directory in (
@@ -393,14 +485,16 @@ class VaultJournal:
         current = self.root
         for part in relative.parts:
             child = current / part
-            if child.is_symlink():
-                raise ValueError(f"journal directory is a symlink: {child}")
-            if child.exists():
-                if not child.is_dir():
-                    raise ValueError(f"journal directory path is not a directory: {child}")
-            else:
+            try:
+                child_st = child.lstat()
+            except FileNotFoundError:
                 child.mkdir()
                 self._fsync_dir(current)
+                child_st = child.lstat()
+            if stat.S_ISLNK(child_st.st_mode):
+                raise ValueError(f"journal directory is a symlink: {child}")
+            if not stat.S_ISDIR(child_st.st_mode):
+                raise ValueError(f"journal directory path is not a directory: {child}")
             current = child
 
     @staticmethod

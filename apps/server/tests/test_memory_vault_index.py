@@ -46,7 +46,8 @@ def test_nested_user_file_is_searchable_and_indexed(vault: Path):
     assert "research/ —" in _managed(vault / "index.md")
     assert "models/ —" in _managed(vault / "research/README.md")
     assert "notes.md — Model notes" in _managed(vault / "research/models/README.md")
-    assert report.missing_descriptions == ()
+    assert report.missing_descriptions == ("research/", "research/models/")
+    assert "research/models/ — Needs description" in report.health_output
     artifacts = ArtifactMemoryStore(vault).list_artifacts(q="Model notes")
     assert "research/models/notes.md" in {artifact.path for artifact in artifacts}
 
@@ -120,13 +121,15 @@ def test_empty_and_readme_only_directories_are_indexed_without_listing_readme(va
     (vault / "empty").mkdir()
     _write(vault / "documented/README.md", "---\nsummary: Curated directory\n---\nUser prose.\n")
 
-    VaultIndexer(vault).apply()
+    report = VaultIndexer(vault).apply()
 
     root = _managed(vault / "index.md")
     assert "empty/ — Needs description" in root
     assert "documented/ — Curated directory" in root
     assert "README.md" not in _managed(vault / "documented/README.md")
     assert [entry.path for entry in VaultIndexer(vault).root_entries()] == ["documented/", "empty/"]
+    assert report.missing_descriptions == ("empty/",)
+    assert "empty/ — Needs description" in report.health_output
 
 
 @pytest.mark.parametrize(
@@ -173,6 +176,52 @@ def test_filename_with_description_delimiter_keeps_existing_description(vault: P
     indexer.apply()
 
     assert f"{name} — Original description" in _managed(vault / "index.md")
+
+
+def test_legacy_markdown_link_target_is_description_identity(vault: Path):
+    name = "a — b.md"
+    _write(vault / name, "# Changed heading\n")
+    _write(
+        vault / "index.md",
+        f"{INDEX_START}\n- [Display — label](a%20%E2%80%94%20b.md) — Curated description\n{INDEX_END}\n",
+    )
+
+    VaultIndexer(vault).apply()
+
+    assert f"{name} — Curated description" in _managed(vault / "index.md")
+
+
+def test_legacy_markdown_directory_target_preserves_trailing_slash_identity(vault: Path):
+    (vault / "docs").mkdir()
+    _write(vault / "index.md", f"{INDEX_START}\n- [Docs](docs/) — Curated directory\n{INDEX_END}\n")
+
+    VaultIndexer(vault).apply()
+
+    assert "docs/ — Curated directory" in _managed(vault / "index.md")
+
+
+def test_ambiguous_plain_legacy_row_is_ignored(vault: Path):
+    name = "a — b.md"
+    _write(vault / name, "# Current heading\n")
+    _write(vault / "index.md", f"{INDEX_START}\n- a — b.md — Wrong description\n{INDEX_END}\n")
+
+    VaultIndexer(vault).apply()
+
+    assert f"{name} — Current heading" in _managed(vault / "index.md")
+
+
+def test_corrupt_nested_readme_is_preserved_and_not_used_as_parent_description(vault: Path):
+    (vault / "research").mkdir()
+    corrupt = f"Safe intro\n{INDEX_START}\nInjected parent description\n{INDEX_START}\n{INDEX_END}\n"
+    _write(vault / "research/README.md", corrupt)
+
+    report = VaultIndexer(vault).apply()
+
+    assert (vault / "research/README.md").read_text(encoding="utf-8") == corrupt
+    assert "research/ — Needs description" in _managed(vault / "index.md")
+    assert report.errors == ("research/README.md: invalid managed index markers",)
+    assert "research/README.md — Invalid managed index markers" in report.health_output
+    assert "research/" in report.missing_descriptions
 
 
 def test_hidden_user_paths_are_indexed_but_hidden_engine_paths_are_not(vault: Path):

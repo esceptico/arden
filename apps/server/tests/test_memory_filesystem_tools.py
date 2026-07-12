@@ -343,7 +343,7 @@ async def test_live_vault_absorbs_external_edits(tmp_path: Path):
     feed = root / "feeds" / "pr-queue.md"
     feed.parent.mkdir(parents=True, exist_ok=True)
     feed.write_text("# PR queue\n\n- none open\n", encoding="utf-8")
-    assert await store.refresh_from_disk() == ["feeds/pr-queue.md"]
+    assert await store.refresh_from_disk() == ["feeds/", "feeds/pr-queue.md"]
     assert feed not in store._pages, "visible-only resources never become record pages"
 
     # external raw-sidecar edit reloads the page's records
@@ -355,7 +355,7 @@ async def test_live_vault_absorbs_external_edits(tmp_path: Path):
 
     # deletion drops the page + records
     feed.unlink()
-    assert await store.refresh_from_disk() == ["feeds/pr-queue.md"]
+    assert await store.refresh_from_disk() == ["feeds/", "feeds/pr-queue.md"]
     assert feed not in store._pages
     await store.close()
 
@@ -422,14 +422,89 @@ async def test_text_resource_create_move_delete_is_watched_without_record_reload
     first.parent.mkdir()
     first.write_text("first\n", encoding="utf-8")
 
-    assert await store.refresh_from_disk() == [".research/notes.txt"]
+    assert await store.refresh_from_disk() == [".research/", ".research/notes.txt"]
     assert first not in store._pages
 
     moved = first.with_name("moved.txt")
     first.rename(moved)
-    assert await store.refresh_from_disk() == [".research/moved.txt", ".research/notes.txt"]
+    assert await store.refresh_from_disk() == [".research/", ".research/moved.txt", ".research/notes.txt"]
     assert moved not in store._pages
 
     moved.unlink()
-    assert await store.refresh_from_disk() == [".research/moved.txt"]
+    assert await store.refresh_from_disk() == [".research/", ".research/moved.txt"]
+    await store.close()
+
+
+async def test_empty_and_readme_only_directory_lifecycle_is_watched_without_record_reload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from ntrp.memory.file_store import FilePageStore
+
+    root = tmp_path / "memory"
+    store = FilePageStore(root)
+    await store.open()
+    reloaded: list[Path] = []
+    monkeypatch.setattr(store, "_reload_page", reloaded.append)
+
+    empty = root / "empty"
+    empty.mkdir()
+    assert await store.refresh_from_disk() == ["empty/"]
+    moved = root / "moved"
+    empty.rename(moved)
+    assert await store.refresh_from_disk() == ["empty/", "moved/"]
+    moved.rmdir()
+    assert await store.refresh_from_disk() == ["moved/"]
+
+    docs = root / "docs"
+    docs.mkdir()
+    (docs / "README.md").write_text("# Docs\n", encoding="utf-8")
+    assert await store.refresh_from_disk() == ["docs/", "docs/README.md"]
+    assert reloaded == []
+    await store.close()
+
+
+async def test_prose_only_write_rejects_nested_visible_parent_symlink(tmp_path: Path):
+    from ntrp.memory.file_store import FilePageStore
+
+    root = tmp_path / "memory"
+    outside = tmp_path / "outside"
+    (root / "raw" / "notes").mkdir(parents=True)
+    (root / "raw" / "notes" / "a.md").write_text("- 2026-07-12 ^safe1 [fact] (src:user) Safe.\n", encoding="utf-8")
+    outside.mkdir()
+    outside_page = outside / "a.md"
+    outside_page.write_text("outside original\n", encoding="utf-8")
+    _symlink_or_skip(root / "notes", outside)
+    store = FilePageStore(root)
+    await store.open()
+    page = root / "notes" / "a.md"
+    store._pages[page].prose = "# Updated prose"
+
+    with pytest.raises(ValueError, match="symlink"):
+        store._persist(page)
+
+    assert outside_page.read_text(encoding="utf-8") == "outside original\n"
+    assert sorted(path.name for path in outside.iterdir()) == ["a.md"]
+    await store.close()
+
+
+async def test_page_delete_rejects_nested_visible_parent_symlink_before_any_mutation(tmp_path: Path):
+    from ntrp.memory.file_store import FilePageStore
+
+    root = tmp_path / "memory"
+    outside = tmp_path / "outside"
+    raw = root / "raw" / "notes" / "a.md"
+    raw.parent.mkdir(parents=True)
+    raw.write_text("- 2026-07-12 ^safe2 [fact] (src:user) Safe.\n", encoding="utf-8")
+    outside.mkdir()
+    outside_page = outside / "a.md"
+    outside_page.write_text("outside original\n", encoding="utf-8")
+    _symlink_or_skip(root / "notes", outside)
+    store = FilePageStore(root)
+    await store.open()
+
+    with pytest.raises(ValueError, match="symlink"):
+        store._remove_page_files(root / "notes" / "a.md")
+
+    assert outside_page.read_text(encoding="utf-8") == "outside original\n"
+    assert raw.read_text(encoding="utf-8").startswith("- 2026-07-12 ^safe2")
     await store.close()

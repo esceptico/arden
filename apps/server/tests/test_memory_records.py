@@ -873,7 +873,8 @@ async def test_user_page_override_reloads_live_state_before_the_next_operation(t
     assert store._loc[successor.id] == page_path
     assert store._next_sequence() == 3
     assert index.store.ids == {successor.id}
-    assert store._file_state[page_path] == page_path.stat().st_mtime_ns
+    assert store._file_state[page_path][0] == "file"
+    assert store._file_state[page_path][3] == page_path.stat().st_mtime_ns
 
     third = _ledger_entry("third", "Third", sequence=3, supersedes=(successor.id,))
     store.append_entries((third,))
