@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 _SNAPSHOT_REL = Path(".ntrp/indexes/links.json")
 _SCHEMA_VERSION = 1
 _MAX_CONTEXT_CHARS = 280
+_MAX_CONTEXT_TOKEN_CHARS = 160
 _MAX_LINK_TEXT_CHARS = 1000
 _ENGINE_DIRS = {"raw", ".ntrp", ".index", ".maintenance"}
 _RESOURCE_SUFFIXES = {".md", ".txt"}
@@ -370,7 +371,7 @@ def _extract_wikilinks(content: str) -> tuple[_ExtractedLink, ...]:
             continue
         context = " ".join(token.content.split())
         if heading_open:
-            heading = _bounded_text(context, _MAX_CONTEXT_CHARS)
+            heading = _bounded_text(context, _MAX_CONTEXT_CHARS) or None
             heading_open = False
         for child in token.children or ():
             if child.type != "wikilink":
@@ -386,7 +387,7 @@ def _extract_wikilinks(content: str) -> tuple[_ExtractedLink, ...]:
                     target=meta["target"],
                     display=meta["display"],
                     heading=heading,
-                    context=_context_snippet(context, meta["raw"]),
+                    context=_context_snippet(token.content, start, meta["raw"]),
                     line=(token.map[0] if token.map else 0) + line_offset + frontmatter_lines + 1,
                     column=column,
                 )
@@ -394,16 +395,41 @@ def _extract_wikilinks(content: str) -> tuple[_ExtractedLink, ...]:
     return tuple(output)
 
 
-def _context_snippet(context: str, token: str) -> str:
-    if len(context) <= _MAX_CONTEXT_CHARS:
-        return context
-    inner_limit = _MAX_CONTEXT_CHARS - 2
-    position = context.find(token)
-    if position < 0:
-        position = 0
-    start = position - max((inner_limit - len(token)) // 2, 0)
-    start = min(max(start, 0), len(context) - inner_limit)
-    return f"…{context[start : start + inner_limit].strip()}…"
+def _context_snippet(raw_context: str, token_start: int, raw_token: str) -> str:
+    raw_before = raw_context[:token_start]
+    raw_after = raw_context[token_start + len(raw_token) :]
+    before = " ".join(raw_before.split())
+    after = " ".join(raw_after.split())
+    left_space = bool(before and raw_before[-1:].isspace())
+    right_space = bool(after and raw_after[:1].isspace())
+    token = _context_token(raw_token)
+    full = f"{before}{' ' if left_space else ''}{token}{' ' if right_space else ''}{after}"
+    if len(full) <= _MAX_CONTEXT_CHARS:
+        return full
+
+    separators = int(left_space) + int(right_space)
+    markers = int(bool(before)) + int(bool(after))
+    available = max(_MAX_CONTEXT_CHARS - len(token) - separators - markers, 0)
+    before_size = min(len(before), available // 2)
+    after_size = min(len(after), available - before_size)
+    remaining = available - before_size - after_size
+    if remaining and len(before) > before_size:
+        extra = min(len(before) - before_size, remaining)
+        before_size += extra
+        remaining -= extra
+    if remaining and len(after) > after_size:
+        after_size += min(len(after) - after_size, remaining)
+    prefix = before[-before_size:].lstrip() if before_size else ""
+    suffix = after[:after_size].rstrip() if after_size else ""
+    left = f"…{prefix}{' ' if left_space else ''}" if before else ""
+    right = f"{' ' if right_space else ''}{suffix}…" if after else ""
+    return f"{left}{token}{right}"
+
+
+def _context_token(raw_token: str) -> str:
+    if len(raw_token) <= _MAX_CONTEXT_TOKEN_CHARS:
+        return raw_token
+    return f"{raw_token[: _MAX_CONTEXT_TOKEN_CHARS - 3]}…]]"
 
 
 def _bounded_text(text: str, limit: int) -> str:

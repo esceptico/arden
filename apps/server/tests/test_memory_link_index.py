@@ -78,6 +78,41 @@ def test_context_is_a_bounded_snippet_that_keeps_the_link(tmp_path: Path):
     assert link.context.startswith("…") and link.context.endswith("…")
 
 
+def test_context_uses_raw_link_offset_and_preserves_label_whitespace(tmp_path: Path):
+    _write(tmp_path / "target.md", "# Target\n")
+    _write(
+        tmp_path / "source.md",
+        f"# Source\n\n{'before ' * 100}[[Target|A  B]] {'after ' * 100}\n",
+    )
+
+    link = LinkIndex(tmp_path).rebuild(ArtifactMemoryStore(tmp_path), "revision-1").outgoing("source.md")[0]
+
+    assert "[[Target|A  B]]" in link.context
+    assert len(link.context) <= 280
+    assert link.context.startswith("…") and link.context.endswith("…")
+
+
+def test_maximum_allowed_target_has_explicit_elided_context_token(tmp_path: Path):
+    target = "t" * 1000
+    _write(tmp_path / "source.md", f"[[{target}]]\n")
+
+    link = LinkIndex(tmp_path).rebuild(ArtifactMemoryStore(tmp_path), "revision-1").outgoing("source.md")[0]
+
+    assert link.target == target
+    assert len(link.context) <= 280
+    assert link.context.startswith("[[tttt")
+    assert link.context.endswith("…]]")
+
+
+def test_empty_commonmark_heading_is_normalized_to_none(tmp_path: Path):
+    _write(tmp_path / "target.md", "# Target\n")
+    _write(tmp_path / "source.md", "# \n\n[[Target]]\n")
+
+    link = LinkIndex(tmp_path).rebuild(ArtifactMemoryStore(tmp_path), "revision-1").outgoing("source.md")[0]
+
+    assert link.heading is None
+
+
 def test_commonmark_scanner_excludes_escaped_comments_and_all_code_forms(tmp_path: Path):
     _write(tmp_path / "visible.md", "# Visible\n")
     _write(
