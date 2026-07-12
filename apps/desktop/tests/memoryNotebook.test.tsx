@@ -104,6 +104,18 @@ function installBridge(options: { list?: typeof summaries; failList?: string; de
             },
           };
         }
+        if (request.path.startsWith("/admin/memory/links")) {
+          const path = new URL(`http://local${request.path}`).searchParams.get("path")!;
+          const outgoing = path === "me.md" ? [{
+            source_path: "me.md", target: "topics/dex", display: "Dex", heading: null,
+            context: "See [[topics/dex|Dex]].", line: 3, column: 5, status: "resolved",
+            resolved_path: "topics/dex.md", candidates: ["topics/dex.md"], source_revision: "ledger:1",
+          }] : [];
+          return {
+            ok: true, status: 200, statusText: "OK", contentType: "application/json",
+            data: { path, revision: "ledger:1", stale: false, outgoing, backlinks: [], total_outgoing: outgoing.length, total_backlinks: 0, limit: 100, offset: 0 }, text: "",
+          };
+        }
         const path = decodeURIComponent(request.path.replace("/admin/memory/artifacts/", ""));
         return { ok: true, status: 200, statusText: "OK", contentType: "application/json", data: { artifact: detail(path) }, text: "" };
       },

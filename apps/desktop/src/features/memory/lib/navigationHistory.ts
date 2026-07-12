@@ -1,0 +1,52 @@
+export interface NavigationLocation {
+  path: string;
+  anchor: string | null;
+  scrollTop: number;
+  focusSelector: string | null;
+}
+
+function sameDestination(left: NavigationLocation, right: NavigationLocation) {
+  return left.path === right.path && left.anchor === right.anchor;
+}
+
+export class NavigationHistory {
+  private entries: NavigationLocation[] = [];
+  private cursor = -1;
+
+  constructor(private readonly limit = 100) {
+    if (!Number.isInteger(limit) || limit < 1) throw new Error("Navigation history limit must be positive");
+  }
+
+  get length() { return this.entries.length; }
+  get canBack() { return this.cursor > 0; }
+  get canForward() { return this.cursor >= 0 && this.cursor < this.entries.length - 1; }
+  get current() { return this.cursor < 0 ? null : this.entries[this.cursor] ?? null; }
+
+  push(location: NavigationLocation) {
+    const current = this.current;
+    if (current && sameDestination(current, location)) return current;
+    this.entries = this.entries.slice(0, this.cursor + 1);
+    this.entries.push(location);
+    if (this.entries.length > this.limit) this.entries.shift();
+    this.cursor = this.entries.length - 1;
+    return location;
+  }
+
+  replaceCurrent(location: NavigationLocation) {
+    if (this.cursor < 0) return this.push(location);
+    this.entries[this.cursor] = location;
+    return location;
+  }
+
+  back() {
+    if (!this.canBack) return null;
+    this.cursor -= 1;
+    return this.entries[this.cursor] ?? null;
+  }
+
+  forward() {
+    if (!this.canForward) return null;
+    this.cursor += 1;
+    return this.entries[this.cursor] ?? null;
+  }
+}

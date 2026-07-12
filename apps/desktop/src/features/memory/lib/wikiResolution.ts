@@ -1,28 +1,23 @@
-import { wikiSlug } from "@/lib/wikilink";
-
-function aliasKey(value: string) {
-  return value.trim().toLowerCase();
-}
-
-export function addAlias(map: Map<string, Set<string>>, key: string, path: string) {
-  const exact = aliasKey(key);
-  if (!exact) return;
-  const paths = map.get(exact) ?? new Set<string>();
-  paths.add(path);
-  map.set(exact, paths);
-}
-
-export function preferredAlias(map: Map<string, Set<string>>, key: string): string | null {
-  const paths = map.get(aliasKey(key));
-  if (!paths) return null;
-  if (paths.size === 1) return [...paths][0];
-  const slug = wikiSlug(key);
-  for (const candidate of [`topics/${slug}.md`, `entities/${slug}.md`, `areas/${slug}.md`, `context/integrations/${slug}.md`]) {
-    if (paths.has(candidate)) return candidate;
-  }
-  return null;
-}
+import type { PageLinks } from "@/features/memory/lib/notebookTypes";
 
 export function isMissingArtifactError(error: unknown) {
   return error instanceof Error && error.message.toLowerCase().includes("memory artifact not found");
+}
+
+export interface ResolvedWikiTarget {
+  path: string;
+  anchor: string | null;
+}
+
+/** Resolve only from the server-built link index. Client metadata is not a
+ * substitute because aliases and ambiguity are vault semantics. */
+export function resolveWikiTarget(links: PageLinks | null, target: string): ResolvedWikiTarget | null {
+  if (!links) return null;
+  const matches = links.outgoing.filter((link) => link.target === target);
+  const paths = new Set(matches.flatMap((link) =>
+    link.status === "resolved" && link.resolvedPath ? [link.resolvedPath] : []));
+  if (matches.length === 0 || paths.size !== 1 || matches.some((link) => link.status !== "resolved")) return null;
+  const hash = target.indexOf("#");
+  const anchor = hash < 0 ? null : target.slice(hash + 1).trim() || null;
+  return { path: [...paths][0]!, anchor };
 }

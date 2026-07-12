@@ -43,7 +43,7 @@ export function MemoryNote({
   const content = detail?.content ?? "";
   return (
     <article className="flex h-full min-h-0 flex-col bg-bg-main">
-      <div className="flex-1 min-h-0 overflow-y-auto scroll-thin">
+      <div data-memory-note-scroll className="flex-1 min-h-0 overflow-y-auto scroll-thin">
         <ScrollFadeTop />
         <div className="mx-auto w-full max-w-[780px] px-8 pb-10 pt-8 sm:px-10 sm:pt-10">
           <header className="mb-7">

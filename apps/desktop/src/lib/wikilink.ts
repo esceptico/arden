@@ -98,6 +98,10 @@ export type WikiLinkHandlers = {
   /** Whether a target resolves to an existing note (drives Obsidian-style
    *  muted "unresolved" rendering for dangling links). */
   exists: (target: string) => boolean;
+  /** Exact artifact-path navigation for inline code. Kept separate so
+   * wikilink aliases remain server-resolved. */
+  existsInline?: (target: string) => boolean;
+  onNavigateInline?: (target: string) => void;
 };
 
 /** Resolution handlers for [[Subject]] clicks. Default undefined so wikilinks

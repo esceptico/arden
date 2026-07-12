@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { X } from "lucide-react";
+import { ChevronLeft, ChevronRight, PanelRight, X } from "lucide-react";
 import { useReducedMotion } from "motion/react";
 import clsx from "clsx";
 import { useStore } from "@/stores";
 import type { AppConfig } from "@/api/core";
-import { wikiSlug, type WikiLinkHandlers } from "@/lib/wikilink";
+import type { WikiLinkHandlers } from "@/lib/wikilink";
 import {
+  getPageHistory,
+  getPageLinks,
   listMemoryArtifactSummaries,
   readMemoryArtifactDetail,
   rebuildMemoryArtifactSummaries,
@@ -17,7 +19,11 @@ import { NotebookRail } from "@/features/memory/components/NotebookRail";
 import { FileDetailPane } from "@/features/memory/components/FileDetailPane";
 import { RecordDetailPane } from "@/features/memory/components/RecordDetailPane";
 import { RecordListPane } from "@/features/memory/components/RecordListPane";
-import { addAlias, isMissingArtifactError, preferredAlias } from "@/features/memory/lib/wikiResolution";
+import { MemoryInspector } from "@/features/memory/components/MemoryInspector";
+import { WikiLinkPreview } from "@/features/memory/components/WikiLinkPreview";
+import { ArtifactCache, RevisionCache } from "@/features/memory/lib/artifactCache";
+import { NavigationHistory, type NavigationLocation } from "@/features/memory/lib/navigationHistory";
+import { isMissingArtifactError, resolveWikiTarget } from "@/features/memory/lib/wikiResolution";
 import {
   buildNotebookRailModel,
   firstNotebookPath,
@@ -25,7 +31,7 @@ import {
   isNotebookResourcePath,
   selectIndexDocuments,
 } from "@/features/memory/lib/notebookIndex";
-import type { MemoryArtifactDetail, MemoryArtifactSummary } from "@/features/memory/lib/notebookTypes";
+import type { MemoryArtifactDetail, MemoryArtifactSummary, PageEditHistory, PageLinks } from "@/features/memory/lib/notebookTypes";
 
 const RECORD_PAGE_SIZE = 100;
 const SEARCH_DEBOUNCE_MS = 180;
@@ -64,12 +70,24 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
   const [pinningId, setPinningId] = useState<string | null>(null);
   const [recordsRefreshKey, setRecordsRefreshKey] = useState(0);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [pageLinks, setPageLinks] = useState<PageLinks | null>(null);
+  const [pageHistory, setPageHistory] = useState<PageEditHistory | null>(null);
+  const [linksLoading, setLinksLoading] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [trustError, setTrustError] = useState<string | null>(null);
+  const [historyVersion, setHistoryVersion] = useState(0);
+  const [pageHistoryPath, setPageHistoryPath] = useState<string | null>(null);
 
   const summaryRequest = useRef<SummaryRequest | null>(null);
   const indexGeneration = useRef(0);
   const recordsRequestId = useRef(0);
-  const detailCache = useRef(new Map<string, MemoryArtifactDetail>());
-  const indexDetailCache = useRef(new Map<string, string>());
+  const detailCache = useRef(new ArtifactCache());
+  const navigationHistory = useRef(new NavigationHistory());
+  const pendingRestore = useRef<NavigationLocation | null>(null);
+  const linksRequestId = useRef(0);
+  const historyRequestId = useRef(0);
+  const indexDetailCache = useRef(new RevisionCache<string>(24));
   const artifactsRef = useRef<MemoryArtifactSummary[]>([]);
   const queryRef = useRef("");
   const selectedMetaRef = useRef<MemoryArtifactSummary | null>(null);
@@ -103,12 +121,12 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     setIndexLoading(true);
     const selectedDocuments = selectIndexDocuments(summaries);
     const results = await Promise.all(selectedDocuments.map(async (summary) => {
-      const key = `${summary.path}@${summary.revision ?? "unknown"}`;
-      const cached = indexDetailCache.current.get(key);
+      const revision = summary.revision ?? "unknown";
+      const cached = indexDetailCache.current.get(summary.path, revision);
       if (cached != null) return { path: summary.path, content: cached, error: null };
       try {
         const response = await readMemoryArtifactDetail(config, summary.path);
-        indexDetailCache.current.set(`${summary.path}@${response.artifact.revision}`, response.artifact.content);
+        indexDetailCache.current.set(summary.path, response.artifact.revision, response.artifact.content);
         return { path: summary.path, content: response.artifact.content, error: null };
       } catch (reason) {
         return {
@@ -231,11 +249,16 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   useEffect(() => {
     if (indexLoading) return;
     const fallback = firstNotebookPath(railModel.entries) ?? railModel.files[0]?.path ?? null;
-    setSelected((current) => current && (
-      navigableArtifacts.some((artifact) => artifact.path === current)
-      || searchResults?.some((artifact) => artifact.path === current)
-    ) ? current : fallback);
-  }, [indexLoading, navigableArtifacts, railModel.entries, railModel.files, searchResults]);
+    if (selected && (
+      navigableArtifacts.some((artifact) => artifact.path === selected)
+      || searchResults?.some((artifact) => artifact.path === selected)
+    )) return;
+    if (fallback) {
+      navigationHistory.current.push({ path: fallback, anchor: null, scrollTop: 0, focusSelector: null });
+      setHistoryVersion((version) => version + 1);
+    }
+    setSelected(fallback);
+  }, [indexLoading, navigableArtifacts, railModel.entries, railModel.files, searchResults, selected]);
 
   const primaryOrder = useMemo(() => {
     const paths: string[] = [];
@@ -262,7 +285,38 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     });
   }, []);
 
-  const selectFile = useCallback((path: string) => {
+  const currentLocation = useCallback((): NavigationLocation | null => {
+    const path = selectedMeta?.path ?? selected;
+    if (!path) return null;
+    const scroller = layoutRef.current?.querySelector<HTMLElement>("[data-memory-note-scroll]");
+    const active = document.activeElement;
+    const focusSelector = active instanceof HTMLElement && scroller?.contains(active) && active.dataset.wikilink
+      ? `wikilink:${active.dataset.wikilink}`
+      : null;
+    const current = navigationHistory.current.current;
+    return {
+      path,
+      anchor: current?.path === path ? current.anchor : null,
+      scrollTop: scroller?.scrollTop ?? 0,
+      focusSelector,
+    };
+  }, [selected, selectedMeta?.path]);
+
+  const navigateTo = useCallback((path: string, anchor: string | null = null) => {
+    const destination = navigationHistory.current.current;
+    if (destination?.path === path && destination.anchor === anchor) {
+      if (anchor) {
+        pendingRestore.current = destination;
+        setHistoryVersion((version) => version + 1);
+      }
+      return;
+    }
+    const current = currentLocation();
+    if (current) navigationHistory.current.replaceCurrent(current);
+    const next = { path, anchor, scrollTop: 0, focusSelector: null };
+    navigationHistory.current.push(next);
+    pendingRestore.current = next;
+    setHistoryVersion((version) => version + 1);
     const from = primaryOrder.indexOf(selectedMeta?.path ?? selected ?? "");
     const to = primaryOrder.indexOf(path);
     if (from !== -1 && to !== -1 && from !== to) setDirection(to > from ? 1 : -1);
@@ -272,7 +326,38 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       setRecordsOpen(false);
       focusRailNote(path);
     }
-  }, [focusRailNote, primaryOrder, recordsOpen, selected, selectedMeta?.path]);
+  }, [currentLocation, focusRailNote, primaryOrder, recordsOpen, selected, selectedMeta?.path]);
+
+  const selectFile = useCallback((path: string) => navigateTo(path), [navigateTo]);
+
+  const moveHistory = useCallback((movement: "back" | "forward") => {
+    const current = currentLocation();
+    if (current) navigationHistory.current.replaceCurrent(current);
+    const location = movement === "back" ? navigationHistory.current.back() : navigationHistory.current.forward();
+    if (!location) return;
+    pendingRestore.current = location;
+    setHistoryVersion((version) => version + 1);
+    const from = primaryOrder.indexOf(selectedMeta?.path ?? selected ?? "");
+    const to = primaryOrder.indexOf(location.path);
+    if (from !== -1 && to !== -1 && from !== to) setDirection(to > from ? 1 : -1);
+    setContentNotice(null);
+    setQuery("");
+    setSelected(location.path);
+  }, [currentLocation, primaryOrder, selected, selectedMeta?.path]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((!event.metaKey && !event.ctrlKey) || (event.key !== "[" && event.key !== "]")) return;
+      const targets = [event.target, document.activeElement];
+      if (targets.some((target) => target instanceof HTMLElement && (
+        target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)
+      ))) return;
+      event.preventDefault();
+      moveHistory(event.key === "[" ? "back" : "forward");
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [moveHistory]);
 
   useEffect(() => {
     if (!recordsOpen) return;
@@ -293,8 +378,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       setContentLoading(false);
       return;
     }
-    const cacheKey = `${selectedMeta.path}@${selectedMeta.revision ?? "unknown"}`;
-    const cached = detailCache.current.get(cacheKey);
+    const cached = detailCache.current.get(selectedMeta.path, selectedMeta.revision);
     if (cached) {
       setActiveDetail(cached);
       setContentError(null);
@@ -308,7 +392,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       .then((response) => {
         if (cancelled) return;
         const detail = response.artifact;
-        detailCache.current.set(`${detail.path}@${detail.revision}`, detail);
+        detailCache.current.set(detail);
         setActiveDetail(detail);
         if (detail.revision !== selectedMeta.revision) {
           setArtifacts((current) => current.map((artifact) => artifact.path === detail.path
@@ -337,6 +421,35 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     };
   }, [config, contentRefreshKey, load, selectedMeta?.path, selectedMeta?.revision]);
 
+  useEffect(() => {
+    const detail = activeDetail;
+    const location = pendingRestore.current;
+    if (!detail || !location || location.path !== detail.path) return;
+    pendingRestore.current = null;
+    const frame = window.requestAnimationFrame(() => {
+      const scroller = layoutRef.current?.querySelector<HTMLElement>("[data-memory-note-scroll]");
+      if (!scroller) return;
+      if (location.anchor) {
+        const normalized = location.anchor.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+        const heading = Array.from(scroller.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,h6"))
+          .find((candidate) => candidate.id === location.anchor || candidate.textContent?.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") === normalized);
+        if (heading) {
+          heading.tabIndex = -1;
+          heading.scrollIntoView({ block: "start" });
+          heading.focus({ preventScroll: true });
+          return;
+        }
+      }
+      scroller.scrollTop = location.scrollTop;
+      if (location.focusSelector?.startsWith("wikilink:")) {
+        const target = location.focusSelector.slice("wikilink:".length);
+        Array.from(scroller.querySelectorAll<HTMLElement>("[data-wikilink]"))
+          .find((element) => element.dataset.wikilink === target)?.focus({ preventScroll: true });
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeDetail, historyVersion]);
+
   const memoryVaultVersion = useStore((state) => state.memoryVaultVersion);
   const observedVaultVersion = useRef(memoryVaultVersion);
   useEffect(() => {
@@ -344,9 +457,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     observedVaultVersion.current = memoryVaultVersion;
     const current = selectedMetaRef.current;
     if (current) {
-      for (const key of detailCache.current.keys()) {
-        if (key.startsWith(`${current.path}@`)) detailCache.current.delete(key);
-      }
+      detailCache.current.invalidatePath(current.path);
       setContentRefreshKey((key) => key + 1);
     }
     void load().then((accepted) => {
@@ -355,37 +466,75 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     if (recordsOpen) setRecordsRefreshKey((key) => key + 1);
   }, [load, memoryVaultVersion, recordsOpen, search]);
 
-  const artifactPaths = useMemo(() => new Set(navigableArtifacts.map((artifact) => artifact.path)), [navigableArtifacts]);
-  const artifactAliasMap = useMemo(() => {
-    const map = new Map<string, Set<string>>();
-    for (const artifact of navigableArtifacts) {
-      const leaf = artifact.path.split("/").pop()?.replace(/\.md$/, "") ?? artifact.path;
-      addAlias(map, artifact.path, artifact.path);
-      addAlias(map, artifact.path.replace(/\.md$/, ""), artifact.path);
-      addAlias(map, artifact.title, artifact.path);
-      addAlias(map, wikiSlug(artifact.title), artifact.path);
-      addAlias(map, leaf, artifact.path);
-      addAlias(map, wikiSlug(leaf), artifact.path);
+  const selectedHasWikilinks = activeDetail != null
+    && selectedMeta != null
+    && activeDetail.path === selectedMeta.path
+    && activeDetail.content.includes("[[");
+  useEffect(() => {
+    const requestId = ++linksRequestId.current;
+    setPageLinks(null);
+    if (!selectedMeta || (!selectedHasWikilinks && !inspectorOpen)) {
+      setLinksLoading(false);
+      return;
     }
-    return map;
-  }, [navigableArtifacts]);
-  const resolveWiki = useMemo(() => (target: string): string | null => {
-    const value = target.trim();
-    if (artifactPaths.has(value)) return value;
-    const directory = value.replace(/\/+$/, "");
-    if (directory && artifactPaths.has(`${directory}/README.md`)) return `${directory}/README.md`;
-    if (directory && artifactPaths.has(`${directory}/index.md`)) return `${directory}/index.md`;
-    return preferredAlias(artifactAliasMap, value) ?? preferredAlias(artifactAliasMap, wikiSlug(value));
-  }, [artifactAliasMap, artifactPaths]);
+    setLinksLoading(true);
+    setTrustError(null);
+    getPageLinks(config, { path: selectedMeta.path, limit: 100, offset: 0 }).then((links) => {
+      if (linksRequestId.current === requestId) setPageLinks(links);
+    }).catch((reason) => {
+      if (linksRequestId.current !== requestId) return;
+      setTrustError(reason instanceof Error ? reason.message : String(reason));
+    }).finally(() => {
+      if (linksRequestId.current === requestId) setLinksLoading(false);
+    });
+  }, [config, contentRefreshKey, inspectorOpen, selectedHasWikilinks, selectedMeta?.path]);
+
+  useEffect(() => {
+    const requestId = ++historyRequestId.current;
+    setPageHistory(null);
+    setPageHistoryPath(null);
+    if (!selectedMeta || !inspectorOpen) {
+      setHistoryLoading(false);
+      return;
+    }
+    setHistoryLoading(true);
+    setTrustError(null);
+    getPageHistory(config, { path: selectedMeta.path, limit: 100 }).then((history) => {
+      if (historyRequestId.current !== requestId) return;
+      setPageHistory(history);
+      setPageHistoryPath(selectedMeta.path);
+    }).catch((reason) => {
+      if (historyRequestId.current !== requestId) return;
+      setTrustError(reason instanceof Error ? reason.message : String(reason));
+    }).finally(() => {
+      if (historyRequestId.current === requestId) setHistoryLoading(false);
+    });
+  }, [config, contentRefreshKey, inspectorOpen, selectedMeta?.path]);
+
+  const currentPageLinks = pageLinks?.path === selectedMeta?.path ? pageLinks : null;
+  const currentPageHistory = pageHistoryPath === selectedMeta?.path ? pageHistory : null;
+  const artifactPaths = useMemo(() => new Set(navigableArtifacts.map((artifact) => artifact.path)), [navigableArtifacts]);
+
   const wikiHandlers = useMemo<WikiLinkHandlers>(() => ({
-    exists: (target) => resolveWiki(target) !== null,
+    exists: (target) => resolveWikiTarget(currentPageLinks, target) !== null,
     onNavigate: (target) => {
-      const path = resolveWiki(target);
-      if (!path) return;
+      const resolved = resolveWikiTarget(currentPageLinks, target);
+      if (!resolved) return;
       setQuery("");
-      selectFile(path);
+      navigateTo(resolved.path, resolved.anchor);
     },
-  }), [resolveWiki, selectFile]);
+    existsInline: (target) => artifactPaths.has(target),
+    onNavigateInline: (target) => {
+      if (!artifactPaths.has(target)) return;
+      setQuery("");
+      navigateTo(target, null);
+    },
+  }), [artifactPaths, currentPageLinks, navigateTo]);
+
+  const loadPreviewDetail = useCallback(async (path: string, signal: AbortSignal) => {
+    const response = await readMemoryArtifactDetail(config, path, { signal });
+    return response.artifact;
+  }, [config]);
 
   useEffect(() => {
     if (!recordsOpen) return;
@@ -449,13 +598,18 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       });
   };
 
+  const rightPanelOpen = recordsOpen || inspectorOpen;
+  const visibleDetail = activeDetail?.path === selectedMeta?.path && activeDetail?.revision === selectedMeta?.revision
+    ? activeDetail
+    : null;
+
   return (
     <div
       ref={layoutRef}
       data-memory-layout="notebook"
       className={clsx(
         "grid h-full min-h-0",
-        recordsOpen
+        rightPanelOpen
           ? "grid-cols-[280px_minmax(0,1fr)_320px]"
           : "grid-cols-[280px_minmax(0,1fr)_0px]",
       )}
@@ -480,11 +634,50 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
           onRetry={() => void load()}
           onRetryIndex={() => void refreshIndexDocuments(artifactsRef.current)}
           onRebuild={rebuild}
-          onToggleRecords={() => recordsOpen ? closeRecords() : setRecordsOpen(true)}
+          onToggleRecords={() => {
+            if (recordsOpen) closeRecords();
+            else {
+              setInspectorOpen(false);
+              setRecordsOpen(true);
+            }
+          }}
         />
       </nav>
 
-      <main data-memory-zone="workspace" aria-label={recordsOpen ? "Raw record" : "Memory note"} className="min-h-0 overflow-hidden">
+      <main data-memory-zone="workspace" aria-label={recordsOpen ? "Raw record" : "Memory note"} className="relative min-h-0 overflow-hidden">
+        {!recordsOpen && (
+          <div className="absolute right-3 top-3 z-10 flex items-center gap-1 rounded-[9px] border border-line-soft bg-bg-main/90 p-1 shadow-sm backdrop-blur">
+            <button
+              type="button"
+              aria-label="Back in memory history"
+              title="Back (⌘[)"
+              disabled={!navigationHistory.current.canBack}
+              onClick={() => moveHistory("back")}
+              className="grid size-7 place-items-center rounded-[6px] text-muted hover:bg-surface-soft hover:text-ink disabled:opacity-35"
+            >
+              <ChevronLeft className="size-4" />
+            </button>
+            <button
+              type="button"
+              aria-label="Forward in memory history"
+              title="Forward (⌘])"
+              disabled={!navigationHistory.current.canForward}
+              onClick={() => moveHistory("forward")}
+              className="grid size-7 place-items-center rounded-[6px] text-muted hover:bg-surface-soft hover:text-ink disabled:opacity-35"
+            >
+              <ChevronRight className="size-4" />
+            </button>
+            <button
+              type="button"
+              aria-label={inspectorOpen ? "Close memory trust inspector" : "Open memory trust inspector"}
+              aria-pressed={inspectorOpen}
+              onClick={() => setInspectorOpen((open) => !open)}
+              className="grid size-7 place-items-center rounded-[6px] text-muted hover:bg-surface-soft hover:text-ink aria-pressed:bg-surface-soft aria-pressed:text-ink"
+            >
+              <PanelRight className="size-4" />
+            </button>
+          </div>
+        )}
         {recordsOpen ? (
           <RecordDetailPane
             record={selectedRecord}
@@ -495,9 +688,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
         ) : (
           <FileDetailPane
             summary={selectedMeta}
-            detail={activeDetail?.path === selectedMeta?.path && activeDetail?.revision === selectedMeta?.revision
-              ? activeDetail
-              : null}
+            detail={visibleDetail}
             loading={loading || indexLoading}
             direction={direction}
             contentNotice={contentNotice}
@@ -506,12 +697,19 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
             wikiHandlers={wikiHandlers}
             onRetry={() => {
               if (selectedMeta) {
-                for (const key of detailCache.current.keys()) {
-                  if (key.startsWith(`${selectedMeta.path}@`)) detailCache.current.delete(key);
-                }
+                detailCache.current.invalidatePath(selectedMeta.path);
               }
               setContentRefreshKey((key) => key + 1);
             }}
+          />
+        )}
+        {!recordsOpen && (
+          <WikiLinkPreview
+            containerRef={layoutRef}
+            links={currentPageLinks}
+            summaries={navigableArtifacts}
+            cache={detailCache.current}
+            loadDetail={loadPreviewDetail}
           />
         )}
       </main>
@@ -519,8 +717,8 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       <aside
         data-memory-zone="inspector"
         aria-label="Memory inspector"
-        aria-hidden={!recordsOpen}
-        className={clsx("min-h-0 overflow-hidden", recordsOpen && "border-l border-line-soft")}
+        aria-hidden={!rightPanelOpen}
+        className={clsx("min-h-0 overflow-hidden", rightPanelOpen && "border-l border-line-soft")}
       >
         {recordsOpen && (
           <section aria-label="Raw records diagnostic" className="flex h-full min-h-0 flex-col">
@@ -566,6 +764,16 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
               onRetry={() => setRecordsRefreshKey((key) => key + 1)}
             />
           </section>
+        )}
+        {!recordsOpen && inspectorOpen && visibleDetail && (
+          <MemoryInspector
+            page={visibleDetail}
+            links={currentPageLinks}
+            history={currentPageHistory}
+            loading={linksLoading || historyLoading}
+            error={trustError}
+            onNavigate={navigateTo}
+          />
         )}
       </aside>
     </div>

@@ -173,7 +173,7 @@ function InlineCode({ className, children, ...rest }: React.HTMLAttributes<HTMLE
   const wiki = useContext(WikiLinkContext);
   const text = typeof children === "string" ? children : null;
   const isInline = !className || (!className.includes("language-") && !className.includes("hljs"));
-  if (wiki && isInline && text && wiki.exists(text.trim())) {
+  if (wiki && isInline && text && (wiki.existsInline ?? wiki.exists)(text.trim())) {
     const target = text.trim();
     return (
       <a
@@ -181,7 +181,7 @@ function InlineCode({ className, children, ...rest }: React.HTMLAttributes<HTMLE
         className="wikilink"
         onClick={(e) => {
           e.preventDefault();
-          wiki.onNavigate(target);
+          (wiki.onNavigateInline ?? wiki.onNavigate)(target);
         }}
       >
         {children}
