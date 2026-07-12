@@ -55,15 +55,14 @@ function RailRow({
       )}
     >
       {/* No leading glyph: state reads through text — muted name + "paused",
-          a softly pulsing "running" label. Pause/enable lives in the detail
-          footer. */}
+          "running" in ink. Pause/enable lives in the detail footer. */}
       <span className="min-w-0 truncate text-base tracking-[-0.005em]">
         {automation.name?.trim() || "Untitled"}
       </span>
       <span
         className={clsx(
           "text-xs tabular-nums whitespace-nowrap",
-          running ? "text-ink animate-pulse-soft motion-reduce:animate-none" : "text-faint",
+          running ? "text-ink" : "text-faint",
         )}
       >
         {whenLabel(automation)}
