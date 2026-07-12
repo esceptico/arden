@@ -32,6 +32,7 @@ from ntrp.memory.file_store import FilePageStore
 from ntrp.memory.ledger import LedgerEntry, LedgerMeta, render_ledger_entry
 from ntrp.memory.models import Kind, SourceRef
 from ntrp.memory.records import RecordStore
+from ntrp.memory.scopes import MemoryScope
 from tests.conftest import completion_response
 
 pytestmark = pytest.mark.asyncio
@@ -487,6 +488,54 @@ async def test_full_curation_uses_explicit_area_without_scope_query(tmp_path: Pa
     await records.close()
 
 
+async def test_full_curation_without_area_uses_exact_session_scope(tmp_path: Path):
+    llm = StubLLM(_ops_json([{"op": "ADD", "text": "Exact area fact", "kind": "fact"}]))
+    sessions = StubSessions(
+        {"s1": [_turn(0, "user", "Exact area fact")]},
+        scopes=[{**_scope("s1"), "area_id": "a1"}],
+        areas={"a1": {"area_id": "a1", "knowledge_scope": "area:a1"}},
+    )
+    curator, records = await _make_file_curator(tmp_path, llm, sessions)
+
+    await curator.curate_session_fully("s1")
+
+    record = (await records.list())[0]
+    assert (record.scope_kind, record.scope_key) == ("area", "a1")
+    assert sessions.exact_scope_reads == 1
+    await curator.stop()
+    await records.close()
+
+
+async def test_full_curation_retry_is_idempotent_within_derivation_run(tmp_path: Path, monkeypatch):
+    response = _ops_json([{"op": "ADD", "text": "Derived once", "kind": "fact"}])
+    llm = StubLLM(response)
+    sessions = StubSessions({"s1": [_turn(0, "user", "Derived once")]})
+    curator, records = await _make_file_curator(tmp_path, llm, sessions)
+    write_watermark = curator._write_watermark
+    failed = False
+
+    async def fail_once(session_id: str, value: int):
+        nonlocal failed
+        if not failed:
+            failed = True
+            raise RuntimeError("injected watermark failure")
+        await write_watermark(session_id, value)
+
+    monkeypatch.setattr(curator, "_write_watermark", fail_once)
+
+    with pytest.raises(RuntimeError, match="injected watermark failure"):
+        await curator.curate_session_fully("s1", derivation_run_id="init-run-1")
+
+    before = await records.list()
+    await curator.curate_session_fully("s1", derivation_run_id="init-run-1")
+    after = await records.list()
+    assert [record.id for record in after] == [record.id for record in before]
+    assert len(llm.calls) == 1
+    assert await curator._read_watermark("s1") == 0
+    await curator.stop()
+    await records.close()
+
+
 # --- record ops: ADD / UPDATE / SUPERSEDE / NOOP ------------------------------
 
 
@@ -640,9 +689,25 @@ async def test_noop_op_does_not_mutate_existing(tmp_path: Path):
     assert got.last_confirmed_at == before
     assert got.superseded_by is None
     assert len(llm.calls) == 1
+    system_prompt = llm.calls[0]["messages"][0]["content"]
+    assert '{"op": "NOOP"}' in system_prompt
+    assert '"NOOP",      "id"' not in system_prompt
     await curator2.stop()
     await curator.stop()
     await records.close()
+
+
+async def test_batch_source_precision_inference_preserves_timestamp_text():
+    turns = [
+        {**_turn(0, "user", "seconds"), "created_at": "2026-07-12T10:00:00Z"},
+        {**_turn(1, "assistant", "milliseconds"), "created_at": "2026-07-12T10:00:00.123Z"},
+        {**_turn(2, "user", "unsupported fraction"), "created_at": "2026-07-12T10:00:00.123456Z"},
+    ]
+
+    sources = Curator._batch_sources("s1", turns, MemoryScope("user"))
+
+    assert [source.occurred_at for source in sources] == [turn["created_at"] for turn in turns]
+    assert [source.time_precision for source in sources] == ["second", "millisecond", "unknown"]
 
 
 # --- worthiness gate: narrative / dev-chatter is not minted -------------------

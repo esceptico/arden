@@ -25,7 +25,7 @@ from ntrp.memory.curator import Curator
 from ntrp.memory.init import run_memory_init
 from ntrp.memory.records import RecordStore
 from tests.conftest import completion_response
-from tests.test_memory_curator import StubSessions, _scope, _turn
+from tests.test_memory_curator import StubSessions, _make_file_curator, _scope, _turn
 
 pytestmark = pytest.mark.asyncio
 
@@ -168,6 +168,32 @@ async def test_run_memory_init_wipes_resets_and_rederives(tmp_path: Path):
     # straight to their pages).
 
     await consolidate.close()
+    await curator.stop()
+    await records.close()
+
+
+async def test_separate_file_store_init_runs_use_distinct_derivation_generations(tmp_path: Path):
+    sessions = StubSessions(
+        rows={"chat1": [_turn(0, "user", "Re-derive this session")]},
+        scopes=[_scope("chat1")],
+    )
+    llm = CuratorStubLLM(
+        json.dumps({"records": [{"op": "ADD", "text": "First derivation", "kind": "fact"}]}),
+        json.dumps({"records": [{"op": "ADD", "text": "Second derivation", "kind": "fact"}]}),
+    )
+    curator, records = await _make_file_curator(tmp_path, llm, sessions)
+    knowledge = FakeKnowledge(
+        records,
+        curator,
+        None,
+        FakeConfig(tmp_path / "memory.db", tmp_path / "artifacts"),
+    )
+
+    await run_memory_init(knowledge)
+    await run_memory_init(knowledge)
+
+    assert len(llm.calls) == 2
+    assert {record.text for record in await records.list()} == {"First derivation", "Second derivation"}
     await curator.stop()
     await records.close()
 

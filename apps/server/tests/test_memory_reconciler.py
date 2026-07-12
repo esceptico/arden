@@ -120,6 +120,22 @@ def test_unsupported_runtime_precision_is_rejected():
         validate_operations([operation], records=[], source=unsupported)
 
 
+def test_millisecond_precision_requires_exactly_three_fractional_digits():
+    operation = RecordOperation.add("User drinks tea")
+
+    assert validate_operations(
+        [operation],
+        records=[],
+        source=_source(occurred_at="2026-07-12T10:00:00.123Z", time_precision="millisecond"),
+    ) == (operation,)
+    with pytest.raises(ValueError, match="millisecond precision"):
+        validate_operations(
+            [operation],
+            records=[],
+            source=_source(occurred_at="2026-07-12T10:00:00.123456Z", time_precision="millisecond"),
+        )
+
+
 @pytest.mark.asyncio
 async def test_plan_is_read_only_and_apply_commits_the_whole_batch_once(tmp_path: Path, monkeypatch):
     vault = tmp_path / "vault"

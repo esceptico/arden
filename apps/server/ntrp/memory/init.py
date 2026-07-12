@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import shutil
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 from ntrp.logging import get_logger
 from ntrp.memory.models import now_iso
@@ -77,6 +78,7 @@ async def run_memory_init(
 
     sessions = curator._sessions
     db_path = knowledge.config.memory_db_path
+    derivation_run_id = uuid4().hex
 
     # --- P0: backup ---------------------------------------------------------
     backup_path = f"{db_path}.init-bak-{now_iso().replace(':', '').replace('-', '')}"
@@ -121,6 +123,7 @@ async def run_memory_init(
             result = await curator.curate_session_fully(
                 row["session_id"],
                 area_id=row["area_id"],
+                derivation_run_id=derivation_run_id,
                 max_calls=budget,
                 bulk=True,
             )

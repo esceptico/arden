@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import TYPE_CHECKING, Literal
 
@@ -105,8 +106,6 @@ def _validate_timestamp(source: SourceRef) -> None:
     if source.occurred_at is None:
         return
     precision = source.time_precision
-    if precision == "unknown":
-        raise ValueError("source timestamp precision is required")
     if precision == "day":
         try:
             datetime.strptime(source.occurred_at, "%Y-%m-%d")
@@ -123,7 +122,8 @@ def _validate_timestamp(source: SourceRef) -> None:
         raise ValueError("source timestamp does not match minute precision")
     if precision == "second" and occurred.microsecond:
         raise ValueError("source timestamp does not match second precision")
-    if precision == "millisecond" and not occurred.microsecond:
+    fraction = re.search(r"\.(\d+)(?:Z|[+-]\d{2}:\d{2})$", source.occurred_at)
+    if precision == "millisecond" and (fraction is None or len(fraction.group(1)) != 3):
         raise ValueError("source timestamp does not match millisecond precision")
 
 

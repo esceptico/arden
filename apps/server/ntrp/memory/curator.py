@@ -87,7 +87,7 @@ _SYSTEM_PROMPT = (
     '    {"op": "ADD",       "text": "<self-contained statement>", "kind": "directive|fact|source|lesson", "entity_labels": ["Dex", "Regina Lin"], "meta_labels": ["Bug", "Open loop"]},\n'
     '    {"op": "UPDATE",    "id": "<existing id>", "text": "<corrected statement>", "entity_labels": ["..."], "meta_labels": ["..."]},\n'
     '    {"op": "SUPERSEDE", "id": "<existing id>", "text": "<replacement statement>", "kind": "...", "entity_labels": ["..."], "meta_labels": ["..."]},\n'
-    '    {"op": "NOOP",      "id": "<existing id>"}\n'
+    '    {"op": "NOOP"}\n'
     "  ]\n"
     "}\n"
     "Rules:\n"
@@ -134,8 +134,8 @@ _SYSTEM_PROMPT = (
     "(2) Records are atomic, self-contained, short, and usable in future prompts (resolve pronouns inline), typed by "
     "FUNCTION not subject. Allowed kinds: directive (standing instruction), fact (stable durable statement), source (receipt pointer only), lesson (distilled playbook rule, see 1c). Choose the op against the EXISTING SIMILAR RECORDS: "
     "ADD (new), UPDATE (edit an existing one), SUPERSEDE (replace a now-wrong "
-    "one), NOOP (reconfirm an unchanged one). Use ONLY ids that appear in "
-    "EXISTING SIMILAR RECORDS; never invent an id.\n"
+    "one), NOOP (no durable change). For UPDATE/SUPERSEDE, use ONLY ids that appear "
+    "in EXISTING SIMILAR RECORDS; never invent an id.\n"
     "(3) LABELS — attach labels to every ADD/UPDATE/SUPERSEDE using two distinct fields:\n"
     "  entity_labels: 0-2 — the NAMED subject the record is fundamentally about: a person "
     "(Regina Lin, Kevin Gu), company/org (Replika, Anthropic, ThirdLayer), product (Dex, ntrp), "
@@ -335,6 +335,7 @@ class Curator:
         session_id: str,
         *,
         area_id: str | None = None,
+        derivation_run_id: str = "incremental",
         max_calls: int | None = None,
         bulk: bool = False,
     ) -> dict:
@@ -352,6 +353,9 @@ class Curator:
         calls = 0
         capped = False
         watermark = await self._read_watermark(session_id)
+        if area_id is None:
+            session_scope = await self._sessions.session_scope(session_id)
+            area_id = session_scope.get("area_id") if session_scope else None
         explicit_scope = await self._area_scope(area_id)
 
         while True:
@@ -364,7 +368,7 @@ class Curator:
                 await self._write_watermark(session_id, max_seq)
                 break
 
-            batch_key = self._batch_key(session_id, max_seq)
+            batch_key = self._batch_key(session_id, max_seq, derivation_run_id)
             if hasattr(self._record_store, "operation_batch_committed") and self._record_store.operation_batch_committed(batch_key):
                 await self._write_watermark(session_id, max_seq)
                 watermark = max_seq
@@ -576,8 +580,8 @@ class Curator:
         return MemoryScope("area", str(area["area_id"]))
 
     @staticmethod
-    def _batch_key(session_id: str, max_seq: int) -> str:
-        return hashlib.sha256(f"{session_id}:{max_seq}".encode()).hexdigest()
+    def _batch_key(session_id: str, max_seq: int, derivation_run_id: str = "incremental") -> str:
+        return hashlib.sha256(f"{derivation_run_id}:{session_id}:{max_seq}".encode()).hexdigest()
 
     @staticmethod
     def _batch_sources(session_id: str, turns: list[dict], scope: MemoryScope) -> tuple[SourceRef, ...]:
@@ -587,7 +591,8 @@ class Curator:
             occurred_at = turn.get("created_at")
             precision = "unknown"
             if isinstance(occurred_at, str):
-                precision = "millisecond" if "." in occurred_at else "second"
+                fraction = re.search(r"\.(\d+)(?:Z|[+-]\d{2}:\d{2})$", occurred_at)
+                precision = "millisecond" if fraction and len(fraction.group(1)) == 3 else "second" if fraction is None else "unknown"
             sources.append(
                 SourceRef(
                     kind="chat_message",
@@ -665,7 +670,7 @@ class Curator:
                         text=raw.get("text"),
                         kind=raw.get("kind"),
                         scope=raw.get("scope"),
-                        target_ids=tuple(raw.get("target_ids") or ([raw["id"]] if raw.get("id") else ())),
+                        target_ids=tuple(raw.get("target_ids") or ()),
                         question=raw.get("question"),
                         meta_labels=labels,
                         entity_labels=entities,
@@ -839,9 +844,7 @@ class Curator:
                     )
                 return record
         elif verb == "NOOP":
-            rid = op.get("id")
-            if rid and not await self._record_store.confirm(rid):
-                _logger.warning("NOOP on unknown record id; skipped", record_id=rid)
+            return None
         return None
 
     @staticmethod
