@@ -1,4 +1,11 @@
-from ntrp.llm.models import Model, ModelRegistry, Pricing, Provider, _derive_codex_models
+from ntrp.llm.models import (
+    FALLBACK_DEFAULTS,
+    Model,
+    ModelRegistry,
+    Pricing,
+    Provider,
+    _derive_codex_models,
+)
 
 
 def test_codex_models_include_supported_openai_models():
@@ -42,3 +49,21 @@ def test_registry_reads_explicit_deferred_tool_capability():
 
     assert registry.supports_native_deferred_tools(model.id) is True
     assert registry.supports_native_deferred_tools("missing") is False
+
+
+def test_codex_fallback_matches_supported_api_models():
+    fallback = {
+        model.id: model
+        for model in FALLBACK_DEFAULTS
+        if model.provider == Provider.OPENAI_CODEX
+    }
+
+    assert set(fallback) == {
+        "openai-codex/gpt-5.4",
+        "openai-codex/gpt-5.4-mini",
+        "openai-codex/gpt-5.5",
+        "openai-codex/gpt-5.6-luna",
+        "openai-codex/gpt-5.6-sol",
+        "openai-codex/gpt-5.6-terra",
+    }
+    assert all(model.native_deferred_tools for model in fallback.values())

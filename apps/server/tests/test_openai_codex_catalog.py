@@ -98,3 +98,4 @@ async def test_refresh_replaces_codex_provider(monkeypatch):
     assert replace.call_args.args[0] == Provider.OPENAI_CODEX
     assert [model.id for model in models] == ["openai-codex/gpt-live"]
     assert client.calls[0][1]["params"] == {"client_version": "0.144.0"}
+    assert client.calls[0][1]["headers"]["Authorization"] == "Bearer access"

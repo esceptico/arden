@@ -56,10 +56,12 @@ def parse_codex_catalog(payload: object) -> list[Model]:
 
 async def _fetch_catalog(client: Any) -> list[Model]:
     tokens = await get_valid_tokens()
+    headers = codex_request_headers(tokens)
+    headers["Authorization"] = f"Bearer {tokens.access}"
     response = await client.get(
         f"{CODEX_BASE_URL}/models",
         params={"client_version": CODEX_CLIENT_VERSION},
-        headers=codex_request_headers(tokens),
+        headers=headers,
     )
     response.raise_for_status()
     return parse_codex_catalog(response.json())
@@ -74,8 +76,8 @@ async def refresh_codex_models(*, client: Any | None = None) -> bool:
                 models = await _fetch_catalog(owned_client)
     except RuntimeError:
         return False
-    except (httpx.HTTPError, ValueError):
-        _logger.warning("Failed to refresh OpenAI Codex model catalog", exc_info=True)
+    except (httpx.HTTPError, ValueError) as exc:
+        _logger.warning("Failed to refresh OpenAI Codex model catalog: %s", exc)
         return False
 
     if not models:

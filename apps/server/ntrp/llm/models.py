@@ -176,9 +176,26 @@ FALLBACK_DEFAULTS = [
     Model(
         "openai-codex/gpt-5.6-sol",
         provider=Provider.OPENAI_CODEX,
-        max_context_tokens=272_000,
+        max_context_tokens=372_000,
         max_output_tokens=128_000,
-        reasoning_efforts=("low", "medium", "high"),
+        reasoning_efforts=("low", "medium", "high", "xhigh", "max", "ultra"),
+        native_deferred_tools=True,
+    ),
+    Model(
+        "openai-codex/gpt-5.6-terra",
+        provider=Provider.OPENAI_CODEX,
+        max_context_tokens=372_000,
+        max_output_tokens=128_000,
+        reasoning_efforts=("low", "medium", "high", "xhigh", "max", "ultra"),
+        native_deferred_tools=True,
+    ),
+    Model(
+        "openai-codex/gpt-5.6-luna",
+        provider=Provider.OPENAI_CODEX,
+        max_context_tokens=372_000,
+        max_output_tokens=128_000,
+        reasoning_efforts=("low", "medium", "high", "xhigh", "max"),
+        native_deferred_tools=True,
     ),
     Model(
         "openai-codex/gpt-5.5",
@@ -186,6 +203,7 @@ FALLBACK_DEFAULTS = [
         max_context_tokens=272_000,
         max_output_tokens=128_000,
         reasoning_efforts=("low", "medium", "high", "xhigh"),
+        native_deferred_tools=True,
     ),
     Model(
         "openai-codex/gpt-5.4",
@@ -193,6 +211,7 @@ FALLBACK_DEFAULTS = [
         max_context_tokens=272_000,
         max_output_tokens=128_000,
         reasoning_efforts=("low", "medium", "high", "xhigh"),
+        native_deferred_tools=True,
     ),
     Model(
         "openai-codex/gpt-5.4-mini",
@@ -200,20 +219,7 @@ FALLBACK_DEFAULTS = [
         max_context_tokens=272_000,
         max_output_tokens=128_000,
         reasoning_efforts=("low", "medium", "high", "xhigh"),
-    ),
-    Model(
-        "openai-codex/gpt-5.3-codex",
-        provider=Provider.OPENAI_CODEX,
-        max_context_tokens=272_000,
-        max_output_tokens=128_000,
-        reasoning_efforts=("low", "medium", "high", "xhigh"),
-    ),
-    Model(
-        "openai-codex/gpt-5.2",
-        provider=Provider.OPENAI_CODEX,
-        max_context_tokens=272_000,
-        max_output_tokens=128_000,
-        reasoning_efforts=("low", "medium", "high", "xhigh"),
+        native_deferred_tools=True,
     ),
     # --- Google ---
     Model(
