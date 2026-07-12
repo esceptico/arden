@@ -7,6 +7,9 @@ atomic artifacts with sparse metadata and optional source evidence.
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import Literal
+
+TimePrecision = Literal["millisecond", "second", "minute", "day", "unknown"]
 
 
 def now_iso() -> str:
@@ -20,6 +23,10 @@ class SourceRef:
     captured_at: str = field(default_factory=now_iso)
     scope_kind: str | None = None
     scope_key: str | None = None
+    occurred_at: str | None = None
+    time_precision: TimePrecision = "unknown"
+    role: str | None = None
+    excerpt_hash: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -28,6 +35,10 @@ class SourceRef:
             "captured_at": self.captured_at,
             "scope_kind": self.scope_kind,
             "scope_key": self.scope_key,
+            "occurred_at": self.occurred_at,
+            "time_precision": self.time_precision,
+            "role": self.role,
+            "excerpt_hash": self.excerpt_hash,
         }
 
     @classmethod
@@ -38,6 +49,10 @@ class SourceRef:
             captured_at=str(data.get("captured_at") or now_iso()),
             scope_kind=data.get("scope_kind"),
             scope_key=data.get("scope_key"),
+            occurred_at=data.get("occurred_at"),
+            time_precision=data.get("time_precision") or "unknown",
+            role=data.get("role"),
+            excerpt_hash=data.get("excerpt_hash"),
         )
 
 
@@ -82,3 +97,12 @@ class Record:
     pinned: bool = False
     source_ref: SourceRef | None = None
     imp: int | None = None  # 1-10 poignancy from the scorer; None = unscored (neutral 5)
+    sources: tuple[SourceRef, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Keep the singular provenance field as a first-source compatibility view."""
+        if self.sources:
+            self.sources = tuple(self.sources)
+            self.source_ref = self.sources[0]
+        elif self.source_ref is not None:
+            self.sources = (self.source_ref,)

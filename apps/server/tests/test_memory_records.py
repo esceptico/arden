@@ -156,14 +156,28 @@ async def test_add_defaults_to_fact_kind(tmp_path: Path):
 
 async def test_provenance_round_trips_via_source_ref(tmp_path: Path):
     store = _store(tmp_path)
-    source = SourceRef(kind="curator", ref="sess-1", scope_kind="area", scope_key="proj-1")
+    source = SourceRef(
+        kind="curator",
+        ref="sess-1",
+        scope_kind="area",
+        scope_key="proj-1",
+        occurred_at="2026-07-12T14:23:41.582+04:00",
+        time_precision="millisecond",
+        role="user",
+        excerpt_hash="sha256:abc",
+    )
     rec = await store.add("auth uses JWT", source_ref=source)
 
     got = await store.get(rec.id)
     assert got.source_ref is not None
+    assert got.sources == (got.source_ref,)
     assert got.source_ref.kind == "curator"
     assert got.source_ref.scope_kind == "area"  # inert provenance, not a partition
     assert got.source_ref.scope_key == "proj-1"
+    assert got.source_ref.occurred_at == "2026-07-12T14:23:41.582+04:00"
+    assert got.source_ref.time_precision == "millisecond"
+    assert got.source_ref.role == "user"
+    assert got.source_ref.excerpt_hash == "sha256:abc"
     await store.close()
 
 

@@ -22,7 +22,11 @@ import json
 import re
 from dataclasses import dataclass, field
 
-SENTINEL = "<!-- timeline (append-only; edit prose above, not below) -->"  # legacy two-zone marker, parsed for migration only
+from ntrp.memory.ledger import LedgerEntry, parse_ledger_entry, render_ledger_entry
+
+SENTINEL = (
+    "<!-- timeline (append-only; edit prose above, not below) -->"  # legacy two-zone marker, parsed for migration only
+)
 
 # Engine bookkeeping — rendered into the raw sidecar, never the visible page.
 # prose_cites is the page's grounding: the record ids its prose was verified
@@ -31,6 +35,7 @@ SENTINEL = "<!-- timeline (append-only; edit prose above, not below) -->"  # leg
 RAW_FM_KEYS = ("scope_key", "entity_labels", "meta_labels", "prose_synced", "prose_cites")
 # Legacy bookkeeping now computed from the prose itself — dropped on parse.
 _DROPPED_FM_KEYS = ("prose_tokens",)
+_V2_HEADER_RE = re.compile(r"^<!-- ntrp:records schema=2(?: [^>]*)? -->$")
 
 # Greedy text + bracket tags only (incl. [superseded]) so the text body can
 # contain ANYTHING — trailing ~~, "(superseded)", brackets — without ambiguity.
@@ -119,10 +124,15 @@ def _dump_frontmatter(fm: dict) -> str:
 class Page:
     frontmatter: dict = field(default_factory=dict)
     prose: str = ""
-    lines: list[Line] = field(default_factory=list)
+    lines: list[Line | LedgerEntry] = field(default_factory=list)
+    records_header: str | None = None
 
-    def active_lines(self) -> list[Line]:
-        return [ln for ln in self.lines if not ln.superseded]
+    def active_lines(self) -> list[Line | LedgerEntry]:
+        return [
+            ln
+            for ln in self.lines
+            if not (ln.meta.operation == "retract" if isinstance(ln, LedgerEntry) else ln.superseded)
+        ]
 
 
 def _split_frontmatter(text: str) -> tuple[dict, str]:
@@ -146,15 +156,34 @@ def parse_page(text: str) -> Page:
     return Page(frontmatter=fm, prose=prose.strip(), lines=lines)
 
 
-def parse_raw(text: str) -> tuple[dict, list[Line]]:
+def parse_raw(text: str) -> tuple[dict, list[Line | LedgerEntry]]:
     """Parse a raw sidecar: engine frontmatter + every parseable timeline line."""
     fm, body = _split_frontmatter(text)
+    rows = body.splitlines()
+    first = next((index for index, row in enumerate(rows) if row.strip()), None)
+    if first is not None and _V2_HEADER_RE.fullmatch(rows[first]):
+        entries: list[LedgerEntry] = []
+        index = first + 1
+        while index < len(rows):
+            if not rows[index].strip():
+                index += 1
+                continue
+            if index + 1 >= len(rows) or not rows[index + 1].lstrip().startswith("<!-- ntrp:meta "):
+                raise ValueError("schema-v2 record is missing its metadata comment")
+            entries.append(parse_ledger_entry(f"{rows[index]}\n{rows[index + 1]}"))
+            index += 2
+        return fm, entries
     return fm, [ln for ln in (parse_line(r) for r in body.splitlines()) if ln]
 
 
 def merge_split(page: Page, raw_text: str | None) -> Page:
     """Attach a raw sidecar's frontmatter + timeline onto a parsed page."""
     if raw_text:
+        _, raw_body = _split_frontmatter(raw_text)
+        page.records_header = next(
+            (row for row in raw_body.splitlines() if _V2_HEADER_RE.fullmatch(row)),
+            None,
+        )
         fm, lines = parse_raw(raw_text)
         page.frontmatter.update(fm)
         page.lines.extend(lines)
@@ -176,12 +205,17 @@ def render_raw(page: Page) -> str:
     """The machine sidecar: engine frontmatter + timeline. Empty string when the
     page carries neither (caller removes the sidecar file)."""
     fm = {k: page.frontmatter[k] for k in RAW_FM_KEYS if k in page.frontmatter}
-    if not fm and not page.lines:
+    if not fm and not page.lines and page.records_header is None:
         return ""
     parts = []
     if fm:
         parts.append("---\n" + _dump_frontmatter(fm) + "\n---")
-    if page.lines:
+    if page.records_header is not None:
+        if any(not isinstance(ln, LedgerEntry) for ln in page.lines):
+            raise ValueError("schema-v2 pages can contain only ledger entries")
+        ledger = [render_ledger_entry(ln) for ln in page.lines]
+        parts.append("\n".join((page.records_header, *ledger)))
+    elif page.lines:
         parts.append("\n".join(format_line(ln) for ln in page.lines))
     return "\n\n".join(parts).rstrip() + "\n"
 
@@ -202,7 +236,16 @@ if __name__ == "__main__":
     # per-line entity slug round-trips and coexists with other tags
     ent = Line(id="9911", text="works at Dex.", kind="fact", date="2026-06-21", src="curator", entity="dex-nexus")
     assert parse_line(format_line(ent)) == ent, parse_line(format_line(ent))
-    ent_pin = Line(id="9922", text="pinned + entity.", kind="fact", date="2026-06-21", src="user", pinned=True, imp=6, entity="regina-lin")
+    ent_pin = Line(
+        id="9922",
+        text="pinned + entity.",
+        kind="fact",
+        date="2026-06-21",
+        src="user",
+        pinned=True,
+        imp=6,
+        entity="regina-lin",
+    )
     assert parse_line(format_line(ent_pin)) == ent_pin, parse_line(format_line(ent_pin))
     # the entity tag lives in the positionally-locked bracket region, so a text body
     # that itself starts with a "(ent:..)"/"[ent:..]"-shaped token round-trips verbatim
@@ -215,7 +258,11 @@ if __name__ == "__main__":
     assert parse_line(format_line(tricky)) == tricky, parse_line(format_line(tricky))
     paren = Line(id="ee44", text="issue resolved (superseded) per Lena", kind="fact", date="2026-06-21", src="chat")
     assert parse_line(format_line(paren)) == paren, parse_line(format_line(paren))
-    page = Page(frontmatter={"type": "topic", "title": "Bicycles", "entity_labels": ["Bicycles"]}, prose="Tim's bikes.", lines=[src, pinned, dead])
+    page = Page(
+        frontmatter={"type": "topic", "title": "Bicycles", "entity_labels": ["Bicycles"]},
+        prose="Tim's bikes.",
+        lines=[src, pinned, dead],
+    )
     # split round-trip: page file carries prose + human fm; raw carries engine fm + timeline
     page_text, raw_text = render_page(page), render_raw(page)
     assert "entity_labels" not in page_text and "^a1b2c3d4" not in page_text, page_text
@@ -226,7 +273,13 @@ if __name__ == "__main__":
     assert len(rp.lines) == 3 and len(rp.active_lines()) == 2
     assert rp.prose == "Tim's bikes."
     # legacy two-zone file still parses (migration path), incl. dropped bookkeeping keys
-    legacy_text = "---\ntitle: Bicycles\nprose_tokens: 12\nprose_cites: 3\n---\n\nTim's bikes.\n\n" + SENTINEL + "\n\n" + format_line(src) + "\n"
+    legacy_text = (
+        "---\ntitle: Bicycles\nprose_tokens: 12\nprose_cites: 3\n---\n\nTim's bikes.\n\n"
+        + SENTINEL
+        + "\n\n"
+        + format_line(src)
+        + "\n"
+    )
     lp = parse_page(legacy_text)
     assert lp.prose == "Tim's bikes." and len(lp.lines) == 1 and "prose_tokens" not in lp.frontmatter, lp
     # prose-only page (no fm-worthy machine state, no lines) needs no raw sidecar
