@@ -8,14 +8,21 @@ ctx.services / ctx.session_id and execution.tool_id).
 
 import json
 import types
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
+import ntrp.database as database
 import ntrp.tools.memory as memory_tools
+from ntrp.context.models import SessionState
+from ntrp.context.store import SessionStore
 from ntrp.memory.curator import Curator
+from ntrp.memory.file_store import FilePageStore
+from ntrp.memory.models import SourceRef
 from ntrp.memory.reconciler import RecordOperation
 from ntrp.memory.records import RecordStore
+from ntrp.services.session import SessionService
 from ntrp.tools.memory import (
     MEMORY_RECONCILER_SERVICE,
     MEMORY_RECORDS_SERVICE,
@@ -63,6 +70,47 @@ def _execution(store, reconciler=None):
         area=None,
     )
     return types.SimpleNamespace(ctx=ctx, tool_id="t1")
+
+
+async def _ledger_dependencies(tmp_path: Path, *decisions: dict):
+    vault = tmp_path / "vault"
+    (vault / "raw").mkdir(parents=True)
+    (vault / "me.md").write_text("# Me\n", encoding="utf-8")
+    (vault / "raw" / "me.md").write_text(
+        "<!-- ntrp:records schema=2 page=me.md -->\n",
+        encoding="utf-8",
+    )
+    store = FilePageStore(vault)
+    await store.open()
+
+    conn = await database.connect(tmp_path / "sessions.db")
+    session_store = SessionStore(conn)
+    await session_store.init_schema()
+    sessions = SessionService(session_store)
+    state = SessionState(session_id="s1", started_at=datetime.now(UTC))
+    await sessions.save(
+        state,
+        [
+            {
+                "message_id": "user-message-1",
+                "role": "user",
+                "content": "Please remember this.",
+                "created_at": "2026-07-12T10:00:00Z",
+            }
+        ],
+    )
+
+    responses = [json.dumps({"records": [decision]}) for decision in decisions]
+    reconciler = Curator(
+        StubLLM(*responses),
+        sessions=sessions,
+        model="memory-model",
+        db_path=tmp_path / "curator.db",
+        record_store=store,
+    )
+    execution = _execution(store, reconciler)
+    execution.ctx.services["session"] = sessions
+    return store, reconciler, execution, conn
 
 
 def _symlink_or_skip(link: Path, target: Path) -> None:
@@ -170,6 +218,42 @@ async def test_remember_nonidentical_candidate_errors_when_reconciliation_unavai
     assert [record.text for record in await store.list(limit=None, scopes=None)] == ["the user prefers green tea"]
 
 
+async def test_remember_empty_reconciliation_decision_is_error(store: RecordStore, tmp_path: Path):
+    result = await remember(
+        _execution(store, _reconciler(tmp_path, store)),
+        RememberInput(text="the user prefers tea"),
+    )
+
+    assert result.is_error
+    assert "reconciliation" in result.content.lower()
+    assert await store.list(limit=None, scopes=None) == []
+
+
+async def test_remember_rejects_injected_empty_typed_decision(store: RecordStore):
+    class EmptyReconciler:
+        async def reconcile_direct_memory(self, **kwargs):
+            return ()
+
+    result = await remember(
+        _execution(store, EmptyReconciler()),
+        RememberInput(text="the user prefers tea"),
+    )
+
+    assert result.is_error
+    assert result.preview == "Reconciliation unavailable"
+
+
+async def test_remember_explicit_typed_noop_is_already_known(store: RecordStore, tmp_path: Path):
+    result = await remember(
+        _execution(store, _reconciler(tmp_path, store, {"op": "NOOP"})),
+        RememberInput(text="the user prefers tea"),
+    )
+
+    assert not result.is_error
+    assert result.preview == "Already known"
+    assert await store.list(limit=None, scopes=None) == []
+
+
 async def test_remember_includes_triggering_user_message_evidence(store: RecordStore):
     class Reconciler:
         sources = ()
@@ -202,6 +286,101 @@ async def test_remember_includes_triggering_user_message_evidence(store: RecordS
         ("tool_call", "t1"),
         ("chat_message", "user-message-1"),
     ]
+
+
+async def test_file_store_direct_remember_commits_complement_with_complete_evidence(tmp_path: Path):
+    store, reconciler, execution, conn = await _ledger_dependencies(
+        tmp_path,
+        {"op": "ADD", "text": "the user dislikes coffee", "kind": "fact"},
+    )
+    try:
+        store.apply_operations(
+            (RecordOperation.add("the user prefers tea"),),
+            SourceRef("chat_message", "seed-message"),
+        )
+        execution.tool_id = "remember-complement"
+
+        result = await remember(execution, RememberInput(text="the user dislikes coffee"))
+
+        assert result.preview == "Remembered"
+        active = await store.list(limit=None, scopes=None)
+        assert {record.text for record in active} == {
+            "the user prefers tea",
+            "the user dislikes coffee",
+        }
+        complement = next(record for record in active if record.text == "the user dislikes coffee")
+        assert [(source.kind, source.ref) for source in complement.sources] == [
+            ("tool_call", "remember-complement"),
+            ("chat_message", "user-message-1"),
+        ]
+        assert store.operation_batch_committed("direct-remember:s1:remember-complement")
+    finally:
+        await reconciler.stop()
+        await store.close()
+        await conn.close()
+
+
+async def test_file_store_direct_contradiction_and_forget_preserve_history_and_evidence(tmp_path: Path):
+    store, reconciler, execution, conn = await _ledger_dependencies(tmp_path)
+    try:
+        store.apply_operations(
+            (RecordOperation.add("the user works at Acme"),),
+            SourceRef("chat_message", "seed-message"),
+        )
+        old = (await store.list(limit=None, scopes=None))[0]
+        await reconciler.stop()
+        reconciler = Curator(
+            StubLLM(
+                json.dumps(
+                    {
+                        "records": [
+                            {
+                                "op": "SUPERSEDE",
+                                "id": old.id,
+                                "text": "the user works at Globex",
+                                "kind": "fact",
+                            }
+                        ]
+                    }
+                )
+            ),
+            sessions=execution.ctx.services["session"],
+            model="memory-model",
+            db_path=tmp_path / "curator.db",
+            record_store=store,
+        )
+        execution.ctx.services[MEMORY_RECONCILER_SERVICE] = reconciler
+        execution.tool_id = "remember-contradiction"
+
+        remembered = await remember(execution, RememberInput(text="the user works at Globex"))
+
+        assert remembered.preview == "Remembered"
+        successor = (await store.list(limit=None, scopes=None))[0]
+        assert successor.text == "the user works at Globex"
+        assert [(source.kind, source.ref) for source in successor.sources] == [
+            ("chat_message", "seed-message"),
+            ("tool_call", "remember-contradiction"),
+            ("chat_message", "user-message-1"),
+        ]
+
+        execution.tool_id = "forget-contradiction"
+        forgotten = await forget(execution, ForgetInput(query="Globex"))
+
+        assert forgotten.preview == "Forgotten"
+        assert await store.list(limit=None, scopes=None) == []
+        history = store.history(old.id)
+        assert [entry.meta.operation for entry in history] == ["record", "record", "retract"]
+        assert [(source.kind, source.ref) for source in history[-1].meta.sources] == [
+            ("chat_message", "seed-message"),
+            ("tool_call", "remember-contradiction"),
+            ("chat_message", "user-message-1"),
+            ("tool_call", "forget-contradiction"),
+            ("chat_message", "user-message-1"),
+        ]
+    finally:
+        await reconciler.stop()
+        await store.close()
+        await conn.close()
 
 
 async def test_memory_tools_return_after_committed_mutation_when_artifact_sync_fails(

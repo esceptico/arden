@@ -695,9 +695,15 @@ async def remember(execution: ToolExecution, args: RememberInput) -> ToolResult:
             preview="Reconciliation unavailable",
             is_error=True,
         )
+    if not operations:
+        return ToolResult(
+            content="Memory reconciliation returned no decision; nothing was changed.",
+            preview="Reconciliation unavailable",
+            is_error=True,
+        )
     if question := next((operation.question for operation in operations if operation.op == "ASK"), None):
         return ToolResult(content=question, preview="Clarification required", is_error=True)
-    if not operations or all(operation.op == "NOOP" for operation in operations):
+    if all(operation.op == "NOOP" for operation in operations):
         return ToolResult(content="No memory change was needed.", preview="Already known")
     return ToolResult(content="Remembered", preview="Remembered")
 
@@ -727,6 +733,8 @@ async def forget(execution: ToolExecution, args: ForgetInput) -> ToolResult:
             batch_key=f"direct-forget:{session_id}:{execution.tool_id}",
         )
     else:
+        # Test-only legacy SQLite compatibility. Runtime memory is the schema-v2
+        # FilePageStore above, which journals the evidenced RETRACT operation.
         await store.delete(best.id)
     others = hits[1:]
     content = f"Forgot: {best.text}"

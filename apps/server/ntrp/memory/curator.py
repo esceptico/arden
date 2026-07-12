@@ -284,6 +284,8 @@ class Curator:
         if raw is None:
             return None
         operations = await self._typed_operations(raw, sources, scope)
+        if not operations:
+            return None
         if not any(operation.op == "ASK" for operation in operations):
             await self._apply_operations(
                 operations,
