@@ -498,6 +498,8 @@ class FilePageStore:
             for target in entry.meta.supersedes:
                 if target not in ids:
                     raise ValueError(f"missing supersedes target: {target}")
+            if entry.meta.successor_id is not None and entry.meta.successor_id not in ids:
+                raise ValueError(f"missing successor target: {entry.meta.successor_id}")
 
     def _active_ledger_entries(self) -> tuple[LedgerEntry, ...]:
         entries = self._ledger_entries()
@@ -536,7 +538,7 @@ class FilePageStore:
         if isinstance(line, LedgerEntry):
             successor = next(
                 (
-                    str(entry.meta.extra.get("successor_id") or entry.id)
+                    str(entry.meta.successor_id or entry.id)
                     for entry in self._ledger_entries()
                     if line.id in entry.meta.supersedes
                 ),
@@ -1047,6 +1049,8 @@ class FilePageStore:
             changed = False
             for entry in entries:
                 links = {entry.id, *entry.meta.supersedes}
+                if entry.meta.successor_id is not None:
+                    links.add(entry.meta.successor_id)
                 if links & related and not links <= related:
                     related.update(links)
                     changed = True
@@ -1172,8 +1176,8 @@ class FilePageStore:
                     scope_key=line.meta.scope_key,
                     sources=union_source_refs(line.meta.sources, successor.meta.sources),
                     supersedes=(old_id,),
+                    successor_id=new_id,
                     operation="retract",
-                    extra={"successor_id": new_id},
                 ),
             )
             self.append_entries((retract,))
@@ -1499,6 +1503,18 @@ class FilePageStore:
             self._merge_labels(final, entity=merge_entity, meta=labels)
 
     async def add_labels(self, record_id: str, labels: list[str], *, entity_labels: list[str] | None = None) -> None:
+        found = self._find(record_id)
+        if found and isinstance(found[1], LedgerEntry):
+            path, line = found
+            if record_id not in {entry.id for entry in self._active_ledger_entries()}:
+                return
+            entities = tuple(
+                dict.fromkeys((*line.entity, *(_slug(label) for label in (entity_labels or []) if _slug(label))))
+            )
+            page = self._pages[path]
+            page.frontmatter["meta_labels"] = sorted({*self._meta_labels(path), *labels})
+            self._replace_ledger_entry(path, replace(line, entity=entities))
+            return
         await self.set_labels(record_id, labels, entity_labels=entity_labels)
 
     def _record_entities(self, path: Path, line: Line | LedgerEntry) -> list[str]:
@@ -1600,6 +1616,11 @@ class FilePageStore:
             if len({(entry.meta.scope_kind, entry.meta.scope_key) for entry in predecessors}) != 1:
                 return None
             survivor_entry = predecessors[0]
+            meta_labels = {
+                label
+                for entry in predecessors
+                for label in self._meta_labels(self._loc[entry.id])
+            }
             recorded_at = now_iso()
             successor = LedgerEntry(
                 id=self._new_id(),
@@ -1619,6 +1640,10 @@ class FilePageStore:
                 ),
             )
             self.append_entries((successor,))
+            successor_path = self._loc[successor.id]
+            if meta_labels:
+                self._pages[successor_path].frontmatter["meta_labels"] = sorted(meta_labels)
+                self._persist(successor_path)
             for entry in predecessors:
                 self._unindex_line(entry.id)
             self._index_line(successor)

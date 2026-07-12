@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from ntrp.memory.file_store import FilePageStore
+from ntrp.memory.ledger import LedgerEntry, LedgerMeta, render_ledger_entry
 from ntrp.memory.models import Kind, Record, SourceRef
 from ntrp.memory.records import RecordStore
 from ntrp.memory.scopes import (
@@ -55,13 +56,42 @@ def test_legacy_project_scope_is_an_area_alias_for_reads():
 
 @pytest.mark.anyio
 async def test_file_store_new_area_write_round_trips_canonical_scope(tmp_path: Path):
-    store = FilePageStore(tmp_path / "vault")
+    vault = tmp_path / "vault"
+    visible = vault / "topics" / "a.md"
+    raw = vault / "raw" / "topics" / "a.md"
+    visible.parent.mkdir(parents=True)
+    raw.parent.mkdir(parents=True)
+    visible.write_text("# A\n", encoding="utf-8")
+    entry = LedgerEntry(
+        id="area-fact",
+        text="Area fact",
+        kind=Kind.FACT,
+        occurred_at="2026-07-12T10:00:00Z",
+        meta=LedgerMeta(
+            recorded_at="2026-07-12T10:00:01Z",
+            sequence=1,
+            time_precision="second",
+            scope_kind="area",
+            scope_key="a1",
+            sources=(),
+        ),
+    )
+    raw.write_text(
+        "<!-- ntrp:records schema=2 page=topics/a.md -->\n" + render_ledger_entry(entry) + "\n",
+        encoding="utf-8",
+    )
+    store = FilePageStore(vault)
     await store.open()
 
-    record = await store.add("Area fact", scope_kind="area", scope_key="a1")
-
+    record = await store.get(entry.id)
     assert (record.scope_kind, record.scope_key) == ("area", "a1")
     await store.close()
+
+    reopened = FilePageStore(vault)
+    await reopened.open()
+    record = await reopened.get(entry.id)
+    assert (record.scope_kind, record.scope_key) == ("area", "a1")
+    await reopened.close()
 
 
 @pytest.mark.anyio

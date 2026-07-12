@@ -25,7 +25,9 @@ _LEGACY_RE = re.compile(
 _RFC3339_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _AUTHORITATIVE_FIELDS = frozenset({"id", "text", "kind", "occurred_at", "pinned", "imp", "entity"})
-_META_FIELDS = frozenset({"recorded_at", "sequence", "time_precision", "scope", "sources", "supersedes", "operation"})
+_META_FIELDS = frozenset(
+    {"recorded_at", "sequence", "time_precision", "scope", "sources", "supersedes", "successor_id", "operation"}
+)
 
 
 @dataclass(frozen=True)
@@ -37,6 +39,7 @@ class LedgerMeta:
     scope_key: str | None
     sources: tuple[SourceRef, ...]
     supersedes: tuple[str, ...] = ()
+    successor_id: str | None = None
     operation: Literal["record", "retract"] = "record"
     extra: Mapping[str, object] = field(default_factory=dict)
     scope_extra: Mapping[str, object] = field(default_factory=dict)
@@ -129,6 +132,9 @@ def _parse_v2(readable: str, metadata: str) -> LedgerEntry:
     supersedes = raw_meta.get("supersedes", [])
     if not isinstance(supersedes, list) or not all(isinstance(item, str) for item in supersedes):
         raise ValueError("ledger supersedes must be a list of strings")
+    successor_id = raw_meta.get("successor_id")
+    if successor_id is not None and not isinstance(successor_id, str):
+        raise ValueError("ledger successor_id must be a string")
     operation = raw_meta.get("operation", "record")
     if operation not in ("record", "retract"):
         raise ValueError("invalid ledger operation")
@@ -159,6 +165,7 @@ def _parse_v2(readable: str, metadata: str) -> LedgerEntry:
             scope_key=scope.get("key"),
             sources=tuple(_source_from_dict(item) for item in raw_meta["sources"]),
             supersedes=tuple(supersedes),
+            successor_id=successor_id,
             operation=operation,
             extra={key: value for key, value in raw_meta.items() if key not in _META_FIELDS},
             scope_extra={key: value for key, value in scope.items() if key not in {"kind", "key"}},
@@ -247,6 +254,8 @@ def render_ledger_entry(entry: LedgerEntry) -> str:
     }
     if entry.meta.supersedes:
         metadata["supersedes"] = list(entry.meta.supersedes)
+    if entry.meta.successor_id is not None:
+        metadata["successor_id"] = entry.meta.successor_id
     if entry.meta.operation != "record":
         metadata["operation"] = entry.meta.operation
     metadata.update(entry.meta.extra)

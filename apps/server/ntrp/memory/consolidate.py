@@ -294,9 +294,9 @@ class Consolidate:
         report.merged += len(loser_ids)
         # Reflect the merge in our live view so a later op in the same hood
         # doesn't act on a now-superseded loser.
-        for lid in loser_ids:
-            live.pop(lid, None)
-        live[survivor.id] = merged
+        for member in members:
+            live.pop(member.id, None)
+        live[merged.id] = merged
 
     async def _apply_retype(self, op: RetypeOp, live: dict[str, Record], report: ConsolidateReport) -> None:
         """Reclassify a single record's function-type (e.g. a raw 'note' that is

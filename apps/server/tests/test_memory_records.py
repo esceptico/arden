@@ -15,6 +15,7 @@ inheritance, delete cascade).
 """
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 from shutil import move
 
@@ -769,6 +770,12 @@ async def test_v2_non_lifecycle_mutations_replace_immutable_entry_in_place(tmp_p
     assert await store.labels_of(entry.id) == ["Ntrp", "work"]
     assert await store.set_label_kind("Ntrp", "meta") == 1
     assert await store.labels_of(entry.id) == ["Ntrp", "work"]
+
+    await store.set_labels(entry.id, ["work"], entity_labels=["Dex"])
+    await store.add_labels(entry.id, ["urgent"])
+    assert await store.labels_of(entry.id) == ["Dex", "urgent", "work"]
+    await store.add_labels(entry.id, [], entity_labels=["Ntrp"])
+    assert await store.labels_of(entry.id) == ["Dex", "Ntrp", "urgent", "work"]
     await store.close()
 
 
@@ -795,7 +802,10 @@ async def test_v2_supersede_keeps_existing_successor_active_and_reopens(tmp_path
     assert await store.supersede(old.id, new.id) is True
     assert await store.get(old.id) is None
     assert (await store.get(new.id)).text == "New"
-    assert [entry.meta.operation for entry in store.history(old.id)] == ["record", "retract"]
+    history = store.history(old.id)
+    assert [entry.id for entry in history] == [old.id, new.id, history[-1].id]
+    assert history[-1].meta.operation == "retract"
+    assert history[-1].meta.successor_id == new.id
     await store.close()
 
     reopened = FilePageStore(vault)
@@ -852,6 +862,7 @@ async def test_cross_page_merge_uses_global_graph_for_index_and_labels_after_reo
 
     assert merged is not None
     assert index.store.ids == {merged.id}
+    assert await store.labels_of(merged.id) == ["Alpha", "loser", "survivor"]
     labels = {row["label"]: row["count"] for row in await store.list_labels()}
     assert labels.get("Beta", 0) == 0
     assert labels["Alpha"] == 1
@@ -876,3 +887,14 @@ async def test_cross_scope_merge_is_rejected_without_deactivation(tmp_path: Path
     assert store.history(first.id) == (first,)
     assert store.history(second.id) == (second,)
     await store.close()
+
+
+async def test_successor_target_is_validated_by_global_graph(tmp_path: Path):
+    vault = tmp_path / "memory"
+    old = _ledger_entry("old", "Old", sequence=1)
+    link = _ledger_entry("link", "Old", sequence=2, supersedes=(old.id,), operation="retract")
+    link = replace(link, meta=replace(link.meta, successor_id="missing"))
+    _write_ledger_vault(vault, [old, link])
+
+    with pytest.raises(ValueError, match="missing successor target"):
+        await FilePageStore(vault).open()

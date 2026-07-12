@@ -23,7 +23,7 @@ import pytest
 
 from ntrp.memory.consolidate import Consolidate, ConsolidateReport
 from ntrp.memory.models import Record, SourceRef
-from ntrp.memory.prompts_consolidate import LabelOps, LintOps, RetypeOp
+from ntrp.memory.prompts_consolidate import LabelOps, LintOps, MergeOp, RetypeOp
 from ntrp.memory.records import RecordStore
 from tests.conftest import completion_response
 
@@ -144,6 +144,35 @@ async def test_retype_tracks_successor_id_and_initiating_evidence(tmp_path: Path
     assert live["new"].kind == "directive"
     assert store.source_ref.kind == "consolidate"
     assert store.source_ref.ref == "retype:old"
+    assert report.retyped == 1
+    await consolidate.close()
+
+
+async def test_merge_live_map_uses_returned_successor_for_following_op(tmp_path: Path):
+    first = Record(id="first", text="Fact", kind="fact", scope_kind="user")
+    second = Record(id="second", text="Fact refined", kind="fact", scope_kind="user")
+
+    class Store:
+        async def merge(self, survivor_id, loser_ids, **kwargs):
+            return Record(id="merged", text=kwargs["text"], kind="fact", scope_kind="user")
+
+        async def supersede_with(self, old_id, **kwargs):
+            assert old_id == "merged"
+            return Record(id="retyped", text=kwargs["text"], kind=kwargs["kind"], scope_kind="user")
+
+    consolidate = Consolidate(Store(), None, model="memory-model", db_path=tmp_path / "meta.db")
+    live = {first.id: first, second.id: second}
+    report = ConsolidateReport()
+
+    await consolidate._apply_merge(
+        MergeOp(member_ids=[first.id, second.id], merged_text="Merged fact"),
+        live,
+        report,
+    )
+    await consolidate._apply_retype(RetypeOp(record_id="merged", kind="directive"), live, report)
+
+    assert set(live) == {"retyped"}
+    assert report.merged == 1
     assert report.retyped == 1
     await consolidate.close()
 

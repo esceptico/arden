@@ -20,7 +20,7 @@ from ntrp.constants import (
     MEMORY_RETENTION_TTL_TRANSIENT_DAYS,
 )
 from ntrp.logging import get_logger
-from ntrp.memory.models import Kind
+from ntrp.memory.models import Kind, SourceRef, now_iso
 
 _logger = get_logger(__name__)
 
@@ -66,6 +66,40 @@ async def run_retention(store) -> RetentionReport:
     store needs _pages: dict[Path, Page], _persist(path), and _unindex_line(id)."""
     today = datetime.now(UTC).date()  # line dates are UTC (now_iso); match to avoid TTL off-by-one
     report = RetentionReport()
+    if store._ledger_mode():
+        touched = set()
+        for entry in store._active_ledger_entries():
+            report.examined += 1
+            if entry.pinned:
+                continue
+            dreamer = any(source.kind == "dreamer" for source in entry.meta.sources)
+            ttl = _DREAMER_TTL if dreamer else _TTL.get(entry.kind, _DEFAULT_TTL)
+            recorded_date = entry.meta.recorded_at[:10]
+            if not _is_stale(recorded_date, ttl, today):
+                continue
+            path = store._loc.get(entry.id)
+            source = SourceRef(
+                "retention",
+                f"ttl:{entry.id}",
+                captured_at=now_iso(),
+                scope_kind=entry.meta.scope_kind,
+                scope_key=entry.meta.scope_key,
+            )
+            await store.delete(entry.id, source_ref=source)
+            if path is not None:
+                touched.add(path)
+            report.superseded += 1
+            report.by_class[entry.kind] = report.by_class.get(entry.kind, 0) + 1
+            _logger.info(
+                "retention: retracted stale ledger entry",
+                id=entry.id,
+                kind=entry.kind,
+                date=recorded_date,
+                ttl_days=ttl,
+            )
+        report.pages_touched = len(touched)
+        _logger.info(report.summary())
+        return report
     for path, page in store._pages.items():
         dirty = False
         for line in page.lines:

@@ -138,3 +138,30 @@ def test_schema_v2_header_must_be_the_first_nonempty_raw_line():
 
     with pytest.raises(ValueError, match="first nonempty"):
         merge_split(parse_page(""), raw)
+
+
+def test_successor_id_is_typed_validated_and_preserves_unknown_metadata():
+    raw = (
+        "- 2026-07-12T14:23:41+04:00 ^link [fact] Old fact.\n"
+        '  <!-- ntrp:meta {"recorded_at":"2026-07-12T10:23:42Z","sequence":3,'
+        '"time_precision":"second","scope":{"kind":"user"},"sources":[],'
+        '"supersedes":["old"],"operation":"retract","successor_id":"new","future":{"x":1}} -->'
+    )
+
+    entry = parse_ledger_entry(raw)
+
+    assert entry.meta.successor_id == "new"
+    assert entry.meta.extra == {"future": {"x": 1}}
+    assert parse_ledger_entry(render_ledger_entry(entry)) == entry
+
+
+def test_successor_id_must_be_a_string():
+    raw = (
+        "- 2026-07-12T14:23:41+04:00 ^link [fact] Old fact.\n"
+        '  <!-- ntrp:meta {"recorded_at":"2026-07-12T10:23:42Z","sequence":3,'
+        '"time_precision":"second","scope":{"kind":"user"},"sources":[],'
+        '"supersedes":["old"],"operation":"retract","successor_id":42} -->'
+    )
+
+    with pytest.raises(ValueError, match="successor_id"):
+        parse_ledger_entry(raw)
