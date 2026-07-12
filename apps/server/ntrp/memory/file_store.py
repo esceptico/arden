@@ -39,7 +39,7 @@ from ntrp.memory.scorer import salience
 from ntrp.search.retrieval import rrf_merge
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Callable, Mapping, Sequence
 
 _logger = get_logger(__name__)
 
@@ -204,7 +204,13 @@ def _iso(date: str) -> str:
 
 
 class FilePageStore:
-    def __init__(self, root: Path, search_index: object | None = None, project_names: dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        root: Path,
+        search_index: object | None = None,
+        project_names: dict[str, str] | None = None,
+        post_canonical_commit: Callable[[], None] | None = None,
+    ) -> None:
         self._root = Path(root)
         self._search_index = search_index  # optional semantic leg (search.db); lexical-only when None
         self._project_names = project_names or {}  # scope_key -> human project name (page naming)
@@ -217,6 +223,7 @@ class FilePageStore:
         self._file_state: dict[Path, int] = {}
         self._watch_task: asyncio.Task | None = None
         self._journal = VaultJournal(self._root)
+        self._post_canonical_commit = post_canonical_commit
 
     @property
     def canonical_revision(self) -> str:
@@ -1041,6 +1048,14 @@ class FilePageStore:
     def _persist(self, path: Path) -> None:
         self._persist_many((path,))
 
+    def _notify_post_canonical_commit(self) -> None:
+        if self._post_canonical_commit is None:
+            return
+        try:
+            self._post_canonical_commit()
+        except Exception:
+            _logger.warning("post-canonical projection scheduling failed", exc_info=True)
+
     @staticmethod
     def _validate_caller_files(
         files: Mapping[Path, bytes] | None,
@@ -1095,6 +1110,7 @@ class FilePageStore:
                 self._file_state[path] = path.stat().st_mtime_ns
             except OSError:
                 self._file_state.pop(path, None)
+        self._notify_post_canonical_commit()
 
     def _remove_page_files(self, path: Path) -> None:
         path.unlink(missing_ok=True)
@@ -1266,6 +1282,7 @@ class FilePageStore:
             self._reload_canonical_state()
             raise
         self._reload_canonical_state()
+        self._notify_post_canonical_commit()
         return revision
 
     def operation_batch_committed(self, batch_key: str) -> bool:

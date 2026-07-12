@@ -259,3 +259,18 @@ async def test_read_and_list_skip_symlinked_nested_artifacts(tmp_path: Path):
         artifacts.read_artifact("facts/index.md")
 
 
+async def test_read_and_list_open_arbitrary_markdown_and_text_paths(tmp_path: Path):
+    root = tmp_path / "artifacts"
+    (root / "research" / "models").mkdir(parents=True)
+    (root / "research" / "models" / "notes.md").write_text("# Model notes\n\nUseful markdown.\n", encoding="utf-8")
+    (root / "research" / "models" / "results.txt").write_text("Useful text results.\n", encoding="utf-8")
+
+    artifacts = ArtifactMemoryStore(root)
+
+    assert artifacts.read_artifact("research/models/notes.md").title == "Model notes"
+    assert artifacts.read_artifact("research/models/results.txt").content == "Useful text results.\n"
+    assert {a.path for a in artifacts.list_artifacts(q="Useful")} == {
+        "research/models/notes.md",
+        "research/models/results.txt",
+    }
+

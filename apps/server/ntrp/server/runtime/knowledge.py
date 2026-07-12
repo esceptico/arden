@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 
 from ntrp.config import Config
 from ntrp.llm.router import get_completion_client
@@ -7,6 +8,68 @@ from ntrp.server.indexer import Indexer
 from ntrp.server.stores import Stores
 
 _logger = get_logger(__name__)
+
+
+class VaultIndexProjection:
+    """Coalesced, retryable projection refresh outside canonical commits."""
+
+    def __init__(self, root: Path, *, retry_delay: float = 2.0):
+        from ntrp.memory.vault_index import VaultIndexer
+
+        self._indexer = VaultIndexer(root)
+        self._retry_delay = retry_delay
+        self._task: asyncio.Task | None = None
+        self._retry_handle: asyncio.TimerHandle | None = None
+        self._dirty = False
+        self.stale = True
+
+    @property
+    def retry_scheduled(self) -> bool:
+        return self._retry_handle is not None and not self._retry_handle.cancelled()
+
+    def schedule(self) -> None:
+        self.stale = True
+        self._dirty = True
+        if self._retry_handle is not None:
+            self._retry_handle.cancel()
+            self._retry_handle = None
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self._run())
+
+    async def _run(self) -> None:
+        try:
+            while self._dirty:
+                self._dirty = False
+                try:
+                    await asyncio.to_thread(self._indexer.apply)
+                except Exception:
+                    self.stale = True
+                    _logger.warning("memory vault index projection failed", exc_info=True)
+                    loop = asyncio.get_running_loop()
+                    self._retry_handle = loop.call_later(self._retry_delay, self.schedule)
+                    return
+                self.stale = False
+        finally:
+            self._task = None
+
+    async def wait_idle(self) -> None:
+        task = self._task
+        if task is not None:
+            await task
+
+    def retry_now(self) -> None:
+        if self._retry_handle is not None:
+            self._retry_handle.cancel()
+            self._retry_handle = None
+        self.schedule()
+
+    def close(self) -> None:
+        if self._retry_handle is not None:
+            self._retry_handle.cancel()
+            self._retry_handle = None
+        if self._task is not None:
+            self._task.cancel()
+        self._dirty = False
 
 
 class KnowledgeRuntime:
@@ -21,6 +84,7 @@ class KnowledgeRuntime:
         self._record_store = None
         self._consolidate = None
         self._artifact_refresh_task: asyncio.Task | None = None
+        self._vault_index = VaultIndexProjection(config.memory_artifacts_dir)
 
     @property
     def memory_ready(self) -> bool:
@@ -39,7 +103,11 @@ class KnowledgeRuntime:
         the in-memory store and fan a change event out through `on_change`."""
         store = self._record_store
         if store is not None and hasattr(store, "start_watch"):
-            store.start_watch(on_change)
+            async def _indexed_change(paths):
+                self._vault_index.schedule()
+                await on_change(paths)
+
+            store.start_watch(_indexed_change)
 
     def _memory_llm(self):
         """(client, model) for memory-page synthesis — the same completion client
@@ -71,6 +139,7 @@ class KnowledgeRuntime:
             self._record_store.attach_search_index(self.search_index)
 
     async def stop(self) -> None:
+        self._vault_index.close()
         if self._artifact_refresh_task is not None:
             self._artifact_refresh_task.cancel()
         if self.memory_curator:
@@ -83,6 +152,7 @@ class KnowledgeRuntime:
             await self.indexer.stop()
 
     async def close(self) -> None:
+        self._vault_index.close()
         if self._consolidate:
             await self._consolidate.close()
         if self._record_store:
@@ -168,6 +238,7 @@ class KnowledgeRuntime:
             root=self.config.memory_artifacts_dir,
             search_index=self.search_index,
             project_names=load_project_names(self.config.memory_artifacts_dir),
+            post_canonical_commit=self._vault_index.schedule,
         )
         self._consolidate = None  # set below once the memory model is resolved
 
@@ -226,6 +297,7 @@ class KnowledgeRuntime:
             except Exception:
                 _logger.warning("clear stale record vectors failed", exc_info=True)
         _logger.info("memory ready (file-canonical)", root=str(self.config.memory_artifacts_dir))
+        self._vault_index.schedule()
 
         # Synthesize the prose layer (the wiki view) off the hot path: stale-gated,
         # so a freshly-migrated store gets full prose once and later boots are cheap.

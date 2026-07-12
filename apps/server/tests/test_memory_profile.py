@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from ntrp.memory.profile import DIRECTIVE_CHAR_BUDGET, FACT_CHAR_BUDGET, resident_profile
+from ntrp.memory.profile import DIRECTIVE_CHAR_BUDGET, FACT_CHAR_BUDGET, ROOT_MAP_CHAR_BUDGET, resident_profile
 from ntrp.memory.records import RecordStore
 
 pytestmark = pytest.mark.asyncio
@@ -37,6 +37,40 @@ async def test_profile_carries_directives_and_facts_not_sources(tmp_path: Path):
 
 async def test_profile_is_none_without_a_store():
     assert await resident_profile(None) is None
+
+
+async def test_profile_includes_compact_root_map_without_nested_file_content(tmp_path: Path):
+    from ntrp.memory.file_store import FilePageStore
+
+    root = tmp_path / "memory"
+    (root / "research" / "models").mkdir(parents=True)
+    (root / "research" / "README.md").write_text("---\nsummary: Research library\n---\n", encoding="utf-8")
+    (root / "research" / "models" / "private.md").write_text("# Secret experiment\n\nDo not embed this body.\n", encoding="utf-8")
+    store = FilePageStore(root)
+    await store.open()
+
+    block = await resident_profile(store)
+
+    assert "## Memory map" in block
+    assert "research/ — Research library" in block
+    assert "private.md" not in block
+    assert "Do not embed this body" not in block
+    await store.close()
+
+
+async def test_profile_root_map_enforces_budget_for_one_large_description(tmp_path: Path):
+    from ntrp.memory.file_store import FilePageStore
+
+    root = tmp_path / "memory"
+    root.mkdir()
+    (root / "notes.md").write_text(f"---\nsummary: {'x' * 5000}\n---\n", encoding="utf-8")
+    store = FilePageStore(root)
+    await store.open()
+
+    block = await resident_profile(store)
+
+    assert len(block) <= ROOT_MAP_CHAR_BUDGET + len("## Memory map\n\n")
+    await store.close()
 
 
 async def test_profile_surfaces_learned_playbook(tmp_path: Path):

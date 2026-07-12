@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field
 
 from ntrp.config import get_config
 from ntrp.logging import get_logger
-from ntrp.memory.artifacts import ArtifactMemoryStore
+from ntrp.memory.artifacts import ARTIFACT_DIR_KINDS, ROOT_ARTIFACTS, ArtifactMemoryStore
 from ntrp.memory.frontmatter import parse_frontmatter
 from ntrp.memory.models import SourceRef
 from ntrp.memory.reconciler import RecordOperation, validate_operations
@@ -74,20 +74,20 @@ class ForgetInput(BaseModel):
 
 
 class MemoryTreeInput(BaseModel):
-    path: str = Field(default="", description="Relative directory or .md file path under the memory artifact root.")
+    path: str = Field(default="", description="Relative directory, Markdown, or text path under the memory root.")
     depth: int = Field(default=4, ge=1, le=12, description="Maximum directory depth to include.")
     include_content: bool = Field(default=False, description="Include bounded artifact snippets in tree rows.")
 
 
 class MemoryReadInput(BaseModel):
-    path: str = Field(description="Relative .md artifact path, directory, title, file stem, or [[wikilink]] under memory artifacts.")
+    path: str = Field(description="Relative Markdown/text path, directory, title, file stem, or [[wikilink]] under memory.")
     offset: int = Field(default=1, ge=1, description="1-based line number to start reading.")
     limit: int = Field(default=500, ge=1, le=2000, description="Maximum lines to return.")
 
 
 class MemorySearchInput(BaseModel):
     query: str = Field(min_length=1, max_length=500, description="Text to search in artifact filenames, titles, snippets, and content.")
-    path: str = Field(default="", description="Optional relative directory or .md file path under the memory artifact root.")
+    path: str = Field(default="", description="Optional relative directory, Markdown, or text path under the memory root.")
     limit: int = Field(default=100, ge=1, le=500, description="Maximum matches to return.")
 
 
@@ -163,7 +163,7 @@ def _validate_relative_path(raw: str, *, allow_empty: bool = False) -> str | Non
         return "" if allow_empty else None
     if rel.endswith("/"):
         rel = rel.rstrip("/")
-    if Path(rel).suffix and not rel.endswith(".md"):
+    if Path(rel).suffix.casefold() not in {"", ".md", ".txt"}:
         return None
     return rel
 
@@ -204,8 +204,8 @@ def _resolve_artifact_read_path(store: ArtifactMemoryStore, raw: str) -> str | N
     rel = _validate_relative_path(ref, allow_empty=False)
     if rel is not None:
         candidates = [rel]
-        if not rel.endswith(".md"):
-            candidates.extend([f"{rel}/index.md", f"{rel}.md"])
+        if Path(rel).suffix.casefold() not in {".md", ".txt"}:
+            candidates.extend([f"{rel}/README.md", f"{rel}/index.md", f"{rel}.md", f"{rel}.txt"])
         for candidate in candidates:
             try:
                 store.read_artifact(candidate)
@@ -219,7 +219,7 @@ def _resolve_artifact_read_path(store: ArtifactMemoryStore, raw: str) -> str | N
 
     ref_lower = ref.lower()
     ref_slug = _artifact_ref_slug(ref)
-    unsupported_suffix = bool(Path(ref).suffix and not ref.endswith(".md"))
+    unsupported_suffix = bool(Path(ref).suffix and Path(ref).suffix.casefold() not in {".md", ".txt"})
     matches: list[str] = []
     for artifact in store.list_artifacts():
         path = artifact.path
@@ -388,7 +388,7 @@ async def memory_tree(execution: ToolExecution, args: MemoryTreeInput) -> ToolRe
 def _memory_read_sync(args: MemoryReadInput) -> ToolResult:
     store = _artifact_store()
     rel = _resolve_artifact_read_path(store, args.path)
-    if rel is None or not rel.endswith(".md"):
+    if rel is None or Path(rel).suffix.casefold() not in {".md", ".txt"}:
         return _path_error(args.path)
     try:
         artifact = store.read_artifact(rel)
@@ -417,7 +417,7 @@ def _memory_search_sync(args: MemorySearchInput) -> ToolResult:
         return ToolResult(content=f"Error searching memory artifacts: {exc}", preview="Search failed", is_error=True)
     if rel and not artifacts:
         return _path_error(args.path)
-    if rel and rel.endswith(".md") and not any(a.path == rel for a in artifacts):
+    if rel and Path(rel).suffix.casefold() in {".md", ".txt"} and not any(a.path == rel for a in artifacts):
         return _path_error(args.path)
     matches = []
     for artifact in artifacts:
@@ -525,7 +525,9 @@ def _write_target(args: MemoryWriteInput) -> tuple[str, str] | ToolResult:
     if rel is None or not rel.endswith(".md"):
         return _path_error(args.path)
     store = _artifact_store()
-    if not store._allowed_artifact_rel(rel) or rel.startswith("changelog/"):
+    parts = Path(rel).parts
+    allowed_write = rel in ROOT_ARTIFACTS or (len(parts) > 1 and parts[0] in ARTIFACT_DIR_KINDS)
+    if not allowed_write or not store._allowed_artifact_rel(rel) or rel.startswith("changelog/"):
         return _path_error(args.path)
     try:
         artifact = store.read_artifact(rel)

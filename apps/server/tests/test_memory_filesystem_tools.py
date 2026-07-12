@@ -127,6 +127,27 @@ async def test_memory_tree_read_and_search_use_artifact_store_safety(store: Reco
     assert search.data["matches"]
 
 
+async def test_memory_read_search_and_tree_open_nested_text_outside_engine_namespaces(
+    store: RecordStore, artifacts_dir: Path
+):
+    await _seed(artifacts_dir)
+    (artifacts_dir / "research" / "models").mkdir(parents=True)
+    (artifacts_dir / "research" / "models" / "results.txt").write_text("Exact benchmark result.\n", encoding="utf-8")
+    (artifacts_dir / "raw").mkdir(exist_ok=True)
+    (artifacts_dir / "raw" / "secret.txt").write_text("Exact private raw result.\n", encoding="utf-8")
+
+    execution = _execution(store)
+    read = await memory_read(execution, MemoryReadInput(path="research/models/results.txt"))
+    search = await memory_search(execution, MemorySearchInput(query="benchmark", path="research"))
+    tree = await memory_tree(execution, MemoryTreeInput(path="research", depth=3))
+    hidden = await memory_read(execution, MemoryReadInput(path="raw/secret.txt"))
+
+    assert not read.is_error and "benchmark" in read.content
+    assert not search.is_error and search.data["matches"][0]["path"] == "research/models/results.txt"
+    assert not tree.is_error and "results.txt" in tree.content
+    assert hidden.is_error
+
+
 async def test_memory_read_resolves_titles_directories_and_wikilinks(store: RecordStore, artifacts_dir: Path):
     await _seed(artifacts_dir)
     execution = _execution(store)
@@ -163,7 +184,7 @@ async def test_memory_read_resolves_titles_directories_and_wikilinks(store: Reco
     assert dotted_title.data["path"] == "entities/a.b.md"
 
 
-@pytest.mark.parametrize("bad_path", ["/tmp/me.md", "../me.md", ".secret/file.md", "README.txt"])
+@pytest.mark.parametrize("bad_path", ["/tmp/me.md", "../me.md", ".secret/file.md", "README.png"])
 async def test_memory_read_search_patch_reject_bad_paths(store: RecordStore, artifacts_dir: Path, bad_path: str):
     await _seed(artifacts_dir)
     execution = _execution(store)

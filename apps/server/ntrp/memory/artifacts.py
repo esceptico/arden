@@ -52,6 +52,8 @@ ARTIFACT_DIR_KINDS: dict[str, str] = {
     "changelog": "changelog",
 }
 ARTIFACT_DIR_ORDER = {name: i for i, name in enumerate(ARTIFACT_DIR_KINDS)}
+_OPEN_RESOURCE_SUFFIXES = {".md", ".txt"}
+_ENGINE_RESOURCE_DIRS = {"raw", ".ntrp", ".index", ".maintenance"}
 
 MAX_LOG_CHARS = 500
 MAX_DOSSIER_SNIPPET_CHARS = 280
@@ -802,7 +804,8 @@ class ArtifactMemoryStore:
         dirname = parts[0]
         kind = ARTIFACT_DIR_KINDS.get(dirname)
         if kind is None:
-            raise FileNotFoundError(rel)
+            fallback = Path(rel).stem.replace("-", " ").replace("_", " ").title()
+            return "source", _title_from_content(content, fallback), "global", None
         fallback = Path(rel).stem.replace("-", " ").replace("_", " ").title()
         title = _title_from_content(content, fallback)
         name = Path(rel).name
@@ -851,39 +854,29 @@ class ArtifactMemoryStore:
             return (0, list(ROOT_ARTIFACTS).index(rel), rel)
         parts = Path(rel).parts
         dirname = parts[0] if parts else ""
-        return (1, ARTIFACT_DIR_ORDER.get(dirname, 99), rel)
+        return (1, ARTIFACT_DIR_ORDER.get(dirname, 99), rel.casefold())
 
     def _allowed_artifact_rel(self, rel: str) -> bool:
         safe = Path(rel)
         if safe.is_absolute() or ".." in safe.parts:
             return False
         parts = safe.parts
-        if not parts or any(part in ("", ".") or part.startswith(".") for part in parts):
+        if not parts or any(part in ("", ".") for part in parts):
             return False
-        if safe.suffix != ".md":
+        if any(part in _ENGINE_RESOURCE_DIRS or part.startswith(".") for part in parts):
             return False
-        if len(parts) == 1:
-            return rel in ROOT_ARTIFACTS
-        return parts[0] in ARTIFACT_DIR_KINDS
+        if safe.suffix.casefold() not in _OPEN_RESOURCE_SUFFIXES:
+            return False
+        return not (parts[0] == "raw" or parts[0] == ".ntrp")
 
     def _iter_artifact_files(self, *, changelog_only: bool = False) -> list[Path]:
-        out: list[Path] = []
-        root_files = () if changelog_only else ROOT_ARTIFACTS
-        for rel in root_files:
-            path = self.root / rel
-            try:
-                st = path.lstat()
-            except FileNotFoundError:
-                continue
-            if stat.S_ISREG(st.st_mode) and not stat.S_ISLNK(st.st_mode):
-                out.append(path)
-        dirnames = ("changelog",) if changelog_only else tuple(ARTIFACT_DIR_KINDS)
-        for dirname in dirnames:
-            directory = self.root / dirname
-            out.extend(self._walk_markdown_files(directory))
+        if changelog_only:
+            out = self._walk_resource_files(self.root / "changelog")
+        else:
+            out = self._walk_resource_files(self.root)
         return sorted(out, key=lambda p: p.relative_to(self.root).as_posix())
 
-    def _walk_markdown_files(self, directory: Path) -> list[Path]:
+    def _walk_resource_files(self, directory: Path) -> list[Path]:
         try:
             st = directory.lstat()
         except FileNotFoundError:
@@ -903,8 +896,9 @@ class ArtifactMemoryStore:
             if stat.S_ISLNK(child_st.st_mode):
                 continue
             if stat.S_ISDIR(child_st.st_mode):
-                out.extend(self._walk_markdown_files(child))
-            elif stat.S_ISREG(child_st.st_mode) and child.suffix == ".md":
+                if child.name not in _ENGINE_RESOURCE_DIRS and not child.name.startswith("."):
+                    out.extend(self._walk_resource_files(child))
+            elif stat.S_ISREG(child_st.st_mode) and child.suffix.casefold() in _OPEN_RESOURCE_SUFFIXES:
                 rel = child.relative_to(self.root).as_posix()
                 if self._allowed_artifact_rel(rel):
                     out.append(child)

@@ -21,6 +21,32 @@ DIRECTIVE_CHAR_BUDGET = 3000
 FACT_CHAR_BUDGET = 2000
 LESSON_CHAR_BUDGET = 2000
 SYNTHESIZED_PROSE_CHAR_LIMIT = 4000
+ROOT_MAP_CHAR_BUDGET = 1500
+
+
+def _root_map(memory_records: object) -> str | None:
+    root = getattr(memory_records, "_root", None)
+    if root is None:
+        return None
+    try:
+        from ntrp.memory.vault_index import VaultIndexer
+
+        entries = VaultIndexer(Path(root)).root_entries()
+    except Exception:
+        _logger.warning("memory root map load failed", exc_info=True)
+        return None
+    lines: list[str] = []
+    used = 0
+    for entry in entries:
+        line = f"- {entry.path} — {entry.description}"
+        remaining = ROOT_MAP_CHAR_BUDGET - used
+        if len(line) > remaining:
+            if lines or remaining <= 1:
+                break
+            line = line[: remaining - 1].rstrip() + "…"
+        lines.append(line)
+        used += len(line)
+    return "## Memory map\n\n" + "\n".join(lines) if lines else None
 
 
 async def _playbook(memory_records: object, scopes: list) -> str | None:
@@ -120,9 +146,10 @@ async def resident_profile(
     # The distilled playbook is appended to whichever profile form we return, so
     # the agent's learned lessons ride along every turn.
     playbook = await _playbook(memory_records, scopes)
+    root_map = _root_map(memory_records)
 
     def _join(base: str | None) -> str | None:
-        parts = [p for p in (base, playbook) if p]
+        parts = [p for p in (base, root_map, playbook) if p]
         return "\n\n".join(parts) if parts else None
 
     # Prefer the synthesized me.md prose (clean wiki block); fall back to the
@@ -131,7 +158,7 @@ async def resident_profile(
     if prose is not None:
         # Directives ride verbatim alongside the prose — never only via paraphrase.
         directives = await _directives_block(memory_records, scopes)
-        parts = [p for p in (prose, directives, playbook) if p]
+        parts = [p for p in (prose, directives, root_map, playbook) if p]
         return "\n\n".join(parts) if parts else None
     try:
         # Directives queried on their own so a flood of recent facts can't evict
