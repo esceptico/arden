@@ -12,7 +12,7 @@ Covers:
   (a) empty ops (admit gate) -> no record writes, watermark advances;
   (b) the watermark filters already-seen seqs;
   (c) a content-less completion -> no writes, watermark NOT advanced;
-  (d) record ops: ADD inserts, UPDATE edits+confirms, SUPERSEDE closes+inserts,
+  (d) record ops: ADD inserts, UPDATE/SUPERSEDE append successors,
       NOOP confirms — exactly one LLM call per curation;
   (e) labels: ADD sets them, UPDATE replaces-or-keeps, SUPERSEDE's successor
       takes the op's labels else inherits, and the prompt carries the LABEL
@@ -28,6 +28,9 @@ from pathlib import Path
 import pytest
 
 from ntrp.memory.curator import Curator
+from ntrp.memory.file_store import FilePageStore
+from ntrp.memory.ledger import LedgerEntry, LedgerMeta, render_ledger_entry
+from ntrp.memory.models import Kind, SourceRef
 from ntrp.memory.records import RecordStore
 from tests.conftest import completion_response
 
@@ -292,11 +295,59 @@ async def test_update_op_edits_and_confirms(tmp_path: Path):
     changed = await curator2.curate_session("s1")
 
     assert changed is True
-    got = await records.get(existing.id)
+    got = (await records.list())[0]
+    assert got.id != existing.id
     assert got.text == "the user lives in Munich"
     assert got.last_confirmed_at > before
     assert len(llm.calls) == 1
     await curator2.stop()
+    await curator.stop()
+    await records.close()
+
+
+async def test_update_op_uses_v2_successor_for_labels_and_evidence(tmp_path: Path):
+    vault = tmp_path / "vault"
+    visible = vault / "topics" / "a.md"
+    raw = vault / "raw" / "topics" / "a.md"
+    visible.parent.mkdir(parents=True)
+    raw.parent.mkdir(parents=True)
+    visible.write_text("# A\n", encoding="utf-8")
+    original_source = SourceRef("chat_message", "s:m0", captured_at="2026-07-12T10:00:00Z")
+    entry = LedgerEntry(
+        id="original",
+        text="the user lives in Berlin",
+        kind=Kind.FACT,
+        occurred_at="2026-07-12T10:00:00Z",
+        meta=LedgerMeta(
+            recorded_at="2026-07-12T10:00:01Z",
+            sequence=1,
+            time_precision="second",
+            scope_kind="user",
+            scope_key=None,
+            sources=(original_source,),
+        ),
+    )
+    raw.write_text(
+        "<!-- ntrp:records schema=2 page=topics/a.md -->\n" + render_ledger_entry(entry) + "\n",
+        encoding="utf-8",
+    )
+    records = FilePageStore(vault)
+    await records.open()
+    curator = Curator(StubLLM(), StubSessions(), model="memory-model", db_path=tmp_path / "m.db", record_store=records)
+    correction = SourceRef("curator", "s1", captured_at="2026-07-12T10:01:00Z")
+
+    updated = await curator._apply_op(
+        {"op": "UPDATE", "id": entry.id, "text": "the user lives in Munich", "labels": ["Munich"]},
+        "s1",
+        correction,
+    )
+
+    assert updated is not None
+    assert updated.id != entry.id
+    assert await records.get(entry.id) is None
+    assert (await records.get(updated.id)).text == "the user lives in Munich"
+    assert await records.labels_of(updated.id) == ["Munich"]
+    assert [source.ref for source in records.history(entry.id)[-1].meta.sources] == ["s:m0", "s1"]
     await curator.stop()
     await records.close()
 
@@ -473,7 +524,8 @@ async def test_update_op_replaces_labels_when_provided(tmp_path: Path):
 
     await curator2.curate_session("s1")
 
-    assert await records.labels_of(existing.id) == ["Munich"]
+    active = (await records.list())[0]
+    assert await records.labels_of(active.id) == ["Munich"]
     await curator2.stop()
     await curator.stop()
     await records.close()
@@ -496,7 +548,8 @@ async def test_update_op_keeps_labels_when_absent(tmp_path: Path):
 
     await curator2.curate_session("s1")
 
-    assert await records.labels_of(existing.id) == ["Berlin", "places"]
+    active = (await records.list())[0]
+    assert await records.labels_of(active.id) == ["Berlin", "places"]
     await curator2.stop()
     await curator.stop()
     await records.close()

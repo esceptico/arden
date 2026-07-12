@@ -583,13 +583,24 @@ class Curator:
         elif verb == "UPDATE":
             rid, text = op.get("id"), self._op_text(op)
             if rid and text:
-                if await self._record_store.update(rid, text):
+                old = await self._record_store.get(rid)
+                if old is not None:
+                    scope = scope_for_write(kind=old.kind, session_id=session_id, source_ref=base_source)
+                    source = apply_scope_to_source(base_source, scope)
+                    record = await self._record_store.supersede_with(
+                        rid,
+                        text=text,
+                        kind=old.kind,
+                        source_ref=source,
+                        scope_kind=old.scope_kind or scope.kind,
+                        scope_key=old.scope_key if old.scope_kind else scope.key,
+                    )
                     # UPDATE labels REPLACE; absent fields keep the old set.
                     if meta_labels is not None or entity_labels is not None:
                         await self._record_store.set_labels(
-                            rid, meta_labels or [], entity_labels=entity_labels or []
+                            record.id, meta_labels or [], entity_labels=entity_labels or []
                         )
-                    return await self._record_store.get(rid)
+                    return await self._record_store.get(record.id)
                 # Stale/hallucinated id -> land the correction as an ADD, unless
                 # the kind is narrative/unwritable (skip rather than mint).
                 kind = self._op_kind(op, default="fact")

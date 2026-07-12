@@ -27,7 +27,7 @@ from pathlib import Path
 
 from ntrp.database import connect as db_connect
 from ntrp.logging import get_logger
-from ntrp.memory.models import Record
+from ntrp.memory.models import Record, SourceRef
 from ntrp.memory.prompts_consolidate import (
     LABEL_HYGIENE_RUBRIC,
     LINT_RUBRIC,
@@ -308,9 +308,23 @@ class Consolidate:
             return  # a lesson never becomes durable knowledge (trust laundering)
         if op.kind not in _KINDS or op.kind == target.kind:
             return
-        if await self._records.set_kind(op.record_id, op.kind):
-            report.retyped += 1
-            live[op.record_id] = await self._records.get(op.record_id)
+        source = SourceRef(
+            kind="consolidate",
+            ref=f"retype:{target.id}",
+            scope_kind=target.scope_kind,
+            scope_key=target.scope_key,
+        )
+        successor = await self._records.supersede_with(
+            target.id,
+            text=target.text,
+            kind=op.kind,
+            source_ref=source,
+            scope_kind=target.scope_kind,
+            scope_key=target.scope_key,
+        )
+        report.retyped += 1
+        live.pop(target.id, None)
+        live[successor.id] = successor
 
     async def _apply_invalidate(self, op: InvalidateOp, live: dict[str, Record], report: ConsolidateReport) -> None:
         target = live.get(op.record_id)

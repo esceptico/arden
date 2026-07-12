@@ -136,16 +136,12 @@ class Page:
             if entry.id in by_id:
                 raise ValueError(f"duplicate ledger entry id: {entry.id}")
             by_id[entry.id] = entry
-        for entry in entries:
-            for target in entry.meta.supersedes:
-                if target not in by_id:
-                    raise ValueError(f"missing supersedes target: {target}")
-
         inactive = {
             target
             for entry in entries
             if entry.meta.operation == "record"
             for target in entry.meta.supersedes
+            if target in by_id
         }
 
         def recorded_key(entry: LedgerEntry) -> tuple[datetime, int]:
@@ -158,7 +154,7 @@ class Page:
             (entry for entry in entries if entry.meta.operation == "retract"),
             key=recorded_key,
         ):
-            inactive.update(retract.meta.supersedes)
+            inactive.update(target for target in retract.meta.supersedes if target in by_id)
         return tuple(
             entry
             for entry in entries

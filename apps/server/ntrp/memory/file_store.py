@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -325,7 +326,7 @@ class FilePageStore:
         self._pages[path] = page
         for ln in page.lines:
             self._loc[ln.id] = path
-            if ln in page.active_lines():
+            if not self._ledger_mode() and ln in page.active_lines():
                 self._index_line(ln)
 
     async def refresh_from_disk(self) -> list[str]:
@@ -346,6 +347,7 @@ class FilePageStore:
         if changed:
             if self._ledger_mode():
                 self._active_ledger_entries()
+                await self._sync_index()
             else:
                 self._write_index()
                 self._write_health()
@@ -424,10 +426,14 @@ class FilePageStore:
             return
         try:
             active: dict[str, Line | LedgerEntry] = {}
-            for page in self._pages.values():
-                for line in page.active_lines():
-                    if line.text.strip():
-                        active[line.id] = line
+            lines: Sequence[Line | LedgerEntry]
+            if self._ledger_mode():
+                lines = self._active_ledger_entries()
+            else:
+                lines = tuple(line for page in self._pages.values() for line in page.active_lines())
+            for line in lines:
+                if line.text.strip():
+                    active[line.id] = line
             indexed = await index.store.get_indexed_hashes(_MEMORY_LINE_SOURCE)
             for stale in set(indexed) - set(active):
                 await index.delete(_MEMORY_LINE_SOURCE, stale)
@@ -487,12 +493,25 @@ class FilePageStore:
     @staticmethod
     def _validate_ledger_entries(entries: Sequence[LedgerEntry]) -> None:
         Page(lines=list(entries)).active_entries()
+        ids = {entry.id for entry in entries}
+        for entry in entries:
+            for target in entry.meta.supersedes:
+                if target not in ids:
+                    raise ValueError(f"missing supersedes target: {target}")
 
     def _active_ledger_entries(self) -> tuple[LedgerEntry, ...]:
-        return Page(lines=list(self._ledger_entries())).active_entries()
+        entries = self._ledger_entries()
+        self._validate_ledger_entries(entries)
+        return Page(lines=list(entries)).active_entries()
 
     def _next_sequence(self) -> int:
         return max((entry.meta.sequence for entry in self._ledger_entries()), default=0) + 1
+
+    def _replace_ledger_entry(self, path: Path, entry: LedgerEntry) -> None:
+        page = self._pages[path]
+        page.lines = [entry if line.id == entry.id else line for line in page.lines]
+        self._loc[entry.id] = path
+        self._persist(path)
 
     def _entity_labels(self, path: Path) -> list[str]:
         return list(self._pages[path].frontmatter.get("entity_labels", [])) if path in self._pages else []
@@ -516,7 +535,11 @@ class FilePageStore:
     def _to_record(self, line: Line | LedgerEntry, path: Path) -> Record:
         if isinstance(line, LedgerEntry):
             successor = next(
-                (entry.id for entry in self._ledger_entries() if line.id in entry.meta.supersedes),
+                (
+                    str(entry.meta.extra.get("successor_id") or entry.id)
+                    for entry in self._ledger_entries()
+                    if line.id in entry.meta.supersedes
+                ),
                 None,
             )
             return Record(
@@ -1123,6 +1146,39 @@ class FilePageStore:
         if not found:
             return False
         path, line = found
+        if isinstance(line, LedgerEntry):
+            successor_found = self._find(new_id)
+            active_ids = {entry.id for entry in self._active_ledger_entries()}
+            if (
+                successor_found is None
+                or not isinstance(successor_found[1], LedgerEntry)
+                or old_id not in active_ids
+                or new_id not in active_ids
+            ):
+                return False
+            successor = successor_found[1]
+            recorded_at = now_iso()
+            retract = LedgerEntry(
+                id=self._new_id(),
+                text=line.text,
+                kind=line.kind,
+                occurred_at=line.occurred_at,
+                entity=line.entity,
+                meta=LedgerMeta(
+                    recorded_at=recorded_at,
+                    sequence=self._next_sequence(),
+                    time_precision=line.meta.time_precision,
+                    scope_kind=line.meta.scope_kind,
+                    scope_key=line.meta.scope_key,
+                    sources=union_source_refs(line.meta.sources, successor.meta.sources),
+                    supersedes=(old_id,),
+                    operation="retract",
+                    extra={"successor_id": new_id},
+                ),
+            )
+            self.append_entries((retract,))
+            self._unindex_line(old_id)
+            return True
         line.superseded = True
         self._persist(path)
         self._unindex_line(old_id)
@@ -1187,6 +1243,28 @@ class FilePageStore:
         if not found:
             return False
         path, line = found
+        if isinstance(line, LedgerEntry):
+            if record_id not in {entry.id for entry in self._active_ledger_entries()}:
+                return False
+            successor = LedgerEntry(
+                id=self._new_id(),
+                text=line.text,
+                kind=Kind(kind),
+                occurred_at=line.occurred_at,
+                pinned=line.pinned,
+                imp=line.imp,
+                entity=line.entity,
+                meta=replace(
+                    line.meta,
+                    recorded_at=now_iso(),
+                    sequence=self._next_sequence(),
+                    supersedes=(record_id,),
+                ),
+            )
+            self.append_entries((successor,))
+            self._unindex_line(record_id)
+            self._index_line(successor)
+            return True
         line.kind = str(kind)
         self._persist(path)
         return True
@@ -1196,6 +1274,15 @@ class FilePageStore:
         if not found:
             return False
         path, line = found
+        if isinstance(line, LedgerEntry):
+            if record_id not in {entry.id for entry in self._active_ledger_entries()}:
+                return False
+            confirmed = replace(
+                line,
+                meta=replace(line.meta, recorded_at=now_iso(), sequence=self._next_sequence()),
+            )
+            self._replace_ledger_entry(path, confirmed)
+            return True
         line.date = now_iso()[:10]
         self._persist(path)
         return True
@@ -1205,6 +1292,11 @@ class FilePageStore:
         if not found:
             return False
         path, line = found
+        if isinstance(line, LedgerEntry):
+            if record_id not in {entry.id for entry in self._active_ledger_entries()}:
+                return False
+            self._replace_ledger_entry(path, replace(line, pinned=bool(pinned)))
+            return True
         line.pinned = bool(pinned)
         self._persist(path)
         return True
@@ -1290,6 +1382,8 @@ class FilePageStore:
     async def prune(self) -> dict[str, int]:
         """Hard-delete tombstoned (superseded) lines from their pages + evict their
         vectors. Idempotent: a store with no superseded lines prunes nothing."""
+        if self._ledger_mode():
+            return {"records": 0}
         removed = 0
         for path, page in list(self._pages.items()):
             dead = [ln for ln in page.lines if ln.superseded]
@@ -1306,6 +1400,44 @@ class FilePageStore:
     async def wipe_except_pinned(self) -> dict[str, int]:
         """/init re-derivation primitive: delete every non-pinned line across all
         pages, keeping pinned survivors. Mirrors RecordStore.wipe_except_pinned."""
+        if self._ledger_mode():
+            active = self._active_ledger_entries()
+            victims = [entry for entry in active if not entry.pinned]
+            kept = sum(1 for entry in active if entry.pinned)
+            if not victims:
+                return {"deleted": 0, "kept_pinned": kept}
+            sequence = self._next_sequence()
+            retracts = []
+            for offset, entry in enumerate(victims):
+                recorded_at = now_iso()
+                source = SourceRef(
+                    "memory_operation",
+                    f"wipe:{entry.id}",
+                    captured_at=recorded_at,
+                )
+                retracts.append(
+                    LedgerEntry(
+                        id=uuid4().hex[:8],
+                        text=entry.text,
+                        kind=entry.kind,
+                        occurred_at=entry.occurred_at,
+                        entity=entry.entity,
+                        meta=LedgerMeta(
+                            recorded_at=recorded_at,
+                            sequence=sequence + offset,
+                            time_precision=entry.meta.time_precision,
+                            scope_kind=entry.meta.scope_kind,
+                            scope_key=entry.meta.scope_key,
+                            sources=union_source_refs(entry.meta.sources, (source,)),
+                            supersedes=(entry.id,),
+                            operation="retract",
+                        ),
+                    )
+                )
+            self.append_entries(retracts)
+            for entry in victims:
+                self._unindex_line(entry.id)
+            return {"deleted": len(victims), "kept_pinned": kept}
         deleted = kept = 0
         for path, page in list(self._pages.items()):
             keep = [ln for ln in page.lines if ln.pinned]
@@ -1338,6 +1470,17 @@ class FilePageStore:
         if not found:
             return
         path, line = found
+        if isinstance(line, LedgerEntry):
+            if record_id not in {entry.id for entry in self._active_ledger_entries()}:
+                return
+            updated = replace(
+                line,
+                entity=tuple(_slug(label) for label in (entity_labels or []) if _slug(label)),
+            )
+            page = self._pages[path]
+            page.frontmatter["meta_labels"] = sorted(set(labels))
+            self._replace_ledger_entry(path, updated)
+            return
         primary = _slug(entity_labels[0]) if entity_labels else None
         # Entity-place only records on the generic pages or an existing entity page;
         # project/directive-scoped records keep their page (scope precedence).
@@ -1358,11 +1501,13 @@ class FilePageStore:
     async def add_labels(self, record_id: str, labels: list[str], *, entity_labels: list[str] | None = None) -> None:
         await self.set_labels(record_id, labels, entity_labels=entity_labels)
 
-    def _record_entities(self, path: Path, line: Line) -> list[str]:
+    def _record_entities(self, path: Path, line: Line | LedgerEntry) -> list[str]:
         """Entity labels for one record: its per-line entity (so a sub-threshold record
         parked on me.md still surfaces its entity) plus any on the page frontmatter."""
         ents = list(self._entity_labels(path))
-        if line.entity:
+        if isinstance(line, LedgerEntry):
+            ents.extend(self._entity_display(entity) for entity in line.entity)
+        elif line.entity:
             ents.append(self._entity_display(line.entity))
         return ents
 
@@ -1389,16 +1534,28 @@ class FilePageStore:
         counts: dict[str, dict] = {}
         # Entity labels are counted per tagged active line — accurate per-entity
         # totals, including records still parked on me.md below the promotion threshold.
-        for page in self._pages.values():
-            for line in page.active_lines():
-                if not line.entity:
-                    continue
-                label = self._entity_display(line.entity)
-                row = counts.setdefault(label, {"label": label, "count": 0, "kind": "entity"})
-                row["count"] += 1
+        if self._ledger_mode():
+            for line in self._active_ledger_entries():
+                for entity in line.entity:
+                    label = self._entity_display(entity)
+                    row = counts.setdefault(label, {"label": label, "count": 0, "kind": "entity"})
+                    row["count"] += 1
+        else:
+            for page in self._pages.values():
+                for line in page.active_lines():
+                    if not line.entity:
+                        continue
+                    label = self._entity_display(line.entity)
+                    row = counts.setdefault(label, {"label": label, "count": 0, "kind": "entity"})
+                    row["count"] += 1
         # Meta labels are page-level category tags (no per-line refinement).
+        active_ids = {entry.id for entry in self._active_ledger_entries()} if self._ledger_mode() else set()
         for path, page in self._pages.items():
-            active = len(page.active_lines())
+            active = (
+                sum(1 for line in page.lines if isinstance(line, LedgerEntry) and line.id in active_ids)
+                if self._ledger_mode()
+                else len(page.active_lines())
+            )
             if not active:
                 continue
             for label in self._meta_labels(path):
@@ -1439,6 +1596,8 @@ class FilePageStore:
             predecessor_ids = tuple(dict.fromkeys((survivor_id, *(rid for rid in loser_ids if rid != survivor_id))))
             predecessors = [active[rid] for rid in predecessor_ids if rid in active]
             if not predecessors or predecessors[0].id != survivor_id or any(entry.pinned for entry in predecessors):
+                return None
+            if len({(entry.meta.scope_kind, entry.meta.scope_key) for entry in predecessors}) != 1:
                 return None
             survivor_entry = predecessors[0]
             recorded_at = now_iso()
@@ -1513,6 +1672,24 @@ class FilePageStore:
         """Fold the label `old` into `new` (lint canonicalization) across meta labels
         and entity tags, then reconcile the entity pages that changed."""
         old_slug, new_slug = _slug(old), _slug(new)
+        if self._ledger_mode():
+            for path, page in self._pages.items():
+                changed = False
+                updated_lines: list[Line | LedgerEntry] = []
+                for line in page.lines:
+                    if isinstance(line, LedgerEntry) and old_slug in line.entity:
+                        entities = tuple(dict.fromkeys(new_slug if entity == old_slug else entity for entity in line.entity))
+                        line = replace(line, entity=entities)
+                        changed = True
+                    updated_lines.append(line)
+                labels = page.frontmatter.get("meta_labels") or []
+                if old in labels:
+                    page.frontmatter["meta_labels"] = sorted({new if label == old else label for label in labels})
+                    changed = True
+                if changed:
+                    page.lines = updated_lines
+                    self._persist(path)
+            return
         touched_pages: set[Path] = set()
         touched_slugs: set[str] = set()
         for path, page in self._pages.items():
@@ -1541,6 +1718,22 @@ class FilePageStore:
             return 0  # meta->entity: can't faithfully map; leave the label untouched
         n = 0
         slug = _slug(label)
+        if self._ledger_mode():
+            for path, page in self._pages.items():
+                changed = False
+                updated_lines: list[Line | LedgerEntry] = []
+                for line in page.lines:
+                    if isinstance(line, LedgerEntry) and slug in line.entity:
+                        line = replace(line, entity=tuple(entity for entity in line.entity if entity != slug))
+                        changed = True
+                    updated_lines.append(line)
+                if changed:
+                    page.lines = updated_lines
+                    current = page.frontmatter.get("meta_labels") or []
+                    page.frontmatter["meta_labels"] = sorted({*current, label})
+                    self._persist(path)
+                    n += 1
+            return n
         for path, page in list(self._pages.items()):
             changed = False
             tagged = [ln for ln in page.lines if ln.entity == slug]

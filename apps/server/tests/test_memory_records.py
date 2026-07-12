@@ -631,6 +631,38 @@ async def _file_store(vault: Path, entries: list[LedgerEntry]) -> FilePageStore:
     return store
 
 
+async def _file_store_pages(vault: Path, pages: dict[str, list[LedgerEntry]], *, index=None) -> FilePageStore:
+    for page, entries in pages.items():
+        _write_ledger_vault(vault, entries, page)
+    store = FilePageStore(vault, search_index=index)
+    await store.open()
+    return store
+
+
+class _LedgerIndexStore:
+    def __init__(self):
+        self.ids: set[str] = set()
+
+    async def get_indexed_hashes(self, source):
+        assert source == "memory_line"
+        return dict.fromkeys(self.ids, (0, ""))
+
+
+class _LedgerIndex:
+    def __init__(self):
+        self.store = _LedgerIndexStore()
+
+    async def upsert(self, *, source, source_id, title, content, metadata=None):
+        assert source == "memory_line"
+        self.store.ids.add(source_id)
+        return True
+
+    async def delete(self, source, source_id):
+        assert source == "memory_line"
+        self.store.ids.discard(source_id)
+        return True
+
+
 async def test_page_active_entries_uses_relationship_graph_and_rejects_invalid_targets():
     first = _ledger_entry("first", "First", sequence=1)
     second = _ledger_entry("second", "Second", sequence=2, supersedes=("first",))
@@ -639,9 +671,8 @@ async def test_page_active_entries_uses_relationship_graph_and_rejects_invalid_t
     duplicate = _ledger_entry("first", "Duplicate", sequence=3)
     with pytest.raises(ValueError, match="duplicate ledger entry id"):
         Page(lines=[first, duplicate]).active_entries()
-    missing = _ledger_entry("third", "Missing", sequence=4, supersedes=("absent",))
-    with pytest.raises(ValueError, match="missing supersedes target"):
-        Page(lines=[missing]).active_entries()
+    external = _ledger_entry("third", "External", sequence=4, supersedes=("other-page",))
+    assert Page(lines=[external]).active_entries() == (external,)
 
 
 async def test_moving_page_does_not_change_record_scope(tmp_path: Path):
@@ -715,4 +746,133 @@ async def test_merge_appends_one_successor_for_all_predecessors_and_unions_evide
     assert successor.meta.supersedes == ("r1", "r2", "r3")
     assert successor.meta.sources == sources
     assert {record.id for record in await store.list()} == {successor.id}
+    await store.close()
+
+
+async def test_v2_non_lifecycle_mutations_replace_immutable_entry_in_place(tmp_path: Path):
+    vault = tmp_path / "memory"
+    entry = _ledger_entry("record", "Fact", sequence=1)
+    store = await _file_store(vault, [entry])
+
+    assert await store.confirm(entry.id) is True
+    assert await store.set_pinned(entry.id, True) is True
+    await store.set_labels(entry.id, ["work"], entity_labels=["Dex"])
+
+    current = await store.get(entry.id)
+    assert current is not None
+    assert current.id == entry.id
+    assert current.pinned is True
+    assert len(store.history(entry.id)) == 1
+    assert await store.labels_of(entry.id) == ["Dex", "work"]
+
+    await store.rename_label("Dex", "Ntrp")
+    assert await store.labels_of(entry.id) == ["Ntrp", "work"]
+    assert await store.set_label_kind("Ntrp", "meta") == 1
+    assert await store.labels_of(entry.id) == ["Ntrp", "work"]
+    await store.close()
+
+
+async def test_v2_set_kind_appends_successor(tmp_path: Path):
+    vault = tmp_path / "memory"
+    store = await _file_store(vault, [_ledger_entry("record", "Rule", sequence=1)])
+
+    assert await store.set_kind("record", Kind.DIRECTIVE) is True
+
+    history = store.history("record")
+    assert [entry.kind for entry in history] == [Kind.FACT, Kind.DIRECTIVE]
+    assert history[-1].meta.supersedes == ("record",)
+    assert await store.get("record") is None
+    assert (await store.get(history[-1].id)).kind == Kind.DIRECTIVE
+    await store.close()
+
+
+async def test_v2_supersede_keeps_existing_successor_active_and_reopens(tmp_path: Path):
+    vault = tmp_path / "memory"
+    old = _ledger_entry("old", "Old", sequence=1)
+    new = _ledger_entry("new", "New", sequence=2)
+    store = await _file_store(vault, [old, new])
+
+    assert await store.supersede(old.id, new.id) is True
+    assert await store.get(old.id) is None
+    assert (await store.get(new.id)).text == "New"
+    assert [entry.meta.operation for entry in store.history(old.id)] == ["record", "retract"]
+    await store.close()
+
+    reopened = FilePageStore(vault)
+    await reopened.open()
+    assert await reopened.get(old.id) is None
+    assert (await reopened.get(new.id)).text == "New"
+    await reopened.close()
+
+
+async def test_v2_prune_is_idempotent_and_preserves_history(tmp_path: Path):
+    vault = tmp_path / "memory"
+    store = await _file_store(vault, [_ledger_entry("record", "Old", sequence=1)])
+    await store.update("record", "New")
+    before = (vault / "raw" / "topics" / "a.md").read_text(encoding="utf-8")
+
+    assert await store.prune() == {"records": 0}
+    assert await store.prune() == {"records": 0}
+    assert (vault / "raw" / "topics" / "a.md").read_text(encoding="utf-8") == before
+    assert len(store.history("record")) == 2
+    await store.close()
+
+
+async def test_v2_wipe_appends_retracts_and_preserves_pinned_history(tmp_path: Path):
+    vault = tmp_path / "memory"
+    pinned = _ledger_entry("pinned", "Pinned", sequence=1)
+    disposable = _ledger_entry("drop", "Drop", sequence=2)
+    store = await _file_store(vault, [pinned, disposable])
+    await store.set_pinned(pinned.id, True)
+
+    assert await store.wipe_except_pinned() == {"deleted": 1, "kept_pinned": 1}
+    assert await store.wipe_except_pinned() == {"deleted": 0, "kept_pinned": 1}
+    assert (await store.get(pinned.id)).pinned is True
+    assert await store.get(disposable.id) is None
+    assert [entry.meta.operation for entry in store.history(disposable.id)] == ["record", "retract"]
+    assert "Drop" in (vault / "raw" / "topics" / "a.md").read_text(encoding="utf-8")
+    await store.close()
+
+
+async def test_cross_page_merge_uses_global_graph_for_index_and_labels_after_reopen(tmp_path: Path):
+    vault = tmp_path / "memory"
+    index = _LedgerIndex()
+    first = _ledger_entry("first", "Shared fact one", sequence=1, scope_kind="area", scope_key="a1")
+    second = _ledger_entry("second", "Shared fact two", sequence=2, scope_kind="area", scope_key="a1")
+    store = await _file_store_pages(
+        vault,
+        {"topics/a.md": [first], "notes/b.md": [second]},
+        index=index,
+    )
+    await store.set_labels(first.id, ["survivor"], entity_labels=["Alpha"])
+    await store.set_labels(second.id, ["loser"], entity_labels=["Beta"])
+
+    merged = await store.merge(first.id, [second.id], text="Shared merged fact")
+    await _drain()
+
+    assert merged is not None
+    assert index.store.ids == {merged.id}
+    labels = {row["label"]: row["count"] for row in await store.list_labels()}
+    assert labels.get("Beta", 0) == 0
+    assert labels["Alpha"] == 1
+    await store.close()
+
+    reopened = FilePageStore(vault)
+    await reopened.open()
+    assert {record.id for record in await reopened.list()} == {merged.id}
+    assert len(reopened.history(first.id)) == 3
+    assert {row["label"] for row in await reopened.list_labels()} >= {"Alpha", "survivor"}
+    await reopened.close()
+
+
+async def test_cross_scope_merge_is_rejected_without_deactivation(tmp_path: Path):
+    vault = tmp_path / "memory"
+    first = _ledger_entry("first", "Area one", sequence=1, scope_kind="area", scope_key="a1")
+    second = _ledger_entry("second", "Area two", sequence=2, scope_kind="area", scope_key="a2")
+    store = await _file_store_pages(vault, {"topics/a.md": [first], "topics/b.md": [second]})
+
+    assert await store.merge(first.id, [second.id], text="Must reject") is None
+    assert {record.id for record in await store.list()} == {first.id, second.id}
+    assert store.history(first.id) == (first,)
+    assert store.history(second.id) == (second,)
     await store.close()

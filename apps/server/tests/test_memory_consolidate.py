@@ -22,8 +22,8 @@ from pathlib import Path
 import pytest
 
 from ntrp.memory.consolidate import Consolidate, ConsolidateReport
-from ntrp.memory.models import SourceRef
-from ntrp.memory.prompts_consolidate import LabelOps, LintOps
+from ntrp.memory.models import Record, SourceRef
+from ntrp.memory.prompts_consolidate import LabelOps, LintOps, RetypeOp
 from ntrp.memory.records import RecordStore
 from tests.conftest import completion_response
 
@@ -113,6 +113,39 @@ async def test_file_store_set_label_kind_meta_to_entity_is_not_data_loss(tmp_pat
     assert changed == 0
     assert any(l["label"] == "Bug" for l in await store.list_labels()), "meta label must survive"
     await store.close()
+
+
+async def test_retype_tracks_successor_id_and_initiating_evidence(tmp_path: Path):
+    target = Record(id="old", text="Always verify", kind="fact", scope_kind="user")
+
+    class Store:
+        source_ref = None
+
+        async def supersede_with(self, old_id, **kwargs):
+            assert old_id == target.id
+            self.source_ref = kwargs["source_ref"]
+            return Record(
+                id="new",
+                text=kwargs["text"],
+                kind=kwargs["kind"],
+                scope_kind=kwargs["scope_kind"],
+                scope_key=kwargs["scope_key"],
+                source_ref=kwargs["source_ref"],
+            )
+
+    store = Store()
+    consolidate = Consolidate(store, None, model="memory-model", db_path=tmp_path / "meta.db")
+    live = {target.id: target}
+    report = ConsolidateReport()
+
+    await consolidate._apply_retype(RetypeOp(record_id=target.id, kind="directive"), live, report)
+
+    assert set(live) == {"new"}
+    assert live["new"].kind == "directive"
+    assert store.source_ref.kind == "consolidate"
+    assert store.source_ref.ref == "retype:old"
+    assert report.retyped == 1
+    await consolidate.close()
 
 
 # --- merge --------------------------------------------------------------------
