@@ -46,7 +46,13 @@ class VaultJournal:
             return ""
         return revision if self._valid_hash(revision) else ""
 
-    def prepare(self, files: Mapping[Path, bytes], *, _allow_migration_meta: bool = False) -> PreparedCommit:
+    def prepare(
+        self,
+        files: Mapping[Path, bytes],
+        *,
+        _allow_migration_meta: bool = False,
+        _publish_revision: bool = True,
+    ) -> PreparedCommit:
         self._validate_metadata_paths()
         rows: list[dict[str, object]] = []
         payloads: list[tuple[bytes, bytes]] = []
@@ -79,9 +85,12 @@ class VaultJournal:
         if not rows:
             raise ValueError("journal commit requires at least one file")
 
+        manifest = {"version": _VERSION, "previous_revision": self.canonical_revision, "files": rows}
+        if not _publish_revision:
+            manifest["publish_revision"] = False
         manifest_bytes = (
             json.dumps(
-                {"version": _VERSION, "previous_revision": self.canonical_revision, "files": rows},
+                manifest,
                 sort_keys=True,
                 separators=(",", ":"),
             )
@@ -132,6 +141,13 @@ class VaultJournal:
             self._remove_empty_journal_root()
             raise
         return prepared.manifest_hash
+
+    def commit_projection(self, files: Mapping[Path, bytes]) -> None:
+        """Atomically replace a derived file set without advancing canonical revision."""
+        self.recover()
+        prepared = self.prepare(files, _publish_revision=False)
+        manifest = self._load_manifest(prepared.path)
+        self._finish(prepared.path, manifest, prepared.commit_id)
 
     def commit_migration(self, files: Mapping[Path, bytes]) -> str:
         self.recover()
@@ -218,7 +234,8 @@ class VaultJournal:
                 self._restore(commit_path, manifest)
                 self._remove_commit(commit_path)
             elif self._targets_match(manifest):
-                self._publish_revision(commit_id)
+                if manifest.get("publish_revision", True):
+                    self._publish_revision(commit_id)
                 self._remove_commit(commit_path)
             elif self._artifacts_match(commit_path, manifest, "staged", "sha256"):
                 self._finish(commit_path, manifest, commit_id)
@@ -241,7 +258,8 @@ class VaultJournal:
         self._write_fsynced(commit_path / "COMMITTED", b"")
         self._fsync_dir(commit_path)
         self._checkpoint("after_committed")
-        self._publish_revision(commit_id)
+        if manifest.get("publish_revision", True):
+            self._publish_revision(commit_id)
         self._remove_commit(commit_path)
         self._remove_empty_journal_root()
 
@@ -274,6 +292,8 @@ class VaultJournal:
         previous_revision = manifest.get("previous_revision", "")
         if not isinstance(previous_revision, str) or (previous_revision and not self._valid_hash(previous_revision)):
             raise RuntimeError(f"invalid previous canonical revision: {commit_path.name}")
+        if not isinstance(manifest.get("publish_revision", True), bool):
+            raise RuntimeError(f"invalid revision publication mode: {commit_path.name}")
         manifest["previous_revision"] = previous_revision
         if not isinstance(rows, list) or not rows:
             raise RuntimeError(f"invalid journal file set: {commit_path.name}")

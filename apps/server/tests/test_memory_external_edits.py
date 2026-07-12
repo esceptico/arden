@@ -375,17 +375,117 @@ async def test_editable_page_read_cannot_escape_on_parent_swap(
     original_open = __import__("os").open
     swapped = False
 
-    def swap_before_absolute_open(path, *args, **kwargs):
+    def swap_before_anchored_component_open(path, *args, **kwargs):
         nonlocal swapped
-        if not swapped and path == page:
+        if not swapped and path == "topics" and kwargs.get("dir_fd") is not None:
             swapped = True
             page.parent.rename(vault / "topics-real")
             page.parent.symlink_to(outside, target_is_directory=True)
         return original_open(path, *args, **kwargs)
 
-    monkeypatch.setattr("os.open", swap_before_absolute_open)
+    monkeypatch.setattr("os.open", swap_before_anchored_component_open)
 
     assert b"SECRET" not in store._editable_page_bytes().values()
+    assert swapped is True
+    await store.close()
+
+
+async def test_matching_old_engine_event_without_marker_never_suppresses_external_edit(tmp_path: Path):
+    vault = tmp_path / "memory"
+    store, page = await _store(vault)
+    service = PageEditService(vault, store, reconciler=Reconciler((RecordOperation.noop(),)))
+    base = page.read_bytes()
+    result = base + b"\nSame transition.\n"
+    preview = await service.preview(
+        path="topics/a.md",
+        base_revision=page_revision(base),
+        content=result,
+        actor="agent:test",
+        origin="agent",
+    )
+    await service.apply(preview.id, decisions={})
+    await store.refresh_from_disk()
+    page.write_bytes(base)
+    reverted = next(change for change in await store.refresh_from_disk() if isinstance(change, ObservedFileChange))
+    store.acknowledge_observed_change(reverted)
+    page.write_bytes(result)
+    repeated = next(change for change in await store.refresh_from_disk() if isinstance(change, ObservedFileChange))
+
+    event = await service.ingest_external(repeated)
+
+    assert event is not None and event.origin == "external"
+    assert len(service.history(path="topics/a.md")) == 2
+    await store.close()
+
+
+async def test_unbound_exact_result_marker_is_pruned_without_suppression(tmp_path: Path):
+    vault = tmp_path / "memory"
+    store, page = await _store(vault)
+    base = page.read_bytes()
+    result = base + b"\nExternal matching bytes.\n"
+    state = _observed(vault)
+    state["engine_writes"].append(
+        {
+            "origin": "synthesis",
+            "path": "topics/a.md",
+            "base_revision": page_revision(base),
+            "base_exists": True,
+            "result_revision": page_revision(result),
+            "result_exists": True,
+            "event_id": None,
+            "batch_key": None,
+            "entry_ids": [],
+        }
+    )
+    store._store_observed_base(result)
+    store._write_observed_state(state)
+    page.write_bytes(result)
+
+    change = next(change for change in await store.refresh_from_disk() if isinstance(change, ObservedFileChange))
+
+    assert change.origin == "external"
+    assert _observed(vault)["engine_writes"] == []
+    await store.close()
+
+
+async def test_live_synthesis_write_uses_atomic_receipt_for_crash_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    vault = tmp_path / "memory"
+    store, page = await _store(vault)
+    store._pages[page].prose += "\nSynthesized live.\n"
+    commit = store._journal.commit_projection
+
+    def commit_then_crash(files, **kwargs):
+        commit(files, **kwargs)
+        raise RuntimeError("crash after synthesis commit")
+
+    monkeypatch.setattr(store._journal, "commit_projection", commit_then_crash)
+    with pytest.raises(RuntimeError, match="crash after synthesis commit"):
+        store._persist(page)
+    await store.close()
+
+    reopened = FilePageStore(vault)
+    await reopened.open()
+    change = next(change for change in await reopened.refresh_from_disk() if isinstance(change, ObservedFileChange))
+
+    assert change.path == "topics/a.md"
+    assert change.origin == "synthesis"
+    await reopened.close()
+
+
+async def test_engine_deletion_moves_page_to_durable_receipt_before_suppression(tmp_path: Path):
+    vault = tmp_path / "memory"
+    store, page = await _store(vault)
+    before = page.read_bytes()
+
+    store._remove_page_files(page)
+    marker = next(marker for marker in _observed(vault)["engine_writes"] if marker["path"] == "topics/a.md")
+    change = next(change for change in await store.refresh_from_disk() if isinstance(change, ObservedFileChange))
+
+    assert change.origin == "synthesis"
+    receipt = vault / marker["delete_receipt"]
+    assert receipt.read_bytes() == before
     await store.close()
 
 
@@ -459,8 +559,12 @@ async def test_stale_engine_markers_are_pruned_without_a_file_change_and_track_e
     base = page.read_bytes()
     first = base + b"\nR1.\n"
     second = first + b"\nR2.\n"
-    store.register_engine_write("topics/a.md", first, origin="synthesis")
-    store.register_engine_write("topics/a.md", second, origin="synthesis")
+    store.register_engine_write_intent(
+        "topics/a.md", first, origin="synthesis", event_id="missing-first"
+    )
+    store.register_engine_write_intent(
+        "topics/a.md", second, origin="synthesis", event_id="missing-second"
+    )
 
     assert await store.refresh_from_disk() == []
     assert _observed(vault)["engine_writes"] == []
@@ -471,7 +575,9 @@ async def test_stale_engine_markers_are_pruned_without_a_file_change_and_track_e
     store.acknowledge_observed_change(change)
 
     page.write_bytes(b"")
-    store.register_engine_write("topics/a.md", None, origin="synthesis")
+    store.register_engine_write_intent(
+        "topics/a.md", None, origin="synthesis", event_id="missing-delete"
+    )
     empty_change = next(change for change in await store.refresh_from_disk() if isinstance(change, ObservedFileChange))
     assert empty_change.origin == "external"
     await store.close()

@@ -189,16 +189,6 @@ class PageEditService:
         if existing is not None:
             self._store.acknowledge_observed_change(change)
             return existing
-        latest = path_history[-1] if path_history else None
-        if (
-            latest is not None
-            and latest.origin != "external"
-            and latest.base_revision == change.base_revision
-            and latest.result_revision == change.result_revision
-            and latest.patch == patch
-        ):
-            self._store.acknowledge_observed_change(change)
-            return None
         try:
             current = self._resources.read_resource_bytes(safe_path)
         except FileNotFoundError:

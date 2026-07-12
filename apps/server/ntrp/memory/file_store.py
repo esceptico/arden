@@ -64,6 +64,7 @@ _RESOURCE_SUFFIXES = {".md", ".txt"}
 _INTERNAL_DIRS = {".ntrp", ".index", ".maintenance"}
 _OBSERVED_STATE = Path(".ntrp/maintenance/observed-pages.json")
 _OBSERVED_BASES = Path(".ntrp/maintenance/observed-page-bases")
+_WRITE_RECEIPTS = Path("raw/write-receipts")
 # Canonical, properly-cased titles for the fixed structural pages (root). Keeps the
 # index + Obsidian note titles clean ("Me", not "me") and self-heals contamination.
 _STRUCTURAL_TITLES = {
@@ -562,7 +563,11 @@ class FilePageStore:
         event_id: str | None = None,
         batch_key: str | None = None,
         entry_ids: tuple[str, ...] = (),
+        receipt_id: str | None = None,
+        delete_receipt: str | None = None,
     ) -> None:
+        if not any((event_id, batch_key, entry_ids, receipt_id, delete_receipt)):
+            raise ValueError("engine write intent requires a durable receipt")
         state = self._read_observed_state()
         if not state:
             return
@@ -583,18 +588,11 @@ class FilePageStore:
             "event_id": event_id,
             "batch_key": batch_key,
             "entry_ids": list(entry_ids),
+            "receipt_id": receipt_id,
+            "delete_receipt": delete_receipt,
         }
         state["engine_writes"].append(marker)
         self._write_observed_state(state)
-
-    def register_engine_write(
-        self,
-        path: str,
-        content: bytes | None,
-        *,
-        origin: Literal["desktop", "agent", "synthesis"],
-    ) -> None:
-        self.register_engine_write_intent(path, content, origin=origin)
 
     def acknowledge_observed_change(self, change: ObservedFileChange) -> None:
         state = self._read_observed_state()
@@ -641,7 +639,7 @@ class FilePageStore:
                 return True
         return False
 
-    def _engine_marker_committed(self, marker: dict, current: bytes | None) -> bool:
+    def _engine_marker_committed(self, marker: dict) -> bool:
         if event_id := marker.get("event_id"):
             return self._page_edit_event_committed(event_id)
         if batch_key := marker.get("batch_key"):
@@ -649,10 +647,27 @@ class FilePageStore:
         if entry_ids := marker.get("entry_ids"):
             committed_ids = {entry.id for entry in self._ledger_entries()}
             return set(entry_ids).issubset(committed_ids)
-        return (
-            marker.get("result_exists") == (current is not None)
-            and marker.get("result_revision") == self._content_revision(current)
-        )
+        if receipt_id := marker.get("receipt_id"):
+            raw = self._safe_read_bytes(self._root / _WRITE_RECEIPTS / f"{receipt_id}.json")
+            if raw is None:
+                return False
+            try:
+                receipt = json.loads(raw)
+            except (UnicodeError, json.JSONDecodeError):
+                return False
+            row = receipt.get("paths", {}).get(marker.get("path"))
+            return row == {
+                "revision": marker.get("result_revision"),
+                "exists": marker.get("result_exists"),
+            }
+        if delete_receipt := marker.get("delete_receipt"):
+            moved = self._safe_read_bytes(self._root / delete_receipt)
+            return (
+                marker.get("result_exists") is False
+                and moved is not None
+                and self._content_revision(moved) == marker.get("base_revision")
+            )
+        return False
 
     def _observed_page_changes(self) -> list[ObservedFileChange]:
         state = self._read_observed_state()
@@ -713,7 +728,7 @@ class FilePageStore:
                         continue
                 cursor_revision = marker.get("result_revision")
                 cursor_exists = marker.get("result_exists")
-                if self._engine_marker_committed(marker, after):
+                if self._engine_marker_committed(marker):
                     matching_marker = marker
             if path_markers:
                 state_changed = True
@@ -1546,19 +1561,46 @@ class FilePageStore:
             projections.pop(self._root / rel, None)
             if self._root / rel in empty_raw:
                 empty_raw.remove(self._root / rel)
+        publishes_canonical_revision = bool(staged)
+        tracked_paths: dict[Path, bytes | None] = {}
         for path in sorted(set(paths)):
             rel = path.relative_to(self._root)
             content = staged.get(rel)
             if content is None and path in projections:
                 content = projections[path].encode()
-            self.register_engine_write_intent(
-                rel.as_posix(),
-                content,
-                origin="synthesis",
-                entry_ids=engine_entry_ids,
-            )
+            tracked_paths[rel] = content
+        receipt_id = None
+        tracking_active = bool(self._read_observed_state())
+        if tracking_active and tracked_paths and not engine_entry_ids:
+            receipt_id = uuid4().hex
+            rows = {
+                rel.as_posix(): {
+                    "revision": self._content_revision(content),
+                    "exists": content is not None,
+                }
+                for rel, content in tracked_paths.items()
+            }
+            for rel, content in tracked_paths.items():
+                if content is not None:
+                    staged[rel] = content
+                    projections.pop(self._root / rel, None)
+            staged[_WRITE_RECEIPTS / f"{receipt_id}.json"] = (
+                json.dumps({"id": receipt_id, "paths": rows}, sort_keys=True, separators=(",", ":")) + "\n"
+            ).encode()
+        if tracking_active:
+            for rel, content in tracked_paths.items():
+                self.register_engine_write_intent(
+                    rel.as_posix(),
+                    content,
+                    origin="synthesis",
+                    entry_ids=engine_entry_ids,
+                    receipt_id=receipt_id,
+                )
         if staged:
-            self._journal.commit(staged)
+            if publishes_canonical_revision:
+                self._journal.commit(staged)
+            else:
+                self._journal.commit_projection(staged)
         for path, text in projections.items():
             self._write_atomic(path, text)
         self._journal.unlink_files_safely(tuple(path.relative_to(self._root) for path in empty_raw))
@@ -1566,15 +1608,61 @@ class FilePageStore:
         self._notify_post_canonical_commit()
 
     def _remove_page_files(self, path: Path) -> None:
-        self.register_engine_write_intent(
-            path.relative_to(self._root).as_posix(),
-            None,
-            origin="synthesis",
-        )
-        self._journal.unlink_files_safely(
-            (path.relative_to(self._root), self._raw_path(path).relative_to(self._root))
-        )
+        rel = path.relative_to(self._root)
+        raw_rel = self._raw_path(path).relative_to(self._root)
+        visible = self._safe_read_bytes(path)
+        if self._read_observed_state() and visible is not None:
+            receipt_id = uuid4().hex
+            visible_receipt = _WRITE_RECEIPTS / "deletions" / f"{receipt_id}.page.bin"
+            self.register_engine_write_intent(
+                rel.as_posix(),
+                None,
+                origin="synthesis",
+                delete_receipt=visible_receipt.as_posix(),
+            )
+            self._move_to_receipt(rel, visible_receipt)
+            raw_receipt = _WRITE_RECEIPTS / "deletions" / f"{receipt_id}.raw.bin"
+            self._move_to_receipt(raw_rel, raw_receipt)
+        else:
+            self._journal.unlink_files_safely((rel, raw_rel))
         self._file_state = self._scan_files()
+
+    def _move_to_receipt(self, source: Path, receipt: Path) -> bool:
+        from ntrp.memory.artifacts import ArtifactMemoryStore
+
+        resources = ArtifactMemoryStore(self._root)
+        try:
+            source_fd, source_name = resources.open_anchored_parent(source)
+        except FileNotFoundError:
+            return False
+        receipt_fd = -1
+        try:
+            try:
+                source_st = os.stat(source_name, dir_fd=source_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                return False
+            if stat.S_ISLNK(source_st.st_mode) or not stat.S_ISREG(source_st.st_mode):
+                raise ValueError(f"engine delete source is unsafe: {source}")
+            receipt_fd, receipt_name = resources.open_anchored_parent(receipt, create_parents=True)
+            try:
+                os.stat(receipt_name, dir_fd=receipt_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                raise FileExistsError(receipt.as_posix())
+            os.rename(
+                source_name,
+                receipt_name,
+                src_dir_fd=source_fd,
+                dst_dir_fd=receipt_fd,
+            )
+            os.fsync(source_fd)
+            os.fsync(receipt_fd)
+            return True
+        finally:
+            os.close(source_fd)
+            if receipt_fd >= 0:
+                os.close(receipt_fd)
 
     def _find(self, record_id: str) -> tuple[Path, Line | LedgerEntry] | None:
         path = self._loc.get(record_id)
