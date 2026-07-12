@@ -45,14 +45,14 @@ test("renders exact raw Markdown locally with wrapping, line numbers, and select
   expect(renderer.style.transition).toBe("none");
   expect(host.querySelector("diffs-container")).toBeNull();
 
-  const beforePane = host.querySelector<HTMLElement>('[aria-label="Before raw Markdown"]')!;
-  const afterPane = host.querySelector<HTMLElement>('[aria-label="After raw Markdown"]')!;
-  expect(beforePane.textContent).toContain("scope: user");
-  expect(beforePane.textContent).toContain("old  ");
-  expect(afterPane.textContent).toContain("new\t");
-  expect(beforePane.querySelector('[data-line-number="5"]')).not.toBeNull();
-  expect(afterPane.querySelector('[data-line-number="5"]')).not.toBeNull();
-  expect(afterPane.querySelector<HTMLElement>('[data-raw-line]')?.style.whiteSpace).toBe("pre-wrap");
+  const beforeCells = Array.from(host.querySelectorAll<HTMLElement>('[data-side="before"]'));
+  const afterCells = Array.from(host.querySelectorAll<HTMLElement>('[data-side="after"]'));
+  expect(beforeCells.map((cell) => cell.textContent).join("\n")).toContain("scope: user");
+  expect(beforeCells.map((cell) => cell.textContent).join("\n")).toContain("old  ");
+  expect(afterCells.map((cell) => cell.textContent).join("\n")).toContain("new\t");
+  expect(host.querySelector('[data-side="before"] [data-line-number="5"]')).not.toBeNull();
+  expect(host.querySelector('[data-side="after"] [data-line-number="5"]')).not.toBeNull();
+  expect(host.querySelector<HTMLElement>('[data-side="after"] [data-raw-line]')?.style.whiteSpace).toBe("pre-wrap");
 });
 
 test("collapses unchanged regions and expands them with keyboard activation", async () => {
@@ -70,6 +70,7 @@ test("collapses unchanged regions and expands them with keyboard activation", as
 
   const expand = host.querySelector<HTMLButtonElement>('button[aria-label="Show 17 unchanged lines"]')!;
   expect(expand).not.toBeNull();
+  expect(expand.closest('[role="cell"]')?.getAttribute("aria-colspan")).toBe("2");
   expect(host.textContent).not.toContain("shared 10");
   await act(async () => {
     expand.focus();
@@ -77,6 +78,75 @@ test("collapses unchanged regions and expands them with keyboard activation", as
   });
   expect(host.textContent).toContain("shared 10");
   expect(document.activeElement).toBe(expand);
+});
+
+test("preserves repeated unchanged lines as ordered context", async () => {
+  const { host, root } = setup();
+  await act(async () => root.render(
+    <RawDiffRenderer
+      before={{ path: "repeated.md", content: "old A\nsame\nsame\nsame\nold B" }}
+      after={{ path: "repeated.md", content: "new A\nsame\nsame\nsame\nnew B" }}
+      layout="split"
+    />,
+  ));
+
+  const contextRows = host.querySelectorAll('[data-paired-row][data-context-row="true"]');
+  expect(contextRows.length).toBe(3);
+  for (const row of contextRows) {
+    expect(row.querySelector('[data-side="before"]')?.textContent).toContain("same");
+    expect(row.querySelector('[data-side="after"]')?.textContent).toContain("same");
+    expect(row.querySelector("[data-change-line]")).toBeNull();
+  }
+});
+
+test("split rows align one-sided deletions and additions with explicit placeholders", async () => {
+  const { host, root } = setup();
+  await act(async () => root.render(
+    <RawDiffRenderer
+      before={{ path: "alignment.md", content: "alpha\nremoved only\nshared\nomega" }}
+      after={{ path: "alignment.md", content: "alpha\nshared\nadded one\nadded two\nomega" }}
+      layout="split"
+    />,
+  ));
+
+  const rows = Array.from(host.querySelectorAll<HTMLElement>("[data-paired-row]"));
+  const deletion = rows.find((row) => row.textContent?.includes("removed only"));
+  expect(deletion).not.toBeUndefined();
+  expect(deletion?.querySelector('[data-change-line="removed"]')).not.toBeNull();
+  expect(deletion?.querySelector('[data-placeholder="after"]')).not.toBeNull();
+
+  const addition = rows.find((row) => row.textContent?.includes("added one"));
+  expect(addition).not.toBeUndefined();
+  expect(addition?.querySelector('[data-placeholder="before"]')).not.toBeNull();
+  expect(addition?.querySelector('[data-change-line="added"]')).not.toBeNull();
+
+  const omega = rows.find((row) => row.textContent?.includes("omega"));
+  expect(omega).not.toBeUndefined();
+  expect(omega?.querySelector('[data-side="before"]')?.textContent).toContain("omega");
+  expect(omega?.querySelector('[data-side="after"]')?.textContent).toContain("omega");
+});
+
+test("split cells with unequal wrapping share one logical grid row", async () => {
+  const long = "new " + "wrapped content ".repeat(30);
+  const { host, root } = setup();
+  await act(async () => root.render(
+    <RawDiffRenderer
+      before={{ path: "wrap.md", content: "old short" }}
+      after={{ path: "wrap.md", content: long }}
+      layout="split"
+    />,
+  ));
+
+  const row = host.querySelector<HTMLElement>('[data-paired-row][data-change-row="true"]')!;
+  expect(row).not.toBeNull();
+  expect(row.className).toContain("grid");
+  expect(row.className).toContain("items-stretch");
+  const beforeCell = row.querySelector<HTMLElement>('[data-side="before"]')!;
+  const afterCell = row.querySelector<HTMLElement>('[data-side="after"]')!;
+  expect(beforeCell.parentElement).toBe(row);
+  expect(afterCell.parentElement).toBe(row);
+  expect(afterCell.textContent).toContain("wrapped content");
+  expect(afterCell.querySelector<HTMLElement>('[data-raw-line]')?.style.whiteSpace).toBe("pre-wrap");
 });
 
 test("renders a 5,000-line file with a substantial changed block", async () => {

@@ -70,6 +70,123 @@ function lines(content: string) {
   return content === "" ? [] : content.split("\n");
 }
 
+interface LineAnchor {
+  before: number;
+  after: number;
+}
+
+function lcsPrefixLengths(
+  first: string[],
+  firstStart: number,
+  firstEnd: number,
+  second: string[],
+  secondStart: number,
+  secondEnd: number,
+) {
+  const secondLength = secondEnd - secondStart;
+  let previous = new Uint32Array(secondLength + 1);
+  let current = new Uint32Array(secondLength + 1);
+  for (let firstIndex = firstStart; firstIndex < firstEnd; firstIndex += 1) {
+    current[0] = 0;
+    for (let offset = 1; offset <= secondLength; offset += 1) {
+      current[offset] = first[firstIndex] === second[secondStart + offset - 1]
+        ? previous[offset - 1] + 1
+        : Math.max(previous[offset], current[offset - 1]);
+    }
+    [previous, current] = [current, previous];
+  }
+  return previous;
+}
+
+function lcsSuffixLengths(
+  first: string[],
+  firstStart: number,
+  firstEnd: number,
+  second: string[],
+  secondStart: number,
+  secondEnd: number,
+) {
+  const secondLength = secondEnd - secondStart;
+  let previous = new Uint32Array(secondLength + 1);
+  let current = new Uint32Array(secondLength + 1);
+  for (let firstIndex = firstEnd - 1; firstIndex >= firstStart; firstIndex -= 1) {
+    current[secondLength] = 0;
+    for (let offset = secondLength - 1; offset >= 0; offset -= 1) {
+      current[offset] = first[firstIndex] === second[secondStart + offset]
+        ? previous[offset + 1] + 1
+        : Math.max(previous[offset], current[offset + 1]);
+    }
+    [previous, current] = [current, previous];
+  }
+  return previous;
+}
+
+function lcsSplit(
+  first: string[],
+  firstStart: number,
+  firstMiddle: number,
+  firstEnd: number,
+  second: string[],
+  secondStart: number,
+  secondEnd: number,
+) {
+  const prefix = lcsPrefixLengths(first, firstStart, firstMiddle, second, secondStart, secondEnd);
+  const suffix = lcsSuffixLengths(first, firstMiddle, firstEnd, second, secondStart, secondEnd);
+  let bestOffset = 0;
+  let bestLength = -1;
+  for (let offset = 0; offset < prefix.length; offset += 1) {
+    const length = prefix[offset] + suffix[offset];
+    if (length > bestLength) {
+      bestLength = length;
+      bestOffset = offset;
+    }
+  }
+  return secondStart + bestOffset;
+}
+
+function collectOrderedMatches(
+  first: string[],
+  firstStart: number,
+  firstEnd: number,
+  second: string[],
+  secondStart: number,
+  secondEnd: number,
+  matches: LineAnchor[],
+) {
+  const firstLength = firstEnd - firstStart;
+  const secondLength = secondEnd - secondStart;
+  if (firstLength === 0 || secondLength === 0) return;
+  if (firstLength === 1) {
+    for (let secondIndex = secondStart; secondIndex < secondEnd; secondIndex += 1) {
+      if (first[firstStart] !== second[secondIndex]) continue;
+      matches.push({ before: firstStart, after: secondIndex });
+      return;
+    }
+    return;
+  }
+  if (secondLength === 1) {
+    for (let firstIndex = firstStart; firstIndex < firstEnd; firstIndex += 1) {
+      if (first[firstIndex] !== second[secondStart]) continue;
+      matches.push({ before: firstIndex, after: secondStart });
+      return;
+    }
+    return;
+  }
+
+  const firstMiddle = firstStart + Math.floor(firstLength / 2);
+  const secondMiddle = lcsSplit(
+    first,
+    firstStart,
+    firstMiddle,
+    firstEnd,
+    second,
+    secondStart,
+    secondEnd,
+  );
+  collectOrderedMatches(first, firstStart, firstMiddle, second, secondStart, secondMiddle, matches);
+  collectOrderedMatches(first, firstMiddle, firstEnd, second, secondMiddle, secondEnd, matches);
+}
+
 export function buildDiffLineGroups(before: string, after: string): DiffLineGroup[] {
   const beforeLines = lines(before);
   const afterLines = lines(after);
@@ -87,51 +204,34 @@ export function buildDiffLineGroups(before: string, after: string): DiffLineGrou
     && beforeLines[beforeLines.length - suffix - 1] === afterLines[afterLines.length - suffix - 1]
   ) suffix += 1;
 
-  const beforeCounts = new Map<string, number>();
-  const afterPositions = new Map<string, number[]>();
-  for (const line of beforeLines) beforeCounts.set(line, (beforeCounts.get(line) ?? 0) + 1);
-  for (let index = 0; index < afterLines.length; index += 1) {
-    const line = afterLines[index];
-    const positions = afterPositions.get(line) ?? [];
-    positions.push(index);
-    afterPositions.set(line, positions);
-  }
-
-  const candidates: Array<{ before: number; after: number }> = [];
-  for (let index = prefix; index < beforeLines.length - suffix; index += 1) {
-    const line = beforeLines[index];
-    const positions = afterPositions.get(line);
-    const afterIndex = positions?.[0];
-    if (
-      beforeCounts.get(line) === 1
-      && positions?.length === 1
-      && afterIndex !== undefined
-      && afterIndex >= prefix
-      && afterIndex < afterLines.length - suffix
-    ) candidates.push({ before: index, after: afterIndex });
-  }
-
-  const tails: number[] = [];
-  const previous = new Array<number>(candidates.length).fill(-1);
-  for (let index = 0; index < candidates.length; index += 1) {
-    let low = 0;
-    let high = tails.length;
-    while (low < high) {
-      const middle = (low + high) >> 1;
-      if (candidates[tails[middle]].after < candidates[index].after) low = middle + 1;
-      else high = middle;
-    }
-    if (low > 0) previous[index] = tails[low - 1];
-    tails[low] = index;
-  }
-
   const middleAnchors: Array<{ before: number; after: number }> = [];
-  let cursor = tails.at(-1) ?? -1;
-  while (cursor >= 0) {
-    middleAnchors.push(candidates[cursor]);
-    cursor = previous[cursor];
+  const beforeMiddleEnd = beforeLines.length - suffix;
+  const afterMiddleEnd = afterLines.length - suffix;
+  if (afterMiddleEnd - prefix <= beforeMiddleEnd - prefix) {
+    collectOrderedMatches(
+      beforeLines,
+      prefix,
+      beforeMiddleEnd,
+      afterLines,
+      prefix,
+      afterMiddleEnd,
+      middleAnchors,
+    );
+  } else {
+    const swapped: LineAnchor[] = [];
+    collectOrderedMatches(
+      afterLines,
+      prefix,
+      afterMiddleEnd,
+      beforeLines,
+      prefix,
+      beforeMiddleEnd,
+      swapped,
+    );
+    for (const anchor of swapped) {
+      middleAnchors.push({ before: anchor.after, after: anchor.before });
+    }
   }
-  middleAnchors.reverse();
   const anchors = [
     ...Array.from({ length: prefix }, (_, index) => ({ before: index, after: index })),
     ...middleAnchors,
