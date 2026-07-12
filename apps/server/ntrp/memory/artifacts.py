@@ -58,6 +58,10 @@ _PAGE_EDIT_INTERNAL_PREFIXES = (
     Path("raw/events"),
     Path(".ntrp/maintenance/page-edit-previews"),
 )
+_SYNTHESIS_MAINTENANCE_PREFIXES = (
+    Path(".ntrp/maintenance/synthesis-bases"),
+    Path(".ntrp/maintenance/synthesis-candidates"),
+)
 
 MAX_LOG_CHARS = 500
 MAX_DOSSIER_SNIPPET_CHARS = 280
@@ -825,6 +829,31 @@ class ArtifactMemoryStore:
             if parent_fd >= 0:
                 os.close(parent_fd)
 
+    def read_synthesis_maintenance(self, rel: Path) -> bytes:
+        if not self._allowed_synthesis_maintenance(rel):
+            raise FileNotFoundError(rel.as_posix())
+        fd = self._open_anchored_regular(rel, os.O_RDONLY, create_parents=False)
+        with os.fdopen(fd, "rb") as stream:
+            return stream.read()
+
+    def write_synthesis_maintenance(self, rel: Path, content: bytes) -> None:
+        if not self._allowed_synthesis_maintenance(rel):
+            raise FileNotFoundError(rel.as_posix())
+        fd = self._open_anchored_regular(
+            rel,
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            create_parents=True,
+        )
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        parent_fd, _ = self._open_anchored_parent(rel, create_parents=False)
+        try:
+            os.fsync(parent_fd)
+        finally:
+            os.close(parent_fd)
+
     def delete_page_edit_preview(self, rel: str) -> None:
         safe = Path(rel)
         if not self._allowed_page_edit_internal(safe) or safe.suffix != ".json":
@@ -867,6 +896,12 @@ class ArtifactMemoryStore:
         if path.is_absolute() or not path.parts or any(part in {"", ".", ".."} for part in path.parts):
             return False
         return any(path.is_relative_to(prefix) for prefix in _PAGE_EDIT_INTERNAL_PREFIXES)
+
+    @staticmethod
+    def _allowed_synthesis_maintenance(path: Path) -> bool:
+        if path.is_absolute() or path.suffix != ".md" or any(part in {"", ".", ".."} for part in path.parts):
+            return False
+        return any(path.is_relative_to(prefix) for prefix in _SYNTHESIS_MAINTENANCE_PREFIXES)
 
     def _open_anchored_regular(self, rel: Path, flags: int, *, create_parents: bool) -> int:
         parent_fd = -1

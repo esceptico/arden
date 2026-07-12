@@ -12,13 +12,24 @@ no new prompts, no dependency on the legacy ArtifactMemoryStore.
 from __future__ import annotations
 
 import re
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from ntrp.logging import get_logger
 from ntrp.memory import prompts_synthesis as ps
+from ntrp.memory.artifacts import ArtifactMemoryStore
 from ntrp.memory.file_store import _slug, load_conventions
-from ntrp.memory.models import Record, now_iso
+from ntrp.memory.journal import JournalConflictError
+from ntrp.memory.merge import (
+    MergeResult,
+    synthesis_base_rel,
+    synthesis_candidate_rel,
+    three_way_merge,
+)
+from ntrp.memory.models import Record
+from ntrp.memory.page_edit_service import PageEditService, StalePageRevisionError
+from ntrp.memory.pages import parse_page, render_page
 from ntrp.memory.project_names import resolve_project_title
 from ntrp.observability import observed_trace
 
@@ -146,11 +157,98 @@ def _page_kind(root: Path, path: Path) -> str | None:
     return None
 
 
-def _stale(page) -> bool:
+def _stale(page, canonical_revision: str) -> bool:
     if not page.prose:
         return True
-    newest = max((ln.date for ln in page.active_lines()), default="")
-    return (newest or "") > str(page.frontmatter.get("prose_synced", ""))
+    return page.frontmatter.get("generated_from_revision") != canonical_revision
+
+
+def _stored_synthesis_base(store, path: Path) -> bytes | None:
+    revision = store._pages[path].frontmatter.get("generated_from_revision")
+    if not isinstance(revision, str):
+        return None
+    try:
+        return ArtifactMemoryStore(store._root).read_synthesis_maintenance(
+            synthesis_base_rel(path.relative_to(store._root).as_posix(), revision)
+        )
+    except FileNotFoundError:
+        return None
+
+
+async def _merge_generated_page(
+    store,
+    path: Path,
+    generated: bytes,
+    *,
+    source_revision: str,
+    prose_cites: tuple[str, ...],
+) -> MergeResult:
+    rel = path.relative_to(store._root).as_posix()
+    current_on_disk = store._safe_read_bytes(path)
+    current = render_page(store._pages[path]).encode() if current_on_disk is None else current_on_disk
+    stored_base = _stored_synthesis_base(store, path)
+    try:
+        current_has_prose = bool(parse_page(current.decode("utf-8")).prose)
+    except UnicodeDecodeError as exc:
+        raise ValueError("memory pages must be UTF-8") from exc
+    base = current if stored_base is None and not current_has_prose else stored_base
+    result = three_way_merge(base, current, generated)
+    resources = ArtifactMemoryStore(store._root)
+    if result.review_required:
+        resources.write_synthesis_maintenance(synthesis_candidate_rel(rel, source_revision), result.candidate)
+        return result
+    if store.canonical_revision != source_revision:
+        resources.write_synthesis_maintenance(synthesis_candidate_rel(rel, source_revision), generated)
+        return MergeResult(None, generated, True, "stale_source")
+    assert result.merged is not None
+    service = PageEditService(store._root, store, reconciler=None)
+    if result.merged == current:
+        if (
+            store._pages[path].frontmatter.get("generated_from_revision") != source_revision
+            or stored_base != generated
+        ):
+            try:
+                await service.advance_synthesis_checkpoint(
+                    path=rel,
+                    current=current,
+                    source_revision=source_revision,
+                    generated_base=generated,
+                    prose_cites=prose_cites,
+                )
+            except (JournalConflictError, StalePageRevisionError):
+                resources.write_synthesis_maintenance(synthesis_candidate_rel(rel, source_revision), generated)
+                return MergeResult(None, generated, True, "stale_source")
+        return result
+    try:
+        await service.apply_synthesis_merge(
+            path=rel,
+            base=current_on_disk,
+            result=result.merged,
+            source_revision=source_revision,
+            generated_base=generated,
+            prose_cites=prose_cites,
+        )
+    except (JournalConflictError, StalePageRevisionError):
+        resources.write_synthesis_maintenance(synthesis_candidate_rel(rel, source_revision), generated)
+        return MergeResult(None, generated, True, "stale_source")
+    return result
+
+
+def _render_generated_page(store, path: Path, prose: str) -> bytes:
+    current_on_disk = store._safe_read_bytes(path)
+    current = render_page(store._pages[path]).encode() if current_on_disk is None else current_on_disk
+    template = _stored_synthesis_base(store, path) or current
+    try:
+        template.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("memory pages must be UTF-8") from exc
+    body = prose.rstrip().encode("utf-8") + b"\n"
+    if not template.startswith(b"---\n"):
+        return body
+    frontmatter_end = template.find(b"\n---\n", 4)
+    if frontmatter_end < 0:
+        return body
+    return template[: frontmatter_end + 5] + b"\n" + body
 
 
 def _known_titles(store) -> list[str]:
@@ -324,13 +422,17 @@ async def run_synthesis(store, llm, model: str, *, reasoning_effort: str | None 
     for d in recent_days:
         if len(_daily_records(store, d)) >= DAILY_MIN_RECORDS:
             store._ensure_page(store._root / "daily" / f"{d}.md", title=d)
+    source_revision = store.canonical_revision
     all_records = await store.list(limit=None, scopes=None)
     labels = await store.labels_for([r.id for r in all_records], include_kind=True)
     known_titles = _known_titles(store)  # links survive only to real topic pages (no dangling [[X]] in Obsidian)
     live_ids = {r.id.lower() for r in all_records}  # for dangling-grounding detection
     src_by_id = {r.id.lower(): (r.source_ref.kind if r.source_ref else "chat") for r in all_records}
     done: list[str] = []
-    for path in list(store._pages.keys()):
+    pending_pages = {path: deepcopy(page) for path, page in store._pages.items()}
+    for path in pending_pages:
+        if path not in store._pages:
+            store._pages[path] = pending_pages[path]
         kind = _page_kind(store._root, path)
         if kind is None:
             continue
@@ -346,7 +448,7 @@ async def run_synthesis(store, llm, model: str, *, reasoning_effort: str | None 
         grounding = {str(i).lower() for i in (page.frontmatter.get("prose_cites") or [])}
         legacy_cites = bool(ps.cited_ids(page.prose)) if page.prose else False
         dangling = bool(page.prose) and not grounding.issubset(live_ids)
-        if not force and not dangling and not legacy_cites and not _stale(page):
+        if not force and not dangling and not legacy_cites and not _stale(page, source_revision):
             continue
         if kind == "profile":
             prose = await _synth_profile(store, labels, llm, model, reasoning_effort, conventions)
@@ -361,10 +463,16 @@ async def run_synthesis(store, llm, model: str, *, reasoning_effort: str | None 
             # away). Keep the prose but keep its bookkeeping honest: translate any legacy
             # inline id-cites to readable source tags and drop dead ids from the grounding.
             if page.prose and (legacy_cites or dangling):
-                page.prose = _humanize_cites(page.prose, src_by_id)
-                page.frontmatter["prose_cites"] = sorted(grounding & live_ids)
-                store._persist(path)
-                done.append(path.stem)
+                generated = _render_generated_page(store, path, _humanize_cites(page.prose, src_by_id))
+                merged = await _merge_generated_page(
+                    store,
+                    path,
+                    generated,
+                    source_revision=source_revision,
+                    prose_cites=tuple(sorted(grounding & live_ids)),
+                )
+                if not merged.review_required:
+                    done.append(path.stem)
             continue
         # Strip wikilinks to subjects that have no page (parked sub-threshold entities)
         # so the vault has no dangling [[X]] links in Obsidian — every pass, not just profile.
@@ -378,11 +486,17 @@ async def run_synthesis(store, llm, model: str, *, reasoning_effort: str | None 
             and not _regression_ok(page, prose)
         ):
             continue
-        page.frontmatter["prose_cites"] = sorted(ps.cited_ids(prose))  # verified grounding, pre-translation
-        page.prose = _humanize_cites(prose, src_by_id)
-        page.frontmatter["prose_synced"] = now_iso()[:10]
-        store._persist(path)
-        done.append(path.stem)
+        prose_cites = tuple(sorted(ps.cited_ids(prose)))  # verified grounding, pre-translation
+        generated = _render_generated_page(store, path, _humanize_cites(prose, src_by_id))
+        merged = await _merge_generated_page(
+            store,
+            path,
+            generated,
+            source_revision=source_revision,
+            prose_cites=prose_cites,
+        )
+        if not merged.review_required:
+            done.append(path.stem)
     if done:  # prose changed -> index blurbs + health verdicts changed with it
         store._write_index()
         store._write_health()

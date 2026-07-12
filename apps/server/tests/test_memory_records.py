@@ -25,7 +25,7 @@ import pytest
 from ntrp.memory.file_store import CanonicalFileRole, FilePageStore
 from ntrp.memory.ledger import LedgerEntry, LedgerMeta, render_ledger_entry
 from ntrp.memory.models import Kind, SourceRef
-from ntrp.memory.pages import Page
+from ntrp.memory.pages import Page, render_raw
 from ntrp.memory.records import RecordStore
 
 pytestmark = pytest.mark.asyncio
@@ -890,6 +890,11 @@ async def test_generated_prose_only_write_is_excluded_from_canonical_revision(tm
     store = await _file_store(vault, [_ledger_entry("record", "Fact", sequence=1)])
     page_path = vault / "topics" / "a.md"
     revision = store.canonical_revision
+    store._pages[page_path].frontmatter["generated_from_revision"] = revision
+    store._journal.commit_projection(
+        {Path("raw/topics/a.md"): render_raw(store._pages[page_path]).encode()}
+    )
+    store._reload_canonical_state()
 
     def reject_commit(files):
         raise AssertionError(f"projection entered canonical commit: {files}")
@@ -899,6 +904,7 @@ async def test_generated_prose_only_write_is_excluded_from_canonical_revision(tm
     store._persist(page_path)
 
     assert "Generated briefing." in page_path.read_text(encoding="utf-8")
+    assert store._pages[page_path].frontmatter["generated_from_revision"] == revision
     assert store.canonical_revision == revision
     await store.close()
 

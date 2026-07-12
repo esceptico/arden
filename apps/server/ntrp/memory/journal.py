@@ -142,12 +142,25 @@ class VaultJournal:
             raise
         return prepared.manifest_hash
 
-    def commit_projection(self, files: Mapping[Path, bytes]) -> None:
+    def commit_projection(
+        self,
+        files: Mapping[Path, bytes],
+        *,
+        expected_files: Mapping[Path, bytes | None] | None = None,
+        expected_revision: str | None = None,
+    ) -> None:
         """Atomically replace a derived file set without advancing canonical revision."""
         self.recover()
+        self._assert_expected_state(expected_files, expected_revision)
         prepared = self.prepare(files, _publish_revision=False)
-        manifest = self._load_manifest(prepared.path)
-        self._finish(prepared.path, manifest, prepared.commit_id)
+        try:
+            self._assert_expected_state(expected_files, expected_revision)
+            manifest = self._load_manifest(prepared.path)
+            self._finish(prepared.path, manifest, prepared.commit_id)
+        except JournalConflictError:
+            self._remove_commit(prepared.path)
+            self._remove_empty_journal_root()
+            raise
 
     def commit_migration(self, files: Mapping[Path, bytes]) -> str:
         self.recover()

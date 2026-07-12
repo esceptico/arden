@@ -8,6 +8,7 @@ import difflib
 import inspect
 import json
 import logging
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
 from typing import Literal
@@ -18,6 +19,7 @@ from zoneinfo import ZoneInfo
 from ntrp.memory.artifacts import ArtifactMemoryStore
 from ntrp.memory.file_store import CanonicalFileRole, FilePageStore, ObservedFileChange
 from ntrp.memory.journal import JournalConflictError
+from ntrp.memory.merge import synthesis_base_rel
 from ntrp.memory.models import SourceRef
 from ntrp.memory.page_events import (
     AppliedPageOperation,
@@ -31,6 +33,7 @@ from ntrp.memory.page_events import (
     render_page_edit_event,
     unified_patch,
 )
+from ntrp.memory.pages import render_raw
 from ntrp.memory.reconciler import RecordOperation, validate_operations
 
 _logger = logging.getLogger(__name__)
@@ -168,6 +171,123 @@ class PageEditService:
             return None
         async with self._apply_lock:
             return await self._ingest_external(change)
+
+    async def apply_synthesis_merge(
+        self,
+        *,
+        path: str,
+        base: bytes | None,
+        result: bytes,
+        source_revision: str,
+        generated_base: bytes | None = None,
+        prose_cites: tuple[str, ...] = (),
+    ) -> PageEditEvent:
+        """Atomically accept one exact generated page merge and its audit event."""
+        async with self._apply_lock:
+            safe_path = self._validate_page_path(path)
+            if self._store.canonical_revision != source_revision:
+                raise JournalConflictError("synthesis source revision is stale")
+            try:
+                current = self._resources.read_resource_bytes(safe_path)
+            except FileNotFoundError:
+                current = None
+            if current != base:
+                raise StalePageRevisionError(
+                    safe_path,
+                    current_content=current or b"",
+                    base_revision=page_revision(base or b""),
+                    candidate_revision=page_revision(result),
+                )
+            base_bytes = base or b""
+            occurred = self._local_now()
+            event = PageEditEvent(
+                event_type="SYNTHESIS_MERGE",
+                id=uuid4().hex,
+                occurred_at=_milliseconds(occurred),
+                sequence=self._next_sequence(),
+                actor="synthesis",
+                origin="synthesis",
+                path=safe_path,
+                base_revision=page_revision(base_bytes),
+                result_revision=page_revision(result),
+                patch=unified_patch(base_bytes, result),
+                operations=(),
+                reconciliation="applied",
+                source_canonical_revision=source_revision,
+            )
+            event_rel, event_bytes, expected_event = self._event_file(event)
+            caller = self._store._validate_caller_files(
+                {Path(safe_path): result, event_rel: event_bytes},
+                {Path(safe_path): CanonicalFileRole.USER_PAGE, event_rel: CanonicalFileRole.EVENT},
+            )
+            page_path = self._vault / safe_path
+            raw_rel = Path("raw") / safe_path
+            raw_before = self._store._safe_read_bytes(self._vault / raw_rel)
+            page = deepcopy(self._store._pages[page_path])
+            page.frontmatter["generated_from_revision"] = source_revision
+            page.frontmatter.pop("prose_synced", None)
+            page.frontmatter["prose_cites"] = sorted(prose_cites)
+            files = {raw_rel: render_raw(page).encode(), **caller}
+            self._commit(
+                files,
+                expected_files={Path(safe_path): base, raw_rel: raw_before, event_rel: expected_event},
+                expected_revision=source_revision,
+                engine_write=(safe_path, result, "synthesis", event.id),
+                projection=True,
+            )
+            if generated_base is not None:
+                try:
+                    self._resources.write_synthesis_maintenance(
+                        synthesis_base_rel(safe_path, source_revision),
+                        generated_base,
+                    )
+                except Exception:
+                    _logger.warning("accepted synthesis base persistence failed", exc_info=True)
+            return event
+
+    async def advance_synthesis_checkpoint(
+        self,
+        *,
+        path: str,
+        current: bytes,
+        source_revision: str,
+        generated_base: bytes,
+        prose_cites: tuple[str, ...] = (),
+    ) -> None:
+        """Advance freshness without emitting an empty synthesis event."""
+        async with self._apply_lock:
+            safe_path = self._validate_page_path(path)
+            if self._store.canonical_revision != source_revision:
+                raise JournalConflictError("synthesis source revision is stale")
+            if self._resources.read_resource_bytes(safe_path) != current:
+                raise StalePageRevisionError(
+                    safe_path,
+                    current_content=self._resources.read_resource_bytes(safe_path),
+                    base_revision=page_revision(current),
+                    candidate_revision=page_revision(current),
+                )
+            page_path = self._vault / safe_path
+            raw_rel = Path("raw") / safe_path
+            raw_before = self._store._safe_read_bytes(self._vault / raw_rel)
+            page = deepcopy(self._store._pages[page_path])
+            page.frontmatter["generated_from_revision"] = source_revision
+            page.frontmatter.pop("prose_synced", None)
+            page.frontmatter["prose_cites"] = sorted(prose_cites)
+            raw_result = render_raw(page).encode()
+            if raw_result != raw_before:
+                self._commit(
+                    {raw_rel: raw_result},
+                    expected_files={Path(safe_path): current, raw_rel: raw_before},
+                    expected_revision=source_revision,
+                    projection=True,
+                )
+            try:
+                self._resources.write_synthesis_maintenance(
+                    synthesis_base_rel(safe_path, source_revision),
+                    generated_base,
+                )
+            except Exception:
+                _logger.warning("synthesis checkpoint base persistence failed", exc_info=True)
 
     async def _ingest_external(self, change: ObservedFileChange) -> PageEditEvent | None:
         safe_path = self._validate_page_path(change.path)
@@ -560,6 +680,7 @@ class PageEditService:
         expected_files: dict[Path, bytes | None],
         expected_revision: str,
         engine_write: tuple[str, bytes, Literal["desktop", "agent", "synthesis"], str] | None = None,
+        projection: bool = False,
     ) -> None:
         if engine_write is not None:
             path, content, origin, event_id = engine_write
@@ -570,7 +691,8 @@ class PageEditService:
                 event_id=event_id,
             )
         try:
-            self._store._journal.commit(
+            commit = self._store._journal.commit_projection if projection else self._store._journal.commit
+            commit(
                 files,
                 expected_files=expected_files,
                 expected_revision=expected_revision,

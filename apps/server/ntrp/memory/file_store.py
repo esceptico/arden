@@ -1432,8 +1432,15 @@ class FilePageStore:
         for ln in records:
             by_kind[ln.kind] = by_kind.get(ln.kind, 0) + 1
         last_dream = max((ln.date for ln in records if ln.src == "dreamer"), default=None)
-        last_synth = max((str(pg.frontmatter.get("prose_synced")) for pg in self._pages.values()
-                          if pg.frontmatter.get("prose_synced")), default=None)
+        synthesized = [pg for pg in self._pages.values() if pg.frontmatter.get("generated_from_revision")]
+        current_syntheses = sum(
+            pg.frontmatter.get("generated_from_revision") == self.canonical_revision for pg in synthesized
+        )
+        last_synth = (
+            f"{current_syntheses}/{len(synthesized)} pages at current revision"
+            if synthesized
+            else None
+        )
 
         gaps: list[str] = []
         dream_age = _age(last_dream) if last_dream else None  # None != 0 — don't let a same-day dream read as "never"

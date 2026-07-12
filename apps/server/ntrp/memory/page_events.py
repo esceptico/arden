@@ -103,6 +103,7 @@ class AppliedPageOperation(BaseModel):
 class PageEditEvent(BaseModel):
     model_config = ConfigDict(frozen=True)
 
+    event_type: Literal["PAGE_EDIT", "SYNTHESIS_MERGE"] = "PAGE_EDIT"
     id: str
     occurred_at: str
     sequence: int
@@ -120,6 +121,7 @@ class PageEditEvent(BaseModel):
     questions: tuple[PageEditQuestion, ...] = ()
     review_event_id: str | None = None
     observation_id: str | None = None
+    source_canonical_revision: str | None = None
 
     @field_validator("occurred_at")
     @classmethod
