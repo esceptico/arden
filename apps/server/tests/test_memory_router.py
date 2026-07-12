@@ -636,6 +636,36 @@ def test_rebuild_artifacts_endpoint_is_noop(client):
     assert isinstance(body["artifacts"], list)
 
 
+def test_artifact_list_and_rebuild_are_metadata_only_with_exact_revisions(tmp_path: Path):
+    vault = tmp_path / "artifacts"
+    (vault / "notes").mkdir(parents=True)
+    exact = (
+        b"---\r\nsummary: Stable notebook summary\r\neditable: true\r\n---\r\n"
+        b"# Page\r\n\r\nFirst paragraph.\r\nSearch needle"
+    )
+    (vault / "notes" / "page.md").write_bytes(exact)
+    knowledge = _Knowledge(None, vault)
+    test_app = FastAPI()
+    test_app.include_router(memory_router)
+    test_app.dependency_overrides[require_knowledge_runtime] = lambda: knowledge
+
+    with TestClient(test_app) as c:
+        listed = c.get("/admin/memory/artifacts", params={"q": "needle"}).json()["artifacts"][0]
+        rebuilt = c.post("/admin/memory/artifacts/rebuild").json()["artifacts"][0]
+        detail = c.get("/admin/memory/artifacts/notes/page.md").json()["artifact"]
+
+    forbidden = {"content", "timeline", "frontmatter", "editable_content"}
+    assert forbidden.isdisjoint(listed)
+    assert forbidden.isdisjoint(rebuilt)
+    assert listed["summary"] == rebuilt["summary"] == "Stable notebook summary"
+    assert listed["revision"] == rebuilt["revision"] == page_revision(exact)
+    assert listed["editable"] is True
+    assert detail["summary"] == listed["summary"]
+    assert detail["revision"] == page_revision(exact)
+    assert detail["editable_content"] == exact.decode("utf-8")
+    assert {"content", "timeline", "frontmatter"}.issubset(detail)
+
+
 def test_list_items_shape(client):
     c, *_ = client
     body = c.get("/admin/memory/items").json()

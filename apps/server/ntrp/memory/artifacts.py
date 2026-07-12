@@ -23,6 +23,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from ntrp.memory.frontmatter import QuotedStr, dump_frontmatter, parse_frontmatter, strip_frontmatter
+from ntrp.memory.page_events import page_revision
 from ntrp.memory.pages import parse_line as _parse_line
 
 _logger = logging.getLogger(__name__)
@@ -322,6 +323,19 @@ def _artifact_snippet(content: str, query: str | None = None) -> str | None:
     return None
 
 
+def _artifact_summary(content: str) -> str | None:
+    frontmatter, _ = parse_frontmatter(content)
+    summary = frontmatter.get("summary")
+    if isinstance(summary, str) and summary.strip():
+        return _sanitize_visible_text(summary, max_chars=MAX_DOSSIER_SNIPPET_CHARS)
+    return _artifact_snippet(content)
+
+
+def _decode_artifact_text(content: bytes) -> str:
+    """Match text-mode rendering while keeping the original bytes for revision/editing."""
+    return content.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+
+
 def _title_from_content(content: str, fallback: str) -> str:
     content = strip_frontmatter(content)
     for line in content.splitlines():
@@ -461,6 +475,8 @@ class MemoryArtifact:
     scope_kind: str
     scope_key: str | None
     content: str
+    summary: str | None
+    revision: str
     record_count: int | None
     updated_at: str | None
     type: str = "file"
@@ -473,6 +489,7 @@ class MemoryArtifact:
     source: str | None = None
     timeline: tuple = ()  # parsed timeline atoms (read_artifact only; () in list view)
     frontmatter: dict = field(default_factory=dict)  # raw YAML properties (read_artifact only)
+    raw_content: str | None = None  # exact decoded file bytes (read_artifact only)
 
 
 class ArtifactMemoryStore:
@@ -673,6 +690,8 @@ class ArtifactMemoryStore:
         st = path.lstat()
         if not stat.S_ISREG(st.st_mode):
             raise FileNotFoundError(rel)
+        exact = self.read_resource_bytes(rel)
+        exact_text = exact.decode("utf-8")
         return MemoryArtifact(
             path=rel,
             title=title,
@@ -688,8 +707,11 @@ class ArtifactMemoryStore:
             editable=editable,
             readonly_reason=_readonly_reason(rel, kind, generated),
             snippet=_artifact_snippet(body),
+            summary=_artifact_summary(exact_text),
+            revision=page_revision(exact),
             labels=meta.labels,
             source=meta.source,
+            raw_content=exact_text,
         )
 
     def list_artifacts(self, *, kind: str | None = None, q: str | None = None) -> list[MemoryArtifact]:
@@ -700,7 +722,8 @@ class ArtifactMemoryStore:
             rel = path.relative_to(self.root).as_posix()
             try:
                 st = path.lstat()
-                content = self._read_text_no_symlink(path)
+                exact = self.read_resource_bytes(rel)
+                content = _decode_artifact_text(exact)
             except FileNotFoundError:
                 continue
             fm, _ = parse_frontmatter(content)
@@ -729,6 +752,8 @@ class ArtifactMemoryStore:
                     editable=editable,
                     readonly_reason=_readonly_reason(rel, artifact_kind, generated),
                     snippet=snippet,
+                    summary=_artifact_summary(content),
+                    revision=page_revision(exact),
                     labels=tuple(fm.get("labels") or ()),
                     source=fm.get("source"),
                 )
@@ -752,7 +777,9 @@ class ArtifactMemoryStore:
         if _CHANGELOG_MONTH_RE.match(rel_posix):
             self._sanitize_changelog_file(path)
             st = path.lstat()
-        content = self._read_text_no_symlink(path)
+        exact = self.read_resource_bytes(rel_posix)
+        raw_content = exact.decode("utf-8")
+        content = _decode_artifact_text(exact)
         fm, body = parse_frontmatter(content)
         # Canonical pages: the file IS the prose (wiki view); the timeline atoms come
         # from the raw/ sidecar and are surfaced separately so the client can show
@@ -793,10 +820,13 @@ class ArtifactMemoryStore:
             editable=editable,
             readonly_reason=_readonly_reason(rel_posix, kind, generated),
             snippet=_artifact_snippet(content),
+            summary=_artifact_summary(content),
+            revision=page_revision(exact),
             labels=tuple(fm.get("labels") or ()),
             source=fm.get("source"),
             timeline=timeline,
             frontmatter=dict(fm),
+            raw_content=raw_content,
         )
 
     def read_resource_bytes(self, rel: str, *, page_edit_internal: bool = False) -> bytes:

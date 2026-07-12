@@ -21,7 +21,7 @@ from ntrp.memory.page_edit_service import (
     ReconciliationPendingError,
     StalePageRevisionError,
 )
-from ntrp.memory.page_events import PageEditDecision, page_revision
+from ntrp.memory.page_events import PageEditDecision
 from ntrp.memory.scopes import MemoryScope, scope_for_write
 from ntrp.server.deps import require_knowledge_runtime
 from ntrp.server.runtime import Runtime, get_runtime
@@ -138,7 +138,7 @@ async def list_scopes() -> dict:
 # --- 2: artifact memory surface ---------------------------------------------
 
 
-def artifact_to_json(a) -> dict:
+def artifact_summary_to_json(a) -> dict:
     return {
         "path": a.path,
         "title": a.title,
@@ -146,8 +146,9 @@ def artifact_to_json(a) -> dict:
         "type": a.type,
         "directory": a.directory,
         "scope": {"kind": a.scope_kind, "key": a.scope_key},
-        "content": a.content,
         "snippet": a.snippet,
+        "summary": a.summary,
+        "revision": a.revision,
         "record_count": a.record_count,
         "generated": a.generated,
         "editable": a.editable,
@@ -155,6 +156,14 @@ def artifact_to_json(a) -> dict:
         "updated_at": a.updated_at,
         "labels": list(a.labels),
         "source": a.source,
+    }
+
+
+def artifact_detail_to_json(a) -> dict:
+    return {
+        **artifact_summary_to_json(a),
+        "content": a.content,
+        "editable_content": a.raw_content if a.editable else None,
         "timeline": [
             {"id": l.id, "text": l.text, "kind": l.kind, "date": l.date,
              "src": l.src, "pinned": l.pinned, "superseded": l.superseded}
@@ -182,7 +191,7 @@ def list_artifacts(
     q: str | None = Query(default=None, max_length=200),
     artifacts: ArtifactMemoryStore = Depends(_artifact_store),
 ) -> dict:
-    return {"artifacts": [artifact_to_json(a) for a in artifacts.list_artifacts(kind=kind, q=q)]}
+    return {"artifacts": [artifact_summary_to_json(a) for a in artifacts.list_artifacts(kind=kind, q=q)]}
 
 
 @router.post("/artifacts/rebuild")
@@ -193,7 +202,10 @@ async def rebuild_artifacts(
     # is no projection to re-derive. Exporting here would clobber the pages, so
     # this is a no-op that just returns the current pages.
     items = artifacts.list_artifacts()
-    return {"artifacts": [artifact_to_json(a) for a in items], "detail": "no-op: memory is file-canonical"}
+    return {
+        "artifacts": [artifact_summary_to_json(a) for a in items],
+        "detail": "no-op: memory is file-canonical",
+    }
 
 
 class InitBody(BaseModel):
@@ -400,11 +412,7 @@ def page_links(
 def read_artifact(path: str, artifacts: ArtifactMemoryStore = Depends(_artifact_store)) -> dict:
     try:
         artifact = artifacts.read_artifact(path)
-        payload = artifact_to_json(artifact)
-        exact = artifacts.read_resource_bytes(path)
-        payload["revision"] = page_revision(exact)
-        payload["editable_content"] = exact.decode("utf-8") if artifact.editable else None
-        return {"artifact": payload}
+        return {"artifact": artifact_detail_to_json(artifact)}
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="memory artifact not found") from exc
 

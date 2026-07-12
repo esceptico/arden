@@ -12,6 +12,7 @@ from ntrp.memory.artifacts import (
     ArtifactMemoryStore,
     _redact_changelog,
 )
+from ntrp.memory.page_events import page_revision
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -277,3 +278,32 @@ async def test_read_and_list_open_arbitrary_markdown_and_text_paths(tmp_path: Pa
         "research/models/results.txt",
     }
     assert artifacts.read_artifact(".research/.hidden.md").title == "Hidden note"
+
+
+async def test_artifact_summaries_are_stable_and_revisions_hash_exact_bytes(tmp_path: Path):
+    root = tmp_path / "artifacts"
+    (root / "research").mkdir(parents=True)
+    explicit = (
+        b"---\r\nsummary: Explicit durable summary\r\n---\r\n"
+        b"# Notes\r\n\r\nFirst prose line.\r\nSearch needle"
+    )
+    fallback = b"# Fallback\r\n\r\nStable first line.\r\nSearch needle"
+    (root / "research" / "explicit.md").write_bytes(explicit)
+    (root / "research" / "fallback.md").write_bytes(fallback)
+    store = ArtifactMemoryStore(root)
+
+    normal = {artifact.path: artifact for artifact in store.list_artifacts()}
+    searched = {artifact.path: artifact for artifact in store.list_artifacts(q="needle")}
+
+    assert normal["research/explicit.md"].summary == "Explicit durable summary"
+    assert searched["research/explicit.md"].summary == "Explicit durable summary"
+    assert normal["research/fallback.md"].summary == "Stable first line."
+    assert searched["research/fallback.md"].summary == "Stable first line."
+    assert searched["research/fallback.md"].snippet == "Search needle"
+    assert normal["research/explicit.md"].revision == page_revision(explicit)
+    assert normal["research/fallback.md"].revision == page_revision(fallback)
+
+    detail = store.read_artifact("research/explicit.md")
+    assert detail.summary == "Explicit durable summary"
+    assert detail.revision == page_revision(explicit)
+    assert detail.raw_content == explicit.decode("utf-8")
