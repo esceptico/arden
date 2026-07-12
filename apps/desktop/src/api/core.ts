@@ -107,12 +107,15 @@ export async function apiWithConfig<T>(config: AppConfig, path: string, init: Re
     });
 
     if (!response.ok) {
+      const contentType = response.headers.get("content-type") ?? "";
+      const text = await response.text();
       let data: unknown = null;
-      let text = "";
-      try {
-        data = await response.json();
-      } catch {
-        text = await response.text();
+      if (contentType.includes("application/json") && text) {
+        try {
+          data = JSON.parse(text);
+        } catch {
+          data = null;
+        }
       }
       throw new ApiError({ status: response.status, data, text });
     }

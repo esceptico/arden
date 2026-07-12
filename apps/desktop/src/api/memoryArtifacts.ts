@@ -131,13 +131,92 @@ interface PageLinks {
 
 export type MemoryArtifactKind = MemoryKind | "changelog" | "lesson" | "topic";
 
-interface MemoryArtifactBase {
+type MemoryFrontmatter = Record<string, string | number | boolean | null | Array<string | number | boolean | null>>;
+
+interface MemoryTimelineEntry {
+  id: string;
+  text: string;
+  kind: string;
+  date: string;
+  src: string;
+  pinned: boolean;
+  superseded: boolean;
+}
+
+export interface MemoryArtifactSummary {
+  path: string;
+  title: string;
+  kind: MemoryArtifactKind;
+  type: "file";
+  directory: string;
+  scope: MemoryScope;
+  snippet: string | null;
+  summary: string | null;
+  revision: string | null;
+  recordCount: number | null;
+  generated: boolean;
+  editable: boolean;
+  readonlyReason: string | null;
+  updatedAt: string | null;
+  labels: string[];
+  source: string | null;
+}
+
+export interface MemoryArtifactDetail extends Omit<MemoryArtifactSummary, "revision"> {
+  revision: string;
+  content: string;
+  editableContent: string | null;
+  timeline: MemoryTimelineEntry[];
+  frontmatter: MemoryFrontmatter;
+}
+
+/** @deprecated Current memory components use the server-shaped artifact until the notebook shell replaces them. */
+export interface MemoryArtifact {
   path: string;
   title: string;
   kind: MemoryArtifactKind;
   type: "file";
   directory: string;
   scope: { kind: string; key: string | null };
+  content: string;
+  snippet: string | null;
+  summary: string | null;
+  revision: string | null;
+  editableContent: string | null;
+  record_count: number | null;
+  generated: boolean;
+  editable: boolean;
+  readonly_reason: string | null;
+  updated_at: string | null;
+  labels: string[];
+  source: string | null;
+  timeline: MemoryTimelineEntry[];
+  frontmatter?: MemoryFrontmatter;
+}
+
+export interface MemoryArtifactsResponse {
+  artifacts: MemoryArtifact[];
+}
+
+export interface MemoryArtifactResponse {
+  artifact: MemoryArtifact;
+}
+
+export interface MemoryArtifactSummariesResponse {
+  artifacts: MemoryArtifactSummary[];
+}
+
+export interface MemoryArtifactDetailResponse {
+  artifact: MemoryArtifactDetail;
+}
+
+interface MemoryArtifactTransport {
+  path: string;
+  title: string;
+  kind: MemoryArtifactKind;
+  type: "file";
+  directory: string;
+  scope: RawScope;
   content: string;
   snippet: string | null;
   record_count: number | null;
@@ -147,41 +226,8 @@ interface MemoryArtifactBase {
   updated_at: string | null;
   labels: string[];
   source: string | null;
-  timeline: Array<{
-    id: string;
-    text: string;
-    kind: string;
-    date: string;
-    src: string;
-    pinned: boolean;
-    superseded: boolean;
-  }>;
-  frontmatter?: Record<string, string | number | boolean | null | Array<string | number | boolean | null>>;
-}
-
-export interface MemoryArtifactSummary extends MemoryArtifactBase {
-  summary: string | null;
-  revision: string | null;
-  editableContent: null;
-}
-
-export interface MemoryArtifactDetail extends MemoryArtifactBase {
-  summary: string | null;
-  revision: string;
-  editableContent: string | null;
-}
-
-export type MemoryArtifact = MemoryArtifactSummary | MemoryArtifactDetail;
-
-export interface MemoryArtifactsResponse {
-  artifacts: MemoryArtifactSummary[];
-}
-
-export interface MemoryArtifactResponse {
-  artifact: MemoryArtifactDetail;
-}
-
-interface MemoryArtifactTransport extends MemoryArtifactBase {
+  timeline: MemoryTimelineEntry[];
+  frontmatter?: MemoryFrontmatter;
   summary?: string | null;
   revision?: string | null;
   editable_content?: string | null;
@@ -297,23 +343,77 @@ const SOURCE_FIELDS = new Set([
 ]);
 
 function mapArtifactSummary(raw: MemoryArtifactTransport): MemoryArtifactSummary {
-  const { summary, revision, editable_content: _editableContent, ...artifact } = raw;
+  const scope = mapScope(raw.scope);
+  if (scope == null) throw new Error("Memory artifact is missing its scope");
   return {
-    ...artifact,
-    summary: summary ?? null,
-    revision: revision ?? null,
-    editableContent: null,
+    path: raw.path,
+    title: raw.title,
+    kind: raw.kind,
+    type: raw.type,
+    directory: raw.directory,
+    scope,
+    snippet: raw.snippet,
+    summary: raw.summary ?? null,
+    revision: raw.revision ?? null,
+    recordCount: raw.record_count,
+    generated: raw.generated,
+    editable: raw.editable,
+    readonlyReason: raw.readonly_reason,
+    updatedAt: raw.updated_at,
+    labels: raw.labels,
+    source: raw.source,
   };
 }
 
 function mapArtifactDetail(raw: MemoryArtifactTransport): MemoryArtifactDetail {
   if (raw.revision == null) throw new Error("Memory artifact detail is missing its revision");
-  const { summary, revision, editable_content: editableContent, ...artifact } = raw;
+  const summary = mapArtifactSummary(raw);
   return {
-    ...artifact,
-    summary: summary ?? null,
-    revision,
-    editableContent: editableContent ?? null,
+    path: summary.path,
+    title: summary.title,
+    kind: summary.kind,
+    type: summary.type,
+    directory: summary.directory,
+    scope: summary.scope,
+    snippet: summary.snippet,
+    summary: summary.summary,
+    revision: raw.revision,
+    recordCount: summary.recordCount,
+    generated: summary.generated,
+    editable: summary.editable,
+    readonlyReason: summary.readonlyReason,
+    updatedAt: summary.updatedAt,
+    labels: summary.labels,
+    source: summary.source,
+    content: raw.content,
+    editableContent: raw.editable_content ?? null,
+    timeline: raw.timeline,
+    frontmatter: raw.frontmatter ?? {},
+  };
+}
+
+function mapLegacyArtifact(raw: MemoryArtifactTransport): MemoryArtifact {
+  return {
+    path: raw.path,
+    title: raw.title,
+    kind: raw.kind,
+    type: raw.type,
+    directory: raw.directory,
+    scope: { kind: raw.scope.kind, key: raw.scope.key },
+    content: raw.content,
+    snippet: raw.snippet,
+    summary: raw.summary ?? null,
+    revision: raw.revision ?? null,
+    editableContent: raw.editable_content ?? null,
+    record_count: raw.record_count,
+    generated: raw.generated,
+    editable: raw.editable,
+    readonly_reason: raw.readonly_reason,
+    updated_at: raw.updated_at,
+    labels: raw.labels,
+    source: raw.source,
+    timeline: raw.timeline,
+    frontmatter: raw.frontmatter,
   };
 }
 
@@ -474,14 +574,48 @@ export function listMemoryArtifacts(config: AppConfig, params: { kind?: MemoryAr
   return apiWithConfig<MemoryArtifactsTransport>(
     config,
     `/admin/memory/artifacts${queryString({ kind: params.kind, q: params.q })}`,
+  ).then((response) => ({ artifacts: response.artifacts.map(mapLegacyArtifact) }));
+}
+
+export function listMemoryArtifactSummaries(
+  config: AppConfig,
+  params: { kind?: MemoryArtifactKind; q?: string } = {},
+): Promise<MemoryArtifactSummariesResponse> {
+  return apiWithConfig<MemoryArtifactsTransport>(
+    config,
+    `/admin/memory/artifacts${queryString({ kind: params.kind, q: params.q })}`,
   ).then((response) => ({ artifacts: response.artifacts.map(mapArtifactSummary) }));
 }
 
-function encodeArtifactPath(path: string): string {
-  return path.split("/").map(encodeURIComponent).join("/");
+function canonicalArtifactPath(path: string): string {
+  const parts = path.split("/");
+  if (
+    path.length === 0
+    || path.startsWith("/")
+    || path.includes("\\")
+    || /^[A-Za-z]:\//.test(path)
+    || parts.some((part) => part === "" || part === "." || part === "..")
+  ) {
+    throw new Error("Invalid memory artifact path");
+  }
+  return path;
 }
 
-export function readMemoryArtifact(config: AppConfig, path: string) {
+function encodeArtifactPath(path: string): string {
+  return canonicalArtifactPath(path).split("/").map(encodeURIComponent).join("/");
+}
+
+export async function readMemoryArtifact(config: AppConfig, path: string) {
+  return apiWithConfig<{ artifact: MemoryArtifactTransport }>(
+    config,
+    `/admin/memory/artifacts/${encodeArtifactPath(path)}`,
+  ).then((response) => ({ artifact: mapLegacyArtifact(response.artifact) }));
+}
+
+export async function readMemoryArtifactDetail(
+  config: AppConfig,
+  path: string,
+): Promise<MemoryArtifactDetailResponse> {
   return apiWithConfig<{ artifact: MemoryArtifactTransport }>(
     config,
     `/admin/memory/artifacts/${encodeArtifactPath(path)}`,
@@ -490,7 +624,7 @@ export function readMemoryArtifact(config: AppConfig, path: string) {
 
 export function rebuildMemoryArtifacts(config: AppConfig) {
   return apiWithConfig<MemoryArtifactsTransport>(config, "/admin/memory/artifacts/rebuild", { method: "POST" })
-    .then((response) => ({ artifacts: response.artifacts.map(mapArtifactSummary) }));
+    .then((response) => ({ artifacts: response.artifacts.map(mapLegacyArtifact) }));
 }
 
 export interface PreviewPageEditInput {
@@ -500,11 +634,12 @@ export interface PreviewPageEditInput {
   actor?: string;
 }
 
-export function previewPageEdit(config: AppConfig, input: PreviewPageEditInput): Promise<PageEditPreview> {
+export async function previewPageEdit(config: AppConfig, input: PreviewPageEditInput): Promise<PageEditPreview> {
+  const path = canonicalArtifactPath(input.path);
   return apiWithConfig<{ preview: RawPreview }>(config, "/admin/memory/page-edits/preview", {
     method: "POST",
     body: JSON.stringify({
-      path: input.path,
+      path,
       base_revision: input.baseRevision,
       content: input.content,
       actor: input.actor ?? "user:desktop",
@@ -544,14 +679,15 @@ export interface PageHistoryParams {
   beforeSequence?: number;
 }
 
-export function getPageHistory(config: AppConfig, params: PageHistoryParams = {}): Promise<PageEditHistory> {
+export async function getPageHistory(config: AppConfig, params: PageHistoryParams = {}): Promise<PageEditHistory> {
+  const path = params.path === undefined ? undefined : canonicalArtifactPath(params.path);
   return apiWithConfig<{
     events: RawEvent[];
     total: number;
     limit: number;
     next_before_sequence: number | null;
   }>(config, `/admin/memory/page-edits/history${queryString({
-    path: params.path,
+    path,
     limit: params.limit,
     before_sequence: params.beforeSequence,
   })}`).then((response) => ({
@@ -568,7 +704,8 @@ export interface PageLinksParams {
   offset?: number;
 }
 
-export function getPageLinks(config: AppConfig, params: PageLinksParams): Promise<PageLinks> {
+export async function getPageLinks(config: AppConfig, params: PageLinksParams): Promise<PageLinks> {
+  const path = canonicalArtifactPath(params.path);
   return apiWithConfig<{
     path: string;
     revision: string;
@@ -580,7 +717,7 @@ export function getPageLinks(config: AppConfig, params: PageLinksParams): Promis
     limit: number;
     offset: number;
   }>(config, `/admin/memory/links${queryString({
-    path: params.path,
+    path,
     limit: params.limit,
     offset: params.offset,
   })}`).then((response) => ({

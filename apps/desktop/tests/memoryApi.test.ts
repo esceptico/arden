@@ -5,8 +5,10 @@ import {
   getPageHistory,
   getPageLinks,
   listMemoryArtifacts,
+  listMemoryArtifactSummaries,
   previewPageEdit,
   readMemoryArtifact,
+  readMemoryArtifactDetail,
 } from "@/api/memoryArtifacts";
 
 const config: AppConfig = { serverUrl: "http://localhost:6877", apiKey: "test-key" };
@@ -396,7 +398,7 @@ test("links preserve resolution status, context, candidates, and pagination", as
   });
 });
 
-test("artifact list and detail distinguish unavailable and exact revisions", async () => {
+test("notebook artifact list is camelCase metadata-only and detail owns content", async () => {
   const artifact = {
     path: "topics/a.md",
     title: "A",
@@ -417,17 +419,71 @@ test("artifact list and detail distinguish unavailable and exact revisions", asy
     frontmatter: {},
   };
   bridgeResponse({ artifacts: [artifact] });
-  const listed = await listMemoryArtifacts(config);
-  expect(listed.artifacts[0]).toMatchObject({ revision: null, summary: null, snippet: "A short summary", editable: true });
+  const listed = await listMemoryArtifactSummaries(config);
+  expect(listed.artifacts[0]).toEqual({
+    path: "topics/a.md",
+    title: "A",
+    kind: "topic",
+    type: "file",
+    directory: "topics",
+    scope: { kind: "user", key: null },
+    snippet: "A short summary",
+    summary: null,
+    revision: null,
+    recordCount: 2,
+    generated: false,
+    editable: true,
+    readonlyReason: null,
+    updatedAt: "2026-07-12T10:00:00Z",
+    labels: ["work"],
+    source: null,
+  });
+  expect("content" in listed.artifacts[0]!).toBe(false);
+  expect("timeline" in listed.artifacts[0]!).toBe(false);
+  expect("record_count" in listed.artifacts[0]!).toBe(false);
 
   bridgeResponse({ artifact: { ...artifact, content: "Rendered prose", revision: "sha256:page", editable_content: "# A\n\nExact prose\n" } });
-  const detail = await readMemoryArtifact(config, "topics/a.md");
-  expect(detail.artifact).toMatchObject({
+  const detail = await readMemoryArtifactDetail(config, "topics/a.md");
+  expect(detail.artifact).toEqual({
+    path: "topics/a.md",
+    title: "A",
+    kind: "topic",
+    type: "file",
+    directory: "topics",
+    scope: { kind: "user", key: null },
+    snippet: "A short summary",
     revision: "sha256:page",
     summary: null,
     editableContent: "# A\n\nExact prose\n",
     content: "Rendered prose",
+    recordCount: 2,
+    generated: false,
+    editable: true,
+    readonlyReason: null,
+    updatedAt: "2026-07-12T10:00:00Z",
+    labels: ["work"],
+    source: null,
+    timeline: [],
+    frontmatter: {},
   });
+  expect("editable_content" in detail.artifact).toBe(false);
+  expect("record_count" in detail.artifact).toBe(false);
+});
+
+test("legacy artifact adapters remain explicit for current components", async () => {
+  const raw = {
+    path: "topics/a.md", title: "A", kind: "topic", type: "file", directory: "topics",
+    scope: { kind: "user", key: null }, content: "", snippet: "Summary", record_count: 2,
+    generated: false, editable: true, readonly_reason: null, updated_at: null, labels: [], source: null,
+    timeline: [], frontmatter: {},
+  };
+  bridgeResponse({ artifacts: [raw] });
+  const list = await listMemoryArtifacts(config);
+  expect(list.artifacts[0]).toMatchObject({ record_count: 2, readonly_reason: null, updated_at: null });
+
+  bridgeResponse({ artifact: { ...raw, content: "body", revision: "rev", editable_content: "exact" } });
+  const detail = await readMemoryArtifact(config, "topics/a.md");
+  expect(detail.artifact).toMatchObject({ content: "body", editableContent: "exact", revision: "rev" });
 });
 
 test("bridge errors retain structured revision-conflict data", async () => {
@@ -463,4 +519,56 @@ test("fetch errors retain structured revision-conflict data", async () => {
   expect(error).toBeInstanceOf(ApiError);
   expect(error.status).toBe(409);
   expect(error.data).toEqual(conflict);
+});
+
+test("fetch plain-text errors read the body once and preserve status and text", async () => {
+  (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
+  Object.defineProperty(window, "ntrpDesktop", { configurable: true, value: undefined, writable: true });
+  let textReads = 0;
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 502,
+    headers: new Headers({ "content-type": "text/plain" }),
+    text: async () => {
+      textReads += 1;
+      return "upstream unavailable";
+    },
+    json: async () => {
+      throw new Error("json() must not be called");
+    },
+  }) as Response;
+
+  const error = await applyPageEdit(config, { previewId: "preview-1", decisions: {} }).catch((reason) => reason);
+
+  expect(textReads).toBe(1);
+  expect(error).toBeInstanceOf(ApiError);
+  expect(error.status).toBe(502);
+  expect(error.responseText).toBe("upstream unavailable");
+  expect(error.data).toBeNull();
+});
+
+test("fetch malformed JSON errors preserve the raw body and HTTP status", async () => {
+  (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
+  Object.defineProperty(window, "ntrpDesktop", { configurable: true, value: undefined, writable: true });
+  globalThis.fetch = async () => new Response("{not-json", {
+    status: 500,
+    headers: { "content-type": "application/json" },
+  });
+
+  const error = await applyPageEdit(config, { previewId: "preview-1", decisions: {} }).catch((reason) => reason);
+
+  expect(error).toBeInstanceOf(ApiError);
+  expect(error.status).toBe(500);
+  expect(error.responseText).toBe("{not-json");
+  expect(error.data).toBeNull();
+});
+
+test("artifact APIs reject non-canonical paths before transport", async () => {
+  bridgeResponse({ artifact: {} });
+  for (const path of ["", "/absolute.md", "../escape.md", "topics/./a.md", "topics//a.md", "topics\\a.md", "C:/a.md"]) {
+    const error = await readMemoryArtifactDetail(config, path).catch((reason) => reason);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe("Invalid memory artifact path");
+    expect(request).toBeNull();
+  }
 });

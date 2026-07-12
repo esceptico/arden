@@ -2,8 +2,12 @@ import type {
   applyPageEdit,
   getPageHistory,
   getPageLinks,
+  MemoryArtifactDetail,
+  MemoryArtifactSummary,
   previewPageEdit,
 } from "@/api/memoryArtifacts";
+
+export type { MemoryArtifactDetail, MemoryArtifactSummary };
 
 export type PageEditPreview = Awaited<ReturnType<typeof previewPageEdit>>;
 export type PageEditEvent = Awaited<ReturnType<typeof applyPageEdit>>["event"];

@@ -5,6 +5,7 @@ const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const { fileURLToPath } = require("node:url");
+const { parseApiResponseBody } = require("./api-response.cjs");
 // The parser is an ESM module (shared with the Vite renderer, which can't
 // import CommonJS source). Kick off the import at load; await the cached
 // promise where it's used. CJS can't `require` ESM or top-level await.
@@ -204,10 +205,7 @@ async function apiRequest(configInput, requestInput, signal) {
     });
     const contentType = response.headers.get("content-type") ?? "";
     const text = await response.text();
-    let data = null;
-    if (contentType.includes("application/json") && text) {
-      data = JSON.parse(text);
-    }
+    const { data } = parseApiResponseBody(contentType, text);
     return {
       ok: response.ok,
       status: response.status,
