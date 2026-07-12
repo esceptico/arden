@@ -5,7 +5,7 @@ import { fetchAutomations, fetchAutomationSuggestions } from "@/actions/automati
 import type { CreateAutomationPayload } from "@/api/types";
 import { suggestionToPayload } from "@/api/automations";
 import { isIterationLoop } from "@/lib/automationFilters";
-import { AutomationRail, ScheduleTape, groupAutomations } from "@/features/automations/components/AutomationRail";
+import { AutomationRail, groupAutomations } from "@/features/automations/components/AutomationRail";
 import { AutomationDetail, type DetailSeed } from "@/features/automations/components/AutomationDetail";
 import { NewAutomationMenu } from "@/features/automations/components/NewAutomationMenu";
 import { Button } from "@/components/ui/Button";
@@ -91,7 +91,7 @@ export function AutomationsModal() {
     >
       <div className="grid grid-cols-[280px_minmax(0,1fr)] min-h-0 h-full">
         {/* rail — anchored chrome, one ladder step below the pane */}
-        <aside className="grid grid-rows-[auto_minmax(0,1fr)_auto] min-h-0 bg-surface-sunken/50">
+        <aside className="grid grid-rows-[auto_minmax(0,1fr)] min-h-0 bg-surface-sunken/50">
           <div className="flex items-center justify-between pl-[18px] pr-3.5 pt-4 pb-2.5">
             <h2 className="m-0 text-md font-semibold tracking-[-0.01em] text-ink">Automations</h2>
             <Button
@@ -112,7 +112,6 @@ export function AutomationsModal() {
             }}
             onPickSuggestion={(s) => startDraft(suggestionToPayload(s))}
           />
-          <ScheduleTape automations={automations} />
         </aside>
 
         {/* detail */}

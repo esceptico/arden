@@ -29,12 +29,13 @@ def test_registry_replaces_only_target_provider():
     standard = Model("gpt-standard", Provider.OPENAI, 128_000)
     previous = Model("openai-codex/old", Provider.OPENAI_CODEX, 128_000)
     current = Model("openai-codex/current", Provider.OPENAI_CODEX, 256_000)
-    registry = ModelRegistry([custom, standard, previous])
+    registry = ModelRegistry([standard, previous, custom])
 
     assert registry.replace_provider_models(Provider.OPENAI_CODEX, [current]) is True
     assert registry.get_models_by_provider(Provider.OPENAI_CODEX) == {current.id: current}
     assert registry.get_model(custom.id) == custom
     assert registry.get_model(standard.id) == standard
+    assert list(registry.get_models()) == [standard.id, current.id, custom.id]
     assert registry.replace_provider_models(Provider.OPENAI_CODEX, [current]) is False
 
 
