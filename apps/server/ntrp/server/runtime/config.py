@@ -21,6 +21,7 @@ class RuntimeConfig:
         get_stores: Callable[[], Stores | None],
         sync_mcp: Callable[[Config], Awaitable[None]],
         is_closing: Callable[[], bool],
+        refresh_models: Callable[[], Awaitable[bool]] | None = None,
         after_reload: Callable[[], Awaitable[None]] | None = None,
     ):
         self.config = config
@@ -31,6 +32,7 @@ class RuntimeConfig:
         self._get_stores = get_stores
         self._sync_mcp = sync_mcp
         self._is_closing = is_closing
+        self._refresh_models = refresh_models
         self._after_reload = after_reload
 
         self._lock = asyncio.Lock()
@@ -48,6 +50,8 @@ class RuntimeConfig:
             return
 
         async with self._lock:
+            if self._refresh_models:
+                await self._refresh_models()
             config = get_config()
             await llm_reset()
             llm_init(config)

@@ -132,8 +132,11 @@ async def start_openai_codex_oauth():
 
 
 @router.get("/providers/openai-codex/oauth/status")
-async def get_openai_codex_oauth_status():
-    return login_status()
+async def get_openai_codex_oauth_status(runtime: Runtime = Depends(get_runtime)):
+    status = login_status()
+    if status.get("connected") is True:
+        await runtime.reload_config()
+    return status
 
 
 @router.get("/services")

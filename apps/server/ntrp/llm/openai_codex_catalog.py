@@ -72,7 +72,9 @@ async def refresh_codex_models(*, client: Any | None = None) -> bool:
         else:
             async with httpx.AsyncClient(timeout=30.0) as owned_client:
                 models = await _fetch_catalog(owned_client)
-    except (httpx.HTTPError, RuntimeError, ValueError):
+    except RuntimeError:
+        return False
+    except (httpx.HTTPError, ValueError):
         _logger.warning("Failed to refresh OpenAI Codex model catalog", exc_info=True)
         return False
 

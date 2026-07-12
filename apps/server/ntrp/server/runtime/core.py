@@ -8,6 +8,7 @@ from ntrp.config import Config, get_config
 from ntrp.core.factory import AgentConfig
 from ntrp.integrations import ALL_INTEGRATIONS, IntegrationRegistry
 from ntrp.integrations.slack.client import SlackClient
+from ntrp.llm.openai_codex_catalog import refresh_codex_models
 from ntrp.llm.router import close as llm_close
 from ntrp.llm.router import get_completion_client
 from ntrp.llm.router import init as llm_init
@@ -62,6 +63,7 @@ class Runtime:
             get_stores=lambda: self.stores,
             sync_mcp=lambda config: self.sync_mcp(config),
             is_closing=lambda: self._closing,
+            refresh_models=refresh_codex_models,
             after_reload=self._after_config_reload,
         )
 

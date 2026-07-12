@@ -1,7 +1,9 @@
 import base64
 import json
+from unittest.mock import AsyncMock
 
 from ntrp.llm import openai_codex_auth as auth
+from ntrp.server.routers import providers
 
 
 def _jwt(payload: dict) -> str:
@@ -46,3 +48,12 @@ def test_config_defaults_to_codex_models_when_oauth_is_connected(tmp_path, monke
     assert config.chat_model == "openai-codex/gpt-5.5"
     assert config.memory_model == "openai-codex/gpt-5.4-mini"
     assert config.has_providers
+
+
+async def test_connected_oauth_status_reloads_runtime(monkeypatch):
+    runtime = type("Runtime", (), {"reload_config": AsyncMock()})()
+    status = {"connected": True, "status": "connected"}
+    monkeypatch.setattr(providers, "login_status", lambda: status)
+
+    assert await providers.get_openai_codex_oauth_status(runtime) == status
+    runtime.reload_config.assert_awaited_once()

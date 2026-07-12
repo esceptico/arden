@@ -25,6 +25,7 @@ from ntrp.automation.scheduler import AUTOMATION_BUS_KEY, RunSkipped, split_manu
 from ntrp.constants import LEGACY_AREAS_FILE
 from ntrp.core.tool_result_files import prune_offload_store
 from ntrp.events.sse import AreasChangedEvent, MemoryChangedEvent
+from ntrp.llm.openai_codex_catalog import refresh_codex_models
 from ntrp.logging import get_logger
 from ntrp.memory.pages import parse_page
 from ntrp.operator.runner import RunRequest, run_agent, run_agent_streaming
@@ -87,6 +88,7 @@ def _install_shutdown_handlers(runtime: Runtime, bus_registry: BusRegistry) -> N
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await refresh_codex_models()
     runtime = Runtime()
     await runtime.connect()
     runtime.start_indexing()

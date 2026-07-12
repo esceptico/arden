@@ -3,6 +3,7 @@ from pydantic import ValidationError
 
 from ntrp.config import Config
 from ntrp.llm.models import EmbeddingModel, Provider
+from ntrp.server.runtime.config import RuntimeConfig
 from ntrp.server.runtime.core import Runtime
 from ntrp.server.runtime.knowledge import KnowledgeRuntime
 from ntrp.server.schemas import UpdateConfigRequest
@@ -97,11 +98,48 @@ async def test_runtime_reload_does_not_advance_config_version_after_failure(monk
 
 
 @pytest.mark.asyncio
+async def test_runtime_reload_refreshes_models_before_reading_config(monkeypatch):
+    import ntrp.server.runtime.config as config_module
+
+    events: list[str] = []
+    updated = Config(memory=False, max_depth=12)
+
+    async def refresh_models() -> bool:
+        events.append("models")
+        return True
+
+    def read_config() -> Config:
+        events.append("config")
+        return updated
+
+    monkeypatch.setattr(config_module, "get_config", read_config)
+    monkeypatch.setattr(config_module, "llm_reset", _noop_reset)
+    monkeypatch.setattr(config_module, "llm_init", lambda _config: None)
+
+    runtime = RuntimeConfig(
+        Config(memory=False),
+        get_integrations=_Integrations,
+        get_knowledge=_Knowledge,
+        get_stores=lambda: None,
+        sync_mcp=_noop_sync_mcp,
+        is_closing=lambda: False,
+        refresh_models=refresh_models,
+    )
+
+    await runtime.reload()
+
+    assert events == ["models", "config"]
+    assert runtime.config is updated
+
+
+@pytest.mark.asyncio
 async def test_knowledge_runtime_syncs_indexer_with_embedding_config(tmp_path, monkeypatch):
     import ntrp.llm.models as llm_models
 
     monkeypatch.setitem(
-        llm_models._embedding_models, "test-embedding", EmbeddingModel("test-embedding", Provider.OPENAI, 3)
+        llm_models._registry._embedding_models,
+        "test-embedding",
+        EmbeddingModel("test-embedding", Provider.OPENAI, 3),
     )
 
     initial = Config(ntrp_dir=tmp_path, memory=False, embedding_model=None)
