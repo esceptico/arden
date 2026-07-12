@@ -19,7 +19,7 @@ from ntrp.memory.pages import SENTINEL, Page, parse_page, parse_raw, render_page
 _HEADER = "<!-- ntrp:records schema=2 page={page} -->"
 _HEADER_RE = re.compile(r"^<!-- ntrp:records schema=(?P<version>\d+)(?: [^>]*)? -->$")
 _READABLE_ID_RE = re.compile(r"^- \S+ \^(?P<id>[\w-]+) ")
-_VALID_SCOPES = frozenset({"global", "user", "area", "project", "entity"})
+_VALID_SCOPES = frozenset({"global", "user", "area"})
 _MIGRATION_META = Path(".ntrp/maintenance/migration-v2.json")
 
 
@@ -38,6 +38,7 @@ class VaultHealth:
     schema_version: int | None
     last_migration: str | None
     backup_path: str | None
+    schema_versions: tuple[int, ...] = ()
     duplicate_ids: tuple[str, ...] = ()
     invalid_relationship_targets: tuple[str, ...] = ()
     malformed_metadata: tuple[str, ...] = ()
@@ -48,7 +49,7 @@ class VaultHealth:
 
     @property
     def healthy(self) -> bool:
-        return self.schema_version in (None, 2) and not any(
+        return self.schema_versions in ((), (2,)) and not any(
             (
                 self.duplicate_ids,
                 self.invalid_relationship_targets,
@@ -94,12 +95,31 @@ class _LegacyPage:
     existing: list[LedgerEntry]
 
 
+@dataclass
+class _Occurrence:
+    page: _LegacyPage
+    ordinal: int
+    old_id: str
+    new_id: str
+    scope: tuple[str, str | None]
+    entry: LedgerEntry
+    identity: str
+    is_legacy: bool
+
+
 def _split_frontmatter(text: str) -> tuple[str, str]:
     if text.startswith("---\n"):
         end = text.find("\n---\n", 4)
         if end >= 0:
             return text[: end + 5], text[end + 5 :]
     return "", text
+
+
+def _read_text(path: Path, root: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise VaultMigrationError(path.relative_to(root), str(exc)) from exc
 
 
 def _legacy_rows(text: str, rel: Path) -> list[tuple[str, LedgerEntry]]:
@@ -144,18 +164,27 @@ def _discover_legacy(root: Path) -> list[_LegacyPage]:
     if raw_root.is_dir():
         for raw_path in sorted(raw_root.rglob("*.md")):
             rel = raw_path.relative_to(raw_root)
-            raw_text = raw_path.read_text(encoding="utf-8")
+            raw_text = _read_text(raw_path, root)
             _, body = _split_frontmatter(raw_text)
             first = next((line for line in body.splitlines() if line.strip()), "")
             visible_path = root / rel
-            visible = visible_path.read_text(encoding="utf-8") if visible_path.exists() else ""
-            page = parse_page(visible)
-            raw_fm, parsed = parse_raw(raw_text)
+            visible = _read_text(visible_path, root) if visible_path.exists() else ""
+            try:
+                page = parse_page(visible)
+            except Exception as exc:
+                raise VaultMigrationError(rel, f"visible parse: {exc}") from exc
+            try:
+                raw_fm, parsed = parse_raw(raw_text)
+            except Exception as exc:
+                raise VaultMigrationError(Path("raw") / rel, f"raw parse: {exc}") from exc
             existing = [item for item in parsed if isinstance(item, LedgerEntry)]
             rows = [] if _HEADER_RE.fullmatch(first) else _legacy_rows(raw_text, Path("raw") / rel)
             if SENTINEL in visible:
                 prose, timeline = visible.split(SENTINEL, 1)
-                page = parse_page(prose)
+                try:
+                    page = parse_page(prose)
+                except Exception as exc:
+                    raise VaultMigrationError(rel, f"visible parse: {exc}") from exc
                 rows.extend(_legacy_rows(timeline, rel))
             has_legacy = has_legacy or bool(rows)
             found[rel] = _LegacyPage(rel, visible, page, rows, raw_fm, existing)
@@ -164,11 +193,14 @@ def _discover_legacy(root: Path) -> list[_LegacyPage]:
         rel = visible_path.relative_to(root)
         if rel.parts[0] in {"raw", ".ntrp", ".index"} or rel in consumed:
             continue
-        visible = visible_path.read_text(encoding="utf-8")
+        visible = _read_text(visible_path, root)
         if SENTINEL not in visible:
             continue
         prose, timeline = visible.split(SENTINEL, 1)
-        page = parse_page(prose)
+        try:
+            page = parse_page(prose)
+        except Exception as exc:
+            raise VaultMigrationError(rel, f"visible parse: {exc}") from exc
         found[rel] = _LegacyPage(rel, visible, page, _legacy_rows(timeline, rel), {}, [])
         has_legacy = True
     return list(found.values()) if has_legacy else []
@@ -191,6 +223,42 @@ def _new_id(old_id: str, rel: Path, raw: str) -> str:
     return f"{old_id}-{digest}"
 
 
+_EXPLICIT_REF_RE = re.compile(r"^(?P<path>[^#]+)#\^?(?P<id>[\w-]+)$")
+
+
+def _normal_page_path(raw: str) -> str:
+    value = raw.removeprefix("raw/")
+    return value.removesuffix(".md") + ".md"
+
+
+def _resolve_reference(
+    raw: str,
+    *,
+    referring: _Occurrence | None,
+    page: _LegacyPage,
+    by_old_id: dict[str, list[_Occurrence]],
+) -> str:
+    explicit = _EXPLICIT_REF_RE.fullmatch(raw)
+    old_id = explicit["id"] if explicit else raw.removeprefix("^")
+    candidates = by_old_id.get(old_id, [])
+    if explicit:
+        target_path = _normal_page_path(explicit["path"])
+        candidates = [item for item in candidates if item.page.rel.as_posix() == target_path]
+        if len(candidates) != 1:
+            raise VaultMigrationError(page.rel, f"reference {raw!r} resolves to {len(candidates)} targets")
+        return f"{explicit['path']}#^{candidates[0].new_id}"
+    if not candidates:
+        return raw
+    same_page = [item for item in candidates if item.page.rel == page.rel]
+    if len(same_page) == 1:
+        return same_page[0].new_id
+    if referring is not None:
+        same_scope = [item for item in candidates if item.scope == referring.scope]
+        if len(same_scope) == 1:
+            return same_scope[0].new_id
+    return candidates[0].new_id
+
+
 def _render_pages(pages: list[_LegacyPage], migration_time: str) -> tuple[dict[Path, bytes], int, int, int]:
     rendered: dict[Path, bytes] = {}
     collapsed = 0
@@ -199,14 +267,13 @@ def _render_pages(pages: list[_LegacyPage], migration_time: str) -> tuple[dict[P
     sequence = max((e.meta.sequence for page in pages for e in page.existing), default=0)
     reserved = {e.id for page in pages for e in page.existing} | {e.id for page in pages for _, e in page.rows}
     used_ids: set[str] = set(reserved)
-    occurrences = [
-        (page, render_ledger_entry(entry), entry, False)
-        for page in pages for entry in page.existing
-    ] + [(page, raw, entry, True) for page in pages for raw, entry in page.rows]
+    raw_occurrences = []
+    for page in sorted(pages, key=lambda item: item.rel.as_posix()):
+        raw_occurrences.extend((page, render_ledger_entry(entry), entry, False) for entry in page.existing)
+        raw_occurrences.extend((page, raw, entry, True) for raw, entry in page.rows)
     seen: dict[str, str] = {}
-    assigned: list[tuple[_LegacyPage, LedgerEntry, bool]] = []
-    local_remap: dict[Path, dict[str, str]] = {}
-    for page, identity, entry, is_legacy in occurrences:
+    assigned: list[_Occurrence] = []
+    for ordinal, (page, identity, entry, is_legacy) in enumerate(raw_occurrences):
         previous = seen.get(entry.id)
         if previous == identity:
             collapsed += 1
@@ -217,17 +284,20 @@ def _render_pages(pages: list[_LegacyPage], migration_time: str) -> tuple[dict[P
             while new_id in used_ids:
                 new_id += "x"
             used_ids.add(new_id)
-            local_remap.setdefault(page.rel, {})[entry.id] = new_id
             reassigned += 1
         seen.setdefault(entry.id, identity)
-        assigned.append((page, replace(entry, id=new_id), is_legacy))
+        scope = _scope(page, entry.kind) if is_legacy else (entry.meta.scope_kind, entry.meta.scope_key)
+        assigned.append(_Occurrence(page, ordinal, entry.id, new_id, scope, entry, identity, is_legacy))
+    by_old_id: dict[str, list[_Occurrence]] = {}
+    for occurrence in assigned:
+        by_old_id.setdefault(occurrence.old_id, []).append(occurrence)
     by_page: dict[Path, list[LedgerEntry]] = {page.rel: [] for page in pages}
-    for page, entry, is_legacy in assigned:
-        remap = local_remap.get(page.rel, {})
-        if is_legacy:
+    for occurrence in assigned:
+        page, entry = occurrence.page, replace(occurrence.entry, id=occurrence.new_id)
+        if occurrence.is_legacy:
             migrated_count += 1
             sequence += 1
-            scope_kind, scope_key = _scope(page, entry.kind)
+            scope_kind, scope_key = occurrence.scope
             entry = replace(
                 entry,
                 meta=replace(
@@ -239,23 +309,37 @@ def _render_pages(pages: list[_LegacyPage], migration_time: str) -> tuple[dict[P
                     scope_key=scope_key,
                 ),
             )
-        sources = tuple(
-            replace(source, ref=remap.get(source.ref, source.ref)) if source.ref in reserved else source
-            for source in entry.meta.sources
-        )
+        sources = []
+        for source in entry.meta.sources:
+            ref = source.ref
+            if source.kind in {"record", "derived-record", "derived_record"} or ref in reserved or _EXPLICIT_REF_RE.fullmatch(ref):
+                ref = _resolve_reference(ref, referring=occurrence, page=page, by_old_id=by_old_id)
+            sources.append(replace(source, ref=ref))
         entry = replace(
             entry,
             meta=replace(
                 entry.meta,
-                sources=sources,
-                supersedes=tuple(remap.get(target, target) for target in entry.meta.supersedes),
-                successor_id=remap.get(entry.meta.successor_id, entry.meta.successor_id),
+                sources=tuple(sources),
+                supersedes=tuple(
+                    _resolve_reference(target, referring=occurrence, page=page, by_old_id=by_old_id)
+                    for target in entry.meta.supersedes
+                ),
+                successor_id=(
+                    _resolve_reference(entry.meta.successor_id, referring=occurrence, page=page, by_old_id=by_old_id)
+                    if entry.meta.successor_id else None
+                ),
             ),
         )
         by_page[page.rel].append(entry)
     for legacy in pages:
         entries = by_page[legacy.rel]
-        visible_page = Page(frontmatter={**legacy.page.frontmatter, **legacy.raw_fm}, prose=legacy.page.prose)
+        frontmatter = {**legacy.page.frontmatter, **legacy.raw_fm}
+        if "prose_cites" in frontmatter:
+            frontmatter["prose_cites"] = [
+                _resolve_reference(str(cite), referring=None, page=legacy, by_old_id=by_old_id)
+                for cite in frontmatter.get("prose_cites", [])
+            ]
+        visible_page = Page(frontmatter=frontmatter, prose=legacy.page.prose)
         rendered[legacy.rel] = render_page(visible_page).encode()
         visible_page.lines = entries
         visible_page.records_header = _HEADER.format(page=legacy.rel.as_posix())
@@ -275,16 +359,23 @@ def _copy_backup(root: Path, backup: Path) -> None:
             (backup / rel).mkdir(parents=True, exist_ok=True)
         elif source.is_file():
             target = backup / rel
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, target)
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target)
+            except OSError as exc:
+                raise VaultMigrationError(rel, f"backup copy: {exc}") from exc
 
 
 def _migration_meta(root: Path) -> dict[str, str]:
     path = root / _MIGRATION_META
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    if not path.exists():
         return {}
+    try:
+        data = json.loads(_read_text(path, root))
+    except FileNotFoundError:
+        return {}
+    except json.JSONDecodeError as exc:
+        raise VaultMigrationError(_MIGRATION_META, f"invalid migration status JSON: {exc.msg}") from exc
     return {key: str(value) for key, value in data.items() if value is not None}
 
 
@@ -329,8 +420,11 @@ def _migrate_vault_to_v2(root: Path) -> MigrationReport:
     _stage_current_vault(root, stage)
     for rel, content in files.items():
         target = stage / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(content)
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+        except OSError as exc:
+            raise VaultMigrationError(rel, f"stage write: {exc}") from exc
     staged_health = validate_vault(stage)
     if not staged_health.healthy:
         raise VaultMigrationError(Path(".ntrp/maintenance/migration-v2") / run_id, staged_health.first_error or "validation failed")
@@ -395,6 +489,29 @@ def _v2_entries(path: Path, root: Path, malformed: list[str]) -> list[LedgerEntr
     return entries
 
 
+def _precision_error(value: str | None, precision: str) -> str | None:
+    if precision == "unknown":
+        return None if value is None else "unknown precision requires absent occurred_at"
+    if value is None:
+        return "absent occurred_at requires unknown precision"
+    if precision == "day":
+        return None if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value) else "day precision requires a date-only occurred_at"
+    timestamp = re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:(?P<seconds>\d{2})(?P<fraction>\.\d+)?(?:Z|[+-]\d{2}:\d{2})",
+        value,
+    )
+    if timestamp is None:
+        return f"{precision} precision requires an RFC 3339 timestamp"
+    fraction = timestamp["fraction"]
+    if precision == "minute" and (timestamp["seconds"] != "00" or fraction):
+        return "minute precision requires zero seconds and no fraction"
+    if precision == "second" and fraction:
+        return "second precision forbids fractional seconds"
+    if precision == "millisecond" and (fraction is None or len(fraction) != 4):
+        return "millisecond precision requires exactly three fractional digits"
+    return None
+
+
 def validate_vault(root: Path) -> VaultHealth:
     root = Path(root)
     malformed: list[str] = []
@@ -409,7 +526,11 @@ def validate_vault(root: Path) -> VaultHealth:
             malformed.append(f"{internal.relative_to(root).as_posix()}: internal root is a symlink")
     if raw_root.is_dir():
         for path in sorted(raw_root.rglob("*.md")):
-            _, body = _split_frontmatter(path.read_text(encoding="utf-8"))
+            try:
+                _, body = _split_frontmatter(_read_text(path, root))
+            except VaultMigrationError as exc:
+                malformed.append(str(exc))
+                continue
             first = next((line for line in body.splitlines() if line.strip()), "")
             header = _HEADER_RE.fullmatch(first)
             if header:
@@ -438,35 +559,28 @@ def validate_vault(root: Path) -> VaultHealth:
             invalid_scope.append(f"{rel}: {entry.id}: area requires a scope key")
         elif entry.meta.scope_kind in {"user", "global"} and entry.meta.scope_key is not None:
             invalid_scope.append(f"{rel}: {entry.id}: {entry.meta.scope_kind} forbids a scope key")
-        if entry.occurred_at is None and entry.meta.time_precision != "unknown":
-            precision.append(f"{rel}: {entry.id}: absent occurred_at requires unknown precision")
-        elif entry.occurred_at is not None:
-            date_only = bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", entry.occurred_at))
-            if entry.meta.time_precision == "day" and not date_only:
-                precision.append(f"{rel}: {entry.id}: day precision requires a date-only occurred_at")
-            elif date_only and entry.meta.time_precision != "day":
-                precision.append(f"{rel}: {entry.id}: date-only occurred_at requires day precision")
+        if error := _precision_error(entry.occurred_at, entry.meta.time_precision):
+            precision.append(f"{rel}: {entry.id}: {error}")
         for index, source in enumerate(entry.meta.sources):
             source_label = f"{rel}: {entry.id}: source {index}"
-            if source.occurred_at is None and source.time_precision != "unknown":
-                precision.append(f"{source_label}: absent occurred_at requires unknown precision")
-            elif source.occurred_at is not None:
-                source_date = bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", source.occurred_at))
-                if source.time_precision == "day" and not source_date:
-                    precision.append(f"{source_label}: day precision requires a date-only occurred_at")
-                elif source_date and source.time_precision != "day":
-                    precision.append(f"{source_label}: date-only occurred_at requires day precision")
+            if error := _precision_error(source.occurred_at, source.time_precision):
+                precision.append(f"{source_label}: {error}")
     interrupted: list[str] = []
     for rel in (Path(".ntrp/journal"), Path(".ntrp/maintenance/migration-v2")):
         path = root / rel
         if path.is_dir():
             interrupted.extend((rel / child.name).as_posix() for child in sorted(path.iterdir()))
-    meta = _migration_meta(root)
+    try:
+        meta = _migration_meta(root)
+    except VaultMigrationError as exc:
+        malformed.append(str(exc))
+        meta = {}
     schema_version = next(iter(versions)) if len(versions) == 1 else (None if not versions else min(versions))
     return VaultHealth(
         schema_version=schema_version,
         last_migration=meta.get("last_migration"),
         backup_path=meta.get("backup_path"),
+        schema_versions=tuple(sorted(versions)),
         duplicate_ids=duplicate_ids,
         invalid_relationship_targets=tuple(sorted(relationships)),
         malformed_metadata=tuple(sorted(malformed)),

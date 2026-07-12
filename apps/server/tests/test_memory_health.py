@@ -153,3 +153,17 @@ def test_health_rejects_symlinked_raw_root(tmp_path: Path) -> None:
     outside.mkdir()
     (tmp_path / "raw").symlink_to(outside, target_is_directory=True)
     assert not validate_vault(tmp_path).healthy
+
+
+def test_health_preserves_mixed_schema_versions_and_rejects_bad_status(tmp_path: Path) -> None:
+    _write_raw(tmp_path, "two.md", "<!-- ntrp:records schema=2 page=two.md -->\n")
+    _write_raw(tmp_path, "three.md", "<!-- ntrp:records schema=3 page=three.md -->\n")
+    health = validate_vault(tmp_path)
+    assert health.schema_versions == (2, 3)
+    assert not health.healthy
+
+    status = tmp_path / ".ntrp/maintenance/migration-v2.json"
+    status.parent.mkdir(parents=True)
+    status.write_text("{bad", encoding="utf-8")
+    health = validate_vault(tmp_path)
+    assert health.malformed_metadata[0].startswith(".ntrp/maintenance/migration-v2.json:")
