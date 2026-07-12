@@ -133,6 +133,11 @@ export type MemoryArtifactKind = MemoryKind | "changelog" | "lesson" | "topic";
 
 type MemoryFrontmatter = Record<string, string | number | boolean | null | Array<string | number | boolean | null>>;
 
+export interface ArtifactScope {
+  kind: string;
+  key: string | null;
+}
+
 interface MemoryTimelineEntry {
   id: string;
   text: string;
@@ -149,7 +154,7 @@ export interface MemoryArtifactSummary {
   kind: MemoryArtifactKind;
   type: "file";
   directory: string;
-  scope: MemoryScope;
+  scope: ArtifactScope;
   snippet: string | null;
   summary: string | null;
   revision: string | null;
@@ -343,15 +348,13 @@ const SOURCE_FIELDS = new Set([
 ]);
 
 function mapArtifactSummary(raw: MemoryArtifactTransport): MemoryArtifactSummary {
-  const scope = mapScope(raw.scope);
-  if (scope == null) throw new Error("Memory artifact is missing its scope");
   return {
     path: raw.path,
     title: raw.title,
     kind: raw.kind,
     type: raw.type,
     directory: raw.directory,
-    scope,
+    scope: { kind: raw.scope.kind, key: raw.scope.key },
     snippet: raw.snippet,
     summary: raw.summary ?? null,
     revision: raw.revision ?? null,

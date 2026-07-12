@@ -486,6 +486,60 @@ test("legacy artifact adapters remain explicit for current components", async ()
   expect(detail.artifact).toMatchObject({ content: "body", editableContent: "exact", revision: "rev" });
 });
 
+test("artifact placement preserves entity, project, and future scope kinds", async () => {
+  const artifact = (path: string, kind: string, key: string | null) => ({
+    path, title: path, kind: "topic", type: "file", directory: "topics",
+    scope: { kind, key }, content: "", snippet: null, record_count: null,
+    generated: false, editable: true, readonly_reason: null, updated_at: null, labels: [], source: null,
+    timeline: [], frontmatter: {},
+  });
+  bridgeResponse({ artifacts: [
+    artifact("entities/alice.md", "entity", "alice"),
+    artifact("projects/dex.md", "project", "dex"),
+    artifact("custom/future.md", "future-placement", null),
+  ] });
+
+  const list = await listMemoryArtifactSummaries(config);
+
+  expect(list.artifacts.map((item) => item.scope)).toEqual([
+    { kind: "entity", key: "alice" },
+    { kind: "project", key: "dex" },
+    { kind: "future-placement", key: null },
+  ]);
+
+  bridgeResponse({ artifact: {
+    ...artifact("projects/dex.md", "project", "dex"),
+    content: "Project prose",
+    revision: "sha256:project",
+    editable_content: "# Dex\n",
+  } });
+  const detail = await readMemoryArtifactDetail(config, "projects/dex.md");
+  expect(detail.artifact.scope).toEqual({ kind: "project", key: "dex" });
+});
+
+test("record operations and source evidence keep strict memory scopes", async () => {
+  bridgeResponse({ preview: {
+    ...rawPreview,
+    operations: [{ ...rawPreview.operations[0], scope: { kind: "entity", key: "alice" } }],
+  } });
+  const operationError = await previewPageEdit(config, {
+    path: "topics/a.md",
+    baseRevision: "sha256:base",
+    content: "candidate",
+  }).catch((reason) => reason);
+  expect((operationError as Error).message).toBe("Unsupported memory scope: entity");
+
+  bridgeResponse({ event: {
+    ...rawEvent,
+    operations: [{
+      ...rawEvent.operations[0],
+      sources: [{ ...rawSources[0], scope_kind: "project", scope_key: "dex" }],
+    }],
+  }, revision: "sha256:result" });
+  const sourceError = await applyPageEdit(config, { previewId: "preview-1", decisions: {} }).catch((reason) => reason);
+  expect((sourceError as Error).message).toBe("Unsupported memory scope: project");
+});
+
 test("bridge errors retain structured revision-conflict data", async () => {
   const conflict = {
     detail: {

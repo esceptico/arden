@@ -1,5 +1,6 @@
 import type {
   applyPageEdit,
+  ArtifactScope,
   getPageHistory,
   getPageLinks,
   MemoryArtifactDetail,
@@ -7,7 +8,7 @@ import type {
   previewPageEdit,
 } from "@/api/memoryArtifacts";
 
-export type { MemoryArtifactDetail, MemoryArtifactSummary };
+export type { ArtifactScope, MemoryArtifactDetail, MemoryArtifactSummary };
 
 export type PageEditPreview = Awaited<ReturnType<typeof previewPageEdit>>;
 export type PageEditEvent = Awaited<ReturnType<typeof applyPageEdit>>["event"];
