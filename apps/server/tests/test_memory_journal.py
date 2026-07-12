@@ -150,6 +150,28 @@ def test_creating_target_ancestors_fsyncs_each_new_directory_parent(tmp_path: Pa
     assert synced.index(tmp_path) < synced.index(tmp_path / "people")
 
 
+def test_commit_rejects_intervening_change_to_expected_file(tmp_path: Path, monkeypatch) -> None:
+    _seed_pair(tmp_path)
+    journal = VaultJournal(tmp_path)
+    prepare = journal.prepare
+
+    def prepare_then_edit(files):
+        prepared = prepare(files)
+        (tmp_path / "me.md").write_bytes(b"external")
+        return prepared
+
+    monkeypatch.setattr(journal, "prepare", prepare_then_edit)
+
+    with pytest.raises(ValueError, match="expected state changed"):
+        journal.commit(
+            {Path("me.md"): b"new", Path("raw/me.md"): b"raw-new"},
+            expected_files={Path("me.md"): b"old"},
+        )
+
+    assert _read_pair(tmp_path) == (b"external", b"raw-old")
+    assert not (tmp_path / ".ntrp" / "journal").exists()
+
+
 @pytest.mark.parametrize("hostile", ["meta", "journal", "revision"])
 def test_commit_rejects_symlinked_internal_journal_paths(tmp_path: Path, hostile: str) -> None:
     outside = tmp_path / "outside"

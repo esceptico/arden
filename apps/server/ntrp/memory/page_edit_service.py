@@ -145,12 +145,9 @@ class PageEditService:
         if existing is not None:
             self._resources.delete_page_edit_preview(self._preview_rel(preview_id))
             return existing
+        expected_revision = self._store.canonical_revision
         envelope = self._load_preview(preview_id)
-        preview = PageEditPreview.model_validate(envelope["preview"])
-        candidate = base64.b64decode(envelope["content"], validate=True)
-        current = self._resources.read_resource_bytes(preview.path)
-        if page_revision(current) != preview.base_revision:
-            raise StalePageRevisionError(preview.path)
+        preview, candidate, analysis, current = self._validate_persisted_preview(preview_id, envelope)
         if preview.analysis_pending and not save_as_pending:
             raise ReconciliationPendingError("page edit analysis is unavailable; explicit pending save is required")
         occurred = self._local_now()
@@ -171,10 +168,10 @@ class PageEditService:
             patch=preview.patch,
             operations=tuple(AppliedPageOperation.from_operation(operation, (source,)) for operation in operations),
             reconciliation="pending" if preview.analysis_pending else "applied",
-            analysis=PageEditAnalysis.model_validate(envelope["analysis"]),
+            analysis=analysis,
         )
         planned = self._store.plan_operations(operations, source, batch_key=f"page-edit:{event.id}") if operations else {}
-        event_rel, event_bytes = self._event_file(event)
+        event_rel, event_bytes, expected_event = self._event_file(event)
         caller_files = {
             Path(preview.path): candidate,
             event_rel: event_bytes,
@@ -185,7 +182,11 @@ class PageEditService:
         }
         files = dict(planned)
         files.update(self._store._validate_caller_files(caller_files, caller_roles))
-        self._commit(files)
+        self._commit(
+            files,
+            expected_files={Path(preview.path): current, event_rel: expected_event},
+            expected_revision=expected_revision,
+        )
         self._resources.delete_page_edit_preview(self._preview_rel(preview.id))
         return event
 
@@ -208,17 +209,47 @@ class PageEditService:
         pending = next((event for event in events if event.id == event_id), None)
         if pending is None or pending.reconciliation != "pending" or pending.analysis is None:
             raise ValueError("pending page edit event not found")
-        if any(event.reconciles_event_id == event_id for event in events):
-            raise ValueError("page edit event already reconciled")
-        answer = await self._reconcile(pending.analysis)
-        if answer is None:
-            raise ReconciliationPendingError("page edit analysis remains unavailable")
-        raw_operations = tuple(answer)
-        questions = tuple(
-            PageEditQuestion(id=f"operation:{index}", operation_index=index, question=operation.question or "")
-            for index, operation in enumerate(raw_operations)
-            if operation.op == "ASK"
+        applied = next(
+            (
+                event
+                for event in events
+                if event.reconciles_event_id == event_id and event.reconciliation == "applied"
+            ),
+            None,
         )
+        if applied is not None:
+            return applied
+        review = next(
+            (
+                event
+                for event in events
+                if event.reconciles_event_id == event_id and event.reconciliation == "needs_review"
+            ),
+            None,
+        )
+        expected_revision = self._store.canonical_revision
+        if review is not None:
+            if not decisions:
+                return review
+            raw_operations = review.review_operations
+            questions = review.questions
+        else:
+            answer = await self._reconcile(pending.analysis)
+            if answer is None:
+                raise ReconciliationPendingError("page edit analysis remains unavailable")
+            raw_operations = tuple(answer)
+            questions = tuple(
+                PageEditQuestion(id=f"operation:{index}", operation_index=index, question=operation.question or "")
+                for index, operation in enumerate(raw_operations)
+                if operation.op == "ASK"
+            )
+            if questions and not decisions:
+                return await self._persist_review(
+                    pending,
+                    raw_operations,
+                    questions,
+                    expected_revision=expected_revision,
+                )
         operations = self._resolve(raw_operations, questions, decisions or {})
         occurred = self._local_now()
         source = self._source(pending.id, pending.actor, occurred)
@@ -239,16 +270,62 @@ class PageEditService:
             reconciliation="applied",
             analysis=pending.analysis,
             reconciles_event_id=pending.id,
+            review_event_id=review.id if review is not None else None,
         )
         planned = self._store.plan_operations(operations, source, batch_key=f"page-edit-retry:{pending.id}") if operations else {}
-        event_rel, event_bytes = self._event_file(event)
+        event_rel, event_bytes, expected_event = self._event_file(event)
         caller = self._store._validate_caller_files(
             {event_rel: event_bytes},
             {event_rel: CanonicalFileRole.EVENT},
         )
         files = dict(planned)
         files.update(caller)
-        self._commit(files)
+        self._commit(
+            files,
+            expected_files={event_rel: expected_event},
+            expected_revision=expected_revision,
+        )
+        return event
+
+    async def _persist_review(
+        self,
+        pending: PageEditEvent,
+        raw_operations: tuple[RecordOperation, ...],
+        questions: tuple[PageEditQuestion, ...],
+        *,
+        expected_revision: str,
+    ) -> PageEditEvent:
+        occurred = self._local_now()
+        source = self._source(pending.id, pending.actor, occurred)
+        records = tuple(await self._store.list(limit=None, scopes=None))
+        validated = validate_operations(raw_operations, records, source)
+        event = PageEditEvent(
+            id=uuid4().hex,
+            occurred_at=_milliseconds(occurred),
+            sequence=self._next_sequence(),
+            actor=pending.actor,
+            origin="synthesis",
+            path=pending.path,
+            base_revision=pending.base_revision,
+            result_revision=pending.result_revision,
+            patch=pending.patch,
+            operations=(),
+            reconciliation="needs_review",
+            analysis=pending.analysis,
+            reconciles_event_id=pending.id,
+            review_operations=validated,
+            questions=questions,
+        )
+        event_rel, event_bytes, expected_event = self._event_file(event)
+        caller = self._store._validate_caller_files(
+            {event_rel: event_bytes},
+            {event_rel: CanonicalFileRole.EVENT},
+        )
+        self._commit(
+            dict(caller),
+            expected_files={event_rel: expected_event},
+            expected_revision=expected_revision,
+        )
         return event
 
     def history(self, *, path: str | None = None) -> tuple[PageEditEvent, ...]:
@@ -294,24 +371,63 @@ class PageEditService:
                 resolved.append(RecordOperation.retract(*decision.target_ids))
         return tuple(resolved)
 
-    def _event_file(self, event: PageEditEvent) -> tuple[Path, bytes]:
+    def _event_file(self, event: PageEditEvent) -> tuple[Path, bytes, bytes | None]:
         day = datetime.fromisoformat(event.occurred_at).date().isoformat()
         rel = Path("raw") / "events" / f"{day}.md"
         try:
             existing = self._resources.read_resource_bytes(rel.as_posix(), page_edit_internal=True)
         except FileNotFoundError:
+            expected = None
             existing = f"# Page edit events {day}\n\n".encode()
-        return rel, existing + render_page_edit_event(event).encode()
+        else:
+            expected = existing
+        return rel, existing + render_page_edit_event(event).encode(), expected
 
-    def _commit(self, files: dict[Path, bytes]) -> None:
+    def _commit(
+        self,
+        files: dict[Path, bytes],
+        *,
+        expected_files: dict[Path, bytes | None],
+        expected_revision: str,
+    ) -> None:
         try:
-            self._store._journal.commit(files)
+            self._store._journal.commit(
+                files,
+                expected_files=expected_files,
+                expected_revision=expected_revision,
+            )
         except Exception:
             self._store._journal.recover(prefer_rollback=True)
             self._store._reload_canonical_state()
             raise
         self._store._reload_canonical_state()
         self._store._notify_post_canonical_commit()
+
+    def _validate_persisted_preview(
+        self,
+        requested_id: str,
+        envelope: dict,
+    ) -> tuple[PageEditPreview, bytes, PageEditAnalysis, bytes]:
+        try:
+            preview = PageEditPreview.model_validate(envelope["preview"])
+            candidate = base64.b64decode(envelope["content"], validate=True)
+            persisted_analysis = PageEditAnalysis.model_validate(envelope["analysis"])
+        except Exception as exc:
+            raise ValueError("invalid persisted preview payload") from exc
+        if preview.id != requested_id:
+            raise ValueError("invalid persisted preview id")
+        if page_revision(candidate) != preview.result_revision:
+            raise ValueError("invalid persisted preview candidate revision")
+        current = self._resources.read_resource_bytes(preview.path)
+        if page_revision(current) != preview.base_revision:
+            raise StalePageRevisionError(preview.path)
+        patch = unified_patch(current, candidate)
+        if patch != preview.patch:
+            raise ValueError("invalid persisted preview patch")
+        analysis = _analyze(preview.path, current, candidate, patch)
+        if analysis != persisted_analysis:
+            raise ValueError("invalid persisted preview analysis")
+        return preview, candidate, analysis, current
 
     def _load_preview(self, preview_id: str) -> dict:
         rel = self._preview_rel(preview_id)

@@ -19,6 +19,10 @@ _VERSION = 1
 _HEX = frozenset("0123456789abcdef")
 
 
+class JournalConflictError(ValueError):
+    """An expected canonical input changed before journal replacement began."""
+
+
 @dataclass(frozen=True)
 class PreparedCommit:
     commit_id: str
@@ -103,11 +107,30 @@ class VaultJournal:
         self._checkpoint("after_prepared")
         return PreparedCommit(commit_id=commit_id, manifest_hash=commit_id, path=commit_path)
 
-    def commit(self, files: Mapping[Path, bytes]) -> str:
+    def commit(
+        self,
+        files: Mapping[Path, bytes],
+        *,
+        expected_files: Mapping[Path, bytes | None] | None = None,
+        expected_revision: str | None = None,
+    ) -> str:
+        """Commit files if expected inputs still match immediately before replacement.
+
+        The second check closes planning/preparation races. An external writer can
+        still race the final check and first replacement; callers must retry any
+        conflict and deployments remain single-writer at that last instruction.
+        """
         self.recover()
+        self._assert_expected_state(expected_files, expected_revision)
         prepared = self.prepare(files)
-        manifest = self._load_manifest(prepared.path)
-        self._finish(prepared.path, manifest, prepared.commit_id)
+        try:
+            self._assert_expected_state(expected_files, expected_revision)
+            manifest = self._load_manifest(prepared.path)
+            self._finish(prepared.path, manifest, prepared.commit_id)
+        except JournalConflictError:
+            self._remove_commit(prepared.path)
+            self._remove_empty_journal_root()
+            raise
         return prepared.manifest_hash
 
     def commit_migration(self, files: Mapping[Path, bytes]) -> str:
@@ -367,6 +390,27 @@ class VaultJournal:
         path = self.root.joinpath(*Path(rel).parts)
         self._assert_safe_parents(path)
         return path
+
+    def _assert_expected_state(
+        self,
+        expected_files: Mapping[Path, bytes | None] | None,
+        expected_revision: str | None,
+    ) -> None:
+        if expected_revision is not None and self.canonical_revision != expected_revision:
+            raise JournalConflictError("journal expected state changed: canonical revision")
+        for target, expected in (expected_files or {}).items():
+            rel = self._validate_relative(target)
+            path = self._target_path(rel)
+            try:
+                target_st = path.lstat()
+            except FileNotFoundError:
+                actual = None
+            else:
+                if stat.S_ISLNK(target_st.st_mode) or not stat.S_ISREG(target_st.st_mode):
+                    raise JournalConflictError(f"journal expected state changed: {rel}")
+                actual = path.read_bytes()
+            if actual != expected:
+                raise JournalConflictError(f"journal expected state changed: {rel}")
 
     def _validate_regular_leaf(self, path: Path, *, allow_missing: bool) -> bool:
         self._assert_safe_parents(path)

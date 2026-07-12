@@ -116,6 +116,9 @@ class PageEditEvent(BaseModel):
     reconciliation: Literal["applied", "pending", "needs_review"]
     analysis: PageEditAnalysis | None = None
     reconciles_event_id: str | None = None
+    review_operations: tuple[RecordOperation, ...] = ()
+    questions: tuple[PageEditQuestion, ...] = ()
+    review_event_id: str | None = None
 
     @field_validator("occurred_at")
     @classmethod

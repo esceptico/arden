@@ -817,6 +817,13 @@ class ArtifactMemoryStore:
             stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())
+        parent_fd = -1
+        try:
+            parent_fd, _ = self._open_anchored_parent(safe, create_parents=False)
+            os.fsync(parent_fd)
+        finally:
+            if parent_fd >= 0:
+                os.close(parent_fd)
 
     def delete_page_edit_preview(self, rel: str) -> None:
         safe = Path(rel)

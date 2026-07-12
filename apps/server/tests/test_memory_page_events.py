@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
+import os
+import stat
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -307,9 +311,9 @@ async def test_apply_commits_page_patch_event_and_operations_together(tmp_path: 
     commits = []
     commit = store._journal.commit
 
-    def capture(files):
+    def capture(files, **kwargs):
         commits.append(dict(files))
-        return commit(files)
+        return commit(files, **kwargs)
 
     monkeypatch.setattr(store._journal, "commit", capture)
 
@@ -367,6 +371,41 @@ async def test_apply_is_idempotent_after_commit_before_preview_cleanup(tmp_path:
     assert retried.sequence == 1
     assert len(service.history(path="topics/a.md")) == 1
     assert await service.apply(preview.id, decisions={}) == retried
+    await store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tamper", ["id", "candidate", "patch", "analysis"])
+async def test_apply_rejects_tampered_persisted_preview_before_commit(tmp_path: Path, monkeypatch, tamper: str):
+    vault = tmp_path / "memory"
+    store = await _store(vault)
+    service = PageEditService(vault, store, reconciler=Reconciler((RecordOperation.noop(),)))
+    page = vault / "topics" / "a.md"
+    base = page.read_bytes()
+    preview = await service.preview(
+        path="topics/a.md",
+        base_revision=page_revision(base),
+        content=base + b"\nCandidate.\n",
+        actor="user:desktop",
+    )
+    persisted = vault / ".ntrp" / "maintenance" / "page-edit-previews" / f"{preview.id}.json"
+    payload = json.loads(persisted.read_text(encoding="utf-8"))
+    if tamper == "id":
+        payload["preview"]["id"] = "other-id"
+    elif tamper == "candidate":
+        payload["content"] = base64.b64encode(base + b"\nTampered.\n").decode("ascii")
+    elif tamper == "patch":
+        payload["preview"]["patch"] = "forged patch"
+    else:
+        payload["analysis"]["path"] = "topics/other.md"
+    persisted.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(store._journal, "commit", lambda *args, **kwargs: pytest.fail("tampered preview committed"))
+
+    with pytest.raises(ValueError, match="persisted preview"):
+        await service.apply(preview.id, decisions={})
+
+    assert page.read_bytes() == base
+    assert service.history() == ()
     await store.close()
 
 
@@ -499,6 +538,36 @@ async def test_apply_rejects_stale_page_revision_without_committing(tmp_path: Pa
 
 
 @pytest.mark.asyncio
+async def test_apply_cas_rejects_page_change_after_revision_check(tmp_path: Path, monkeypatch):
+    vault = tmp_path / "memory"
+    store = await _store(vault)
+    service = PageEditService(vault, store, reconciler=Reconciler((RecordOperation.noop(),)))
+    page = vault / "topics" / "a.md"
+    base = page.read_bytes()
+    preview = await service.preview(
+        path="topics/a.md",
+        base_revision=page_revision(base),
+        content=base + b"\nCandidate.\n",
+        actor="user:desktop",
+    )
+    prepare = store._journal.prepare
+
+    def prepare_then_edit(files):
+        prepared = prepare(files)
+        page.write_bytes(base + b"\nExternal edit.\n")
+        return prepared
+
+    monkeypatch.setattr(store._journal, "prepare", prepare_then_edit)
+
+    with pytest.raises(ValueError, match="expected state changed"):
+        await service.apply(preview.id, decisions={})
+
+    assert page.read_bytes() == base + b"\nExternal edit.\n"
+    assert service.history() == ()
+    await store.close()
+
+
+@pytest.mark.asyncio
 async def test_analysis_unavailable_can_save_pending_and_retry_exact_patch_once(tmp_path: Path):
     vault = tmp_path / "memory"
     store = await _store(vault)
@@ -528,9 +597,116 @@ async def test_analysis_unavailable_can_save_pending_and_retry_exact_patch_once(
     assert page.read_bytes() == newer
     assert reconciler.analyses[0].after == ("Original durable statement.", "Original candidate statement.")
     assert resolved.operations[0].sources[0].ref == f"page_edit:{pending.id}"
-    with pytest.raises(ValueError, match="already reconciled"):
-        await restarted.retry(pending.id)
+    assert await restarted.retry(pending.id) == resolved
     await store.close()
+
+
+@pytest.mark.asyncio
+async def test_pending_ask_is_persisted_and_resolved_after_restart_without_reanalysis(tmp_path: Path):
+    vault = tmp_path / "memory"
+    store = await _store(vault)
+    store.apply_operations(
+        (RecordOperation.add("User drinks coffee"),),
+        SourceRef("test", "seed", occurred_at="2026-07-12T10:00:00.000+04:00", time_precision="millisecond"),
+    )
+    record = (await store.list())[0]
+    page = vault / "topics" / "a.md"
+    base = page.read_bytes()
+    unavailable = PageEditService(vault, store, reconciler=Reconciler(None))
+    preview = await unavailable.preview(
+        path="topics/a.md",
+        base_revision=page_revision(base),
+        content=base + b"\nNo coffee.\n",
+        actor="user:desktop",
+    )
+    pending = await unavailable.apply(preview.id, decisions={}, save_as_pending=True)
+    first_reconciler = Reconciler((RecordOperation.ask("Forget the coffee memory?"),))
+    first_retry = PageEditService(vault, store, reconciler=first_reconciler)
+
+    review = await first_retry.retry(pending.id)
+
+    assert review.reconciliation == "needs_review"
+    assert review.review_operations == (RecordOperation.ask("Forget the coffee memory?"),)
+    assert review.questions[0].question == "Forget the coffee memory?"
+    assert len(first_reconciler.analyses) == 1
+    calls = 0
+
+    async def must_not_reconcile(_analysis):
+        nonlocal calls
+        calls += 1
+        raise AssertionError("persisted review was reanalyzed")
+
+    restarted = PageEditService(vault, store, reconciler=must_not_reconcile)
+    applied = await restarted.retry(
+        pending.id,
+        decisions={review.questions[0].id: PageEditDecision(choice="Forget memory", target_ids=(record.id,))},
+    )
+
+    assert calls == 0
+    assert applied.reconciliation == "applied"
+    assert applied.review_event_id == review.id
+    assert applied.operations[0].op == "RETRACT"
+    assert await store.get(record.id) is None
+    assert await restarted.retry(pending.id) == applied
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_pending_retry_cas_rejects_canonical_change_during_analysis(tmp_path: Path, monkeypatch):
+    vault = tmp_path / "memory"
+    store = await _store(vault)
+    page = vault / "topics" / "a.md"
+    base = page.read_bytes()
+    unavailable = PageEditService(vault, store, reconciler=Reconciler(None))
+    preview = await unavailable.preview(
+        path="topics/a.md",
+        base_revision=page_revision(base),
+        content=base + b"\nCandidate.\n",
+        actor="user:desktop",
+    )
+    pending = await unavailable.apply(preview.id, decisions={}, save_as_pending=True)
+    retry = PageEditService(vault, store, reconciler=Reconciler((RecordOperation.add("Candidate."),)))
+    list_records = store.list
+    changed = False
+
+    async def list_then_external_commit(*args, **kwargs):
+        nonlocal changed
+        records = await list_records(*args, **kwargs)
+        if not changed:
+            changed = True
+            store._journal.commit({Path("external.md"): b"external\n"})
+        return records
+
+    monkeypatch.setattr(store, "list", list_then_external_commit)
+
+    with pytest.raises(ValueError, match="expected state changed"):
+        await retry.retry(pending.id)
+
+    assert (vault / "external.md").read_bytes() == b"external\n"
+    assert not any(event.reconciliation == "applied" and event.reconciles_event_id == pending.id for event in retry.history())
+    await store.close()
+
+
+def test_preview_creation_fsyncs_parent_directory(tmp_path: Path, monkeypatch):
+    vault = tmp_path / "memory"
+    (vault / ".ntrp" / "maintenance" / "page-edit-previews").mkdir(parents=True)
+    resources = ArtifactMemoryStore(vault)
+    synced_directory = False
+    fsync = os.fsync
+
+    def capture(descriptor: int) -> None:
+        nonlocal synced_directory
+        synced_directory = synced_directory or stat.S_ISDIR(os.fstat(descriptor).st_mode)
+        fsync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", capture)
+
+    resources.write_page_edit_preview(
+        ".ntrp/maintenance/page-edit-previews/test.json",
+        b"{}\n",
+    )
+
+    assert synced_directory is True
 
 
 @pytest.mark.asyncio
