@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict
 
 from ntrp.memory.models import Kind, Record, SourceRef
 from ntrp.memory.scopes import USER_SCOPE, MemoryScope
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 OperationName = Literal["ADD", "SUPERSEDE", "MERGE", "RETRACT", "NOOP", "ASK"]
 
@@ -81,8 +84,8 @@ class RecordOperation(BaseModel):
         return cls(op="RETRACT", target_ids=target_ids)
 
     @classmethod
-    def noop(cls, target_id: str) -> RecordOperation:
-        return cls(op="NOOP", target_ids=(target_id,))
+    def noop(cls) -> RecordOperation:
+        return cls(op="NOOP")
 
     @classmethod
     def ask(cls, question: str) -> RecordOperation:
@@ -90,6 +93,8 @@ class RecordOperation(BaseModel):
 
 
 def _validate_timestamp(source: SourceRef) -> None:
+    if source.time_precision not in {"millisecond", "second", "minute", "day", "unknown"}:
+        raise ValueError("invalid source time_precision")
     if source.captured_at:
         try:
             captured = datetime.fromisoformat(source.captured_at.replace("Z", "+00:00"))
@@ -134,13 +139,17 @@ def _validate_scope(scope: MemoryScope | None) -> None:
 def validate_operations(
     operations: list[RecordOperation] | tuple[RecordOperation, ...],
     records: list[Record] | tuple[Record, ...],
-    source: SourceRef,
+    source: SourceRef | Sequence[SourceRef],
 ) -> tuple[RecordOperation, ...]:
     """Validate a complete batch before any storage planning or mutation."""
-    explicitly_unknown = (source.kind == "source" and source.ref == "unknown") or source.kind == "source:unknown"
-    if not explicitly_unknown and not source.ref.strip():
+    sources = (source,) if isinstance(source, SourceRef) else tuple(source)
+    if not sources:
         raise ValueError("operation source evidence is required")
-    _validate_timestamp(source)
+    for evidence in sources:
+        explicitly_unknown = (evidence.kind == "source" and evidence.ref == "unknown") or evidence.kind == "source:unknown"
+        if not explicitly_unknown and not evidence.ref.strip():
+            raise ValueError("operation source evidence is required")
+        _validate_timestamp(evidence)
 
     by_id = {record.id: record for record in records}
     normalized: list[RecordOperation] = []
@@ -168,10 +177,18 @@ def validate_operations(
             if not targets or text is not None:
                 raise ValueError("RETRACT requires targets and cannot have text")
         elif op.op == "NOOP":
-            if len(targets) != 1 or text is not None:
-                raise ValueError("NOOP requires exactly one target")
+            if text is not None or question is not None or op.kind is not None or op.scope is not None or targets or op.meta_labels is not None or op.entity_labels is not None:
+                raise ValueError("NOOP cannot carry payload fields")
         elif op.op == "ASK":
-            if question is None or targets or text is not None:
+            if (
+                question is None
+                or targets
+                or text is not None
+                or op.kind is not None
+                or op.scope is not None
+                or op.meta_labels is not None
+                or op.entity_labels is not None
+            ):
                 raise ValueError("ASK requires only a question")
 
         if op.op in {"SUPERSEDE", "MERGE", "RETRACT"}:

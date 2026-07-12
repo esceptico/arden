@@ -5,6 +5,7 @@ import pytest
 from ntrp.memory.file_store import FilePageStore
 from ntrp.memory.models import Kind, Record, SourceRef
 from ntrp.memory.reconciler import RecordOperation, validate_operations
+from ntrp.memory.scopes import MemoryScope
 
 
 def _source(**changes) -> SourceRef:
@@ -68,6 +69,57 @@ def test_source_timestamp_precision_must_match_timestamp():
         )
 
 
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"text": "not allowed"},
+        {"kind": Kind.FACT},
+        {"scope": MemoryScope("user")},
+        {"target_ids": ("record",)},
+        {"meta_labels": ("label",)},
+        {"entity_labels": ("entity",)},
+    ],
+)
+def test_ask_rejects_every_non_question_field(changes: dict):
+    operation = RecordOperation(op="ASK", question="Which tea?", **changes)
+
+    with pytest.raises(ValueError, match="ASK requires only a question"):
+        validate_operations([operation], records=[_fact("record", "Fact")], source=_source())
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"question": "not allowed"},
+        {"text": "not allowed"},
+        {"kind": Kind.FACT},
+        {"scope": MemoryScope("user")},
+        {"target_ids": ("record",)},
+        {"meta_labels": ("label",)},
+        {"entity_labels": ("entity",)},
+    ],
+)
+def test_noop_rejects_all_payload_fields(changes: dict):
+    operation = RecordOperation(op="NOOP", **changes)
+
+    with pytest.raises(ValueError, match="NOOP cannot carry payload fields"):
+        validate_operations([operation], records=[_fact("record", "Fact")], source=_source())
+
+
+def test_noop_without_payload_is_valid():
+    operation = RecordOperation(op="NOOP")
+
+    assert validate_operations([operation], records=[], source=_source()) == (operation,)
+
+
+def test_unsupported_runtime_precision_is_rejected():
+    operation = RecordOperation.add("User drinks tea")
+    unsupported = _source(time_precision="microsecond")
+
+    with pytest.raises(ValueError, match="invalid source time_precision"):
+        validate_operations([operation], records=[], source=unsupported)
+
+
 @pytest.mark.asyncio
 async def test_plan_is_read_only_and_apply_commits_the_whole_batch_once(tmp_path: Path, monkeypatch):
     vault = tmp_path / "vault"
@@ -110,7 +162,7 @@ async def test_plan_is_read_only_and_apply_commits_the_whole_batch_once(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_noop_records_confirmation_but_ask_never_mutates(tmp_path: Path):
+async def test_noop_and_ask_never_mutate(tmp_path: Path):
     vault = tmp_path / "vault"
     (vault / "raw").mkdir(parents=True)
     (vault / "me.md").write_text("# Me\n", encoding="utf-8")
@@ -123,14 +175,14 @@ async def test_noop_records_confirmation_but_ask_never_mutates(tmp_path: Path):
     store.apply_operations((RecordOperation.add("User drinks tea"),), _source())
     record = (await store.list())[0]
     revision = store.canonical_revision
-    confirmation = _source(ref="s1:m2", occurred_at="2026-07-12T10:01:00Z")
+    source = _source(ref="s1:m2", occurred_at="2026-07-12T10:01:00Z")
 
-    assert store.plan_operations((RecordOperation.ask("Which tea?"),), confirmation) == {}
-    assert store.apply_operations((RecordOperation.ask("Which tea?"),), confirmation) == revision
+    assert store.plan_operations((RecordOperation.ask("Which tea?"),), source) == {}
+    assert store.apply_operations((RecordOperation.ask("Which tea?"),), source) == revision
+    assert store.plan_operations((RecordOperation(op="NOOP"),), source) == {}
+    assert store.apply_operations((RecordOperation(op="NOOP"),), source) == revision
 
-    store.apply_operations((RecordOperation.noop(record.id),), confirmation)
-
-    confirmed = await store.get(record.id)
-    assert store.canonical_revision != revision
-    assert [source.ref for source in confirmed.sources] == ["s1:m1", "s1:m2"]
+    unchanged = await store.get(record.id)
+    assert store.canonical_revision == revision
+    assert [evidence.ref for evidence in unchanged.sources] == ["s1:m1"]
     await store.close()

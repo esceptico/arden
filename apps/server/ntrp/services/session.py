@@ -409,6 +409,9 @@ class SessionService:
     async def recent_session_scopes(self, limit: int) -> list[dict]:
         return await self.store.recent_session_scopes(limit)
 
+    async def session_scope(self, session_id: str) -> dict | None:
+        return await self.store.session_scope(session_id)
+
     async def list_turns(self, session_id: str, limit: int = 100) -> list[dict]:
         return await self.store.list_session_turns(session_id, limit=limit)
 

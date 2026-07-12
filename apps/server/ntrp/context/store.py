@@ -3156,6 +3156,26 @@ class SessionStore:
             for row in rows
         ]
 
+    async def session_scope(self, session_id: str) -> dict | None:
+        """Return one session's scope exactly, independent of sweep recency."""
+        rows = await self.read_conn.execute_fetchall(
+            """
+            SELECT session_id, area_id, session_type, origin_automation_id
+            FROM sessions
+            WHERE session_id = ?
+            """,
+            (session_id,),
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        return {
+            "session_id": row["session_id"],
+            "area_id": row["area_id"],
+            "session_type": row["session_type"] or "chat",
+            "origin_automation_id": row["origin_automation_id"],
+        }
+
     async def search_messages(
         self,
         query: str,

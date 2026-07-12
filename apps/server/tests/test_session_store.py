@@ -14,6 +14,7 @@ from ntrp.context.store import SessionStore
 from ntrp.core.raw_tool_results import RAW_TOOL_RESULT_DATA_KEY, persist_raw_tool_result
 from ntrp.events.sse import ThinkingEvent, ToolCallResultEvent
 from ntrp.server.bus import StreamRecord
+from ntrp.services.session import SessionService
 
 
 @pytest_asyncio.fixture
@@ -95,6 +96,31 @@ async def test_area_round_trip_and_session_scoping(store: SessionStore):
     assert restored is not None
     assert restored["area_id"] == area["area_id"]
     assert await store.get_area(area["area_id"]) is not None
+
+
+@pytest.mark.asyncio
+async def test_exact_session_scope_survives_beyond_recent_fifty(store: SessionStore):
+    area = await store.create_area(name="Old area")
+    old = _make_state(session_id="old-area-session")
+    old.area_id = area["area_id"]
+    await store.save_session(old, [{"role": "user", "content": "old"}])
+    for index in range(51):
+        await store.save_session(
+            _make_state(session_id=f"recent-{index:02d}"),
+            [{"role": "user", "content": "recent"}],
+        )
+
+    recent_ids = {row["session_id"] for row in await store.recent_session_scopes(50)}
+    service = SessionService(store)
+
+    assert old.session_id not in recent_ids
+    assert await store.session_scope(old.session_id) == {
+        "session_id": old.session_id,
+        "area_id": area["area_id"],
+        "session_type": "chat",
+        "origin_automation_id": None,
+    }
+    assert await service.session_scope(old.session_id) == await store.session_scope(old.session_id)
 
 
 @pytest.mark.asyncio

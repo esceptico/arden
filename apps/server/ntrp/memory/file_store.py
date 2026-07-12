@@ -1152,13 +1152,16 @@ class FilePageStore:
     def plan_operations(
         self,
         operations: Sequence[RecordOperation],
-        source: SourceRef,
+        source: SourceRef | Sequence[SourceRef],
+        *,
+        batch_key: str | None = None,
     ) -> Mapping[Path, bytes]:
         """Build a complete schema-v2 reconciliation commit without writing."""
         if not self._ledger_mode():
             raise ValueError("typed reconciliation requires a schema-v2 vault")
         active = tuple(self._to_record(entry, self._loc[entry.id]) for entry in self._active_ledger_entries())
-        validated = validate_operations(tuple(operations), active, source)
+        sources = (source,) if isinstance(source, SourceRef) else tuple(source)
+        validated = validate_operations(tuple(operations), active, sources)
         pages = {path: deepcopy(page) for path, page in self._pages.items()}
         entries_by_id = {entry.id: entry for entry in self._ledger_entries()}
         additions: list[LedgerEntry] = []
@@ -1174,35 +1177,17 @@ class FilePageStore:
                     return record_id
 
         for operation in validated:
-            if operation.op == "ASK":
+            if operation.op in {"ASK", "NOOP"}:
                 continue
             targets = [entries_by_id[target] for target in operation.target_ids]
-            if operation.op == "NOOP":
-                target = targets[0]
-                path = self._loc[target.id]
-                page = pages[path]
-                confirmed = replace(
-                    target,
-                    meta=replace(
-                        target.meta,
-                        recorded_at=now_iso(),
-                        sequence=sequence,
-                        sources=union_source_refs(target.meta.sources, (source,)),
-                    ),
-                )
-                page.lines = [confirmed if line.id == target.id else line for line in page.lines]
-                page.frontmatter["updated"] = now_iso()[:10]
-                entries_by_id[target.id] = confirmed
-                touched.add(path)
-                sequence += 1
-                continue
             scope = operation.scope
             assert scope is not None
             recorded_at = now_iso()
-            occurred_at = source.occurred_at or recorded_at
-            precision = source.time_precision if source.occurred_at else "millisecond"
+            primary_source = sources[0]
+            occurred_at = primary_source.occurred_at or recorded_at
+            precision = primary_source.time_precision if primary_source.occurred_at else "millisecond"
             target_sources = tuple(src for target in targets for src in target.meta.sources)
-            sources = union_source_refs(target_sources, (source,))
+            evidence = union_source_refs(target_sources, sources)
             kind = operation.kind or (targets[0].kind if targets else Kind.FACT)
             operation_kind = "retract" if operation.op == "RETRACT" else "record"
             text = operation.text or (targets[0].text if targets else "")
@@ -1224,9 +1209,10 @@ class FilePageStore:
                     time_precision=precision,
                     scope_kind=scope.kind or "user",
                     scope_key=scope.key,
-                    sources=sources,
+                    sources=evidence,
                     supersedes=operation.target_ids,
                     operation=operation_kind,
+                    extra=({"batch_key": batch_key} if batch_key else {}),
                 ),
             )
             sequence += 1
@@ -1258,10 +1244,14 @@ class FilePageStore:
     def apply_operations(
         self,
         operations: Sequence[RecordOperation],
-        source: SourceRef,
+        source: SourceRef | Sequence[SourceRef],
+        *,
+        batch_key: str | None = None,
     ) -> str:
         """Validate, plan, and publish one reconciliation batch in one commit."""
-        planned = self.plan_operations(operations, source)
+        if batch_key and self.operation_batch_committed(batch_key):
+            return self.canonical_revision
+        planned = self.plan_operations(operations, source, batch_key=batch_key)
         if not planned:
             return self.canonical_revision
         try:
@@ -1272,6 +1262,9 @@ class FilePageStore:
             raise
         self._reload_canonical_state()
         return revision
+
+    def operation_batch_committed(self, batch_key: str) -> bool:
+        return any(entry.meta.extra.get("batch_key") == batch_key for entry in self._ledger_entries())
 
     def history(self, record_id: str) -> tuple[LedgerEntry, ...]:
         """Return the complete connected lifecycle history for one ledger record."""

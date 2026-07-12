@@ -13,7 +13,7 @@ Covers:
   (b) the watermark filters already-seen seqs;
   (c) a content-less completion -> no writes, watermark NOT advanced;
   (d) record ops: ADD inserts, UPDATE/SUPERSEDE append successors,
-      NOOP confirms — exactly one LLM call per curation;
+      NOOP does not mutate — exactly one LLM call per curation;
   (e) labels: ADD sets them, UPDATE replaces-or-keeps, SUPERSEDE's successor
       takes the op's labels else inherits, and the prompt carries the LABEL
       VOCABULARY (top names + the recalled records' labels);
@@ -67,6 +67,7 @@ class StubSessions:
         self._scopes = scopes or []
         self._areas = areas or {}
         self.scope_reads = 0
+        self.exact_scope_reads = 0
 
     def set_rows(self, session_id: str, rows: list[dict]) -> None:
         self._rows[session_id] = rows
@@ -77,6 +78,10 @@ class StubSessions:
     async def recent_session_scopes(self, limit: int) -> list[dict]:
         self.scope_reads += 1
         return self._scopes[:limit]
+
+    async def session_scope(self, session_id: str) -> dict | None:
+        self.exact_scope_reads += 1
+        return next((scope for scope in self._scopes if scope["session_id"] == session_id), None)
 
     async def get_area(self, area_id: str | None) -> dict | None:
         return self._areas.get(area_id) if area_id is not None else None
@@ -310,6 +315,123 @@ async def test_assistant_envelope_and_area_scope_are_preserved(tmp_path: Path):
     await records.close()
 
 
+async def test_session_older_than_sweep_window_keeps_exact_area_scope(tmp_path: Path):
+    llm = StubLLM(_ops_json([{"op": "ADD", "text": "Old area fact", "kind": "fact"}]))
+    recent = [_scope(f"recent-{index}") for index in range(50)]
+    sessions = StubSessions(
+        {"old": [_turn(0, "user", "Old area fact")]},
+        scopes=[*recent, {**_scope("old"), "area_id": "a1"}],
+        areas={"a1": {"area_id": "a1", "knowledge_scope": "area:a1"}},
+    )
+    curator, records = await _make_file_curator(tmp_path, llm, sessions)
+
+    await curator.curate_session("old")
+
+    record = (await records.list())[0]
+    assert (record.scope_kind, record.scope_key) == ("area", "a1")
+    assert sessions.exact_scope_reads == 1
+    await curator.stop()
+    await records.close()
+
+
+async def test_ask_keeps_watermark_retryable_and_does_not_commit(tmp_path: Path, monkeypatch):
+    llm = StubLLM(_ops_json([{"op": "ASK", "question": "Which tea do you mean?"}]))
+    sessions = StubSessions({"s1": [_turn(0, "user", "I prefer that tea")]})
+    curator, records = await _make_file_curator(tmp_path, llm, sessions)
+    commits = 0
+
+    def reject_commit(_files):
+        nonlocal commits
+        commits += 1
+        raise AssertionError("ASK must not commit")
+
+    monkeypatch.setattr(records._journal, "commit", reject_commit)
+
+    assert await curator.curate_session("s1") is False
+    assert await curator._read_watermark("s1") == -1
+    assert curator.pending_question("s1") == "Which tea do you mean?"
+    assert commits == 0
+    await curator.stop()
+    await records.close()
+
+
+async def test_retry_after_watermark_failure_does_not_duplicate_committed_batch(tmp_path: Path, monkeypatch):
+    response = _ops_json(
+        [
+            {"op": "ADD", "text": "User drinks tea", "kind": "fact"},
+            {"op": "ADD", "text": "User likes ceramic mugs", "kind": "fact"},
+        ]
+    )
+    llm = StubLLM(response)
+    sessions = StubSessions({"s1": [_turn(0, "user", "I drink tea from ceramic mugs")]})
+    curator, records = await _make_file_curator(tmp_path, llm, sessions)
+    write_watermark = curator._write_watermark
+    failed = False
+
+    async def fail_once(session_id: str, value: int):
+        nonlocal failed
+        if not failed:
+            failed = True
+            raise RuntimeError("injected watermark failure")
+        await write_watermark(session_id, value)
+
+    monkeypatch.setattr(curator, "_write_watermark", fail_once)
+
+    with pytest.raises(RuntimeError, match="injected watermark failure"):
+        await curator.curate_session("s1")
+
+    before = await records.list()
+    before_history = sum(len(records.history(record.id)) for record in before)
+    batch_key = curator._batch_key("s1", 0)
+    assert {
+        entry.meta.extra.get("batch_key")
+        for record in before
+        for entry in records.history(record.id)
+    } == {batch_key}
+
+    assert await curator.curate_session("s1") is False
+    after = await records.list()
+    assert len(after) == len(before) == 2
+    assert sum(len(records.history(record.id)) for record in after) == before_history == 2
+    assert await curator._read_watermark("s1") == 0
+    assert len(llm.calls) == 1
+    await curator.stop()
+    await records.close()
+
+
+async def test_mixed_roles_persist_one_exact_source_per_turn(tmp_path: Path):
+    llm = StubLLM(
+        _ops_json(
+            [
+                {"op": "ADD", "text": "Deployment passed", "kind": "fact"},
+                {"op": "ADD", "text": "User asked about deployment", "kind": "fact"},
+            ]
+        )
+    )
+    sessions = StubSessions(
+        {
+            "s1": [
+                _turn(0, "user", "Did the deployment pass?"),
+                _turn(1, "assistant", "Yes, the deployment passed."),
+            ]
+        }
+    )
+    curator, records = await _make_file_curator(tmp_path, llm, sessions)
+
+    await curator.curate_session("s1")
+
+    for record in await records.list():
+        assert [(source.ref, source.role) for source in record.sources] == [("m0", "user"), ("m1", "assistant")]
+        assert [source.occurred_at for source in record.sources] == [
+            "2026-07-12T10:00:00Z",
+            "2026-07-12T10:00:01Z",
+        ]
+        assert all(source.time_precision == "second" for source in record.sources)
+        assert all(source.captured_at is not None for source in record.sources)
+    await curator.stop()
+    await records.close()
+
+
 async def test_failed_second_operation_keeps_watermark_retryable(tmp_path: Path, monkeypatch):
     response = _ops_json(
         [
@@ -347,7 +469,7 @@ async def test_failed_second_operation_keeps_watermark_retryable(tmp_path: Path,
     await records.close()
 
 
-async def test_full_curation_resolves_area_once(tmp_path: Path):
+async def test_full_curation_uses_explicit_area_without_scope_query(tmp_path: Path):
     llm = StubLLM(_ops_json([]), _ops_json([]))
     sessions = StubSessions(
         {"s1": [_turn(seq, "user", f"fact {seq}") for seq in range(41)]},
@@ -356,10 +478,11 @@ async def test_full_curation_resolves_area_once(tmp_path: Path):
     )
     curator, records = await _make_file_curator(tmp_path, llm, sessions)
 
-    result = await curator.curate_session_fully("s1")
+    result = await curator.curate_session_fully("s1", area_id="a1")
 
     assert result["calls"] == 2
-    assert sessions.scope_reads == 1
+    assert sessions.scope_reads == 0
+    assert sessions.exact_scope_reads == 0
     await curator.stop()
     await records.close()
 
@@ -379,10 +502,10 @@ async def test_add_op_inserts_a_record(tmp_path: Path):
     rows = await records.list()
     assert [r.text for r in rows] == ["the user uses Linux"]
     assert rows[0].kind == "fact"
-    # Dreamer-written records carry curator provenance.
+    # Dreamer-written records preserve exact turn provenance.
     assert rows[0].source_ref is not None
-    assert rows[0].source_ref.kind == "curator"
-    assert rows[0].source_ref.ref == "s1"
+    assert rows[0].source_ref.kind == "chat_message"
+    assert rows[0].source_ref.ref == "m0"
     assert await curator._read_watermark("s1") == 0
     await curator.stop()
     await records.close()
@@ -493,12 +616,12 @@ async def test_supersede_op_closes_old_and_inserts_new(tmp_path: Path):
     await records.close()
 
 
-async def test_noop_op_confirms_existing(tmp_path: Path):
+async def test_noop_op_does_not_mutate_existing(tmp_path: Path):
     curator, records = _make_curator(tmp_path, StubLLM(), StubSessions())
     existing = await records.add("the user prefers dark mode")
     before = (await records.get(existing.id)).last_confirmed_at
 
-    llm = StubLLM(_ops_json([{"op": "NOOP", "id": existing.id}]))
+    llm = StubLLM(_ops_json([{"op": "NOOP"}]))
     sessions = StubSessions({"s1": [_turn(0, "user", "still on dark mode")]})
     curator2 = Curator(
         llm,
@@ -514,7 +637,7 @@ async def test_noop_op_confirms_existing(tmp_path: Path):
     assert changed is True
     got = await records.get(existing.id)
     assert got.text == "the user prefers dark mode"
-    assert got.last_confirmed_at > before  # reconfirmed
+    assert got.last_confirmed_at == before
     assert got.superseded_by is None
     assert len(llm.calls) == 1
     await curator2.stop()

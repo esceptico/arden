@@ -162,6 +162,7 @@ async def test_run_memory_init_wipes_resets_and_rederives(tmp_path: Path):
 
     # Exactly one curator LLM call: one batch drained the single-turn session.
     assert len(curator_llm.calls) == 1
+    assert sessions.scope_reads == 1  # enumeration only; full curation receives row area_id explicitly
 
     # File-canonical: no artifact projection is rebuilt (records were written
     # straight to their pages).

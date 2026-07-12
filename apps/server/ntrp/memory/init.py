@@ -118,7 +118,12 @@ async def run_memory_init(
             break
         budget = max_llm_calls - llm_calls
         try:
-            result = await curator.curate_session_fully(row["session_id"], max_calls=budget, bulk=True)
+            result = await curator.curate_session_fully(
+                row["session_id"],
+                area_id=row["area_id"],
+                max_calls=budget,
+                bulk=True,
+            )
         except Exception:
             _logger.warning("init: session curation failed", session_id=row["session_id"], exc_info=True)
             continue

@@ -15,6 +15,7 @@ a session with no new turns costs one DB read and no LLM call.
 """
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -22,7 +23,7 @@ from pathlib import Path
 
 from ntrp.database import connect as db_connect
 from ntrp.logging import get_logger
-from ntrp.memory.models import Kind, Record, SourceRef
+from ntrp.memory.models import Kind, Record, SourceRef, now_iso
 from ntrp.memory.reconciler import RecordOperation, validate_operations
 from ntrp.memory.records import RecordStore
 from ntrp.memory.scopes import USER_SCOPE, MemoryScope, apply_scope_to_source, scope_for_write
@@ -225,6 +226,7 @@ class Curator:
 
         # De-dupe in-flight curations per session.
         self._tasks: dict[str, asyncio.Task] = {}
+        self._pending_questions: dict[str, str] = {}
 
         # The periodic curation sweep (started by knowledge.connect()).
         self._sweep_task: asyncio.Task | None = None
@@ -248,6 +250,9 @@ class Curator:
         sessions that never complete a chat run, so they still reach memory."""
         if self._sweep_task is None or self._sweep_task.done():
             self._sweep_task = asyncio.create_task(self._sweep_loop())
+
+    def pending_question(self, session_id: str) -> str | None:
+        return self._pending_questions.get(session_id)
 
     async def sweep_once(self) -> int:
         """Schedule curation for the most-recent live USER CHATS. Automation
@@ -288,7 +293,13 @@ class Curator:
             await self._write_watermark(session_id, max_seq)
             return False
 
-        explicit_scope = await self._session_scope(session_id)
+        batch_key = self._batch_key(session_id, max_seq)
+        if hasattr(self._record_store, "operation_batch_committed") and self._record_store.operation_batch_committed(batch_key):
+            await self._write_watermark(session_id, max_seq)
+            return False
+
+        session_scope = await self._sessions.session_scope(session_id)
+        explicit_scope = await self._area_scope(session_scope.get("area_id") if session_scope else None)
         ops = await self._complete(turns, header="NEW TURNS", explicit_scope=explicit_scope)
         if ops is None:
             # The LLM call failed (or returned nothing usable); do NOT advance the
@@ -296,9 +307,14 @@ class Curator:
             # model dedupes against the existing records).
             return False
 
-        source_ref = self._batch_source(session_id, turns, explicit_scope)
-        operations = await self._typed_operations(ops, source_ref, explicit_scope)
-        new_records = await self._apply_operations(operations, session_id, source_ref)
+        sources = self._batch_sources(session_id, turns, explicit_scope)
+        operations = await self._typed_operations(ops, sources, explicit_scope)
+        if question := next((operation.question for operation in operations if operation.op == "ASK"), None):
+            self._pending_questions[session_id] = question
+            _logger.info("curation requires clarification", session_id=session_id, question=question)
+            return False
+        self._pending_questions.pop(session_id, None)
+        new_records = await self._apply_operations(operations, session_id, sources, batch_key=batch_key)
 
         # CONSOLIDATE/LINT — THE memory step: turn the raw record pile into a small,
         # clean, current body (merge duplicates, supersede stale, drop orphans).
@@ -314,7 +330,14 @@ class Curator:
         return bool(ops)
 
     @observed_trace("memory.curate.full", tags="memory")
-    async def curate_session_fully(self, session_id: str, *, max_calls: int | None = None, bulk: bool = False) -> dict:
+    async def curate_session_fully(
+        self,
+        session_id: str,
+        *,
+        area_id: str | None = None,
+        max_calls: int | None = None,
+        bulk: bool = False,
+    ) -> dict:
         """Full re-derivation of ONE session: loop curate_session-style batches,
         draining ALL transcript turns rather than the single 40-turn batch the
         incremental tick does. Advances the in-process watermark each iteration via
@@ -329,7 +352,7 @@ class Curator:
         calls = 0
         capped = False
         watermark = await self._read_watermark(session_id)
-        explicit_scope = await self._session_scope(session_id)
+        explicit_scope = await self._area_scope(area_id)
 
         while True:
             if max_calls is not None and calls >= max_calls:
@@ -341,6 +364,12 @@ class Curator:
                 await self._write_watermark(session_id, max_seq)
                 break
 
+            batch_key = self._batch_key(session_id, max_seq)
+            if hasattr(self._record_store, "operation_batch_committed") and self._record_store.operation_batch_committed(batch_key):
+                await self._write_watermark(session_id, max_seq)
+                watermark = max_seq
+                continue
+
             ops = await self._complete(turns, header="NEW TURNS", bulk=bulk, explicit_scope=explicit_scope)
             calls += 1
             if ops is None:
@@ -348,9 +377,14 @@ class Curator:
                 # run). Stop the drain so a persistent failure can't spin.
                 break
 
-            source_ref = self._batch_source(session_id, turns, explicit_scope)
-            operations = await self._typed_operations(ops, source_ref, explicit_scope)
-            new_records = await self._apply_operations(operations, session_id, source_ref)
+            sources = self._batch_sources(session_id, turns, explicit_scope)
+            operations = await self._typed_operations(ops, sources, explicit_scope)
+            if question := next((operation.question for operation in operations if operation.op == "ASK"), None):
+                self._pending_questions[session_id] = question
+                _logger.info("curation requires clarification", session_id=session_id, question=question)
+                break
+            self._pending_questions.pop(session_id, None)
+            new_records = await self._apply_operations(operations, session_id, sources, batch_key=batch_key)
             admitted += len(new_records)
             await self._write_watermark(session_id, max_seq)
             watermark = max_seq
@@ -532,11 +566,8 @@ class Curator:
             return None
         return self._parse_completion(content)
 
-    async def _session_scope(self, session_id: str) -> MemoryScope:
-        """Resolve one session's area once for the complete curation batch."""
-        rows = await self._sessions.recent_session_scopes(SWEEP_SESSION_LIMIT)
-        row = next((item for item in rows if item.get("session_id") == session_id), None)
-        area_id = row.get("area_id") if row else None
+    async def _area_scope(self, area_id: str | None) -> MemoryScope:
+        """Resolve one explicit area ID for the complete curation batch."""
         if not area_id:
             return USER_SCOPE
         area = await self._sessions.get_area(area_id)
@@ -545,27 +576,37 @@ class Curator:
         return MemoryScope("area", str(area["area_id"]))
 
     @staticmethod
-    def _batch_source(session_id: str, turns: list[dict], scope: MemoryScope) -> SourceRef:
-        latest = turns[-1]
-        occurred_at = latest.get("created_at")
-        precision = "unknown"
-        if isinstance(occurred_at, str):
-            precision = "millisecond" if "." in occurred_at else "second"
-        return SourceRef(
-            kind="curator",
-            ref=session_id,
-            scope_kind=scope.kind,
-            scope_key=scope.key,
-            occurred_at=occurred_at,
-            time_precision=precision,
-            role=latest.get("role"),
-            extra={"message_ids": [turn["message_id"] for turn in turns], "max_seq": latest["seq"]},
-        )
+    def _batch_key(session_id: str, max_seq: int) -> str:
+        return hashlib.sha256(f"{session_id}:{max_seq}".encode()).hexdigest()
+
+    @staticmethod
+    def _batch_sources(session_id: str, turns: list[dict], scope: MemoryScope) -> tuple[SourceRef, ...]:
+        captured_at = now_iso()
+        sources: list[SourceRef] = []
+        for turn in turns:
+            occurred_at = turn.get("created_at")
+            precision = "unknown"
+            if isinstance(occurred_at, str):
+                precision = "millisecond" if "." in occurred_at else "second"
+            sources.append(
+                SourceRef(
+                    kind="chat_message",
+                    ref=turn["message_id"],
+                    captured_at=captured_at,
+                    scope_kind=scope.kind,
+                    scope_key=scope.key,
+                    occurred_at=occurred_at,
+                    time_precision=precision,
+                    role=turn["role"],
+                    extra={"session_id": session_id, "seq": turn["seq"]},
+                )
+            )
+        return tuple(sources)
 
     async def _typed_operations(
         self,
         raw_operations: list[dict],
-        source: SourceRef,
+        sources: tuple[SourceRef, ...],
         explicit_scope: MemoryScope,
     ) -> tuple[RecordOperation, ...]:
         operations: list[RecordOperation] = []
@@ -581,7 +622,7 @@ class Curator:
                     continue
                 scope = scope_for_write(
                     kind=kind,
-                    source_ref=source,
+                    source_ref=sources[0],
                     explicit_scope=explicit_scope if explicit_scope.kind == "area" else None,
                 )
                 operations.append(
@@ -618,29 +659,51 @@ class Curator:
                 targets = tuple(raw.get("target_ids") or ([raw["id"]] if raw.get("id") else ()))
                 operations.append(RecordOperation.retract(*targets))
             elif verb == "NOOP":
-                target = raw.get("id") or next(iter(raw.get("target_ids") or ()), None)
-                if not isinstance(target, str):
-                    raise ValueError("NOOP requires a target")
-                operations.append(RecordOperation.noop(target))
+                operations.append(
+                    RecordOperation(
+                        op="NOOP",
+                        text=raw.get("text"),
+                        kind=raw.get("kind"),
+                        scope=raw.get("scope"),
+                        target_ids=tuple(raw.get("target_ids") or ([raw["id"]] if raw.get("id") else ())),
+                        question=raw.get("question"),
+                        meta_labels=labels,
+                        entity_labels=entities,
+                    )
+                )
             elif verb == "ASK":
-                operations.append(RecordOperation.ask(str(raw.get("question") or "")))
+                operations.append(
+                    RecordOperation(
+                        op="ASK",
+                        text=raw.get("text"),
+                        kind=raw.get("kind"),
+                        scope=raw.get("scope"),
+                        target_ids=tuple(raw.get("target_ids") or ([raw["id"]] if raw.get("id") else ())),
+                        question=raw.get("question"),
+                        meta_labels=labels,
+                        entity_labels=entities,
+                    )
+                )
             else:
                 raise ValueError(f"unknown record operation: {verb}")
         records = tuple(await self._record_store.list(limit=None, scopes=None))
-        return validate_operations(tuple(operations), records, source)
+        return validate_operations(tuple(operations), records, sources)
 
     async def _apply_operations(
         self,
         operations: tuple[RecordOperation, ...],
         session_id: str,
-        source: SourceRef,
+        sources: tuple[SourceRef, ...],
+        *,
+        batch_key: str,
     ) -> list[Record]:
         if hasattr(self._record_store, "apply_operations"):
-            self._record_store.apply_operations(operations, source)
+            self._record_store.apply_operations(operations, sources, batch_key=batch_key)
             written = [operation for operation in operations if operation.op in {"ADD", "SUPERSEDE", "MERGE"}]
             return [record for record in await self._record_store.list(limit=None, scopes=None) if record.text in {op.text for op in written}]
 
         records: list[Record] = []
+        source = sources[0]
         for operation in operations:
             if operation.op == "MERGE":
                 record = await self._record_store.merge(
