@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { buildNotebookSections, isNotebookArtifact } from "@/features/memory/components/NotebookRail";
+import type { MemoryArtifactSummary } from "@/features/memory/lib/notebookTypes";
 
 test("memory modal uses the directory-first artifact browser instead of pane tabs", () => {
   const modal = readFileSync(new URL("../src/features/memory/components/MemoryModal.tsx", import.meta.url), "utf8");
@@ -13,32 +15,50 @@ test("memory modal uses the directory-first artifact browser instead of pane tab
   expect(pane).not.toContain("LensesView");
 });
 
-test("artifact memory browser reflects filesystem v3 tree contracts", () => {
-  const view = readFileSync(new URL("../src/features/memory/components/ArtifactMemoryView.tsx", import.meta.url), "utf8");
-  const api = readFileSync(new URL("../src/api/memoryArtifacts.ts", import.meta.url), "utf8");
-  const items = readFileSync(new URL("../src/api/memoryItems.ts", import.meta.url), "utf8");
-  const tree = readFileSync(new URL("../src/features/memory/lib/artifactTree.ts", import.meta.url), "utf8");
-  const copyPath = readFileSync(new URL("../src/features/memory/components/CopyPath.tsx", import.meta.url), "utf8");
+test("notebook hierarchy keeps described directories semantic and machine pages hidden", () => {
+  const artifact = (path: string, title: string, summary: string): MemoryArtifactSummary => ({
+    path, title, summary, kind: "topic", type: "file", directory: path.includes("/") ? path.split("/")[0]! : "",
+    scope: { kind: "user", key: null }, snippet: null, revision: `rev:${path}`, recordCount: 0,
+    generated: false, editable: true, readonlyReason: null, updatedAt: null, labels: [], source: null,
+  });
+  const artifacts = [
+    artifact("me.md", "Me", "Personal context"),
+    artifact("topics/dex.md", "Dex", "Dex decisions"),
+    artifact("research/README.md", "Research", "Experiments and findings"),
+    artifact("research/index.md", "Research index", "Older generated index description"),
+    artifact("research/result.md", "Result", "Latest result"),
+    artifact("research/sub/README.md", "Focused research", "One focused investigation"),
+    artifact("research/sub/deep-result.md", "Deep result", "Nested finding"),
+    artifact("research/empty/README.md", "Empty research", "No notes yet"),
+    artifact("scratch.md", "Scratch", "Unsorted"),
+    artifact("health.md", "Health", "Machine report"),
+    artifact("raw/events.md", "Events", "Machine events"),
+    artifact("research/raw/event.md", "Nested event", "Machine event"),
+    artifact("research/.ntrp/state.md", "Nested state", "Machine state"),
+    artifact("research/.maintenance/candidate.md", "Candidate", "Machine candidate"),
+    artifact("research/health.md", "Nested health", "Machine health"),
+    artifact("research/AGENTS.md", "Nested agents", "Machine instructions"),
+    artifact("facts/index.md", "Fact index", "Generated fact index"),
+    artifact("archive/index.md", "Archive", "Older but useful notes"),
+    artifact("archive/note.md", "Archived note", "A retained note"),
+  ];
 
-  expect(items).toContain('"directive" | "fact" | "source"');
-  expect(api).toContain('record_count: number | null');
-  expect(api).toContain('snippet: string | null');
-  expect(api).toContain('generated: boolean');
-  expect(api).toContain('editable: boolean');
-  expect(api).toContain('readonly_reason: string | null');
-  expect(api).toContain('q: params.q');
+  const hierarchy = buildNotebookSections(artifacts);
 
-  // Copy-path UX feature lives in CopyPath.tsx.
-  expect(copyPath).toContain('Copy path');
-  // Clipboard must route through the webview-safe shared util, not the
-  // silently-failing navigator.clipboard.
-  expect(copyPath).toContain('@/lib/clipboard');
-
-  // Folder order + no old structure are the genuine v3 contracts, in artifactTree.ts.
-  expect(tree).toContain('const DIRECTORY_ORDER = ["topics", "feeds", "daily", "insights", "context", "facts", "changelog"]');
-  expect(tree).not.toContain('"sources", "files", "docs"');
-  expect(tree).not.toContain('Fact shards');
-
-  // Missing-artifact recovery notice still surfaces from the orchestrator.
-  expect(view).toContain('refreshed the list');
+  expect(hierarchy.sections.map((section) => section.title)).toEqual(["Memory", "Topics", "Archive", "Research", "Focused research"]);
+  expect(hierarchy.sections.find((section) => section.title === "Archive")?.description).toBe("Older but useful notes");
+  expect(hierarchy.sections.find((section) => section.title === "Archive")?.artifacts.map((item) => item.title)).toEqual(["Archived note"]);
+  expect(hierarchy.sections.find((section) => section.title === "Research")?.description).toBe("Experiments and findings");
+  expect(hierarchy.sections.find((section) => section.title === "Research")?.artifacts.map((item) => item.title)).toEqual(["Result"]);
+  expect(hierarchy.sections.find((section) => section.title === "Focused research")?.artifacts.map((item) => item.title)).toEqual(["Deep result"]);
+  expect(hierarchy.sections.some((section) => section.title === "Empty research")).toBe(false);
+  expect(hierarchy.files.map((item) => item.title)).toEqual(["Scratch"]);
+  expect(artifacts.filter(isNotebookArtifact).map((item) => item.title)).not.toContain("Health");
+  expect(artifacts.filter(isNotebookArtifact).map((item) => item.title)).not.toContain("Events");
+  expect(artifacts.filter(isNotebookArtifact).map((item) => item.title)).not.toContain("Nested event");
+  expect(artifacts.filter(isNotebookArtifact).map((item) => item.title)).not.toContain("Nested state");
+  expect(artifacts.filter(isNotebookArtifact).map((item) => item.title)).not.toContain("Candidate");
+  expect(artifacts.filter(isNotebookArtifact).map((item) => item.title)).not.toContain("Nested health");
+  expect(artifacts.filter(isNotebookArtifact).map((item) => item.title)).not.toContain("Nested agents");
+  expect(artifacts.filter(isNotebookArtifact).map((item) => item.title)).not.toContain("Fact index");
 });

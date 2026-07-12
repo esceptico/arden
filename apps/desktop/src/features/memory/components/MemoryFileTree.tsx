@@ -1,7 +1,7 @@
 import { ChevronRight, FileText, Folder, FolderOpen, Search, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import clsx from "clsx";
-import type { MemoryArtifact } from "@/api/memoryArtifacts";
+import type { MemoryArtifactSummary } from "@/features/memory/lib/notebookTypes";
 import { ICON } from "@/lib/icons";
 import { EASE_EMPHASIZED, EASE_OUT, MOTION, RISE_IN, RISE_SETTLED } from "@/lib/tokens/motion";
 import { displayFileName, displayTitle } from "@/features/memory/lib/format";
@@ -156,10 +156,9 @@ export function TreeRow({
   );
 }
 
-export function FlatRow({ a, active, onSelect }: { a: MemoryArtifact; active: boolean; onSelect: (path: string) => void }) {
+export function FlatRow({ a, active, onSelect }: { a: MemoryArtifactSummary; active: boolean; onSelect: (path: string) => void }) {
   const segments = a.path.split("/");
-  const leaf = segments[segments.length - 1].replace(/\.md$/, "");
-  const parent = segments.slice(0, -1).join(" / ");
+  const parent = segments.slice(0, -1).join(" › ");
   return (
     <button
       type="button"
@@ -171,7 +170,7 @@ export function FlatRow({ a, active, onSelect }: { a: MemoryArtifact; active: bo
       <FileText className={clsx("mt-px h-3.5 w-3.5 shrink-0", active ? "text-muted" : "text-faint")} />
       <span className="min-w-0 flex-1">
         <span className={clsx("block truncate text-sm", active ? "font-medium text-ink" : "text-ink-soft group-hover:text-ink")}>
-          {leaf}
+          {a.title}
         </span>
         {parent && <span className="block truncate text-2xs text-muted">{parent}</span>}
       </span>

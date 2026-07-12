@@ -1,11 +1,11 @@
 import { ChevronRight, Pin } from "lucide-react";
-import type { MemoryArtifact } from "@/api/memoryArtifacts";
+import type { MemoryArtifactDetail } from "@/features/memory/lib/notebookTypes";
 import { kindLabel } from "@/features/memory/lib/format";
 
 // The page's raw record timeline (the machine layer under the compiled prose),
 // shown as collapsed evidence. Dense rows: date, then the claim with kind ·
 // source as a quiet trailing token — the claim always gets the width.
-export function TimelineDisclosure({ timeline }: { timeline?: MemoryArtifact["timeline"] }) {
+export function TimelineDisclosure({ timeline }: { timeline?: MemoryArtifactDetail["timeline"] }) {
   const records = (timeline ?? []).filter((l) => !l.superseded);
   const supersededCount = (timeline ?? []).length - records.length;
   if (records.length === 0) return null;

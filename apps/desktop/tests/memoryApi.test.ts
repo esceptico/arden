@@ -9,6 +9,7 @@ import {
   previewPageEdit,
   readMemoryArtifact,
   readMemoryArtifactDetail,
+  rebuildMemoryArtifactSummaries,
 } from "@/api/memoryArtifacts";
 
 const config: AppConfig = { serverUrl: "http://localhost:6877", apiKey: "test-key" };
@@ -484,6 +485,23 @@ test("legacy artifact adapters remain explicit for current components", async ()
   bridgeResponse({ artifact: { ...raw, content: "body", revision: "rev", editable_content: "exact" } });
   const detail = await readMemoryArtifact(config, "topics/a.md");
   expect(detail.artifact).toMatchObject({ content: "body", editableContent: "exact", revision: "rev" });
+});
+
+test("rebuild returns summary-only notebook metadata", async () => {
+  const raw = {
+    path: "topics/a.md", title: "A", kind: "topic", type: "file", directory: "topics",
+    scope: { kind: "user", key: null }, snippet: "Summary", summary: "Meaning", revision: "sha256:a",
+    record_count: 2, generated: false, editable: true, readonly_reason: null,
+    updated_at: null, labels: [], source: null,
+  };
+  bridgeResponse({ artifacts: [raw] });
+
+  const rebuilt = await rebuildMemoryArtifactSummaries(config);
+
+  expect(lastRequest()).toMatchObject({ method: "POST", path: "/admin/memory/artifacts/rebuild" });
+  expect(rebuilt.artifacts[0]).toMatchObject({ path: "topics/a.md", summary: "Meaning", recordCount: 2 });
+  expect("content" in rebuilt.artifacts[0]!).toBe(false);
+  expect("timeline" in rebuilt.artifacts[0]!).toBe(false);
 });
 
 test("artifact placement preserves entity, project, and future scope kinds", async () => {

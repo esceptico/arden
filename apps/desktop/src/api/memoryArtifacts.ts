@@ -630,6 +630,11 @@ export function rebuildMemoryArtifacts(config: AppConfig) {
     .then((response) => ({ artifacts: response.artifacts.map(mapLegacyArtifact) }));
 }
 
+export function rebuildMemoryArtifactSummaries(config: AppConfig): Promise<MemoryArtifactSummariesResponse> {
+  return apiWithConfig<MemoryArtifactsTransport>(config, "/admin/memory/artifacts/rebuild", { method: "POST" })
+    .then((response) => ({ artifacts: response.artifacts.map(mapArtifactSummary) }));
+}
+
 export interface PreviewPageEditInput {
   path: string;
   baseRevision: string;
