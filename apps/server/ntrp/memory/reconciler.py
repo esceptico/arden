@@ -89,8 +89,8 @@ class RecordOperation(BaseModel):
         return cls(op="NOOP")
 
     @classmethod
-    def ask(cls, question: str) -> RecordOperation:
-        return cls(op="ASK", question=question)
+    def ask(cls, question: str, *target_ids: str) -> RecordOperation:
+        return cls(op="ASK", question=question, target_ids=target_ids)
 
 
 def _validate_timestamp(source: SourceRef) -> None:
@@ -182,14 +182,13 @@ def validate_operations(
         elif op.op == "ASK":
             if (
                 question is None
-                or targets
                 or text is not None
                 or op.kind is not None
                 or op.scope is not None
                 or op.meta_labels is not None
                 or op.entity_labels is not None
             ):
-                raise ValueError("ASK requires only a question")
+                raise ValueError("ASK requires only a question and optional target ids")
 
         if op.op in {"SUPERSEDE", "MERGE", "RETRACT"}:
             overlap = consumed.intersection(targets)

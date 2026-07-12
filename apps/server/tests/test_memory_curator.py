@@ -172,6 +172,29 @@ async def test_reconcile_page_edit_returns_typed_operations_without_applying(tmp
     system = llm.calls[0]["messages"][0]["content"]
     assert "structural memory page edits" in system
     assert "ASK" in system and "RETRACT" in system
+    assert "ASK requires a `question` plus the exact reviewed `target_ids`" in system
+    assert "only a concise `question`" not in system
+    assert "with only a question" not in prompt
+    await curator.stop()
+    await records.close()
+
+
+async def test_reconcile_page_edit_rejects_ask_without_reviewed_targets(tmp_path: Path):
+    llm = StubLLM(_ops_json([{"op": "ASK", "question": "Forget this memory?"}]))
+    curator, records = _make_curator(tmp_path, llm, StubSessions())
+    await records.open()
+    analysis = PageEditAnalysis(
+        path="topics/a.md",
+        before=("Durable statement.",),
+        after=(),
+        changed_before=("Durable statement.",),
+        changed_after=(),
+        patch="patch",
+    )
+
+    with pytest.raises(ValueError, match="reviewed target ids"):
+        await curator.reconcile_page_edit(analysis)
+
     await curator.stop()
     await records.close()
 

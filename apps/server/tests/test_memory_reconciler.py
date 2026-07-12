@@ -75,7 +75,6 @@ def test_source_timestamp_precision_must_match_timestamp():
         {"text": "not allowed"},
         {"kind": Kind.FACT},
         {"scope": MemoryScope("user")},
-        {"target_ids": ("record",)},
         {"meta_labels": ("label",)},
         {"entity_labels": ("entity",)},
     ],
@@ -83,8 +82,24 @@ def test_source_timestamp_precision_must_match_timestamp():
 def test_ask_rejects_every_non_question_field(changes: dict):
     operation = RecordOperation(op="ASK", question="Which tea?", **changes)
 
-    with pytest.raises(ValueError, match="ASK requires only a question"):
+    with pytest.raises(ValueError, match="ASK requires only a question and optional target ids"):
         validate_operations([operation], records=[_fact("record", "Fact")], source=_source())
+
+
+def test_ask_allows_question_only_or_validated_target_ids():
+    record = _fact("record", "User drinks tea")
+
+    question_only = RecordOperation.ask("Which tea?")
+    assert validate_operations([question_only], records=[record], source=_source()) == (question_only,)
+
+    operation = RecordOperation(op="ASK", question="Forget tea?", target_ids=(record.id,))
+    assert validate_operations([operation], records=[record], source=_source()) == (operation,)
+    with pytest.raises(ValueError, match="missing target"):
+        validate_operations(
+            [RecordOperation(op="ASK", question="Forget tea?", target_ids=("missing",))],
+            records=[record],
+            source=_source(),
+        )
 
 
 @pytest.mark.parametrize(

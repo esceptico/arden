@@ -37,7 +37,10 @@ def _record_store(knowledge: KnowledgeRuntime = Depends(require_knowledge_runtim
 
 
 def _artifact_store(knowledge: KnowledgeRuntime = Depends(require_knowledge_runtime)) -> ArtifactMemoryStore:
-    return ArtifactMemoryStore(knowledge.config.memory_artifacts_dir)
+    artifacts = knowledge.artifact_store
+    if artifacts is None:
+        raise HTTPException(status_code=503, detail="memory artifacts not ready")
+    return artifacts
 
 
 def _page_edit_service(knowledge: KnowledgeRuntime = Depends(require_knowledge_runtime)) -> PageEditService:

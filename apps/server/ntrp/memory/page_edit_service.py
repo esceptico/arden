@@ -87,6 +87,10 @@ class PageEditService:
         self._preview_ttl = preview_ttl
         self._apply_lock = _VAULT_APPLY_LOCKS.setdefault(self._vault.resolve(), asyncio.Lock())
 
+    @property
+    def artifact_store(self) -> ArtifactMemoryStore:
+        return self._resources
+
     async def preview(
         self,
         *,
@@ -389,6 +393,9 @@ class PageEditService:
         questions: tuple[PageEditQuestion, ...],
         decisions: dict[str, PageEditDecision | str],
     ) -> tuple[RecordOperation, ...]:
+        unknown_decisions = set(decisions).difference(question.id for question in questions)
+        if unknown_decisions:
+            raise ValueError(f"invalid decision id: {sorted(unknown_decisions)[0]}")
         by_index = {question.operation_index: question for question in questions}
         resolved: list[RecordOperation] = []
         for index, operation in enumerate(operations):
@@ -403,9 +410,12 @@ class PageEditService:
             if decision.choice == "Note only":
                 resolved.append(RecordOperation.noop())
             else:
-                if not decision.target_ids:
+                target_ids = decision.target_ids or operation.target_ids
+                if not target_ids:
                     raise ValueError("Forget memory decision requires target ids")
-                resolved.append(RecordOperation.retract(*decision.target_ids))
+                if not set(target_ids).issubset(operation.target_ids):
+                    raise ValueError("Forget memory decision target is outside the reviewed memory")
+                resolved.append(RecordOperation.retract(*target_ids))
         return tuple(resolved)
 
     def _event_file(self, event: PageEditEvent) -> tuple[Path, bytes, bytes | None]:

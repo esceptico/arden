@@ -478,7 +478,11 @@ async def test_ask_requires_explicit_note_only_or_forget_decision(tmp_path: Path
         SourceRef("test", "seed", occurred_at="2026-07-12T10:00:00.000+04:00", time_precision="millisecond"),
     )
     record = (await store.list())[0]
-    service = PageEditService(vault, store, reconciler=Reconciler((RecordOperation.ask("Forget the coffee memory?"),)))
+    service = PageEditService(
+        vault,
+        store,
+        reconciler=Reconciler((RecordOperation.ask("Forget the coffee memory?", record.id),)),
+    )
     page = vault / "topics" / "a.md"
     base = page.read_bytes()
     preview = await service.preview(path="topics/a.md", base_revision=page_revision(base), content=base + b"\nNo coffee.\n", actor="user:desktop")
@@ -507,7 +511,7 @@ async def test_note_only_resolves_ask_without_semantic_mutation(tmp_path: Path):
         SourceRef("test", "seed", occurred_at="2026-07-12T10:00:00.000+04:00", time_precision="millisecond"),
     )
     record = (await store.list())[0]
-    service = PageEditService(vault, store, reconciler=Reconciler((RecordOperation.ask("Forget it?"),)))
+    service = PageEditService(vault, store, reconciler=Reconciler((RecordOperation.ask("Forget it?", record.id),)))
     page = vault / "topics" / "a.md"
     base = page.read_bytes()
     preview = await service.preview(path="topics/a.md", base_revision=page_revision(base), content=base + b"\nPage note only.\n", actor="user:desktop")
@@ -620,13 +624,13 @@ async def test_pending_ask_is_persisted_and_resolved_after_restart_without_reana
         actor="user:desktop",
     )
     pending = await unavailable.apply(preview.id, decisions={}, save_as_pending=True)
-    first_reconciler = Reconciler((RecordOperation.ask("Forget the coffee memory?"),))
+    first_reconciler = Reconciler((RecordOperation.ask("Forget the coffee memory?", record.id),))
     first_retry = PageEditService(vault, store, reconciler=first_reconciler)
 
     review = await first_retry.retry(pending.id)
 
     assert review.reconciliation == "needs_review"
-    assert review.review_operations == (RecordOperation.ask("Forget the coffee memory?"),)
+    assert review.review_operations == (RecordOperation.ask("Forget the coffee memory?", record.id),)
     assert review.questions[0].question == "Forget the coffee memory?"
     assert len(first_reconciler.analyses) == 1
     calls = 0
@@ -637,6 +641,11 @@ async def test_pending_ask_is_persisted_and_resolved_after_restart_without_reana
         raise AssertionError("persisted review was reanalyzed")
 
     restarted = PageEditService(vault, store, reconciler=must_not_reconcile)
+    with pytest.raises(ValueError, match="invalid decision id"):
+        await restarted.retry(
+            pending.id,
+            decisions={"unrelated": PageEditDecision(choice="Note only")},
+        )
     applied = await restarted.retry(
         pending.id,
         decisions={review.questions[0].id: PageEditDecision(choice="Forget memory", target_ids=(record.id,))},

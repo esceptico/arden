@@ -126,6 +126,11 @@ class KnowledgeRuntime:
         return self._page_edit_service
 
     @property
+    def artifact_store(self):
+        service = self._page_edit_service
+        return service.artifact_store if service is not None else None
+
+    @property
     def consolidate(self):
         return self._consolidate
 
@@ -175,6 +180,7 @@ class KnowledgeRuntime:
             self._record_store.attach_search_index(self.search_index)
 
     async def stop(self) -> None:
+        self._page_edit_service = None
         await self._vault_index.close()
         if self._artifact_refresh_task is not None:
             self._artifact_refresh_task.cancel()
@@ -188,6 +194,7 @@ class KnowledgeRuntime:
             await self.indexer.stop()
 
     async def close(self) -> None:
+        self._page_edit_service = None
         await self._vault_index.close()
         if self._consolidate:
             await self._consolidate.close()

@@ -171,10 +171,12 @@ _PAGE_EDIT_SYSTEM_PROMPT = (
     "MERGE, RETRACT, NOOP, or ASK. Formatting, ordering, and wording-only changes are NOOP. "
     "Use mutation target ids only from EXISTING SIMILAR RECORDS. RETRACT only when the edit is an "
     "unambiguous request to forget exact durable memory. When semantic deletion is ambiguous, return ASK "
-    "with only a concise `question`; never choose semantics from keywords or regex-like text matching. "
+    "with a concise `question` and exact reviewed `target_ids`; never choose semantics from keywords or "
+    "regex-like text matching. "
     "ADD requires self-contained `text`, `kind` (directive|fact|source|lesson), and optional entity_labels/meta_labels. "
     "UPDATE/SUPERSEDE require `id` and replacement `text`; MERGE requires `target_ids` and `text`; "
-    "RETRACT requires `target_ids`; NOOP carries no fields. Output only the JSON object."
+    "RETRACT requires `target_ids`; ASK requires a `question` plus the exact reviewed `target_ids`; "
+    "NOOP carries no fields. Output only the JSON object."
 )
 
 _ENTITY_BACKFILL_SYSTEM = (
@@ -326,7 +328,8 @@ class Curator:
                 "PAGE EDIT RECONCILIATION. The content is a structural before/after diff, not a conversation. "
                 "Return NOOP for formatting, ordering, or wording-only changes. Return ADD, UPDATE/SUPERSEDE, "
                 "MERGE, or RETRACT only for unambiguous semantic changes using listed record ids. Return ASK "
-                "with only a question when forgetting durable memory is ambiguous; never infer a deletion from words."
+                "with a concise question and exact reviewed target ids when forgetting durable memory is ambiguous; "
+                "never infer a deletion from words."
             ),
             explicit_scope=USER_SCOPE,
             system_prompt=_PAGE_EDIT_SYSTEM_PROMPT,
@@ -342,7 +345,10 @@ class Curator:
             time_precision="unknown",
             role="user:desktop",
         )
-        return await self._typed_operations(raw, (source,), USER_SCOPE)
+        operations = await self._typed_operations(raw, (source,), USER_SCOPE)
+        if any(operation.op == "ASK" and not operation.target_ids for operation in operations):
+            raise ValueError("page edit ASK requires reviewed target ids")
+        return operations
 
     async def sweep_once(self) -> int:
         """Schedule curation for the most-recent live USER CHATS. Automation

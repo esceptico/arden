@@ -15,6 +15,7 @@ import pytest_asyncio
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from ntrp.memory.artifacts import ArtifactMemoryStore
 from ntrp.memory.file_store import FilePageStore
 from ntrp.memory.journal import JournalConflictError
 from ntrp.memory.page_edit_service import PageEditService
@@ -37,10 +38,18 @@ class _Knowledge:
     def page_edit_service(self):
         return self._page_edit_service
 
+    @property
+    def artifact_store(self):
+        service = self._page_edit_service
+        return service.artifact_store if service is not None else ArtifactMemoryStore(self.config.memory_artifacts_dir)
+
     def _memory_llm(self):
         # Hermetic: no LLM → mechanical projection, same as the production helper
         # when memory_model is unset.
         return None, ""
+
+    async def reload_config(self, config, stores=None):
+        self.config = config
 
 
 @pytest_asyncio.fixture
@@ -66,6 +75,7 @@ async def client(tmp_path: Path):
 class _PageReconciler:
     def __init__(self, answer=(RecordOperation.noop(),)):
         self.answer = answer
+        self.knowledge = None
 
     async def reconcile_page_edit(self, _analysis):
         return self.answer
@@ -89,6 +99,7 @@ async def page_edit_client(tmp_path: Path):
     reconciler = _PageReconciler()
     service = PageEditService(vault, store, reconciler=reconciler)
     knowledge = _Knowledge(store, vault, service)
+    reconciler.knowledge = knowledge
     test_app = FastAPI()
     test_app.include_router(memory_router)
     test_app.dependency_overrides[require_knowledge_runtime] = lambda: knowledge
@@ -138,7 +149,11 @@ def test_page_edit_preview_is_non_mutating(page_edit_client):
 
 def test_page_edit_apply_requires_ask_decisions(page_edit_client):
     c, _store, _service, reconciler, page = page_edit_client
-    reconciler.answer = (RecordOperation.ask("Forget the prior memory?"),)
+    target_id = c.post(
+        "/admin/memory/record",
+        json={"text": "Prior memory", "kind_tag": "fact"},
+    ).json()["record"]["id"]
+    reconciler.answer = (RecordOperation.ask("Forget the prior memory?", target_id),)
     base = page.read_bytes()
     preview = c.post(
         "/admin/memory/page-edits/preview",
@@ -156,6 +171,47 @@ def test_page_edit_apply_requires_ask_decisions(page_edit_client):
 
     assert response.status_code == 422
     assert page.read_bytes() == base
+
+
+def test_page_edit_forget_memory_uses_ask_targets_and_rejects_unrelated_override(page_edit_client):
+    c, _store, _service, reconciler, page = page_edit_client
+    target_id = c.post(
+        "/admin/memory/record",
+        json={"text": "User drinks coffee", "kind_tag": "fact"},
+    ).json()["record"]["id"]
+    reconciler.answer = (
+        RecordOperation(op="ASK", question="Forget the coffee memory?", target_ids=(target_id,)),
+    )
+    base = page.read_bytes()
+    preview = c.post(
+        "/admin/memory/page-edits/preview",
+        json={
+            "path": "topics/a.md",
+            "base_revision": page_revision(base),
+            "content": "# A\n",
+        },
+    ).json()["preview"]
+    question_id = preview["questions"][0]["id"]
+
+    unrelated = c.put(
+        "/admin/memory/page-edits/apply",
+        json={
+            "preview_id": preview["id"],
+            "decisions": {
+                question_id: {"choice": "forget_memory", "target_ids": ["unrelated"]},
+            },
+        },
+    )
+    assert unrelated.status_code == 422
+    assert page.read_bytes() == base
+
+    applied = c.put(
+        "/admin/memory/page-edits/apply",
+        json={"preview_id": preview["id"], "decisions": {question_id: "forget_memory"}},
+    )
+    assert applied.status_code == 200
+    assert applied.json()["event"]["operations"][0]["op"] == "RETRACT"
+    assert applied.json()["event"]["operations"][0]["target_ids"] == [target_id]
 
 
 def test_page_edit_apply_rejects_unknown_decision_ids(page_edit_client):
@@ -412,6 +468,101 @@ async def test_runtime_page_edit_adapter_uses_curator_typed_operations():
     assert await runtime._reconcile_page_edit(analysis) == expected
     runtime.memory_curator = None
     assert await runtime._reconcile_page_edit(analysis) is None
+
+
+@pytest.mark.asyncio
+async def test_runtime_artifact_store_stays_on_active_vault_after_config_reload(page_edit_client, tmp_path):
+    _c, store, service, _reconciler, _page = page_edit_client
+    runtime = object.__new__(KnowledgeRuntime)
+    runtime.config = SimpleNamespace(embedding=None, memory_artifacts_dir=service.artifact_store.root)
+    runtime.embedding = None
+    runtime.search_index = None
+    runtime._record_store = store
+    runtime._page_edit_service = service
+
+    await runtime.reload_config(
+        SimpleNamespace(embedding=None, memory_artifacts_dir=tmp_path / "different-vault"),
+        stores=None,
+    )
+
+    assert runtime.artifact_store.root == service.artifact_store.root
+
+
+@pytest.mark.asyncio
+async def test_router_preflight_stays_on_active_vault_after_config_reload(page_edit_client, tmp_path):
+    c, _store, _service, reconciler, page = page_edit_client
+    await reconciler.knowledge.reload_config(
+        SimpleNamespace(memory_artifacts_dir=tmp_path / "different-vault", memory_model=None),
+    )
+    base = page.read_bytes()
+
+    artifact = c.get("/admin/memory/artifacts/topics/a.md")
+    preview = c.post(
+        "/admin/memory/page-edits/preview",
+        json={
+            "path": "topics/a.md",
+            "base_revision": page_revision(base),
+            "content": (base + b"\nCandidate.\n").decode(),
+        },
+    )
+
+    assert artifact.status_code == 200
+    assert artifact.json()["artifact"]["revision"] == page_revision(base)
+    assert preview.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_runtime_stop_and_close_clear_page_edit_service():
+    class _Closable:
+        def __init__(self):
+            self.calls = 0
+
+        async def close(self):
+            self.calls += 1
+
+    runtime = object.__new__(KnowledgeRuntime)
+    runtime._vault_index = _Closable()
+    runtime._artifact_refresh_task = None
+    runtime.memory_curator = None
+    runtime._consolidate = None
+    runtime._record_store = _Closable()
+    runtime.indexer = None
+    runtime._page_edit_service = object()
+
+    await runtime.stop()
+    assert runtime.page_edit_service is None
+    assert runtime.artifact_store is None
+
+    runtime._page_edit_service = object()
+    await runtime.close()
+    assert runtime.page_edit_service is None
+    assert runtime.artifact_store is None
+
+
+@pytest.mark.asyncio
+async def test_runtime_clears_page_edit_service_when_store_shutdown_fails():
+    class _VaultIndex:
+        async def close(self):
+            return None
+
+    class _FailingStore:
+        async def close(self):
+            raise OSError("close failed")
+
+    runtime = object.__new__(KnowledgeRuntime)
+    runtime._vault_index = _VaultIndex()
+    runtime._artifact_refresh_task = None
+    runtime.memory_curator = None
+    runtime._consolidate = None
+    runtime._record_store = _FailingStore()
+    runtime.indexer = None
+    runtime._page_edit_service = object()
+
+    with pytest.raises(OSError, match="close failed"):
+        await runtime.stop()
+
+    assert runtime.page_edit_service is None
+    assert runtime.artifact_store is None
 
 
 def test_scopes_empty(client):
