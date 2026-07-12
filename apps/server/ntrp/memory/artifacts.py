@@ -863,7 +863,7 @@ class ArtifactMemoryStore:
         parts = safe.parts
         if not parts or any(part in ("", ".") for part in parts):
             return False
-        if any(part in _ENGINE_RESOURCE_DIRS or part.startswith(".") for part in parts):
+        if any(part in _ENGINE_RESOURCE_DIRS for part in parts):
             return False
         if safe.suffix.casefold() not in _OPEN_RESOURCE_SUFFIXES:
             return False
@@ -896,7 +896,7 @@ class ArtifactMemoryStore:
             if stat.S_ISLNK(child_st.st_mode):
                 continue
             if stat.S_ISDIR(child_st.st_mode):
-                if child.name not in _ENGINE_RESOURCE_DIRS and not child.name.startswith("."):
+                if child.name not in _ENGINE_RESOURCE_DIRS:
                     out.extend(self._walk_resource_files(child))
             elif stat.S_ISREG(child_st.st_mode) and child.suffix.casefold() in _OPEN_RESOURCE_SUFFIXES:
                 rel = child.relative_to(self.root).as_posix()

@@ -135,17 +135,23 @@ async def test_memory_read_search_and_tree_open_nested_text_outside_engine_names
     (artifacts_dir / "research" / "models" / "results.txt").write_text("Exact benchmark result.\n", encoding="utf-8")
     (artifacts_dir / "raw").mkdir(exist_ok=True)
     (artifacts_dir / "raw" / "secret.txt").write_text("Exact private raw result.\n", encoding="utf-8")
+    (artifacts_dir / ".research").mkdir()
+    (artifacts_dir / ".research" / ".result.txt").write_text("Exact hidden benchmark.\n", encoding="utf-8")
 
     execution = _execution(store)
     read = await memory_read(execution, MemoryReadInput(path="research/models/results.txt"))
     search = await memory_search(execution, MemorySearchInput(query="benchmark", path="research"))
     tree = await memory_tree(execution, MemoryTreeInput(path="research", depth=3))
     hidden = await memory_read(execution, MemoryReadInput(path="raw/secret.txt"))
+    user_hidden = await memory_read(execution, MemoryReadInput(path=".research/.result.txt"))
+    hidden_search = await memory_search(execution, MemorySearchInput(query="hidden benchmark", path=".research"))
 
     assert not read.is_error and "benchmark" in read.content
     assert not search.is_error and search.data["matches"][0]["path"] == "research/models/results.txt"
     assert not tree.is_error and "results.txt" in tree.content
     assert hidden.is_error
+    assert not user_hidden.is_error and "hidden benchmark" in user_hidden.content
+    assert not hidden_search.is_error and hidden_search.data["matches"][0]["path"] == ".research/.result.txt"
 
 
 async def test_memory_read_resolves_titles_directories_and_wikilinks(store: RecordStore, artifacts_dir: Path):
@@ -338,7 +344,7 @@ async def test_live_vault_absorbs_external_edits(tmp_path: Path):
     feed.parent.mkdir(parents=True, exist_ok=True)
     feed.write_text("# PR queue\n\n- none open\n", encoding="utf-8")
     assert await store.refresh_from_disk() == ["feeds/pr-queue.md"]
-    assert store._pages[feed].prose.startswith("# PR queue")
+    assert feed not in store._pages, "visible-only resources never become record pages"
 
     # external raw-sidecar edit reloads the page's records
     raw_me = root / "raw" / "me.md"
@@ -351,7 +357,79 @@ async def test_live_vault_absorbs_external_edits(tmp_path: Path):
     feed.unlink()
     assert await store.refresh_from_disk() == ["feeds/pr-queue.md"]
     assert feed not in store._pages
+    await store.close()
 
-    # index.md reflects the absorbed state (regenerated on change)
-    assert "pr-queue" not in (root / "index.md").read_text(encoding="utf-8")
+
+async def test_visible_resource_record_syntax_never_enters_canonical_store(tmp_path: Path):
+    from ntrp.memory.file_store import FilePageStore
+    from ntrp.memory.pages import SENTINEL
+
+    root = tmp_path / "memory"
+    (root / "raw").mkdir(parents=True)
+    (root / "raw" / "me.md").write_text("<!-- ntrp:records schema=2 page=me.md -->\n", encoding="utf-8")
+    (root / "raw" / ".ntrp").mkdir()
+    (root / "raw" / ".ntrp" / "secret.md").write_text(
+        "- 2026-07-12 ^engine1 [fact] (src:user) Must remain internal.\n",
+        encoding="utf-8",
+    )
+    resource = root / "research" / "fake.md"
+    resource.parent.mkdir()
+    resource.write_text(
+        f"# Resource\n\n{SENTINEL}\n- 2026-07-12 ^escape1 [fact] (src:user) Must remain resource-only.\n",
+        encoding="utf-8",
+    )
+
+    store = FilePageStore(root)
+    await store.open()
+
+    assert resource not in store._pages
+    assert "escape1" not in store._loc
+    assert "engine1" not in store._loc
+    await store.close()
+
+
+async def test_live_store_rejects_raw_and_visible_symlink_escapes(tmp_path: Path):
+    from ntrp.memory.file_store import FilePageStore
+
+    root = tmp_path / "memory"
+    outside = tmp_path / "outside"
+    (root / "raw").mkdir(parents=True)
+    outside.mkdir()
+    (outside / "evil.md").write_text("- 2026-07-12 ^escape2 [fact] (src:user) Outside.\n", encoding="utf-8")
+    _symlink_or_skip(root / "raw" / "evil.md", outside / "evil.md")
+    (root / "raw" / "me.md").write_text("<!-- ntrp:records schema=2 page=me.md -->\n", encoding="utf-8")
+    (outside / "visible.md").write_text("# Outside visible\n", encoding="utf-8")
+    _symlink_or_skip(root / "me.md", outside / "visible.md")
+
+    store = FilePageStore(root)
+    await store.open()
+
+    assert root / "evil.md" not in store._pages
+    assert "escape2" not in store._loc
+    assert root / "me.md" in store._pages
+    assert "Outside visible" not in store._pages[root / "me.md"].prose
+    assert root / "me.md" not in store._file_state
+    await store.close()
+
+
+async def test_text_resource_create_move_delete_is_watched_without_record_reload(tmp_path: Path):
+    from ntrp.memory.file_store import FilePageStore
+
+    root = tmp_path / "memory"
+    store = FilePageStore(root)
+    await store.open()
+    first = root / ".research" / "notes.txt"
+    first.parent.mkdir()
+    first.write_text("first\n", encoding="utf-8")
+
+    assert await store.refresh_from_disk() == [".research/notes.txt"]
+    assert first not in store._pages
+
+    moved = first.with_name("moved.txt")
+    first.rename(moved)
+    assert await store.refresh_from_disk() == [".research/moved.txt", ".research/notes.txt"]
+    assert moved not in store._pages
+
+    moved.unlink()
+    assert await store.refresh_from_disk() == [".research/moved.txt"]
     await store.close()

@@ -20,14 +20,22 @@ class VaultIndexProjection:
         self._retry_delay = retry_delay
         self._task: asyncio.Task | None = None
         self._retry_handle: asyncio.TimerHandle | None = None
+        self._work_future: asyncio.Future | None = None
         self._dirty = False
+        self._closed = False
         self.stale = True
 
     @property
+    def closed(self) -> bool:
+        return self._closed
+
+    @property
     def retry_scheduled(self) -> bool:
-        return self._retry_handle is not None and not self._retry_handle.cancelled()
+        return not self._closed and self._retry_handle is not None and not self._retry_handle.cancelled()
 
     def schedule(self) -> None:
+        if self._closed:
+            return
         self.stale = True
         self._dirty = True
         if self._retry_handle is not None:
@@ -41,12 +49,22 @@ class VaultIndexProjection:
             while self._dirty:
                 self._dirty = False
                 try:
-                    await asyncio.to_thread(self._indexer.apply)
+                    loop = asyncio.get_running_loop()
+                    work = loop.run_in_executor(None, self._indexer.apply)
+                    self._work_future = work
+                    try:
+                        await asyncio.shield(work)
+                    except asyncio.CancelledError:
+                        await asyncio.shield(work)
+                        raise
+                    finally:
+                        self._work_future = None
                 except Exception:
                     self.stale = True
                     _logger.warning("memory vault index projection failed", exc_info=True)
-                    loop = asyncio.get_running_loop()
-                    self._retry_handle = loop.call_later(self._retry_delay, self.schedule)
+                    if not self._closed:
+                        loop = asyncio.get_running_loop()
+                        self._retry_handle = loop.call_later(self._retry_delay, self.schedule)
                     return
                 self.stale = False
         finally:
@@ -58,18 +76,26 @@ class VaultIndexProjection:
             await task
 
     def retry_now(self) -> None:
+        if self._closed:
+            return
         if self._retry_handle is not None:
             self._retry_handle.cancel()
             self._retry_handle = None
         self.schedule()
 
-    def close(self) -> None:
+    async def close(self) -> None:
+        self._closed = True
+        self._dirty = False
         if self._retry_handle is not None:
             self._retry_handle.cancel()
             self._retry_handle = None
-        if self._task is not None:
-            self._task.cancel()
-        self._dirty = False
+        task = self._task
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        work = self._work_future
+        if work is not None:
+            await asyncio.shield(work)
 
 
 class KnowledgeRuntime:
@@ -139,7 +165,7 @@ class KnowledgeRuntime:
             self._record_store.attach_search_index(self.search_index)
 
     async def stop(self) -> None:
-        self._vault_index.close()
+        await self._vault_index.close()
         if self._artifact_refresh_task is not None:
             self._artifact_refresh_task.cancel()
         if self.memory_curator:
@@ -152,7 +178,7 @@ class KnowledgeRuntime:
             await self.indexer.stop()
 
     async def close(self) -> None:
-        self._vault_index.close()
+        await self._vault_index.close()
         if self._consolidate:
             await self._consolidate.close()
         if self._record_store:
@@ -215,6 +241,8 @@ class KnowledgeRuntime:
         if not self.config.memory:
             _logger.info("memory disabled by config")
             return
+        if not hasattr(self, "_vault_index"):
+            self._vault_index = VaultIndexProjection(self.config.memory_artifacts_dir)
 
         from ntrp.memory.journal import VaultJournal
 

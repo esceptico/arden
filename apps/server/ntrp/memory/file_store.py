@@ -1,6 +1,8 @@
 """FilePageStore — canonical memory backed by plain markdown pages, layered
-Karpathy-style: the visible page file is compiled prose (the wiki), its
-append-only record timeline lives in a raw/<same-path>.md sidecar.
+Karpathy-style: the visible page file is compiled prose (the wiki), while its
+append-only record timeline lives in a raw/<same-path>.md sidecar. Raw sidecars
+are the live record-discovery boundary; visible-only Markdown/text stays a
+resource and is never parsed into records.
 
 Duck-types the slice of RecordStore that tools/profile/curator actually call
 (open/close/attach_search_index, add/update/supersede_with/supersede/confirm/
@@ -18,7 +20,9 @@ passes.
 from __future__ import annotations
 
 import asyncio
+import os
 import re
+import stat
 from copy import deepcopy
 from dataclasses import replace
 from datetime import UTC, date, datetime
@@ -33,7 +37,7 @@ from ntrp.logging import get_logger
 from ntrp.memory.journal import VaultJournal
 from ntrp.memory.ledger import LedgerEntry, LedgerMeta
 from ntrp.memory.models import TRUST_DEFAULT, TRUST_LEVEL, Kind, Record, SourceRef, now_iso, union_source_refs
-from ntrp.memory.pages import SENTINEL, Line, Page, merge_split, parse_page, render_page, render_raw
+from ntrp.memory.pages import Line, Page, merge_split, parse_page, render_page, render_raw
 from ntrp.memory.reconciler import RecordOperation, validate_operations
 from ntrp.memory.scorer import salience
 from ntrp.search.retrieval import rrf_merge
@@ -54,6 +58,8 @@ _OBSERVATIONS = "observations"  # RETIRED raw integration streams — folded awa
 _RAW = "raw"  # machine layer: per-page record timelines (raw/<page-path>.md sidecars)
 _INSIGHTS = "insights"  # cross-domain DREAM outputs (OKF insights/), kept out of facts/entities
 _GENERATED_FILES = {"index.md", "AGENTS.md", "health.md"}  # generated reports, not record pages
+_RESOURCE_SUFFIXES = {".md", ".txt"}
+_INTERNAL_DIRS = {".ntrp", ".index", ".maintenance"}
 # Canonical, properly-cased titles for the fixed structural pages (root). Keeps the
 # index + Obsidian note titles clean ("Me", not "me") and self-heals contamination.
 _STRUCTURAL_TITLES = {
@@ -217,7 +223,7 @@ class FilePageStore:
         self._scorer = None  # optional async (text, kind, pinned) -> int(1..10); set by knowledge
         self._pages: dict[Path, Page] = {}
         self._loc: dict[str, Path] = {}  # record id -> page path
-        # Live-vault state: mtimes of every tracked .md (pages + raw sidecars) as
+        # Live-vault state: mtimes of every tracked .md/.txt resource and raw sidecar as
         # last seen/written by THIS store, so the watch loop reloads only external
         # edits (Obsidian, feeds, git) — our own writes never echo.
         self._file_state: dict[Path, int] = {}
@@ -238,53 +244,16 @@ class FilePageStore:
 
     async def open(self) -> None:
         self._root.mkdir(parents=True, exist_ok=True)
-        self._pages.clear()
-        self._loc.clear()
-        legacy: list[Path] = []
-        for path in sorted(self._root.rglob("*.md")):
-            # Generated reports live at ROOT only; a nested file like topics/health.md
-            # is a real content page (the user's "health" topic), not the generated audit.
-            # .maintenance/ holds per-automation learnings sidecars — never record pages;
-            # raw/ holds the machine timelines, loaded WITH their page below
-            # (rglob DOES descend dotdirs, so this filter is mandatory).
-            rel_parts = path.relative_to(self._root).parts
-            if {".index", ".maintenance", _RAW} & set(rel_parts) or (path.parent == self._root and path.name in _GENERATED_FILES):
-                continue
-            try:
-                text = path.read_text(encoding="utf-8")
-                raw_path = self._raw_path(path)
-                page = merge_split(parse_page(text), raw_path.read_text(encoding="utf-8") if raw_path.exists() else None)
-            except Exception:
-                _logger.warning("skip unparseable memory page", path=str(path))
-                continue
-            self._pages[path] = page
-            for line in page.lines:
-                self._loc[line.id] = path
-            if SENTINEL in text:  # legacy two-zone file — rewrite split on this open
-                legacy.append(path)
-        for path in self._orphan_raw_files():
-            # a raw sidecar whose page file is gone: resurrect a prose-less page so
-            # its records stay reachable (synthesis will re-compile the prose)
-            page_path = self._root / path.relative_to(self._root / _RAW)
-            try:
-                page = merge_split(Page(), path.read_text(encoding="utf-8"))
-            except Exception:
-                _logger.warning("skip unparseable raw timeline", path=str(path))
-                continue
-            self._pages[page_path] = page
-            for line in page.lines:
-                self._loc[line.id] = page_path
-            legacy.append(page_path)
+        root_st = self._root.lstat()
+        if stat.S_ISLNK(root_st.st_mode) or not stat.S_ISDIR(root_st.st_mode):
+            raise NotADirectoryError(str(self._root))
+        self._load_canonical_pages()
         if self._ledger_mode():
             self._active_ledger_entries()  # validate identity + relationship targets before serving reads
             self._write_conventions()
             self._file_state = self._scan_files()
             await self._sync_index()
             return
-        for path in legacy:
-            self._persist(path)
-        if legacy:
-            _logger.info("split legacy two-zone pages", pages=len(legacy))
         self._migrate_insights()  # relocate pre-insights/ dream records (one-time, idempotent)
         self._retire_observations()  # drop the retired raw integration streams (feeds/ replaced them)
         self._migrate_to_topics()  # fold entities/+projects/ into one topics/ folder (idempotent)
@@ -309,19 +278,132 @@ class FilePageStore:
 
     # -- live vault (Obsidian-style: disk is truth, the store follows) --------
 
-    def _scan_files(self) -> dict[Path, int]:
-        """mtime_ns of every tracked .md — content pages AND raw/ sidecars.
-        Generated root reports and dot-dirs are untracked (regenerated, never
-        externally edited as content)."""
-        out: dict[Path, int] = {}
-        for path in self._root.rglob("*.md"):
-            rel_parts = path.relative_to(self._root).parts
-            if {".index", ".maintenance"} & set(rel_parts):
+    def _walk_regular_files(
+        self,
+        directory: Path,
+        *,
+        suffixes: set[str],
+        excluded_dirs: set[str] | None = None,
+    ) -> list[Path]:
+        excluded = excluded_dirs or set()
+        try:
+            root_st = self._root.lstat()
+            directory_st = directory.lstat()
+        except OSError:
+            return []
+        if (
+            stat.S_ISLNK(root_st.st_mode)
+            or not stat.S_ISDIR(root_st.st_mode)
+            or stat.S_ISLNK(directory_st.st_mode)
+            or not stat.S_ISDIR(directory_st.st_mode)
+        ):
+            return []
+        out: list[Path] = []
+
+        def walk(current: Path) -> None:
+            try:
+                children = sorted(current.iterdir(), key=lambda path: (path.name.casefold(), path.name))
+            except OSError:
+                return
+            for child in children:
+                try:
+                    child_st = child.lstat()
+                except OSError:
+                    continue
+                if stat.S_ISLNK(child_st.st_mode):
+                    continue
+                if stat.S_ISDIR(child_st.st_mode):
+                    if child.name not in excluded:
+                        walk(child)
+                elif stat.S_ISREG(child_st.st_mode) and child.suffix.casefold() in suffixes:
+                    out.append(child)
+
+        walk(directory)
+        return out
+
+    def _safe_read_text(self, path: Path) -> str | None:
+        try:
+            relative = path.relative_to(self._root)
+            root_st = self._root.lstat()
+        except (OSError, ValueError):
+            return None
+        if stat.S_ISLNK(root_st.st_mode) or not stat.S_ISDIR(root_st.st_mode):
+            return None
+        current = self._root
+        for part in relative.parts[:-1]:
+            current = current / part
+            try:
+                current_st = current.lstat()
+            except OSError:
+                return None
+            if stat.S_ISLNK(current_st.st_mode) or not stat.S_ISDIR(current_st.st_mode):
+                return None
+        try:
+            target_st = path.lstat()
+        except OSError:
+            return None
+        if stat.S_ISLNK(target_st.st_mode) or not stat.S_ISREG(target_st.st_mode):
+            return None
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        try:
+            fd = os.open(path, flags)
+        except OSError:
+            return None
+        try:
+            opened_st = os.fstat(fd)
+            if not stat.S_ISREG(opened_st.st_mode):
+                return None
+            with os.fdopen(fd, "r", encoding="utf-8") as handle:
+                fd = -1
+                return handle.read()
+        except (OSError, UnicodeError):
+            return None
+        finally:
+            if fd >= 0:
+                os.close(fd)
+
+    def _canonical_raw_files(self) -> list[Path]:
+        return self._walk_regular_files(
+            self._root / _RAW,
+            suffixes={".md"},
+            excluded_dirs={*_INTERNAL_DIRS, _RAW},
+        )
+
+    def _load_canonical_pages(self) -> None:
+        self._pages.clear()
+        self._loc.clear()
+        raw_root = self._root / _RAW
+        for raw_path in self._canonical_raw_files():
+            page_path = self._root / raw_path.relative_to(raw_root)
+            raw_text = self._safe_read_text(raw_path)
+            if raw_text is None:
                 continue
+            visible_text = self._safe_read_text(page_path) or ""
+            try:
+                page = merge_split(parse_page(visible_text), raw_text)
+            except Exception:
+                _logger.warning("skip unparseable canonical memory page", path=str(page_path))
+                continue
+            self._pages[page_path] = page
+            for line in page.lines:
+                self._loc[line.id] = page_path
+
+    def _scan_files(self) -> dict[Path, int]:
+        """mtime_ns for safe user resources plus canonical raw sidecars."""
+        out: dict[Path, int] = {}
+        paths = self._walk_regular_files(
+            self._root,
+            suffixes=_RESOURCE_SUFFIXES,
+            excluded_dirs={*_INTERNAL_DIRS, _RAW},
+        )
+        paths.extend(self._canonical_raw_files())
+        for path in paths:
             if path.parent == self._root and path.name in _GENERATED_FILES:
                 continue
             try:
-                out[path] = path.stat().st_mtime_ns
+                path_st = path.lstat()
+                if stat.S_ISREG(path_st.st_mode) and not stat.S_ISLNK(path_st.st_mode):
+                    out[path] = path_st.st_mtime_ns
             except OSError:
                 continue
         return out
@@ -337,13 +419,13 @@ class FilePageStore:
                     self._loc.pop(ln.id, None)
                     self._unindex_line(ln.id)
         try:
-            page_text = path.read_text(encoding="utf-8") if path.exists() else ""
             raw_path = self._raw_path(path)
-            raw_text = raw_path.read_text(encoding="utf-8") if raw_path.exists() else None
-        except OSError:
-            _logger.warning("vault reload failed", path=str(path), exc_info=True)
-            return
-        if not page_text and raw_text is None:
+            raw_text = self._safe_read_text(raw_path)
+            page_text = self._safe_read_text(path) or ""
+        except ValueError:
+            raw_text = None
+            page_text = ""
+        if raw_text is None:
             return  # page deleted on disk
         try:
             page = merge_split(parse_page(page_text), raw_text)
@@ -359,32 +441,7 @@ class FilePageStore:
     def _reload_canonical_state(self) -> None:
         """Replace live record and index state from the recovered vault bytes."""
         old_ids = set(self._loc)
-        self._pages.clear()
-        self._loc.clear()
-        for path in sorted(self._root.rglob("*.md")):
-            rel_parts = path.relative_to(self._root).parts
-            if {".index", ".maintenance", _RAW} & set(rel_parts) or (path.parent == self._root and path.name in _GENERATED_FILES):
-                continue
-            try:
-                text = path.read_text(encoding="utf-8")
-                raw_path = self._raw_path(path)
-                page = merge_split(parse_page(text), raw_path.read_text(encoding="utf-8") if raw_path.exists() else None)
-            except Exception:
-                _logger.warning("skip unparseable recovered memory page", path=str(path))
-                continue
-            self._pages[path] = page
-            for line in page.lines:
-                self._loc[line.id] = path
-        for raw_path in self._orphan_raw_files():
-            page_path = self._root / raw_path.relative_to(self._root / _RAW)
-            try:
-                page = merge_split(Page(), raw_path.read_text(encoding="utf-8"))
-            except Exception:
-                _logger.warning("skip unparseable recovered raw timeline", path=str(raw_path))
-                continue
-            self._pages[page_path] = page
-            for line in page.lines:
-                self._loc[line.id] = page_path
+        self._load_canonical_pages()
         active = self._active_ledger_entries() if self._ledger_mode() else tuple(line for page in self._pages.values() for line in page.active_lines())
         for record_id in old_ids:
             self._unindex_line(record_id)
@@ -399,15 +456,23 @@ class FilePageStore:
         current = self._scan_files()
         raw_root = self._root / _RAW
         changed: set[Path] = set()
+        canonical_changed: set[Path] = set()
         for p in current.keys() | self._file_state.keys():
             if self._file_state.get(p) == current.get(p):
                 continue
             rel = p.relative_to(self._root)
-            changed.add(self._root / p.relative_to(raw_root) if rel.parts[0] == _RAW else p)
-        for page_path in sorted(changed):
+            if rel.parts[0] == _RAW:
+                page_path = self._root / p.relative_to(raw_root)
+                changed.add(page_path)
+                canonical_changed.add(page_path)
+            else:
+                changed.add(p)
+                if p.suffix.casefold() == ".md" and self._safe_read_text(self._raw_path(p)) is not None:
+                    canonical_changed.add(p)
+        for page_path in sorted(canonical_changed):
             self._reload_page(page_path)
         self._file_state = current
-        if changed:
+        if canonical_changed:
             if self._ledger_mode():
                 self._active_ledger_entries()
                 await self._sync_index()
@@ -885,9 +950,9 @@ class FilePageStore:
         reading it understands the format. Deterministic; refreshed each open() so the
         doc never drifts from the code."""
         path = self._root / "AGENTS.md"
-        current = path.read_text(encoding="utf-8") if path.exists() else None
+        current = self._safe_read_text(path)
         if current != _CONVENTIONS:
-            path.write_text(_CONVENTIONS, encoding="utf-8")
+            self._write_atomic(path, _CONVENTIONS)
 
     def _page_blurb(self, page: Page, *, record_list: bool = False) -> str:
         """One index line per page: the first real sentence of its prose (the honest
@@ -941,7 +1006,7 @@ class FilePageStore:
         dailies = sorted(p.stem for p in self._pages if p.parent.name == "daily")
         if dailies:
             parts += ["## Daily", "", f"- `daily/` — {len(dailies)} dated logs, newest [[daily/{dailies[-1]}|{dailies[-1]}]]", ""]
-        (self._root / "index.md").write_text("\n".join(parts).rstrip() + "\n", encoding="utf-8")
+        self._write_atomic(self._root / "index.md", "\n".join(parts).rstrip() + "\n")
 
     def _write_health(self) -> None:
         """health.md — a deterministic self-audit that surfaces blind spots (doc
@@ -1007,7 +1072,7 @@ class FilePageStore:
             "", "_Conflicting records are reconciled nightly by the consolidation pass "
             "(it supersedes a contradicted record into the newer one)._",
         ]
-        (self._root / "health.md").write_text("\n".join(parts).rstrip() + "\n", encoding="utf-8")
+        self._write_atomic(self._root / "health.md", "\n".join(parts).rstrip() + "\n")
 
     def _ensure_page(self, path: Path, *, title: str | None = None) -> Page:
         page = self._pages.get(path)
@@ -1029,17 +1094,14 @@ class FilePageStore:
     def _raw_path(self, path: Path) -> Path:
         return self._root / _RAW / path.relative_to(self._root)
 
-    def _orphan_raw_files(self) -> list[Path]:
-        raw_root = self._root / _RAW
-        if not raw_root.is_dir():
-            return []
-        return [p for p in sorted(raw_root.rglob("*.md")) if (self._root / p.relative_to(raw_root)) not in self._pages]
-
     def _write_atomic(self, path: Path, text: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_text(text, encoding="utf-8")
         tmp.replace(path)
+        if path.parent == self._root and path.name in _GENERATED_FILES:
+            self._file_state.pop(path, None)
+            return
         try:
             self._file_state[path] = path.stat().st_mtime_ns  # own write — not an external change
         except OSError:
@@ -1082,10 +1144,8 @@ class FilePageStore:
             visible = render_page(page)
             raw = render_raw(page)
             raw_path = self._raw_path(path)
-            try:
-                raw_changed = bool(raw) and raw_path.read_bytes() != raw.encode()
-            except OSError:
-                raw_changed = bool(raw)
+            existing_raw = self._safe_read_text(raw_path)
+            raw_changed = bool(raw) and existing_raw != raw
             if raw_changed:
                 staged[path.relative_to(self._root)] = visible.encode()
                 staged[raw_path.relative_to(self._root)] = raw.encode()

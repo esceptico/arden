@@ -35,18 +35,20 @@ def _root_map(memory_records: object) -> str | None:
     except Exception:
         _logger.warning("memory root map load failed", exc_info=True)
         return None
+    header = "## Memory map\n\n"
     lines: list[str] = []
-    used = 0
+    used = len(header)
     for entry in entries:
         line = f"- {entry.path} — {entry.description}"
-        remaining = ROOT_MAP_CHAR_BUDGET - used
+        separator = 1 if lines else 0
+        remaining = ROOT_MAP_CHAR_BUDGET - used - separator
         if len(line) > remaining:
             if lines or remaining <= 1:
                 break
             line = line[: remaining - 1].rstrip() + "…"
         lines.append(line)
-        used += len(line)
-    return "## Memory map\n\n" + "\n".join(lines) if lines else None
+        used += separator + len(line)
+    return header + "\n".join(lines) if lines else None
 
 
 async def _playbook(memory_records: object, scopes: list) -> str | None:

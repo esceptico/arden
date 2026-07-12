@@ -40,6 +40,7 @@ _logger = get_logger(__name__)
 
 MEMORY_RECORDS_SERVICE = "memory_records"
 MEMORY_RECONCILER_SERVICE = "memory_reconciler"
+_ENGINE_MEMORY_PATHS = {"raw", ".ntrp", ".index", ".maintenance"}
 
 
 class RememberInput(BaseModel):
@@ -156,7 +157,7 @@ def _validate_relative_path(raw: str, *, allow_empty: bool = False) -> str | Non
     path = Path(text)
     if path.is_absolute() or ".." in path.parts:
         return None
-    if any(part.startswith(".") for part in path.parts if part not in {"", "."}):
+    if any(part in _ENGINE_MEMORY_PATHS for part in path.parts):
         return None
     rel = path.as_posix().strip("/")
     if not rel or rel == ".":
@@ -214,7 +215,7 @@ def _resolve_artifact_read_path(store: ArtifactMemoryStore, raw: str) -> str | N
                 continue
     else:
         unsafe = Path(ref)
-        if unsafe.is_absolute() or ".." in unsafe.parts or any(part.startswith(".") for part in unsafe.parts):
+        if unsafe.is_absolute() or ".." in unsafe.parts or any(part in _ENGINE_MEMORY_PATHS for part in unsafe.parts):
             return None
 
     ref_lower = ref.lower()
@@ -257,7 +258,7 @@ def _artifact_snippet(artifact, content: str) -> str | None:
 
 def _safe_existing_file_path(root: Path, rel: str) -> Path | None:
     parts = Path(rel).parts
-    if not parts or any(part in {"", ".", ".."} or part.startswith(".") for part in parts):
+    if not parts or any(part in {"", ".", ".."} or part in _ENGINE_MEMORY_PATHS for part in parts):
         return None
     path = root.joinpath(*parts)
     try:

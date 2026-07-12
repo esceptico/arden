@@ -8,6 +8,7 @@ import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import quote, unquote
 from uuid import uuid4
 
 from ntrp.memory.frontmatter import parse_frontmatter
@@ -22,7 +23,7 @@ NEEDS_DESCRIPTION = "Needs description"
 _RESOURCE_SUFFIXES = {".md", ".txt"}
 _ENGINE_DIRS = {"raw", ".ntrp", ".index", ".maintenance"}
 _GENERATED_ROOT_FILES = {"index.md", "README.md", "AGENTS.md", "health.md"}
-_MANAGED_LINE = re.compile(r"^-\s+(?:\[[^]]+\]\([^)]+\)|(.+?))\s+—\s+(.+?)\s*$")
+_MANAGED_ID = re.compile(r"^(?P<line>- .*) <!-- ntrp:path=(?P<path>\S+) -->$")
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,7 @@ class IndexReport:
     updated_paths: tuple[str, ...]
     missing_descriptions: tuple[str, ...]
     health_output: str
+    errors: tuple[str, ...] = ()
 
 
 class VaultIndexer:
@@ -45,75 +47,73 @@ class VaultIndexer:
 
     @property
     def entries(self) -> tuple[IndexEntry, ...]:
-        files = self._resource_files()
+        files, _directories = self._resources()
         return tuple(
             IndexEntry(path=rel.as_posix(), description=self._description(self.root / rel, None), is_dir=False)
             for rel in files
         )
 
     def root_entries(self) -> tuple[IndexEntry, ...]:
-        return self._children(Path("."), self._resource_files())
+        files, directories = self._resources()
+        return self._children(Path("."), files, directories)
 
     def render_updates(self) -> Mapping[Path, bytes]:
-        files = self._resource_files()
-        directories = {Path("."), *self._managed_directories()}
-        for rel in files:
-            parent = rel.parent
-            while parent != Path("."):
-                directories.add(parent)
-                parent = parent.parent
+        updates, _errors = self._render_plan()
+        return updates
+
+    def _render_plan(self) -> tuple[dict[Path, bytes], tuple[str, ...]]:
+        files, discovered_directories = self._resources()
+        directories = {Path("."), *discovered_directories}
         updates: dict[Path, bytes] = {}
+        errors: list[str] = []
         for directory in sorted(directories, key=lambda p: (len(p.parts), p.as_posix().casefold())):
             target = Path("index.md") if directory == Path(".") else directory / "README.md"
             current = self._read_regular(target)
-            block = self._render_block(self._children(directory, files))
-            updates[target] = self._replace_managed_block(current, block, root=(directory == Path("."))).encode("utf-8")
-        return updates
-
-    def _managed_directories(self) -> set[Path]:
-        directories: set[Path] = set()
-        for path in self.root.rglob("README.md"):
             try:
-                rel = path.relative_to(self.root)
-                st = path.lstat()
-            except (OSError, ValueError):
+                bounds = self._marker_bounds(current)
+            except ValueError:
+                errors.append(f"{target.as_posix()}: invalid managed index markers")
                 continue
-            if (
-                stat.S_ISREG(st.st_mode)
-                and not stat.S_ISLNK(st.st_mode)
-                and not any(part in _ENGINE_DIRS or part.startswith(".") for part in rel.parts[:-1])
-            ):
-                try:
-                    text = path.read_text(encoding="utf-8")
-                except (OSError, UnicodeError):
-                    continue
-                if INDEX_START in text and INDEX_END in text:
-                    directories.add(rel.parent)
-        return directories
+            block = self._render_block(self._children(directory, files, discovered_directories))
+            updates[target] = self._replace_managed_block(
+                current,
+                block,
+                root=(directory == Path(".")),
+                bounds=bounds,
+            ).encode("utf-8")
+        return updates, tuple(errors)
 
     def scan(self) -> IndexReport:
         return self.apply()
 
     def apply(self) -> IndexReport:
-        updates = self.render_updates()
+        updates, errors = self._render_plan()
+        updated_paths: list[str] = []
         for rel, content in updates.items():
+            if self._read_regular(rel).encode("utf-8") == content:
+                continue
             self._write_atomic(rel, content)
+            updated_paths.append(rel.as_posix())
         missing = tuple(entry.path for entry in self.entries if entry.description == NEEDS_DESCRIPTION)
-        health = "\n".join(f"- {path} — {NEEDS_DESCRIPTION}" for path in missing)
+        health_lines = [*(f"- {path} — {NEEDS_DESCRIPTION}" for path in missing)]
+        suffix = ": invalid managed index markers"
+        health_lines.extend(f"- {error.removesuffix(suffix)} — Invalid managed index markers" for error in errors)
         return IndexReport(
-            updated_paths=tuple(path.as_posix() for path in updates),
+            updated_paths=tuple(updated_paths),
             missing_descriptions=missing,
-            health_output=health,
+            health_output="\n".join(health_lines),
+            errors=errors,
         )
 
-    def _resource_files(self) -> tuple[Path, ...]:
+    def _resources(self) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
         try:
             root_st = self.root.lstat()
         except FileNotFoundError:
-            return ()
+            return (), ()
         if stat.S_ISLNK(root_st.st_mode) or not stat.S_ISDIR(root_st.st_mode):
             raise FileNotFoundError(str(self.root))
         out: list[Path] = []
+        directories: list[Path] = []
 
         def walk(directory: Path) -> None:
             try:
@@ -131,6 +131,7 @@ class VaultIndexer:
                 if stat.S_ISDIR(child_st.st_mode):
                     if child.name in _ENGINE_DIRS:
                         continue
+                    directories.append(rel)
                     walk(child)
                     continue
                 if not stat.S_ISREG(child_st.st_mode) or child.suffix.casefold() not in _RESOURCE_SUFFIXES:
@@ -142,12 +143,23 @@ class VaultIndexer:
                 out.append(rel)
 
         walk(self.root)
-        return tuple(sorted(out, key=lambda p: (p.as_posix().casefold(), p.as_posix())))
+        def path_key(path: Path) -> tuple[str, str]:
+            return path.as_posix().casefold(), path.as_posix()
 
-    def _children(self, directory: Path, files: tuple[Path, ...]) -> tuple[IndexEntry, ...]:
+        return tuple(sorted(out, key=path_key)), tuple(sorted(directories, key=path_key))
+
+    def _children(
+        self,
+        directory: Path,
+        files: tuple[Path, ...],
+        directories: tuple[Path, ...],
+    ) -> tuple[IndexEntry, ...]:
         existing = self._existing_descriptions(directory)
-        child_dirs: set[Path] = set()
+        child_dirs: list[Path] = []
         child_files: list[Path] = []
+        for child in directories:
+            if child.parent == directory:
+                child_dirs.append(child)
         for rel in files:
             try:
                 descendant = rel.relative_to(directory)
@@ -155,8 +167,6 @@ class VaultIndexer:
                 continue
             if len(descendant.parts) == 1:
                 child_files.append(rel)
-            elif descendant.parts:
-                child_dirs.add(directory / descendant.parts[0])
         entries: list[IndexEntry] = []
         for child in sorted(child_dirs, key=lambda p: (p.name.casefold(), p.name)):
             label = f"{child.name}/"
@@ -168,19 +178,29 @@ class VaultIndexer:
     def _existing_descriptions(self, directory: Path) -> dict[str, str]:
         target = Path("index.md") if directory == Path(".") else directory / "README.md"
         text = self._read_regular(target)
-        if INDEX_START not in text or INDEX_END not in text:
+        try:
+            bounds = self._marker_bounds(text)
+        except ValueError:
             return {}
-        block = text.split(INDEX_START, 1)[1].split(INDEX_END, 1)[0]
+        if bounds is None:
+            return {}
+        start, end = bounds
+        block = text[start + len(INDEX_START) : end - len(INDEX_END)]
         descriptions: dict[str, str] = {}
         for line in block.splitlines():
-            match = _MANAGED_LINE.match(line.strip())
-            if not match:
+            stripped = line.strip()
+            identity = _MANAGED_ID.match(stripped)
+            if identity:
+                label = unquote(identity.group("path"))
+                prefix = f"- {label} — "
+                rendered = identity.group("line")
+                if not rendered.startswith(prefix):
+                    continue
+                description = rendered[len(prefix) :].strip()
+            elif stripped.startswith("- ") and " — " in stripped:
+                label, _separator, description = stripped[2:].partition(" — ")
+            else:
                 continue
-            label = match.group(1)
-            if label is None:
-                label_match = re.match(r"^-\s+\[([^]]+)\]", line.strip())
-                label = label_match.group(1) if label_match else None
-            description = match.group(2).strip()
             if label and description != NEEDS_DESCRIPTION:
                 descriptions[label.strip()] = description
         return descriptions
@@ -188,9 +208,7 @@ class VaultIndexer:
     def _description(self, path: Path, existing: str | None) -> str:
         text = ""
         try:
-            st = path.lstat()
-            if stat.S_ISREG(st.st_mode) and not stat.S_ISLNK(st.st_mode):
-                text = path.read_text(encoding="utf-8")
+            text = self._read_regular(path.relative_to(self.root))
         except (OSError, UnicodeError):
             text = ""
         try:
@@ -218,31 +236,52 @@ class VaultIndexer:
 
     @staticmethod
     def _without_managed_block(text: str) -> str:
-        if INDEX_START in text and INDEX_END in text:
-            before, rest = text.split(INDEX_START, 1)
-            _managed, after = rest.split(INDEX_END, 1)
-            return before + after
+        try:
+            bounds = VaultIndexer._marker_bounds(text)
+        except ValueError:
+            return text
+        if bounds is not None:
+            start, end = bounds
+            return text[:start] + text[end:]
         return text
 
     @staticmethod
     def _render_block(entries: tuple[IndexEntry, ...]) -> str:
         if not entries:
             return "_No entries._"
-        return "\n".join(f"- {entry.path} — {entry.description}" for entry in entries)
+        return "\n".join(
+            f"- {entry.path} — {entry.description} <!-- ntrp:path={quote(entry.path, safe='')} -->"
+            for entry in entries
+        )
 
     @staticmethod
-    def _replace_managed_block(current: str, block: str, *, root: bool) -> str:
+    def _marker_bounds(text: str) -> tuple[int, int] | None:
+        starts = [match.start() for match in re.finditer(re.escape(INDEX_START), text)]
+        ends = [match.start() for match in re.finditer(re.escape(INDEX_END), text)]
+        if not starts and not ends:
+            return None
+        if len(starts) != 1 or len(ends) != 1 or starts[0] >= ends[0]:
+            raise ValueError("invalid managed index markers")
+        return starts[0], ends[0] + len(INDEX_END)
+
+    @staticmethod
+    def _replace_managed_block(
+        current: str,
+        block: str,
+        *,
+        root: bool,
+        bounds: tuple[int, int] | None,
+    ) -> str:
         managed = f"{INDEX_START}\n{block}\n{INDEX_END}"
-        if INDEX_START in current and INDEX_END in current:
-            before, rest = current.split(INDEX_START, 1)
-            _old, after = rest.split(INDEX_END, 1)
-            return before + managed + after
-        prefix = current.rstrip()
-        if not prefix:
+        if bounds is not None:
+            start, end = bounds
+            return current[:start] + managed + current[end:]
+        if not current:
             if not root:
                 return f"{managed}\n"
-            prefix = "# Memory"
-        return f"{prefix}\n\n{managed}\n"
+            return f"# Memory\n\n{managed}\n"
+        separator = "" if current.endswith("\n\n") else ("\n" if current.endswith("\n") else "\n\n")
+        return f"{current}{separator}{managed}\n"
 
     def _read_regular(self, rel: Path) -> str:
         path = self.root / rel

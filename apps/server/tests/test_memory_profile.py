@@ -69,7 +69,22 @@ async def test_profile_root_map_enforces_budget_for_one_large_description(tmp_pa
 
     block = await resident_profile(store)
 
-    assert len(block) <= ROOT_MAP_CHAR_BUDGET + len("## Memory map\n\n")
+    assert len(block) <= ROOT_MAP_CHAR_BUDGET
+    await store.close()
+
+
+async def test_profile_root_map_budget_counts_row_separators(tmp_path: Path):
+    from ntrp.memory.file_store import FilePageStore
+
+    root = tmp_path / "memory"
+    root.mkdir()
+    for index in range(200):
+        (root / f"note-{index:03}.txt").write_text("short description\n", encoding="utf-8")
+    store = FilePageStore(root)
+    await store.open()
+
+    block = await resident_profile(store)
+    assert len(block) <= ROOT_MAP_CHAR_BUDGET
     await store.close()
 
 
