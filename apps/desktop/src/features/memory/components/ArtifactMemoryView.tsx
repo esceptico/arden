@@ -121,6 +121,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const [linksLoadingMore, setLinksLoadingMore] = useState(false);
   const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
   const [linkError, setLinkError] = useState<string | null>(null);
+  const [linksRefreshKey, setLinksRefreshKey] = useState(0);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [historyVersion, setHistoryVersion] = useState(0);
   const [pageHistoryPath, setPageHistoryPath] = useState<string | null>(null);
@@ -540,7 +541,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     }).finally(() => {
       if (linksRequestId.current === requestId) setLinksLoading(false);
     });
-  }, [config, contentRefreshKey, selectedMeta?.path, shouldLoadLinks]);
+  }, [config, contentRefreshKey, linksRefreshKey, selectedMeta?.path, shouldLoadLinks]);
 
   useEffect(() => {
     const requestId = ++historyRequestId.current;
@@ -598,15 +599,20 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     const requestId = linksRequestId.current;
     setLinksLoadingMore(true);
     setLinkError(null);
-    void getPageLinks(config, { path, limit: current.limit, offset }).then((page) => {
+    void getPageLinks(config, { path, limit: current.limit, offset }).then(async (page) => {
       if (linksRequestId.current !== requestId || selectedMetaRef.current?.path !== path) return;
+      if (page.revision !== current.revision) {
+        const fresh = await getPageLinks(config, { path, limit: current.limit, offset: 0 });
+        if (linksRequestId.current === requestId && selectedMetaRef.current?.path === path) setPageLinks(fresh);
+        return;
+      }
       setPageLinks((previous) => previous?.path === path && previous.revision === page.revision
         ? {
             ...page,
             outgoing: mergeLinks(previous.outgoing, page.outgoing),
             backlinks: mergeLinks(previous.backlinks, page.backlinks),
           }
-        : page);
+        : previous);
     }).catch((reason) => {
       if (linksRequestId.current === requestId) setLinkError(reason instanceof Error ? reason.message : String(reason));
     }).finally(() => {
@@ -876,6 +882,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
             linkError={linkError}
             historyError={historyError}
             onNavigate={navigateTo}
+            onRetryLinks={() => setLinksRefreshKey((key) => key + 1)}
             onLoadMoreLinks={loadMoreLinks}
             onLoadMoreHistory={loadMoreHistory}
           />

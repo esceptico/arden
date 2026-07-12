@@ -143,6 +143,7 @@ export function MemoryInspector({
   linksLoadingMore = false,
   historyLoadingMore = false,
   onNavigate,
+  onRetryLinks,
   onLoadMoreLinks,
   onLoadMoreHistory,
 }: {
@@ -156,6 +157,7 @@ export function MemoryInspector({
   linksLoadingMore?: boolean;
   historyLoadingMore?: boolean;
   onNavigate: (path: string, anchor: string | null) => void;
+  onRetryLinks?: () => void;
   onLoadMoreLinks?: () => void;
   onLoadMoreHistory?: () => void;
 }) {
@@ -186,7 +188,10 @@ export function MemoryInspector({
           {linkError && <ErrorText message={linkError} />}
           {linksLoading && !links && <p role="status" className="text-xs text-muted">Loading links…</p>}
           {links && <>
-            {links.stale && <div className="text-xs text-warning">Link index is refreshing. Navigation is temporarily disabled.</div>}
+            {links.stale && <div className="flex items-center justify-between gap-3 text-xs text-warning">
+              <span>Link index is refreshing. Navigation is temporarily disabled.</span>
+              {onRetryLinks && <button type="button" aria-label="Refresh memory links" onClick={onRetryLinks} className="shrink-0 font-medium hover:text-ink">Refresh links</button>}
+            </div>}
             <div className="text-2xs text-faint">Backlinks · {links.totalBacklinks}</div>
             <ul className="grid gap-1.5">{links.backlinks.map((link, index) => <LinkRow key={`back:${link.sourcePath}:${link.line}:${index}`} link={link} kind="backlink" stale={links.stale} onNavigate={onNavigate} />)}</ul>
             <div className="mt-1 text-2xs text-faint">Outgoing · {links.totalOutgoing}</div>

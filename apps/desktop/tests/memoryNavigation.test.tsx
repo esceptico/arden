@@ -102,6 +102,19 @@ test("artifact cache is revision keyed, evicts old path revisions, and stays bou
   expect(cache.size).toBe(2);
 });
 
+test("artifact cache bounds revision aliases and removes aliases for evicted details", () => {
+  const cache = new ArtifactCache(2);
+  cache.set(detail(summary("a.md", "A", "server-a"), "A"), "listed-a");
+  cache.set(detail(summary("b.md", "B", "server-b"), "B"), "listed-b");
+  expect(cache.aliasSize).toBe(2);
+  cache.set(detail(summary("c.md", "C", "server-c"), "C"), "listed-c");
+  expect(cache.size).toBe(2);
+  expect(cache.aliasSize).toBe(2);
+  expect(cache.get("a.md", "listed-a")).toBeNull();
+  expect(cache.get("a.md", "server-a")).toBeNull();
+  expect(cache.get("c.md", "listed-c")?.content).toBe("C");
+});
+
 test("revision cache bounds index bodies and replaces obsolete revisions per path", () => {
   const cache = new RevisionCache<string>(2);
   cache.set("index.md", "r1", "old index");
@@ -198,14 +211,14 @@ test("preview clears with its link snapshot and revision mismatch is cached with
   const containerRef = createRef<HTMLDivElement>();
   const cache = new ArtifactCache();
   const { host, root } = setup();
-  const renderPreview = async (snapshot: PageLinks | null) => {
+  const renderPreview = async (snapshot: PageLinks | null, listedSummaries = [listed]) => {
     await act(async () => root.render(
       <div ref={containerRef}>
         <a href="#wikilink" data-wikilink="Alpha">Alpha</a>
         <WikiLinkPreview
           containerRef={containerRef}
           links={snapshot}
-          summaries={[listed]}
+          summaries={listedSummaries}
           cache={cache}
           loadDetail={async () => { reads += 1; return current; }}
         />
@@ -224,10 +237,46 @@ test("preview clears with its link snapshot and revision mismatch is cached with
   expect(reads).toBe(1);
   expect(document.querySelector('[role="tooltip"]')).not.toBeNull();
 
-  await renderPreview({ ...links, revision: "ledger:2", outgoing: [] });
+  const refreshedSummary = summary("alpha.md", "Alpha", "server-r2");
+  await renderPreview(links, [refreshedSummary]);
   expect(alpha.getAttribute("aria-describedby")).toBeNull();
   await settle(200);
   expect(document.querySelector('[role="tooltip"]')).toBeNull();
+  const refreshedAlpha = host.querySelector<HTMLAnchorElement>('[data-wikilink="Alpha"]')!;
+  await act(async () => refreshedAlpha.dispatchEvent(new FocusEvent("focusin", { bubbles: true })));
+  await settle(320);
+  expect(reads).toBe(1);
+
+  await renderPreview({ ...links, revision: "ledger:2", outgoing: [] }, [refreshedSummary]);
+  expect(refreshedAlpha.getAttribute("aria-describedby")).toBeNull();
+  await settle(200);
+  expect(document.querySelector('[role="tooltip"]')).toBeNull();
+});
+
+test("preview hover bridge covers the full padded surface", async () => {
+  const alpha = summary("alpha.md", "Alpha", "r1");
+  const links: PageLinks = {
+    path: "source.md", revision: "ledger:1", stale: false, backlinks: [], totalBacklinks: 0, totalOutgoing: 1, limit: 100, offset: 0,
+    outgoing: [{ sourcePath: "source.md", target: "Alpha", display: "Alpha", heading: null, context: "Alpha", line: 1, column: 1, status: "resolved", resolvedPath: "alpha.md", candidates: ["alpha.md"], sourceRevision: "ledger:1" }],
+  };
+  const containerRef = createRef<HTMLDivElement>();
+  const { host, root } = setup();
+  await act(async () => root.render(
+    <div ref={containerRef}>
+      <a href="#wikilink" data-wikilink="Alpha">Alpha</a>
+      <WikiLinkPreview containerRef={containerRef} links={links} summaries={[alpha]} cache={new ArtifactCache()} loadDetail={async () => detail(alpha, "Paragraph")} />
+    </div>,
+  ));
+  const link = host.querySelector<HTMLAnchorElement>('[data-wikilink="Alpha"]')!;
+  await act(async () => link.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
+  await settle(320);
+  const surface = document.querySelector<HTMLElement>('[data-memory-link-preview-surface]')!;
+  expect(surface.classList.contains("p-3")).toBe(true);
+  await act(async () => link.dispatchEvent(new MouseEvent("mouseout", { bubbles: true })));
+  await settle(60);
+  await act(async () => surface.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true })));
+  await settle(100);
+  expect(document.querySelector('[role="tooltip"]')).not.toBeNull();
 });
 
 test("notebook history shortcuts restore pages and ignore focused editors", async () => {
@@ -409,6 +458,54 @@ test("trust inspector loads shared link pages and older event cursors", async ()
   expect(requests.some((path) => path.includes("before_sequence=5"))).toBe(true);
   expect(host.textContent).toContain("older outgoing context");
   expect(host.textContent).toContain("agent:older");
+});
+
+test("stale links can refresh and a drifted load-more response restarts from offset zero", async () => {
+  const index = summary("index.md", "Index");
+  const note = summary("note.md", "Note");
+  const target = summary("target.md", "Target");
+  const rows = [index, note, target];
+  const offsets: number[] = [];
+  let linkRead = 0;
+  window.ntrpDesktop = { api: { request: async (_config, request) => {
+    if (request.path === "/admin/memory/artifacts") return response({ artifacts: rows.map((item) => rawArtifact(item)) });
+    if (request.path.startsWith("/admin/memory/links")) {
+      const offset = Number(new URL(`http://x${request.path}`).searchParams.get("offset") ?? 0);
+      offsets.push(offset);
+      linkRead += 1;
+      const state = linkRead === 1
+        ? { revision: "ledger:stale", stale: true, context: "stale base" }
+        : linkRead === 2
+          ? { revision: "ledger:one", stale: false, context: "fresh base one" }
+          : linkRead === 3
+            ? { revision: "ledger:two", stale: false, context: "offset tail must be discarded" }
+            : { revision: "ledger:two", stale: false, context: "fresh base two" };
+      const outgoing = [{ source_path: "note.md", target: "Target", display: "Target", heading: null, context: state.context, line: offset + 1, column: 1, status: "resolved", resolved_path: "target.md", candidates: ["target.md"], source_revision: state.revision }];
+      return response({ path: "note.md", revision: state.revision, stale: state.stale, outgoing, backlinks: [], total_outgoing: 101, total_backlinks: 0, limit: 100, offset });
+    }
+    if (request.path.startsWith("/admin/memory/page-edits/history")) return response({ events: [], total: 0, limit: 100, next_before_sequence: null });
+    const path = decodeURIComponent(request.path.replace("/admin/memory/artifacts/", ""));
+    if (path === "index.md") return response({ artifact: rawArtifact(index, "<!-- ntrp:index:start -->\n- note.md <!-- ntrp:path=note.md -->\n- target.md <!-- ntrp:path=target.md -->\n<!-- ntrp:index:end -->") });
+    return response({ artifact: rawArtifact(path === "note.md" ? note : target, path === "note.md" ? "[[Target]]" : "Target body") });
+  } } } as Window["ntrpDesktop"];
+  const { host, root } = setup();
+  await act(async () => root.render(<ArtifactMemoryView config={config} />));
+  await settle(350);
+  expect(host.querySelector<HTMLAnchorElement>('[data-wikilink="Target"]')?.classList.contains("wikilink--unresolved")).toBe(true);
+  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Open memory trust inspector"]')?.click());
+  await settle(50);
+  expect(host.textContent).toContain("stale base");
+  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Refresh memory links"]')?.click());
+  await settle(100);
+  expect(offsets).toEqual([0, 0]);
+  expect(host.textContent).toContain("fresh base one");
+  expect(host.querySelector<HTMLAnchorElement>('[data-wikilink="Target"]')?.classList.contains("wikilink--unresolved")).toBe(false);
+
+  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Load more memory links"]')?.click());
+  await settle(150);
+  expect(offsets).toEqual([0, 0, 100, 0]);
+  expect(host.textContent).toContain("fresh base two");
+  expect(host.textContent).not.toContain("offset tail must be discarded");
 });
 
 test("vault revision refresh invalidates the selected detail cache", async () => {

@@ -20,6 +20,7 @@ interface PreviewState {
   detail: MemoryArtifactDetail | null;
   loading: boolean;
   error: string | null;
+  expectedRevision: string | null;
 }
 
 export function WikiLinkPreview({
@@ -65,6 +66,11 @@ export function WikiLinkPreview({
 
   useEffect(() => close(), [close, links]);
 
+  const activeSummaryRevision = preview ? summariesByPath.get(preview.path)?.revision ?? null : null;
+  useEffect(() => {
+    if (preview && activeSummaryRevision !== preview.expectedRevision) close();
+  }, [activeSummaryRevision, close, preview]);
+
   useEffect(() => {
     const element = preview?.element;
     if (!element) return;
@@ -91,22 +97,22 @@ export function WikiLinkPreview({
       const resolved = resolveWikiTarget(links, target);
       if (!resolved) return close();
       cancelRequest();
-      const revision = summariesByPath.get(resolved.path)?.revision;
+      const revision = summariesByPath.get(resolved.path)?.revision ?? null;
       const cached = cache.get(resolved.path, revision);
       if (cached) {
-        setPreview({ element, ...resolved, detail: cached, loading: false, error: null });
+        setPreview({ element, ...resolved, detail: cached, loading: false, error: null, expectedRevision: revision });
         return;
       }
       const controller = new AbortController();
       request.current = controller;
-      setPreview({ element, ...resolved, detail: null, loading: true, error: null });
+      setPreview({ element, ...resolved, detail: null, loading: true, error: null, expectedRevision: revision });
       void loadDetail(resolved.path, controller.signal).then((detail) => {
         if (controller.signal.aborted || request.current !== controller) return;
         cache.set(detail, revision ?? detail.revision);
-        setPreview({ element, ...resolved, detail, loading: false, error: null });
+        setPreview({ element, ...resolved, detail, loading: false, error: null, expectedRevision: revision });
       }).catch((reason) => {
         if (controller.signal.aborted || request.current !== controller) return;
-        setPreview({ element, ...resolved, detail: null, loading: false, error: reason instanceof Error ? reason.message : String(reason) });
+        setPreview({ element, ...resolved, detail: null, loading: false, error: reason instanceof Error ? reason.message : String(reason), expectedRevision: revision });
       });
     };
     const schedule = (element: HTMLElement) => {
@@ -151,11 +157,11 @@ export function WikiLinkPreview({
       anchor={anchor}
       id={tooltipId}
       role="tooltip"
-      className="w-[320px] p-3"
+      className="w-[320px]"
       closeOnScroll
     >
       {preview && (
-        <div className="grid gap-1.5" onMouseEnter={cancelHide} onMouseLeave={scheduleHide}>
+        <div data-memory-link-preview-surface className="grid gap-1.5 p-3" onMouseEnter={cancelHide} onMouseLeave={scheduleHide}>
           <strong className="text-sm font-semibold text-ink">{preview.detail?.title ?? summariesByPath.get(preview.path)?.title ?? preview.path}</strong>
           {preview.loading ? <span className="text-xs text-muted">Loading preview…</span>
             : preview.error ? <span role="alert" className="text-xs text-danger">{preview.error}</span>
