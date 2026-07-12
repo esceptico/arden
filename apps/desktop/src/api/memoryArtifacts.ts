@@ -2,9 +2,136 @@ import { apiWithConfig, type AppConfig } from "@/api/core";
 import { queryString } from "@/api/memoryItems";
 import type { MemoryKind } from "@/api/memoryItems";
 
-export type MemoryArtifactKind = MemoryKind | "changelog" | "topic";
+type MemoryTimePrecision = "millisecond" | "second" | "minute" | "day" | "unknown";
 
-export interface MemoryArtifact {
+interface MemoryScope {
+  kind: "global" | "user" | "area" | "integration" | "session";
+  key: string | null;
+}
+
+interface MemorySourceRef {
+  kind: string;
+  ref: string;
+  capturedAt: string | null;
+  scope: MemoryScope | null;
+  occurredAt: string | null;
+  timePrecision: MemoryTimePrecision;
+  role: string | null;
+  excerptHash: string | null;
+  metadata: Record<string, unknown>;
+}
+
+type NotebookMemoryKind = "directive" | "fact" | "source" | "changelog" | "lesson";
+
+interface TextOperationFields {
+  id: string;
+  text: string;
+  metaLabels: string[];
+  entityLabels: string[];
+  sources: MemorySourceRef[];
+}
+
+type MemoryOperation =
+  | ({ kind: "ADD"; memoryKind: NotebookMemoryKind; scope: MemoryScope } & TextOperationFields)
+  | ({
+      kind: "SUPERSEDE" | "MERGE";
+      memoryKind: NotebookMemoryKind | null;
+      scope: MemoryScope | null;
+      targetIds: string[];
+    } & TextOperationFields)
+  | { kind: "RETRACT"; id: string; targetIds: string[]; sources: MemorySourceRef[] }
+  | { kind: "NOOP"; id: string; reason: string; sources: MemorySourceRef[] }
+  | { kind: "ASK"; id: string; question: string; targetIds: string[] };
+
+interface PageEditQuestion {
+  id: string;
+  operationIndex: number;
+  question: string;
+}
+
+interface PageEditAnalysis {
+  path: string;
+  before: string[];
+  after: string[];
+  changedBefore: string[];
+  changedAfter: string[];
+  patch: string;
+}
+
+interface PageEditPreview {
+  id: string;
+  path: string;
+  baseRevision: string;
+  resultRevision: string;
+  patch: string;
+  operations: MemoryOperation[];
+  questions: PageEditQuestion[];
+  analysisPending: boolean;
+}
+
+interface PageEditEvent {
+  eventType: "PAGE_EDIT" | "SYNTHESIS_MERGE";
+  id: string;
+  occurredAt: string;
+  sequence: number;
+  actor: string;
+  origin: "desktop" | "external" | "agent" | "synthesis";
+  path: string;
+  baseRevision: string;
+  resultRevision: string;
+  patch: string;
+  operations: MemoryOperation[];
+  reconciliation: "applied" | "pending" | "needs_review";
+  analysis: PageEditAnalysis | null;
+  reconcilesEventId: string | null;
+  reviewOperations: MemoryOperation[];
+  questions: PageEditQuestion[];
+  reviewEventId: string | null;
+  observationId: string | null;
+  sourceCanonicalRevision: string | null;
+}
+
+interface PageEditDecision {
+  choice: "note_only" | "forget_memory";
+  targetIds: string[];
+}
+
+interface PageEditHistory {
+  events: PageEditEvent[];
+  total: number;
+  limit: number;
+  nextBeforeSequence: number | null;
+}
+
+interface MemoryLink {
+  sourcePath: string;
+  target: string;
+  display: string;
+  heading: string | null;
+  context: string;
+  line: number;
+  column: number;
+  status: "resolved" | "ambiguous" | "unresolved";
+  resolvedPath: string | null;
+  candidates: string[];
+  sourceRevision: string;
+}
+
+interface PageLinks {
+  path: string;
+  revision: string;
+  stale: boolean;
+  outgoing: MemoryLink[];
+  backlinks: MemoryLink[];
+  totalOutgoing: number;
+  totalBacklinks: number;
+  limit: number;
+  offset: number;
+}
+
+export type MemoryArtifactKind = MemoryKind | "changelog" | "lesson" | "topic";
+
+interface MemoryArtifactBase {
   path: string;
   title: string;
   kind: MemoryArtifactKind;
@@ -32,19 +159,322 @@ export interface MemoryArtifact {
   frontmatter?: Record<string, string | number | boolean | null | Array<string | number | boolean | null>>;
 }
 
+export interface MemoryArtifactSummary extends MemoryArtifactBase {
+  summary: string | null;
+  revision: string | null;
+  editableContent: null;
+}
+
+export interface MemoryArtifactDetail extends MemoryArtifactBase {
+  summary: string | null;
+  revision: string;
+  editableContent: string | null;
+}
+
+export type MemoryArtifact = MemoryArtifactSummary | MemoryArtifactDetail;
+
 export interface MemoryArtifactsResponse {
-  artifacts: MemoryArtifact[];
+  artifacts: MemoryArtifactSummary[];
 }
 
 export interface MemoryArtifactResponse {
-  artifact: MemoryArtifact;
+  artifact: MemoryArtifactDetail;
+}
+
+interface MemoryArtifactTransport extends MemoryArtifactBase {
+  summary?: string | null;
+  revision?: string | null;
+  editable_content?: string | null;
+}
+
+interface MemoryArtifactsTransport {
+  artifacts: MemoryArtifactTransport[];
+}
+
+interface RawScope {
+  kind: string;
+  key: string | null;
+}
+
+interface RawSourceRef extends Record<string, unknown> {
+  kind: string;
+  ref: string;
+  captured_at?: string | null;
+  scope_kind?: string | null;
+  scope_key?: string | null;
+  occurred_at?: string | null;
+  time_precision?: string | null;
+  role?: string | null;
+  excerpt_hash?: string | null;
+}
+
+type RawOperationKind = "ADD" | "SUPERSEDE" | "MERGE" | "RETRACT" | "NOOP" | "ASK";
+
+interface RawOperation {
+  op: RawOperationKind;
+  text?: string | null;
+  kind?: string | null;
+  scope?: RawScope | null;
+  target_ids?: string[];
+  question?: string | null;
+  meta_labels?: string[] | null;
+  entity_labels?: string[] | null;
+  sources?: RawSourceRef[];
+}
+
+interface RawQuestion {
+  id: string;
+  operation_index: number;
+  question: string;
+}
+
+interface RawAnalysis {
+  path: string;
+  before: string[];
+  after: string[];
+  changed_before: string[];
+  changed_after: string[];
+  patch: string;
+}
+
+interface RawPreview {
+  id: string;
+  path: string;
+  base_revision: string;
+  result_revision: string;
+  patch: string;
+  operations: RawOperation[];
+  questions: RawQuestion[];
+  analysis_pending: boolean;
+}
+
+interface RawEvent {
+  event_type: "PAGE_EDIT" | "SYNTHESIS_MERGE";
+  id: string;
+  occurred_at: string;
+  sequence: number;
+  actor: string;
+  origin: "desktop" | "external" | "agent" | "synthesis";
+  path: string;
+  base_revision: string;
+  result_revision: string;
+  patch: string;
+  operations: RawOperation[];
+  reconciliation: "applied" | "pending" | "needs_review";
+  analysis?: RawAnalysis | null;
+  reconciles_event_id?: string | null;
+  review_operations?: RawOperation[];
+  questions?: RawQuestion[];
+  review_event_id?: string | null;
+  observation_id?: string | null;
+  source_canonical_revision?: string | null;
+}
+
+interface RawLink {
+  source_path: string;
+  target: string;
+  display: string;
+  heading: string | null;
+  context: string;
+  line: number;
+  column: number;
+  status: "resolved" | "ambiguous" | "unresolved";
+  resolved_path: string | null;
+  candidates: string[];
+  source_revision: string;
+}
+
+const SOURCE_FIELDS = new Set([
+  "kind",
+  "ref",
+  "captured_at",
+  "scope_kind",
+  "scope_key",
+  "occurred_at",
+  "time_precision",
+  "role",
+  "excerpt_hash",
+]);
+
+function mapArtifactSummary(raw: MemoryArtifactTransport): MemoryArtifactSummary {
+  const { summary, revision, editable_content: _editableContent, ...artifact } = raw;
+  return {
+    ...artifact,
+    summary: summary ?? null,
+    revision: revision ?? null,
+    editableContent: null,
+  };
+}
+
+function mapArtifactDetail(raw: MemoryArtifactTransport): MemoryArtifactDetail {
+  if (raw.revision == null) throw new Error("Memory artifact detail is missing its revision");
+  const { summary, revision, editable_content: editableContent, ...artifact } = raw;
+  return {
+    ...artifact,
+    summary: summary ?? null,
+    revision,
+    editableContent: editableContent ?? null,
+  };
+}
+
+function mapScope(raw: RawScope | null | undefined): MemoryScope | null {
+  if (!raw) return null;
+  if (!["global", "user", "area", "integration", "session"].includes(raw.kind)) {
+    throw new Error(`Unsupported memory scope: ${raw.kind}`);
+  }
+  return raw as MemoryScope;
+}
+
+function mapMemoryKind(raw: string | null | undefined): NotebookMemoryKind | null {
+  if (raw == null) return null;
+  if (!["directive", "fact", "source", "changelog", "lesson"].includes(raw)) {
+    throw new Error(`Unsupported memory kind: ${raw}`);
+  }
+  return raw as NotebookMemoryKind;
+}
+
+function mapSource(raw: RawSourceRef): MemorySourceRef {
+  const metadata = Object.fromEntries(Object.entries(raw).filter(([key]) => !SOURCE_FIELDS.has(key)));
+  const scope = raw.scope_kind == null
+    ? null
+    : mapScope({ kind: raw.scope_kind, key: raw.scope_key ?? null });
+  const precision = raw.time_precision ?? "unknown";
+  if (!["millisecond", "second", "minute", "day", "unknown"].includes(precision)) {
+    throw new Error(`Unsupported source time precision: ${precision}`);
+  }
+  return {
+    kind: raw.kind,
+    ref: raw.ref,
+    capturedAt: raw.captured_at ?? null,
+    scope,
+    occurredAt: raw.occurred_at ?? null,
+    timePrecision: precision as MemoryTimePrecision,
+    role: raw.role ?? null,
+    excerptHash: raw.excerpt_hash ?? null,
+    metadata,
+  };
+}
+
+function requiredText(raw: RawOperation): string {
+  if (raw.text == null) throw new Error(`${raw.op} operation is missing text`);
+  return raw.text;
+}
+
+function mapOperation(raw: RawOperation, id: string): MemoryOperation {
+  const sources = (raw.sources ?? []).map(mapSource);
+  const textFields = () => ({
+    id,
+    text: requiredText(raw),
+    metaLabels: raw.meta_labels ?? [],
+    entityLabels: raw.entity_labels ?? [],
+    sources,
+  });
+  switch (raw.op) {
+    case "ADD": {
+      const memoryKind = mapMemoryKind(raw.kind);
+      const scope = mapScope(raw.scope);
+      if (memoryKind == null || scope == null) throw new Error("ADD operation is missing kind or scope");
+      return { kind: "ADD", ...textFields(), memoryKind, scope };
+    }
+    case "SUPERSEDE":
+      return {
+        kind: "SUPERSEDE",
+        ...textFields(),
+        memoryKind: mapMemoryKind(raw.kind),
+        scope: mapScope(raw.scope),
+        targetIds: raw.target_ids ?? [],
+      };
+    case "MERGE":
+      return {
+        kind: "MERGE",
+        ...textFields(),
+        memoryKind: mapMemoryKind(raw.kind),
+        scope: mapScope(raw.scope),
+        targetIds: raw.target_ids ?? [],
+      };
+    case "RETRACT":
+      return { kind: "RETRACT", id, targetIds: raw.target_ids ?? [], sources };
+    case "NOOP":
+      return { kind: "NOOP", id, reason: raw.text ?? "No memory changes", sources };
+    case "ASK":
+      return { kind: "ASK", id, question: raw.question ?? "", targetIds: raw.target_ids ?? [] };
+  }
+}
+
+function mapQuestion(raw: RawQuestion): PageEditQuestion {
+  return { id: raw.id, operationIndex: raw.operation_index, question: raw.question };
+}
+
+function mapAnalysis(raw: RawAnalysis): PageEditAnalysis {
+  return {
+    path: raw.path,
+    before: raw.before,
+    after: raw.after,
+    changedBefore: raw.changed_before,
+    changedAfter: raw.changed_after,
+    patch: raw.patch,
+  };
+}
+
+function mapPreview(raw: RawPreview): PageEditPreview {
+  return {
+    id: raw.id,
+    path: raw.path,
+    baseRevision: raw.base_revision,
+    resultRevision: raw.result_revision,
+    patch: raw.patch,
+    operations: raw.operations.map((operation, index) => mapOperation(operation, `${raw.id}:operation:${index}`)),
+    questions: raw.questions.map(mapQuestion),
+    analysisPending: raw.analysis_pending,
+  };
+}
+
+function mapEvent(raw: RawEvent): PageEditEvent {
+  return {
+    eventType: raw.event_type,
+    id: raw.id,
+    occurredAt: raw.occurred_at,
+    sequence: raw.sequence,
+    actor: raw.actor,
+    origin: raw.origin,
+    path: raw.path,
+    baseRevision: raw.base_revision,
+    resultRevision: raw.result_revision,
+    patch: raw.patch,
+    operations: raw.operations.map((operation, index) => mapOperation(operation, `${raw.id}:operation:${index}`)),
+    reconciliation: raw.reconciliation,
+    analysis: raw.analysis ? mapAnalysis(raw.analysis) : null,
+    reconcilesEventId: raw.reconciles_event_id ?? null,
+    reviewOperations: (raw.review_operations ?? []).map((operation, index) =>
+      mapOperation(operation, `${raw.id}:review-operation:${index}`)),
+    questions: (raw.questions ?? []).map(mapQuestion),
+    reviewEventId: raw.review_event_id ?? null,
+    observationId: raw.observation_id ?? null,
+    sourceCanonicalRevision: raw.source_canonical_revision ?? null,
+  };
+}
+
+function mapLink(raw: RawLink): MemoryLink {
+  return {
+    sourcePath: raw.source_path,
+    target: raw.target,
+    display: raw.display,
+    heading: raw.heading,
+    context: raw.context,
+    line: raw.line,
+    column: raw.column,
+    status: raw.status,
+    resolvedPath: raw.resolved_path,
+    candidates: raw.candidates,
+    sourceRevision: raw.source_revision,
+  };
 }
 
 export function listMemoryArtifacts(config: AppConfig, params: { kind?: MemoryArtifactKind; q?: string } = {}) {
-  return apiWithConfig<MemoryArtifactsResponse>(
+  return apiWithConfig<MemoryArtifactsTransport>(
     config,
     `/admin/memory/artifacts${queryString({ kind: params.kind, q: params.q })}`,
-  );
+  ).then((response) => ({ artifacts: response.artifacts.map(mapArtifactSummary) }));
 }
 
 function encodeArtifactPath(path: string): string {
@@ -52,9 +482,116 @@ function encodeArtifactPath(path: string): string {
 }
 
 export function readMemoryArtifact(config: AppConfig, path: string) {
-  return apiWithConfig<MemoryArtifactResponse>(config, `/admin/memory/artifacts/${encodeArtifactPath(path)}`);
+  return apiWithConfig<{ artifact: MemoryArtifactTransport }>(
+    config,
+    `/admin/memory/artifacts/${encodeArtifactPath(path)}`,
+  ).then((response) => ({ artifact: mapArtifactDetail(response.artifact) }));
 }
 
 export function rebuildMemoryArtifacts(config: AppConfig) {
-  return apiWithConfig<MemoryArtifactsResponse>(config, "/admin/memory/artifacts/rebuild", { method: "POST" });
+  return apiWithConfig<MemoryArtifactsTransport>(config, "/admin/memory/artifacts/rebuild", { method: "POST" })
+    .then((response) => ({ artifacts: response.artifacts.map(mapArtifactSummary) }));
+}
+
+export interface PreviewPageEditInput {
+  path: string;
+  baseRevision: string;
+  content: string;
+  actor?: string;
+}
+
+export function previewPageEdit(config: AppConfig, input: PreviewPageEditInput): Promise<PageEditPreview> {
+  return apiWithConfig<{ preview: RawPreview }>(config, "/admin/memory/page-edits/preview", {
+    method: "POST",
+    body: JSON.stringify({
+      path: input.path,
+      base_revision: input.baseRevision,
+      content: input.content,
+      actor: input.actor ?? "user:desktop",
+    }),
+  }).then((response) => mapPreview(response.preview));
+}
+
+export interface ApplyPageEditInput {
+  previewId: string;
+  decisions: Record<string, PageEditDecision>;
+  savePending?: boolean;
+}
+
+export function applyPageEdit(
+  config: AppConfig,
+  input: ApplyPageEditInput,
+): Promise<{ event: PageEditEvent; revision: string }> {
+  const decisions = Object.fromEntries(
+    Object.entries(input.decisions).map(([id, decision]) => [
+      id,
+      { choice: decision.choice, target_ids: decision.targetIds },
+    ]),
+  );
+  return apiWithConfig<{ event: RawEvent; revision: string }>(config, "/admin/memory/page-edits/apply", {
+    method: "PUT",
+    body: JSON.stringify({
+      preview_id: input.previewId,
+      decisions,
+      save_pending: input.savePending ?? false,
+    }),
+  }).then((response) => ({ event: mapEvent(response.event), revision: response.revision }));
+}
+
+export interface PageHistoryParams {
+  path?: string;
+  limit?: number;
+  beforeSequence?: number;
+}
+
+export function getPageHistory(config: AppConfig, params: PageHistoryParams = {}): Promise<PageEditHistory> {
+  return apiWithConfig<{
+    events: RawEvent[];
+    total: number;
+    limit: number;
+    next_before_sequence: number | null;
+  }>(config, `/admin/memory/page-edits/history${queryString({
+    path: params.path,
+    limit: params.limit,
+    before_sequence: params.beforeSequence,
+  })}`).then((response) => ({
+    events: response.events.map(mapEvent),
+    total: response.total,
+    limit: response.limit,
+    nextBeforeSequence: response.next_before_sequence,
+  }));
+}
+
+export interface PageLinksParams {
+  path: string;
+  limit?: number;
+  offset?: number;
+}
+
+export function getPageLinks(config: AppConfig, params: PageLinksParams): Promise<PageLinks> {
+  return apiWithConfig<{
+    path: string;
+    revision: string;
+    stale: boolean;
+    outgoing: RawLink[];
+    backlinks: RawLink[];
+    total_outgoing: number;
+    total_backlinks: number;
+    limit: number;
+    offset: number;
+  }>(config, `/admin/memory/links${queryString({
+    path: params.path,
+    limit: params.limit,
+    offset: params.offset,
+  })}`).then((response) => ({
+    path: response.path,
+    revision: response.revision,
+    stale: response.stale,
+    outgoing: response.outgoing.map(mapLink),
+    backlinks: response.backlinks.map(mapLink),
+    totalOutgoing: response.total_outgoing,
+    totalBacklinks: response.total_backlinks,
+    limit: response.limit,
+    offset: response.offset,
+  }));
 }

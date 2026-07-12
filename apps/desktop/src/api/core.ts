@@ -12,6 +12,20 @@ export interface ApiBridgeResponse {
   text: string;
 }
 
+export class ApiError extends Error {
+  readonly status: number;
+  readonly data: unknown;
+  readonly responseText: string;
+
+  constructor(response: { status: number; data?: unknown; text?: string }) {
+    super(errorMessageFromResponse(response));
+    this.name = "ApiError";
+    this.status = response.status;
+    this.data = response.data ?? null;
+    this.responseText = response.text ?? "";
+  }
+}
+
 export interface HealthCheck {
   ok: boolean;
   version: string | null;
@@ -74,7 +88,7 @@ export async function apiWithConfig<T>(config: AppConfig, path: string, init: Re
       timeout: effectiveTimeout,
     };
     const response: ApiBridgeResponse = await desktopRequestWithTimeout(desktopApi, config, request, effectiveTimeout);
-    if (!response.ok) throw new Error(errorMessageFromResponse(response));
+    if (!response.ok) throw new ApiError(response);
     return response.contentType.includes("application/json") ? (response.data as T) : (undefined as T);
   }
 
@@ -100,7 +114,7 @@ export async function apiWithConfig<T>(config: AppConfig, path: string, init: Re
       } catch {
         text = await response.text();
       }
-      throw new Error(errorMessageFromResponse({ status: response.status, data, text }));
+      throw new ApiError({ status: response.status, data, text });
     }
 
     if (!response.headers.get("content-type")?.includes("application/json")) {
