@@ -66,13 +66,14 @@ def three_way_merge(base: bytes | None, current: bytes, generated: bytes) -> Mer
     current_lines = tuple(current.splitlines(keepends=True))
     generated_lines = tuple(generated.splitlines(keepends=True))
     current_hunks = _hunks(base_lines, current_lines)
-    generated_hunks = _hunks(base_lines, generated_lines)
+    current_hunk_set = set(current_hunks)
+    generated_hunks = tuple(
+        hunk for hunk in _hunks(base_lines, generated_lines) if hunk not in current_hunk_set
+    )
 
     for generated_hunk in generated_hunks:
         for current_hunk in current_hunks:
             if not _overlap(generated_hunk, current_hunk):
-                continue
-            if generated_hunk == current_hunk:
                 continue
             return MergeResult(None, generated, True, "overlap")
 

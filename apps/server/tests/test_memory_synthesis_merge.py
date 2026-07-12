@@ -50,6 +50,37 @@ def test_three_way_merge_keeps_current_when_base_is_missing():
     assert result.reason == "missing_base"
 
 
+@pytest.mark.parametrize(
+    ("base", "current", "generated", "expected"),
+    [
+        (
+            b"A\nB\nC\n",
+            b"A\nShared.\nB\nC\nUser tail.\n",
+            b"A\nShared.\nB\nGenerated C.\n",
+            b"A\nShared.\nB\nGenerated C.\nUser tail.\n",
+        ),
+        (
+            b"A\nOld.\nSeparator.\nC\n",
+            b"A\nShared replacement.\nSeparator.\nC\nUser tail.\n",
+            b"A\nShared replacement.\nSeparator.\nGenerated C.\n",
+            b"A\nShared replacement.\nSeparator.\nGenerated C.\nUser tail.\n",
+        ),
+        (
+            b"A\nRemove me.\nSeparator.\nC\n",
+            b"A\nSeparator.\nC\nUser tail.\n",
+            b"A\nSeparator.\nGenerated C.\n",
+            b"A\nSeparator.\nGenerated C.\nUser tail.\n",
+        ),
+    ],
+    ids=("insertion", "replacement", "deletion"),
+)
+def test_three_way_merge_applies_shared_hunk_only_once(base, current, generated, expected):
+    result = three_way_merge(base, current, generated)
+
+    assert result.review_required is False
+    assert result.merged == expected
+
+
 def test_freshness_distinguishes_two_canonical_revisions_on_the_same_day():
     first = "a" * 64
     second = "b" * 64

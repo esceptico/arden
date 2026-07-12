@@ -40,9 +40,11 @@ RAW_FM_KEYS = (
     "meta_labels",
     "generated_from_revision",
     "prose_cites",
+    "prose_synced",
 )
-# Legacy bookkeeping now computed from the prose itself — dropped on parse.
-_DROPPED_FM_KEYS = ("prose_tokens",)
+# Legacy bookkeeping is dropped on visible and raw parse. Keeping it in
+# RAW_FM_KEYS is defense-in-depth: an old value can never render visibly.
+_DROPPED_FM_KEYS = ("prose_tokens", "prose_synced")
 _V2_HEADER_RE = re.compile(r"^<!-- ntrp:records schema=2(?: [^>]*)? -->$")
 
 # Greedy text + bracket tags only (incl. [superseded]) so the text body can
@@ -202,6 +204,8 @@ def parse_page(text: str) -> Page:
 def parse_raw(text: str) -> tuple[dict, list[Line | LedgerEntry]]:
     """Parse a raw sidecar: engine frontmatter + every parseable timeline line."""
     fm, body = _split_frontmatter(text)
+    for key in _DROPPED_FM_KEYS:
+        fm.pop(key, None)
     rows = body.splitlines()
     first = next((index for index, row in enumerate(rows) if row.strip()), None)
     header_rows = [index for index, row in enumerate(rows) if _V2_HEADER_RE.fullmatch(row)]

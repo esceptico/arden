@@ -909,6 +909,37 @@ async def test_generated_prose_only_write_is_excluded_from_canonical_revision(tm
     await store.close()
 
 
+async def test_legacy_prose_synced_is_dropped_without_leaking_into_visible_frontmatter(tmp_path: Path):
+    vault = tmp_path / "memory"
+    (vault / "topics").mkdir(parents=True)
+    (vault / "raw/topics").mkdir(parents=True)
+    page_path = vault / "topics/a.md"
+    raw_path = vault / "raw/topics/a.md"
+    revision = "a" * 64
+    page_path.write_text("---\ntitle: A\n---\n\nExisting prose.\n", encoding="utf-8")
+    raw_path.write_text(
+        "---\n"
+        "prose_synced: 2026-07-12\n"
+        f"generated_from_revision: {revision}\n"
+        "---\n\n"
+        "<!-- ntrp:records schema=2 page=topics/a.md -->\n",
+        encoding="utf-8",
+    )
+    store = FilePageStore(vault)
+    await store.open()
+
+    store._pages[page_path].prose = "Persisted prose."
+    store._persist(page_path)
+
+    visible = page_path.read_text(encoding="utf-8")
+    raw = raw_path.read_text(encoding="utf-8")
+    assert "prose_synced" not in visible
+    assert "prose_synced" not in raw
+    assert "generated_from_revision" not in visible
+    assert f"generated_from_revision: {revision}" in raw
+    await store.close()
+
+
 async def test_update_appends_successor_and_preserves_evidence(tmp_path: Path):
     vault = tmp_path / "memory"
     original_source = SourceRef("chat_message", "s:m1", captured_at="2026-07-12T10:00:00Z")
