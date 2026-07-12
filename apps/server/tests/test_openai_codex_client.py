@@ -1,8 +1,11 @@
+from unittest.mock import AsyncMock
+
 import pytest
 from pydantic import BaseModel
 
 from ntrp.agent import FinishReason, Role
 from ntrp.llm.openai_codex import OpenAICodexClient
+from ntrp.llm.openai_codex_auth import OpenAICodexTokens
 
 
 class _Structured(BaseModel):
@@ -187,6 +190,20 @@ def test_prepare_responses_request_uses_codex_model_and_response_shapes():
     assert request["reasoning"] == {"effort": "high", "summary": "auto"}
     assert request["text"]["format"]["name"] == "_Structured"
     assert request["prompt_cache_key"] == "session-1"
+
+
+@pytest.mark.asyncio
+async def test_client_advertises_compatible_codex_version(monkeypatch):
+    monkeypatch.setattr(
+        "ntrp.llm.openai_codex.get_valid_tokens",
+        AsyncMock(return_value=OpenAICodexTokens("access", "refresh", 123, "account")),
+    )
+
+    client = await OpenAICodexClient()._client()
+
+    assert client.default_headers["originator"] == "codex_cli_rs"
+    assert client.default_headers["User-Agent"].startswith("codex_cli_rs/0.144.0 ")
+    await client.close()
 
 
 def test_prepare_responses_request_adds_required_default_instructions():

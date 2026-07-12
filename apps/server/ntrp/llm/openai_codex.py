@@ -1,3 +1,4 @@
+import platform
 from collections.abc import AsyncGenerator
 from typing import Any
 
@@ -22,6 +23,7 @@ from ntrp.observability.judgment import trace_client
 
 _MODEL_PREFIX = "openai-codex/"
 _DEFAULT_INSTRUCTIONS = "Follow the user's request exactly and return the requested output."
+_CODEX_CLIENT_VERSION = "0.144.0"
 
 
 class OpenAICodexClient(CompletionClient):
@@ -103,8 +105,11 @@ class OpenAICodexClient(CompletionClient):
     async def _client(self) -> openai.AsyncOpenAI:
         tokens = await get_valid_tokens()
         headers = {
-            "originator": "ntrp",
-            "User-Agent": "ntrp",
+            "originator": "codex_cli_rs",
+            "User-Agent": (
+                f"codex_cli_rs/{_CODEX_CLIENT_VERSION} "
+                f"({platform.system().lower()} {platform.release()}; {platform.machine()})"
+            ),
         }
         if tokens.account_id:
             headers["ChatGPT-Account-Id"] = tokens.account_id

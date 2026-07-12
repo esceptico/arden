@@ -273,16 +273,23 @@ FALLBACK_DEFAULTS = [
     ),
 ]
 
+_CODEX_API_MODEL_IDS = {
+    "gpt-5.4-mini",
+    "gpt-5.4",
+    "gpt-5.5",
+    "gpt-5.6-luna",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+}
+
+
 def _derive_codex_models(generated: list[Model]) -> list[Model]:
-    # Codex serves OpenAI models under ChatGPT account auth (no per-token pricing);
-    # models.dev has no codex provider, so mirror the generated OpenAI gpt-5 entries.
+    # models.dev has no Codex provider. Reuse its metadata only for models the
+    # Codex catalog marks as supported in the API.
     return [
         replace(m, id=f"openai-codex/{m.id}", provider=Provider.OPENAI_CODEX, pricing=Pricing(0, 0))
         for m in generated
-        if m.provider == Provider.OPENAI
-        and m.id.startswith("gpt-5")
-        and "chat-latest" not in m.id
-        and not m.id.endswith("-pro")
+        if m.provider == Provider.OPENAI and m.id in _CODEX_API_MODEL_IDS
     ]
 
 
