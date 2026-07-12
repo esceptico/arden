@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from copy import deepcopy
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from enum import StrEnum
@@ -33,6 +34,7 @@ from ntrp.memory.journal import VaultJournal
 from ntrp.memory.ledger import LedgerEntry, LedgerMeta
 from ntrp.memory.models import TRUST_DEFAULT, TRUST_LEVEL, Kind, Record, SourceRef, now_iso, union_source_refs
 from ntrp.memory.pages import SENTINEL, Line, Page, merge_split, parse_page, render_page, render_raw
+from ntrp.memory.reconciler import RecordOperation, validate_operations
 from ntrp.memory.scorer import salience
 from ntrp.search.retrieval import rrf_merge
 
@@ -1146,6 +1148,130 @@ class FilePageStore:
         if file_roles and CanonicalFileRole.USER_PAGE in file_roles.values():
             self._reload_canonical_state()
         self._active_ledger_entries()
+
+    def plan_operations(
+        self,
+        operations: Sequence[RecordOperation],
+        source: SourceRef,
+    ) -> Mapping[Path, bytes]:
+        """Build a complete schema-v2 reconciliation commit without writing."""
+        if not self._ledger_mode():
+            raise ValueError("typed reconciliation requires a schema-v2 vault")
+        active = tuple(self._to_record(entry, self._loc[entry.id]) for entry in self._active_ledger_entries())
+        validated = validate_operations(tuple(operations), active, source)
+        pages = {path: deepcopy(page) for path, page in self._pages.items()}
+        entries_by_id = {entry.id: entry for entry in self._ledger_entries()}
+        additions: list[LedgerEntry] = []
+        touched: set[Path] = set()
+        generated_ids: set[str] = set()
+        sequence = self._next_sequence()
+
+        def new_id() -> str:
+            while True:
+                record_id = uuid4().hex[:8]
+                if record_id not in self._loc and record_id not in generated_ids:
+                    generated_ids.add(record_id)
+                    return record_id
+
+        for operation in validated:
+            if operation.op == "ASK":
+                continue
+            targets = [entries_by_id[target] for target in operation.target_ids]
+            if operation.op == "NOOP":
+                target = targets[0]
+                path = self._loc[target.id]
+                page = pages[path]
+                confirmed = replace(
+                    target,
+                    meta=replace(
+                        target.meta,
+                        recorded_at=now_iso(),
+                        sequence=sequence,
+                        sources=union_source_refs(target.meta.sources, (source,)),
+                    ),
+                )
+                page.lines = [confirmed if line.id == target.id else line for line in page.lines]
+                page.frontmatter["updated"] = now_iso()[:10]
+                entries_by_id[target.id] = confirmed
+                touched.add(path)
+                sequence += 1
+                continue
+            scope = operation.scope
+            assert scope is not None
+            recorded_at = now_iso()
+            occurred_at = source.occurred_at or recorded_at
+            precision = source.time_precision if source.occurred_at else "millisecond"
+            target_sources = tuple(src for target in targets for src in target.meta.sources)
+            sources = union_source_refs(target_sources, (source,))
+            kind = operation.kind or (targets[0].kind if targets else Kind.FACT)
+            operation_kind = "retract" if operation.op == "RETRACT" else "record"
+            text = operation.text or (targets[0].text if targets else "")
+            entity = (
+                tuple(_slug(label) for label in operation.entity_labels if _slug(label))
+                if operation.entity_labels is not None
+                else tuple(dict.fromkeys(entity for target in targets for entity in target.entity))
+            )
+            entry = LedgerEntry(
+                id=new_id(),
+                text=_norm(text),
+                kind=Kind(kind),
+                occurred_at=occurred_at,
+                pinned=any(target.pinned for target in targets),
+                entity=entity,
+                meta=LedgerMeta(
+                    recorded_at=recorded_at,
+                    sequence=sequence,
+                    time_precision=precision,
+                    scope_kind=scope.kind or "user",
+                    scope_key=scope.key,
+                    sources=sources,
+                    supersedes=operation.target_ids,
+                    operation=operation_kind,
+                ),
+            )
+            sequence += 1
+            target_path = self._loc[operation.target_ids[0]] if operation.target_ids else None
+            path = target_path or self._page_for(entry.kind, entry.meta.scope_kind, entry.meta.scope_key)
+            page = pages.get(path)
+            if page is None:
+                page = Page()
+                pages[path] = page
+            if page.records_header is None:
+                rel = path.relative_to(self._root).as_posix()
+                page.records_header = f"<!-- ntrp:records schema=2 page={rel} -->"
+            if operation.meta_labels is not None:
+                page.frontmatter["meta_labels"] = sorted(set(operation.meta_labels))
+            page.frontmatter["updated"] = now_iso()[:10]
+            page.lines.append(entry)
+            entries_by_id[entry.id] = entry
+            additions.append(entry)
+            touched.add(path)
+
+        self._validate_ledger_entries((*self._ledger_entries(), *additions))
+        planned: dict[Path, bytes] = {}
+        for path in sorted(touched):
+            page = pages[path]
+            planned[path.relative_to(self._root)] = render_page(page).encode()
+            planned[self._raw_path(path).relative_to(self._root)] = render_raw(page).encode()
+        return planned
+
+    def apply_operations(
+        self,
+        operations: Sequence[RecordOperation],
+        source: SourceRef,
+    ) -> str:
+        """Validate, plan, and publish one reconciliation batch in one commit."""
+        planned = self.plan_operations(operations, source)
+        if not planned:
+            return self.canonical_revision
+        try:
+            revision = self._journal.commit(planned)
+        except Exception:
+            self._journal.recover(prefer_rollback=True)
+            self._reload_canonical_state()
+            raise
+        self._reload_canonical_state()
+        return revision
 
     def history(self, record_id: str) -> tuple[LedgerEntry, ...]:
         """Return the complete connected lifecycle history for one ledger record."""

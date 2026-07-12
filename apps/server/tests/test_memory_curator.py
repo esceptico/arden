@@ -57,9 +57,16 @@ class StubSessions:
     `scopes` is the preset sweep worklist; rows carry the origin fields the
     sweep gates on ({session_id, area_id, session_type, origin_automation_id})."""
 
-    def __init__(self, rows: dict[str, list[dict]] | None = None, scopes: list[dict] | None = None):
+    def __init__(
+        self,
+        rows: dict[str, list[dict]] | None = None,
+        scopes: list[dict] | None = None,
+        areas: dict[str, dict] | None = None,
+    ):
         self._rows = rows or {}
         self._scopes = scopes or []
+        self._areas = areas or {}
+        self.scope_reads = 0
 
     def set_rows(self, session_id: str, rows: list[dict]) -> None:
         self._rows[session_id] = rows
@@ -68,11 +75,21 @@ class StubSessions:
         return [r for r in self._rows.get(session_id, []) if r["seq"] > seq]
 
     async def recent_session_scopes(self, limit: int) -> list[dict]:
+        self.scope_reads += 1
         return self._scopes[:limit]
+
+    async def get_area(self, area_id: str | None) -> dict | None:
+        return self._areas.get(area_id) if area_id is not None else None
 
 
 def _turn(seq: int, role: str, text: str) -> dict:
-    return {"seq": seq, "role": role, "message": {"role": role, "content": text}}
+    return {
+        "seq": seq,
+        "message_id": f"m{seq}",
+        "role": role,
+        "created_at": f"2026-07-12T10:00:{seq:02d}Z",
+        "message": {"role": role, "content": text},
+    }
 
 
 def _scope(session_id: str, *, session_type: str = "chat", origin_automation_id: str | None = None) -> dict:
@@ -91,6 +108,26 @@ def _ops_json(records: list[dict] | None = None) -> str:
 
 def _make_curator(tmp_path: Path, llm, sessions) -> tuple[Curator, RecordStore]:
     records = RecordStore(tmp_path / "memory.db", search_index=None)
+    curator = Curator(
+        llm,
+        sessions,
+        model="memory-model",
+        db_path=tmp_path / "memory.db",
+        record_store=records,
+    )
+    return curator, records
+
+
+async def _make_file_curator(tmp_path: Path, llm, sessions) -> tuple[Curator, FilePageStore]:
+    vault = tmp_path / "vault"
+    visible = vault / "me.md"
+    raw = vault / "raw" / "me.md"
+    visible.parent.mkdir(parents=True)
+    raw.parent.mkdir(parents=True)
+    visible.write_text("# Me\n", encoding="utf-8")
+    raw.write_text("<!-- ntrp:records schema=2 page=me.md -->\n", encoding="utf-8")
+    records = FilePageStore(vault)
+    await records.open()
     curator = Curator(
         llm,
         sessions,
@@ -248,6 +285,81 @@ async def test_unparseable_completion_does_not_advance(tmp_path: Path):
     assert changed is False
     assert await records.list() == []
     assert await curator._read_watermark("s1") == -1
+    await curator.stop()
+    await records.close()
+
+
+async def test_assistant_envelope_and_area_scope_are_preserved(tmp_path: Path):
+    llm = StubLLM(_ops_json([{"op": "ADD", "text": "The deployment passed", "kind": "fact"}]))
+    sessions = StubSessions(
+        {"s1": [_turn(0, "assistant", "The deployment passed")]},
+        scopes=[{**_scope("s1"), "area_id": "a1"}],
+        areas={"a1": {"area_id": "a1", "knowledge_scope": "area:a1"}},
+    )
+    curator, records = await _make_file_curator(tmp_path, llm, sessions)
+
+    await curator.curate_session("s1")
+
+    prompt = llm.calls[0]["messages"][1]["content"]
+    assert '"role":"assistant"' in prompt
+    assert '"message_id":"m0"' in prompt
+    assert '"created_at":"2026-07-12T10:00:00Z"' in prompt
+    record = (await records.list())[0]
+    assert (record.scope_kind, record.scope_key) == ("area", "a1")
+    await curator.stop()
+    await records.close()
+
+
+async def test_failed_second_operation_keeps_watermark_retryable(tmp_path: Path, monkeypatch):
+    response = _ops_json(
+        [
+            {"op": "ADD", "text": "User drinks tea", "kind": "fact"},
+            {"op": "ADD", "text": "User likes ceramic mugs", "kind": "fact"},
+        ]
+    )
+    llm = StubLLM(response, response)
+    sessions = StubSessions({"s1": [_turn(0, "user", "I drink tea from ceramic mugs")]})
+    curator, records = await _make_file_curator(tmp_path, llm, sessions)
+
+    failed = False
+
+    def fail_mid_commit(point: str):
+        nonlocal failed
+        if point == "after_replace:0" and not failed:
+            failed = True
+            raise RuntimeError("injected batch failure")
+
+    monkeypatch.setattr(records._journal, "_checkpoint", fail_mid_commit)
+
+    with pytest.raises(RuntimeError, match="injected batch failure"):
+        await curator.curate_session("s1")
+
+    assert await records.list() == []
+    assert await curator._read_watermark("s1") == -1
+
+    assert await curator.curate_session("s1") is True
+    assert {record.text for record in await records.list()} == {
+        "User drinks tea",
+        "User likes ceramic mugs",
+    }
+    assert await curator._read_watermark("s1") == 0
+    await curator.stop()
+    await records.close()
+
+
+async def test_full_curation_resolves_area_once(tmp_path: Path):
+    llm = StubLLM(_ops_json([]), _ops_json([]))
+    sessions = StubSessions(
+        {"s1": [_turn(seq, "user", f"fact {seq}") for seq in range(41)]},
+        scopes=[{**_scope("s1"), "area_id": "a1"}],
+        areas={"a1": {"area_id": "a1", "knowledge_scope": "area:a1"}},
+    )
+    curator, records = await _make_file_curator(tmp_path, llm, sessions)
+
+    result = await curator.curate_session_fully("s1")
+
+    assert result["calls"] == 2
+    assert sessions.scope_reads == 1
     await curator.stop()
     await records.close()
 

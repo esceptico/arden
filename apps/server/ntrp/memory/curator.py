@@ -22,9 +22,10 @@ from pathlib import Path
 
 from ntrp.database import connect as db_connect
 from ntrp.logging import get_logger
-from ntrp.memory.models import Record, SourceRef
+from ntrp.memory.models import Kind, Record, SourceRef
+from ntrp.memory.reconciler import RecordOperation, validate_operations
 from ntrp.memory.records import RecordStore
-from ntrp.memory.scopes import apply_scope_to_source, scope_for_write
+from ntrp.memory.scopes import USER_SCOPE, MemoryScope, apply_scope_to_source, scope_for_write
 from ntrp.observability import observed_trace
 
 _logger = get_logger(__name__)
@@ -287,24 +288,17 @@ class Curator:
             await self._write_watermark(session_id, max_seq)
             return False
 
-        ops = await self._complete(turns, header="NEW TURNS")
+        explicit_scope = await self._session_scope(session_id)
+        ops = await self._complete(turns, header="NEW TURNS", explicit_scope=explicit_scope)
         if ops is None:
             # The LLM call failed (or returned nothing usable); do NOT advance the
             # watermark so the same turns are retried next time (idempotent — the
             # model dedupes against the existing records).
             return False
 
-        # Apply ADD/UPDATE/SUPERSEDE/NOOP. Isolate per-op — one bad op must not
-        # abort the rest or block the watermark advance.
-        new_records: list[Record] = []
-        source_ref = SourceRef(kind="curator", ref=session_id)
-        for op in ops:
-            try:
-                record = await self._apply_op(op, session_id, source_ref)
-                if record is not None:
-                    new_records.append(record)
-            except Exception:
-                _logger.warning("record op failed; skipping", op=op.get("op"), exc_info=True)
+        source_ref = self._batch_source(session_id, turns, explicit_scope)
+        operations = await self._typed_operations(ops, source_ref, explicit_scope)
+        new_records = await self._apply_operations(operations, session_id, source_ref)
 
         # CONSOLIDATE/LINT — THE memory step: turn the raw record pile into a small,
         # clean, current body (merge duplicates, supersede stale, drop orphans).
@@ -335,6 +329,7 @@ class Curator:
         calls = 0
         capped = False
         watermark = await self._read_watermark(session_id)
+        explicit_scope = await self._session_scope(session_id)
 
         while True:
             if max_calls is not None and calls >= max_calls:
@@ -346,22 +341,16 @@ class Curator:
                 await self._write_watermark(session_id, max_seq)
                 break
 
-            ops = await self._complete(turns, header="NEW TURNS", bulk=bulk)
+            ops = await self._complete(turns, header="NEW TURNS", bulk=bulk, explicit_scope=explicit_scope)
             calls += 1
             if ops is None:
                 # Failed/empty completion: do NOT advance (the batch retries next
                 # run). Stop the drain so a persistent failure can't spin.
                 break
 
-            new_records: list[Record] = []
-            source_ref = SourceRef(kind="curator", ref=session_id)
-            for op in ops:
-                try:
-                    record = await self._apply_op(op, session_id, source_ref)
-                    if record is not None:
-                        new_records.append(record)
-                except Exception:
-                    _logger.warning("record op failed; skipping", op=op.get("op"), exc_info=True)
+            source_ref = self._batch_source(session_id, turns, explicit_scope)
+            operations = await self._typed_operations(ops, source_ref, explicit_scope)
+            new_records = await self._apply_operations(operations, session_id, source_ref)
             admitted += len(new_records)
             await self._write_watermark(session_id, max_seq)
             watermark = max_seq
@@ -476,7 +465,14 @@ class Curator:
                 _logger.warning("curation sweep failed", exc_info=True)
 
     @observed_trace("memory.curate", tags="memory")
-    async def _complete(self, lines: list[str], header: str, *, bulk: bool = False) -> list[dict] | None:
+    async def _complete(
+        self,
+        lines: list[dict],
+        header: str,
+        *,
+        bulk: bool = False,
+        explicit_scope: MemoryScope | None = None,
+    ) -> list[dict] | None:
         """ONE LLM call emitting the record-ops. Pre-searches the flat record pool
         for the candidate set so the model picks from REAL ids only, and carries
         the label vocabulary (top names by count + the recalled records' labels)
@@ -485,7 +481,7 @@ class Curator:
 
         `lines` is the source-agnostic body (chat turns today; integration records
         in Phase 2) and `header` labels the block in the prompt."""
-        existing = await self._record_store.search("\n".join(lines), limit=20)
+        existing = await self._record_store.search("\n".join(line["content"] for line in lines), limit=20)
         existing_labels = await self._record_store.labels_for([r.id for r in existing])
         existing_block = (
             "\n".join(
@@ -503,13 +499,15 @@ class Curator:
             vocabulary.extend(label for label in labels if label not in vocabulary)
         vocabulary_block = ", ".join(vocabulary) if vocabulary else "(none yet)"
 
+        scope_label = f"{explicit_scope.kind}:{explicit_scope.key or ''}" if explicit_scope else "unspecified"
         user_prompt = (
             f"EXISTING SIMILAR RECORDS (id [labels]: text — use these ids only):\n"
             f"{existing_block}\n\n"
             f"LABEL VOCABULARY (reuse before minting):\n"
             f"{vocabulary_block}\n\n"
-            f"{header}:\n"
-            f"{chr(10).join(lines)}"
+            f"SCOPE: {scope_label}\n\n"
+            f"{header} (JSONL envelopes):\n"
+            + "\n".join(json.dumps(line, ensure_ascii=False, separators=(",", ":")) for line in lines)
         )
         from ntrp.memory.file_store import load_conventions
 
@@ -533,6 +531,143 @@ class Curator:
         if not content or not content.strip():
             return None
         return self._parse_completion(content)
+
+    async def _session_scope(self, session_id: str) -> MemoryScope:
+        """Resolve one session's area once for the complete curation batch."""
+        rows = await self._sessions.recent_session_scopes(SWEEP_SESSION_LIMIT)
+        row = next((item for item in rows if item.get("session_id") == session_id), None)
+        area_id = row.get("area_id") if row else None
+        if not area_id:
+            return USER_SCOPE
+        area = await self._sessions.get_area(area_id)
+        if area is None:
+            raise ValueError(f"session area does not exist: {area_id}")
+        return MemoryScope("area", str(area["area_id"]))
+
+    @staticmethod
+    def _batch_source(session_id: str, turns: list[dict], scope: MemoryScope) -> SourceRef:
+        latest = turns[-1]
+        occurred_at = latest.get("created_at")
+        precision = "unknown"
+        if isinstance(occurred_at, str):
+            precision = "millisecond" if "." in occurred_at else "second"
+        return SourceRef(
+            kind="curator",
+            ref=session_id,
+            scope_kind=scope.kind,
+            scope_key=scope.key,
+            occurred_at=occurred_at,
+            time_precision=precision,
+            role=latest.get("role"),
+            extra={"message_ids": [turn["message_id"] for turn in turns], "max_seq": latest["seq"]},
+        )
+
+    async def _typed_operations(
+        self,
+        raw_operations: list[dict],
+        source: SourceRef,
+        explicit_scope: MemoryScope,
+    ) -> tuple[RecordOperation, ...]:
+        operations: list[RecordOperation] = []
+        for raw in raw_operations:
+            verb = str(raw.get("op", "")).upper()
+            meta_labels, entity_labels = self._op_labels(raw)
+            labels = tuple(meta_labels) if meta_labels is not None else None
+            entities = tuple(entity_labels) if entity_labels is not None else None
+            if verb == "ADD":
+                text = self._op_text(raw)
+                kind = self._op_kind(raw, default="fact")
+                if text is None or kind is None:
+                    continue
+                scope = scope_for_write(
+                    kind=kind,
+                    source_ref=source,
+                    explicit_scope=explicit_scope if explicit_scope.kind == "area" else None,
+                )
+                operations.append(
+                    RecordOperation.add(
+                        text,
+                        kind=Kind(kind),
+                        scope=scope,
+                        meta_labels=labels,
+                        entity_labels=entities,
+                    )
+                )
+            elif verb in {"UPDATE", "SUPERSEDE"}:
+                text = self._op_text(raw)
+                target = raw.get("id") or next(iter(raw.get("target_ids") or ()), None)
+                if text is None or not isinstance(target, str):
+                    raise ValueError(f"{verb} requires a target and text")
+                raw_kind = self._op_kind(raw, default="fact") if raw.get("kind") else None
+                operations.append(
+                    RecordOperation.supersede(
+                        target,
+                        text,
+                        kind=Kind(raw_kind) if raw_kind else None,
+                        meta_labels=labels,
+                        entity_labels=entities,
+                    )
+                )
+            elif verb == "MERGE":
+                text = self._op_text(raw)
+                targets = tuple(raw.get("target_ids") or raw.get("ids") or ())
+                if text is None:
+                    raise ValueError("MERGE requires text")
+                operations.append(RecordOperation.merge(targets, text))
+            elif verb == "RETRACT":
+                targets = tuple(raw.get("target_ids") or ([raw["id"]] if raw.get("id") else ()))
+                operations.append(RecordOperation.retract(*targets))
+            elif verb == "NOOP":
+                target = raw.get("id") or next(iter(raw.get("target_ids") or ()), None)
+                if not isinstance(target, str):
+                    raise ValueError("NOOP requires a target")
+                operations.append(RecordOperation.noop(target))
+            elif verb == "ASK":
+                operations.append(RecordOperation.ask(str(raw.get("question") or "")))
+            else:
+                raise ValueError(f"unknown record operation: {verb}")
+        records = tuple(await self._record_store.list(limit=None, scopes=None))
+        return validate_operations(tuple(operations), records, source)
+
+    async def _apply_operations(
+        self,
+        operations: tuple[RecordOperation, ...],
+        session_id: str,
+        source: SourceRef,
+    ) -> list[Record]:
+        if hasattr(self._record_store, "apply_operations"):
+            self._record_store.apply_operations(operations, source)
+            written = [operation for operation in operations if operation.op in {"ADD", "SUPERSEDE", "MERGE"}]
+            return [record for record in await self._record_store.list(limit=None, scopes=None) if record.text in {op.text for op in written}]
+
+        records: list[Record] = []
+        for operation in operations:
+            if operation.op == "MERGE":
+                record = await self._record_store.merge(
+                    operation.target_ids[0],
+                    list(operation.target_ids[1:]),
+                    text=operation.text,
+                    kind=operation.kind,
+                )
+            elif operation.op == "RETRACT":
+                for target in operation.target_ids:
+                    await self._record_store.delete(target, source_ref=source)
+                record = None
+            elif operation.op == "ASK":
+                record = None
+            else:
+                raw = {
+                    "op": operation.op,
+                    "id": operation.target_ids[0] if operation.target_ids else None,
+                    "text": operation.text,
+                    "kind": operation.kind,
+                    "meta_labels": list(operation.meta_labels) if operation.meta_labels is not None else None,
+                    "entity_labels": list(operation.entity_labels) if operation.entity_labels is not None else None,
+                }
+                record = await self._apply_op(raw, session_id, source)
+            if record is not None:
+                records.append(record)
+        return records
 
     @staticmethod
     def _parse_completion(content: str) -> list[dict] | None:
@@ -703,8 +838,8 @@ class Curator:
         return meta or [], entity or []
 
     @classmethod
-    def _select_batch(cls, rows: list[dict], watermark: int) -> tuple[list[str], int]:
-        turns: list[str] = []
+    def _select_batch(cls, rows: list[dict], watermark: int) -> tuple[list[dict], int]:
+        turns: list[dict] = []
         total_chars = 0
         max_seq = watermark
         for row in sorted(rows, key=lambda r: r.get("seq", watermark)):
@@ -715,27 +850,36 @@ class Curator:
             if not turn:
                 max_seq = max(max_seq, seq)
                 continue
-            if turns and (len(turns) >= CURATION_BATCH_MAX_TURNS or total_chars + len(turn) > CURATION_BATCH_MAX_CHARS):
+            if turns and (
+                len(turns) >= CURATION_BATCH_MAX_TURNS
+                or total_chars + len(turn["content"]) > CURATION_BATCH_MAX_CHARS
+            ):
                 break
             turns.append(turn)
-            total_chars += len(turn)
+            total_chars += len(turn["content"])
             max_seq = max(max_seq, seq)
         return turns, max_seq
 
     @staticmethod
-    def _flatten_turn(row) -> str:
-        """Compact `role: text` projection of one transcript turn. Drops empty
-        turns and image/base64 noise (mirrors the store's flatten projection)."""
+    def _flatten_turn(row) -> dict | None:
+        """Preserve a stable, role-separated transcript envelope for curation."""
         message = row.get("message") if isinstance(row, dict) else None
         role = (row.get("role") if isinstance(row, dict) else "") or ""
         if role not in CURATION_ROLES:
-            return ""
+            return None
         text = Curator._flatten_content(message)
         if not text:
-            return ""
+            return None
         if len(text) > CURATION_TURN_MAX_CHARS:
             text = text[:CURATION_TURN_MAX_CHARS].rstrip()
-        return f"{role}: {text}" if role else text
+        seq = row.get("seq")
+        return {
+            "seq": seq,
+            "message_id": str(row.get("message_id") or f"seq:{seq}"),
+            "role": role,
+            "created_at": row.get("created_at"),
+            "content": text,
+        }
 
     @staticmethod
     def _flatten_content(message) -> str:
