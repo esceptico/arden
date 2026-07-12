@@ -119,6 +119,7 @@ class PageEditEvent(BaseModel):
     review_operations: tuple[RecordOperation, ...] = ()
     questions: tuple[PageEditQuestion, ...] = ()
     review_event_id: str | None = None
+    observation_id: str | None = None
 
     @field_validator("occurred_at")
     @classmethod

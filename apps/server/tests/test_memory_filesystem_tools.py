@@ -85,6 +85,10 @@ def _fifo_or_skip(path: Path) -> None:
         pytest.skip(f"FIFOs unavailable: {exc}")
 
 
+def _changed_paths(changes) -> list[str]:
+    return [getattr(change, "path", change) for change in changes]
+
+
 async def test_memory_filesystem_tools_registered_and_permission_gated():
     registry = ToolRegistry()
     for name, tool in MEMORY.tools.items():
@@ -329,21 +333,26 @@ async def test_live_vault_absorbs_external_edits(tmp_path: Path):
 
     # own writes are echo-suppressed
     rec = await store.add("Tim rides a gravel bike.", kind="fact", source_ref=SourceRef("user", ""))
-    assert await store.refresh_from_disk() == []
+    own = await store.refresh_from_disk()
+    assert _changed_paths(own) == ["me.md"]
+    assert own[0].origin == "synthesis"
 
     # external prose edit on an existing page is absorbed
     me = root / "me.md"
     me.write_text(me.read_text(encoding="utf-8") + "\nEdited in Obsidian.\n", encoding="utf-8")
     changed = await store.refresh_from_disk()
-    assert changed == ["me.md"], changed
+    assert _changed_paths(changed) == ["me.md"], changed
     assert "Edited in Obsidian." in store._pages[me].prose
     assert (await store.get(rec.id)) is not None, "timeline survives a prose edit"
+    store.acknowledge_observed_change(changed[0])
 
     # external new page (a feed write) appears
     feed = root / "feeds" / "pr-queue.md"
     feed.parent.mkdir(parents=True, exist_ok=True)
     feed.write_text("# PR queue\n\n- none open\n", encoding="utf-8")
-    assert await store.refresh_from_disk() == ["feeds/", "feeds/pr-queue.md"]
+    feed_changes = await store.refresh_from_disk()
+    assert _changed_paths(feed_changes) == ["feeds/", "feeds/pr-queue.md"]
+    store.acknowledge_observed_change(next(change for change in feed_changes if hasattr(change, "after")))
     assert feed not in store._pages, "visible-only resources never become record pages"
 
     # external raw-sidecar edit reloads the page's records
@@ -355,7 +364,7 @@ async def test_live_vault_absorbs_external_edits(tmp_path: Path):
 
     # deletion drops the page + records
     feed.unlink()
-    assert await store.refresh_from_disk() == ["feeds/", "feeds/pr-queue.md"]
+    assert _changed_paths(await store.refresh_from_disk()) == ["feeds/", "feeds/pr-queue.md"]
     assert feed not in store._pages
     await store.close()
 
@@ -458,7 +467,7 @@ async def test_empty_and_readme_only_directory_lifecycle_is_watched_without_reco
     docs = root / "docs"
     docs.mkdir()
     (docs / "README.md").write_text("# Docs\n", encoding="utf-8")
-    assert await store.refresh_from_disk() == ["docs/", "docs/README.md"]
+    assert _changed_paths(await store.refresh_from_disk()) == ["docs/", "docs/README.md"]
     assert reloaded == []
     await store.close()
 

@@ -20,21 +20,23 @@ passes.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import os
 import re
 import stat
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 from uuid import uuid4
 
 from ntrp.constants import MEMORY_MIN_ENTITY_RECORDS, RRF_K
 from ntrp.database import serialize_embedding
 from ntrp.logging import get_logger
-from ntrp.memory.journal import VaultJournal
+from ntrp.memory.journal import JournalConflictError, VaultJournal
 from ntrp.memory.ledger import LedgerEntry, LedgerMeta
 from ntrp.memory.models import TRUST_DEFAULT, TRUST_LEVEL, Kind, Record, SourceRef, now_iso, union_source_refs
 from ntrp.memory.pages import Line, Page, merge_split, parse_page, render_page, render_raw
@@ -60,6 +62,8 @@ _INSIGHTS = "insights"  # cross-domain DREAM outputs (OKF insights/), kept out o
 _GENERATED_FILES = {"index.md", "AGENTS.md", "health.md"}  # generated reports, not record pages
 _RESOURCE_SUFFIXES = {".md", ".txt"}
 _INTERNAL_DIRS = {".ntrp", ".index", ".maintenance"}
+_OBSERVED_STATE = Path(".ntrp/maintenance/observed-pages.json")
+_OBSERVED_BASES = Path(".ntrp/maintenance/observed-page-bases")
 # Canonical, properly-cased titles for the fixed structural pages (root). Keeps the
 # index + Obsidian note titles clean ("Me", not "me") and self-heals contamination.
 _STRUCTURAL_TITLES = {
@@ -186,6 +190,19 @@ class CanonicalFileRole(StrEnum):
     PROJECTION = "projection"
 
 
+@dataclass(frozen=True)
+class ObservedFileChange:
+    """An external editable-page change with its exact durable base."""
+
+    observation_id: str
+    path: str
+    before: bytes | None
+    after: bytes | None
+    base_revision: str
+    result_revision: str
+    origin: Literal["external", "desktop", "agent", "synthesis"] = "external"
+
+
 def _slug(label: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")
     return s or "untitled"
@@ -252,6 +269,7 @@ class FilePageStore:
             self._active_ledger_entries()  # validate identity + relationship targets before serving reads
             self._write_conventions()
             self._file_state = self._scan_files()
+            self._load_or_initialize_observed_pages()
             await self._sync_index()
             return
         self._migrate_insights()  # relocate pre-insights/ dream records (one-time, idempotent)
@@ -267,6 +285,7 @@ class FilePageStore:
         self._write_health()       # health.md (self-audit / surfaced gaps) — deterministic
         self._write_index()        # index.md — one line of meaning per page (navigate by index)
         self._file_state = self._scan_files()  # live-vault baseline (post-migration state)
+        self._load_or_initialize_observed_pages()
         _logger.info("file memory ready", pages=len(self._pages), lines=len(self._loc), root=str(self._root), **stats)
         await self._sync_index()
 
@@ -324,7 +343,7 @@ class FilePageStore:
         walk(directory)
         return out
 
-    def _safe_read_text(self, path: Path) -> str | None:
+    def _safe_read_bytes(self, path: Path) -> bytes | None:
         try:
             relative = path.relative_to(self._root)
             root_st = self._root.lstat()
@@ -356,14 +375,23 @@ class FilePageStore:
             opened_st = os.fstat(fd)
             if not stat.S_ISREG(opened_st.st_mode):
                 return None
-            with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            with os.fdopen(fd, "rb") as handle:
                 fd = -1
                 return handle.read()
-        except (OSError, UnicodeError):
+        except OSError:
             return None
         finally:
             if fd >= 0:
                 os.close(fd)
+
+    def _safe_read_text(self, path: Path) -> str | None:
+        content = self._safe_read_bytes(path)
+        if content is None:
+            return None
+        try:
+            return content.decode("utf-8")
+        except UnicodeError:
+            return None
 
     def _canonical_raw_files(self) -> list[Path]:
         return self._walk_regular_files(
@@ -420,6 +448,229 @@ class FilePageStore:
                 continue
         return out
 
+    @staticmethod
+    def _content_revision(content: bytes | None) -> str:
+        return hashlib.sha256(content or b"").hexdigest()
+
+    def _editable_page_bytes(self) -> dict[str, bytes]:
+        pages: dict[str, bytes] = {}
+        for path in self._walk_regular_files(
+            self._root,
+            suffixes={".md"},
+            excluded_dirs={*_INTERNAL_DIRS, _RAW},
+        ):
+            rel = path.relative_to(self._root)
+            if path.parent == self._root and path.name in _GENERATED_FILES:
+                continue
+            content = self._safe_read_bytes(path)
+            if content is not None:
+                pages[rel.as_posix()] = content
+        return pages
+
+    def _observed_path(self, rel: Path) -> Path:
+        return self._root.joinpath(*rel.parts)
+
+    def _write_observed_file(self, rel: Path, content: bytes) -> None:
+        from ntrp.memory.artifacts import ArtifactMemoryStore
+
+        resources = ArtifactMemoryStore(self._root)
+        parent_fd, name = resources._open_anchored_parent(rel, create_parents=True)
+        temp = f".{name}.{uuid4().hex}.tmp"
+        descriptor = os.open(
+            temp,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=parent_fd,
+        )
+        try:
+            with os.fdopen(descriptor, "wb") as stream:
+                descriptor = -1
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            try:
+                target_st = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                if stat.S_ISLNK(target_st.st_mode) or not stat.S_ISREG(target_st.st_mode):
+                    raise ValueError(f"observed page metadata target is unsafe: {rel}")
+            os.rename(temp, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            temp = ""
+            os.fsync(parent_fd)
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+            if temp:
+                try:
+                    os.unlink(temp, dir_fd=parent_fd)
+                except FileNotFoundError:
+                    pass
+            os.close(parent_fd)
+
+    def _read_observed_file(self, rel: Path) -> bytes | None:
+        from ntrp.memory.artifacts import ArtifactMemoryStore
+
+        resources = ArtifactMemoryStore(self._root)
+        try:
+            descriptor = resources._open_anchored_regular(rel, os.O_RDONLY, create_parents=False)
+        except FileNotFoundError:
+            current = self._root
+            for part in rel.parts[:-1]:
+                current /= part
+                try:
+                    current_st = current.lstat()
+                except FileNotFoundError:
+                    break
+                if stat.S_ISLNK(current_st.st_mode) or not stat.S_ISDIR(current_st.st_mode):
+                    raise ValueError(f"observed page metadata parent is unsafe: {current}")
+            return None
+        with os.fdopen(descriptor, "rb") as stream:
+            return stream.read()
+
+    def _read_observed_state(self) -> dict:
+        raw = self._read_observed_file(_OBSERVED_STATE)
+        if raw is None:
+            return {}
+        try:
+            state = json.loads(raw)
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("invalid observed page state") from exc
+        if state.get("version") != 1 or not isinstance(state.get("pages"), dict) or not isinstance(
+            state.get("engine_writes"), list
+        ) or not isinstance(state.get("pending_changes", {}), dict):
+            raise RuntimeError("invalid observed page state")
+        state.setdefault("pending_changes", {})
+        return state
+
+    def _write_observed_state(self, state: dict) -> None:
+        payload = (json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        self._write_observed_file(_OBSERVED_STATE, payload)
+
+    def _store_observed_base(self, content: bytes) -> str:
+        revision = self._content_revision(content)
+        rel = _OBSERVED_BASES / revision
+        existing = self._read_observed_file(rel)
+        if existing is None:
+            self._write_observed_file(rel, content)
+        elif existing != content:
+            raise RuntimeError(f"invalid observed page base: {revision}")
+        return revision
+
+    def _load_or_initialize_observed_pages(self) -> None:
+        if self._read_observed_state():
+            return
+        pages = self._editable_page_bytes()
+        revisions = {path: self._store_observed_base(content) for path, content in pages.items()}
+        self._write_observed_state(
+            {"version": 1, "pages": revisions, "engine_writes": [], "pending_changes": {}}
+        )
+
+    def register_engine_write(
+        self,
+        path: str,
+        content: bytes | None,
+        *,
+        origin: Literal["desktop", "agent", "synthesis"],
+    ) -> None:
+        result_revision = self._store_observed_base(content or b"")
+        state = self._read_observed_state()
+        if not state:
+            return
+        marker = {"origin": origin, "path": path, "result_revision": result_revision}
+        state["engine_writes"].append(marker)
+        self._write_observed_state(state)
+
+    def acknowledge_observed_change(self, change: ObservedFileChange) -> None:
+        current = self._editable_page_bytes().get(change.path)
+        if current != change.after:
+            raise JournalConflictError(f"observed page changed before acknowledgement: {change.path}")
+        state = self._read_observed_state()
+        if change.after is None:
+            state["pages"].pop(change.path, None)
+        else:
+            state["pages"][change.path] = self._store_observed_base(change.after)
+        state["pending_changes"].pop(change.path, None)
+        self._write_observed_state(state)
+
+    def _observed_page_changes(self) -> list[ObservedFileChange]:
+        state = self._read_observed_state()
+        pages: dict[str, str] = state["pages"]
+        current = self._editable_page_bytes()
+        changes: list[ObservedFileChange] = []
+        markers_pruned = False
+        pending_changed = False
+        for path in sorted(set(pages) | set(current)):
+            before_revision = pages.get(path)
+            after = current.get(path)
+            result_revision = self._content_revision(after)
+            if before_revision == result_revision and (path in pages) == (path in current):
+                continue
+            before = None
+            if before_revision is not None:
+                before = self._read_observed_file(_OBSERVED_BASES / before_revision)
+                if before is None:
+                    raise RuntimeError(f"missing observed page base: {before_revision}")
+                if self._content_revision(before) != before_revision:
+                    raise RuntimeError(f"invalid observed page base: {before_revision}")
+            origin: Literal["external", "desktop", "agent", "synthesis"] = "external"
+            path_markers = [
+                (index, marker)
+                for index, marker in enumerate(state["engine_writes"])
+                if marker.get("path") == path
+            ]
+            marker_index = next(
+                (
+                    index for index, marker in path_markers if marker.get("result_revision") == result_revision
+                ),
+                None,
+            )
+            if marker_index is not None:
+                marker = state["engine_writes"][marker_index]
+                origin = marker["origin"]
+            if path_markers:
+                markers_pruned = True
+                state["engine_writes"] = [
+                    marker for marker in state["engine_writes"] if marker.get("path") != path
+                ]
+            pending = state["pending_changes"].get(path)
+            base_revision = before_revision or self._content_revision(None)
+            if not isinstance(pending, dict) or (
+                pending.get("base_revision") != base_revision
+                or pending.get("result_revision") != result_revision
+                or pending.get("after_exists") != (after is not None)
+            ):
+                pending = {
+                    "id": uuid4().hex,
+                    "base_revision": base_revision,
+                    "result_revision": result_revision,
+                    "after_exists": after is not None,
+                }
+                state["pending_changes"][path] = pending
+                if after is not None:
+                    self._store_observed_base(after)
+                pending_changed = True
+            change = ObservedFileChange(
+                observation_id=pending["id"],
+                path=path,
+                before=before,
+                after=after,
+                base_revision=base_revision,
+                result_revision=result_revision,
+                origin=origin,
+            )
+            if marker_index is not None:
+                if after is None:
+                    state["pages"].pop(path, None)
+                else:
+                    state["pages"][path] = self._store_observed_base(after)
+                state["pending_changes"].pop(path, None)
+                pending_changed = True
+            changes.append(change)
+        if any(change.origin != "external" for change in changes) or markers_pruned or pending_changed:
+            self._write_observed_state(state)
+        return changes
+
     def _reload_page(self, path: Path) -> None:
         """Re-read one page (+ its raw sidecar) from disk, replacing the in-memory
         state. Synchronous mutation — no await between evicting the old page and
@@ -461,13 +712,14 @@ class FilePageStore:
             self._index_line(line)
         self._file_state = self._scan_files()
 
-    async def refresh_from_disk(self) -> list[str]:
+    async def refresh_from_disk(self) -> list[str | ObservedFileChange]:
         """Absorb external edits (Obsidian, feeds, git, memory_write): reload every
         page whose file or raw sidecar changed since we last saw/wrote it. Returns
         the vault-relative paths of reloaded pages (empty = nothing changed)."""
         current = self._scan_files()
         raw_root = self._root / _RAW
-        changed: set[str] = set()
+        observed = {change.path: change for change in self._observed_page_changes()}
+        changed: dict[str, str | ObservedFileChange] = dict(observed)
         canonical_changed: set[Path] = set()
         for p in current.keys() | self._file_state.keys():
             if self._file_state.get(p) == current.get(p):
@@ -475,16 +727,23 @@ class FilePageStore:
             rel = p.relative_to(self._root)
             state = current.get(p) or self._file_state[p]
             if state[0] == "directory":
-                changed.add(rel.as_posix().rstrip("/") + "/")
+                directory = rel.as_posix().rstrip("/") + "/"
+                changed[directory] = directory
                 continue
             if rel.parts[0] == _RAW:
                 page_path = self._root / p.relative_to(raw_root)
-                changed.add(page_path.relative_to(self._root).as_posix())
+                page_rel = page_path.relative_to(self._root).as_posix()
+                changed.setdefault(page_rel, page_rel)
                 canonical_changed.add(page_path)
             else:
-                changed.add(rel.as_posix())
+                page_rel = rel.as_posix()
+                changed.setdefault(page_rel, page_rel)
                 if p.suffix.casefold() == ".md" and self._safe_read_text(self._raw_path(p)) is not None:
                     canonical_changed.add(p)
+        for page_rel in observed:
+            page_path = self._root / page_rel
+            if self._safe_read_text(self._raw_path(page_path)) is not None:
+                canonical_changed.add(page_path)
         for page_path in sorted(canonical_changed):
             self._reload_page(page_path)
         self._file_state = current
@@ -495,7 +754,7 @@ class FilePageStore:
             else:
                 self._write_index()
                 self._write_health()
-        return sorted(changed)
+        return [changed[path] for path in sorted(changed)]
 
     def start_watch(self, on_change=None, *, interval: float = 2.0) -> None:
         """Poll the vault for external edits (ponytail: mtime scan of ~100 files
@@ -1170,6 +1429,10 @@ class FilePageStore:
         for path, text in projections.items():
             self._write_atomic(path, text)
         self._journal.unlink_files_safely(tuple(path.relative_to(self._root) for path in empty_raw))
+        for path in sorted(set(paths)):
+            rel = path.relative_to(self._root)
+            content = self._safe_read_bytes(path)
+            self.register_engine_write(rel.as_posix(), content, origin="synthesis")
         self._file_state = self._scan_files()
         self._notify_post_canonical_commit()
 
@@ -1177,6 +1440,7 @@ class FilePageStore:
         self._journal.unlink_files_safely(
             (path.relative_to(self._root), self._raw_path(path).relative_to(self._root))
         )
+        self.register_engine_write(path.relative_to(self._root).as_posix(), None, origin="synthesis")
         self._file_state = self._scan_files()
 
     def _find(self, record_id: str) -> tuple[Path, Line | LedgerEntry] | None:
@@ -1343,6 +1607,9 @@ class FilePageStore:
             self._reload_canonical_state()
             raise
         self._reload_canonical_state()
+        for rel, content in planned.items():
+            if rel.parts[0] != _RAW and rel.suffix.casefold() == ".md":
+                self.register_engine_write(rel.as_posix(), content, origin="synthesis")
         self._notify_post_canonical_commit()
         return revision
 

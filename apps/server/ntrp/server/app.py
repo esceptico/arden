@@ -130,8 +130,12 @@ async def lifespan(app: FastAPI):
     # Live memory vault: the store polls the memory dir for external edits
     # (Obsidian, feed automations, git) and fans each absorbed batch out on the
     # global stream so the desktop memory view refreshes itself — no restarts.
-    async def _publish_memory_changed(paths: list[str]) -> None:
-        await bus_registry.get_or_create(AUTOMATION_BUS_KEY).emit(MemoryChangedEvent(paths=paths))
+    async def _publish_memory_changed(
+        paths: list[str], *, revision: str | None = None, review_required: bool = False
+    ) -> None:
+        await bus_registry.get_or_create(AUTOMATION_BUS_KEY).emit(
+            MemoryChangedEvent(paths=paths, revision=revision, review_required=review_required)
+        )
         # Event beats polling: an external edit to an area's topic page (the
         # user in Obsidian, another agent) wakes that area's custodian.
         # Drop only an exact digest recorded by an Area page tool. A real user

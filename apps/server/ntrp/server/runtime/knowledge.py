@@ -139,9 +139,28 @@ class KnowledgeRuntime:
         the in-memory store and fan a change event out through `on_change`."""
         store = self._record_store
         if store is not None and hasattr(store, "start_watch"):
-            async def _indexed_change(paths):
+            async def _indexed_change(changes):
+                from ntrp.memory.file_store import ObservedFileChange
+
+                page_events: list[tuple[str, str, bool]] = []
+                plain_paths: list[str] = []
+                for change in changes:
+                    if isinstance(change, ObservedFileChange):
+                        revision = change.result_revision
+                        review_required = False
+                        if self._page_edit_service is not None:
+                            event = await self._page_edit_service.ingest_external(change)
+                            if event is not None:
+                                revision = event.result_revision
+                                review_required = event.reconciliation == "needs_review"
+                        page_events.append((change.path, revision, review_required))
+                    else:
+                        plain_paths.append(change)
                 self._vault_index.schedule()
-                await on_change(paths)
+                for path, revision, review_required in page_events:
+                    await on_change([path], revision=revision, review_required=review_required)
+                if plain_paths:
+                    await on_change(plain_paths, revision=None, review_required=False)
 
             store.start_watch(_indexed_change)
 

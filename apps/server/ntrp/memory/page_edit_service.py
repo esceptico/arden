@@ -16,7 +16,7 @@ from weakref import WeakValueDictionary
 from zoneinfo import ZoneInfo
 
 from ntrp.memory.artifacts import ArtifactMemoryStore
-from ntrp.memory.file_store import CanonicalFileRole, FilePageStore
+from ntrp.memory.file_store import CanonicalFileRole, FilePageStore, ObservedFileChange
 from ntrp.memory.journal import JournalConflictError
 from ntrp.memory.models import SourceRef
 from ntrp.memory.page_events import (
@@ -162,6 +162,117 @@ class PageEditService:
         async with self._apply_lock:
             return await self._apply(preview_id, decisions=decisions, save_as_pending=save_as_pending)
 
+    async def ingest_external(self, change: ObservedFileChange) -> PageEditEvent | None:
+        """Persist one observed page change before advancing its durable base."""
+        if change.origin != "external":
+            return None
+        async with self._apply_lock:
+            return await self._ingest_external(change)
+
+    async def _ingest_external(self, change: ObservedFileChange) -> PageEditEvent | None:
+        safe_path = self._validate_page_path(change.path)
+        before = change.before or b""
+        after = change.after or b""
+        if page_revision(before) != change.base_revision or page_revision(after) != change.result_revision:
+            raise ValueError("observed page change revisions do not match its bytes")
+        current = self._resources.read_resource_bytes(safe_path) if change.after is not None else None
+        if current != change.after:
+            raise StalePageRevisionError(
+                safe_path,
+                current_content=current or b"",
+                base_revision=change.base_revision,
+                candidate_revision=change.result_revision,
+            )
+        patch = unified_patch(before, after)
+        path_history = self.history(path=safe_path)
+        existing = next(
+            (
+                event
+                for event in path_history
+                if event.origin == "external"
+                and event.observation_id == change.observation_id
+            ),
+            None,
+        )
+        if existing is not None:
+            self._store.acknowledge_observed_change(change)
+            return existing
+        latest = path_history[-1] if path_history else None
+        if (
+            latest is not None
+            and latest.origin != "external"
+            and latest.base_revision == change.base_revision
+            and latest.result_revision == change.result_revision
+            and latest.patch == patch
+        ):
+            self._store.acknowledge_observed_change(change)
+            return None
+
+        analysis = _analyze(safe_path, before, after, patch)
+        answer = await self._reconcile(analysis)
+        raw_operations = tuple(answer or ())
+        occurred = self._local_now()
+        event_id = uuid4().hex
+        source = self._source(event_id, "external:filesystem", occurred)
+        if raw_operations:
+            records = tuple(await self._store.list(limit=None, scopes=None))
+            raw_operations = validate_operations(raw_operations, records, source)
+        questions = tuple(
+            PageEditQuestion(id=f"operation:{index}", operation_index=index, question=operation.question or "")
+            for index, operation in enumerate(raw_operations)
+            if operation.op == "ASK"
+        )
+        reconciliation: Literal["applied", "pending", "needs_review"]
+        if answer is None:
+            reconciliation = "pending"
+        elif questions:
+            reconciliation = "needs_review"
+        else:
+            reconciliation = "applied"
+        applied_operations = raw_operations if reconciliation == "applied" else ()
+        event = PageEditEvent(
+            id=event_id,
+            occurred_at=_milliseconds(occurred),
+            sequence=self._next_sequence(),
+            actor="external:filesystem",
+            origin="external",
+            path=safe_path,
+            base_revision=change.base_revision,
+            result_revision=change.result_revision,
+            patch=patch,
+            operations=tuple(AppliedPageOperation.from_operation(operation, (source,)) for operation in applied_operations),
+            reconciliation=reconciliation,
+            analysis=analysis,
+            review_operations=raw_operations if reconciliation == "needs_review" else (),
+            questions=questions,
+            observation_id=change.observation_id,
+        )
+        expected_revision = self._store.canonical_revision
+        planned = (
+            self._store.plan_operations(applied_operations, source, batch_key=f"page-edit:{event.id}")
+            if applied_operations
+            else {}
+        )
+        if change.after is None:
+            planned.pop(Path(safe_path), None)
+        else:
+            planned[Path(safe_path)] = change.after
+        event_rel, event_bytes, expected_event = self._event_file(event)
+        caller_roles = {event_rel: CanonicalFileRole.EVENT}
+        caller_files = {event_rel: event_bytes}
+        if change.after is not None:
+            caller_roles[Path(safe_path)] = CanonicalFileRole.USER_PAGE
+            caller_files[Path(safe_path)] = change.after
+        files = dict(planned)
+        files.update(self._store._validate_caller_files(caller_files, caller_roles))
+        self._commit(
+            files,
+            expected_files={Path(safe_path): change.after, event_rel: expected_event},
+            expected_revision=expected_revision,
+        )
+        self._store.acknowledge_observed_change(change)
+        return event
+
     async def _apply(
         self,
         preview_id: str,
@@ -218,6 +329,9 @@ class PageEditService:
                 files,
                 expected_files={Path(preview.path): current, event_rel: expected_event},
                 expected_revision=expected_revision,
+                engine_write=(preview.path, candidate, envelope["origin"])
+                if envelope["origin"] != "external"
+                else None,
             )
         except JournalConflictError as exc:
             latest = self._resources.read_resource_bytes(preview.path)
@@ -248,7 +362,12 @@ class PageEditService:
     ) -> PageEditEvent:
         events = self.history()
         pending = next((event for event in events if event.id == event_id), None)
-        if pending is None or pending.reconciliation != "pending" or pending.analysis is None:
+        external_review = (
+            pending is not None
+            and pending.origin == "external"
+            and pending.reconciliation == "needs_review"
+        )
+        if pending is None or (pending.reconciliation != "pending" and not external_review) or pending.analysis is None:
             raise ValueError("pending page edit event not found")
         applied = next(
             (
@@ -260,7 +379,7 @@ class PageEditService:
         )
         if applied is not None:
             return applied
-        review = next(
+        review = pending if external_review else next(
             (
                 event
                 for event in events
@@ -314,6 +433,8 @@ class PageEditService:
             review_event_id=review.id if review is not None else None,
         )
         planned = self._store.plan_operations(operations, source, batch_key=f"page-edit-retry:{pending.id}") if operations else {}
+        if pending.origin == "external":
+            planned.pop(Path(pending.path), None)
         event_rel, event_bytes, expected_event = self._event_file(event)
         caller = self._store._validate_caller_files(
             {event_rel: event_bytes},
@@ -436,6 +557,7 @@ class PageEditService:
         *,
         expected_files: dict[Path, bytes | None],
         expected_revision: str,
+        engine_write: tuple[str, bytes, Literal["desktop", "agent", "synthesis"]] | None = None,
     ) -> None:
         try:
             self._store._journal.commit(
@@ -448,6 +570,9 @@ class PageEditService:
             self._store._reload_canonical_state()
             raise
         self._store._reload_canonical_state()
+        if engine_write is not None:
+            path, content, origin = engine_write
+            self._store.register_engine_write(path, content, origin=origin)
         self._store._notify_post_canonical_commit()
 
     def _validate_persisted_preview(
