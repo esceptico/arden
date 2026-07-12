@@ -1,4 +1,6 @@
 import asyncio
+from collections.abc import Callable
+from datetime import date
 from pathlib import Path
 
 from ntrp.config import Config
@@ -98,6 +100,92 @@ class VaultIndexProjection:
             await asyncio.shield(work)
 
 
+class DailyProjectionCoordinator:
+    """Coalesced daily projection with retry outside canonical commits."""
+
+    def __init__(self, projector, *, revision: Callable[[], str], retry_delay: float = 2.0):
+        self._projector = projector
+        self._revision = revision
+        self._retry_delay = retry_delay
+        self._pending: set[date] = set()
+        self._task: asyncio.Task | None = None
+        self._retry_handle: asyncio.TimerHandle | None = None
+        self._closed = False
+        self.stale = True
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    @property
+    def retry_scheduled(self) -> bool:
+        return not self._closed and self._retry_handle is not None and not self._retry_handle.cancelled()
+
+    def schedule(self, local_dates=None) -> None:
+        if self._closed:
+            return
+        dates = self._projector.local_dates() if local_dates is None else local_dates
+        if isinstance(dates, date):
+            dates = (dates,)
+        self._pending.update(dates)
+        if not self._pending:
+            self.stale = False
+            return
+        self.stale = True
+        if self._retry_handle is not None:
+            self._retry_handle.cancel()
+            self._retry_handle = None
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self._run())
+
+    async def _run(self) -> None:
+        failed: set[date] = set()
+        try:
+            while self._pending:
+                local_date = min(self._pending)
+                self._pending.remove(local_date)
+                try:
+                    self._projector.render(local_date, self._revision())
+                except Exception:
+                    failed.add(local_date)
+                    _logger.warning("memory daily projection failed", exc_info=True)
+            if failed:
+                self._pending.update(failed)
+                self.stale = True
+                if not self._closed:
+                    self._retry_handle = asyncio.get_running_loop().call_later(
+                        self._retry_delay, self.schedule, ()
+                    )
+                return
+            self.stale = False
+        finally:
+            self._task = None
+
+    async def wait_idle(self) -> None:
+        task = self._task
+        if task is not None:
+            await task
+
+    def retry_now(self) -> None:
+        if self._closed:
+            return
+        if self._retry_handle is not None:
+            self._retry_handle.cancel()
+            self._retry_handle = None
+        self.schedule(())
+
+    async def close(self) -> None:
+        self._closed = True
+        self._pending.clear()
+        if self._retry_handle is not None:
+            self._retry_handle.cancel()
+            self._retry_handle = None
+        task = self._task
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
 class KnowledgeRuntime:
     def __init__(self, config: Config):
         self.config = config
@@ -112,6 +200,7 @@ class KnowledgeRuntime:
         self._consolidate = None
         self._artifact_refresh_task: asyncio.Task | None = None
         self._vault_index = VaultIndexProjection(config.memory_artifacts_dir)
+        self._daily_projection: DailyProjectionCoordinator | None = None
 
     @property
     def memory_ready(self) -> bool:
@@ -201,6 +290,8 @@ class KnowledgeRuntime:
             self._record_store.attach_search_index(self.search_index)
 
     async def stop(self) -> None:
+        if self._daily_projection is not None:
+            await self._daily_projection.close()
         self._page_edit_service = None
         await self._vault_index.close()
         if self._artifact_refresh_task is not None:
@@ -215,6 +306,8 @@ class KnowledgeRuntime:
             await self.indexer.stop()
 
     async def close(self) -> None:
+        if self._daily_projection is not None:
+            await self._daily_projection.close()
         self._page_edit_service = None
         await self._vault_index.close()
         if self._consolidate:
@@ -304,7 +397,7 @@ class KnowledgeRuntime:
             root=self.config.memory_artifacts_dir,
             search_index=self.search_index,
             project_names=load_project_names(self.config.memory_artifacts_dir),
-            post_canonical_commit=self._vault_index.schedule,
+            post_canonical_commit=self._schedule_memory_projections,
         )
         self._consolidate = None  # set below once the memory model is resolved
 
@@ -362,6 +455,19 @@ class KnowledgeRuntime:
             self._record_store,
             reconciler=self._reconcile_page_edit,
         )
+        from ntrp.memory.daily import DailyProjector
+
+        daily_projector = DailyProjector(
+            self.config.memory_artifacts_dir,
+            timezone=self.config.memory_timezone,
+            entries=self._record_store._ledger_entries,
+            page_events=self._page_edit_service.history,
+            projection_writer=self._record_store.commit_generated_projection,
+        )
+        self._daily_projection = DailyProjectionCoordinator(
+            daily_projector,
+            revision=lambda: self._record_store.canonical_revision,
+        )
         # Evict stale old-engine vectors (source="record") from the shared index.
         # Only touches that partition — transcripts + memory_line are untouched.
         if self.search_index is not None:
@@ -371,6 +477,7 @@ class KnowledgeRuntime:
                 _logger.warning("clear stale record vectors failed", exc_info=True)
         _logger.info("memory ready (file-canonical)", root=str(self.config.memory_artifacts_dir))
         self._vault_index.schedule()
+        self._daily_projection.schedule()
 
         # Synthesize the prose layer (the wiki view) off the hot path: stale-gated,
         # so a freshly-migrated store gets full prose once and later boots are cheap.
@@ -380,6 +487,11 @@ class KnowledgeRuntime:
             self._artifact_refresh_task = asyncio.create_task(
                 run_synthesis(self._record_store, memory_llm, self.config.memory_model, reasoning_effort=memory_effort)
             )
+
+    def _schedule_memory_projections(self) -> None:
+        self._vault_index.schedule()
+        if self._daily_projection is not None:
+            self._daily_projection.schedule()
 
     async def _migrate_legacy_if_needed(self) -> None:
         """One-time boot migration: if the file store is empty but the legacy

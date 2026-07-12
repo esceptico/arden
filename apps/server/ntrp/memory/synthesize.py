@@ -151,7 +151,7 @@ def _page_kind(root: Path, path: Path) -> str | None:
     if rel.name == "active-work.md":
         return "active_work"
     if rel.parts and rel.parts[0] == "daily":
-        return "daily"
+        return None  # granular DailyProjector owns daily pages
     if rel.parts and rel.parts[0] in ("topics", "entities", "projects"):
         return "dossier"
     return None
@@ -414,14 +414,6 @@ async def run_synthesis(store, llm, model: str, *, reasoning_effort: str | None 
     # the page exists so the loop synthesizes it (the synthesizer pulls from across
     # the store, not from this page's lines).
     store._ensure_page(store._root / "active-work.md", title="Active work")
-    # Daily logs: a dated page per recent day that has meaningful (non-observation)
-    # records. Pages in the trailing window are regenerated each run (a day can gain
-    # records); days that scroll past the window keep their last prose and freeze.
-    today = datetime.now(UTC).date()
-    recent_days = {(today - timedelta(days=i)).isoformat() for i in range(DAILY_RECENT_DAYS)}
-    for d in recent_days:
-        if len(_daily_records(store, d)) >= DAILY_MIN_RECORDS:
-            store._ensure_page(store._root / "daily" / f"{d}.md", title=d)
     source_revision = store.canonical_revision
     all_records = await store.list(limit=None, scopes=None)
     labels = await store.labels_for([r.id for r in all_records], include_kind=True)
@@ -441,7 +433,7 @@ async def run_synthesis(store, llm, model: str, *, reasoning_effort: str | None 
         # _stale (which reads local lines) can't judge them — force re-synth so they
         # track the store's current state. Past-window daily pages fall through to
         # _stale and freeze once written.
-        force = kind == "active_work" or (kind == "daily" and path.stem in recent_days)
+        force = kind == "active_work"
         # Re-synthesize if a new record arrived, a grounding id went dangling (the
         # cited record was merged/superseded/pruned away), or the prose still carries
         # the legacy inline `(record:..)` dialect (one-time migration to source tags).
@@ -454,8 +446,6 @@ async def run_synthesis(store, llm, model: str, *, reasoning_effort: str | None 
             prose = await _synth_profile(store, labels, llm, model, reasoning_effort, conventions)
         elif kind == "active_work":
             prose = await _synth_active_work(store, labels, llm, model, reasoning_effort, conventions)
-        elif kind == "daily":
-            prose = await _synth_daily(store, path, labels, llm, model, reasoning_effort, conventions)
         else:
             prose = await _synth_dossier(store, path, labels, llm, model, reasoning_effort, conventions)
         if prose is None:

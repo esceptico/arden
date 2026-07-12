@@ -1,5 +1,7 @@
+import os
 from pathlib import Path
 from typing import Literal, Self
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -26,6 +28,32 @@ from ntrp.settings import NTRP_DIR, load_user_settings
 from ntrp.tools.core.types import ToolOverrideDecision
 
 _logger = get_logger(__name__)
+
+
+def _local_timezone_name() -> str:
+    configured = os.environ.get("TZ")
+    if configured:
+        try:
+            ZoneInfo(configured)
+        except ZoneInfoNotFoundError:
+            pass
+        else:
+            return configured
+    try:
+        target = Path("/etc/localtime").resolve()
+    except OSError:
+        target = Path()
+    parts = target.parts
+    if "zoneinfo" in parts:
+        candidate = "/".join(parts[parts.index("zoneinfo") + 1 :])
+        try:
+            ZoneInfo(candidate)
+        except ZoneInfoNotFoundError:
+            pass
+        else:
+            return candidate
+    _logger.warning("local timezone could not be discovered; memory daily projection uses UTC")
+    return "UTC"
 
 
 # --- Provider / service mappings ---
@@ -55,6 +83,7 @@ PERSIST_KEYS = frozenset(
         "memory_model",
         "embedding_model",
         "memory",
+        "memory_timezone",
         "consolidation_interval",
         "google",
         "gmail_days",
@@ -113,6 +142,7 @@ class Config(BaseSettings):
 
     # Memory
     memory: bool = True
+    memory_timezone: str = Field(default_factory=lambda: _local_timezone_name())
     consolidation_interval: int = 30
 
     # Google (Gmail + Calendar)
@@ -218,6 +248,15 @@ class Config(BaseSettings):
             _logger.warning("Unknown model '%s' in settings, falling back to default", v)
             return None
         return v
+
+    @field_validator("memory_timezone")
+    @classmethod
+    def _validate_memory_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError(f"unknown memory timezone: {value}") from exc
+        return value
 
     @field_validator("embedding_model")
     @classmethod

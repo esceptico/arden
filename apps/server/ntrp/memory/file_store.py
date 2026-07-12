@@ -1522,6 +1522,61 @@ class FilePageStore:
         except Exception:
             _logger.warning("post-canonical projection scheduling failed", exc_info=True)
 
+    def commit_generated_projection(
+        self,
+        rel: Path,
+        content: bytes,
+        expected: bytes | None,
+        expected_revision: str,
+    ) -> None:
+        """CAS one generated page with a watcher-verifiable durable receipt."""
+        if (
+            rel.is_absolute()
+            or rel.suffix.casefold() != ".md"
+            or rel.parts[:1] != ("daily",)
+            or any(part in {"", ".", ".."} for part in rel.parts)
+        ):
+            raise ValueError(f"invalid generated projection path: {rel}")
+        files = {rel: content}
+        expected_files: dict[Path, bytes | None] = {rel: expected}
+        if self._read_observed_state():
+            receipt_id = uuid4().hex
+            receipt_rel = _WRITE_RECEIPTS / f"{receipt_id}.json"
+            files[receipt_rel] = (
+                json.dumps(
+                    {
+                        "id": receipt_id,
+                        "paths": {
+                            rel.as_posix(): {
+                                "revision": self._content_revision(content),
+                                "exists": True,
+                            }
+                        },
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode()
+            expected_files[receipt_rel] = None
+            self.register_engine_write_intent(
+                rel.as_posix(),
+                content,
+                origin="synthesis",
+                receipt_id=receipt_id,
+            )
+        try:
+            self._journal.commit_projection(
+                files,
+                expected_files=expected_files,
+                expected_revision=expected_revision,
+            )
+        except Exception:
+            self._journal.recover(prefer_rollback=True)
+            self._reload_canonical_state()
+            raise
+        self._file_state = self._scan_files()
+
     @staticmethod
     def _validate_caller_files(
         files: Mapping[Path, bytes] | None,
