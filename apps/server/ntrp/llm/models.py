@@ -48,6 +48,7 @@ class Model:
     base_url: str | None = None
     api_key_env: str | None = None
     reasoning_efforts: tuple[str, ...] = ()
+    native_deferred_tools: bool = False
 
 
 def _generated_models_path() -> Path:
@@ -55,9 +56,11 @@ def _generated_models_path() -> Path:
 
 
 def _model_from_generated_entry(entry: dict) -> Model:
+    provider = Provider(entry["provider"])
+    model_id = entry["id"]
     return Model(
-        id=entry["id"],
-        provider=Provider(entry["provider"]),
+        id=model_id,
+        provider=provider,
         max_context_tokens=int(entry["context_window"]),
         max_output_tokens=int(entry.get("max_output_tokens", 8192)),
         pricing=Pricing(
@@ -67,6 +70,14 @@ def _model_from_generated_entry(entry: dict) -> Model:
             price_cache_write=float(entry.get("price_cache_write", 0)),
         ),
         reasoning_efforts=tuple(entry.get("reasoning_efforts", ())),
+        native_deferred_tools=bool(
+            entry.get("native_deferred_tools")
+            or provider == Provider.ANTHROPIC
+            or (
+                provider == Provider.OPENAI
+                and model_id.startswith(("gpt-5.4", "gpt-5.5", "gpt-5.6"))
+            )
+        ),
     )
 
 
@@ -317,8 +328,67 @@ EMBEDDING_DEFAULTS = [
 ]
 
 
-_models: dict[str, Model] = {m.id: m for m in DEFAULTS}
-_embedding_models: dict[str, EmbeddingModel] = {m.id: m for m in EMBEDDING_DEFAULTS}
+class ModelRegistry:
+    def __init__(self, models: list[Model], embedding_models: list[EmbeddingModel] | None = None):
+        self._models = {model.id: model for model in models}
+        self._embedding_models = {
+            model.id: model for model in (embedding_models or [])
+        }
+
+    def get_model(self, model_id: str) -> Model:
+        if model_id not in self._models:
+            raise ValueError(f"Unknown model: {model_id}. Available: {', '.join(self._models)}")
+        return self._models[model_id]
+
+    def get_models(self) -> dict[str, Model]:
+        return dict(self._models)
+
+    def get_models_by_provider(self, provider: Provider) -> dict[str, Model]:
+        return {mid: model for mid, model in self._models.items() if model.provider == provider}
+
+    def replace_provider_models(self, provider: Provider, models: list[Model]) -> bool:
+        replacement = {model.id: model for model in models}
+        if any(model.provider != provider for model in replacement.values()):
+            raise ValueError(f"Replacement models must use provider {provider.value}")
+        if replacement == self.get_models_by_provider(provider):
+            return False
+        retained = {
+            mid: model for mid, model in self._models.items() if model.provider != provider
+        }
+        self._models = {**retained, **replacement}
+        return True
+
+    def add_model(self, model: Model) -> None:
+        self._models[model.id] = model
+
+    def remove_model(self, model_id: str) -> None:
+        del self._models[model_id]
+
+    def supports_native_deferred_tools(self, model_id: str) -> bool:
+        model = self._models.get(model_id)
+        return bool(model and model.native_deferred_tools)
+
+    def get_embedding_model(self, model_id: str) -> EmbeddingModel:
+        if model_id not in self._embedding_models:
+            available = ", ".join(self._embedding_models)
+            raise ValueError(f"Unknown embedding model: {model_id}. Available: {available}")
+        return self._embedding_models[model_id]
+
+    def get_embedding_models(self) -> dict[str, EmbeddingModel]:
+        return dict(self._embedding_models)
+
+    def get_embedding_models_by_provider(self, provider: Provider) -> dict[str, EmbeddingModel]:
+        return {
+            mid: model
+            for mid, model in self._embedding_models.items()
+            if model.provider == provider
+        }
+
+    def add_embedding_model(self, model: EmbeddingModel) -> None:
+        self._embedding_models[model.id] = model
+
+
+_registry = ModelRegistry(DEFAULTS, EMBEDDING_DEFAULTS)
 _custom_loaded = False
 
 
@@ -362,7 +432,7 @@ def load_custom_models(base_dir: Path) -> None:
             api_key_env=entry.get("api_key_env"),
             reasoning_efforts=tuple(entry.get("reasoning_efforts", ())),
         )
-        _models[model_id] = model
+        _registry.add_model(model)
         _logger.info("Registered custom model: %s (base_url=%s)", model_id, model.base_url)
 
     for model_id, entry in embedding_raw.items():
@@ -383,58 +453,48 @@ def load_custom_models(base_dir: Path) -> None:
             base_url=entry["base_url"],
             api_key_env=entry.get("api_key_env"),
         )
-        _embedding_models[model_id] = emb
+        _registry.add_embedding_model(emb)
         _logger.info("Registered custom embedding model: %s (base_url=%s)", model_id, emb.base_url)
 
 
 def get_model(model_id: str) -> Model:
-    if model_id not in _models:
-        raise ValueError(f"Unknown model: {model_id}. Available: {', '.join(_models)}")
-    return _models[model_id]
+    return _registry.get_model(model_id)
 
 
 def supports_native_deferred_tools(model_id: str) -> bool:
-    try:
-        model = get_model(model_id)
-    except ValueError:
-        return False
-    if model.provider == Provider.ANTHROPIC:
-        return True
-    if model.provider == Provider.OPENAI:
-        return model.id.startswith(("gpt-5.4", "gpt-5.5", "gpt-5.6"))
-    if model.provider == Provider.OPENAI_CODEX:
-        return model.id.removeprefix("openai-codex/").startswith(("gpt-5.4", "gpt-5.5", "gpt-5.6"))
-    return False
+    return _registry.supports_native_deferred_tools(model_id)
 
 
 def get_embedding_model(model_id: str) -> EmbeddingModel:
-    if model_id not in _embedding_models:
-        raise ValueError(f"Unknown embedding model: {model_id}. Available: {', '.join(_embedding_models)}")
-    return _embedding_models[model_id]
+    return _registry.get_embedding_model(model_id)
 
 
 def list_models() -> list[str]:
-    return list(_models)
+    return list(_registry.get_models())
 
 
 def get_models() -> dict[str, Model]:
-    return _models
+    return _registry.get_models()
 
 
 def get_models_by_provider(provider: Provider) -> dict[str, Model]:
-    return {mid: m for mid, m in _models.items() if m.provider == provider}
+    return _registry.get_models_by_provider(provider)
+
+
+def replace_provider_models(provider: Provider, models: list[Model]) -> bool:
+    return _registry.replace_provider_models(provider, models)
 
 
 def list_embedding_models() -> list[str]:
-    return list(_embedding_models)
+    return list(_registry.get_embedding_models())
 
 
 def get_embedding_models() -> dict[str, EmbeddingModel]:
-    return _embedding_models
+    return _registry.get_embedding_models()
 
 
 def get_embedding_models_by_provider(provider: Provider) -> dict[str, EmbeddingModel]:
-    return {mid: m for mid, m in _embedding_models.items() if m.provider == provider}
+    return _registry.get_embedding_models_by_provider(provider)
 
 
 def add_custom_model(
@@ -464,15 +524,19 @@ def add_custom_model(
         base_url=base_url,
         api_key_env=api_key_env,
     )
-    _models[model_id] = model
+    _registry.add_model(model)
     return model
 
 
 def remove_custom_model(model_id: str) -> None:
-    if model_id not in _models or _models[model_id].provider != Provider.CUSTOM:
+    try:
+        model = get_model(model_id)
+    except ValueError:
+        raise ValueError(f"Not a custom model: {model_id}") from None
+    if model.provider != Provider.CUSTOM:
         raise ValueError(f"Not a custom model: {model_id}")
 
-    del _models[model_id]
+    _registry.remove_model(model_id)
 
     raw = _read_models_json()
     if raw is not None:

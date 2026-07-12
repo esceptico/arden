@@ -1,4 +1,4 @@
-from ntrp.llm.models import Model, Pricing, Provider, _derive_codex_models
+from ntrp.llm.models import Model, ModelRegistry, Pricing, Provider, _derive_codex_models
 
 
 def test_codex_models_include_supported_openai_models():
@@ -15,3 +15,30 @@ def test_codex_models_include_supported_openai_models():
         Model(f"openai-codex/{name}", Provider.OPENAI_CODEX, 272_000, pricing=Pricing(0, 0))
         for name in ("gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-terra")
     ]
+
+
+def test_registry_replaces_only_target_provider():
+    custom = Model("custom/model", Provider.CUSTOM, 128_000)
+    standard = Model("gpt-standard", Provider.OPENAI, 128_000)
+    previous = Model("openai-codex/old", Provider.OPENAI_CODEX, 128_000)
+    current = Model("openai-codex/current", Provider.OPENAI_CODEX, 256_000)
+    registry = ModelRegistry([custom, standard, previous])
+
+    assert registry.replace_provider_models(Provider.OPENAI_CODEX, [current]) is True
+    assert registry.get_models_by_provider(Provider.OPENAI_CODEX) == {current.id: current}
+    assert registry.get_model(custom.id) == custom
+    assert registry.get_model(standard.id) == standard
+    assert registry.replace_provider_models(Provider.OPENAI_CODEX, [current]) is False
+
+
+def test_registry_reads_explicit_deferred_tool_capability():
+    model = Model(
+        "not-name-derived",
+        Provider.OPENAI,
+        128_000,
+        native_deferred_tools=True,
+    )
+    registry = ModelRegistry([model])
+
+    assert registry.supports_native_deferred_tools(model.id) is True
+    assert registry.supports_native_deferred_tools("missing") is False
