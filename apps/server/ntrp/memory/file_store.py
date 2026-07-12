@@ -1953,8 +1953,9 @@ class FilePageStore:
         rid = record_id or self._new_id()
         if self._ledger_mode():
             recorded_at = now_iso()
-            precision = "day" if date else "millisecond"
-            occurred_at = date or recorded_at
+            source_occurred_at = source_ref.occurred_at if source_ref is not None else None
+            precision = "day" if date else source_ref.time_precision if source_occurred_at else "millisecond"
+            occurred_at = date or source_occurred_at or recorded_at
             entry = LedgerEntry(
                 id=rid,
                 text=_norm(text),

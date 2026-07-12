@@ -430,3 +430,32 @@ async def test_runtime_projection_writer_registers_crash_verifiable_engine_recei
     assert (vault / "raw/write-receipts" / f"{marker['receipt_id']}.json").is_file()
     assert record.id in (vault / "daily/2026-07-12.md").read_text(encoding="utf-8")
     await store.close()
+
+
+@pytest.mark.asyncio
+async def test_direct_add_preserves_source_event_time_across_local_midnight(tmp_path: Path):
+    from ntrp.memory.file_store import FilePageStore
+
+    vault = tmp_path / "memory"
+    (vault / "raw").mkdir(parents=True)
+    (vault / "raw/me.md").write_text("<!-- ntrp:records schema=2 page=me.md -->\n", encoding="utf-8")
+    store = FilePageStore(vault)
+    await store.open()
+    record = await store.add(
+        "Earlier local event",
+        source_ref=SourceRef(
+            "user",
+            "chat-1",
+            occurred_at="2026-07-12T23:59:00.000+04:00",
+            time_precision="minute",
+        ),
+    )
+
+    entry = next(entry for entry in store._ledger_entries() if entry.id == record.id)
+    projector = DailyProjector(vault, timezone="Asia/Yerevan", entries=store._ledger_entries)
+
+    assert entry.occurred_at == "2026-07-12T23:59:00.000+04:00"
+    assert entry.meta.time_precision == "minute"
+    assert [event.id for event in projector.events_for(date(2026, 7, 12))] == [record.id]
+    assert projector.events_for(date(2026, 7, 13)) == ()
+    await store.close()
