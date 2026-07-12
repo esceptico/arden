@@ -8,7 +8,8 @@ import pytest
 from ntrp.memory.file_store import FilePageStore
 from ntrp.memory.journal import VaultJournal
 from ntrp.memory.migrate_ledger_v2 import VaultMigrationError, migrate_vault_to_v2, validate_vault
-from ntrp.memory.pages import merge_split, parse_page
+from ntrp.memory.pages import SENTINEL, merge_split, parse_page
+from ntrp.memory.records import RecordStore
 from ntrp.server.runtime.knowledge import KnowledgeRuntime
 
 
@@ -38,7 +39,7 @@ def test_clean_legacy_vault_is_backed_up_staged_validated_and_committed(tmp_path
     assert raw.startswith("<!-- ntrp:records schema=2 page=me.md -->\n")
     entry = merge_split(parse_page(""), raw).lines[0]
     assert entry.occurred_at == "2025-01-03"
-    assert entry.meta.recorded_at == "2025-01-03T00:00:00Z"
+    assert entry.meta.recorded_at.startswith("2026-07-12T")
     assert entry.meta.time_precision == "day"
     assert validate_vault(tmp_path).healthy
     assert not (tmp_path / ".ntrp" / "maintenance" / "migration-v2").exists()
@@ -79,7 +80,7 @@ def test_identical_duplicate_ids_collapse_but_conflicts_receive_stable_new_ids(t
     assert report.reassigned_duplicates == 1
 
 
-def test_staging_validates_legacy_changes_against_existing_v2_pages(tmp_path: Path) -> None:
+def test_global_remap_resolves_legacy_conflict_with_existing_v2_page(tmp_path: Path) -> None:
     _legacy_page(tmp_path, "me.md", "- 2025-01-03 ^shared [fact] (src:user) Legacy")
     visible = tmp_path / "topics" / "v2.md"
     raw = tmp_path / "raw" / "topics" / "v2.md"
@@ -94,13 +95,17 @@ def test_staging_validates_legacy_changes_against_existing_v2_pages(tmp_path: Pa
         '"sources":[{"kind":"chat","ref":"s:m"}]} -->\n',
         encoding="utf-8",
     )
-    before = (tmp_path / "raw" / "me.md").read_bytes()
+    report = migrate_vault_to_v2(tmp_path)
 
-    with pytest.raises(VaultMigrationError, match="duplicate"):
-        migrate_vault_to_v2(tmp_path)
-
-    assert (tmp_path / "raw" / "me.md").read_bytes() == before
-    assert not (tmp_path / ".ntrp" / "backups").exists()
+    health = validate_vault(tmp_path)
+    assert health.healthy
+    assert report.reassigned_duplicates == 1
+    ids = {
+        entry.id
+        for rel in ("me.md", "topics/v2.md")
+        for entry in merge_split(parse_page(""), (tmp_path / "raw" / rel).read_text(encoding="utf-8")).lines
+    }
+    assert len(ids) == 2 and "shared" in ids
 
 
 def test_malformed_legacy_line_fails_closed_with_exact_path_and_reason(tmp_path: Path) -> None:
@@ -142,7 +147,7 @@ def test_commit_failure_leaves_original_bytes_untouched_and_backup_complete(
         assert (backups[0] / "raw" / "me.md").read_bytes() == before[Path("raw/me.md")]
         raise RuntimeError("injected canonical write failure")
 
-    monkeypatch.setattr(VaultJournal, "commit", fail_commit)
+    monkeypatch.setattr(VaultJournal, "commit_migration", fail_commit)
     with pytest.raises(VaultMigrationError, match="journal commit: injected canonical write failure"):
         migrate_vault_to_v2(tmp_path)
 
@@ -229,8 +234,8 @@ async def test_migrated_page_move_preserves_identity_scope_evidence_and_active_s
     raw = tmp_path / "raw" / "topics" / "area.md"
     visible.parent.mkdir(parents=True)
     raw.parent.mkdir(parents=True)
-    visible.write_text("---\ntitle: Area\nscope_key: a1\n---\n# Area\n", encoding="utf-8")
-    raw.write_text("- 2025-01-03 ^fact [fact] (src:chat) Area fact\n", encoding="utf-8")
+    visible.write_text("---\ntitle: Area\n---\n# Area\n", encoding="utf-8")
+    raw.write_text("---\nscope_key: a1\n---\n- 2025-01-03 ^fact [fact] (src:chat) Area fact\n", encoding="utf-8")
     migrate_vault_to_v2(tmp_path)
     (tmp_path / "notes").mkdir()
     (tmp_path / "raw" / "notes").mkdir()
@@ -247,3 +252,105 @@ async def test_migrated_page_move_preserves_identity_scope_evidence_and_active_s
     assert [(source.kind, source.ref) for source in record.sources] == [("chat", "fact")]
     assert [item.id for item in await store.list()] == ["fact"]
     await store.close()
+
+
+def test_raw_frontmatter_wins_and_survives_migration(tmp_path: Path) -> None:
+    (tmp_path / "topics").mkdir()
+    (tmp_path / "raw" / "topics").mkdir(parents=True)
+    (tmp_path / "topics/area.md").write_text("---\ntitle: Area\nscope_key: wrong\n---\n# Area\n", encoding="utf-8")
+    (tmp_path / "raw/topics/area.md").write_text(
+        '---\nscope_key: a1\nentity_labels: ["Area"]\nmeta_labels: ["important"]\n---\n'
+        "- 2025-01-03 ^fact [fact] [pin] (src:chat) Area fact\n",
+        encoding="utf-8",
+    )
+
+    migrate_vault_to_v2(tmp_path)
+    raw = (tmp_path / "raw/topics/area.md").read_text(encoding="utf-8")
+    page = merge_split(parse_page(""), raw)
+
+    assert page.frontmatter["scope_key"] == "a1"
+    assert page.frontmatter["entity_labels"] == ["Area"]
+    assert page.frontmatter["meta_labels"] == ["important"]
+    assert page.lines[0].pinned
+    assert page.lines[0].meta.scope_key == "a1"
+
+
+def test_v2_raw_and_legacy_visible_timeline_for_same_page_are_unioned(tmp_path: Path) -> None:
+    (tmp_path / "raw").mkdir()
+    (tmp_path / "me.md").write_text(
+        "# Me\n\n" + SENTINEL + "\n- 2025-01-03 ^legacy [fact] (src:user) Legacy\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "raw/me.md").write_text(
+        "<!-- ntrp:records schema=2 page=me.md -->\n"
+        "- 2026-07-12T10:23:41Z ^existing [fact] Existing.\n"
+        '  <!-- ntrp:meta {"recorded_at":"2026-07-12T10:23:42Z","sequence":9,'
+        '"time_precision":"second","scope":{"kind":"user"},'
+        '"sources":[{"kind":"chat","ref":"s:m"}]} -->\n', encoding="utf-8")
+
+    migrate_vault_to_v2(tmp_path)
+    page = merge_split(parse_page(""), (tmp_path / "raw/me.md").read_text(encoding="utf-8"))
+
+    assert {entry.id for entry in page.lines} == {"existing", "legacy"}
+
+
+@pytest.mark.asyncio
+async def test_runtime_converts_nonempty_sqlite_import_to_healthy_v2_before_ready(tmp_path: Path) -> None:
+    db = tmp_path / "memory.db"
+    legacy = RecordStore(db)
+    await legacy.open()
+    await legacy.add("Imported fact", source_ref=None)
+    await legacy.close()
+    config = SimpleNamespace(memory=True, memory_model=None, memory_artifacts_dir=tmp_path / "vault", memory_db_path=db)
+    runtime = KnowledgeRuntime.__new__(KnowledgeRuntime)
+    runtime.config = config
+    runtime.search_index = None
+    runtime._record_store = None
+    runtime._consolidate = None
+    runtime.memory_curator = None
+    runtime._artifact_refresh_task = None
+
+    await runtime._init_memory(SimpleNamespace(sessions=None))
+
+    health = validate_vault(config.memory_artifacts_dir)
+    assert health.schema_version == 2
+    assert health.healthy
+    assert await runtime._record_store.count_active() == 1
+    await runtime._record_store.close()
+
+
+@pytest.mark.parametrize("name", ["maintenance", "backups"])
+def test_internal_parent_symlink_never_writes_or_deletes_outside(tmp_path: Path, name: str) -> None:
+    _legacy_page(tmp_path, "me.md", "- 2025-01-03 ^old [fact] (src:user) Fact")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "sentinel"
+    sentinel.write_text("keep", encoding="utf-8")
+    meta = tmp_path / ".ntrp"
+    meta.mkdir()
+    (meta / name).symlink_to(outside, target_is_directory=True)
+    before = (tmp_path / "raw/me.md").read_bytes()
+
+    with pytest.raises(VaultMigrationError, match="symlink"):
+        migrate_vault_to_v2(tmp_path)
+
+    assert sentinel.read_text(encoding="utf-8") == "keep"
+    assert (tmp_path / "raw/me.md").read_bytes() == before
+
+
+def test_metadata_and_canonical_bytes_rollback_together(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _legacy_page(tmp_path, "me.md", "- 2025-01-03 ^old [fact] (src:user) Fact")
+    prior = tmp_path / ".ntrp/maintenance/migration-v2.json"
+    prior.parent.mkdir(parents=True)
+    prior.write_text('{"schema_version":1}\n', encoding="utf-8")
+    before_raw = (tmp_path / "raw/me.md").read_bytes()
+    def fail(point: str) -> None:
+        if point == "after_replace:0":
+            raise RuntimeError("metadata crash")
+
+    monkeypatch.setattr(VaultJournal, "_checkpoint", staticmethod(fail))
+    with pytest.raises(VaultMigrationError, match="metadata crash"):
+        migrate_vault_to_v2(tmp_path)
+
+    assert prior.read_text(encoding="utf-8") == '{"schema_version":1}\n'
+    assert (tmp_path / "raw/me.md").read_bytes() == before_raw

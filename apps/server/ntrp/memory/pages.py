@@ -33,7 +33,7 @@ SENTINEL = (
 # prose_cites is the page's grounding: the record ids its prose was verified
 # against at synthesis time (the visible prose carries readable source tags,
 # not ids — this list is what keeps the grounding machine-checkable).
-RAW_FM_KEYS = ("scope_key", "entity_labels", "meta_labels", "prose_synced", "prose_cites")
+RAW_FM_KEYS = ("scope_kind", "scope_key", "entity_labels", "meta_labels", "prose_synced", "prose_cites")
 # Legacy bookkeeping now computed from the prose itself — dropped on parse.
 _DROPPED_FM_KEYS = ("prose_tokens",)
 _V2_HEADER_RE = re.compile(r"^<!-- ntrp:records schema=2(?: [^>]*)? -->$")

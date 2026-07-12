@@ -126,7 +126,7 @@ def test_file_store_exposes_invalid_v2_health_without_serving_reads(tmp_path: Pa
     )
 
 
-def test_missing_evidence_is_reported_without_making_an_otherwise_valid_vault_unreadable(tmp_path: Path) -> None:
+def test_missing_evidence_blocks_an_otherwise_valid_vault(tmp_path: Path) -> None:
     _write_raw(
         tmp_path,
         "me.md",
@@ -136,4 +136,20 @@ def test_missing_evidence_is_reported_without_making_an_otherwise_valid_vault_un
     health = validate_vault(tmp_path)
 
     assert health.missing_evidence == ("raw/me.md: one",)
-    assert health.healthy
+    assert not health.healthy
+
+
+def test_health_blocks_future_schema_and_invalid_scope_keys(tmp_path: Path) -> None:
+    _write_raw(tmp_path, "future.md", "<!-- ntrp:records schema=3 page=future.md -->\n")
+    assert not validate_vault(tmp_path).healthy
+
+    _write_raw(tmp_path, "future.md", "<!-- ntrp:records schema=2 page=future.md -->\n" + _entry("area", scope='{"kind":"area"}'))
+    health = validate_vault(tmp_path)
+    assert health.invalid_scope == ("raw/future.md: area: area requires a scope key",)
+
+
+def test_health_rejects_symlinked_raw_root(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (tmp_path / "raw").symlink_to(outside, target_is_directory=True)
+    assert not validate_vault(tmp_path).healthy

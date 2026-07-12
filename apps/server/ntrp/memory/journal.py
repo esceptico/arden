@@ -40,13 +40,13 @@ class VaultJournal:
             return ""
         return revision if self._valid_hash(revision) else ""
 
-    def prepare(self, files: Mapping[Path, bytes]) -> PreparedCommit:
+    def prepare(self, files: Mapping[Path, bytes], *, _allow_migration_meta: bool = False) -> PreparedCommit:
         self._validate_metadata_paths()
         rows: list[dict[str, object]] = []
         payloads: list[tuple[bytes, bytes]] = []
         seen: set[str] = set()
         for index, (target, content) in enumerate(sorted(files.items(), key=lambda item: item[0].as_posix())):
-            rel = self._validate_relative(target)
+            rel = self._validate_relative(target, allow_migration_meta=_allow_migration_meta)
             if rel in seen:
                 raise ValueError(f"duplicate journal target: {rel}")
             if not isinstance(content, bytes):
@@ -104,6 +104,13 @@ class VaultJournal:
     def commit(self, files: Mapping[Path, bytes]) -> str:
         self.recover()
         prepared = self.prepare(files)
+        manifest = self._load_manifest(prepared.path)
+        self._finish(prepared.path, manifest, prepared.commit_id)
+        return prepared.manifest_hash
+
+    def commit_migration(self, files: Mapping[Path, bytes]) -> str:
+        self.recover()
+        prepared = self.prepare(files, _allow_migration_meta=True)
         manifest = self._load_manifest(prepared.path)
         self._finish(prepared.path, manifest, prepared.commit_id)
         return prepared.manifest_hash
@@ -200,7 +207,7 @@ class VaultJournal:
             if not isinstance(row, dict):
                 raise RuntimeError(f"invalid journal file entry: {commit_path.name}")
             try:
-                target = self._validate_relative(Path(row["target"]))
+                target = self._validate_relative(Path(row["target"]), allow_migration_meta=True)
                 staged = self._artifact_path(commit_path, row["staged"], "staged")
                 backup = self._artifact_path(commit_path, row["backup"], "backups")
             except (KeyError, TypeError, ValueError) as exc:
@@ -397,10 +404,12 @@ class VaultJournal:
             current = child
 
     @staticmethod
-    def _validate_relative(path: Path) -> str:
+    def _validate_relative(path: Path, *, allow_migration_meta: bool = False) -> str:
         if path.is_absolute() or not path.parts or any(part in {"", ".", ".."} for part in path.parts):
             raise ValueError(f"journal target must be vault-relative: {path}")
-        if path.parts[0] == ".ntrp":
+        if path.parts[0] == ".ntrp" and not (
+            allow_migration_meta and path == Path(".ntrp/maintenance/migration-v2.json")
+        ):
             raise ValueError("journal cannot target its metadata directory")
         return path.as_posix()
 

@@ -14,13 +14,13 @@ from uuid import uuid4
 from ntrp.memory.journal import VaultJournal
 from ntrp.memory.ledger import LedgerEntry, parse_ledger_entry, render_ledger_entry
 from ntrp.memory.models import Kind
-from ntrp.memory.pages import SENTINEL, Page, parse_page, render_page
+from ntrp.memory.pages import SENTINEL, Page, parse_page, parse_raw, render_page, render_raw
 
 _HEADER = "<!-- ntrp:records schema=2 page={page} -->"
 _HEADER_RE = re.compile(r"^<!-- ntrp:records schema=(?P<version>\d+)(?: [^>]*)? -->$")
 _READABLE_ID_RE = re.compile(r"^- \S+ \^(?P<id>[\w-]+) ")
 _VALID_SCOPES = frozenset({"global", "user", "area", "project", "entity"})
-_MIGRATION_META = Path(".ntrp/migration-v2.json")
+_MIGRATION_META = Path(".ntrp/maintenance/migration-v2.json")
 
 
 @dataclass(frozen=True)
@@ -48,11 +48,12 @@ class VaultHealth:
 
     @property
     def healthy(self) -> bool:
-        return self.schema_version != 1 and not any(
+        return self.schema_version in (None, 2) and not any(
             (
                 self.duplicate_ids,
                 self.invalid_relationship_targets,
                 self.malformed_metadata,
+                self.missing_evidence,
                 self.invalid_scope,
                 self.timestamp_precision_violations,
                 self.interrupted_journals,
@@ -65,6 +66,8 @@ class VaultHealth:
             return self.malformed_metadata[0]
         if self.duplicate_ids:
             return f"duplicate record id: {self.duplicate_ids[0]}"
+        if self.missing_evidence:
+            return self.missing_evidence[0]
         groups = (
             self.invalid_relationship_targets,
             self.invalid_scope,
@@ -87,6 +90,8 @@ class _LegacyPage:
     visible: str
     page: Page
     rows: list[tuple[str, LedgerEntry]]
+    raw_fm: dict
+    existing: list[LedgerEntry]
 
 
 def _split_frontmatter(text: str) -> tuple[str, str]:
@@ -132,7 +137,8 @@ def _legacy_rows(text: str, rel: Path) -> list[tuple[str, LedgerEntry]]:
 
 
 def _discover_legacy(root: Path) -> list[_LegacyPage]:
-    found: list[_LegacyPage] = []
+    found: dict[Path, _LegacyPage] = {}
+    has_legacy = False
     consumed: set[Path] = set()
     raw_root = root / "raw"
     if raw_root.is_dir():
@@ -141,12 +147,18 @@ def _discover_legacy(root: Path) -> list[_LegacyPage]:
             raw_text = raw_path.read_text(encoding="utf-8")
             _, body = _split_frontmatter(raw_text)
             first = next((line for line in body.splitlines() if line.strip()), "")
-            if _HEADER_RE.fullmatch(first):
-                continue
             visible_path = root / rel
             visible = visible_path.read_text(encoding="utf-8") if visible_path.exists() else ""
             page = parse_page(visible)
-            found.append(_LegacyPage(rel, visible, page, _legacy_rows(raw_text, Path("raw") / rel)))
+            raw_fm, parsed = parse_raw(raw_text)
+            existing = [item for item in parsed if isinstance(item, LedgerEntry)]
+            rows = [] if _HEADER_RE.fullmatch(first) else _legacy_rows(raw_text, Path("raw") / rel)
+            if SENTINEL in visible:
+                prose, timeline = visible.split(SENTINEL, 1)
+                page = parse_page(prose)
+                rows.extend(_legacy_rows(timeline, rel))
+            has_legacy = has_legacy or bool(rows)
+            found[rel] = _LegacyPage(rel, visible, page, rows, raw_fm, existing)
             consumed.add(rel)
     for visible_path in sorted(root.rglob("*.md")):
         rel = visible_path.relative_to(root)
@@ -157,14 +169,18 @@ def _discover_legacy(root: Path) -> list[_LegacyPage]:
             continue
         prose, timeline = visible.split(SENTINEL, 1)
         page = parse_page(prose)
-        found.append(_LegacyPage(rel, visible, page, _legacy_rows(timeline, rel)))
-    return found
+        found[rel] = _LegacyPage(rel, visible, page, _legacy_rows(timeline, rel), {}, [])
+        has_legacy = True
+    return list(found.values()) if has_legacy else []
 
 
 def _scope(page: _LegacyPage, kind: Kind) -> tuple[str, str | None]:
-    key = page.page.frontmatter.get("scope_key")
+    key = page.raw_fm.get("scope_key")
+    raw_kind = page.raw_fm.get("scope_kind")
     if key:
         return "area", str(key)
+    if raw_kind in {"global", "user"}:
+        return str(raw_kind), None
     if kind in (Kind.DIRECTIVE, Kind.LESSON):
         return "global", None
     return "user", None
@@ -175,72 +191,80 @@ def _new_id(old_id: str, rel: Path, raw: str) -> str:
     return f"{old_id}-{digest}"
 
 
-def _render_pages(pages: list[_LegacyPage]) -> tuple[dict[Path, bytes], int, int, int]:
-    seen: dict[str, str] = {}
+def _render_pages(pages: list[_LegacyPage], migration_time: str) -> tuple[dict[Path, bytes], int, int, int]:
     rendered: dict[Path, bytes] = {}
     collapsed = 0
     reassigned = 0
-    sequence = 0
-    used_ids: set[str] = set()
-    for legacy in pages:
-        entries: list[LedgerEntry] = []
-        local_remap: dict[str, str] = {}
-        for raw, parsed in legacy.rows:
-            previous = seen.get(parsed.id)
-            if previous == raw:
-                collapsed += 1
-                continue
-            record_id = parsed.id
-            if previous is not None:
-                record_id = _new_id(record_id, legacy.rel, raw)
-                while record_id in used_ids:
-                    record_id += "x"
-                local_remap[parsed.id] = record_id
-                reassigned += 1
-            seen.setdefault(parsed.id, raw)
-            used_ids.add(record_id)
+    migrated_count = 0
+    sequence = max((e.meta.sequence for page in pages for e in page.existing), default=0)
+    reserved = {e.id for page in pages for e in page.existing} | {e.id for page in pages for _, e in page.rows}
+    used_ids: set[str] = set(reserved)
+    occurrences = [
+        (page, render_ledger_entry(entry), entry, False)
+        for page in pages for entry in page.existing
+    ] + [(page, raw, entry, True) for page in pages for raw, entry in page.rows]
+    seen: dict[str, str] = {}
+    assigned: list[tuple[_LegacyPage, LedgerEntry, bool]] = []
+    local_remap: dict[Path, dict[str, str]] = {}
+    for page, identity, entry, is_legacy in occurrences:
+        previous = seen.get(entry.id)
+        if previous == identity:
+            collapsed += 1
+            continue
+        new_id = entry.id
+        if previous is not None:
+            new_id = _new_id(entry.id, page.rel, identity)
+            while new_id in used_ids:
+                new_id += "x"
+            used_ids.add(new_id)
+            local_remap.setdefault(page.rel, {})[entry.id] = new_id
+            reassigned += 1
+        seen.setdefault(entry.id, identity)
+        assigned.append((page, replace(entry, id=new_id), is_legacy))
+    by_page: dict[Path, list[LedgerEntry]] = {page.rel: [] for page in pages}
+    for page, entry, is_legacy in assigned:
+        remap = local_remap.get(page.rel, {})
+        if is_legacy:
+            migrated_count += 1
             sequence += 1
-            scope_kind, scope_key = _scope(legacy, parsed.kind)
-            precision = "day" if parsed.occurred_at else "unknown"
-            recorded_at = f"{parsed.occurred_at}T00:00:00Z" if parsed.occurred_at else datetime.now(UTC).isoformat()
-            entries.append(
-                replace(
-                    parsed,
-                    id=record_id,
-                    meta=replace(
-                        parsed.meta,
-                        recorded_at=recorded_at,
-                        sequence=sequence,
-                        time_precision=precision,
-                        scope_kind=scope_kind,
-                        scope_key=scope_key,
-                    ),
-                )
+            scope_kind, scope_key = _scope(page, entry.kind)
+            entry = replace(
+                entry,
+                meta=replace(
+                    entry.meta,
+                    recorded_at=migration_time,
+                    sequence=sequence,
+                    time_precision="day" if entry.occurred_at else "unknown",
+                    scope_kind=scope_kind,
+                    scope_key=scope_key,
+                ),
             )
-        if local_remap:
-            entries = [
-                replace(
-                    entry,
-                    meta=replace(
-                        entry.meta,
-                        supersedes=tuple(local_remap.get(target, target) for target in entry.meta.supersedes),
-                        successor_id=local_remap.get(entry.meta.successor_id, entry.meta.successor_id),
-                    ),
-                )
-                for entry in entries
-            ]
-        visible_page = Page(frontmatter=legacy.page.frontmatter, prose=legacy.page.prose)
+        sources = tuple(
+            replace(source, ref=remap.get(source.ref, source.ref)) if source.ref in reserved else source
+            for source in entry.meta.sources
+        )
+        entry = replace(
+            entry,
+            meta=replace(
+                entry.meta,
+                sources=sources,
+                supersedes=tuple(remap.get(target, target) for target in entry.meta.supersedes),
+                successor_id=remap.get(entry.meta.successor_id, entry.meta.successor_id),
+            ),
+        )
+        by_page[page.rel].append(entry)
+    for legacy in pages:
+        entries = by_page[legacy.rel]
+        visible_page = Page(frontmatter={**legacy.page.frontmatter, **legacy.raw_fm}, prose=legacy.page.prose)
         rendered[legacy.rel] = render_page(visible_page).encode()
-        body = "\n".join(render_ledger_entry(entry) for entry in entries)
-        raw = _HEADER.format(page=legacy.rel.as_posix()) + "\n"
-        if body:
-            raw += body + "\n"
-        rendered[Path("raw") / legacy.rel] = raw.encode()
-    return rendered, sequence, collapsed, reassigned
+        visible_page.lines = entries
+        visible_page.records_header = _HEADER.format(page=legacy.rel.as_posix())
+        rendered[Path("raw") / legacy.rel] = render_raw(visible_page).encode()
+    return rendered, migrated_count, collapsed, reassigned
 
 
 def _copy_backup(root: Path, backup: Path) -> None:
-    backup.mkdir(parents=True)
+    backup.mkdir(parents=True, exist_ok=True)
     for source in sorted(root.rglob("*")):
         rel = source.relative_to(root)
         if rel.parts[:2] == (".ntrp", "backups") or rel.parts[:2] == (".ntrp", "maintenance"):
@@ -264,16 +288,11 @@ def _migration_meta(root: Path) -> dict[str, str]:
     return {key: str(value) for key, value in data.items() if value is not None}
 
 
-def _write_migration_meta(root: Path, *, migrated_at: str, backup_path: Path) -> None:
-    path = root / _MIGRATION_META
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_suffix(".tmp")
-    temp.write_text(
+def _migration_meta_bytes(*, migrated_at: str, backup_path: Path) -> bytes:
+    return (
         json.dumps({"schema_version": 2, "last_migration": migrated_at, "backup_path": str(backup_path)}, sort_keys=True)
-        + "\n",
-        encoding="utf-8",
-    )
-    temp.replace(path)
+        + "\n"
+    ).encode()
 
 
 def _stage_current_vault(root: Path, stage: Path) -> None:
@@ -289,10 +308,12 @@ def _stage_current_vault(root: Path, stage: Path) -> None:
         shutil.copy2(source, target)
 
 
-def migrate_vault_to_v2(root: Path) -> MigrationReport:
+def _migrate_vault_to_v2(root: Path) -> MigrationReport:
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
+    journal = VaultJournal(root)
     maintenance = root / ".ntrp" / "maintenance" / "migration-v2"
+    journal._assert_safe_parents(maintenance / "run")
     if maintenance.exists():
         if maintenance.is_symlink():
             raise VaultMigrationError(Path(".ntrp/maintenance/migration-v2"), "staging root is a symlink")
@@ -301,7 +322,8 @@ def migrate_vault_to_v2(root: Path) -> MigrationReport:
     if not pages:
         meta = _migration_meta(root)
         return MigrationReport(False, meta.get("backup_path"))
-    files, record_count, collapsed, reassigned = _render_pages(pages)
+    migrated_at = datetime.now(UTC).isoformat()
+    files, record_count, collapsed, reassigned = _render_pages(pages, migrated_at)
     run_id = uuid4().hex
     stage = maintenance / run_id
     _stage_current_vault(root, stage)
@@ -312,21 +334,37 @@ def migrate_vault_to_v2(root: Path) -> MigrationReport:
     staged_health = validate_vault(stage)
     if not staged_health.healthy:
         raise VaultMigrationError(Path(".ntrp/maintenance/migration-v2") / run_id, staged_health.first_error or "validation failed")
-    migrated_at = datetime.now(UTC).isoformat()
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
     backup = root / ".ntrp" / "backups" / stamp
+    journal._mkdir_durable(backup)
     _copy_backup(root, backup)
+    files[_MIGRATION_META] = _migration_meta_bytes(migrated_at=migrated_at, backup_path=backup)
     try:
-        VaultJournal(root).commit(files)
+        journal.commit_migration(files)
     except Exception as exc:
         try:
             VaultJournal(root).recover(prefer_rollback=True)
         except Exception as recovery_exc:
             raise VaultMigrationError(Path(".ntrp/journal"), f"journal commit: {exc}; rollback: {recovery_exc}") from exc
         raise VaultMigrationError(Path(".ntrp/journal"), f"journal commit: {exc}") from exc
-    _write_migration_meta(root, migrated_at=migrated_at, backup_path=backup)
     shutil.rmtree(maintenance, ignore_errors=True)
     return MigrationReport(True, str(backup), len(pages), record_count, collapsed, reassigned)
+
+
+def migrate_vault_to_v2(root: Path) -> MigrationReport:
+    root = Path(root)
+    try:
+        return _migrate_vault_to_v2(root)
+    except VaultMigrationError:
+        raise
+    except Exception as exc:
+        filename = getattr(exc, "filename", None)
+        path = Path(filename) if filename else root
+        try:
+            path = path.relative_to(root)
+        except ValueError:
+            path = Path(".")
+        raise VaultMigrationError(path, str(exc)) from exc
 
 
 def _v2_entries(path: Path, root: Path, malformed: list[str]) -> list[LedgerEntry]:
@@ -363,6 +401,12 @@ def validate_vault(root: Path) -> VaultHealth:
     entries: list[tuple[str, LedgerEntry]] = []
     versions: set[int] = set()
     raw_root = root / "raw"
+    if raw_root.is_symlink():
+        malformed.append("raw: vault raw root is a symlink")
+        raw_root = root / "__invalid_raw__"
+    for internal in (root / ".ntrp", root / ".ntrp/backups", root / ".ntrp/maintenance"):
+        if internal.is_symlink():
+            malformed.append(f"{internal.relative_to(root).as_posix()}: internal root is a symlink")
     if raw_root.is_dir():
         for path in sorted(raw_root.rglob("*.md")):
             _, body = _split_frontmatter(path.read_text(encoding="utf-8"))
@@ -390,6 +434,10 @@ def validate_vault(root: Path) -> VaultHealth:
             missing_evidence.append(f"{rel}: {entry.id}")
         if entry.meta.scope_kind not in _VALID_SCOPES:
             invalid_scope.append(f"{rel}: {entry.id}: {entry.meta.scope_kind}")
+        elif entry.meta.scope_kind == "area" and not entry.meta.scope_key:
+            invalid_scope.append(f"{rel}: {entry.id}: area requires a scope key")
+        elif entry.meta.scope_kind in {"user", "global"} and entry.meta.scope_key is not None:
+            invalid_scope.append(f"{rel}: {entry.id}: {entry.meta.scope_kind} forbids a scope key")
         if entry.occurred_at is None and entry.meta.time_precision != "unknown":
             precision.append(f"{rel}: {entry.id}: absent occurred_at requires unknown precision")
         elif entry.occurred_at is not None:
@@ -398,6 +446,16 @@ def validate_vault(root: Path) -> VaultHealth:
                 precision.append(f"{rel}: {entry.id}: day precision requires a date-only occurred_at")
             elif date_only and entry.meta.time_precision != "day":
                 precision.append(f"{rel}: {entry.id}: date-only occurred_at requires day precision")
+        for index, source in enumerate(entry.meta.sources):
+            source_label = f"{rel}: {entry.id}: source {index}"
+            if source.occurred_at is None and source.time_precision != "unknown":
+                precision.append(f"{source_label}: absent occurred_at requires unknown precision")
+            elif source.occurred_at is not None:
+                source_date = bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", source.occurred_at))
+                if source.time_precision == "day" and not source_date:
+                    precision.append(f"{source_label}: day precision requires a date-only occurred_at")
+                elif source_date and source.time_precision != "day":
+                    precision.append(f"{source_label}: date-only occurred_at requires day precision")
     interrupted: list[str] = []
     for rel in (Path(".ntrp/journal"), Path(".ntrp/maintenance/migration-v2")):
         path = root / rel

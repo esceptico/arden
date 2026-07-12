@@ -212,6 +212,12 @@ class KnowledgeRuntime:
 
         await self._record_store.open()
         await self._migrate_legacy_if_needed()
+        VaultJournal(self.config.memory_artifacts_dir).recover()
+        migrate_vault_to_v2(self.config.memory_artifacts_dir)
+        health = validate_vault(self.config.memory_artifacts_dir)
+        if not health.healthy:
+            raise RuntimeError(f"memory vault validation failed: {health.first_error or 'unknown vault error'}")
+        await self._record_store.open()
         # Evict stale old-engine vectors (source="record") from the shared index.
         # Only touches that partition — transcripts + memory_line are untouched.
         if self.search_index is not None:
