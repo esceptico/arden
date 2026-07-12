@@ -21,15 +21,20 @@ import asyncio
 import re
 from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from ntrp.constants import MEMORY_MIN_ENTITY_RECORDS, RRF_K
 from ntrp.database import serialize_embedding
 from ntrp.logging import get_logger
-from ntrp.memory.models import TRUST_DEFAULT, TRUST_LEVEL, Kind, Record, SourceRef, now_iso
+from ntrp.memory.ledger import LedgerEntry, LedgerMeta
+from ntrp.memory.models import TRUST_DEFAULT, TRUST_LEVEL, Kind, Record, SourceRef, now_iso, union_source_refs
 from ntrp.memory.pages import SENTINEL, Line, Page, merge_split, parse_page, render_page, render_raw
 from ntrp.memory.scorer import salience
 from ntrp.search.retrieval import rrf_merge
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 _logger = get_logger(__name__)
 
@@ -242,6 +247,12 @@ class FilePageStore:
             for line in page.lines:
                 self._loc[line.id] = page_path
             legacy.append(page_path)
+        if self._ledger_mode():
+            self._active_ledger_entries()  # validate identity + relationship targets before serving reads
+            self._write_conventions()
+            self._file_state = self._scan_files()
+            await self._sync_index()
+            return
         for path in legacy:
             self._persist(path)
         if legacy:
@@ -294,8 +305,9 @@ class FilePageStore:
         old = self._pages.pop(path, None)
         if old is not None:
             for ln in old.lines:
-                self._loc.pop(ln.id, None)
-                self._unindex_line(ln.id)
+                if self._loc.get(ln.id) == path:
+                    self._loc.pop(ln.id, None)
+                    self._unindex_line(ln.id)
         try:
             page_text = path.read_text(encoding="utf-8") if path.exists() else ""
             raw_path = self._raw_path(path)
@@ -313,7 +325,7 @@ class FilePageStore:
         self._pages[path] = page
         for ln in page.lines:
             self._loc[ln.id] = path
-            if not ln.superseded:
+            if ln in page.active_lines():
                 self._index_line(ln)
 
     async def refresh_from_disk(self) -> list[str]:
@@ -332,8 +344,11 @@ class FilePageStore:
             self._reload_page(page_path)
         self._file_state = current
         if changed:
-            self._write_index()
-            self._write_health()
+            if self._ledger_mode():
+                self._active_ledger_entries()
+            else:
+                self._write_index()
+                self._write_health()
         return [p.relative_to(self._root).as_posix() for p in sorted(changed)]
 
     def start_watch(self, on_change=None, *, interval: float = 2.0) -> None:
@@ -378,8 +393,13 @@ class FilePageStore:
 
         asyncio.ensure_future(_run())
 
-    def _index_line(self, line: Line) -> None:
-        if self._search_index is None or line.superseded or not line.text.strip():
+    def _index_line(self, line: Line | LedgerEntry) -> None:
+        if (
+            self._search_index is None
+            or (isinstance(line, LedgerEntry) and line.meta.operation == "retract")
+            or (isinstance(line, Line) and line.superseded)
+            or not line.text.strip()
+        ):
             return
         self._track(
             self._search_index.upsert(
@@ -403,7 +423,7 @@ class FilePageStore:
         if index is None:
             return
         try:
-            active: dict[str, Line] = {}
+            active: dict[str, Line | LedgerEntry] = {}
             for page in self._pages.values():
                 for line in page.active_lines():
                     if line.text.strip():
@@ -431,6 +451,8 @@ class FilePageStore:
         for path, page in self._pages.items():
             dirty = False
             for line in page.lines:
+                if isinstance(line, LedgerEntry):
+                    continue
                 if line.superseded or line.imp is not None:
                     continue
                 try:
@@ -451,13 +473,34 @@ class FilePageStore:
             if rid not in self._loc:
                 return rid
 
+    def _ledger_mode(self) -> bool:
+        return any(page.records_header is not None for page in self._pages.values())
+
+    def _ledger_entries(self) -> tuple[LedgerEntry, ...]:
+        return tuple(
+            line
+            for page in self._pages.values()
+            for line in page.lines
+            if isinstance(line, LedgerEntry)
+        )
+
+    @staticmethod
+    def _validate_ledger_entries(entries: Sequence[LedgerEntry]) -> None:
+        Page(lines=list(entries)).active_entries()
+
+    def _active_ledger_entries(self) -> tuple[LedgerEntry, ...]:
+        return Page(lines=list(self._ledger_entries())).active_entries()
+
+    def _next_sequence(self) -> int:
+        return max((entry.meta.sequence for entry in self._ledger_entries()), default=0) + 1
+
     def _entity_labels(self, path: Path) -> list[str]:
         return list(self._pages[path].frontmatter.get("entity_labels", [])) if path in self._pages else []
 
     def _meta_labels(self, path: Path) -> list[str]:
         return list(self._pages[path].frontmatter.get("meta_labels", [])) if path in self._pages else []
 
-    def _scope_for(self, path: Path, kind: str) -> tuple[str | None, str | None]:
+    def _legacy_scope_for(self, path: Path, kind: str) -> tuple[str | None, str | None]:
         # Scope is a property of the page (frontmatter scope_key), not its folder — a
         # project page and an emergent topic both live in topics/; only the scope_key
         # tells them apart. This keeps active-work's project view working after the
@@ -465,13 +508,32 @@ class FilePageStore:
         page = self._pages.get(path)
         key = page.frontmatter.get("scope_key") if page else None
         if key:
-            return ("project", str(key))
+            return ("area", str(key))
         if kind in (Kind.DIRECTIVE, Kind.LESSON):
             return ("global", None)  # behaviour rules + distilled playbook apply everywhere
         return ("user", None)
 
-    def _to_record(self, line: Line, path: Path) -> Record:
-        scope_kind, scope_key = self._scope_for(path, line.kind)
+    def _to_record(self, line: Line | LedgerEntry, path: Path) -> Record:
+        if isinstance(line, LedgerEntry):
+            successor = next(
+                (entry.id for entry in self._ledger_entries() if line.id in entry.meta.supersedes),
+                None,
+            )
+            return Record(
+                id=line.id,
+                text=line.text,
+                kind=line.kind,
+                scope_kind=line.meta.scope_kind,
+                scope_key=line.meta.scope_key,
+                created_at=line.occurred_at or line.meta.recorded_at,
+                last_confirmed_at=line.meta.recorded_at,
+                superseded_by=successor,
+                pinned=line.pinned,
+                source_ref=(line.meta.sources[0] if line.meta.sources else None),
+                sources=line.meta.sources,
+                imp=line.imp,
+            )
+        scope_kind, scope_key = self._legacy_scope_for(path, line.kind)
         return Record(
             id=line.id,
             text=line.text,
@@ -498,7 +560,7 @@ class FilePageStore:
             return self._root / _DIRECTIVES
         if kind == Kind.LESSON:
             return self._root / _LESSONS
-        if scope_kind == "project" and scope_key:
+        if scope_kind in ("area", "project") and scope_key:
             return self._root / _ENTITIES / f"{_slug(self._project_names.get(scope_key, scope_key))}.md"
         if kind == Kind.SOURCE:
             return self._root / _REFERENCES
@@ -912,7 +974,7 @@ class FilePageStore:
         self._file_state.pop(path, None)
         self._file_state.pop(self._raw_path(path), None)
 
-    def _find(self, record_id: str) -> tuple[Path, Line] | None:
+    def _find(self, record_id: str) -> tuple[Path, Line | LedgerEntry] | None:
         path = self._loc.get(record_id)
         if path is None:
             return None
@@ -921,11 +983,59 @@ class FilePageStore:
                 return path, line
         return None
 
-    def _append(self, path: Path, line: Line, *, title: str | None = None) -> None:
+    def _append(self, path: Path, line: Line | LedgerEntry, *, title: str | None = None) -> None:
         page = self._ensure_page(path, title=title)
         page.lines.append(line)
         self._loc[line.id] = path
         self._persist(path)
+
+    def append_entries(self, entries: Sequence[LedgerEntry]) -> None:
+        """Validate and append immutable schema-v2 entries without rewriting history."""
+        additions = tuple(entries)
+        if not additions:
+            return
+        self._validate_ledger_entries((*self._ledger_entries(), *additions))
+        touched: set[Path] = set()
+        for entry in additions:
+            target_path = next(
+                (self._loc[target] for target in entry.meta.supersedes if target in self._loc),
+                None,
+            )
+            path = target_path or self._page_for(entry.kind, entry.meta.scope_kind, entry.meta.scope_key)
+            page = self._ensure_page(path)
+            if page.records_header is None:
+                rel = path.relative_to(self._root).as_posix()
+                page.records_header = f"<!-- ntrp:records schema=2 page={rel} -->"
+            page.lines.append(entry)
+            self._loc[entry.id] = path
+            touched.add(path)
+        for path in touched:
+            self._persist(path)
+        self._active_ledger_entries()
+
+    def history(self, record_id: str) -> tuple[LedgerEntry, ...]:
+        """Return the complete connected lifecycle history for one ledger record."""
+        entries = self._ledger_entries()
+        if not any(entry.id == record_id for entry in entries):
+            return ()
+        related = {record_id}
+        changed = True
+        while changed:
+            changed = False
+            for entry in entries:
+                links = {entry.id, *entry.meta.supersedes}
+                if links & related and not links <= related:
+                    related.update(links)
+                    changed = True
+        return tuple(
+            sorted(
+                (entry for entry in entries if entry.id in related),
+                key=lambda entry: (
+                    datetime.fromisoformat(entry.meta.recorded_at.replace("Z", "+00:00")).astimezone(UTC),
+                    entry.meta.sequence,
+                ),
+            )
+        )
 
     # -- writes --------------------------------------------------------------
 
@@ -943,6 +1053,31 @@ class FilePageStore:
         date: str | None = None,
     ) -> Record:
         rid = record_id or self._new_id()
+        if self._ledger_mode():
+            recorded_at = now_iso()
+            precision = "day" if date else "millisecond"
+            occurred_at = date or recorded_at
+            entry = LedgerEntry(
+                id=rid,
+                text=_norm(text),
+                kind=Kind(kind),
+                occurred_at=occurred_at,
+                pinned=pinned,
+                entity=((_slug(entity_labels[0]),) if entity_labels else ()),
+                meta=LedgerMeta(
+                    recorded_at=recorded_at,
+                    sequence=self._next_sequence(),
+                    time_precision=precision,
+                    scope_kind=scope_kind or "user",
+                    scope_key=scope_key,
+                    sources=((source_ref,) if source_ref is not None else ()),
+                ),
+            )
+            self.append_entries((entry,))
+            self._index_line(entry)
+            found = self._find(entry.id)
+            assert found is not None
+            return self._to_record(entry, found[0])
         line = Line(
             id=rid,
             text=_norm(text),
@@ -964,13 +1099,13 @@ class FilePageStore:
             # A project-scoped directive/lesson routes to the GLOBAL directives.md/
             # lessons.md by kind — its project identity must NOT stamp that page. Only a
             # subject page in topics/ takes the project title/scope_key.
-            on_project_page = scope_kind == "project" and scope_key and base.parent.name == _ENTITIES
+            on_project_page = scope_kind in ("area", "project") and scope_key and base.parent.name == _ENTITIES
             title = self._project_names.get(scope_key, scope_key) if on_project_page else None
         self._append(base, line, title=title)
         # Persist the raw project key so non-slug-safe keys round-trip (the filename
         # is a lossy slug; _scope_for reads scope_key from frontmatter). Only on the
         # actual topics/ subject page — never on a global page a project rule landed on.
-        if scope_kind == "project" and scope_key and base.parent.name == _ENTITIES:
+        if scope_kind in ("area", "project") and scope_key and base.parent.name == _ENTITIES:
             self._pages[base].frontmatter["scope_key"] = scope_key
             self._pages[base].frontmatter["type"] = "project"
             self._persist(base)
@@ -1004,6 +1139,31 @@ class FilePageStore:
         scope_key: str | None = None,
     ) -> Record:
         found = self._find(old_id)
+        if found and isinstance(found[1], LedgerEntry):
+            old = found[1]
+            recorded_at = now_iso()
+            successor = LedgerEntry(
+                id=self._new_id(),
+                text=_norm(text),
+                kind=Kind(kind),
+                occurred_at=(source_ref.occurred_at if source_ref and source_ref.occurred_at else old.occurred_at),
+                pinned=old.pinned,
+                imp=None,
+                entity=old.entity,
+                meta=LedgerMeta(
+                    recorded_at=recorded_at,
+                    sequence=self._next_sequence(),
+                    time_precision=(source_ref.time_precision if source_ref and source_ref.occurred_at else old.meta.time_precision),
+                    scope_kind=scope_kind or old.meta.scope_kind,
+                    scope_key=(scope_key if scope_kind is not None else old.meta.scope_key),
+                    sources=union_source_refs(old.meta.sources, ((source_ref,) if source_ref else ())),
+                    supersedes=(old_id,),
+                ),
+            )
+            self.append_entries((successor,))
+            self._unindex_line(old_id)
+            self._index_line(successor)
+            return self._to_record(successor, found[0])
         old_entity = found[1].entity if found else None
         old_display = self._pages[found[0]].frontmatter.get("title") if (found and found[0].parent.name == _ENTITIES) else None
         # Add the successor FIRST: a failure mid-op then leaves a harmless duplicate
@@ -1049,11 +1209,34 @@ class FilePageStore:
         self._persist(path)
         return True
 
-    async def update(self, record_id: str, text: str) -> bool:
+    async def update(self, record_id: str, text: str, *, source_ref: SourceRef | None = None) -> bool:
         found = self._find(record_id)
         if not found:
             return False
         path, line = found
+        if isinstance(line, LedgerEntry):
+            recorded_at = now_iso()
+            successor = LedgerEntry(
+                id=self._new_id(),
+                text=_norm(text),
+                kind=line.kind,
+                occurred_at=(source_ref.occurred_at if source_ref and source_ref.occurred_at else line.occurred_at),
+                pinned=line.pinned,
+                entity=line.entity,
+                meta=LedgerMeta(
+                    recorded_at=recorded_at,
+                    sequence=self._next_sequence(),
+                    time_precision=(source_ref.time_precision if source_ref and source_ref.occurred_at else line.meta.time_precision),
+                    scope_kind=line.meta.scope_kind,
+                    scope_key=line.meta.scope_key,
+                    sources=union_source_refs(line.meta.sources, ((source_ref,) if source_ref else ())),
+                    supersedes=(record_id,),
+                ),
+            )
+            self.append_entries((successor,))
+            self._unindex_line(record_id)
+            self._index_line(successor)
+            return True
         line.text = _norm(text)
         line.date = now_iso()[:10]
         line.imp = None  # text changed -> re-score on next sweep
@@ -1061,11 +1244,41 @@ class FilePageStore:
         self._index_line(line)
         return True
 
-    async def delete(self, record_id: str) -> None:
+    async def delete(self, record_id: str, *, source_ref: SourceRef | None = None) -> None:
         found = self._find(record_id)
         if not found:
             return
         path, line = found
+        if isinstance(line, LedgerEntry):
+            if record_id not in {entry.id for entry in self._active_ledger_entries()}:
+                return
+            recorded_at = now_iso()
+            initiating = source_ref or SourceRef(
+                "memory_operation",
+                f"delete:{record_id}",
+                captured_at=recorded_at,
+            )
+            retract = LedgerEntry(
+                id=self._new_id(),
+                text=line.text,
+                kind=line.kind,
+                occurred_at=line.occurred_at,
+                pinned=False,
+                entity=line.entity,
+                meta=LedgerMeta(
+                    recorded_at=recorded_at,
+                    sequence=self._next_sequence(),
+                    time_precision=line.meta.time_precision,
+                    scope_kind=line.meta.scope_kind,
+                    scope_key=line.meta.scope_key,
+                    sources=union_source_refs(line.meta.sources, (initiating,)),
+                    supersedes=(record_id,),
+                    operation="retract",
+                ),
+            )
+            self.append_entries((retract,))
+            self._unindex_line(record_id)
+            return
         entity = line.entity
         self._pages[path].lines = [ln for ln in self._pages[path].lines if ln.id != record_id]
         self._loc.pop(record_id, None)
@@ -1221,6 +1434,39 @@ class FilePageStore:
         labels. `text` re-texts + re-confirms (re-scores) the survivor; `kind` retypes it.
         Aborts (None) if the survivor or ANY loser is pinned — pinned records are never
         merged away."""
+        if self._ledger_mode():
+            active = {entry.id: entry for entry in self._active_ledger_entries()}
+            predecessor_ids = tuple(dict.fromkeys((survivor_id, *(rid for rid in loser_ids if rid != survivor_id))))
+            predecessors = [active[rid] for rid in predecessor_ids if rid in active]
+            if not predecessors or predecessors[0].id != survivor_id or any(entry.pinned for entry in predecessors):
+                return None
+            survivor_entry = predecessors[0]
+            recorded_at = now_iso()
+            successor = LedgerEntry(
+                id=self._new_id(),
+                text=_norm(text if text is not None else survivor_entry.text),
+                kind=Kind(kind or survivor_entry.kind),
+                occurred_at=survivor_entry.occurred_at,
+                pinned=False,
+                entity=survivor_entry.entity,
+                meta=LedgerMeta(
+                    recorded_at=recorded_at,
+                    sequence=self._next_sequence(),
+                    time_precision=survivor_entry.meta.time_precision,
+                    scope_kind=survivor_entry.meta.scope_kind,
+                    scope_key=survivor_entry.meta.scope_key,
+                    sources=union_source_refs(*(entry.meta.sources for entry in predecessors)),
+                    supersedes=tuple(entry.id for entry in predecessors),
+                ),
+            )
+            self.append_entries((successor,))
+            for entry in predecessors:
+                self._unindex_line(entry.id)
+            self._index_line(successor)
+            found = self._find(successor.id)
+            assert found is not None
+            return self._to_record(successor, found[0])
+
         survivor = await self.get(survivor_id)
         if survivor is None or survivor.pinned:
             return None
@@ -1319,12 +1565,22 @@ class FilePageStore:
 
     async def get(self, record_id: str) -> Record | None:
         found = self._find(record_id)
+        if found and isinstance(found[1], LedgerEntry):
+            active_ids = {entry.id for entry in self._active_ledger_entries()}
+            if record_id not in active_ids:
+                return None
         return self._to_record(found[1], found[0]) if found else None
 
     def _iter_records(self, *, include_superseded: bool):
+        active_ids = {entry.id for entry in self._active_ledger_entries()} if self._ledger_mode() else set()
         for path, page in self._pages.items():
             for line in page.lines:
-                if line.superseded and not include_superseded:
+                if isinstance(line, LedgerEntry):
+                    if line.meta.operation == "retract":
+                        continue
+                    if line.id not in active_ids and not include_superseded:
+                        continue
+                elif line.superseded and not include_superseded:
                     continue
                 yield self._to_record(line, path)
 
@@ -1336,7 +1592,9 @@ class FilePageStore:
             if sk == "global" and sv is None:
                 if (record.scope_kind in (None, "global")) and record.scope_key is None:
                     return True
-            elif record.scope_kind == sk and record.scope_key == sv:
+            elif record.scope_key == sv and (
+                record.scope_kind == sk or (sk == "area" and record.scope_kind == "project")
+            ):
                 return True
         return False
 
@@ -1356,10 +1614,16 @@ class FilePageStore:
         window = max(limit * 8, 80)
 
         # Candidate lines (id -> (line, path)), honoring superseded visibility.
-        cand: dict[str, tuple[Line, Path]] = {}
+        cand: dict[str, tuple[Line | LedgerEntry, Path]] = {}
+        active_ids = {entry.id for entry in self._active_ledger_entries()} if self._ledger_mode() else set()
         for path, page in self._pages.items():
             for line in page.lines:
-                if line.superseded and not include_superseded:
+                if isinstance(line, LedgerEntry):
+                    if line.meta.operation == "retract":
+                        continue
+                    if line.id not in active_ids and not include_superseded:
+                        continue
+                elif line.superseded and not include_superseded:
                     continue
                 cand[line.id] = (line, path)
 
@@ -1406,7 +1670,8 @@ class FilePageStore:
             # Salience is a SOFT boost (×0.6–1.0), not a hard multiplier: recency/
             # importance break ties and lift fresh records, but can't bury an exact match
             # (a stale durable fact keeps 60% of its relevance rather than 3%).
-            final = rrf * (0.6 + 0.4 * salience(line.imp, line.date))
+            line_date = line.meta.recorded_at if isinstance(line, LedgerEntry) else line.date
+            final = rrf * (0.6 + 0.4 * salience(line.imp, line_date))
             scored.append((final, rec.last_confirmed_at, rec))
         scored.sort(key=lambda t: (t[0], t[1]), reverse=True)
         return [rec for _, _, rec in scored[:limit]]
@@ -1438,6 +1703,8 @@ class FilePageStore:
         return out
 
     async def count_active(self) -> int:
+        if self._ledger_mode():
+            return len(self._active_ledger_entries())
         return sum(len(p.active_lines()) for p in self._pages.values())
 
 

@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 from ntrp.memory.ledger import LedgerEntry, parse_ledger_entry, render_ledger_entry
 
@@ -127,7 +128,46 @@ class Page:
     lines: list[Line | LedgerEntry] = field(default_factory=list)
     records_header: str | None = None
 
+    def active_entries(self) -> tuple[LedgerEntry, ...]:
+        """Return schema-v2 records that remain active in the lifecycle graph."""
+        entries = tuple(line for line in self.lines if isinstance(line, LedgerEntry))
+        by_id: dict[str, LedgerEntry] = {}
+        for entry in entries:
+            if entry.id in by_id:
+                raise ValueError(f"duplicate ledger entry id: {entry.id}")
+            by_id[entry.id] = entry
+        for entry in entries:
+            for target in entry.meta.supersedes:
+                if target not in by_id:
+                    raise ValueError(f"missing supersedes target: {target}")
+
+        inactive = {
+            target
+            for entry in entries
+            if entry.meta.operation == "record"
+            for target in entry.meta.supersedes
+        }
+
+        def recorded_key(entry: LedgerEntry) -> tuple[datetime, int]:
+            return (
+                datetime.fromisoformat(entry.meta.recorded_at.replace("Z", "+00:00")).astimezone(UTC),
+                entry.meta.sequence,
+            )
+
+        for retract in sorted(
+            (entry for entry in entries if entry.meta.operation == "retract"),
+            key=recorded_key,
+        ):
+            inactive.update(retract.meta.supersedes)
+        return tuple(
+            entry
+            for entry in entries
+            if entry.meta.operation == "record" and entry.id not in inactive
+        )
+
     def active_lines(self) -> list[Line | LedgerEntry]:
+        if self.records_header is not None or any(isinstance(line, LedgerEntry) for line in self.lines):
+            return list(self.active_entries())
         return [
             ln
             for ln in self.lines

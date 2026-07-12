@@ -18,7 +18,8 @@ INTEGRATION_SOURCE_KINDS = {"file", "web", "email", "gmail", "calendar", "slack"
 
 
 def project_scope(project: Any) -> MemoryScope:
-    return MemoryScope("project", project.knowledge_scope or project.area_id)
+    """Return the canonical area scope; legacy `project` remains a read alias."""
+    return MemoryScope("area", project.area_id)
 
 
 def scope_for_write(

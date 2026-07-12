@@ -16,11 +16,15 @@ inheritance, delete cascade).
 
 import asyncio
 from pathlib import Path
+from shutil import move
 
 import numpy as np
 import pytest
 
+from ntrp.memory.file_store import FilePageStore
+from ntrp.memory.ledger import LedgerEntry, LedgerMeta, render_ledger_entry
 from ntrp.memory.models import Kind, SourceRef
+from ntrp.memory.pages import Page
 from ntrp.memory.records import RecordStore
 
 pytestmark = pytest.mark.asyncio
@@ -573,4 +577,142 @@ async def test_delete_cascades_labels(tmp_path: Path):
 
     assert await store.labels_of(rec.id) == []
     assert await store.list_labels() == []
+    await store.close()
+
+
+# --- schema-v2 file ledger lifecycle ---------------------------------------
+
+
+def _ledger_entry(
+    record_id: str,
+    text: str,
+    *,
+    sequence: int,
+    scope_kind: str = "user",
+    scope_key: str | None = None,
+    sources: tuple[SourceRef, ...] = (),
+    supersedes: tuple[str, ...] = (),
+    operation: str = "record",
+) -> LedgerEntry:
+    return LedgerEntry(
+        id=record_id,
+        text=text,
+        kind=Kind.FACT,
+        occurred_at="2026-07-12T10:00:00Z",
+        meta=LedgerMeta(
+            recorded_at=f"2026-07-12T10:00:{sequence:02d}Z",
+            sequence=sequence,
+            time_precision="second",
+            scope_kind=scope_kind,
+            scope_key=scope_key,
+            sources=sources,
+            supersedes=supersedes,
+            operation=operation,
+        ),
+    )
+
+
+def _write_ledger_vault(vault: Path, entries: list[LedgerEntry], page: str = "topics/a.md") -> None:
+    visible = vault / page
+    raw = vault / "raw" / page
+    visible.parent.mkdir(parents=True, exist_ok=True)
+    raw.parent.mkdir(parents=True, exist_ok=True)
+    visible.write_text("# A\n", encoding="utf-8")
+    raw.write_text(
+        "\n".join((f"<!-- ntrp:records schema=2 page={page} -->", *(render_ledger_entry(e) for e in entries))) + "\n",
+        encoding="utf-8",
+    )
+
+
+async def _file_store(vault: Path, entries: list[LedgerEntry]) -> FilePageStore:
+    _write_ledger_vault(vault, entries)
+    store = FilePageStore(vault)
+    await store.open()
+    return store
+
+
+async def test_page_active_entries_uses_relationship_graph_and_rejects_invalid_targets():
+    first = _ledger_entry("first", "First", sequence=1)
+    second = _ledger_entry("second", "Second", sequence=2, supersedes=("first",))
+    assert Page(lines=[first, second]).active_entries() == (second,)
+
+    duplicate = _ledger_entry("first", "Duplicate", sequence=3)
+    with pytest.raises(ValueError, match="duplicate ledger entry id"):
+        Page(lines=[first, duplicate]).active_entries()
+    missing = _ledger_entry("third", "Missing", sequence=4, supersedes=("absent",))
+    with pytest.raises(ValueError, match="missing supersedes target"):
+        Page(lines=[missing]).active_entries()
+
+
+async def test_moving_page_does_not_change_record_scope(tmp_path: Path):
+    vault = tmp_path / "memory"
+    entry = _ledger_entry("area-fact", "Area fact", sequence=1, scope_kind="area", scope_key="a1")
+    store = await _file_store(vault, [entry])
+
+    (vault / "notes").mkdir()
+    (vault / "raw" / "notes").mkdir()
+    move(vault / "topics" / "a.md", vault / "notes" / "a.md")
+    move(vault / "raw" / "topics" / "a.md", vault / "raw" / "notes" / "a.md")
+    await store.refresh_from_disk()
+
+    record = await store.get(entry.id)
+    assert record is not None
+    assert (record.scope_kind, record.scope_key) == ("area", "a1")
+    await store.close()
+
+
+async def test_forget_appends_retract_and_keeps_history(tmp_path: Path):
+    vault = tmp_path / "memory"
+    source = SourceRef("chat_message", "s:m1", captured_at="2026-07-12T10:00:00Z")
+    store = await _file_store(vault, [_ledger_entry("temporary", "Temporary", sequence=1, sources=(source,))])
+
+    await store.delete("temporary", source_ref=SourceRef("tool_call", "forget:1", captured_at="2026-07-12T10:01:00Z"))
+
+    assert await store.get("temporary") is None
+    history = store.history("temporary")
+    assert [entry.meta.operation for entry in history] == ["record", "retract"]
+    assert history[-1].meta.sources[-1].ref == "forget:1"
+    assert "Temporary" in (vault / "raw" / "topics" / "a.md").read_text(encoding="utf-8")
+    await store.close()
+
+
+async def test_update_appends_successor_and_preserves_evidence(tmp_path: Path):
+    vault = tmp_path / "memory"
+    original_source = SourceRef("chat_message", "s:m1", captured_at="2026-07-12T10:00:00Z")
+    update_source = SourceRef("tool_call", "remember:2", captured_at="2026-07-12T10:01:00Z")
+    store = await _file_store(
+        vault,
+        [_ledger_entry("original", "Original", sequence=1, scope_kind="area", scope_key="a1", sources=(original_source,))],
+    )
+
+    assert await store.update("original", "Updated", source_ref=update_source) is True
+
+    history = store.history("original")
+    assert [entry.text for entry in history] == ["Original", "Updated"]
+    assert history[-1].meta.supersedes == ("original",)
+    assert history[-1].meta.sources == (original_source, update_source)
+    current = await store.get(history[-1].id)
+    assert current is not None
+    assert (current.scope_kind, current.scope_key) == ("area", "a1")
+    await store.close()
+
+
+async def test_merge_appends_one_successor_for_all_predecessors_and_unions_evidence(tmp_path: Path):
+    vault = tmp_path / "memory"
+    sources = tuple(
+        SourceRef("chat_message", f"s:m{i}", captured_at=f"2026-07-12T10:0{i}:00Z") for i in range(1, 4)
+    )
+    store = await _file_store(
+        vault,
+        [_ledger_entry(f"r{i}", f"Fact {i}", sequence=i, sources=(sources[i - 1],)) for i in range(1, 4)],
+    )
+
+    merged = await store.merge("r1", ["r2", "r3"], text="Merged fact")
+
+    assert merged is not None
+    successor = store.history("r1")[-1]
+    assert successor.id == merged.id
+    assert successor.meta.supersedes == ("r1", "r2", "r3")
+    assert successor.meta.sources == sources
+    assert {record.id for record in await store.list()} == {successor.id}
     await store.close()

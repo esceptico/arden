@@ -75,6 +75,16 @@ class SourceRef:
         )
 
 
+def union_source_refs(*groups: tuple[SourceRef, ...]) -> tuple[SourceRef, ...]:
+    """Stable evidence union for successor ledger records."""
+    merged: list[SourceRef] = []
+    for group in groups:
+        for source in group:
+            if source not in merged:
+                merged.append(source)
+    return tuple(merged)
+
+
 class Kind(StrEnum):
     """Small v1 memory function types.
 
