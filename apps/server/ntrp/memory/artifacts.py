@@ -893,6 +893,10 @@ class ArtifactMemoryStore:
             if parent_fd >= 0:
                 os.close(parent_fd)
 
+    def open_anchored_regular(self, rel: Path, flags: int, *, create_parents: bool = False) -> int:
+        """Open one vault-relative regular file without following swapped parents."""
+        return self._open_anchored_regular(rel, flags, create_parents=create_parents)
+
     def _open_anchored_parent(self, rel: Path, *, create_parents: bool) -> tuple[int, str]:
         if rel.is_absolute() or not rel.parts or any(part in {"", ".", ".."} for part in rel.parts):
             raise FileNotFoundError(rel.as_posix())
@@ -923,6 +927,10 @@ class ArtifactMemoryStore:
         finally:
             if current >= 0:
                 os.close(current)
+
+    def open_anchored_parent(self, rel: Path, *, create_parents: bool = False) -> tuple[int, str]:
+        """Open the anchored parent directory for one vault-relative leaf."""
+        return self._open_anchored_parent(rel, create_parents=create_parents)
 
     def _artifact_meta(self, rel: str, content: str) -> tuple[str, str, str, str | None]:
         fm, _ = parse_frontmatter(content)

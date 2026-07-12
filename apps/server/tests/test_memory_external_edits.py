@@ -10,7 +10,7 @@ from ntrp.events.sse import MemoryChangedEvent
 from ntrp.memory.artifacts import ArtifactMemoryStore
 from ntrp.memory.file_store import FilePageStore, ObservedFileChange
 from ntrp.memory.models import SourceRef
-from ntrp.memory.page_edit_service import PageEditService
+from ntrp.memory.page_edit_service import PageEditService, StalePageRevisionError
 from ntrp.memory.page_events import PageEditDecision, page_revision, unified_patch
 from ntrp.memory.reconciler import RecordOperation
 from ntrp.server.runtime.knowledge import KnowledgeRuntime
@@ -149,9 +149,13 @@ async def test_engine_write_marker_suppresses_exact_revision_once(tmp_path: Path
     )
     await service.apply(preview.id, decisions={})
 
-    assert _observed(vault)["engine_writes"] == [
-        {"origin": "agent", "path": "topics/a.md", "result_revision": page_revision(after)}
-    ]
+    marker = _observed(vault)["engine_writes"][0]
+    assert (marker["origin"], marker["path"], marker["result_revision"], marker["result_exists"]) == (
+        "agent",
+        "topics/a.md",
+        page_revision(after),
+        True,
+    )
     acknowledged = await store.refresh_from_disk()
     assert [change.path for change in acknowledged] == ["topics/a.md"]
     assert acknowledged[0].origin == "agent"
@@ -179,26 +183,22 @@ async def test_committed_engine_event_suppresses_external_ingest_if_marker_write
         actor="agent:test",
         origin="agent",
     )
-    register = store.register_engine_write
-    monkeypatch.setattr(
-        store,
-        "register_engine_write",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("marker crash")),
-    )
+    commit = store._journal.commit
 
-    with pytest.raises(RuntimeError, match="marker crash"):
+    def commit_then_crash(files, **kwargs):
+        commit(files, **kwargs)
+        raise RuntimeError("crash after commit")
+
+    monkeypatch.setattr(store._journal, "commit", commit_then_crash)
+
+    with pytest.raises(RuntimeError, match="crash after commit"):
         await service.apply(preview.id, decisions={})
 
-    monkeypatch.setattr(store, "register_engine_write", register)
+    monkeypatch.setattr(store._journal, "commit", commit)
     change = next(change for change in await store.refresh_from_disk() if isinstance(change, ObservedFileChange))
-    restarted = PageEditService(
-        vault,
-        store,
-        reconciler=lambda _analysis: (_ for _ in ()).throw(AssertionError("must not reconcile")),
-    )
 
-    assert await restarted.ingest_external(change) is None
-    assert len(restarted.history(path="topics/a.md")) == 1
+    assert change.origin == "agent"
+    assert len(service.history(path="topics/a.md")) == 1
     assert _observed(vault)["pages"]["topics/a.md"] == page_revision(after)
     await store.close()
 
@@ -361,4 +361,223 @@ async def test_observed_state_write_stays_on_open_parent_during_swap(
     store._write_observed_state(state)
 
     assert sentinel.read_text(encoding="utf-8") == "outside\n"
+    await store.close()
+
+
+async def test_editable_page_read_cannot_escape_on_parent_swap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    vault = tmp_path / "memory"
+    store, page = await _store(vault)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "a.md").write_bytes(b"SECRET")
+    original_open = __import__("os").open
+    swapped = False
+
+    def swap_before_absolute_open(path, *args, **kwargs):
+        nonlocal swapped
+        if not swapped and path == page:
+            swapped = True
+            page.parent.rename(vault / "topics-real")
+            page.parent.symlink_to(outside, target_is_directory=True)
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr("os.open", swap_before_absolute_open)
+
+    assert b"SECRET" not in store._editable_page_bytes().values()
+    await store.close()
+
+
+async def test_external_ingest_never_stages_the_already_changed_page(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    vault = tmp_path / "memory"
+    store, page = await _store(vault)
+    page.write_bytes(page.read_bytes() + b"\nExternal.\n")
+    change = next(change for change in await store.refresh_from_disk() if isinstance(change, ObservedFileChange))
+    service = PageEditService(vault, store, reconciler=Reconciler((RecordOperation.noop(),)))
+    commit = store._journal.commit
+    staged = []
+
+    def capture(files, **kwargs):
+        staged.append(set(files))
+        return commit(files, **kwargs)
+
+    monkeypatch.setattr(store._journal, "commit", capture)
+
+    await service.ingest_external(change)
+
+    assert change.path not in {path.as_posix() for path in staged[0]}
+    await store.close()
+
+
+async def test_committed_pending_observation_preserves_intermediate_base_after_new_disk_edit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    vault = tmp_path / "memory"
+    store, page = await _store(vault)
+    base = page.read_bytes()
+    first = base + b"\nFirst.\n"
+    second = first + b"\nSecond.\n"
+    page.write_bytes(first)
+    first_change = next(change for change in await store.refresh_from_disk() if isinstance(change, ObservedFileChange))
+    service = PageEditService(
+        vault,
+        store,
+        reconciler=Reconciler((RecordOperation.noop(),), (RecordOperation.noop(),)),
+    )
+    acknowledge = store.acknowledge_observed_change
+    monkeypatch.setattr(
+        store,
+        "acknowledge_observed_change",
+        lambda _change: (_ for _ in ()).throw(RuntimeError("ack crash")),
+    )
+    with pytest.raises(RuntimeError, match="ack crash"):
+        await service.ingest_external(first_change)
+    page.write_bytes(second)
+    monkeypatch.setattr(store, "acknowledge_observed_change", acknowledge)
+
+    retried_first = next(change for change in await store.refresh_from_disk() if isinstance(change, ObservedFileChange))
+    first_event = await service.ingest_external(retried_first)
+    second_change = next(change for change in await store.refresh_from_disk() if isinstance(change, ObservedFileChange))
+    second_event = await service.ingest_external(second_change)
+
+    assert first_event is not None and first_event.observation_id == first_change.observation_id
+    assert (second_change.before, second_change.after) == (first, second)
+    assert second_event is not None
+    assert [(event.base_revision, event.result_revision) for event in service.history(path="topics/a.md")] == [
+        (page_revision(base), page_revision(first)),
+        (page_revision(first), page_revision(second)),
+    ]
+    await store.close()
+
+
+async def test_stale_engine_markers_are_pruned_without_a_file_change_and_track_existence(tmp_path: Path):
+    vault = tmp_path / "memory"
+    store, page = await _store(vault)
+    base = page.read_bytes()
+    first = base + b"\nR1.\n"
+    second = first + b"\nR2.\n"
+    store.register_engine_write("topics/a.md", first, origin="synthesis")
+    store.register_engine_write("topics/a.md", second, origin="synthesis")
+
+    assert await store.refresh_from_disk() == []
+    assert _observed(vault)["engine_writes"] == []
+
+    page.write_bytes(first)
+    change = next(change for change in await store.refresh_from_disk() if isinstance(change, ObservedFileChange))
+    assert change.origin == "external"
+    store.acknowledge_observed_change(change)
+
+    page.write_bytes(b"")
+    store.register_engine_write("topics/a.md", None, origin="synthesis")
+    empty_change = next(change for change in await store.refresh_from_disk() if isinstance(change, ObservedFileChange))
+    assert empty_change.origin == "external"
+    await store.close()
+
+
+async def test_generic_write_intent_survives_commit_then_exception_and_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    vault = tmp_path / "memory"
+    store, _page = await _store(vault)
+    commit = store._journal.commit
+
+    def commit_then_crash(files, **kwargs):
+        commit(files, **kwargs)
+        raise RuntimeError("crash after commit")
+
+    monkeypatch.setattr(store._journal, "commit", commit_then_crash)
+    with pytest.raises(RuntimeError, match="crash after commit"):
+        store.apply_operations(
+            (RecordOperation.add("Committed generic write"),),
+            SourceRef("test", "intent"),
+            batch_key="intent-test",
+        )
+    await store.close()
+
+    reopened = FilePageStore(vault)
+    await reopened.open()
+    changes = [change for change in await reopened.refresh_from_disk() if isinstance(change, ObservedFileChange)]
+
+    assert changes and all(change.origin == "synthesis" for change in changes)
+    await reopened.close()
+
+
+async def test_uncommitted_generic_intent_cannot_suppress_later_matching_external_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    vault = tmp_path / "memory"
+    store, _page = await _store(vault)
+    monkeypatch.setattr(
+        store._journal,
+        "commit",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("pre-commit crash")),
+    )
+    with pytest.raises(RuntimeError, match="pre-commit crash"):
+        store.apply_operations(
+            (RecordOperation.add("Uncommitted generic write"),),
+            SourceRef("test", "uncommitted-intent"),
+        )
+    marker = _observed(vault)["engine_writes"][0]
+    desired = (vault / ".ntrp" / "maintenance" / "observed-page-bases" / marker["result_revision"]).read_bytes()
+    target = vault / marker["path"]
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(desired)
+
+    change = next(change for change in await store.refresh_from_disk() if isinstance(change, ObservedFileChange))
+
+    assert change.origin == "external"
+    await store.close()
+
+
+async def test_runtime_publishes_first_page_before_second_ingest_failure(tmp_path: Path):
+    runtime = KnowledgeRuntime.__new__(KnowledgeRuntime)
+    callbacks = {}
+    runtime._record_store = SimpleNamespace(start_watch=lambda callback: callbacks.setdefault("watch", callback))
+    runtime._vault_index = SimpleNamespace(schedule=lambda: None)
+    changes = [
+        ObservedFileChange("one", "a.md", b"a", b"b", page_revision(b"a"), page_revision(b"b")),
+        ObservedFileChange("two", "b.md", b"c", b"d", page_revision(b"c"), page_revision(b"d")),
+    ]
+    calls = 0
+
+    async def ingest(change):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("page two failed")
+        return SimpleNamespace(result_revision=change.result_revision, reconciliation="applied")
+
+    runtime._page_edit_service = SimpleNamespace(ingest_external=ingest)
+    published = []
+
+    async def publish(paths, *, revision=None, review_required=False):
+        published.append((paths, revision, review_required))
+
+    runtime.start_memory_watch(publish)
+    with pytest.raises(RuntimeError, match="page two failed"):
+        await callbacks["watch"](changes)
+
+    assert published == [(["a.md"], page_revision(b"b"), False)]
+
+
+async def test_uncommitted_stale_observation_is_abandoned_for_latest_disk_state(tmp_path: Path):
+    vault = tmp_path / "memory"
+    store, page = await _store(vault)
+    base = page.read_bytes()
+    first = base + b"\nFirst.\n"
+    latest = base + b"\nLatest.\n"
+    page.write_bytes(first)
+    stale = next(change for change in await store.refresh_from_disk() if isinstance(change, ObservedFileChange))
+    page.write_bytes(latest)
+    service = PageEditService(vault, store, reconciler=Reconciler((RecordOperation.noop(),)))
+
+    with pytest.raises(StalePageRevisionError):
+        await service.ingest_external(stale)
+
+    current = next(change for change in await store.refresh_from_disk() if isinstance(change, ObservedFileChange))
+    assert (current.before, current.after) == (base, latest)
+    assert current.observation_id != stale.observation_id
     await store.close()

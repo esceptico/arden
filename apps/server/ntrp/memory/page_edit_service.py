@@ -175,14 +175,6 @@ class PageEditService:
         after = change.after or b""
         if page_revision(before) != change.base_revision or page_revision(after) != change.result_revision:
             raise ValueError("observed page change revisions do not match its bytes")
-        current = self._resources.read_resource_bytes(safe_path) if change.after is not None else None
-        if current != change.after:
-            raise StalePageRevisionError(
-                safe_path,
-                current_content=current or b"",
-                base_revision=change.base_revision,
-                candidate_revision=change.result_revision,
-            )
         patch = unified_patch(before, after)
         path_history = self.history(path=safe_path)
         existing = next(
@@ -207,6 +199,18 @@ class PageEditService:
         ):
             self._store.acknowledge_observed_change(change)
             return None
+        try:
+            current = self._resources.read_resource_bytes(safe_path)
+        except FileNotFoundError:
+            current = None
+        if current != change.after:
+            self._store.abandon_observed_change(change)
+            raise StalePageRevisionError(
+                safe_path,
+                current_content=current or b"",
+                base_revision=change.base_revision,
+                candidate_revision=change.result_revision,
+            )
 
         analysis = _analyze(safe_path, before, after, patch)
         answer = await self._reconcile(analysis)
@@ -253,23 +257,31 @@ class PageEditService:
             if applied_operations
             else {}
         )
-        if change.after is None:
-            planned.pop(Path(safe_path), None)
-        else:
-            planned[Path(safe_path)] = change.after
+        planned.pop(Path(safe_path), None)
         event_rel, event_bytes, expected_event = self._event_file(event)
         caller_roles = {event_rel: CanonicalFileRole.EVENT}
         caller_files = {event_rel: event_bytes}
-        if change.after is not None:
-            caller_roles[Path(safe_path)] = CanonicalFileRole.USER_PAGE
-            caller_files[Path(safe_path)] = change.after
         files = dict(planned)
         files.update(self._store._validate_caller_files(caller_files, caller_roles))
-        self._commit(
-            files,
-            expected_files={Path(safe_path): change.after, event_rel: expected_event},
-            expected_revision=expected_revision,
-        )
+        try:
+            self._commit(
+                files,
+                expected_files={Path(safe_path): change.after, event_rel: expected_event},
+                expected_revision=expected_revision,
+            )
+        except JournalConflictError as exc:
+            self._store.abandon_observed_change(change)
+            try:
+                latest = self._resources.read_resource_bytes(safe_path)
+            except FileNotFoundError:
+                latest = b""
+            raise StalePageRevisionError(
+                safe_path,
+                current_content=latest,
+                base_revision=change.base_revision,
+                candidate_revision=change.result_revision,
+                message=str(exc),
+            ) from exc
         self._store.acknowledge_observed_change(change)
         return event
 
@@ -329,7 +341,7 @@ class PageEditService:
                 files,
                 expected_files={Path(preview.path): current, event_rel: expected_event},
                 expected_revision=expected_revision,
-                engine_write=(preview.path, candidate, envelope["origin"])
+                engine_write=(preview.path, candidate, envelope["origin"], event.id)
                 if envelope["origin"] != "external"
                 else None,
             )
@@ -557,8 +569,16 @@ class PageEditService:
         *,
         expected_files: dict[Path, bytes | None],
         expected_revision: str,
-        engine_write: tuple[str, bytes, Literal["desktop", "agent", "synthesis"]] | None = None,
+        engine_write: tuple[str, bytes, Literal["desktop", "agent", "synthesis"], str] | None = None,
     ) -> None:
+        if engine_write is not None:
+            path, content, origin, event_id = engine_write
+            self._store.register_engine_write_intent(
+                path,
+                content,
+                origin=origin,
+                event_id=event_id,
+            )
         try:
             self._store._journal.commit(
                 files,
@@ -570,9 +590,6 @@ class PageEditService:
             self._store._reload_canonical_state()
             raise
         self._store._reload_canonical_state()
-        if engine_write is not None:
-            path, content, origin = engine_write
-            self._store.register_engine_write(path, content, origin=origin)
         self._store._notify_post_canonical_commit()
 
     def _validate_persisted_preview(

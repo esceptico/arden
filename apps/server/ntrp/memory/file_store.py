@@ -344,32 +344,15 @@ class FilePageStore:
         return out
 
     def _safe_read_bytes(self, path: Path) -> bytes | None:
+        from ntrp.memory.artifacts import ArtifactMemoryStore
+
         try:
             relative = path.relative_to(self._root)
-            root_st = self._root.lstat()
-        except (OSError, ValueError):
+        except ValueError:
             return None
-        if stat.S_ISLNK(root_st.st_mode) or not stat.S_ISDIR(root_st.st_mode):
-            return None
-        current = self._root
-        for part in relative.parts[:-1]:
-            current = current / part
-            try:
-                current_st = current.lstat()
-            except OSError:
-                return None
-            if stat.S_ISLNK(current_st.st_mode) or not stat.S_ISDIR(current_st.st_mode):
-                return None
         try:
-            target_st = path.lstat()
-        except OSError:
-            return None
-        if stat.S_ISLNK(target_st.st_mode) or not stat.S_ISREG(target_st.st_mode):
-            return None
-        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-        try:
-            fd = os.open(path, flags)
-        except OSError:
+            fd = ArtifactMemoryStore(self._root).open_anchored_regular(relative, os.O_RDONLY)
+        except FileNotFoundError:
             return None
         try:
             opened_st = os.fstat(fd)
@@ -474,7 +457,7 @@ class FilePageStore:
         from ntrp.memory.artifacts import ArtifactMemoryStore
 
         resources = ArtifactMemoryStore(self._root)
-        parent_fd, name = resources._open_anchored_parent(rel, create_parents=True)
+        parent_fd, name = resources.open_anchored_parent(rel, create_parents=True)
         temp = f".{name}.{uuid4().hex}.tmp"
         descriptor = os.open(
             temp,
@@ -513,7 +496,7 @@ class FilePageStore:
 
         resources = ArtifactMemoryStore(self._root)
         try:
-            descriptor = resources._open_anchored_regular(rel, os.O_RDONLY, create_parents=False)
+            descriptor = resources.open_anchored_regular(rel, os.O_RDONLY)
         except FileNotFoundError:
             current = self._root
             for part in rel.parts[:-1]:
@@ -541,6 +524,10 @@ class FilePageStore:
         ) or not isinstance(state.get("pending_changes", {}), dict):
             raise RuntimeError("invalid observed page state")
         state.setdefault("pending_changes", {})
+        for path, pending in state["pending_changes"].items():
+            if isinstance(pending, dict):
+                pending.setdefault("base_exists", path in state["pages"])
+                pending.setdefault("origin", "external")
         return state
 
     def _write_observed_state(self, state: dict) -> None:
@@ -566,6 +553,40 @@ class FilePageStore:
             {"version": 1, "pages": revisions, "engine_writes": [], "pending_changes": {}}
         )
 
+    def register_engine_write_intent(
+        self,
+        path: str,
+        content: bytes | None,
+        *,
+        origin: Literal["desktop", "agent", "synthesis"],
+        event_id: str | None = None,
+        batch_key: str | None = None,
+        entry_ids: tuple[str, ...] = (),
+    ) -> None:
+        state = self._read_observed_state()
+        if not state:
+            return
+        result_revision = self._store_observed_base(content or b"")
+        result_exists = content is not None
+        base_content = self._editable_page_bytes().get(path)
+        base_revision = self._content_revision(base_content)
+        base_exists = base_content is not None
+        if base_revision == result_revision and base_exists == result_exists:
+            return
+        marker = {
+            "origin": origin,
+            "path": path,
+            "base_revision": base_revision,
+            "base_exists": base_exists,
+            "result_revision": result_revision,
+            "result_exists": result_exists,
+            "event_id": event_id,
+            "batch_key": batch_key,
+            "entry_ids": list(entry_ids),
+        }
+        state["engine_writes"].append(marker)
+        self._write_observed_state(state)
+
     def register_engine_write(
         self,
         path: str,
@@ -573,19 +594,20 @@ class FilePageStore:
         *,
         origin: Literal["desktop", "agent", "synthesis"],
     ) -> None:
-        result_revision = self._store_observed_base(content or b"")
-        state = self._read_observed_state()
-        if not state:
-            return
-        marker = {"origin": origin, "path": path, "result_revision": result_revision}
-        state["engine_writes"].append(marker)
-        self._write_observed_state(state)
+        self.register_engine_write_intent(path, content, origin=origin)
 
     def acknowledge_observed_change(self, change: ObservedFileChange) -> None:
-        current = self._editable_page_bytes().get(change.path)
-        if current != change.after:
-            raise JournalConflictError(f"observed page changed before acknowledgement: {change.path}")
         state = self._read_observed_state()
+        pending = state["pending_changes"].get(change.path)
+        expected = {
+            "id": change.observation_id,
+            "base_revision": change.base_revision,
+            "base_exists": change.before is not None,
+            "result_revision": change.result_revision,
+            "after_exists": change.after is not None,
+        }
+        if not isinstance(pending, dict) or any(pending.get(key) != value for key, value in expected.items()):
+            raise JournalConflictError(f"observed page acknowledgement is stale: {change.path}")
         if change.after is None:
             state["pages"].pop(change.path, None)
         else:
@@ -593,63 +615,164 @@ class FilePageStore:
         state["pending_changes"].pop(change.path, None)
         self._write_observed_state(state)
 
+    def abandon_observed_change(self, change: ObservedFileChange) -> None:
+        """Drop only the still-current uncommitted observation; keep its logical base."""
+        state = self._read_observed_state()
+        pending = state["pending_changes"].get(change.path)
+        expected = {
+            "id": change.observation_id,
+            "base_revision": change.base_revision,
+            "base_exists": change.before is not None,
+            "result_revision": change.result_revision,
+            "after_exists": change.after is not None,
+        }
+        if not isinstance(pending, dict) or any(pending.get(key) != value for key, value in expected.items()):
+            raise JournalConflictError(f"observed page abandonment is stale: {change.path}")
+        state["pending_changes"].pop(change.path, None)
+        self._write_observed_state(state)
+
+    def _page_edit_event_committed(self, event_id: str) -> bool:
+        from ntrp.memory.page_events import parse_page_edit_events
+
+        raw_events = self._root / _RAW / "events"
+        for path in self._walk_regular_files(raw_events, suffixes={".md"}, excluded_dirs=set()):
+            content = self._safe_read_bytes(path)
+            if content is not None and any(event.id == event_id for event in parse_page_edit_events(content)):
+                return True
+        return False
+
+    def _engine_marker_committed(self, marker: dict, current: bytes | None) -> bool:
+        if event_id := marker.get("event_id"):
+            return self._page_edit_event_committed(event_id)
+        if batch_key := marker.get("batch_key"):
+            return self.operation_batch_committed(batch_key)
+        if entry_ids := marker.get("entry_ids"):
+            committed_ids = {entry.id for entry in self._ledger_entries()}
+            return set(entry_ids).issubset(committed_ids)
+        return (
+            marker.get("result_exists") == (current is not None)
+            and marker.get("result_revision") == self._content_revision(current)
+        )
+
     def _observed_page_changes(self) -> list[ObservedFileChange]:
         state = self._read_observed_state()
         pages: dict[str, str] = state["pages"]
         current = self._editable_page_bytes()
         changes: list[ObservedFileChange] = []
-        markers_pruned = False
-        pending_changed = False
-        for path in sorted(set(pages) | set(current)):
+        state_changed = False
+        marker_paths = {
+            marker["path"]
+            for marker in state["engine_writes"]
+            if isinstance(marker, dict) and isinstance(marker.get("path"), str)
+        }
+        for path in sorted(set(pages) | set(current) | set(state["pending_changes"]) | marker_paths):
             before_revision = pages.get(path)
             after = current.get(path)
             result_revision = self._content_revision(after)
-            if before_revision == result_revision and (path in pages) == (path in current):
+            pending = state["pending_changes"].get(path)
+            if isinstance(pending, dict):
+                pending_before = (
+                    self._read_observed_file(_OBSERVED_BASES / pending["base_revision"])
+                    if pending.get("base_exists")
+                    else None
+                )
+                pending_after = (
+                    self._read_observed_file(_OBSERVED_BASES / pending["result_revision"])
+                    if pending.get("after_exists")
+                    else None
+                )
+                if pending.get("base_exists") and pending_before is None:
+                    raise RuntimeError(f"missing observed page base: {pending['base_revision']}")
+                if pending.get("after_exists") and pending_after is None:
+                    raise RuntimeError(f"missing observed page base: {pending['result_revision']}")
+                changes.append(
+                    ObservedFileChange(
+                        observation_id=pending["id"],
+                        path=path,
+                        before=pending_before,
+                        after=pending_after,
+                        base_revision=pending["base_revision"],
+                        result_revision=pending["result_revision"],
+                        origin=pending.get("origin", "external"),
+                    )
+                )
                 continue
-            before = None
-            if before_revision is not None:
-                before = self._read_observed_file(_OBSERVED_BASES / before_revision)
-                if before is None:
-                    raise RuntimeError(f"missing observed page base: {before_revision}")
-                if self._content_revision(before) != before_revision:
-                    raise RuntimeError(f"invalid observed page base: {before_revision}")
-            origin: Literal["external", "desktop", "agent", "synthesis"] = "external"
-            path_markers = [
-                (index, marker)
-                for index, marker in enumerate(state["engine_writes"])
-                if marker.get("path") == path
-            ]
-            marker_index = next(
-                (
-                    index for index, marker in path_markers if marker.get("result_revision") == result_revision
-                ),
-                None,
-            )
-            if marker_index is not None:
-                marker = state["engine_writes"][marker_index]
-                origin = marker["origin"]
+            path_markers = [marker for marker in state["engine_writes"] if marker.get("path") == path]
+            matching_marker = None
+            cursor_revision = before_revision or self._content_revision(None)
+            cursor_exists = path in pages
+            for marker in path_markers:
+                if (
+                    marker.get("base_revision") != cursor_revision
+                    or marker.get("base_exists") != cursor_exists
+                ):
+                    if (
+                        marker.get("base_revision") != (before_revision or self._content_revision(None))
+                        or marker.get("base_exists") != (path in pages)
+                    ):
+                        continue
+                cursor_revision = marker.get("result_revision")
+                cursor_exists = marker.get("result_exists")
+                if self._engine_marker_committed(marker, after):
+                    matching_marker = marker
             if path_markers:
-                markers_pruned = True
+                state_changed = True
                 state["engine_writes"] = [
                     marker for marker in state["engine_writes"] if marker.get("path") != path
                 ]
-            pending = state["pending_changes"].get(path)
+            if matching_marker is not None:
+                before = (
+                    self._read_observed_file(_OBSERVED_BASES / before_revision)
+                    if before_revision is not None
+                    else None
+                )
+                marker_after = (
+                    self._read_observed_file(_OBSERVED_BASES / matching_marker["result_revision"])
+                    if matching_marker.get("result_exists")
+                    else None
+                )
+                if matching_marker.get("result_exists") and marker_after is None:
+                    raise RuntimeError(f"missing observed page base: {matching_marker['result_revision']}")
+                observation_id = uuid4().hex
+                if marker_after is None:
+                    state["pages"].pop(path, None)
+                else:
+                    state["pages"][path] = matching_marker["result_revision"]
+                changes.append(
+                    ObservedFileChange(
+                        observation_id=observation_id,
+                        path=path,
+                        before=before,
+                        after=marker_after,
+                        base_revision=before_revision or self._content_revision(None),
+                        result_revision=matching_marker["result_revision"],
+                        origin=matching_marker["origin"],
+                    )
+                )
+                state_changed = True
+                continue
+            if before_revision == result_revision and (path in pages) == (path in current):
+                continue
+            before = (
+                self._read_observed_file(_OBSERVED_BASES / before_revision)
+                if before_revision is not None
+                else None
+            )
+            if before_revision is not None and before is None:
+                raise RuntimeError(f"missing observed page base: {before_revision}")
             base_revision = before_revision or self._content_revision(None)
-            if not isinstance(pending, dict) or (
-                pending.get("base_revision") != base_revision
-                or pending.get("result_revision") != result_revision
-                or pending.get("after_exists") != (after is not None)
-            ):
-                pending = {
-                    "id": uuid4().hex,
-                    "base_revision": base_revision,
-                    "result_revision": result_revision,
-                    "after_exists": after is not None,
-                }
-                state["pending_changes"][path] = pending
-                if after is not None:
-                    self._store_observed_base(after)
-                pending_changed = True
+            pending = {
+                "id": uuid4().hex,
+                "base_revision": base_revision,
+                "base_exists": before is not None,
+                "result_revision": result_revision,
+                "after_exists": after is not None,
+                "origin": "external",
+            }
+            state["pending_changes"][path] = pending
+            if after is not None:
+                self._store_observed_base(after)
+            state_changed = True
             change = ObservedFileChange(
                 observation_id=pending["id"],
                 path=path,
@@ -657,17 +780,10 @@ class FilePageStore:
                 after=after,
                 base_revision=base_revision,
                 result_revision=result_revision,
-                origin=origin,
+                origin="external",
             )
-            if marker_index is not None:
-                if after is None:
-                    state["pages"].pop(path, None)
-                else:
-                    state["pages"][path] = self._store_observed_base(after)
-                state["pending_changes"].pop(path, None)
-                pending_changed = True
             changes.append(change)
-        if any(change.origin != "external" for change in changes) or markers_pruned or pending_changed:
+        if state_changed:
             self._write_observed_state(state)
         return changes
 
@@ -1399,7 +1515,13 @@ class FilePageStore:
             raise ValueError("projection caller files cannot enter a canonical commit")
         return payload
 
-    def _persist_many(self, paths: Sequence[Path], *, files: Mapping[Path, bytes] | None = None) -> None:
+    def _persist_many(
+        self,
+        paths: Sequence[Path],
+        *,
+        files: Mapping[Path, bytes] | None = None,
+        engine_entry_ids: tuple[str, ...] = (),
+    ) -> None:
         extra = dict(files or {})
         staged: dict[Path, bytes] = {}
         projections: dict[Path, str] = {}
@@ -1424,23 +1546,34 @@ class FilePageStore:
             projections.pop(self._root / rel, None)
             if self._root / rel in empty_raw:
                 empty_raw.remove(self._root / rel)
+        for path in sorted(set(paths)):
+            rel = path.relative_to(self._root)
+            content = staged.get(rel)
+            if content is None and path in projections:
+                content = projections[path].encode()
+            self.register_engine_write_intent(
+                rel.as_posix(),
+                content,
+                origin="synthesis",
+                entry_ids=engine_entry_ids,
+            )
         if staged:
             self._journal.commit(staged)
         for path, text in projections.items():
             self._write_atomic(path, text)
         self._journal.unlink_files_safely(tuple(path.relative_to(self._root) for path in empty_raw))
-        for path in sorted(set(paths)):
-            rel = path.relative_to(self._root)
-            content = self._safe_read_bytes(path)
-            self.register_engine_write(rel.as_posix(), content, origin="synthesis")
         self._file_state = self._scan_files()
         self._notify_post_canonical_commit()
 
     def _remove_page_files(self, path: Path) -> None:
+        self.register_engine_write_intent(
+            path.relative_to(self._root).as_posix(),
+            None,
+            origin="synthesis",
+        )
         self._journal.unlink_files_safely(
             (path.relative_to(self._root), self._raw_path(path).relative_to(self._root))
         )
-        self.register_engine_write(path.relative_to(self._root).as_posix(), None, origin="synthesis")
         self._file_state = self._scan_files()
 
     def _find(self, record_id: str) -> tuple[Path, Line | LedgerEntry] | None:
@@ -1486,7 +1619,11 @@ class FilePageStore:
             self._loc[entry.id] = path
             touched.add(path)
         try:
-            self._persist_many(tuple(touched), files=caller_files)
+            self._persist_many(
+                tuple(touched),
+                files=caller_files,
+                engine_entry_ids=tuple(entry.id for entry in additions),
+            )
         except Exception:
             self._journal.recover(prefer_rollback=True)
             self._reload_canonical_state()
@@ -1597,9 +1734,18 @@ class FilePageStore:
         """Validate, plan, and publish one reconciliation batch in one commit."""
         if batch_key and self.operation_batch_committed(batch_key):
             return self.canonical_revision
-        planned = self.plan_operations(operations, source, batch_key=batch_key)
+        effective_batch_key = batch_key or f"internal-apply:{uuid4().hex}"
+        planned = self.plan_operations(operations, source, batch_key=effective_batch_key)
         if not planned:
             return self.canonical_revision
+        for rel, content in planned.items():
+            if rel.parts[0] != _RAW and rel.suffix.casefold() == ".md":
+                self.register_engine_write_intent(
+                    rel.as_posix(),
+                    content,
+                    origin="synthesis",
+                    batch_key=effective_batch_key,
+                )
         try:
             revision = self._journal.commit(planned)
         except Exception:
@@ -1607,9 +1753,6 @@ class FilePageStore:
             self._reload_canonical_state()
             raise
         self._reload_canonical_state()
-        for rel, content in planned.items():
-            if rel.parts[0] != _RAW and rel.suffix.casefold() == ".md":
-                self.register_engine_write(rel.as_posix(), content, origin="synthesis")
         self._notify_post_canonical_commit()
         return revision
 

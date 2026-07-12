@@ -142,7 +142,6 @@ class KnowledgeRuntime:
             async def _indexed_change(changes):
                 from ntrp.memory.file_store import ObservedFileChange
 
-                page_events: list[tuple[str, str, bool]] = []
                 plain_paths: list[str] = []
                 for change in changes:
                     if isinstance(change, ObservedFileChange):
@@ -153,13 +152,16 @@ class KnowledgeRuntime:
                             if event is not None:
                                 revision = event.result_revision
                                 review_required = event.reconciliation == "needs_review"
-                        page_events.append((change.path, revision, review_required))
+                        self._vault_index.schedule()
+                        await on_change(
+                            [change.path],
+                            revision=revision,
+                            review_required=review_required,
+                        )
                     else:
                         plain_paths.append(change)
-                self._vault_index.schedule()
-                for path, revision, review_required in page_events:
-                    await on_change([path], revision=revision, review_required=review_required)
                 if plain_paths:
+                    self._vault_index.schedule()
                     await on_change(plain_paths, revision=None, review_required=False)
 
             store.start_watch(_indexed_change)
