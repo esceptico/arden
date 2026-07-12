@@ -1,4 +1,3 @@
-import platform
 from collections.abc import AsyncGenerator
 from typing import Any
 
@@ -12,7 +11,7 @@ from ntrp.agent import (
 )
 from ntrp.llm.base import CompletionClient
 from ntrp.llm.models import supports_native_deferred_tools
-from ntrp.llm.openai_codex_auth import CODEX_BASE_URL, get_valid_tokens
+from ntrp.llm.openai_codex_auth import CODEX_BASE_URL, codex_request_headers, get_valid_tokens
 from ntrp.llm.openai_responses import (
     buffered_stream_responses_completion,
     parse_responses_response,
@@ -23,7 +22,6 @@ from ntrp.observability.judgment import trace_client
 
 _MODEL_PREFIX = "openai-codex/"
 _DEFAULT_INSTRUCTIONS = "Follow the user's request exactly and return the requested output."
-_CODEX_CLIENT_VERSION = "0.144.0"
 
 
 class OpenAICodexClient(CompletionClient):
@@ -104,20 +102,11 @@ class OpenAICodexClient(CompletionClient):
 
     async def _client(self) -> openai.AsyncOpenAI:
         tokens = await get_valid_tokens()
-        headers = {
-            "originator": "codex_cli_rs",
-            "User-Agent": (
-                f"codex_cli_rs/{_CODEX_CLIENT_VERSION} "
-                f"({platform.system().lower()} {platform.release()}; {platform.machine()})"
-            ),
-        }
-        if tokens.account_id:
-            headers["ChatGPT-Account-Id"] = tokens.account_id
         return trace_client(openai.AsyncOpenAI(
             api_key=tokens.access,
             base_url=CODEX_BASE_URL,
             timeout=self._timeout,
-            default_headers=headers,
+            default_headers=codex_request_headers(tokens),
         ))
 
     def _prepare(

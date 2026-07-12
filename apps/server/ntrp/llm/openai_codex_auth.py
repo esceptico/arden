@@ -3,6 +3,7 @@ import base64
 import hashlib
 import html
 import json
+import platform
 import secrets
 import threading
 import time
@@ -19,6 +20,7 @@ from ntrp.settings import NTRP_DIR
 CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 ISSUER = "https://auth.openai.com"
 CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
+CODEX_CLIENT_VERSION = "0.144.0"
 OAUTH_PORT = 1455
 OAUTH_CALLBACK_PATH = "/auth/callback"
 TOKEN_PATH = NTRP_DIR / "openai-codex-auth.json"
@@ -46,6 +48,19 @@ class OpenAICodexTokens:
         if self.account_id:
             data["accountId"] = self.account_id
         return data
+
+
+def codex_request_headers(tokens: OpenAICodexTokens) -> dict[str, str]:
+    headers = {
+        "originator": "codex_cli_rs",
+        "User-Agent": (
+            f"codex_cli_rs/{CODEX_CLIENT_VERSION} "
+            f"({platform.system().lower()} {platform.release()}; {platform.machine()})"
+        ),
+    }
+    if tokens.account_id:
+        headers["ChatGPT-Account-Id"] = tokens.account_id
+    return headers
 
 
 @dataclass
