@@ -336,34 +336,31 @@ class VaultJournal:
     def _restore(self, commit_path: Path, manifest: dict) -> None:
         for index, row in enumerate(manifest["files"]):
             target = self._target_path(row["target"])
+            rejected_candidate = self._classify_rejected(commit_path, row, index, target)
             actual = self._leaf_hash(target)
             if row["existed"]:
+                if rejected_candidate:
+                    source = self._expected_restore_source(commit_path, row, index)
+                    self._link_no_clobber(source, target, commit_path)
+                    continue
                 if actual == row["backup_sha256"]:
                     continue
                 if actual is not None and actual != row["sha256"]:
                     self._mark_conflict(commit_path, f"journal {commit_path.name} rollback found external target")
                 if actual == row["sha256"]:
-                    rejected = self._preserve_rejected_target(commit_path, target, index)
-                    if self._leaf_hash(rejected) != row["sha256"]:
-                        self._restore_preserved_no_clobber(rejected, target)
-                        self._mark_conflict(
-                            commit_path,
-                            f"journal {commit_path.name} rollback displaced an external target",
-                        )
+                    self._preserve_rejected_target(commit_path, target, index)
+                    self._classify_rejected(commit_path, row, index, target)
                 source = self._expected_restore_source(commit_path, row, index)
                 self._link_no_clobber(source, target, commit_path)
             else:
+                if rejected_candidate:
+                    continue
                 if actual is None:
                     continue
                 if actual != row["sha256"]:
                     self._mark_conflict(commit_path, f"journal {commit_path.name} rollback found external target")
-                rejected = self._preserve_rejected_target(commit_path, target, index)
-                if self._leaf_hash(rejected) != row["sha256"]:
-                    self._restore_preserved_no_clobber(rejected, target)
-                    self._mark_conflict(
-                        commit_path,
-                        f"journal {commit_path.name} rollback displaced an external target",
-                    )
+                self._preserve_rejected_target(commit_path, target, index)
+                self._classify_rejected(commit_path, row, index, target)
                 if target.exists() or target.is_symlink():
                     self._mark_conflict(commit_path, f"journal {commit_path.name} rollback raced an external target")
         if not self._backup_targets_match(manifest):
@@ -558,18 +555,57 @@ class VaultJournal:
         if rejected.exists() or rejected.is_symlink():
             self._mark_conflict(commit_path, f"journal rejected path already exists: {target}")
         os.rename(target, rejected)
+        self._checkpoint(f"after_rejected_rename:{index}")
         self._fsync_dir(target.parent)
+        self._checkpoint(f"after_rejected_target_fsync:{index}")
         self._fsync_dir(rejected.parent)
+        self._checkpoint(f"after_rejected_dir_fsync:{index}")
         return rejected
 
-    def _restore_preserved_no_clobber(self, preserved: Path, target: Path) -> None:
+    def _classify_rejected(self, commit_path: Path, row: dict, index: int, target: Path) -> bool:
+        rejected = commit_path / "rejected" / f"{index:04d}"
+        self._validate_artifact_file(commit_path, rejected, require_file=False)
+        if not rejected.exists():
+            return False
+        rejected_hash = self._leaf_hash(rejected)
+        self._checkpoint(f"after_rejected_validation:{index}")
+        if target.exists() or target.is_symlink():
+            self._mark_conflict(
+                commit_path,
+                f"journal {commit_path.name} rollback found target and rejected versions",
+            )
+        if rejected_hash != row["sha256"]:
+            self._restore_preserved_no_clobber(rejected, target, rejected_index=index)
+            self._mark_conflict(
+                commit_path,
+                f"journal {commit_path.name} rollback retained an external rejected version",
+            )
+        return True
+
+    def _restore_preserved_no_clobber(
+        self,
+        preserved: Path,
+        target: Path,
+        *,
+        rejected_index: int | None = None,
+    ) -> None:
+        if rejected_index is not None:
+            self._checkpoint(f"before_rejected_relink:{rejected_index}")
         if target.exists() or target.is_symlink():
             return
         try:
             os.link(preserved, target, follow_symlinks=False)
-        except OSError:
+        except FileExistsError:
             return
+        except OSError as exc:
+            if rejected_index is not None:
+                raise RuntimeError(f"journal could not restore rejected version: {target}") from exc
+            return
+        if rejected_index is not None:
+            self._checkpoint(f"after_rejected_relink:{rejected_index}")
         self._fsync_dir(target.parent)
+        if rejected_index is not None:
+            self._checkpoint(f"after_rejected_relink_fsync:{rejected_index}")
 
     def _link_no_clobber(self, source: Path, target: Path, commit_path: Path) -> None:
         try:

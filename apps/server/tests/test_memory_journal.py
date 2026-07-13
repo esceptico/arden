@@ -164,6 +164,112 @@ def test_rollback_replacement_race_keeps_external_bytes_visible(tmp_path: Path, 
     assert VaultJournal(tmp_path).recover() == ()
 
 
+@pytest.mark.parametrize(
+    "failpoint",
+    [
+        "after_rejected_rename:0",
+        "after_rejected_target_fsync:0",
+        "after_rejected_dir_fsync:0",
+        "after_rejected_validation:0",
+        "before_rejected_relink:0",
+        "after_rejected_relink:0",
+        "after_rejected_relink_fsync:0",
+    ],
+)
+def test_rejected_external_inode_recovery_is_idempotent_at_every_boundary(
+    tmp_path: Path,
+    monkeypatch,
+    failpoint: str,
+) -> None:
+    _seed_pair(tmp_path)
+    journal = VaultJournal(tmp_path)
+
+    def interrupt_install(point: str) -> None:
+        if point == "after_link:0":
+            raise InjectedFailure(point)
+
+    monkeypatch.setattr(journal, "_checkpoint", interrupt_install)
+    with pytest.raises(InjectedFailure, match="after_link:0"):
+        journal.commit({Path("me.md"): b"new", Path("raw/me.md"): b"raw-new"})
+    commit_id = _commit_id_on_disk(tmp_path)
+
+    recovering = VaultJournal(tmp_path)
+    preserve = recovering._preserve_rejected_target
+
+    def replace_then_preserve(commit_path: Path, target: Path, index: int) -> Path:
+        replacement = tmp_path / "external.tmp"
+        replacement.write_bytes(b"external")
+        os.replace(replacement, target)
+        return preserve(commit_path, target, index)
+
+    def interrupt_rejected(point: str) -> None:
+        if point == failpoint:
+            raise InjectedFailure(point)
+
+    monkeypatch.setattr(recovering, "_preserve_rejected_target", replace_then_preserve)
+    monkeypatch.setattr(recovering, "_checkpoint", interrupt_rejected)
+
+    with pytest.raises(InjectedFailure, match=failpoint):
+        recovering.recover()
+
+    with pytest.raises(ValueError, match="conflict"):
+        VaultJournal(tmp_path).recover()
+    assert _read_pair(tmp_path) == (b"external", b"raw-old")
+    assert VaultJournal(tmp_path).canonical_revision == ""
+    archived = next((tmp_path / ".ntrp" / "versions").iterdir())
+    assert (archived / "rejected" / "0000").read_bytes() == b"external"
+    assert archived.name.startswith(commit_id)
+    assert (archived / "markers" / "CONFLICT").exists()
+    assert not (archived / "markers" / "ROLLED_BACK").exists()
+    assert VaultJournal(tmp_path).recover() == ()
+
+
+@pytest.mark.parametrize(
+    "failpoint",
+    [
+        "after_rejected_rename:0",
+        "after_rejected_target_fsync:0",
+        "after_rejected_dir_fsync:0",
+        "after_rejected_validation:0",
+    ],
+)
+def test_rejected_candidate_inode_resumes_rollback_at_every_boundary(
+    tmp_path: Path,
+    monkeypatch,
+    failpoint: str,
+) -> None:
+    _seed_pair(tmp_path)
+    journal = VaultJournal(tmp_path)
+
+    def interrupt_install(point: str) -> None:
+        if point == "after_link:0":
+            raise InjectedFailure(point)
+
+    monkeypatch.setattr(journal, "_checkpoint", interrupt_install)
+    with pytest.raises(InjectedFailure, match="after_link:0"):
+        journal.commit({Path("me.md"): b"new", Path("raw/me.md"): b"raw-new"})
+    commit_id = _commit_id_on_disk(tmp_path)
+
+    recovering = VaultJournal(tmp_path)
+
+    def interrupt_rejected(point: str) -> None:
+        if point == failpoint:
+            raise InjectedFailure(point)
+
+    monkeypatch.setattr(recovering, "_checkpoint", interrupt_rejected)
+    with pytest.raises(InjectedFailure, match=failpoint):
+        recovering.recover()
+
+    assert VaultJournal(tmp_path).recover() == (commit_id,)
+    assert _read_pair(tmp_path) == (b"old", b"raw-old")
+    assert VaultJournal(tmp_path).canonical_revision == ""
+    archived = next((tmp_path / ".ntrp" / "versions").iterdir())
+    assert (archived / "rejected" / "0000").read_bytes() == b"new"
+    assert (archived / "markers" / "ROLLED_BACK").exists()
+    assert not (archived / "markers" / "CONFLICT").exists()
+    assert VaultJournal(tmp_path).recover() == ()
+
+
 def test_commit_preserves_an_external_atomic_replacement_at_finish_entry(tmp_path: Path, monkeypatch) -> None:
     target = tmp_path / "me.md"
     target.write_bytes(b"old")
