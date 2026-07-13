@@ -735,8 +735,13 @@ async def test_ledger_write_recovers_visible_and_raw_files_as_one_commit(tmp_pat
     await store.close()
 
 
-@pytest.mark.parametrize("failpoint", ["after_replace:0", "after_committed"])
-async def test_failed_append_reloads_live_state_and_same_id_can_retry(tmp_path: Path, monkeypatch, failpoint: str):
+@pytest.mark.parametrize(
+    ("failpoint", "committed"),
+    [("after_replace:0", False), ("after_committed", True)],
+)
+async def test_failed_append_reloads_decided_state_or_allows_retry(
+    tmp_path: Path, monkeypatch, failpoint: str, committed: bool
+):
     vault = tmp_path / "memory"
     original = _ledger_entry("original", "Original", sequence=1)
     index = _LedgerIndex()
@@ -753,6 +758,14 @@ async def test_failed_append_reloads_live_state_and_same_id_can_retry(tmp_path: 
     successor = _ledger_entry("retry-id", "Successor", sequence=2, supersedes=(original.id,))
     with pytest.raises(RuntimeError, match="injected journal failure"):
         store.append_entries((successor,))
+
+    if committed:
+        assert (await store.get(successor.id)).text == "Successor"
+        assert store._next_sequence() == 3
+        await _drain()
+        assert index.store.ids == {successor.id}
+        await store.close()
+        return
 
     assert await store.get(successor.id) is None
     assert store.history(original.id) == (original,)
@@ -891,9 +904,7 @@ async def test_generated_prose_only_write_is_excluded_from_canonical_revision(tm
     page_path = vault / "topics" / "a.md"
     revision = store.canonical_revision
     store._pages[page_path].frontmatter["generated_from_revision"] = revision
-    store._journal.commit_projection(
-        {Path("raw/topics/a.md"): render_raw(store._pages[page_path]).encode()}
-    )
+    store._journal.commit_projection({Path("raw/topics/a.md"): render_raw(store._pages[page_path]).encode()})
     store._reload_canonical_state()
 
     def reject_commit(files):
@@ -946,7 +957,11 @@ async def test_update_appends_successor_and_preserves_evidence(tmp_path: Path):
     update_source = SourceRef("tool_call", "remember:2", captured_at="2026-07-12T10:01:00Z")
     store = await _file_store(
         vault,
-        [_ledger_entry("original", "Original", sequence=1, scope_kind="area", scope_key="a1", sources=(original_source,))],
+        [
+            _ledger_entry(
+                "original", "Original", sequence=1, scope_kind="area", scope_key="a1", sources=(original_source,)
+            )
+        ],
     )
 
     assert await store.update("original", "Updated", source_ref=update_source) is True
@@ -963,9 +978,7 @@ async def test_update_appends_successor_and_preserves_evidence(tmp_path: Path):
 
 async def test_merge_appends_one_successor_for_all_predecessors_and_unions_evidence(tmp_path: Path):
     vault = tmp_path / "memory"
-    sources = tuple(
-        SourceRef("chat_message", f"s:m{i}", captured_at=f"2026-07-12T10:0{i}:00Z") for i in range(1, 4)
-    )
+    sources = tuple(SourceRef("chat_message", f"s:m{i}", captured_at=f"2026-07-12T10:0{i}:00Z") for i in range(1, 4))
     store = await _file_store(
         vault,
         [_ledger_entry(f"r{i}", f"Fact {i}", sequence=i, sources=(sources[i - 1],)) for i in range(1, 4)],

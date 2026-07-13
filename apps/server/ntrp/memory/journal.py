@@ -2,20 +2,24 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
 import shutil
 import stat
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Iterator, Mapping, Sequence
 
-_VERSION = 1
+_VERSION = 2
+_SUPPORTED_VERSIONS = frozenset({1, _VERSION})
 _HEX = frozenset("0123456789abcdef")
 
 
@@ -35,11 +39,18 @@ class VaultJournal:
         self.root = Path(root).resolve()
         self._meta_root = self.root / ".ntrp"
         self._journal_root = self._meta_root / "journal"
+        self._versions_root = self._meta_root / "versions"
         self._revision_path = self._meta_root / "canonical-revision"
+        self._lock_path = self._meta_root / "canonical.lock"
+        self._lock_depth = 0
+        self._thread_lock = threading.RLock()
 
     @property
     def canonical_revision(self) -> str:
         self._validate_metadata_paths()
+        return self._canonical_revision_locked()
+
+    def _canonical_revision_locked(self) -> str:
         try:
             revision = self._revision_path.read_text(encoding="ascii").strip()
         except OSError:
@@ -53,12 +64,25 @@ class VaultJournal:
         _allow_migration_meta: bool = False,
         _publish_revision: bool = True,
     ) -> PreparedCommit:
-        self._validate_metadata_paths()
+        with self._locked():
+            return self._prepare_locked(
+                files,
+                allow_migration_meta=_allow_migration_meta,
+                publish_revision=_publish_revision,
+            )
+
+    def _prepare_locked(
+        self,
+        files: Mapping[Path, bytes],
+        *,
+        allow_migration_meta: bool = False,
+        publish_revision: bool = True,
+    ) -> PreparedCommit:
         rows: list[dict[str, object]] = []
         payloads: list[tuple[bytes, bytes]] = []
         seen: set[str] = set()
         for index, (target, content) in enumerate(sorted(files.items(), key=lambda item: item[0].as_posix())):
-            rel = self._validate_relative(target, allow_migration_meta=_allow_migration_meta)
+            rel = self._validate_relative(target, allow_migration_meta=allow_migration_meta)
             if rel in seen:
                 raise ValueError(f"duplicate journal target: {rel}")
             if not isinstance(content, bytes):
@@ -71,11 +95,13 @@ class VaultJournal:
             backup = target_path.read_bytes() if existed else b""
             staged_name = f"staged/{index:04d}"
             backup_name = f"backups/{index:04d}"
+            publish_name = f"publish/{index:04d}"
             rows.append(
                 {
                     "target": rel,
                     "staged": staged_name,
                     "backup": backup_name,
+                    "publish": publish_name,
                     "sha256": self._sha256(content),
                     "backup_sha256": self._sha256(backup),
                     "existed": existed,
@@ -85,8 +111,8 @@ class VaultJournal:
         if not rows:
             raise ValueError("journal commit requires at least one file")
 
-        manifest = {"version": _VERSION, "previous_revision": self.canonical_revision, "files": rows}
-        if not _publish_revision:
+        manifest = {"version": _VERSION, "previous_revision": self._canonical_revision_locked(), "files": rows}
+        if not publish_revision:
             manifest["publish_revision"] = False
         manifest_bytes = (
             json.dumps(
@@ -104,9 +130,16 @@ class VaultJournal:
         for row, (content, backup) in zip(rows, payloads, strict=True):
             self._write_fsynced(commit_path / str(row["staged"]), content)
             self._write_fsynced(commit_path / str(row["backup"]), backup)
+            self._write_fsynced(commit_path / str(row["publish"]), content)
+        for name in ("displaced", "rejected", "markers"):
+            self._mkdir_durable(commit_path / name)
         self._checkpoint("before_prepare_complete")
         self._fsync_dir(commit_path / "staged")
         self._fsync_dir(commit_path / "backups")
+        self._fsync_dir(commit_path / "publish")
+        self._fsync_dir(commit_path / "displaced")
+        self._fsync_dir(commit_path / "rejected")
+        self._fsync_dir(commit_path / "markers")
         self._fsync_dir(commit_path)
         self._write_fsynced(commit_path / "manifest.json", manifest_bytes)
         self._fsync_dir(commit_path)
@@ -123,24 +156,20 @@ class VaultJournal:
         expected_files: Mapping[Path, bytes | None] | None = None,
         expected_revision: str | None = None,
     ) -> str:
-        """Commit files if expected inputs still match immediately before replacement.
-
-        The second check closes planning/preparation races. An external writer can
-        still race the final check and first replacement; callers must retry any
-        conflict and deployments remain single-writer at that last instruction.
-        """
-        self.recover()
-        self._assert_expected_state(expected_files, expected_revision)
-        prepared = self.prepare(files)
-        try:
+        """Commit without clobbering cooperating or external filesystem writers."""
+        with self._locked():
+            self._recover_locked()
             self._assert_expected_state(expected_files, expected_revision)
+            prepared = self.prepare(files)
+            try:
+                self._assert_expected_state(expected_files, expected_revision)
+            except JournalConflictError:
+                self._remove_commit(prepared.path)
+                self._remove_empty_journal_root()
+                raise
             manifest = self._load_manifest(prepared.path)
             self._finish(prepared.path, manifest, prepared.commit_id)
-        except JournalConflictError:
-            self._remove_commit(prepared.path)
-            self._remove_empty_journal_root()
-            raise
-        return prepared.manifest_hash
+            return prepared.manifest_hash
 
     def commit_projection(
         self,
@@ -150,24 +179,26 @@ class VaultJournal:
         expected_revision: str | None = None,
     ) -> None:
         """Atomically replace a derived file set without advancing canonical revision."""
-        self.recover()
-        self._assert_expected_state(expected_files, expected_revision)
-        prepared = self.prepare(files, _publish_revision=False)
-        try:
+        with self._locked():
+            self._recover_locked()
             self._assert_expected_state(expected_files, expected_revision)
+            prepared = self.prepare(files, _publish_revision=False)
+            try:
+                self._assert_expected_state(expected_files, expected_revision)
+            except JournalConflictError:
+                self._remove_commit(prepared.path)
+                self._remove_empty_journal_root()
+                raise
             manifest = self._load_manifest(prepared.path)
             self._finish(prepared.path, manifest, prepared.commit_id)
-        except JournalConflictError:
-            self._remove_commit(prepared.path)
-            self._remove_empty_journal_root()
-            raise
 
     def commit_migration(self, files: Mapping[Path, bytes]) -> str:
-        self.recover()
-        prepared = self.prepare(files, _allow_migration_meta=True)
-        manifest = self._load_manifest(prepared.path)
-        self._finish(prepared.path, manifest, prepared.commit_id)
-        return prepared.manifest_hash
+        with self._locked():
+            self._recover_locked()
+            prepared = self.prepare(files, _allow_migration_meta=True)
+            manifest = self._load_manifest(prepared.path)
+            self._finish(prepared.path, manifest, prepared.commit_id)
+            return prepared.manifest_hash
 
     def replace_file_safely(self, target: Path, content: bytes) -> None:
         """Replace one non-journal file without following vault symlinks.
@@ -220,7 +251,12 @@ class VaultJournal:
             self._fsync_dir(directory)
 
     def recover(self, *, prefer_rollback: bool = False) -> tuple[str, ...]:
-        self._validate_metadata_paths()
+        if not self.root.exists():
+            return ()
+        with self._locked():
+            return self._recover_locked(prefer_rollback=prefer_rollback)
+
+    def _recover_locked(self, *, prefer_rollback: bool = False) -> tuple[str, ...]:
         if not self._journal_root.is_dir():
             return ()
         recovered: list[str] = []
@@ -235,61 +271,58 @@ class VaultJournal:
                 recovered.append(commit_id)
                 continue
             manifest = self._load_manifest(commit_path)
-            rolled_back_marker = commit_path / "ROLLED_BACK"
-            self._validate_internal_file(rolled_back_marker)
-            if rolled_back_marker.is_file():
-                if not self._backup_targets_match(manifest):
-                    if not self._artifacts_match(commit_path, manifest, "backup", "backup_sha256"):
-                        raise RuntimeError(f"journal {commit_id} cannot resume rollback")
-                    self._restore(commit_path, manifest)
-                self._remove_commit(commit_path)
-            elif prefer_rollback and self._artifacts_match(commit_path, manifest, "backup", "backup_sha256"):
-                self._restore(commit_path, manifest)
-                self._remove_commit(commit_path)
-            elif self._targets_match(manifest):
-                if manifest.get("publish_revision", True):
-                    self._publish_revision(commit_id)
-                self._remove_commit(commit_path)
-            elif self._artifacts_match(commit_path, manifest, "staged", "sha256"):
-                self._finish(commit_path, manifest, commit_id)
-            elif self._artifacts_match(commit_path, manifest, "backup", "backup_sha256"):
-                self._restore(commit_path, manifest)
-                self._remove_commit(commit_path)
+            self._ensure_publish_state(commit_path, manifest)
+            if self._has_marker(commit_path, "CONFLICT") or self._has_marker(commit_path, "ROLLED_BACK"):
+                self._archive_commit(commit_path)
+            elif self._has_marker(commit_path, "DECIDED_COMMIT") or self._has_marker(commit_path, "COMMITTED"):
+                self._complete_decided_commit(commit_path, manifest, commit_id)
+            elif not prefer_rollback and self._all_rows_provably_installed(commit_path, manifest):
+                self._write_marker(commit_path, "DECIDED_COMMIT")
+                self._complete_decided_commit(commit_path, manifest, commit_id)
             else:
-                raise RuntimeError(f"journal {commit_id} has no valid staged set or backup set")
+                self._restore(commit_path, manifest)
             recovered.append(commit_id)
         self._remove_empty_journal_root()
         return tuple(recovered)
 
     def _finish(self, commit_path: Path, manifest: dict, commit_id: str) -> None:
+        self._ensure_publish_state(commit_path, manifest)
+        self._preflight_install(commit_path, manifest)
         for index, row in enumerate(manifest["files"]):
-            content = self._read_artifact(commit_path, row["staged"])
-            self._replace_target(row["target"], content, commit_id, index)
-            self._checkpoint(f"after_replace:{index}")
+            self._install_row(commit_path, row, index)
         if not self._targets_match(manifest):
-            raise RuntimeError(f"journal {commit_id} target hash validation failed")
-        self._write_fsynced(commit_path / "COMMITTED", b"")
-        self._fsync_dir(commit_path)
-        self._checkpoint("after_committed")
-        if manifest.get("publish_revision", True):
-            self._publish_revision(commit_id)
-        self._remove_commit(commit_path)
-        self._remove_empty_journal_root()
+            self._mark_conflict(commit_path, f"journal {commit_id} target changed before commit decision")
+        self._checkpoint("before_decided_commit")
+        self._write_marker(commit_path, "DECIDED_COMMIT")
+        self._checkpoint("after_decided_commit")
+        self._complete_decided_commit(commit_path, manifest, commit_id)
 
     def _restore(self, commit_path: Path, manifest: dict) -> None:
         for index, row in enumerate(manifest["files"]):
             target = self._target_path(row["target"])
+            actual = self._leaf_hash(target)
             if row["existed"]:
-                self._replace_target(row["target"], self._read_artifact(commit_path, row["backup"]), commit_path.name, index)
+                if actual == row["backup_sha256"]:
+                    continue
+                if actual is not None and actual != row["sha256"]:
+                    self._mark_conflict(commit_path, f"journal {commit_path.name} rollback found external target")
+                if actual == row["sha256"]:
+                    self._preserve_rejected_target(commit_path, target, index)
+                source = self._expected_restore_source(commit_path, row, index)
+                self._link_no_clobber(source, target, commit_path)
             else:
-                target.unlink(missing_ok=True)
-                self._fsync_dir(target.parent)
+                if actual is None:
+                    continue
+                if actual != row["sha256"]:
+                    self._mark_conflict(commit_path, f"journal {commit_path.name} rollback found external target")
+                self._preserve_rejected_target(commit_path, target, index)
+                if target.exists() or target.is_symlink():
+                    self._mark_conflict(commit_path, f"journal {commit_path.name} rollback raced an external target")
         if not self._backup_targets_match(manifest):
-            raise RuntimeError(f"journal {commit_path.name} backup hash validation failed")
-        if manifest.get("publish_revision", True):
-            self._restore_revision(manifest["previous_revision"])
-        self._write_fsynced(commit_path / "ROLLED_BACK", b"")
-        self._fsync_dir(commit_path)
+            self._mark_conflict(commit_path, f"journal {commit_path.name} rollback validation failed")
+        self._write_marker(commit_path, "ROLLED_BACK")
+        self._checkpoint("after_rolled_back")
+        self._archive_commit(commit_path)
 
     def _load_manifest(self, commit_path: Path) -> dict:
         self._validate_commit_path(commit_path)
@@ -300,7 +333,7 @@ class VaultJournal:
             manifest = json.loads(raw)
         except (OSError, json.JSONDecodeError) as exc:
             raise RuntimeError(f"invalid journal manifest: {commit_path.name}") from exc
-        if self._sha256(raw) != commit_path.name or manifest.get("version") != _VERSION:
+        if self._sha256(raw) != commit_path.name or manifest.get("version") not in _SUPPORTED_VERSIONS:
             raise RuntimeError(f"invalid journal manifest identity: {commit_path.name}")
         rows = manifest.get("files")
         previous_revision = manifest.get("previous_revision", "")
@@ -312,13 +345,14 @@ class VaultJournal:
         if not isinstance(rows, list) or not rows:
             raise RuntimeError(f"invalid journal file set: {commit_path.name}")
         seen: set[str] = set()
-        for row in rows:
+        for index, row in enumerate(rows):
             if not isinstance(row, dict):
                 raise RuntimeError(f"invalid journal file entry: {commit_path.name}")
             try:
                 target = self._validate_relative(Path(row["target"]), allow_migration_meta=True)
                 staged = self._artifact_path(commit_path, row["staged"], "staged")
                 backup = self._artifact_path(commit_path, row["backup"], "backups")
+                publish = self._artifact_path(commit_path, row.get("publish", f"publish/{index:04d}"), "publish")
             except (KeyError, TypeError, ValueError) as exc:
                 raise RuntimeError(f"invalid journal file entry: {commit_path.name}") from exc
             if target in seen or not isinstance(row.get("existed"), bool):
@@ -329,6 +363,7 @@ class VaultJournal:
             row["target"] = target
             row["staged"] = staged.relative_to(commit_path).as_posix()
             row["backup"] = backup.relative_to(commit_path).as_posix()
+            row["publish"] = publish.relative_to(commit_path).as_posix()
         self._validate_artifact_paths(commit_path, manifest)
         return manifest
 
@@ -350,46 +385,192 @@ class VaultJournal:
                 return False
         return True
 
-    def _artifacts_match(self, commit_path: Path, manifest: dict, field: str, hash_field: str) -> bool:
+    def _ensure_publish_state(self, commit_path: Path, manifest: dict) -> None:
+        for name in ("publish", "displaced", "rejected", "markers"):
+            self._mkdir_durable(commit_path / name)
         for row in manifest["files"]:
+            publish = commit_path / row["publish"]
+            self._validate_artifact_file(commit_path, publish, require_file=False)
+            if not publish.exists():
+                self._write_fsynced(publish, self._read_artifact(commit_path, row["staged"]))
+        self._fsync_dir(commit_path / "publish")
+        self._fsync_dir(commit_path)
+
+    def _preflight_install(self, commit_path: Path, manifest: dict) -> None:
+        commit_device = commit_path.stat().st_dev
+        for index, row in enumerate(manifest["files"]):
+            target = self._target_path(row["target"])
+            self._mkdir_durable(target.parent)
             try:
-                content = self._read_artifact(commit_path, row[field])
+                target_st = target.lstat()
             except FileNotFoundError:
+                target_st = None
+            if target_st is not None and (stat.S_ISLNK(target_st.st_mode) or not stat.S_ISREG(target_st.st_mode)):
+                self._mark_conflict(commit_path, f"journal target is not a regular file: {row['target']}")
+            if target.parent.stat().st_dev != commit_device:
+                self._mark_conflict(commit_path, f"journal target is on an unsupported filesystem: {row['target']}")
+            publish = commit_path / row["publish"]
+            if self._leaf_hash(publish) != row["sha256"]:
+                self._mark_conflict(commit_path, f"journal publish artifact is invalid: {row['target']}")
+            probe = commit_path / "rejected" / f"probe-{index:04d}"
+            self._validate_artifact_file(commit_path, probe, require_file=False)
+            try:
+                os.link(publish, probe, follow_symlinks=False)
+            except OSError as exc:
+                self._mark_conflict(commit_path, f"journal hard links are unsupported: {row['target']}: {exc}")
+            else:
+                probe.unlink()
+                self._fsync_dir(probe.parent)
+
+    def _install_row(self, commit_path: Path, row: dict, index: int) -> None:
+        target = self._target_path(row["target"])
+        displaced = commit_path / "displaced" / f"{index:04d}"
+        self._validate_artifact_file(commit_path, displaced, require_file=False)
+        if displaced.exists() or displaced.is_symlink():
+            self._mark_conflict(commit_path, f"journal displaced path already exists: {row['target']}")
+
+        self._checkpoint(f"before_move:{index}")
+        if row["existed"]:
+            try:
+                target_st = target.lstat()
+            except FileNotFoundError:
+                self._mark_conflict(commit_path, f"journal target disappeared before displacement: {row['target']}")
+            if stat.S_ISLNK(target_st.st_mode) or not stat.S_ISREG(target_st.st_mode):
+                self._mark_conflict(commit_path, f"journal target changed type: {row['target']}")
+            try:
+                os.rename(target, displaced)
+            except OSError as exc:
+                self._mark_conflict(commit_path, f"journal target displacement failed: {row['target']}: {exc}")
+        elif target.exists() or target.is_symlink():
+            self._mark_conflict(commit_path, f"journal target appeared before install: {row['target']}")
+        self._checkpoint(f"after_move:{index}")
+        self._fsync_dir(target.parent)
+        self._checkpoint(f"after_move_target_fsync:{index}")
+        self._fsync_dir(displaced.parent)
+        self._checkpoint(f"after_move_displaced_fsync:{index}")
+
+        if row["existed"] and self._leaf_hash(displaced) != row["backup_sha256"]:
+            self._restore_displaced_no_clobber(commit_path, displaced, target)
+            self._mark_conflict(commit_path, f"journal displaced target changed: {row['target']}")
+        self._write_marker(commit_path, f"DISPLACED.{index:04d}")
+        self._checkpoint(f"after_displaced:{index}")
+
+        publish = commit_path / row["publish"]
+        self._checkpoint(f"before_link:{index}")
+        try:
+            os.link(publish, target, follow_symlinks=False)
+        except OSError as exc:
+            if row["existed"]:
+                self._restore_displaced_no_clobber(commit_path, displaced, target)
+            self._mark_conflict(commit_path, f"journal target install conflicted: {row['target']}: {exc}")
+        self._checkpoint(f"after_link:{index}")
+        self._fsync_dir(target.parent)
+        self._checkpoint(f"after_link_fsync:{index}")
+        if self._leaf_hash(target) != row["sha256"] or self._leaf_hash(publish) != row["sha256"]:
+            self._mark_conflict(commit_path, f"journal installed target changed: {row['target']}")
+        self._write_marker(commit_path, f"INSTALLED.{index:04d}")
+        self._checkpoint(f"after_installed:{index}")
+        self._checkpoint(f"after_replace:{index}")
+
+    def _complete_decided_commit(self, commit_path: Path, manifest: dict, commit_id: str) -> None:
+        if manifest.get("publish_revision", True):
+            self._checkpoint("before_revision_publish")
+            self._publish_revision_locked(commit_id, expected_previous=manifest["previous_revision"])
+            self._checkpoint("after_revision_published")
+        if not self._has_marker(commit_path, "COMMITTED"):
+            self._write_marker(commit_path, "COMMITTED")
+        self._checkpoint("after_committed")
+        self._archive_commit(commit_path)
+
+    def _all_rows_provably_installed(self, commit_path: Path, manifest: dict) -> bool:
+        for index, row in enumerate(manifest["files"]):
+            if self._leaf_hash(self._target_path(row["target"])) != row["sha256"]:
                 return False
-            if self._sha256(content) != row[hash_field]:
+            if self._leaf_hash(commit_path / row["publish"]) != row["sha256"]:
+                return False
+            displaced = commit_path / "displaced" / f"{index:04d}"
+            if row["existed"] and self._leaf_hash(displaced) != row["backup_sha256"]:
+                return False
+            if not row["existed"] and (displaced.exists() or displaced.is_symlink()):
                 return False
         return True
 
-    def _replace_target(self, rel: str, content: bytes, commit_id: str, index: int) -> None:
-        target = self._target_path(rel)
-        self._mkdir_durable(target.parent)
-        self._assert_safe_parents(target)
-        if target.is_symlink():
-            raise ValueError(f"journal target is a symlink: {rel}")
-        temp = target.parent / f".ntrp-{commit_id[:12]}-{index}.tmp"
+    def _expected_restore_source(self, commit_path: Path, row: dict, index: int) -> Path:
+        displaced = commit_path / "displaced" / f"{index:04d}"
+        if self._leaf_hash(displaced) == row["backup_sha256"]:
+            return displaced
+        backup = commit_path / row["backup"]
+        if self._leaf_hash(backup) != row["backup_sha256"]:
+            self._mark_conflict(commit_path, f"journal backup artifact is invalid: {row['target']}")
+        return backup
+
+    def _preserve_rejected_target(self, commit_path: Path, target: Path, index: int) -> None:
+        rejected = commit_path / "rejected" / f"{index:04d}"
+        self._validate_artifact_file(commit_path, rejected, require_file=False)
+        if rejected.exists() or rejected.is_symlink():
+            self._mark_conflict(commit_path, f"journal rejected path already exists: {target}")
+        os.rename(target, rejected)
+        self._fsync_dir(target.parent)
+        self._fsync_dir(rejected.parent)
+
+    def _restore_displaced_no_clobber(self, commit_path: Path, displaced: Path, target: Path) -> None:
+        if target.exists() or target.is_symlink():
+            return
         try:
-            self._write_fsynced(temp, content)
-            os.replace(temp, target)
-            self._fsync_dir(target.parent)
-        finally:
-            temp.unlink(missing_ok=True)
+            os.link(displaced, target, follow_symlinks=False)
+        except OSError:
+            return
+        self._fsync_dir(target.parent)
+
+    def _link_no_clobber(self, source: Path, target: Path, commit_path: Path) -> None:
+        try:
+            os.link(source, target, follow_symlinks=False)
+        except OSError as exc:
+            self._mark_conflict(commit_path, f"journal rollback conflicted: {target}: {exc}")
+        self._fsync_dir(target.parent)
+
+    def _mark_conflict(self, commit_path: Path, message: str) -> None:
+        self._write_marker(commit_path, "CONFLICT")
+        self._checkpoint("after_conflict")
+        self._archive_commit(commit_path)
+        raise JournalConflictError(f"journal conflict: {message}")
+
+    def _write_marker(self, commit_path: Path, name: str) -> None:
+        marker = commit_path / "markers" / name
+        self._write_fsynced(marker, b"")
+        self._fsync_dir(marker.parent)
+        self._fsync_dir(commit_path)
+
+    def _has_marker(self, commit_path: Path, name: str) -> bool:
+        marker = commit_path / "markers" / name
+        self._validate_internal_file(marker)
+        return marker.is_file()
+
+    @staticmethod
+    def _leaf_hash(path: Path) -> str | None:
+        try:
+            path_st = path.lstat()
+        except FileNotFoundError:
+            return None
+        if stat.S_ISLNK(path_st.st_mode) or not stat.S_ISREG(path_st.st_mode):
+            return None
+        return hashlib.sha256(path.read_bytes()).hexdigest()
 
     def _publish_revision(self, commit_id: str) -> None:
-        self._validate_metadata_paths()
+        with self._locked():
+            self._publish_revision_locked(commit_id)
+
+    def _publish_revision_locked(self, commit_id: str, *, expected_previous: str | None = None) -> None:
+        current = self._canonical_revision_locked()
+        if current == commit_id:
+            return
+        if expected_previous is not None and current != expected_previous:
+            raise JournalConflictError("journal canonical revision advanced after commit decision")
         self._mkdir_durable(self._meta_root)
         temp = self._meta_root / ".canonical-revision.tmp"
         self._write_fsynced(temp, (commit_id + "\n").encode("ascii"))
         os.replace(temp, self._revision_path)
         self._fsync_dir(self._meta_root)
-
-    def _restore_revision(self, revision: str) -> None:
-        if revision:
-            self._publish_revision(revision)
-            return
-        self._validate_metadata_paths()
-        if self._revision_path.exists():
-            self._revision_path.unlink()
-            self._fsync_dir(self._meta_root)
 
     def _remove_commit(self, commit_path: Path) -> None:
         self._validate_metadata_paths()
@@ -397,6 +578,23 @@ class VaultJournal:
         self._validate_artifact_directories(commit_path)
         shutil.rmtree(commit_path)
         self._fsync_dir(self._journal_root)
+
+    def _archive_commit(self, commit_path: Path) -> Path:
+        self._validate_commit_path(commit_path)
+        self._validate_artifact_directories(commit_path)
+        self._mkdir_durable(self._versions_root)
+        archive = self._versions_root / commit_path.name
+        if archive.is_symlink():
+            raise ValueError(f"journal version path already exists: {archive}")
+        if archive.exists():
+            if not archive.is_dir():
+                raise ValueError(f"journal version path already exists: {archive}")
+            archive = self._versions_root / f"{commit_path.name}-{uuid4().hex}"
+        os.rename(commit_path, archive)
+        self._fsync_dir(self._journal_root)
+        self._fsync_dir(self._versions_root)
+        self._remove_empty_journal_root()
+        return archive
 
     def _remove_empty_journal_root(self) -> None:
         self._validate_metadata_paths()
@@ -479,11 +677,55 @@ class VaultJournal:
             if not stat.S_ISDIR(current_st.st_mode):
                 raise ValueError(f"journal target parent is not a directory: {current}")
 
+    @contextmanager
+    def _locked(self) -> Iterator[None]:
+        with self._thread_lock, self._process_locked():
+            yield
+
+    @contextmanager
+    def _process_locked(self) -> Iterator[None]:
+        if self._lock_depth:
+            self._lock_depth += 1
+            try:
+                yield
+            finally:
+                self._lock_depth -= 1
+            return
+
+        self._validate_metadata_paths()
+        self._mkdir_durable(self._meta_root)
+        self._validate_metadata_paths()
+        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(self._lock_path, flags, 0o600)
+        try:
+            opened = os.fstat(descriptor)
+            linked = self._lock_path.lstat()
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or opened.st_dev != linked.st_dev
+                or opened.st_ino != linked.st_ino
+                or opened.st_nlink != 1
+            ):
+                raise ValueError(f"journal lock path is not an anchored regular file: {self._lock_path}")
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            linked = self._lock_path.lstat()
+            if opened.st_dev != linked.st_dev or opened.st_ino != linked.st_ino:
+                raise ValueError(f"journal lock path changed while locking: {self._lock_path}")
+            self._lock_depth = 1
+            self._validate_metadata_paths()
+            yield
+        finally:
+            self._lock_depth = 0
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
+
     def _validate_metadata_paths(self) -> None:
         for path, expected_directory in (
             (self._meta_root, True),
             (self._journal_root, True),
+            (self._versions_root, True),
             (self._revision_path, False),
+            (self._lock_path, False),
         ):
             if path.is_symlink():
                 raise ValueError(f"journal metadata path is a symlink: {path}")
@@ -510,7 +752,7 @@ class VaultJournal:
 
     def _validate_artifact_directories(self, commit_path: Path) -> None:
         self._validate_commit_path(commit_path)
-        for name in ("staged", "backups"):
+        for name in ("staged", "backups", "publish", "displaced", "rejected", "markers"):
             directory = commit_path / name
             if directory.is_symlink():
                 raise ValueError(f"journal artifact directory is a symlink: {directory}")
@@ -525,6 +767,7 @@ class VaultJournal:
         for row in manifest["files"]:
             self._validate_artifact_file(commit_path, commit_path / row["staged"], require_file=False)
             self._validate_artifact_file(commit_path, commit_path / row["backup"], require_file=False)
+            self._validate_artifact_file(commit_path, commit_path / row["publish"], require_file=False)
 
     def _validate_artifact_file(self, commit_path: Path, artifact: Path, *, require_file: bool) -> None:
         try:
@@ -566,8 +809,12 @@ class VaultJournal:
             try:
                 child_st = child.lstat()
             except FileNotFoundError:
-                child.mkdir()
-                self._fsync_dir(current)
+                try:
+                    child.mkdir()
+                except FileExistsError:
+                    pass
+                else:
+                    self._fsync_dir(current)
                 child_st = child.lstat()
             if stat.S_ISLNK(child_st.st_mode):
                 raise ValueError(f"journal directory is a symlink: {child}")
@@ -590,7 +837,12 @@ class VaultJournal:
         if not isinstance(raw, str):
             raise TypeError("journal artifact path must be text")
         path = Path(raw)
-        if path.is_absolute() or len(path.parts) != 2 or path.parts[0] != expected_dir or path.parts[1] in {"", ".", ".."}:
+        if (
+            path.is_absolute()
+            or len(path.parts) != 2
+            or path.parts[0] != expected_dir
+            or path.parts[1] in {"", ".", ".."}
+        ):
             raise ValueError("invalid journal artifact path")
         return commit_path / path
 

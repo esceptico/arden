@@ -1,4 +1,7 @@
+import errno
 import json
+import multiprocessing
+import os
 import shutil
 from pathlib import Path
 
@@ -11,6 +14,26 @@ class InjectedFailure(RuntimeError):
     pass
 
 
+def _cooperating_commit(root: str, content: bytes, barrier, results) -> None:
+    journal = VaultJournal(Path(root))
+    finish = journal._finish
+
+    def synchronized_finish(commit_path, manifest, commit_id) -> None:
+        try:
+            barrier.wait(timeout=2)
+        except Exception:
+            pass
+        finish(commit_path, manifest, commit_id)
+
+    journal._finish = synchronized_finish
+    try:
+        journal.commit({Path("me.md"): content}, expected_files={Path("me.md"): b"old"})
+    except Exception as exc:
+        results.put((content, type(exc).__name__))
+    else:
+        results.put((content, "committed"))
+
+
 def _seed_pair(root: Path) -> None:
     (root / "raw").mkdir(parents=True)
     (root / "me.md").write_bytes(b"old")
@@ -21,12 +44,226 @@ def _read_pair(root: Path) -> tuple[bytes, bytes]:
     return (root / "me.md").read_bytes(), (root / "raw" / "me.md").read_bytes()
 
 
+def test_commit_preserves_an_external_atomic_replacement_at_finish_entry(tmp_path: Path, monkeypatch) -> None:
+    target = tmp_path / "me.md"
+    target.write_bytes(b"old")
+    journal = VaultJournal(tmp_path)
+    finish = journal._finish
+
+    def replace_then_finish(commit_path, manifest, commit_id) -> None:
+        replacement = tmp_path / "external.tmp"
+        replacement.write_bytes(b"external")
+        os.replace(replacement, target)
+        finish(commit_path, manifest, commit_id)
+
+    monkeypatch.setattr(journal, "_finish", replace_then_finish)
+
+    with pytest.raises(ValueError, match=r"conflict|expected state changed"):
+        journal.commit({Path("me.md"): b"candidate"}, expected_files={Path("me.md"): b"old"})
+
+    assert target.read_bytes() == b"external"
+    versions = list((tmp_path / ".ntrp" / "versions").glob("*/"))
+    assert len(versions) == 1
+    assert (versions[0] / "staged" / "0000").read_bytes() == b"candidate"
+    assert (versions[0] / "displaced" / "0000").read_bytes() == b"external"
+
+
+def test_cross_process_lock_allows_only_one_expected_state_commit(tmp_path: Path) -> None:
+    (tmp_path / "me.md").write_bytes(b"old")
+    context = multiprocessing.get_context("spawn")
+    barrier = context.Barrier(2)
+    results = context.Queue()
+    processes = [
+        context.Process(target=_cooperating_commit, args=(str(tmp_path), content, barrier, results))
+        for content in (b"first", b"second")
+    ]
+
+    for process in processes:
+        process.start()
+    outcomes = [results.get(timeout=10) for _ in processes]
+    for process in processes:
+        process.join(timeout=10)
+
+    assert all(process.exitcode == 0 for process in processes)
+    assert sorted(outcome for _, outcome in outcomes) == ["JournalConflictError", "committed"]
+    committed = next(content for content, outcome in outcomes if outcome == "committed")
+    assert (tmp_path / "me.md").read_bytes() == committed
+
+
+def test_late_open_descriptor_write_survives_in_displaced_version(tmp_path: Path, monkeypatch) -> None:
+    target = tmp_path / "me.md"
+    target.write_bytes(b"old")
+    journal = VaultJournal(tmp_path)
+
+    with target.open("r+b") as external:
+
+        def write_after_install(point: str) -> None:
+            if point == "after_installed:0":
+                external.seek(0)
+                external.write(b"external-late")
+                external.truncate()
+                external.flush()
+                os.fsync(external.fileno())
+
+        monkeypatch.setattr(journal, "_checkpoint", write_after_install)
+        journal.commit({Path("me.md"): b"candidate"}, expected_files={Path("me.md"): b"old"})
+
+    assert target.read_bytes() == b"candidate"
+    versions = list((tmp_path / ".ntrp" / "versions").glob("*/displaced/0000"))
+    assert len(versions) == 1
+    assert versions[0].read_bytes() == b"external-late"
+
+
+def test_external_replacement_after_install_is_not_overwritten(tmp_path: Path, monkeypatch) -> None:
+    target = tmp_path / "me.md"
+    target.write_bytes(b"old")
+    journal = VaultJournal(tmp_path)
+
+    def replace_after_install(point: str) -> None:
+        if point == "after_installed:0":
+            replacement = tmp_path / "external.tmp"
+            replacement.write_bytes(b"external")
+            os.replace(replacement, target)
+
+    monkeypatch.setattr(journal, "_checkpoint", replace_after_install)
+
+    with pytest.raises(ValueError, match="conflict"):
+        journal.commit({Path("me.md"): b"candidate"}, expected_files={Path("me.md"): b"old"})
+
+    assert target.read_bytes() == b"external"
+    archived = next((tmp_path / ".ntrp" / "versions").iterdir())
+    assert (archived / "staged" / "0000").read_bytes() == b"candidate"
+    assert (archived / "displaced" / "0000").read_bytes() == b"old"
+
+
+def test_external_replacement_in_move_link_gap_is_preserved(tmp_path: Path, monkeypatch) -> None:
+    target = tmp_path / "me.md"
+    target.write_bytes(b"old")
+    journal = VaultJournal(tmp_path)
+
+    def replace_in_gap(point: str) -> None:
+        if point == "after_displaced:0":
+            replacement = tmp_path / "external.tmp"
+            replacement.write_bytes(b"external")
+            os.replace(replacement, target)
+
+    monkeypatch.setattr(journal, "_checkpoint", replace_in_gap)
+
+    with pytest.raises(ValueError, match="conflict"):
+        journal.commit({Path("me.md"): b"candidate"}, expected_files={Path("me.md"): b"old"})
+
+    assert target.read_bytes() == b"external"
+    archived = next((tmp_path / ".ntrp" / "versions").iterdir())
+    assert (archived / "staged" / "0000").read_bytes() == b"candidate"
+    assert (archived / "displaced" / "0000").read_bytes() == b"old"
+
+
+def test_external_replacement_after_commit_decision_remains_visible(tmp_path: Path, monkeypatch) -> None:
+    target = tmp_path / "me.md"
+    target.write_bytes(b"old")
+    journal = VaultJournal(tmp_path)
+
+    def replace_after_decision(point: str) -> None:
+        if point == "after_decided_commit":
+            replacement = tmp_path / "external.tmp"
+            replacement.write_bytes(b"external")
+            os.replace(replacement, target)
+
+    monkeypatch.setattr(journal, "_checkpoint", replace_after_decision)
+
+    revision = journal.commit({Path("me.md"): b"candidate"}, expected_files={Path("me.md"): b"old"})
+
+    assert target.read_bytes() == b"external"
+    assert journal.canonical_revision == revision
+    archived = tmp_path / ".ntrp" / "versions" / revision
+    assert (archived / "staged" / "0000").read_bytes() == b"candidate"
+    assert (archived / "displaced" / "0000").read_bytes() == b"old"
+
+
+@pytest.mark.parametrize(
+    ("failpoint", "expected"),
+    [
+        ("after_move:0", (b"old", b"raw-old")),
+        ("after_move_target_fsync:0", (b"old", b"raw-old")),
+        ("after_move_displaced_fsync:0", (b"old", b"raw-old")),
+        ("after_displaced:0", (b"old", b"raw-old")),
+        ("after_link:0", (b"old", b"raw-old")),
+        ("after_link_fsync:0", (b"old", b"raw-old")),
+        ("after_installed:0", (b"old", b"raw-old")),
+        ("before_decided_commit", (b"new", b"raw-new")),
+        ("after_decided_commit", (b"new", b"raw-new")),
+        ("before_revision_publish", (b"new", b"raw-new")),
+        ("after_revision_published", (b"new", b"raw-new")),
+    ],
+)
+def test_recovery_is_idempotent_at_publish_boundaries(
+    tmp_path: Path, monkeypatch, failpoint: str, expected: tuple[bytes, bytes]
+) -> None:
+    _seed_pair(tmp_path)
+    journal = VaultJournal(tmp_path)
+
+    def inject(point: str) -> None:
+        if point == failpoint:
+            raise InjectedFailure(point)
+
+    monkeypatch.setattr(journal, "_checkpoint", inject)
+    with pytest.raises(InjectedFailure, match=failpoint):
+        journal.commit({Path("me.md"): b"new", Path("raw/me.md"): b"raw-new"})
+
+    recovered = VaultJournal(tmp_path).recover()
+
+    assert len(recovered) == 1
+    assert _read_pair(tmp_path) == expected
+    assert VaultJournal(tmp_path).recover() == ()
+    assert not (tmp_path / ".ntrp" / "journal").exists()
+
+
+def test_conflict_recovery_is_idempotent_after_conflict_marker(tmp_path: Path, monkeypatch) -> None:
+    target = tmp_path / "me.md"
+    target.write_bytes(b"old")
+    journal = VaultJournal(tmp_path)
+
+    def interrupt_conflict(point: str) -> None:
+        if point == "after_displaced:0":
+            replacement = tmp_path / "external.tmp"
+            replacement.write_bytes(b"external")
+            os.replace(replacement, target)
+        if point == "after_conflict":
+            raise InjectedFailure(point)
+
+    monkeypatch.setattr(journal, "_checkpoint", interrupt_conflict)
+    with pytest.raises(InjectedFailure, match="after_conflict"):
+        journal.commit({Path("me.md"): b"candidate"}, expected_files={Path("me.md"): b"old"})
+
+    assert target.read_bytes() == b"external"
+    assert len(VaultJournal(tmp_path).recover()) == 1
+    assert target.read_bytes() == b"external"
+    assert VaultJournal(tmp_path).recover() == ()
+
+
+def test_unsupported_hard_links_fail_closed_before_displacement(tmp_path: Path, monkeypatch) -> None:
+    target = tmp_path / "me.md"
+    target.write_bytes(b"old")
+
+    def unsupported(*args, **kwargs) -> None:
+        raise OSError(errno.EXDEV, "cross-device link")
+
+    monkeypatch.setattr(os, "link", unsupported)
+
+    with pytest.raises(ValueError, match="hard links are unsupported"):
+        VaultJournal(tmp_path).commit({Path("me.md"): b"candidate"})
+
+    assert target.read_bytes() == b"old"
+    archived = next((tmp_path / ".ntrp" / "versions").iterdir())
+    assert (archived / "staged" / "0000").read_bytes() == b"candidate"
+
+
 @pytest.mark.parametrize(
     ("failpoint", "expected"),
     [
         ("before_prepare_complete", (b"old", b"raw-old")),
-        ("after_prepared", (b"new", b"raw-new")),
-        ("after_replace:0", (b"new", b"raw-new")),
+        ("after_prepared", (b"old", b"raw-old")),
+        ("after_replace:0", (b"old", b"raw-old")),
         ("after_committed", (b"new", b"raw-new")),
     ],
 )
@@ -105,16 +342,17 @@ def test_recovery_resumes_cleanup_after_a_completed_rollback(tmp_path: Path, mon
 
     recovering = VaultJournal(tmp_path)
 
+    archive_commit = recovering._archive_commit
+
     def interrupt_cleanup(path: Path) -> None:
-        shutil.rmtree(path / "staged")
-        shutil.rmtree(path / "backups")
         raise InjectedFailure("cleanup")
 
-    monkeypatch.setattr(recovering, "_remove_commit", interrupt_cleanup)
+    monkeypatch.setattr(recovering, "_archive_commit", interrupt_cleanup)
     with pytest.raises(InjectedFailure, match="cleanup"):
         recovering.recover()
 
-    assert (commit_dir / "ROLLED_BACK").exists()
+    assert (commit_dir / "markers" / "ROLLED_BACK").exists()
+    monkeypatch.setattr(recovering, "_archive_commit", archive_commit)
     VaultJournal(tmp_path).recover()
     assert _read_pair(tmp_path) == (b"old", b"raw-old")
     assert not (tmp_path / ".ntrp" / "journal").exists()
@@ -188,7 +426,7 @@ def test_commit_rejects_intervening_change_to_expected_file(tmp_path: Path, monk
     assert not (tmp_path / ".ntrp" / "journal").exists()
 
 
-@pytest.mark.parametrize("hostile", ["meta", "journal", "revision"])
+@pytest.mark.parametrize("hostile", ["meta", "journal", "versions", "revision", "lock"])
 def test_commit_rejects_symlinked_internal_journal_paths(tmp_path: Path, hostile: str) -> None:
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -202,6 +440,10 @@ def test_commit_rejects_symlinked_internal_journal_paths(tmp_path: Path, hostile
         meta.mkdir()
         if hostile == "journal":
             (meta / "journal").symlink_to(outside, target_is_directory=True)
+        elif hostile == "versions":
+            (meta / "versions").symlink_to(outside, target_is_directory=True)
+        elif hostile == "lock":
+            (meta / "canonical.lock").symlink_to(outside / "lock")
         else:
             external_revision = outside / "revision"
             external_revision.write_text("sentinel", encoding="utf-8")

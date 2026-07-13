@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+import ntrp.memory.migrate_ledger_v2 as migration_module
 from ntrp.memory.file_store import FilePageStore
 from ntrp.memory.journal import VaultJournal
 from ntrp.memory.ledger import LedgerEntry, LedgerMeta, render_ledger_entry
@@ -44,7 +46,13 @@ def _v2_page(root: Path, rel: str, entries: list[LedgerEntry], *, cites: list[st
     raw.write_text(fm + f"<!-- ntrp:records schema=2 page={rel} -->\n" + "\n".join(render_ledger_entry(e) for e in entries) + "\n", encoding="utf-8")
 
 
-def test_clean_legacy_vault_is_backed_up_staged_validated_and_committed(tmp_path: Path) -> None:
+def test_clean_legacy_vault_is_backed_up_staged_validated_and_committed(tmp_path: Path, monkeypatch) -> None:
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 7, 12, 12, tzinfo=tz)
+
+    monkeypatch.setattr(migration_module, "datetime", FrozenDateTime)
     legacy = "- 2025-01-03 ^old [fact] [imp:7] (src:curator) Legacy fact"
     _legacy_page(tmp_path, "me.md", legacy)
 
