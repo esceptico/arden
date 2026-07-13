@@ -17,19 +17,22 @@ function NoteRow({
   artifact,
   description,
   selected,
+  disabled,
   onSelect,
 }: {
   artifact: MemoryArtifactSummary;
   description: string;
   selected: boolean;
+  disabled: boolean;
   onSelect: (path: string) => void;
 }) {
   return (
     <button
       type="button"
+      disabled={disabled}
       data-memory-entry={artifact.path}
       onClick={() => onSelect(artifact.path)}
-      className="app-row group w-full rounded-[10px] px-2.5 py-2 text-left"
+      className="app-row group w-full rounded-[10px] px-2.5 py-2 text-left disabled:opacity-50"
       data-active={selected}
       aria-current={selected ? "page" : undefined}
     >
@@ -45,11 +48,13 @@ function RailEntry({
   entry,
   depth,
   selectedPath,
+  disabled,
   onSelect,
 }: {
   entry: NotebookRailEntry;
   depth: number;
   selectedPath: string | null;
+  disabled: boolean;
   onSelect: (path: string) => void;
 }) {
   if (entry.kind === "note") {
@@ -58,6 +63,7 @@ function RailEntry({
         artifact={entry.artifact}
         description={entry.description}
         selected={selectedPath === entry.path}
+        disabled={disabled}
         onSelect={onSelect}
       />
     );
@@ -77,7 +83,7 @@ function RailEntry({
       {entry.children.length > 0 && (
         <div className="flex flex-col gap-1">
           {entry.children.map((child) => (
-            <RailEntry key={`${child.kind}:${child.path}`} entry={child} depth={depth + 1} selectedPath={selectedPath} onSelect={onSelect} />
+            <RailEntry key={`${child.kind}:${child.path}`} entry={child} depth={depth + 1} selectedPath={selectedPath} disabled={disabled} onSelect={onSelect} />
           ))}
         </div>
       )}
@@ -98,6 +104,7 @@ export function NotebookRail({
   indexBlocked,
   rebuilding,
   recordsOpen,
+  navigationDisabled,
   recordsTriggerRef,
   onQueryChange,
   onSelect,
@@ -118,6 +125,7 @@ export function NotebookRail({
   indexBlocked: boolean;
   rebuilding: boolean;
   recordsOpen: boolean;
+  navigationDisabled: boolean;
   recordsTriggerRef: RefObject<HTMLButtonElement | null>;
   onQueryChange: (value: string) => void;
   onSelect: (path: string) => void;
@@ -159,6 +167,7 @@ export function NotebookRail({
                     artifact={artifact}
                     description={descriptionFor(artifact) ?? ""}
                     selected={selectedPath === artifact.path}
+                    disabled={navigationDisabled}
                     onSelect={onSelect}
                   />
                 ))}
@@ -190,7 +199,7 @@ export function NotebookRail({
         ) : (
           <div className="flex flex-col gap-4">
             {model.entries.map((entry) => (
-              <RailEntry key={`${entry.kind}:${entry.path}`} entry={entry} depth={0} selectedPath={selectedPath} onSelect={onSelect} />
+              <RailEntry key={`${entry.kind}:${entry.path}`} entry={entry} depth={0} selectedPath={selectedPath} disabled={navigationDisabled} onSelect={onSelect} />
             ))}
             {model.files.length > 0 && (
               <details data-memory-files className="group/files rounded-[10px] bg-surface-soft/35 px-2 py-1.5">
@@ -201,7 +210,7 @@ export function NotebookRail({
                 </summary>
                 <div className="mt-1 flex flex-col gap-1 pb-1">
                   {model.files.map((artifact) => (
-                    <FlatRow key={artifact.path} a={artifact} active={selectedPath === artifact.path} onSelect={onSelect} />
+                    <FlatRow key={artifact.path} a={artifact} active={selectedPath === artifact.path} disabled={navigationDisabled} onSelect={onSelect} />
                   ))}
                 </div>
               </details>
@@ -213,10 +222,11 @@ export function NotebookRail({
         <button
           ref={recordsTriggerRef}
           type="button"
+          disabled={navigationDisabled}
           aria-label="Open raw records diagnostic"
           aria-pressed={recordsOpen}
           onClick={onToggleRecords}
-          className="flex h-7 items-center gap-1.5 rounded-[8px] px-2 text-xs text-muted hover:bg-surface-soft hover:text-ink-soft"
+          className="flex h-7 items-center gap-1.5 rounded-[8px] px-2 text-xs text-muted hover:bg-surface-soft hover:text-ink-soft disabled:opacity-50"
         >
           <Database className="h-3.5 w-3.5" />
           Raw records

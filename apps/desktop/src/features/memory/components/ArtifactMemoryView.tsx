@@ -222,7 +222,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const [editing, setEditing] = useState<EditingSession | null>(null);
   const [editReview, setEditReview] = useState<ReviewState | null>(null);
   const [externalReviewQueue, setExternalReviewQueue] = useState<PageEditEvent[]>([]);
-  const [externalReviewPaused, setExternalReviewPaused] = useState(false);
+  const [pausedExternalReviewId, setPausedExternalReviewId] = useState<string | null>(null);
   const [editDecisions, setEditDecisions] = useState<Record<string, DiffReviewDecision>>({});
   const [editPending, setEditPending] = useState(false);
   const [reviewPending, setReviewPending] = useState(false);
@@ -246,21 +246,41 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const editingRef = useRef<EditingSession | null>(null);
   const editReviewRef = useRef<ReviewState | null>(null);
   const editRequestGeneration = useRef(0);
+  const editPreviewController = useRef<AbortController | null>(null);
   const reviewGeneration = useRef(0);
   const applyGeneration = useRef(0);
+  const mutationPendingRef = useRef(false);
   const externalReviewQueueRef = useRef<PageEditEvent[]>([]);
   const memoryVaultChangesRef = useRef(useStore.getState().memoryVaultChanges);
   const processedMemoryChangeSeqs = useRef(new Set<number>());
   const memoryChangeDrainRunning = useRef(false);
-  const memoryChangeDrainGeneration = useRef(0);
+  const memoryChangeDrainRequested = useRef(false);
   const memoryChangeDrainRef = useRef<(() => Promise<void>) | null>(null);
   const restoreNoteFocus = useRef(false);
+  const mountedRef = useRef(true);
+  const disposeControllerRef = useRef(new AbortController());
 
   artifactsRef.current = artifacts;
   queryRef.current = query.trim();
   editingRef.current = editing;
   editReviewRef.current = editReview;
   externalReviewQueueRef.current = externalReviewQueue;
+
+  useEffect(() => {
+    mountedRef.current = true;
+    if (disposeControllerRef.current.signal.aborted) disposeControllerRef.current = new AbortController();
+    return () => {
+      mountedRef.current = false;
+      disposeControllerRef.current.abort();
+      summaryRequest.current?.controller.abort();
+      linksRequestId.current += 1;
+      historyRequestId.current += 1;
+      recordsRequestId.current += 1;
+      indexGeneration.current += 1;
+      editRequestGeneration.current += 1;
+      editPreviewController.current?.abort();
+    };
+  }, []);
 
   const beginSummaryRequest = useCallback((): SummaryRequest => {
     summaryRequest.current?.controller.abort();
@@ -289,7 +309,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       const cached = indexDetailCache.current.get(summary.path, revision);
       if (cached != null) return { path: summary.path, content: cached, error: null };
       try {
-        const response = await readMemoryArtifactDetail(config, summary.path);
+        const response = await readMemoryArtifactDetail(config, summary.path, { signal: disposeControllerRef.current.signal });
         indexDetailCache.current.set(summary.path, response.artifact.revision, response.artifact.content);
         return { path: summary.path, content: response.artifact.content, error: null };
       } catch (reason) {
@@ -300,7 +320,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
         };
       }
     }));
-    if (generation !== indexGeneration.current) return;
+    if (!mountedRef.current || generation !== indexGeneration.current) return;
     setIndexDocuments((current) => {
       const next = new Map<string, string>();
       for (const result of results) {
@@ -412,6 +432,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
 
   useEffect(() => {
     if (indexLoading) return;
+    if (mutationPendingRef.current) return;
     const fallback = firstNotebookPath(railModel.entries) ?? railModel.files[0]?.path ?? null;
     if (selected && (
       navigableArtifacts.some((artifact) => artifact.path === selected)
@@ -422,7 +443,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       setHistoryVersion((version) => version + 1);
     }
     setSelected(fallback);
-  }, [indexLoading, navigableArtifacts, railModel.entries, railModel.files, searchResults, selected]);
+  }, [indexLoading, navigableArtifacts, railModel.entries, railModel.files, reviewPending, searchResults, selected]);
 
   const primaryOrder = useMemo(() => {
     const paths: string[] = [];
@@ -467,6 +488,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   }, [selected, selectedMeta?.path]);
 
   const navigateTo = useCallback((path: string, anchor: string | null = null) => {
+    if (mutationPendingRef.current) return;
     const destination = navigationHistory.current.current;
     if (destination?.path === path && destination.anchor === anchor) {
       if (anchor) {
@@ -495,6 +517,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const selectFile = useCallback((path: string) => navigateTo(path), [navigateTo]);
 
   const moveHistory = useCallback((movement: "back" | "forward") => {
+    if (mutationPendingRef.current) return;
     const current = currentLocation();
     if (current) navigationHistory.current.replaceCurrent(current);
     const location = movement === "back" ? navigationHistory.current.back() : navigationHistory.current.forward();
@@ -536,7 +559,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   }, [closeRecords, recordsOpen]);
 
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
     if (!selectedMeta) {
       setActiveDetail(null);
       setContentLoading(false);
@@ -552,9 +575,9 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     setActiveDetail((current) => current?.path === selectedMeta.path ? current : null);
     setContentLoading(true);
     setContentError(null);
-    readMemoryArtifactDetail(config, selectedMeta.path)
+    readMemoryArtifactDetail(config, selectedMeta.path, { signal: controller.signal })
       .then((response) => {
-        if (cancelled) return;
+        if (controller.signal.aborted || !mountedRef.current) return;
         const detail = response.artifact;
         detailCache.current.set(detail);
         setActiveDetail(detail);
@@ -565,11 +588,11 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
         }
       })
       .catch((reason) => {
-        if (cancelled) return;
+        if (controller.signal.aborted || !mountedRef.current) return;
         if (isMissingArtifactError(reason)) {
           const missingPath = selectedMeta.path;
           setArtifacts((current) => current.filter((artifact) => artifact.path !== missingPath));
-          setSelected((current) => current === missingPath ? null : current);
+          if (!mutationPendingRef.current) setSelected((current) => current === missingPath ? null : current);
           setActiveDetail(null);
           setContentNotice("That memory note changed or disappeared; refreshed the index.");
           void load();
@@ -578,11 +601,9 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
         setContentError(reason instanceof Error ? reason.message : String(reason));
       })
       .finally(() => {
-        if (!cancelled) setContentLoading(false);
+        if (!controller.signal.aborted && mountedRef.current) setContentLoading(false);
       });
-    return () => {
-      cancelled = true;
-    };
+    return () => controller.abort();
   }, [config, contentRefreshKey, load, selectedMeta?.path, selectedMeta?.revision]);
 
   useEffect(() => {
@@ -650,55 +671,64 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const observedVaultVersion = useRef(memoryVaultVersion);
   const observedVaultChanges = useRef(memoryVaultChanges);
 
+  const rememberExternalReview = useCallback((event: PageEditEvent) => {
+    const next = enqueueExternalReview(externalReviewQueueRef.current, event);
+    externalReviewQueueRef.current = next;
+    setExternalReviewQueue(next);
+  }, []);
+
   const drainMemoryChanges = useCallback(async () => {
-    if (memoryChangeDrainRunning.current) return;
+    if (memoryChangeDrainRunning.current) {
+      memoryChangeDrainRequested.current = true;
+      return;
+    }
     memoryChangeDrainRunning.current = true;
     try {
       while (true) {
         const next = memoryVaultChangesRef.current.find((change) => !processedMemoryChangeSeqs.current.has(change.seq));
         if (!next) break;
-        processedMemoryChangeSeqs.current.add(next.seq);
         const current = selectedMetaRef.current;
-        if (!current || !next.paths.includes(current.path)) continue;
-        const path = current.path;
-        const generation = memoryChangeDrainGeneration.current;
-        detailCache.current.invalidatePath(path);
-        setContentRefreshKey((key) => key + 1);
-        const accepted = await load();
-        if (
-          generation !== memoryChangeDrainGeneration.current
-          || selectedMetaRef.current?.path !== path
-        ) continue;
-        if (accepted && queryRef.current) await search(queryRef.current);
-        if (recordsOpen) setRecordsRefreshKey((key) => key + 1);
-        if (!next.reviewRequired || !next.revision) continue;
-        try {
-          const history = await getPageHistory(config, { path, limit: 100 });
-          if (
-            generation !== memoryChangeDrainGeneration.current
-            || selectedMetaRef.current?.path !== path
-          ) continue;
-          const event = history.events.find((candidate) =>
-            candidate.origin === "external"
-            && candidate.reconciliation === "needs_review"
-            && candidate.resultRevision === next.revision,
-          );
-          if (!event || editReviewRef.current?.kind === "external" && editReviewRef.current.event.id === event.id) continue;
-          setExternalReviewPaused(false);
-          setExternalReviewQueue((currentQueue) => enqueueExternalReview(currentQueue, event));
-        } catch (reason) {
-          if (generation === memoryChangeDrainGeneration.current) {
-            setEditError(reason instanceof Error ? reason.message : String(reason));
+        if (current && next.paths.includes(current.path)) {
+          detailCache.current.invalidatePath(current.path);
+          if (mountedRef.current) setContentRefreshKey((key) => key + 1);
+          const accepted = await load();
+          if (mountedRef.current && accepted && queryRef.current) await search(queryRef.current);
+          if (mountedRef.current && recordsOpen) setRecordsRefreshKey((key) => key + 1);
+        }
+        if (next.reviewRequired && next.revision) {
+          try {
+            for (const path of next.paths) {
+              const history = await getPageHistory(
+                config,
+                { path, limit: 100 },
+                { signal: disposeControllerRef.current.signal },
+              );
+              if (!mountedRef.current) return;
+              const event = history.events.find((candidate) =>
+                candidate.path === path
+                && candidate.origin === "external"
+                && candidate.reconciliation === "needs_review"
+                && candidate.resultRevision === next.revision,
+              );
+              if (event) rememberExternalReview(event);
+            }
+          } catch (reason) {
+            if (mountedRef.current && selectedMetaRef.current && next.paths.includes(selectedMetaRef.current.path)) {
+              setEditError(reason instanceof Error ? reason.message : String(reason));
+            }
+            return;
           }
         }
+        processedMemoryChangeSeqs.current.add(next.seq);
       }
     } finally {
       memoryChangeDrainRunning.current = false;
-      if (memoryVaultChangesRef.current.some((change) => !processedMemoryChangeSeqs.current.has(change.seq))) {
+      if (memoryChangeDrainRequested.current) {
+        memoryChangeDrainRequested.current = false;
         queueMicrotask(() => void memoryChangeDrainRef.current?.());
       }
     }
-  }, [config, load, recordsOpen, search]);
+  }, [config, load, recordsOpen, rememberExternalReview, search]);
   memoryChangeDrainRef.current = drainMemoryChanges;
 
   useEffect(() => {
@@ -711,7 +741,6 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   }, [drainMemoryChanges, memoryVaultChanges]);
 
   useEffect(() => {
-    memoryChangeDrainGeneration.current += 1;
     void drainMemoryChanges();
   }, [drainMemoryChanges, selectedMeta?.path]);
 
@@ -738,6 +767,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     && activeDetail.content.includes("[[");
   const shouldLoadLinks = selectedHasWikilinks || inspectorOpen;
   useEffect(() => {
+    const controller = new AbortController();
     const requestId = ++linksRequestId.current;
     setPageLinks(null);
     setLinksLoadingMore(false);
@@ -747,17 +777,19 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       return;
     }
     setLinksLoading(true);
-    getPageLinks(config, { path: selectedMeta.path, limit: 100, offset: 0 }).then((links) => {
-      if (linksRequestId.current === requestId) setPageLinks(links);
+    getPageLinks(config, { path: selectedMeta.path, limit: 100, offset: 0 }, { signal: controller.signal }).then((links) => {
+      if (!controller.signal.aborted && linksRequestId.current === requestId) setPageLinks(links);
     }).catch((reason) => {
-      if (linksRequestId.current !== requestId) return;
+      if (controller.signal.aborted || linksRequestId.current !== requestId) return;
       setLinkError(reason instanceof Error ? reason.message : String(reason));
     }).finally(() => {
-      if (linksRequestId.current === requestId) setLinksLoading(false);
+      if (!controller.signal.aborted && linksRequestId.current === requestId) setLinksLoading(false);
     });
+    return () => controller.abort();
   }, [config, contentRefreshKey, linksRefreshKey, selectedMeta?.path, shouldLoadLinks]);
 
   useEffect(() => {
+    const controller = new AbortController();
     const requestId = ++historyRequestId.current;
     setPageHistory(null);
     setPageHistoryPath(null);
@@ -768,16 +800,17 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       return;
     }
     setHistoryLoading(true);
-    getPageHistory(config, { path: selectedMeta.path, limit: 100 }).then((history) => {
-      if (historyRequestId.current !== requestId) return;
+    getPageHistory(config, { path: selectedMeta.path, limit: 100 }, { signal: controller.signal }).then((history) => {
+      if (controller.signal.aborted || historyRequestId.current !== requestId) return;
       setPageHistory(history);
       setPageHistoryPath(selectedMeta.path);
     }).catch((reason) => {
-      if (historyRequestId.current !== requestId) return;
+      if (controller.signal.aborted || historyRequestId.current !== requestId) return;
       setHistoryError(reason instanceof Error ? reason.message : String(reason));
     }).finally(() => {
-      if (historyRequestId.current === requestId) setHistoryLoading(false);
+      if (!controller.signal.aborted && historyRequestId.current === requestId) setHistoryLoading(false);
     });
+    return () => controller.abort();
   }, [config, contentRefreshKey, historyRefreshKey, inspectorOpen, selectedMeta?.path]);
 
   const currentPageLinks = pageLinks?.path === selectedMeta?.path ? pageLinks : null;
@@ -813,10 +846,11 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     const requestId = linksRequestId.current;
     setLinksLoadingMore(true);
     setLinkError(null);
-    void getPageLinks(config, { path, limit: current.limit, offset }).then(async (page) => {
+    const signal = disposeControllerRef.current.signal;
+    void getPageLinks(config, { path, limit: current.limit, offset }, { signal }).then(async (page) => {
       if (linksRequestId.current !== requestId || selectedMetaRef.current?.path !== path) return;
       if (page.revision !== current.revision) {
-        const fresh = await getPageLinks(config, { path, limit: current.limit, offset: 0 });
+        const fresh = await getPageLinks(config, { path, limit: current.limit, offset: 0 }, { signal });
         if (linksRequestId.current === requestId && selectedMetaRef.current?.path === path) setPageLinks(fresh);
         return;
       }
@@ -841,7 +875,11 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     const requestId = historyRequestId.current;
     setHistoryLoadingMore(true);
     setHistoryError(null);
-    void getPageHistory(config, { path, limit: current.limit, beforeSequence: current.nextBeforeSequence }).then((page) => {
+    void getPageHistory(
+      config,
+      { path, limit: current.limit, beforeSequence: current.nextBeforeSequence },
+      { signal: disposeControllerRef.current.signal },
+    ).then((page) => {
       if (historyRequestId.current !== requestId || selectedMetaRef.current?.path !== path) return;
       setPageHistory((previous) => {
         if (pageHistoryPath !== path || !previous) return page;
@@ -941,6 +979,9 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
 
   const requestEditPreview = useCallback(async () => {
     if (!editing || editing.draftContent === editing.baseContent || editPending) return;
+    editPreviewController.current?.abort();
+    const controller = new AbortController();
+    editPreviewController.current = controller;
     const requestGeneration = ++editRequestGeneration.current;
     const snapshot = snapshotEditing(editing, requestGeneration);
     setEditPending(true);
@@ -951,23 +992,23 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
         baseRevision: snapshot.baseRevision,
         content: snapshot.candidateContent,
         actor: "user:desktop",
-      });
-      if (
+      }, { signal: controller.signal });
+      if (controller.signal.aborted || (
         editRequestGeneration.current !== requestGeneration
         || !editingMatchesSnapshot(editingRef.current, snapshot)
-      ) return;
+      )) return;
       setEditDecisions({});
       setEditReview({ kind: "preview", generation: ++reviewGeneration.current, snapshot, preview });
     } catch (reason) {
-      if (
+      if (controller.signal.aborted || !mountedRef.current || (
         editRequestGeneration.current !== requestGeneration
         || !editingMatchesSnapshot(editingRef.current, snapshot)
-      ) return;
+      )) return;
       const conflict = revisionConflict(reason);
       if (conflict) setEditReview({ kind: "conflict", generation: ++reviewGeneration.current, snapshot, conflict });
       else setEditError(reason instanceof Error ? reason.message : String(reason));
     } finally {
-      if (editRequestGeneration.current === requestGeneration) setEditPending(false);
+      if (!controller.signal.aborted && editRequestGeneration.current === requestGeneration) setEditPending(false);
     }
   }, [config, editPending, editing]);
 
@@ -982,8 +1023,8 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   }, [editDecisions]);
 
   const completeLocalSave = useCallback((revision: string, snapshot: EditSnapshot, activeReviewGeneration: number) => {
-    if (editReviewRef.current?.generation !== activeReviewGeneration) return;
     clearDraftIfMatches(snapshot.path, snapshot.baseRevision, snapshot.candidateContent);
+    if (!mountedRef.current || editReviewRef.current?.generation !== activeReviewGeneration) return;
     detailCache.current.invalidatePath(snapshot.path);
     setArtifacts((current) => current.map((artifact) => artifact.path === snapshot.path ? { ...artifact, revision } : artifact));
     if (editingMatchesSnapshot(editingRef.current, snapshot)) setEditing(null);
@@ -996,31 +1037,33 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     void load();
   }, [load]);
 
-  const promoteExternalReview = useCallback((queue: PageEditEvent[] = externalReviewQueueRef.current) => {
-    const [next, ...remaining] = queue;
+  const promoteExternalReview = useCallback((
+    queue: PageEditEvent[] = externalReviewQueueRef.current,
+    path: string | null | undefined = selectedMetaRef.current?.path,
+  ) => {
+    const next = queue.find((event) => event.path === path && event.id !== pausedExternalReviewId);
     if (!next) return false;
-    setExternalReviewQueue(remaining);
-    setExternalReviewPaused(false);
     setEditDecisions({});
     setEditError(null);
     setEditReview({ kind: "external", generation: ++reviewGeneration.current, event: next });
     return true;
-  }, []);
+  }, [pausedExternalReviewId]);
 
   useEffect(() => {
-    if (editReview || reviewPending || externalReviewPaused || externalReviewQueue.length === 0) return;
+    if (editReview || reviewPending || externalReviewQueue.length === 0) return;
     const draft = editingRef.current;
-    const next = externalReviewQueue[0]!;
+    const path = selectedMeta?.path;
+    const next = externalReviewQueue.find((event) => event.path === path && event.id !== pausedExternalReviewId);
+    if (!next) return;
     if (draft && draft.draftContent !== draft.baseContent && draft.baseRevision !== next.resultRevision) return;
-    promoteExternalReview(externalReviewQueue);
-  }, [editReview, externalReviewPaused, externalReviewQueue, promoteExternalReview, reviewPending]);
+    promoteExternalReview(externalReviewQueue, path);
+  }, [editReview, externalReviewQueue, pausedExternalReviewId, promoteExternalReview, reviewPending, selectedMeta?.path]);
 
   const returnFromEditReview = useCallback(() => {
     if (reviewPending) return;
     const currentReview = editReviewRef.current;
     if (currentReview?.kind === "external") {
-      setExternalReviewQueue((current) => enqueueExternalReview(current, currentReview.event));
-      setExternalReviewPaused(true);
+      setPausedExternalReviewId(currentReview.event.id);
       setEditDecisions({});
       setEditError(null);
       const draft = editingRef.current;
@@ -1044,11 +1087,11 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       }
       return;
     }
-    if (!externalReviewPaused && promoteExternalReview()) return;
+    if (promoteExternalReview()) return;
     setEditReview(null);
     setEditDecisions({});
     setEditError(null);
-  }, [activeDetail, externalReviewPaused, promoteExternalReview, reviewPending]);
+  }, [activeDetail, promoteExternalReview, reviewPending]);
 
   const rebaseConflict = useCallback(() => {
     if (!editing || editReview?.kind !== "conflict") return;
@@ -1077,9 +1120,10 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
 
   const finishExternalReview = useCallback((eventId: string) => {
     const remaining = externalReviewQueueRef.current.filter((event) => event.id !== eventId);
+    externalReviewQueueRef.current = remaining;
     setExternalReviewQueue(remaining);
-    setExternalReviewPaused(false);
-    if (promoteExternalReview(remaining)) return;
+    setPausedExternalReviewId((current) => current === eventId ? null : current);
+    if (promoteExternalReview(remaining, selectedMetaRef.current?.path)) return;
     const draft = editingRef.current;
     if (
       draft
@@ -1105,12 +1149,13 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
 
   const applyEditReview = useCallback(async () => {
     const review = editReviewRef.current;
-    if (!review || review.kind === "conflict" || reviewPending) return;
+    if (!review || review.kind === "conflict" || mutationPendingRef.current) return;
     const transactionGeneration = ++applyGeneration.current;
     const activeReviewGeneration = review.generation;
     const submittedDecisions = review.kind === "external"
       ? decisionsForServer(review.event.reviewOperations, review.event.questions)
       : decisionsForServer(review.preview.operations, review.preview.questions);
+    mutationPendingRef.current = true;
     setReviewPending(true);
     setEditError(null);
     try {
@@ -1119,10 +1164,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
           eventId: review.event.id,
           decisions: submittedDecisions,
         });
-        if (
-          applyGeneration.current !== transactionGeneration
-          || editReviewRef.current?.generation !== activeReviewGeneration
-        ) return;
+        if (applyGeneration.current !== transactionGeneration || !mountedRef.current) return;
         finishExternalReview(review.event.id);
         setHistoryRefreshKey((key) => key + 1);
         setRecordsRefreshKey((key) => key + 1);
@@ -1134,13 +1176,12 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
         decisions: submittedDecisions,
         savePending: review.preview.analysisPending,
       });
-      if (
-        applyGeneration.current !== transactionGeneration
-        || editReviewRef.current?.generation !== activeReviewGeneration
-      ) return;
+      if (applyGeneration.current !== transactionGeneration) return;
       completeLocalSave(result.revision, review.snapshot, activeReviewGeneration);
     } catch (reason) {
       if (
+        !mountedRef.current
+        ||
         applyGeneration.current !== transactionGeneration
         || editReviewRef.current?.generation !== activeReviewGeneration
       ) return;
@@ -1155,23 +1196,34 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       }
       else setEditError(reason instanceof Error ? reason.message : String(reason));
     } finally {
-      if (applyGeneration.current === transactionGeneration) setReviewPending(false);
+      if (applyGeneration.current === transactionGeneration) {
+        mutationPendingRef.current = false;
+        if (mountedRef.current) setReviewPending(false);
+      }
     }
-  }, [completeLocalSave, config, decisionsForServer, finishExternalReview, reviewPending]);
+  }, [completeLocalSave, config, decisionsForServer, finishExternalReview]);
 
   useEffect(() => {
-    if (!editing || selectedMeta?.path === editing.path) return;
-    setEditing(null);
-    setEditReview(null);
-    setExternalReviewQueue([]);
-    setExternalReviewPaused(false);
-    setEditDecisions({});
-    setEditError(null);
+    if (mutationPendingRef.current) return;
+    const path = selectedMeta?.path;
+    setPausedExternalReviewId(null);
+    const currentReview = editReviewRef.current;
+    if (currentReview?.kind === "external" && currentReview.event.path !== path) {
+      setEditReview(null);
+      setEditDecisions({});
+      setEditError(null);
+    }
+    if (editing && path !== editing.path) {
+      setEditing(null);
+      if (currentReview?.kind !== "external") setEditReview(null);
+      setEditDecisions({});
+      setEditError(null);
+    }
   }, [editing, selectedMeta?.path]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (reviewPending) return;
+      if (mutationPendingRef.current) return;
       if ((!event.metaKey && !event.ctrlKey) || event.altKey || event.shiftKey) return;
       const key = event.key.toLowerCase();
       if (key !== "e" && key !== "s") return;
@@ -1213,6 +1265,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const reviewPresentation = useMemo(() => {
     if (!editReview) return null;
     if (editReview.kind === "external") {
+      if (editReview.event.path !== selectedMeta?.path) return null;
       const analysis = editReview.event.analysis;
       return {
         path: editReview.event.path,
@@ -1230,7 +1283,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       operations: editReview.kind === "preview" ? editReview.preview.operations : [],
       analysisPending: editReview.kind === "preview" && editReview.preview.analysisPending,
     };
-  }, [editReview, editing]);
+  }, [editReview, editing, selectedMeta?.path]);
 
   return (
     <div
@@ -1257,6 +1310,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
           indexBlocked={indexBlocked}
           rebuilding={rebuilding}
           recordsOpen={recordsOpen}
+          navigationDisabled={reviewPending}
           recordsTriggerRef={recordsTriggerRef}
           onQueryChange={setQuery}
           onSelect={selectFile}
@@ -1264,6 +1318,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
           onRetryIndex={() => void refreshIndexDocuments(artifactsRef.current)}
           onRebuild={rebuild}
           onToggleRecords={() => {
+            if (mutationPendingRef.current) return;
             if (recordsOpen) closeRecords();
             else {
               setInspectorOpen(false);
@@ -1289,8 +1344,8 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
             <button
               type="button"
               aria-label="Back in memory history"
-              title="Back (⌘[)"
-              disabled={!navigationHistory.current.canBack}
+              title="Back (Cmd/Ctrl+[)"
+              disabled={reviewPending || !navigationHistory.current.canBack}
               onClick={() => moveHistory("back")}
               className="grid size-7 place-items-center rounded-[6px] text-muted hover:bg-surface-soft hover:text-ink disabled:opacity-35"
             >
@@ -1299,8 +1354,8 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
             <button
               type="button"
               aria-label="Forward in memory history"
-              title="Forward (⌘])"
-              disabled={!navigationHistory.current.canForward}
+              title="Forward (Cmd/Ctrl+])"
+              disabled={reviewPending || !navigationHistory.current.canForward}
               onClick={() => moveHistory("forward")}
               className="grid size-7 place-items-center rounded-[6px] text-muted hover:bg-surface-soft hover:text-ink disabled:opacity-35"
             >
@@ -1327,6 +1382,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
         ) : editReview && reviewPresentation ? (
           <MemoryEditReview
             kind={editReview.kind}
+            reviewId={editReview.kind === "external" ? editReview.event.id : editReview.kind === "preview" ? editReview.preview.id : `conflict:${editReview.conflict.currentRevision}`}
             path={reviewPresentation.path}
             baseContent={reviewPresentation.baseContent}
             draftContent={reviewPresentation.draftContent}
@@ -1352,6 +1408,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
             error={editError}
             onChange={(draftContent) => {
               editRequestGeneration.current += 1;
+              editPreviewController.current?.abort();
               setEditPending(false);
               if (draftContent === editing.baseContent) clearDraft(editing.path, editing.baseRevision);
               else setDraft(editing.path, editing.baseRevision, draftContent);
@@ -1360,6 +1417,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
             onSave={() => void requestEditPreview()}
             onClose={() => {
               editRequestGeneration.current += 1;
+              editPreviewController.current?.abort();
               setEditPending(false);
               setEditing(null);
             }}
@@ -1455,6 +1513,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
             historyLoadingMore={historyLoadingMore}
             linkError={linkError}
             historyError={historyError}
+            navigationDisabled={reviewPending}
             onNavigate={navigateTo}
             onRetryLinks={() => setLinksRefreshKey((key) => key + 1)}
             onLoadMoreLinks={loadMoreLinks}

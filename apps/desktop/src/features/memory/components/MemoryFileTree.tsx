@@ -36,15 +36,16 @@ export function TreeSearch({ value, onChange, placeholder }: { value: string; on
   );
 }
 
-export function FlatRow({ a, active, onSelect }: { a: MemoryArtifactSummary; active: boolean; onSelect: (path: string) => void }) {
+export function FlatRow({ a, active, disabled = false, onSelect }: { a: MemoryArtifactSummary; active: boolean; disabled?: boolean; onSelect: (path: string) => void }) {
   const segments = a.path.split("/");
   const parent = segments.slice(0, -1).join(" › ");
   return (
     <button
       type="button"
+      disabled={disabled}
       onClick={() => onSelect(a.path)}
       title={a.path}
-      className="app-row group flex min-w-0 items-start gap-2 rounded-[10px] px-2.5 py-1.5 text-left"
+      className="app-row group flex min-w-0 items-start gap-2 rounded-[10px] px-2.5 py-1.5 text-left disabled:opacity-50"
       data-active={active}
       data-memory-entry={a.path}
     >

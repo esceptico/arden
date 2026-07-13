@@ -576,10 +576,15 @@ export interface PreviewPageEditInput {
   actor?: string;
 }
 
-export async function previewPageEdit(config: AppConfig, input: PreviewPageEditInput): Promise<PageEditPreview> {
+export async function previewPageEdit(
+  config: AppConfig,
+  input: PreviewPageEditInput,
+  options: { signal?: AbortSignal } = {},
+): Promise<PageEditPreview> {
   const path = canonicalArtifactPath(input.path);
   return apiWithConfig<{ preview: RawPreview }>(config, "/admin/memory/page-edits/preview", {
     method: "POST",
+    signal: options.signal,
     body: JSON.stringify({
       path,
       base_revision: input.baseRevision,
@@ -642,7 +647,11 @@ export interface PageHistoryParams {
   beforeSequence?: number;
 }
 
-export async function getPageHistory(config: AppConfig, params: PageHistoryParams = {}): Promise<PageEditHistory> {
+export async function getPageHistory(
+  config: AppConfig,
+  params: PageHistoryParams = {},
+  options: { signal?: AbortSignal } = {},
+): Promise<PageEditHistory> {
   const path = params.path === undefined ? undefined : canonicalArtifactPath(params.path);
   return apiWithConfig<{
     events: RawEvent[];
@@ -653,7 +662,7 @@ export async function getPageHistory(config: AppConfig, params: PageHistoryParam
     path,
     limit: params.limit,
     before_sequence: params.beforeSequence,
-  })}`).then((response) => ({
+  })}`, { signal: options.signal }).then((response) => ({
     events: response.events.map(mapEvent),
     total: response.total,
     limit: response.limit,
@@ -667,7 +676,11 @@ export interface PageLinksParams {
   offset?: number;
 }
 
-export async function getPageLinks(config: AppConfig, params: PageLinksParams): Promise<PageLinks> {
+export async function getPageLinks(
+  config: AppConfig,
+  params: PageLinksParams,
+  options: { signal?: AbortSignal } = {},
+): Promise<PageLinks> {
   const path = canonicalArtifactPath(params.path);
   return apiWithConfig<{
     path: string;
@@ -683,7 +696,7 @@ export async function getPageLinks(config: AppConfig, params: PageLinksParams): 
     path,
     limit: params.limit,
     offset: params.offset,
-  })}`).then((response) => ({
+  })}`, { signal: options.signal }).then((response) => ({
     path: response.path,
     revision: response.revision,
     stale: response.stale,

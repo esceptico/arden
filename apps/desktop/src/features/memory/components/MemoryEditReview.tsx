@@ -10,6 +10,7 @@ export interface MemoryConflict {
 
 export function MemoryEditReview({
   kind,
+  reviewId,
   path,
   baseContent,
   draftContent,
@@ -25,6 +26,7 @@ export function MemoryEditReview({
   onRebase,
 }: {
   kind: "preview" | "conflict" | "external";
+  reviewId: string;
   path: string;
   baseContent: string;
   draftContent: string;
@@ -54,7 +56,7 @@ export function MemoryEditReview({
 
   useEffect(() => {
     containerRef.current?.focus({ preventScroll: true });
-  }, [conflict?.currentRevision, kind, path]);
+  }, [conflict?.currentRevision, kind, path, reviewId]);
 
   if (kind === "conflict" && conflict) {
     return (
@@ -67,7 +69,7 @@ export function MemoryEditReview({
         tabIndex={-1}
         className="flex h-full min-h-0 min-w-0 flex-col bg-bg-main p-3 outline-none sm:p-4"
       >
-        <p role="status" aria-live="polite" className="sr-only">Conflict detected for {path}. Your draft is preserved.</p>
+        <p role="status" aria-live="polite" className="sr-only">Conflict {reviewId} detected for {path}. Your draft is preserved.</p>
         <header className="mb-3 flex flex-wrap items-center gap-2 sm:gap-3">
           <div className="min-w-0 flex-1 basis-56">
             <h1 className="text-lg font-semibold text-ink">Page changed elsewhere</h1>
@@ -112,7 +114,7 @@ export function MemoryEditReview({
       className="flex h-full min-h-0 min-w-0 flex-col bg-bg-main p-3 outline-none sm:p-4"
     >
       <p role="status" aria-live="polite" className="sr-only">
-        {external ? `Resolving external memory effects for ${path}` : `Reviewing changes to ${path}`}
+        {external ? `Resolving external memory effects for ${path}, event ${reviewId}` : `Reviewing changes to ${path}, review ${reviewId}`}
       </p>
       {analysisPending && (
         <div role="status" className="mb-3 rounded-lg bg-warn-soft px-3 py-2 text-xs text-ink-soft">

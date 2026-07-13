@@ -77,10 +77,11 @@ function SourceRow({ source }: { source: MemorySourceRef }) {
   );
 }
 
-function LinkRow({ link, kind, stale, onNavigate }: {
+function LinkRow({ link, kind, stale, navigationDisabled, onNavigate }: {
   link: MemoryLink;
   kind: "outgoing" | "backlink";
   stale: boolean;
+  navigationDisabled: boolean;
   onNavigate: (path: string, anchor: string | null) => void;
 }) {
   const path = kind === "backlink" ? link.sourcePath : link.resolvedPath;
@@ -89,7 +90,7 @@ function LinkRow({ link, kind, stale, onNavigate }: {
     <li className="rounded-[8px] bg-surface-soft/40 p-2.5 text-xs">
       <button
         type="button"
-        disabled={stale || !path}
+        disabled={navigationDisabled || stale || !path}
         aria-label={kind === "backlink" ? `Open backlink from ${link.sourcePath}` : `Open outgoing link ${link.display}`}
         onClick={() => !stale && path && onNavigate(path, anchor)}
         className="flex w-full items-center gap-1.5 text-left font-medium text-ink disabled:text-faint"
@@ -142,6 +143,7 @@ export function MemoryInspector({
   historyError,
   linksLoadingMore = false,
   historyLoadingMore = false,
+  navigationDisabled = false,
   onNavigate,
   onRetryLinks,
   onLoadMoreLinks,
@@ -156,6 +158,7 @@ export function MemoryInspector({
   historyError: string | null;
   linksLoadingMore?: boolean;
   historyLoadingMore?: boolean;
+  navigationDisabled?: boolean;
   onNavigate: (path: string, anchor: string | null) => void;
   onRetryLinks?: () => void;
   onLoadMoreLinks?: () => void;
@@ -193,9 +196,9 @@ export function MemoryInspector({
               {onRetryLinks && <button type="button" aria-label="Refresh memory links" onClick={onRetryLinks} className="shrink-0 font-medium hover:text-ink">Refresh links</button>}
             </div>}
             <div className="text-2xs text-faint">Backlinks · {links.totalBacklinks}</div>
-            <ul className="grid gap-1.5">{links.backlinks.map((link, index) => <LinkRow key={`back:${link.sourcePath}:${link.line}:${index}`} link={link} kind="backlink" stale={links.stale} onNavigate={onNavigate} />)}</ul>
+            <ul className="grid gap-1.5">{links.backlinks.map((link, index) => <LinkRow key={`back:${link.sourcePath}:${link.line}:${index}`} link={link} kind="backlink" stale={links.stale} navigationDisabled={navigationDisabled} onNavigate={onNavigate} />)}</ul>
             <div className="mt-1 text-2xs text-faint">Outgoing · {links.totalOutgoing}</div>
-            <ul className="grid gap-1.5">{links.outgoing.map((link, index) => <LinkRow key={`out:${link.target}:${link.line}:${index}`} link={link} kind="outgoing" stale={links.stale} onNavigate={onNavigate} />)}</ul>
+            <ul className="grid gap-1.5">{links.outgoing.map((link, index) => <LinkRow key={`out:${link.target}:${link.line}:${index}`} link={link} kind="outgoing" stale={links.stale} navigationDisabled={navigationDisabled} onNavigate={onNavigate} />)}</ul>
             <p className="text-2xs text-faint">Showing {links.outgoing.length} of {links.totalOutgoing} outgoing · {links.backlinks.length} of {links.totalBacklinks} backlinks</p>
             {moreLinks && onLoadMoreLinks && <button type="button" aria-label="Load more memory links" disabled={linksLoadingMore || links.stale} onClick={onLoadMoreLinks} className="text-xs font-medium text-muted hover:text-ink disabled:opacity-50">{linksLoadingMore ? "Loading…" : "Load more links"}</button>}
           </>}

@@ -37,6 +37,17 @@ function note(revision = "note-r1", extra: Record<string, unknown> = {}) {
   };
 }
 
+function noteB(revision = "note-b-r1", extra: Record<string, unknown> = {}) {
+  return note(revision, {
+    path: "topics/b.md",
+    title: "B",
+    content: "Rendered B prose",
+    editable_content: "# B\n\nB source bytes.\n",
+    summary: "B note",
+    ...extra,
+  });
+}
+
 function ok(data: unknown): BridgeResponse {
   return { ok: true, status: 200, statusText: "OK", contentType: "application/json", data, text: "" };
 }
@@ -58,10 +69,11 @@ function rawEvent(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function externalReview(id: string, revision: string, question: string, sequence: number) {
+function externalReview(id: string, revision: string, question: string, sequence: number, path = "topics/a.md") {
   return rawEvent({
     id,
     sequence,
+    path,
     actor: "external:filesystem",
     origin: "external",
     reconciliation: "needs_review",
@@ -69,7 +81,7 @@ function externalReview(id: string, revision: string, question: string, sequence
     review_operations: [{ op: "ASK", question, target_ids: [`record-${id}`] }],
     questions: [{ id: "operation:0", operation_index: 0, question }],
     analysis: {
-      path: "topics/a.md",
+      path,
       before: ["Old source bytes."],
       after: [`External ${revision}.`],
       changed_before: ["Old source bytes."],
@@ -93,12 +105,14 @@ function installBridge(options: {
   events?: ReturnType<typeof rawEvent>[];
   onPreview?: (body: Record<string, unknown>, call: number) => BridgeResponse | Promise<BridgeResponse>;
   onApply?: (body: Record<string, unknown>, call: number) => BridgeResponse | Promise<BridgeResponse>;
-  onHistory?: (call: number) => BridgeResponse | Promise<BridgeResponse>;
+  onHistory?: (call: number, path: string | null) => BridgeResponse | Promise<BridgeResponse>;
   onRetry?: (body: Record<string, unknown>, call: number) => BridgeResponse | Promise<BridgeResponse>;
+  secondNote?: ReturnType<typeof note>;
 } = {}) {
   let current = note("note-r1", options.readonly ? {
     editable: false, editable_content: null, readonly_reason: "Engine-owned page",
   } : {});
+  let currentB = options.secondNote ?? null;
   let conflictRemaining = options.conflictPreview ?? false;
   let historyEvents = options.events ?? (options.event ? [options.event] : []);
   let previewCalls = 0;
@@ -110,15 +124,21 @@ function installBridge(options: {
     const method = request.method ?? "GET";
     const body = request.body ? JSON.parse(request.body) : null;
     requests.push({ path: request.path, method, body });
-    if (request.path === "/admin/memory/artifacts") return ok({ artifacts: [index, current] });
+    if (request.path === "/admin/memory/artifacts") return ok({ artifacts: [index, current, ...(currentB ? [currentB] : [])] });
     if (request.path === "/admin/memory/artifacts/index.md") {
-      return ok({ artifact: { ...index, content: "<!-- ntrp:index:start -->\n- topics/a.md <!-- ntrp:path=topics%2Fa.md -->\n<!-- ntrp:index:end -->", editable_content: null, timeline: [], frontmatter: {} } });
+      return ok({ artifact: { ...index, content: `<!-- ntrp:index:start -->\n- topics/a.md <!-- ntrp:path=topics%2Fa.md -->${currentB ? "\n- topics/b.md <!-- ntrp:path=topics%2Fb.md -->" : ""}\n<!-- ntrp:index:end -->`, editable_content: null, timeline: [], frontmatter: {} } });
     }
     if (request.path === "/admin/memory/artifacts/topics/a.md") return ok({ artifact: current });
-    if (request.path.startsWith("/admin/memory/links")) return ok({ path: "topics/a.md", revision: current.revision, stale: false, outgoing: [], backlinks: [], total_outgoing: 0, total_backlinks: 0, limit: 100, offset: 0 });
+    if (request.path === "/admin/memory/artifacts/topics/b.md" && currentB) return ok({ artifact: currentB });
+    if (request.path.startsWith("/admin/memory/links")) {
+      const path = new URL(request.path, "http://ntrp.test").searchParams.get("path") ?? "topics/a.md";
+      const revision = path === "topics/b.md" ? currentB?.revision ?? "note-b-r1" : current.revision;
+      return ok({ path, revision, stale: false, outgoing: [], backlinks: [], total_outgoing: 0, total_backlinks: 0, limit: 100, offset: 0 });
+    }
     if (request.path.startsWith("/admin/memory/page-edits/history")) {
       historyCalls += 1;
-      if (options.onHistory) return options.onHistory(historyCalls);
+      const path = new URL(request.path, "http://ntrp.test").searchParams.get("path");
+      if (options.onHistory) return options.onHistory(historyCalls, path);
       return ok({ events: historyEvents, total: historyEvents.length, limit: 100, next_before_sequence: null });
     }
     if (request.path === "/admin/memory/page-edits/preview") {
@@ -155,6 +175,10 @@ function installBridge(options: {
   return {
     requests,
     update(next: ReturnType<typeof note>) { current = next; },
+    updatePath(next: ReturnType<typeof note>) {
+      if (next.path === "topics/b.md") currentB = next;
+      else current = next;
+    },
     setHistoryEvents(next: ReturnType<typeof rawEvent>[]) { historyEvents = next; },
   };
 }
@@ -591,6 +615,148 @@ test("same-path history requests drain in sequence instead of racing", async () 
   await act(async () => firstGate.resolve());
   await settle(160);
   expect(historyCalls).toBe(2);
+});
+
+test("an in-flight A review survives switching to B and returns only on A", async () => {
+  useStore.setState({ memoryVaultVersion: 0, memoryVaultChanges: [] });
+  const historyGate = deferred();
+  const eventA = externalReview("switch-a", "note-r2", "Review A after returning?", 60);
+  const bridge = installBridge({
+    secondNote: noteB(),
+    onHistory: async (_call, path) => {
+      if (path === "topics/a.md") await historyGate.promise;
+      return ok({ events: path === "topics/a.md" ? [eventA] : [], total: path === "topics/a.md" ? 1 : 0, limit: 100, next_before_sequence: null });
+    },
+  });
+  bridge.update(note("note-r2", { content: "A externally changed", editable_content: "# A\n\nA externally changed.\n" }));
+  const { host } = await renderView();
+  await act(async () => useStore.getState().memoryVaultChanged({
+    paths: ["topics/a.md"], revision: "note-r2", reviewRequired: true, seq: 601,
+  }));
+  await settle(40);
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-memory-entry="topics/b.md"]')?.click());
+  await settle(40);
+  await act(async () => historyGate.resolve());
+  await settle(240);
+
+  expect(host.querySelector('[aria-label="Resolve external memory effects for topics/a.md"]')).toBeNull();
+  expect(host.textContent).toContain("Rendered B prose");
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-memory-entry="topics/a.md"]')?.click());
+  await settle(120);
+  expect(host.textContent).toContain("Review A after returning?");
+});
+
+test("external reviews stay path-scoped and exact across A-B-A navigation", async () => {
+  useStore.setState({ memoryVaultVersion: 0, memoryVaultChanges: [] });
+  const eventA = externalReview("scope-a", "note-r2", "Exact A review?", 70);
+  const eventB = externalReview("scope-b", "note-b-r2", "Exact B review?", 71, "topics/b.md");
+  const bridge = installBridge({
+    secondNote: noteB("note-b-r2", { content: "B externally changed", editable_content: "# B\n\nB externally changed.\n" }),
+    onHistory: (_call, path) => ok({
+      events: path === "topics/a.md" ? [eventA] : path === "topics/b.md" ? [eventB] : [],
+      total: 1,
+      limit: 100,
+      next_before_sequence: null,
+    }),
+  });
+  bridge.update(note("note-r2", { content: "A externally changed", editable_content: "# A\n\nA externally changed.\n" }));
+  const { host } = await renderView();
+  await act(async () => useStore.getState().memoryVaultChanged({ paths: ["topics/a.md"], revision: "note-r2", reviewRequired: true, seq: 611 }));
+  await settle(220);
+  expect(host.textContent).toContain("Exact A review?");
+
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-memory-entry="topics/b.md"]')?.click());
+  await settle(100);
+  expect(host.textContent).not.toContain("Exact A review?");
+  await act(async () => useStore.getState().memoryVaultChanged({ paths: ["topics/b.md"], revision: "note-b-r2", reviewRequired: true, seq: 612 }));
+  await settle(220);
+  expect(host.textContent).toContain("Exact B review?");
+
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-memory-entry="topics/a.md"]')?.click());
+  await settle(100);
+  expect(host.textContent).toContain("Exact A review?");
+  expect(bridge.requests.filter((request) => request.path.endsWith("/retry"))).toHaveLength(0);
+});
+
+test("apply centrally locks navigation and still commits its exact draft", async () => {
+  const applyGate = deferred();
+  const bridge = installBridge({
+    secondNote: noteB(),
+    onApply: async () => {
+      await applyGate.promise;
+      return ok({ event: rawEvent(), revision: "note-r2" });
+    },
+  });
+  const { host } = await renderView();
+  await shortcut("e");
+  const candidate = "# A\n\nLocked candidate.\n";
+  await changeDraft(host.querySelector<HTMLTextAreaElement>("textarea")!, candidate);
+  await shortcut("s", host.querySelector<HTMLTextAreaElement>("textarea")!);
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Note only"]')?.click());
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Apply changes"]')?.click());
+
+  const bRail = host.querySelector<HTMLButtonElement>('[data-memory-entry="topics/b.md"]')!;
+  const rawRecords = host.querySelector<HTMLButtonElement>('[aria-label="Open raw records diagnostic"]')!;
+  expect(bRail.disabled).toBe(true);
+  expect(rawRecords.disabled).toBe(true);
+  await act(async () => bRail.click());
+  await shortcut("[");
+  expect(host.querySelector('[aria-label="Review memory edit for topics/a.md"]')).not.toBeNull();
+  expect(host.querySelector('[aria-label="Review memory edit for topics/b.md"]')).toBeNull();
+
+  await act(async () => applyGate.resolve());
+  await settle(260);
+  expect(getDraft("topics/a.md", "note-r1")).toBeNull();
+  expect(bridge.requests.filter((request) => request.path.endsWith("/apply"))).toHaveLength(1);
+});
+
+test("a committed apply after unmount only compare-clears and never reloads", async () => {
+  const applyGate = deferred();
+  const bridge = installBridge({ onApply: async () => {
+    await applyGate.promise;
+    return ok({ event: rawEvent(), revision: "note-r2" });
+  } });
+  const view = await renderView();
+  await shortcut("e");
+  const candidate = "# A\n\nUnmounted commit.\n";
+  await changeDraft(view.host.querySelector<HTMLTextAreaElement>("textarea")!, candidate);
+  await shortcut("s", view.host.querySelector<HTMLTextAreaElement>("textarea")!);
+  await act(async () => view.host.querySelector<HTMLButtonElement>('[aria-label="Note only"]')?.click());
+  await act(async () => view.host.querySelector<HTMLButtonElement>('[aria-label="Apply changes"]')?.click());
+  expect(getDraft("topics/a.md", "note-r1")).toBe(candidate);
+
+  await act(async () => view.root.unmount());
+  roots.delete(view.root);
+  const readsBeforeCommit = bridge.requests.filter((request) => request.path === "/admin/memory/artifacts").length;
+  await act(async () => applyGate.resolve());
+  await settle(80);
+  expect(getDraft("topics/a.md", "note-r1")).toBeNull();
+  expect(bridge.requests.filter((request) => request.path === "/admin/memory/artifacts")).toHaveLength(readsBeforeCommit);
+});
+
+test("consecutive same-path reviews refocus and announce their exact event ids", async () => {
+  useStore.setState({ memoryVaultVersion: 0, memoryVaultChanges: [] });
+  const first = externalReview("announce-first", "note-r2", "First announced review?", 80);
+  const second = externalReview("announce-second", "note-r3", "Second announced review?", 81);
+  const bridge = installBridge({ events: [second, first] });
+  bridge.update(note("note-r3", { content: "Latest A", editable_content: "# A\n\nLatest A.\n" }));
+  const { host } = await renderView();
+  await act(async () => {
+    useStore.getState().memoryVaultChanged({ paths: ["topics/a.md"], revision: "note-r2", reviewRequired: true, seq: 621 });
+    useStore.getState().memoryVaultChanged({ paths: ["topics/a.md"], revision: "note-r3", reviewRequired: true, seq: 622 });
+  });
+  await settle(300);
+  let review = host.querySelector<HTMLElement>('[data-memory-edit-review]')!;
+  expect(review.querySelector('[role="status"]')?.textContent).toContain("announce-first");
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Note only"]')?.click());
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Resolve memory effects"]')?.click());
+  await settle(100);
+
+  review = host.querySelector<HTMLElement>('[data-memory-edit-review]')!;
+  expect(review.textContent).toContain("Second announced review?");
+  expect(review.querySelector('[role="status"]')?.textContent).toContain("announce-second");
+  expect(document.activeElement).toBe(review);
+  expect(host.querySelector<HTMLButtonElement>('[aria-label="Back in memory history"]')?.title ?? "").not.toContain("⌘");
 });
 
 test("local apply preserves an external review that arrives before its response", async () => {
