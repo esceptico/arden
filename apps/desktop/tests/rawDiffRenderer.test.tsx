@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { RawDiffRenderer } from "@/components/ui/RawDiffRenderer";
+import { buildDiffLineGroups } from "@/components/ui/diffReviewTypes";
 
 const roots = new Set<Root>();
 
@@ -179,6 +180,36 @@ test("renders a 5,000-line file with a substantial changed block", async () => {
   expect(host.textContent).not.toContain("stable line 3000");
   expect(elapsedMs).toBeLessThan(2_000);
 });
+
+test("bounds fully disjoint 5,000-line comparison with a safe coarse result", async () => {
+  const beforeLines = Array.from({ length: 5_000 }, (_, index) => `old disjoint line ${index + 1}`);
+  const afterLines = Array.from({ length: 5_000 }, (_, index) => `new disjoint line ${index + 1}`);
+  const beforeContent = beforeLines.join("\n");
+  const afterContent = afterLines.join("\n");
+
+  const groupingStartedAt = performance.now();
+  const groups = buildDiffLineGroups(beforeContent, afterContent);
+  const groupingElapsedMs = performance.now() - groupingStartedAt;
+  expect(groupingElapsedMs).toBeLessThan(250);
+  expect(groups).toHaveLength(1);
+  expect(groups[0].kind).toBe("changed");
+  expect(groups[0].beforeLines).toEqual(beforeLines);
+  expect(groups[0].afterLines).toEqual(afterLines);
+
+  const renderStartedAt = performance.now();
+  const { host, root } = setup();
+  await act(async () => root.render(
+    <RawDiffRenderer
+      before={{ path: "disjoint.md", content: beforeContent }}
+      after={{ path: "disjoint.md", content: afterContent }}
+      layout="stacked"
+    />,
+  ));
+  const renderElapsedMs = performance.now() - renderStartedAt;
+  expect(host.querySelectorAll('[data-change-line="removed"]')).toHaveLength(5_000);
+  expect(host.querySelectorAll('[data-change-line="added"]')).toHaveLength(5_000);
+  expect(renderElapsedMs).toBeLessThan(5_000);
+}, 10_000);
 
 test("updates theme and layout inputs without motion or selection regressions", async () => {
   const { host, root } = setup();

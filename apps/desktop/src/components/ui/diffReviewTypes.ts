@@ -75,6 +75,23 @@ interface LineAnchor {
   after: number;
 }
 
+const EXACT_LCS_COMPARISON_BUDGET = 4_000_000;
+
+interface ComparisonBudget {
+  remaining: number;
+}
+
+function reserveComparisons(
+  budget: ComparisonBudget,
+  firstLength: number,
+  secondLength: number,
+) {
+  if (firstLength === 0 || secondLength === 0) return true;
+  if (firstLength > Math.floor(budget.remaining / secondLength)) return false;
+  budget.remaining -= firstLength * secondLength;
+  return true;
+}
+
 function lcsPrefixLengths(
   first: string[],
   firstStart: number,
@@ -152,11 +169,13 @@ function collectOrderedMatches(
   secondStart: number,
   secondEnd: number,
   matches: LineAnchor[],
+  budget: ComparisonBudget,
 ) {
   const firstLength = firstEnd - firstStart;
   const secondLength = secondEnd - secondStart;
   if (firstLength === 0 || secondLength === 0) return;
   if (firstLength === 1) {
+    if (!reserveComparisons(budget, 1, secondLength)) return;
     for (let secondIndex = secondStart; secondIndex < secondEnd; secondIndex += 1) {
       if (first[firstStart] !== second[secondIndex]) continue;
       matches.push({ before: firstStart, after: secondIndex });
@@ -165,6 +184,7 @@ function collectOrderedMatches(
     return;
   }
   if (secondLength === 1) {
+    if (!reserveComparisons(budget, firstLength, 1)) return;
     for (let firstIndex = firstStart; firstIndex < firstEnd; firstIndex += 1) {
       if (first[firstIndex] !== second[secondStart]) continue;
       matches.push({ before: firstIndex, after: secondStart });
@@ -172,6 +192,8 @@ function collectOrderedMatches(
     }
     return;
   }
+
+  if (!reserveComparisons(budget, firstLength, secondLength)) return;
 
   const firstMiddle = firstStart + Math.floor(firstLength / 2);
   const secondMiddle = lcsSplit(
@@ -183,8 +205,26 @@ function collectOrderedMatches(
     secondStart,
     secondEnd,
   );
-  collectOrderedMatches(first, firstStart, firstMiddle, second, secondStart, secondMiddle, matches);
-  collectOrderedMatches(first, firstMiddle, firstEnd, second, secondMiddle, secondEnd, matches);
+  collectOrderedMatches(
+    first,
+    firstStart,
+    firstMiddle,
+    second,
+    secondStart,
+    secondMiddle,
+    matches,
+    budget,
+  );
+  collectOrderedMatches(
+    first,
+    firstMiddle,
+    firstEnd,
+    second,
+    secondMiddle,
+    secondEnd,
+    matches,
+    budget,
+  );
 }
 
 export function buildDiffLineGroups(before: string, after: string): DiffLineGroup[] {
@@ -205,6 +245,7 @@ export function buildDiffLineGroups(before: string, after: string): DiffLineGrou
   ) suffix += 1;
 
   const middleAnchors: Array<{ before: number; after: number }> = [];
+  const comparisonBudget: ComparisonBudget = { remaining: EXACT_LCS_COMPARISON_BUDGET };
   const beforeMiddleEnd = beforeLines.length - suffix;
   const afterMiddleEnd = afterLines.length - suffix;
   if (afterMiddleEnd - prefix <= beforeMiddleEnd - prefix) {
@@ -216,6 +257,7 @@ export function buildDiffLineGroups(before: string, after: string): DiffLineGrou
       prefix,
       afterMiddleEnd,
       middleAnchors,
+      comparisonBudget,
     );
   } else {
     const swapped: LineAnchor[] = [];
@@ -227,6 +269,7 @@ export function buildDiffLineGroups(before: string, after: string): DiffLineGrou
       prefix,
       beforeMiddleEnd,
       swapped,
+      comparisonBudget,
     );
     for (const anchor of swapped) {
       middleAnchors.push({ before: anchor.after, after: anchor.before });
