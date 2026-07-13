@@ -75,6 +75,37 @@ def test_clean_legacy_vault_is_backed_up_staged_validated_and_committed(tmp_path
     assert not (tmp_path / ".ntrp" / "maintenance" / "migration-v2").exists()
 
 
+def test_migration_normalizes_an_aliased_vault_root_before_internal_paths(tmp_path: Path) -> None:
+    actual = tmp_path / "actual"
+    actual.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(actual, target_is_directory=True)
+    _legacy_page(alias, "me.md", "- 2025-01-03 ^old [fact] (src:user) Aliased fact")
+
+    report = migrate_vault_to_v2(alias)
+
+    assert report.migrated is True
+    assert validate_vault(actual).healthy
+
+
+@pytest.mark.asyncio
+async def test_empty_vault_is_marked_v2_before_its_first_record(tmp_path: Path) -> None:
+    report = migrate_vault_to_v2(tmp_path)
+    marker = tmp_path / ".ntrp/maintenance/migration-v2.json"
+
+    assert report.migrated is False
+    assert json.loads(marker.read_text(encoding="utf-8"))["schema_version"] == 2
+
+    store = FilePageStore(tmp_path)
+    await store.open()
+    record = await store.add("First record")
+    await store.close()
+
+    raw = (tmp_path / "raw/me.md").read_text(encoding="utf-8")
+    assert raw.startswith("<!-- ntrp:records schema=2 page=me.md -->\n")
+    assert f"^{record.id}" in raw
+
+
 def test_legacy_record_without_a_known_time_migrates_with_unknown_precision(tmp_path: Path) -> None:
     _legacy_page(tmp_path, "me.md", "- unknown ^old [fact] (src:curator) Timeless fact")
 

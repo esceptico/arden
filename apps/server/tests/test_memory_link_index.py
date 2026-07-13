@@ -374,6 +374,26 @@ async def test_projection_failure_is_stale_and_retry_keeps_canonical_revision(tm
     await projection.close()
 
 
+@pytest.mark.asyncio
+async def test_projection_uses_a_stable_revision_for_an_empty_canonical_vault(tmp_path: Path):
+    _write(tmp_path / "index.md", "# Memory\n")
+    index = LinkIndex(tmp_path)
+    projection = LinkIndexProjection(
+        index,
+        artifacts=ArtifactMemoryStore(tmp_path),
+        revision=lambda: "",
+        retry_delay=60,
+    )
+
+    projection.schedule()
+    await projection.wait_idle()
+
+    assert projection.stale is False
+    assert len(index.snapshot.revision) == 64
+    assert index.snapshot.pages == ("index.md",)
+    await projection.close()
+
+
 def test_projection_marks_persisted_snapshot_stale_when_canonical_revision_advanced(tmp_path: Path):
     _write(tmp_path / "source.md", "[[Missing]]\n")
     index = LinkIndex(tmp_path)

@@ -1314,10 +1314,10 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       ref={layoutRef}
       data-memory-layout="notebook"
       className={clsx(
-        "grid h-full min-h-0",
+        "relative grid h-full min-h-0 max-[640px]:grid-cols-[180px_minmax(0,1fr)_0px]",
         rightPanelOpen
-          ? "grid-cols-[280px_minmax(0,1fr)_320px]"
-          : "grid-cols-[280px_minmax(0,1fr)_0px]",
+          ? "grid-cols-[280px_minmax(0,1fr)_320px] max-[900px]:grid-cols-[200px_minmax(0,1fr)_0px]"
+          : "grid-cols-[280px_minmax(0,1fr)_0px] max-[900px]:grid-cols-[200px_minmax(0,1fr)_0px]",
       )}
     >
       <nav data-memory-zone="rail" aria-label="Memory notebook" className="flex min-h-0 flex-col border-r border-line-soft">
@@ -1479,7 +1479,10 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
         data-memory-zone="inspector"
         aria-label="Memory inspector"
         aria-hidden={!rightPanelOpen}
-        className={clsx("min-h-0 overflow-hidden", rightPanelOpen && "border-l border-line-soft")}
+        className={clsx(
+          "min-h-0 overflow-hidden",
+          rightPanelOpen && "border-l border-line-soft max-[900px]:absolute max-[900px]:inset-y-0 max-[900px]:right-0 max-[900px]:z-20 max-[900px]:w-[min(320px,calc(100%-24px))] max-[900px]:bg-bg-main max-[900px]:shadow-lg",
+        )}
       >
         {recordsOpen && (
           <section aria-label="Raw records diagnostic" className="flex h-full min-h-0 flex-col">

@@ -387,11 +387,11 @@ def _migration_meta(root: Path) -> dict[str, str]:
     return {key: str(value) for key, value in data.items() if value is not None}
 
 
-def _migration_meta_bytes(*, migrated_at: str, backup_path: Path) -> bytes:
-    return (
-        json.dumps({"schema_version": 2, "last_migration": migrated_at, "backup_path": str(backup_path)}, sort_keys=True)
-        + "\n"
-    ).encode()
+def _migration_meta_bytes(*, migrated_at: str, backup_path: Path | None) -> bytes:
+    data: dict[str, object] = {"schema_version": 2, "last_migration": migrated_at}
+    if backup_path is not None:
+        data["backup_path"] = str(backup_path)
+    return (json.dumps(data, sort_keys=True) + "\n").encode()
 
 
 def _stage_current_vault(root: Path, stage: Path) -> None:
@@ -408,7 +408,10 @@ def _stage_current_vault(root: Path, stage: Path) -> None:
 
 
 def _migrate_vault_to_v2(root: Path) -> MigrationReport:
-    root = Path(root)
+    # VaultJournal canonicalizes its root. Derive every migration-internal path
+    # from the same canonical path so aliases such as macOS /tmp -> /private/tmp
+    # cannot fall outside the journal's containment checks.
+    root = Path(root).resolve()
     root.mkdir(parents=True, exist_ok=True)
     journal = VaultJournal(root)
     maintenance = root / ".ntrp" / "maintenance" / "migration-v2"
@@ -420,6 +423,11 @@ def _migrate_vault_to_v2(root: Path) -> MigrationReport:
     pages = _discover_legacy(root)
     if not pages:
         meta = _migration_meta(root)
+        if meta.get("schema_version") != "2":
+            migrated_at = datetime.now(UTC).isoformat()
+            journal.commit_migration(
+                {_MIGRATION_META: _migration_meta_bytes(migrated_at=migrated_at, backup_path=None)}
+            )
         return MigrationReport(False, meta.get("backup_path"))
     migrated_at = datetime.now(UTC).isoformat()
     files, record_count, collapsed, reassigned = _render_pages(pages, migrated_at)
@@ -454,7 +462,7 @@ def _migrate_vault_to_v2(root: Path) -> MigrationReport:
 
 
 def migrate_vault_to_v2(root: Path) -> MigrationReport:
-    root = Path(root)
+    root = Path(root).resolve()
     try:
         return _migrate_vault_to_v2(root)
     except VaultMigrationError:

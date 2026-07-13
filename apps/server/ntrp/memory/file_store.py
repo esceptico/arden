@@ -437,6 +437,8 @@ class FilePageStore:
         return hashlib.sha256(content or b"").hexdigest()
 
     def _editable_page_bytes(self) -> dict[str, bytes]:
+        from ntrp.memory.artifacts import artifact_is_editable
+
         pages: dict[str, bytes] = {}
         for path in self._walk_regular_files(
             self._root,
@@ -447,7 +449,13 @@ class FilePageStore:
             if path.parent == self._root and path.name in _GENERATED_FILES:
                 continue
             content = self._safe_read_bytes(path)
-            if content is not None:
+            if content is None:
+                continue
+            try:
+                text = content.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            if artifact_is_editable(rel.as_posix(), text):
                 pages[rel.as_posix()] = content
         return pages
 
@@ -1014,7 +1022,17 @@ class FilePageStore:
                 return rid
 
     def _ledger_mode(self) -> bool:
-        return any(page.records_header is not None for page in self._pages.values())
+        if any(page.records_header is not None for page in self._pages.values()):
+            return True
+        marker = self._root / ".ntrp" / "maintenance" / "migration-v2.json"
+        try:
+            marker_st = marker.lstat()
+            if stat.S_ISLNK(marker_st.st_mode) or not stat.S_ISREG(marker_st.st_mode):
+                return False
+            data = json.loads(marker.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return False
+        return isinstance(data, dict) and data.get("schema_version") == 2
 
     def _ledger_entries(self) -> tuple[LedgerEntry, ...]:
         return tuple(

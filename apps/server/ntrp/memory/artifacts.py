@@ -273,13 +273,19 @@ _GENERATED_RELS = {"AGENTS.md", "health.md", "index.md", "facts/index.md"}
 def _artifact_generated(rel: str, content: str) -> bool:
     if rel in _GENERATED_RELS or rel.startswith("changelog/"):
         return True
+    if (
+        Path(rel).name == "README.md"
+        and "<!-- ntrp:index:start -->" in content
+        and "<!-- ntrp:index:end -->" in content
+    ):
+        return True
     fm, _ = parse_frontmatter(content)
     if "generated" in fm:
         return bool(fm["generated"])
     return False
 
 
-def _artifact_editable(rel: str, content: str) -> bool:
+def artifact_is_editable(rel: str, content: str) -> bool:
     if rel.startswith("changelog/"):
         return False
     fm, _ = parse_frontmatter(content)
@@ -672,7 +678,7 @@ class ArtifactMemoryStore:
             raise FileNotFoundError(rel)
         body = strip_frontmatter(content)
         generated = _artifact_generated(rel, body)
-        editable = _artifact_editable(rel, body)
+        editable = artifact_is_editable(rel, body)
         frontmatter = dump_frontmatter({
             "kind": kind,
             "title": title,
@@ -735,7 +741,7 @@ class ArtifactMemoryStore:
             if query and query not in haystack:
                 continue
             generated = _artifact_generated(rel, content)
-            editable = _artifact_editable(rel, content)
+            editable = artifact_is_editable(rel, content)
             artifacts.append(
                 MemoryArtifact(
                     path=rel,
@@ -804,7 +810,7 @@ class ArtifactMemoryStore:
         timeline = timeline or ()
         kind, title, scope_kind, scope_key = self._artifact_meta(rel_posix, content)
         generated = _artifact_generated(rel_posix, content)
-        editable = _artifact_editable(rel_posix, content)
+        editable = artifact_is_editable(rel_posix, content)
         return MemoryArtifact(
             path=rel_posix,
             title=title,

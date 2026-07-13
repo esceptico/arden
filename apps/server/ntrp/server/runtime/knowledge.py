@@ -10,6 +10,11 @@ from ntrp.server.indexer import Indexer
 from ntrp.server.stores import Stores
 
 _logger = get_logger(__name__)
+_EMPTY_CANONICAL_REVISION = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+
+def _link_index_revision(revision: str) -> str:
+    return revision or _EMPTY_CANONICAL_REVISION
 
 
 class VaultIndexProjection:
@@ -199,7 +204,7 @@ class LinkIndexProjection:
         self._work_future: asyncio.Future | None = None
         self._dirty = False
         self._closed = False
-        self.stale = not index.snapshot.revision or index.snapshot.revision != revision()
+        self.stale = not index.snapshot.revision or index.snapshot.revision != _link_index_revision(revision())
 
     @property
     def closed(self) -> bool:
@@ -224,7 +229,7 @@ class LinkIndexProjection:
         try:
             while self._dirty:
                 self._dirty = False
-                revision = self._revision()
+                revision = _link_index_revision(self._revision())
                 try:
                     loop = asyncio.get_running_loop()
                     work = loop.run_in_executor(None, self.index.rebuild, self._artifacts, revision)
@@ -236,7 +241,7 @@ class LinkIndexProjection:
                         raise
                     finally:
                         self._work_future = None
-                    if snapshot.revision != self._revision():
+                    if snapshot.revision != _link_index_revision(self._revision()):
                         self._dirty = True
                         self.stale = True
                 except Exception:
@@ -330,7 +335,7 @@ class KnowledgeRuntime:
                     if isinstance(change, ObservedFileChange):
                         revision = change.result_revision
                         review_required = False
-                        if self._page_edit_service is not None:
+                        if change.origin == "external" and self._page_edit_service is not None:
                             event = await self._page_edit_service.ingest_external(change)
                             if event is not None:
                                 revision = event.result_revision

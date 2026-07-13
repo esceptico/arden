@@ -168,6 +168,34 @@ async def test_engine_write_marker_suppresses_exact_revision_once(tmp_path: Path
     await store.close()
 
 
+async def test_generated_and_changelog_writes_never_become_user_page_edits(tmp_path: Path):
+    vault = tmp_path / "memory"
+    store, _page = await _store(vault)
+    changelog = vault / "changelog/2026/2026-07.md"
+    changelog.parent.mkdir(parents=True)
+    changelog.write_text("# Generated changelog\n", encoding="utf-8")
+    daily = vault / "daily/2026-07-13.md"
+    daily.parent.mkdir()
+    daily.write_text("---\ngenerated: true\n---\n\n# Daily\n", encoding="utf-8")
+    managed_index = vault / "daily/README.md"
+    managed_index.write_text(
+        "<!-- ntrp:index:start -->\n- day.md — Day\n<!-- ntrp:index:end -->\n",
+        encoding="utf-8",
+    )
+    manual = vault / "notes/manual.md"
+    manual.parent.mkdir()
+    manual.write_text("# Manual\n", encoding="utf-8")
+
+    changes = await store.refresh_from_disk()
+    observed = [change for change in changes if isinstance(change, ObservedFileChange)]
+
+    assert [change.path for change in observed] == ["notes/manual.md"]
+    assert "changelog/2026/2026-07.md" not in _observed(vault)["pages"]
+    assert "daily/2026-07-13.md" not in _observed(vault)["pages"]
+    assert "daily/README.md" not in _observed(vault)["pages"]
+    await store.close()
+
+
 async def test_committed_engine_event_suppresses_external_ingest_if_marker_write_crashes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -272,6 +300,45 @@ async def test_runtime_publishes_only_after_external_event_and_snapshot_are_dura
     runtime.start_memory_watch(publish)
     await captured["callback"]([change])
 
+    assert captured["published"] == (["topics/a.md"], change.result_revision, False)
+    await store.close()
+
+
+async def test_runtime_never_reingests_a_receipted_engine_write_as_external(tmp_path: Path):
+    vault = tmp_path / "memory"
+    store, page = await _store(vault)
+    service = PageEditService(
+        vault,
+        store,
+        reconciler=Reconciler((RecordOperation.noop(),), (RecordOperation.noop(),)),
+    )
+    before = page.read_bytes()
+    preview = await service.preview(
+        path="topics/a.md",
+        base_revision=page_revision(before),
+        content=before + b"\nEngine-authored.\n",
+        actor="agent:test",
+        origin="agent",
+    )
+    committed = await service.apply(preview.id, decisions={})
+    change = next(change for change in await store.refresh_from_disk() if isinstance(change, ObservedFileChange))
+    assert change.origin == "agent"
+
+    captured = {}
+    store.start_watch = lambda callback: captured.setdefault("callback", callback)
+    runtime = KnowledgeRuntime.__new__(KnowledgeRuntime)
+    runtime._record_store = store
+    runtime._page_edit_service = service
+    runtime._vault_index = SimpleNamespace(schedule=lambda: None)
+    runtime._link_index = SimpleNamespace(schedule=lambda: None)
+
+    async def publish(paths, *, revision=None, review_required=False):
+        captured["published"] = (paths, revision, review_required)
+
+    runtime.start_memory_watch(publish)
+    await captured["callback"]([change])
+
+    assert service.history(path="topics/a.md") == (committed,)
     assert captured["published"] == (["topics/a.md"], change.result_revision, False)
     await store.close()
 

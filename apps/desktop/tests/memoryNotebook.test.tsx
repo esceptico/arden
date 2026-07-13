@@ -163,6 +163,9 @@ test("memory opens as a meaning-first notebook, not a database inspector", async
   expect(rail?.getAttribute("aria-label")).toBe("Memory notebook");
   expect(workspace?.getAttribute("aria-label")).toBe("Memory note");
   expect(inspector).not.toBeNull();
+  const layout = host.querySelector<HTMLElement>('[data-memory-layout="notebook"]');
+  expect(layout?.className).toContain("max-[640px]:grid-cols-[180px_minmax(0,1fr)_0px]");
+  expect(layout?.className).toContain("max-[900px]:grid-cols-[200px_minmax(0,1fr)_0px]");
 
   expect(host.querySelector('button[role="tab"]')).toBeNull();
   expect(host.textContent).not.toContain("FilesRecords");
