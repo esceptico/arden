@@ -251,6 +251,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const applyGeneration = useRef(0);
   const mutationPendingRef = useRef(false);
   const externalReviewQueueRef = useRef<PageEditEvent[]>([]);
+  const reviewSelectionPathRef = useRef<string | null>(null);
   const memoryVaultChangesRef = useRef(useStore.getState().memoryVaultChanges);
   const processedMemoryChangeSeqs = useRef(new Set<number>());
   const memoryChangeDrainRunning = useRef(false);
@@ -289,6 +290,10 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       controller: new AbortController(),
     };
     summaryRequest.current = next;
+    if (!mountedRef.current) {
+      next.controller.abort();
+      return next;
+    }
     setLoading(false);
     setSearchLoading(false);
     setRebuilding(false);
@@ -296,11 +301,12 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   }, []);
 
   const isCurrentSummaryRequest = useCallback((request: SummaryRequest) =>
-    summaryRequest.current?.epoch === request.epoch, []);
+    mountedRef.current && summaryRequest.current?.epoch === request.epoch, []);
 
   useEffect(() => () => summaryRequest.current?.controller.abort(), []);
 
   const refreshIndexDocuments = useCallback(async (summaries: MemoryArtifactSummary[]) => {
+    if (!mountedRef.current) return;
     const generation = ++indexGeneration.current;
     setIndexLoading(true);
     const selectedDocuments = selectIndexDocuments(summaries);
@@ -337,12 +343,14 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   }, [config]);
 
   const acceptSummaries = useCallback((next: MemoryArtifactSummary[]) => {
+    if (!mountedRef.current) return;
     artifactsRef.current = next;
     setArtifacts(next);
     void refreshIndexDocuments(next);
   }, [refreshIndexDocuments]);
 
   const load = useCallback(async (): Promise<boolean> => {
+    if (!mountedRef.current) return false;
     const request = beginSummaryRequest();
     setLoading(true);
     setError(null);
@@ -362,6 +370,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   }, [acceptSummaries, beginSummaryRequest, config, isCurrentSummaryRequest]);
 
   const search = useCallback(async (value: string): Promise<boolean> => {
+    if (!mountedRef.current) return false;
     const queryValue = value.trim();
     if (!queryValue) return false;
     const request = beginSummaryRequest();
@@ -934,6 +943,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   };
 
   const rebuild = () => {
+    if (!mountedRef.current) return;
     const request = beginSummaryRequest();
     setRebuilding(true);
     setContentNotice(null);
@@ -1041,8 +1051,8 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     queue: PageEditEvent[] = externalReviewQueueRef.current,
     path: string | null | undefined = selectedMetaRef.current?.path,
   ) => {
-    const next = queue.find((event) => event.path === path && event.id !== pausedExternalReviewId);
-    if (!next) return false;
+    const next = queue.find((event) => event.path === path);
+    if (!next || next.id === pausedExternalReviewId) return false;
     setEditDecisions({});
     setEditError(null);
     setEditReview({ kind: "external", generation: ++reviewGeneration.current, event: next });
@@ -1053,8 +1063,8 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     if (editReview || reviewPending || externalReviewQueue.length === 0) return;
     const draft = editingRef.current;
     const path = selectedMeta?.path;
-    const next = externalReviewQueue.find((event) => event.path === path && event.id !== pausedExternalReviewId);
-    if (!next) return;
+    const next = externalReviewQueue.find((event) => event.path === path);
+    if (!next || next.id === pausedExternalReviewId) return;
     if (draft && draft.draftContent !== draft.baseContent && draft.baseRevision !== next.resultRevision) return;
     promoteExternalReview(externalReviewQueue, path);
   }, [editReview, externalReviewQueue, pausedExternalReviewId, promoteExternalReview, reviewPending, selectedMeta?.path]);
@@ -1205,8 +1215,10 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
 
   useEffect(() => {
     if (mutationPendingRef.current) return;
-    const path = selectedMeta?.path;
-    setPausedExternalReviewId(null);
+    const path = selectedMeta?.path ?? null;
+    const pathChanged = reviewSelectionPathRef.current !== path;
+    reviewSelectionPathRef.current = path;
+    if (pathChanged) setPausedExternalReviewId(null);
     const currentReview = editReviewRef.current;
     if (currentReview?.kind === "external" && currentReview.event.path !== path) {
       setEditReview(null);

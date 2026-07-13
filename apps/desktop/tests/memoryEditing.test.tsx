@@ -107,6 +107,8 @@ function installBridge(options: {
   onApply?: (body: Record<string, unknown>, call: number) => BridgeResponse | Promise<BridgeResponse>;
   onHistory?: (call: number, path: string | null) => BridgeResponse | Promise<BridgeResponse>;
   onRetry?: (body: Record<string, unknown>, call: number) => BridgeResponse | Promise<BridgeResponse>;
+  onList?: (query: string | null, call: number) => BridgeResponse | Promise<BridgeResponse>;
+  onRebuild?: (call: number) => BridgeResponse | Promise<BridgeResponse>;
   secondNote?: ReturnType<typeof note>;
 } = {}) {
   let current = note("note-r1", options.readonly ? {
@@ -119,12 +121,24 @@ function installBridge(options: {
   let applyCalls = 0;
   let historyCalls = 0;
   let retryCalls = 0;
+  let listCalls = 0;
+  let rebuildCalls = 0;
   const requests: Array<{ path: string; method: string; body: unknown }> = [];
   window.ntrpDesktop = { api: { request: async (_config, request) => {
     const method = request.method ?? "GET";
     const body = request.body ? JSON.parse(request.body) : null;
     requests.push({ path: request.path, method, body });
-    if (request.path === "/admin/memory/artifacts") return ok({ artifacts: [index, current, ...(currentB ? [currentB] : [])] });
+    if (request.path.startsWith("/admin/memory/artifacts?") || request.path === "/admin/memory/artifacts") {
+      listCalls += 1;
+      const query = new URL(request.path, "http://ntrp.test").searchParams.get("q");
+      if (options.onList) return options.onList(query, listCalls);
+      return ok({ artifacts: [index, current, ...(currentB ? [currentB] : [])] });
+    }
+    if (request.path === "/admin/memory/artifacts/rebuild") {
+      rebuildCalls += 1;
+      if (options.onRebuild) return options.onRebuild(rebuildCalls);
+      return ok({ artifacts: [index, current, ...(currentB ? [currentB] : [])] });
+    }
     if (request.path === "/admin/memory/artifacts/index.md") {
       return ok({ artifact: { ...index, content: `<!-- ntrp:index:start -->\n- topics/a.md <!-- ntrp:path=topics%2Fa.md -->${currentB ? "\n- topics/b.md <!-- ntrp:path=topics%2Fb.md -->" : ""}\n<!-- ntrp:index:end -->`, editable_content: null, timeline: [], frontmatter: {} } });
     }
@@ -211,6 +225,13 @@ async function changeDraft(textarea: HTMLTextAreaElement, value: string) {
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(textarea, value);
     textarea.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+async function changeInput(input: HTMLInputElement, value: string) {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
   });
 }
 
@@ -587,6 +608,42 @@ test("multiple external review events remain FIFO and resolving one preserves th
   expect(host.textContent).toContain("Second external decision?");
 });
 
+test("Not now pauses the FIFO head until real path navigation", async () => {
+  useStore.setState({ memoryVaultVersion: 0, memoryVaultChanges: [] });
+  const first = externalReview("paused-first", "note-r2", "Paused first decision?", 22);
+  const second = externalReview("paused-second", "note-r3", "Paused second decision?", 23);
+  const bridge = installBridge({ events: [second, first], secondNote: noteB() });
+  bridge.update(note("note-r3", { content: "Latest external", editable_content: "# A\n\nLatest external.\n" }));
+  const { host } = await renderView();
+  await act(async () => {
+    useStore.getState().memoryVaultChanged({ paths: ["topics/a.md"], revision: "note-r2", reviewRequired: true, seq: 513 });
+    useStore.getState().memoryVaultChanged({ paths: ["topics/a.md"], revision: "note-r3", reviewRequired: true, seq: 514 });
+  });
+  await settle(340);
+  expect(host.textContent).toContain("Paused first decision?");
+
+  await act(async () => Array.from(host.querySelectorAll<HTMLButtonElement>("button"))
+    .find((button) => button.textContent === "Not now")?.click());
+  await settle();
+  expect(host.textContent).not.toContain("Paused first decision?");
+  expect(host.textContent).not.toContain("Paused second decision?");
+
+  await shortcut("e");
+  const textarea = host.querySelector<HTMLTextAreaElement>("textarea")!;
+  expect(textarea).not.toBeNull();
+  expect(host.textContent).not.toContain("Paused first decision?");
+  await shortcut("e", textarea);
+  expect(host.textContent).not.toContain("Paused first decision?");
+  expect(host.textContent).not.toContain("Paused second decision?");
+
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-memory-entry="topics/b.md"]')?.click());
+  await settle(80);
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-memory-entry="topics/a.md"]')?.click());
+  await settle(100);
+  expect(host.textContent).toContain("Paused first decision?");
+  expect(host.textContent).not.toContain("Paused second decision?");
+});
+
 test("same-path history requests drain in sequence instead of racing", async () => {
   useStore.setState({ memoryVaultVersion: 0, memoryVaultChanges: [] });
   const firstGate = deferred();
@@ -732,6 +789,52 @@ test("a committed apply after unmount only compare-clears and never reloads", as
   await settle(80);
   expect(getDraft("topics/a.md", "note-r1")).toBeNull();
   expect(bridge.requests.filter((request) => request.path === "/admin/memory/artifacts")).toHaveLength(readsBeforeCommit);
+});
+
+test("an initial summary result cannot launch index reads after unmount", async () => {
+  const listGate = deferred<BridgeResponse>();
+  const bridge = installBridge({ onList: () => listGate.promise });
+  const view = setup();
+  await act(async () => view.root.render(<ArtifactMemoryView config={config} />));
+  await settle(20);
+  await act(async () => view.root.unmount());
+  roots.delete(view.root);
+  const indexReads = bridge.requests.filter((request) => request.path === "/admin/memory/artifacts/index.md").length;
+  await act(async () => listGate.resolve(ok({ artifacts: [index, note()] })));
+  await settle(80);
+  expect(bridge.requests.filter((request) => request.path === "/admin/memory/artifacts/index.md")).toHaveLength(indexReads);
+});
+
+test("a search result cannot launch index reads after unmount", async () => {
+  const searchGate = deferred<BridgeResponse>();
+  const bridge = installBridge({
+    onList: (query) => query ? searchGate.promise : ok({ artifacts: [index, note()] }),
+  });
+  const view = await renderView();
+  await changeInput(view.host.querySelector<HTMLInputElement>('input[aria-label="Search memory notes…"]')!, "changed");
+  await settle(220);
+  expect(bridge.requests.some((request) => request.path.includes("q=changed"))).toBe(true);
+  await act(async () => view.root.unmount());
+  roots.delete(view.root);
+  const indexReads = bridge.requests.filter((request) => request.path === "/admin/memory/artifacts/index.md").length;
+  await act(async () => searchGate.resolve(ok({ artifacts: [index, note("search-r2")] })));
+  await settle(100);
+  expect(bridge.requests.filter((request) => request.path === "/admin/memory/artifacts/index.md")).toHaveLength(indexReads);
+});
+
+test("a rebuild result cannot launch index reads after unmount", async () => {
+  const rebuildGate = deferred<BridgeResponse>();
+  const bridge = installBridge({ onRebuild: () => rebuildGate.promise });
+  const view = await renderView();
+  await act(async () => view.host.querySelector<HTMLButtonElement>('button[aria-label="Reload memory notes"]')?.click());
+  await settle(20);
+  expect(bridge.requests.some((request) => request.path === "/admin/memory/artifacts/rebuild")).toBe(true);
+  await act(async () => view.root.unmount());
+  roots.delete(view.root);
+  const indexReads = bridge.requests.filter((request) => request.path === "/admin/memory/artifacts/index.md").length;
+  await act(async () => rebuildGate.resolve(ok({ artifacts: [index, note("rebuild-r2")] })));
+  await settle(100);
+  expect(bridge.requests.filter((request) => request.path === "/admin/memory/artifacts/index.md")).toHaveLength(indexReads);
 });
 
 test("consecutive same-path reviews refocus and announce their exact event ids", async () => {
