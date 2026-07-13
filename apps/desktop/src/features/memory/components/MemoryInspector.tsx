@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { AlertCircle, ArrowUpRight, Copy, Link2 } from "lucide-react";
+import { Button } from "@/components/ui/Button";
 import { copyText } from "@/lib/clipboard";
 import type {
   MemoryArtifactDetail,
@@ -148,6 +150,8 @@ export function MemoryInspector({
   onRetryLinks,
   onLoadMoreLinks,
   onLoadMoreHistory,
+  onCorrect,
+  onForget,
 }: {
   page: MemoryArtifactDetail;
   links: PageLinks | null;
@@ -163,7 +167,12 @@ export function MemoryInspector({
   onRetryLinks?: () => void;
   onLoadMoreLinks?: () => void;
   onLoadMoreHistory?: () => void;
+  onCorrect?: (recordId: string) => void;
+  onForget?: (recordId: string, eventId: string, questionId: string) => Promise<void>;
 }) {
+  const [confirmForget, setConfirmForget] = useState<string | null>(null);
+  const [forgetting, setForgetting] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const appliedOperations = history?.events.flatMap((event) => event.operations) ?? [];
   const proposedOperations = history?.events.flatMap((event) => event.reviewOperations) ?? [];
   const appliedSources = appliedOperations.flatMap(operationSources);
@@ -177,6 +186,12 @@ export function MemoryInspector({
       && resolver.sequence > event.sequence
       && (resolver.reconcilesEventId === event.id || resolver.reviewEventId === event.id)))
     .flatMap((event) => event.questions.map((question) => ({ event, question }))) ?? [];
+  const actionableTargets = pending.flatMap(({ event, question }) => {
+    const operation = event.reviewOperations[question.operationIndex];
+    return operation && operation.kind === "ASK"
+      ? operation.targetIds.map((target) => ({ target, eventId: event.id, questionId: question.id }))
+      : [];
+  }).filter((entry, index, entries) => entries.findIndex((candidate) => candidate.target === entry.target) === index);
   const partialHistory = history != null && history.events.length < history.total;
   const moreLinks = links != null && (links.outgoing.length < links.totalOutgoing || links.backlinks.length < links.totalBacklinks);
 
@@ -230,6 +245,47 @@ export function MemoryInspector({
             {appliedTargets.map(({ operation, target }) => <li key={`actual:${operation.id}:${target}`} className="rounded-[8px] bg-surface-soft/40 p-2"><span className="font-medium text-ink">{operation.kind}</span> · Target <span className="font-mono">{target}</span></li>)}
             {proposedTargets.map(({ operation, target }) => <li key={`proposed:${operation.id}:${target}`} className="rounded-[8px] bg-warning/10 p-2"><span className="font-medium text-ink">{operation.kind}</span> · Proposed target <span className="font-mono">{target}</span></li>)}
           </ul> : <p className="text-xs text-faint">No lifecycle relationships.</p>}
+          {actionableTargets.map(({ target, eventId, questionId }) => {
+            const related = [...appliedTargets, ...proposedTargets].filter((entry) => entry.target === target);
+            const evidenceCount = related.reduce((count, entry) => count + operationSources(entry.operation).length, 0);
+            return (
+              <div key={`actions:${target}`} className="rounded-[8px] border border-line-soft p-2.5 text-xs">
+                <div className="break-all font-mono text-ink">{target}</div>
+                <div className="mt-1 text-2xs text-faint">{related.length} relationship{related.length === 1 ? "" : "s"} · {evidenceCount} evidence reference{evidenceCount === 1 ? "" : "s"}</div>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  <Button size="sm" variant="secondary" aria-label={`Correct record ${target}`} disabled={!onCorrect || !page.editable || navigationDisabled} onClick={() => onCorrect?.(target)}>Correct</Button>
+                  <Button size="sm" variant="danger" aria-label={`Forget record ${target}`} disabled={!onForget || navigationDisabled} onClick={() => { setActionError(null); setConfirmForget(target); }}>Forget</Button>
+                  <Button size="sm" variant="secondary" aria-label={`Dispute record ${target}`} disabled title="Dispute events are not supported by this ledger">Dispute</Button>
+                  <Button size="sm" variant="secondary" aria-label={`Archive record ${target}`} disabled title="Records have no archived state">Archive</Button>
+                </div>
+                {confirmForget === target && (
+                  <div role="alertdialog" aria-label={`Confirm forget ${target}`} className="mt-2 rounded-[7px] bg-bad-soft p-2.5">
+                    <strong className="text-ink">Forget {target}?</strong>
+                    <p className="mt-1 text-ink-soft">This appends a RETRACT event. It does not delete history.</p>
+                    <div className="mt-2 flex gap-1.5">
+                      <Button size="sm" variant="secondary" disabled={forgetting === target} onClick={() => setConfirmForget(null)}>Cancel</Button>
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        aria-label={`Confirm forget ${target}`}
+                        disabled={forgetting === target}
+                        onClick={() => {
+                          if (!onForget) return;
+                          setForgetting(target);
+                          setActionError(null);
+                          void onForget(target, eventId, questionId)
+                            .then(() => setConfirmForget(null))
+                            .catch((reason) => setActionError(reason instanceof Error ? reason.message : String(reason)))
+                            .finally(() => setForgetting(null));
+                        }}
+                      >{forgetting === target ? "Forgetting…" : "Confirm forget"}</Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {actionError && <ErrorText message={actionError} />}
         </Section>
 
         <Section id="page-events" title="Page events">

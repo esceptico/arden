@@ -9,6 +9,7 @@ import { Collapse } from "@/components/ui/Collapse";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
+import { getApprovalFeedbackDraft, setApprovalFeedbackDraft } from "@/lib/approvalFeedbackDraft";
 
 // Cap visible stack to 2 cards. The front card already shows "1 of N" when
 // there are more pending, so a third sliver doesn't add information — it
@@ -264,7 +265,7 @@ function ApprovalCard({
   // already turns into "User rejected this action and said: …"). The plain
   // Reject button stays as the instant, no-reason path.
   const [denyOpen, setDenyOpen] = useState(false);
-  const [denyReason, setDenyReason] = useState("");
+  const [denyReason, setDenyReason] = useState(() => getApprovalFeedbackDraft(toolId));
   const submitDeny = () =>
     onDismissWith("reject", () => respondToApproval(toolId, false, denyReason.trim()));
 
@@ -336,7 +337,10 @@ function ApprovalCard({
             size="sm"
             autoFocus
             value={denyReason}
-            onChange={(e) => setDenyReason(e.target.value)}
+            onChange={(e) => {
+              setDenyReason(e.target.value);
+              setApprovalFeedbackDraft(toolId, e.target.value);
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 e.preventDefault();

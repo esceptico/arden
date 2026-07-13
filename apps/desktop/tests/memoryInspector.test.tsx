@@ -227,3 +227,38 @@ test("pending questions disappear after a later applied event resolves the revie
   expect(host.querySelector('[data-memory-inspector-section="pending-review"]')?.textContent).not.toContain("Forget the old durable fact?");
   expect(host.querySelector('[data-memory-inspector-section="pending-review"]')?.textContent).toContain("No pending questions");
 });
+
+test("lifecycle actions preserve the exact target and require confirmation before forget", async () => {
+  const calls: Array<{ action: string; target: string }> = [];
+  const { host, root } = setup();
+  await act(async () => root.render(
+    <MemoryInspector
+      page={page}
+      links={links}
+      history={history}
+      linksLoading={false}
+      historyLoading={false}
+      linkError={null}
+      historyError={null}
+      onNavigate={() => {}}
+      onCorrect={(target) => calls.push({ action: "correct", target })}
+      onForget={async (target, eventId, questionId) => { calls.push({ action: `forget:${eventId}:${questionId}`, target }); }}
+    />,
+  ));
+
+  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Correct record record-old"]')?.click());
+  expect(calls).toEqual([{ action: "correct", target: "record-old" }]);
+
+  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Forget record record-old"]')?.click());
+  expect(calls).toHaveLength(1);
+  expect(host.textContent).toContain("Forget record-old?");
+  expect(host.textContent).toContain("This appends a RETRACT event");
+  expect(host.querySelector<HTMLButtonElement>('button[aria-label="Dispute record record-old"]')?.disabled).toBe(true);
+  expect(host.querySelector<HTMLButtonElement>('button[aria-label="Archive record record-old"]')?.disabled).toBe(true);
+
+  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Confirm forget record-old"]')?.click());
+  expect(calls).toEqual([
+    { action: "correct", target: "record-old" },
+    { action: "forget:event-1:question-1", target: "record-old" },
+  ]);
+});

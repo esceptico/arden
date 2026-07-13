@@ -34,6 +34,7 @@ export type DiffReviewOperation =
 export interface RawDiffRendererProps {
   before: DiffReviewFile;
   after: DiffReviewFile;
+  rawPatch?: string;
   layout: DiffReviewLayout;
   reducedMotion?: boolean;
 }
@@ -57,6 +58,8 @@ export interface DiffReviewProps {
   reducedMotion?: boolean;
   hideFooter?: boolean;
   interactionDisabled?: boolean;
+  /** Server-authored unified patch for approval surfaces that do not have full files. Raw mode only. */
+  rawPatch?: string;
 }
 
 export interface DiffLineGroup {

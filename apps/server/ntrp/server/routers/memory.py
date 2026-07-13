@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from ntrp.memory.artifacts import ArtifactMemoryStore
-from ntrp.memory.models import Record
+from ntrp.memory.models import Record, SourceRef
 from ntrp.memory.page_edit_service import (
     PageEditService,
     PreviewExpiredError,
@@ -22,6 +22,7 @@ from ntrp.memory.page_edit_service import (
     StalePageRevisionError,
 )
 from ntrp.memory.page_events import PageEditDecision
+from ntrp.memory.reconciler import RecordOperation
 from ntrp.memory.scopes import MemoryScope, scope_for_write
 from ntrp.server.deps import require_knowledge_runtime
 from ntrp.server.runtime import Runtime, get_runtime
@@ -462,6 +463,12 @@ class PinBody(BaseModel):
     pinned: bool
 
 
+class ForgetBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirm: bool = False
+
+
 @router.post("/record")
 async def create_record(
     body: RecordBody,
@@ -491,6 +498,33 @@ async def pin_record(
         raise HTTPException(status_code=404, detail="record not found")
     artifacts.append_event(f"{'pinned' if body.pinned else 'unpinned'} memory record")
     return {"ok": True, "pinned": body.pinned}
+
+
+@router.post("/record/{record_id}/forget")
+async def forget_record(record_id: str, body: ForgetBody, store=Depends(_record_store)) -> dict:
+    """Append an exact, user-authored RETRACT. Never infer a target from text."""
+    if not body.confirm:
+        raise HTTPException(status_code=400, detail="forget requires confirm=true")
+    record = await store.get(record_id)
+    if record is None:
+        if hasattr(store, "history") and store.history(record_id):
+            raise HTTPException(status_code=409, detail="record is no longer active")
+        raise HTTPException(status_code=404, detail="record not found")
+    if record.superseded_by:
+        raise HTTPException(status_code=409, detail="record is no longer active")
+    if not hasattr(store, "apply_operations"):
+        raise HTTPException(status_code=503, detail="append-only record lifecycle is unavailable")
+    source = SourceRef(
+        kind="user_action",
+        ref=f"memory:record:{record_id}:forget",
+        role="retraction",
+    )
+    revision = store.apply_operations(
+        (RecordOperation.retract(record_id),),
+        source,
+        batch_key=f"desktop-forget:{record_id}",
+    )
+    return {"ok": True, "operation": "RETRACT", "record_id": record_id, "revision": revision}
 
 
 @router.get("/items")

@@ -1,5 +1,6 @@
 import { submitToolResult } from "@/api/chat";
 import { getState } from "@/stores";
+import { clearApprovalFeedbackDraft } from "@/lib/approvalFeedbackDraft";
 
 export async function respondToApproval(
   toolId: string,
@@ -8,6 +9,7 @@ export async function respondToApproval(
 ): Promise<void> {
   const s = getState();
   if (!s.currentRunId) return;
+  clearApprovalFeedbackDraft(toolId);
   s.resolvePendingApproval(toolId);
   try {
     await submitToolResult(s.config, {

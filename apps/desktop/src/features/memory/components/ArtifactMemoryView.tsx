@@ -987,6 +987,18 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     setEditError(null);
   }, [activeDetail]);
 
+  const forgetExactRecord = useCallback(async (recordId: string, eventId: string, questionId: string) => {
+    await retryPageEdit(config, {
+      eventId,
+      decisions: { [questionId]: { choice: "forget_memory", targetIds: [recordId] } },
+    });
+    detailCache.current.invalidatePath(selectedMetaRef.current?.path ?? "");
+    setContentRefreshKey((key) => key + 1);
+    setHistoryRefreshKey((key) => key + 1);
+    setRecordsRefreshKey((key) => key + 1);
+    await load();
+  }, [config, load]);
+
   const requestEditPreview = useCallback(async () => {
     if (!editing || editing.draftContent === editing.baseContent || editPending) return;
     editPreviewController.current?.abort();
@@ -1530,6 +1542,8 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
             onRetryLinks={() => setLinksRefreshKey((key) => key + 1)}
             onLoadMoreLinks={loadMoreLinks}
             onLoadMoreHistory={loadMoreHistory}
+            onCorrect={() => beginEditing()}
+            onForget={forgetExactRecord}
           />
         )}
       </aside>

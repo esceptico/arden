@@ -123,6 +123,7 @@ def test_routes_registered():
         "/admin/memory/page-edits/history",
         "/admin/memory/links",
         "/admin/memory/items",
+        "/admin/memory/record/{record_id}/forget",
         "/admin/memory/search",
     ):
         assert p in paths
@@ -832,3 +833,23 @@ def test_create_and_pin_record(client):
     )
     assert "Remembered: pinned fact" in monthly  # create event carries the record text
     assert c.post("/admin/memory/record/missing/pin", json={"pinned": True}).status_code == 404
+
+
+def test_forget_record_requires_confirmation_and_retracts_exact_ledger_id(page_edit_client):
+    c, records, *_ = page_edit_client
+    first = c.post("/admin/memory/record", json={"text": "first durable fact"}).json()["record"]
+    second = c.post("/admin/memory/record", json={"text": "second durable fact"}).json()["record"]
+
+    denied = c.post(f"/admin/memory/record/{first['id']}/forget", json={"confirm": False})
+    assert denied.status_code == 400
+
+    forgotten = c.post(f"/admin/memory/record/{first['id']}/forget", json={"confirm": True})
+    assert forgotten.status_code == 200
+    assert forgotten.json()["record_id"] == first["id"]
+    assert forgotten.json()["operation"] == "RETRACT"
+    assert c.get(f"/admin/memory/items/{second['id']}").status_code == 200
+    assert records.history(first["id"])[-1].meta.operation == "retract"
+    assert records.history(first["id"])[-1].meta.sources[-1].kind == "user_action"
+
+    repeated = c.post(f"/admin/memory/record/{first['id']}/forget", json={"confirm": True})
+    assert repeated.status_code == 409

@@ -225,6 +225,7 @@ export function DiffReview({
   reducedMotion,
   hideFooter = false,
   interactionDisabled = false,
+  rawPatch,
 }: DiffReviewProps) {
   const availableModes = modes.length ? modes : (["rendered"] as const);
   const fallbackMode = initialMode && availableModes.includes(initialMode) ? initialMode : availableModes[0];
@@ -270,7 +271,7 @@ export function DiffReview({
             <RenderedProseDiff before={before} after={after} layout={layout} reducedMotion={reduced} />
           ) : (
             <Suspense fallback={<div role="status" className="p-4 text-xs text-muted">Preparing raw diff…</div>}>
-              <LazyRawDiffRenderer before={before} after={after} layout={layout} reducedMotion={reduced} />
+              <LazyRawDiffRenderer before={before} after={after} rawPatch={rawPatch} layout={layout} reducedMotion={reduced} />
             </Suspense>
           )}
         </div>

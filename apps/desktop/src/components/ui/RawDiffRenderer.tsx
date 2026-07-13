@@ -255,7 +255,31 @@ function StackedPane({ side, groups, expanded, onToggle }: {
   );
 }
 
-export function RawDiffRenderer({ before, after, layout, reducedMotion = false }: RawDiffRendererProps) {
+function UnifiedPatch({ patch }: { patch: string }) {
+  return (
+    <section role="table" aria-label="Unified raw file diff" className="min-w-max bg-bg-main py-1 font-mono text-xs leading-[19px]">
+      <div role="rowgroup" data-raw-diff-lines>
+        {patch.split("\n").map((line, index) => {
+          const header = line.startsWith("---") || line.startsWith("+++") || line.startsWith("@@");
+          const added = !header && line.startsWith("+");
+          const removed = !header && line.startsWith("-");
+          return (
+            <div
+              role="row"
+              key={index}
+              data-patch-line={header ? "header" : added ? "added" : removed ? "removed" : "context"}
+              className={clsx(header && "text-info", added && "bg-ok-soft", removed && "bg-bad-soft")}
+            >
+              <code role="cell" className="block min-h-[19px] whitespace-pre px-3 text-ink">{line || " "}</code>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+export function RawDiffRenderer({ before, after, rawPatch, layout, reducedMotion = false }: RawDiffRendererProps) {
   const dark = useDarkTheme();
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const groups = buildDiffLineGroups(before.content, after.content);
@@ -288,11 +312,13 @@ export function RawDiffRenderer({ before, after, layout, reducedMotion = false }
       data-after-lines={lineCount(after.content)}
       data-before-bytes={before.content.length}
       data-after-bytes={after.content.length}
-      aria-label={`Raw Markdown changes for ${after.path || before.path}`}
+      aria-label={rawPatch !== undefined ? `Raw file changes for ${after.path || before.path}` : `Raw Markdown changes for ${after.path || before.path}`}
       className="min-w-0 overflow-auto bg-bg-main text-ink scroll-thin"
       style={style}
     >
-      {layout === "split" ? (
+      {rawPatch !== undefined ? (
+        <UnifiedPatch patch={rawPatch} />
+      ) : layout === "split" ? (
         <SplitComparison groups={groups} expanded={expanded} onToggle={toggle} />
       ) : (
         <div className="grid grid-cols-1 divide-y divide-line-soft">

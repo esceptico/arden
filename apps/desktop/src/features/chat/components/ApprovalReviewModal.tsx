@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Check, X } from "lucide-react";
 import { useStore } from "@/stores";
 import { respondToApproval } from "@/actions/approvals";
@@ -6,20 +7,9 @@ import { Button } from "@/components/ui/Button";
 import { PageModal } from "@/components/ui/PageModal";
 import { ICON } from "@/lib/icons";
 import { ScrollFadeTop } from "@/components/ui/ScrollBlur";
-
-const DIFF_LINE = "block px-2 min-w-max";
-const DIFF_ADD = "bg-[rgba(79,138,58,0.10)] text-[#2e6620] dark:bg-[rgba(135,154,57,0.16)] dark:text-[#afc463]";
-const DIFF_DEL = "bg-[rgba(184,68,43,0.10)] text-[#8a3220] dark:bg-[rgba(209,77,65,0.16)] dark:text-[#e58075]";
-const DIFF_HUNK = "text-info";
-
-function diffClassFor(line: string): string {
-  if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("@@")) {
-    return `${DIFF_LINE} ${DIFF_HUNK}`;
-  }
-  if (line.startsWith("+")) return `${DIFF_LINE} ${DIFF_ADD}`;
-  if (line.startsWith("-")) return `${DIFF_LINE} ${DIFF_DEL}`;
-  return DIFF_LINE;
-}
+import { DiffReview } from "@/components/ui/DiffReview";
+import { Input } from "@/components/ui/Input";
+import { getApprovalFeedbackDraft, setApprovalFeedbackDraft } from "@/lib/approvalFeedbackDraft";
 
 /** Diff/preview review for a pending approval. Opens when the banner's
  *  Review button is clicked. Approve/Reject actions live here too so the
@@ -31,6 +21,10 @@ export function ApprovalReviewModal() {
   );
   const close = useStore((s) => s.setReviewingApproval);
   const origin = useStore((s) => s.modalOrigin);
+  const [denyReason, setDenyReason] = useState("");
+  useEffect(() => {
+    setDenyReason(reviewing ? getApprovalFeedbackDraft(reviewing) : "");
+  }, [reviewing]);
 
   return (
     <PageModal
@@ -58,14 +52,16 @@ export function ApprovalReviewModal() {
           <div className="overflow-y-auto scroll-thin">
             <ScrollFadeTop />
             {approval.diff ? (
-              <div className="font-mono text-xs leading-[1.5] whitespace-pre overflow-x-auto overflow-y-auto max-h-60 scroll-thin">
-                <div>
-                  {approval.diff.split("\n").map((line, i) => (
-                    <span key={i} className={diffClassFor(line)}>
-                      {line || " "}
-                    </span>
-                  ))}
-                </div>
+              <div className="min-h-0 p-3">
+                <DiffReview
+                  before={{ path: approval.path ?? "before", content: "" }}
+                  after={{ path: approval.path ?? "after", content: "" }}
+                  rawPatch={approval.diff}
+                  modes={["raw"]}
+                  initialMode="raw"
+                  layout="stacked"
+                  hideFooter
+                />
               </div>
             ) : approval.preview ? (
               <pre className="m-0 px-5 py-4 font-mono text-sm leading-[1.55] text-ink-soft whitespace-pre-wrap">
@@ -80,11 +76,21 @@ export function ApprovalReviewModal() {
 
           <footer className="flex items-center gap-2 px-5 py-3 bg-surface-soft/40">
             <span className="text-xs text-faint font-mono">{approval.toolId.slice(0, 8)}</span>
+            <Input
+              size="sm"
+              aria-label="Rejection reason"
+              placeholder="Optional rejection reason"
+              value={denyReason}
+              onChange={(event) => {
+                setDenyReason(event.target.value);
+                setApprovalFeedbackDraft(approval.toolId, event.target.value);
+              }}
+              className="ml-auto min-w-0 max-w-72"
+            />
             <Button
               variant="secondary"
               leadingIcon={X}
-              onClick={() => void respondToApproval(approval.toolId, false)}
-              className="ml-auto"
+              onClick={() => void respondToApproval(approval.toolId, false, denyReason.trim())}
             >
               Reject
             </Button>
