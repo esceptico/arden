@@ -52,6 +52,10 @@ export function MemoryEditReview({
     return () => observer.disconnect();
   }, []);
 
+  useEffect(() => {
+    containerRef.current?.focus({ preventScroll: true });
+  }, [conflict?.currentRevision, kind, path]);
+
   if (kind === "conflict" && conflict) {
     return (
       <section
@@ -60,15 +64,17 @@ export function MemoryEditReview({
         data-reduced-motion-ready="true"
         data-long-content-ready="true"
         aria-label={`Three-way conflict for ${path}`}
-        className="flex h-full min-h-0 min-w-0 flex-col bg-bg-main p-3 sm:p-4"
+        tabIndex={-1}
+        className="flex h-full min-h-0 min-w-0 flex-col bg-bg-main p-3 outline-none sm:p-4"
       >
-        <header className="mb-3 flex items-center gap-3">
-          <div className="min-w-0">
+        <p role="status" aria-live="polite" className="sr-only">Conflict detected for {path}. Your draft is preserved.</p>
+        <header className="mb-3 flex flex-wrap items-center gap-2 sm:gap-3">
+          <div className="min-w-0 flex-1 basis-56">
             <h1 className="text-lg font-semibold text-ink">Page changed elsewhere</h1>
-            <p className="truncate text-xs text-muted">Compare both changes from your saved base. Your draft was not changed.</p>
+            <p className="break-words text-xs text-muted">Compare both changes from your saved base. Your draft was not changed.</p>
           </div>
-          <Button className="ml-auto" variant="secondary" size="sm" aria-label="Back to draft" onClick={onCancel}>Back to draft</Button>
-          <Button size="sm" aria-label="Continue with current page" onClick={onRebase}>Continue with current</Button>
+          <Button className="ml-auto" variant="secondary" size="sm" aria-label="Back to draft" disabled={pending} onClick={onCancel}>Back to draft</Button>
+          <Button size="sm" aria-label="Continue with current page" disabled={pending} onClick={onRebase}>Continue with current</Button>
         </header>
         <div className="grid min-h-0 min-w-0 flex-1 gap-3 overflow-auto lg:grid-cols-2">
           <section aria-label="Current page" className="flex min-h-[280px] min-w-0 flex-col">
@@ -102,8 +108,12 @@ export function MemoryEditReview({
       data-reduced-motion-ready="true"
       data-long-content-ready="true"
       aria-label={external ? `Resolve external memory effects for ${path}` : `Review memory edit for ${path}`}
-      className="flex h-full min-h-0 min-w-0 flex-col bg-bg-main p-3 sm:p-4"
+      tabIndex={-1}
+      className="flex h-full min-h-0 min-w-0 flex-col bg-bg-main p-3 outline-none sm:p-4"
     >
+      <p role="status" aria-live="polite" className="sr-only">
+        {external ? `Resolving external memory effects for ${path}` : `Reviewing changes to ${path}`}
+      </p>
       {analysisPending && (
         <div role="status" className="mb-3 rounded-lg bg-warn-soft px-3 py-2 text-xs text-ink-soft">
           Memory analysis is unavailable. Saving now records this edit as pending for later reconciliation.
@@ -125,6 +135,7 @@ export function MemoryEditReview({
           onCancel={onCancel}
           applyLabel={external ? "Resolve memory effects" : analysisPending ? "Save as pending" : "Apply changes"}
           applyDisabled={pending}
+          interactionDisabled={pending}
           cancelLabel={external ? "Not now" : "Back to edit"}
           layout={stacked ? "stacked" : "split"}
         />

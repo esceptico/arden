@@ -42,7 +42,7 @@ export function MemoryNote({
 
   const content = detail?.content ?? "";
   return (
-    <article data-memory-note-path={summary.path} className="flex h-full min-h-0 flex-col bg-bg-main">
+    <article data-memory-note-path={summary.path} tabIndex={-1} className="flex h-full min-h-0 flex-col bg-bg-main outline-none">
       <div data-memory-note-scroll className="flex-1 min-h-0 overflow-y-auto scroll-thin">
         <ScrollFadeTop />
         <div className="mx-auto w-full max-w-[780px] px-8 pb-10 pt-8 sm:px-10 sm:pt-10">
@@ -94,7 +94,7 @@ export function MemoryNote({
               {detail.generated && <span>generated</span>}
               {detail.source && <span>{detail.source}</span>}
               <span title={detail.revision} className="font-mono">rev {detail.revision.slice(0, 12)}</span>
-              {detail.editable && detail.editableContent != null && <span>⌘E to edit</span>}
+              {detail.editable && detail.editableContent != null && <span>Cmd/Ctrl+E to edit</span>}
               {detail.readonlyReason && <span className="basis-full pt-1 text-muted">{detail.readonlyReason}</span>}
             </footer>
           )}

@@ -16,6 +16,12 @@ export function clearDraft(path: string, baseRevision: string): void {
   drafts.delete(draftKey(path, baseRevision));
 }
 
+export function clearDraftIfMatches(path: string, baseRevision: string, expectedContent: string): boolean {
+  const key = draftKey(path, baseRevision);
+  if (drafts.get(key) !== expectedContent) return false;
+  return drafts.delete(key);
+}
+
 export function clearDrafts(): void {
   drafts.clear();
 }

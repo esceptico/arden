@@ -23,6 +23,10 @@ export interface MemoryVaultChange {
   seq: number | null;
 }
 
+export interface SequencedMemoryVaultChange extends MemoryVaultChange {
+  seq: number;
+}
+
 export type SettingsTabId =
   | "connection"
   | "providers"
@@ -562,7 +566,7 @@ export interface Actions {
    *  on-disk changes (Obsidian edit, feed write, maintenance pass) — the
    *  memory view refetches silently when it moves. */
   memoryVaultVersion: number;
-  memoryVaultChange: MemoryVaultChange | null;
+  memoryVaultChanges: readonly SequencedMemoryVaultChange[];
   memoryVaultChanged: (change?: MemoryVaultChange) => void;
   pushToast: (toast: Toast) => void;
   dismissToast: (id: string) => void;

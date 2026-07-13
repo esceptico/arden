@@ -41,8 +41,9 @@ export function MemoryEditor({
       aria-label={`Edit ${path}`}
       className="flex h-full min-h-0 min-w-0 flex-col bg-bg-main"
     >
-      <header className="flex min-w-0 items-center gap-3 border-b border-line-soft bg-surface px-4 py-3">
-        <div className="min-w-0">
+      <p role="status" aria-live="polite" className="sr-only">Editing Markdown source for {path}</p>
+      <header className="flex min-w-0 flex-wrap items-center gap-2 border-b border-line-soft bg-surface px-4 py-3 sm:gap-3">
+        <div className="min-w-0 flex-1 basis-48">
           <h1 className="truncate text-lg font-semibold text-ink">{title}</h1>
           <p className="truncate font-mono text-2xs text-faint">{path} · rev {baseRevision.slice(0, 12)}</p>
         </div>
@@ -58,7 +59,7 @@ export function MemoryEditor({
       </header>
       <div className="flex min-h-0 flex-1 flex-col p-4 sm:p-6">
         <p id={hintId} className="mb-2 text-xs text-faint">
-          Markdown source. Press ⌘S to review; closing keeps this revision-specific draft.
+          Markdown source. Press Cmd/Ctrl+S to review; closing keeps this revision-specific draft.
         </p>
         <Textarea
           ref={textareaRef}

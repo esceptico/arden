@@ -61,6 +61,7 @@ import {
   reduceRecordArchived,
   type AreasDomainState,
 } from "@/stores/areas-domain";
+import { appendMemoryVaultChange } from "@/stores/memory-vault-domain";
 import {
   createTriageDomainState,
   reduceTriageSeen,
@@ -821,13 +822,16 @@ export const useStore = create<State & Actions>((set) => ({
       automationStream: reduceAutomationFinished(s.automationStream, taskId),
     })),
   memoryVaultVersion: 0,
-  memoryVaultChange: null,
+  memoryVaultChanges: [],
   memoryVaultChanged: (change) =>
     set((s) => {
-      if (change?.seq != null && s.memoryVaultChange?.seq != null && change.seq <= s.memoryVaultChange.seq) return {};
+      const memoryVaultChanges = change
+        ? appendMemoryVaultChange(s.memoryVaultChanges, change)
+        : s.memoryVaultChanges;
+      if (change && memoryVaultChanges === s.memoryVaultChanges) return {};
       return {
         memoryVaultVersion: s.memoryVaultVersion + 1,
-        memoryVaultChange: change ?? null,
+        memoryVaultChanges,
       };
     }),
   pushToast: (toast) =>

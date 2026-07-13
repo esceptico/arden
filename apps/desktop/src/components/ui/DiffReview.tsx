@@ -41,12 +41,14 @@ function DecisionRadio({
   value,
   selected,
   tabbable,
+  disabled,
   onSelect,
 }: {
   label: string;
   value: DiffReviewDecisionChoice;
   selected: boolean;
   tabbable: boolean;
+  disabled: boolean;
   onSelect: () => void;
 }) {
   return (
@@ -56,7 +58,8 @@ function DecisionRadio({
       data-value={value}
       aria-label={label}
       aria-checked={selected}
-      tabIndex={tabbable ? 0 : -1}
+      tabIndex={!disabled && tabbable ? 0 : -1}
+      disabled={disabled}
       onClick={onSelect}
       className={clsx(
         "min-w-0 flex-1 rounded-md border px-2 py-1.5 text-xs font-medium transition-colors duration-check",
@@ -73,10 +76,12 @@ function DecisionRadio({
 function AskDecision({
   operation,
   choice,
+  disabled,
   onChange,
 }: {
   operation: Extract<DiffReviewOperation, { kind: "ASK" }>;
   choice: DiffReviewDecisionChoice | undefined;
+  disabled: boolean;
   onChange: (choice: DiffReviewDecisionChoice) => void;
 }) {
   const choose = (next: string) => onChange(next as DiffReviewDecisionChoice);
@@ -85,10 +90,13 @@ function AskDecision({
       role="radiogroup"
       aria-label={`Decision for ${operation.question}`}
       className="mt-2 flex gap-1.5"
-      onKeyDown={(event) => radioGroupKeyDown(event, choice ?? "", choose)}
+      aria-disabled={disabled}
+      onKeyDown={(event) => {
+        if (!disabled) radioGroupKeyDown(event, choice ?? "", choose);
+      }}
     >
-      <DecisionRadio label="Note only" value="note_only" selected={choice === "note_only"} tabbable={!choice || choice === "note_only"} onSelect={() => onChange("note_only")} />
-      <DecisionRadio label="Forget memory" value="forget_memory" selected={choice === "forget_memory"} tabbable={choice === "forget_memory"} onSelect={() => onChange("forget_memory")} />
+      <DecisionRadio label="Note only" value="note_only" selected={choice === "note_only"} tabbable={!choice || choice === "note_only"} disabled={disabled} onSelect={() => onChange("note_only")} />
+      <DecisionRadio label="Forget memory" value="forget_memory" selected={choice === "forget_memory"} tabbable={choice === "forget_memory"} disabled={disabled} onSelect={() => onChange("forget_memory")} />
     </div>
   );
 }
@@ -98,11 +106,13 @@ function MemoryEffects({
   decisions,
   onDecision,
   layout,
+  interactionDisabled,
 }: {
   operations: readonly DiffReviewOperation[];
   decisions: NonNullable<DiffReviewProps["decisions"]>;
   onDecision: NonNullable<DiffReviewProps["onDecision"]>;
   layout: NonNullable<DiffReviewProps["layout"]>;
+  interactionDisabled: boolean;
 }) {
   return (
     <aside
@@ -139,6 +149,7 @@ function MemoryEffects({
               <AskDecision
                 operation={operation}
                 choice={decisions[operation.id]?.choice}
+                disabled={interactionDisabled}
                 onChange={(choice) => onDecision(operation.id, { choice, targetIds: operation.targetIds })}
               />
             )}
@@ -153,13 +164,15 @@ function ModeTabs({
   modes,
   mode,
   onChange,
+  disabled,
 }: {
   modes: readonly DiffReviewMode[];
   mode: DiffReviewMode;
   onChange: (mode: DiffReviewMode) => void;
+  disabled: boolean;
 }) {
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "Home" && event.key !== "End") return;
+    if (disabled || (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "Home" && event.key !== "End")) return;
     event.preventDefault();
     const current = modes.indexOf(mode);
     const next = event.key === "Home" ? 0
@@ -170,7 +183,7 @@ function ModeTabs({
     event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')[next]?.focus();
   };
   return (
-    <div role="tablist" aria-label="Diff view" onKeyDown={onKeyDown} className="flex rounded-md bg-surface-soft p-0.5">
+    <div role="tablist" aria-label="Diff view" aria-disabled={disabled} onKeyDown={onKeyDown} className="flex rounded-md bg-surface-soft p-0.5">
       {modes.map((candidate) => (
         <button
           key={candidate}
@@ -178,6 +191,7 @@ function ModeTabs({
           role="tab"
           aria-label={candidate === "rendered" ? "Rendered" : "Raw Markdown"}
           aria-selected={candidate === mode}
+          disabled={disabled}
           tabIndex={candidate === mode ? 0 : -1}
           onClick={() => onChange(candidate)}
           className={clsx(
@@ -210,6 +224,7 @@ export function DiffReview({
   onModeChange,
   reducedMotion,
   hideFooter = false,
+  interactionDisabled = false,
 }: DiffReviewProps) {
   const availableModes = modes.length ? modes : (["rendered"] as const);
   const fallbackMode = initialMode && availableModes.includes(initialMode) ? initialMode : availableModes[0];
@@ -230,12 +245,12 @@ export function DiffReview({
       aria-label={`Review changes to ${after.path || before.path}`}
       className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-line-soft bg-bg-main"
     >
-      <header className="flex items-center gap-3 border-b border-line-soft bg-surface px-3 py-2.5">
+      <header className="flex flex-wrap items-center gap-3 border-b border-line-soft bg-surface px-3 py-2.5">
         <div className="min-w-0">
           <h2 className="truncate text-sm font-semibold text-ink">Review changes</h2>
           <p className="truncate font-mono text-2xs text-faint">{before.path} → {after.path}</p>
         </div>
-        {availableModes.length > 1 && <div className="ml-auto"><ModeTabs modes={availableModes} mode={mode} onChange={changeMode} /></div>}
+        {availableModes.length > 1 && <div className="ml-auto"><ModeTabs modes={availableModes} mode={mode} onChange={changeMode} disabled={interactionDisabled} /></div>}
       </header>
 
       <div className={clsx(
@@ -260,23 +275,23 @@ export function DiffReview({
           )}
         </div>
         {operations !== undefined && (
-          <MemoryEffects operations={operations} decisions={decisions} onDecision={onDecision} layout={layout} />
+          <MemoryEffects operations={operations} decisions={decisions} onDecision={onDecision} layout={layout} interactionDisabled={interactionDisabled} />
         )}
       </div>
 
-      {!hideFooter && <footer className="flex items-center gap-2 border-t border-line-soft bg-surface px-3 py-2.5">
+      {!hideFooter && <footer className="flex flex-wrap items-center gap-2 border-t border-line-soft bg-surface px-3 py-2.5">
         {operations !== undefined && (
           <span className="text-2xs text-faint">
             {operations.length} memory effect{operations.length === 1 ? "" : "s"}
             {unresolved > 0 ? ` · ${unresolved} decision${unresolved === 1 ? "" : "s"} required` : ""}
           </span>
         )}
-        {onCancel && <Button variant="secondary" size="sm" className="ml-auto" onClick={onCancel}>{cancelLabel}</Button>}
+        {onCancel && <Button variant="secondary" size="sm" className="ml-auto" disabled={interactionDisabled} onClick={onCancel}>{cancelLabel}</Button>}
         <Button
           size="sm"
           className={onCancel ? undefined : "ml-auto"}
           aria-label={applyLabel}
-          disabled={applyDisabled || unresolved > 0}
+          disabled={interactionDisabled || applyDisabled || unresolved > 0}
           onClick={onApply}
         >
           {applyLabel}
