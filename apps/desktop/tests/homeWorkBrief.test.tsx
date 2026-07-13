@@ -29,8 +29,8 @@ test("WorkBrief renders finite sections in chief-of-staff order and routes rows"
   try {
     await act(async () => root.render(<WorkBrief brief={brief} />));
     const text = host.textContent ?? "";
-    expect(text.indexOf("Done for you")).toBeLessThan(text.indexOf("In progress"));
-    expect(text.indexOf("In progress")).toBeLessThan(text.indexOf("Needs you"));
+    expect(text.indexOf("Needs you")).toBeLessThan(text.indexOf("Agents on it"));
+    expect(text.indexOf("Agents on it")).toBeLessThan(text.indexOf("Done for you"));
     expect(text).toContain("Labs normalized");
     expect(text.match(/That’s it for today\./g)).toHaveLength(1);
 
@@ -48,7 +48,7 @@ test("WorkBrief hides empty sections but always shows the end", async () => {
   try {
     await act(async () => root.render(<WorkBrief brief={{ done: [], in_progress: [], needs_you: [] }} />));
     expect(host.textContent).not.toContain("Done for you");
-    expect(host.textContent).not.toContain("In progress");
+    expect(host.textContent).not.toContain("Agents on it");
     expect(host.textContent).not.toContain("Needs you");
     expect(host.textContent?.match(/That’s it for today\./g)).toHaveLength(1);
   } finally {

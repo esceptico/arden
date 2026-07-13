@@ -191,7 +191,7 @@ test("preview delays hover and focus, bridges into the tooltip, and exposes its 
   await act(async () => betaLink!.dispatchEvent(new FocusEvent("focusin", { bubbles: true })));
   await settle(250);
   expect(requests.filter((request) => request.path === "beta.md")).toHaveLength(0);
-  await settle(80);
+  await settleUntil(() => document.querySelector('[role="tooltip"]')?.textContent?.includes("First meaningful paragraph.") === true);
   expect(document.querySelector('[role="tooltip"]')?.textContent).toContain("First meaningful paragraph.");
 
   await act(async () => betaLink!.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
