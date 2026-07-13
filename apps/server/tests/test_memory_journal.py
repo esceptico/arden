@@ -1,4 +1,5 @@
 import errno
+import hashlib
 import json
 import multiprocessing
 import os
@@ -42,6 +43,125 @@ def _seed_pair(root: Path) -> None:
 
 def _read_pair(root: Path) -> tuple[bytes, bytes]:
     return (root / "me.md").read_bytes(), (root / "raw" / "me.md").read_bytes()
+
+
+def _commit_id_on_disk(root: Path) -> str:
+    journal = root / ".ntrp" / "journal"
+    if journal.is_dir():
+        pending = list(journal.iterdir())
+        if pending:
+            return pending[0].name[:64]
+    versions = root / ".ntrp" / "versions"
+    return next(versions.iterdir()).name[:64]
+
+
+def _seed_v1_journal(
+    root: Path,
+    *,
+    marker: str | None,
+    target_content: bytes,
+    revision: str,
+) -> tuple[str, str, Path]:
+    previous_revision = "a" * 64
+    staged = b"new"
+    backup = b"old"
+    manifest = {
+        "version": 1,
+        "previous_revision": previous_revision,
+        "files": [
+            {
+                "target": "me.md",
+                "staged": "staged/0000",
+                "backup": "backups/0000",
+                "sha256": hashlib.sha256(staged).hexdigest(),
+                "backup_sha256": hashlib.sha256(backup).hexdigest(),
+                "existed": True,
+            }
+        ],
+    }
+    manifest_bytes = (json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    commit_id = hashlib.sha256(manifest_bytes).hexdigest()
+    commit_path = root / ".ntrp" / "journal" / commit_id
+    (commit_path / "staged").mkdir(parents=True)
+    (commit_path / "backups").mkdir()
+    (root / "me.md").write_bytes(target_content)
+    (commit_path / "staged" / "0000").write_bytes(staged)
+    (commit_path / "backups" / "0000").write_bytes(backup)
+    (commit_path / "manifest.json").write_bytes(manifest_bytes)
+    (commit_path / "PREPARED").write_bytes(b"")
+    if marker is not None:
+        (commit_path / marker).write_bytes(b"")
+    revision_value = commit_id if revision == "commit" else previous_revision
+    (root / ".ntrp" / "canonical-revision").write_text(revision_value + "\n", encoding="ascii")
+    return commit_id, previous_revision, commit_path
+
+
+@pytest.mark.parametrize(
+    ("marker", "revision", "target_content", "expected_content", "expected_revision_kind"),
+    [
+        ("COMMITTED", "previous", b"new", b"new", "commit"),
+        ("COMMITTED", "commit", b"new", b"new", "commit"),
+        ("ROLLED_BACK", "previous", b"old", b"old", "previous"),
+        ("ROLLED_BACK", "commit", b"old", b"old", "previous"),
+        (None, "previous", b"new", b"new", "commit"),
+    ],
+)
+def test_v1_recovery_honors_legacy_decision_and_revision_state(
+    tmp_path: Path,
+    marker: str | None,
+    revision: str,
+    target_content: bytes,
+    expected_content: bytes,
+    expected_revision_kind: str,
+) -> None:
+    commit_id, previous_revision, _ = _seed_v1_journal(
+        tmp_path,
+        marker=marker,
+        target_content=target_content,
+        revision=revision,
+    )
+
+    assert VaultJournal(tmp_path).recover() == (commit_id,)
+
+    assert (tmp_path / "me.md").read_bytes() == expected_content
+    expected_revision = commit_id if expected_revision_kind == "commit" else previous_revision
+    assert VaultJournal(tmp_path).canonical_revision == expected_revision
+    assert VaultJournal(tmp_path).recover() == ()
+    assert not (tmp_path / ".ntrp" / "journal").exists()
+
+
+def test_rollback_replacement_race_keeps_external_bytes_visible(tmp_path: Path, monkeypatch) -> None:
+    _seed_pair(tmp_path)
+    journal = VaultJournal(tmp_path)
+
+    def interrupt(point: str) -> None:
+        if point == "after_link:0":
+            raise InjectedFailure(point)
+
+    monkeypatch.setattr(journal, "_checkpoint", interrupt)
+    with pytest.raises(InjectedFailure, match="after_link:0"):
+        journal.commit({Path("me.md"): b"new", Path("raw/me.md"): b"raw-new"})
+
+    recovering = VaultJournal(tmp_path)
+    preserve = recovering._preserve_rejected_target
+
+    def replace_then_preserve(commit_path: Path, target: Path, index: int) -> Path:
+        replacement = tmp_path / "external.tmp"
+        replacement.write_bytes(b"external")
+        os.replace(replacement, target)
+        return preserve(commit_path, target, index)
+
+    monkeypatch.setattr(recovering, "_preserve_rejected_target", replace_then_preserve)
+
+    with pytest.raises(ValueError, match="conflict"):
+        recovering.recover()
+
+    assert _read_pair(tmp_path) == (b"external", b"raw-old")
+    assert VaultJournal(tmp_path).canonical_revision == ""
+    archived = next((tmp_path / ".ntrp" / "versions").iterdir())
+    assert (archived / "rejected" / "0000").read_bytes() == b"external"
+    assert (archived / "markers" / "CONFLICT").exists()
+    assert VaultJournal(tmp_path).recover() == ()
 
 
 def test_commit_preserves_an_external_atomic_replacement_at_finish_entry(tmp_path: Path, monkeypatch) -> None:
@@ -183,10 +303,12 @@ def test_external_replacement_after_commit_decision_remains_visible(tmp_path: Pa
 @pytest.mark.parametrize(
     ("failpoint", "expected"),
     [
+        ("before_move:0", (b"old", b"raw-old")),
         ("after_move:0", (b"old", b"raw-old")),
         ("after_move_target_fsync:0", (b"old", b"raw-old")),
         ("after_move_displaced_fsync:0", (b"old", b"raw-old")),
         ("after_displaced:0", (b"old", b"raw-old")),
+        ("before_link:0", (b"old", b"raw-old")),
         ("after_link:0", (b"old", b"raw-old")),
         ("after_link_fsync:0", (b"old", b"raw-old")),
         ("after_installed:0", (b"old", b"raw-old")),
@@ -209,13 +331,202 @@ def test_recovery_is_idempotent_at_publish_boundaries(
     monkeypatch.setattr(journal, "_checkpoint", inject)
     with pytest.raises(InjectedFailure, match=failpoint):
         journal.commit({Path("me.md"): b"new", Path("raw/me.md"): b"raw-new"})
+    commit_id = _commit_id_on_disk(tmp_path)
 
     recovered = VaultJournal(tmp_path).recover()
 
     assert len(recovered) == 1
     assert _read_pair(tmp_path) == expected
+    assert VaultJournal(tmp_path).canonical_revision == (commit_id if expected[0] == b"new" else "")
     assert VaultJournal(tmp_path).recover() == ()
     assert not (tmp_path / ".ntrp" / "journal").exists()
+
+
+@pytest.mark.parametrize(
+    ("failpoint", "marker", "expected"),
+    [
+        *[
+            (f"{boundary}:{marker}", marker, (b"old", b"raw-old"))
+            for marker in ("DISPLACED.0000", "INSTALLED.0000")
+            for boundary in ("after_marker_write", "after_marker_dir_fsync", "after_marker_commit_fsync")
+        ],
+        *[
+            (f"{boundary}:{marker}", marker, (b"new", b"raw-new"))
+            for marker in ("DECIDED_COMMIT", "COMMITTED")
+            for boundary in ("after_marker_write", "after_marker_dir_fsync", "after_marker_commit_fsync")
+        ],
+    ],
+)
+def test_recovery_handles_every_v2_marker_fsync_boundary(
+    tmp_path: Path,
+    monkeypatch,
+    failpoint: str,
+    marker: str,
+    expected: tuple[bytes, bytes],
+) -> None:
+    _seed_pair(tmp_path)
+    journal = VaultJournal(tmp_path)
+
+    def inject(point: str) -> None:
+        if point == failpoint:
+            raise InjectedFailure(point)
+
+    monkeypatch.setattr(journal, "_checkpoint", inject)
+    with pytest.raises(InjectedFailure, match=failpoint):
+        journal.commit({Path("me.md"): b"new", Path("raw/me.md"): b"raw-new"})
+    commit_id = _commit_id_on_disk(tmp_path)
+
+    assert VaultJournal(tmp_path).recover() == (commit_id,)
+
+    assert _read_pair(tmp_path) == expected
+    assert VaultJournal(tmp_path).canonical_revision == (commit_id if expected[0] == b"new" else "")
+    archived = next((tmp_path / ".ntrp" / "versions").iterdir())
+    assert (archived / "markers" / marker).exists()
+    assert VaultJournal(tmp_path).recover() == ()
+
+
+@pytest.mark.parametrize(
+    "failpoint",
+    [
+        "after_prepared_marker_write",
+        "after_prepared_marker_commit_fsync",
+        "after_prepared_marker_journal_fsync",
+    ],
+)
+def test_recovery_handles_every_prepared_marker_fsync_boundary(
+    tmp_path: Path,
+    monkeypatch,
+    failpoint: str,
+) -> None:
+    _seed_pair(tmp_path)
+    journal = VaultJournal(tmp_path)
+
+    def inject(point: str) -> None:
+        if point == failpoint:
+            raise InjectedFailure(point)
+
+    monkeypatch.setattr(journal, "_checkpoint", inject)
+    with pytest.raises(InjectedFailure, match=failpoint):
+        journal.commit({Path("me.md"): b"new", Path("raw/me.md"): b"raw-new"})
+    commit_id = _commit_id_on_disk(tmp_path)
+
+    assert VaultJournal(tmp_path).recover() == (commit_id,)
+    assert _read_pair(tmp_path) == (b"old", b"raw-old")
+    assert VaultJournal(tmp_path).canonical_revision == ""
+    assert VaultJournal(tmp_path).recover() == ()
+
+
+@pytest.mark.parametrize(
+    "failpoint",
+    [
+        "before_archive",
+        "after_archive_rename",
+        "after_archive_journal_fsync",
+        "after_archive_versions_fsync",
+        "after_archive_cleanup",
+    ],
+)
+def test_commit_survives_every_archive_boundary(tmp_path: Path, monkeypatch, failpoint: str) -> None:
+    _seed_pair(tmp_path)
+    journal = VaultJournal(tmp_path)
+
+    def inject(point: str) -> None:
+        if point == failpoint:
+            raise InjectedFailure(point)
+
+    monkeypatch.setattr(journal, "_checkpoint", inject)
+    with pytest.raises(InjectedFailure, match=failpoint):
+        journal.commit({Path("me.md"): b"new", Path("raw/me.md"): b"raw-new"})
+    commit_id = _commit_id_on_disk(tmp_path)
+
+    recovered = VaultJournal(tmp_path).recover()
+
+    assert recovered in {(), (commit_id,)}
+    assert _read_pair(tmp_path) == (b"new", b"raw-new")
+    assert VaultJournal(tmp_path).canonical_revision == commit_id
+    assert VaultJournal(tmp_path).recover() == ()
+    assert not (tmp_path / ".ntrp" / "journal").exists()
+
+
+@pytest.mark.parametrize(
+    "failpoint",
+    [
+        "after_marker_write:ROLLED_BACK",
+        "after_marker_dir_fsync:ROLLED_BACK",
+        "after_marker_commit_fsync:ROLLED_BACK",
+    ],
+)
+def test_recovery_replays_every_rollback_marker_fsync_boundary(
+    tmp_path: Path,
+    monkeypatch,
+    failpoint: str,
+) -> None:
+    _seed_pair(tmp_path)
+    journal = VaultJournal(tmp_path)
+
+    def interrupt_install(point: str) -> None:
+        if point == "after_link:0":
+            raise InjectedFailure(point)
+
+    monkeypatch.setattr(journal, "_checkpoint", interrupt_install)
+    with pytest.raises(InjectedFailure, match="after_link:0"):
+        journal.commit({Path("me.md"): b"new", Path("raw/me.md"): b"raw-new"})
+    commit_id = _commit_id_on_disk(tmp_path)
+
+    recovering = VaultJournal(tmp_path)
+
+    def interrupt_marker(point: str) -> None:
+        if point == failpoint:
+            raise InjectedFailure(point)
+
+    monkeypatch.setattr(recovering, "_checkpoint", interrupt_marker)
+    with pytest.raises(InjectedFailure, match=failpoint):
+        recovering.recover()
+
+    assert VaultJournal(tmp_path).recover() == (commit_id,)
+    assert _read_pair(tmp_path) == (b"old", b"raw-old")
+    assert VaultJournal(tmp_path).canonical_revision == ""
+    archived = next((tmp_path / ".ntrp" / "versions").iterdir())
+    assert (archived / "markers" / "ROLLED_BACK").exists()
+    assert VaultJournal(tmp_path).recover() == ()
+
+
+@pytest.mark.parametrize(
+    "failpoint",
+    [
+        "after_marker_write:CONFLICT",
+        "after_marker_dir_fsync:CONFLICT",
+        "after_marker_commit_fsync:CONFLICT",
+    ],
+)
+def test_recovery_replays_every_conflict_marker_fsync_boundary(
+    tmp_path: Path,
+    monkeypatch,
+    failpoint: str,
+) -> None:
+    target = tmp_path / "me.md"
+    target.write_bytes(b"old")
+    journal = VaultJournal(tmp_path)
+
+    def interrupt_conflict(point: str) -> None:
+        if point == "after_displaced:0":
+            replacement = tmp_path / "external.tmp"
+            replacement.write_bytes(b"external")
+            os.replace(replacement, target)
+        if point == failpoint:
+            raise InjectedFailure(point)
+
+    monkeypatch.setattr(journal, "_checkpoint", interrupt_conflict)
+    with pytest.raises(InjectedFailure, match=failpoint):
+        journal.commit({Path("me.md"): b"candidate"}, expected_files={Path("me.md"): b"old"})
+    commit_id = _commit_id_on_disk(tmp_path)
+
+    assert VaultJournal(tmp_path).recover() == (commit_id,)
+    assert target.read_bytes() == b"external"
+    assert VaultJournal(tmp_path).canonical_revision == ""
+    archived = next((tmp_path / ".ntrp" / "versions").iterdir())
+    assert (archived / "markers" / "CONFLICT").exists()
+    assert VaultJournal(tmp_path).recover() == ()
 
 
 def test_conflict_recovery_is_idempotent_after_conflict_marker(tmp_path: Path, monkeypatch) -> None:
