@@ -167,6 +167,8 @@ def _discover_legacy(root: Path) -> list[_LegacyPage]:
     if raw_root.is_dir():
         for raw_path in sorted(raw_root.rglob("*.md")):
             rel = raw_path.relative_to(raw_root)
+            if rel.parts[0] == "events":
+                continue
             raw_text = _read_text(raw_path, root)
             _, body = _split_frontmatter(raw_text)
             first = next((line for line in body.splitlines() if line.strip()), "")
@@ -542,6 +544,8 @@ def validate_vault(root: Path) -> VaultHealth:
             malformed.append(f"{internal.relative_to(root).as_posix()}: internal root is a symlink")
     if raw_root.is_dir():
         for path in sorted(raw_root.rglob("*.md")):
+            if path.relative_to(raw_root).parts[0] == "events":
+                continue
             try:
                 _, body = _split_frontmatter(_read_text(path, root))
             except VaultMigrationError as exc:

@@ -294,7 +294,7 @@ def artifact_is_editable(rel: str, content: str) -> bool:
     return not _artifact_generated(rel, content)
 
 
-def _readonly_reason(rel: str, kind: str, generated: bool) -> str | None:
+def _readonly_reason(rel: str, kind: str, generated: bool, editable: bool) -> str | None:
     if rel == "AGENTS.md":
         return "Conventions doc — regenerated on load."
     if rel == "health.md":
@@ -305,7 +305,7 @@ def _readonly_reason(rel: str, kind: str, generated: bool) -> str | None:
         return "Generated from DB records; use recall/record tools for facts."
     if rel.startswith("changelog/"):
         return "Generated audit log; append events through memory tools."
-    if generated:
+    if generated and not editable:
         return "Generated report — edits are overwritten; change the underlying records."
     return None
 
@@ -711,7 +711,7 @@ class ArtifactMemoryStore:
             directory=_artifact_directory(rel),
             generated=generated,
             editable=editable,
-            readonly_reason=_readonly_reason(rel, kind, generated),
+            readonly_reason=_readonly_reason(rel, kind, generated, editable),
             snippet=_artifact_snippet(body),
             summary=_artifact_summary(exact_text),
             revision=page_revision(exact),
@@ -756,7 +756,7 @@ class ArtifactMemoryStore:
                     directory=_artifact_directory(rel),
                     generated=generated,
                     editable=editable,
-                    readonly_reason=_readonly_reason(rel, artifact_kind, generated),
+                    readonly_reason=_readonly_reason(rel, artifact_kind, generated, editable),
                     snippet=snippet,
                     summary=_artifact_summary(content),
                     revision=page_revision(exact),
@@ -824,7 +824,7 @@ class ArtifactMemoryStore:
             directory=_artifact_directory(rel_posix),
             generated=generated,
             editable=editable,
-            readonly_reason=_readonly_reason(rel_posix, kind, generated),
+            readonly_reason=_readonly_reason(rel_posix, kind, generated, editable),
             snippet=_artifact_snippet(content),
             summary=_artifact_summary(content),
             revision=page_revision(exact),

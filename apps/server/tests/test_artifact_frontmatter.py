@@ -61,6 +61,23 @@ def test_read_artifact_strips_frontmatter(tmp_path: Path):
     assert raw.startswith("---\n")
 
 
+def test_generated_editable_page_has_no_readonly_warning(tmp_path: Path):
+    root = tmp_path / "artifacts"
+    daily = root / "daily/2026-07-13.md"
+    daily.parent.mkdir(parents=True)
+    daily.write_text(
+        dump_frontmatter({"generated": True, "editable": True, "title": "2026-07-13"})
+        + "# 2026-07-13\n\nTimeline entry.\n",
+        encoding="utf-8",
+    )
+
+    artifact = ArtifactMemoryStore(root).read_artifact("daily/2026-07-13.md")
+
+    assert artifact.generated is True
+    assert artifact.editable is True
+    assert artifact.readonly_reason is None
+
+
 async def test_artifact_meta_reads_kind_and_scope_from_frontmatter(tmp_path: Path):
     root = tmp_path / "artifacts"
     root.mkdir()

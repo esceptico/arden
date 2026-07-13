@@ -52,6 +52,15 @@ def test_nested_user_file_is_searchable_and_indexed(vault: Path):
     assert "research/models/notes.md" in {artifact.path for artifact in artifacts}
 
 
+def test_daily_directory_has_a_useful_default_description(vault: Path):
+    _write(vault / "daily/2026-07-13.md", "# 2026-07-13\n\n## Timeline\n")
+
+    report = VaultIndexer(vault).scan()
+
+    assert "daily/ — Chronological memory activity." in _managed(vault / "index.md")
+    assert "daily/" not in report.missing_descriptions
+
+
 def test_render_updates_is_side_effect_free_and_apply_preserves_user_prose(vault: Path):
     _write(vault / "notes.md", "# Notes\n")
     _write(vault / "index.md", f"My intro\n\n{INDEX_START}\nold\n{INDEX_END}\nFooter")

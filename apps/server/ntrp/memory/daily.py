@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -304,8 +303,7 @@ class DailyProjector:
     def _source_text(source: SourceRef) -> str:
         timestamp = source.occurred_at or source.captured_at
         suffix = f" @ {timestamp} [{source.time_precision}]" if timestamp else f" [{source.time_precision}]"
-        metadata = json.dumps(source.to_dict(), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        return f"{source.kind}:{source.ref}{suffix} `{metadata}`"
+        return f"{source.kind}:{source.ref}{suffix}"
 
     def _write_projection(
         self,

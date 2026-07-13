@@ -26,6 +26,7 @@ function NoteRow({
   disabled: boolean;
   onSelect: (path: string) => void;
 }) {
+  const showDescription = description.trim().length > 0 && description.trim() !== artifact.title.trim();
   return (
     <button
       type="button"
@@ -39,7 +40,7 @@ function NoteRow({
       <span className={clsx("block text-sm", selected ? "font-medium text-ink" : "text-ink-soft group-hover:text-ink")}>
         {artifact.title}
       </span>
-      {description && <span className="mt-0.5 block line-clamp-2 text-xs leading-[1.35] text-muted">{description}</span>}
+      {showDescription && <span className="mt-0.5 block line-clamp-2 text-xs leading-[1.35] text-muted">{description}</span>}
     </button>
   );
 }

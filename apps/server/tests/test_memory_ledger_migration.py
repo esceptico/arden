@@ -88,6 +88,26 @@ def test_migration_normalizes_an_aliased_vault_root_before_internal_paths(tmp_pa
     assert validate_vault(actual).healthy
 
 
+def test_legacy_migration_ignores_page_event_ledgers(tmp_path: Path) -> None:
+    _legacy_page(tmp_path, "me.md", "- 2025-01-03 ^old [fact] (src:user) Legacy fact")
+    events = tmp_path / "raw/events/2026-07-13.md"
+    events.parent.mkdir(parents=True)
+    events.write_text(
+        "# Page edit events 2026-07-13\n\n"
+        "<!-- ntrp:page-edit-event -->\n"
+        '{"event_type":"PAGE_EDIT","id":"event-1","path":"me.md"}\n',
+        encoding="utf-8",
+    )
+
+    report = migrate_vault_to_v2(tmp_path)
+
+    assert report.migrated is True
+    assert events.read_text(encoding="utf-8").startswith("# Page edit events")
+    assert (tmp_path / "raw/me.md").read_text(encoding="utf-8").startswith(
+        "<!-- ntrp:records schema=2 page=me.md -->"
+    )
+
+
 @pytest.mark.asyncio
 async def test_empty_vault_is_marked_v2_before_its_first_record(tmp_path: Path) -> None:
     report = migrate_vault_to_v2(tmp_path)

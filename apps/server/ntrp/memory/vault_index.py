@@ -261,6 +261,8 @@ class VaultIndexer:
                 line = line[2:].strip()
             if line:
                 return " ".join(line.split())
+        if path.name == "README.md" and path.parent.name == "daily":
+            return "Chronological memory activity."
         return NEEDS_DESCRIPTION
 
     @staticmethod

@@ -171,8 +171,9 @@ def test_one_action_per_event_and_all_evidence_refs_are_retained(tmp_path: Path)
     ).render(date(2026, 7, 12), revision).content
     assert b"gmail:message-1 @ 2026-07-12T09:00:00+04:00 [second]" in content
     assert b"calendar:event-2 @ 2026-07-12T09:00:00+04:00 [second]" in content
-    for exact_metadata in (b'"captured_at":"2026-07-12T09:01:00.000+04:00"', b'"role":"sender"', b'"excerpt_hash":"hash-1"', b'"thread":"thread-1"'):
-        assert exact_metadata in content
+    assert b'"captured_at"' not in content
+    assert b'"excerpt_hash"' not in content
+    assert b'"scope_kind"' not in content
 
 
 def test_daily_synthesis_event_does_not_feed_the_next_daily_projection(tmp_path: Path):

@@ -30,6 +30,8 @@ const summaries = [
   { ...base, path: "topics/dex.md", directory: "topics", title: "Dex", summary: "Current work and decisions about Dex." },
   { ...base, path: "research/README.md", directory: "research", title: "Research", summary: "Research notes and experiments." },
   { ...base, path: "research/latency.md", directory: "research", title: "Latency", summary: "Observed latency behavior." },
+  { ...base, path: "daily/README.md", directory: "daily", title: "Daily", summary: "Chronological memory activity.", generated: true, editable: false },
+  { ...base, path: "daily/2026-07-13.md", directory: "daily", title: "2026-07-13", summary: null, generated: true },
   { ...base, path: "scratch.md", directory: "", title: "Scratch", summary: "Unsorted working notes." },
   { ...base, path: "health.md", directory: "", title: "Health", summary: "Machine health report.", generated: true, editable: false },
   { ...base, path: "raw/events/1.md", directory: "raw/events", title: "Raw event", summary: "Machine event." },
@@ -51,11 +53,14 @@ function detail(path: string) {
         ["me.md", "Identity, preferences, and durable context."],
         ["topics/", "Current topics and decisions."],
         ["research/", "Research notes and experiments."],
+        ["daily/", "Chronological memory activity."],
       ])
     : path === "topics/index.md"
       ? managed([["dex.md", "Current work and decisions about Dex."]])
       : path === "research/README.md"
         ? managed([["latency.md", "Observed latency behavior."]])
+        : path === "daily/README.md"
+          ? managed([["2026-07-13.md", "2026-07-13"]])
         : null;
   return {
     ...item,
@@ -172,6 +177,9 @@ test("memory opens as a meaning-first notebook, not a database inspector", async
   expect(rail?.textContent).toContain("Topics");
   expect(rail?.textContent).toContain("Current work and decisions about Dex.");
   expect(rail?.textContent).toContain("Research notes and experiments.");
+  expect(rail?.textContent).toContain("Chronological memory activity.");
+  const dailyRow = rail?.querySelector<HTMLButtonElement>('[data-memory-entry="daily/2026-07-13.md"]');
+  expect(dailyRow?.textContent).toBe("2026-07-13");
   expect(rail?.textContent).not.toContain("topics/dex.md");
   expect(rail?.textContent).not.toContain("raw/events/1.md");
   expect(rail?.textContent).not.toContain("Machine health report");
