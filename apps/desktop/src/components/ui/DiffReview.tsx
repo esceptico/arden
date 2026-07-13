@@ -209,6 +209,7 @@ export function DiffReview({
   mode: controlledMode,
   onModeChange,
   reducedMotion,
+  hideFooter = false,
 }: DiffReviewProps) {
   const availableModes = modes.length ? modes : (["rendered"] as const);
   const fallbackMode = initialMode && availableModes.includes(initialMode) ? initialMode : availableModes[0];
@@ -263,7 +264,7 @@ export function DiffReview({
         )}
       </div>
 
-      <footer className="flex items-center gap-2 border-t border-line-soft bg-surface px-3 py-2.5">
+      {!hideFooter && <footer className="flex items-center gap-2 border-t border-line-soft bg-surface px-3 py-2.5">
         {operations !== undefined && (
           <span className="text-2xs text-faint">
             {operations.length} memory effect{operations.length === 1 ? "" : "s"}
@@ -280,7 +281,7 @@ export function DiffReview({
         >
           {applyLabel}
         </Button>
-      </footer>
+      </footer>}
     </section>
   );
 }

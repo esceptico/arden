@@ -16,6 +16,13 @@ import type { AreasDomainState } from "@/stores/areas-domain";
 
 export type { SessionViewState } from "@/stores/session-view";
 
+export interface MemoryVaultChange {
+  paths: string[];
+  revision: string | null;
+  reviewRequired: boolean;
+  seq: number | null;
+}
+
 export type SettingsTabId =
   | "connection"
   | "providers"
@@ -555,7 +562,8 @@ export interface Actions {
    *  on-disk changes (Obsidian edit, feed write, maintenance pass) — the
    *  memory view refetches silently when it moves. */
   memoryVaultVersion: number;
-  memoryVaultChanged: () => void;
+  memoryVaultChange: MemoryVaultChange | null;
+  memoryVaultChanged: (change?: MemoryVaultChange) => void;
   pushToast: (toast: Toast) => void;
   dismissToast: (id: string) => void;
   backgroundAgentsRefreshStarted: () => void;

@@ -94,6 +94,7 @@ export function MemoryNote({
               {detail.generated && <span>generated</span>}
               {detail.source && <span>{detail.source}</span>}
               <span title={detail.revision} className="font-mono">rev {detail.revision.slice(0, 12)}</span>
+              {detail.editable && detail.editableContent != null && <span>⌘E to edit</span>}
               {detail.readonlyReason && <span className="basis-full pt-1 text-muted">{detail.readonlyReason}</span>}
             </footer>
           )}

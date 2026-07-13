@@ -55,6 +55,7 @@ export interface DiffReviewProps {
   mode?: DiffReviewMode;
   onModeChange?: (mode: DiffReviewMode) => void;
   reducedMotion?: boolean;
+  hideFooter?: boolean;
 }
 
 export interface DiffLineGroup {

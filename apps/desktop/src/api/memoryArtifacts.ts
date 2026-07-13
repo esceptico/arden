@@ -595,22 +595,43 @@ export interface ApplyPageEditInput {
   savePending?: boolean;
 }
 
-export function applyPageEdit(
-  config: AppConfig,
-  input: ApplyPageEditInput,
-): Promise<{ event: PageEditEvent; revision: string }> {
-  const decisions = Object.fromEntries(
-    Object.entries(input.decisions).map(([id, decision]) => [
+function serializePageEditDecisions(decisions: Record<string, PageEditDecision>) {
+  return Object.fromEntries(
+    Object.entries(decisions).map(([id, decision]) => [
       id,
       { choice: decision.choice, target_ids: decision.targetIds },
     ]),
   );
+}
+
+export function applyPageEdit(
+  config: AppConfig,
+  input: ApplyPageEditInput,
+): Promise<{ event: PageEditEvent; revision: string }> {
   return apiWithConfig<{ event: RawEvent; revision: string }>(config, "/admin/memory/page-edits/apply", {
     method: "PUT",
     body: JSON.stringify({
       preview_id: input.previewId,
-      decisions,
+      decisions: serializePageEditDecisions(input.decisions),
       save_pending: input.savePending ?? false,
+    }),
+  }).then((response) => ({ event: mapEvent(response.event), revision: response.revision }));
+}
+
+export interface RetryPageEditInput {
+  eventId: string;
+  decisions: Record<string, PageEditDecision>;
+}
+
+export function retryPageEdit(
+  config: AppConfig,
+  input: RetryPageEditInput,
+): Promise<{ event: PageEditEvent; revision: string }> {
+  return apiWithConfig<{ event: RawEvent; revision: string }>(config, "/admin/memory/page-edits/retry", {
+    method: "PUT",
+    body: JSON.stringify({
+      event_id: input.eventId,
+      decisions: serializePageEditDecisions(input.decisions),
     }),
   }).then((response) => ({ event: mapEvent(response.event), revision: response.revision }));
 }

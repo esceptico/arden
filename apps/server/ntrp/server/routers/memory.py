@@ -268,6 +268,26 @@ class PageEditApplyRequest(BaseModel):
     save_pending: bool = False
 
 
+class PageEditRetryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    event_id: str
+    decisions: dict[str, Literal["note_only", "forget_memory"] | PageEditDecisionRequest]
+
+
+def _page_edit_decisions(
+    raw_decisions: dict[str, Literal["note_only", "forget_memory"] | PageEditDecisionRequest],
+) -> dict[str, PageEditDecision]:
+    decisions: dict[str, PageEditDecision] = {}
+    for question_id, raw in raw_decisions.items():
+        value = PageEditDecisionRequest(choice=raw) if isinstance(raw, str) else raw
+        decisions[question_id] = PageEditDecision(
+            choice="Note only" if value.choice == "note_only" else "Forget memory",
+            target_ids=value.target_ids,
+        )
+    return decisions
+
+
 def _reject_machine_page(path: str) -> None:
     parts = Path(path).parts
     if parts and parts[0] in {"raw", "changelog", ".ntrp", ".index", ".maintenance"}:
@@ -329,13 +349,7 @@ async def apply_page_edit(
     body: PageEditApplyRequest,
     service: PageEditService = Depends(_page_edit_service),
 ) -> dict:
-    decisions: dict[str, PageEditDecision] = {}
-    for question_id, raw in body.decisions.items():
-        value = PageEditDecisionRequest(choice=raw) if isinstance(raw, str) else raw
-        decisions[question_id] = PageEditDecision(
-            choice="Note only" if value.choice == "note_only" else "Forget memory",
-            target_ids=value.target_ids,
-        )
+    decisions = _page_edit_decisions(body.decisions)
     try:
         event = await service.apply(
             body.preview_id,
@@ -352,6 +366,23 @@ async def apply_page_edit(
         raise HTTPException(status_code=404, detail="page edit preview not found") from exc
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="memory page not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"event": event.model_dump(mode="json"), "revision": event.result_revision}
+
+
+@router.put("/page-edits/retry")
+async def retry_page_edit(
+    body: PageEditRetryRequest,
+    service: PageEditService = Depends(_page_edit_service),
+) -> dict:
+    try:
+        event = await service.retry(
+            body.event_id,
+            decisions=_page_edit_decisions(body.decisions),
+        )
+    except ReconciliationPendingError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"event": event.model_dump(mode="json"), "revision": event.result_revision}

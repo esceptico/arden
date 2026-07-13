@@ -1,17 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, PanelRight, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, PanelRight, Pencil, X } from "lucide-react";
 import { useReducedMotion } from "motion/react";
 import clsx from "clsx";
 import { useStore } from "@/stores";
-import type { AppConfig } from "@/api/core";
+import { ApiError, type AppConfig } from "@/api/core";
 import type { WikiLinkHandlers } from "@/lib/wikilink";
 import {
   getPageHistory,
   getPageLinks,
+  applyPageEdit,
   listMemoryArtifactSummaries,
+  previewPageEdit,
   readMemoryArtifactDetail,
   rebuildMemoryArtifactSummaries,
+  retryPageEdit,
 } from "@/api/memoryArtifacts";
+import type { DiffReviewDecision, DiffReviewOperation } from "@/components/ui/diffReviewTypes";
 import { listMemoryItems, setRecordPinned, type MemoryItem, type MemoryKind } from "@/api/memoryItems";
 import { Select } from "@/components/ui/Select";
 import { TreeSearch } from "@/features/memory/components/MemoryFileTree";
@@ -20,10 +24,13 @@ import { FileDetailPane } from "@/features/memory/components/FileDetailPane";
 import { RecordDetailPane } from "@/features/memory/components/RecordDetailPane";
 import { RecordListPane } from "@/features/memory/components/RecordListPane";
 import { MemoryInspector } from "@/features/memory/components/MemoryInspector";
+import { MemoryEditor } from "@/features/memory/components/MemoryEditor";
+import { MemoryEditReview, type MemoryConflict } from "@/features/memory/components/MemoryEditReview";
 import { WikiLinkPreview } from "@/features/memory/components/WikiLinkPreview";
 import { ArtifactCache, RevisionCache } from "@/features/memory/lib/artifactCache";
 import { NavigationHistory, type NavigationLocation } from "@/features/memory/lib/navigationHistory";
 import { isMissingArtifactError, resolveWikiTarget } from "@/features/memory/lib/wikiResolution";
+import { clearDraft, getDraft, setDraft } from "@/features/memory/lib/draftStore";
 import {
   buildNotebookRailModel,
   firstNotebookPath,
@@ -31,7 +38,7 @@ import {
   isNotebookResourcePath,
   selectIndexDocuments,
 } from "@/features/memory/lib/notebookIndex";
-import type { MemoryArtifactDetail, MemoryArtifactSummary, MemoryLink, PageEditHistory, PageLinks } from "@/features/memory/lib/notebookTypes";
+import type { MemoryArtifactDetail, MemoryArtifactSummary, MemoryLink, MemoryOperation, PageEditEvent, PageEditHistory, PageEditPreview, PageLinks } from "@/features/memory/lib/notebookTypes";
 
 const RECORD_PAGE_SIZE = 100;
 const SEARCH_DEBOUNCE_MS = 180;
@@ -45,6 +52,44 @@ interface MemoryFocusToken {
   kind: "wikilink" | "inline";
   target: string;
   occurrence: number;
+}
+
+interface EditingSession {
+  path: string;
+  title: string;
+  baseRevision: string;
+  baseContent: string;
+  draftContent: string;
+}
+
+type ReviewState =
+  | { kind: "preview"; preview: PageEditPreview }
+  | { kind: "conflict"; conflict: MemoryConflict }
+  | { kind: "external"; event: PageEditEvent };
+
+function diffOperation(operation: MemoryOperation): DiffReviewOperation {
+  switch (operation.kind) {
+    case "ADD":
+      return { kind: "ADD", id: operation.id, text: operation.text, memoryKind: operation.memoryKind, scope: operation.scope };
+    case "SUPERSEDE":
+    case "MERGE":
+      return { kind: operation.kind, id: operation.id, text: operation.text, memoryKind: operation.memoryKind, scope: operation.scope, targetIds: operation.targetIds };
+    case "RETRACT":
+      return { kind: "RETRACT", id: operation.id, targetIds: operation.targetIds };
+    case "NOOP":
+      return { kind: "NOOP", id: operation.id, reason: operation.reason };
+    case "ASK":
+      return { kind: "ASK", id: operation.id, question: operation.question, targetIds: operation.targetIds };
+  }
+}
+
+function revisionConflict(reason: unknown): MemoryConflict | null {
+  if (!(reason instanceof ApiError) || reason.status !== 409 || !reason.data || typeof reason.data !== "object") return null;
+  const detail = (reason.data as { detail?: unknown }).detail;
+  if (!detail || typeof detail !== "object") return null;
+  const value = detail as { error?: unknown; current_revision?: unknown; current_content?: unknown };
+  if (value.error !== "page_revision_conflict" || typeof value.current_revision !== "string" || typeof value.current_content !== "string") return null;
+  return { currentRevision: value.current_revision, currentContent: value.current_content };
 }
 
 function focusToken(element: HTMLElement, scroller: HTMLElement): string | null {
@@ -125,6 +170,12 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [historyVersion, setHistoryVersion] = useState(0);
   const [pageHistoryPath, setPageHistoryPath] = useState<string | null>(null);
+  const [editing, setEditing] = useState<EditingSession | null>(null);
+  const [editReview, setEditReview] = useState<ReviewState | null>(null);
+  const [queuedExternalReview, setQueuedExternalReview] = useState<PageEditEvent | null>(null);
+  const [editDecisions, setEditDecisions] = useState<Record<string, DiffReviewDecision>>({});
+  const [editPending, setEditPending] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
 
   const summaryRequest = useRef<SummaryRequest | null>(null);
   const indexGeneration = useRef(0);
@@ -141,9 +192,13 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const recordsTriggerRef = useRef<HTMLButtonElement>(null);
   const recordsHeadingRef = useRef<HTMLHeadingElement>(null);
   const layoutRef = useRef<HTMLDivElement>(null);
+  const editingRef = useRef<EditingSession | null>(null);
+  const editReviewRef = useRef<ReviewState | null>(null);
 
   artifactsRef.current = artifacts;
   queryRef.current = query.trim();
+  editingRef.current = editing;
+  editReviewRef.current = editReview;
 
   const beginSummaryRequest = useCallback((): SummaryRequest => {
     summaryRequest.current?.controller.abort();
@@ -469,6 +524,25 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   }, [config, contentRefreshKey, load, selectedMeta?.path, selectedMeta?.revision]);
 
   useEffect(() => {
+    if (!editing || !activeDetail || activeDetail.path !== editing.path || activeDetail.revision === editing.baseRevision) return;
+    const currentContent = activeDetail.editableContent ?? activeDetail.content;
+    if (editing.draftContent === editing.baseContent) {
+      clearDraft(editing.path, editing.baseRevision);
+      setEditing({
+        path: activeDetail.path,
+        title: activeDetail.title,
+        baseRevision: activeDetail.revision,
+        baseContent: currentContent,
+        draftContent: currentContent,
+      });
+      return;
+    }
+    setEditReview((current) => current?.kind === "conflict" && current.conflict.currentRevision === activeDetail.revision
+      ? current
+      : { kind: "conflict", conflict: { currentRevision: activeDetail.revision, currentContent } });
+  }, [activeDetail, editing]);
+
+  useEffect(() => {
     const detail = activeDetail;
     const location = pendingRestore.current;
     if (!detail || !location || location.path !== detail.path) return;
@@ -503,11 +577,16 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   }, [activeDetail, historyVersion]);
 
   const memoryVaultVersion = useStore((state) => state.memoryVaultVersion);
+  const memoryVaultChange = useStore((state) => state.memoryVaultChange);
   const observedVaultVersion = useRef(memoryVaultVersion);
+  const observedVaultChange = useRef(memoryVaultChange);
   useEffect(() => {
     if (memoryVaultVersion === observedVaultVersion.current) return;
     observedVaultVersion.current = memoryVaultVersion;
+    const change = memoryVaultChange === observedVaultChange.current ? null : memoryVaultChange;
+    observedVaultChange.current = memoryVaultChange;
     const current = selectedMetaRef.current;
+    if (change && current && !change.paths.includes(current.path)) return;
     if (current) {
       detailCache.current.invalidatePath(current.path);
       setContentRefreshKey((key) => key + 1);
@@ -516,7 +595,26 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       if (accepted && queryRef.current) void search(queryRef.current);
     });
     if (recordsOpen) setRecordsRefreshKey((key) => key + 1);
-  }, [load, memoryVaultVersion, recordsOpen, search]);
+    if (current && change?.reviewRequired && change.revision) {
+      void getPageHistory(config, { path: current.path, limit: 100 }).then((history) => {
+        if (selectedMetaRef.current?.path !== current.path) return;
+        const event = history.events.find((candidate) =>
+          candidate.origin === "external"
+          && candidate.reconciliation === "needs_review"
+          && candidate.resultRevision === change.revision,
+        );
+        if (!event) return;
+        setEditDecisions({});
+        setEditError(null);
+        const draft = editingRef.current;
+        if (editReviewRef.current || (draft && draft.draftContent !== draft.baseContent)) {
+          setQueuedExternalReview(event);
+        } else {
+          setEditReview({ kind: "external", event });
+        }
+      }).catch((reason) => setEditError(reason instanceof Error ? reason.message : String(reason)));
+    }
+  }, [config, load, memoryVaultChange, memoryVaultVersion, recordsOpen, search]);
 
   const selectedHasWikilinks = activeDetail != null
     && selectedMeta != null
@@ -708,6 +806,215 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     ? activeDetail
     : null;
 
+  const beginEditing = useCallback(() => {
+    const detail = activeDetail;
+    if (!detail || detail.path !== selectedMetaRef.current?.path || !detail.editable || detail.editableContent == null) return;
+    const baseContent = detail.editableContent;
+    setEditing({
+      path: detail.path,
+      title: detail.title,
+      baseRevision: detail.revision,
+      baseContent,
+      draftContent: getDraft(detail.path, detail.revision) ?? baseContent,
+    });
+    setEditReview(null);
+    setEditDecisions({});
+    setEditError(null);
+  }, [activeDetail]);
+
+  const requestEditPreview = useCallback(async () => {
+    if (!editing || editing.draftContent === editing.baseContent || editPending) return;
+    setEditPending(true);
+    setEditError(null);
+    try {
+      const preview = await previewPageEdit(config, {
+        path: editing.path,
+        baseRevision: editing.baseRevision,
+        content: editing.draftContent,
+        actor: "user:desktop",
+      });
+      setEditDecisions({});
+      setEditReview({ kind: "preview", preview });
+    } catch (reason) {
+      const conflict = revisionConflict(reason);
+      if (conflict) setEditReview({ kind: "conflict", conflict });
+      else setEditError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setEditPending(false);
+    }
+  }, [config, editPending, editing]);
+
+  const decisionsForServer = useCallback((operations: readonly MemoryOperation[], questions: readonly { id: string; operationIndex: number }[]) => {
+    const result: Record<string, DiffReviewDecision> = {};
+    for (const question of questions) {
+      const operation = operations[question.operationIndex];
+      const decision = operation ? editDecisions[operation.id] : undefined;
+      if (decision) result[question.id] = decision;
+    }
+    return result;
+  }, [editDecisions]);
+
+  const completeLocalSave = useCallback((revision: string) => {
+    if (!editing) return;
+    clearDraft(editing.path, editing.baseRevision);
+    detailCache.current.invalidatePath(editing.path);
+    setArtifacts((current) => current.map((artifact) => artifact.path === editing.path ? { ...artifact, revision } : artifact));
+    setEditing(null);
+    setEditReview(null);
+    setQueuedExternalReview(null);
+    setEditDecisions({});
+    setEditError(null);
+    setContentNotice("Saved memory note.");
+    setContentRefreshKey((key) => key + 1);
+    void load();
+  }, [editing, load]);
+
+  const returnFromEditReview = useCallback(() => {
+    if (queuedExternalReview) {
+      setQueuedExternalReview(null);
+      setEditDecisions({});
+      setEditError(null);
+      setEditReview({ kind: "external", event: queuedExternalReview });
+      return;
+    }
+    const draft = editingRef.current;
+    if (
+      editReviewRef.current?.kind === "external"
+      && draft
+      && activeDetail?.path === draft.path
+      && activeDetail.revision !== draft.baseRevision
+      && draft.draftContent !== draft.baseContent
+    ) {
+      setEditDecisions({});
+      setEditError(null);
+      setEditReview({
+        kind: "conflict",
+        conflict: {
+          currentRevision: activeDetail.revision,
+          currentContent: activeDetail.editableContent ?? activeDetail.content,
+        },
+      });
+      return;
+    }
+    setEditReview(null);
+    setEditDecisions({});
+    setEditError(null);
+  }, [activeDetail, queuedExternalReview]);
+
+  const rebaseConflict = useCallback(() => {
+    if (!editing || editReview?.kind !== "conflict") return;
+    const { currentRevision, currentContent } = editReview.conflict;
+    setDraft(editing.path, currentRevision, editing.draftContent);
+    setEditing({
+      ...editing,
+      baseRevision: currentRevision,
+      baseContent: currentContent,
+    });
+    detailCache.current.invalidatePath(editing.path);
+    setActiveDetail(null);
+    setArtifacts((current) => current.map((artifact) => artifact.path === editing.path
+      ? { ...artifact, revision: currentRevision }
+      : artifact));
+    setContentRefreshKey((key) => key + 1);
+    if (queuedExternalReview) {
+      setQueuedExternalReview(null);
+      setEditReview({ kind: "external", event: queuedExternalReview });
+    } else {
+      setEditReview(null);
+    }
+    setEditDecisions({});
+    setEditError(null);
+  }, [editReview, editing, queuedExternalReview]);
+
+  const applyEditReview = useCallback(async () => {
+    const review = editReview;
+    if (!review || review.kind === "conflict" || editPending) return;
+    setEditPending(true);
+    setEditError(null);
+    try {
+      if (review.kind === "external") {
+        await retryPageEdit(config, {
+          eventId: review.event.id,
+          decisions: decisionsForServer(review.event.reviewOperations, review.event.questions),
+        });
+        returnFromEditReview();
+        setHistoryVersion((version) => version + 1);
+        setRecordsRefreshKey((key) => key + 1);
+        setContentNotice("Resolved external memory effects.");
+        return;
+      }
+      const result = await applyPageEdit(config, {
+        previewId: review.preview.id,
+        decisions: decisionsForServer(review.preview.operations, review.preview.questions),
+        savePending: review.preview.analysisPending,
+      });
+      completeLocalSave(result.revision);
+    } catch (reason) {
+      const conflict = revisionConflict(reason);
+      if (conflict) setEditReview({ kind: "conflict", conflict });
+      else setEditError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setEditPending(false);
+    }
+  }, [completeLocalSave, config, decisionsForServer, editPending, editReview, returnFromEditReview]);
+
+  useEffect(() => {
+    if (!editing || selectedMeta?.path === editing.path) return;
+    setEditing(null);
+    setEditReview(null);
+    setQueuedExternalReview(null);
+    setEditDecisions({});
+    setEditError(null);
+  }, [editing, selectedMeta?.path]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((!event.metaKey && !event.ctrlKey) || event.altKey || event.shiftKey) return;
+      const key = event.key.toLowerCase();
+      if (key !== "e" && key !== "s") return;
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      const inEditor = target?.closest("[data-memory-editor]") != null;
+      const focusedControl = target != null && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(target.tagName));
+      if (focusedControl && !inEditor) return;
+      if (key === "e") {
+        if (!editing && (!visibleDetail?.editable || visibleDetail.editableContent == null)) return;
+        event.preventDefault();
+        if (editing) {
+          setEditReview(null);
+          setEditing(null);
+        } else beginEditing();
+        return;
+      }
+      if (!editing || editReview) return;
+      event.preventDefault();
+      void requestEditPreview();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [beginEditing, editReview, editing, requestEditPreview, visibleDetail]);
+
+  const reviewPresentation = useMemo(() => {
+    if (!editReview) return null;
+    if (editReview.kind === "external") {
+      const analysis = editReview.event.analysis;
+      return {
+        path: editReview.event.path,
+        baseContent: analysis?.before.join("\n") ?? "",
+        draftContent: analysis?.after.join("\n") ?? "",
+        operations: editReview.event.reviewOperations,
+        analysisPending: false,
+      };
+    }
+    if (!editing) return null;
+    return {
+      path: editing.path,
+      baseContent: editing.baseContent,
+      draftContent: editing.draftContent,
+      operations: editReview.kind === "preview" ? editReview.preview.operations : [],
+      analysisPending: editReview.kind === "preview" && editReview.preview.analysisPending,
+    };
+  }, [editReview, editing]);
+
   return (
     <div
       ref={layoutRef}
@@ -749,9 +1056,19 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
         />
       </nav>
 
-      <main data-memory-zone="workspace" aria-label={recordsOpen ? "Raw record" : "Memory note"} className="relative min-h-0 overflow-hidden">
-        {!recordsOpen && (
+      <main data-memory-zone="workspace" aria-label={recordsOpen ? "Raw record" : editReview ? "Memory edit review" : editing ? "Memory editor" : "Memory note"} className="relative min-h-0 overflow-hidden">
+        {!recordsOpen && !editing && !editReview && (
           <div className="absolute right-3 top-3 z-10 flex items-center gap-1 rounded-[9px] border border-line-soft bg-bg-main/90 p-1 shadow-sm backdrop-blur">
+            <button
+              type="button"
+              aria-label="Edit memory note"
+              title="Edit (⌘E)"
+              disabled={!visibleDetail?.editable || visibleDetail.editableContent == null}
+              onClick={beginEditing}
+              className="grid size-7 place-items-center rounded-[6px] text-muted hover:bg-surface-soft hover:text-ink disabled:opacity-35"
+            >
+              <Pencil className="size-3.5" />
+            </button>
             <button
               type="button"
               aria-label="Back in memory history"
@@ -790,6 +1107,40 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
             pinningId={pinningId}
             onTogglePinned={togglePinned}
           />
+        ) : editReview && reviewPresentation ? (
+          <MemoryEditReview
+            kind={editReview.kind}
+            path={reviewPresentation.path}
+            baseContent={reviewPresentation.baseContent}
+            draftContent={reviewPresentation.draftContent}
+            operations={reviewPresentation.operations.map(diffOperation)}
+            decisions={editDecisions}
+            analysisPending={reviewPresentation.analysisPending}
+            conflict={editReview.kind === "conflict" ? editReview.conflict : undefined}
+            pending={editPending}
+            error={editError}
+            onDecision={(operationId, decision) => setEditDecisions((current) => ({ ...current, [operationId]: decision }))}
+            onApply={() => void applyEditReview()}
+            onCancel={returnFromEditReview}
+            onRebase={rebaseConflict}
+          />
+        ) : editing ? (
+          <MemoryEditor
+            path={editing.path}
+            title={editing.title}
+            baseRevision={editing.baseRevision}
+            baseContent={editing.baseContent}
+            value={editing.draftContent}
+            saving={editPending}
+            error={editError}
+            onChange={(draftContent) => {
+              if (draftContent === editing.baseContent) clearDraft(editing.path, editing.baseRevision);
+              else setDraft(editing.path, editing.baseRevision, draftContent);
+              setEditing((current) => current ? { ...current, draftContent } : current);
+            }}
+            onSave={() => void requestEditPreview()}
+            onClose={() => setEditing(null)}
+          />
         ) : (
           <FileDetailPane
             summary={selectedMeta}
@@ -808,7 +1159,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
             }}
           />
         )}
-        {!recordsOpen && (
+        {!recordsOpen && !editing && !editReview && (
           <WikiLinkPreview
             containerRef={layoutRef}
             links={currentPageLinks}

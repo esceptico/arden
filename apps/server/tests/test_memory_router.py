@@ -119,12 +119,46 @@ def test_routes_registered():
         "/admin/memory/artifacts/{path}",
         "/admin/memory/page-edits/preview",
         "/admin/memory/page-edits/apply",
+        "/admin/memory/page-edits/retry",
         "/admin/memory/page-edits/history",
         "/admin/memory/links",
         "/admin/memory/items",
         "/admin/memory/search",
     ):
         assert p in paths
+
+
+@pytest.mark.asyncio
+async def test_external_page_review_retry_applies_only_memory_decisions_and_is_idempotent(page_edit_client):
+    c, store, service, reconciler, page = page_edit_client
+    target = await store.add("Original durable statement.", kind="fact")
+    await store.refresh_from_disk()
+    page.write_text("# A\n\nChanged outside ntrp.\n", encoding="utf-8")
+    change = (await store.refresh_from_disk())[0]
+    reconciler.answer = (RecordOperation.ask("Forget the old memory?", target.id),)
+    review = await service.ingest_external(change)
+    assert review is not None and review.reconciliation == "needs_review"
+    current_bytes = page.read_bytes()
+
+    payload = {
+        "event_id": review.id,
+        "decisions": {
+            review.questions[0].id: {
+                "choice": "forget_memory",
+                "target_ids": [target.id],
+            }
+        },
+    }
+    first = c.put("/admin/memory/page-edits/retry", json=payload)
+    second = c.put("/admin/memory/page-edits/retry", json=payload)
+
+    assert first.status_code == 200
+    assert first.json()["event"]["reconciles_event_id"] == review.id
+    assert first.json()["revision"] == review.result_revision
+    assert second.status_code == 200
+    assert second.json()["event"]["id"] == first.json()["event"]["id"]
+    assert page.read_bytes() == current_bytes
+    assert await store.get(target.id) is None
 
 
 def test_links_route_returns_paginated_outgoing_and_backlinks(tmp_path: Path):

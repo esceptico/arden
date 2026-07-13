@@ -9,6 +9,7 @@ import type { SessionListItem } from "@/api/types";
 import { createStallWatchdog } from "@/lib/streamWatchdog";
 import { openSseStream } from "@/lib/sseTransport";
 import { automationToast } from "@/lib/taskToast";
+import type { MemoryVaultChange } from "@/stores/types";
 
 // The automation stream keepalives every 5s; treat ~3x silence as stalled.
 const AUTOMATION_STALL_MS = 15_000;
@@ -28,7 +29,7 @@ type AutomationEvent =
   | { type: "automation_suggestions_updated"; seq?: number }
   | { type: "session_created"; session: SessionListItem; seq?: number }
   | { type: "session_activity"; session: SessionListItem; seq?: number }
-  | { type: "memory_changed"; paths: string[]; seq?: number }
+  | { type: "memory_changed"; paths: string[]; revision?: string | null; review_required?: boolean; seq?: number }
   | { type: "areas_changed"; keys: string[]; seq?: number }
   | { type: "stream_keepalive"; latest_seq: number; seq?: number }
   | { type: "stream_reset"; reason: string; seq?: number };
@@ -52,6 +53,17 @@ export function reduceAutomationStreamCursor(
   const next = typeof event.latest_seq === "number" ? event.latest_seq : event.seq;
   if (typeof next !== "number") return current;
   return Math.max(current ?? 0, next);
+}
+
+export function memoryVaultChangeFromEvent(
+  event: Extract<AutomationEvent, { type: "memory_changed" }>,
+): MemoryVaultChange {
+  return {
+    paths: event.paths,
+    revision: event.revision ?? null,
+    reviewRequired: event.review_required ?? false,
+    seq: event.seq ?? null,
+  };
 }
 
 /** Subscribe to `/automations/events` for the lifetime of the app. The
@@ -117,7 +129,7 @@ export function useAutomationEvents(): void {
         // The live memory vault absorbed on-disk edits (Obsidian, a feed run,
         // a maintenance pass) — bump the version so an open memory view
         // silently refetches what it's showing.
-        store().memoryVaultChanged();
+        store().memoryVaultChanged(memoryVaultChangeFromEvent(event));
       } else if (event.type === "session_activity") {
         // A channel the user may not be viewing got new content — bump its
         // sidebar row to the top with fresh metadata.

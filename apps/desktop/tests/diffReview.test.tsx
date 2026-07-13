@@ -262,3 +262,11 @@ test("reduced motion disables review transitions", async () => {
   expect(host.querySelector<HTMLElement>('[data-rendered-prose-diff]')?.style.transition).toBe("none");
   window.matchMedia = originalMatchMedia;
 });
+
+test("can embed a diff without duplicating parent review actions", async () => {
+  const { host, root } = setup();
+  await act(async () => root.render(
+    <DiffReview {...files} operations={[]} hideFooter />,
+  ));
+  expect(host.querySelector("footer")).toBeNull();
+});
