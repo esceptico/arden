@@ -1,7 +1,7 @@
 import asyncio
-from dataclasses import dataclass
 import json
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from ntrp.automation.models import Automation
@@ -9,6 +9,7 @@ from ntrp.automation.prompts import AUTOMATION_PROMPT, AUTOMATION_SUFFIX
 from ntrp.automation.store import AutomationStore
 from ntrp.automation.triggers import CountTrigger, EventTrigger, IdleTrigger, MessageTrigger, TimeTrigger
 from ntrp.constants import (
+    DETACHED_RUN_MAX_AGE,
     MESSAGE_RECEIVED,
     SCHEDULER_DEDUP_TTL,
     SCHEDULER_EVENT_MAX_RETRIES,
@@ -18,7 +19,6 @@ from ntrp.constants import (
 )
 from ntrp.events.internal import RunCompleted
 from ntrp.events.sse import AutomationFinishedEvent, AutomationProgressEvent, SSEEvent
-from ntrp.constants import DETACHED_RUN_MAX_AGE
 from ntrp.events.triggers import EVENT_APPROACHING, EventApproaching, MessageReceived, TriggerEvent
 from ntrp.logging import get_logger
 from ntrp.operator.runner import OperatorDeps, RunRequest, run_agent, run_agent_streaming
