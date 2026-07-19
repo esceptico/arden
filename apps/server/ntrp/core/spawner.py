@@ -370,6 +370,13 @@ def create_spawn_fn(
             filtered_tools = [t for t in full_tools if t.get("function", {}).get("name") in wanted]
         else:
             filtered_tools = tools
+        parent_allowed = calling_ctx.run.allowed_tool_names
+        if parent_allowed is not None:
+            filtered_tools = [
+                schema
+                for schema in filtered_tools
+                if schema.get("function", {}).get("name") in parent_allowed
+            ]
         if exclude_tools:
             filtered_tools = [t for t in filtered_tools if t.get("function", {}).get("name") not in exclude_tools]
         allowed_tool_names = tool_schema_names(filtered_tools)

@@ -46,6 +46,7 @@ from ntrp.events.sse import (
 )
 from ntrp.server.state import RunRegistry
 from ntrp.services.session import SessionService
+from ntrp.tools.core import ToolAction, ToolPolicy, ToolResult, ToolScope, tool
 from ntrp.tools.core.context import BackgroundTaskRegistry, ChildSession, IOBridge, RunContext, ToolContext
 from tests.helpers import make_executor, make_text_response
 
@@ -53,6 +54,45 @@ from tests.helpers import make_executor, make_text_response
 class ParentTracker:
     def __init__(self, cost: float = 0.0):
         self.cost = cost
+
+
+@pytest.mark.asyncio
+async def test_spawned_agent_cannot_widen_parent_tool_scope(monkeypatch):
+    captured = {}
+
+    async def execute(_execution, _args):
+        return ToolResult(content="ok", preview="ok")
+
+    policy = ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL)
+    executor = make_executor(
+        {
+            "allowed": tool(description="allowed", policy=policy, execute=execute),
+            "forbidden": tool(description="forbidden", policy=policy, execute=execute),
+        }
+    )
+
+    class FakeAgent:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        async def stream(self, messages):
+            yield Result(text="done", stop_reason=StopReason.END_TURN, steps=1, usage=Usage())
+
+    monkeypatch.setattr(spawner_module, "Agent", FakeAgent)
+    ctx = ToolContext(
+        session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
+        registry=executor.registry,
+        run=RunContext(run_id="run-1", current_depth=0, max_depth=3, allowed_tool_names={"allowed"}),
+        io=IOBridge(),
+        background_tasks=BackgroundTaskRegistry(session_id="test"),
+    )
+
+    spawn = create_spawn_fn(executor=executor, model="test-model", max_depth=3, current_depth=0)
+    await spawn(ctx, "child task", system_prompt="child prompt", isolation=IsolationLevel.SHARED)
+
+    schema_names = {item["function"]["name"] for item in captured["tools"]}
+    assert schema_names == {"allowed"}
+    assert captured["executor"]._ctx.run.allowed_tool_names == {"allowed"}
 
 
 @pytest.mark.asyncio
