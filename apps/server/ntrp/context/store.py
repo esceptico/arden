@@ -339,8 +339,6 @@ CREATE TABLE IF NOT EXISTS background_agent_events (
 
 CREATE INDEX IF NOT EXISTS idx_background_agent_events_task
     ON background_agent_events(task_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_background_agent_events_event_id
-    ON background_agent_events(event_id) WHERE event_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS session_goals (
     session_id TEXT PRIMARY KEY,

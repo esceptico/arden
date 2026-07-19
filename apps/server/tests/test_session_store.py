@@ -1316,6 +1316,44 @@ async def test_background_agent_schema_migrates_old_task_id_primary_key(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_background_agent_event_schema_adds_delivery_columns_before_index(tmp_path: Path):
+    conn = await database.connect(tmp_path / "old-events.db")
+    await conn.execute(
+        """
+        CREATE TABLE background_agent_events (
+            session_id TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            task_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            detail TEXT,
+            result_ref TEXT,
+            terminal INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (session_id, seq)
+        )
+        """
+    )
+    await conn.commit()
+
+    store = SessionStore(conn)
+    try:
+        await store.init_schema()
+        columns = {
+            row["name"]
+            for row in await conn.execute_fetchall("PRAGMA table_info(background_agent_events)")
+        }
+        indexes = {
+            row["name"]
+            for row in await conn.execute_fetchall("PRAGMA index_list(background_agent_events)")
+        }
+
+        assert {"event_id", "delivered_at"}.issubset(columns)
+        assert "idx_background_agent_events_event_id" in indexes
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_marks_running_background_agents_interrupted_on_startup(store: SessionStore):
     await store.record_background_agent_started(
         task_id="bg-1",
