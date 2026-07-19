@@ -6,7 +6,6 @@ import { useStore } from "@/stores";
 
 export function ProofSummary({ turnId }: { turnId: string }) {
   const revision = useStore((state) => state.sourceRefsRevision);
-  const openContextForTurn = useStore((state) => state.openContextForTurn);
   const [open, setOpen] = useState(false);
   const summary = useMemo(() => {
     const { messages, order } = useStore.getState();
@@ -69,13 +68,6 @@ export function ProofSummary({ turnId }: { turnId: string }) {
             primary: row.code,
             secondary: row.recoveryAction ?? row.status,
           }))} />
-          <button
-            type="button"
-            onClick={() => openContextForTurn(turnId)}
-            className="w-fit rounded-md px-1.5 py-1 font-medium text-ink-soft transition-colors hover:bg-surface-soft hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-          >
-            View turn details
-          </button>
         </div>
       )}
     </div>

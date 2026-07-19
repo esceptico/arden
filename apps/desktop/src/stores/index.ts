@@ -267,7 +267,6 @@ export const useStore = create<State & Actions>((set) => ({
   sourceFocus: null,
   rightInspectorTab: "activity",
   sourceTurnId: null,
-  contextTurnId: null,
   sourceRefsRevision: 0,
   paletteOpen: false,
   pendingApprovals: [],
@@ -383,7 +382,6 @@ export const useStore = create<State & Actions>((set) => ({
         sessionView,
         currentSessionId: sessionView.currentSessionId,
         sourceTurnId: null,
-        contextTurnId: null,
         sourceRefsRevision: s.sourceRefsRevision + 1,
         sessionCache: cache,
         messages: view.messages,
@@ -426,8 +424,6 @@ export const useStore = create<State & Actions>((set) => ({
         activeActivityId: normalized.activeActivityId,
         sourceTurnId:
           s.sourceTurnId && !normalized.messages.has(s.sourceTurnId) ? null : s.sourceTurnId,
-        contextTurnId:
-          s.contextTurnId && !normalized.messages.has(s.contextTurnId) ? null : s.contextTurnId,
         sourceRefsRevision: s.sourceRefsRevision + 1,
         thinkingRunId: null,
         thinkingStatus: null,
@@ -560,7 +556,6 @@ export const useStore = create<State & Actions>((set) => ({
         messages,
         order: keep,
         sourceTurnId: s.sourceTurnId && !messages.has(s.sourceTurnId) ? null : s.sourceTurnId,
-        contextTurnId: s.contextTurnId && !messages.has(s.contextTurnId) ? null : s.contextTurnId,
         sourceRefsRevision: s.sourceRefsRevision + 1,
       };
     }),
@@ -852,7 +847,6 @@ export const useStore = create<State & Actions>((set) => ({
     set({
       rightInspectorTab,
       ...(rightInspectorTab === "sources" ? { sourceTurnId: null } : {}),
-      ...(rightInspectorTab === "context" ? { contextTurnId: null } : {}),
     }),
   openSourcesForTurn: (sourceTurnId) =>
     set((s) => {
@@ -861,14 +855,6 @@ export const useStore = create<State & Actions>((set) => ({
         : s.prefs;
       if (prefs !== s.prefs) persistPrefs(prefs);
       return { rightInspectorTab: "sources", sourceTurnId, prefs };
-    }),
-  openContextForTurn: (contextTurnId) =>
-    set((s) => {
-      const prefs = s.prefs.rightPanelCollapsed
-        ? { ...s.prefs, rightPanelCollapsed: false }
-        : s.prefs;
-      if (prefs !== s.prefs) persistPrefs(prefs);
-      return { rightInspectorTab: "context", contextTurnId, prefs };
     }),
   openPalette: () => set({ paletteOpen: true }),
   closePalette: () => set({ paletteOpen: false }),

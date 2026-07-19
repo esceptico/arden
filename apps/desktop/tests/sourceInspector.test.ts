@@ -48,30 +48,9 @@ beforeEach(() => {
     order: [],
     sessionCache: new Map(),
     sourceTurnId: null,
-    contextTurnId: null,
     rightInspectorTab: "activity",
     prefs: { ...DEFAULT_PREFS, rightPanelCollapsed: true },
   });
-});
-
-test("opening Context scopes the exact turn and expands the persisted right panel", () => {
-  getState().openContextForTurn("user-1");
-
-  expect(getState().rightInspectorTab).toBe("context");
-  expect(getState().contextTurnId).toBe("user-1");
-  expect(getState().prefs.rightPanelCollapsed).toBe(false);
-});
-
-test("manual Context selection clears exact scope and session changes clear it", () => {
-  getState().setCurrentSession("session-1");
-  getState().openContextForTurn("user-1");
-
-  getState().setRightInspectorTab("context");
-  expect(getState().contextTurnId).toBeNull();
-
-  getState().openContextForTurn("user-1");
-  getState().setCurrentSession("session-2");
-  expect(getState().contextTurnId).toBeNull();
 });
 
 test("opening Sources scopes the exact turn and expands the persisted right panel", () => {
