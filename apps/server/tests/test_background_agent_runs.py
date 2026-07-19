@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 
 import pytest
 
@@ -83,3 +84,29 @@ async def test_background_registry_injects_hidden_meta_completion_with_result():
             "client_id": "bg:bg-1:completed",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_background_result_fallback_rejects_path_traversal(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("ntrp.tools.core.context.RESULT_BASE", tmp_path)
+    result_dir = tmp_path / "sess-1" / "bg_results"
+    result_dir.mkdir(parents=True)
+    (tmp_path / "secret.txt").write_text("other session secret")
+    registry = BackgroundTaskRegistry(session_id="sess-1")
+
+    result = await registry.read_background_result("../../secret")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_durable_background_reader_is_authoritative(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("ntrp.tools.core.context.RESULT_BASE", tmp_path)
+
+    async def missing_owned_result(_task_id: str) -> None:
+        return None
+
+    registry = BackgroundTaskRegistry(session_id="sess-1", read_result=missing_owned_result)
+    registry._write_result_file("not-owned", "legacy secret")
+
+    assert await registry.read_background_result("not-owned") is None

@@ -349,18 +349,27 @@ class BackgroundTaskRegistry:
         return sum(1 for t in self._tasks.values() if not t.done()) + len(self._reserved)
 
     def _write_result_file(self, task_id: str, content: str) -> Path:
-        result_dir = RESULT_BASE / self.session_id / "bg_results"
-        result_dir.mkdir(parents=True, exist_ok=True)
-        path = result_dir / f"{task_id}.txt"
+        path = self._result_path(task_id)
+        if path is None:
+            raise ValueError("Invalid background task result path")
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
         return path
 
+    def _result_path(self, task_id: str) -> Path | None:
+        root = RESULT_BASE.resolve()
+        result_dir = (root / self.session_id / "bg_results").resolve()
+        if not result_dir.is_relative_to(root):
+            return None
+        path = (result_dir / f"{task_id}.txt").resolve()
+        return path if path.is_relative_to(result_dir) else None
+
     async def read_background_result(self, task_id: str) -> str | None:
         if self.read_result:
-            durable = await self.read_result(task_id)
-            if durable is not None:
-                return durable
-        path = RESULT_BASE / self.session_id / "bg_results" / f"{task_id}.txt"
+            return await self.read_result(task_id)
+        path = self._result_path(task_id)
+        if path is None:
+            return None
         if not path.exists():
             return None
         return await asyncio.to_thread(path.read_text, encoding="utf-8")
@@ -378,7 +387,7 @@ class BackgroundTaskRegistry:
         wait: bool | None = None,
     ) -> None:
         path = self._write_result_file(task_id, result)
-        result_ref = str(path.relative_to(RESULT_BASE / self.session_id))
+        result_ref = str(path.relative_to((RESULT_BASE / self.session_id).resolve()))
 
         notification = (
             f'<background_agent_result task_id="{task_id}" status="{status}">\n'
