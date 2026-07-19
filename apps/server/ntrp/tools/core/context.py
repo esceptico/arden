@@ -183,6 +183,8 @@ class BackgroundTaskRegistry:
     on_result: Callable[[list[dict]], Awaitable[None]] | None = None
     record_event: Callable[..., Awaitable[None]] | None = None
     read_result: Callable[[str], Awaitable[str | None]] | None = None
+    claim_completion: Callable[..., Awaitable[dict]] | None = None
+    mark_completion_delivered: Callable[..., Awaitable[None]] | None = None
     _tasks: dict[str, asyncio.Task] = field(default_factory=dict)
     _commands: dict[str, str] = field(default_factory=dict)
     _reserved: set[str] = field(default_factory=set)
@@ -194,6 +196,7 @@ class BackgroundTaskRegistry:
     # task_id -> the agent's own child session id, so a cancel can walk the
     # spawn subtree (descendants run inside this session).
     _child_sessions: dict[str, str] = field(default_factory=dict)
+    _delivered_completion_ids: set[str] = field(default_factory=set)
 
     def generate_id(self) -> str:
         return generate_slug(2)
@@ -394,8 +397,37 @@ class BackgroundTaskRegistry:
         agent_type: str | None = None,
         wait: bool | None = None,
     ) -> None:
-        path = self._write_result_file(task_id, result)
-        result_ref = str(path.relative_to((RESULT_BASE / self.session_id).resolve()))
+        result_ref = f"background://{task_id}"
+        completion_id = f"bg:{task_id}:{status}"
+        if self.claim_completion:
+            completion = await self.claim_completion(
+                task_id=task_id,
+                session_id=self.session_id,
+                status=status,
+                result_ref=result_ref,
+                result_text=result,
+                completion_id=completion_id,
+            )
+            if completion.get("delivered"):
+                return
+            completion_id = str(completion["completion_id"])
+            status = str(completion["status"])
+            result_ref = str(completion.get("result_ref") or result_ref)
+            result = str(completion.get("result_text") or result)
+
+        if completion_id in self._delivered_completion_ids:
+            if self.mark_completion_delivered:
+                await self.mark_completion_delivered(
+                    session_id=self.session_id,
+                    task_id=task_id,
+                    completion_id=completion_id,
+                )
+            return
+
+        try:
+            await asyncio.to_thread(self._write_result_file, task_id, result)
+        except Exception:
+            _logger.warning("Failed to write supplementary background result file", exc_info=True)
 
         notification = (
             f'<background_agent_result task_id="{task_id}" status="{status}">\n'
@@ -418,7 +450,7 @@ class BackgroundTaskRegistry:
         if emit:
             await emit(
                 BackgroundTaskEvent(
-                    event_id=f"bg:{task_id}:{status}",
+                    event_id=completion_id,
                     task_id=task_id,
                     session_id=self.session_id,
                     child_run_id=task_id,
@@ -435,14 +467,22 @@ class BackgroundTaskRegistry:
                 )
             )
 
-        await self._record(
-            task_id=task_id,
-            status=status,
-            result_ref=result_ref,
-            result_text=result,
-        )
+        if not self.claim_completion:
+            await self._record(
+                task_id=task_id,
+                status=status,
+                result_ref=result_ref,
+                result_text=result,
+            )
 
         await self.inject(messages)
+        self._delivered_completion_ids.add(completion_id)
+        if self.mark_completion_delivered:
+            await self.mark_completion_delivered(
+                session_id=self.session_id,
+                task_id=task_id,
+                completion_id=completion_id,
+            )
 
 
 @dataclass

@@ -307,6 +307,7 @@ CREATE TABLE IF NOT EXISTS background_agent_runs (
     ended_at TEXT,
     cancel_requested_at TEXT,
     notified_at TEXT,
+    completion_id TEXT,
     PRIMARY KEY (session_id, task_id)
 );
 
@@ -322,11 +323,15 @@ CREATE TABLE IF NOT EXISTS background_agent_events (
     result_ref TEXT,
     terminal INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
+    event_id TEXT,
+    delivered_at TEXT,
     PRIMARY KEY (session_id, seq)
 );
 
 CREATE INDEX IF NOT EXISTS idx_background_agent_events_task
     ON background_agent_events(task_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_background_agent_events_event_id
+    ON background_agent_events(event_id) WHERE event_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS session_goals (
     session_id TEXT PRIMARY KEY,
@@ -539,6 +544,7 @@ class SessionStore:
             "ended_at": row["ended_at"],
             "cancel_requested_at": row["cancel_requested_at"],
             "notified_at": row["notified_at"],
+            "completion_id": dict(row).get("completion_id"),
         }
 
     def _background_agent_event_payload(self, row: aiosqlite.Row) -> dict:
@@ -551,6 +557,8 @@ class SessionStore:
             "result_ref": row["result_ref"],
             "terminal": bool(row["terminal"]),
             "created_at": row["created_at"],
+            "event_id": dict(row).get("event_id"),
+            "delivered_at": dict(row).get("delivered_at"),
         }
 
     def _tool_call_payload(self, row: aiosqlite.Row) -> dict:
@@ -748,6 +756,7 @@ class SessionStore:
         await self._migrate_tool_calls_schema()
         await self._migrate_run_suspensions_schema()
         await self._migrate_background_agent_runs_schema()
+        await self._migrate_background_agent_events_schema()
         await self._migrate_chat_compactions_schema()
         await self._migrate_chat_runs_schema()
         await self.conn.execute(
@@ -1377,6 +1386,9 @@ class SessionStore:
             if "wait" not in columns:
                 await self.conn.execute("ALTER TABLE background_agent_runs ADD COLUMN wait INTEGER NOT NULL DEFAULT 0")
                 changed = True
+            if "completion_id" not in columns:
+                await self.conn.execute("ALTER TABLE background_agent_runs ADD COLUMN completion_id TEXT")
+                changed = True
             if changed:
                 await self.conn.commit()
             return
@@ -1410,6 +1422,7 @@ class SessionStore:
                 ended_at TEXT,
                 cancel_requested_at TEXT,
                 notified_at TEXT,
+                completion_id TEXT,
                 PRIMARY KEY (session_id, task_id)
             )
             """
@@ -1435,6 +1448,21 @@ class SessionStore:
             CREATE INDEX IF NOT EXISTS idx_background_agent_runs_session_status
                 ON background_agent_runs(session_id, status)
             """
+        )
+        await self.conn.commit()
+
+    async def _migrate_background_agent_events_schema(self) -> None:
+        rows = await self.conn.execute_fetchall("PRAGMA table_info(background_agent_events)")
+        if not rows:
+            return
+        columns = {row["name"] for row in rows}
+        if "event_id" not in columns:
+            await self.conn.execute("ALTER TABLE background_agent_events ADD COLUMN event_id TEXT")
+        if "delivered_at" not in columns:
+            await self.conn.execute("ALTER TABLE background_agent_events ADD COLUMN delivered_at TEXT")
+        await self.conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_background_agent_events_event_id "
+            "ON background_agent_events(event_id) WHERE event_id IS NOT NULL"
         )
         await self.conn.commit()
 
@@ -2282,7 +2310,7 @@ class SessionStore:
         wait: bool = False,
     ) -> None:
         now = datetime.now(UTC).isoformat()
-        await self.conn.execute(
+        cursor = await self.conn.execute(
             """
             INSERT INTO background_agent_runs (
                 task_id, session_id, parent_run_id, parent_tool_call_id, child_session_id,
@@ -2305,7 +2333,9 @@ class SessionStore:
                 updated_at = excluded.updated_at,
                 ended_at = NULL,
                 cancel_requested_at = NULL,
-                notified_at = NULL
+                notified_at = NULL,
+                completion_id = NULL
+            WHERE background_agent_runs.completion_id IS NULL
             """,
             (
                 task_id,
@@ -2322,11 +2352,12 @@ class SessionStore:
             ),
         )
         await self.conn.commit()
-        await self.record_background_agent_event(
-            task_id=task_id,
-            session_id=session_id,
-            status="started",
-        )
+        if cursor.rowcount > 0:
+            await self.record_background_agent_event(
+                task_id=task_id,
+                session_id=session_id,
+                status="started",
+            )
 
     async def record_background_agent_event(
         self,
@@ -2381,28 +2412,115 @@ class SessionStore:
         detail: str | None = None,
         result_text: str | None = None,
     ) -> None:
-        now = datetime.now(UTC).isoformat()
-        await self.conn.execute(
-            """
-            UPDATE background_agent_runs
-            SET status = ?,
-                detail = COALESCE(?, detail),
-                result_ref = COALESCE(?, result_ref),
-                result_text = COALESCE(?, result_text),
-                updated_at = ?,
-                ended_at = COALESCE(ended_at, ?)
-            WHERE session_id = ? AND task_id = ?
-            """,
-            (status, detail, result_ref, result_text, now, now, session_id, task_id),
-        )
-        await self.conn.commit()
-        await self.record_background_agent_event(
+        await self.claim_background_agent_completion(
             task_id=task_id,
             session_id=session_id,
             status=status,
             detail=detail,
             result_ref=result_ref,
+            result_text=result_text,
+            completion_id=f"bg:{task_id}:{status}",
         )
+
+    async def claim_background_agent_completion(
+        self,
+        *,
+        task_id: str,
+        session_id: str,
+        status: str,
+        completion_id: str,
+        result_ref: str | None = None,
+        detail: str | None = None,
+        result_text: str | None = None,
+    ) -> dict:
+        now = datetime.now(UTC).isoformat()
+        async with self._background_event_lock:
+            rows = await self.conn.execute_fetchall(
+                "SELECT * FROM background_agent_runs WHERE session_id = ? AND task_id = ?",
+                (session_id, task_id),
+            )
+            if not rows:
+                raise KeyError(f"Unknown background task {session_id}/{task_id}")
+            existing = rows[0]
+            if existing["completion_id"]:
+                return {
+                    "claimed": False,
+                    "delivered": existing["notified_at"] is not None,
+                    "completion_id": existing["completion_id"],
+                    "status": existing["status"],
+                    "result_ref": existing["result_ref"],
+                    "result_text": existing["result_text"],
+                }
+
+            seq_rows = await self.conn.execute_fetchall(
+                "SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq FROM background_agent_events WHERE session_id = ?",
+                (session_id,),
+            )
+            seq = int(seq_rows[0]["next_seq"])
+            await self.conn.execute(
+                """
+                UPDATE background_agent_runs
+                SET status = ?, detail = COALESCE(?, detail), result_ref = COALESCE(?, result_ref),
+                    result_text = COALESCE(?, result_text), completion_id = ?, updated_at = ?, ended_at = ?
+                WHERE session_id = ? AND task_id = ? AND completion_id IS NULL
+                """,
+                (status, detail, result_ref, result_text, completion_id, now, now, session_id, task_id),
+            )
+            await self.conn.execute(
+                """
+                INSERT INTO background_agent_events (
+                    session_id, seq, task_id, status, detail, result_ref, terminal, created_at, event_id
+                ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+                """,
+                (session_id, seq, task_id, status, detail, result_ref, now, completion_id),
+            )
+            await self.conn.commit()
+        return {
+            "claimed": True,
+            "delivered": False,
+            "completion_id": completion_id,
+            "status": status,
+            "result_ref": result_ref,
+            "result_text": result_text,
+        }
+
+    async def mark_background_completion_delivered(
+        self,
+        *,
+        session_id: str,
+        task_id: str,
+        completion_id: str,
+    ) -> bool:
+        now = datetime.now(UTC).isoformat()
+        cursor = await self.conn.execute(
+            """
+            UPDATE background_agent_runs SET notified_at = COALESCE(notified_at, ?), updated_at = ?
+            WHERE session_id = ? AND task_id = ? AND completion_id = ?
+            """,
+            (now, now, session_id, task_id, completion_id),
+        )
+        await self.conn.execute(
+            "UPDATE background_agent_events SET delivered_at = COALESCE(delivered_at, ?) WHERE event_id = ?",
+            (now, completion_id),
+        )
+        await self.conn.commit()
+        return cursor.rowcount > 0
+
+    async def list_undelivered_background_completions(self) -> list[dict]:
+        rows = await self.read_conn.execute_fetchall(
+            """
+            SELECT * FROM background_agent_runs
+            WHERE completion_id IS NOT NULL AND notified_at IS NULL
+            ORDER BY ended_at ASC
+            """
+        )
+        return [
+            {
+                **self._background_agent_payload(row),
+                "result_text": row["result_text"],
+            }
+            for row in rows
+        ]
 
     async def request_background_agent_cancel(self, session_id: str, task_id: str) -> bool:
         now = datetime.now(UTC).isoformat()

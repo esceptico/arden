@@ -463,6 +463,46 @@ async def lifespan(app: FastAPI):
             await _resume_suspended_chat_run(interrupted_run["run_id"], interrupted_run["session_id"])
         except Exception:
             _logger.exception("Failed to resume interrupted run %s", interrupted_run["run_id"])
+    for completion in await runtime.session_service.store.list_undelivered_background_completions():
+        try:
+            session_id = completion["session_id"]
+            registry = runtime.run_registry.get_background_registry(session_id)
+            registry.claim_completion = runtime.session_service.store.claim_background_agent_completion
+            registry.mark_completion_delivered = runtime.session_service.store.mark_background_completion_delivered
+
+            async def _redeliver(messages: list[dict], target_session_id: str = session_id) -> None:
+                saved = await runtime.session_service.load(target_session_id)
+                saved_client_ids = {
+                    message.get("client_id") for message in (saved.messages if saved else []) if message.get("client_id")
+                }
+                for message in messages:
+                    client_id = message.get("client_id")
+                    if client_id in saved_client_ids:
+                        continue
+                    content = message.get("content")
+                    if isinstance(content, str) and content:
+                        await _dispatch_session_message(
+                            target_session_id,
+                            content,
+                            client_id if isinstance(client_id, str) else None,
+                            True,
+                        )
+
+            registry.on_result = _redeliver
+            await prime_bus_cursor_from_store(bus_registry, session_id, runtime.session_service.store)
+            await registry.deliver_result(
+                task_id=completion["task_id"],
+                result=completion.get("result_text") or "",
+                label=completion["command"],
+                status=completion["status"],
+                emit=bus_registry.get_or_create(session_id).emit,
+                child_session_id=completion.get("child_session_id"),
+                parent_tool_call_id=completion.get("parent_tool_call_id"),
+                agent_type=completion.get("agent_type"),
+                wait=completion.get("wait"),
+            )
+        except Exception:
+            _logger.exception("Failed to redeliver background completion %s", completion["completion_id"])
     app.state.runtime = runtime
     app.state.bus_registry = bus_registry
     _install_shutdown_handlers(runtime, bus_registry)

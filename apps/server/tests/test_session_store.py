@@ -1018,6 +1018,61 @@ async def test_background_agent_run_lifecycle(store: SessionStore):
 
 
 @pytest.mark.asyncio
+async def test_background_completion_claim_is_atomic_and_idempotent(store: SessionStore):
+    await store.record_background_agent_started(
+        task_id="bg-1",
+        session_id="sess-1",
+        parent_run_id="run-1",
+        command="research task",
+    )
+
+    first = await store.claim_background_agent_completion(
+        task_id="bg-1",
+        session_id="sess-1",
+        status="completed",
+        result_ref="background://bg-1",
+        result_text="first result",
+        completion_id="bg:bg-1:completed",
+    )
+    await store.record_background_agent_started(
+        task_id="bg-1",
+        session_id="sess-1",
+        parent_run_id="run-1",
+        command="duplicate start",
+    )
+    second = await store.claim_background_agent_completion(
+        task_id="bg-1",
+        session_id="sess-1",
+        status="failed",
+        result_ref="background://bg-1",
+        result_text="duplicate result",
+        completion_id="bg:bg-1:failed",
+    )
+
+    assert first["claimed"] is True
+    assert second["claimed"] is False
+    assert second["completion_id"] == "bg:bg-1:completed"
+    assert second["status"] == "completed"
+    assert await store.get_background_agent_result("sess-1", "bg-1") == "first result"
+    events = await store.list_background_agent_events("sess-1")
+    assert [event["status"] for event in events] == ["started", "completed"]
+    assert [row["completion_id"] for row in await store.list_undelivered_background_completions()] == [
+        "bg:bg-1:completed"
+    ]
+
+    assert await store.mark_background_completion_delivered(
+        session_id="sess-1",
+        task_id="bg-1",
+        completion_id="bg:bg-1:completed",
+    )
+    run = (await store.list_background_agent_runs("sess-1"))[0]
+    events = await store.list_background_agent_events("sess-1")
+    assert run["notified_at"] is not None
+    assert events[-1]["delivered_at"] is not None
+    assert await store.list_undelivered_background_completions() == []
+
+
+@pytest.mark.asyncio
 async def test_background_agent_task_ids_are_session_scoped(store: SessionStore):
     await store.record_background_agent_started(
         task_id="bg-1",

@@ -199,9 +199,10 @@ async def test_save_message_with_newlines_and_quotes(store: SessionStore):
 
 
 @pytest.mark.asyncio
-async def test_registry_deliver_result_with_no_callback(tmp_path):
+async def test_registry_deliver_result_with_no_callback(tmp_path, monkeypatch):
     """deliver_result with on_result=None should not crash (just warn)."""
-    registry = BackgroundTaskRegistry(session_id=str(tmp_path))
+    monkeypatch.setattr("ntrp.tools.core.context.RESULT_BASE", tmp_path)
+    registry = BackgroundTaskRegistry(session_id="sess-1")
     # No on_result set — should log warning but not crash
     await registry.deliver_result(
         task_id="t1",

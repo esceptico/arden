@@ -87,6 +87,92 @@ async def test_background_registry_injects_hidden_meta_completion_with_result():
 
 
 @pytest.mark.asyncio
+async def test_background_registry_delivers_claimed_completion_once():
+    emitted = []
+    injected = []
+    marked = []
+    delivered = False
+
+    async def claim_completion(**kwargs):
+        return {
+            **kwargs,
+            "claimed": not delivered,
+            "delivered": delivered,
+            "completion_id": "bg:bg-1:completed",
+        }
+
+    async def mark_delivered(**kwargs):
+        nonlocal delivered
+        delivered = True
+        marked.append(kwargs)
+
+    async def emit(event):
+        emitted.append(event)
+
+    async def on_result(messages):
+        injected.extend(messages)
+
+    registry = BackgroundTaskRegistry(
+        session_id="sess-1",
+        on_result=on_result,
+        claim_completion=claim_completion,
+        mark_completion_delivered=mark_delivered,
+    )
+
+    await registry.deliver_result("bg-1", "done", "research", "completed", emit)
+    await registry.deliver_result("bg-1", "duplicate", "research", "failed", emit)
+
+    assert len(emitted) == 1
+    assert emitted[0].event_id == "bg:bg-1:completed"
+    assert len(injected) == 1
+    assert marked == [
+        {"session_id": "sess-1", "task_id": "bg-1", "completion_id": "bg:bg-1:completed"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_background_registry_retries_delivery_mark_without_reinjecting():
+    emitted = []
+    injected = []
+    mark_attempts = 0
+
+    async def claim_completion(**kwargs):
+        return {**kwargs, "claimed": mark_attempts == 0, "delivered": False}
+
+    async def mark_delivered(**kwargs):
+        nonlocal mark_attempts
+        mark_attempts += 1
+        if mark_attempts == 1:
+            raise RuntimeError("crash after delivery")
+
+    registry = BackgroundTaskRegistry(
+        session_id="sess-1",
+        on_result=lambda messages: _extend(injected, messages),
+        claim_completion=claim_completion,
+        mark_completion_delivered=mark_delivered,
+    )
+
+    with pytest.raises(RuntimeError, match="crash after delivery"):
+        await registry.deliver_result("bg-1", "done", "research", "completed", _append(emitted))
+    await registry.deliver_result("bg-1", "done", "research", "completed", _append(emitted))
+
+    assert len(emitted) == 1
+    assert len(injected) == 1
+    assert mark_attempts == 2
+
+
+def _append(items):
+    async def append(item):
+        items.append(item)
+
+    return append
+
+
+async def _extend(items, values):
+    items.extend(values)
+
+
+@pytest.mark.asyncio
 async def test_background_result_fallback_rejects_path_traversal(tmp_path: Path, monkeypatch):
     monkeypatch.setattr("ntrp.tools.core.context.RESULT_BASE", tmp_path)
     result_dir = tmp_path / "sess-1" / "bg_results"

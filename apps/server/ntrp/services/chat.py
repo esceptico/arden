@@ -1202,7 +1202,10 @@ async def _drain_backgrounded(
 
     async def _save_directly(injected: list[dict]) -> None:
         async with save_lock:
-            messages.extend(injected)
+            existing_client_ids = {message.get("client_id") for message in messages if message.get("client_id")}
+            messages.extend(
+                message for message in injected if not message.get("client_id") or message.get("client_id") not in existing_client_ids
+            )
             try:
                 await _save_snapshot()
             except Exception:
@@ -1465,6 +1468,10 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
             session_state.session_id,
             task_id,
         )
+        bg_registry.claim_completion = getattr(ctx.session_service.store, "claim_background_agent_completion", None)
+        bg_registry.mark_completion_delivered = getattr(
+            ctx.session_service.store, "mark_background_completion_delivered", None
+        )
 
         async def record_approval(**kwargs) -> None:
             await ctx.session_service.store.record_tool_approval_requested(**kwargs)
@@ -1566,6 +1573,17 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
             )
 
         async def _on_bg_result(messages: list[dict]) -> None:
+            if not run_finished and not run.cancelled:
+                for message in messages:
+                    client_id = message.get("client_id")
+                    if isinstance(client_id, str):
+                        await _record_queued_message(
+                            ctx.session_service,
+                            client_id=client_id,
+                            session_id=session_state.session_id,
+                            run_id=run.run_id,
+                            message=message,
+                        )
             await _handle_background_result(
                 run=run,
                 session_id=session_state.session_id,
