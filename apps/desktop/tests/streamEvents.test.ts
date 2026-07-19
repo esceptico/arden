@@ -636,9 +636,20 @@ test("live tool calls move from ongoing to executed on result", () => {
     name: "ReadFile",
     content: "ok",
     timestamp: 2,
+    outcome: {
+      status: "succeeded",
+      effect: { operation: "read", target: "file:a" },
+      receipt: "receipt-1",
+    },
   });
 
-  expect(getState().messages.get(activityId!)?.activity?.items[0]?.status).toBe("executed");
+  const item = getState().messages.get(activityId!)?.activity?.items[0];
+  expect(item?.status).toBe("executed");
+  expect(item?.outcome).toEqual({
+    status: "succeeded",
+    effect: { operation: "read", target: "file:a" },
+    receipt: "receipt-1",
+  });
 });
 
 test("areas and stably merges normalized source refs onto live tool activity", () => {

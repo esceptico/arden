@@ -1,4 +1,5 @@
 import type { AppConfig } from "@/api/core";
+import type { ToolOutcome } from "@/api/events";
 import type { ArchivedSession } from "@/api/sessions";
 import type { Automation, AutomationSuggestion, ModelsResponse, Area, ServerConfig, SessionGoal, SessionListItem, SkillDescriptor, TodoListItem } from "@/api/types";
 import type { TransportDiagnosticsSnapshot } from "@/lib/transportDiagnostics";
@@ -209,6 +210,8 @@ export interface ActivityItem {
   /** Wall-clock duration of the tool call in milliseconds. Set on
    *  TOOL_CALL_RESULT — undefined while running. */
   durationMs?: number;
+  /** Structured terminal execution result from the server. */
+  outcome?: ToolOutcome;
   taskStatus?: "running" | "completed" | "failed" | "cancelled";
   progress?: string;
   /** Subagent token usage (only populated when `semanticKind === "agent"`).

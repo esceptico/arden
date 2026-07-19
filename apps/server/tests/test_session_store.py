@@ -440,6 +440,11 @@ async def test_tool_call_round_trip(store: SessionStore):
         tool_call_id="call-1",
         status="success",
         result_preview="ok",
+        outcome={
+            "status": "succeeded",
+            "effect": {"operation": "read", "target": "state:1"},
+            "receipt": "receipt-1",
+        },
     )
 
     rows = await store.list_tool_calls(run_id="run-1")
@@ -447,6 +452,11 @@ async def test_tool_call_round_trip(store: SessionStore):
     assert rows[0]["status"] == "success"
     assert rows[0]["result_preview"] == "ok"
     assert rows[0]["args_hash"] == "abc123"
+    assert rows[0]["outcome"] == {
+        "status": "succeeded",
+        "effect": {"operation": "read", "target": "state:1"},
+        "receipt": "receipt-1",
+    }
     assert rows[0]["ended_at"] is not None
 
 

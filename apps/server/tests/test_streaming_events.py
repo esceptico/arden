@@ -17,7 +17,7 @@ from ntrp.agent import (
     Usage,
 )
 from ntrp.agent.types.events import ToolCompleted
-from ntrp.agent.types.tools import ToolSourceRef
+from ntrp.agent.types.tools import ToolEffect, ToolOutcome, ToolOutcomeStatus, ToolSourceRef
 from ntrp.context.models import SessionData, SessionState
 from ntrp.core import spawner as spawner_module
 from ntrp.core.spawner import create_spawn_fn
@@ -92,6 +92,11 @@ def test_tool_result_sse_exposes_source_refs_outside_result_content():
             data=None,
             display_name="Slack Thread",
             source_refs=(source, page),
+            outcome=ToolOutcome(
+                status=ToolOutcomeStatus.SUCCEEDED,
+                effect=ToolEffect(operation="read", target="thread:C1:1.0"),
+                receipt="receipt-1",
+            ),
         )
     )
     payload = json.loads(event.to_sse()["data"])
@@ -100,6 +105,11 @@ def test_tool_result_sse_exposes_source_refs_outside_result_content():
     assert payload["content"] == "thread text"
     assert payload["source_refs"] == [source.to_dict(), page.to_dict()]
     assert payload["data"] is None
+    assert payload["outcome"] == {
+        "status": "succeeded",
+        "effect": {"operation": "read", "target": "thread:C1:1.0"},
+        "receipt": "receipt-1",
+    }
 
 
 @pytest.mark.asyncio

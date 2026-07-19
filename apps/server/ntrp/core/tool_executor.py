@@ -157,7 +157,13 @@ class NtrpToolExecutor:
             if read_key is not None:
                 self._ledger.finish_read(read_key, succeeded=read_succeeded)
             if store and finish_status is not None:
-                await self._record_tool_call_finished(store, tool_call_id, finish_status, finish_preview)
+                await self._record_tool_call_finished(
+                    store,
+                    tool_call_id,
+                    finish_status,
+                    finish_preview,
+                    result.outcome.to_dict() if result and result.outcome else None,
+                )
 
     def _audit_store(self) -> Any | None:
         store = self._ctx.services.get("store")
@@ -209,6 +215,7 @@ class NtrpToolExecutor:
         tool_call_id: str,
         status: str,
         result_preview: str | None,
+        outcome: dict | None = None,
     ) -> None:
         try:
             await store.record_tool_call_finished(
@@ -216,6 +223,7 @@ class NtrpToolExecutor:
                 tool_call_id=tool_call_id,
                 status=status,
                 result_preview=self._audit_preview(result_preview) if result_preview is not None else None,
+                outcome=outcome,
             )
         except Exception:
             _logger.warning("Failed to record tool call audit finish", exc_info=True)

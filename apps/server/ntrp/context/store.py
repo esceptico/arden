@@ -186,6 +186,7 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     status TEXT NOT NULL,
     result_preview TEXT,
     result_ref TEXT,
+    outcome_json TEXT,
     started_at TEXT NOT NULL,
     ended_at TEXT,
     PRIMARY KEY (run_id, tool_call_id)
@@ -550,6 +551,7 @@ class SessionStore:
         }
 
     def _tool_call_payload(self, row: aiosqlite.Row) -> dict:
+        columns = set(row.keys())
         return {
             "run_id": row["run_id"],
             "session_id": row["session_id"],
@@ -561,6 +563,7 @@ class SessionStore:
             "status": row["status"],
             "result_preview": row["result_preview"],
             "result_ref": row["result_ref"],
+            "outcome": json.loads(row["outcome_json"]) if "outcome_json" in columns and row["outcome_json"] else None,
             "started_at": row["started_at"],
             "ended_at": row["ended_at"],
         }
@@ -1292,6 +1295,7 @@ class SessionStore:
                     status TEXT NOT NULL,
                     result_preview TEXT,
                     result_ref TEXT,
+                    outcome_json TEXT,
                     started_at TEXT NOT NULL,
                     ended_at TEXT,
                     PRIMARY KEY (run_id, tool_call_id)
@@ -1318,9 +1322,12 @@ class SessionStore:
             await self.conn.commit()
 
         rows = await self.conn.execute_fetchall("PRAGMA table_info(tool_calls)")
-        if "result_ref" not in {row["name"] for row in rows}:
+        columns = {row["name"] for row in rows}
+        if "result_ref" not in columns:
             await self.conn.execute("ALTER TABLE tool_calls ADD COLUMN result_ref TEXT")
-            await self.conn.commit()
+        if "outcome_json" not in columns:
+            await self.conn.execute("ALTER TABLE tool_calls ADD COLUMN outcome_json TEXT")
+        await self.conn.commit()
 
     async def _migrate_background_agent_runs_schema(self) -> None:
         rows = await self.conn.execute_fetchall("PRAGMA table_info(background_agent_runs)")
@@ -1901,6 +1908,7 @@ class SessionStore:
                 status = excluded.status,
                 result_preview = NULL,
                 result_ref = NULL,
+                outcome_json = NULL,
                 started_at = excluded.started_at,
                 ended_at = NULL
             """,
@@ -1915,15 +1923,23 @@ class SessionStore:
         tool_call_id: str,
         status: str,
         result_preview: str | None = None,
+        outcome: dict | None = None,
     ) -> None:
         now = datetime.now(UTC).isoformat()
         await self.conn.execute(
             """
             UPDATE tool_calls
-            SET status = ?, result_preview = ?, ended_at = ?
+            SET status = ?, result_preview = ?, outcome_json = ?, ended_at = ?
             WHERE run_id = ? AND tool_call_id = ?
             """,
-            (status, result_preview, now, run_id, tool_call_id),
+            (
+                status,
+                result_preview,
+                json.dumps(outcome, sort_keys=True, separators=(",", ":")) if outcome else None,
+                now,
+                run_id,
+                tool_call_id,
+            ),
         )
         await self.conn.commit()
 
