@@ -35,6 +35,7 @@ from ntrp.agent import (
     ToolInputEnded,
     ToolInputStarted,
     ToolMeta,
+    ToolOutcomeStatus,
     ToolResult,
     Usage,
 )
@@ -318,6 +319,8 @@ async def test_provider_tool_call_renders_without_executor_dispatch():
     assert started.name == "tool_search"
     assert started.display_name == "Search Tools"
     assert completed.result == '[{"name":"slack_search"}]'
+    assert completed.outcome is not None
+    assert completed.outcome.status == ToolOutcomeStatus.SUCCEEDED
     assert executor.call_log == []
 
 

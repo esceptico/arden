@@ -41,6 +41,7 @@ from ntrp.agent.types.llm import (
 )
 from ntrp.agent.types.stop import StopReason
 from ntrp.agent.types.tool_choice import ToolChoice, ToolChoiceMode
+from ntrp.agent.types.tools import ToolOutcome, ToolOutcomeStatus
 from ntrp.agent.types.usage import Usage
 from ntrp.logging import get_logger
 
@@ -733,6 +734,7 @@ class Agent:
             data={"provider_executed": True},
             display_name="Search Tools" if call.name == "tool_search" else call.name,
             kind="tool",
+            outcome=ToolOutcome(status=ToolOutcomeStatus.SUCCEEDED),
         )
 
     def _provider_tool_args(self, raw: str) -> dict:
