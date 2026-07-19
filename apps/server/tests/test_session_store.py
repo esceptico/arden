@@ -913,6 +913,91 @@ async def test_run_sidecars_persist_context_and_derive_evidence_from_durable_fac
 
 
 @pytest.mark.asyncio
+async def test_run_sidecars_resolve_exact_initiating_queued_and_meta_turns(store: SessionStore):
+    async def seed(run_id: str, session_id: str, client_id: str) -> None:
+        await store.record_chat_run_started(run_id, session_id, metadata={"client_id": client_id})
+        await store.record_run_context_manifest(
+            run_id=run_id,
+            session_id=session_id,
+            manifest=[
+                {
+                    "context_id": f"ctx-{run_id}",
+                    "content_type": "memory",
+                    "source": "memory",
+                    "ref": f"record:{run_id}",
+                    "freshness": "current",
+                    "selection_reason": "relevant",
+                    "size_bytes": 42,
+                }
+            ],
+        )
+
+    await seed("run-1", "s-1", "turn-1")
+    await seed("run-2", "s-1", "turn-2")
+    await store.record_chat_queued_message(
+        client_id="queued-1",
+        session_id="s-1",
+        run_id="run-1",
+        message={"role": "user", "content": "follow up", "client_id": "queued-1"},
+    )
+    await store.mark_chat_queued_message_ingested("queued-1")
+
+    initiating = await store.get_run_sidecars_for_turn(session_id="s-1", turn_id="turn-1")
+    queued = await store.get_run_sidecars_for_turn(session_id="s-1", turn_id="queued-1")
+    meta = await store.get_run_sidecars_for_turn(session_id="s-1", turn_id="meta-user-run-2")
+
+    assert initiating and initiating["run_id"] == "run-1"
+    assert queued and queued["run_id"] == "run-1"
+    assert meta and meta["run_id"] == "run-2"
+    assert await store.get_run_sidecars_for_turn(session_id="other", turn_id="turn-1") is None
+    assert await store.get_run_sidecars_for_turn(session_id="s-1", turn_id="missing") is None
+
+
+@pytest.mark.asyncio
+async def test_run_sidecars_ignore_queued_turn_until_ingested(store: SessionStore):
+    await store.record_chat_run_started("run-1", "s-1", metadata={"client_id": "turn-1"})
+    await store.record_run_context_manifest(run_id="run-1", session_id="s-1", manifest=[])
+    await store.record_chat_queued_message(
+        client_id="queued-1",
+        session_id="s-1",
+        run_id="run-1",
+        message={"role": "user", "content": "pending", "client_id": "queued-1"},
+    )
+
+    assert await store.get_run_sidecars_for_turn(session_id="s-1", turn_id="queued-1") is None
+
+
+@pytest.mark.asyncio
+async def test_list_tool_call_outcomes_returns_only_requested_session_calls(store: SessionStore):
+    for run_id, session_id, call_id in (
+        ("run-1", "s-1", "call-1"),
+        ("run-2", "s-2", "call-2"),
+    ):
+        await store.record_tool_call_started(
+            run_id=run_id,
+            session_id=session_id,
+            tool_call_id=call_id,
+            tool_name="write_file",
+            action="write",
+            scope="internal",
+        )
+        await store.record_tool_call_finished(
+            run_id=run_id,
+            tool_call_id=call_id,
+            status="success",
+            result_preview="done",
+            outcome={"status": "succeeded", "receipt": f"receipt:{call_id}"},
+        )
+
+    outcomes = await store.list_tool_call_outcomes(
+        session_id="s-1",
+        tool_call_ids=["call-1", "call-1", "call-2", "missing"],
+    )
+
+    assert outcomes == {"call-1": {"status": "succeeded", "receipt": "receipt:call-1"}}
+
+
+@pytest.mark.asyncio
 async def test_list_interrupted_chat_runs_returns_restart_candidates(store: SessionStore):
     await store.record_chat_run_started(run_id="run-1", session_id="s-1")
     await store.record_chat_run_started(run_id="run-2", session_id="s-2")

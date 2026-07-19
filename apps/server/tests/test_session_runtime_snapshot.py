@@ -11,6 +11,7 @@ from ntrp.context.store import SessionStore
 from ntrp.core.model_context_budget import HISTORY_TOOL_RESULT_PREVIEW_CHARS
 from ntrp.events.sse import ThinkingEvent
 from ntrp.server.bus import BusRegistry
+from ntrp.server.routers import session as session_router
 from ntrp.server.routers.session import _history_tool_calls, get_session_history, list_sessions
 from ntrp.server.state import RunRegistry, RunStatus
 from ntrp.services.session import SessionService
@@ -345,6 +346,94 @@ async def test_history_includes_tool_result_data(session_service: SessionService
     tool_message = result["messages"][-1]
     assert tool_message["role"] == "tool"
     assert tool_message["data"] == data
+
+
+@pytest.mark.asyncio
+async def test_history_hydrates_tool_outcomes_from_durable_calls(session_service: SessionService):
+    state = _state("sess-tool-outcome")
+    await session_service.save(
+        state,
+        [
+            {"role": "user", "content": "write"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "function": {"name": "write_file", "arguments": '{"path":"a.txt"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call-1", "content": "done"},
+        ],
+    )
+    await session_service.store.record_tool_call_started(
+        run_id="run-1",
+        session_id="sess-tool-outcome",
+        tool_call_id="call-1",
+        tool_name="write_file",
+        action="write",
+        scope="internal",
+    )
+    await session_service.store.record_tool_call_finished(
+        run_id="run-1",
+        tool_call_id="call-1",
+        status="success",
+        result_preview="done",
+        outcome={
+            "status": "succeeded",
+            "effect": {"operation": "write", "target": "a.txt"},
+            "receipt": "sha256:abc",
+        },
+    )
+
+    result = await get_session_history(
+        session_service,
+        SimpleNamespace(run_registry=RunRegistry(), executor=None),
+        BusRegistry(),
+        "sess-tool-outcome",
+        limit=100,
+        around_seq=None,
+    )
+
+    assistant = next(message for message in result["messages"] if message.get("tool_calls"))
+    assert assistant["tool_calls"][0]["outcome"] == {
+        "status": "succeeded",
+        "effect": {"operation": "write", "target": "a.txt"},
+        "receipt": "sha256:abc",
+    }
+
+
+@pytest.mark.asyncio
+async def test_turn_inspector_returns_exact_nullable_sidecar(session_service: SessionService):
+    await session_service.store.record_chat_run_started(
+        "run-1",
+        "sess-inspector",
+        metadata={"client_id": "turn-1"},
+    )
+    await session_service.store.record_run_context_manifest(
+        run_id="run-1",
+        session_id="sess-inspector",
+        manifest=[
+            {
+                "context_id": "ctx-1",
+                "content_type": "memory",
+                "source": "memory",
+                "ref": "record:1",
+                "freshness": "current",
+                "selection_reason": "relevant",
+                "size_bytes": 42,
+            }
+        ],
+    )
+
+    result = await session_router.get_turn_inspector("sess-inspector", "turn-1", session_service)
+
+    assert result and result["run_id"] == "run-1"
+    assert result["context_manifest"][0]["context_id"] == "ctx-1"
+    assert await session_router.get_turn_inspector("sess-inspector", "missing", session_service) is None
+    assert await session_router.get_turn_inspector("other-session", "turn-1", session_service) is None
 
 
 @pytest.mark.asyncio

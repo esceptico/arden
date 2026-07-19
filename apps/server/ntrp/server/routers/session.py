@@ -28,6 +28,7 @@ from ntrp.server.schemas import (
     SetSessionAutoRequest,
     SetSessionGoalRequest,
     SetTodoOverrideRequest,
+    TurnInspectorResponse,
     UpdateSessionGoalRequest,
     UpdateSessionModelRequest,
 )
@@ -228,7 +229,11 @@ async def _emit_goal_event(
         await bus.emit(GoalUpdatedEvent(session_id=session_id, goal=goal))
 
 
-def _history_tool_calls(msg: dict, tool_meta_for: Callable[[str], tuple[str, str | None]]) -> list[dict]:
+def _history_tool_calls(
+    msg: dict,
+    tool_meta_for: Callable[[str], tuple[str, str | None]],
+    outcomes: dict[str, dict] | None = None,
+) -> list[dict]:
     tool_calls = []
     raw_provider_calls = msg.get("provider_tool_calls") or []
     if isinstance(raw_provider_calls, list):
@@ -241,16 +246,17 @@ def _history_tool_calls(msg: dict, tool_meta_for: Callable[[str], tuple[str, str
                 continue
             arguments = tc.get("arguments", "{}")
             result = tc.get("result", "")
-            tool_calls.append(
-                {
-                    "id": call_id,
-                    "name": name,
-                    "arguments": arguments if isinstance(arguments, str) else "{}",
-                    "kind": "tool",
-                    "display_name": "Search Tools" if name == "tool_search" else name,
-                    "result": result if isinstance(result, str) else "",
-                }
-            )
+            item = {
+                "id": call_id,
+                "name": name,
+                "arguments": arguments if isinstance(arguments, str) else "{}",
+                "kind": "tool",
+                "display_name": "Search Tools" if name == "tool_search" else name,
+                "result": result if isinstance(result, str) else "",
+            }
+            if outcomes and call_id in outcomes:
+                item["outcome"] = outcomes[call_id]
+            tool_calls.append(item)
     raw_tool_calls = msg.get("tool_calls") or []
     if not isinstance(raw_tool_calls, list):
         raw_tool_calls = []
@@ -274,6 +280,8 @@ def _history_tool_calls(msg: dict, tool_meta_for: Callable[[str], tuple[str, str
         }
         if display_name:
             item["display_name"] = display_name
+        if outcomes and call_id in outcomes:
+            item["outcome"] = outcomes[call_id]
         tool_calls.append(item)
     return tool_calls
 
@@ -350,6 +358,14 @@ async def get_session_history(
         around_seq=around_seq,
     )
 
+    tool_call_ids = [
+        call_id
+        for row in page["messages"]
+        for call in (row["message"].get("tool_calls") or [])
+        if isinstance(call, dict) and isinstance((call_id := call.get("id")), str)
+    ]
+    outcomes = await svc.store.list_tool_call_outcomes(session_id=sid, tool_call_ids=tool_call_ids)
+
     history = []
     for row in page["messages"]:
         msg = row["message"]
@@ -384,7 +400,7 @@ async def get_session_history(
             entry = {"role": role, "content": content}
 
         if role == Role.ASSISTANT:
-            tool_calls = _history_tool_calls(msg, _tool_meta_for)
+            tool_calls = _history_tool_calls(msg, _tool_meta_for, outcomes)
             if tool_calls:
                 entry["tool_calls"] = tool_calls
         if role == Role.ASSISTANT and msg.get("reasoning_content"):
@@ -449,6 +465,18 @@ async def get_session_turns(
     if not data:
         return {"turns": []}
     return {"turns": await svc.list_turns(data.state.session_id, limit=limit)}
+
+
+@router.get(
+    "/sessions/{session_id}/turns/{turn_id}/inspector",
+    response_model=TurnInspectorResponse | None,
+)
+async def get_turn_inspector(
+    session_id: str,
+    turn_id: str,
+    svc: SessionService = Depends(require_session_service),
+):
+    return await svc.store.get_run_sidecars_for_turn(session_id=session_id, turn_id=turn_id)
 
 
 @router.get("/session")

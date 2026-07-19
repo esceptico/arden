@@ -2,7 +2,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
-from ntrp.core.content import ContextContent
+from ntrp.core.content import ContextContent, ContextManifestEntry
 from ntrp.tools.core.types import ToolOverrideDecision
 
 # --- Chat / run ---
@@ -315,6 +315,65 @@ class SessionResponse(BaseModel):
     name: str | None = None
     area_id: str | None = None
     chat_model: str | None = None
+
+
+class InspectorSourceResponse(BaseModel):
+    provider: str
+    kind: str
+    ref: str
+    title: str
+    url: str | None = None
+
+
+class InspectorApprovalResponse(BaseModel):
+    tool_call_id: str
+    tool_name: str
+    status: str
+    feedback: str | None = None
+
+
+class InspectorEffectResponse(BaseModel):
+    tool_call_id: str
+    operation: str
+    target: str
+    before_ref: str | None = None
+    after_ref: str | None = None
+
+
+class InspectorReceiptResponse(BaseModel):
+    tool_call_id: str
+    receipt: str
+
+
+class InspectorCheckResponse(BaseModel):
+    tool_call_id: str
+    postcondition: str
+    observed: str
+    confidence: float | None = None
+
+
+class InspectorLimitationResponse(BaseModel):
+    tool_call_id: str
+    status: str
+    code: str
+    recovery_action: str | None = None
+
+
+class TurnEvidenceResponse(BaseModel):
+    sources: list[InspectorSourceResponse] = Field(default_factory=list)
+    approvals: list[InspectorApprovalResponse] = Field(default_factory=list)
+    effects: list[InspectorEffectResponse] = Field(default_factory=list)
+    receipts: list[InspectorReceiptResponse] = Field(default_factory=list)
+    checks: list[InspectorCheckResponse] = Field(default_factory=list)
+    limitations: list[InspectorLimitationResponse] = Field(default_factory=list)
+
+
+class TurnInspectorResponse(BaseModel):
+    run_id: str
+    session_id: str
+    context_manifest: list[ContextManifestEntry] = Field(default_factory=list)
+    evidence: TurnEvidenceResponse = Field(default_factory=TurnEvidenceResponse)
+    updated_at: str
 
 
 class AreaResponse(BaseModel):

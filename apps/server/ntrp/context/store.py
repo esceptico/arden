@@ -2096,6 +2096,32 @@ class SessionStore:
         )
         return [self._tool_call_payload(row) for row in rows]
 
+    async def list_tool_call_outcomes(
+        self,
+        *,
+        session_id: str,
+        tool_call_ids: list[str],
+    ) -> dict[str, dict]:
+        call_ids = list(dict.fromkeys(call_id for call_id in tool_call_ids if call_id))
+        outcomes: dict[str, dict] = {}
+        for offset in range(0, len(call_ids), 200):
+            chunk = call_ids[offset : offset + 200]
+            placeholders = ", ".join("?" for _ in chunk)
+            rows = await self.read_conn.execute_fetchall(
+                f"""
+                SELECT tool_call_id, outcome_json
+                FROM tool_calls
+                WHERE session_id = ?
+                  AND tool_call_id IN ({placeholders})
+                  AND outcome_json IS NOT NULL
+                ORDER BY ended_at ASC, started_at ASC
+                """,
+                (session_id, *chunk),
+            )
+            for row in rows:
+                outcomes[row["tool_call_id"]] = json.loads(row["outcome_json"])
+        return outcomes
+
     async def record_run_context_manifest(
         self,
         *,
@@ -2217,6 +2243,47 @@ class SessionStore:
             "evidence": json.loads(row["evidence_json"]),
             "updated_at": row["updated_at"],
         }
+
+    async def get_run_sidecars_for_turn(self, *, session_id: str, turn_id: str) -> dict | None:
+        run_id = await self._run_id_for_turn(session_id=session_id, turn_id=turn_id)
+        if run_id is None:
+            return None
+        sidecars = await self.get_run_sidecars(run_id)
+        if sidecars is None or sidecars["session_id"] != session_id:
+            return None
+        return sidecars
+
+    async def _run_id_for_turn(self, *, session_id: str, turn_id: str) -> str | None:
+        meta_prefix = "meta-user-"
+        if turn_id.startswith(meta_prefix):
+            run_id = turn_id.removeprefix(meta_prefix)
+            rows = await self.read_conn.execute_fetchall(
+                "SELECT run_id FROM chat_runs WHERE session_id = ? AND run_id = ? LIMIT 1",
+                (session_id, run_id),
+            )
+            return rows[0]["run_id"] if rows else None
+
+        rows = await self.read_conn.execute_fetchall(
+            """
+            SELECT run_id FROM chat_runs
+            WHERE session_id = ? AND client_id = ?
+            ORDER BY started_at DESC
+            LIMIT 1
+            """,
+            (session_id, turn_id),
+        )
+        if rows:
+            return rows[0]["run_id"]
+
+        rows = await self.read_conn.execute_fetchall(
+            """
+            SELECT run_id FROM chat_queued_messages
+            WHERE session_id = ? AND client_id = ? AND status = 'ingested'
+            LIMIT 1
+            """,
+            (session_id, turn_id),
+        )
+        return rows[0]["run_id"] if rows else None
 
     async def get_tool_result(self, tool_result_id: str) -> dict | None:
         rows = await self.read_conn.execute_fetchall(
