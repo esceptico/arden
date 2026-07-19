@@ -1329,6 +1329,8 @@ async def test_ntrp_tool_executor_audits_cancelled_policy_enabled_call(session_s
     assert len(rows) == 1
     assert rows[0]["tool_call_id"] == "call-1"
     assert rows[0]["status"] == "cancelled"
+    assert rows[0]["outcome"]["status"] == "uncertain"
+    assert rows[0]["outcome"]["error"]["code"] == "tool_cancelled"
     assert rows[0]["ended_at"] is not None
 
 

@@ -156,6 +156,14 @@ class NtrpToolExecutor:
             return result
         except asyncio.CancelledError:
             finish_status = "cancelled"
+            result = ToolResult.failure(
+                code="tool_cancelled",
+                message="Tool execution was cancelled before a terminal result was observed.",
+                preview="Cancelled",
+                status=ToolOutcomeStatus.UNCERTAIN,
+                recovery_action="Verify whether the operation completed before retrying.",
+            )
+            finish_preview = result.preview
             raise
         except Exception:
             finish_status = "error"
