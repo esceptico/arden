@@ -74,10 +74,12 @@ export async function getTurnInspector(
   config: AppConfig,
   sessionId: string,
   turnId: string,
+  signal?: AbortSignal,
 ): Promise<TurnInspector | null> {
   const raw = await apiWithConfig<unknown>(
     config,
     `/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/inspector`,
+    { signal },
   );
   return normalizeTurnInspector(raw);
 }

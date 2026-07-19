@@ -79,6 +79,47 @@ test("empty Sources panel describes turn-level provenance", () => {
   expect(renderToStaticMarkup(<SourcesPanel />)).toContain("No sources for this turn.");
 });
 
+test("proof summary is placed between final answer content and message actions", async () => {
+  setState({
+    sourceRefsRevision: 1,
+    messages: new Map([
+      ["user-1", { id: "user-1", role: "user", content: "write" }],
+      ["activity-1", {
+        id: "activity-1",
+        role: "activity",
+        content: "",
+        activity: {
+          label: "Called",
+          done: true,
+          items: [{
+            id: "call-1",
+            kind: "write_file",
+            target: "a.txt",
+            outcome: { status: "succeeded", effect: { operation: "write", target: "a.txt" } },
+          }],
+        },
+      }],
+      ["assistant-1", { id: "assistant-1", role: "assistant", content: "Done" }],
+    ]),
+    order: ["user-1", "activity-1", "assistant-1"],
+  });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(
+      <AssistantMessage id="assistant-1" isFinal sourceTurnId="user-1" sourceCount={0} />,
+    ));
+    const children = Array.from(host.querySelector("article")?.children ?? []);
+    expect(children[0]?.classList.contains("md")).toBe(true);
+    expect(children[1]?.getAttribute("data-proof-summary")).toBe("true");
+    expect(children[2]?.querySelector('button[aria-label="Copy"]')).not.toBeNull();
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});
+
 test("browser-invalid stored URLs are non-clickable and retain Show call", () => {
   setState({
     messages: new Map([

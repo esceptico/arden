@@ -35,6 +35,7 @@ import { SectionHeader } from "@/features/background-agents/components/SectionHe
 import { ApprovalsRow } from "@/features/background-agents/components/ApprovalsRow";
 import { ParentBreadcrumb } from "@/features/background-agents/components/ParentBreadcrumb";
 import { TodoSidebarSection } from "@/features/background-agents/components/TodoSidebarSection";
+import { ContextPanel } from "@/features/context/components/ContextPanel";
 
 export { isActiveBackgroundAgent } from "@/stores/background-agent-domain";
 export { StatusDot } from "@/components/ui/StatusDot";
@@ -238,7 +239,7 @@ export function AgentRightSidebar({ sourcesPanel }: { sourcesPanel: ReactNode })
         <div className="drag-spacer flex items-center px-3 h-[34px] shrink-0">
           <Tabs
             value={rightInspectorTab}
-            onChange={(value) => setRightInspectorTab(value as "activity" | "sources")}
+            onChange={(value) => setRightInspectorTab(value as "activity" | "sources" | "context")}
             variant="underline"
             label="Inspector sections"
             className="h-full items-center gap-4"
@@ -256,6 +257,13 @@ export function AgentRightSidebar({ sourcesPanel }: { sourcesPanel: ReactNode })
               className="inline-flex h-[34px] items-center text-xs font-medium text-muted transition-colors hover:text-ink data-[active=true]:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             >
               Sources
+            </Tab>
+            <Tab
+              id="right-inspector-context-tab"
+              value="context"
+              className="inline-flex h-[34px] items-center text-xs font-medium text-muted transition-colors hover:text-ink data-[active=true]:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              Context
             </Tab>
           </Tabs>
         </div>
@@ -397,6 +405,15 @@ export function AgentRightSidebar({ sourcesPanel }: { sourcesPanel: ReactNode })
                 aria-labelledby="right-inspector-sources-tab"
               >
                 {sourcesPanel}
+              </div>
+            )}
+            {rightInspectorTab === "context" && !collapsed && (
+              <div
+                id="right-inspector-context-panel"
+                role="tabpanel"
+                aria-labelledby="right-inspector-context-tab"
+              >
+                <ContextPanel />
               </div>
             )}
           </div>
