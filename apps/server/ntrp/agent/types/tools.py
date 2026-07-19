@@ -1,5 +1,5 @@
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from urllib.parse import urlsplit
 
@@ -248,6 +248,18 @@ class ToolResult:
     model_content: tuple[ContentBlock, ...] = ()
     source_refs: tuple[ToolSourceRef, ...] = ()
     outcome: ToolOutcome | None = None
+
+    def with_default_outcome(self) -> "ToolResult":
+        if self.outcome is not None:
+            return self
+        if self.is_error:
+            outcome = ToolOutcome(
+                status=ToolOutcomeStatus.FAILED,
+                error=ToolError(code="tool_error"),
+            )
+        else:
+            outcome = ToolOutcome(status=ToolOutcomeStatus.SUCCEEDED)
+        return replace(self, outcome=outcome)
 
     @staticmethod
     def error(message: str) -> "ToolResult":

@@ -107,9 +107,15 @@ class NtrpToolExecutor:
                 read_key = await self._ledger.claim_read(name, args)
                 if read_key is None:
                     content = f"[Already read by another agent in this run: {name} {format_arguments(args)}]"
-                    result = ToolResult(content=content, preview="Already read")
+                    result = ToolResult(content=content, preview="Already read").with_default_outcome()
                     if store:
-                        await self._record_tool_call_finished(store, tool_call_id, "success", result.preview)
+                        await self._record_tool_call_finished(
+                            store,
+                            tool_call_id,
+                            "success",
+                            result.preview,
+                            result.outcome.to_dict(),
+                        )
                     return result
             else:
                 await self._ledger.mark_accessed(access_key(name, args))
@@ -142,6 +148,7 @@ class NtrpToolExecutor:
             result = self._truncate_result(result, tool.policy.max_result_chars)
             if tool.policy.offload:
                 result = self._maybe_offload(result, tool_call_id)
+            result = result.with_default_outcome()
 
             finish_status = self._audit_status(result)
             finish_preview = result.preview

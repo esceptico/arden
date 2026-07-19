@@ -91,6 +91,23 @@ async def test_runner_executes_mutating_and_non_mutating_in_one_batch():
 
 
 @pytest.mark.asyncio
+async def test_runner_adds_succeeded_outcome_to_legacy_tool_result():
+    release = {"c1": asyncio.Event()}
+    release["c1"].set()
+    runner = ToolRunner(
+        executor=_FakeExecutor({"read": ToolMeta(name="read", display_name="Read")}, release),
+        depth=0,
+        parent_id=None,
+    )
+
+    events = [event async for event in runner.execute_all([_make_call("c1", "read")])]
+
+    completed = next(event for event in events if isinstance(event, ToolCompleted))
+    assert completed.outcome is not None
+    assert completed.outcome.status == ToolOutcomeStatus.SUCCEEDED
+
+
+@pytest.mark.asyncio
 async def test_runner_handles_empty_call_list():
     metas: dict[str, ToolMeta] = {}
     executor = _FakeExecutor(metas, {})

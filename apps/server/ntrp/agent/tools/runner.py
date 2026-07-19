@@ -67,6 +67,7 @@ class ToolRunner:
             )
         try:
             result = await self._executor.execute(rc.call.name, rc.call.args, rc.call.tool_call.id)
+            result = result.with_default_outcome()
             return result, _ms_now() - start_ms
         except Exception as e:
             return (

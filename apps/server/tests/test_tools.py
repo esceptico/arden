@@ -933,6 +933,8 @@ async def test_ntrp_tool_executor_policy_offload_false_keeps_large_result_inline
     assert result.content == large_content
     assert result.preview == "large"
     assert not result.is_error
+    assert result.outcome is not None
+    assert result.outcome.status == ToolOutcomeStatus.SUCCEEDED
 
 
 @pytest.mark.asyncio
