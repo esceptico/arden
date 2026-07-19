@@ -1255,6 +1255,7 @@ async def _drain_backgrounded(
                 await _save_snapshot()
             except Exception:
                 _logger.exception("Background direct-save failed (run_id=%s)", ctx.run.run_id)
+                raise
 
     bg_registry.on_result = _save_directly
 

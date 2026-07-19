@@ -2704,6 +2704,55 @@ async def test_backgrounded_drain_persists_budget_stop_reason():
 
 
 @pytest.mark.asyncio
+async def test_backgrounded_completion_is_not_acknowledged_when_direct_save_fails():
+    run = RunState(run_id="run-1", session_id="sess-1", backgrounded=True)
+    session_state = SessionState(session_id="sess-1", started_at=datetime.now(UTC))
+
+    class FailingInjectedSaveService:
+        async def load(self, session_id=None):
+            return SessionData(state=session_state, messages=[])
+
+        async def save(self, session_state, messages, metadata=None):
+            if any(message.get("client_id") == "bg:bg-1:completed" for message in messages):
+                raise RuntimeError("disk unavailable")
+
+        async def record_chat_run_status(self, run_id, status, **kwargs):
+            return None
+
+    async def gen():
+        yield Result(text="done", stop_reason=StopReason.END_TURN, steps=0, usage=Usage())
+
+    service = FailingInjectedSaveService()
+    registry = BackgroundTaskRegistry(session_id="sess-1")
+    ctx = ChatContext(
+        run=run,
+        session_state=session_state,
+        is_init=False,
+        executor=SimpleNamespace(registry=SimpleNamespace(get=lambda _name: None)),
+        tools=[],
+        config=SimpleNamespace(),
+        available_integrations=[],
+        integration_errors={},
+        session_service=service,
+        run_registry=RunRegistry(),
+    )
+    await _drain_backgrounded(
+        gen(),
+        SimpleNamespace(tools=[]),
+        ctx,
+        registry,
+        UsageTracker(),
+        SessionBus(session_id="sess-1"),
+    )
+
+    assert registry.on_result is not None
+    with pytest.raises(RuntimeError, match="disk unavailable"):
+        await registry.on_result(
+            [{"role": "user", "content": "done", "client_id": "bg:bg-1:completed"}]
+        )
+
+
+@pytest.mark.asyncio
 async def test_backgrounded_drain_stream_failure_records_error_not_completed():
     run = RunState(run_id="run-1", session_id="sess-1", backgrounded=True)
     session_state = SessionState(session_id="sess-1", started_at=datetime.now(UTC))
