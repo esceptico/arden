@@ -54,13 +54,14 @@ class ToolRunner:
         start_ms = _ms_now()
         if error := rc.call.argument_error:
             return (
-                ToolResult(
-                    content=(
+                ToolResult.failure(
+                    code=error.code,
+                    message=(
                         f"{error.code}: {error.message} "
                         "Retry the tool call with one valid JSON object matching its schema."
                     ),
                     preview="Invalid tool arguments",
-                    is_error=True,
+                    recovery_action="Retry with one valid JSON object matching the tool schema.",
                 ),
                 _ms_now() - start_ms,
             )
@@ -69,10 +70,10 @@ class ToolRunner:
             return result, _ms_now() - start_ms
         except Exception as e:
             return (
-                ToolResult(
-                    content=f"Error: {type(e).__name__}: {e}",
+                ToolResult.failure(
+                    code="internal_error",
+                    message=f"Error: {type(e).__name__}: {e}",
                     preview=f"Failed: {type(e).__name__}",
-                    is_error=True,
                 ),
                 _ms_now() - start_ms,
             )
@@ -106,6 +107,7 @@ class ToolRunner:
             kind=rc.kind,
             model_content=result.model_content,
             source_refs=normalize_source_refs(result.source_refs),
+            outcome=result.outcome,
         )
 
     async def execute_all(self, calls: list[PendingToolCall]) -> AsyncGenerator[ToolStarted | ToolCompleted]:

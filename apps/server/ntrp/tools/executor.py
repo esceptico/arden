@@ -83,9 +83,11 @@ class ToolExecutor:
     async def execute(self, tool_name: str, arguments: dict, execution: ToolExecution) -> ToolResult:
         tool = self.registry.get(tool_name)
         if not tool:
-            return ToolResult(
-                content=f"Unknown tool: {tool_name}. Check available tools in the system prompt.",
+            return ToolResult.failure(
+                code="unknown_tool",
+                message=f"Unknown tool: {tool_name}. Check available tools in the system prompt.",
                 preview="Unknown tool",
+                recovery_action="Use a tool exposed in the current system prompt.",
             )
 
         return await self.registry.execute(tool_name, execution, arguments)

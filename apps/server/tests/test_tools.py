@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 import ntrp.database as database
 import ntrp.tools.executor as tool_executor_module
-from ntrp.agent import ToolResult
+from ntrp.agent import ToolEffect, ToolOutcome, ToolOutcomeStatus, ToolResult, ToolVerification
 from ntrp.constants import OFFLOAD_PREVIEW_CHARS, OFFLOAD_THRESHOLD
 from ntrp.context.models import SessionState
 from ntrp.context.store import SessionStore
@@ -42,6 +42,56 @@ WRITE_INTERNAL_APPROVAL_POLICY = ToolPolicy(
     scope=ToolScope.INTERNAL,
     requires_approval=True,
 )
+
+
+def test_tool_result_failure_has_typed_outcome():
+    result = ToolResult.failure(
+        code="invalid_arguments",
+        message="Arguments did not match the schema.",
+        preview="Validation error",
+        recovery_action="Retry with the required fields.",
+    )
+
+    assert result.is_error is True
+    assert result.outcome is not None
+    assert result.outcome.status == ToolOutcomeStatus.FAILED
+    assert result.outcome.to_dict() == {
+        "status": "failed",
+        "error": {
+            "code": "invalid_arguments",
+            "retryable": False,
+            "recovery_action": "Retry with the required fields.",
+        },
+    }
+
+
+def test_tool_outcome_serializes_effect_receipt_and_verification():
+    outcome = ToolOutcome(
+        status=ToolOutcomeStatus.SUCCEEDED,
+        effect=ToolEffect(operation="send", target="message:42", before_ref="draft:1", after_ref="sent:42"),
+        verification=ToolVerification(
+            postcondition="Message is visible in the destination",
+            observed="message:42 fetched successfully",
+            confidence=1.0,
+        ),
+        receipt="provider-receipt-42",
+    )
+
+    assert outcome.to_dict() == {
+        "status": "succeeded",
+        "effect": {
+            "operation": "send",
+            "target": "message:42",
+            "before_ref": "draft:1",
+            "after_ref": "sent:42",
+        },
+        "verification": {
+            "postcondition": "Message is visible in the destination",
+            "observed": "message:42 fetched successfully",
+            "confidence": 1.0,
+        },
+        "receipt": "provider-receipt-42",
+    }
 
 
 def test_tool_policy_model_defaults():
@@ -161,6 +211,10 @@ async def test_tool_override_deny_blocks_execution():
 
     assert result.is_error is True
     assert result.preview == "Denied by settings"
+    assert result.outcome is not None
+    assert result.outcome.status == ToolOutcomeStatus.DENIED
+    assert result.outcome.error is not None
+    assert result.outcome.error.code == "permission_denied"
 
 
 @pytest.mark.asyncio
@@ -426,6 +480,9 @@ async def test_update_todos_rejects_multiple_in_progress_items():
 
     assert result.is_error
     assert result.preview == "Validation error"
+    assert result.outcome is not None
+    assert result.outcome.error is not None
+    assert result.outcome.error.code == "invalid_arguments"
 
 
 # --- Function tools ---
@@ -845,6 +902,10 @@ async def test_ntrp_tool_executor_rejects_registered_tool_outside_run_allowlist(
 
     assert result.is_error
     assert result.preview == "Tool not allowed"
+    assert result.outcome is not None
+    assert result.outcome.status == ToolOutcomeStatus.DENIED
+    assert result.outcome.error is not None
+    assert result.outcome.error.code == "permission_denied"
     assert called is False
 
 
@@ -921,7 +982,12 @@ async def test_ntrp_tool_executor_policy_timeout_seconds_returns_error_result():
 
     result = await executor.execute("slow", {}, "call-1")
 
-    assert result == ToolResult(content="Tool call timed out.", preview="Timed out", is_error=True)
+    assert result.content == "Tool call timed out."
+    assert result.preview == "Timed out"
+    assert result.outcome is not None
+    assert result.outcome.error is not None
+    assert result.outcome.error.code == "timeout"
+    assert result.outcome.error.retryable is True
 
 
 @pytest.mark.asyncio
@@ -947,7 +1013,11 @@ async def test_ntrp_tool_executor_defaults_external_tool_timeout(monkeypatch):
 
     result = await executor.execute("slow_external", {}, "call-1")
 
-    assert result == ToolResult(content="Tool call timed out.", preview="Timed out", is_error=True)
+    assert result.content == "Tool call timed out."
+    assert result.preview == "Timed out"
+    assert result.outcome is not None
+    assert result.outcome.error is not None
+    assert result.outcome.error.code == "timeout"
 
 
 @pytest.mark.asyncio

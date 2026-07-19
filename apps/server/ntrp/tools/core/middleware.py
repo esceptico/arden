@@ -31,10 +31,11 @@ async def validate_arguments(call: ToolCall, next_call: ToolNext) -> ToolResult:
         errors = "; ".join(
             f"{'.'.join(str(l) for l in err['loc'])}: {err['msg']}" for err in e.errors() if err.get("loc")
         )
-        return ToolResult(
-            content=f"Invalid arguments: {errors}",
+        return ToolResult.failure(
+            code="invalid_arguments",
+            message=f"Invalid arguments: {errors}",
             preview="Validation error",
-            is_error=True,
+            recovery_action="Retry with arguments matching the tool schema.",
         )
 
     return await next_call(replace(call, arguments=validated.model_dump()))

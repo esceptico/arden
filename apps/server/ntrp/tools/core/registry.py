@@ -1,6 +1,7 @@
 from collections.abc import Mapping, Sequence
 from typing import Any, Self
 
+from ntrp.agent import ToolOutcomeStatus
 from ntrp.tools.core.base import RESERVED_ARG_KEYS, Tool, ToolResult
 from ntrp.tools.core.context import ToolExecution
 from ntrp.tools.core.middleware import DEFAULT_TOOL_MIDDLEWARE, ToolCall, ToolMiddleware
@@ -48,10 +49,12 @@ class ToolRegistry:
 
     async def execute(self, name: str, execution: ToolExecution, arguments: dict[str, Any]) -> ToolResult:
         if self._tool_overrides.get(name) == ToolOverrideDecision.DENY:
-            return ToolResult(
-                content=f"Tool denied by settings: {name}",
+            return ToolResult.failure(
+                code="permission_denied",
+                message=f"Tool denied by settings: {name}",
                 preview="Denied by settings",
-                is_error=True,
+                status=ToolOutcomeStatus.DENIED,
+                recovery_action="Use a tool allowed by the current settings.",
             )
         tool = self._tools[name]
         # Strip UI-only pseudo-args (the model's action title) so tools — incl.

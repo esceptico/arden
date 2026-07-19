@@ -12,8 +12,8 @@ import pytest
 from ntrp.agent.tools.dispatch import _append_results
 from ntrp.agent.tools.runner import ToolRunner
 from ntrp.agent.types.events import ToolCompleted, ToolStarted
-from ntrp.agent.types.tool_call import FunctionCall, PendingToolCall, ToolCall
-from ntrp.agent.types.tools import ToolMeta, ToolResult
+from ntrp.agent.types.tool_call import FunctionCall, PendingToolCall, ToolArgumentError, ToolCall
+from ntrp.agent.types.tools import ToolMeta, ToolOutcomeStatus, ToolResult
 
 
 class _FakeExecutor:
@@ -97,6 +97,33 @@ async def test_runner_handles_empty_call_list():
     runner = ToolRunner(executor=executor, depth=0, parent_id=None)
     events = [event async for event in runner.execute_all([])]
     assert events == []
+
+
+@pytest.mark.asyncio
+async def test_runner_projects_invalid_arguments_as_typed_failure_without_execution():
+    executor = _FakeExecutor(
+        {"send": ToolMeta(name="send", display_name="Send")},
+        {"c1": asyncio.Event()},
+    )
+    runner = ToolRunner(executor=executor, depth=0, parent_id=None)
+    call = PendingToolCall(
+        tool_call=ToolCall(id="c1", type="function", function=FunctionCall(name="send", arguments="{")),
+        name="send",
+        args={},
+        argument_error=ToolArgumentError(
+            code="invalid_tool_arguments",
+            message="Malformed JSON",
+        ),
+    )
+
+    events = [event async for event in runner.execute_all([call])]
+
+    completed = next(event for event in events if isinstance(event, ToolCompleted))
+    assert executor.arrived == []
+    assert completed.outcome is not None
+    assert completed.outcome.status == ToolOutcomeStatus.FAILED
+    assert completed.outcome.error is not None
+    assert completed.outcome.error.code == "invalid_tool_arguments"
 
 
 def test_append_results_uses_normal_missing_fallback():

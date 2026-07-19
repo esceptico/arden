@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, TypedDict
 
 from coolname import generate_slug
 
-from ntrp.agent import Role, ToolResult
+from ntrp.agent import Role, ToolOutcomeStatus, ToolResult
 from ntrp.agent.agent import RunBudget
 from ntrp.agent.ledger import SharedLedger
 from ntrp.constants import NTRP_TMP_BASE
@@ -37,7 +37,13 @@ class Rejection:
         content = (
             f"User rejected this action and said: {self.feedback}" if self.feedback else "User rejected this action"
         )
-        return ToolResult(content=content, preview="Rejected")
+        return ToolResult.failure(
+            code="approval_rejected",
+            message=content,
+            preview="Rejected",
+            status=ToolOutcomeStatus.DENIED,
+            recovery_action="Revise the action or ask the user for different authorization.",
+        )
 
 
 @dataclass

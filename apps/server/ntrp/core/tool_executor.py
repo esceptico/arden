@@ -6,7 +6,7 @@ from typing import Any
 from judgeval import Tracer
 
 from ntrp import logging
-from ntrp.agent import ToolMeta, ToolResult
+from ntrp.agent import ToolMeta, ToolOutcomeStatus, ToolResult
 from ntrp.agent.ledger import SharedLedger, access_key, format_arguments
 from ntrp.agent.types.tool_presentation import tool_presentation
 from ntrp.constants import (
@@ -62,9 +62,11 @@ class NtrpToolExecutor:
     async def _execute(self, name: str, args: dict, tool_call_id: str) -> ToolResult:
         tool = self._executor.registry.get(name)
         if not tool:
-            return ToolResult(
-                content=f"Unknown tool: {name}. Check available tools in the system prompt.",
+            return ToolResult.failure(
+                code="unknown_tool",
+                message=f"Unknown tool: {name}. Check available tools in the system prompt.",
                 preview="Unknown tool",
+                recovery_action="Use a tool exposed in the current system prompt.",
             )
 
         if (
@@ -72,10 +74,12 @@ class NtrpToolExecutor:
             and name not in self._ctx.run.allowed_tool_names
             and not (name == "tool_search" and self._ctx.run.deferred_tools_enabled)
         ):
-            return ToolResult(
-                content=f"Tool {name!r} is not available in this run. Use only tools exposed in the system prompt.",
+            return ToolResult.failure(
+                code="permission_denied",
+                message=f"Tool {name!r} is not available in this run. Use only tools exposed in the system prompt.",
                 preview="Tool not allowed",
-                is_error=True,
+                status=ToolOutcomeStatus.DENIED,
+                recovery_action="Use a tool exposed in this run.",
             )
 
         if (
@@ -83,13 +87,14 @@ class NtrpToolExecutor:
             and is_deferred_tool(name, self._executor.registry)
             and name not in self._ctx.run.loaded_tools
         ):
-            return ToolResult(
-                content=(
+            return ToolResult.failure(
+                code="tool_not_loaded",
+                message=(
                     f"Tool {name!r} is deferred and has not been loaded in this run. "
                     f"Call tool_search(query='select:{name}') first, then retry."
                 ),
                 preview="Tool not loaded",
-                is_error=True,
+                recovery_action=f"Load {name!r} with tool_search, then retry.",
             )
 
         store = self._audit_store() if tool.policy.audit else None
@@ -123,7 +128,13 @@ class NtrpToolExecutor:
                 try:
                     result = await asyncio.wait_for(execute, timeout=timeout_seconds)
                 except TimeoutError:
-                    result = ToolResult(content="Tool call timed out.", preview="Timed out", is_error=True)
+                    result = ToolResult.failure(
+                        code="timeout",
+                        message="Tool call timed out.",
+                        preview="Timed out",
+                        retryable=True,
+                        recovery_action="Check whether the operation completed before retrying.",
+                    )
                     finish_status = "timeout"
                     finish_preview = result.preview
                     return result
@@ -220,6 +231,7 @@ class NtrpToolExecutor:
             data=result.data,
             model_content=result.model_content,
             source_refs=result.source_refs,
+            outcome=result.outcome,
         )
 
     def get_meta(self, name: str) -> ToolMeta | None:
@@ -265,6 +277,7 @@ class NtrpToolExecutor:
             data=data,
             model_content=result.model_content,
             source_refs=result.source_refs,
+            outcome=result.outcome,
         )
 
 

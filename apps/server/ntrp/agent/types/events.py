@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 from ntrp.agent.types.stop import StopReason
-from ntrp.agent.types.tools import ToolSourceRef
+from ntrp.agent.types.tools import ToolOutcome, ToolSourceRef
 from ntrp.agent.types.usage import Usage
 from ntrp.core.content import ContentBlock
 
@@ -103,6 +103,7 @@ class ToolCompleted(AgentEventBase):
     kind: str = "tool"
     model_content: tuple[ContentBlock, ...] = ()
     source_refs: tuple[ToolSourceRef, ...] = ()
+    outcome: ToolOutcome | None = None
 
 
 @dataclass(frozen=True)

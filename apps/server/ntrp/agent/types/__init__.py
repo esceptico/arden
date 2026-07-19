@@ -27,7 +27,15 @@ from ntrp.agent.types.llm import (
 from ntrp.agent.types.stop import StopReason
 from ntrp.agent.types.tool_call import FunctionCall, PendingToolCall, ToolCall
 from ntrp.agent.types.tool_choice import SpecificTool, ToolChoice, ToolChoiceMode
-from ntrp.agent.types.tools import ToolMeta, ToolResult
+from ntrp.agent.types.tools import (
+    ToolEffect,
+    ToolError,
+    ToolMeta,
+    ToolOutcome,
+    ToolOutcomeStatus,
+    ToolResult,
+    ToolVerification,
+)
 from ntrp.agent.types.usage import Usage
 
 __all__ = [
@@ -60,7 +68,12 @@ __all__ = [
     "ToolInputEnded",
     "ToolInputStarted",
     "ToolMeta",
+    "ToolEffect",
+    "ToolError",
+    "ToolOutcome",
+    "ToolOutcomeStatus",
     "ToolResult",
+    "ToolVerification",
     "ToolStarted",
     "Usage",
 ]

@@ -328,6 +328,7 @@ class ToolCallResultEvent(SSEEvent):
     content_sha256: str | None = None
     content_bytes: int | None = None
     retention_class: str | None = None
+    outcome: dict[str, object] | None = None
 
 
 # ─── Reasoning (AG-UI Start / Content / End + outer Start/End) ───────
@@ -827,6 +828,7 @@ def agent_events_to_sse(event) -> tuple[SSEEvent, ...]:
                     parent_id=event.parent_id,
                     kind=event.kind,
                     is_error=event.is_error,
+                    outcome=event.outcome.to_dict() if event.outcome else None,
                 ),
             )
     return ()
