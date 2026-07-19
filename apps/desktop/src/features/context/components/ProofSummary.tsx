@@ -18,7 +18,7 @@ export function ProofSummary({ turnId }: { turnId: string }) {
 
   const attention = summary.tone === "attention";
   const Icon = attention ? TriangleAlert : ShieldCheck;
-  const label = attention ? "Needs attention" : "Evidence recorded";
+  const label = summaryLabel(summary);
   const counts = countLabels(summary);
 
   return (
@@ -51,8 +51,8 @@ export function ProofSummary({ turnId }: { turnId: string }) {
         <div className="grid gap-3 px-3 pb-3 pt-1">
           <ProofRows label="Actions" rows={summary.actions.map((row) => ({
             key: row.toolCallId,
-            primary: `${row.operation} · ${row.target}`,
-            secondary: row.toolLabel,
+            primary: row.toolLabel,
+            secondary: `${readable(row.operation)} · ${row.target}`,
           }))} />
           <ProofRows label="Checks" rows={summary.checks.map((row) => ({
             key: row.toolCallId,
@@ -74,7 +74,7 @@ export function ProofSummary({ turnId }: { turnId: string }) {
             onClick={() => openContextForTurn(turnId)}
             className="w-fit rounded-md px-1.5 py-1 font-medium text-ink-soft transition-colors hover:bg-surface-soft hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
           >
-            Inspect context
+            View turn details
           </button>
         </div>
       )}
@@ -110,14 +110,23 @@ function ProofRows({
 function countLabels(summary: ReturnType<typeof turnProofSummary> & {}): string {
   if (!summary) return "";
   return [
-    countLabel(summary.actionCount, "action"),
     countLabel(summary.checkCount, "check"),
     countLabel(summary.receiptCount, "receipt"),
-    countLabel(summary.sourceCount, "source"),
     countLabel(summary.limitationCount, "limitation"),
   ].filter(Boolean).join(" · ");
 }
 
+function summaryLabel(summary: NonNullable<ReturnType<typeof turnProofSummary>>): string {
+  if (summary.tone === "attention") return "Needs attention";
+  if (summary.actionCount === 1) return `${summary.actions[0]?.toolLabel ?? "Action"} completed`;
+  if (summary.actionCount > 1) return `${summary.actionCount} actions completed`;
+  return "Outcome verified";
+}
+
 function countLabel(count: number, noun: string): string {
   return count > 0 ? `${count} ${noun}${count === 1 ? "" : "s"}` : "";
+}
+
+function readable(value: string): string {
+  return value.replaceAll("_", " ").replace(/^./, (character) => character.toUpperCase());
 }

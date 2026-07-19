@@ -37,15 +37,35 @@ const inspectorPayload = {
   run_id: "run-1",
   session_id: "session-1",
   updated_at: "2026-07-20T12:00:00Z",
-  context_manifest: [{
-    context_id: "ctx-1",
-    content_type: "memory",
-    source: "memory",
-    ref: "record:1",
-    freshness: "current",
-    selection_reason: "Relevant user preference",
-    size_bytes: 120,
-  }],
+  context_manifest: [
+    {
+      context_id: "ctx-1",
+      content_type: "memory_context",
+      source: "memory",
+      ref: "resident_profile",
+      freshness: "session load",
+      selection_reason: "Relevant user preference",
+      size_bytes: 120,
+    },
+    {
+      context_id: "ctx-system",
+      content_type: "system_prompt",
+      source: "ntrp",
+      ref: "system:base",
+      freshness: "versioned",
+      selection_reason: "Required runtime instructions",
+      size_bytes: 21_000,
+    },
+    {
+      context_id: "ctx-clock",
+      content_type: "runtime_time",
+      source: "clock",
+      ref: "local-hour",
+      freshness: "2026-07-20",
+      selection_reason: "Current temporal context",
+      size_bytes: 71,
+    },
+  ],
   evidence: {
     sources: [{ provider: "gmail", kind: "message", ref: "42", title: "Sent email" }],
     approvals: [{ tool_call_id: "call-1", tool_name: "send_email", status: "approved" }],
@@ -108,15 +128,16 @@ test("proof summary is collapsed by default and opens exact-turn Context", async
 
   const toggle = host.querySelector('button[aria-label="Expand outcome evidence"]') as HTMLButtonElement;
   expect(toggle?.getAttribute("aria-expanded")).toBe("false");
-  expect(host.textContent).toContain("Evidence recorded");
-  expect(host.textContent).toContain("1 action");
+  expect(host.textContent).toContain("Send email completed");
+  expect(host.textContent).not.toContain("1 action");
+  expect(host.textContent).not.toContain("1 source");
   expect(host.textContent).not.toContain("message exists");
 
   await act(async () => toggle.click());
   expect(host.textContent).toContain("message exists");
   expect(host.textContent).toContain("provider:42");
 
-  const inspect = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "Inspect context");
+  const inspect = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "View turn details");
   await act(async () => inspect?.click());
   expect(getState().rightInspectorTab).toBe("context");
   expect(getState().contextTurnId).toBe("user-1");
@@ -135,7 +156,35 @@ test("proof summary renders nothing for a turn without evidence", async () => {
   expect(host.innerHTML).toBe("");
 });
 
-test("Context panel loads exact metadata and hands the turn to Sources", async () => {
+test("proof summary renders nothing when a turn only has sources", async () => {
+  setState({
+    messages: new Map([
+      ["user-2", { id: "user-2", role: "user", content: "check email" }],
+      ["activity-2", {
+        id: "activity-2",
+        role: "activity",
+        content: "",
+        activity: {
+          label: "Called",
+          done: true,
+          items: [{
+            id: "call-2",
+            kind: "emails",
+            target: "inbox",
+            sourceRefs: [{ provider: "gmail", kind: "message", ref: "42", title: "Email" }],
+          }],
+        },
+      }],
+      ["assistant-2", { id: "assistant-2", role: "assistant", content: "Summary" }],
+    ]),
+    order: ["user-2", "activity-2", "assistant-2"],
+  });
+  const { host, root } = setup();
+  await act(async () => root.render(<ProofSummary turnId="user-2" />));
+  expect(host.innerHTML).toBe("");
+});
+
+test("Context panel prioritizes applied context and collapses technical details", async () => {
   const paths: string[] = [];
   window.ntrpDesktop = { api: { request: async (_config, request) => {
     paths.push(request.path);
@@ -147,15 +196,20 @@ test("Context panel loads exact metadata and hands the turn to Sources", async (
   await settle();
 
   expect(paths).toEqual(["/sessions/session-1/turns/user-1/inspector"]);
-  expect(host.textContent).toContain("Context used");
+  expect(host.textContent).toContain("Context applied");
   expect(host.textContent).toContain("Relevant user preference");
   expect(host.textContent).toContain("Outcome evidence");
   expect(host.textContent).toContain("provider:42");
+  expect(host.textContent).toContain("Technical details");
+  expect(host.textContent).not.toContain("System prompt");
+  expect(host.textContent).not.toContain("Required runtime instructions");
+  expect(host.textContent).not.toContain("View 1 source");
 
-  const sources = Array.from(host.querySelectorAll("button")).find((button) => button.textContent?.includes("View 1 source"));
-  await act(async () => sources?.click());
-  expect(getState().rightInspectorTab).toBe("sources");
-  expect(getState().sourceTurnId).toBe("user-1");
+  const technical = Array.from(host.querySelectorAll("button"))
+    .find((button) => button.textContent?.includes("Technical details"));
+  await act(async () => technical.click());
+  expect(host.textContent).toContain("System prompt");
+  expect(host.textContent).toContain("Required runtime instructions");
 });
 
 test("Context panel keeps missing sidecars quiet and offers retry on request failure", async () => {
@@ -165,11 +219,11 @@ test("Context panel keeps missing sidecars quiet and offers retry on request fai
   const { host, root } = setup();
   await act(async () => root.render(<ContextPanel />));
   await settle();
-  expect(host.textContent).toContain("No recorded context or evidence for this turn.");
+  expect(host.textContent).toContain("No additional context or outcomes for this turn.");
 
   fail = true;
   await act(async () => root.render(<ContextPanel key="retry-case" />));
   await settle();
-  expect(host.textContent).toContain("Could not load context evidence.");
+  expect(host.textContent).toContain("Could not load turn details.");
   expect(Array.from(host.querySelectorAll("button")).some((button) => button.textContent === "Retry")).toBe(true);
 });

@@ -27,7 +27,22 @@ test("suppresses proof for turns without structured outcomes or sources", () => 
   expect(turnProofSummary(state.messages, state.order, "user-1")).toBeNull();
 });
 
-test("summarizes durable actions checks receipts and deduplicated sources", () => {
+test("suppresses proof when sources are the only evidence", () => {
+  const state = transcript([
+    { id: "user-1", role: "user", content: "check email" },
+    activity("activity-1", [{
+      id: "call-1",
+      kind: "emails",
+      target: "inbox",
+      sourceRefs: [{ provider: "gmail", kind: "message", ref: "42", title: "Email" }],
+    }]),
+    { id: "assistant-1", role: "assistant", content: "Summary" },
+  ]);
+
+  expect(turnProofSummary(state.messages, state.order, "user-1")).toBeNull();
+});
+
+test("summarizes durable actions checks and receipts", () => {
   const state = transcript([
     { id: "user-1", role: "user", content: "send it" },
     activity("activity-1", [
@@ -56,7 +71,6 @@ test("summarizes durable actions checks receipts and deduplicated sources", () =
     actionCount: 1,
     checkCount: 1,
     receiptCount: 1,
-    sourceCount: 1,
     limitationCount: 0,
     actions: [{ toolCallId: "call-1", toolLabel: "Send email", operation: "send", target: "message:42" }],
     checks: [{

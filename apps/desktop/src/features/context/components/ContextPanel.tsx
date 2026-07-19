@@ -1,8 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { Library, RotateCcw, ShieldCheck, TriangleAlert } from "lucide-react";
+import { ChevronRight, RotateCcw, ShieldCheck, TriangleAlert } from "lucide-react";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ICON } from "@/lib/icons";
-import { getTurnInspector, type TurnInspector } from "@/api/turnInspector";
+import {
+  getTurnInspector,
+  type InspectorContextItem,
+  type TurnInspector,
+} from "@/api/turnInspector";
 import { latestInspectableTurnId } from "@/features/context/lib/turnProof";
 import { useStore } from "@/stores";
 
@@ -11,13 +15,19 @@ type LoadState =
   | { phase: "ready"; data: TurnInspector | null }
   | { phase: "error"; data: null };
 
+const TECHNICAL_CONTEXT_TYPES = new Set([
+  "runtime_time",
+  "system_prompt",
+  "temporal_reminder",
+]);
+
 export function ContextPanel() {
   const config = useStore((state) => state.config);
   const sessionId = useStore((state) => state.currentSessionId);
   const exactTurnId = useStore((state) => state.contextTurnId);
   const revision = useStore((state) => state.sourceRefsRevision);
-  const openSourcesForTurn = useStore((state) => state.openSourcesForTurn);
   const [retryKey, setRetryKey] = useState(0);
+  const [technicalOpen, setTechnicalOpen] = useState(false);
   const [load, setLoad] = useState<LoadState>({ phase: "idle", data: null });
   const turnId = useMemo(() => {
     if (exactTurnId) return exactTurnId;
@@ -43,11 +53,13 @@ export function ContextPanel() {
     };
   }, [config, retryKey, sessionId, turnId]);
 
+  useEffect(() => setTechnicalOpen(false), [turnId]);
+
   if (!sessionId || !turnId) {
     return <PanelEmpty>No completed turn to inspect.</PanelEmpty>;
   }
   if (load.phase === "loading" || load.phase === "idle") {
-    return <p className="px-3 py-8 text-center text-xs text-muted">Loading context evidence…</p>;
+    return <p className="px-3 py-8 text-center text-xs text-muted">Loading turn details…</p>;
   }
   if (load.phase === "error") {
     return (
@@ -66,33 +78,46 @@ export function ContextPanel() {
           </button>
         )}
       >
-        Could not load context evidence.
+        Could not load turn details.
       </EmptyState>
     );
   }
   if (!load.data || !hasInspectorContent(load.data)) {
-    return <PanelEmpty>No recorded context or evidence for this turn.</PanelEmpty>;
+    return <PanelEmpty>No additional context or outcomes for this turn.</PanelEmpty>;
   }
 
   const { data } = load;
+  const { applied, technical } = partitionContext(data.context);
   return (
     <div className="grid gap-5 pb-2">
-      {data.context.length > 0 && (
-        <InspectorSection label="Context used" count={data.context.length}>
-          {data.context.map((item) => (
-            <div key={item.id} className="grid gap-1 rounded-lg bg-surface-soft/55 px-2.5 py-2">
-              <div className="flex min-w-0 items-center gap-2">
-                <span className="min-w-0 flex-1 truncate text-xs font-medium text-ink-soft">
-                  {readable(item.contentType)}
-                </span>
-                <span className="shrink-0 text-[11px] text-faint">{formatBytes(item.sizeBytes)}</span>
-              </div>
-              <div className="break-words text-xs text-muted">{item.source} · {item.ref}</div>
-              <div className="break-words text-xs text-ink-soft">{item.selectionReason}</div>
-              <div className="text-[11px] text-faint">Freshness: {item.freshness}</div>
-            </div>
-          ))}
+      {applied.length > 0 && (
+        <InspectorSection label="Context applied" count={applied.length}>
+          {applied.map((item) => <ContextRow key={item.id} item={item} />)}
         </InspectorSection>
+      )}
+
+      {technical.length > 0 && (
+        <section className="grid gap-1.5">
+          <button
+            type="button"
+            aria-expanded={technicalOpen}
+            onClick={() => setTechnicalOpen((value) => !value)}
+            className="app-row flex w-full items-center gap-2 rounded-lg px-1 py-1.5 text-left text-xs text-muted hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            <ChevronRight
+              aria-hidden
+              size={ICON.XS}
+              className={`shrink-0 transition-transform duration-fast ${technicalOpen ? "rotate-90" : ""}`}
+            />
+            <span className="flex-1 font-medium">Technical details</span>
+            <span className="text-[11px] text-faint">{technical.length}</span>
+          </button>
+          {technicalOpen && (
+            <div className="grid gap-1">
+              {technical.map((item) => <ContextRow key={item.id} item={item} technical />)}
+            </div>
+          )}
+        </section>
       )}
 
       {evidenceCount(data) > 0 && (
@@ -141,17 +166,27 @@ export function ContextPanel() {
         </InspectorSection>
       )}
 
-      {data.evidence.sources.length > 0 && (
-        <InspectorSection label="Sources" count={data.evidence.sources.length}>
-          <button
-            type="button"
-            onClick={() => openSourcesForTurn(turnId)}
-            className="app-row flex w-full items-center gap-2 rounded-lg bg-surface-soft/55 px-2.5 py-2 text-left text-xs font-medium text-ink-soft hover:bg-surface-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-          >
-            <Library aria-hidden size={ICON.XS} />
-            View {data.evidence.sources.length} {data.evidence.sources.length === 1 ? "source" : "sources"}
-          </button>
-        </InspectorSection>
+    </div>
+  );
+}
+
+function ContextRow({ item, technical = false }: { item: InspectorContextItem; technical?: boolean }) {
+  return (
+    <div className="grid gap-1 rounded-lg bg-surface-soft/55 px-2.5 py-2">
+      <div className="flex min-w-0 items-center gap-2">
+        <span className="min-w-0 flex-1 truncate text-xs font-medium text-ink-soft">
+          {readable(item.contentType)}
+        </span>
+        {technical && (
+          <span className="shrink-0 text-[11px] text-faint">{formatBytes(item.sizeBytes)}</span>
+        )}
+      </div>
+      <div className="break-words text-xs text-ink-soft">{item.selectionReason}</div>
+      {technical && (
+        <>
+          <div className="break-words text-xs text-muted">{item.source} · {item.ref}</div>
+          <div className="text-[11px] text-faint">Freshness: {item.freshness}</div>
+        </>
       )}
     </div>
   );
@@ -200,7 +235,19 @@ function PanelEmpty({ children }: { children: React.ReactNode }) {
 }
 
 function hasInspectorContent(data: TurnInspector): boolean {
-  return data.context.length + evidenceCount(data) + data.evidence.sources.length > 0;
+  return data.context.length + evidenceCount(data) > 0;
+}
+
+function partitionContext(items: InspectorContextItem[]): {
+  applied: InspectorContextItem[];
+  technical: InspectorContextItem[];
+} {
+  const applied: InspectorContextItem[] = [];
+  const technical: InspectorContextItem[] = [];
+  for (const item of items) {
+    (TECHNICAL_CONTEXT_TYPES.has(item.contentType) ? technical : applied).push(item);
+  }
+  return { applied, technical };
 }
 
 function evidenceCount(data: TurnInspector): number {

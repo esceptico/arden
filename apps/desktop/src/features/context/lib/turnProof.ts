@@ -40,7 +40,6 @@ export interface TurnProofSummary {
   actionCount: number;
   checkCount: number;
   receiptCount: number;
-  sourceCount: number;
   limitationCount: number;
   actions: ProofAction[];
   checks: ProofCheck[];
@@ -60,12 +59,8 @@ export function turnProofSummary(
   const checks: ProofCheck[] = [];
   const receipts: ProofReceipt[] = [];
   const limitations: ProofLimitation[] = [];
-  const sources = new Set<string>();
 
   for (const item of activityItems(messages, segment)) {
-    for (const source of item.sourceRefs ?? []) {
-      sources.add(`${source.provider.length}:${source.provider}${source.ref}`);
-    }
     const outcome = item.outcome;
     if (!outcome) continue;
     const toolLabel = item.displayName ?? item.noun ?? item.kind;
@@ -104,14 +99,13 @@ export function turnProofSummary(
     }
   }
 
-  const meaningful = actions.length + checks.length + receipts.length + limitations.length + sources.size;
+  const meaningful = actions.length + checks.length + receipts.length + limitations.length;
   if (meaningful === 0) return null;
   return {
     tone: limitations.length > 0 ? "attention" : "recorded",
     actionCount: actions.length,
     checkCount: checks.length,
     receiptCount: receipts.length,
-    sourceCount: sources.size,
     limitationCount: limitations.length,
     actions: actions.slice(0, EXPANDED_ROW_LIMIT),
     checks: checks.slice(0, EXPANDED_ROW_LIMIT),
