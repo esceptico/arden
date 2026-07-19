@@ -1,4 +1,5 @@
 import { apiWithConfig, headersForConfig, type AppConfig } from "@/api/core";
+import type { ToolOutcome } from "@/api/events";
 import type { TodoListItem } from "@/api/types";
 
 export interface HistoryToolCall {
@@ -10,6 +11,7 @@ export interface HistoryToolCall {
   /** Semantic kind ("tool" | "agent") for the row renderer. Server fills
    *  this from the tool registry at history-read time. */
   kind?: string;
+  outcome?: ToolOutcome;
 }
 
 export interface HistoryImage {

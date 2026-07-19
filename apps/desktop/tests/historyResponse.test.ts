@@ -87,3 +87,36 @@ test("active history merge keeps child agent metadata from durable result data",
     status: "running",
   });
 });
+
+test("history rebuild keeps durable tool outcomes for proof summaries", () => {
+  const history: HistoryResponse = {
+    messages: [
+      { role: "user", content: "write", id: "user-1" },
+      {
+        role: "assistant",
+        content: "",
+        id: "assistant-tools",
+        tool_calls: [{
+          id: "call-1",
+          name: "write_file",
+          arguments: '{"path":"a.txt"}',
+          outcome: {
+            status: "succeeded",
+            effect: { operation: "write", target: "a.txt" },
+            receipt: "sha256:abc",
+          },
+        }],
+      },
+      { role: "tool", content: "done", id: "tool-result", tool_call_id: "call-1" },
+    ],
+    active_run_id: null,
+  };
+
+  const activity = areaHistoryResponse(history, true).items.find((item) => item.role === "activity");
+
+  expect(activity?.activity?.items[0].outcome).toEqual({
+    status: "succeeded",
+    effect: { operation: "write", target: "a.txt" },
+    receipt: "sha256:abc",
+  });
+});

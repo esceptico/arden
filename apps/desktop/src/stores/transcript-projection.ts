@@ -632,6 +632,7 @@ export function rebuildTranscriptFromHistory(
             status: "executed",
             childAgent,
             sourceRefs: sourceRefs.length > 0 ? sourceRefs : undefined,
+            outcome: toolCall.outcome,
             htmlWidget,
           });
         }

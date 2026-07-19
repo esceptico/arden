@@ -402,9 +402,10 @@ export interface State {
   compacting: boolean;
   memoryOpen: boolean;
   sourceFocus: MessageSourceFocus | null;
-  rightInspectorTab: "activity" | "sources";
+  rightInspectorTab: "activity" | "sources" | "context";
   sourceTurnId: string | null;
-  /** Monotonic invalidation key for per-turn source derivation. */
+  contextTurnId: string | null;
+  /** Monotonic invalidation key for per-turn source and proof derivation. */
   sourceRefsRevision: number;
   paletteOpen: boolean;
   /** Tool approvals waiting on the user. Lives outside `messages` so the
@@ -611,8 +612,9 @@ export interface Actions {
   openMemory: (origin?: { x: number; y: number } | null) => void;
   closeMemory: () => void;
   setSourceFocus: (focus: MessageSourceFocus | null) => void;
-  setRightInspectorTab: (tab: "activity" | "sources") => void;
+  setRightInspectorTab: (tab: "activity" | "sources" | "context") => void;
   openSourcesForTurn: (turnId: string) => void;
+  openContextForTurn: (turnId: string) => void;
   openPalette: () => void;
   closePalette: () => void;
   togglePalette: () => void;
