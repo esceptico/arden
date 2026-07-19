@@ -3,7 +3,7 @@ import json
 import logging
 
 from ntrp.agent.types.llm import Message, Role
-from ntrp.agent.types.tool_call import PendingToolCall, ToolCall
+from ntrp.agent.types.tool_call import PendingToolCall, ToolArgumentError, ToolCall
 
 _logger = logging.getLogger(__name__)
 
@@ -48,10 +48,21 @@ def parse_tool_calls(tool_calls: list[ToolCall]) -> list[PendingToolCall]:
     """Parse raw ToolCall objects into PendingToolCall with extracted name and args."""
     result = []
     for tc in tool_calls:
+        error = None
         try:
             args = json.loads(tc.function.arguments) if tc.function.arguments else {}
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as exc:
             _logger.warning("Malformed tool arguments: %.200s", tc.function.arguments)
             args = {}
-        result.append(PendingToolCall(tool_call=tc, name=tc.function.name, args=args))
+            error = ToolArgumentError(
+                code="invalid_tool_arguments",
+                message=f"Malformed JSON at character {exc.pos}: {exc.msg}",
+            )
+        if not isinstance(args, dict):
+            args = {}
+            error = ToolArgumentError(
+                code="invalid_tool_arguments",
+                message="Tool arguments must be a JSON object.",
+            )
+        result.append(PendingToolCall(tool_call=tc, name=tc.function.name, args=args, argument_error=error))
     return result

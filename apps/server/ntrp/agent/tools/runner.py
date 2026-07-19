@@ -52,6 +52,18 @@ class ToolRunner:
 
     async def _run_one(self, rc: _ResolvedCall) -> tuple[ToolResult, int]:
         start_ms = _ms_now()
+        if error := rc.call.argument_error:
+            return (
+                ToolResult(
+                    content=(
+                        f"{error.code}: {error.message} "
+                        "Retry the tool call with one valid JSON object matching its schema."
+                    ),
+                    preview="Invalid tool arguments",
+                    is_error=True,
+                ),
+                _ms_now() - start_ms,
+            )
         try:
             result = await self._executor.execute(rc.call.name, rc.call.args, rc.call.tool_call.id)
             return result, _ms_now() - start_ms

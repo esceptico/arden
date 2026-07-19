@@ -442,13 +442,36 @@ async def test_text_and_tool_calls_yields_text_block():
 
 
 @pytest.mark.asyncio
-async def test_malformed_tool_arguments_becomes_empty_dict():
+async def test_malformed_tool_arguments_returns_error_without_execution():
     bad_tc = ToolCall(id="c1", type="function", function=FunctionCall(name="t", arguments="{not json}"))
     llm = FakeLLM([_response(tool_calls=[bad_tc]), _response(text="done")])
     executor = FakeExecutor({"t": ToolResult(content="ok", preview="ok")})
     agent = _make_agent(llm, executor)
-    await agent.run(_msgs())
-    assert executor.call_log == [("t", {})]
+    messages = _msgs()
+
+    await agent.run(messages)
+
+    assert executor.call_log == []
+    tool_message = next(message for message in messages if message["role"] == "tool")
+    assert "invalid_tool_arguments" in tool_message["content"]
+    assert "valid JSON object" in tool_message["content"]
+
+
+@pytest.mark.parametrize("raw_arguments", ["[]", "null", '"text"', "1"])
+@pytest.mark.asyncio
+async def test_non_object_tool_arguments_return_error_without_execution(raw_arguments: str):
+    bad_tc = ToolCall(id="c1", type="function", function=FunctionCall(name="t", arguments=raw_arguments))
+    llm = FakeLLM([_response(tool_calls=[bad_tc]), _response(text="done")])
+    executor = FakeExecutor({"t": ToolResult(content="ok", preview="ok")})
+    agent = _make_agent(llm, executor)
+    messages = _msgs()
+
+    await agent.run(messages)
+
+    assert executor.call_log == []
+    tool_message = next(message for message in messages if message["role"] == "tool")
+    assert "invalid_tool_arguments" in tool_message["content"]
+    assert "JSON object" in tool_message["content"]
 
 
 # ============================================================

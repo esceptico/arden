@@ -17,9 +17,16 @@ class ToolCall:
 
 
 @dataclass(frozen=True)
+class ToolArgumentError:
+    code: Literal["invalid_tool_arguments"]
+    message: str
+
+
+@dataclass(frozen=True)
 class PendingToolCall:
     """Parsed tool call — name and args extracted from the raw ToolCall."""
 
     tool_call: ToolCall
     name: str
     args: dict
+    argument_error: ToolArgumentError | None = None
