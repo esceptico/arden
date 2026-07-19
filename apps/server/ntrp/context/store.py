@@ -1931,6 +1931,18 @@ class SessionStore:
     async def list_pending_tool_approvals(self, session_id: str, *, run_id: str | None = None) -> list[dict]:
         return await self.list_pending_run_suspensions(session_id, run_id=run_id, kind="tool_approval")
 
+    async def list_pending_integration_connections(
+        self,
+        session_id: str,
+        *,
+        run_id: str | None = None,
+    ) -> list[dict]:
+        return await self.list_pending_run_suspensions(
+            session_id,
+            run_id=run_id,
+            kind="integration_connection",
+        )
+
     async def list_pending_run_suspensions(
         self,
         session_id: str,
@@ -2338,6 +2350,40 @@ class SessionStore:
             expires_at=expires_at,
         )
 
+    async def record_integration_connection_requested(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        tool_call_id: str,
+        descriptor,
+        source: str,
+        detail: str,
+        expires_at: str | None = None,
+    ) -> None:
+        await self.record_run_suspension(
+            run_id=run_id,
+            session_id=session_id,
+            suspension_id=tool_call_id,
+            kind="integration_connection",
+            payload={
+                "tool_name": "request_connection",
+                "action": descriptor.action,
+                "scope": "external",
+                "integration_id": descriptor.integration_id,
+                "connection_id": descriptor.connection_id,
+                "label": descriptor.label,
+                "reason": descriptor.state,
+                "detail": detail,
+                "capability": descriptor.capability,
+                "settings_tab": descriptor.settings_tab,
+                "required_scopes": list(descriptor.required_scopes),
+                "tool_names": list(descriptor.tool_names),
+                "source": source,
+            },
+            expires_at=expires_at,
+        )
+
     async def record_run_suspension(
         self,
         *,
@@ -2400,6 +2446,21 @@ class SessionStore:
         await self.conn.commit()
 
     async def resolve_tool_approval(
+        self,
+        *,
+        run_id: str,
+        tool_call_id: str,
+        status: str,
+        result_feedback: str | None = None,
+    ) -> bool:
+        return await self.resolve_run_suspension(
+            run_id=run_id,
+            suspension_id=tool_call_id,
+            status=status,
+            resolution={"approved": status == "approved", "result": result_feedback or ""},
+        )
+
+    async def resolve_integration_connection(
         self,
         *,
         run_id: str,

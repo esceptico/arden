@@ -6,6 +6,7 @@ from typing import Any
 from google.auth.exceptions import RefreshError
 from googleapiclient.discovery import build
 
+from ntrp.integrations.base import IntegrationConnectionError
 from ntrp.integrations.google_auth.auth import (
     SCOPES_CALENDAR,
     get_google_credentials,
@@ -113,7 +114,11 @@ class GoogleCalendar:
 
     def _get_credentials(self):
         if self._creds is None or not self._creds.valid:
-            self._creds = get_google_credentials(self.token_path)
+            self._creds = get_google_credentials(
+                self.token_path,
+                require_scopes=SCOPES_CALENDAR,
+                integration_id="calendar",
+            )
         return self._creds
 
     def _get_service(self):
@@ -130,8 +135,13 @@ class GoogleCalendar:
             calendar = service.calendars().get(calendarId="primary").execute()
             self._email_address = calendar.get("id", "")
             return self._email_address
+        except IntegrationConnectionError:
+            raise
         except Exception:
             return ""
+
+    def verify_connection(self) -> None:
+        self._get_service().calendars().get(calendarId="primary").execute()
 
     def _parse_event(self, event: dict) -> RawItem:
         event_id = event.get("id", "")
@@ -376,6 +386,7 @@ class MultiCalendarSource:
     def __init__(self, token_paths: list[Path], days_back: int, days_ahead: int):
         self.sources: list[GoogleCalendar] = []
         self._errors: dict[str, str] = {}
+        connection_error: IntegrationConnectionError | None = None
 
         for token_path in token_paths:
             try:
@@ -386,8 +397,14 @@ class MultiCalendarSource:
                 )
                 src._get_credentials()
                 self.sources.append(src)
+            except IntegrationConnectionError as exc:
+                connection_error = exc
+                self._errors[token_path.name] = exc.detail
             except Exception as e:
                 self._errors[token_path.name] = str(e)
+
+        if not self.sources and connection_error is not None:
+            raise connection_error
 
     @property
     def errors(self) -> dict[str, str]:
@@ -402,6 +419,23 @@ class MultiCalendarSource:
     def details(self) -> dict:
         return {"accounts": self.list_accounts()}
 
+    def verify_connection(self) -> None:
+        if not self.sources:
+            raise IntegrationConnectionError(
+                integration_id="calendar",
+                reason="not_configured",
+                detail="No Google Calendar account is connected.",
+            )
+        last_error: Exception | None = None
+        for source in self.sources:
+            try:
+                source.verify_connection()
+                return
+            except Exception as exc:
+                last_error = exc
+        if last_error is not None:
+            raise last_error
+
     def list_accounts(self) -> list[str]:
         accounts: list[str] = []
         for src in self.sources:
@@ -412,6 +446,7 @@ class MultiCalendarSource:
 
     def _collect(self, fn: Callable[[GoogleCalendar], list[RawItem]], limit: int) -> list[RawItem]:
         items: list[RawItem] = []
+        connection_error: IntegrationConnectionError | None = None
         for src in self.sources:
             try:
                 items.extend(fn(src))
@@ -419,9 +454,14 @@ class MultiCalendarSource:
                 key = src.get_email_address() or src.token_path.name
                 _logger.warning("Calendar auth failed for %s: %s", key, e)
                 src.auth_error = str(e)
+            except IntegrationConnectionError as exc:
+                connection_error = exc
+                src.auth_error = exc.detail
             except Exception as e:
                 key = src.get_email_address() or src.token_path.name
                 _logger.warning("Calendar failed for %s: %s", key, e)
+        if not items and connection_error is not None:
+            raise connection_error
         items.sort(key=lambda x: x.metadata.get("start", ""))
         return items[:limit]
 

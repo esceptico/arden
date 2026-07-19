@@ -84,6 +84,26 @@ def _approval_snapshot(row: dict) -> dict:
     }
 
 
+def _connection_snapshot(row: dict) -> dict:
+    payload = row.get("payload") or {}
+    return {
+        "tool_id": row["tool_call_id"],
+        "integration_id": payload.get("integration_id"),
+        "connection_id": payload.get("connection_id"),
+        "label": payload.get("label"),
+        "reason": payload.get("reason"),
+        "detail": payload.get("detail"),
+        "capability": payload.get("capability"),
+        "action": payload.get("action"),
+        "settings_tab": payload.get("settings_tab") or "integrations",
+        "required_scopes": list(payload.get("required_scopes") or []),
+        "source": payload.get("source") or "suggestion",
+        "status": "pending",
+        "requested_at": row.get("requested_at"),
+        "run_id": row.get("run_id"),
+    }
+
+
 def _queued_message_snapshot(row: dict) -> dict:
     message = row.get("message") or {}
     raw_content = message.get("content", "") or ""
@@ -135,6 +155,11 @@ async def _session_runtime_snapshot(
     approval_rows = (
         await svc.store.list_pending_tool_approvals(session_id, run_id=surfaced_run["run_id"]) if surfaced_run else []
     )
+    connection_rows = (
+        await svc.store.list_pending_integration_connections(session_id, run_id=surfaced_run["run_id"])
+        if surfaced_run
+        else []
+    )
     queued_rows = []
     if surfaced_run and run_status in ACTIVE_RUN_STATUSES:
         queued_rows = [
@@ -144,6 +169,7 @@ async def _session_runtime_snapshot(
         ]
 
     pending_approvals = [_approval_snapshot(row) for row in approval_rows]
+    pending_connections = [_connection_snapshot(row) for row in connection_rows]
     queued_messages = [_queued_message_snapshot(row) for row in queued_rows]
 
     active_run = None
@@ -160,6 +186,7 @@ async def _session_runtime_snapshot(
             "error_code": surfaced_run.get("error_code"),
             "error_message": surfaced_run.get("error_message"),
             "pending_approvals": pending_approvals,
+            "pending_connections": pending_connections,
             "queued_messages": queued_messages,
         }
 
@@ -169,6 +196,7 @@ async def _session_runtime_snapshot(
         "checkpoint_seq": checkpoint_seq,
         "active_run": active_run,
         "pending_approvals": pending_approvals,
+        "pending_connections": pending_connections,
         "queued_messages": queued_messages,
     }
 
@@ -182,6 +210,7 @@ def _session_list_runtime_fields(snapshot: dict) -> dict:
         "latest_event_seq": snapshot["latest_event_seq"],
         "is_active": bool(active_run and active_run.get("status") in ACTIVE_RUN_STATUSES),
         "pending_approvals_count": len(snapshot["pending_approvals"]),
+        "pending_connections_count": len(snapshot["pending_connections"]),
         "queued_messages_count": len(snapshot["queued_messages"]),
         "run_error_code": active_run.get("error_code") if active_run else None,
         "run_stop_reason": active_run.get("stop_reason") if active_run else None,
@@ -324,6 +353,7 @@ async def get_session_history(
                 "checkpoint_seq": 0,
                 "active_run": None,
                 "pending_approvals": [],
+                "pending_connections": [],
                 "queued_messages": [],
             },
             "page": {"has_more_before": False, "has_more_after": False},

@@ -57,6 +57,7 @@ from ntrp.services.goal_continuation import (
 from ntrp.services.session import SessionService
 from ntrp.services.token_directive import parse_token_budget
 from ntrp.skills.registry import SkillRegistry
+from ntrp.tools.connections import render_connection_catalog
 from ntrp.tools.core.context import ChildIOFactory, ChildIOParams, ChildSession, IOBridge
 from ntrp.tools.core.types import ToolAction
 from ntrp.tools.deferred import (
@@ -219,6 +220,7 @@ class ChatDeps:
     run_registry: RunRegistry
     available_integrations: list[str]
     integration_errors: dict[str, str]
+    connection_catalog: tuple[object, ...] = ()
     enqueue_run_completed: Callable[[RunCompleted], Awaitable[bool]] | None = None
     dispatch_session_message: Callable[[str, str, str | None, bool | None], Awaitable[object]] | None = None
     memory_curator: object | None = None
@@ -239,6 +241,7 @@ class ChatContext:
     integration_errors: dict[str, str]
     session_service: SessionService
     run_registry: RunRegistry
+    connection_catalog: tuple[object, ...] = ()
     initial_input_tokens: int | None = None
     goal_id: str | None = None
     session_name_task: asyncio.Task[str] | None = None
@@ -520,6 +523,7 @@ async def _prepare_messages(
         area_context=area_context,
         area_page_context=area_page_context,
         todo_override=todo_override,
+        connections_context=render_connection_catalog(list(deps.connection_catalog)),
         use_cache_control=_is_anthropic(deps.chat_model),
         native_deferred_tools=native_deferred_tools,
         context_manifest=context_manifest,
@@ -775,6 +779,7 @@ async def prepare_chat(
         config=deps.agent_config,
         available_integrations=deps.available_integrations,
         integration_errors=deps.integration_errors,
+        connection_catalog=deps.connection_catalog,
         session_service=deps.session_service,
         run_registry=deps.run_registry,
         initial_input_tokens=session_data.last_input_tokens,
@@ -1529,6 +1534,12 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
             else:
                 await ctx.session_service.store.resolve_tool_approval(**kwargs)
 
+        async def record_connection(**kwargs) -> None:
+            await ctx.session_service.store.record_integration_connection_requested(**kwargs)
+
+        async def resolve_connection(**kwargs) -> None:
+            await ctx.session_service.store.resolve_integration_connection(**kwargs)
+
         async def get_suspension(**kwargs) -> dict | None:
             return await ctx.session_service.store.get_run_suspension(**kwargs)
 
@@ -1538,9 +1549,13 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
         io = IOBridge(
             pending_approvals=run.pending_approvals,
             pending_inputs=run.pending_inputs,
+            pending_connections=run.pending_connections,
+            pending_connection_descriptors=run.pending_connection_descriptors,
             emit=bus.emit,
             record_approval=record_approval,
             resolve_approval=resolve_approval,
+            record_connection=record_connection,
+            resolve_connection=resolve_connection,
             get_suspension=get_suspension,
             consume_suspension=consume_suspension,
             approval_timeout_seconds=ctx.config.approval_timeout_seconds,

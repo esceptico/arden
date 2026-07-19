@@ -6,6 +6,7 @@ import { switchSession } from "@/actions/sessions";
 import { Messages } from "@/features/chat/components/Messages";
 import { Composer } from "@/features/chat/components/Composer";
 import { ApprovalBanner } from "@/features/chat/components/ApprovalBanner";
+import { ConnectionBanner } from "@/features/chat/components/ConnectionBanner";
 import { TriageChip } from "@/features/chat/components/TriageChip";
 import { useChatTriage } from "@/hooks/useChatTriage";
 import { Button } from "@/components/ui/Button";
@@ -176,6 +177,7 @@ export function Chat() {
           className="absolute bottom-0 left-0 right-0 z-10"
         >
           <TriageChip />
+          <ConnectionBanner />
           <ApprovalBanner />
           <Composer />
         </div>

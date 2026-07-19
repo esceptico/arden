@@ -58,6 +58,17 @@ def test_registry_distinguishes_disabled_and_not_configured_connections():
     assert unconfigured.state == "not_configured"
 
 
+def test_registry_prioritizes_setup_when_disabled_integration_has_no_credentials():
+    registry = IntegrationRegistry([_integration(lambda _config: None)])
+    registry.sync(Config(_env_file=None, memory=False, google=False, openai_api_key=None))
+
+    descriptor = registry.get_connection("example")
+
+    assert descriptor is not None
+    assert descriptor.state == "not_configured"
+    assert descriptor.action == "settings"
+
+
 def test_registry_preserves_typed_connection_build_failure():
     def build(_config):
         raise IntegrationConnectionError(

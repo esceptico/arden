@@ -4,7 +4,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 from coolname import generate_slug
 
@@ -13,13 +13,14 @@ from ntrp.agent.agent import RunBudget
 from ntrp.agent.ledger import SharedLedger
 from ntrp.constants import NTRP_TMP_BASE
 from ntrp.context.models import AreaContext, SessionState
-from ntrp.events.sse import ApprovalNeededEvent, BackgroundTaskEvent, InputNeededEvent
+from ntrp.events.sse import ApprovalNeededEvent, BackgroundTaskEvent, ConnectionNeededEvent, InputNeededEvent
 from ntrp.logging import get_logger
 from ntrp.tools.core.types import ToolOverrideDecision
 
 _logger = get_logger(__name__)
 
 if TYPE_CHECKING:
+    from ntrp.integrations.base import IntegrationConnectionDescriptor
     from ntrp.server.state import RunRegistry
     from ntrp.tools.core.registry import ToolRegistry
 
@@ -72,6 +73,7 @@ class RunContext:
     workflow_model: str | None = None
     deferred_tools_enabled: bool = False
     loaded_tools: set[str] = field(default_factory=set)
+    declined_connections: set[str] = field(default_factory=set)
     allowed_tool_names: set[str] | None = None
     loop_task_id: str | None = None
     active_plan_ref: str | None = None
@@ -97,6 +99,7 @@ class RunContext:
             "background_tasks": background_tasks or [],
             "active_plan_ref": self.active_plan_ref,
             "loop_task_id": self.loop_task_id,
+            "declined_connections": sorted(self.declined_connections),
         }
 
     def apply_rehydration_state(self, state: dict[str, Any] | None) -> None:
@@ -106,6 +109,9 @@ class RunContext:
         self.active_plan_ref = active_plan_ref if isinstance(active_plan_ref, str) else None
         loop_task_id = state.get("loop_task_id")
         self.loop_task_id = loop_task_id if isinstance(loop_task_id, str) else None
+        declined_connections = state.get("declined_connections")
+        if isinstance(declined_connections, list):
+            self.declined_connections = {value for value in declined_connections if isinstance(value, str)}
 
 
 @dataclass
@@ -121,8 +127,14 @@ class IOBridge:
     # mechanics as approvals but a separate dict so set_skip_approvals'
     # blanket-approve never resolves a pending input with an empty string.
     pending_inputs: dict[str, "asyncio.Future[ApprovalResponse]"] | None = None
+    # Connection requests are user-interaction suspensions, not approvals.
+    # Keep them separate so Auto mode never resolves them.
+    pending_connections: dict[str, "asyncio.Future[ApprovalResponse]"] | None = None
+    pending_connection_descriptors: dict[str, "IntegrationConnectionDescriptor"] | None = None
     record_approval: Callable[..., Awaitable[None]] | None = None
     resolve_approval: Callable[..., Awaitable[None]] | None = None
+    record_connection: Callable[..., Awaitable[None]] | None = None
+    resolve_connection: Callable[..., Awaitable[None]] | None = None
     get_suspension: Callable[..., Awaitable[dict | None]] | None = None
     consume_suspension: Callable[..., Awaitable[None]] | None = None
     approval_timeout_seconds: int = 300
@@ -539,6 +551,118 @@ class ToolExecution:
     tool_id: str
     tool_name: str
     ctx: ToolContext
+
+    async def request_connection(
+        self,
+        descriptor: "IntegrationConnectionDescriptor",
+        *,
+        source: Literal["recovery", "suggestion"],
+        detail: str | None = None,
+    ) -> bool:
+        if descriptor.integration_id in self.ctx.run.declined_connections:
+            return False
+        if self.ctx.io.get_suspension:
+            try:
+                suspension = await self.ctx.io.get_suspension(
+                    run_id=self.ctx.run.run_id,
+                    suspension_id=self.tool_id,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _logger.exception("Connection suspension lookup failed")
+            else:
+                if (
+                    suspension
+                    and suspension.get("kind") == "integration_connection"
+                    and suspension.get("status") != "pending"
+                ):
+                    resolution = suspension.get("resolution") or {}
+                    accepted = bool(resolution.get("approved"))
+                    await _approval_callback_best_effort(
+                        self.ctx.io.consume_suspension,
+                        "consume",
+                        run_id=self.ctx.run.run_id,
+                        suspension_id=self.tool_id,
+                    )
+                    if not accepted:
+                        self.ctx.run.declined_connections.add(descriptor.integration_id)
+                    return accepted
+
+        if not self.ctx.io.emit or self.ctx.io.pending_connections is None:
+            return False
+
+        request_detail = (detail or descriptor.detail or descriptor.capability).strip()
+        expires_at = (datetime.now(UTC) + timedelta(seconds=self.ctx.io.approval_timeout_seconds)).isoformat()
+        await _approval_callback_best_effort(
+            self.ctx.io.record_connection,
+            "record connection",
+            run_id=self.ctx.run.run_id,
+            session_id=self.ctx.session_id,
+            tool_call_id=self.tool_id,
+            descriptor=descriptor,
+            source=source,
+            detail=request_detail,
+            expires_at=expires_at,
+        )
+
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[ApprovalResponse] = loop.create_future()
+        self.ctx.io.pending_connections[self.tool_id] = future
+        if self.ctx.io.pending_connection_descriptors is not None:
+            self.ctx.io.pending_connection_descriptors[self.tool_id] = descriptor
+        try:
+            await self.ctx.io.emit(
+                ConnectionNeededEvent(
+                    run_id=self.ctx.run.run_id,
+                    tool_id=self.tool_id,
+                    integration_id=descriptor.integration_id,
+                    connection_id=descriptor.connection_id,
+                    label=descriptor.label,
+                    reason=descriptor.state,
+                    detail=request_detail,
+                    capability=descriptor.capability,
+                    action=descriptor.action,
+                    settings_tab=descriptor.settings_tab,
+                    required_scopes=list(descriptor.required_scopes),
+                    source=source,
+                )
+            )
+            response = await asyncio.wait_for(future, timeout=self.ctx.io.approval_timeout_seconds)
+        except TimeoutError:
+            await _approval_callback_best_effort(
+                self.ctx.io.resolve_connection,
+                "resolve connection",
+                run_id=self.ctx.run.run_id,
+                tool_call_id=self.tool_id,
+                status="expired",
+                result_feedback="Connection request timed out",
+            )
+            return False
+        finally:
+            self.ctx.io.pending_connections.pop(self.tool_id, None)
+            if self.ctx.io.pending_connection_descriptors is not None:
+                self.ctx.io.pending_connection_descriptors.pop(self.tool_id, None)
+
+        accepted = bool(response["approved"])
+        if not accepted:
+            self.ctx.run.declined_connections.add(descriptor.integration_id)
+        await _approval_callback_best_effort(
+            self.ctx.io.resolve_connection,
+            "resolve connection",
+            run_id=self.ctx.run.run_id,
+            tool_call_id=self.tool_id,
+            status="approved" if accepted else "rejected",
+            result_feedback=response.get("result", "").strip() or None,
+        )
+        if accepted:
+            await _approval_callback_best_effort(
+                self.ctx.io.consume_suspension,
+                "consume",
+                run_id=self.ctx.run.run_id,
+                suspension_id=self.tool_id,
+            )
+        return accepted
 
     async def request_approval(
         self,

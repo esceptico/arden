@@ -12,6 +12,7 @@ from ntrp.tools.core.context import ApprovalControls, BackgroundTaskRegistry
 
 if TYPE_CHECKING:
     from ntrp.context.models import SessionState
+    from ntrp.integrations.base import IntegrationConnectionDescriptor
 
 
 class RunStatus(StrEnum):
@@ -53,6 +54,8 @@ class RunState:
     # pending_approvals so set_skip_approvals' blanket-approve never feeds a
     # pending input an empty string.
     pending_inputs: dict[str, "asyncio.Future[dict]"] = field(default_factory=dict)
+    pending_connections: dict[str, "asyncio.Future[dict]"] = field(default_factory=dict)
+    pending_connection_descriptors: dict[str, "IntegrationConnectionDescriptor"] = field(default_factory=dict)
     task: asyncio.Task | None = None
     inject_queue: list[dict] = field(default_factory=list)
     loaded_tools: set[str] = field(default_factory=set)
@@ -194,6 +197,7 @@ class RunState:
             "message_count": len(self.messages),
             "pending_injections": self.pending_injection_count,
             "approvals_pending": len(self.pending_approvals),
+            "connections_pending": len(self.pending_connections),
             "task_running": self.task is not None and not self.task.done(),
             "drain_task_running": self.drain_task is not None and not self.drain_task.done(),
             "cancelled": self.cancelled,

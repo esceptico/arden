@@ -14,6 +14,7 @@ import markdown
 from googleapiclient.discovery import build
 
 from ntrp.core.prompts import env
+from ntrp.integrations.base import IntegrationConnectionError
 from ntrp.integrations.google_auth.auth import (
     SCOPES_ALL,
     SCOPES_GMAIL_SEND,
@@ -244,15 +245,20 @@ class GmailSource:
 
     def _get_credentials(self):
         if self._creds is None or not self._creds.valid:
-            self._creds = get_google_credentials(self.token_path, scopes=SCOPES_ALL)
+            self._creds = get_google_credentials(self.token_path, scopes=SCOPES_ALL, integration_id="gmail")
         return self._creds
 
     def has_send_scope(self) -> bool:
-        try:
-            creds = self._get_credentials()
-            return has_scope(creds, SCOPES_GMAIL_SEND[0])
-        except Exception:
-            return False  # Token invalid or network error - assume no send scope
+        creds = self._get_credentials()
+        if not has_scope(creds, SCOPES_GMAIL_SEND[0]):
+            raise IntegrationConnectionError(
+                integration_id="gmail",
+                reason="scope_required",
+                detail="Gmail authorization is missing permission to send email.",
+                required_scopes=tuple(SCOPES_GMAIL_SEND),
+                retry_safe=True,
+            )
+        return True
 
     def _get_service(self):
         if self._service is None:
@@ -268,15 +274,19 @@ class GmailSource:
             profile = service.users().getProfile(userId="me").execute()
             self._email_address = profile.get("emailAddress", "")
             return self._email_address
+        except IntegrationConnectionError:
+            raise
         except Exception:
             return ""  # API error fetching profile - return empty email
+
+    def verify_connection(self) -> None:
+        self._get_service().users().getProfile(userId="me").execute()
 
     def send(self, to: str, subject: str, body: str, from_email: str | None = None, html: bool = False) -> str:
         if not to:
             return "Error: recipient is required"
 
-        if not self.has_send_scope():
-            return "Error: Gmail token lacks send permission. Run `ntrp gmail add` to re-authenticate with send scope."
+        self.has_send_scope()
 
         body_text = body or ""
 
@@ -318,6 +328,8 @@ class GmailSource:
             )
             msg_id = sent.get("id", "")
             return f"Sent email to {to}" + (f" (id: {msg_id})" if msg_id else "")
+        except IntegrationConnectionError:
+            raise
         except Exception as e:
             return f"Error sending email: {e}"
 
@@ -355,6 +367,8 @@ class GmailSource:
             )
             self._emails_cache[cache_key] = msg
             return msg
+        except IntegrationConnectionError:
+            raise
         except Exception:
             return None  # API error - message not found or permission denied
 
@@ -368,6 +382,8 @@ class GmailSource:
             msg = service.users().messages().get(userId="me", id=msg_id, format="full").execute()
             self._emails_cache[cache_key] = msg
             return msg
+        except IntegrationConnectionError:
+            raise
         except Exception:
             return None  # API error fetching full message
 
@@ -512,14 +528,21 @@ class MultiGmailSource:
     def __init__(self, token_paths: list[Path], days_back: int):
         self.sources: list[GmailSource] = []
         self._errors: dict[str, str] = {}
+        connection_error: IntegrationConnectionError | None = None
 
         for token_path in token_paths:
             try:
                 src = GmailSource(token_path=token_path, days_back=days_back)
                 src._get_credentials()
                 self.sources.append(src)
+            except IntegrationConnectionError as exc:
+                connection_error = exc
+                self._errors[token_path.name] = exc.detail
             except Exception as e:
                 self._errors[token_path.name] = str(e)
+
+        if not self.sources and connection_error is not None:
+            raise connection_error
 
         self._days = days_back
 
@@ -530,6 +553,23 @@ class MultiGmailSource:
     @property
     def details(self) -> dict:
         return {"accounts": self.list_accounts(), "days": self._days}
+
+    def verify_connection(self) -> None:
+        if not self.sources:
+            raise IntegrationConnectionError(
+                integration_id="gmail",
+                reason="not_configured",
+                detail="No Gmail account is connected.",
+            )
+        last_error: Exception | None = None
+        for source in self.sources:
+            try:
+                source.verify_connection()
+                return
+            except Exception as exc:
+                last_error = exc
+        if last_error is not None:
+            raise last_error
 
     def list_accounts(self) -> list[str]:
         accounts: list[str] = []
@@ -568,22 +608,34 @@ class MultiGmailSource:
 
     def search(self, query: str, limit: int = 50) -> list[RawItem]:
         items: list[RawItem] = []
+        connection_error: IntegrationConnectionError | None = None
         per_account = max(limit // len(self.sources), 10) if self.sources else limit
         for src in self.sources:
             try:
                 items.extend(src.search(query, limit=per_account))
+            except IntegrationConnectionError as exc:
+                connection_error = exc
+                self._handle_source_error(src, exc)
             except Exception as e:
                 self._handle_source_error(src, e)
+        if not items and connection_error is not None:
+            raise connection_error
         items.sort(key=lambda x: x.updated_at, reverse=True)
         return items[:limit]
 
     def list_recent(self, days: int = 7, limit: int = 50) -> list[SourceItem]:
         items: list[SourceItem] = []
+        connection_error: IntegrationConnectionError | None = None
         per_account = max(limit // len(self.sources), 5) if self.sources else limit
         for src in self.sources:
             try:
                 items.extend(src.list_recent(days=days, limit=per_account))
+            except IntegrationConnectionError as exc:
+                connection_error = exc
+                self._handle_source_error(src, exc)
             except Exception as e:
                 self._handle_source_error(src, e)
+        if not items and connection_error is not None:
+            raise connection_error
         items.sort(key=lambda x: x.timestamp or datetime.min.replace(tzinfo=UTC), reverse=True)
         return items[:limit]

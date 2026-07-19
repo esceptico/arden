@@ -78,10 +78,10 @@ class IntegrationRegistry:
         elif id in self._errors:
             state = "degraded"
             detail = self._errors[id]
-        elif self._config is not None and spec.enabled is not None and not spec.enabled(self._config):
-            state = "disabled"
         elif self._config is not None and spec.configured is not None and not spec.configured(self._config):
             state = "not_configured"
+        elif self._config is not None and spec.enabled is not None and not spec.enabled(self._config):
+            state = "disabled"
         else:
             state = "not_configured" if spec.configured is None else "degraded"
 

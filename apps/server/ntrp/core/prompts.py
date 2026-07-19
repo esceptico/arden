@@ -325,6 +325,7 @@ def build_system_blocks(
     area_context: object | None = None,
     area_page_context: dict | None = None,
     todo_override: dict | None = None,
+    connections_context: str | None = None,
     use_cache_control: bool = False,
     native_deferred_tools: bool = False,
     context_manifest: list[ContextManifestEntry] | None = None,
@@ -388,6 +389,12 @@ def build_system_blocks(
     if todo_override and todo_override.get("items"):
         blocks.append({"type": "text", "text": TODO_OVERRIDE_BLOCK.render(todo=todo_override)})
         manifest_specs.append(("todo_override", "session", "todo_override", "live", "user-edited task state"))
+
+    if connections_context:
+        blocks.append({"type": "text", "text": connections_context})
+        manifest_specs.append(
+            ("connections", "integrations", "registered-connections", "live", "currently disconnected capabilities")
+        )
 
     blocks.append({"type": "text", "text": TEMPORAL_REMINDER.render(date=date)})
     manifest_specs.append(("temporal_reminder", "clock", "current-date", date, "date-sensitive reasoning"))

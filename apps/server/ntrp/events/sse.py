@@ -70,6 +70,7 @@ class EventType(StrEnum):
     THINKING = "thinking"
     APPROVAL_NEEDED = "approval_needed"
     INPUT_NEEDED = "input_needed"
+    CONNECTION_NEEDED = "connection_needed"
     BACKGROUND_TASK = "background_task"
     WORKFLOW_STARTED = "workflow_started"
     WORKFLOW_FINISHED = "workflow_finished"
@@ -407,6 +408,23 @@ class InputNeededEvent(SSEEvent):
 
 
 @dataclass(frozen=True)
+class ConnectionNeededEvent(SSEEvent):
+    type: EventType = field(default=EventType.CONNECTION_NEEDED, init=False)
+    run_id: str = ""
+    tool_id: str = ""
+    integration_id: str = ""
+    connection_id: str = ""
+    label: str = ""
+    reason: str = "not_configured"
+    detail: str = ""
+    capability: str = ""
+    action: str = "settings"
+    settings_tab: str = "integrations"
+    required_scopes: list[str] = field(default_factory=list)
+    source: Literal["recovery", "suggestion"] = "suggestion"
+
+
+@dataclass(frozen=True)
 class BackgroundTaskEvent(SSEEvent):
     type: EventType = field(default=EventType.BACKGROUND_TASK, init=False)
     event_id: str | None = None
@@ -652,6 +670,7 @@ _EVENT_CLASSES = {
     EventType.THINKING.value: ThinkingEvent,
     EventType.APPROVAL_NEEDED.value: ApprovalNeededEvent,
     EventType.INPUT_NEEDED.value: InputNeededEvent,
+    EventType.CONNECTION_NEEDED.value: ConnectionNeededEvent,
     EventType.BACKGROUND_TASK.value: BackgroundTaskEvent,
     EventType.TASK_STARTED.value: TaskStartedEvent,
     EventType.TASK_PROGRESS.value: TaskProgressEvent,

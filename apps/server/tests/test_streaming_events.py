@@ -27,6 +27,7 @@ from ntrp.events.sse import (
     AutomationProgressEvent,
     CompactionFinishedEvent,
     CompactionStartedEvent,
+    ConnectionNeededEvent,
     KeepaliveEvent,
     ReasoningMessageContentEvent,
     TaskFinishedEvent,
@@ -816,6 +817,70 @@ async def test_event_stream_skips_resolved_approval_replay():
     assert payload["type"] == "thinking"
     assert payload["status"] == "tail"
     assert payload["seq"] == 2
+
+
+@pytest.mark.asyncio
+async def test_event_stream_replays_only_pending_connection():
+    buses = BusRegistry()
+    bus = buses.get_or_create("sess-1")
+    await bus.emit(
+        ConnectionNeededEvent(
+            tool_id="tool-connection",
+            integration_id="gmail",
+            connection_id="google",
+            label="Gmail",
+            capability="Read email",
+        )
+    )
+
+    registry = RunRegistry()
+    run = registry.create_run("sess-1")
+    run.status = RunStatus.RUNNING
+    run.pending_connections["tool-connection"] = asyncio.get_running_loop().create_future()
+
+    stream = _event_stream("sess-1", buses, registry, stream=True, after_seq=0)
+    try:
+        chunk = await anext(stream)
+    finally:
+        await stream.aclose()
+
+    payload = json.loads(chunk.split("data: ", 1)[1].strip())
+    assert payload["type"] == "connection_needed"
+    assert payload["tool_id"] == "tool-connection"
+    assert payload["replay"] is True
+
+
+@pytest.mark.asyncio
+async def test_event_stream_skips_resolved_connection_replay():
+    buses = BusRegistry()
+    bus = buses.get_or_create("sess-1")
+    await bus.emit(
+        ConnectionNeededEvent(
+            tool_id="tool-connection",
+            integration_id="gmail",
+            connection_id="google",
+            label="Gmail",
+            capability="Read email",
+        )
+    )
+    await bus.emit(ThinkingEvent(status="tail"))
+
+    registry = RunRegistry()
+    run = registry.create_run("sess-1")
+    run.status = RunStatus.RUNNING
+    future = asyncio.get_running_loop().create_future()
+    future.set_result({"approved": True, "result": "connected"})
+    run.pending_connections["tool-connection"] = future
+
+    stream = _event_stream("sess-1", buses, registry, stream=True, after_seq=0)
+    try:
+        chunk = await anext(stream)
+    finally:
+        await stream.aclose()
+
+    payload = json.loads(chunk.split("data: ", 1)[1].strip())
+    assert payload["type"] == "thinking"
+    assert payload["status"] == "tail"
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,5 @@
 import type { AppConfig } from "@/api/core";
-import type { ToolOutcome } from "@/api/events";
+import type { ConnectionAction, ConnectionState, ToolOutcome } from "@/api/events";
 import type { ArchivedSession } from "@/api/sessions";
 import type { Automation, AutomationSuggestion, ModelsResponse, Area, ServerConfig, SessionGoal, SessionListItem, SkillDescriptor, TodoListItem } from "@/api/types";
 import type { TransportDiagnosticsSnapshot } from "@/lib/transportDiagnostics";
@@ -262,6 +262,21 @@ export interface ApprovalState {
   status: ApprovalStatus;
 }
 
+export interface PendingConnection {
+  runId: string;
+  toolId: string;
+  integrationId: string;
+  connectionId: string;
+  label: string;
+  reason: ConnectionState;
+  detail: string;
+  capability: string;
+  action: ConnectionAction;
+  settingsTab: string;
+  requiredScopes: string[];
+  source: "recovery" | "suggestion";
+}
+
 export interface TodoListState {
   items: TodoListItem[];
   explanation?: string | null;
@@ -345,6 +360,7 @@ export interface CachedSessionState {
   compacting: boolean;
   sourceFocus: MessageSourceFocus | null;
   pendingApprovals: ApprovalState[];
+  pendingConnections: PendingConnection[];
   reviewingApprovalToolId: string | null;
   queuedMessages: QueuedMessage[];
   pendingResume: { runId: string | null; sessionId: string } | null;
@@ -411,6 +427,7 @@ export interface State {
    *  approval UI can render as its own surface (sticky banner above the
    *  composer) without interleaving with the agent's narrative trace. */
   pendingApprovals: ApprovalState[];
+  pendingConnections: PendingConnection[];
   /** When non-null, the approval UI is showing a diff/preview modal for
    *  this approval's `toolId`. */
   reviewingApprovalToolId: string | null;
@@ -516,6 +533,8 @@ export interface Actions {
   setApprovalStatus: (id: string, status: ApprovalStatus) => void;
   addPendingApproval: (approval: ApprovalState) => void;
   resolvePendingApproval: (toolId: string) => void;
+  addPendingConnection: (connection: PendingConnection) => void;
+  resolvePendingConnection: (toolId: string) => void;
   setReviewingApproval: (
     toolId: string | null,
     origin?: { x: number; y: number } | null,

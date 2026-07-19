@@ -45,6 +45,24 @@ export interface RuntimeApprovalSnapshot {
   run_id?: string | null;
 }
 
+export interface RuntimeConnectionSnapshot {
+  tool_id: string;
+  run_id: string;
+  integration_id: string;
+  connection_id: string;
+  label: string;
+  reason: ConnectionState;
+  detail: string;
+  capability: string;
+  action: ConnectionAction;
+  settings_tab: string;
+  required_scopes: string[];
+  source: "recovery" | "suggestion";
+}
+
+export type ConnectionState = "not_configured" | "disabled" | "auth_required" | "scope_required" | "degraded";
+export type ConnectionAction = "oauth" | "credentials" | "enable" | "settings";
+
 export interface RuntimeQueuedMessageSnapshot {
   client_id: string;
   text: string;
@@ -67,6 +85,7 @@ export interface ActiveRunSnapshot {
   error_code?: string | null;
   error_message?: string | null;
   pending_approvals: RuntimeApprovalSnapshot[];
+  pending_connections: RuntimeConnectionSnapshot[];
   queued_messages: RuntimeQueuedMessageSnapshot[];
 }
 
@@ -76,6 +95,7 @@ export interface SessionRuntimeSnapshot {
   checkpoint_seq: number;
   active_run: ActiveRunSnapshot | null;
   pending_approvals: RuntimeApprovalSnapshot[];
+  pending_connections: RuntimeConnectionSnapshot[];
   queued_messages: RuntimeQueuedMessageSnapshot[];
 }
 
@@ -117,6 +137,7 @@ export type ServerEvent = CommonServerEventFields & (
   // ─── ntrp-specific (non-AG-UI canonical) ───────────────────────────
   | { type: "approval_needed"; tool_id: string; name: string; path?: string | null; diff?: string | null; content_preview?: string | null }
   | { type: "input_needed"; tool_id: string; name: string; title: string; html: string }
+  | { type: "connection_needed"; run_id: string; tool_id: string; integration_id: string; connection_id: string; label: string; reason: ConnectionState; detail: string; capability: string; action: ConnectionAction; settings_tab: string; required_scopes: string[]; source: "recovery" | "suggestion" }
   | {
       type: "background_task";
       event_id?: string | null;

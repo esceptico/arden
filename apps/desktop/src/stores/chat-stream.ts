@@ -293,6 +293,22 @@ function applyServerEvent(event: ServerEvent): ServerEventEffect | undefined {
         status: "pending",
       });
       return;
+    case "connection_needed":
+      s.addPendingConnection({
+        runId: event.run_id,
+        toolId: event.tool_id,
+        integrationId: event.integration_id,
+        connectionId: event.connection_id,
+        label: event.label,
+        reason: event.reason,
+        detail: event.detail,
+        capability: event.capability,
+        action: event.action,
+        settingsTab: event.settings_tab,
+        requiredScopes: event.required_scopes,
+        source: event.source,
+      });
+      return;
     case "background_task":
       const agent: BackgroundAgentUpsert = {
         taskId: event.task_id,

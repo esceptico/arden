@@ -27,6 +27,7 @@ from ntrp.server.stores import Stores
 from ntrp.services.session import SessionService
 from ntrp.skills.registry import SkillRegistry
 from ntrp.skills.service import SkillService, get_skills_dirs
+from ntrp.tools.connections import ConnectionService
 from ntrp.tools.executor import ToolExecutor
 
 _logger = get_logger(__name__)
@@ -41,6 +42,7 @@ class Runtime:
         initial_config = config or get_config()
         self.integrations = IntegrationRegistry(ALL_INTEGRATIONS)
         self.integrations.sync(initial_config)
+        self.connection_service = ConnectionService(self.integrations)
         self.run_registry = RunRegistry()
         self.knowledge = KnowledgeRuntime(initial_config)
 
@@ -131,6 +133,7 @@ class Runtime:
     @property
     def tool_services(self) -> dict[str, object]:
         services: dict[str, object] = dict(self.integrations.clients)
+        services["connections"] = self.connection_service
         services["area_pages"] = self.config.memory_artifacts_dir
         if self.automation:
             services["area_custodians"] = self.automation.custodians
@@ -298,6 +301,7 @@ class Runtime:
             run_registry=self.run_registry,
             available_integrations=self.get_available_integrations(),
             integration_errors=self.get_integration_errors(),
+            connection_catalog=tuple(self.integrations.list_connections()),
             enqueue_run_completed=self.stores.outbox.enqueue_run_completed if self.stores else None,
             dispatch_session_message=self.dispatch_session_message,
             memory_curator=self.memory_curator,

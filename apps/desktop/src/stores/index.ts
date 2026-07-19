@@ -91,6 +91,7 @@ export type {
   Actions,
   ApprovalState,
   ApprovalStatus,
+  PendingConnection,
   BackgroundAgent,
   BackgroundAgentStatus,
   CachedSessionState,
@@ -270,6 +271,7 @@ export const useStore = create<State & Actions>((set) => ({
   sourceRefsRevision: 0,
   paletteOpen: false,
   pendingApprovals: [],
+  pendingConnections: [],
   reviewingApprovalToolId: null,
   queuedMessages: [],
   pendingResume: null,
@@ -396,6 +398,7 @@ export const useStore = create<State & Actions>((set) => ({
         compacting: view.compacting,
         sourceFocus: view.sourceFocus,
         pendingApprovals: view.pendingApprovals,
+        pendingConnections: view.pendingConnections,
         reviewingApprovalToolId: view.reviewingApprovalToolId,
         queuedMessages: view.queuedMessages,
         pendingResume: view.pendingResume,
@@ -695,6 +698,12 @@ export const useStore = create<State & Actions>((set) => ({
 
   addPendingApproval: (approval) => set((s) => reduceApprovalRequested(s, approval)),
   resolvePendingApproval: (toolId) => set((s) => reduceApprovalResolved(s, toolId)),
+  addPendingConnection: (connection) =>
+    set((s) => ({
+      pendingConnections: [...s.pendingConnections.filter((item) => item.toolId !== connection.toolId), connection],
+    })),
+  resolvePendingConnection: (toolId) =>
+    set((s) => ({ pendingConnections: s.pendingConnections.filter((item) => item.toolId !== toolId) })),
   setReviewingApproval: (toolId, origin) =>
     set({ reviewingApprovalToolId: toolId, modalOrigin: toolId ? origin ?? null : null }),
 

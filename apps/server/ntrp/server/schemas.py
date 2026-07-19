@@ -29,6 +29,13 @@ class ToolResultRequest(BaseModel):
     approved: bool = True
 
 
+class ConnectionResultRequest(BaseModel):
+    run_id: str
+    tool_id: str
+    result: str = ""
+    approved: bool = True
+
+
 class CancelRequest(BaseModel):
     # run_id is preferred; session_id lets the client say "stop whatever is
     # running in this session" when it can't reliably name the run (e.g. a

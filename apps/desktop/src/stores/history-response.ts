@@ -115,6 +115,27 @@ export function pendingApprovalsFromRuntime(
   }));
 }
 
+export function pendingConnectionsFromRuntime(
+  runtime: SessionRuntimeSnapshot | undefined,
+  hasForegroundRun: boolean,
+) {
+  if (!runtime || !hasForegroundRun) return [];
+  return (runtime.pending_connections ?? []).map((connection) => ({
+    runId: connection.run_id,
+    toolId: connection.tool_id,
+    integrationId: connection.integration_id,
+    connectionId: connection.connection_id,
+    label: connection.label,
+    reason: connection.reason,
+    detail: connection.detail,
+    capability: connection.capability,
+    action: connection.action,
+    settingsTab: connection.settings_tab,
+    requiredScopes: connection.required_scopes,
+    source: connection.source,
+  }));
+}
+
 export function queuedMessagesFromRuntime(
   runtime: SessionRuntimeSnapshot | undefined,
   hasForegroundRun: boolean,
@@ -175,6 +196,7 @@ export function cachedSessionFromHistory(
     activeActivityId,
     compacting: false,
     pendingApprovals: pendingApprovalsFromRuntime(runtime, view.hasForegroundRun, skipApprovals),
+    pendingConnections: pendingConnectionsFromRuntime(runtime, view.hasForegroundRun),
     reviewingApprovalToolId: null,
     queuedMessages: queuedMessagesFromRuntime(runtime, view.hasForegroundRun),
   };

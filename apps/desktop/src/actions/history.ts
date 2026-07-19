@@ -26,6 +26,7 @@ import {
   cachedSessionFromHistory,
   historyMessagesToUi,
   pendingApprovalsFromRuntime,
+  pendingConnectionsFromRuntime,
   areaHistoryResponse,
   queuedMessagesFromRuntime,
   runtimeView,
@@ -193,6 +194,7 @@ function applyRuntimeSnapshot(sessionId: string, runtime: SessionRuntimeSnapshot
     return {
       ...lifecycle,
       pendingApprovals: pendingApprovalsFromRuntime(runtime, view.hasForegroundRun, state.skipApprovals),
+      pendingConnections: pendingConnectionsFromRuntime(runtime, view.hasForegroundRun),
       queuedMessages: queuedMessagesFromRuntime(runtime, view.hasForegroundRun),
     };
   });

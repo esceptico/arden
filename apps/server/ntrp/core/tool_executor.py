@@ -17,6 +17,8 @@ from ntrp.constants import (
 )
 from ntrp.core.raw_tool_results import persist_raw_tool_result
 from ntrp.core.tool_result_files import persist_result
+from ntrp.integrations.base import IntegrationConnectionError
+from ntrp.tools.connections import ConnectionService
 from ntrp.tools.core.context import ToolContext, ToolExecution
 from ntrp.tools.core.types import ToolAction, ToolScope
 from ntrp.tools.deferred import is_deferred_tool
@@ -128,22 +130,31 @@ class NtrpToolExecutor:
         try:
             execute = self._executor.registry.execute(name, execution, args)
             timeout_seconds = _effective_timeout_seconds(tool)
-            if timeout_seconds is None:
-                result = await execute
-            else:
-                try:
+            try:
+                if timeout_seconds is None:
+                    result = await execute
+                else:
                     result = await asyncio.wait_for(execute, timeout=timeout_seconds)
-                except TimeoutError:
-                    result = ToolResult.failure(
-                        code="timeout",
-                        message="Tool call timed out.",
-                        preview="Timed out",
-                        retryable=True,
-                        recovery_action="Check whether the operation completed before retrying.",
-                    )
-                    finish_status = "timeout"
-                    finish_preview = result.preview
-                    return result
+            except TimeoutError:
+                result = ToolResult.failure(
+                    code="timeout",
+                    message="Tool call timed out.",
+                    preview="Timed out",
+                    retryable=True,
+                    recovery_action="Check whether the operation completed before retrying.",
+                )
+                finish_status = "timeout"
+                finish_preview = result.preview
+                return result
+            except IntegrationConnectionError as exc:
+                result = await self._recover_connection(
+                    exc,
+                    tool=tool,
+                    execution=execution,
+                    name=name,
+                    args=args,
+                    timeout_seconds=timeout_seconds,
+                )
 
             result = self._truncate_result(result, tool.policy.max_result_chars)
             if tool.policy.offload:
@@ -185,6 +196,67 @@ class NtrpToolExecutor:
                     finish_preview,
                     result.outcome.to_dict() if result and result.outcome else None,
                 )
+
+    async def _recover_connection(
+        self,
+        error: IntegrationConnectionError,
+        *,
+        tool: Any,
+        execution: ToolExecution,
+        name: str,
+        args: dict,
+        timeout_seconds: int | float | None,
+    ) -> ToolResult:
+        service = self._ctx.get_client("connections", ConnectionService)
+        descriptor = service.recovery_descriptor(error) if service else None
+        if descriptor is None:
+            return ToolResult.failure(
+                code="connection_required",
+                message=error.detail,
+                preview="Connection required",
+                retryable=True,
+                recovery_action="Repair the integration connection in settings, then retry.",
+            )
+
+        accepted = await execution.request_connection(descriptor, source="recovery", detail=error.detail)
+        if not accepted:
+            return ToolResult.failure(
+                code="connection_declined",
+                message=f"{descriptor.label} was not reconnected.",
+                preview="Connection declined",
+                recovery_action="Continue without this integration or reconnect it later.",
+            )
+
+        if not error.retry_safe or tool.policy.action != ToolAction.READ:
+            return ToolResult.failure(
+                code="connection_retry_required",
+                message=f"{descriptor.label} is connected. Retry the operation explicitly.",
+                preview="Ready to retry",
+                retryable=True,
+                recovery_action="Retry the operation once.",
+            )
+
+        try:
+            retry = self._executor.registry.execute(name, execution, args)
+            if timeout_seconds is None:
+                return await retry
+            return await asyncio.wait_for(retry, timeout=timeout_seconds)
+        except IntegrationConnectionError as retry_error:
+            return ToolResult.failure(
+                code="connection_still_unavailable",
+                message=retry_error.detail,
+                preview="Connection unavailable",
+                retryable=True,
+                recovery_action="Check the integration settings before retrying.",
+            )
+        except TimeoutError:
+            return ToolResult.failure(
+                code="timeout",
+                message="Tool call timed out after reconnecting.",
+                preview="Timed out",
+                retryable=True,
+                recovery_action="Check whether the operation completed before retrying.",
+            )
 
     def _audit_store(self) -> Any | None:
         store = self._ctx.services.get("store")

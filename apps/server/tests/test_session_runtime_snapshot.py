@@ -10,6 +10,7 @@ from ntrp.context.models import SessionState
 from ntrp.context.store import SessionStore
 from ntrp.core.model_context_budget import HISTORY_TOOL_RESULT_PREVIEW_CHARS
 from ntrp.events.sse import ThinkingEvent
+from ntrp.integrations.base import IntegrationConnectionDescriptor
 from ntrp.server.bus import BusRegistry
 from ntrp.server.routers import session as session_router
 from ntrp.server.routers.session import _history_tool_calls, get_session_history, list_sessions
@@ -89,6 +90,57 @@ async def test_history_includes_runtime_snapshot_for_active_session(session_serv
     assert result["runtime"]["active_run"]["status"] == "running"
     assert result["runtime"]["pending_approvals"][0]["tool_id"] == "tool-1"
     assert result["runtime"]["queued_messages"][0]["client_id"] == "queued-1"
+
+
+@pytest.mark.asyncio
+async def test_history_runtime_snapshot_includes_pending_connection(session_service: SessionService):
+    state = _state("sess-connection")
+    await session_service.save(state, [{"role": "user", "content": "check email"}])
+    await session_service.store.record_chat_run_started("run-connection", "sess-connection")
+    await session_service.store.record_chat_run_status("run-connection", "running", last_seq=4)
+    await session_service.store.record_integration_connection_requested(
+        run_id="run-connection",
+        session_id="sess-connection",
+        tool_call_id="call-connection",
+        descriptor=IntegrationConnectionDescriptor(
+            integration_id="gmail",
+            connection_id="google",
+            label="Gmail",
+            capability="Search, read, and send email",
+            action="oauth",
+            settings_tab="integrations",
+            state="auth_required",
+            detail="Reconnect Gmail",
+            required_scopes=("gmail.readonly",),
+            tool_names=("emails",),
+        ),
+        source="recovery",
+        detail="Reconnect Gmail",
+    )
+
+    runtime = SimpleNamespace(run_registry=RunRegistry(), executor=None)
+    result = await get_session_history(
+        session_service, runtime, BusRegistry(), "sess-connection", limit=100, around_seq=None
+    )
+
+    assert result["runtime"]["pending_connections"] == [
+        {
+            "tool_id": "call-connection",
+            "integration_id": "gmail",
+            "connection_id": "google",
+            "label": "Gmail",
+            "reason": "auth_required",
+            "detail": "Reconnect Gmail",
+            "capability": "Search, read, and send email",
+            "action": "oauth",
+            "settings_tab": "integrations",
+            "required_scopes": ["gmail.readonly"],
+            "source": "recovery",
+            "status": "pending",
+            "requested_at": result["runtime"]["pending_connections"][0]["requested_at"],
+            "run_id": "run-connection",
+        }
+    ]
 
 
 @pytest.mark.asyncio

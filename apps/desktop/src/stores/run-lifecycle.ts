@@ -16,6 +16,7 @@ type RunLifecyclePatch = Partial<
     | "backgroundedRunSessionIds"
     | "unreadDoneSessionIds"
     | "pendingApprovals"
+    | "pendingConnections"
     | "reviewingApprovalToolId"
     | "queuedMessages"
     | "pendingResume"
@@ -177,6 +178,7 @@ export function reduceRunStatus(
           ? null
           : state.stoppingRunId,
       pendingApprovals: [],
+      pendingConnections: [],
       reviewingApprovalToolId: null,
       ...backgroundActiveActivity(state),
       ...(terminalRunIds !== state.terminalRunIds ? { terminalRunIds } : {}),
@@ -456,6 +458,7 @@ function reduceForegroundInactiveRun(
     ...(input.clearApprovals
       ? { pendingApprovals: [], reviewingApprovalToolId: null }
       : {}),
+    ...((terminal || input.clearApprovals) ? { pendingConnections: [] } : {}),
   };
 }
 

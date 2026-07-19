@@ -8,6 +8,7 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
+from ntrp.integrations.base import IntegrationConnectionError
 from ntrp.settings import NTRP_DIR
 
 CREDENTIALS_PATH = NTRP_DIR / "gmail_credentials.json"
@@ -144,6 +145,7 @@ def get_google_credentials(
     token_path: Path,
     scopes: list[str] | None = None,
     require_scopes: list[str] | None = None,
+    integration_id: str = "google",
 ) -> Credentials:
     """
     Get or refresh OAuth credentials from token file.
@@ -151,14 +153,15 @@ def get_google_credentials(
     Args:
         token_path: Path to the token JSON file
         scopes: Scopes to request for new tokens (default: SCOPES_ALL)
-        require_scopes: If set, raise PermissionError if token lacks these scopes
+        require_scopes: If set, require every listed OAuth scope
+        integration_id: Native integration identifier for typed recovery
 
     Returns:
         Valid Credentials object
 
     Raises:
         FileNotFoundError: If credentials file doesn't exist
-        PermissionError: If token lacks required scopes
+        IntegrationConnectionError: If authorization expired or required scopes are absent
     """
     scopes = scopes or SCOPES_ALL
     creds = None
@@ -172,10 +175,13 @@ def get_google_credentials(
             try:
                 creds.refresh(Request())
                 refreshed = True
-            except RefreshError:
-                raise PermissionError(
-                    f"Token expired or revoked for {token_path.name}. Re-add the account in settings."
-                )
+            except RefreshError as exc:
+                raise IntegrationConnectionError(
+                    integration_id=integration_id,
+                    reason="auth_required",
+                    detail=f"Google authorization expired or was revoked for {token_path.name}.",
+                    retry_safe=True,
+                ) from exc
         if not refreshed:
             if not CREDENTIALS_PATH.exists():
                 raise FileNotFoundError(
@@ -188,12 +194,15 @@ def get_google_credentials(
         token_path.parent.mkdir(parents=True, exist_ok=True)
         token_path.write_text(creds.to_json())
 
-    if require_scopes and creds.scopes:
-        for scope in require_scopes:
-            if scope not in creds.scopes:
-                raise PermissionError(
-                    f"Missing Google OAuth scope {scope}. Re-run setup with the required Google service choice."
-                )
+    missing_scopes = tuple(scope for scope in require_scopes or () if scope not in (creds.scopes or ()))
+    if missing_scopes:
+        raise IntegrationConnectionError(
+            integration_id=integration_id,
+            reason="scope_required",
+            detail="Google authorization is missing required permissions.",
+            required_scopes=missing_scopes,
+            retry_safe=True,
+        )
 
     return creds
 

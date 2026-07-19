@@ -6,6 +6,7 @@ from typing import Any, Literal
 import aiohttp
 
 from ntrp.core.content import ImageContent
+from ntrp.integrations.base import IntegrationConnectionError
 from ntrp.logging import get_logger
 from ntrp.search.types import RawItem
 
@@ -80,7 +81,12 @@ class SlackClient:
     def _token_for(self, method: str) -> str:
         if method in _USER_TOKEN_METHODS:
             if not self._user_token:
-                raise RuntimeError(f"Slack {method} requires a user token (xoxp-) — set SLACK_USER_TOKEN")
+                raise IntegrationConnectionError(
+                    integration_id="slack",
+                    reason="scope_required",
+                    detail=f"Slack {method} requires a user token.",
+                    retry_safe=True,
+                )
             return self._user_token
         return self._read_token  # type: ignore[return-value]
 
@@ -97,6 +103,22 @@ class SlackClient:
         if provided:
             msg += f" (have: {provided})"
         msg += f" [{token_kind} token]"
+        if error in {"invalid_auth", "token_revoked", "account_inactive", "not_authed"}:
+            raise IntegrationConnectionError(
+                integration_id="slack",
+                reason="auth_required",
+                detail=msg,
+                retry_safe=True,
+            )
+        if error == "missing_scope":
+            required_scopes = tuple(scope.strip() for scope in str(needed or "").split(",") if scope.strip())
+            raise IntegrationConnectionError(
+                integration_id="slack",
+                reason="scope_required",
+                detail=msg,
+                required_scopes=required_scopes,
+                retry_safe=True,
+            )
         raise RuntimeError(msg)
 
     async def _get(self, session: aiohttp.ClientSession, method: str, **params: Any) -> dict:
@@ -136,6 +158,9 @@ class SlackClient:
             if not data.get("ok"):
                 self._raise_for_error(method, data, dict(resp.headers))
             return data
+
+    async def verify_connection(self) -> None:
+        await self.auth_test()
 
     async def _resolve_user(self, session: aiohttp.ClientSession, user_id: str) -> str:
         if not user_id:

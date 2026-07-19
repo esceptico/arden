@@ -6,7 +6,14 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from ntrp.events.sse import EPHEMERAL_EVENT_TYPES, ApprovalNeededEvent, InputNeededEvent, TextMessageContentEvent
+from ntrp.events.sse import (
+    EPHEMERAL_EVENT_TYPES,
+    ApprovalNeededEvent,
+    ConnectionNeededEvent,
+    InputNeededEvent,
+    TextMessageContentEvent,
+)
+from ntrp.integrations.base import IntegrationConnectionDescriptor, IntegrationConnectionError
 from ntrp.logging import get_logger
 from ntrp.server.bus import BusRegistry, StreamRecord
 from ntrp.server.deps import get_bus_registry, require_run_registry
@@ -19,6 +26,7 @@ from ntrp.server.schemas import (
     ChatRequest,
     ChatRunsStatusResponse,
     ChildAgentResultResponse,
+    ConnectionResultRequest,
     InjectChildAgentRequest,
     ToolResultRequest,
 )
@@ -111,6 +119,7 @@ async def _event_stream(
         return event.type not in EPHEMERAL_EVENT_TYPES
 
     durable_pending_approval_ids: set[str] | None = None
+    durable_pending_connection_ids: set[str] | None = None
 
     async def is_pending_approval(tool_id: str) -> bool:
         active_run = run_registry.get_active_run(session_id)
@@ -135,6 +144,24 @@ async def _event_stream(
         future = active_run.pending_inputs.get(tool_id) if active_run else None
         return future is not None and not future.done()
 
+    async def is_pending_connection(tool_id: str) -> bool:
+        active_run = run_registry.get_active_run(session_id)
+        future = active_run.pending_connections.get(tool_id) if active_run else None
+        if future is not None:
+            return not future.done()
+
+        nonlocal durable_pending_connection_ids
+        if durable_pending_connection_ids is None:
+            list_pending = getattr(event_store, "list_pending_integration_connections", None)
+            if list_pending is None:
+                durable_pending_connection_ids = set()
+            else:
+                rows = await list_pending(session_id)
+                durable_pending_connection_ids = {
+                    row["tool_call_id"] for row in rows if isinstance(row.get("tool_call_id"), str)
+                }
+        return tool_id in durable_pending_connection_ids
+
     async def filter_replay_records(records: list[StreamRecord]) -> list[StreamRecord]:
         filtered: list[StreamRecord] = []
         for record in records:
@@ -145,6 +172,8 @@ async def _event_stream(
             # input_needed is a UI edge; the resolved state replays via the
             # durable TOOL_CALL_RESULT. Do not replay stale input cards.
             if isinstance(record.event, InputNeededEvent) and not is_pending_input(record.event.tool_id):
+                continue
+            if isinstance(record.event, ConnectionNeededEvent) and not await is_pending_connection(record.event.tool_id):
                 continue
             filtered.append(record)
         return filtered
@@ -475,6 +504,85 @@ async def submit_tool_result(
             )
         except Exception:
             pass
+
+    return {"status": "ok"}
+
+
+def _connection_descriptor_from_payload(payload: dict) -> IntegrationConnectionDescriptor:
+    return IntegrationConnectionDescriptor(
+        integration_id=str(payload["integration_id"]),
+        connection_id=str(payload["connection_id"]),
+        label=str(payload["label"]),
+        capability=str(payload["capability"]),
+        action=str(payload["action"]),  # type: ignore[arg-type]
+        settings_tab=str(payload.get("settings_tab") or "integrations"),
+        state=str(payload.get("reason") or "not_configured"),  # type: ignore[arg-type]
+        detail=str(payload.get("detail") or "") or None,
+        required_scopes=tuple(str(value) for value in payload.get("required_scopes") or []),
+        tool_names=tuple(str(value) for value in payload.get("tool_names") or []),
+    )
+
+
+@router.post("/connections/result")
+async def submit_connection_result(
+    request: ConnectionResultRequest,
+    run_registry: RunRegistry = Depends(require_run_registry),
+    runtime: Runtime = Depends(get_runtime),
+):
+    session_service = getattr(runtime, "session_service", None)
+    store = getattr(session_service, "store", None)
+    run = run_registry.get_run(request.run_id)
+    descriptor = run.pending_connection_descriptors.get(request.tool_id) if run else None
+    durable_row = None
+    if store is not None:
+        durable_row = await store.get_run_suspension(run_id=request.run_id, suspension_id=request.tool_id)
+        if durable_row is not None and durable_row.get("kind") != "integration_connection":
+            durable_row = None
+        if descriptor is None and durable_row is not None:
+            descriptor = _connection_descriptor_from_payload(durable_row.get("payload") or {})
+
+    if descriptor is None:
+        raise HTTPException(status_code=404, detail="No pending connection for this tool")
+
+    if request.approved:
+        await runtime.reload_config()
+        try:
+            await runtime.connection_service.verify_connection(descriptor.integration_id)
+        except IntegrationConnectionError as exc:
+            raise HTTPException(status_code=409, detail=exc.detail) from exc
+
+    future = run.pending_connections.get(request.tool_id) if run else None
+    if future is not None and future.done():
+        raise HTTPException(status_code=409, detail="Connection request already resolved")
+
+    if store is not None and durable_row is not None:
+        if durable_row["status"] != "pending":
+            raise HTTPException(status_code=409, detail="Connection request already resolved")
+        resolved = await store.resolve_integration_connection(
+            run_id=request.run_id,
+            tool_call_id=request.tool_id,
+            status="approved" if request.approved else "rejected",
+            result_feedback=request.result.strip() or None,
+        )
+        if not resolved:
+            raise HTTPException(status_code=409, detail="Connection request already resolved")
+
+    if future is not None:
+        future.set_result(
+            {
+                "type": "connection_response",
+                "tool_id": request.tool_id,
+                "result": request.result,
+                "approved": request.approved,
+            }
+        )
+
+    if future is None and durable_row is not None:
+        resume = getattr(runtime, "resume_suspended_chat_run", None)
+        if resume:
+            await resume(request.run_id, durable_row["session_id"])
+    elif future is None:
+        raise HTTPException(status_code=404, detail="No pending connection for this tool")
 
     return {"status": "ok"}
 
