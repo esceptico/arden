@@ -868,6 +868,28 @@ async def test_tool_approval_reuses_durable_resolution(status, resolution, feedb
 
 
 @pytest.mark.asyncio
+async def test_durable_approval_marks_suspension_consumed_before_execution():
+    consumed = []
+
+    async def get_suspension(**kwargs):
+        return {"status": "approved", "resolution": {"approved": True, "result": "ok"}}
+
+    async def consume_suspension(**kwargs):
+        consumed.append(kwargs)
+
+    ctx = ToolContext(
+        session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
+        registry=ToolRegistry(),
+        run=RunContext(run_id="run-1"),
+        io=IOBridge(get_suspension=get_suspension, consume_suspension=consume_suspension),
+        background_tasks=BackgroundTaskRegistry(session_id="test"),
+    )
+
+    assert await ToolExecution(tool_id="call-1", tool_name="echo", ctx=ctx).request_approval("Echo") is None
+    assert consumed == [{"run_id": "run-1", "suspension_id": "call-1"}]
+
+
+@pytest.mark.asyncio
 async def test_function_tool_rejects_non_tool_result_output():
     async def bad_output(execution: ToolExecution, args: EmptyInput) -> str:
         return "not a ToolResult"

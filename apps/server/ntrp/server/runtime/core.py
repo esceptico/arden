@@ -52,6 +52,7 @@ class Runtime:
         self.skill_service: SkillService | None = None
         self.notifier_service: NotifierService | None = None
         self.dispatch_session_message: Callable[[str, str, str | None, bool | None], Awaitable[object]] | None = None
+        self.resume_suspended_chat_run: Callable[[str, str], Awaitable[object]] | None = None
 
         self._connected = False
         self._closing = False

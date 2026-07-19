@@ -47,7 +47,13 @@ from ntrp.server.routers.automation import _automation_event_stream
 from ntrp.server.routers.chat import _event_stream, _keepalive
 from ntrp.server.state import RunRegistry, RunState, RunStatus
 from ntrp.server.stream import run_agent_loop
-from ntrp.services.chat import ChatContext, _drain_backgrounded, run_chat
+from ntrp.services.chat import (
+    ChatContext,
+    _checkpoint_tool_step,
+    _drain_backgrounded,
+    _recover_durable_tool_calls,
+    run_chat,
+)
 from ntrp.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext
 from tests.helpers import make_executor, make_text_response
 
@@ -63,6 +69,72 @@ def test_text_boundary_events_convert_to_sse():
     assert isinstance(end, TextMessageEndEvent)
     assert end.message_id == "text-1"
     assert end.content == "hello"
+
+
+@pytest.mark.asyncio
+async def test_recovery_reuses_terminal_calls_blocks_ambiguous_calls_and_leaves_safe_calls():
+    class Store:
+        async def list_tool_calls(self, *, run_id):
+            assert run_id == "run-1"
+            return [
+                {"tool_call_id": "c1", "status": "success", "result_preview": "done", "outcome": {"status": "succeeded"}},
+                {"tool_call_id": "c2", "status": "running", "result_preview": None, "outcome": None},
+                {"tool_call_id": "c3", "status": "created", "result_preview": None, "outcome": None},
+                {"tool_call_id": "c4", "status": "awaiting", "result_preview": None, "outcome": None},
+            ]
+
+        async def get_tool_result_for_call(self, *, run_id, tool_call_id):
+            assert (run_id, tool_call_id) == ("run-1", "c1")
+            return {"content": "durable result"}
+
+    calls = [SimpleNamespace(tool_call=SimpleNamespace(id=f"c{i}")) for i in range(1, 5)]
+
+    recovered = await _recover_durable_tool_calls(Store(), "run-1", calls)
+
+    assert set(recovered) == {"c1", "c2"}
+    assert recovered["c1"].content == "durable result"
+    assert recovered["c1"].outcome.status == ToolOutcomeStatus.SUCCEEDED
+    assert recovered["c2"].outcome.status == ToolOutcomeStatus.UNCERTAIN
+    assert recovered["c2"].outcome.error.code == "execution_state_uncertain"
+
+
+@pytest.mark.asyncio
+async def test_tool_step_checkpoint_saves_assistant_turn_before_call_intents():
+    operations = []
+
+    class Store:
+        async def record_tool_call_created(self, **kwargs):
+            operations.append(("created", kwargs))
+
+    class SessionService:
+        store = Store()
+
+        async def save_progress(self, state, messages):
+            operations.append(("saved", list(messages)))
+
+    run = RunState(run_id="run-1", session_id="s-1")
+    run.messages = [
+        {"role": "user", "content": "go"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "c1", "type": "function", "function": {"name": "write", "arguments": '{"x":1}'}}
+            ],
+        },
+    ]
+    executor = SimpleNamespace(
+        registry=SimpleNamespace(
+            get=lambda _name: SimpleNamespace(policy=SimpleNamespace(action="write", scope="internal"))
+        )
+    )
+
+    assert await _checkpoint_tool_step(
+        SessionService(), SessionState(session_id="s-1", started_at=datetime.now(UTC)), run, executor
+    )
+
+    assert [kind for kind, _payload in operations] == ["saved", "created"]
+    assert operations[1][1]["tool_call_id"] == "c1"
 
 
 def test_tool_result_sse_exposes_source_refs_outside_result_content():

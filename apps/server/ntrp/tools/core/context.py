@@ -124,6 +124,7 @@ class IOBridge:
     record_approval: Callable[..., Awaitable[None]] | None = None
     resolve_approval: Callable[..., Awaitable[None]] | None = None
     get_suspension: Callable[..., Awaitable[dict | None]] | None = None
+    consume_suspension: Callable[..., Awaitable[None]] | None = None
     approval_timeout_seconds: int = 300
 
 
@@ -520,6 +521,12 @@ class ToolExecution:
                 if suspension and suspension.get("status") != "pending":
                     resolution = suspension.get("resolution") or {}
                     if resolution.get("approved"):
+                        await _approval_callback_best_effort(
+                            self.ctx.io.consume_suspension,
+                            "consume",
+                            run_id=self.ctx.run.run_id,
+                            suspension_id=self.tool_id,
+                        )
                         return None
                     feedback = str(resolution.get("result") or suspension.get("result_feedback") or "").strip() or None
                     return Rejection(feedback=feedback)
@@ -620,6 +627,12 @@ class ToolExecution:
             tool_call_id=self.tool_id,
             status="approved",
             result_feedback=response.get("result", "").strip() or None,
+        )
+        await _approval_callback_best_effort(
+            self.ctx.io.consume_suspension,
+            "consume",
+            run_id=self.ctx.run.run_id,
+            suspension_id=self.tool_id,
         )
 
         return None

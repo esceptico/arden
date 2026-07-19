@@ -76,6 +76,49 @@ class ToolOutcome:
     verification: ToolVerification | None = None
     receipt: str | None = None
 
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]) -> "ToolOutcome":
+        error_value = value.get("error")
+        effect_value = value.get("effect")
+        verification_value = value.get("verification")
+        return cls(
+            status=ToolOutcomeStatus(str(value["status"])),
+            error=(
+                ToolError(
+                    code=str(error_value["code"]),
+                    retryable=bool(error_value.get("retryable", False)),
+                    recovery_action=_trimmed_string(error_value.get("recovery_action")),
+                    diagnostic_ref=_trimmed_string(error_value.get("diagnostic_ref")),
+                )
+                if isinstance(error_value, Mapping)
+                else None
+            ),
+            effect=(
+                ToolEffect(
+                    operation=str(effect_value["operation"]),
+                    target=str(effect_value["target"]),
+                    before_ref=_trimmed_string(effect_value.get("before_ref")),
+                    after_ref=_trimmed_string(effect_value.get("after_ref")),
+                )
+                if isinstance(effect_value, Mapping)
+                else None
+            ),
+            verification=(
+                ToolVerification(
+                    postcondition=str(verification_value["postcondition"]),
+                    observed=str(verification_value["observed"]),
+                    confidence=(
+                        float(verification_value["confidence"])
+                        if isinstance(verification_value.get("confidence"), int | float)
+                        else None
+                    ),
+                )
+                if isinstance(verification_value, Mapping)
+                else None
+            ),
+            receipt=_trimmed_string(value.get("receipt")),
+        )
+
     def to_dict(self) -> dict[str, object]:
         data: dict[str, object] = {"status": self.status.value}
         if self.error:

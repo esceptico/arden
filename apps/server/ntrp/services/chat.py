@@ -9,8 +9,10 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
-from ntrp.agent import Agent, Role
+from ntrp.agent import Agent, Role, ToolOutcome, ToolOutcomeStatus, ToolResult
+from ntrp.agent.llm.parsing import trailing_incomplete_tool_step
 from ntrp.agent.types.events import Result, ToolCompleted
+from ntrp.agent.types.tool_call import PendingToolCall
 from ntrp.areas.context import load_area_context
 from ntrp.config import get_config
 from ntrp.constants import CONVERSATION_GAP_THRESHOLD, LOOP_ITERATION_HISTORY_WINDOW
@@ -60,6 +62,74 @@ from ntrp.tools.executor import ToolExecutor
 _logger = get_logger(__name__)
 
 INIT_AUTO_APPROVE = {"remember", "forget"}
+
+
+async def _recover_durable_tool_calls(
+    store,
+    run_id: str,
+    calls: list[PendingToolCall],
+) -> dict[str, ToolResult]:
+    durable = {row["tool_call_id"]: row for row in await store.list_tool_calls(run_id=run_id)}
+    recovered: dict[str, ToolResult] = {}
+    for call in calls:
+        tool_call_id = call.tool_call.id
+        row = durable.get(tool_call_id)
+        if not row or row["status"] in {"created", "awaiting"}:
+            continue
+        if row["status"] == "running":
+            recovered[tool_call_id] = ToolResult.failure(
+                code="execution_state_uncertain",
+                message=(
+                    "Tool execution may have started before the server restarted. "
+                    "Verify the external state before retrying."
+                ),
+                preview="Execution state uncertain",
+                status=ToolOutcomeStatus.UNCERTAIN,
+                recovery_action="Verify whether the operation completed before retrying.",
+            )
+            continue
+        stored_result = await store.get_tool_result_for_call(run_id=run_id, tool_call_id=tool_call_id)
+        content = (stored_result or {}).get("content") or row.get("result_preview") or "Tool call completed."
+        outcome = ToolOutcome.from_dict(row["outcome"]) if row.get("outcome") else None
+        recovered[tool_call_id] = ToolResult(
+            content=content,
+            preview=row.get("result_preview"),
+            is_error=row["status"] != "success",
+            outcome=outcome,
+        )
+    return recovered
+
+
+async def _checkpoint_tool_step(
+    session_service: SessionService,
+    session_state: SessionState,
+    run: RunState,
+    executor: ToolExecutor,
+) -> bool:
+    incomplete = trailing_incomplete_tool_step(run.messages)
+    if not incomplete:
+        return False
+    await session_service.save_progress(session_state, _persistable_messages(run))
+    for call in incomplete.pending_calls:
+        tool = executor.registry.get(call.name)
+        policy = getattr(tool, "policy", None)
+        action = getattr(getattr(policy, "action", None), "value", None) or str(
+            getattr(policy, "action", "unknown")
+        )
+        scope = getattr(getattr(policy, "scope", None), "value", None) or str(
+            getattr(policy, "scope", "internal")
+        )
+        args_json = json.dumps(call.args, sort_keys=True, separators=(",", ":"))
+        await session_service.store.record_tool_call_created(
+            run_id=run.run_id,
+            session_id=run.session_id,
+            tool_call_id=call.tool_call.id,
+            tool_name=call.name,
+            action=action,
+            scope=scope,
+            args_hash=hashlib.sha256(args_json.encode()).hexdigest(),
+        )
+    return True
 
 
 class ChatIdempotencyConflict(Exception):
@@ -411,6 +481,7 @@ async def _prepare_messages(
     area_context: AreaContext | None = None,
     area_page_context: dict | None = None,
     todo_override: dict | None = None,
+    append_user: bool = True,
 ) -> list[dict]:
     memory_context = await resident_profile(
         deps.memory_records, project_context=area_context, session_id=session_id
@@ -453,6 +524,9 @@ async def _prepare_messages(
         messages[0]["content"] = system_blocks
     else:
         messages.insert(0, {"role": Role.SYSTEM, "content": system_blocks})
+
+    if not append_user:
+        return messages
 
     ctx_blocks = list(context or [])
     if last_activity:
@@ -569,6 +643,7 @@ async def prepare_chat(
     emit: Callable[[object], Awaitable[None]] | None = None,
     tool_scope: tuple[str, ...] | None = None,
     output_schema: type[BaseModel] | None = None,
+    resume_run_id: str | None = None,
 ) -> ChatContext:
     registry = deps.run_registry
 
@@ -597,15 +672,16 @@ async def prepare_chat(
         # sees the tail.
         history_prefix, messages = _trim_for_loop_iteration(messages)
 
+    is_resume = resume_run_id is not None
     user_message = message
-    is_init = user_message.strip().lower() == "/init"
+    is_init = not is_resume and user_message.strip().lower() == "/init"
     if is_init:
         user_message = INIT_INSTRUCTION
     elif deps.skill_registry:
         user_message, _ = expand_skill_command(user_message, deps.skill_registry)
 
     stripped_message = message.strip()
-    should_name_session = (
+    should_name_session = not is_resume and (
         not session_state.name and not is_init and (stripped_message or images) and not stripped_message.startswith("/")
     )
     session_name_task = (
@@ -614,8 +690,8 @@ async def prepare_chat(
         else None
     )
 
-    run = registry.create_run(session_state.session_id)
-    run.token_budget = parse_token_budget(message)
+    run = registry.create_run(session_state.session_id, run_id=resume_run_id)
+    run.token_budget = None if is_resume else parse_token_budget(message)
 
     tools = deps.executor.get_tools(scope=tool_scope) if tool_scope else deps.executor.get_tools()
     get_goal = getattr(deps.session_service, "get_goal", None)
@@ -644,12 +720,22 @@ async def prepare_chat(
         area_context=area_context,
         area_page_context=area_page_context,
         todo_override=todo_override,
+        append_user=not is_resume,
     )
 
     run.messages = messages
     run.session_state = session_state
-    run.client_id = client_id
-    run.input_message_index = len(messages) - 1
+    if is_resume:
+        for index in range(len(messages) - 1, -1, -1):
+            if messages[index].get("role") != Role.USER:
+                continue
+            prior_client_id = messages[index].get("client_id")
+            run.client_id = prior_client_id if isinstance(prior_client_id, str) else None
+            run.input_message_index = index
+            break
+    else:
+        run.client_id = client_id
+        run.input_message_index = len(messages) - 1
     if skip_approvals is not None:
         run.set_skip_approvals(skip_approvals)
     run.history_prefix = history_prefix
@@ -781,6 +867,49 @@ async def submit_chat_message(
             tool_scope=tool_scope,
             output_schema=output_schema,
         )
+
+
+async def resume_suspended_chat_run(
+    run_registry: RunRegistry,
+    build_deps: Callable[[], ChatDeps],
+    buses: BusRegistry,
+    *,
+    run_id: str,
+    session_id: str,
+    session_service: SessionService,
+) -> dict[str, str] | None:
+    async with run_registry.session_lock(session_id):
+        active = run_registry.get_active_run(session_id)
+        if active:
+            return {"run_id": active.run_id, "session_id": session_id, "status": "active"}
+        durable_run = await session_service.store.get_chat_run(run_id)
+        if (
+            not durable_run
+            or durable_run["session_id"] != session_id
+            or durable_run["status"] != "interrupted"
+            or durable_run["stop_reason"] != "server_restart"
+        ):
+            return None
+        session_data = await session_service.load(session_id)
+        if not session_data or not trailing_incomplete_tool_step(session_data.messages):
+            return None
+
+        await prime_bus_cursor_from_store(buses, session_id, session_service.store)
+        bus = buses.get_or_create(session_id)
+        ctx = await prepare_chat(
+            build_deps(),
+            message="",
+            skip_approvals=False,
+            session_id=session_id,
+            emit=bus.emit,
+            resume_run_id=run_id,
+        )
+        task = asyncio.create_task(run_chat(ctx, bus, buses))
+        ctx.run.task = task
+        _install_cancel_fallback(ctx.run, bus, run_registry, task)
+        if ctx.run.client_id:
+            run_registry.register_otid(session_id, ctx.run.client_id, run_id)
+        return {"run_id": run_id, "session_id": session_id, "status": "resumed"}
 
 
 async def _submit_chat_message_locked(
@@ -1228,6 +1357,7 @@ def make_child_io_factory(
     resolve_approval: Callable[..., Awaitable[None]],
     approval_timeout_seconds: int,
     get_suspension: Callable[..., Awaitable[dict | None]] | None = None,
+    consume_suspension: Callable[..., Awaitable[None]] | None = None,
 ) -> ChildIOFactory:
     """Build the factory that gives a spawned FULL subagent its OWN session bus,
     framed with the standard run lifecycle so the child session streams live
@@ -1251,6 +1381,7 @@ def make_child_io_factory(
             record_approval=record_approval,
             resolve_approval=resolve_approval,
             get_suspension=get_suspension,
+            consume_suspension=consume_suspension,
             approval_timeout_seconds=approval_timeout_seconds,
         )
         await child_bus.emit(RunStartedEvent(session_id=params.session_id, run_id=params.run_id))
@@ -1348,6 +1479,9 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
         async def get_suspension(**kwargs) -> dict | None:
             return await ctx.session_service.store.get_run_suspension(**kwargs)
 
+        async def consume_suspension(**kwargs) -> None:
+            await ctx.session_service.store.mark_run_suspension_consumed(**kwargs)
+
         io = IOBridge(
             pending_approvals=run.pending_approvals,
             pending_inputs=run.pending_inputs,
@@ -1355,6 +1489,7 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
             record_approval=record_approval,
             resolve_approval=resolve_approval,
             get_suspension=get_suspension,
+            consume_suspension=consume_suspension,
             approval_timeout_seconds=ctx.config.approval_timeout_seconds,
         )
 
@@ -1368,6 +1503,7 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
             record_approval=record_approval,
             resolve_approval=resolve_approval,
             get_suspension=get_suspension,
+            consume_suspension=consume_suspension,
             approval_timeout_seconds=ctx.config.approval_timeout_seconds,
         )
 
@@ -1394,6 +1530,7 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
             )
 
         async def _track_response(response) -> None:
+            await _checkpoint_tool_step(ctx.session_service, session_state, run, ctx.executor)
             await tracker.track(response)
             await bus.emit(
                 TokenUsageEvent(
@@ -1439,10 +1576,14 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
 
         bg_registry.on_result = _on_bg_result
 
+        async def _recover_tool_calls(calls: list[PendingToolCall]) -> dict[str, ToolResult]:
+            return await _recover_durable_tool_calls(ctx.session_service.store, run.run_id, calls)
+
         def _configure_agent(next_agent: Agent) -> Agent:
             next_agent.hooks.on_response = _track_response
             next_agent.hooks.on_step_finish = _checkpoint
             next_agent.hooks.get_pending_messages = _build_get_pending(bus, run, ctx.session_service)
+            next_agent.hooks.recover_tool_calls = _recover_tool_calls
             return next_agent
 
         async def _force_context_compaction() -> bool:

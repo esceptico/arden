@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from ntrp.agent.hooks import AgentHooks
 from ntrp.agent.llm.client import LLMClient
-from ntrp.agent.llm.parsing import normalize_assistant_message, parse_tool_calls
+from ntrp.agent.llm.parsing import normalize_assistant_message, parse_tool_calls, trailing_incomplete_tool_step
 from ntrp.agent.model_request import ModelRequest, ModelRequestMiddleware, apply_model_request_middlewares
 from ntrp.agent.tools.dispatch import dispatch_tools
 from ntrp.agent.tools.executor import AgentToolExecutor
@@ -167,6 +167,28 @@ class Agent:
         step = 0
         result_text = ""
         try:
+            if incomplete_step := trailing_incomplete_tool_step(messages):
+                recovered = (
+                    await self.hooks.recover_tool_calls(incomplete_step.pending_calls)
+                    if self.hooks.recover_tool_calls
+                    else {}
+                )
+                calls_to_execute = [
+                    call for call in incomplete_step.pending_calls if call.tool_call.id not in recovered
+                ]
+                missing_ids = {call.tool_call.id for call in incomplete_step.pending_calls}
+                missing_raw_calls = [call for call in incomplete_step.raw_tool_calls if call.id in missing_ids]
+                self._record_tool_calls(len(calls_to_execute))
+                async for event in dispatch_tools(
+                    self._runner,
+                    messages,
+                    calls_to_execute,
+                    missing_raw_calls,
+                    recovered_results=recovered,
+                ):
+                    yield event
+                step = 1
+
             while True:
                 await self._drain_pending(messages)
 

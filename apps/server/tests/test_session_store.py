@@ -799,6 +799,83 @@ async def test_tool_call_audit_is_scoped_by_run(store: SessionStore):
 
 
 @pytest.mark.asyncio
+async def test_tool_call_checkpoint_and_suspension_state_transitions(store: SessionStore):
+    await store.record_tool_call_created(
+        run_id="run-1",
+        session_id="s-1",
+        tool_call_id="call-1",
+        tool_name="bash",
+        action="execute",
+        scope="internal",
+        args_hash="hash-1",
+    )
+    await store.record_tool_call_started(
+        run_id="run-1",
+        session_id="s-1",
+        tool_call_id="call-1",
+        tool_name="bash",
+        action="execute",
+        scope="internal",
+        args_hash="hash-1",
+    )
+    await store.record_run_suspension(
+        run_id="run-1",
+        session_id="s-1",
+        suspension_id="call-1",
+        kind="tool_approval",
+        payload={"tool_name": "bash", "action": "execute", "scope": "internal"},
+    )
+
+    assert (await store.list_tool_calls(run_id="run-1"))[0]["status"] == "awaiting"
+
+    await store.mark_run_suspension_consumed(run_id="run-1", suspension_id="call-1")
+    assert (await store.list_tool_calls(run_id="run-1"))[0]["status"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_duplicate_tool_checkpoint_does_not_overwrite_terminal_call(store: SessionStore):
+    kwargs = {
+        "run_id": "run-1",
+        "session_id": "s-1",
+        "tool_call_id": "call-1",
+        "tool_name": "read_state",
+        "action": "read",
+        "scope": "internal",
+        "args_hash": "hash-1",
+    }
+    await store.record_tool_call_created(**kwargs)
+    await store.record_tool_call_started(**kwargs)
+    await store.record_tool_call_finished(
+        run_id="run-1",
+        tool_call_id="call-1",
+        status="success",
+        result_preview="done",
+    )
+
+    await store.record_tool_call_created(**kwargs)
+
+    row = (await store.list_tool_calls(run_id="run-1"))[0]
+    assert row["status"] == "success"
+    assert row["result_preview"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_list_interrupted_chat_runs_returns_restart_candidates(store: SessionStore):
+    await store.record_chat_run_started(run_id="run-1", session_id="s-1")
+    await store.record_chat_run_started(run_id="run-2", session_id="s-2")
+    await store.record_chat_run_status(run_id="run-1", status="interrupted", stop_reason="server_restart")
+    await store.record_chat_run_status(run_id="run-2", status="completed")
+
+    rows = await store.list_interrupted_chat_runs()
+
+    assert [(row["run_id"], row["session_id"]) for row in rows] == [("run-1", "s-1")]
+
+    await store.record_chat_run_status(run_id="run-1", status="running")
+    resumed = await store.get_chat_run("run-1")
+    assert resumed["ended_at"] is None
+
+
+@pytest.mark.asyncio
 async def test_tool_call_schema_migrates_single_column_primary_key(tmp_path):
     conn = await database.connect(tmp_path / "legacy_sessions.db")
     await conn.executescript(

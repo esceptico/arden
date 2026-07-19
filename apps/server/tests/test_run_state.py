@@ -6,6 +6,15 @@ import pytest
 from ntrp.server.state import RunRegistry, RunState, RunStatus
 
 
+def test_run_registry_restores_explicit_run_id():
+    registry = RunRegistry()
+
+    run = registry.create_run("sess-x", run_id="original-run")
+
+    assert run.run_id == "original-run"
+    assert registry.get_run("original-run") is run
+
+
 @pytest.mark.asyncio
 async def test_cancel_endpoint_resolves_active_run_by_session():
     from ntrp.server.routers.chat import cancel_run as cancel_run_endpoint

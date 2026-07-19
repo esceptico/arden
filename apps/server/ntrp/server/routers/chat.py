@@ -7,6 +7,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from ntrp.events.sse import EPHEMERAL_EVENT_TYPES, ApprovalNeededEvent, InputNeededEvent, TextMessageContentEvent
+from ntrp.logging import get_logger
 from ntrp.server.bus import BusRegistry, StreamRecord
 from ntrp.server.deps import get_bus_registry, require_run_registry
 from ntrp.server.middleware import SSEStreamingResponse
@@ -27,6 +28,7 @@ from ntrp.server.state import RunRegistry, RunStatus
 from ntrp.services.chat import ChatIdempotencyConflict, ChatSessionNotFound, submit_chat_message
 
 router = APIRouter(tags=["chat"])
+_logger = get_logger(__name__)
 
 KEEPALIVE_INTERVAL = 5
 CHILD_AGENT_TERMINAL_STATUSES = {"completed", "failed", "cancelled", "interrupted"}
@@ -401,6 +403,12 @@ async def submit_tool_result(
         )
         if not resolved:
             raise HTTPException(status_code=409, detail="Approval already resolved")
+        resume = getattr(runtime, "resume_suspended_chat_run", None)
+        if resume:
+            try:
+                await resume(request.run_id, row["session_id"])
+            except Exception:
+                _logger.exception("Failed to resume run %s after durable tool resolution", request.run_id)
         return True
 
     run = run_registry.get_run(request.run_id)

@@ -6,6 +6,7 @@ from ntrp.agent.hooks import (
     OnFinishFn,
     OnResponseFn,
     OnStepFinishFn,
+    RecoverToolCallsFn,
 )
 from ntrp.agent.ledger import SharedLedger
 from ntrp.agent.llm import LLMClient
@@ -71,6 +72,7 @@ __all__ = [
     "OnFinishFn",
     "OnResponseFn",
     "OnStepFinishFn",
+    "RecoverToolCallsFn",
     "PendingToolCall",
     "ProviderToolCall",
     "ReasoningBlock",

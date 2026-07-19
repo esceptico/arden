@@ -193,6 +193,44 @@ async def test_tools_result_resolves_durable_approval_without_active_run(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_tools_result_resumes_run_after_offline_approval(tmp_path):
+    import ntrp.database as database
+
+    conn = await database.connect(tmp_path / "sessions.db")
+    read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
+    store = SessionStore(conn, read_conn)
+    await store.init_schema()
+    await store.record_tool_approval_requested(
+        run_id="run-1",
+        session_id="s-1",
+        tool_call_id="call-1",
+        tool_name="bash",
+        action="execute",
+        scope="internal",
+    )
+    resumed = []
+    runtime = _RuntimeStub(store)
+
+    async def resume(run_id, session_id):
+        resumed.append((run_id, session_id))
+
+    runtime.resume_suspended_chat_run = resume
+
+    try:
+        response = await submit_tool_result(
+            ToolResultRequest(run_id="run-1", tool_id="call-1", result="ok", approved=True),
+            run_registry=RunRegistry(),
+            runtime=runtime,
+        )
+
+        assert response == {"status": "ok"}
+        assert resumed == [("run-1", "s-1")]
+    finally:
+        await read_conn.close()
+        await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_tools_result_wakes_active_future_when_durable_update_fails():
     class FailingStore:
         async def get_tool_approval(self, **kwargs):

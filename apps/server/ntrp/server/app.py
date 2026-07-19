@@ -48,7 +48,7 @@ from ntrp.server.routers.settings import router as settings_router
 from ntrp.server.routers.setup import router as setup_router
 from ntrp.server.routers.skills import router as skills_router
 from ntrp.server.runtime import Runtime
-from ntrp.services.chat import submit_chat_message
+from ntrp.services.chat import resume_suspended_chat_run, submit_chat_message
 
 _logger = get_logger(__name__)
 
@@ -370,6 +370,19 @@ async def lifespan(app: FastAPI):
     app.state.request_area_wake = runtime.automation.request_area_wake
     runtime.dispatch_session_message = _dispatch_session_message
 
+    async def _resume_suspended_chat_run(run_id: str, session_id: str) -> object:
+        chat_model = await runtime.resolve_session_chat_model(session_id)
+        return await resume_suspended_chat_run(
+            runtime.run_registry,
+            lambda: runtime.build_chat_deps(chat_model=chat_model),
+            bus_registry,
+            run_id=run_id,
+            session_id=session_id,
+            session_service=runtime.session_service,
+        )
+
+    runtime.resume_suspended_chat_run = _resume_suspended_chat_run
+
     async def _dispatch_post(automation: Automation, context: str | dict | None = None) -> str | None:
         # Post mode: run the agent fresh (no session history), then write
         # the agent's final text into the target session as an assistant
@@ -445,6 +458,11 @@ async def lifespan(app: FastAPI):
     runtime.scheduler.set_loop_fire_gate(_loop_can_fire)
     await runtime.start_scheduler()
     runtime.start_monitor()
+    for interrupted_run in await runtime.session_service.store.list_interrupted_chat_runs():
+        try:
+            await _resume_suspended_chat_run(interrupted_run["run_id"], interrupted_run["session_id"])
+        except Exception:
+            _logger.exception("Failed to resume interrupted run %s", interrupted_run["run_id"])
     app.state.runtime = runtime
     app.state.bus_registry = bus_registry
     _install_shutdown_handlers(runtime, bus_registry)

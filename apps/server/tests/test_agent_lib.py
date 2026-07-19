@@ -220,6 +220,77 @@ async def test_simple_text_response_returns_result():
 
 
 @pytest.mark.asyncio
+async def test_resume_incomplete_tool_step_reuses_completed_call_and_executes_created_call():
+    calls = [_tc("c1", "test", {"x": 1}), _tc("c2", "test", {"x": 2})]
+    messages = [
+        *_msgs(),
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {"name": call.function.name, "arguments": call.function.arguments},
+                }
+                for call in calls
+            ],
+        },
+    ]
+
+    async def recover(pending_calls):
+        assert [call.tool_call.id for call in pending_calls] == ["c1", "c2"]
+        return {"c1": ToolResult(content="durable one", preview="one")}
+
+    llm = FakeLLM([_response(text="done")])
+    executor = FakeExecutor({"test": ToolResult(content="executed two", preview="two")})
+    agent = _make_agent(llm, executor, hooks=AgentHooks(recover_tool_calls=recover))
+
+    result = await agent.run(messages)
+
+    assert result.text == "done"
+    assert executor.call_log == [("test", {"x": 2})]
+    assert [(message["tool_call_id"], message["content"]) for message in messages if message["role"] == "tool"] == [
+        ("c1", "durable one"),
+        ("c2", "executed two"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_resume_incomplete_tool_step_keeps_existing_partial_result_without_duplication():
+    calls = [_tc("c1", "test", {"x": 1}), _tc("c2", "test", {"x": 2})]
+    messages = [
+        *_msgs(),
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {"name": call.function.name, "arguments": call.function.arguments},
+                }
+                for call in calls
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "already saved"},
+    ]
+
+    async def recover(pending_calls):
+        assert [call.tool_call.id for call in pending_calls] == ["c2"]
+        return {}
+
+    llm = FakeLLM([_response(text="done")])
+    executor = FakeExecutor({"test": ToolResult(content="executed two", preview="two")})
+    agent = _make_agent(llm, executor, hooks=AgentHooks(recover_tool_calls=recover))
+
+    await agent.run(messages)
+
+    assert executor.call_log == [("test", {"x": 2})]
+    assert [message["tool_call_id"] for message in messages if message["role"] == "tool"] == ["c1", "c2"]
+
+
+@pytest.mark.asyncio
 async def test_provider_tool_call_renders_without_executor_dispatch():
     llm = FakeLLM(
         [

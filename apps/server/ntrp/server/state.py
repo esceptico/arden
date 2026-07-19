@@ -247,8 +247,10 @@ class RunRegistry:
             cancelled.extend(self.cancel_subtree(grandchild_session))
         return cancelled
 
-    def create_run(self, session_id: str) -> RunState:
-        run_id = generate_slug(2)
+    def create_run(self, session_id: str, *, run_id: str | None = None) -> RunState:
+        run_id = run_id or generate_slug(2)
+        if run_id in self._runs:
+            raise ValueError(f"Run {run_id!r} already exists")
         run = RunState(run_id=run_id, session_id=session_id)
         self._runs[run_id] = run
         self._active_by_session[session_id] = run_id

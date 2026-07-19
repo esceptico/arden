@@ -1853,10 +1853,10 @@ class SessionStore:
             SET status = ?,
                 stop_reason = ?,
                 updated_at = ?,
-                ended_at = COALESCE(?, ended_at),
+                ended_at = ?,
                 last_seq = COALESCE(?, last_seq),
-                error_code = COALESCE(?, error_code),
-                error_message = COALESCE(?, error_message)
+                error_code = ?,
+                error_message = ?
             WHERE run_id = ?
             """,
             (status, stop_reason, now, ended_at, last_seq, error_code, error_message, run_id),
@@ -1882,6 +1882,16 @@ class SessionStore:
         if not rows:
             return None
         return self._chat_run_payload(rows[0])
+
+    async def list_interrupted_chat_runs(self) -> list[dict]:
+        rows = await self.read_conn.execute_fetchall(
+            """
+            SELECT * FROM chat_runs
+            WHERE status = 'interrupted' AND stop_reason = 'server_restart'
+            ORDER BY updated_at ASC
+            """
+        )
+        return [self._chat_run_payload(row) for row in rows]
 
     async def list_pending_tool_approvals(self, session_id: str, *, run_id: str | None = None) -> list[dict]:
         return await self.list_pending_run_suspensions(session_id, run_id=run_id, kind="tool_approval")
@@ -1939,6 +1949,31 @@ class SessionStore:
                 outcome_json = NULL,
                 started_at = excluded.started_at,
                 ended_at = NULL
+            WHERE tool_calls.status IN ('created', 'awaiting')
+            """,
+            (run_id, session_id, tool_call_id, tool_name, action, scope, args_hash, now),
+        )
+        await self.conn.commit()
+
+    async def record_tool_call_created(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        tool_call_id: str,
+        tool_name: str,
+        action: str,
+        scope: str,
+        args_hash: str | None = None,
+    ) -> None:
+        now = datetime.now(UTC).isoformat()
+        await self.conn.execute(
+            """
+            INSERT OR IGNORE INTO tool_calls (
+                run_id, session_id, tool_call_id, tool_name, action, scope,
+                args_hash, status, started_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'created', ?)
             """,
             (run_id, session_id, tool_call_id, tool_name, action, scope, args_hash, now),
         )
@@ -2035,6 +2070,22 @@ class SessionStore:
         content = await asyncio.to_thread(read_raw_tool_result, row["blob_path"], compression=row["compression"])
         return self._tool_result_payload(row, content=content)
 
+    async def get_tool_result_for_call(self, *, run_id: str, tool_call_id: str) -> dict | None:
+        rows = await self.read_conn.execute_fetchall(
+            """
+            SELECT * FROM tool_results
+            WHERE run_id = ? AND tool_call_id = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (run_id, tool_call_id),
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        content = await asyncio.to_thread(read_raw_tool_result, row["blob_path"], compression=row["compression"])
+        return self._tool_result_payload(row, content=content)
+
     async def record_tool_approval_requested(
         self,
         *,
@@ -2115,6 +2166,13 @@ class SessionStore:
                 payload_json,
             ),
         )
+        await self.conn.execute(
+            """
+            UPDATE tool_calls SET status = 'awaiting'
+            WHERE run_id = ? AND tool_call_id = ? AND status IN ('created', 'running')
+            """,
+            (run_id, suspension_id),
+        )
         await self.conn.commit()
 
     async def resolve_tool_approval(
@@ -2183,6 +2241,15 @@ class SessionStore:
         if not rows:
             return None
         return self._tool_approval_payload(rows[0])
+
+    async def mark_run_suspension_consumed(self, *, run_id: str, suspension_id: str) -> bool:
+        return await self._update(
+            """
+            UPDATE tool_calls SET status = 'running'
+            WHERE run_id = ? AND tool_call_id = ? AND status = 'awaiting'
+            """,
+            (run_id, suspension_id),
+        )
 
     async def mark_interrupted_chat_runs(self) -> int:
         now = datetime.now(UTC).isoformat()

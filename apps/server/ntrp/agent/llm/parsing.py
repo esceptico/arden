@@ -1,11 +1,18 @@
 import base64
 import json
 import logging
+from dataclasses import dataclass
 
 from ntrp.agent.types.llm import Message, Role
-from ntrp.agent.types.tool_call import PendingToolCall, ToolArgumentError, ToolCall
+from ntrp.agent.types.tool_call import FunctionCall, PendingToolCall, ToolArgumentError, ToolCall
 
 _logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class IncompleteToolStep:
+    raw_tool_calls: list[ToolCall]
+    pending_calls: list[PendingToolCall]
 
 
 def normalize_assistant_message(message: Message) -> dict:
@@ -66,3 +73,48 @@ def parse_tool_calls(tool_calls: list[ToolCall]) -> list[PendingToolCall]:
             )
         result.append(PendingToolCall(tool_call=tc, name=tc.function.name, args=args, argument_error=error))
     return result
+
+
+def trailing_incomplete_tool_step(messages: list[dict]) -> IncompleteToolStep | None:
+    """Return only missing calls from a trailing assistant/tool sequence."""
+    index = len(messages) - 1
+    completed_ids: set[str] = set()
+    while index >= 0 and messages[index].get("role") == Role.TOOL:
+        tool_call_id = messages[index].get("tool_call_id")
+        if isinstance(tool_call_id, str):
+            completed_ids.add(tool_call_id)
+        index -= 1
+    if index < 0:
+        return None
+    assistant = messages[index]
+    if assistant.get("role") != Role.ASSISTANT or not isinstance(assistant.get("tool_calls"), list):
+        return None
+
+    raw_calls: list[ToolCall] = []
+    for value in assistant["tool_calls"]:
+        if not isinstance(value, dict) or not isinstance(value.get("function"), dict):
+            return None
+        function = value["function"]
+        tool_id = value.get("id")
+        name = function.get("name")
+        arguments = function.get("arguments")
+        if not all(isinstance(item, str) for item in (tool_id, name, arguments)):
+            return None
+        signature = value.get("thought_signature")
+        try:
+            decoded_signature = base64.b64decode(signature) if isinstance(signature, str) else None
+        except ValueError:
+            decoded_signature = None
+        raw_calls.append(
+            ToolCall(
+                id=tool_id,
+                type="function",
+                function=FunctionCall(name=name, arguments=arguments),
+                thought_signature=decoded_signature,
+            )
+        )
+
+    pending_calls = [call for call in parse_tool_calls(raw_calls) if call.tool_call.id not in completed_ids]
+    if not pending_calls:
+        return None
+    return IncompleteToolStep(raw_tool_calls=raw_calls, pending_calls=pending_calls)

@@ -5,6 +5,7 @@ from ntrp.agent.tools.runner import ToolRunner
 from ntrp.agent.types.events import ToolCompleted, ToolStarted
 from ntrp.agent.types.llm import Role
 from ntrp.agent.types.tool_call import PendingToolCall, ToolCall
+from ntrp.agent.types.tools import ToolResult
 from ntrp.core.content import ContentBlock, ContextContent
 from ntrp.core.tool_result_data import persistable_tool_result_data
 
@@ -14,10 +15,17 @@ async def dispatch_tools(
     messages: list[dict],
     calls: list[PendingToolCall],
     raw_tool_calls: list[ToolCall],
+    recovered_results: dict[str, ToolResult] | None = None,
 ) -> AsyncGenerator[ToolStarted | ToolCompleted]:
-    results: dict[str, str] = {}
+    recovered_results = recovered_results or {}
+    results: dict[str, str] = {tool_id: result.content for tool_id, result in recovered_results.items()}
     result_data: dict[str, dict] = {}
     model_content: dict[str, tuple[ContentBlock, ...]] = {}
+    for tool_id, result in recovered_results.items():
+        if data := persistable_tool_result_data(result.data, result.source_refs):
+            result_data[tool_id] = data
+        if result.model_content:
+            model_content[tool_id] = result.model_content
 
     try:
         async for event in runner.execute_all(calls):

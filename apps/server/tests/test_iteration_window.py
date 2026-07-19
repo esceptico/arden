@@ -15,6 +15,7 @@ import pytest
 from ntrp.constants import LOOP_ITERATION_HISTORY_WINDOW
 from ntrp.context.models import SessionData, SessionState
 from ntrp.core.factory import AgentConfig
+from ntrp.server.bus import BusRegistry
 from ntrp.server.state import RunRegistry
 from ntrp.services.chat import (
     ChatDeps,
@@ -22,6 +23,7 @@ from ntrp.services.chat import (
     _persistable_messages,
     _trim_for_loop_iteration,
     prepare_chat,
+    resume_suspended_chat_run,
 )
 
 
@@ -146,6 +148,89 @@ def test_loop_iteration_history_window_constant_exists():
     # Sanity check that the budget is what the design calls for. If this
     # ever changes intentionally, update the test consciously.
     assert LOOP_ITERATION_HISTORY_WINDOW == 50
+
+
+@pytest.mark.asyncio
+async def test_prepare_resumed_chat_restores_run_without_appending_user_message():
+    history = [
+        {"role": "system", "content": "old"},
+        {"role": "user", "content": "do it", "client_id": "client-1"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "call-1", "type": "function", "function": {"name": "write", "arguments": "{}"}}
+            ],
+        },
+    ]
+    svc = _StubSessionService(history)
+    deps = _make_deps(svc)
+
+    ctx = await prepare_chat(
+        deps,
+        message="",
+        session_id="sess-1",
+        resume_run_id="original-run",
+    )
+
+    assert ctx.run.run_id == "original-run"
+    assert [message["role"] for message in ctx.run.messages] == ["system", "user", "assistant"]
+    assert ctx.run.client_id == "client-1"
+
+
+@pytest.mark.asyncio
+async def test_resume_suspended_chat_run_schedules_original_run(monkeypatch):
+    from ntrp.services import chat as chat_service
+
+    history = [
+        {"role": "system", "content": "old"},
+        {"role": "user", "content": "do it"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "call-1", "type": "function", "function": {"name": "write", "arguments": "{}"}}
+            ],
+        },
+    ]
+    svc = _StubSessionService(history)
+
+    class Store:
+        async def get_chat_run(self, run_id):
+            return {
+                "run_id": run_id,
+                "session_id": "sess-1",
+                "status": "interrupted",
+                "stop_reason": "server_restart",
+            }
+
+        async def get_latest_session_event_seq(self, session_id):
+            return 0
+
+        async def get_latest_session_checkpoint_seq(self, session_id):
+            return 0
+
+    svc.store = Store()
+    deps = _make_deps(svc)
+    seen = []
+
+    async def fake_run_chat(ctx, bus, buses):
+        seen.append(ctx.run.run_id)
+
+    monkeypatch.setattr(chat_service, "run_chat", fake_run_chat)
+
+    result = await resume_suspended_chat_run(
+        deps.run_registry,
+        lambda: deps,
+        BusRegistry(),
+        run_id="original-run",
+        session_id="sess-1",
+        session_service=svc,
+    )
+    await deps.run_registry.get_run("original-run").task
+
+    assert result == {"run_id": "original-run", "session_id": "sess-1", "status": "resumed"}
+    assert seen == ["original-run"]
 
 
 @pytest.mark.asyncio
