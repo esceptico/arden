@@ -19,7 +19,7 @@ from ntrp.tools.core.context import (
     ToolExecution,
 )
 from ntrp.tools.core.registry import ToolRegistry
-from ntrp.tools.workflow import WorkflowInput, run_workflow
+from ntrp.tools.workflow import SaveWorkflowInput, WorkflowInput, run_save_workflow, run_workflow
 
 PRESET_DESCRIPTION = "Echo preset returning args x."
 PRESET_SCRIPT = 'return args.get("x", "ok")'
@@ -102,6 +102,60 @@ async def test_run_workflow_rejects_script_and_name_together(registry: SkillRegi
 
 
 @pytest.mark.asyncio
+async def test_run_workflow_rejects_inline_python_without_executing_it(registry: SkillRegistry):
+    called = False
+
+    def mutate_process_state() -> None:
+        nonlocal called
+        called = True
+
+    ctx = make_ctx(registry, [])
+    execution = ToolExecution(tool_id="t1", tool_name="workflow", ctx=ctx)
+
+    result = await run_workflow(
+        execution,
+        WorkflowInput(script="args['mutate']()\nreturn 'ran'", args={"mutate": mutate_process_state}),
+    )
+
+    assert result.is_error is True
+    assert result.preview == "Inline scripts disabled"
+    assert called is False
+
+
+@pytest.mark.asyncio
+async def test_run_workflow_rejects_user_saved_python_preset(tmp_path: Path):
+    write_preset(tmp_path)
+    registry = SkillRegistry()
+    registry.load([(tmp_path, "global")])
+    ctx = make_ctx(registry, [])
+    execution = ToolExecution(tool_id="t1", tool_name="workflow", ctx=ctx)
+
+    result = await run_workflow(execution, WorkflowInput(name="echo"))
+
+    assert result.is_error is True
+    assert result.preview == "Untrusted workflow"
+
+
+@pytest.mark.asyncio
+async def test_save_workflow_tool_rejects_python_without_persisting(registry: SkillRegistry):
+    class UnexpectedService:
+        def save_workflow(self, *args, **kwargs):
+            raise AssertionError("untrusted workflow must not be persisted")
+
+    ctx = make_ctx(registry, [])
+    ctx.services["skill_service"] = UnexpectedService()
+    execution = ToolExecution(tool_id="t1", tool_name="save_workflow", ctx=ctx)
+
+    result = await run_save_workflow(
+        execution,
+        SaveWorkflowInput(name="unsafe", description="unsafe", script="return 1"),
+    )
+
+    assert result.is_error is True
+    assert result.preview == "Python workflows disabled"
+
+
+@pytest.mark.asyncio
 async def test_run_workflow_preset_resolves_and_carries_description(registry: SkillRegistry):
     events: list = []
     ctx = make_ctx(registry, events)
@@ -126,7 +180,7 @@ async def test_run_workflow_started_event_carries_declared_phases(registry: Skil
 
     result = await run_workflow(
         execution,
-        WorkflowInput(script="return 'ok'", title="planned", phases=["find", "verify"]),
+        WorkflowInput(name="echo", title="planned", phases=["find", "verify"]),
     )
 
     assert result.is_error is None or result.is_error is False
