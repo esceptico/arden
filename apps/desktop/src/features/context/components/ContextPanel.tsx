@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Library, RotateCcw, ShieldCheck, TriangleAlert } from "@/components/icons";
+import { Library, RotateCcw, ShieldCheck, TriangleAlert } from "lucide-react";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ICON } from "@/lib/icons";
 import { getTurnInspector, type TurnInspector } from "@/api/turnInspector";

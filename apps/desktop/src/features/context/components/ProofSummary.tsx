@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ChevronRight, ShieldCheck, TriangleAlert } from "@/components/icons";
+import { ChevronRight, ShieldCheck, TriangleAlert } from "lucide-react";
 import { ICON } from "@/lib/icons";
 import { turnProofSummary } from "@/features/context/lib/turnProof";
 import { useStore } from "@/stores";
