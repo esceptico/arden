@@ -1,5 +1,5 @@
 from ntrp.config import Config
-from ntrp.integrations.base import Integration
+from ntrp.integrations.base import Integration, IntegrationConnectionSpec
 from ntrp.integrations.calendar.client import MultiCalendarSource
 from ntrp.integrations.calendar.tools import (
     calendar_tool,
@@ -30,4 +30,11 @@ CALENDAR = Integration(
         "delete_calendar_event": delete_calendar_event_tool,
     },
     build=_build,
+    connection=IntegrationConnectionSpec(
+        connection_id="google",
+        capability="Read and manage calendar events",
+        action="oauth",
+        enabled=lambda config: config.google,
+        configured=lambda _config: bool(discover_calendar_tokens()),
+    ),
 )

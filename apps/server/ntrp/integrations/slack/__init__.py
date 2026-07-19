@@ -1,5 +1,5 @@
 from ntrp.config import Config
-from ntrp.integrations.base import Integration, IntegrationField
+from ntrp.integrations.base import Integration, IntegrationConnectionSpec, IntegrationField
 from ntrp.integrations.slack.client import SlackClient
 from ntrp.integrations.slack.notifier import SlackNotifier
 from ntrp.integrations.slack.tools import (
@@ -45,4 +45,10 @@ SLACK = Integration(
     },
     notifier_class=SlackNotifier,
     build=_build,
+    connection=IntegrationConnectionSpec(
+        connection_id="slack",
+        capability="Search, read, and send Slack messages",
+        action="credentials",
+        configured=lambda config: bool(config.slack_bot_token or config.slack_user_token),
+    ),
 )

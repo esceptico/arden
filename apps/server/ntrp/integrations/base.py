@@ -8,6 +8,61 @@ if TYPE_CHECKING:
 
 from ntrp.tools.core.base import Tool
 
+ConnectionState = Literal[
+    "connected",
+    "not_configured",
+    "disabled",
+    "auth_required",
+    "scope_required",
+    "degraded",
+]
+ConnectionAction = Literal["oauth", "credentials", "enable", "settings"]
+
+
+class IntegrationConnectionError(RuntimeError):
+    """A provider failure that can be repaired through its connection flow."""
+
+    def __init__(
+        self,
+        *,
+        integration_id: str,
+        reason: ConnectionState,
+        detail: str,
+        required_scopes: tuple[str, ...] = (),
+        retry_safe: bool = False,
+    ):
+        super().__init__(detail)
+        self.integration_id = integration_id
+        self.reason = reason
+        self.detail = detail
+        self.required_scopes = required_scopes
+        self.retry_safe = retry_safe
+
+
+@dataclass(frozen=True)
+class IntegrationConnectionSpec:
+    connection_id: str
+    capability: str
+    action: ConnectionAction
+    settings_tab: str = "integrations"
+    enabled: Callable[["Config"], bool] | None = None
+    configured: Callable[["Config"], bool] | None = None
+    required_scopes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class IntegrationConnectionDescriptor:
+    integration_id: str
+    connection_id: str
+    label: str
+    capability: str
+    action: ConnectionAction
+    settings_tab: str
+    state: ConnectionState
+    detail: str | None = None
+    required_scopes: tuple[str, ...] = ()
+    tool_names: tuple[str, ...] = ()
+
 
 @dataclass(frozen=True)
 class IntegrationField:
@@ -31,6 +86,7 @@ class Integration:
     tools: dict[str, Tool] = field(default_factory=dict)
     notifier_class: type["Notifier"] | None = None
     build: Callable[["Config"], object | None] | None = None
+    connection: IntegrationConnectionSpec | None = None
 
 
 @dataclass(frozen=True)

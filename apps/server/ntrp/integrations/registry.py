@@ -1,6 +1,8 @@
 from ntrp.config import Config
 from ntrp.integrations.base import (
     Integration,
+    IntegrationConnectionDescriptor,
+    IntegrationConnectionError,
     IntegrationHealth,
     ToolProviderStatus,
 )
@@ -15,8 +17,11 @@ class IntegrationRegistry:
         self._integrations: dict[str, Integration] = {i.id: i for i in integrations}
         self._clients: dict[str, object] = {}
         self._errors: dict[str, str] = {}
+        self._connection_errors: dict[str, IntegrationConnectionError] = {}
+        self._config: Config | None = None
 
     def sync(self, config: Config) -> None:
+        self._config = config
         for id, integration in self._integrations.items():
             if integration.build is None:
                 continue
@@ -26,8 +31,13 @@ class IntegrationRegistry:
                 _logger.exception("Integration %r build failed", id)
                 self._clients.pop(id, None)
                 self._errors[id] = str(e)
+                if isinstance(e, IntegrationConnectionError):
+                    self._connection_errors[id] = e
+                else:
+                    self._connection_errors.pop(id, None)
                 continue
             self._errors.pop(id, None)
+            self._connection_errors.pop(id, None)
             if client is None:
                 self._clients.pop(id, None)
             else:
@@ -50,6 +60,50 @@ class IntegrationRegistry:
 
     def get_integration(self, id: str) -> Integration | None:
         return self._integrations.get(id)
+
+    def get_connection(self, id: str) -> IntegrationConnectionDescriptor | None:
+        integration = self._integrations.get(id)
+        spec = integration.connection if integration else None
+        if integration is None or spec is None:
+            return None
+
+        detail: str | None = None
+        required_scopes = spec.required_scopes
+        if id in self._clients:
+            state = "connected"
+        elif error := self._connection_errors.get(id):
+            state = error.reason
+            detail = error.detail
+            required_scopes = error.required_scopes or required_scopes
+        elif id in self._errors:
+            state = "degraded"
+            detail = self._errors[id]
+        elif self._config is not None and spec.enabled is not None and not spec.enabled(self._config):
+            state = "disabled"
+        elif self._config is not None and spec.configured is not None and not spec.configured(self._config):
+            state = "not_configured"
+        else:
+            state = "not_configured" if spec.configured is None else "degraded"
+
+        return IntegrationConnectionDescriptor(
+            integration_id=id,
+            connection_id=spec.connection_id,
+            label=integration.label,
+            capability=spec.capability,
+            action="enable" if state == "disabled" else spec.action,
+            settings_tab=spec.settings_tab,
+            state=state,
+            detail=detail,
+            required_scopes=required_scopes,
+            tool_names=tuple(sorted(integration.tools)),
+        )
+
+    def list_connections(self) -> list[IntegrationConnectionDescriptor]:
+        return [
+            descriptor
+            for id in self._integrations
+            if not id.startswith("_") and (descriptor := self.get_connection(id)) is not None
+        ]
 
     def active_tools(self) -> list[Tool]:
         """Tools from integrations whose client built successfully, or which have no build."""
