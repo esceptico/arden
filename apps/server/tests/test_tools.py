@@ -1335,6 +1335,33 @@ async def test_ntrp_tool_executor_audits_cancelled_policy_enabled_call(session_s
 
 
 @pytest.mark.asyncio
+async def test_ntrp_tool_executor_audits_internal_failure_outcome(session_store: SessionStore):
+    async def explode(execution: ToolExecution, args: EmptyInput) -> ToolResult:
+        raise RuntimeError("boom")
+
+    registry = ToolRegistry()
+    registry.register(
+        "explode",
+        tool(
+            description="Fail.",
+            execute=explode,
+            policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, audit=True),
+        ),
+    )
+    ctx = _make_tool_context(registry, session_id="sess-1")
+    ctx.services["store"] = session_store
+    executor = NtrpToolExecutor(ToolExecutor().with_registry(registry), ctx)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await executor.execute("explode", {}, "call-1")
+
+    row = (await session_store.list_tool_calls(run_id="run-1"))[0]
+    assert row["status"] == "error"
+    assert row["outcome"]["status"] == "failed"
+    assert row["outcome"]["error"]["code"] == "internal_error"
+
+
+@pytest.mark.asyncio
 async def test_ntrp_tool_executor_skips_audit_when_policy_disabled(session_store: SessionStore):
     async def echo(execution: ToolExecution, args: EchoInput) -> ToolResult:
         return ToolResult(content=f"echo: {args.text}", preview="ok")

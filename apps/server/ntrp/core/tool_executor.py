@@ -165,8 +165,14 @@ class NtrpToolExecutor:
             )
             finish_preview = result.preview
             raise
-        except Exception:
+        except Exception as exc:
             finish_status = "error"
+            result = ToolResult.failure(
+                code="internal_error",
+                message=f"Tool execution failed: {type(exc).__name__}",
+                preview=f"Failed: {type(exc).__name__}",
+            )
+            finish_preview = result.preview
             raise
         finally:
             if read_key is not None:
