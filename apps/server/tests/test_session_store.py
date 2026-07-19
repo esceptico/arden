@@ -547,6 +547,71 @@ async def test_tool_approval_request_to_rejected(store: SessionStore):
 
 
 @pytest.mark.asyncio
+async def test_run_suspension_round_trip(store: SessionStore):
+    await store.record_run_suspension(
+        run_id="run-1",
+        session_id="s-1",
+        suspension_id="approval-1",
+        kind="tool_approval",
+        payload={"tool_name": "bash", "action": "execute", "scope": "internal"},
+    )
+    assert await store.resolve_run_suspension(
+        run_id="run-1",
+        suspension_id="approval-1",
+        status="approved",
+        resolution={"approved": True, "result": "ok"},
+    )
+
+    row = await store.get_run_suspension(run_id="run-1", suspension_id="approval-1")
+
+    assert row is not None
+    assert row["kind"] == "tool_approval"
+    assert row["payload"]["tool_name"] == "bash"
+    assert row["status"] == "approved"
+    assert row["resolution"] == {"approved": True, "result": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_run_suspension_duplicate_record_preserves_terminal_resolution(store: SessionStore):
+    request = {
+        "run_id": "run-1",
+        "session_id": "s-1",
+        "suspension_id": "approval-1",
+        "kind": "tool_approval",
+        "payload": {"tool_name": "bash", "action": "execute", "scope": "internal"},
+    }
+    await store.record_run_suspension(**request)
+    await store.resolve_run_suspension(
+        run_id="run-1",
+        suspension_id="approval-1",
+        status="rejected",
+        resolution={"approved": False, "result": "no"},
+    )
+
+    await store.record_run_suspension(**request)
+
+    row = await store.get_run_suspension(run_id="run-1", suspension_id="approval-1")
+    assert row is not None
+    assert row["status"] == "rejected"
+    assert row["resolution"] == {"approved": False, "result": "no"}
+
+
+@pytest.mark.asyncio
+async def test_pending_tool_approvals_exclude_other_suspension_kinds(store: SessionStore):
+    await store.record_run_suspension(
+        run_id="run-1",
+        session_id="s-1",
+        suspension_id="input-1",
+        kind="user_input",
+        payload={"prompt": "Choose one"},
+    )
+
+    assert await store.list_pending_tool_approvals("s-1") == []
+    suspensions = await store.list_pending_run_suspensions("s-1")
+    assert [row["suspension_id"] for row in suspensions] == ["input-1"]
+
+
+@pytest.mark.asyncio
 async def test_session_goal_lifecycle(store: SessionStore):
     goal = await store.set_goal("sess-1", "Ship the goal feature")
 

@@ -123,6 +123,7 @@ class IOBridge:
     pending_inputs: dict[str, "asyncio.Future[ApprovalResponse]"] | None = None
     record_approval: Callable[..., Awaitable[None]] | None = None
     resolve_approval: Callable[..., Awaitable[None]] | None = None
+    get_suspension: Callable[..., Awaitable[dict | None]] | None = None
     approval_timeout_seconds: int = 300
 
 
@@ -505,6 +506,24 @@ class ToolExecution:
         diff: str | None = None,
         preview: str | None = None,
     ) -> Rejection | None:
+        if self.ctx.io.get_suspension:
+            try:
+                suspension = await self.ctx.io.get_suspension(
+                    run_id=self.ctx.run.run_id,
+                    suspension_id=self.tool_id,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _logger.exception("Approval suspension lookup failed")
+            else:
+                if suspension and suspension.get("status") != "pending":
+                    resolution = suspension.get("resolution") or {}
+                    if resolution.get("approved"):
+                        return None
+                    feedback = str(resolution.get("result") or suspension.get("result_feedback") or "").strip() or None
+                    return Rejection(feedback=feedback)
+
         override = self.ctx.registry.get_override(self.tool_name)
         ui_connected = self.ctx.io.emit is not None and self.ctx.io.pending_approvals is not None
         ask_must_block = override == ToolOverrideDecision.ASK and ui_connected

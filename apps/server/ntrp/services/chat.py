@@ -1227,6 +1227,7 @@ def make_child_io_factory(
     record_approval: Callable[..., Awaitable[None]],
     resolve_approval: Callable[..., Awaitable[None]],
     approval_timeout_seconds: int,
+    get_suspension: Callable[..., Awaitable[dict | None]] | None = None,
 ) -> ChildIOFactory:
     """Build the factory that gives a spawned FULL subagent its OWN session bus,
     framed with the standard run lifecycle so the child session streams live
@@ -1249,6 +1250,7 @@ def make_child_io_factory(
             emit=child_bus.emit,
             record_approval=record_approval,
             resolve_approval=resolve_approval,
+            get_suspension=get_suspension,
             approval_timeout_seconds=approval_timeout_seconds,
         )
         await child_bus.emit(RunStartedEvent(session_id=params.session_id, run_id=params.run_id))
@@ -1343,12 +1345,16 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
             else:
                 await ctx.session_service.store.resolve_tool_approval(**kwargs)
 
+        async def get_suspension(**kwargs) -> dict | None:
+            return await ctx.session_service.store.get_run_suspension(**kwargs)
+
         io = IOBridge(
             pending_approvals=run.pending_approvals,
             pending_inputs=run.pending_inputs,
             emit=bus.emit,
             record_approval=record_approval,
             resolve_approval=resolve_approval,
+            get_suspension=get_suspension,
             approval_timeout_seconds=ctx.config.approval_timeout_seconds,
         )
 
@@ -1361,6 +1367,7 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
             ctx.run_registry,
             record_approval=record_approval,
             resolve_approval=resolve_approval,
+            get_suspension=get_suspension,
             approval_timeout_seconds=ctx.config.approval_timeout_seconds,
         )
 

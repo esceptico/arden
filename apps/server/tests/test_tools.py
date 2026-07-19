@@ -831,6 +831,43 @@ async def test_tool_approval_resolve_failure_after_approval_still_continues():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "resolution", "feedback"),
+    [
+        ("approved", {"approved": True, "result": "ok"}, None),
+        ("rejected", {"approved": False, "result": "no"}, "no"),
+    ],
+)
+async def test_tool_approval_reuses_durable_resolution(status, resolution, feedback):
+    emitted = []
+    pending: dict[str, asyncio.Future] = {}
+
+    async def emit(event):
+        emitted.append(event)
+
+    async def get_suspension(**kwargs):
+        return {"status": status, "resolution": resolution}
+
+    ctx = ToolContext(
+        session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
+        registry=ToolRegistry(),
+        run=RunContext(run_id="run-1"),
+        io=IOBridge(
+            emit=emit,
+            pending_approvals=pending,
+            get_suspension=get_suspension,
+        ),
+        background_tasks=BackgroundTaskRegistry(session_id="test"),
+    )
+
+    rejection = await ToolExecution(tool_id="call-1", tool_name="echo", ctx=ctx).request_approval("Echo hello")
+
+    assert (rejection.feedback if rejection else None) == feedback
+    assert emitted == []
+    assert pending == {}
+
+
+@pytest.mark.asyncio
 async def test_function_tool_rejects_non_tool_result_output():
     async def bad_output(execution: ToolExecution, args: EmptyInput) -> str:
         return "not a ToolResult"

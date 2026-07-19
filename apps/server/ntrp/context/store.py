@@ -249,6 +249,9 @@ CREATE TABLE IF NOT EXISTS tool_approvals (
     resolved_at TEXT,
     expires_at TEXT,
     result_feedback TEXT,
+    kind TEXT NOT NULL DEFAULT 'tool_approval',
+    payload_json TEXT,
+    resolution_json TEXT,
     PRIMARY KEY (run_id, tool_call_id)
 );
 
@@ -590,9 +593,16 @@ class SessionStore:
         }
 
     def _tool_approval_payload(self, row: aiosqlite.Row) -> dict:
+        columns = set(row.keys())
+        payload = json.loads(row["payload_json"] or "{}") if "payload_json" in columns else {}
+        resolution = json.loads(row["resolution_json"]) if "resolution_json" in columns and row["resolution_json"] else None
         return {
             "run_id": row["run_id"],
             "session_id": row["session_id"],
+            "suspension_id": row["tool_call_id"],
+            "kind": row["kind"] if "kind" in columns else "tool_approval",
+            "payload": payload,
+            "resolution": resolution,
             "tool_call_id": row["tool_call_id"],
             "tool_name": row["tool_name"],
             "action": row["action"],
@@ -736,6 +746,7 @@ class SessionStore:
         )
         await self._migrate_session_messages_fts()
         await self._migrate_tool_calls_schema()
+        await self._migrate_run_suspensions_schema()
         await self._migrate_background_agent_runs_schema()
         await self._migrate_chat_compactions_schema()
         await self._migrate_chat_runs_schema()
@@ -1329,6 +1340,20 @@ class SessionStore:
             await self.conn.execute("ALTER TABLE tool_calls ADD COLUMN outcome_json TEXT")
         await self.conn.commit()
 
+    async def _migrate_run_suspensions_schema(self) -> None:
+        rows = await self.conn.execute_fetchall("PRAGMA table_info(tool_approvals)")
+        if not rows:
+            return
+        columns = {row["name"] for row in rows}
+        for column in (
+            "kind TEXT NOT NULL DEFAULT 'tool_approval'",
+            "payload_json TEXT",
+            "resolution_json TEXT",
+        ):
+            if column.split()[0] not in columns:
+                await self.conn.execute(f"ALTER TABLE tool_approvals ADD COLUMN {column}")
+        await self.conn.commit()
+
     async def _migrate_background_agent_runs_schema(self) -> None:
         rows = await self.conn.execute_fetchall("PRAGMA table_info(background_agent_runs)")
         if not rows:
@@ -1859,24 +1884,27 @@ class SessionStore:
         return self._chat_run_payload(rows[0])
 
     async def list_pending_tool_approvals(self, session_id: str, *, run_id: str | None = None) -> list[dict]:
+        return await self.list_pending_run_suspensions(session_id, run_id=run_id, kind="tool_approval")
+
+    async def list_pending_run_suspensions(
+        self,
+        session_id: str,
+        *,
+        run_id: str | None = None,
+        kind: str | None = None,
+    ) -> list[dict]:
+        conditions = ["session_id = ?", "status = 'pending'"]
+        params: list[str] = [session_id]
         if run_id is not None:
-            rows = await self.read_conn.execute_fetchall(
-                """
-                SELECT * FROM tool_approvals
-                WHERE session_id = ? AND run_id = ? AND status = 'pending'
-                ORDER BY requested_at ASC
-                """,
-                (session_id, run_id),
-            )
-        else:
-            rows = await self.read_conn.execute_fetchall(
-                """
-                SELECT * FROM tool_approvals
-                WHERE session_id = ? AND status = 'pending'
-                ORDER BY requested_at ASC
-                """,
-                (session_id,),
-            )
+            conditions.append("run_id = ?")
+            params.append(run_id)
+        if kind is not None:
+            conditions.append("kind = ?")
+            params.append(kind)
+        rows = await self.read_conn.execute_fetchall(
+            f"SELECT * FROM tool_approvals WHERE {' AND '.join(conditions)} ORDER BY requested_at ASC",
+            tuple(params),
+        )
         return [self._tool_approval_payload(row) for row in rows]
 
     async def record_tool_call_started(
@@ -2020,14 +2048,45 @@ class SessionStore:
         diff: str | None = None,
         expires_at: str | None = None,
     ) -> None:
+        await self.record_run_suspension(
+            run_id=run_id,
+            session_id=session_id,
+            suspension_id=tool_call_id,
+            kind="tool_approval",
+            payload={
+                "tool_name": tool_name,
+                "action": action,
+                "scope": scope,
+                "preview": preview,
+                "diff": diff,
+            },
+            expires_at=expires_at,
+        )
+
+    async def record_run_suspension(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        suspension_id: str,
+        kind: str,
+        payload: dict,
+        expires_at: str | None = None,
+    ) -> None:
         now = datetime.now(UTC).isoformat()
+        tool_name = str(payload.get("tool_name") or kind)
+        action = str(payload.get("action") or "suspend")
+        scope = str(payload.get("scope") or "internal")
+        preview = payload.get("preview")
+        diff = payload.get("diff")
+        payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         await self.conn.execute(
             """
             INSERT INTO tool_approvals (
                 run_id, session_id, tool_call_id, tool_name, action, scope,
-                preview, diff, status, requested_at, expires_at
+                preview, diff, status, requested_at, expires_at, kind, payload_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
             ON CONFLICT(run_id, tool_call_id) DO UPDATE SET
                 session_id = excluded.session_id,
                 tool_name = excluded.tool_name,
@@ -2035,13 +2094,26 @@ class SessionStore:
                 scope = excluded.scope,
                 preview = excluded.preview,
                 diff = excluded.diff,
-                status = excluded.status,
                 requested_at = excluded.requested_at,
-                resolved_at = NULL,
                 expires_at = excluded.expires_at,
-                result_feedback = NULL
+                kind = excluded.kind,
+                payload_json = excluded.payload_json
+            WHERE tool_approvals.status = 'pending'
             """,
-            (run_id, session_id, tool_call_id, tool_name, action, scope, preview, diff, now, expires_at),
+            (
+                run_id,
+                session_id,
+                suspension_id,
+                tool_name,
+                action,
+                scope,
+                preview,
+                diff,
+                now,
+                expires_at,
+                kind,
+                payload_json,
+            ),
         )
         await self.conn.commit()
 
@@ -2053,17 +2125,35 @@ class SessionStore:
         status: str,
         result_feedback: str | None = None,
     ) -> bool:
+        return await self.resolve_run_suspension(
+            run_id=run_id,
+            suspension_id=tool_call_id,
+            status=status,
+            resolution={"approved": status == "approved", "result": result_feedback or ""},
+        )
+
+    async def resolve_run_suspension(
+        self,
+        *,
+        run_id: str,
+        suspension_id: str,
+        status: str,
+        resolution: dict | None = None,
+    ) -> bool:
         now = datetime.now(UTC).isoformat()
+        resolution_json = json.dumps(resolution, sort_keys=True, separators=(",", ":")) if resolution else None
+        result_feedback = resolution.get("result") if resolution else None
         cursor = await self.conn.execute(
             """
             UPDATE tool_approvals
             SET status = ?,
                 resolved_at = COALESCE(resolved_at, ?),
-                result_feedback = COALESCE(?, result_feedback)
+                result_feedback = COALESCE(?, result_feedback),
+                resolution_json = COALESCE(?, resolution_json)
             WHERE run_id = ? AND tool_call_id = ?
               AND status = 'pending'
             """,
-            (status, now, result_feedback, run_id, tool_call_id),
+            (status, now, result_feedback, resolution_json, run_id, suspension_id),
         )
         await self.conn.commit()
         return cursor.rowcount > 0
@@ -2083,9 +2173,12 @@ class SessionStore:
         )
 
     async def get_tool_approval(self, *, run_id: str, tool_call_id: str) -> dict | None:
+        return await self.get_run_suspension(run_id=run_id, suspension_id=tool_call_id)
+
+    async def get_run_suspension(self, *, run_id: str, suspension_id: str) -> dict | None:
         rows = await self.read_conn.execute_fetchall(
             "SELECT * FROM tool_approvals WHERE run_id = ? AND tool_call_id = ?",
-            (run_id, tool_call_id),
+            (run_id, suspension_id),
         )
         if not rows:
             return None
