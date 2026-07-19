@@ -4,6 +4,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from ntrp.agent import ToolResult
+from ntrp.tool_call_metadata import DISPLAY_TITLE_ARG, RESERVED_TOOL_ARGUMENTS
 from ntrp.tools.core.context import ToolExecution
 from ntrp.tools.core.types import ApprovalInfo, ToolPolicy
 
@@ -32,12 +33,12 @@ def _inline_refs(schema: dict) -> dict:
 
 __all__ = ["Tool", "ToolResult", "ApprovalInfo", "TITLE_ARG", "RESERVED_ARG_KEYS"]
 
-# The model emits a short UI action title as a pseudo-arg on every tool call
+# The model emits a short UI action title as a namespaced pseudo-arg on every tool call
 # (the letta / Claude-Code "inline field" pattern — free, same completion). It
 # is stripped from the args before execute() so tools never see it; it only
 # feeds the desktop trace's per-step label.
-TITLE_ARG = "title"
-RESERVED_ARG_KEYS = frozenset({TITLE_ARG})
+TITLE_ARG = DISPLAY_TITLE_ARG
+RESERVED_ARG_KEYS = RESERVED_TOOL_ARGUMENTS
 _TITLE_PROP = {
     "type": "string",
     "description": (
@@ -72,6 +73,10 @@ class Tool(ABC):
             json_schema = _inline_refs(self.input_model.model_json_schema())
             properties = dict(json_schema.get("properties", {}))
             required = list(json_schema.get("required", []))
+        collisions = RESERVED_ARG_KEYS.intersection(properties)
+        if collisions:
+            names = ", ".join(sorted(collisions))
+            raise ValueError(f"Tool {name!r} schema uses reserved tool argument(s): {names}")
         # Inject the optional action-title hint first so it streams early. It is
         # stripped before execute() (see registry.execute), so the title never
         # reaches the tool — it only labels the call in the UI.

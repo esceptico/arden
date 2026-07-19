@@ -18,6 +18,7 @@ from ntrp.context.models import SessionState
 from ntrp.context.store import SessionStore
 from ntrp.core.tool_executor import NtrpToolExecutor
 from ntrp.integrations.base import Integration
+from ntrp.tool_call_metadata import DISPLAY_TITLE_ARG
 from ntrp.tools.bash import bash_tool, execute_bash, is_blocked_command, is_safe_command
 from ntrp.tools.core import EmptyInput, Tool, ToolCall, ToolNext, tool
 from ntrp.tools.core.context import (
@@ -455,9 +456,9 @@ async def test_function_tool_execute_without_args():
     assert schema["name"] == "current_time"
     assert schema["description"] == "Get the current time."
     # The optional UI action-title hint is injected into every tool's schema;
-    # this no-arg tool therefore exposes just `title`. It is stripped before
+    # this no-arg tool therefore exposes just the namespaced key. It is stripped before
     # execute(), so the tool itself never receives it.
-    assert set(schema["parameters"]["properties"]) == {"title"}
+    assert set(schema["parameters"]["properties"]) == {DISPLAY_TITLE_ARG}
     assert schema["parameters"]["required"] == []
 
 

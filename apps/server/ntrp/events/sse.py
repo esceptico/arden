@@ -42,6 +42,7 @@ from ntrp.agent import (
     ToolStarted,
 )
 from ntrp.agent.types.tools import normalize_source_refs
+from ntrp.tool_call_metadata import split_tool_arguments
 
 
 class EventType(StrEnum):
@@ -783,8 +784,9 @@ def agent_events_to_sse(event) -> tuple[SSEEvent, ...]:
                 ),
             )
         case ToolStarted():
-            description = _format_call(event.display_name or event.name, event.args)
-            args_json = json.dumps(event.args) if event.args else "{}"
+            title, args = split_tool_arguments(event.args)
+            description = title or _format_call(event.display_name or event.name, args)
+            args_json = json.dumps(args) if args else "{}"
             return (
                 ToolCallStartEvent(
                     tool_call_id=event.tool_id,
