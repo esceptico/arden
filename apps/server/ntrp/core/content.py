@@ -1,3 +1,4 @@
+import hashlib
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
@@ -19,6 +20,37 @@ class ContextContent(BaseModel):
     content_type: str
     content: str | None = None
     metadata: dict[str, str] | None = None
+
+
+class ContextManifestEntry(BaseModel):
+    context_id: str
+    content_type: str
+    source: str
+    ref: str
+    freshness: str
+    selection_reason: str
+    size_bytes: int
+
+
+def context_manifest_entry(
+    *,
+    content_type: str,
+    content: str,
+    source: str,
+    ref: str,
+    freshness: str,
+    selection_reason: str,
+) -> ContextManifestEntry:
+    identity = f"{content_type}\0{source}\0{ref}\0{content}".encode()
+    return ContextManifestEntry(
+        context_id=f"ctx_{hashlib.sha256(identity).hexdigest()[:16]}",
+        content_type=content_type,
+        source=source,
+        ref=ref,
+        freshness=freshness,
+        selection_reason=selection_reason,
+        size_bytes=len(content.encode()),
+    )
 
 
 ContentBlock = Annotated[

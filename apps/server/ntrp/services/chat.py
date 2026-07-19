@@ -17,7 +17,14 @@ from ntrp.areas.context import load_area_context
 from ntrp.config import get_config
 from ntrp.constants import CONVERSATION_GAP_THRESHOLD, LOOP_ITERATION_HISTORY_WINDOW
 from ntrp.context.models import AreaContext, SessionData, SessionState
-from ntrp.core.content import ContextContent, ImageContent, TextContent
+from ntrp.core.content import (
+    ContextContent,
+    ContextManifestEntry,
+    ImageContent,
+    TextContent,
+    context_manifest_entry,
+    render_context,
+)
 from ntrp.core.factory import AgentConfig, create_agent
 from ntrp.core.naming import generate_conversation_name
 from ntrp.core.prompts import INIT_INSTRUCTION, build_system_blocks
@@ -482,6 +489,7 @@ async def _prepare_messages(
     area_page_context: dict | None = None,
     todo_override: dict | None = None,
     append_user: bool = True,
+    context_manifest: list[ContextManifestEntry] | None = None,
 ) -> list[dict]:
     memory_context = await resident_profile(
         deps.memory_records, project_context=area_context, session_id=session_id
@@ -514,6 +522,7 @@ async def _prepare_messages(
         todo_override=todo_override,
         use_cache_control=_is_anthropic(deps.chat_model),
         native_deferred_tools=native_deferred_tools,
+        context_manifest=context_manifest,
     )
 
     messages = _retain_user_content(messages)
@@ -529,6 +538,20 @@ async def _prepare_messages(
         return messages
 
     ctx_blocks = list(context or [])
+    if context_manifest is not None:
+        for index, raw_context in enumerate(ctx_blocks):
+            parsed = ContextContent.model_validate(raw_context)
+            metadata = parsed.metadata or {}
+            context_manifest.append(
+                context_manifest_entry(
+                    content_type=parsed.content_type,
+                    content=render_context(parsed),
+                    source=metadata.get("source", "request"),
+                    ref=metadata.get("ref", f"user-context:{index}"),
+                    freshness=metadata.get("freshness", "request time"),
+                    selection_reason=metadata.get("selection_reason", "explicitly supplied"),
+                )
+            )
     if last_activity:
         time_gap = _time_gap_note(last_activity)
         if time_gap:
@@ -705,6 +728,7 @@ async def prepare_chat(
     # Area context = the container's topic page (a capability on the area
     # row); plain area chats get None and stay ordinary.
     area_page_context = load_area_context(get_config().memory_artifacts_dir, area_record)
+    context_manifest: list[ContextManifestEntry] = []
     messages = await _prepare_messages(
         deps,
         messages,
@@ -721,10 +745,12 @@ async def prepare_chat(
         area_page_context=area_page_context,
         todo_override=todo_override,
         append_user=not is_resume,
+        context_manifest=context_manifest,
     )
 
     run.messages = messages
     run.session_state = session_state
+    run.context_manifest = [entry.model_dump() for entry in context_manifest]
     if is_resume:
         for index in range(len(messages) - 1, -1, -1):
             if messages[index].get("role") != Role.USER:
@@ -1045,6 +1071,14 @@ async def _submit_chat_message_locked(
         # the pre-submit history and the SSE replay carries agent events, not
         # the user message itself.
         await deps.session_service.save_progress(ctx.session_state, _persistable_messages(ctx.run))
+        store = getattr(deps.session_service, "store", None)
+        record_manifest = getattr(store, "record_run_context_manifest", None)
+        if record_manifest:
+            await record_manifest(
+                run_id=ctx.run.run_id,
+                session_id=ctx.run.session_id,
+                manifest=ctx.run.context_manifest,
+            )
     except BaseException:
         ctx.run_registry.error_run(ctx.run.run_id)
         try:
@@ -1119,6 +1153,17 @@ def _install_cancel_fallback(
 
 
 async def _record_completed_run(ctx: ChatContext, *, last_seq: int | None) -> None:
+    store = getattr(ctx.session_service, "store", None)
+    record_evidence = getattr(store, "record_run_evidence", None)
+    if record_evidence:
+        try:
+            await record_evidence(
+                run_id=ctx.run.run_id,
+                session_id=ctx.run.session_id,
+                source_refs=list(ctx.run.source_refs),
+            )
+        except Exception:
+            _logger.warning("Failed to record run evidence sidecar", exc_info=True)
     await _record_run_status(
         ctx.session_service,
         ctx.run.run_id,

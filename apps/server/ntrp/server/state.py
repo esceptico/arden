@@ -100,6 +100,7 @@ class RunState:
     # etc.). Folded into the episode's source_refs when the run completes so
     # memory records what the turn actually touched, not just the chat text.
     source_refs: list[dict] = field(default_factory=list)
+    context_manifest: list[dict] = field(default_factory=list)
     _source_ref_identities: set[tuple[str, str]] = field(default_factory=set, init=False, repr=False)
 
     def __post_init__(self) -> None:

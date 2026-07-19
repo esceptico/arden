@@ -35,3 +35,18 @@ def test_build_system_blocks_native_deferred_prompt_omits_group_loader():
     assert "tool_search" in text
     assert "load_tools" not in text
     assert "load the relevant group" not in text
+
+
+def test_build_system_blocks_records_deterministic_context_manifest():
+    first = []
+    second = []
+
+    build_system_blocks(source_details={}, memory_context="Known preference", context_manifest=first)
+    build_system_blocks(source_details={}, memory_context="Known preference", context_manifest=second)
+
+    memory = next(entry for entry in first if entry.content_type == "memory_context")
+    assert memory.source == "memory"
+    assert memory.ref == "resident_profile"
+    assert memory.selection_reason == "activated for this session"
+    assert memory.size_bytes == len(b"## MEMORY CONTEXT\nKnown preference")
+    assert [entry.context_id for entry in first] == [entry.context_id for entry in second]

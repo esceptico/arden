@@ -860,6 +860,59 @@ async def test_duplicate_tool_checkpoint_does_not_overwrite_terminal_call(store:
 
 
 @pytest.mark.asyncio
+async def test_run_sidecars_persist_context_and_derive_evidence_from_durable_facts(store: SessionStore):
+    await store.record_run_context_manifest(
+        run_id="run-1",
+        session_id="s-1",
+        manifest=[{"context_id": "ctx-1", "source": "memory", "ref": "record-1"}],
+    )
+    await store.record_tool_call_started(
+        run_id="run-1",
+        session_id="s-1",
+        tool_call_id="call-1",
+        tool_name="send_email",
+        action="write",
+        scope="external",
+    )
+    await store.record_tool_call_finished(
+        run_id="run-1",
+        tool_call_id="call-1",
+        status="success",
+        result_preview="sent",
+        outcome={
+            "status": "succeeded",
+            "effect": {"operation": "send", "target": "message:42"},
+            "verification": {"postcondition": "message exists", "observed": "message:42", "confidence": 1.0},
+            "receipt": "provider:42",
+        },
+    )
+    await store.record_tool_approval_requested(
+        run_id="run-1",
+        session_id="s-1",
+        tool_call_id="call-1",
+        tool_name="send_email",
+        action="write",
+        scope="external",
+    )
+    await store.resolve_tool_approval(run_id="run-1", tool_call_id="call-1", status="approved")
+
+    evidence = await store.record_run_evidence(
+        run_id="run-1",
+        session_id="s-1",
+        source_refs=[{"provider": "gmail", "kind": "message", "ref": "message:42", "title": "Sent email"}],
+    )
+    sidecars = await store.get_run_sidecars("run-1")
+
+    assert sidecars["context_manifest"][0]["context_id"] == "ctx-1"
+    assert evidence["sources"][0]["ref"] == "message:42"
+    assert evidence["approvals"][0]["status"] == "approved"
+    assert evidence["receipts"] == [{"tool_call_id": "call-1", "receipt": "provider:42"}]
+    assert evidence["checks"][0]["observed"] == "message:42"
+    assert evidence["effects"][0]["target"] == "message:42"
+    assert evidence["limitations"] == []
+
+
+@pytest.mark.asyncio
 async def test_list_interrupted_chat_runs_returns_restart_candidates(store: SessionStore):
     await store.record_chat_run_started(run_id="run-1", session_id="s-1")
     await store.record_chat_run_started(run_id="run-2", session_id="s-2")

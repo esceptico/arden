@@ -260,6 +260,15 @@ CREATE INDEX IF NOT EXISTS idx_tool_approvals_run
 CREATE INDEX IF NOT EXISTS idx_tool_approvals_session_status
     ON tool_approvals(session_id, status);
 
+CREATE TABLE IF NOT EXISTS run_sidecars (
+    run_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    context_manifest_json TEXT NOT NULL DEFAULT '[]',
+    source_refs_json TEXT NOT NULL DEFAULT '[]',
+    evidence_json TEXT NOT NULL DEFAULT '{}',
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS session_events (
     session_id TEXT NOT NULL,
     seq INTEGER NOT NULL,
@@ -2086,6 +2095,128 @@ class SessionStore:
             (run_id,),
         )
         return [self._tool_call_payload(row) for row in rows]
+
+    async def record_run_context_manifest(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        manifest: list[dict],
+    ) -> None:
+        now = datetime.now(UTC).isoformat()
+        manifest_json = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+        await self.conn.execute(
+            """
+            INSERT INTO run_sidecars (run_id, session_id, context_manifest_json, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(run_id) DO UPDATE SET
+                session_id = excluded.session_id,
+                context_manifest_json = excluded.context_manifest_json,
+                updated_at = excluded.updated_at
+            """,
+            (run_id, session_id, manifest_json, now),
+        )
+        await self.conn.commit()
+
+    async def record_run_evidence(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        source_refs: list[dict],
+    ) -> dict:
+        calls = await self.list_tool_calls(run_id=run_id)
+        approval_rows = await self.read_conn.execute_fetchall(
+            "SELECT * FROM tool_approvals WHERE run_id = ? AND kind = 'tool_approval' ORDER BY requested_at ASC",
+            (run_id,),
+        )
+        approvals = [
+            {
+                "tool_call_id": row["tool_call_id"],
+                "tool_name": row["tool_name"],
+                "status": row["status"],
+                **({"feedback": row["result_feedback"]} if row["result_feedback"] else {}),
+            }
+            for row in approval_rows
+        ]
+        effects: list[dict] = []
+        receipts: list[dict] = []
+        checks: list[dict] = []
+        limitations: list[dict] = []
+        for call in calls:
+            outcome = call.get("outcome") or {}
+            tool_call_id = call["tool_call_id"]
+            if effect := outcome.get("effect"):
+                effects.append({"tool_call_id": tool_call_id, **effect})
+            if receipt := outcome.get("receipt"):
+                receipts.append({"tool_call_id": tool_call_id, "receipt": receipt})
+            if verification := outcome.get("verification"):
+                checks.append({"tool_call_id": tool_call_id, **verification})
+            outcome_status = outcome.get("status")
+            if outcome_status and outcome_status != "succeeded":
+                error = outcome.get("error") or {}
+                limitations.append(
+                    {
+                        "tool_call_id": tool_call_id,
+                        "status": outcome_status,
+                        "code": error.get("code") or outcome_status,
+                        **({"recovery_action": error["recovery_action"]} if error.get("recovery_action") else {}),
+                    }
+                )
+            elif call["status"] == "running":
+                limitations.append(
+                    {
+                        "tool_call_id": tool_call_id,
+                        "status": "uncertain",
+                        "code": "execution_state_uncertain",
+                        "recovery_action": "Verify whether the operation completed before retrying.",
+                    }
+                )
+        sources = sorted(source_refs, key=lambda ref: (str(ref.get("provider", "")), str(ref.get("ref", ""))))
+        evidence = {
+            "sources": sources,
+            "approvals": approvals,
+            "effects": effects,
+            "receipts": receipts,
+            "checks": checks,
+            "limitations": limitations,
+        }
+        now = datetime.now(UTC).isoformat()
+        await self.conn.execute(
+            """
+            INSERT INTO run_sidecars (
+                run_id, session_id, source_refs_json, evidence_json, updated_at
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(run_id) DO UPDATE SET
+                session_id = excluded.session_id,
+                source_refs_json = excluded.source_refs_json,
+                evidence_json = excluded.evidence_json,
+                updated_at = excluded.updated_at
+            """,
+            (
+                run_id,
+                session_id,
+                json.dumps(sources, sort_keys=True, separators=(",", ":")),
+                json.dumps(evidence, sort_keys=True, separators=(",", ":")),
+                now,
+            ),
+        )
+        await self.conn.commit()
+        return evidence
+
+    async def get_run_sidecars(self, run_id: str) -> dict | None:
+        rows = await self.read_conn.execute_fetchall("SELECT * FROM run_sidecars WHERE run_id = ?", (run_id,))
+        if not rows:
+            return None
+        row = rows[0]
+        return {
+            "run_id": row["run_id"],
+            "session_id": row["session_id"],
+            "context_manifest": json.loads(row["context_manifest_json"]),
+            "source_refs": json.loads(row["source_refs_json"]),
+            "evidence": json.loads(row["evidence_json"]),
+            "updated_at": row["updated_at"],
+        }
 
     async def get_tool_result(self, tool_result_id: str) -> dict | None:
         rows = await self.read_conn.execute_fetchall(

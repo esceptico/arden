@@ -151,6 +151,37 @@ def test_loop_iteration_history_window_constant_exists():
 
 
 @pytest.mark.asyncio
+async def test_prepare_chat_records_context_manifest_with_explicit_provenance():
+    svc = _StubSessionService([])
+    ctx = await prepare_chat(
+        _make_deps(svc),
+        message="Summarize this",
+        session_id="sess-1",
+        context=[
+            {
+                "type": "context",
+                "content_type": "selected_text",
+                "content": "Evidence",
+                "metadata": {
+                    "source": "desktop",
+                    "ref": "selection:1",
+                    "freshness": "now",
+                    "selection_reason": "user selected",
+                },
+            }
+        ],
+    )
+
+    selected = next(
+        item for item in ctx.run.context_manifest if item["content_type"] == "selected_text"
+    )
+    assert selected["source"] == "desktop"
+    assert selected["ref"] == "selection:1"
+    assert selected["selection_reason"] == "user selected"
+    assert any(item["content_type"] == "system_prompt" for item in ctx.run.context_manifest)
+
+
+@pytest.mark.asyncio
 async def test_prepare_resumed_chat_restores_run_without_appending_user_message():
     history = [
         {"role": "system", "content": "old"},

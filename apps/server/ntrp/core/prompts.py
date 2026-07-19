@@ -3,6 +3,7 @@ from datetime import datetime
 from jinja2 import Environment
 
 from ntrp.constants import AGENT_MAX_DEPTH
+from ntrp.core.content import ContextManifestEntry, context_manifest_entry
 
 env = Environment(trim_blocks=True, lstrip_blocks=True)
 
@@ -326,6 +327,7 @@ def build_system_blocks(
     todo_override: dict | None = None,
     use_cache_control: bool = False,
     native_deferred_tools: bool = False,
+    context_manifest: list[ContextManifestEntry] | None = None,
 ) -> list[dict]:
     """Build system prompt as a list of content blocks.
 
@@ -348,18 +350,24 @@ def build_system_blocks(
     if use_cache_control:
         static_block["cache_control"] = {"type": "ephemeral"}
     blocks = [static_block]
+    manifest_specs = [("system_prompt", "ntrp", "system:base", "versioned", "required runtime instructions")]
 
     dynamic = DYNAMIC_BLOCK.render(
         date=date,
         time=now.strftime("%H:00"),
     )
     blocks.append({"type": "text", "text": dynamic})
+    manifest_specs.append(("runtime_time", "clock", "local-hour", date, "current temporal context"))
 
     if area_context:
         blocks.append({"type": "text", "text": AREA_BLOCK.render(area=area_context)})
+        manifest_specs.append(("area_context", "area", str(area_context.area_id), "session load", "session area scope"))
 
     if area_page_context:
         blocks.append({"type": "text", "text": AREA_PAGE_BLOCK.render(area=area_page_context)})
+        manifest_specs.append(
+            ("area_page", "memory", str(area_page_context.get("title") or "area"), "session load", "area topic page")
+        )
 
     if memory_context:
         memory_block: dict = {
@@ -369,14 +377,35 @@ def build_system_blocks(
         if use_cache_control:
             memory_block["cache_control"] = {"type": "ephemeral"}
         blocks.append(memory_block)
+        manifest_specs.append(
+            ("memory_context", "memory", "resident_profile", "session load", "activated for this session")
+        )
 
     if goal_context:
         blocks.append({"type": "text", "text": GOAL_BLOCK.render(goal=goal_context)})
+        manifest_specs.append(("goal_context", "goal", str(goal_context.get("goal_id") or "active"), "live", "active goal"))
 
     if todo_override and todo_override.get("items"):
         blocks.append({"type": "text", "text": TODO_OVERRIDE_BLOCK.render(todo=todo_override)})
+        manifest_specs.append(("todo_override", "session", "todo_override", "live", "user-edited task state"))
 
     blocks.append({"type": "text", "text": TEMPORAL_REMINDER.render(date=date)})
+    manifest_specs.append(("temporal_reminder", "clock", "current-date", date, "date-sensitive reasoning"))
+
+    if context_manifest is not None:
+        context_manifest.extend(
+            context_manifest_entry(
+                content_type=content_type,
+                content=block["text"],
+                source=source,
+                ref=ref,
+                freshness=freshness,
+                selection_reason=selection_reason,
+            )
+            for block, (content_type, source, ref, freshness, selection_reason) in zip(
+                blocks, manifest_specs, strict=True
+            )
+        )
 
     return blocks
 
