@@ -344,6 +344,15 @@ def create_spawn_fn(
         child_executor_source = executor
         child_registry = executor.registry
         if extra_tools:
+            shadowed = {
+                name
+                for name in extra_tools
+                if executor.registry.get_source(name) == "user"
+            }
+            if shadowed:
+                raise ValueError(
+                    "user tools cannot shadow child-only tools: " + ", ".join(sorted(shadowed))
+                )
             # Inject only tools not already registered. A specialized agent type
             # (research) carries its full toolset and re-passes it on every spawn,
             # but a NESTED spawn already inherited those tools — and copy_with raises
@@ -357,7 +366,10 @@ def create_spawn_fn(
         # for full): it narrows the base toolset to those ToolActions, the same way
         # research read-only-filtered its tools. extra_tools (merged into the child
         # registry above) and exclude_tools then add/remove on top.
-        full_tools = child_executor_source.get_tools(actions=actions)
+        full_tools = child_executor_source.get_tools(
+            actions=actions,
+            extra_names=frozenset(extra_tools or ()),
+        )
         # `tools` is either schema dicts (research/background pass these) or a
         # name allowlist a workflow author wrote, e.g. ["slack_search", ...].
         # Resolve names against the full toolset so a name-restricted agent still
@@ -414,6 +426,7 @@ def create_spawn_fn(
             approval_controls=calling_ctx.run.approval_controls,
             research_model=calling_ctx.run.research_model,
             deferred_tools_enabled=calling_ctx.run.deferred_tools_enabled,
+            deferred_tool_loader=calling_ctx.run.deferred_tool_loader,
             loaded_tools=set(calling_ctx.run.loaded_tools),
             allowed_tool_names=allowed_tool_names,
             research_scope_id=research_scope_id or calling_ctx.run.research_scope_id,

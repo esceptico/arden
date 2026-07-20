@@ -171,7 +171,6 @@ def test_observe_scope_is_area_locked_and_can_read_area_transcripts():
     assert matches_scope(tuple(OBSERVE_TOOL_SCOPE), "slack_search")
     assert not matches_scope(tuple(OBSERVE_TOOL_SCOPE), "memory_patch")
     assert not matches_scope(tuple(OBSERVE_TOOL_SCOPE), "memory_write")
-    assert not matches_scope(tuple(OBSERVE_TOOL_SCOPE), "memory_rebuild")
     assert not matches_scope(tuple(OBSERVE_TOOL_SCOPE), "remember")
     assert not matches_scope(tuple(OBSERVE_TOOL_SCOPE), "forget")
     assert not matches_scope(tuple(OBSERVE_TOOL_SCOPE), "send_email")

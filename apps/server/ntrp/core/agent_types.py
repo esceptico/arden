@@ -23,6 +23,12 @@ from ntrp.tools.core.types import ToolAction
 
 _READ = frozenset({ToolAction.READ})
 
+SPAWN_SURFACE_GUIDANCE = (
+    "Choose research for one awaited investigation; background for a detached one-off investigation; "
+    "workflow for a curated multi-agent pipeline; create_automation for recurring scheduled/event work; "
+    "create_loop only for adaptive repeated work that stops on a condition."
+)
+
 
 @dataclass(frozen=True)
 class AgentType:

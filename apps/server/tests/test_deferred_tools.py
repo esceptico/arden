@@ -413,6 +413,31 @@ async def test_deferred_middleware_uses_native_loading_for_supported_models():
     assert "echo" in names
     assert "slack_search" not in names
     assert "slack_search" in deferred_names
+    assert run.deferred_tool_loader == "tool_search"
+
+
+@pytest.mark.asyncio
+async def test_hidden_tool_recovery_names_the_exposed_loader():
+    registry = _registry()
+    run = RunContext(run_id="run", deferred_tools_enabled=True)
+    ctx = ToolContext(
+        session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
+        registry=registry,
+        run=run,
+        io=IOBridge(),
+    )
+    executor = NtrpToolExecutor(ToolExecutor().with_registry(registry), ctx)
+
+    classic = await executor.execute("slack_search", {"query": "x"}, "classic")
+    assert classic.is_error
+    assert "load_tools" in classic.content
+    assert "tool_search" not in classic.content
+
+    middleware = DeferredToolsModelRequestMiddleware(registry=registry, run=run, get_services=dict)
+    await middleware(replace(_request(registry), model="gpt-5.5"), _identity)
+    native = await executor.execute("slack_search", {"query": "x"}, "native")
+    assert native.is_error
+    assert "tool_search" in native.content
 
 
 @pytest.mark.asyncio
@@ -1187,7 +1212,7 @@ async def test_spawned_agent_extra_tools_are_child_only(monkeypatch):
     async def extra_tool(execution: ToolExecution, args: ExtraInput) -> ToolResult:
         return ToolResult(content=args.value, preview="extra")
 
-    research_note_tool = tool(
+    child_helper_tool = tool(
         description="Child-only helper.",
         input_model=ExtraInput,
         policy=READ_INTERNAL_POLICY,
@@ -1221,14 +1246,14 @@ async def test_spawned_agent_extra_tools_are_child_only(monkeypatch):
         parent_ctx,
         task="search files",
         system_prompt="child prompt",
-        extra_tools={"research_note": research_note_tool},
+        extra_tools={"child_helper": child_helper_tool},
     )
 
     tool_names = {schema["function"]["name"] for schema in captured["tools"]}
     assert result.text == "done"
-    assert registry.get("research_note") is None
-    assert "research_note" in tool_names
-    assert captured["executor"]._executor.registry.get("research_note") is research_note_tool
+    assert registry.get("child_helper") is None
+    assert "child_helper" in tool_names
+    assert captured["executor"]._executor.registry.get("child_helper") is child_helper_tool
 
     prepared = await apply_model_request_middlewares(
         ModelRequest(
@@ -1244,7 +1269,7 @@ async def test_spawned_agent_extra_tools_are_child_only(monkeypatch):
         captured["model_request_middlewares"],
     )
     prepared_names = {schema["function"]["name"] for schema in prepared.tools}
-    assert "research_note" in prepared_names
+    assert "child_helper" in prepared_names
 
 
 @pytest.mark.asyncio

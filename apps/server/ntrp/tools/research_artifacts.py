@@ -316,13 +316,14 @@ async def list_research_artifacts(execution: ToolExecution, args: ListResearchAr
     )
 
 
-_POLICY = ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, offload=False)
+_READ_POLICY = ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, offload=False)
+_WRITE_POLICY = ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, offload=False)
 
 write_research_artifact_tool = tool(
     display_name="WriteResearchArtifact",
     description="Write (overwrite) a filesystem-backed scratchpad artifact for this research run. Use to offload long source inventories, tables, or draft reports out of context; return a compact manifest instead. Stored under ~/.ntrp/artifacts/research/<scope>/ with safe relative paths.",
     input_model=WriteResearchArtifactInput,
-    policy=_POLICY,
+    policy=_WRITE_POLICY,
     execute=write_research_artifact,
 )
 
@@ -330,7 +331,7 @@ append_research_artifact_tool = tool(
     display_name="AppendResearchArtifact",
     description="Append text to a filesystem-backed scratchpad artifact for this research run (created if absent). Good for incrementally building a source inventory.",
     input_model=AppendResearchArtifactInput,
-    policy=_POLICY,
+    policy=_WRITE_POLICY,
     execute=append_research_artifact,
 )
 
@@ -338,7 +339,7 @@ read_research_artifact_tool = tool(
     display_name="ReadResearchArtifact",
     description="Read back a scratchpad artifact from this research run, paging with offset/limit. Artifacts are also readable from ~/.ntrp/artifacts/research/<scope>/.",
     input_model=ReadResearchArtifactInput,
-    policy=_POLICY,
+    policy=_READ_POLICY,
     execute=read_research_artifact,
 )
 
@@ -346,6 +347,6 @@ list_research_artifacts_tool = tool(
     display_name="ListResearchArtifacts",
     description="List scratchpad artifacts written so far in this research run, including filesystem paths.",
     input_model=ListResearchArtifactsInput,
-    policy=_POLICY,
+    policy=_READ_POLICY,
     execute=list_research_artifacts,
 )

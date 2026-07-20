@@ -9,6 +9,7 @@ from ntrp.context.models import SessionState
 from ntrp.core.spawner import SpawnResult
 from ntrp.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
 from ntrp.tools.core.registry import ToolRegistry
+from ntrp.tools.core.types import ToolAction
 
 
 def _ctx(registry: BackgroundTaskRegistry) -> ToolContext:
@@ -83,6 +84,7 @@ async def test_background_tool_spawns_detached_background_research_agent():
 
 def test_background_tool_is_agent_kind():
     assert background_module.background_tool.kind == "agent"
+    assert background_module.background_tool.policy.action == ToolAction.EXECUTE
 
 
 def test_background_registry_reservations_count_toward_cap():
@@ -104,7 +106,7 @@ async def test_send_to_agent_delivers_to_running_agent():
         execution = ToolExecution(tool_id="t", tool_name="send_to_agent", ctx=_ctx(registry))
         result = await background_module.send_to_agent(
             execution,
-            background_module.SendToAgentInput(agent_id="agent-1", message="also check pricing"),
+            background_module.SendToAgentInput(task_id="agent-1", message="also check pricing"),
         )
         assert not result.is_error
         assert "agent-1" in result.content
@@ -127,12 +129,28 @@ async def test_send_to_agent_unknown_id_lists_running_agents():
         execution = ToolExecution(tool_id="t", tool_name="send_to_agent", ctx=_ctx(registry))
         result = await background_module.send_to_agent(
             execution,
-            background_module.SendToAgentInput(agent_id="agent-missing", message="hi"),
+            background_module.SendToAgentInput(task_id="agent-missing", message="hi"),
         )
         assert result.is_error
         assert "agent-live" in result.content
     finally:
         await _cancel(task)
+
+
+@pytest.mark.asyncio
+async def test_list_background_tasks_is_sorted_by_task_id():
+    registry = BackgroundTaskRegistry(session_id="test")
+    later = await _register_live(registry, "task-z", "later")
+    earlier = await _register_live(registry, "task-a", "earlier")
+    try:
+        result = await background_module.list_background_tasks(
+            ToolExecution(tool_id="t", tool_name="list_background_tasks", ctx=_ctx(registry)),
+            background_module.EmptyInput(),
+        )
+        assert result.content.index("task-a") < result.content.index("task-z")
+    finally:
+        await _cancel(later)
+        await _cancel(earlier)
 
 
 @pytest.mark.asyncio

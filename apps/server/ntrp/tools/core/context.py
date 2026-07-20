@@ -95,6 +95,7 @@ class RunContext:
     research_model: str | None = None
     workflow_model: str | None = None
     deferred_tools_enabled: bool = False
+    deferred_tool_loader: Literal["load_tools", "tool_search"] = "load_tools"
     loaded_tools: set[str] = field(default_factory=set)
     declined_connections: set[str] = field(default_factory=set)
     allowed_tool_names: set[str] | None = None

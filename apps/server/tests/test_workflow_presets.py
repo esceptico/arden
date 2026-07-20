@@ -7,10 +7,9 @@ from pathlib import Path
 
 import pytest
 
-import ntrp.skills.service as skill_service_module
 from ntrp.context.models import SessionState
 from ntrp.skills.registry import SkillRegistry
-from ntrp.skills.service import BUILTIN_SKILLS_DIR, SkillService
+from ntrp.skills.service import BUILTIN_SKILLS_DIR
 from ntrp.tools.core.context import (
     BackgroundTaskRegistry,
     IOBridge,
@@ -19,7 +18,7 @@ from ntrp.tools.core.context import (
     ToolExecution,
 )
 from ntrp.tools.core.registry import ToolRegistry
-from ntrp.tools.workflow import SaveWorkflowInput, WorkflowInput, run_save_workflow, run_workflow
+from ntrp.tools.workflow import WorkflowInput, run_workflow
 
 PRESET_DESCRIPTION = "Echo preset returning args x."
 PRESET_SCRIPT = 'return args.get("x", "ok")'
@@ -91,35 +90,8 @@ async def test_run_workflow_unknown_preset_lists_available(registry: SkillRegist
     assert "plain-skill" not in result.content
 
 
-@pytest.mark.asyncio
-async def test_run_workflow_rejects_script_and_name_together(registry: SkillRegistry):
-    ctx = make_ctx(registry, [])
-    execution = ToolExecution(tool_id="t1", tool_name="workflow", ctx=ctx)
-
-    result = await run_workflow(execution, WorkflowInput(name="echo", script="return 1"))
-
-    assert result.is_error is True
-
-
-@pytest.mark.asyncio
-async def test_run_workflow_rejects_inline_python_without_executing_it(registry: SkillRegistry):
-    called = False
-
-    def mutate_process_state() -> None:
-        nonlocal called
-        called = True
-
-    ctx = make_ctx(registry, [])
-    execution = ToolExecution(tool_id="t1", tool_name="workflow", ctx=ctx)
-
-    result = await run_workflow(
-        execution,
-        WorkflowInput(script="args['mutate']()\nreturn 'ran'", args={"mutate": mutate_process_state}),
-    )
-
-    assert result.is_error is True
-    assert result.preview == "Inline scripts disabled"
-    assert called is False
+def test_workflow_schema_has_no_executable_script_field():
+    assert "script" not in WorkflowInput.model_fields
 
 
 @pytest.mark.asyncio
@@ -134,25 +106,6 @@ async def test_run_workflow_rejects_user_saved_python_preset(tmp_path: Path):
 
     assert result.is_error is True
     assert result.preview == "Untrusted workflow"
-
-
-@pytest.mark.asyncio
-async def test_save_workflow_tool_rejects_python_without_persisting(registry: SkillRegistry):
-    class UnexpectedService:
-        def save_workflow(self, *args, **kwargs):
-            raise AssertionError("untrusted workflow must not be persisted")
-
-    ctx = make_ctx(registry, [])
-    ctx.services["skill_service"] = UnexpectedService()
-    execution = ToolExecution(tool_id="t1", tool_name="save_workflow", ctx=ctx)
-
-    result = await run_save_workflow(
-        execution,
-        SaveWorkflowInput(name="unsafe", description="unsafe", script="return 1"),
-    )
-
-    assert result.is_error is True
-    assert result.preview == "Python workflows disabled"
 
 
 @pytest.mark.asyncio
@@ -186,29 +139,3 @@ async def test_run_workflow_started_event_carries_declared_phases(registry: Skil
     assert result.is_error is None or result.is_error is False
     started = next(e for e in events if type(e).__name__ == "WorkflowStartedEvent")
     assert started.phases == ["find", "verify"]
-
-
-def test_save_workflow_round_trips_yaml_hostile_description(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(skill_service_module, "NTRP_DIR", tmp_path)
-    registry = SkillRegistry()
-    service = SkillService(registry)
-    description = "Audit a target: find, verify — args: target."
-
-    meta = service.save_workflow("rt-preset", description, "  \n" + PRESET_SCRIPT + "\n  ")
-
-    assert meta.kind == "workflow"
-    assert meta.description == description
-    assert registry.load_workflow_script("rt-preset") == PRESET_SCRIPT + "\n"
-
-
-def test_save_workflow_rejects_blank_script_and_duplicates(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(skill_service_module, "NTRP_DIR", tmp_path)
-    registry = SkillRegistry()
-    service = SkillService(registry)
-
-    with pytest.raises(ValueError, match="non-empty script"):
-        service.save_workflow("blank", "desc", "   \n")
-
-    service.save_workflow("dup", "desc", PRESET_SCRIPT)
-    with pytest.raises(ValueError, match="already exists"):
-        service.save_workflow("dup", "desc", PRESET_SCRIPT)

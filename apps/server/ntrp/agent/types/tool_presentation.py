@@ -66,7 +66,6 @@ _BY_NAME: dict[str, tuple[str, str | None]] = {
     "memory_read": ("brain", None),
     "memory_patch": ("brain", None),
     "memory_tree": ("brain", None),
-    "memory_rebuild": ("brain", None),
     # Sessions
     "search_transcripts": ("history", "transcript"),
     "read_session": ("history", None),

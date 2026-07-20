@@ -83,8 +83,10 @@ def _provider_failure_content(error: WebSearchProviderException) -> str:
 
 class WebSearchInput(BaseModel):
     query: str = Field(description="The search query")
-    num_results: int = Field(
+    limit: int = Field(
         default=_DEFAULT_SEARCH_RESULTS,
+        ge=1,
+        le=WEB_SEARCH_MAX_RESULTS,
         description=f"Number of results (default: {_DEFAULT_SEARCH_RESULTS}, max: {WEB_SEARCH_MAX_RESULTS})",
     )
     category: WebSearchCategory | None = Field(
@@ -99,7 +101,7 @@ async def web_search(execution: ToolExecution, args: WebSearchInput) -> ToolResu
         results = await asyncio.to_thread(
             source.search_with_details,
             query=args.query,
-            num_results=min(max(args.num_results, 1), WEB_SEARCH_MAX_RESULTS),
+            limit=args.limit,
             category=args.category,
         )
 

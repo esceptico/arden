@@ -21,14 +21,14 @@ class ExaWebSource:
     def search_with_details(
         self,
         query: str,
-        num_results: int = 5,
+        limit: int = 5,
         category: str | None = None,
     ) -> list[WebSearchResult]:
         client = self._get_client()
 
         search_params = {
             "query": query,
-            "num_results": num_results,
+            "num_results": limit,
             "type": "auto",
         }
         if category:

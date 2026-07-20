@@ -41,7 +41,7 @@ def clamp_tool_results_for_model_context(messages: list[dict]) -> list[dict]:
     Recency-first (the field's consensus: keep the active tail, evict the stale) and monotonic —
     a result only ever transitions full→stub as newer results arrive, never back — so each stub is
     byte-stable across turns and the prompt prefix stays cache-friendly. Results above the blob
-    threshold remain exactly re-readable via read_tool_result.
+    threshold remain exactly re-readable via read_file using the persisted result path.
     """
     tool_indices = [i for i, m in enumerate(messages) if _is_tool_message(m)]
     keep_full: set[int] = set()

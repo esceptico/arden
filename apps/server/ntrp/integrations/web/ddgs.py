@@ -31,14 +31,14 @@ class DDGSWebSource:
     def search_with_details(
         self,
         query: str,
-        num_results: int = 5,
+        limit: int = 5,
         category: str | None = None,
     ) -> list[WebSearchResult]:
         del category
         results: list[WebSearchResult] = []
         with DDGS() as client:
             try:
-                items = client.text(query, max_results=num_results) or []
+                items = client.text(query, max_results=limit) or []
             except DDGSException as e:
                 if e.args == _DDGS_NO_RESULTS:
                     raise NoSearchResultsException(query) from e

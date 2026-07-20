@@ -133,18 +133,5 @@ class SkillService:
             raise RuntimeError(f"Failed to load created skill '{name}'.")
         return meta
 
-    def save_workflow(self, name: str, description: str, script: str) -> SkillMeta:
-        """Persist an Orchestra script as a reusable global workflow preset
-        (~/.ntrp/skills/<name>/ with kind: workflow + workflow.py). Afterwards
-        it runs via the `workflow` tool's `name` arg. create() validates the
-        script is non-empty."""
-        body = (
-            f"Workflow preset — run it with the `workflow` tool: "
-            f'`workflow(name="{name}", args={{...}})`.\n\n{description.strip()}'
-        )
-        return self.create(
-            name, description, body, source="workflow-preset", kind="workflow", workflow_script=script
-        )
-
     def remove(self, name: str) -> bool:
         return self._registry.remove(name)

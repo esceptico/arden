@@ -24,7 +24,7 @@ import os
 import re
 import stat
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -57,9 +57,8 @@ class RememberInput(BaseModel):
             "user or their world, stated plainly (resolve pronouns inline)."
         ),
     )
-    kind: str = Field(
+    kind: Literal["directive", "fact", "source", "lesson"] = Field(
         default="fact",
-        pattern="^(directive|fact|source|lesson)$",
         description=(
             "The record's function: directive | fact | source | lesson. "
             "Preferences and project facts are facts with the right scope; a standing rule the user states is a directive; "
@@ -116,21 +115,17 @@ class MemoryWriteInput(BaseModel):
     )
 
 
-class MemoryRebuildInput(BaseModel):
-    reason: str | None = Field(default=None, max_length=500, description="Optional short reason for the rebuild audit log.")
-
-
 class RecallInput(BaseModel):
     query: str = Field(
         min_length=1,
         max_length=20_000,
         description="A natural-language query; returns the most relevant durable fact/source records by default.",
     )
-    kinds: list[str] | None = Field(
+    kind: Literal["directive", "fact", "source", "lesson"] | None = Field(
         default=None,
-        description="Optional kinds to search. Defaults to fact+source (topical recall). Standing "
+        description="Optional kind to search. Defaults to fact+source (topical recall). Standing "
         "directives and learned lessons are always in the resident context, so they're excluded here "
-        "by default — pass kinds=['directive'] or ['lesson'] to search them explicitly. Live integration "
+        "by default — pass kind='directive' or kind='lesson' to search them explicitly. Live integration "
         "state (inbox, PR queue, …) lives on feeds/ pages — memory_read those, don't recall.",
     )
 
@@ -688,20 +683,6 @@ async def memory_write(execution: ToolExecution, args: MemoryWriteInput) -> Tool
     return await asyncio.to_thread(_memory_write_sync, args)
 
 
-async def approve_memory_rebuild(execution: ToolExecution, args: MemoryRebuildInput) -> ApprovalInfo | None:
-    reason = f": {args.reason}" if args.reason else ""
-    return ApprovalInfo(description=f"Rebuild memory filesystem artifacts{reason}", preview=None, diff=None)
-
-
-async def memory_rebuild(execution: ToolExecution, args: MemoryRebuildInput) -> ToolResult:
-    # Memory is file-canonical: the markdown pages ARE the source of truth, so
-    # there is no projection to rebuild — and exporting would clobber the pages.
-    return ToolResult(
-        content="Memory is file-canonical: pages are the source of truth, nothing to rebuild. Edit pages directly.",
-        preview="no-op (file-canonical)",
-        data={"rebuilt": False},
-    )
-
 def _normalize_text(text: str) -> str:
     return " ".join(text.split()).strip().lower().rstrip(".!?")
 
@@ -946,7 +927,7 @@ async def recall(execution: ToolExecution, args: RecallInput) -> ToolResult:
     # standing rules already in the resident context every turn — including them here
     # let high-salience rules bury the topical facts a query is actually asking for
     # (the eval went 65% -> 95% once they were excluded).
-    kinds = args.kinds or ["fact", "source"]
+    kinds = [args.kind] if args.kind else ["fact", "source"]
     hits = await store.search(args.query, limit=10, scopes=visible, kinds=kinds)
     if not hits:
         return ToolResult(content="No matching memory.", preview="No matches")
@@ -1036,15 +1017,6 @@ memory_write_tool = tool(
     policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, requires_approval=True, permissions=frozenset({MEMORY_RECORDS_SERVICE})),
     approval=approve_memory_write,
     execute=memory_write,
-)
-
-memory_rebuild_tool = tool(
-    display_name="MemoryRebuild",
-    description="Rebuild the generated memory filesystem projection from canonical SQLite records. Requires approval. " + _MEMORY_FS_DESCRIPTION,
-    input_model=MemoryRebuildInput,
-    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, requires_approval=True, permissions=frozenset({MEMORY_RECORDS_SERVICE})),
-    approval=approve_memory_rebuild,
-    execute=memory_rebuild,
 )
 
 remember_tool = tool(

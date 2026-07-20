@@ -24,7 +24,7 @@ from ntrp.tools.core.types import ToolAction, ToolScope
 from ntrp.tools.deferred import is_deferred_tool
 from ntrp.tools.executor import ToolExecutor
 
-LIVE_READ_TOOLS = frozenset({"list_background_tasks", "research_note", "research_outline", "research_cover"})
+LIVE_READ_TOOLS = frozenset({"list_background_tasks"})
 AUDIT_PREVIEW_MAX_CHARS = 500
 _logger = logging.get_logger(__name__)
 
@@ -71,10 +71,11 @@ class NtrpToolExecutor:
                 recovery_action="Use a tool exposed in the current system prompt.",
             )
 
+        loader = self._ctx.run.deferred_tool_loader
         if (
             self._ctx.run.allowed_tool_names is not None
             and name not in self._ctx.run.allowed_tool_names
-            and not (name == "tool_search" and self._ctx.run.deferred_tools_enabled)
+            and not (name == loader and self._ctx.run.deferred_tools_enabled)
         ):
             return ToolResult.failure(
                 code="permission_denied",
@@ -93,10 +94,14 @@ class NtrpToolExecutor:
                 code="tool_not_loaded",
                 message=(
                     f"Tool {name!r} is deferred and has not been loaded in this run. "
-                    f"Call tool_search(query='select:{name}') first, then retry."
+                    + (
+                        f"Call tool_search(query='select:{name}') first, then retry."
+                        if loader == "tool_search"
+                        else f"Call load_tools(names=['{name}']) first, then retry."
+                    )
                 ),
                 preview="Tool not loaded",
-                recovery_action=f"Load {name!r} with tool_search, then retry.",
+                recovery_action=f"Load {name!r} with {loader}, then retry.",
             )
 
         store = self._audit_store() if tool.policy.audit else None

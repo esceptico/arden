@@ -16,13 +16,11 @@ from ntrp.tools.memory import (
     MEMORY_RECORDS_SERVICE,
     MemoryPatchInput,
     MemoryReadInput,
-    MemoryRebuildInput,
     MemorySearchInput,
     MemoryTreeInput,
     approve_memory_patch,
     memory_patch,
     memory_read,
-    memory_rebuild,
     memory_search,
     memory_tree,
 )
@@ -104,13 +102,12 @@ async def test_memory_filesystem_tools_registered_and_permission_gated():
         )
     }
 
-    expected = {"memory_tree", "memory_read", "memory_search", "memory_patch", "memory_rebuild"}
+    expected = {"memory_tree", "memory_read", "memory_search", "memory_patch"}
     assert expected.isdisjoint(names_without)
     assert expected.issubset(names_with)
     assert "remember" not in names_with
     assert "remember" in names_with_reconciler
     assert MEMORY.tools["memory_patch"].policy.requires_approval is True
-    assert MEMORY.tools["memory_rebuild"].policy.requires_approval is True
 
 
 async def test_memory_tree_read_and_search_use_artifact_store_safety(store: RecordStore, artifacts_dir: Path):
@@ -320,21 +317,6 @@ async def test_memory_patch_rejects_change_after_approval(store: RecordStore, ar
     assert result.outcome is not None and result.outcome.error is not None
     assert result.outcome.error.code == "write_conflict"
     assert "External edit." in path.read_text(encoding="utf-8")
-
-
-async def test_memory_rebuild_is_noop_under_file_canonical(store: RecordStore, artifacts_dir: Path):
-    # Memory is file-canonical: rebuild is a no-op (no projection to re-derive,
-    # exporting would clobber the canonical pages).
-    result = await memory_rebuild(_execution(store), MemoryRebuildInput(reason="test"))
-    assert not result.is_error
-    assert result.data["rebuilt"] is False
-
-
-async def test_memory_rebuild_noop_without_memory_records_service(artifacts_dir: Path):
-    # The no-op needs no store and never errors.
-    result = await memory_rebuild(_execution(None), MemoryRebuildInput())
-    assert not result.is_error
-    assert result.data["rebuilt"] is False
 
 
 async def test_memory_write_creates_and_updates_feed_pages(store: RecordStore, artifacts_dir: Path):

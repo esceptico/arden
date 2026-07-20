@@ -43,7 +43,6 @@ from ntrp.tools.memory import (
     forget_tool,
     memory_patch_tool,
     memory_read_tool,
-    memory_rebuild_tool,
     memory_search_tool,
     memory_tree_tool,
     memory_write_tool,
@@ -62,7 +61,7 @@ from ntrp.tools.sessions import (
 )
 from ntrp.tools.time import current_time_tool
 from ntrp.tools.todos import update_todos_tool
-from ntrp.tools.workflow import save_workflow_tool, workflow_tool
+from ntrp.tools.workflow import workflow_tool
 
 SYSTEM = Integration(
     id="_system",
@@ -79,7 +78,6 @@ SYSTEM = Integration(
         "render_html": render_html_tool,
         "research": research_tool,
         "workflow": workflow_tool,
-        "save_workflow": save_workflow_tool,
         "background": background_tool,
         "request_connection": request_connection_tool,
         "load_tools": load_tools_tool,
@@ -192,7 +190,6 @@ MEMORY = Integration(
         "memory_search": memory_search_tool,
         "memory_patch": memory_patch_tool,
         "memory_write": memory_write_tool,
-        "memory_rebuild": memory_rebuild_tool,
     },
 )
 

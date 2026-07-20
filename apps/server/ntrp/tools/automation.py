@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 from ntrp.automation.models import Automation
 from ntrp.automation.triggers import build_trigger
+from ntrp.core.agent_types import SPAWN_SURFACE_GUIDANCE
 from ntrp.events.triggers import EVENT_APPROACHING
 from ntrp.tools.core import EmptyInput, ToolResult, tool
 from ntrp.tools.core.collections import format_timestamp
@@ -25,6 +26,7 @@ CREATE_AUTOMATION_DESCRIPTION = (
     "Time triggers support two modes: schedule ('at' a specific time) or interval ('every' N hours/minutes). "
     "Optional model override per automation (falls back to default chat model when omitted). "
     "Read-only by default, set auto_approve=true for autonomous memory/note writes (skips approvals)."
+    f" {SPAWN_SURFACE_GUIDANCE}"
 )
 
 LIST_AUTOMATIONS_DESCRIPTION = "List all automations by stable ID with their trigger, status, and next run."
@@ -769,6 +771,7 @@ CREATE_LOOP_DESCRIPTION = (
     "to terminate when the goal is reached. "
     "Optional max_iterations caps the loop. "
     "Optional stop_when is a natural-language predicate the agent checks each iteration."
+    f" {SPAWN_SURFACE_GUIDANCE}"
 )
 
 

@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field
 
 from ntrp.constants import BACKGROUND_AGENT_TIMEOUT
+from ntrp.core.agent_types import SPAWN_SURFACE_GUIDANCE
 from ntrp.events.sse import BackgroundTaskEvent
 from ntrp.tools.core import EmptyInput, ToolResult, tool
 from ntrp.tools.core.context import ToolExecution
@@ -16,12 +17,13 @@ BACKGROUND_SYSTEM_PROMPT = (
 
 BACKGROUND_DESCRIPTION = (
     "Spawn a background agent that runs independently and delivers results automatically when done. "
-    "The agent has read-only tool access (search, read, web, memory, bash). "
+    "The agent has read-only tool access (search, read, web, memory). "
     "Use for long-running tasks: deep research, multi-source investigation, data gathering. "
     "When it finishes, the result is delivered back into the parent conversation as a hidden meta message. "
     "Do not inspect the filesystem for background results. "
     "Use cancel_background_task to stop, list_background_tasks to check currently running tasks, "
     "and get_background_result only when the user explicitly asks to retrieve a result by task ID."
+    f" {SPAWN_SURFACE_GUIDANCE}"
 )
 
 
@@ -97,7 +99,7 @@ async def get_background_result(execution: ToolExecution, args: GetBackgroundRes
 
 
 async def list_background_tasks(execution: ToolExecution, args: EmptyInput) -> ToolResult:
-    pending = execution.ctx.background_tasks.list_pending()
+    pending = sorted(execution.ctx.background_tasks.list_pending(), key=lambda item: item[0])
     if not pending:
         return ToolResult(content="No background tasks running.", preview="0 tasks")
 
@@ -106,11 +108,11 @@ async def list_background_tasks(execution: ToolExecution, args: EmptyInput) -> T
         f"{len(pending)} running:\n" + "\n".join(lines) + "\n\nResults are delivered automatically — do not poll. "
         "Continue with other work or respond to the user."
     )
-    return ToolResult(content=content, preview=f"{len(pending)} tasks")
+    return ToolResult(content=content, preview=f"{len(pending)} tasks", data={"items": pending})
 
 
 class SendToAgentInput(BaseModel):
-    agent_id: str = Field(description="ID of the running background agent to message (from list_background_tasks).")
+    task_id: str = Field(description="ID of the running background task to message (from list_background_tasks).")
     message: str = Field(description="The instruction/message to deliver. The agent receives it at its next step.")
 
 
@@ -122,11 +124,11 @@ async def send_to_agent(execution: ToolExecution, args: SendToAgentInput) -> Too
             is_error=True,
         )
     registry = execution.ctx.background_tasks
-    delivered = registry.queue_steering(args.agent_id, args.message)
+    delivered = registry.queue_steering(args.task_id, args.message)
     if delivered:
         return ToolResult(
-            content=f"Queued for {args.agent_id}; it'll see this at its next step if it's still running.",
-            preview=f"Sent · {args.agent_id}",
+            content=f"Queued for {args.task_id}; it'll see this at its next step if it's still running.",
+            preview=f"Sent · {args.task_id}",
         )
     # Self-correcting: a finished/unknown id dead-ends otherwise, so list the
     # ids that ARE live instead of just failing.
@@ -134,12 +136,12 @@ async def send_to_agent(execution: ToolExecution, args: SendToAgentInput) -> Too
     if pending:
         listing = "\n".join(f"- {tid}: {cmd}" for tid, cmd in pending)
         return ToolResult(
-            content=f"No running agent with id '{args.agent_id}'. Currently running:\n{listing}",
+            content=f"No running agent with id '{args.task_id}'. Currently running:\n{listing}",
             preview="Not found",
             is_error=True,
         )
     return ToolResult(
-        content=f"No running agent with id '{args.agent_id}' — nothing is running.",
+        content=f"No running agent with id '{args.task_id}' — nothing is running.",
         preview="Not found",
         is_error=True,
     )
@@ -149,7 +151,7 @@ background_tool = tool(
     display_name="Background",
     description=BACKGROUND_DESCRIPTION,
     input_model=BackgroundInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL),
+    policy=ToolPolicy(action=ToolAction.EXECUTE, scope=ToolScope.INTERNAL),
     execute=background,
     kind="agent",
 )

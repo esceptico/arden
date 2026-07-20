@@ -15,7 +15,7 @@ from ntrp.agent.ledger import (
     VerificationRecord,
     WorkspaceQuestion,
 )
-from ntrp.core.agent_types import AgentType, apply_profile, register_agent_type
+from ntrp.core.agent_types import SPAWN_SURFACE_GUIDANCE, AgentType, apply_profile, register_agent_type
 from ntrp.core.isolation import IsolationLevel
 from ntrp.core.prompts import RESEARCH_PROMPTS, current_date_formatted, env
 from ntrp.logging import get_logger
@@ -135,8 +135,8 @@ USER CONTEXT:
 
 RESEARCH HARNESS — record AS YOU GO, never batched at the end:
 - The harness is shared LIVE with other research agents in this run. The model decides what to inspect; the harness stores state so you do not carry everything in the transcript.
-- Use research_track_search() for meaningful queries/paths tried, research_track_source() for candidate/read/rejected sources, research_curate() for important source-backed evidence, research_verify_claim() for claims you checked, and research_question() for open questions/dead ends.
-- Also use research_note() for shared facts/dead ends/contradictions/gaps, research_cover() when a source supports an outline section, and research_outline() early for broad/deep tasks.
+- Use research_track_search() for meaningful queries/paths tried, research_track_source() for candidate/read/rejected sources, research_curate() for important source-backed evidence, research_verify_claim() for claims you checked or found contradictory, and research_question() for open questions, gaps, and dead ends.
+- Use research_cover() when a source supports an outline section, and research_outline() early for broad/deep tasks.
 - Record after each source you read, before moving to the next. Batching all notes at the end defeats the harness — parallel agents can't see your progress and re-do the same analysis.
 - Do not hide unsupported claims. If a claim is weak, contradictory, or missing evidence, record it and say so in the final answer.
 
@@ -153,29 +153,16 @@ RESEARCH_DESCRIPTION = (
     "Spawn a research agent with access to all read-only tools. "
     "Can run in parallel (call multiple in one turn) and nest recursively. "
     "Use depth='deep' for thorough research, 'quick' for fast lookups."
+    f" {SPAWN_SURFACE_GUIDANCE}"
 )
 
 
 class ResearchInput(BaseModel):
     task: str = Field(description="What to research.")
-    depth: str = Field(
+    depth: Literal["quick", "normal", "deep"] = Field(
         default="normal",
         description="How thorough: 'quick' (fast scan), 'normal' (balanced), 'deep' (exhaustive).",
     )
-
-
-class ResearchNoteInput(BaseModel):
-    kind: Literal["fact", "dead_end", "contradiction", "gap"] = Field(description="Type of note to record.")
-    claim: str | None = Field(default=None, description="Fact claim. Required for kind='fact'.")
-    source: str | None = Field(default=None, description="Source path, URL, message id, or tool result reference.")
-    quote: str | None = Field(default=None, description="Short supporting quote for kind='fact'.")
-    tried: str | None = Field(default=None, description="Attempted query/source/path. Required for kind='dead_end'.")
-    why_failed: str | None = Field(default=None, description="Failure reason. Required for kind='dead_end'.")
-    claim_a: str | None = Field(default=None, description="First conflicting claim.")
-    source_a: str | None = Field(default=None, description="Source for first conflicting claim.")
-    claim_b: str | None = Field(default=None, description="Second conflicting claim.")
-    source_b: str | None = Field(default=None, description="Source for second conflicting claim.")
-    what_missing: str | None = Field(default=None, description="Missing information. Required for kind='gap'.")
 
 
 class ResearchOutlineInput(BaseModel):
@@ -315,43 +302,6 @@ async def _list_scope_artifacts(ctx: ToolContext, scope_id: str) -> list[dict]:
     ]
 
 
-async def research_note(execution: ToolExecution, args: ResearchNoteInput) -> ToolResult:
-    ledger = execution.ctx.ledger
-    if not ledger:
-        return ToolResult(content="Error: research ledger not available", preview="No ledger", is_error=True)
-
-    if args.kind == "fact":
-        if not args.claim or not args.source:
-            return ToolResult(content="fact notes require claim and source", preview="Invalid note", is_error=True)
-        note = FactNote(claim=args.claim, source=args.source, quote=args.quote)
-    elif args.kind == "dead_end":
-        if not args.tried or not args.why_failed:
-            return ToolResult(
-                content="dead_end notes require tried and why_failed", preview="Invalid note", is_error=True
-            )
-        note = DeadEndNote(tried=args.tried, why_failed=args.why_failed)
-    elif args.kind == "contradiction":
-        if not args.claim_a or not args.source_a or not args.claim_b or not args.source_b:
-            return ToolResult(
-                content="contradiction notes require claim_a, source_a, claim_b, and source_b",
-                preview="Invalid note",
-                is_error=True,
-            )
-        note = ContradictionNote(
-            claim_a=args.claim_a,
-            source_a=args.source_a,
-            claim_b=args.claim_b,
-            source_b=args.source_b,
-        )
-    else:
-        if not args.what_missing:
-            return ToolResult(content="gap notes require what_missing", preview="Invalid note", is_error=True)
-        note = GapNote(what_missing=args.what_missing)
-
-    ledger.add_note(note)
-    return ToolResult(content=f"Recorded research note: {_format_note(note)}", preview=f"Recorded {args.kind}")
-
-
 async def research_outline(execution: ToolExecution, args: ResearchOutlineInput) -> ToolResult:
     ledger = execution.ctx.ledger
     if not ledger:
@@ -477,24 +427,16 @@ research_tool = tool(
     display_name="Research",
     description=RESEARCH_DESCRIPTION,
     input_model=ResearchInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL),
+    policy=ToolPolicy(action=ToolAction.EXECUTE, scope=ToolScope.INTERNAL),
     execute=research,
     kind="agent",
-)
-
-research_note_tool = tool(
-    display_name="Research Note",
-    description="Record a source-backed research fact, dead end, contradiction, or gap in the shared run ledger.",
-    input_model=ResearchNoteInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, offload=False),
-    execute=research_note,
 )
 
 research_outline_tool = tool(
     display_name="Research Outline",
     description="Set the required coverage sections for a broad or deep research task.",
     input_model=ResearchOutlineInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, offload=False),
+    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, offload=False),
     execute=research_outline,
 )
 
@@ -502,7 +444,7 @@ research_cover_tool = tool(
     display_name="Research Cover",
     description="Mark an outline section as covered by a specific source.",
     input_model=ResearchCoverInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, offload=False),
+    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, offload=False),
     execute=research_cover,
 )
 
@@ -510,7 +452,7 @@ research_track_source_tool = tool(
     display_name="Research Track Source",
     description="Track a candidate/read/rejected source in the structured research harness workspace.",
     input_model=ResearchSourceInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, offload=False),
+    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, offload=False),
     execute=research_track_source,
 )
 
@@ -518,7 +460,7 @@ research_curate_tool = tool(
     display_name="Research Curate Evidence",
     description="Promote an important source-backed finding into the research harness with importance/confidence metadata.",
     input_model=ResearchCurateInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, offload=False),
+    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, offload=False),
     execute=research_curate,
 )
 
@@ -526,7 +468,7 @@ research_verify_claim_tool = tool(
     display_name="Research Verify Claim",
     description="Record whether a claim is supported, contradicted, or uncertain based on inspected sources.",
     input_model=ResearchVerifyClaimInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, offload=False),
+    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, offload=False),
     execute=research_verify_claim,
 )
 
@@ -534,7 +476,7 @@ research_question_tool = tool(
     display_name="Research Question",
     description="Track an open, answered, or dead-end research question in the structured harness workspace.",
     input_model=ResearchQuestionInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, offload=False),
+    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, offload=False),
     execute=research_question,
 )
 
@@ -542,12 +484,11 @@ research_track_search_tool = tool(
     display_name="Research Track Search",
     description="Record a meaningful query or exploration path tried during research.",
     input_model=ResearchSearchInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, offload=False),
+    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, offload=False),
     execute=research_track_search,
 )
 
 RESEARCH_AGENT_TOOLS = {
-    "research_note": research_note_tool,
     "research_outline": research_outline_tool,
     "research_cover": research_cover_tool,
     "research_track_source": research_track_source_tool,

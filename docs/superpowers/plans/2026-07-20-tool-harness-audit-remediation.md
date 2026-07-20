@@ -334,13 +334,13 @@ def atomic_compare_and_swap(path: Path, content: str, expected_sha256: str) -> F
 - One tool owns each intent; reserved built-in and child-only names cannot be shadowed.
 - Stateful spawns and artifact writes are not classified READ.
 
-- [ ] Add failing tests for user-tool shadowing, READ-filter leakage, dead registered tools, and hidden-loader recovery guidance.
-- [ ] Remove `memory_rebuild`, `save_workflow`, and rejected `workflow.script` from the agent schema. Keep `run_workflow(name=...)` for curated built-ins; delete unused compatibility registrations after `rg` proves no Python caller imports them.
-- [ ] Add `get_directives`; consolidate research claim/source and dead-end/gap recorders behind one canonical tool each.
-- [ ] Classify background/research writes by actual effect; align deferred recovery with the loader actually exposed.
-- [ ] Add one shared spawn-surface decision block and canonical parameter naming (`task_id`, `limit`, singular `kind`).
-- [ ] Remove stale Obsidian bytecode and incorrect tool comments.
-- [ ] Run tests and commit: `refactor(harness): clarify tool ownership and policy`.
+- [x] Add failing tests for user-tool shadowing, READ-filter leakage, dead registered tools, and hidden-loader recovery guidance.
+- [x] Remove `memory_rebuild`, `save_workflow`, and rejected `workflow.script` from the agent schema. Keep `run_workflow(name=...)` for curated built-ins; delete unused compatibility registrations after `rg` proves no Python caller imports them.
+- [x] Add `get_directives`; consolidate research claim/source and dead-end/gap recorders behind one canonical tool each.
+- [x] Classify background/research writes by actual effect; align deferred recovery with the loader actually exposed.
+- [x] Add one shared spawn-surface decision block and canonical parameter naming (`task_id`, `limit`, singular `kind`).
+- [x] Remove stale Obsidian bytecode and incorrect tool comments.
+- [x] Run tests and commit: `refactor(harness): clarify tool ownership and policy`.
 
 ### Task 12: End-to-End Provenance
 

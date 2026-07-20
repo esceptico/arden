@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 import ntrp.database as database
 import ntrp.tools.research as research_module
@@ -173,11 +173,7 @@ async def test_research_spawns_child_with_research_ledger_helpers(monkeypatch):
     }
     assert (
         set(captured["extra_tools"])
-        == {
-            "research_note",
-            "research_outline",
-            "research_cover",
-        }
+        == {"research_outline", "research_cover"}
         | SCRATCHPAD_TOOL_NAMES
         | HARNESS_TOOL_NAMES
     )
@@ -281,7 +277,7 @@ async def test_research_profile_builds_read_only_child_toolset(monkeypatch):
     names = {schema["function"]["name"] for schema in captured["tools"]}
     assert "read_tool" in names
     assert names >= SCRATCHPAD_TOOL_NAMES
-    assert {"research_note", "research_outline", "research_cover"} <= names
+    assert {"research_outline", "research_cover"} <= names
     assert names >= HARNESS_TOOL_NAMES
     assert "write_tool" not in names  # WRITE filtered by actions={READ}
     assert "background" not in names  # excluded by the research spawn-tool set
@@ -312,7 +308,7 @@ async def test_nested_research_profile_does_not_double_register_ledger_tools(mon
 
     assert result.text == "done"
     names = {schema["function"]["name"] for schema in captured["tools"]}
-    assert {"research_note", "research_outline", "research_cover"} <= names
+    assert {"research_outline", "research_cover"} <= names
     assert names >= SCRATCHPAD_TOOL_NAMES
     assert names >= HARNESS_TOOL_NAMES
     assert "read_tool" in names
@@ -363,27 +359,6 @@ async def test_research_harness_tools_populate_scoped_workspace():
     assert summary["evidence"][0]["importance"] == "high"
     assert summary["verifications"][0]["verdict"] == "supported"
     assert summary["questions"][0]["status"] == "open"
-
-
-@pytest.mark.asyncio
-async def test_research_note_records_fact_in_shared_ledger():
-    assert hasattr(research_module, "research_note")
-    ledger = SharedLedger()
-    execution = ToolExecution(tool_id="note-1", tool_name="research_note", ctx=_context(ledger))
-
-    result = await research_module.research_note(
-        execution,
-        research_module.ResearchNoteInput(
-            kind="fact",
-            claim="ntrp research agents can spawn child agents.",
-            source="apps/server/ntrp/tools/research.py",
-            quote="Spawn a research agent",
-        ),
-    )
-
-    assert result.preview == "Recorded fact"
-    assert [note.kind for note in ledger.notes] == ["fact"]
-    assert ledger.notes[0].source == "apps/server/ntrp/tools/research.py"
 
 
 @pytest.mark.asyncio
@@ -451,19 +426,31 @@ async def test_research_outline_coverage_is_scoped_per_research_agent():
 
 
 @pytest.mark.asyncio
-async def test_research_prompt_names_note_and_coverage_tools():
+async def test_research_prompt_names_canonical_harness_tools():
     ledger = SharedLedger()
     await ledger.register("other-research", "inspect existing behavior", depth="normal")
     ctx = _context(ledger)
 
     prompt = await research_module._build_research_prompt(ctx, "normal", 2, "research-1")
 
-    assert "research_note" in prompt
+    assert "research_note" not in prompt
     assert "research_outline" in prompt
     assert "research_cover" in prompt
     assert "research_curate" in prompt
     assert "research_verify_claim" in prompt
     assert "research_track_source" in prompt
-    assert "facts/dead ends/contradictions/gaps" in prompt
+    assert "open questions, gaps, and dead ends" in prompt
     assert "Do not hide unsupported claims" in prompt
     assert "TL;DR plus artifact manifest" in prompt
+
+
+def test_research_depth_rejects_unknown_value():
+    with pytest.raises(ValidationError):
+        research_module.ResearchInput(task="x", depth="maximum")
+
+
+def test_research_state_mutations_have_honest_policies():
+    assert research_module.research_tool.policy.action == ToolAction.EXECUTE
+    for name, registered in research_module.RESEARCH_AGENT_TOOLS.items():
+        expected = ToolAction.READ if name.startswith(("read_", "list_")) else ToolAction.WRITE
+        assert registered.policy.action == expected

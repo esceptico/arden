@@ -34,6 +34,7 @@ class DeferredToolsModelRequestMiddleware:
         allowed.discard(None)
         capabilities = frozenset(self._get_services())
         native_deferred = supports_native_deferred_tools(request.model)
+        self._run.deferred_tool_loader = "tool_search" if native_deferred else "load_tools"
         allowed_deferred = {
             name
             for name in allowed

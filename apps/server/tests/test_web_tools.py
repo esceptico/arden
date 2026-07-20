@@ -31,7 +31,7 @@ class FakeWebSource:
     def search_with_details(
         self,
         query: str,
-        num_results: int,
+        limit: int,
         category: str | None,
     ) -> list[WebSearchResult]:
         if self.error:
@@ -60,7 +60,7 @@ def _execution(source: FakeWebSource) -> ToolExecution:
 async def test_web_search_tells_model_to_simplify_empty_queries():
     result = await web_search(
         _execution(FakeWebSource()),
-        WebSearchInput(query='"latest exact phrase" AND obscure term', num_results=5),
+        WebSearchInput(query='"latest exact phrase" AND obscure term', limit=5),
     )
 
     assert result.is_error is False
@@ -78,7 +78,7 @@ async def test_web_search_self_reports_each_result_source():
         ]
     )
 
-    result = await web_search(_execution(source), WebSearchInput(query="examples", num_results=5))
+    result = await web_search(_execution(source), WebSearchInput(query="examples", limit=5))
 
     assert [ref.to_dict() for ref in result.source_refs] == [
         {
@@ -131,7 +131,7 @@ async def test_web_search_uses_opaque_identity_for_query_urls_without_persisting
     secret_url = "https://example.com/private?signature=super-secret#download"
     source = FakeWebSource(results=[WebSearchResult(title="Private result", url=secret_url)])
 
-    result = await web_search(_execution(source), WebSearchInput(query="private", num_results=5))
+    result = await web_search(_execution(source), WebSearchInput(query="private", limit=5))
 
     expected_ref = f"url-sha256:{hashlib.sha256(secret_url.encode()).hexdigest()}"
     assert [ref.to_dict() for ref in result.source_refs] == [
@@ -169,7 +169,7 @@ async def test_web_fetch_uses_opaque_identity_for_credential_urls_with_generic_t
 async def test_web_search_treats_no_search_results_exception_as_empty_result():
     result = await web_search(
         _execution(FakeWebSource(error=NoSearchResultsException("empty search"))),
-        WebSearchInput(query="too specific query", num_results=5),
+        WebSearchInput(query="too specific query", limit=5),
     )
 
     assert result.is_error is False
@@ -182,7 +182,7 @@ async def test_web_search_treats_no_search_results_exception_as_empty_result():
 async def test_web_search_keeps_provider_exceptions_as_errors_even_if_message_says_no_results():
     result = await web_search(
         _execution(FakeWebSource(error=RuntimeError("No results found for query"))),
-        WebSearchInput(query="too specific query", num_results=5),
+        WebSearchInput(query="too specific query", limit=5),
     )
 
     assert result.is_error is True
@@ -194,7 +194,7 @@ async def test_web_search_keeps_provider_exceptions_as_errors_even_if_message_sa
 async def test_web_search_keeps_real_provider_errors_as_errors():
     result = await web_search(
         _execution(FakeWebSource(error=RuntimeError("backend unavailable"))),
-        WebSearchInput(query="normal query", num_results=5),
+        WebSearchInput(query="normal query", limit=5),
     )
 
     assert result.is_error is True
@@ -207,7 +207,7 @@ async def test_web_search_sanitizes_provider_failures():
     raw_error = "('error sending request for url (https://html.duckduckgo.com/html/)', 'https://html.duckduckgo.com/html/')"
     result = await web_search(
         _execution(FakeWebSource(error=WebSearchProviderException("DuckDuckGo request failed."))),
-        WebSearchInput(query="normal query", num_results=5),
+        WebSearchInput(query="normal query", limit=5),
     )
 
     assert result.is_error is True

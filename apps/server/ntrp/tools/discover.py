@@ -9,8 +9,28 @@ from ntrp.tools.core.base import Tool
 
 _logger = get_logger(__name__)
 
+RESERVED_USER_TOOL_NAMES = frozenset(
+    {
+        "research_outline",
+        "research_cover",
+        "research_track_source",
+        "research_curate",
+        "research_verify_claim",
+        "research_question",
+        "research_track_search",
+        "write_research_artifact",
+        "append_research_artifact",
+        "read_research_artifact",
+        "list_research_artifacts",
+    }
+)
 
-def discover_user_tools(tools_dir: Path | None = None) -> dict[str, Tool]:
+
+def discover_user_tools(
+    tools_dir: Path | None = None,
+    *,
+    reserved_names: frozenset[str] = RESERVED_USER_TOOL_NAMES,
+) -> dict[str, Tool]:
     if tools_dir is None:
         tools_dir = NTRP_DIR / "tools"
     if not tools_dir.is_dir():
@@ -40,6 +60,9 @@ def discover_user_tools(tools_dir: Path | None = None) -> dict[str, Tool]:
                     continue
                 if name in tools:
                     _logger.warning("User tool %r from %s skipped — duplicate user tool", name, path.name)
+                    continue
+                if name in reserved_names:
+                    _logger.warning("User tool %r from %s skipped — reserved tool name", name, path.name)
                     continue
                 tools[name] = candidate
 

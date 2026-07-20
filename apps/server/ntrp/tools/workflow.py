@@ -2,8 +2,9 @@ import asyncio
 from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
+from ntrp.core.agent_types import SPAWN_SURFACE_GUIDANCE
 from ntrp.events.sse import WorkflowFinishedEvent, WorkflowStartedEvent
 from ntrp.orchestra.dynamic import format_script_traceback, run_script
 from ntrp.orchestra.engine import Orchestra
@@ -13,10 +14,8 @@ from ntrp.tools.core.types import ToolAction, ToolPolicy, ToolScope
 
 
 class WorkflowInput(BaseModel):
-    script: str | None = Field(
-        default=None,
-        description="Deprecated. Inline Python workflows are disabled; run a curated preset by `name`.",
-    )
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = Field(
         default=None,
         description="Name of a curated built-in workflow preset to run (e.g. 'audit').",
@@ -30,12 +29,6 @@ class WorkflowInput(BaseModel):
         description="Optional phase labels rendered before the preset starts.",
     )
     args: dict = Field(default_factory=dict, description="Parameters passed to the curated preset.")
-
-
-class SaveWorkflowInput(BaseModel):
-    name: str = Field(description="Preset name: lowercase letters/digits/hyphens, starts with a letter (e.g. 'memory-audit').")
-    description: str = Field(description="One line — when to use this preset and what `args` it expects.")
-    script: str = Field(description="Deprecated executable Python workflow source.")
 
 
 def _jsonable(value: Any) -> Any:
@@ -85,13 +78,6 @@ async def run_workflow(execution: ToolExecution, args: WorkflowInput) -> ToolRes
     ctx = execution.ctx
     if ctx.spawn_fn is None:
         return ToolResult(content="Error: spawn capability not available", preview="No spawn", is_error=True)
-
-    if args.script is not None:
-        return ToolResult(
-            content="Inline Python workflows are disabled. Run a curated workflow preset by name.",
-            preview="Inline scripts disabled",
-            is_error=True,
-        )
 
     # Only named, curated presets may reach the trusted in-process runner.
     script = None
@@ -198,7 +184,7 @@ WORKFLOW_DESCRIPTION = """\
 Run a curated built-in multi-agent workflow by `name`, passing its parameters through `args`.
 Available presets include `audit`, `investigate`, `panel`, and `implement`. Example:
 workflow(name="audit", args={"target": "apps/server", "depth": "normal"}).
-Inline and user-authored Python workflows are disabled."""
+Inline and user-authored Python workflows are disabled. """ + SPAWN_SURFACE_GUIDANCE
 
 workflow_tool = tool(
     display_name="Workflow",
@@ -209,21 +195,4 @@ workflow_tool = tool(
     # "workflow" (not "agent") so the desktop renders it as a workflow card from
     # the tool call itself — independent of the streamed workflow-domain events.
     kind="workflow",
-)
-
-
-async def run_save_workflow(execution: ToolExecution, args: SaveWorkflowInput) -> ToolResult:
-    return ToolResult(
-        content="Saving executable Python workflows is disabled. Use a reviewed built-in workflow preset.",
-        preview="Python workflows disabled",
-        is_error=True,
-    )
-
-
-save_workflow_tool = tool(
-    display_name="Save Workflow",
-    description="Executable Python workflow presets are disabled; this compatibility tool returns an error.",
-    input_model=SaveWorkflowInput,
-    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=frozenset({"skill_service"})),
-    execute=run_save_workflow,
 )
