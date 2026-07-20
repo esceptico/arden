@@ -8,14 +8,17 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from google.oauth2.credentials import Credentials
 from pydantic import BaseModel
 
+from ntrp.integrations.google_auth.accounts import GoogleService
 from ntrp.integrations.google_auth.auth import (
     SCOPES_CALENDAR,
     discover_calendar_tokens,
     discover_gmail_tokens,
+    google_account_store,
     google_credentials_status,
     import_google_credentials_file,
     save_google_credentials_json,
     scopes_for_google_choice,
+    scopes_for_google_service,
 )
 from ntrp.integrations.slack.client import SlackClient
 from ntrp.server.routers.mcp import list_mcp_servers
@@ -26,7 +29,8 @@ router = APIRouter(prefix="/setup", tags=["setup"])
 
 
 class GooglePreflightRequest(BaseModel):
-    service_choice: str
+    service_choice: str | None = None
+    integration_id: GoogleService | None = None
 
 
 class SlackVerifyRequest(BaseModel):
@@ -98,6 +102,18 @@ def _calendar_token_statuses() -> list[dict]:
     return statuses
 
 
+def _google_accounts() -> list[dict]:
+    return [
+        {
+            "id": account.id,
+            "email": account.email,
+            "services": sorted(account.services),
+            "scopes": list(account.scopes),
+        }
+        for account in google_account_store().list_accounts()
+    ]
+
+
 def _slack_services(runtime: Runtime) -> list[dict]:
     services = []
     config = runtime.config
@@ -131,8 +147,11 @@ async def setup_status(runtime: Runtime = Depends(get_runtime)):
             "enabled": bool(getattr(runtime.config, "google", False)),
             "credentials": google_credentials_status(),
             "accounts": _gmail_accounts(),
+            "google_accounts": _google_accounts(),
             "calendar_tokens": _calendar_token_statuses(),
-            "provider_statuses": [p for p in native_providers if p["id"] in {"gmail", "calendar"}],
+            "provider_statuses": [
+                p for p in native_providers if p["id"] in {"gmail", "calendar", "google_drive"}
+            ],
         },
         "slack": {
             "services": _slack_services(runtime),
@@ -168,7 +187,12 @@ async def setup_google_credentials(req: dict = Body(...)):
 @router.post("/google/preflight")
 async def setup_google_preflight(req: GooglePreflightRequest):
     try:
-        scopes = scopes_for_google_choice(req.service_choice)
+        if req.integration_id is not None:
+            scopes = scopes_for_google_service(req.integration_id)
+        elif req.service_choice is not None:
+            scopes = scopes_for_google_choice(req.service_choice)
+        else:
+            raise ValueError("integration_id is required")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     credentials = google_credentials_status()

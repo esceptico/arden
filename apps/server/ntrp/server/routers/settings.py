@@ -43,7 +43,10 @@ def _config_response(rt: Runtime) -> dict:
     for integration in rt.integrations.integrations.values():
         if integration.id.startswith("_") or integration.build is None:
             continue  # core builtins / notifier-only
-        entry: dict = {"connected": integration.id in rt.integrations.clients}
+        entry: dict = {
+            "connected": integration.id in rt.integrations.clients,
+            "enabled": config.integration_enabled(integration.id),
+        }
         if integration.id in rt.integrations.errors:
             entry["error"] = rt.integrations.errors[integration.id]
         integrations[integration.id] = entry
@@ -65,14 +68,26 @@ def _config_response(rt: Runtime) -> dict:
     # Umbrella + memory (not direct integrations)
     integrations["google"] = {
         "enabled": config.google,
-        "connected": "gmail" in rt.integrations.clients or "calendar" in rt.integrations.clients,
+        "connected": any(
+            integration_id in rt.integrations.clients
+            for integration_id in ("gmail", "calendar", "google_drive")
+        ),
         **(
             {
                 "error": "; ".join(
-                    e for e in (rt.integrations.errors.get("gmail"), rt.integrations.errors.get("calendar")) if e
+                    e
+                    for e in (
+                        rt.integrations.errors.get("gmail"),
+                        rt.integrations.errors.get("calendar"),
+                        rt.integrations.errors.get("google_drive"),
+                    )
+                    if e
                 )
             }
-            if (rt.integrations.errors.get("gmail") or rt.integrations.errors.get("calendar"))
+            if any(
+                rt.integrations.errors.get(integration_id)
+                for integration_id in ("gmail", "calendar", "google_drive")
+            )
             else {}
         ),
     }

@@ -8,6 +8,7 @@ from ntrp.integrations.google_auth.auth import (
     gmail_token_path,
     google_account_store,
     has_scope,
+    revoke_google_account,
     scopes_for_google_service,
 )
 
@@ -24,4 +25,5 @@ __all__ = [
     "has_scope",
     "google_account_store",
     "scopes_for_google_service",
+    "revoke_google_account",
 ]

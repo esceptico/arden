@@ -44,6 +44,18 @@ def test_google_preflight_reports_missing_credentials_without_throwing(monkeypat
     ]
 
 
+def test_google_preflight_accepts_exact_drive_integration(monkeypatch, tmp_path):
+    monkeypatch.setattr(google_auth, "CREDENTIALS_PATH", tmp_path / "gmail_credentials.json")
+
+    response = TestClient(app).post(
+        "/setup/google/preflight",
+        json={"integration_id": "google_drive"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["scopes"] == google_auth.scopes_for_google_service("google_drive")
+
+
 def test_google_credentials_rejects_web_client(monkeypatch, tmp_path):
     monkeypatch.setattr(google_auth, "CREDENTIALS_PATH", tmp_path / "gmail_credentials.json")
 
@@ -162,6 +174,18 @@ def test_setup_status_flattens_google_slack_mcp_shapes(monkeypatch):
         "_calendar_token_statuses",
         lambda: [{"token_file": "calendar_token.json", "has_calendar_scope": True, "error": None}],
     )
+    monkeypatch.setattr(
+        setup_router,
+        "_google_accounts",
+        lambda: [
+            {
+                "id": "acct-1",
+                "email": "user@example.com",
+                "services": ["gmail", "google_drive"],
+                "scopes": ["scope"],
+            }
+        ],
+    )
 
     try:
         response = TestClient(app).get("/setup/status")
@@ -173,6 +197,7 @@ def test_setup_status_flattens_google_slack_mcp_shapes(monkeypatch):
     assert body["google"]["enabled"] is True
     assert body["google"]["credentials"]["client_id"] == "client-id"
     assert body["google"]["accounts"][0]["email"] == "user@example.com"
+    assert body["google"]["google_accounts"][0]["services"] == ["gmail", "google_drive"]
     assert [p["id"] for p in body["google"]["provider_statuses"]] == ["gmail", "calendar"]
     assert [s["id"] for s in body["slack"]["services"]] == ["slack_bot_token", "slack_user_token"]
     assert body["slack"]["provider_status"]["id"] == "slack"

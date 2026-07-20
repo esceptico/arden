@@ -1,6 +1,9 @@
 import json
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlencode
+from urllib.request import Request as URLRequest
+from urllib.request import urlopen
 
 from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
@@ -258,7 +261,7 @@ def authorize_google_service(
         requested = list(dict.fromkeys((*account.scopes, *requested)))
 
     flow = InstalledAppFlow.from_client_secrets_file(str(CREDENTIALS_PATH), requested)
-    creds = flow.run_local_server(port=0)
+    creds = flow.run_local_server(port=0, include_granted_scopes="true")
     granted = tuple(creds.scopes or requested)
     missing = tuple(scope for scope in GOOGLE_SERVICE_SCOPES[service] if scope not in granted)
     if missing:
@@ -271,6 +274,18 @@ def authorize_google_service(
         )
     profile = build("oauth2", "v2", credentials=creds).userinfo().get().execute()
     email = str(profile.get("email") or "").strip() or None
+    existing = next(
+        (
+            item
+            for item in store.list_accounts()
+            if email and item.email and item.email.casefold() == email.casefold()
+        ),
+        None,
+    )
+    if account_id is None and existing and not set(existing.scopes).issubset(granted):
+        raise ValueError(
+            "This Google account is already connected. Choose it explicitly so existing permissions are preserved."
+        )
     return store.upsert_authorization(
         account_id=account_id,
         email=email,
@@ -278,6 +293,24 @@ def authorize_google_service(
         scopes=granted,
         service=service,
     )
+
+
+def revoke_google_account(account: GoogleAccount, store: GoogleAccountStore | None = None) -> None:
+    store = store or google_account_store()
+    creds = Credentials.from_authorized_user_file(str(store.token_path(account)))
+    token = creds.refresh_token or creds.token
+    if not token:
+        return
+    body = urlencode({"token": token}).encode()
+    request = URLRequest(
+        "https://oauth2.googleapis.com/revoke",
+        data=body,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+    with urlopen(request, timeout=15) as response:
+        if response.status not in {200, 400}:
+            raise RuntimeError(f"Google token revocation failed with HTTP {response.status}")
 
 
 def add_google_account(service_choice: str = "all") -> dict:
