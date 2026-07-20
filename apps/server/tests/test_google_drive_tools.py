@@ -47,8 +47,8 @@ def test_drive_write_tools_require_approval():
 
 
 def test_create_inputs_do_not_accept_file_content():
-    assert set(CreateGoogleDocInput.model_fields) == {"title", "account"}
-    assert set(CreateGoogleSheetInput.model_fields) == {"title", "account"}
+    assert set(CreateGoogleDocInput.model_fields) == {"title", "account", "idempotency_key"}
+    assert set(CreateGoogleSheetInput.model_fields) == {"title", "account", "idempotency_key"}
 
 
 def test_create_tool_descriptions_require_a_followup_write():

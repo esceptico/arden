@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from ntrp.agent.types.tools import ToolSourceRef, normalize_source_refs
 from ntrp.integrations.google_drive.client import MultiGoogleDriveClient
+from ntrp.integrations.mutations import execute_idempotent, mutation_result
 from ntrp.tools.core import ToolResult, tool
 from ntrp.tools.core.context import ToolExecution
 from ntrp.tools.core.types import ApprovalInfo, ToolAction, ToolPolicy, ToolScope
@@ -88,11 +89,24 @@ async def read_google_sheet(execution: ToolExecution, args: ReadGoogleSheetInput
 class CreateGoogleDocInput(BaseModel):
     title: str = Field(min_length=1, max_length=300)
     account: str | None = None
+    idempotency_key: str = Field(min_length=8, max_length=200)
 
 
 async def create_google_doc(execution: ToolExecution, args: CreateGoogleDocInput) -> ToolResult:
-    data = _drive(execution).select_account(args.account).create_doc(args.title)
-    return ToolResult(content=f"Created {data['title']}: {data['url']}", preview="Created document")
+    async def invoke() -> ToolResult:
+        data = _drive(execution).select_account(args.account).create_doc(args.title)
+        return mutation_result(
+            content=f"Created {data['title']}: {data['url']}\nref: {data['ref']}",
+            preview="Created document",
+            operation="create",
+            target=args.title,
+            receipt=data["ref"],
+            after_ref=data["ref"],
+            observed=f"Drive returned {data['ref']}",
+            data={"file_ref": data["ref"], "url": data["url"]},
+        )
+
+    return await execute_idempotent(execution, namespace=f"drive:create_doc:{args.account or 'default'}", idempotency_key=args.idempotency_key, payload=args.model_dump(exclude={"idempotency_key"}), invoke=invoke)
 
 
 async def approve_create_google_doc(_execution: ToolExecution, args: CreateGoogleDocInput) -> ApprovalInfo:
@@ -104,6 +118,7 @@ class EditGoogleDocInput(BaseModel):
     operation: Literal["append", "replace_all"]
     text: str = Field(max_length=100_000)
     match: str | None = Field(default=None, max_length=10_000)
+    idempotency_key: str = Field(min_length=8, max_length=200)
 
     @model_validator(mode="after")
     def require_match(self):
@@ -113,9 +128,12 @@ class EditGoogleDocInput(BaseModel):
 
 
 async def edit_google_doc(execution: ToolExecution, args: EditGoogleDocInput) -> ToolResult:
-    client, document_id = _drive(execution).resolve_ref(args.document_ref)
-    data = client.edit_doc(document_id, operation=args.operation, text=args.text, match=args.match)
-    return ToolResult(content=f"Updated {data['title']}: {data['url']}", preview="Updated document")
+    async def invoke() -> ToolResult:
+        client, document_id = _drive(execution).resolve_ref(args.document_ref)
+        data = client.edit_doc(document_id, operation=args.operation, text=args.text, match=args.match)
+        return mutation_result(content=f"Updated {data['title']}: {data['url']}", preview="Updated document", operation=args.operation, target=args.document_ref, receipt=args.idempotency_key, before_ref=args.document_ref, after_ref=data["ref"], observed=f"Drive returned {data['ref']}")
+
+    return await execute_idempotent(execution, namespace="drive:edit_doc", idempotency_key=args.idempotency_key, payload=args.model_dump(exclude={"idempotency_key"}), invoke=invoke)
 
 
 async def approve_edit_google_doc(_execution: ToolExecution, args: EditGoogleDocInput) -> ApprovalInfo:
@@ -126,11 +144,15 @@ async def approve_edit_google_doc(_execution: ToolExecution, args: EditGoogleDoc
 class CreateGoogleSheetInput(BaseModel):
     title: str = Field(min_length=1, max_length=300)
     account: str | None = None
+    idempotency_key: str = Field(min_length=8, max_length=200)
 
 
 async def create_google_sheet(execution: ToolExecution, args: CreateGoogleSheetInput) -> ToolResult:
-    data = _drive(execution).select_account(args.account).create_sheet(args.title)
-    return ToolResult(content=f"Created {data['title']}: {data['url']}", preview="Created spreadsheet")
+    async def invoke() -> ToolResult:
+        data = _drive(execution).select_account(args.account).create_sheet(args.title)
+        return mutation_result(content=f"Created {data['title']}: {data['url']}\nref: {data['ref']}", preview="Created spreadsheet", operation="create", target=args.title, receipt=data["ref"], after_ref=data["ref"], observed=f"Drive returned {data['ref']}", data={"file_ref": data["ref"], "url": data["url"]})
+
+    return await execute_idempotent(execution, namespace=f"drive:create_sheet:{args.account or 'default'}", idempotency_key=args.idempotency_key, payload=args.model_dump(exclude={"idempotency_key"}), invoke=invoke)
 
 
 async def approve_create_google_sheet(_execution: ToolExecution, args: CreateGoogleSheetInput) -> ApprovalInfo:
@@ -142,18 +164,25 @@ class SheetWriteInput(BaseModel):
     range: str = Field(min_length=1, max_length=200)
     values: list[list[CellValue]] = Field(min_length=1, max_length=500)
     value_input_option: Literal["RAW", "USER_ENTERED"] = "USER_ENTERED"
+    idempotency_key: str = Field(min_length=8, max_length=200)
 
 
 async def update_google_sheet(execution: ToolExecution, args: SheetWriteInput) -> ToolResult:
-    client, spreadsheet_id = _drive(execution).resolve_ref(args.spreadsheet_ref)
-    client.update_sheet(spreadsheet_id, args.range, args.values, args.value_input_option)
-    return ToolResult(content=f"Updated {args.spreadsheet_ref} range {args.range}", preview="Updated cells")
+    async def invoke() -> ToolResult:
+        client, spreadsheet_id = _drive(execution).resolve_ref(args.spreadsheet_ref)
+        receipt = client.update_sheet(spreadsheet_id, args.range, args.values, args.value_input_option)
+        return mutation_result(content=f"Updated {args.spreadsheet_ref} range {args.range}", preview="Updated cells", operation="update", target=f"{args.spreadsheet_ref}:{args.range}", receipt=json.dumps(receipt, sort_keys=True), before_ref=args.spreadsheet_ref, after_ref=args.spreadsheet_ref, observed=f"Drive acknowledged {receipt.get('updatedRange', args.range)}")
+
+    return await execute_idempotent(execution, namespace="drive:update_sheet", idempotency_key=args.idempotency_key, payload=args.model_dump(exclude={"idempotency_key"}), invoke=invoke)
 
 
 async def append_google_sheet_rows(execution: ToolExecution, args: SheetWriteInput) -> ToolResult:
-    client, spreadsheet_id = _drive(execution).resolve_ref(args.spreadsheet_ref)
-    client.append_sheet_rows(spreadsheet_id, args.range, args.values, args.value_input_option)
-    return ToolResult(content=f"Appended rows to {args.spreadsheet_ref} range {args.range}", preview="Appended rows")
+    async def invoke() -> ToolResult:
+        client, spreadsheet_id = _drive(execution).resolve_ref(args.spreadsheet_ref)
+        receipt = client.append_sheet_rows(spreadsheet_id, args.range, args.values, args.value_input_option)
+        return mutation_result(content=f"Appended rows to {args.spreadsheet_ref} range {args.range}", preview="Appended rows", operation="append", target=f"{args.spreadsheet_ref}:{args.range}", receipt=json.dumps(receipt, sort_keys=True), before_ref=args.spreadsheet_ref, after_ref=args.spreadsheet_ref, observed=f"Drive acknowledged append to {args.range}")
+
+    return await execute_idempotent(execution, namespace="drive:append_sheet", idempotency_key=args.idempotency_key, payload=args.model_dump(exclude={"idempotency_key"}), invoke=invoke)
 
 
 async def approve_sheet_write(_execution: ToolExecution, args: SheetWriteInput) -> ApprovalInfo:

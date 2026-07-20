@@ -4,6 +4,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from ntrp.agent.types.tools import ToolSourceRef, normalize_source_refs
+from ntrp.integrations.mutations import execute_idempotent, mutation_result
 from ntrp.integrations.slack.client import SlackClient
 from ntrp.tools.core import ToolResult, tool
 from ntrp.tools.core.context import ToolExecution
@@ -216,6 +217,7 @@ class SlackPostMessageInput(BaseModel):
         )
     )
     thread_ts: str | None = Field(default=None, description="Optional parent message timestamp to post as a thread reply")
+    idempotency_key: str = Field(min_length=8, max_length=200)
 
 
 class SlackPostBlocksInput(BaseModel):
@@ -238,6 +240,7 @@ class SlackPostBlocksInput(BaseModel):
         ),
     )
     thread_ts: str | None = Field(default=None, description="Optional parent message timestamp to post as a thread reply")
+    idempotency_key: str = Field(min_length=8, max_length=200)
 
 
 SLACK_FORMATTING_GUIDE = (
@@ -283,19 +286,47 @@ def _posted_message_result(args: SlackPostMessageInput | SlackPostBlocksInput, r
     ts = result.get("ts", "")
     thread_ts = result.get("thread_ts", ts)
     content = f"Posted to #{channel_label} at {ts}\nchannel: {result.get('channel', args.channel)}\nthread_ts: {thread_ts}"
-    return ToolResult(content=content, preview=f"Posted to #{channel_label}")
+    message_ref = f"{result.get('channel', args.channel)}:{ts}" if ts else None
+    return mutation_result(
+        content=content,
+        preview=f"Posted to #{channel_label}" if message_ref else "Post unverified",
+        operation="post",
+        target=args.channel,
+        receipt=ts or args.idempotency_key,
+        after_ref=message_ref,
+        observed=(f"Slack returned message {message_ref}" if message_ref else None),
+        data={"message_ref": message_ref, "thread_ts": thread_ts} if message_ref else None,
+    )
 
 
 async def slack_post_message(execution: ToolExecution, args: SlackPostMessageInput) -> ToolResult:
-    source = execution.ctx.get_client("slack", SlackClient)
-    result = await source.post_message(args.channel, args.text, thread_ts=args.thread_ts)
-    return _posted_message_result(args, result)
+    async def invoke() -> ToolResult:
+        source = execution.ctx.get_client("slack", SlackClient)
+        result = await source.post_message(args.channel, args.text, thread_ts=args.thread_ts)
+        return _posted_message_result(args, result)
+
+    return await execute_idempotent(
+        execution,
+        namespace="slack:post_message",
+        idempotency_key=args.idempotency_key,
+        payload=args.model_dump(exclude={"idempotency_key"}),
+        invoke=invoke,
+    )
 
 
 async def slack_post_blocks(execution: ToolExecution, args: SlackPostBlocksInput) -> ToolResult:
-    source = execution.ctx.get_client("slack", SlackClient)
-    result = await source.post_message(args.channel, args.text, thread_ts=args.thread_ts, blocks=args.blocks)
-    return _posted_message_result(args, result)
+    async def invoke() -> ToolResult:
+        source = execution.ctx.get_client("slack", SlackClient)
+        result = await source.post_message(args.channel, args.text, thread_ts=args.thread_ts, blocks=args.blocks)
+        return _posted_message_result(args, result)
+
+    return await execute_idempotent(
+        execution,
+        namespace="slack:post_blocks",
+        idempotency_key=args.idempotency_key,
+        payload=args.model_dump(exclude={"idempotency_key"}),
+        invoke=invoke,
+    )
 
 
 class SlackDmsInput(BaseModel):

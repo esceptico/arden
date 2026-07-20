@@ -174,6 +174,7 @@ async def test_send_email_maps_provider_failure_to_typed_result():
             to="you@example.test",
             subject="Status",
             body="Ready",
+            idempotency_key="send-status-1",
         ),
     )
 
@@ -200,6 +201,7 @@ async def test_calendar_create_maps_provider_failure_to_typed_result():
         CreateCalendarEventInput(
             summary="Review",
             start="2026-07-20T09:00:00+04:00",
+            idempotency_key="calendar-review-1",
         ),
     )
 
@@ -381,6 +383,7 @@ async def test_send_email_approval_includes_the_body():
             to="you@example.test",
             subject="Release status",
             body="The release is ready for final review.",
+            idempotency_key="release-status-1",
         ),
     )
 
@@ -403,6 +406,7 @@ async def test_slack_blocks_approval_includes_the_actual_blocks():
                     "text": {"type": "mrkdwn", "text": "*Release is green*"},
                 }
             ],
+            idempotency_key="slack-release-1",
         ),
     )
 

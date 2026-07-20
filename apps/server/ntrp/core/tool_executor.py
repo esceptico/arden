@@ -136,12 +136,18 @@ class NtrpToolExecutor:
                 else:
                     result = await asyncio.wait_for(execute, timeout=timeout_seconds)
             except TimeoutError:
+                mutation = tool.policy.action in {ToolAction.WRITE, ToolAction.EXECUTE}
                 result = ToolResult.failure(
-                    code="timeout",
-                    message="Tool call timed out.",
-                    preview="Timed out",
-                    retryable=True,
-                    recovery_action="Check whether the operation completed before retrying.",
+                    code="mutation_timeout" if mutation else "timeout",
+                    message="Tool call timed out; provider completion is unknown." if mutation else "Tool call timed out.",
+                    preview="Completion unknown" if mutation else "Timed out",
+                    status=ToolOutcomeStatus.UNCERTAIN if mutation else ToolOutcomeStatus.FAILED,
+                    retryable=not mutation,
+                    recovery_action=(
+                        "Verify provider state using the operation's idempotency key before retrying."
+                        if mutation
+                        else "Check whether the operation completed before retrying."
+                    ),
                 )
                 finish_status = "timeout"
                 finish_preview = result.preview

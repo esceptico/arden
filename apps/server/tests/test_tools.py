@@ -1215,6 +1215,31 @@ async def test_ntrp_tool_executor_policy_timeout_seconds_returns_error_result():
 
 
 @pytest.mark.asyncio
+async def test_ntrp_tool_executor_mutation_timeout_is_uncertain_and_not_retryable():
+    async def slow(execution: ToolExecution, args: EmptyInput) -> ToolResult:
+        await asyncio.sleep(1)
+        return ToolResult(content="late", preview="late")
+
+    registry = ToolRegistry()
+    registry.register(
+        "slow_write",
+        tool(
+            description="Mutate too slowly.",
+            execute=slow,
+            policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.EXTERNAL, timeout_seconds=0),
+        ),
+    )
+    executor = NtrpToolExecutor(ToolExecutor().with_registry(registry), _make_tool_context(registry))
+
+    result = await executor.execute("slow_write", {}, "call-write-timeout")
+
+    assert result.outcome.status == ToolOutcomeStatus.UNCERTAIN
+    assert result.outcome.error.code == "mutation_timeout"
+    assert result.outcome.error.retryable is False
+    assert "Verify provider state" in result.outcome.error.recovery_action
+
+
+@pytest.mark.asyncio
 async def test_ntrp_tool_executor_defaults_external_tool_timeout(monkeypatch):
     import ntrp.core.tool_executor as core_tool_executor_module
 

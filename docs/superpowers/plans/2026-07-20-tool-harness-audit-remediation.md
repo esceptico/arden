@@ -253,10 +253,10 @@ def atomic_compare_and_swap(path: Path, content: str, expected_sha256: str) -> F
 - Mutation inputs accept `idempotency_key`; outputs populate `ToolEffect`, `ToolVerification`, and provider/ntrp receipt.
 - Contract: an uncertain timeout instructs verification and never silently retries.
 
-- [ ] Add failing duplicate-call and timeout-ambiguity tests for each external mutation family.
-- [ ] Add a shared idempotency ledger keyed by integration, operation, account, and idempotency key; persist before/after provider receipts.
-- [ ] Return changed state/diff. Gmail verifies by message ID, Calendar by event ref, Slack by `(channel, ts)`, and Drive by qualified file ref; if a provider returns no readable ref, return `UNCERTAIN` with its receipt.
-- [ ] Run tests and commit: `feat(harness): make external mutations retry-safe`.
+- [x] Add failing duplicate-call and timeout-ambiguity tests for each external mutation family.
+- [x] Add a shared idempotency ledger keyed by integration, operation, account, and idempotency key; persist before/after provider receipts.
+- [x] Return changed state/diff. Gmail verifies by message ID, Calendar by event ref, Slack by `(channel, ts)`, and Drive by qualified file ref; if a provider returns no readable ref, return `UNCERTAIN` with its receipt.
+- [x] Run tests and commit: `feat(harness): make external mutations retry-safe`.
 
 ### Task 9: Chain-Safe Integration References
 

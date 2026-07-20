@@ -1,3 +1,4 @@
+import re
 from datetime import datetime
 
 from pydantic import BaseModel, Field
@@ -5,6 +6,7 @@ from pydantic import BaseModel, Field
 from ntrp.agent.types.tools import ToolSourceRef, normalize_source_refs
 from ntrp.integrations.base import IntegrationOperationError
 from ntrp.integrations.calendar.client import MultiCalendarSource
+from ntrp.integrations.mutations import execute_idempotent, mutation_result
 from ntrp.integrations.tool_errors import operation_error_result
 from ntrp.tools.core import ToolResult, tool
 from ntrp.tools.core.context import ToolExecution
@@ -167,6 +169,7 @@ class CreateCalendarEventInput(BaseModel):
     attendees: str | None = Field(default=None, description="Comma-separated email addresses of attendees (optional)")
     all_day: bool = Field(default=False, description="Whether this is an all-day event (optional)")
     account: str | None = Field(default=None, description="Calendar account email (optional if only one account)")
+    idempotency_key: str = Field(min_length=8, max_length=200)
 
 
 async def approve_create_calendar_event(
@@ -199,21 +202,41 @@ async def create_calendar_event(execution: ToolExecution, args: CreateCalendarEv
     end_dt = _parse_datetime(args.end) if args.end else None
     attendee_list = [e.strip() for e in args.attendees.split(",") if e.strip()] if args.attendees else None
 
-    source = execution.ctx.get_client("calendar", MultiCalendarSource)
-    try:
-        result = source.create_event(
-            account=args.account or "",
-            summary=args.summary,
-            start=start_dt,
-            end=end_dt,
-            description=args.description or "",
-            location=args.location or "",
-            attendees=attendee_list,
-            all_day=args.all_day,
+    async def invoke() -> ToolResult:
+        source = execution.ctx.get_client("calendar", MultiCalendarSource)
+        try:
+            result = source.create_event(
+                account=args.account or "",
+                summary=args.summary,
+                start=start_dt,
+                end=end_dt,
+                description=args.description or "",
+                location=args.location or "",
+                attendees=attendee_list,
+                all_day=args.all_day,
+            )
+        except IntegrationOperationError as error:
+            return operation_error_result(error, preview="Create failed")
+        match = re.search(r"\(id: ([^)]+)\)", result)
+        event_ref = f"{args.account}:{match.group(1)}" if match and args.account else (match.group(1) if match else None)
+        return mutation_result(
+            content=result,
+            preview="Created" if event_ref else "Create unverified",
+            operation="create",
+            target=args.summary,
+            receipt=match.group(1) if match else args.idempotency_key,
+            after_ref=event_ref,
+            observed=(f"Calendar returned event {event_ref}" if event_ref else None),
+            data={"event_ref": event_ref} if event_ref else None,
         )
-    except IntegrationOperationError as error:
-        return operation_error_result(error, preview="Create failed")
-    return ToolResult(content=result, preview="Created")
+
+    return await execute_idempotent(
+        execution,
+        namespace=f"calendar:create:{args.account or 'default'}",
+        idempotency_key=args.idempotency_key,
+        payload=args.model_dump(exclude={"idempotency_key"}),
+        invoke=invoke,
+    )
 
 
 class EditCalendarEventInput(BaseModel):
@@ -226,6 +249,7 @@ class EditCalendarEventInput(BaseModel):
     attendees: str | None = Field(
         default=None, description="New comma-separated attendee emails (optional, replaces existing)"
     )
+    idempotency_key: str = Field(min_length=8, max_length=200)
 
 
 async def approve_edit_calendar_event(execution: ToolExecution, args: EditCalendarEventInput) -> ApprovalInfo | None:
@@ -266,24 +290,43 @@ async def edit_calendar_event(execution: ToolExecution, args: EditCalendarEventI
 
     attendee_list = [e.strip() for e in args.attendees.split(",") if e.strip()] if args.attendees else None
 
-    source = execution.ctx.get_client("calendar", MultiCalendarSource)
-    try:
-        result = source.update_event(
-            event_id=args.event_id,
-            summary=args.summary,
-            start=start_dt,
-            end=end_dt,
-            description=args.description,
-            location=args.location,
-            attendees=attendee_list,
+    async def invoke() -> ToolResult:
+        source = execution.ctx.get_client("calendar", MultiCalendarSource)
+        try:
+            result = source.update_event(
+                event_id=args.event_id,
+                summary=args.summary,
+                start=start_dt,
+                end=end_dt,
+                description=args.description,
+                location=args.location,
+                attendees=attendee_list,
+            )
+        except IntegrationOperationError as error:
+            return operation_error_result(error, preview="Update failed")
+        return mutation_result(
+            content=result,
+            preview="Updated",
+            operation="update",
+            target=args.event_id,
+            receipt=args.idempotency_key,
+            before_ref=args.event_id,
+            after_ref=args.event_id,
+            observed=f"Calendar acknowledged update of {args.event_id}",
         )
-    except IntegrationOperationError as error:
-        return operation_error_result(error, preview="Update failed")
-    return ToolResult(content=result, preview="Updated")
+
+    return await execute_idempotent(
+        execution,
+        namespace="calendar:update",
+        idempotency_key=args.idempotency_key,
+        payload=args.model_dump(exclude={"idempotency_key"}),
+        invoke=invoke,
+    )
 
 
 class DeleteCalendarEventInput(BaseModel):
     event_id: str = Field(description="The event ID to delete")
+    idempotency_key: str = Field(min_length=8, max_length=200)
 
 
 async def approve_delete_calendar_event(
@@ -293,12 +336,30 @@ async def approve_delete_calendar_event(
 
 
 async def delete_calendar_event(execution: ToolExecution, args: DeleteCalendarEventInput) -> ToolResult:
-    source = execution.ctx.get_client("calendar", MultiCalendarSource)
-    try:
-        result = source.delete_event(args.event_id)
-    except IntegrationOperationError as error:
-        return operation_error_result(error, preview="Delete failed")
-    return ToolResult(content=result, preview="Deleted")
+    async def invoke() -> ToolResult:
+        source = execution.ctx.get_client("calendar", MultiCalendarSource)
+        try:
+            result = source.delete_event(args.event_id)
+        except IntegrationOperationError as error:
+            return operation_error_result(error, preview="Delete failed")
+        return mutation_result(
+            content=result,
+            preview="Deleted",
+            operation="delete",
+            target=args.event_id,
+            receipt=args.idempotency_key,
+            before_ref=args.event_id,
+            after_ref="absent",
+            observed=f"Calendar acknowledged deletion of {args.event_id}",
+        )
+
+    return await execute_idempotent(
+        execution,
+        namespace="calendar:delete",
+        idempotency_key=args.idempotency_key,
+        payload=args.model_dump(exclude={"idempotency_key"}),
+        invoke=invoke,
+    )
 
 
 calendar_tool = tool(
