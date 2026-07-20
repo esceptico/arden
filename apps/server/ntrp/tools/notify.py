@@ -8,7 +8,8 @@ from ntrp.logging import get_logger
 from ntrp.notifiers.base import Notifier
 from ntrp.tools.core import ToolResult, tool
 from ntrp.tools.core.context import ToolExecution
-from ntrp.tools.core.types import ToolAction, ToolPolicy, ToolScope
+from ntrp.tools.core.types import ApprovalInfo, ToolAction, ToolPolicy, ToolScope
+from ntrp.utils import truncate
 
 _logger = get_logger(__name__)
 _SERVICE_NAME = "notifiers"
@@ -42,6 +43,15 @@ class _ResolvedNotifiers:
     targets: list[Notifier]
     unknown: list[str]
     available: list[str]
+
+
+async def approve_notify(_execution: ToolExecution, args: NotifyInput) -> ApprovalInfo:
+    targets = ", ".join(args.names) if args.names else "all configured channels"
+    return ApprovalInfo(
+        description=f"Notify via {targets}: {args.subject}",
+        preview=truncate(args.body, 1_500),
+        diff=None,
+    )
 
 
 def _resolve_notifiers(execution: ToolExecution, names: list[str] | None = None) -> _ResolvedNotifiers:
@@ -101,5 +111,6 @@ notify_tool = tool(
         requires_approval=True,
         permissions=frozenset({"notifiers"}),
     ),
+    approval=approve_notify,
     execute=notify,
 )

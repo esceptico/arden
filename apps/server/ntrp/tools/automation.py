@@ -699,6 +699,14 @@ async def schedule_wakeup(execution: ToolExecution, args: ScheduleWakeupInput) -
     )
 
 
+async def approve_schedule_wakeup(_execution: ToolExecution, args: ScheduleWakeupInput) -> ApprovalInfo:
+    return ApprovalInfo(
+        description="Schedule the loop's next iteration",
+        preview=f"Delay: {args.delay_seconds} seconds",
+        diff=None,
+    )
+
+
 async def loop_done(execution: ToolExecution, args: LoopDoneInput) -> ToolResult:
     task_id, err = _loop_task_id_or_error(execution)
     if err:
@@ -713,6 +721,10 @@ async def loop_done(execution: ToolExecution, args: LoopDoneInput) -> ToolResult
     )
 
 
+async def approve_loop_done(_execution: ToolExecution, args: LoopDoneInput) -> ApprovalInfo:
+    return ApprovalInfo(description="Stop the current loop", preview=args.reason[:1_500], diff=None)
+
+
 schedule_wakeup_tool = tool(
     display_name="ScheduleWakeup",
     description=SCHEDULE_WAKEUP_DESCRIPTION,
@@ -723,6 +735,7 @@ schedule_wakeup_tool = tool(
         requires_approval=True,
         permissions=frozenset({"automation"}),
     ),
+    approval=approve_schedule_wakeup,
     execute=schedule_wakeup,
 )
 
@@ -736,6 +749,7 @@ loop_done_tool = tool(
         requires_approval=True,
         permissions=frozenset({"automation"}),
     ),
+    approval=approve_loop_done,
     execute=loop_done,
 )
 

@@ -37,6 +37,8 @@ class _FunctionTool(Tool):
         self.description = description
         self.input_model = input_model
         self.policy = policy
+        if policy.requires_approval and approval is None:
+            raise ValueError("approval-gated tools require an approval preview callback")
         self._execute = execute
         self._approval = approval
         self.kind = kind

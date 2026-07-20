@@ -19,6 +19,8 @@ from ntrp.context.store import SessionStore
 from ntrp.core.tool_executor import NtrpToolExecutor
 from ntrp.integrations.base import Integration
 from ntrp.tool_call_metadata import DISPLAY_TITLE_ARG
+from ntrp.tools.automation import loop_done_tool, schedule_wakeup_tool
+from ntrp.tools.background import cancel_background_task_tool
 from ntrp.tools.bash import bash_tool, execute_bash, is_blocked_command, is_safe_command
 from ntrp.tools.core import EmptyInput, Tool, ToolCall, ToolNext, tool
 from ntrp.tools.core.context import (
@@ -33,6 +35,7 @@ from ntrp.tools.core.registry import ToolRegistry
 from ntrp.tools.core.types import ApprovalInfo, ToolAction, ToolOverrideDecision, ToolPolicy, ToolScope
 from ntrp.tools.discover import discover_user_tools
 from ntrp.tools.executor import ToolExecutor
+from ntrp.tools.notify import notify_tool
 from ntrp.tools.todos import update_todos_tool
 from ntrp.tools.workflow import workflow_tool
 
@@ -148,6 +151,9 @@ def test_tool_overrides_hide_deny_and_patch_approval_policy():
     async def handler(execution, args):
         return ToolResult(content="ok")
 
+    async def approval(execution, args):
+        return ApprovalInfo(description="Write state", preview="ok", diff=None)
+
     registry = ToolRegistry(
         tool_overrides={
             "read_state": ToolOverrideDecision.ASK,
@@ -171,6 +177,7 @@ def test_tool_overrides_hide_deny_and_patch_approval_policy():
                     scope=ToolScope.INTERNAL,
                     requires_approval=True,
                 ),
+                approval=approval,
             ),
             "blocked": tool(
                 description="Blocked.",
@@ -626,28 +633,17 @@ async def test_function_tool_supports_approval_callback():
     assert result.content == "User rejected this action and said: No UI connected — cannot approve"
 
 
-@pytest.mark.asyncio
-async def test_function_tool_requires_approval_without_preview_callback():
+def test_function_tool_requires_explicit_approval_preview_callback():
     async def echo(execution: ToolExecution, args: EchoInput) -> ToolResult:
         return ToolResult(content=args.text, preview=args.text)
 
-    registry = ToolRegistry()
-    _register_tools(
-        registry,
-        {
-            "echo": tool(
-                description="Echo text.",
-                input_model=EchoInput,
-                execute=echo,
-                policy=WRITE_INTERNAL_APPROVAL_POLICY,
-            )
-        },
-    )
-
-    result = await registry.execute("echo", _make_execution("echo"), {"text": "hello"})
-
-    assert result.preview == "Rejected"
-    assert result.content == "User rejected this action and said: No UI connected — cannot approve"
+    with pytest.raises(ValueError, match="approval preview"):
+        tool(
+            description="Echo text.",
+            input_model=EchoInput,
+            execute=echo,
+            policy=WRITE_INTERNAL_APPROVAL_POLICY,
+        )
 
 
 @pytest.mark.asyncio
@@ -655,6 +651,9 @@ async def test_tool_approval_timeout_expires_pending_request():
     async def echo(execution: ToolExecution, args: EchoInput) -> ToolResult:
         return ToolResult(content=args.text, preview=args.text)
 
+    async def approve_echo(execution: ToolExecution, args: EchoInput) -> ApprovalInfo:
+        return ApprovalInfo(description="Echo text", preview=args.text, diff=None)
+
     registry = ToolRegistry()
     _register_tools(
         registry,
@@ -664,6 +663,7 @@ async def test_tool_approval_timeout_expires_pending_request():
                 input_model=EchoInput,
                 execute=echo,
                 policy=WRITE_INTERNAL_APPROVAL_POLICY,
+                approval=approve_echo,
             )
         },
     )
@@ -769,7 +769,7 @@ async def test_tool_approval_cancellation_resolves_pending_request():
 
 
 @pytest.mark.asyncio
-async def test_tool_approval_record_failure_still_registers_and_emits():
+async def test_tool_approval_record_failure_fails_closed_before_emit():
     emitted = []
     resolved = []
     pending: dict[str, asyncio.Future] = {}
@@ -792,32 +792,27 @@ async def test_tool_approval_record_failure_still_registers_and_emits():
             pending_approvals=pending,
             record_approval=record_approval,
             resolve_approval=resolve_approval,
+            approval_timeout_seconds=0.001,
         ),
         background_tasks=BackgroundTaskRegistry(session_id="test"),
     )
     execution = ToolExecution(tool_id="call-1", tool_name="echo", ctx=ctx)
 
-    task = asyncio.create_task(execution.request_approval("Echo hello", preview="hello"))
-    for _ in range(20):
-        if "call-1" in pending and emitted:
-            break
-        await asyncio.sleep(0)
-
-    assert not task.done()
-    assert "call-1" in pending
-    assert len(emitted) == 1
-
-    pending["call-1"].set_result({"approved": False, "result": "no"})
-    rejection = await task
+    rejection = await execution.request_approval("Echo hello", preview="hello")
 
     assert rejection is not None
-    assert rejection.feedback == "no"
+    assert rejection.feedback == "Approval could not be recorded — action cancelled"
+    result = rejection.to_result()
+    assert result.outcome is not None and result.outcome.error is not None
+    assert result.outcome.error.code == "approval_persistence_failed"
+    assert result.outcome.error.diagnostic_ref
     assert pending == {}
-    assert resolved[0]["status"] == "rejected"
+    assert emitted == []
+    assert resolved == []
 
 
 @pytest.mark.asyncio
-async def test_tool_approval_resolve_failure_after_approval_still_continues():
+async def test_tool_approval_resolve_failure_after_approval_fails_closed():
     emitted = []
     pending: dict[str, asyncio.Future] = {}
 
@@ -848,8 +843,36 @@ async def test_tool_approval_resolve_failure_after_approval_still_continues():
 
     pending["call-1"].set_result({"approved": True, "result": "ok"})
 
-    assert await task is None
+    rejection = await task
+    assert rejection is not None
+    assert rejection.feedback == "Approval could not be persisted — action cancelled"
+    result = rejection.to_result()
+    assert result.outcome is not None and result.outcome.error is not None
+    assert result.outcome.error.code == "approval_persistence_failed"
+    assert result.outcome.error.diagnostic_ref
     assert pending == {}
+
+
+@pytest.mark.asyncio
+async def test_approval_gated_tools_render_the_payload():
+    execution = _make_execution()
+
+    notify = await notify_tool.approval_info(
+        execution,
+        subject="Build failed",
+        body="The release build failed in the signing step.",
+        names=["work-telegram"],
+    )
+    wakeup = await schedule_wakeup_tool.approval_info(execution, delay_seconds=120)
+    done = await loop_done_tool.approval_info(execution, reason="The requested condition is satisfied")
+    cancel = await cancel_background_task_tool.approval_info(execution, task_id="agent-42")
+
+    assert notify is not None
+    assert notify.description == "Notify via work-telegram: Build failed"
+    assert notify.preview == "The release build failed in the signing step."
+    assert wakeup is not None and wakeup.preview == "Delay: 120 seconds"
+    assert done is not None and done.preview == "The requested condition is satisfied"
+    assert cancel is not None and cancel.preview == "Background task: agent-42"
 
 
 @pytest.mark.asyncio
@@ -909,6 +932,32 @@ async def test_durable_approval_marks_suspension_consumed_before_execution():
 
     assert await ToolExecution(tool_id="call-1", tool_name="echo", ctx=ctx).request_approval("Echo") is None
     assert consumed == [{"run_id": "run-1", "suspension_id": "call-1"}]
+
+
+@pytest.mark.asyncio
+async def test_durable_approval_consume_failure_fails_closed():
+    async def get_suspension(**kwargs):
+        return {"status": "approved", "resolution": {"approved": True, "result": "ok"}}
+
+    async def consume_suspension(**kwargs):
+        raise RuntimeError("store write failed")
+
+    ctx = ToolContext(
+        session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
+        registry=ToolRegistry(),
+        run=RunContext(run_id="run-1"),
+        io=IOBridge(get_suspension=get_suspension, consume_suspension=consume_suspension),
+        background_tasks=BackgroundTaskRegistry(session_id="test"),
+    )
+
+    rejection = await ToolExecution(tool_id="call-1", tool_name="echo", ctx=ctx).request_approval("Echo")
+
+    assert rejection is not None
+    assert rejection.feedback == "Approval could not be consumed — action cancelled"
+    result = rejection.to_result()
+    assert result.outcome is not None and result.outcome.error is not None
+    assert result.outcome.error.code == "approval_persistence_failed"
+    assert result.outcome.error.diagnostic_ref
 
 
 @pytest.mark.asyncio
@@ -1413,6 +1462,9 @@ async def test_ntrp_tool_executor_audits_rejected_approval_as_error(session_stor
     async def echo(execution: ToolExecution, args: EchoInput) -> ToolResult:
         return ToolResult(content=args.text, preview=args.text)
 
+    async def approve_echo(execution: ToolExecution, args: EchoInput) -> ApprovalInfo:
+        return ApprovalInfo(description="Echo text", preview=args.text, diff=None)
+
     registry = ToolRegistry()
     registry.register(
         "echo",
@@ -1421,6 +1473,7 @@ async def test_ntrp_tool_executor_audits_rejected_approval_as_error(session_stor
             input_model=EchoInput,
             execute=echo,
             policy=WRITE_INTERNAL_APPROVAL_POLICY,
+            approval=approve_echo,
         ),
     )
     ctx = _make_tool_context(registry, session_id="sess-1")

@@ -111,11 +111,11 @@ else:
 - Produces: explicit `approval=` handler requirement for approval-gated tools, with an intentional opt-out only for payload-free actions.
 - Contract: approval persistence must succeed before a mutation may execute.
 
-- [ ] Add failing registration tests for approval-gated tools without handlers and approval rendering tests for complete email, Slack Block Kit, notification, wakeup, loop, and cancellation payloads.
-- [ ] Add failing tests proving record/resolve approval persistence errors prevent execution.
-- [ ] Implement registration validation and payload previews capped at 1,500 characters; render Block Kit as compact JSON/Markdown, not only a block count.
-- [ ] Replace best-effort approval record/resolve before mutation with typed `approval_persistence_failed` results carrying a diagnostic reference.
-- [ ] Run focused approval/integration tests and commit: `fix(harness): make approvals durable and inspectable`.
+- [x] Add failing registration tests for approval-gated tools without handlers and approval rendering tests for complete email, Slack Block Kit, notification, wakeup, loop, and cancellation payloads.
+- [x] Add failing tests proving record/resolve approval persistence errors prevent execution.
+- [x] Implement registration validation and payload previews capped at 1,500 characters; render Block Kit as compact JSON/Markdown, not only a block count.
+- [x] Replace best-effort approval record/resolve before mutation with typed `approval_persistence_failed` results carrying a diagnostic reference.
+- [x] Run focused approval/integration tests and commit: `fix(harness): make approvals durable and inspectable`.
 
 ### Task 3: Approval-Bound Compare-and-Swap Writes
 

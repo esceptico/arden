@@ -1,3 +1,4 @@
+import json
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -271,8 +272,8 @@ async def approve_slack_post_message(execution: ToolExecution, args: SlackPostMe
 
 async def approve_slack_post_blocks(execution: ToolExecution, args: SlackPostBlocksInput) -> ApprovalInfo | None:
     location = f"{args.channel} thread {args.thread_ts}" if args.thread_ts else args.channel
-    preview = truncate(args.text, 1000)
-    preview += f"\n\n[Block Kit: {len(args.blocks)} block(s)]"
+    blocks = json.dumps(args.blocks, ensure_ascii=False, separators=(",", ":"))
+    preview = truncate(f"Fallback text:\n{args.text}\n\nBlocks:\n{blocks}", 1_500)
     return ApprovalInfo(description=f"Post Slack Block Kit message to {location}", preview=preview, diff=None)
 
 

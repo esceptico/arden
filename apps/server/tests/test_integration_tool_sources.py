@@ -7,9 +7,23 @@ from ntrp.context.models import SessionState
 from ntrp.integrations.calendar.client import MultiCalendarSource
 from ntrp.integrations.calendar.tools import CalendarInput, calendar
 from ntrp.integrations.gmail.client import MultiGmailSource
-from ntrp.integrations.gmail.tools import EmailsInput, ReadEmailInput, emails, read_email
+from ntrp.integrations.gmail.tools import (
+    EmailsInput,
+    ReadEmailInput,
+    SendEmailInput,
+    approve_send_email,
+    emails,
+    read_email,
+)
 from ntrp.integrations.slack.client import SlackClient, SlackThreadResult
-from ntrp.integrations.slack.tools import SlackSearchInput, SlackThreadInput, slack_search, slack_thread
+from ntrp.integrations.slack.tools import (
+    SlackPostBlocksInput,
+    SlackSearchInput,
+    SlackThreadInput,
+    approve_slack_post_blocks,
+    slack_search,
+    slack_thread,
+)
 from ntrp.search.types import RawItem
 from ntrp.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
 from ntrp.tools.core.registry import ToolRegistry
@@ -238,6 +252,44 @@ def test_multi_gmail_read_returns_the_matching_account_identity():
     assert result is not None
     assert result.content == "message body"
     assert result.account == "second@example.test"
+
+
+@pytest.mark.asyncio
+async def test_send_email_approval_includes_the_body():
+    info = await approve_send_email(
+        _execution("gmail", FakeGmailSource(), "send_email"),
+        SendEmailInput(
+            account="me@example.test",
+            to="you@example.test",
+            subject="Release status",
+            body="The release is ready for final review.",
+        ),
+    )
+
+    assert info is not None
+    assert info.description == "you@example.test"
+    assert "Subject: Release status" in (info.preview or "")
+    assert "Body:\nThe release is ready for final review." in (info.preview or "")
+
+
+@pytest.mark.asyncio
+async def test_slack_blocks_approval_includes_the_actual_blocks():
+    info = await approve_slack_post_blocks(
+        _execution("slack", FakeSlackSource([]), "slack_post_blocks"),
+        SlackPostBlocksInput(
+            channel="#releases",
+            text="Release status",
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": "*Release is green*"},
+                }
+            ],
+        ),
+    )
+
+    assert info is not None
+    assert '"text": "*Release is green*"' in (info.preview or "")
 
 
 @pytest.mark.asyncio

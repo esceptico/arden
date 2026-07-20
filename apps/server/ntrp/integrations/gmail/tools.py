@@ -65,7 +65,11 @@ class SendEmailInput(BaseModel):
 
 
 async def approve_send_email(execution: ToolExecution, args: SendEmailInput) -> ApprovalInfo | None:
-    return ApprovalInfo(description=args.to, preview=f"Subject: {args.subject}\nFrom: {args.account}", diff=None)
+    preview = truncate(
+        f"Subject: {args.subject}\nFrom: {args.account}\n\nBody:\n{args.body}",
+        1_500,
+    )
+    return ApprovalInfo(description=args.to, preview=preview, diff=None)
 
 
 async def send_email(execution: ToolExecution, args: SendEmailInput) -> ToolResult:

@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
+from uuid import uuid4
 
 from coolname import generate_slug
 
@@ -33,17 +34,39 @@ class ApprovalResponse(TypedDict):
 @dataclass
 class Rejection:
     feedback: str | None
+    code: str = "approval_rejected"
+    status: ToolOutcomeStatus = ToolOutcomeStatus.DENIED
+    preview: str = "Rejected"
+    recovery_action: str | None = "Revise the action or ask the user for different authorization."
+    diagnostic_ref: str | None = None
+
+    @classmethod
+    def persistence_failure(cls, feedback: str, diagnostic_ref: str) -> "Rejection":
+        return cls(
+            feedback=feedback,
+            code="approval_persistence_failed",
+            status=ToolOutcomeStatus.FAILED,
+            preview="Approval unavailable",
+            recovery_action="Retry after approval storage is available.",
+            diagnostic_ref=diagnostic_ref,
+        )
 
     def to_result(self) -> ToolResult:
-        content = (
-            f"User rejected this action and said: {self.feedback}" if self.feedback else "User rejected this action"
-        )
+        if self.code == "approval_rejected":
+            content = (
+                f"User rejected this action and said: {self.feedback}"
+                if self.feedback
+                else "User rejected this action"
+            )
+        else:
+            content = self.feedback or "Approval storage failed — action cancelled"
         return ToolResult.failure(
-            code="approval_rejected",
+            code=self.code,
             message=content,
-            preview="Rejected",
-            status=ToolOutcomeStatus.DENIED,
-            recovery_action="Revise the action or ask the user for different authorization.",
+            preview=self.preview,
+            status=self.status,
+            recovery_action=self.recovery_action,
+            diagnostic_ref=self.diagnostic_ref,
         )
 
 
@@ -182,6 +205,28 @@ async def _approval_callback_best_effort(
         raise
     except Exception:
         _logger.exception("Approval %s callback failed", label)
+
+
+async def _approval_callback_required(
+    callback: Callable[..., Awaitable[None]] | None,
+    label: str,
+    **kwargs: Any,
+) -> str | None:
+    if not callback:
+        return None
+    try:
+        await callback(**kwargs)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        diagnostic_ref = f"approval-{uuid4().hex[:12]}"
+        _logger.exception(
+            "Required approval %s callback failed (diagnostic_ref=%s)",
+            label,
+            diagnostic_ref,
+        )
+        return diagnostic_ref
+    return None
 
 
 RESULT_BASE = Path(NTRP_TMP_BASE)
@@ -685,12 +730,17 @@ class ToolExecution:
                 if suspension and suspension.get("status") != "pending":
                     resolution = suspension.get("resolution") or {}
                     if resolution.get("approved"):
-                        await _approval_callback_best_effort(
+                        persistence_error = await _approval_callback_required(
                             self.ctx.io.consume_suspension,
                             "consume",
                             run_id=self.ctx.run.run_id,
                             suspension_id=self.tool_id,
                         )
+                        if persistence_error:
+                            return Rejection.persistence_failure(
+                                "Approval could not be consumed — action cancelled",
+                                persistence_error,
+                            )
                         return None
                     feedback = str(resolution.get("result") or suspension.get("result_feedback") or "").strip() or None
                     return Rejection(feedback=feedback)
@@ -709,7 +759,7 @@ class ToolExecution:
         scope = tool.policy.scope.value if tool else "internal"
         expires_at = (datetime.now(UTC) + timedelta(seconds=self.ctx.io.approval_timeout_seconds)).isoformat()
 
-        await _approval_callback_best_effort(
+        persistence_error = await _approval_callback_required(
             self.ctx.io.record_approval,
             "record",
             run_id=self.ctx.run.run_id,
@@ -722,6 +772,11 @@ class ToolExecution:
             diff=diff,
             expires_at=expires_at,
         )
+        if persistence_error:
+            return Rejection.persistence_failure(
+                "Approval could not be recorded — action cancelled",
+                persistence_error,
+            )
 
         if not self.ctx.io.emit or self.ctx.io.pending_approvals is None:
             await _approval_callback_best_effort(
@@ -787,7 +842,7 @@ class ToolExecution:
             )
             return Rejection(feedback=feedback)
 
-        await _approval_callback_best_effort(
+        persistence_error = await _approval_callback_required(
             self.ctx.io.resolve_approval,
             "resolve",
             run_id=self.ctx.run.run_id,
@@ -795,12 +850,22 @@ class ToolExecution:
             status="approved",
             result_feedback=response.get("result", "").strip() or None,
         )
-        await _approval_callback_best_effort(
+        if persistence_error:
+            return Rejection.persistence_failure(
+                "Approval could not be persisted — action cancelled",
+                persistence_error,
+            )
+        persistence_error = await _approval_callback_required(
             self.ctx.io.consume_suspension,
             "consume",
             run_id=self.ctx.run.run_id,
             suspension_id=self.tool_id,
         )
+        if persistence_error:
+            return Rejection.persistence_failure(
+                "Approval could not be consumed — action cancelled",
+                persistence_error,
+            )
 
         return None
 

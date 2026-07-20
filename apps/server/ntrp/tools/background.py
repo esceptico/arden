@@ -4,7 +4,7 @@ from ntrp.constants import BACKGROUND_AGENT_TIMEOUT
 from ntrp.events.sse import BackgroundTaskEvent
 from ntrp.tools.core import EmptyInput, ToolResult, tool
 from ntrp.tools.core.context import ToolExecution
-from ntrp.tools.core.types import ToolAction, ToolPolicy, ToolScope
+from ntrp.tools.core.types import ApprovalInfo, ToolAction, ToolPolicy, ToolScope
 
 BACKGROUND_SYSTEM_PROMPT = (
     "You are a background agent. Complete the given task using available read-only tools, "
@@ -54,6 +54,16 @@ async def background(execution: ToolExecution, args: BackgroundInput) -> ToolRes
 
 class CancelBackgroundTaskInput(BaseModel):
     task_id: str = Field(description="The ID of the background task to cancel")
+
+
+async def approve_cancel_background_task(
+    _execution: ToolExecution, args: CancelBackgroundTaskInput
+) -> ApprovalInfo:
+    return ApprovalInfo(
+        description="Cancel a running background task",
+        preview=f"Background task: {args.task_id}",
+        diff=None,
+    )
 
 
 async def cancel_background_task(execution: ToolExecution, args: CancelBackgroundTaskInput) -> ToolResult:
@@ -161,6 +171,7 @@ cancel_background_task_tool = tool(
     description="Cancel a running background task by its ID.",
     input_model=CancelBackgroundTaskInput,
     policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, requires_approval=True),
+    approval=approve_cancel_background_task,
     execute=cancel_background_task,
 )
 
