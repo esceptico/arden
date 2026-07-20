@@ -49,6 +49,15 @@ _BY_NAME: dict[str, tuple[str, str | None]] = {
     "create_calendar_event": ("calendar", None),
     "edit_calendar_event": ("calendar", None),
     "delete_calendar_event": ("calendar", None),
+    # Google Drive
+    "search_google_drive": ("search", "file"),
+    "read_google_doc": ("file", "document"),
+    "read_google_sheet": ("table", "spreadsheet"),
+    "create_google_doc": ("file-plus", None),
+    "edit_google_doc": ("edit", None),
+    "create_google_sheet": ("table", None),
+    "update_google_sheet": ("table", None),
+    "append_google_sheet_rows": ("table", None),
     # Memory
     "memory_search": ("brain", "record"),
     "recall": ("brain", None),
@@ -69,6 +78,7 @@ _BY_SOURCE: dict[str, str] = {
     "gmail": "mail",
     "slack": "slack",
     "calendar": "calendar",
+    "google_drive": "folder",
     "web": "globe",
     "_memory": "brain",
     "_sessions": "history",

@@ -10,7 +10,7 @@ from ntrp.tools.core.registry import ToolRegistry, tool_changes_state
 from ntrp.tools.core.types import ToolAction, ToolPolicy, ToolScope
 
 DEFERRED_SOURCES = frozenset(
-    {"gmail", "calendar", "slack", "_automation", "_background", "_notifications", "_directives", "mcp"}
+    {"gmail", "calendar", "google_drive", "slack", "_automation", "_background", "_notifications", "_directives", "mcp"}
 )
 
 DEFERRED_TOOL_GROUP_BY_NAME = {
@@ -26,6 +26,11 @@ GROUP_ALIASES: dict[str, str] = {
     "calendar": "calendar",
     "cal": "calendar",
     "schedule": "calendar",
+    "google_drive": "google_drive",
+    "drive": "google_drive",
+    "docs": "google_drive",
+    "sheets": "google_drive",
+    "spreadsheets": "google_drive",
     "slack": "slack",
     "automations": "_automation",
     "automation": "_automation",
@@ -52,6 +57,7 @@ GROUP_ALIASES: dict[str, str] = {
 GROUP_DESCRIPTIONS: dict[str, str] = {
     "gmail": "Search/list/read/send Gmail messages. Use for inbox, emails, Gmail, sending/replying, or communication history.",
     "calendar": "Search/create/edit/delete calendar events. Use for meetings, schedule, availability, appointments, reminders, or rescheduling.",
+    "google_drive": "Search/read/create/edit Google Docs and Sheets. Use for Drive documents, spreadsheets, tables, ranges, and rows.",
     "slack": "Search Slack and read channels, DMs, threads, image files, and user profiles. Use for Slack messages, workspace history, coworkers, channels, DMs, threads, screenshots, images, or file IDs.",
     "_automation": "Create/list/update/delete/run autonomous scheduled or event-triggered tasks. Use for reminders, recurring checks, notifications, scheduled agents, or automation management.",
     "_background": "Inspect, cancel, or read background agents. Use only when the user asks about an existing background task; spawning a background agent uses the always-available background() tool.",
@@ -64,6 +70,7 @@ GROUP_DESCRIPTIONS: dict[str, str] = {
 DEFERRED_GROUP_ORDER = (
     "gmail",
     "calendar",
+    "google_drive",
     "slack",
     "_automation",
     "_background",
@@ -74,6 +81,7 @@ DEFERRED_GROUP_ORDER = (
 
 DEFERRED_GROUP_LABELS = {
     "gmail": "email",
+    "google_drive": "google_drive",
     "_automation": "automations",
     "_background": "background",
     "_notifications": "notifications",
