@@ -244,7 +244,7 @@ class MultiGoogleDriveClient:
         self.clients = {client.account_id: client for client in clients}
 
     def list_accounts(self) -> list[str]:
-        return list(self.clients)
+        return [client.email or client.account_id for client in self.clients.values()]
 
     def verify_connection(self) -> None:
         for client in self.clients.values():
@@ -262,18 +262,26 @@ class MultiGoogleDriveClient:
         results = [item for client in clients for item in client.search(query, kind=kind, limit=limit)]
         return results[:limit]
 
-    def _account(self, account_id: str) -> GoogleDriveClient:
-        try:
-            return self.clients[account_id]
-        except KeyError as exc:
-            raise ValueError(f"Unknown Google account: {account_id}") from exc
+    def _account(self, account_ref: str) -> GoogleDriveClient:
+        if account_ref in self.clients:
+            return self.clients[account_ref]
+        normalized = account_ref.casefold()
+        matches = [
+            client
+            for client in self.clients.values()
+            if client.email and client.email.casefold() == normalized
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        available = ", ".join(self.list_accounts())
+        raise ValueError(f"Unknown Google account: {account_ref}. Available: {available}")
 
     def select_account(self, account_id: str | None = None) -> GoogleDriveClient:
         if account_id:
             return self._account(account_id)
         if len(self.clients) == 1:
             return next(iter(self.clients.values()))
-        raise ValueError("Specify a Google account")
+        raise ValueError(f"Specify a Google account by email: {', '.join(self.list_accounts())}")
 
     def resolve_ref(self, ref: str) -> tuple[GoogleDriveClient, str]:
         if ":" in ref:

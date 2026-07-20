@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from ntrp.integrations.google_drive.client import GoogleDriveClient
+from ntrp.integrations.google_drive.client import GoogleDriveClient, MultiGoogleDriveClient
 from ntrp.integrations.google_drive.render import flatten_google_doc
 
 
@@ -170,3 +170,35 @@ def test_sheet_update_writes_only_requested_range():
     values = services[("sheets", "v4")].resource.values_resource
     assert values.updated_range == "Data!A2:B2"
     assert values.body == {"values": [["a", 2]]}
+
+
+def test_multi_account_client_resolves_account_by_email():
+    first, _ = _client()
+    second = GoogleDriveClient(
+        token_path=Path("other.json"),
+        account_id="acct-2",
+        email="other@example.com",
+        credentials=object(),
+    )
+    client = MultiGoogleDriveClient([first, second])
+
+    assert client.select_account("user@example.com") is first
+    assert client.select_account("OTHER@example.com") is second
+
+
+def test_multi_account_error_names_available_account_emails():
+    first, _ = _client()
+    second = GoogleDriveClient(
+        token_path=Path("other.json"),
+        account_id="acct-2",
+        email="other@example.com",
+        credentials=object(),
+    )
+    client = MultiGoogleDriveClient([first, second])
+
+    try:
+        client.select_account()
+    except ValueError as exc:
+        assert str(exc) == "Specify a Google account by email: user@example.com, other@example.com"
+    else:
+        raise AssertionError("expected account selection error")

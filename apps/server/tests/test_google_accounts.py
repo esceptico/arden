@@ -88,3 +88,28 @@ def test_legacy_migration_is_idempotent_and_classifies_scopes(tmp_path):
     assert account.services == frozenset({"gmail", "calendar"})
     assert legacy.exists()
     assert len(list((tmp_path / "google_tokens").glob("*.json"))) == 1
+
+
+def test_legacy_migration_never_overwrites_newer_canonical_authorization(tmp_path):
+    legacy_scopes = ["https://www.googleapis.com/auth/gmail.readonly"]
+    expanded_scopes = [*legacy_scopes, "https://www.googleapis.com/auth/spreadsheets"]
+    legacy = tmp_path / "gmail_token_user@example.com.json"
+    legacy.write_text(_credential(legacy_scopes))
+    store = GoogleAccountStore(tmp_path)
+    store.migrate_legacy()
+    [account] = store.list_accounts()
+    expanded_token = _credential(expanded_scopes)
+    store.upsert_authorization(
+        account_id=account.id,
+        email=account.email,
+        credential_json=expanded_token,
+        scopes=tuple(expanded_scopes),
+        service="google_drive",
+    )
+
+    store.migrate_legacy()
+
+    [updated] = store.list_accounts()
+    assert updated.scopes == tuple(expanded_scopes)
+    assert updated.services == frozenset({"gmail", "google_drive"})
+    assert store.token_path(updated).read_text() == expanded_token

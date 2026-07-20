@@ -241,6 +241,19 @@ def has_scope(creds: Credentials, scope: str) -> bool:
     return scope in creds.scopes
 
 
+def _run_local_oauth(flow) -> Credentials:
+    try:
+        return flow.run_local_server(port=0, include_granted_scopes="true")
+    except Warning as warning:
+        old_scopes = getattr(warning, "old_scope", None)
+        new_scopes = getattr(warning, "new_scope", None)
+        token = getattr(warning, "token", None)
+        if old_scopes is None or new_scopes is None or token is None or not set(old_scopes).issubset(new_scopes):
+            raise
+        flow.oauth2session.token = dict(token)
+        return flow.credentials
+
+
 def authorize_google_service(
     service: GoogleService,
     *,
@@ -261,7 +274,7 @@ def authorize_google_service(
         requested = list(dict.fromkeys((*account.scopes, *requested)))
 
     flow = InstalledAppFlow.from_client_secrets_file(str(CREDENTIALS_PATH), requested)
-    creds = flow.run_local_server(port=0, include_granted_scopes="true")
+    creds = _run_local_oauth(flow)
     granted = tuple(creds.scopes or requested)
     missing = tuple(scope for scope in GOOGLE_SERVICE_SCOPES[service] if scope not in granted)
     if missing:

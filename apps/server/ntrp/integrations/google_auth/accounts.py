@@ -177,6 +177,8 @@ class GoogleAccountStore:
     def migrate_legacy(self) -> None:
         paths = sorted((*self.root.glob("gmail_token*.json"), *self.root.glob("calendar_token*.json")))
         for path in paths:
+            if any(path.name in record.get("legacy_sources", []) for record in self._read_records()):
+                continue
             try:
                 credential_json = path.read_text()
                 data = json.loads(credential_json)
