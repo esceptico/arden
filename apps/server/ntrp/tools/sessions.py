@@ -18,6 +18,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from ntrp.agent.types.tools import ToolSourceRef, normalize_source_refs
 from ntrp.tools.core import ToolResult, tool
 from ntrp.tools.core.collections import format_timestamp
 from ntrp.tools.core.context import ToolExecution
@@ -210,6 +211,16 @@ def _format_when(raw) -> str:
     return format_timestamp(dt)
 
 
+def _session_ref(session_id: str, title: str) -> ToolSourceRef:
+    return ToolSourceRef(provider="ntrp", kind="session", ref=session_id, title=title or session_id)
+
+
+def _message_ref(session_id: str, seq: object, title: str) -> ToolSourceRef | None:
+    if not isinstance(seq, int):
+        return None
+    return ToolSourceRef(provider="ntrp", kind="message", ref=f"{session_id}:{seq}", title=title)
+
+
 # --- Executors ---
 
 
@@ -254,6 +265,10 @@ async def list_recent_sessions(execution: ToolExecution, args: ListRecentSession
         content="\n".join(lines),
         preview=f"{len(sessions)} sessions" + (" (capped)" if has_more else ""),
         data={"items": sessions, "count": len(sessions), "has_more": has_more},
+        source_refs=normalize_source_refs(
+            _session_ref(str(session.get("session_id", "")), str(session.get("name") or session.get("session_id", "")))
+            for session in sessions
+        ),
     )
 
 
@@ -276,7 +291,11 @@ async def create_session(execution: ToolExecution, args: CreateSessionInput) -> 
     ]
     if origin:
         lines.append(f"Origin automation: {origin}")
-    return ToolResult(content="\n".join(lines), preview=f"Created ({state.session_id})")
+    return ToolResult(
+        content="\n".join(lines),
+        preview=f"Created ({state.session_id})",
+        source_refs=(_session_ref(state.session_id, state.name or state.session_id),),
+    )
 
 
 async def read_session(execution: ToolExecution, args: ReadSessionInput) -> ToolResult:
@@ -322,6 +341,7 @@ async def read_session(execution: ToolExecution, args: ReadSessionInput) -> Tool
     kept = 0
     first_seq: int | None = None
     last_seq: int | None = None
+    source_refs: list[ToolSourceRef] = [_session_ref(args.session_id, f"Session {args.session_id}")]
     for row in raw_messages:
         # Each row is {seq, role, created_at, message: {...}}. The body lives
         # in the nested message; role is mirrored at the top level.
@@ -338,6 +358,8 @@ async def read_session(execution: ToolExecution, args: ReadSessionInput) -> Tool
         if seq is not None:
             first_seq = seq if first_seq is None else first_seq
             last_seq = seq
+        if ref := _message_ref(args.session_id, seq, f"Session {args.session_id} message {seq}"):
+            source_refs.append(ref)
         kept += 1
 
     if not kept:
@@ -359,6 +381,7 @@ async def read_session(execution: ToolExecution, args: ReadSessionInput) -> Tool
     return ToolResult(
         content=body_text,
         preview=f"{kept} of {len(raw_messages)} messages",
+        source_refs=normalize_source_refs(source_refs),
     )
 
 
@@ -407,6 +430,17 @@ async def search_transcripts(execution: ToolExecution, args: SearchTranscriptsIn
     return ToolResult(
         content="\n".join(lines) + footer,
         preview=f"{len(hits)} hit{'s' if len(hits) != 1 else ''}",
+        source_refs=normalize_source_refs(
+            ref
+            for hit in hits
+            if (
+                ref := _message_ref(
+                    str(hit.get("session_id", "")),
+                    hit.get("seq"),
+                    f"{hit.get('session_name') or hit.get('session_id', '')} message {hit.get('seq')}",
+                )
+            )
+        ),
     )
 
 

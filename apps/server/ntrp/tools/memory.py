@@ -28,7 +28,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from ntrp.agent.types.tools import ToolEffect, ToolOutcome, ToolOutcomeStatus
+from ntrp.agent.types.tools import ToolEffect, ToolOutcome, ToolOutcomeStatus, ToolSourceRef, normalize_source_refs
 from ntrp.config import get_config
 from ntrp.logging import get_logger
 from ntrp.memory.artifacts import ARTIFACT_DIR_KINDS, ROOT_ARTIFACTS, ArtifactMemoryStore
@@ -146,6 +146,23 @@ def _render_records(records: list) -> str:
         else:
             lines.append(f"- [{r.kind}] {r.text}")
     return "\n".join(lines)
+
+
+def _artifact_source_ref(path: str, title: str | None = None) -> ToolSourceRef:
+    return ToolSourceRef(provider="memory", kind="artifact", ref=path, title=title or path)
+
+
+def _record_source_refs(records: list) -> tuple[ToolSourceRef, ...]:
+    return normalize_source_refs(
+        ToolSourceRef(
+            provider="memory",
+            kind="record",
+            ref=str(record.id),
+            title=str(record.text)[:256],
+        )
+        for record in records
+        if getattr(record, "id", None)
+    )
 
 
 def _record_version(record: Any) -> str:
@@ -418,8 +435,22 @@ def _memory_tree_sync(args: MemoryTreeInput) -> ToolResult:
             meta += " editable"
         suffix = f" — {snippet[:160]}" if args.include_content and snippet else ""
         lines.append(f"{indent}{parts[-1]}{meta}{suffix}")
-        rows.append({"path": artifact.path, "title": artifact.title, "kind": artifact.kind, "directory": getattr(artifact, "directory", parts[0] if len(parts)>1 else "memory")})
-    return ToolResult(content="\n".join(lines), preview=f"{len(rows)} artifact(s)", data={"root": str(store.root), "path": rel, "artifacts": rows})
+        rows.append(
+            {
+                "path": artifact.path,
+                "title": artifact.title,
+                "kind": artifact.kind,
+                "directory": getattr(artifact, "directory", parts[0] if len(parts) > 1 else "memory"),
+            }
+        )
+    return ToolResult(
+        content="\n".join(lines),
+        preview=f"{len(rows)} artifact(s)",
+        data={"root": str(store.root), "path": rel, "artifacts": rows},
+        source_refs=normalize_source_refs(
+            _artifact_source_ref(str(row["path"]), str(row.get("title") or row["path"])) for row in rows
+        ),
+    )
 
 
 async def memory_tree(execution: ToolExecution, args: MemoryTreeInput) -> ToolResult:
@@ -453,6 +484,7 @@ def _memory_read_sync(args: MemoryReadInput) -> ToolResult:
             "sha256": artifact.revision,
             "size": len(raw_content.encode("utf-8")),
         },
+        source_refs=(_artifact_source_ref(artifact.path, artifact.title),),
     )
 
 
@@ -494,7 +526,12 @@ def _memory_search_sync(args: MemorySearchInput) -> ToolResult:
             break
     if not matches:
         return ToolResult(content="0 matches", preview="0 matches", data={"query": args.query, "matches": []})
-    return ToolResult(content="\n".join(f"{m['path']}:{m['line']}: {m['snippet']}" for m in matches), preview=f"{len(matches)} match(es)", data={"query": args.query, "path": rel, "matches": matches})
+    return ToolResult(
+        content="\n".join(f"{m['path']}:{m['line']}: {m['snippet']}" for m in matches),
+        preview=f"{len(matches)} match(es)",
+        data={"query": args.query, "path": rel, "matches": matches},
+        source_refs=normalize_source_refs(_artifact_source_ref(str(match["path"])) for match in matches),
+    )
 
 
 async def memory_search(execution: ToolExecution, args: MemorySearchInput) -> ToolResult:
@@ -823,6 +860,7 @@ async def search_memory_candidates(
         content="\n".join(lines),
         preview=f"{len(candidates)} candidate(s)",
         data={"candidates": candidates},
+        source_refs=_record_source_refs(hits),
     )
 
 
@@ -935,7 +973,7 @@ async def recall(execution: ToolExecution, args: RecallInput) -> ToolResult:
     nudge = _entity_brief_nudge(args.query)
     if nudge:
         content += "\n\n" + nudge
-    return ToolResult(content=content, preview=f"{len(hits)} match(es)")
+    return ToolResult(content=content, preview=f"{len(hits)} match(es)", source_refs=_record_source_refs(hits))
 
 
 def _entity_brief_nudge(query: str) -> str | None:

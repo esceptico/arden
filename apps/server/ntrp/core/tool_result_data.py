@@ -12,6 +12,9 @@ def persistable_tool_result_data(
         child_agent = data.get("child_agent")
         if isinstance(child_agent, dict):
             persisted["child_agent"] = child_agent
+        provenance = data.get("provenance")
+        if isinstance(provenance, dict):
+            persisted["provenance"] = provenance
 
     raw_refs = data.get("source_refs") if source_refs is None and isinstance(data, dict) else source_refs
     refs = normalize_source_refs(raw_refs)

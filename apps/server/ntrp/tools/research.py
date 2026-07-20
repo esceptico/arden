@@ -1,3 +1,4 @@
+import json
 from typing import Literal
 
 from coolname import generate_slug
@@ -15,6 +16,7 @@ from ntrp.agent.ledger import (
     VerificationRecord,
     WorkspaceQuestion,
 )
+from ntrp.agent.types.tools import ToolSourceRef, normalize_source_refs
 from ntrp.core.agent_types import SPAWN_SURFACE_GUIDANCE, AgentType, apply_profile, register_agent_type
 from ntrp.core.isolation import IsolationLevel
 from ntrp.core.prompts import RESEARCH_PROMPTS, current_date_formatted, env
@@ -274,20 +276,66 @@ async def research(execution: ToolExecution, args: ResearchInput) -> ToolResult:
     if spawn.usage is not None:
         data["usage"] = spawn.usage
         data["cost"] = spawn.cost
-    if artifacts := await _list_scope_artifacts(ctx, research_scope_id):
-        data["artifacts"] = artifacts
+    workspace = None
     if ctx.ledger:
         workspace = ctx.ledger.workspace_summary(scope=research_scope_id, max_items=12)
         if workspace:
             data["research_workspace"] = workspace
-    return ToolResult(content=spawn.text, preview=f"Researched ({args.depth})", data=data or None)
+    provenance = {
+        "query": args.task[:4_096],
+        "window": {
+            "depth": args.depth,
+            "current_depth": ctx.run.current_depth,
+            "max_depth": ctx.run.max_depth,
+        },
+        "derivation": {
+            "research_tool_call_id": execution.tool_id,
+            "child_run_id": spawn.child_run_id,
+            "child_tool_call_ids": list(spawn.tool_call_ids),
+        },
+    }
+    store = _research_store(ctx)
+    if store is not None:
+        workspace_path = "_provenance.json"
+        await store.put_research_artifact(
+            scope_id=research_scope_id,
+            path=workspace_path,
+            content=json.dumps({**provenance, "workspace": workspace}, ensure_ascii=False, sort_keys=True),
+        )
+        provenance["workspace_ref"] = f"{research_scope_id}:{workspace_path}"
+    data["provenance"] = provenance
+
+    artifacts = await _list_scope_artifacts(ctx, research_scope_id)
+    if artifacts:
+        data["artifacts"] = artifacts
+    artifact_refs = (
+        ToolSourceRef(
+            provider="research",
+            kind="artifact",
+            ref=f"{research_scope_id}:{artifact['path']}",
+            title=f"Research artifact {artifact['path']}",
+        )
+        for artifact in artifacts
+    )
+    source_refs = normalize_source_refs((*spawn.source_refs, *artifact_refs))
+    return ToolResult(
+        content=spawn.text,
+        preview=f"Researched ({args.depth})",
+        data=data or None,
+        source_refs=source_refs,
+    )
+
+
+def _research_store(ctx: ToolContext):
+    store = ctx.services.get("store")
+    if store is not None:
+        return store
+    svc = ctx.services.get("session")
+    return getattr(svc, "store", None) if svc else None
 
 
 async def _list_scope_artifacts(ctx: ToolContext, scope_id: str) -> list[dict]:
-    store = ctx.services.get("store")
-    if store is None:
-        svc = ctx.services.get("session")
-        store = getattr(svc, "store", None) if svc else None
+    store = _research_store(ctx)
     rows = await list_scope_artifacts(scope_id, store=store)
     return [
         {
@@ -360,7 +408,9 @@ async def research_track_source(execution: ToolExecution, args: ResearchSourceIn
     if not source.id or not source.title or not source.locator:
         return ToolResult(content="source id, title, and locator are required", preview="Invalid source", is_error=True)
     ledger.add_workspace_source(source, scope=_research_scope(execution))
-    return ToolResult(content=f"Tracked source {source.id}: {source.title} ({source.status})", preview=f"Source {source.status}")
+    return ToolResult(
+        content=f"Tracked source {source.id}: {source.title} ({source.status})", preview=f"Source {source.status}"
+    )
 
 
 async def research_curate(execution: ToolExecution, args: ResearchCurateInput) -> ToolResult:
@@ -397,7 +447,9 @@ async def research_verify_claim(execution: ToolExecution, args: ResearchVerifyCl
     if not verification.claim:
         return ToolResult(content="claim is required", preview="Invalid verification", is_error=True)
     ledger.add_workspace_verification(verification, scope=_research_scope(execution))
-    return ToolResult(content=f"Verified claim as {verification.verdict}: {verification.claim}", preview=f"{verification.verdict}")
+    return ToolResult(
+        content=f"Verified claim as {verification.verdict}: {verification.claim}", preview=f"{verification.verdict}"
+    )
 
 
 async def research_question(execution: ToolExecution, args: ResearchQuestionInput) -> ToolResult:
@@ -412,7 +464,9 @@ async def research_question(execution: ToolExecution, args: ResearchQuestionInpu
     if not question.question:
         return ToolResult(content="question is required", preview="Invalid question", is_error=True)
     ledger.add_workspace_question(question, scope=_research_scope(execution))
-    return ToolResult(content=f"Tracked {question.status} question: {question.question}", preview=f"Question {question.status}")
+    return ToolResult(
+        content=f"Tracked {question.status} question: {question.question}", preview=f"Question {question.status}"
+    )
 
 
 async def research_track_search(execution: ToolExecution, args: ResearchSearchInput) -> ToolResult:
@@ -509,7 +563,9 @@ RESEARCH_AGENT_TOOLS = {
 RESEARCH_AGENT_TYPE = AgentType(
     name="research",
     actions=frozenset({ToolAction.READ}),
-    exclude=frozenset({"background", "cancel_background_task", "list_background_tasks", "get_background_result", "workflow"}),
+    exclude=frozenset(
+        {"background", "cancel_background_task", "list_background_tasks", "get_background_result", "workflow"}
+    ),
     extra_tools=RESEARCH_AGENT_TOOLS,
 )
 register_agent_type(RESEARCH_AGENT_TYPE)

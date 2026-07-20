@@ -1338,14 +1338,8 @@ async def test_background_agent_event_schema_adds_delivery_columns_before_index(
     store = SessionStore(conn)
     try:
         await store.init_schema()
-        columns = {
-            row["name"]
-            for row in await conn.execute_fetchall("PRAGMA table_info(background_agent_events)")
-        }
-        indexes = {
-            row["name"]
-            for row in await conn.execute_fetchall("PRAGMA index_list(background_agent_events)")
-        }
+        columns = {row["name"] for row in await conn.execute_fetchall("PRAGMA table_info(background_agent_events)")}
+        indexes = {row["name"] for row in await conn.execute_fetchall("PRAGMA index_list(background_agent_events)")}
 
         assert {"event_id", "delivered_at"}.issubset(columns)
         assert "idx_background_agent_events_event_id" in indexes
@@ -1533,6 +1527,38 @@ async def test_tool_result_live_data_stays_rich_while_durable_data_is_allowliste
         "mode": "display",
     }
     assert "must-not-persist" not in rows[0]["event_json"]
+
+
+@pytest.mark.asyncio
+async def test_research_provenance_round_trips_in_durable_tool_result_data(store: SessionStore):
+    provenance = {
+        "query": "audit harness",
+        "window": {"depth": "deep", "current_depth": 0, "max_depth": 3},
+        "derivation": {
+            "research_tool_call_id": "research-1",
+            "child_run_id": "child-1",
+            "child_tool_call_ids": ["child-call-1"],
+        },
+        "workspace_ref": "research-1:_provenance.json",
+    }
+    await store.record_session_event(
+        StreamRecord(
+            seq=17,
+            session_id="sess-provenance",
+            event=ToolCallResultEvent(
+                tool_call_id="research-1",
+                name="research",
+                content="summary",
+                data={"provenance": provenance, "arbitrary": {"drop": True}},
+            ),
+        )
+    )
+
+    rows = await store.read_conn.execute_fetchall(
+        "SELECT event_json FROM session_events WHERE session_id = 'sess-provenance'"
+    )
+    payload = json.loads(rows[0]["event_json"])
+    assert payload["data"] == {"provenance": provenance}
 
 
 @pytest.mark.asyncio

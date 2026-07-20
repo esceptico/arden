@@ -162,9 +162,15 @@ def test_source_refs_deduplicate_normalized_provider_and_ref_then_cap_at_50():
     assert normalized[-1].ref == "C1:49"
 
 
-def test_persistable_tool_result_data_keeps_only_child_agent_and_normalized_source_refs():
+def test_persistable_tool_result_data_keeps_only_provenance_and_normalized_source_refs():
     data = {
         "child_agent": {"child_run_id": "child-1", "wait": False},
+        "provenance": {
+            "query": "audit",
+            "window": {"depth": "deep"},
+            "derivation": {"child_run_id": "child-1"},
+            "workspace_ref": "research-1:_provenance.json",
+        },
         "source_refs": [
             _source().to_dict(),
             {**_source(title="Duplicate").to_dict(), "url": "javascript:alert(1)"},
@@ -175,11 +181,10 @@ def test_persistable_tool_result_data_keeps_only_child_agent_and_normalized_sour
 
     assert persistable_tool_result_data(data) == {
         "child_agent": {"child_run_id": "child-1", "wait": False},
+        "provenance": data["provenance"],
         "source_refs": [_source().to_dict()],
     }
-    assert persistable_tool_result_data(None, (_source(url=None),)) == {
-        "source_refs": [_source(url=None).to_dict()]
-    }
+    assert persistable_tool_result_data(None, (_source(url=None),)) == {"source_refs": [_source(url=None).to_dict()]}
 
 
 class _SourceExecutor:
@@ -273,6 +278,9 @@ async def test_session_history_restores_persisted_source_refs_unchanged():
 
         async def get_latest_chat_run_for_session(self, _session_id: str):
             return None
+
+        async def list_tool_call_outcomes(self, **_kwargs):
+            return {}
 
     class _SessionService:
         store = _Store()

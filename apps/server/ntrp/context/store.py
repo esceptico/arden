@@ -45,6 +45,7 @@ _DURABLE_TOOL_RESULT_DATA_KEYS = (
     "html",
     "title",
     "mode",
+    "provenance",
 )
 
 SCHEMA = """

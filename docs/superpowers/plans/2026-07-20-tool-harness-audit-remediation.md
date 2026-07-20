@@ -359,10 +359,10 @@ def atomic_compare_and_swap(path: Path, content: str, expected_sha256: str) -> F
 - `SpawnResult` carries normalized child source refs and child tool-call IDs.
 - Derived results persist query/window/derivation and a durable workspace/raw ref.
 
-- [ ] Add failing parent-child provenance and persistence round-trip tests.
-- [ ] Propagate normalized refs across the child boundary; persist research workspace/artifacts by durable ref.
-- [ ] Add source refs where stable provider/session refs already exist; never synthesize unverifiable provenance.
-- [ ] Run tests and commit: `feat(harness): preserve provenance across tool chains`.
+- [x] Add failing parent-child provenance and persistence round-trip tests.
+- [x] Propagate normalized refs across the child boundary; persist research workspace/artifacts by durable ref.
+- [x] Add source refs where stable provider/session refs already exist; never synthesize unverifiable provenance.
+- [x] Run tests and commit: `feat(harness): preserve provenance across tool chains`.
 
 ### Task 13: Complete Common Workflows and Documentation
 

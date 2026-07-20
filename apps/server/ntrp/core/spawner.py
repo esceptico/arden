@@ -20,6 +20,7 @@ from ntrp.agent import (
     ToolCompleted,
     ToolStarted,
 )
+from ntrp.agent.types.tools import ToolSourceRef, normalize_source_refs
 from ntrp.constants import AGENT_MAX_CONCURRENT, SUBAGENT_DEFAULT_TIMEOUT
 from ntrp.context.models import SessionState
 from ntrp.context.prompts import RESEARCH_AGENT_COMPACTION_CONTEXT
@@ -83,6 +84,14 @@ class SpawnResult:
     agent_type: str = "sub_agent"
     wait: bool = True
     status: str = "completed"
+    source_refs: tuple[ToolSourceRef, ...] = ()
+    tool_call_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "source_refs", normalize_source_refs(self.source_refs))
+        object.__setattr__(
+            self, "tool_call_ids", tuple(dict.fromkeys(call_id for call_id in self.tool_call_ids if call_id))
+        )
 
     def child_agent_data(self) -> dict:
         if not self.child_run_id:
@@ -96,9 +105,12 @@ class SpawnResult:
         }
         if self.child_session_id:
             child_agent["child_session_id"] = self.child_session_id
-        return {
-            "child_agent": child_agent,
-        }
+        if self.tool_call_ids:
+            child_agent["tool_call_ids"] = list(self.tool_call_ids)
+        data = {"child_agent": child_agent}
+        if self.source_refs:
+            data["source_refs"] = [ref.to_dict() for ref in self.source_refs]
+        return data
 
 
 _logger = get_logger(__name__)
@@ -344,15 +356,9 @@ def create_spawn_fn(
         child_executor_source = executor
         child_registry = executor.registry
         if extra_tools:
-            shadowed = {
-                name
-                for name in extra_tools
-                if executor.registry.get_source(name) == "user"
-            }
+            shadowed = {name for name in extra_tools if executor.registry.get_source(name) == "user"}
             if shadowed:
-                raise ValueError(
-                    "user tools cannot shadow child-only tools: " + ", ".join(sorted(shadowed))
-                )
+                raise ValueError("user tools cannot shadow child-only tools: " + ", ".join(sorted(shadowed)))
             # Inject only tools not already registered. A specialized agent type
             # (research) carries its full toolset and re-passes it on every spawn,
             # but a NESTED spawn already inherited those tools — and copy_with raises
@@ -385,9 +391,7 @@ def create_spawn_fn(
         parent_allowed = calling_ctx.run.allowed_tool_names
         if parent_allowed is not None:
             filtered_tools = [
-                schema
-                for schema in filtered_tools
-                if schema.get("function", {}).get("name") in parent_allowed
+                schema for schema in filtered_tools if schema.get("function", {}).get("name") in parent_allowed
             ]
         if exclude_tools:
             filtered_tools = [t for t in filtered_tools if t.get("function", {}).get("name") not in exclude_tools]
@@ -674,6 +678,8 @@ def create_spawn_fn(
 
         stream_failed = False
         tool_call_count = 0
+        child_tool_call_ids: list[str] = []
+        child_source_refs: list[ToolSourceRef] = []
 
         async def _stream_to(to_events) -> str:
             nonlocal stream_failed, tool_call_count
@@ -683,8 +689,13 @@ def create_spawn_fn(
                     if isinstance(event, Result):
                         text = event.text
                         continue
+                    if isinstance(event, ToolStarted) and event.tool_id not in child_tool_call_ids:
+                        child_tool_call_ids.append(event.tool_id)
                     if isinstance(event, ToolCompleted):
                         tool_call_count += 1
+                        if event.tool_id not in child_tool_call_ids:
+                            child_tool_call_ids.append(event.tool_id)
+                        child_source_refs.extend(event.source_refs)
                     if child_io is not None:
                         for sse in agent_events_to_sse(event):
                             await child_io.emit(_rebase_for_child(sse))
@@ -725,6 +736,8 @@ def create_spawn_fn(
                 agent_type=resolved_agent_type,
                 wait=should_wait,
                 status=status,
+                source_refs=normalize_source_refs(child_source_refs),
+                tool_call_ids=tuple(child_tool_call_ids),
             )
 
         if not background:

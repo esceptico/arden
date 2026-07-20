@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -8,7 +9,8 @@ from pydantic import BaseModel, ValidationError
 import ntrp.database as database
 import ntrp.tools.research as research_module
 import ntrp.tools.research_artifacts as research_artifacts_module
-from ntrp.agent import Result, SharedLedger, StopReason, Usage
+from ntrp.agent import Result, SharedLedger, StopReason, ToolCompleted, ToolStarted, Usage
+from ntrp.agent.types.tools import ToolSourceRef
 from ntrp.context.models import SessionState
 from ntrp.context.store import SessionStore
 from ntrp.core.agent_types import apply_profile
@@ -74,7 +76,12 @@ async def test_research_offers_scratchpad_and_returns_artifact_manifest(session_
             research_module.CuratedEvidence(claim="important finding", source="inv.md", importance="high"),
             scope=scope,
         )
-        return SpawnResult(text="done")
+        return SpawnResult(
+            text="done",
+            child_run_id="child-1",
+            source_refs=(ToolSourceRef("slack", "message", "C1:1", "Evidence"),),
+            tool_call_ids=("child-call-1",),
+        )
 
     ctx = _context(SharedLedger(), registry=registry, spawn_fn=spawn_fn)
     ctx.services["store"] = session_store
@@ -94,6 +101,17 @@ async def test_research_offers_scratchpad_and_returns_artifact_manifest(session_
     assert result.data["artifacts"][0]["scope_id"] == "research-fun-panda"
     assert "research-fun-panda" in result.data["artifact_dir"]
     assert result.data["research_workspace"]["evidence"][0]["claim"] == "important finding"
+    assert result.data["provenance"]["query"] == "x"
+    assert result.data["provenance"]["derivation"]["child_tool_call_ids"] == ["child-call-1"]
+    assert result.data["provenance"]["workspace_ref"] == "research-fun-panda:_provenance.json"
+    assert {ref.ref for ref in result.source_refs} == {
+        "C1:1",
+        "research-fun-panda:_provenance.json",
+        "research-fun-panda:inv.md",
+    }
+    persisted = await session_store.get_research_artifact(scope_id="research-fun-panda", path="_provenance.json")
+    assert persisted is not None
+    assert json.loads(persisted)["workspace"]["evidence"][0]["claim"] == "important finding"
 
 
 def _context(
@@ -173,9 +191,7 @@ async def test_research_spawns_child_with_research_ledger_helpers(monkeypatch):
     }
     assert (
         set(captured["extra_tools"])
-        == {"research_outline", "research_cover"}
-        | SCRATCHPAD_TOOL_NAMES
-        | HARNESS_TOOL_NAMES
+        == {"research_outline", "research_cover"} | SCRATCHPAD_TOOL_NAMES | HARNESS_TOOL_NAMES
     )
     assert captured["research_scope_id"] == "research-fun-panda"
     assert result.data["research_scope_id"] == "research-fun-panda"
@@ -214,7 +230,12 @@ async def _noop_tool(execution, args):
 
 
 def _action_tool(action: ToolAction):
-    return tool(description="t", input_model=_ToolInput, policy=ToolPolicy(action=action, scope=ToolScope.INTERNAL), execute=_noop_tool)
+    return tool(
+        description="t",
+        input_model=_ToolInput,
+        policy=ToolPolicy(action=action, scope=ToolScope.INTERNAL),
+        execute=_noop_tool,
+    )
 
 
 class _CapExecutor:
@@ -316,6 +337,53 @@ async def test_nested_research_profile_does_not_double_register_ledger_tools(mon
 
 
 @pytest.mark.asyncio
+async def test_spawner_carries_child_tool_calls_and_source_refs(monkeypatch):
+    source = ToolSourceRef(provider="slack", kind="message", ref="C1:1", title="Evidence")
+
+    class FakeAgent:
+        def __init__(self, **kwargs):
+            pass
+
+        async def stream(self, messages):
+            yield ToolStarted(
+                depth=1,
+                parent_id="parent-call",
+                tool_id="child-call-1",
+                name="read_tool",
+                args={},
+                display_name="Read",
+            )
+            yield ToolCompleted(
+                depth=1,
+                parent_id="parent-call",
+                tool_id="child-call-1",
+                name="read_tool",
+                result="evidence",
+                preview="evidence",
+                duration_ms=1,
+                is_error=False,
+                data=None,
+                display_name="Read",
+                source_refs=(source,),
+            )
+            yield Result(text="done", stop_reason=StopReason.END_TURN, steps=1, usage=Usage())
+
+    monkeypatch.setattr("ntrp.core.spawner.Agent", FakeAgent)
+    parent_ctx = _spawn_parent_ctx(_base_registry())
+
+    result = await parent_ctx.spawn_fn(
+        parent_ctx,
+        task="trace evidence",
+        parent_id="parent-call",
+        system_prompt="Read evidence.",
+    )
+
+    assert result.tool_call_ids == ("child-call-1",)
+    assert result.source_refs == (source,)
+    assert result.child_agent_data()["source_refs"] == [source.to_dict()]
+
+
+@pytest.mark.asyncio
 async def test_research_harness_tools_populate_scoped_workspace():
     ledger = SharedLedger()
     ctx = _context(ledger, research_scope_id="research-a")
@@ -326,7 +394,9 @@ async def test_research_harness_tools_populate_scoped_workspace():
     )
     await research_module.research_track_source(
         ToolExecution(tool_id="src", tool_name="research_track_source", ctx=ctx),
-        research_module.ResearchSourceInput(id="paper", title="Harness paper", locator="https://example.test/paper", status="read"),
+        research_module.ResearchSourceInput(
+            id="paper", title="Harness paper", locator="https://example.test/paper", status="read"
+        ),
     )
     await research_module.research_curate(
         ToolExecution(tool_id="cur", tool_name="research_curate", ctx=ctx),

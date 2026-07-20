@@ -50,6 +50,19 @@ def _message_source_ref(message_id: str, *, title: str) -> tuple[ToolSourceRef, 
     )
 
 
+def _entity_source_refs(items: list[dict], *, kind: str, id_key: str, title_key: str) -> tuple[ToolSourceRef, ...]:
+    return normalize_source_refs(
+        ToolSourceRef(
+            provider="slack",
+            kind=kind,
+            ref=str(item[id_key]),
+            title=str(item.get(title_key) or item[id_key]),
+        )
+        for item in items
+        if item.get(id_key)
+    )
+
+
 def _format_messages(items: list, *, show_thread_hint: bool = True) -> str:
     lines = []
     for item in items:
@@ -99,7 +112,9 @@ async def slack_search(execution: ToolExecution, args: SlackSearchInput) -> Tool
     results = await source.search_messages(args.query, limit=args.limit, channel_types=channel_types)
     if not results:
         return ToolResult(content=f"No Slack messages found for {args.query!r}", preview="0 results")
-    content, may_have_more = _bounded_content(_format_messages(results), count=len(results), limit=args.limit, noun="messages")
+    content, may_have_more = _bounded_content(
+        _format_messages(results), count=len(results), limit=args.limit, noun="messages"
+    )
     return ToolResult(
         content=content,
         preview=f"{len(results)} messages" + (" (possibly capped)" if may_have_more else ""),
@@ -118,7 +133,9 @@ async def slack_channel(execution: ToolExecution, args: SlackChannelInput) -> To
     results = await source.read_channel(args.channel, limit=args.limit)
     if not results:
         return ToolResult(content=f"No messages in #{args.channel}", preview="0 messages")
-    content, may_have_more = _bounded_content(_format_messages(results), count=len(results), limit=args.limit, noun="messages")
+    content, may_have_more = _bounded_content(
+        _format_messages(results), count=len(results), limit=args.limit, noun="messages"
+    )
     return ToolResult(
         content=content,
         preview=f"{len(results)} messages" + (" (possibly capped)" if may_have_more else ""),
@@ -171,6 +188,7 @@ async def slack_channels(execution: ToolExecution, args: SlackChannelsInput) -> 
         content=content,
         preview=f"{len(results)} channels" + (" (possibly capped)" if may_have_more else ""),
         data={"items": results, "count": len(results), "may_have_more": may_have_more},
+        source_refs=_entity_source_refs(results, kind="channel", id_key="id", title_key="name"),
     )
 
 
@@ -196,13 +214,12 @@ async def slack_users(execution: ToolExecution, args: SlackUsersInput) -> ToolRe
         if user.get("email"):
             line += f"  {user['email']}"
         lines.append(line)
-    content, may_have_more = _bounded_content(
-        "\n".join(lines), count=len(results), limit=args.limit, noun="users"
-    )
+    content, may_have_more = _bounded_content("\n".join(lines), count=len(results), limit=args.limit, noun="users")
     return ToolResult(
         content=content,
         preview=f"{len(results)} users" + (" (possibly capped)" if may_have_more else ""),
         data={"items": results, "count": len(results), "may_have_more": may_have_more},
+        source_refs=_entity_source_refs(results, kind="user", id_key="id", title_key="name"),
     )
 
 
@@ -216,7 +233,18 @@ async def slack_user(execution: ToolExecution, args: SlackUserInput) -> ToolResu
     if not profile:
         return not_found_result("user", args.user_id, call_first="slack_users")
     lines = [f"{key}: {value}" for key, value in profile.items() if value]
-    return ToolResult(content="\n".join(lines), preview=profile.get("name", args.user_id))
+    return ToolResult(
+        content="\n".join(lines),
+        preview=profile.get("name", args.user_id),
+        source_refs=(
+            ToolSourceRef(
+                provider="slack",
+                kind="user",
+                ref=args.user_id,
+                title=profile.get("name") or args.user_id,
+            ),
+        ),
+    )
 
 
 class SlackFileInput(BaseModel):
@@ -246,7 +274,9 @@ class SlackPostMessageInput(BaseModel):
             "Supports basic Slack mrkdwn: *bold*, _italic_, ~strike~, `code`, ```code block```, <url|label>, mentions, and bullet lines."
         )
     )
-    thread_ts: str | None = Field(default=None, description="Optional parent message timestamp to post as a thread reply")
+    thread_ts: str | None = Field(
+        default=None, description="Optional parent message timestamp to post as a thread reply"
+    )
     idempotency_key: str = Field(min_length=8, max_length=200)
 
 
@@ -269,7 +299,9 @@ class SlackPostBlocksInput(BaseModel):
             "Limits: max 50 blocks, section text 3000 chars, field text 2000 chars."
         ),
     )
-    thread_ts: str | None = Field(default=None, description="Optional parent message timestamp to post as a thread reply")
+    thread_ts: str | None = Field(
+        default=None, description="Optional parent message timestamp to post as a thread reply"
+    )
     idempotency_key: str = Field(min_length=8, max_length=200)
 
 
@@ -315,7 +347,9 @@ def _posted_message_result(args: SlackPostMessageInput | SlackPostBlocksInput, r
     channel_label = result.get("channel_name") or result.get("channel") or args.channel
     ts = result.get("ts", "")
     thread_ts = result.get("thread_ts", ts)
-    content = f"Posted to #{channel_label} at {ts}\nchannel: {result.get('channel', args.channel)}\nthread_ts: {thread_ts}"
+    content = (
+        f"Posted to #{channel_label} at {ts}\nchannel: {result.get('channel', args.channel)}\nthread_ts: {thread_ts}"
+    )
     message_ref = f"{result.get('channel', args.channel)}:{ts}" if ts else None
     return mutation_result(
         content=content,
@@ -380,6 +414,7 @@ async def slack_dms(execution: ToolExecution, args: SlackDmsInput) -> ToolResult
         content=content,
         preview=f"{len(dms)} DMs" + (" (possibly capped)" if may_have_more else ""),
         data={"items": dms, "count": len(dms), "may_have_more": may_have_more},
+        source_refs=_entity_source_refs(dms, kind="channel", id_key="channel_id", title_key="peer"),
     )
 
 
@@ -403,7 +438,9 @@ async def slack_dm(execution: ToolExecution, args: SlackDmInput) -> ToolResult:
     results = await source.read_channel(channel_id, limit=args.limit)
     if not results:
         return ToolResult(content=f"No messages in DM with {args.target!r}", preview="0 messages")
-    content, may_have_more = _bounded_content(_format_messages(results), count=len(results), limit=args.limit, noun="messages")
+    content, may_have_more = _bounded_content(
+        _format_messages(results), count=len(results), limit=args.limit, noun="messages"
+    )
     return ToolResult(
         content=content,
         preview=f"{len(results)} messages" + (" (possibly capped)" if may_have_more else ""),
