@@ -1,5 +1,5 @@
 import { apiWithConfig } from "@/api/core";
-import { addGmailAccountApi } from "@/api/settings";
+import { connectGoogleServiceApi, type GoogleIntegrationId } from "@/api/settings";
 import { updateServerConfig } from "@/actions/server";
 import { getState, type PendingConnection } from "@/stores";
 
@@ -19,14 +19,14 @@ async function submit(connection: PendingConnection, approved: boolean): Promise
 
 export async function connectAndResume(connection: PendingConnection): Promise<void> {
   const state = getState();
-  if (connection.action === "oauth" && connection.connectionId === "google") {
-    await addGmailAccountApi(
-      state.config,
-      connection.integrationId === "calendar" ? "calendar" : "email",
-    );
-    await updateServerConfig({ integrations: { google: true } });
-  } else if (connection.action === "enable" && connection.connectionId === "google") {
-    await updateServerConfig({ integrations: { google: true } });
+  const googleIntegration = (["gmail", "calendar", "google_drive"] as const).find(
+    (id) => id === connection.integrationId,
+  ) as GoogleIntegrationId | undefined;
+  if (connection.action === "oauth" && googleIntegration) {
+    await connectGoogleServiceApi(state.config, googleIntegration);
+    await updateServerConfig({ integrations: { [googleIntegration]: true } });
+  } else if (connection.action === "enable" && googleIntegration) {
+    await updateServerConfig({ integrations: { [googleIntegration]: true } });
   }
   await submit(connection, true);
 }

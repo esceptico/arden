@@ -119,8 +119,8 @@ test("Google connection runs OAuth, enables Google, then resolves", async () => 
 
   await connectAndResume(gmail);
 
-  expect(calls.map((call) => call.path)).toEqual(["/gmail/add", "/config", "/connections/result"]);
-  expect(calls[0].body).toEqual({ service_choice: "email" });
-  expect(calls[1].body).toEqual({ integrations: { google: true } });
+  expect(calls.map((call) => call.path)).toEqual(["/google/gmail/connect", "/config", "/connections/result"]);
+  expect(calls[0].body).toEqual({});
+  expect(calls[1].body).toEqual({ integrations: { gmail: true } });
   expect(getState().pendingConnections).toEqual([]);
 });

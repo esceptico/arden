@@ -207,6 +207,16 @@ export interface GmailAccount {
   error?: string;
 }
 
+export type GoogleIntegrationId = "gmail" | "calendar" | "google_drive";
+
+export interface GoogleAccountSummary {
+  id: string;
+  email: string | null;
+  services: GoogleIntegrationId[];
+  scopes: string[];
+  error?: string | null;
+}
+
 // ─── Setup assistant contracts ─────────────────────────────────────────
 
 export type GoogleServiceChoice = "email" | "email_calendar" | "calendar" | "all";
@@ -240,6 +250,7 @@ export interface SetupStatus {
     enabled: boolean;
     credentials: GoogleCredentialsStatus;
     accounts: GmailAccount[];
+    google_accounts: GoogleAccountSummary[];
     calendar_tokens: CalendarTokenStatus[];
     provider_statuses: ToolProviderConnection[];
   };
@@ -298,6 +309,36 @@ export async function listGmailAccountsApi(config: AppConfig): Promise<GmailAcco
   return r.accounts;
 }
 
+export async function listGoogleAccountsApi(config: AppConfig): Promise<GoogleAccountSummary[]> {
+  const response = await apiWithConfig<{ accounts: GoogleAccountSummary[] }>(config, "/google/accounts");
+  return response.accounts;
+}
+
+export async function connectGoogleServiceApi(
+  config: AppConfig,
+  integrationId: GoogleIntegrationId,
+  accountId?: string,
+): Promise<{ status: string; account: GoogleAccountSummary }> {
+  return apiWithConfig(config, `/google/${integrationId}/connect`, {
+    method: "POST",
+    body: JSON.stringify(accountId ? { account_id: accountId } : {}),
+  });
+}
+
+export async function disconnectGoogleServiceApi(
+  config: AppConfig,
+  integrationId: GoogleIntegrationId,
+  accountId: string,
+): Promise<void> {
+  await apiWithConfig(config, `/google/${integrationId}/accounts/${encodeURIComponent(accountId)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function removeGoogleAccountApi(config: AppConfig, accountId: string): Promise<void> {
+  await apiWithConfig(config, `/google/accounts/${encodeURIComponent(accountId)}`, { method: "DELETE" });
+}
+
 export async function getSetupStatusApi(config: AppConfig): Promise<SetupStatus> {
   return apiWithConfig<SetupStatus>(config, "/setup/status");
 }
@@ -314,11 +355,11 @@ export async function saveGoogleCredentialsApi(
 
 export async function preflightGoogleSetupApi(
   config: AppConfig,
-  serviceChoice: GoogleServiceChoice,
+  integrationId: GoogleIntegrationId,
 ): Promise<GooglePreflightResponse> {
   return apiWithConfig<GooglePreflightResponse>(config, "/setup/google/preflight", {
     method: "POST",
-    body: JSON.stringify({ service_choice: serviceChoice }),
+    body: JSON.stringify({ integration_id: integrationId }),
   });
 }
 
@@ -398,7 +439,10 @@ export type ServerConfigPatch = Partial<{
   consolidation_interval: number;
   web_search: "auto" | "exa" | "ddgs" | "none";
   tool_overrides: Record<string, ToolOverrideDecision>;
-  integrations: { google?: boolean | null; memory?: boolean | null };
+  integrations: Partial<Record<GoogleIntegrationId, boolean | null>> & {
+    google?: boolean | null;
+    memory?: boolean | null;
+  };
 }>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
