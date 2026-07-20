@@ -36,6 +36,7 @@ Deferred group: `email`.
 | `emails` | Search and list emails | — |
 | `read_email` | Read full email content | — |
 | `send_email` | Send an email | 🔒 |
+| `reply_email` | Reply in an existing thread by qualified `account:message_id` | 🔒 |
 
 ## Calendar
 
@@ -140,6 +141,34 @@ Connected MCP server tools are deferred by server. Use `load_tools(group="mcp:<s
 
 MCP tools default to conservative external execution: approval required. Per-tool config can override that with `tool_policies.<tool_name>`. If a server is trusted, `trust_tool_annotations=true` lets ntrp use MCP `Tool.annotations` hints such as `readOnlyHint` and `destructiveHint`; explicit `tool_policies` still win.
 
+## Canonical workflows
+
+Follow the same sequence for source-of-truth work: **search → inspect → preview → mutate → verify**. Never invent IDs; pass stable refs returned by the previous tool.
+
+### Bounded file edit
+
+1. Find candidates with `find_files` or `search_text`; if `has_more` is true, narrow the query or continue with its cursor.
+2. `read_file(path, offset, limit)` the exact region and retain its revision.
+3. Call `edit_file` or `write_file` with that revision. The approval card shows the diff before the write.
+4. Treat `write_conflict`, `not_found`, and `permission_denied` as terminal for that attempt; follow `recovery_action`, re-read, and create a new preview.
+5. Verify the returned `after_ref` by reading the file again. Large results provide a durable `raw_ref` rather than disappearing at truncation.
+
+### Slack and Gmail mutation
+
+1. Load `slack` or `email`, search with a bounded `limit`, and continue only when the result says more may exist.
+2. Inspect the selected message/thread. Use its exact `source_refs[].ref` (`channel:timestamp` for Slack, `account:message_id` for Gmail).
+3. Draft the post, send, or reply; provide a stable `idempotency_key`. Approval shows the destination and bounded body preview.
+4. A successful mutation returns an effect, provider receipt, and `after_ref`; an uncertain result says to verify provider state before retrying.
+5. Read the returned ref to verify. For Gmail replies, `reply_email` preserves `In-Reply-To`, `References`, and Gmail `threadId`.
+
+### MCP recovery
+
+1. Load the exact server group with `load_tools(group="mcp:<server>")`; loading never executes a tool.
+2. Inspect the lossless schema and annotations. Bound list arguments and use refs from earlier results.
+3. Preview and approve external mutations unless an explicit policy says otherwise.
+4. On `tool_not_loaded`, load the named group; on `mcp_error`, follow its recovery action. Do not retry uncertain mutations without checking state.
+5. Preserve returned `source_refs`, `raw_ref`, receipts, and verification data for downstream calls.
+
 ## Deferred loading examples
 
 | Need | Load call |
@@ -192,30 +221,52 @@ Automations reference a named schema (`output_schema`), resolved on the server. 
 
 ## User-defined tools
 
-Create custom tools in `~/.ntrp/tools/`. Each file is a Python module that exports a `tools` mapping:
+Create custom tools in `~/.ntrp/tools/`. Each file exports a `tools` mapping. Inputs must be bounded, failures typed, and stable results sourced:
 
 ```python
 from pydantic import BaseModel, Field
 
+from ntrp.agent.types.tools import ToolSourceRef
 from ntrp.tools.core import ToolAction, ToolPolicy, ToolResult, ToolScope, tool
 from ntrp.tools.core.context import ToolExecution
 
 
-class EchoInput(BaseModel):
-    text: str = Field(description="Text to echo")
+class LookupInput(BaseModel):
+    query: str = Field(min_length=1, max_length=500)
+    limit: int = Field(default=20, ge=1, le=100)
 
 
-async def echo(execution: ToolExecution, args: EchoInput) -> ToolResult:
-    return ToolResult(content=args.text, preview="Echoed")
+async def lookup(execution: ToolExecution, args: LookupInput) -> ToolResult:
+    service = execution.ctx.services.get("catalog")
+    if service is None:
+        return ToolResult.failure(
+            code="not_configured",
+            message="Catalog is unavailable.",
+            preview="Unavailable",
+            recovery_action="Configure the catalog service and retry.",
+        )
+    rows = await service.search(args.query, limit=args.limit)
+    return ToolResult(
+        content="\n".join(row.title for row in rows),
+        preview=f"{len(rows)} results",
+        source_refs=tuple(
+            ToolSourceRef(provider="catalog", kind="item", ref=row.id, title=row.title)
+            for row in rows
+        ),
+    )
 
 
 tools = {
-    "echo": tool(
-        display_name="Echo",
-        description="Echo text back to the user.",
-        input_model=EchoInput,
-        policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL),
-        execute=echo,
+    "lookup": tool(
+        display_name="Lookup",
+        description="Search the configured catalog and return stable item refs.",
+        input_model=LookupInput,
+        policy=ToolPolicy(
+            action=ToolAction.READ,
+            scope=ToolScope.INTERNAL,
+            permissions=frozenset({"catalog"}),
+        ),
+        execute=lookup,
     )
 }
 ```

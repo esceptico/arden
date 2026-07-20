@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from ntrp.agent import ToolEffect, ToolOutcome, ToolOutcomeStatus, ToolResult, ToolVerification
+from ntrp.agent.types.tools import normalize_source_refs
 from ntrp.settings import NTRP_DIR
 from ntrp.tools.core.context import ToolExecution
 
@@ -89,6 +90,7 @@ def _result_json(result: ToolResult) -> str:
             "preview": result.preview,
             "is_error": result.is_error,
             "data": result.data,
+            "source_refs": [ref.to_dict() for ref in result.source_refs],
             "outcome": result.outcome.to_dict() if result.outcome else None,
         },
         ensure_ascii=False,
@@ -107,6 +109,7 @@ def _result_from_json(raw: str) -> ToolResult:
         preview=value["preview"],
         is_error=bool(value["is_error"]),
         data=data,
+        source_refs=normalize_source_refs(value.get("source_refs")),
         outcome=outcome,
     )
 

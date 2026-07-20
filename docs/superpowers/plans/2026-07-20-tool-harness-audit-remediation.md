@@ -378,11 +378,11 @@ def atomic_compare_and_swap(path: Path, content: str, expected_sha256: str) -> F
 - Produces: `reply_email(message_ref, body, idempotency_key)` with Gmail thread headers/thread ID.
 - Documents canonical search → inspect → preview → mutate → verify workflows.
 
-- [ ] Add failing reply/threading tests.
-- [ ] Implement reply by qualified message ref with `In-Reply-To`, `References`, and provider `threadId`.
-- [ ] Replace toy snippets with bounded file, Slack/email, and MCP workflows including errors, pagination, approvals, stable refs, receipts, and verification.
-- [ ] Update the add-tool scaffold to require typed failures, bounds, source refs, idempotency, and mutation outcomes.
-- [ ] Run tests and commit: `feat(harness): complete and document common workflows`.
+- [x] Add failing reply/threading tests.
+- [x] Implement reply by qualified message ref with `In-Reply-To`, `References`, and provider `threadId`.
+- [x] Replace toy snippets with bounded file, Slack/email, and MCP workflows including errors, pagination, approvals, stable refs, receipts, and verification.
+- [x] Update the add-tool scaffold to require typed failures, bounds, source refs, idempotency, and mutation outcomes.
+- [x] Run tests and commit: `feat(harness): complete and document common workflows`.
 
 ### Task 14: Provider-Backed Agent Ergonomics Evals
 

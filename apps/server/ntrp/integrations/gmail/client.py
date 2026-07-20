@@ -337,6 +337,66 @@ class GmailSource:
             _logger.exception("Gmail send failed")
             raise IntegrationProviderError(integration_label="Gmail", cause=exc) from exc
 
+    def reply(self, message_id: str, body: str, from_email: str | None = None) -> str:
+        """Reply to an existing Gmail message while preserving its RFC and provider thread identity."""
+        self.has_send_scope()
+        try:
+            original = (
+                self._get_service().users().messages().get(userId="me", id=message_id, format="full").execute()
+            )
+        except IntegrationConnectionError:
+            raise
+        except Exception as exc:
+            _logger.exception("Gmail reply source fetch failed")
+            raise IntegrationProviderError(integration_label="Gmail", cause=exc) from exc
+        if not original:
+            raise IntegrationOperationError(code="not_found", safe_message=f"Gmail message not found: {message_id}")
+
+        headers = extract_headers(original.get("payload", {}).get("headers", []))
+        recipient = decode_email_header(headers.get("reply-to") or headers.get("from"))
+        if not recipient:
+            raise IntegrationOperationError(
+                code="invalid_ref",
+                safe_message="The original Gmail message has no reply sender.",
+            )
+        subject = decode_email_header(headers.get("subject")) or "(no subject)"
+        if not subject.casefold().startswith("re:"):
+            subject = f"Re: {subject}"
+
+        message = MIMEText(body or "")
+        message["to"] = recipient
+        message["subject"] = subject
+        if from_email:
+            message["from"] = from_email
+        original_message_id = headers.get("message-id", "").strip()
+        if original_message_id:
+            message["In-Reply-To"] = original_message_id
+            references = headers.get("references", "").strip()
+            message["References"] = f"{references} {original_message_id}".strip()
+
+        thread_id = str(original.get("threadId") or "")
+        if not thread_id:
+            raise IntegrationOperationError(
+                code="invalid_ref",
+                safe_message="The original Gmail message has no thread ID.",
+            )
+        raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
+        try:
+            sent = (
+                self._get_service()
+                .users()
+                .messages()
+                .send(userId="me", body={"raw": raw, "threadId": thread_id})
+                .execute()
+            )
+            reply_id = sent.get("id", "")
+            return f"Replied to {recipient}" + (f" (id: {reply_id})" if reply_id else "")
+        except IntegrationConnectionError:
+            raise
+        except Exception as exc:
+            _logger.exception("Gmail reply failed")
+            raise IntegrationProviderError(integration_label="Gmail", cause=exc) from exc
+
     def _markdown_to_html(self, markdown_text: str) -> str:
         # Convert markdown to HTML with common extensions
         md = markdown.Markdown(
@@ -605,6 +665,27 @@ class MultiGmailSource:
         raise IntegrationOperationError(
             code="not_found",
             safe_message="No Gmail accounts are available.",
+        )
+
+    def reply_email(self, message_ref: str, body: str) -> str:
+        account, separator, message_id = message_ref.partition(":")
+        if not separator or not account.strip() or not message_id.strip():
+            raise IntegrationOperationError(
+                code="invalid_ref",
+                safe_message="Use the qualified account:message_id returned by emails or read_email.",
+            )
+        for src in self.sources:
+            source_account = src.get_email_address()
+            if source_account.casefold() == account.strip().casefold():
+                return src.reply(message_id.strip(), body, from_email=source_account)
+        accounts = self.list_accounts()
+        raise IntegrationOperationError(
+            code="invalid_ref",
+            safe_message=(
+                f"Gmail account not found. Available: {', '.join(accounts)}"
+                if accounts
+                else "No Gmail accounts are available."
+            ),
         )
 
     def read(self, source_id: str) -> ReadEmailResult | None:

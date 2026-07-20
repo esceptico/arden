@@ -2,7 +2,7 @@ from ntrp.config import Config
 from ntrp.integrations.base import Integration, IntegrationConnectionSpec
 from ntrp.integrations.gmail.client import MultiGmailSource
 from ntrp.integrations.gmail.notifier import EmailNotifier
-from ntrp.integrations.gmail.tools import emails_tool, read_email_tool, send_email_tool
+from ntrp.integrations.gmail.tools import emails_tool, read_email_tool, reply_email_tool, send_email_tool
 from ntrp.integrations.google_auth.auth import google_account_store, scopes_for_google_service
 
 
@@ -20,7 +20,12 @@ def _build(config: Config) -> MultiGmailSource | None:
 GMAIL = Integration(
     id="gmail",
     label="Gmail",
-    tools={"emails": emails_tool, "read_email": read_email_tool, "send_email": send_email_tool},
+    tools={
+        "emails": emails_tool,
+        "read_email": read_email_tool,
+        "send_email": send_email_tool,
+        "reply_email": reply_email_tool,
+    },
     notifier_class=EmailNotifier,
     build=_build,
     connection=IntegrationConnectionSpec(

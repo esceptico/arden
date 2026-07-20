@@ -1,4 +1,5 @@
 import re
+from dataclasses import replace
 
 from pydantic import BaseModel, Field
 
@@ -15,6 +16,10 @@ from ntrp.tools.core.types import ApprovalInfo, ToolAction, ToolPolicy, ToolScop
 from ntrp.utils import truncate
 
 SEND_EMAIL_DESCRIPTION = "Send an email from a specified Gmail account. Requires approval."
+REPLY_EMAIL_DESCRIPTION = (
+    "Reply in an existing Gmail thread using the qualified account:message_id returned by emails or read_email. "
+    "Preserves the provider thread and reply headers. Requires approval."
+)
 
 READ_EMAIL_DESCRIPTION = (
     "Read the full content of an email by its ID. Use emails() or emails(query) first to find email IDs."
@@ -73,6 +78,12 @@ class SendEmailInput(BaseModel):
     idempotency_key: str = Field(min_length=8, max_length=200, description="Unique stable key for this send attempt")
 
 
+class ReplyEmailInput(BaseModel):
+    message_ref: str = Field(description="Qualified account:message_id returned by emails or read_email.")
+    body: str = Field(min_length=1, max_length=100_000, description="Plain-text reply body.")
+    idempotency_key: str = Field(min_length=8, max_length=200, description="Unique stable key for this reply attempt.")
+
+
 async def approve_send_email(execution: ToolExecution, args: SendEmailInput) -> ApprovalInfo | None:
     preview = truncate(
         f"Subject: {args.subject}\nFrom: {args.account}\n\nBody:\n{args.body}",
@@ -104,6 +115,53 @@ async def send_email(execution: ToolExecution, args: SendEmailInput) -> ToolResu
     return await execute_idempotent(
         execution,
         namespace=f"gmail:send:{args.account}",
+        idempotency_key=args.idempotency_key,
+        payload=args.model_dump(exclude={"idempotency_key"}),
+        invoke=invoke,
+    )
+
+
+async def approve_reply_email(execution: ToolExecution, args: ReplyEmailInput) -> ApprovalInfo | None:
+    return ApprovalInfo(
+        description=f"Reply to {args.message_ref}",
+        preview=truncate(f"Thread: {args.message_ref}\n\nBody:\n{args.body}", 1_500),
+        diff=None,
+    )
+
+
+async def reply_email(execution: ToolExecution, args: ReplyEmailInput) -> ToolResult:
+    async def invoke() -> ToolResult:
+        source = execution.ctx.get_client("gmail", MultiGmailSource)
+        try:
+            result = source.reply_email(args.message_ref, args.body)
+        except IntegrationOperationError as error:
+            return operation_error_result(error, preview="Reply failed")
+        match = re.search(r"\(id: ([^)]+)\)", result)
+        account, _, _message_id = args.message_ref.partition(":")
+        reply_ref = _qualified_message_ref(account, match.group(1)) if match else None
+        mutation = mutation_result(
+            content=result,
+            preview="Replied" if reply_ref else "Reply unverified",
+            operation="reply",
+            target=args.message_ref,
+            receipt=match.group(1) if match else args.idempotency_key,
+            before_ref=args.message_ref,
+            after_ref=reply_ref,
+            observed=(f"Gmail returned reply {reply_ref}" if reply_ref else None),
+            data={"message_ref": reply_ref, "thread_ref": args.message_ref} if reply_ref else None,
+        )
+        return replace(
+            mutation,
+            source_refs=normalize_source_refs(
+                (*_message_source_ref(account, args.message_ref), *_message_source_ref(account, reply_ref or ""))
+            ),
+        )
+
+    account, separator, _message_id = args.message_ref.partition(":")
+    namespace_account = account if separator else "invalid"
+    return await execute_idempotent(
+        execution,
+        namespace=f"gmail:reply:{namespace_account}",
         idempotency_key=args.idempotency_key,
         payload=args.model_dump(exclude={"idempotency_key"}),
         invoke=invoke,
@@ -170,7 +228,9 @@ class EmailsInput(BaseModel):
         le=3650,
         description=f"How many days back to look when listing (default: {_DEFAULT_EMAIL_DAYS})",
     )
-    limit: int = Field(default=_DEFAULT_EMAIL_LIMIT, ge=1, le=100, description=f"Maximum results (default: {_DEFAULT_EMAIL_LIMIT})")
+    limit: int = Field(
+        default=_DEFAULT_EMAIL_LIMIT, ge=1, le=100, description=f"Maximum results (default: {_DEFAULT_EMAIL_LIMIT})"
+    )
 
 
 def _list_emails(source: MultiGmailSource, days: int, limit: int) -> ToolResult:
@@ -247,4 +307,18 @@ send_email_tool = tool(
     ),
     approval=approve_send_email,
     execute=send_email,
+)
+
+reply_email_tool = tool(
+    display_name="ReplyEmail",
+    description=REPLY_EMAIL_DESCRIPTION,
+    input_model=ReplyEmailInput,
+    policy=ToolPolicy(
+        action=ToolAction.WRITE,
+        scope=ToolScope.EXTERNAL,
+        requires_approval=True,
+        permissions=frozenset({"gmail"}),
+    ),
+    approval=approve_reply_email,
+    execute=reply_email,
 )

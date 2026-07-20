@@ -16,6 +16,7 @@ Ask the user:
 2. What parameters does it need?
 3. Does it modify source-of-truth state? (if yes -> `policy.requires_approval=True`, needs an approval function)
 4. Does it need an existing source or service? (see available services below)
+5. What bounds, stable references, and retry/idempotency contract does it need?
 
 ## Step 2: Scaffold the tool file
 
@@ -39,6 +40,14 @@ Use `read_file` on `~/.ntrp/tools/<tool_name>.py`, then use `bash` to apply edit
 - If `requires_approval=True`, uncomment and implement the approval function, then pass it as `approval=...`
 - If the tool needs a source/service, add `permissions=frozenset({...})` and service access (see patterns below)
 - Keep the module-level `tools = {"tool_name": tool(...)}` mapping
+
+### Non-negotiable harness contract
+
+- Bound every string/list/range input with Pydantic and cap every returned collection; say when more may exist and provide a cursor when continuation is supported.
+- Return `ToolResult.failure(code=..., recovery_action=...)` for actionable failures. Do not encode failures as success prose or leak provider exceptions.
+- Attach `ToolSourceRef` for each stable provider/file/session ref. Never fabricate provenance or URLs.
+- Every source-of-truth mutation needs an approval preview, stable `idempotency_key`, and a `ToolOutcome` with effect, receipt, and verification (or an explicit uncertain status).
+- Search/list first, inspect the exact ref, preview the change, mutate once, then verify via the returned `after_ref`.
 
 ## Required shape
 
