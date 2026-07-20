@@ -30,6 +30,7 @@ from ntrp.core.tool_executor import NtrpToolExecutor
 from ntrp.tools.core import ToolAction, ToolPolicy, ToolResult, ToolScope, tool
 from ntrp.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
 from ntrp.tools.core.registry import ToolRegistry
+from ntrp.tools.core.types import ApprovalInfo
 from ntrp.tools.deferred import (
     build_deferred_tools_prompt,
     build_deferred_tools_prompt_for_schemas,
@@ -58,6 +59,10 @@ async def fake_echo(execution: ToolExecution, args: SearchInput) -> ToolResult:
     return ToolResult(content=args.query, preview="echo")
 
 
+async def fake_approval(execution: ToolExecution, args: SearchInput) -> ApprovalInfo:
+    return ApprovalInfo(description="Test mutation", preview=args.query, diff=None)
+
+
 def _registry() -> ToolRegistry:
     registry = ToolRegistry()
     registry.register("load_tools", load_tools_tool, source="_system")
@@ -78,6 +83,7 @@ def _registry() -> ToolRegistry:
             description="Write a local file",
             input_model=SearchInput,
             policy=WRITE_INTERNAL_POLICY,
+            approval=fake_approval,
             execute=fake_search,
         ),
         source="_system",
@@ -88,6 +94,7 @@ def _registry() -> ToolRegistry:
             description="Edit a local file",
             input_model=SearchInput,
             policy=WRITE_INTERNAL_POLICY,
+            approval=fake_approval,
             execute=fake_search,
         ),
         source="_system",
@@ -109,6 +116,7 @@ def _registry() -> ToolRegistry:
             description="Cancel a background agent",
             input_model=SearchInput,
             policy=WRITE_INTERNAL_POLICY,
+            approval=fake_approval,
             execute=fake_search,
         ),
         source="_background",
@@ -119,6 +127,7 @@ def _registry() -> ToolRegistry:
             description="Send a notification",
             input_model=SearchInput,
             policy=WRITE_EXTERNAL_POLICY,
+            approval=fake_approval,
             execute=fake_search,
         ),
         source="_notifications",
@@ -129,6 +138,7 @@ def _registry() -> ToolRegistry:
             description="Update persistent behavior directives",
             input_model=SearchInput,
             policy=WRITE_INTERNAL_POLICY,
+            approval=fake_approval,
             execute=fake_search,
         ),
         source="_directives",
@@ -264,6 +274,7 @@ def test_tool_context_builds_compaction_rehydration_state():
         "background_tasks": [{"task_id": "bg-1", "command": "research"}],
         "active_plan_ref": "plan:abc",
         "loop_task_id": None,
+        "declined_connections": [],
     }
 
 
@@ -799,7 +810,13 @@ async def test_load_group_respects_run_allowed_names():
     registry = _registry()
     registry.register(
         "slack_post",
-        tool(description="Post to Slack", input_model=SearchInput, policy=WRITE_EXTERNAL_POLICY, execute=fake_search),
+        tool(
+            description="Post to Slack",
+            input_model=SearchInput,
+            policy=WRITE_EXTERNAL_POLICY,
+            approval=fake_approval,
+            execute=fake_search,
+        ),
         source="slack",
     )
     run = RunContext(
