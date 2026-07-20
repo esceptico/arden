@@ -91,7 +91,7 @@ test("setup API wrappers preserve endpoint contracts", async () => {
 
   await getSetupStatusApi(appConfig);
   await saveGoogleCredentialsApi(appConfig, { path: "/tmp/client_secret.json" });
-  await preflightGoogleSetupApi(appConfig, "email_calendar");
+  await preflightGoogleSetupApi(appConfig, "google_drive");
   await verifySlackTokenApi(appConfig, "slack_bot_token", "xoxb-token");
 
   expect(requests.map((request) => request.path)).toEqual([
@@ -101,7 +101,7 @@ test("setup API wrappers preserve endpoint contracts", async () => {
     "/setup/slack/verify",
   ]);
   expect(JSON.parse(requests[1].body ?? "{}")).toEqual({ path: "/tmp/client_secret.json" });
-  expect(JSON.parse(requests[2].body ?? "{}")).toEqual({ service_choice: "email_calendar" });
+  expect(JSON.parse(requests[2].body ?? "{}")).toEqual({ integration_id: "google_drive" });
   expect(JSON.parse(requests[3].body ?? "{}")).toEqual({ service_id: "slack_bot_token", api_key: "xoxb-token" });
 });
 

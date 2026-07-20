@@ -6,10 +6,9 @@ import {
 } from "@/features/settings/lib/setupAssistant";
 
 test("labels Google setup service choices", () => {
-  expect(googleChoiceLabel("email")).toBe("Email only");
-  expect(googleChoiceLabel("email_calendar")).toBe("Email + Calendar");
-  expect(googleChoiceLabel("calendar")).toBe("Calendar only");
-  expect(googleChoiceLabel("all")).toBe("All current Google services");
+  expect(googleChoiceLabel("gmail")).toBe("Gmail");
+  expect(googleChoiceLabel("calendar")).toBe("Google Calendar");
+  expect(googleChoiceLabel("google_drive")).toBe("Google Drive");
 });
 
 test("validates Slack token prefixes by selected token type", () => {
