@@ -125,3 +125,71 @@ def test_mcp_tool_ignores_untrusted_annotations():
 
     assert tool.policy.action is ToolAction.EXECUTE
     assert tool.policy.requires_approval is True
+
+
+def test_mcp_tool_preserves_complete_nested_schema():
+    input_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "$defs": {
+            "Filter": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "score": {"type": "integer", "minimum": 1, "maximum": 10},
+                },
+                "required": ["score"],
+            }
+        },
+        "properties": {
+            "filter": {"$ref": "#/$defs/Filter"},
+            "mode": {"oneOf": [{"const": "fast"}, {"const": "exact"}]},
+        },
+        "required": ["filter"],
+    }
+    tool = MCPTool(
+        "notes",
+        McpTool(name="search", description="Search", inputSchema=input_schema),
+        FakeMCPSession(CallToolResult(content=[])),
+    )
+
+    parameters = tool.to_dict(tool.name)["function"]["parameters"]
+
+    assert "$defs" not in parameters
+    assert "$ref" not in str(parameters)
+    assert parameters["additionalProperties"] is False
+    assert parameters["properties"]["filter"]["properties"]["score"]["minimum"] == 1
+    assert parameters["properties"]["filter"]["properties"]["score"]["maximum"] == 10
+    assert parameters["properties"]["mode"]["oneOf"] == [{"const": "fast"}, {"const": "exact"}]
+
+
+def test_mcp_tool_rejects_contradictory_trusted_annotations():
+    mcp_tool = McpTool(
+        name="erase",
+        description="Erase",
+        inputSchema={"type": "object"},
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=True),
+    )
+
+    with pytest.raises(ValueError, match="read-only and destructive"):
+        MCPTool("notes", mcp_tool, FakeMCPSession(CallToolResult(content=[])), trust_annotations=True)
+
+
+def test_mcp_tool_exposes_trusted_risk_annotations_in_metadata():
+    mcp_tool = McpTool(
+        name="publish",
+        description="Publish",
+        inputSchema={"type": "object"},
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+    )
+    tool = MCPTool("notes", mcp_tool, FakeMCPSession(CallToolResult(content=[])), trust_annotations=True)
+
+    policy = tool.get_metadata(tool.name)["policy"]
+    assert policy["destructive"] is False
+    assert policy["open_world"] is True
+    assert policy["idempotent"] is True

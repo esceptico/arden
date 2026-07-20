@@ -6,6 +6,7 @@ from mcp.types import Tool as McpTool
 from ntrp.mcp.results import call_tool_result_to_tool_result
 from ntrp.tools.core.base import Tool, ToolResult
 from ntrp.tools.core.context import ToolExecution
+from ntrp.tools.core.schema import tool_parameters
 from ntrp.tools.core.types import ToolAction, ToolPolicy, ToolScope
 
 
@@ -64,32 +65,35 @@ class MCPTool(Tool):
             )
 
     def to_dict(self, name: str) -> dict:
-        schema: dict = {"name": name, "description": self.description}
-        input_schema = self._mcp_tool.inputSchema
-        if input_schema:
-            schema["parameters"] = {
-                "type": "object",
-                "properties": input_schema.get("properties", {}),
-                "required": input_schema.get("required", []),
-            }
+        input_schema = self._mcp_tool.inputSchema or {"type": "object"}
+        schema: dict = {
+            "name": name,
+            "description": self.description,
+            "parameters": tool_parameters(input_schema, tool_name=name),
+        }
         return {"type": "function", "function": schema}
 
 
 def _policy_from_annotations(annotations: ToolAnnotations | None, trusted: bool) -> ToolPolicy | None:
     if not trusted or annotations is None:
         return None
+    if annotations.readOnlyHint is True and annotations.destructiveHint is True:
+        raise ValueError("Trusted MCP annotations cannot mark a tool as both read-only and destructive")
     if annotations.readOnlyHint is True:
-        return ToolPolicy(
-            action=ToolAction.READ,
-            scope=ToolScope.EXTERNAL,
-            requires_approval=False,
-            permissions=frozenset({"mcp"}),
-        )
-    if annotations.destructiveHint is True:
-        return ToolPolicy(
-            action=ToolAction.WRITE,
-            scope=ToolScope.EXTERNAL,
-            requires_approval=True,
-            permissions=frozenset({"mcp"}),
-        )
-    return None
+        action = ToolAction.READ
+        requires_approval = False
+    elif annotations.destructiveHint is True:
+        action = ToolAction.WRITE
+        requires_approval = True
+    else:
+        action = ToolAction.EXECUTE
+        requires_approval = True
+    return ToolPolicy(
+        action=action,
+        scope=ToolScope.EXTERNAL,
+        requires_approval=requires_approval,
+        permissions=frozenset({"mcp"}),
+        destructive=annotations.destructiveHint,
+        open_world=annotations.openWorldHint,
+        idempotent=annotations.idempotentHint,
+    )

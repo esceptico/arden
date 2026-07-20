@@ -109,6 +109,9 @@ def test_tool_policy_model_defaults():
     assert policy.max_result_chars is None
     assert policy.offload is True
     assert policy.allow_approval_bypass is True
+    assert policy.destructive is None
+    assert policy.open_world is None
+    assert policy.idempotent is None
 
 
 def test_function_tool_metadata_exposes_policy():
@@ -134,6 +137,9 @@ def test_function_tool_metadata_exposes_policy():
         "max_result_chars": None,
         "offload": True,
         "allow_approval_bypass": True,
+        "destructive": None,
+        "open_world": None,
+        "idempotent": None,
     }
 
 
@@ -571,6 +577,39 @@ async def test_function_tool_execute_without_args():
 
 class EchoInput(BaseModel):
     text: str = Field(min_length=1, description="Text to echo.")
+
+
+class NestedFilter(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    score: int = Field(ge=1, le=10)
+
+
+class ComplexInput(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    filter: NestedFilter
+    mode: str | int
+
+
+def test_function_tool_preserves_complete_normalized_schema():
+    async def handler(execution, args):
+        return ToolResult(content="ok", preview="ok")
+
+    value = tool(
+        description="Complex input.",
+        input_model=ComplexInput,
+        execute=handler,
+        policy=READ_INTERNAL_POLICY,
+    ).to_dict("complex")["function"]["parameters"]
+
+    assert "$defs" not in value
+    assert "$ref" not in str(value)
+    assert value["additionalProperties"] is False
+    assert value["properties"]["filter"]["additionalProperties"] is False
+    assert value["properties"]["filter"]["properties"]["score"]["minimum"] == 1
+    assert value["properties"]["filter"]["properties"]["score"]["maximum"] == 10
+    assert value["properties"]["mode"]["anyOf"] == [{"type": "string"}, {"type": "integer"}]
 
 
 @pytest.mark.asyncio

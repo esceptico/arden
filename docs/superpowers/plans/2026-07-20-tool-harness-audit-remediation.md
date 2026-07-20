@@ -211,10 +211,10 @@ def atomic_compare_and_swap(path: Path, content: str, expected_sha256: str) -> F
 - Produces complete provider-compatible JSON Schema with resolved local refs and preserved constraints.
 - Extends `ToolPolicy` with destructive/open-world/idempotent annotations and exposes them in metadata.
 
-- [ ] Add failing schema tests containing `$defs`, nested `$ref`, `oneOf`, bounds, and `additionalProperties: false`.
-- [ ] Reuse one shared schema normalizer for native and MCP tools; never reconstruct schemas from only `properties` and `required`.
-- [ ] Reject contradictory trusted MCP annotations instead of letting `readOnlyHint` override `destructiveHint`.
-- [ ] Run tests and commit: `fix(mcp): preserve schemas and risk annotations`.
+- [x] Add failing schema tests containing `$defs`, nested `$ref`, `oneOf`, bounds, and `additionalProperties: false`.
+- [x] Reuse one shared schema normalizer for native and MCP tools; never reconstruct schemas from only `properties` and `required`.
+- [x] Reject contradictory trusted MCP annotations instead of letting `readOnlyHint` override `destructiveHint`.
+- [x] Run tests and commit: `fix(mcp): preserve schemas and risk annotations`.
 
 ### Task 7: Bounded MCP and Non-Offloaded Results
 

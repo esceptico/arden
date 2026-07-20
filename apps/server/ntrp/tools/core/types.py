@@ -34,6 +34,9 @@ class ToolPolicy(BaseModel):
     max_result_chars: int | None = None
     offload: bool = True
     allow_approval_bypass: bool = True
+    destructive: bool | None = None
+    open_world: bool | None = None
+    idempotent: bool | None = None
 
     @model_validator(mode="after")
     def _normalize_approval_mode(self):
