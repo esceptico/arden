@@ -194,9 +194,9 @@ def atomic_compare_and_swap(path: Path, content: str, expected_sha256: str) -> F
 - Replaces: `forget(query)` mutation.
 - Produces: `search_memory_candidates(query, limit)` output with stable `memory_ref` and revision; `forget(memory_ref, expected_version)` approval-gated mutation.
 
-- [ ] Add failing tests proving ambiguous text never deletes and stale versions conflict.
-- [ ] Split search from delete, add exact preview/undo metadata, and remove fuzzy mutation.
-- [ ] Run memory tests, stage only audit hunks, and commit: `fix(memory): delete records by stable revisioned ref`.
+- [x] Add failing tests proving ambiguous text never deletes and stale versions conflict.
+- [x] Split search from delete, add exact preview/undo metadata, and remove fuzzy mutation.
+- [x] Run memory tests, stage only audit hunks, and commit: `fix(memory): delete records by stable revisioned ref`.
 
 ### Task 6: Lossless MCP Schemas and Risk Metadata
 

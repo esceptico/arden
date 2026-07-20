@@ -4,24 +4,27 @@ Plain tools over the scoped RecordStore (atomic, self-contained records in
 `config.memory_db_path`):
 
 - remember(text, kind?) -> RecordStore.add (write a record)
-- forget(query)         -> hybrid-search records, delete the best hit
+- search_memory_candidates(query) -> find exact revisioned deletion candidates
+- forget(memory_ref, expected_version) -> delete one exact candidate
 - recall(query)         -> hybrid record search (READ)
 
 Records are one simple table with scope metadata for visibility, not a graph or
 project hierarchy. Each tool only appears once `MEMORY_RECORDS_SERVICE` is wired
 by the knowledge runtime, so they stay hidden when memory is off.
 
-Self-correcting interface (the standing lesson): `forget` never requires the model
-to reproduce an opaque id — it searches by NL query and, on a near-miss, lists the
-other candidates instead of dead-ending.
+Deletion is deliberately two-step: search proposes stable references, then an
+approval-gated forget call compares the selected revision before mutating.
 """
 
 import asyncio
 import difflib
+import hashlib
+import json
 import os
 import re
 import stat
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -65,15 +68,18 @@ class RememberInput(BaseModel):
     )
 
 
-class ForgetInput(BaseModel):
+class SearchMemoryCandidatesInput(BaseModel):
     query: str = Field(
         min_length=1,
         max_length=20_000,
-        description=(
-            "A natural-language description of the memory to forget. The "
-            "best-matching record is removed (no id required)."
-        ),
+        description="A natural-language description used only to find possible memories to forget.",
     )
+    limit: int = Field(default=5, ge=1, le=20, description="Maximum deletion candidates to return.")
+
+
+class ForgetInput(BaseModel):
+    memory_ref: str = Field(min_length=1, description="Exact memory_ref returned by search_memory_candidates.")
+    expected_version: str = Field(min_length=1, description="Exact version returned with that memory_ref.")
 
 
 class MemoryTreeInput(BaseModel):
@@ -145,6 +151,37 @@ def _render_records(records: list) -> str:
         else:
             lines.append(f"- [{r.kind}] {r.text}")
     return "\n".join(lines)
+
+
+def _record_version(record: Any) -> str:
+    sources = []
+    for source in getattr(record, "sources", ()) or ():
+        sources.append(source.to_dict() if hasattr(source, "to_dict") else str(source))
+    payload = {
+        "id": getattr(record, "id", None),
+        "text": getattr(record, "text", None),
+        "kind": getattr(record, "kind", None),
+        "scope_kind": getattr(record, "scope_kind", None),
+        "scope_key": getattr(record, "scope_key", None),
+        "created_at": getattr(record, "created_at", None),
+        "last_confirmed_at": getattr(record, "last_confirmed_at", None),
+        "superseded_by": getattr(record, "superseded_by", None),
+        "pinned": getattr(record, "pinned", False),
+        "sources": sources,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _candidate_data(record: Any) -> dict[str, object]:
+    return {
+        "memory_ref": record.id,
+        "version": _record_version(record),
+        "text": record.text,
+        "kind": record.kind,
+        "scope_kind": getattr(record, "scope_kind", None),
+        "scope_key": getattr(record, "scope_key", None),
+    }
 
 
 
@@ -772,24 +809,99 @@ async def remember(execution: ToolExecution, args: RememberInput) -> ToolResult:
     return ToolResult(content="Remembered", preview="Remembered")
 
 
-async def forget(execution: ToolExecution, args: ForgetInput) -> ToolResult:
+def _visible_memory_scopes(execution: ToolExecution) -> list[tuple[str | None, str | None]]:
+    session_id = getattr(getattr(execution.ctx, "session_state", None), "session_id", None) or execution.ctx.session_id
+    return [(scope.kind, scope.key) for scope in scopes_for_read(project=execution.ctx.area, session_id=session_id)]
+
+
+def _record_is_visible(record: Any, visible: list[tuple[str | None, str | None]]) -> bool:
+    scope = (getattr(record, "scope_kind", None), getattr(record, "scope_key", None))
+    return scope in visible or (scope == (None, None) and ("global", None) in visible)
+
+
+async def search_memory_candidates(
+    execution: ToolExecution,
+    args: SearchMemoryCandidatesInput,
+) -> ToolResult:
     store = execution.ctx.services.get(MEMORY_RECORDS_SERVICE)
     if store is None:
         return _unavailable()
 
-    session_id = getattr(getattr(execution.ctx, "session_state", None), "session_id", None) or execution.ctx.session_id
-    visible = [
-        (s.kind, s.key) for s in scopes_for_read(project=execution.ctx.area, session_id=session_id)
-    ]
-    hits = await store.search(args.query, limit=5, scopes=visible)
+    hits = await store.search(args.query, limit=args.limit, scopes=_visible_memory_scopes(execution))
     if not hits:
-        return ToolResult(content="No matching memory to forget.", preview="Not found")
+        return ToolResult(content="No matching memory candidates.", preview="0 candidates", data={"candidates": []})
 
-    best = hits[0]
-    scope = MemoryScope(best.scope_kind or "user", best.scope_key)
+    candidates = [_candidate_data(hit) for hit in hits]
+    lines = [
+        f"- [{candidate['kind']}] {candidate['text']}\n"
+        f"  memory_ref: {candidate['memory_ref']}\n"
+        f"  version: {candidate['version']}"
+        for candidate in candidates
+    ]
+    return ToolResult(
+        content="\n".join(lines),
+        preview=f"{len(candidates)} candidate(s)",
+        data={"candidates": candidates},
+    )
+
+
+async def _forget_record(execution: ToolExecution, args: ForgetInput) -> tuple[Any | None, ToolResult | None]:
+    store = execution.ctx.services.get(MEMORY_RECORDS_SERVICE)
+    if store is None:
+        return None, _unavailable()
+    record = await store.get(args.memory_ref)
+    if record is None:
+        return None, ToolResult.failure(
+            code="write_conflict",
+            message="The selected memory no longer exists. Search again before deleting.",
+            preview="Memory changed",
+            recovery_action="Call search_memory_candidates again and retry with a current reference and version.",
+        )
+    if not _record_is_visible(record, _visible_memory_scopes(execution)):
+        return None, ToolResult.failure(
+            code="permission_denied",
+            message="The selected memory is outside the current readable scope.",
+            preview="Outside scope",
+            recovery_action="Search within the current session or Area scope.",
+        )
+    observed = _record_version(record)
+    if observed != args.expected_version:
+        return None, ToolResult.failure(
+            code="write_conflict",
+            message="The selected memory changed after it was proposed. Nothing was deleted.",
+            preview="Memory changed",
+            recovery_action="Call search_memory_candidates again and retry with the new version.",
+        )
+    return record, None
+
+
+async def approve_forget(execution: ToolExecution, args: ForgetInput) -> ApprovalInfo | None:
+    record, failure = await _forget_record(execution, args)
+    if failure is not None or record is None:
+        return None
+    return ApprovalInfo(
+        description=f"Forget memory {args.memory_ref} at version {args.expected_version}",
+        preview=str(record.text)[:1_500],
+        diff=f"- {record.text}\n  memory_ref: {args.memory_ref}\n  version: {args.expected_version}",
+    )
+
+
+async def forget(execution: ToolExecution, args: ForgetInput) -> ToolResult:
+    record, failure = await _forget_record(execution, args)
+    if failure is not None or record is None:
+        return failure or ToolResult.failure(
+            code="not_found",
+            message="The selected memory was not found.",
+            preview="Not found",
+        )
+
+    store = execution.ctx.services[MEMORY_RECORDS_SERVICE]
+    session_id = getattr(getattr(execution.ctx, "session_state", None), "session_id", None) or execution.ctx.session_id
+    scope = MemoryScope(getattr(record, "scope_kind", None) or "user", getattr(record, "scope_key", None))
     sources = await _direct_sources(execution, scope)
     records = tuple(await store.list(limit=None, scopes=None))
-    operations = validate_operations([RecordOperation.retract(best.id)], records, sources)
+    operations = validate_operations([RecordOperation.retract(record.id)], records, sources)
+
     if hasattr(store, "apply_operations"):
         store.apply_operations(
             operations,
@@ -799,14 +911,26 @@ async def forget(execution: ToolExecution, args: ForgetInput) -> ToolResult:
     else:
         # Test-only legacy SQLite compatibility. Runtime memory is the schema-v2
         # FilePageStore above, which journals the evidenced RETRACT operation.
-        await store.delete(best.id)
-    others = hits[1:]
-    content = f"Forgot: {best.text}"
-    if others:
-        # Self-correcting: show what else matched so the model can refine rather
-        # than dead-end if it meant a different record.
-        content += "\n\nOther matches (not removed):\n" + _render_records(others)
-    return ToolResult(content=content, preview="Forgotten")
+        await store.delete(record.id)
+
+    deleted = _candidate_data(record)
+    return ToolResult(
+        content=f"Forgot: {record.text}",
+        preview="Forgotten",
+        data={
+            "deleted": deleted,
+            "undo": {"tool": "remember", "text": record.text, "kind": record.kind},
+        },
+        outcome=ToolOutcome(
+            status=ToolOutcomeStatus.SUCCEEDED,
+            effect=ToolEffect(
+                operation="delete",
+                target=args.memory_ref,
+                before_ref=args.expected_version,
+                after_ref="absent",
+            ),
+        ),
+    )
 
 
 async def recall(execution: ToolExecution, args: RecallInput) -> ToolResult:
@@ -941,18 +1065,35 @@ remember_tool = tool(
     execute=remember,
 )
 
+search_memory_candidates_tool = tool(
+    display_name="Search Memory Candidates",
+    description=(
+        "Find possible long-term memories to delete without changing anything. "
+        "Returns exact memory_ref and version values required by forget."
+    ),
+    input_model=SearchMemoryCandidatesInput,
+    policy=ToolPolicy(
+        action=ToolAction.READ,
+        scope=ToolScope.INTERNAL,
+        permissions=frozenset({MEMORY_RECORDS_SERVICE}),
+    ),
+    execute=search_memory_candidates,
+)
+
 forget_tool = tool(
     display_name="Forget",
     description=(
-        "Remove a previously-remembered record from long-term memory. Describe "
-        "what to forget in natural language; the best-matching record is removed."
+        "Delete one exact long-term memory previously returned by search_memory_candidates. "
+        "Requires its stable memory_ref and version and fails if the record changed."
     ),
     input_model=ForgetInput,
     policy=ToolPolicy(
         action=ToolAction.WRITE,
         scope=ToolScope.INTERNAL,
+        requires_approval=True,
         permissions=frozenset({MEMORY_RECORDS_SERVICE}),
     ),
+    approval=approve_forget,
     execute=forget,
 )
 

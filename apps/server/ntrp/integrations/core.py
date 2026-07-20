@@ -49,6 +49,7 @@ from ntrp.tools.memory import (
     memory_write_tool,
     recall_tool,
     remember_tool,
+    search_memory_candidates_tool,
 )
 from ntrp.tools.notify import notify_tool
 from ntrp.tools.render_html import render_html_tool
@@ -183,6 +184,7 @@ MEMORY = Integration(
     label="Memory",
     tools={
         "remember": remember_tool,
+        "search_memory_candidates": search_memory_candidates_tool,
         "forget": forget_tool,
         "recall": recall_tool,
         "memory_tree": memory_tree_tool,

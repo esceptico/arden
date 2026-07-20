@@ -29,9 +29,12 @@ from ntrp.tools.memory import (
     ForgetInput,
     RecallInput,
     RememberInput,
+    SearchMemoryCandidatesInput,
+    approve_forget,
     forget,
     recall,
     remember,
+    search_memory_candidates,
 )
 from tests.conftest import completion_response
 
@@ -70,6 +73,15 @@ def _execution(store, reconciler=None):
         area=None,
     )
     return types.SimpleNamespace(ctx=ctx, tool_id="t1")
+
+
+async def _forget_by_query(execution, query: str):
+    found = await search_memory_candidates(execution, SearchMemoryCandidatesInput(query=query))
+    candidate = found.data["candidates"][0]
+    return await forget(
+        execution,
+        ForgetInput(memory_ref=candidate["memory_ref"], expected_version=candidate["version"]),
+    )
 
 
 async def _ledger_dependencies(tmp_path: Path, *decisions: dict):
@@ -364,7 +376,7 @@ async def test_file_store_direct_contradiction_and_forget_preserve_history_and_e
         ]
 
         execution.tool_id = "forget-contradiction"
-        forgotten = await forget(execution, ForgetInput(query="Globex"))
+        forgotten = await _forget_by_query(execution, "Globex")
 
         assert forgotten.preview == "Forgotten"
         assert await store.list(limit=None, scopes=None) == []
@@ -410,7 +422,7 @@ async def test_memory_tools_return_after_committed_mutation_when_artifact_sync_f
     assert remembered.preview == "Remembered"
     assert await store.search("artifact sync failures")
 
-    forgotten = await forget(execution, ForgetInput(query="artifact sync failures"))
+    forgotten = await _forget_by_query(execution, "artifact sync failures")
 
     assert forgotten.preview == "Forgotten"
     assert "artifact sync failures should not mask writes" in forgotten.content
@@ -440,11 +452,11 @@ async def test_recall_no_matches(store: RecordStore):
 # --- forget -------------------------------------------------------------------
 
 
-async def test_forget_deletes_best_match(store: RecordStore):
+async def test_forget_deletes_exact_versioned_ref(store: RecordStore):
     execution = _execution(store)
     await store.add("the user dislikes coffee")
 
-    result = await forget(execution, ForgetInput(query="coffee"))
+    result = await _forget_by_query(execution, "coffee")
     assert result.preview == "Forgotten"
     assert "coffee" in result.content.lower()
     assert await store.search("coffee") == []
@@ -454,18 +466,29 @@ async def test_forget_validates_retract_with_tool_evidence():
     class Store:
         applied = None
 
+        record = types.SimpleNamespace(
+            id="record",
+            text="the user dislikes coffee",
+            kind="fact",
+            scope_kind="user",
+            scope_key=None,
+        )
+
         async def search(self, *args, **kwargs):
-            return [types.SimpleNamespace(id="record", text="the user dislikes coffee", kind="fact", scope_kind="user", scope_key=None)]
+            return [self.record]
+
+        async def get(self, record_id):
+            return self.record if record_id == self.record.id else None
 
         async def list(self, *args, **kwargs):
-            return [types.SimpleNamespace(id="record", text="the user dislikes coffee", kind="fact", scope_kind="user", scope_key=None)]
+            return [self.record]
 
         def apply_operations(self, operations, sources, **kwargs):
             self.applied = (operations, sources)
 
     store = Store()
 
-    result = await forget(_execution(store), ForgetInput(query="coffee"))
+    result = await _forget_by_query(_execution(store), "coffee")
 
     assert result.preview == "Forgotten"
     operations, sources = store.applied
@@ -476,22 +499,57 @@ async def test_forget_validates_retract_with_tool_evidence():
     assert sources[0].ref == "t1"
 
 
-async def test_forget_lists_other_matches(store: RecordStore):
+async def test_search_candidates_never_deletes_ambiguous_matches(store: RecordStore):
     execution = _execution(store)
     await store.add("the user likes green tea")
     await store.add("the user likes black tea")
 
-    result = await forget(execution, ForgetInput(query="tea"))
-    assert result.preview == "Forgotten"
-    assert "Other matches" in result.content
+    result = await search_memory_candidates(execution, SearchMemoryCandidatesInput(query="tea"))
+
+    assert result.preview == "2 candidate(s)"
+    assert len(result.data["candidates"]) == 2
+    assert all(candidate["memory_ref"] and candidate["version"] for candidate in result.data["candidates"])
     remaining = await store.search("tea")
-    assert len(remaining) == 1
+    assert len(remaining) == 2
 
 
-async def test_forget_not_found(store: RecordStore):
+async def test_search_candidates_not_found_is_non_mutating(store: RecordStore):
     execution = _execution(store)
-    result = await forget(execution, ForgetInput(query="nothing stored"))
-    assert result.preview == "Not found"
+    result = await search_memory_candidates(execution, SearchMemoryCandidatesInput(query="nothing stored"))
+    assert result.preview == "0 candidates"
+
+
+async def test_forget_rejects_stale_version_without_deleting(store: RecordStore):
+    execution = _execution(store)
+    record = await store.add("the user likes coffee")
+    found = await search_memory_candidates(execution, SearchMemoryCandidatesInput(query="coffee"))
+    candidate = found.data["candidates"][0]
+    await store.update(record.id, "the user dislikes coffee")
+
+    result = await forget(
+        execution,
+        ForgetInput(memory_ref=candidate["memory_ref"], expected_version=candidate["version"]),
+    )
+
+    assert result.is_error
+    assert result.outcome.error.code == "write_conflict"
+    assert await store.get(record.id) is not None
+
+
+async def test_forget_approval_previews_exact_record(store: RecordStore):
+    execution = _execution(store)
+    await store.add("the user dislikes coffee")
+    found = await search_memory_candidates(execution, SearchMemoryCandidatesInput(query="coffee"))
+    candidate = found.data["candidates"][0]
+
+    approval = await approve_forget(
+        execution,
+        ForgetInput(memory_ref=candidate["memory_ref"], expected_version=candidate["version"]),
+    )
+
+    assert approval is not None
+    assert approval.preview == "the user dislikes coffee"
+    assert candidate["memory_ref"] in approval.description
 
 
 # --- unavailable service (shape preserved) ------------------------------------
