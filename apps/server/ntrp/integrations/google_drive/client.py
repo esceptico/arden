@@ -248,6 +248,7 @@ class MultiGoogleDriveClient:
     ) -> list[DriveFile]:
         clients = [self._account(account_id)] if account_id else list(self.clients.values())
         results = [item for client in clients for item in client.search(query, kind=kind, limit=limit)]
+        results.sort(key=lambda item: (item.modified_time or "", item.ref), reverse=True)
         return results[:limit]
 
     def _account(self, account_ref: str) -> GoogleDriveClient:

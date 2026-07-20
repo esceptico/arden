@@ -277,10 +277,10 @@ def atomic_compare_and_swap(path: Path, content: str, expected_sha256: str) -> F
 - Canonical refs are account-qualified and are exactly the strings sibling tools accept.
 - Slack semantic user resolution paginates all candidates and returns ambiguity rather than choosing silently.
 
-- [ ] Add failing create→read/update and multi-account collision tests.
-- [ ] Print and return qualified refs from Gmail/Calendar/Drive create/search/read results; stop probing accounts in configuration order.
-- [ ] Return Drive creation refs, preserve globally stable sorting, and paginate Slack user lookup beyond five users.
-- [ ] Run tests and commit: `fix(integrations): return chain-safe semantic refs`.
+- [x] Add failing create→read/update and multi-account collision tests.
+- [x] Print and return qualified refs from Gmail/Calendar/Drive create/search/read results; stop probing accounts in configuration order.
+- [x] Return Drive creation refs, preserve globally stable sorting, and paginate Slack user lookup beyond five users.
+- [x] Run tests and commit: `fix(integrations): return chain-safe semantic refs`.
 
 ### Task 10: Common Pagination, Ordering, and Time Contracts
 

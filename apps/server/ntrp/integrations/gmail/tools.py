@@ -30,6 +30,8 @@ Use read_email(id) to get full content of a specific email."""
 def _qualified_message_ref(account: str, message_id: str) -> str:
     account = account.strip()
     message_id = message_id.strip()
+    if account and message_id.startswith(f"{account}:"):
+        return message_id
     return f"{account}:{message_id}" if account and message_id else ""
 
 
@@ -137,7 +139,7 @@ def _format_email_list(emails: list) -> str:
         preview = truncate(email.preview, EMAIL_FROM_TRUNCATE) if email.preview else ""
         line = f"• {title}" + (f" ({preview})" if preview else "")
         if email.identity:
-            line += f"  id: {email.identity}"
+            line += f"  id: {_qualified_message_ref(email.account, email.identity)}"
         output.append(line)
     return "\n".join(output)
 
@@ -149,7 +151,7 @@ def _format_email_search(results: list) -> str:
         subj = truncate(meta.get("subject", "No subject"), EMAIL_SUBJECT_TRUNCATE)
         frm = truncate(meta.get("from", ""), EMAIL_FROM_TRUNCATE)
         output.append(f"• {subj}")
-        output.append(f"  from: {frm}, id: {item.source_id}")
+        output.append(f"  from: {frm}, id: {_qualified_message_ref(meta.get('account', ''), item.source_id)}")
     return "\n".join(output)
 
 

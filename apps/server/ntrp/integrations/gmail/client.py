@@ -608,8 +608,17 @@ class MultiGmailSource:
         )
 
     def read(self, source_id: str) -> ReadEmailResult | None:
+        account, separator, message_id = source_id.partition(":")
+        if not separator:
+            if len(self.sources) != 1:
+                return None
+            source = self.sources[0]
+            result = source.read(source_id)
+            return ReadEmailResult(content=result, account=source.get_email_address()) if result else None
         for src in self.sources:
-            result = src.read(source_id)
+            if src.get_email_address().lower() != account.lower():
+                continue
+            result = src.read(message_id)
             if result and not result.startswith("Email not found"):
                 return ReadEmailResult(content=result, account=src.get_email_address())
         return None

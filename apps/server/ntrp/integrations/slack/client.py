@@ -374,38 +374,52 @@ class SlackClient:
         stripped = target.lstrip("@")
         if stripped and stripped[0] in ("U", "W") and stripped.isalnum() and stripped.isupper():
             return await self.open_dm(stripped)
-        # Name -> search users, then open DM with best match
-        users = await self.search_users(stripped, limit=5)
+        # Name -> resolve across the complete matching user set.
+        users = await self.search_users(stripped, limit=200)
         if not users:
             raise RuntimeError(f"No Slack user found matching {target!r}")
-        user_id = users[0]["id"]
+        normalized = stripped.casefold()
+        exact = [
+            user
+            for user in users
+            if normalized in {user.get("name", "").casefold(), user.get("username", "").casefold(), user.get("email", "").casefold()}
+        ]
+        candidates = exact or users
+        if len(candidates) != 1:
+            refs = ", ".join(f"{user['name']} ({user['id']})" for user in candidates[:10])
+            raise RuntimeError(f"Ambiguous Slack user {target!r}; choose an exact user id: {refs}")
+        user_id = candidates[0]["id"]
         return await self.open_dm(user_id)
 
     async def search_users(self, query: str | None = None, limit: int = 50) -> list[dict[str, str]]:
         async with aiohttp.ClientSession() as session:
-            data = await self._get(session, "users.list", limit=str(limit))
-            members = data.get("members", [])
             results = []
             q = query.lower() if query else None
-            for m in members:
-                if m.get("deleted") or m.get("is_bot"):
-                    continue
-                profile = m.get("profile", {})
-                name = m.get("real_name") or m.get("name", "")
-                email = profile.get("email", "")
-                username = m.get("name", "")
-                if q and q not in name.lower() and q not in email.lower() and q not in username.lower():
-                    continue
-                results.append(
-                    {
-                        "id": m.get("id", ""),
-                        "name": name,
-                        "username": username,
-                        "email": email,
-                        "title": profile.get("title", ""),
-                    }
-                )
-                if len(results) >= limit:
+            cursor = ""
+            while len(results) < limit:
+                data = await self._get(session, "users.list", limit="200", cursor=cursor)
+                for m in data.get("members", []):
+                    if m.get("deleted") or m.get("is_bot"):
+                        continue
+                    profile = m.get("profile", {})
+                    name = m.get("real_name") or m.get("name", "")
+                    email = profile.get("email", "")
+                    username = m.get("name", "")
+                    if q and q not in name.lower() and q not in email.lower() and q not in username.lower():
+                        continue
+                    results.append(
+                        {
+                            "id": m.get("id", ""),
+                            "name": name,
+                            "username": username,
+                            "email": email,
+                            "title": profile.get("title", ""),
+                        }
+                    )
+                    if len(results) >= limit:
+                        break
+                cursor = data.get("response_metadata", {}).get("next_cursor", "")
+                if not cursor:
                     break
             return results
 

@@ -1,3 +1,4 @@
+import re
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -15,6 +16,10 @@ from ntrp.integrations.google_auth.auth import (
 from ntrp.logging import get_logger
 from ntrp.search.types import RawItem
 from ntrp.settings import NTRP_DIR
+
+
+def _qualify_calendar_result(result: str, account: str) -> str:
+    return re.sub(r"\(id: ([^)]+)\)", lambda match: f"(id: {account}:{match.group(1)})", result, count=1)
 
 
 def parse_event_datetime(dt_obj: dict) -> datetime | None:
@@ -454,7 +459,11 @@ class MultiCalendarSource:
         connection_error: IntegrationConnectionError | None = None
         for src in self.sources:
             try:
-                items.extend(fn(src))
+                account = src.get_email_address()
+                for item in fn(src):
+                    item.source_id = f"{account}:{item.source_id}"
+                    item.metadata["account"] = account
+                    items.append(item)
             except RefreshError as e:
                 key = src.get_email_address() or src.token_path.name
                 _logger.warning("Calendar auth failed for %s: %s", key, e)
@@ -492,7 +501,8 @@ class MultiCalendarSource:
         if not account:
             # Default to first available calendar
             if self.sources:
-                return self.sources[0].create_event(
+                source = self.sources[0]
+                result = source.create_event(
                     summary=summary,
                     start=start,
                     end=end,
@@ -501,6 +511,7 @@ class MultiCalendarSource:
                     attendees=attendees,
                     all_day=all_day,
                 )
+                return _qualify_calendar_result(result, source.get_email_address())
             raise IntegrationOperationError(
                 code="not_found",
                 safe_message="No Calendar accounts are available.",
@@ -510,7 +521,7 @@ class MultiCalendarSource:
         for src in self.sources:
             email = src.get_email_address().lower()
             if email == account_lower:
-                return src.create_event(
+                result = src.create_event(
                     summary=summary,
                     start=start,
                     end=end,
@@ -519,6 +530,7 @@ class MultiCalendarSource:
                     attendees=attendees,
                     all_day=all_day,
                 )
+                return _qualify_calendar_result(result, email)
 
         accounts = self.list_accounts()
         if accounts:
@@ -532,16 +544,8 @@ class MultiCalendarSource:
         )
 
     def delete_event(self, event_id: str) -> str:
-        for src in self.sources:
-            try:
-                return src.delete_event(event_id)
-            except IntegrationProviderError as exc:
-                if exc.code != "not_found":
-                    raise
-        raise IntegrationOperationError(
-            code="invalid_ref",
-            safe_message=f"Calendar event not found: {event_id}",
-        )
+        src, provider_id = self._resolve_event_ref(event_id)
+        return src.delete_event(provider_id)
 
     def update_event(
         self,
@@ -554,24 +558,33 @@ class MultiCalendarSource:
         attendees: list[str] | None = None,
         all_day: bool | None = None,
     ) -> str:
-        for src in self.sources:
-            try:
-                return src.update_event(
-                    event_id=event_id,
-                    summary=summary,
-                    start=start,
-                    end=end,
-                    description=description,
-                    location=location,
-                    attendees=attendees,
-                    all_day=all_day,
-                )
-            except IntegrationProviderError as exc:
-                if exc.code != "not_found":
-                    raise
+        src, provider_id = self._resolve_event_ref(event_id)
+        return src.update_event(
+            event_id=provider_id,
+            summary=summary,
+            start=start,
+            end=end,
+            description=description,
+            location=location,
+            attendees=attendees,
+            all_day=all_day,
+        )
+
+    def _resolve_event_ref(self, event_ref: str) -> tuple[GoogleCalendar, str]:
+        account, separator, event_id = event_ref.partition(":")
+        if not separator:
+            if len(self.sources) == 1:
+                return self.sources[0], event_ref
+            raise IntegrationOperationError(
+                code="invalid_ref",
+                safe_message="Calendar event references must be account-qualified.",
+            )
+        for source in self.sources:
+            if source.get_email_address().lower() == account.lower():
+                return source, event_id
         raise IntegrationOperationError(
             code="invalid_ref",
-            safe_message=f"Calendar event not found: {event_id}",
+            safe_message=f"Calendar account not found in event reference: {account}",
         )
 
     def search(self, query: str, limit: int = 20) -> list[RawItem]:

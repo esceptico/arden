@@ -17,6 +17,7 @@ from ntrp.integrations.gmail.tools import (
     read_email,
     send_email,
 )
+from ntrp.integrations.mutations import IDEMPOTENCY_LEDGER_SERVICE, IdempotencyLedger
 from ntrp.integrations.slack.client import SlackClient, SlackThreadResult
 from ntrp.integrations.slack.tools import (
     SlackPostBlocksInput,
@@ -156,7 +157,7 @@ def test_calendar_create_raises_sanitized_provider_failure(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_send_email_maps_provider_failure_to_typed_result():
+async def test_send_email_maps_provider_failure_to_typed_result(tmp_path):
     source = FakeGmailSource()
 
     def fail_send(**kwargs):
@@ -167,8 +168,10 @@ async def test_send_email_maps_provider_failure_to_typed_result():
         )
 
     source.send_email = fail_send
+    execution = _execution("gmail", source, "send_email")
+    execution.ctx.services[IDEMPOTENCY_LEDGER_SERVICE] = IdempotencyLedger(tmp_path / "idempotency.sqlite3")
     result = await send_email(
-        _execution("gmail", source, "send_email"),
+        execution,
         SendEmailInput(
             account="me@example.test",
             to="you@example.test",
@@ -185,7 +188,7 @@ async def test_send_email_maps_provider_failure_to_typed_result():
 
 
 @pytest.mark.asyncio
-async def test_calendar_create_maps_provider_failure_to_typed_result():
+async def test_calendar_create_maps_provider_failure_to_typed_result(tmp_path):
     source = FakeCalendarSource([])
 
     def fail_create(**kwargs):
@@ -196,8 +199,10 @@ async def test_calendar_create_maps_provider_failure_to_typed_result():
         )
 
     source.create_event = fail_create
+    execution = _execution("calendar", source, "create_calendar_event")
+    execution.ctx.services[IDEMPOTENCY_LEDGER_SERVICE] = IdempotencyLedger(tmp_path / "idempotency.sqlite3")
     result = await create_calendar_event(
-        _execution("calendar", source, "create_calendar_event"),
+        execution,
         CreateCalendarEventInput(
             summary="Review",
             start="2026-07-20T09:00:00+04:00",
@@ -367,7 +372,7 @@ def test_multi_gmail_read_returns_the_matching_account_identity():
         SimpleNamespace(read=lambda _source_id: "message body", get_email_address=lambda: "second@example.test"),
     ]
 
-    result = source.read("message-123")
+    result = source.read("second@example.test:message-123")
 
     assert result is not None
     assert result.content == "message body"

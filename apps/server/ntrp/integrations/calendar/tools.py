@@ -218,7 +218,9 @@ async def create_calendar_event(execution: ToolExecution, args: CreateCalendarEv
         except IntegrationOperationError as error:
             return operation_error_result(error, preview="Create failed")
         match = re.search(r"\(id: ([^)]+)\)", result)
-        event_ref = f"{args.account}:{match.group(1)}" if match and args.account else (match.group(1) if match else None)
+        event_ref = match.group(1) if match else None
+        if event_ref and args.account and not event_ref.startswith(f"{args.account}:"):
+            event_ref = f"{args.account}:{event_ref}"
         return mutation_result(
             content=result,
             preview="Created" if event_ref else "Create unverified",
