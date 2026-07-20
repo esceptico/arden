@@ -104,11 +104,11 @@ def test_registry_reports_untyped_build_failure_as_degraded():
 
 def test_registered_native_integrations_declare_connection_capabilities():
     assert GMAIL.connection is not None
-    assert GMAIL.connection.connection_id == "google"
+    assert GMAIL.connection.connection_id == "gmail"
     assert GMAIL.connection.action == "oauth"
 
     assert CALENDAR.connection is not None
-    assert CALENDAR.connection.connection_id == "google"
+    assert CALENDAR.connection.connection_id == "calendar"
     assert CALENDAR.connection.action == "oauth"
 
     assert SLACK.connection is not None

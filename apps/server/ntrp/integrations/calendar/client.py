@@ -92,11 +92,7 @@ class GoogleCalendar:
         if token_path:
             self.token_path = token_path
         else:
-            gmail_tokens = list(NTRP_DIR.glob("gmail_token*.json")) if NTRP_DIR.exists() else []
-            if gmail_tokens:
-                self.token_path = sorted(gmail_tokens)[0]
-            else:
-                self.token_path = NTRP_DIR / "calendar_token.json"
+            self.token_path = NTRP_DIR / "calendar_token.json"
 
         self.days_back = days_back
         self.days_ahead = days_ahead
