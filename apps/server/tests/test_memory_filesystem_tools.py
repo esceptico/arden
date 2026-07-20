@@ -9,6 +9,7 @@ import pytest
 import ntrp.tools.memory as memory_tools
 from ntrp.integrations.core import MEMORY
 from ntrp.memory.records import RecordStore
+from ntrp.tools.core.file_mutation import file_revision
 from ntrp.tools.core.registry import ToolRegistry
 from ntrp.tools.memory import (
     MEMORY_RECONCILER_SERVICE,
@@ -125,6 +126,7 @@ async def test_memory_tree_read_and_search_use_artifact_store_safety(store: Reco
     assert not read.is_error
     assert "oolong" in read.content.lower()
     assert read.data["path"] == "me.md"
+    assert read.data["sha256"] == file_revision(artifacts_dir / "me.md").sha256
 
     search = await memory_search(execution, MemorySearchInput(query="concise", limit=10))
     assert not search.is_error
@@ -201,7 +203,18 @@ async def test_memory_read_search_patch_reject_bad_paths(store: RecordStore, art
 
     assert (await memory_read(execution, MemoryReadInput(path=bad_path))).is_error
     assert (await memory_search(execution, MemorySearchInput(query="x", path=bad_path))).is_error
-    assert (await memory_patch(execution, MemoryPatchInput(path=bad_path, old_text="x", new_text="y", force_generated=True))).is_error
+    assert (
+        await memory_patch(
+            execution,
+            MemoryPatchInput(
+                path=bad_path,
+                old_text="x",
+                new_text="y",
+                force_generated=True,
+                expected_sha256="absent",
+            ),
+        )
+    ).is_error
 
 
 async def test_memory_tools_reject_symlink_and_fifo(store: RecordStore, artifacts_dir: Path):
@@ -215,7 +228,18 @@ async def test_memory_tools_reject_symlink_and_fifo(store: RecordStore, artifact
 
     assert (await memory_read(execution, MemoryReadInput(path="me.md"))).is_error
     assert (await memory_search(execution, MemorySearchInput(query="outside", path="me.md"))).is_error
-    assert (await memory_patch(execution, MemoryPatchInput(path="me.md", old_text="outside", new_text="inside", force_generated=True))).is_error
+    assert (
+        await memory_patch(
+            execution,
+            MemoryPatchInput(
+                path="me.md",
+                old_text="outside",
+                new_text="inside",
+                force_generated=True,
+                expected_sha256="absent",
+            ),
+        )
+    ).is_error
 
     readme.unlink()
     _fifo_or_skip(readme)
@@ -230,17 +254,18 @@ async def test_memory_patch_refuses_generated_without_force_and_force_patch_audi
     store_obj = memory_tools.ArtifactMemoryStore(artifacts_dir)
     store_obj._write("health.md", "Health & gaps", "topic", "global", None, "# Memory health\n\nAll good.\n", None)
     old = store_obj.read_artifact("health.md").content.splitlines()[0]
+    health_revision = file_revision(artifacts_dir / "health.md").sha256
 
-    refused = await memory_patch(execution, MemoryPatchInput(path="health.md", old_text=old, new_text="# Patched memory", force_generated=False))
+    refused = await memory_patch(execution, MemoryPatchInput(path="health.md", old_text=old, new_text="# Patched memory", force_generated=False, expected_sha256=health_revision))
     assert refused.is_error
     assert "Refusing to edit generated" in refused.content
 
-    approval = await approve_memory_patch(execution, MemoryPatchInput(path="health.md", old_text=old, new_text="# Patched memory", force_generated=True))
+    approval = await approve_memory_patch(execution, MemoryPatchInput(path="health.md", old_text=old, new_text="# Patched memory", force_generated=True, expected_sha256=health_revision))
     assert approval is not None
     assert approval.description == "Force edit generated memory artifact health.md"
     assert "-" in (approval.diff or "") and "+" in (approval.diff or "")
 
-    patched = await memory_patch(execution, MemoryPatchInput(path="health.md", old_text=old, new_text="# Patched memory", force_generated=True))
+    patched = await memory_patch(execution, MemoryPatchInput(path="health.md", old_text=old, new_text="# Patched memory", force_generated=True, expected_sha256=health_revision))
     assert not patched.is_error
     assert store_obj.read_artifact("health.md").content.startswith("# Patched memory")
     changelog = "\n".join(p.read_text(encoding="utf-8") for p in (artifacts_dir / "changelog").glob("**/*.md"))
@@ -248,7 +273,7 @@ async def test_memory_patch_refuses_generated_without_force_and_force_patch_audi
 
     # canonical prose pages are directly editable — no force needed
     me_old = store_obj.read_artifact("me.md").content.splitlines()[0]
-    edited = await memory_patch(execution, MemoryPatchInput(path="me.md", old_text=me_old, new_text="# Me, edited", force_generated=False))
+    edited = await memory_patch(execution, MemoryPatchInput(path="me.md", old_text=me_old, new_text="# Me, edited", force_generated=False, expected_sha256=file_revision(artifacts_dir / "me.md").sha256))
     assert not edited.is_error
 
 
@@ -257,10 +282,44 @@ async def test_memory_patch_requires_unique_old_text(store: RecordStore, artifac
     path = artifacts_dir / "me.md"
     path.write_text("# A\nrepeat\nrepeat\n", encoding="utf-8")
 
-    result = await memory_patch(_execution(store), MemoryPatchInput(path="me.md", old_text="repeat", new_text="once", force_generated=True))
+    result = await memory_patch(_execution(store), MemoryPatchInput(path="me.md", old_text="repeat", new_text="once", force_generated=True, expected_sha256=file_revision(path).sha256))
 
     assert result.is_error
     assert result.preview == "Ambiguous"
+
+
+async def test_memory_patch_rejects_change_after_approval(store: RecordStore, artifacts_dir: Path):
+    await _seed(artifacts_dir)
+    path = artifacts_dir / "me.md"
+    expected = file_revision(path).sha256
+    old_text = "oolong"
+    execution = _execution(store)
+
+    approval = await approve_memory_patch(
+        execution,
+        MemoryPatchInput(
+            path="me.md",
+            old_text=old_text,
+            new_text="sencha",
+            expected_sha256=expected,
+        ),
+    )
+    path.write_text(path.read_text(encoding="utf-8") + "\nExternal edit.\n", encoding="utf-8")
+    result = await memory_patch(
+        execution,
+        MemoryPatchInput(
+            path="me.md",
+            old_text=old_text,
+            new_text="sencha",
+            expected_sha256=expected,
+        ),
+    )
+
+    assert approval is not None and expected in (approval.diff or "")
+    assert result.is_error
+    assert result.outcome is not None and result.outcome.error is not None
+    assert result.outcome.error.code == "write_conflict"
+    assert "External edit." in path.read_text(encoding="utf-8")
 
 
 async def test_memory_rebuild_is_noop_under_file_canonical(store: RecordStore, artifacts_dir: Path):
@@ -284,14 +343,17 @@ async def test_memory_write_creates_and_updates_feed_pages(store: RecordStore, a
     await _seed(artifacts_dir)
     execution = _execution(store)
 
-    approval = await approve_memory_write(execution, MemoryWriteInput(path="feeds/pr-queue.md", content="# PR queue\n\n- none open"))
+    approval = await approve_memory_write(execution, MemoryWriteInput(path="feeds/pr-queue.md", content="# PR queue\n\n- none open", expected_sha256="absent"))
     assert approval is not None and approval.description == "Create memory page feeds/pr-queue.md"
 
-    created = await memory_write(execution, MemoryWriteInput(path="feeds/pr-queue.md", content="# PR queue\n\n- none open"))
+    created = await memory_write(execution, MemoryWriteInput(path="feeds/pr-queue.md", content="# PR queue\n\n- none open", expected_sha256="absent"))
     assert not created.is_error
+    assert created.outcome is not None and created.outcome.effect is not None
+    assert created.outcome.effect.before_ref == "absent"
+    assert created.outcome.effect.after_ref == created.data["sha256"]
     assert (artifacts_dir / "feeds" / "pr-queue.md").read_text(encoding="utf-8").startswith("# PR queue")
 
-    updated = await memory_write(execution, MemoryWriteInput(path="feeds/pr-queue.md", content="# PR queue\n\n- 2 open"))
+    updated = await memory_write(execution, MemoryWriteInput(path="feeds/pr-queue.md", content="# PR queue\n\n- 2 open", expected_sha256=created.data["sha256"]))
     assert not updated.is_error and updated.preview == "Updated"
     assert "2 open" in (artifacts_dir / "feeds" / "pr-queue.md").read_text(encoding="utf-8")
 
@@ -305,18 +367,18 @@ async def test_memory_write_refuses_record_backed_generated_and_bad_paths(store:
     # record-backed page (raw/ sidecar exists) -> compiled prose, refuse whole-page write
     (artifacts_dir / "raw").mkdir(parents=True, exist_ok=True)
     (artifacts_dir / "raw" / "me.md").write_text("- 2026-07-02 ^aaaa1111 [fact] (src:user) x\n", encoding="utf-8")
-    refused = await memory_write(execution, MemoryWriteInput(path="me.md", content="# clobber"))
+    refused = await memory_write(execution, MemoryWriteInput(path="me.md", content="# clobber", expected_sha256="absent"))
     assert refused.is_error and "record-backed" in refused.content
 
     # generated report
     store_obj = memory_tools.ArtifactMemoryStore(artifacts_dir)
     store_obj._write("health.md", "Health", "topic", "global", None, "# Memory health\n", None)
-    gen = await memory_write(execution, MemoryWriteInput(path="health.md", content="# nope"))
+    gen = await memory_write(execution, MemoryWriteInput(path="health.md", content="# nope", expected_sha256="absent"))
     assert gen.is_error
 
     # path escapes / disallowed dirs
     for bad in ("../evil.md", "raw/me.md", "changelog/2026/2026-07.md", "newroot.md"):
-        result = await memory_write(execution, MemoryWriteInput(path=bad, content="x"))
+        result = await memory_write(execution, MemoryWriteInput(path=bad, content="x", expected_sha256="absent"))
         assert result.is_error, bad
 
 

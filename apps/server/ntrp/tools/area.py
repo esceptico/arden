@@ -3,9 +3,16 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from ntrp.areas.paths import atomic_write_text, resolve_area_page
+from ntrp.agent.types.tools import ToolEffect, ToolOutcome, ToolOutcomeStatus
+from ntrp.areas.paths import resolve_area_page
 from ntrp.tools.core import ToolResult, tool
 from ntrp.tools.core.context import ToolExecution
+from ntrp.tools.core.file_mutation import (
+    RevisionConflict,
+    atomic_compare_and_swap,
+    read_file_snapshot,
+    revision_or_absent,
+)
 from ntrp.tools.core.formatting import format_lines_with_pagination
 from ntrp.tools.core.types import ToolAction, ToolPolicy, ToolScope
 
@@ -20,10 +27,14 @@ class AreaPageReadInput(BaseModel):
 class AreaPagePatchInput(BaseModel):
     old_text: str = Field(min_length=1)
     new_text: str
+    expected_sha256: str = Field(description="SHA-256 returned by area_page_read for the page being edited.")
 
 
 class AreaPageWriteInput(BaseModel):
     content: str = Field(min_length=1, max_length=100_000, description="Complete Markdown body; frontmatter is preserved.")
+    expected_sha256: str = Field(
+        description="SHA-256 returned by area_page_read, or the literal 'absent' when creating the page."
+    )
 
 
 class AreaAutomationRunInput(BaseModel):
@@ -50,6 +61,21 @@ def _frontmatter_prefix(raw: str) -> str:
     return raw[: end + 5] if end >= 0 else ""
 
 
+def _revision_conflict(target: Path, expected_sha256: str) -> ToolResult | None:
+    observed = revision_or_absent(target)
+    if observed == expected_sha256:
+        return None
+    return ToolResult.failure(
+        code="write_conflict",
+        message=(
+            f"Area page changed since it was read. Expected {expected_sha256}, observed {observed}. "
+            "Read it again before writing."
+        ),
+        preview="Write conflict",
+        recovery_action="Read the Area page, recompute the change, and retry with its new sha256.",
+    )
+
+
 def _record_write(execution: ToolExecution, written: str) -> None:
     """Self-write provenance: only the Custodian's own automation runs record
     digests. An edit made from any other session (the user working through
@@ -59,8 +85,8 @@ def _record_write(execution: ToolExecution, written: str) -> None:
         return
     provenance = execution.ctx.services.get("area_custodians")
     if provenance is not None:
-        # Hash the written string — atomic_write_text wrote exactly these
-        # utf-8 bytes, so this matches the watcher's read_bytes() digest.
+        # Hash the written string — the CAS writer wrote exactly these UTF-8
+        # bytes, so this matches the watcher's read_bytes() digest.
         provenance.record_page_write(area.area_id, sha256(written.encode("utf-8")).hexdigest())
 
 
@@ -70,11 +96,18 @@ async def area_page_read(execution: ToolExecution, args: AreaPageReadInput) -> T
         return target
     if not target.is_file():
         return ToolResult(content="The attached Area page is missing.", preview="Page missing", is_error=True)
-    content = format_lines_with_pagination(target.read_text(encoding="utf-8"), args.offset, args.limit)
+    snapshot, revision = read_file_snapshot(target)
+    raw = snapshot.decode("utf-8")
+    content = format_lines_with_pagination(raw, args.offset, args.limit)
     return ToolResult(
         content=content,
         preview=content.splitlines()[0],
-        data={"page_path": execution.ctx.area.page_path, "offset": args.offset},
+        data={
+            "page_path": execution.ctx.area.page_path,
+            "offset": args.offset,
+            "sha256": revision.sha256,
+            "size": revision.size,
+        },
     )
 
 
@@ -82,6 +115,8 @@ async def area_page_patch(execution: ToolExecution, args: AreaPagePatchInput) ->
     target = _target(execution)
     if isinstance(target, ToolResult):
         return target
+    if conflict := _revision_conflict(target, args.expected_sha256):
+        return conflict
     raw = target.read_text(encoding="utf-8") if target.exists() else ""
     matches = raw.count(args.old_text)
     if matches == 0:
@@ -97,22 +132,64 @@ async def area_page_patch(execution: ToolExecution, args: AreaPagePatchInput) ->
             is_error=True,
         )
     written = raw.replace(args.old_text, args.new_text, 1)
-    atomic_write_text(target, written)
+    try:
+        revision = atomic_compare_and_swap(target, written, args.expected_sha256)
+    except RevisionConflict:
+        return _revision_conflict(target, args.expected_sha256) or ToolResult.failure(
+            code="write_conflict",
+            message="Area page changed during the write. Read it again before retrying.",
+            preview="Write conflict",
+        )
     _record_write(execution, written)
-    return ToolResult(content="Patched this Area's page.", preview="Area page patched")
+    return ToolResult(
+        content="Patched this Area's page.",
+        preview="Area page patched",
+        data={"sha256": revision.sha256, "size": revision.size},
+        outcome=ToolOutcome(
+            status=ToolOutcomeStatus.SUCCEEDED,
+            effect=ToolEffect(
+                operation="edit",
+                target=str(target),
+                before_ref=args.expected_sha256,
+                after_ref=revision.sha256,
+            ),
+        ),
+    )
 
 
 async def area_page_write(execution: ToolExecution, args: AreaPageWriteInput) -> ToolResult:
     target = _target(execution)
     if isinstance(target, ToolResult):
         return target
+    if conflict := _revision_conflict(target, args.expected_sha256):
+        return conflict
     existing = target.read_text(encoding="utf-8") if target.exists() else ""
     body = args.content.strip() + "\n"
     prefix = _frontmatter_prefix(existing)
     written = f"{prefix}\n{body}" if prefix else body
-    atomic_write_text(target, written)
+    try:
+        revision = atomic_compare_and_swap(target, written, args.expected_sha256)
+    except RevisionConflict:
+        return _revision_conflict(target, args.expected_sha256) or ToolResult.failure(
+            code="write_conflict",
+            message="Area page changed during the write. Read it again before retrying.",
+            preview="Write conflict",
+        )
     _record_write(execution, written)
-    return ToolResult(content="Updated this Area's page.", preview="Area page updated")
+    return ToolResult(
+        content="Updated this Area's page.",
+        preview="Area page updated",
+        data={"sha256": revision.sha256, "size": revision.size},
+        outcome=ToolOutcome(
+            status=ToolOutcomeStatus.SUCCEEDED,
+            effect=ToolEffect(
+                operation="create" if args.expected_sha256 == "absent" else "replace",
+                target=str(target),
+                before_ref=args.expected_sha256,
+                after_ref=revision.sha256,
+            ),
+        ),
+    )
 
 
 async def area_run_automation(execution: ToolExecution, args: AreaAutomationRunInput) -> ToolResult:
@@ -140,7 +217,10 @@ _AREA_PERMISSION = frozenset({AREA_PAGES_SERVICE})
 
 area_page_read_tool = tool(
     display_name="AreaPageRead",
-    description="Read the current Area's attached page. The path is fixed by the Area and cannot be overridden.",
+    description=(
+        "Read the current Area's attached page and its SHA-256 revision. "
+        "The path is fixed by the Area and cannot be overridden."
+    ),
     input_model=AreaPageReadInput,
     policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=_AREA_PERMISSION),
     execute=area_page_read,
@@ -148,7 +228,10 @@ area_page_read_tool = tool(
 
 area_page_patch_tool = tool(
     display_name="AreaPagePatch",
-    description="Replace one exact block in the current Area's attached page. Cannot edit any other page.",
+    description=(
+        "Replace one exact block in the current Area's attached page using the sha256 from area_page_read. "
+        "Cannot edit any other page."
+    ),
     input_model=AreaPagePatchInput,
     policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=_AREA_PERMISSION),
     execute=area_page_patch,
@@ -156,7 +239,10 @@ area_page_patch_tool = tool(
 
 area_page_write_tool = tool(
     display_name="AreaPageWrite",
-    description="Replace the Markdown body of the current Area's attached page while preserving frontmatter.",
+    description=(
+        "Replace the Markdown body of the current Area's attached page while preserving frontmatter. "
+        "Pass the sha256 from area_page_read as expected_sha256."
+    ),
     input_model=AreaPageWriteInput,
     policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=_AREA_PERMISSION),
     execute=area_page_write,

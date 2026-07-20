@@ -7,15 +7,17 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from ntrp.agent.types.tools import ToolSourceRef, normalize_source_refs
+from ntrp.agent.types.tools import ToolEffect, ToolOutcome, ToolOutcomeStatus, ToolSourceRef, normalize_source_refs
 from ntrp.core.tool_result_files import RESULTS_BASE
 from ntrp.tools.core import ToolResult, tool
 from ntrp.tools.core.context import ToolExecution
+from ntrp.tools.core.file_mutation import RevisionConflict, atomic_compare_and_swap, read_file_snapshot
 from ntrp.tools.core.formatting import format_lines_with_pagination
 from ntrp.tools.core.types import ApprovalInfo, ToolAction, ToolPolicy, ToolScope
 
 READ_FILE_DESCRIPTION = (
     "Read content from a file. Use for code, configs, logs, etc. "
+    "Returns the file's SHA-256 revision for safe write_file/edit_file calls. "
     "For large files, use offset and limit parameters to read in chunks. "
     "When an area default cwd is set, use paths relative to it unless reading outside the area."
 )
@@ -33,10 +35,12 @@ SEARCH_TEXT_DESCRIPTION = (
 )
 WRITE_FILE_DESCRIPTION = (
     "Write exact UTF-8 content to a file. Creates the file or replaces existing content. "
+    "Call read_file first and pass its sha256, or expected_sha256='absent' for creation. "
     "When an area default cwd is set, use paths relative to it unless writing outside the area."
 )
 EDIT_FILE_DESCRIPTION = (
     "Edit a file by replacing one exact text block with another. "
+    "Call read_file first and pass its sha256 as expected_sha256. "
     "When an area default cwd is set, use paths relative to it unless editing outside the area."
 )
 
@@ -125,6 +129,23 @@ def _unified_diff(path: Path, before: str, after: str, *, display_path: str | No
     return diff or None
 
 
+def _revision_bound_diff(diff: str | None, expected_sha256: str) -> str:
+    body = diff.rstrip() + "\n\n" if diff else ""
+    return f"{body}Expected SHA-256: {expected_sha256}"
+
+
+def _write_conflict(path: Path, conflict: RevisionConflict, cwd: str | None = None) -> ToolResult:
+    return ToolResult.failure(
+        code="write_conflict",
+        message=(
+            f"File changed since it was read: {_display_path(path, cwd)}. "
+            f"Expected {conflict.expected}, observed {conflict.observed}. Read it again before writing."
+        ),
+        preview="Write conflict",
+        recovery_action="Read the current file, recompute the edit, and retry with its new sha256.",
+    )
+
+
 # Each tool's filesystem-touching body runs through `asyncio.to_thread` so a
 # slow read or a vault-wide search doesn't block the asyncio event loop —
 # without this, automations and research agents (which lean heavily on
@@ -165,7 +186,8 @@ def _read_file_sync(args: ReadFileInput, cwd: str | None = None) -> ToolResult:
         )
 
     try:
-        content = _read_text(full_path)
+        raw, revision = read_file_snapshot(full_path)
+        content = raw.decode("utf-8", errors="replace")
         formatted = format_lines_with_pagination(content, offset, limit)
         lines = len(content.split("\n"))
         source_refs = ()
@@ -180,7 +202,12 @@ def _read_file_sync(args: ReadFileInput, cwd: str | None = None) -> ToolResult:
                     ),
                 )
             )
-        return ToolResult(content=formatted, preview=f"Read {lines} lines", source_refs=source_refs)
+        return ToolResult(
+            content=formatted,
+            preview=f"Read {lines} lines",
+            data={**_path_data(full_path, cwd), "sha256": revision.sha256, "size": revision.size},
+            source_refs=source_refs,
+        )
 
     except PermissionError:
         return ToolResult(
@@ -468,6 +495,9 @@ async def search_text(execution: ToolExecution, args: SearchTextInput) -> ToolRe
 class WriteFileInput(BaseModel):
     path: str = Field(description="Path to write. Prefer relative paths from the area default cwd when set.")
     content: str = Field(description="Full file content to write.")
+    expected_sha256: str = Field(
+        description="SHA-256 returned by read_file, or the literal 'absent' when creating a new file."
+    )
 
 
 def _approve_write_file_sync(args: WriteFileInput, cwd: str | None = None) -> ApprovalInfo | None:
@@ -480,7 +510,11 @@ def _approve_write_file_sync(args: WriteFileInput, cwd: str | None = None) -> Ap
     display = _display_path(path, cwd)
     diff = _unified_diff(path, before, args.content, display_path=display)
     action = "Replace" if path.exists() else "Create"
-    return ApprovalInfo(description=f"{action} {display}", preview=args.content[:500], diff=diff)
+    return ApprovalInfo(
+        description=f"{action} {display}",
+        preview=args.content[:500],
+        diff=_revision_bound_diff(diff, args.expected_sha256),
+    )
 
 
 async def approve_write_file(execution: ToolExecution, args: WriteFileInput) -> ApprovalInfo | None:
@@ -499,7 +533,9 @@ def _write_file_sync(args: WriteFileInput, cwd: str | None = None) -> ToolResult
         )
 
     try:
-        path.write_text(args.content, encoding="utf-8")
+        revision = atomic_compare_and_swap(path, args.content, args.expected_sha256)
+    except RevisionConflict as conflict:
+        return _write_conflict(path, conflict, cwd)
     except PermissionError:
         return ToolResult(content=f"Permission denied: {args.path}", preview="Denied", is_error=True)
     except OSError as e:
@@ -510,7 +546,21 @@ def _write_file_sync(args: WriteFileInput, cwd: str | None = None) -> ToolResult
     return ToolResult(
         content=f"Wrote {display} ({lines} lines).",
         preview=f"Wrote {lines} lines",
-        data={**_path_data(path, cwd), "lines": lines},
+        data={
+            **_path_data(path, cwd),
+            "lines": lines,
+            "sha256": revision.sha256,
+            "size": revision.size,
+        },
+        outcome=ToolOutcome(
+            status=ToolOutcomeStatus.SUCCEEDED,
+            effect=ToolEffect(
+                operation="create" if args.expected_sha256 == "absent" else "replace",
+                target=str(path),
+                before_ref=args.expected_sha256,
+                after_ref=revision.sha256,
+            ),
+        ),
     )
 
 
@@ -522,6 +572,7 @@ class EditFileInput(BaseModel):
     path: str = Field(description="Path to edit. Prefer relative paths from the area default cwd when set.")
     old_text: str = Field(min_length=1, description="Exact existing text block to replace. Must match once.")
     new_text: str = Field(description="Replacement text.")
+    expected_sha256: str = Field(description="SHA-256 returned by read_file for the content being edited.")
 
 
 def _approve_edit_file_sync(args: EditFileInput, cwd: str | None = None) -> ApprovalInfo | None:
@@ -536,7 +587,10 @@ def _approve_edit_file_sync(args: EditFileInput, cwd: str | None = None) -> Appr
     return ApprovalInfo(
         description=f"Edit {display}",
         preview=args.new_text[:500],
-        diff=_unified_diff(path, before, after, display_path=display),
+        diff=_revision_bound_diff(
+            _unified_diff(path, before, after, display_path=display),
+            args.expected_sha256,
+        ),
     )
 
 
@@ -571,14 +625,29 @@ def _edit_file_sync(args: EditFileInput, cwd: str | None = None) -> ToolResult:
 
     after = before.replace(args.old_text, args.new_text, 1)
     try:
-        path.write_text(after, encoding="utf-8")
+        revision = atomic_compare_and_swap(path, after, args.expected_sha256)
+    except RevisionConflict as conflict:
+        return _write_conflict(path, conflict, cwd)
     except PermissionError:
         return ToolResult(content=f"Permission denied: {args.path}", preview="Denied", is_error=True)
     except OSError as e:
         return ToolResult(content=f"Error editing file: {e}", preview="Edit failed", is_error=True)
 
     display = _display_path(path, cwd)
-    return ToolResult(content=f"Edited {display}.", preview="Edited", data=_path_data(path, cwd))
+    return ToolResult(
+        content=f"Edited {display}.",
+        preview="Edited",
+        data={**_path_data(path, cwd), "sha256": revision.sha256, "size": revision.size},
+        outcome=ToolOutcome(
+            status=ToolOutcomeStatus.SUCCEEDED,
+            effect=ToolEffect(
+                operation="edit",
+                target=str(path),
+                before_ref=args.expected_sha256,
+                after_ref=revision.sha256,
+            ),
+        ),
+    )
 
 
 async def edit_file(execution: ToolExecution, args: EditFileInput) -> ToolResult:

@@ -15,6 +15,7 @@ from ntrp.tools.area import (
     area_run_automation,
 )
 from ntrp.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
+from ntrp.tools.core.file_mutation import file_revision
 from ntrp.tools.core.registry import ToolRegistry
 
 
@@ -60,7 +61,14 @@ async def test_area_page_tools_are_locked_to_active_area_page(tmp_path: Path) ->
     run = execution(vault)
 
     read = await area_page_read(run, AreaPageReadInput())
-    patched = await area_page_patch(run, AreaPagePatchInput(old_text="Old status", new_text="Current status"))
+    patched = await area_page_patch(
+        run,
+        AreaPagePatchInput(
+            old_text="Old status",
+            new_text="Current status",
+            expected_sha256=read.data["sha256"],
+        ),
+    )
 
     assert not read.is_error and "Old status" in read.content
     assert not patched.is_error and "Current status" in page.read_text()
@@ -71,10 +79,20 @@ async def test_area_page_tools_are_locked_to_active_area_page(tmp_path: Path) ->
 async def test_area_page_write_preserves_frontmatter(tmp_path: Path) -> None:
     vault = tmp_path / "memory"
     page = seed(vault)
+    expected = file_revision(page).sha256
 
-    result = await area_page_write(execution(vault), AreaPageWriteInput(content="# Health\n\nNew body"))
+    result = await area_page_write(
+        execution(vault),
+        AreaPageWriteInput(
+            content="# Health\n\nNew body",
+            expected_sha256=expected,
+        ),
+    )
 
     assert not result.is_error
+    assert result.outcome is not None and result.outcome.effect is not None
+    assert result.outcome.effect.before_ref == expected
+    assert result.outcome.effect.after_ref == file_revision(page).sha256
     assert page.read_text().startswith("---\ntitle: Health\n---")
     assert page.read_text().endswith("# Health\n\nNew body\n")
 
@@ -87,7 +105,14 @@ async def test_area_page_writes_record_exact_post_write_digest(tmp_path: Path) -
     provenance = WriteProvenance()
     run.ctx.services["area_custodians"] = provenance
 
-    result = await area_page_patch(run, AreaPagePatchInput(old_text="Old status", new_text="Current status"))
+    result = await area_page_patch(
+        run,
+        AreaPagePatchInput(
+            old_text="Old status",
+            new_text="Current status",
+            expected_sha256=file_revision(vault / "topics" / "health.md").sha256,
+        ),
+    )
 
     assert not result.is_error
     assert provenance.writes[0][0] == "area_health"
@@ -104,10 +129,39 @@ async def test_non_custodian_page_writes_record_no_digest(tmp_path: Path) -> Non
     provenance = WriteProvenance()
     run.ctx.services["area_custodians"] = provenance
 
-    result = await area_page_patch(run, AreaPagePatchInput(old_text="Old status", new_text="Current status"))
+    result = await area_page_patch(
+        run,
+        AreaPagePatchInput(
+            old_text="Old status",
+            new_text="Current status",
+            expected_sha256=file_revision(vault / "topics" / "health.md").sha256,
+        ),
+    )
 
     assert not result.is_error
     assert provenance.writes == []
+
+
+@pytest.mark.asyncio
+async def test_area_page_patch_rejects_stale_revision(tmp_path: Path) -> None:
+    vault = tmp_path / "memory"
+    page = seed(vault)
+    expected = file_revision(page).sha256
+    page.write_text("external version\n", encoding="utf-8")
+
+    result = await area_page_patch(
+        execution(vault),
+        AreaPagePatchInput(
+            old_text="Old status",
+            new_text="Approved status",
+            expected_sha256=expected,
+        ),
+    )
+
+    assert result.is_error
+    assert result.outcome is not None and result.outcome.error is not None
+    assert result.outcome.error.code == "write_conflict"
+    assert page.read_text(encoding="utf-8") == "external version\n"
 
 
 @pytest.mark.asyncio

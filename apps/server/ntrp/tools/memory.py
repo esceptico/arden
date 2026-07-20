@@ -25,6 +25,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from ntrp.agent.types.tools import ToolEffect, ToolOutcome, ToolOutcomeStatus
 from ntrp.config import get_config
 from ntrp.logging import get_logger
 from ntrp.memory.artifacts import ARTIFACT_DIR_KINDS, ROOT_ARTIFACTS, ArtifactMemoryStore
@@ -34,6 +35,7 @@ from ntrp.memory.reconciler import RecordOperation, validate_operations
 from ntrp.memory.scopes import MemoryScope, apply_scope_to_source, scope_for_write, scopes_for_read
 from ntrp.tools.core import ToolResult, tool
 from ntrp.tools.core.context import ToolExecution
+from ntrp.tools.core.file_mutation import RevisionConflict, atomic_compare_and_swap, revision_or_absent
 from ntrp.tools.core.types import ApprovalInfo, ToolAction, ToolPolicy, ToolScope
 
 _logger = get_logger(__name__)
@@ -97,11 +99,15 @@ class MemoryPatchInput(BaseModel):
     old_text: str = Field(min_length=1, description="Exact existing text block to replace. Must match once.")
     new_text: str = Field(description="Replacement text.")
     force_generated: bool = Field(default=False, description="Explicitly allow editing a generated read-only artifact after approval.")
+    expected_sha256: str = Field(description="SHA-256 returned by memory_read for the artifact being edited.")
 
 
 class MemoryWriteInput(BaseModel):
     path: str = Field(description="Relative .md path under the memory root, e.g. feeds/pr-queue.md. Creates the page or replaces its whole content (update-in-place).")
     content: str = Field(min_length=1, max_length=40_000, description="Full markdown content for the page (a compact briefing, not an append log).")
+    expected_sha256: str = Field(
+        description="SHA-256 returned by memory_read, or the literal 'absent' when creating a new page."
+    )
 
 
 class MemoryRebuildInput(BaseModel):
@@ -292,21 +298,6 @@ def _read_text_no_symlink(path: Path) -> str:
         raise
 
 
-def _write_text_no_symlink(path: Path, text: str, *, create: bool = False) -> None:
-    flags = os.O_WRONLY | os.O_TRUNC
-    if create:
-        flags |= os.O_CREAT
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    fd = os.open(path, flags, 0o644)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(text)
-    except Exception:
-        os.close(fd)
-        raise
-
-
 def _unified_diff(rel: str, before: str, after: str) -> str:
     return "".join(
         difflib.unified_diff(
@@ -315,6 +306,23 @@ def _unified_diff(rel: str, before: str, after: str) -> str:
             fromfile=f"a/{rel}",
             tofile=f"b/{rel}",
         )
+    )
+
+
+def _revision_bound_diff(diff: str, expected_sha256: str) -> str:
+    body = diff.rstrip() + "\n\n" if diff else ""
+    return f"{body}Expected SHA-256: {expected_sha256}"
+
+
+def _write_conflict(rel: str, expected_sha256: str, observed: str) -> ToolResult:
+    return ToolResult.failure(
+        code="write_conflict",
+        message=(
+            f"Memory artifact {rel} changed since it was read. "
+            f"Expected {expected_sha256}, observed {observed}. Read it again before writing."
+        ),
+        preview="Write conflict",
+        recovery_action="Call memory_read, recompute the change, and retry with its new sha256.",
     )
 
 
@@ -396,10 +404,24 @@ def _memory_read_sync(args: MemoryReadInput) -> ToolResult:
     except (FileNotFoundError, OSError):
         return _path_error(args.path)
     lines = artifact.content.splitlines()
+    raw_content = artifact.raw_content or artifact.content
     start = min(args.offset, len(lines) + 1)
     selected = lines[start - 1 : start - 1 + args.limit]
     content = _format_lines(selected, start) if selected else ""
-    return ToolResult(content=content, preview=f"{len(selected)} line(s)", data={"path": artifact.path, "title": artifact.title, "kind": artifact.kind, "offset": args.offset, "limit": args.limit, "lines": len(lines)})
+    return ToolResult(
+        content=content,
+        preview=f"{len(selected)} line(s)",
+        data={
+            "path": artifact.path,
+            "title": artifact.title,
+            "kind": artifact.kind,
+            "offset": args.offset,
+            "limit": args.limit,
+            "lines": len(lines),
+            "sha256": artifact.revision,
+            "size": len(raw_content.encode("utf-8")),
+        },
+    )
 
 
 async def memory_read(execution: ToolExecution, args: MemoryReadInput) -> ToolResult:
@@ -469,7 +491,11 @@ def _approve_memory_patch_sync(args: MemoryPatchInput) -> ApprovalInfo | None:
         return None
     rel, before, after, artifact = preview
     description = f"Force edit generated memory artifact {rel}" if args.force_generated and _artifact_generated(artifact) else f"Edit memory artifact {rel}"
-    return ApprovalInfo(description=description, preview=args.new_text[:500], diff=_unified_diff(rel, before, after))
+    return ApprovalInfo(
+        description=description,
+        preview=args.new_text[:500],
+        diff=_revision_bound_diff(_unified_diff(rel, before, after), args.expected_sha256),
+    )
 
 
 async def approve_memory_patch(execution: ToolExecution, args: MemoryPatchInput) -> ApprovalInfo | None:
@@ -477,12 +503,18 @@ async def approve_memory_patch(execution: ToolExecution, args: MemoryPatchInput)
 
 
 def _memory_patch_sync(args: MemoryPatchInput) -> ToolResult:
+    rel = _validate_relative_path(args.path)
+    if rel is None:
+        return _path_error(args.path)
+    store = _artifact_store()
+    path = _safe_existing_file_path(store.root, rel)
+    if path is None:
+        return _path_error(args.path)
+    observed = revision_or_absent(path)
+    if observed != args.expected_sha256:
+        return _write_conflict(rel, args.expected_sha256, observed)
     preview = _patch_preview(args)
     if preview is None:
-        rel = _validate_relative_path(args.path)
-        if rel is None:
-            return _path_error(args.path)
-        store = _artifact_store()
         try:
             artifact = store.read_artifact(rel)
             count = artifact.content.count(args.old_text)
@@ -492,10 +524,6 @@ def _memory_patch_sync(args: MemoryPatchInput) -> ToolResult:
             return ToolResult(content="Text block not found. Read the artifact and include more exact context.", preview="No match", is_error=True)
         return ToolResult(content=f"Text block matched {count} times. Include a larger exact block so the edit is unique.", preview="Ambiguous", is_error=True)
     rel, _before, after, artifact = preview
-    store = _artifact_store()
-    path = _safe_existing_file_path(store.root, rel)
-    if path is None:
-        return _path_error(args.path)
     try:
         raw = _read_text_no_symlink(path)
     except OSError:
@@ -505,10 +533,25 @@ def _memory_patch_sync(args: MemoryPatchInput) -> ToolResult:
         return ToolResult(content=f"Refusing to edit generated memory artifact {rel}; use recall/record tools for DB-backed facts or set force_generated=true with approval for projection-only edits.", preview="Generated artifact", is_error=True)
     frontmatter = raw[: len(raw) - len(_body)] if fm else ""
     try:
-        _write_text_no_symlink(path, frontmatter + after)
+        revision = atomic_compare_and_swap(path, frontmatter + after, args.expected_sha256)
+    except RevisionConflict as conflict:
+        return _write_conflict(rel, conflict.expected, conflict.observed)
     except OSError as exc:
         return ToolResult(content=f"Error patching memory artifact: {exc}", preview="Patch failed", is_error=True)
-    return ToolResult(content=f"Patched memory artifact {rel}.", preview="Patched", data={"path": rel})
+    return ToolResult(
+        content=f"Patched memory artifact {rel}.",
+        preview="Patched",
+        data={"path": rel, "sha256": revision.sha256, "size": revision.size},
+        outcome=ToolOutcome(
+            status=ToolOutcomeStatus.SUCCEEDED,
+            effect=ToolEffect(
+                operation="edit",
+                target=str(path),
+                before_ref=args.expected_sha256,
+                after_ref=revision.sha256,
+            ),
+        ),
+    )
 
 
 async def memory_patch(execution: ToolExecution, args: MemoryPatchInput) -> ToolResult:
@@ -561,7 +604,7 @@ def _approve_memory_write_sync(args: MemoryWriteInput) -> ApprovalInfo | None:
     return ApprovalInfo(
         description=f"{verb} memory page {rel}",
         preview=args.content[:500],
-        diff=_unified_diff(rel, existing, args.content),
+        diff=_revision_bound_diff(_unified_diff(rel, existing, args.content), args.expected_sha256),
     )
 
 
@@ -576,14 +619,32 @@ def _memory_write_sync(args: MemoryWriteInput) -> ToolResult:
     rel, existing = target
     store = _artifact_store()
     path = store.root.joinpath(*Path(rel).parts)
+    observed = revision_or_absent(path)
+    if observed != args.expected_sha256:
+        return _write_conflict(rel, args.expected_sha256, observed)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         content = args.content if args.content.endswith("\n") else args.content + "\n"
-        _write_text_no_symlink(path, content, create=True)
+        revision = atomic_compare_and_swap(path, content, args.expected_sha256)
+    except RevisionConflict as conflict:
+        return _write_conflict(rel, conflict.expected, conflict.observed)
     except OSError as exc:
         return ToolResult(content=f"Error writing memory page: {exc}", preview="Write failed", is_error=True)
     verb = "Updated" if existing else "Created"
-    return ToolResult(content=f"{verb} memory page {rel}.", preview=verb, data={"path": rel})
+    return ToolResult(
+        content=f"{verb} memory page {rel}.",
+        preview=verb,
+        data={"path": rel, "sha256": revision.sha256, "size": revision.size},
+        outcome=ToolOutcome(
+            status=ToolOutcomeStatus.SUCCEEDED,
+            effect=ToolEffect(
+                operation="create" if args.expected_sha256 == "absent" else "replace",
+                target=str(path),
+                before_ref=args.expected_sha256,
+                after_ref=revision.sha256,
+            ),
+        ),
+    )
 
 
 async def memory_write(execution: ToolExecution, args: MemoryWriteInput) -> ToolResult:
@@ -807,7 +868,10 @@ memory_tree_tool = tool(
 
 memory_read_tool = tool(
     display_name="MemoryRead",
-    description="Read a safe relative .md memory artifact with line offsets. " + _MEMORY_FS_DESCRIPTION,
+    description=(
+        "Read a safe relative .md memory artifact with line offsets and its SHA-256 revision. "
+        + _MEMORY_FS_DESCRIPTION
+    ),
     input_model=MemoryReadInput,
     policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({MEMORY_RECORDS_SERVICE})),
     execute=memory_read,
@@ -823,7 +887,11 @@ memory_search_tool = tool(
 
 memory_patch_tool = tool(
     display_name="MemoryPatch",
-    description="Patch a unique exact text block in a memory filesystem projection file. Requires approval; refuses generated artifacts unless force_generated is explicit. " + _MEMORY_FS_DESCRIPTION,
+    description=(
+        "Patch a unique exact text block using the sha256 from memory_read. Requires approval; "
+        "refuses generated artifacts unless force_generated is explicit. "
+        + _MEMORY_FS_DESCRIPTION
+    ),
     input_model=MemoryPatchInput,
     policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, requires_approval=True, permissions=frozenset({MEMORY_RECORDS_SERVICE})),
     approval=approve_memory_patch,
@@ -835,7 +903,8 @@ memory_write_tool = tool(
     description=(
         "Create or update-in-place a whole memory page (e.g. a feeds/<slug>.md briefing "
         "owned by an automation). Replaces the entire page — write the full current "
-        "briefing, never an appended log. Refuses generated reports and record-backed "
+        "briefing, never an appended log. Pass memory_read's sha256 when replacing, or "
+        "expected_sha256='absent' when creating. Refuses generated reports and record-backed "
         "pages (those compile from records; use remember/memory_patch). Requires approval. "
         + _MEMORY_FS_DESCRIPTION
     ),

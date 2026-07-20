@@ -134,9 +134,9 @@ else:
 - Produces: `FileRevision(sha256: str, size: int)` and `atomic_compare_and_swap(path, content, expected_sha256)`.
 - Contract: reads expose a revision; replacing existing content requires that revision; creation requires `expected_sha256="absent"`.
 
-- [ ] Add race tests: approve against revision A, mutate externally to B, execute, assert `write_conflict` and B remains untouched.
-- [ ] Add read-result tests for `sha256`; add atomic replacement tests preserving complete old/new files across failures.
-- [ ] Implement:
+- [x] Add race tests: approve against revision A, mutate externally to B, execute, assert `write_conflict` and B remains untouched.
+- [x] Add read-result tests for `sha256`; add atomic replacement tests preserving complete old/new files across failures.
+- [x] Implement:
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -152,9 +152,9 @@ def atomic_compare_and_swap(path: Path, content: str, expected_sha256: str) -> F
     return file_revision(path)
 ```
 
-- [ ] Thread `expected_sha256` through write/edit/directives/Area/memory inputs and approval diffs; return before/after revisions in `ToolOutcome.effect`.
-- [ ] Run focused tests. Because `memory.py` is already dirty, stage only audit hunks with `git add -p` and inspect the cached diff.
-- [ ] Commit: `fix(harness): bind write approvals to file revisions`.
+- [x] Thread `expected_sha256` through write/edit/directives/Area/memory inputs and approval diffs; return before/after revisions in `ToolOutcome.effect`.
+- [x] Run focused tests. Because `memory.py` is already dirty, stage only audit hunks with `git add -p` and inspect the cached diff.
+- [x] Commit: `fix(harness): bind write approvals to file revisions`.
 
 ### Task 4: Truthful Typed Failures
 

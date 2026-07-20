@@ -29,7 +29,7 @@ from ntrp.tools.background import (
 from ntrp.tools.bash import bash_tool
 from ntrp.tools.connections import request_connection_tool
 from ntrp.tools.deferred import load_tools_tool, tool_search_tool
-from ntrp.tools.directives import set_directives_tool
+from ntrp.tools.directives import get_directives_tool, set_directives_tool
 from ntrp.tools.files import (
     edit_file_tool,
     find_files_tool,
@@ -132,7 +132,7 @@ NOTIFICATIONS = Integration(
 DIRECTIVES = Integration(
     id="_directives",
     label="Directives",
-    tools={"set_directives": set_directives_tool},
+    tools={"get_directives": get_directives_tool, "set_directives": set_directives_tool},
 )
 
 TASK_TRACKING = Integration(
