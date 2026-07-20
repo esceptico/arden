@@ -1,5 +1,14 @@
-from mcp.types import CallToolResult, EmbeddedResource, ImageContent, ResourceLink, TextContent, TextResourceContents
+from mcp.types import (
+    AudioContent,
+    CallToolResult,
+    EmbeddedResource,
+    ImageContent,
+    ResourceLink,
+    TextContent,
+    TextResourceContents,
+)
 
+from ntrp.core.raw_tool_results import RAW_TOOL_RESULT_DATA_KEY, read_raw_tool_result
 from ntrp.mcp import results as mcp_results
 
 
@@ -68,6 +77,46 @@ def test_non_text_blocks_are_model_safe_placeholders():
             }
         ]
     }
+    assert [block.model_dump() for block in result.model_content] == [
+        {"type": "image", "media_type": "image/png", "data": "base64"}
+    ]
+
+
+def test_audio_blocks_are_forwarded_as_model_content():
+    result = _adapt(CallToolResult(content=[AudioContent(type="audio", data="base64", mimeType="audio/mpeg")]))
+
+    assert result.content == "[audio content]"
+    assert [block.model_dump() for block in result.model_content] == [
+        {"type": "audio", "media_type": "audio/mpeg", "data": "base64"}
+    ]
+
+
+def test_large_structured_payload_is_bounded_and_durably_retrievable():
+    result = _adapt(
+        CallToolResult(
+            content=[TextContent(type="text", text="Found records")],
+            structuredContent={"rows": [{"body": "x" * 100_000}], "next_cursor": "page-2"},
+        )
+    )
+
+    assert result.data["truncated"] is True
+    assert result.data["raw_ref"].startswith("sha256:")
+    assert result.data["next_cursor"] == "page-2"
+    assert len(str(result.data)) < 5_000
+    blob = result.data[RAW_TOOL_RESULT_DATA_KEY]
+    raw = read_raw_tool_result(blob["blob_path"], compression=blob["compression"])
+    assert '"next_cursor":"page-2"' in raw
+    assert "x" * 1_000 in raw
+
+
+def test_large_media_payload_is_bounded_and_not_inlined_to_model():
+    result = _adapt(
+        CallToolResult(content=[ImageContent(type="image", data="x" * 100_000, mimeType="image/png")])
+    )
+
+    assert result.data["truncated"] is True
+    assert result.model_content == ()
+    assert len(str(result.data)) < 5_000
 
 
 def test_text_blocks_are_not_polluted_by_non_text_placeholders():

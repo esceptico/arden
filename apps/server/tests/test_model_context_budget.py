@@ -78,3 +78,13 @@ def test_clamp_small_stub_makes_no_reread_promise():
     assert "cleared from context" in by_id["tiny"]
     assert "read_tool_result" not in by_id["tiny"]
     assert len(tiny) <= MODEL_TOOL_RESULT_PREVIEW_CHARS
+
+
+def test_clamp_counts_and_removes_large_structured_tool_data():
+    message = _tool("large-data", "summary")
+    message["data"] = {"rows": [{"body": "x" * (MODEL_TOOL_RESULT_KEEP_FULL_CHARS + 1)}]}
+
+    clamped = clamp_tool_results_for_model_context([message])
+
+    assert "cleared from context" in clamped[0]["content"]
+    assert "data" not in clamped[0]

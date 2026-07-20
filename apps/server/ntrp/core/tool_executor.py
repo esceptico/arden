@@ -156,9 +156,10 @@ class NtrpToolExecutor:
                     timeout_seconds=timeout_seconds,
                 )
 
-            result = self._truncate_result(result, tool.policy.max_result_chars)
+            result = self._truncate_result(result, tool.policy.max_result_chars, tool_call_id=tool_call_id)
             if tool.policy.offload:
                 result = self._maybe_offload(result, tool_call_id)
+            result = self._bound_result_payload(result, tool_call_id)
             result = result.with_default_outcome()
 
             finish_status = self._audit_status(result)
@@ -321,16 +322,89 @@ class NtrpToolExecutor:
         except Exception:
             _logger.warning("Failed to record tool call audit finish", exc_info=True)
 
-    def _truncate_result(self, result: ToolResult, max_chars: int | None) -> ToolResult:
+    def _truncate_result(
+        self,
+        result: ToolResult,
+        max_chars: int | None,
+        *,
+        tool_call_id: str | None = None,
+    ) -> ToolResult:
         if max_chars is None or len(result.content) <= max_chars:
             return result
 
+        data = result.data
+        note = ""
+        if tool_call_id is not None:
+            raw_payload = self._serialized_result(result)
+            path = persist_result(self._ctx.session_id, tool_call_id, raw_payload)
+            blob = persist_raw_tool_result(raw_payload)
+            data = {
+                "truncated": True,
+                "raw_ref": blob.blob_ref,
+                "raw_bytes": blob.content_bytes,
+                **blob.to_internal_data(),
+            }
+            note = f"\n[Full result saved to {path}. Use read_file(path={str(path)!r}) to retrieve it.]"
         return ToolResult(
-            content=f"{result.content[:max_chars]}... [truncated]",
+            content=f"{result.content[:max_chars]}... [truncated]{note}",
             preview=result.preview,
             is_error=result.is_error,
-            data=result.data,
-            model_content=result.model_content,
+            data=data,
+            model_content=() if tool_call_id is not None else result.model_content,
+            source_refs=result.source_refs,
+            outcome=result.outcome,
+        )
+
+    @staticmethod
+    def _serialized_result(result: ToolResult) -> str:
+        payload = {
+            "content": result.content,
+            "preview": result.preview,
+            "is_error": result.is_error,
+            "data": result.data,
+            "model_content": [
+                block.model_dump(mode="json") if hasattr(block, "model_dump") else dict(block)
+                for block in result.model_content
+            ],
+            "source_refs": [ref.to_dict() for ref in result.source_refs],
+            "outcome": result.outcome.to_dict() if result.outcome else None,
+        }
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+
+    def _bound_result_payload(self, result: ToolResult, tool_call_id: str) -> ToolResult:
+        serialized = self._serialized_result(result)
+        if len(serialized.encode("utf-8")) <= OFFLOAD_THRESHOLD:
+            return result
+
+        path = persist_result(self._ctx.session_id, tool_call_id, serialized)
+        blob = persist_raw_tool_result(serialized)
+        lines = result.content.split("\n")
+        preview, _preview_lines = _bounded_offload_preview(lines)
+        data: dict[str, Any] = {
+            "truncated": True,
+            "raw_ref": blob.blob_ref,
+            "raw_bytes": blob.content_bytes,
+            **blob.to_internal_data(),
+        }
+        if isinstance(result.data, dict):
+            next_cursor = result.data.get("next_cursor")
+            if isinstance(next_cursor, (str, int, float, bool)) or next_cursor is None:
+                if "next_cursor" in result.data:
+                    data["next_cursor"] = next_cursor
+            public_keys = sorted(key for key in result.data if not key.startswith("_"))[:50]
+            if public_keys:
+                data["data_summary"] = {"keys": public_keys}
+        compact = (
+            f"{preview}\n\n"
+            f"[Full tool result payload ({blob.content_bytes} bytes) saved to {path}.]\n"
+            f"Use read_file(path={str(path)!r}, offset=N, limit=M) to retrieve it."
+        )
+        return ToolResult(
+            content=compact,
+            preview=result.preview,
+            is_error=result.is_error,
+            data=data,
+            model_content=(),
             source_refs=result.source_refs,
             outcome=result.outcome,
         )

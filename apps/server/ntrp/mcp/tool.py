@@ -3,7 +3,7 @@ from typing import Any, Protocol
 from mcp.types import CallToolResult, ToolAnnotations
 from mcp.types import Tool as McpTool
 
-from ntrp.mcp.results import call_tool_result_to_tool_result
+from ntrp.mcp.results import call_tool_result_to_tool_result, mcp_exception_result
 from ntrp.tools.core.base import Tool, ToolResult
 from ntrp.tools.core.context import ToolExecution
 from ntrp.tools.core.schema import tool_parameters
@@ -57,12 +57,8 @@ class MCPTool(Tool):
                 provider=self._server_name,
                 tool_name=self._mcp_tool.name,
             )
-        except Exception as e:
-            return ToolResult(
-                content=f"MCP tool error ({self._server_name}/{self._mcp_tool.name}): {e}",
-                preview="MCP error",
-                is_error=True,
-            )
+        except Exception as error:
+            return mcp_exception_result(error, provider=self._server_name, tool_name=self._mcp_tool.name)
 
     def to_dict(self, name: str) -> dict:
         input_schema = self._mcp_tool.inputSchema or {"type": "object"}

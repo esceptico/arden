@@ -6,7 +6,12 @@ from typing import Any
 from mcp import types as mcp_types
 
 from ntrp.agent.types.tools import ToolSourceRef, normalize_source_refs
+from ntrp.constants import RAW_TOOL_RESULT_INLINE_MAX_BYTES
+from ntrp.core.content import AudioContent, ContentBlock, ImageContent
+from ntrp.core.raw_tool_results import persist_raw_tool_result, preview_text
 from ntrp.tools.core.base import ToolResult
+
+MCP_RESULT_PREVIEW_CHARS = 12_000
 
 
 @dataclass(frozen=True)
@@ -14,6 +19,7 @@ class ContentProjection:
     text: str
     fallback: str
     metadata: tuple[dict[str, Any], ...] = ()
+    model_content: tuple[ContentBlock, ...] = ()
 
 
 def call_tool_result_to_tool_result(
@@ -22,14 +28,29 @@ def call_tool_result_to_tool_result(
     provider: str,
     tool_name: str,
 ) -> ToolResult:
-    projection = _area_content(result.content)
+    raw_payload = json.dumps(result.model_dump(mode="json", by_alias=True), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    oversized = len(raw_payload.encode("utf-8")) > RAW_TOOL_RESULT_INLINE_MAX_BYTES
+    projection = _area_content(result.content, include_model_content=not oversized)
     content = _model_content(result, projection)
+    data = _bounded_metadata(result, projection, raw_payload) if oversized else _metadata(result, projection)
     return ToolResult(
-        content=content,
+        content=preview_text(content, limit=MCP_RESULT_PREVIEW_CHARS) if oversized else content,
         preview=content[:100] if content else "Empty result",
         is_error=bool(result.isError),
-        data=_metadata(result, projection),
+        data=data,
+        model_content=projection.model_content,
         source_refs=extract_mcp_source_refs(result, provider=provider, tool_name=tool_name),
+    )
+
+
+def mcp_exception_result(error: Exception, *, provider: str, tool_name: str) -> ToolResult:
+    retryable = isinstance(error, (TimeoutError, ConnectionError))
+    return ToolResult.failure(
+        code="mcp_provider_error",
+        message=f"MCP provider request failed for {provider}/{tool_name}.",
+        preview="MCP error",
+        retryable=retryable,
+        recovery_action="Check the MCP server connection and retry." if retryable else "Inspect the MCP server logs.",
     )
 
 
@@ -139,10 +160,11 @@ def _model_content(result: mcp_types.CallToolResult, projection: ContentProjecti
     return ""
 
 
-def _area_content(blocks: list[mcp_types.ContentBlock]) -> ContentProjection:
+def _area_content(blocks: list[mcp_types.ContentBlock], *, include_model_content: bool = True) -> ContentProjection:
     text: list[str] = []
     fallback: list[str] = []
     metadata: list[dict[str, Any]] = []
+    model_content: list[ContentBlock] = []
 
     for block in blocks:
         match block:
@@ -154,9 +176,13 @@ def _area_content(blocks: list[mcp_types.ContentBlock]) -> ContentProjection:
             case mcp_types.ImageContent():
                 fallback.append("[image content]")
                 metadata.append(_media_metadata("image", block.mimeType, block.data))
+                if include_model_content:
+                    model_content.append(ImageContent(media_type=block.mimeType, data=block.data))
             case mcp_types.AudioContent():
                 fallback.append("[audio content]")
                 metadata.append(_media_metadata("audio", block.mimeType, block.data))
+                if include_model_content:
+                    model_content.append(AudioContent(media_type=block.mimeType, data=block.data))
             case mcp_types.ResourceLink():
                 fallback.append(f"[resource: {block.uri}]")
                 metadata.append(_resource_link_metadata(block))
@@ -168,7 +194,39 @@ def _area_content(blocks: list[mcp_types.ContentBlock]) -> ContentProjection:
         text="\n".join(part for part in text if part),
         fallback="\n".join(part for part in fallback if part),
         metadata=tuple(metadata),
+        model_content=tuple(model_content),
     )
+
+
+def _bounded_metadata(
+    result: mcp_types.CallToolResult,
+    projection: ContentProjection,
+    raw_payload: str,
+) -> dict[str, Any]:
+    blob = persist_raw_tool_result(raw_payload)
+    data: dict[str, Any] = {
+        "truncated": True,
+        "raw_ref": blob.blob_ref,
+        "raw_bytes": blob.content_bytes,
+        **blob.to_internal_data(),
+    }
+    structured = result.structuredContent
+    if isinstance(structured, Mapping):
+        data["structured_summary"] = {
+            "keys": sorted(str(key) for key in structured)[:50],
+            "counts": {
+                str(key): len(value)
+                for key, value in structured.items()
+                if isinstance(value, (list, dict, tuple))
+            },
+        }
+        next_cursor = structured.get("next_cursor")
+        if isinstance(next_cursor, (str, int, float, bool)) or next_cursor is None:
+            if "next_cursor" in structured:
+                data["next_cursor"] = next_cursor
+    if projection.metadata:
+        data["content"] = list(projection.metadata)
+    return data
 
 
 def _metadata(result: mcp_types.CallToolResult, projection: ContentProjection) -> dict | None:

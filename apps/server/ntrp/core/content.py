@@ -15,6 +15,12 @@ class ImageContent(BaseModel):
     data: str
 
 
+class AudioContent(BaseModel):
+    type: Literal["audio"] = "audio"
+    media_type: str
+    data: str
+
+
 class ContextContent(BaseModel):
     type: Literal["context"] = "context"
     content_type: str
@@ -54,7 +60,7 @@ def context_manifest_entry(
 
 
 ContentBlock = Annotated[
-    TextContent | ImageContent | ContextContent,
+    TextContent | ImageContent | AudioContent | ContextContent,
     Field(discriminator="type"),
 ]
 
@@ -63,6 +69,7 @@ MessageContent = str | list[ContentBlock]
 _BLOCK_MAP: dict[str, type[BaseModel]] = {
     "text": TextContent,
     "image": ImageContent,
+    "audio": AudioContent,
     "context": ContextContent,
 }
 

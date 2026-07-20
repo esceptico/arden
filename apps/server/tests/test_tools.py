@@ -1042,7 +1042,7 @@ async def test_function_tool_rejects_non_tool_result_output():
 
 
 @pytest.mark.asyncio
-async def test_ntrp_tool_executor_policy_offload_false_keeps_large_result_inline():
+async def test_ntrp_tool_executor_policy_offload_false_keeps_retrieval_pointer():
     large_content = "x" * (OFFLOAD_THRESHOLD + 1)
 
     async def large_result(execution: ToolExecution, args: EmptyInput) -> ToolResult:
@@ -1061,11 +1061,40 @@ async def test_ntrp_tool_executor_policy_offload_false_keeps_large_result_inline
 
     result = await executor.execute("large_result", {}, "call-1")
 
-    assert result.content == large_content
+    assert result.content != large_content
+    assert "read_file" in result.content
+    assert result.data["truncated"] is True
+    assert result.data["raw_ref"].startswith("sha256:")
     assert result.preview == "large"
     assert not result.is_error
     assert result.outcome is not None
     assert result.outcome.status == ToolOutcomeStatus.SUCCEEDED
+
+
+@pytest.mark.asyncio
+async def test_ntrp_tool_executor_bounds_large_structured_data():
+    async def large_result(execution: ToolExecution, args: EmptyInput) -> ToolResult:
+        return ToolResult(content="summary", preview="large", data={"rows": [{"body": "x" * 100_000}]})
+
+    registry = ToolRegistry()
+    registry.register(
+        "large_result",
+        tool(
+            description="Return large structured data.",
+            execute=large_result,
+            policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, offload=False),
+        ),
+    )
+    executor = NtrpToolExecutor(ToolExecutor().with_registry(registry), _make_tool_context(registry))
+
+    result = await executor.execute("large_result", {}, "call-data")
+
+    assert len(json.dumps(result.data)) < 5_000
+    assert result.data["truncated"] is True
+    assert result.data["raw_ref"].startswith("sha256:")
+    assert "read_file" in result.content
+    emitted = json.dumps({"content": result.content, "data": result.data, "model_content": result.model_content})
+    assert len(emitted) < 20_000
 
 
 @pytest.mark.asyncio
@@ -1150,7 +1179,10 @@ async def test_ntrp_tool_executor_policy_max_result_chars_truncates_before_model
 
     result = await executor.execute("long_error", {}, "call-1")
 
-    assert result.content == "abcdefghij... [truncated]"
+    assert result.content.startswith("abcdefghij... [truncated]")
+    assert "read_file" in result.content
+    assert result.data["truncated"] is True
+    assert result.data["raw_ref"].startswith("sha256:")
     assert result.preview == "original"
     assert result.is_error
 

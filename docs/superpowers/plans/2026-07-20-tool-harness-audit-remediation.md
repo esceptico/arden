@@ -231,11 +231,11 @@ def atomic_compare_and_swap(path: Path, content: str, expected_sha256: str) -> F
 - Produces: bounded `data`, `truncated`, `raw_ref`, and optional `next_cursor`.
 - Contract: result budgets cover content, model content, metadata, and structured data together.
 
-- [ ] Add failing 100k structured-data and media tests; assert emitted event size stays bounded and raw data remains retrievable.
-- [ ] Store full structured/raw payloads durably; emit only an allowlisted summary and stable raw ref.
-- [ ] Ensure `offload=False` over-budget results retain a retrieval pointer or are rejected before context loss.
-- [ ] Route MCP exceptions through the typed MCP error formatter and map image/audio blocks to `model_content`.
-- [ ] Run tests and commit: `fix(harness): bound and preserve tool result payloads`.
+- [x] Add failing 100k structured-data and media tests; assert emitted event size stays bounded and raw data remains retrievable.
+- [x] Store full structured/raw payloads durably; emit only an allowlisted summary and stable raw ref.
+- [x] Ensure `offload=False` over-budget results retain a retrieval pointer or are rejected before context loss.
+- [x] Route MCP exceptions through the typed MCP error formatter and map image/audio blocks to `model_content`.
+- [x] Run tests and commit: `fix(harness): bound and preserve tool result payloads`.
 
 ### Task 8: Retry-Safe Mutation Outcomes
 

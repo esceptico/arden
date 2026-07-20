@@ -1,3 +1,4 @@
+import json
 from dataclasses import replace
 
 from ntrp.agent.model_request import ModelRequest, ModelRequestNext
@@ -28,6 +29,11 @@ def _is_tool_message(message: dict) -> bool:
     return message.get("role") in {Role.TOOL, "tool"} and isinstance(message.get("content"), str)
 
 
+def _tool_message_size(message: dict) -> int:
+    payload = {"content": message.get("content", ""), "data": message.get("data")}
+    return len(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str))
+
+
 def clamp_tool_results_for_model_context(messages: list[dict]) -> list[dict]:
     """Keep the most-recent tool results in full up to MODEL_TOOL_RESULT_KEEP_FULL_CHARS;
     collapse older ones to an informative stub.
@@ -41,7 +47,7 @@ def clamp_tool_results_for_model_context(messages: list[dict]) -> list[dict]:
     keep_full: set[int] = set()
     remaining = MODEL_TOOL_RESULT_KEEP_FULL_CHARS
     for i in reversed(tool_indices):  # newest first
-        length = len(messages[i]["content"])
+        length = _tool_message_size(messages[i])
         if length <= remaining:
             keep_full.add(i)
             remaining -= length
@@ -52,7 +58,11 @@ def clamp_tool_results_for_model_context(messages: list[dict]) -> list[dict]:
     clamped = list(messages)
     for i in tool_indices:
         if i not in keep_full:
-            clamped[i] = {**messages[i], "content": _tool_result_stub(messages[i])}
+            clamped[i] = {
+                key: value
+                for key, value in messages[i].items()
+                if key != "data"
+            } | {"content": _tool_result_stub(messages[i])}
     return clamped
 
 

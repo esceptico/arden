@@ -193,3 +193,32 @@ def test_mcp_tool_exposes_trusted_risk_annotations_in_metadata():
     assert policy["destructive"] is False
     assert policy["open_world"] is True
     assert policy["idempotent"] is True
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_exception_returns_sanitized_typed_failure():
+    class FailingSession:
+        async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> CallToolResult:
+            raise RuntimeError("provider secret")
+
+    tool = MCPTool(
+        "notes",
+        McpTool(name="search", description="Search", inputSchema={"type": "object"}),
+        FailingSession(),
+    )
+    result = await tool.execute(
+        ToolExecution(
+            tool_id="call-1",
+            tool_name=tool.name,
+            ctx=ToolContext(
+                session_state=SessionState(session_id="session-1", started_at=datetime(2026, 4, 30, tzinfo=UTC)),
+                registry=ToolRegistry(),
+                run=RunContext(run_id="run-1"),
+                io=IOBridge(),
+            ),
+        )
+    )
+
+    assert result.is_error
+    assert result.outcome.error.code == "mcp_provider_error"
+    assert "provider secret" not in result.content
