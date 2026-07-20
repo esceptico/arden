@@ -2,6 +2,8 @@ from types import SimpleNamespace
 
 from ntrp.integrations.google_drive.tools import (
     DRIVE_TOOLS,
+    CreateGoogleDocInput,
+    CreateGoogleSheetInput,
     ReadGoogleDocInput,
     read_google_doc,
 )
@@ -42,6 +44,18 @@ def test_drive_write_tools_require_approval():
         assert registered.policy.action == ToolAction.WRITE
         assert registered.policy.requires_approval is True
         assert registered.policy.permissions == frozenset({"google_drive"})
+
+
+def test_create_inputs_do_not_accept_file_content():
+    assert set(CreateGoogleDocInput.model_fields) == {"title", "account"}
+    assert set(CreateGoogleSheetInput.model_fields) == {"title", "account"}
+
+
+def test_create_tool_descriptions_require_a_followup_write():
+    assert "empty" in DRIVE_TOOLS["create_google_doc"].description.lower()
+    assert "edit_google_doc" in DRIVE_TOOLS["create_google_doc"].description
+    assert "empty" in DRIVE_TOOLS["create_google_sheet"].description.lower()
+    assert "update_google_sheet" in DRIVE_TOOLS["create_google_sheet"].description
 
 
 async def test_read_doc_returns_source_reference():

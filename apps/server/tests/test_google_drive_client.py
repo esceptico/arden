@@ -44,6 +44,11 @@ class DriveService:
 class Documents:
     def __init__(self):
         self.batch_body = None
+        self.created_body = None
+
+    def create(self, *, body):
+        self.created_body = body
+        return Request({"documentId": "doc-new"})
 
     def get(self, **_kwargs):
         return Request(
@@ -85,6 +90,11 @@ class Values:
 class Spreadsheets:
     def __init__(self):
         self.values_resource = Values()
+        self.created_body = None
+
+    def create(self, *, body):
+        self.created_body = body
+        return Request({"spreadsheetId": "sheet-new", "spreadsheetUrl": "https://sheets.test/sheet-new"})
 
     def values(self):
         return self.values_resource
@@ -170,6 +180,28 @@ def test_sheet_update_writes_only_requested_range():
     values = services[("sheets", "v4")].resource.values_resource
     assert values.updated_range == "Data!A2:B2"
     assert values.body == {"values": [["a", 2]]}
+
+
+def test_create_doc_creates_empty_file_without_content_write():
+    client, services = _client()
+
+    result = client.create_doc("Empty document")
+
+    documents = services[("docs", "v1")].resource
+    assert documents.created_body == {"title": "Empty document"}
+    assert documents.batch_body is None
+    assert result["ref"] == "acct-1:doc-new"
+
+
+def test_create_sheet_creates_empty_file_without_values_write():
+    client, services = _client()
+
+    result = client.create_sheet("Empty sheet")
+
+    spreadsheets = services[("sheets", "v4")].resource
+    assert spreadsheets.created_body == {"properties": {"title": "Empty sheet"}}
+    assert spreadsheets.values_resource.body is None
+    assert result["ref"] == "acct-1:sheet-new"
 
 
 def test_multi_account_client_resolves_account_by_email():

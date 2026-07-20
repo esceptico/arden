@@ -124,15 +124,10 @@ class GoogleDriveClient:
             "url": f"https://docs.google.com/document/d/{document_id}/edit",
         }
 
-    def create_doc(self, title: str, content: str) -> dict:
+    def create_doc(self, title: str) -> dict:
         documents = self._service("docs", "v1").documents()
         created = documents.create(body={"title": title}).execute()
         document_id = str(created["documentId"])
-        if content:
-            documents.batchUpdate(
-                documentId=document_id,
-                body={"requests": [{"insertText": {"location": {"index": 1}, "text": content}}]},
-            ).execute()
         return {
             "ref": f"{self.account_id}:{document_id}",
             "title": title,
@@ -180,17 +175,10 @@ class GoogleDriveClient:
             "url": f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit",
         }
 
-    def create_sheet(self, title: str, rows: list[list[Any]]) -> dict:
+    def create_sheet(self, title: str) -> dict:
         spreadsheets = self._service("sheets", "v4").spreadsheets()
         created = spreadsheets.create(body={"properties": {"title": title}}).execute()
         spreadsheet_id = str(created["spreadsheetId"])
-        if rows:
-            spreadsheets.values().update(
-                spreadsheetId=spreadsheet_id,
-                range="A1",
-                valueInputOption="USER_ENTERED",
-                body={"values": rows},
-            ).execute()
         return {
             "ref": f"{self.account_id}:{spreadsheet_id}",
             "title": title,

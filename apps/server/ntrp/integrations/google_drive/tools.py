@@ -87,17 +87,16 @@ async def read_google_sheet(execution: ToolExecution, args: ReadGoogleSheetInput
 
 class CreateGoogleDocInput(BaseModel):
     title: str = Field(min_length=1, max_length=300)
-    content: str = Field(default="", max_length=100_000)
     account: str | None = None
 
 
 async def create_google_doc(execution: ToolExecution, args: CreateGoogleDocInput) -> ToolResult:
-    data = _drive(execution).select_account(args.account).create_doc(args.title, args.content)
+    data = _drive(execution).select_account(args.account).create_doc(args.title)
     return ToolResult(content=f"Created {data['title']}: {data['url']}", preview="Created document")
 
 
 async def approve_create_google_doc(_execution: ToolExecution, args: CreateGoogleDocInput) -> ApprovalInfo:
-    return ApprovalInfo(description=args.title, preview=args.content[:1000] or "Empty document", diff=None)
+    return ApprovalInfo(description=args.title, preview="Create empty document", diff=None)
 
 
 class EditGoogleDocInput(BaseModel):
@@ -126,17 +125,16 @@ async def approve_edit_google_doc(_execution: ToolExecution, args: EditGoogleDoc
 
 class CreateGoogleSheetInput(BaseModel):
     title: str = Field(min_length=1, max_length=300)
-    rows: list[list[CellValue]] = Field(default_factory=list, max_length=500)
     account: str | None = None
 
 
 async def create_google_sheet(execution: ToolExecution, args: CreateGoogleSheetInput) -> ToolResult:
-    data = _drive(execution).select_account(args.account).create_sheet(args.title, args.rows)
+    data = _drive(execution).select_account(args.account).create_sheet(args.title)
     return ToolResult(content=f"Created {data['title']}: {data['url']}", preview="Created spreadsheet")
 
 
 async def approve_create_google_sheet(_execution: ToolExecution, args: CreateGoogleSheetInput) -> ApprovalInfo:
-    return ApprovalInfo(description=args.title, preview=json.dumps(args.rows[:20], ensure_ascii=False), diff=None)
+    return ApprovalInfo(description=args.title, preview="Create empty spreadsheet", diff=None)
 
 
 class SheetWriteInput(BaseModel):
@@ -178,9 +176,9 @@ def _policy(action: ToolAction, *, approval: bool = False) -> ToolPolicy:
 search_google_drive_tool = tool(display_name="Search Google Drive", description="Search connected Google Docs and Sheets.", input_model=SearchGoogleDriveInput, policy=_policy(ToolAction.READ), execute=search_google_drive)
 read_google_doc_tool = tool(display_name="Read Google Doc", description="Read a Google Doc by qualified reference.", input_model=ReadGoogleDocInput, policy=_policy(ToolAction.READ), execute=read_google_doc)
 read_google_sheet_tool = tool(display_name="Read Google Sheet", description="Read a bounded A1 range from a Google Sheet.", input_model=ReadGoogleSheetInput, policy=_policy(ToolAction.READ), execute=read_google_sheet)
-create_google_doc_tool = tool(display_name="Create Google Doc", description="Create a Google Doc.", input_model=CreateGoogleDocInput, policy=_policy(ToolAction.WRITE, approval=True), approval=approve_create_google_doc, execute=create_google_doc)
+create_google_doc_tool = tool(display_name="Create Google Doc", description="Create an empty Google Doc. Use edit_google_doc in a separate operation to add content.", input_model=CreateGoogleDocInput, policy=_policy(ToolAction.WRITE, approval=True), approval=approve_create_google_doc, execute=create_google_doc)
 edit_google_doc_tool = tool(display_name="Edit Google Doc", description="Append to or replace exact text in a Google Doc.", input_model=EditGoogleDocInput, policy=_policy(ToolAction.WRITE, approval=True), approval=approve_edit_google_doc, execute=edit_google_doc)
-create_google_sheet_tool = tool(display_name="Create Google Sheet", description="Create a Google Sheet with optional rows.", input_model=CreateGoogleSheetInput, policy=_policy(ToolAction.WRITE, approval=True), approval=approve_create_google_sheet, execute=create_google_sheet)
+create_google_sheet_tool = tool(display_name="Create Google Sheet", description="Create an empty Google Sheet. Use update_google_sheet in a separate operation to add values.", input_model=CreateGoogleSheetInput, policy=_policy(ToolAction.WRITE, approval=True), approval=approve_create_google_sheet, execute=create_google_sheet)
 update_google_sheet_tool = tool(display_name="Update Google Sheet", description="Replace values in one exact A1 range.", input_model=SheetWriteInput, policy=_policy(ToolAction.WRITE, approval=True), approval=approve_sheet_write, execute=update_google_sheet)
 append_google_sheet_rows_tool = tool(display_name="Append Google Sheet Rows", description="Append rows to a Google Sheet range.", input_model=SheetWriteInput, policy=_policy(ToolAction.WRITE, approval=True), approval=approve_sheet_write, execute=append_google_sheet_rows)
 
