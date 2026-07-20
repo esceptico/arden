@@ -339,7 +339,11 @@ class DeleteCalendarEventInput(BaseModel):
 async def approve_delete_calendar_event(
     execution: ToolExecution, args: DeleteCalendarEventInput
 ) -> ApprovalInfo | None:
-    return ApprovalInfo(description=args.event_id, preview=None, diff=None)
+    return ApprovalInfo(
+        description="Delete calendar event",
+        preview=f"Event ref: {args.event_id}",
+        diff=f"- calendar event {args.event_id}",
+    )
 
 
 async def delete_calendar_event(execution: ToolExecution, args: DeleteCalendarEventInput) -> ToolResult:

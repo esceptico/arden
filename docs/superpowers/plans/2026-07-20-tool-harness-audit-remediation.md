@@ -414,8 +414,8 @@ def atomic_compare_and_swap(path: Path, content: str, expected_sha256: str) -> F
 
 **Files:** only files changed by Tasks 1–14.
 
-- [ ] Re-read this ledger and map every row to a passing test, code path, and commit.
-- [ ] Search for remaining stringly errors, bare mutation successes, unbounded list inputs, naive timestamp formatting, approval-gated tools without previews, registered dead tools, and production mutations without outcomes.
-- [ ] Run Ruff/type checks, the full server suite, harness journeys, provider-backed eval smoke, and affected desktop tests.
-- [ ] Inspect `git status`, every commit diff, and `git diff --cached --check`; prove unrelated dirty changes were never staged.
-- [ ] Commit any review-only corrections as `fix(harness): close remediation audit gaps`.
+- [x] Re-read this ledger and map every row to a passing test, code path, and commit.
+- [x] Search for remaining stringly errors, bare mutation successes, unbounded list inputs, naive timestamp formatting, approval-gated tools without previews, registered dead tools, and production mutations without outcomes.
+- [x] Run Ruff/type checks, the full server suite, harness journeys, provider-backed eval smoke, and affected desktop tests.
+- [x] Inspect `git status`, every commit diff, and `git diff --cached --check`; prove unrelated dirty changes were never staged.
+- [x] Commit any review-only corrections as `fix(harness): close remediation audit gaps`.

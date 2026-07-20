@@ -174,10 +174,13 @@ def _working_dir(execution: ToolExecution, args: BashInput) -> str | None:
 
 
 async def approve_bash(execution: ToolExecution, args: BashInput) -> ApprovalInfo | None:
-    if not is_safe_command(args.command) and not is_blocked_command(args.command):
-        cwd = _working_dir(execution, args) or str(Path.cwd())
-        return ApprovalInfo(description=f"{args.command}\n\ncwd: {cwd}", preview=None, diff=None)
-    return None
+    cwd = _working_dir(execution, args) or str(Path.cwd())
+    classification = "Blocked" if is_blocked_command(args.command) else "Command"
+    return ApprovalInfo(
+        description="Run shell command",
+        preview=f"{classification}: {args.command[:1_200]}\nCWD: {cwd}",
+        diff=None,
+    )
 
 
 async def run_bash(execution: ToolExecution, args: BashInput) -> ToolResult:

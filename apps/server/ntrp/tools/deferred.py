@@ -359,6 +359,7 @@ class LoadToolsInput(BaseModel):
     )
     names: list[str] | None = Field(
         default=None,
+        max_length=100,
         description="Exact deferred tool names to load, e.g. ['slack_search', 'slack_thread', 'slack_file'].",
     )
 

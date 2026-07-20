@@ -74,15 +74,8 @@ def _empty_search_content(query: str) -> str:
     )
 
 
-def _provider_failure_content(error: WebSearchProviderException) -> str:
-    return (
-        f"{error} This is a provider/network failure, not an empty-results response. "
-        "Retry once; if it repeats, use another web search provider or report that search is temporarily unavailable."
-    )
-
-
 class WebSearchInput(BaseModel):
-    query: str = Field(description="The search query")
+    query: str = Field(min_length=1, max_length=2_000, description="The search query")
     limit: int = Field(
         default=_DEFAULT_SEARCH_RESULTS,
         ge=1,
@@ -135,22 +128,23 @@ async def web_search(execution: ToolExecution, args: WebSearchInput) -> ToolResu
 
     except NoSearchResultsException:
         return ToolResult(content=_empty_search_content(args.query), preview="0 results")
-    except WebSearchProviderException as e:
-        return ToolResult(content=_provider_failure_content(e), preview="Search failed", is_error=True)
-    except Exception as e:
-        return ToolResult(content=f"Error: Search failed: {e}", preview="Search failed", is_error=True)
+    except WebSearchProviderException as error:
+        return _web_provider_failure("Search failed", safe_message=str(error))
+    except Exception:
+        return _web_provider_failure("Search failed")
 
 
 class WebFetchInput(BaseModel):
-    url: str = Field(description="The URL to fetch")
+    url: str = Field(min_length=1, max_length=4_096, description="The URL to fetch")
 
 
 async def web_fetch(execution: ToolExecution, args: WebFetchInput) -> ToolResult:
     if not args.url.startswith(("http://", "https://")):
-        return ToolResult(
-            content=f"Invalid URL: must start with http:// or https://. Got: {args.url}",
+        return ToolResult.failure(
+            code="invalid_ref",
+            message="URL must start with http:// or https://.",
             preview="Invalid url",
-            is_error=True,
+            recovery_action="Pass a complete HTTP(S) URL returned by web_search.",
         )
 
     source = execution.ctx.get_client("web", WebClient)
@@ -179,8 +173,18 @@ async def web_fetch(execution: ToolExecution, args: WebFetchInput) -> ToolResult
                 ),
             )
         return ToolResult(content="No content fetched. Page may be empty or require JavaScript.", preview="Empty")
-    except Exception as e:
-        return ToolResult(content=f"Error fetching URL: {e}", preview="Fetch failed", is_error=True)
+    except Exception:
+        return _web_provider_failure("Fetch failed")
+
+
+def _web_provider_failure(preview: str, *, safe_message: str = "The web provider request failed.") -> ToolResult:
+    return ToolResult.failure(
+        code="provider_error",
+        message=safe_message,
+        preview=preview,
+        retryable=True,
+        recovery_action="Retry once; if it repeats, use another provider or report that web access is unavailable.",
+    )
 
 
 web_search_tool = tool(

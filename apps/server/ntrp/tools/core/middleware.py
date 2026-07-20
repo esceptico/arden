@@ -6,7 +6,7 @@ from pydantic import ValidationError
 
 from ntrp.tools.core.base import Tool, ToolResult
 from ntrp.tools.core.context import ToolExecution
-from ntrp.tools.core.types import ApprovalInfo, ApprovalMode
+from ntrp.tools.core.types import ApprovalMode
 
 
 @dataclass(frozen=True)
@@ -47,10 +47,11 @@ async def request_approval(call: ToolCall, next_call: ToolNext) -> ToolResult:
 
     info = await call.tool.approval_info(call.execution, **call.arguments)
     if info is None:
-        info = ApprovalInfo(
-            description=f"Approve {call.tool.display_name or call.name}",
-            preview=None,
-            diff=None,
+        return ToolResult.failure(
+            code="approval_preview_unavailable",
+            message=f"Could not prepare a safe preview for {call.tool.display_name or call.name}.",
+            preview="Approval unavailable",
+            recovery_action="Inspect the target state and retry; the action was not executed.",
         )
 
     rejection = await call.execution.request_approval(

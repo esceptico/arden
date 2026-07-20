@@ -221,13 +221,22 @@ def _message_ref(session_id: str, seq: object, title: str) -> ToolSourceRef | No
     return ToolSourceRef(provider="ntrp", kind="message", ref=f"{session_id}:{seq}", title=title)
 
 
+def _session_unavailable() -> ToolResult:
+    return ToolResult.failure(
+        code="not_configured",
+        message="Session service unavailable.",
+        preview="Unavailable",
+        recovery_action="Retry from a persisted session with history access enabled.",
+    )
+
+
 # --- Executors ---
 
 
 async def list_recent_sessions(execution: ToolExecution, args: ListRecentSessionsInput) -> ToolResult:
     svc = execution.ctx.services.get("session")
     if svc is None:
-        return ToolResult(content="Session service unavailable.", preview="Unavailable", is_error=True)
+        return _session_unavailable()
 
     sessions = await svc.list_sessions(
         limit=args.limit * 2 if args.within_days else args.limit,
@@ -275,7 +284,7 @@ async def list_recent_sessions(execution: ToolExecution, args: ListRecentSession
 async def create_session(execution: ToolExecution, args: CreateSessionInput) -> ToolResult:
     svc = execution.ctx.services.get("session")
     if svc is None:
-        return ToolResult(content="Session service unavailable.", preview="Unavailable", is_error=True)
+        return _session_unavailable()
 
     origin = execution.ctx.run.loop_task_id
     state = await svc.provision(
@@ -301,17 +310,18 @@ async def create_session(execution: ToolExecution, args: CreateSessionInput) -> 
 async def read_session(execution: ToolExecution, args: ReadSessionInput) -> ToolResult:
     svc = execution.ctx.services.get("session")
     if svc is None:
-        return ToolResult(content="Session service unavailable.", preview="Unavailable", is_error=True)
+        return _session_unavailable()
 
     roles: set[str] | None = None
     if args.role_filter:
         roles = {r.strip().lower() for r in args.role_filter.split(",") if r.strip()}
 
     if args.after_seq is not None and args.before_seq is not None:
-        return ToolResult(
-            content="Pass only one of after_seq / before_seq.",
+        return ToolResult.failure(
+            code="invalid_arguments",
+            message="Pass only one of after_seq or before_seq.",
             preview="Bad cursor",
-            is_error=True,
+            recovery_action="Choose one pagination direction and retry.",
         )
 
     try:
@@ -323,11 +333,13 @@ async def read_session(execution: ToolExecution, args: ReadSessionInput) -> Tool
             around_seq=args.around_seq,
             area_id=_active_area_id(execution),
         )
-    except Exception as e:
-        return ToolResult(
-            content=f"Failed to read session {args.session_id}: {e}",
+    except Exception:
+        return ToolResult.failure(
+            code="session_read_failed",
+            message=f"Failed to read session {args.session_id}.",
             preview="Read failed",
-            is_error=True,
+            retryable=True,
+            recovery_action="Call list_recent_sessions and retry with an exact readable session ID.",
         )
 
     raw_messages = page.get("messages") if isinstance(page, dict) else page
@@ -388,7 +400,7 @@ async def read_session(execution: ToolExecution, args: ReadSessionInput) -> Tool
 async def search_transcripts(execution: ToolExecution, args: SearchTranscriptsInput) -> ToolResult:
     svc = execution.ctx.services.get("session")
     if svc is None:
-        return ToolResult(content="Session service unavailable.", preview="Unavailable", is_error=True)
+        return _session_unavailable()
 
     since: str | None = None
     if args.within_days is not None:
@@ -403,11 +415,13 @@ async def search_transcripts(execution: ToolExecution, args: SearchTranscriptsIn
             since=since,
             area_id=_active_area_id(execution),
         )
-    except Exception as e:
-        return ToolResult(
-            content=f"Search failed: {e}",
+    except Exception:
+        return ToolResult.failure(
+            code="session_search_failed",
+            message="Transcript search failed.",
             preview="Search failed",
-            is_error=True,
+            retryable=True,
+            recovery_action="Simplify the query or retry with a narrower session/time window.",
         )
 
     hits = result.get("hits", [])

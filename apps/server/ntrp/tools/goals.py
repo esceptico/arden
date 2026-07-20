@@ -47,6 +47,22 @@ def _block_attempt_evidence(reason: str, evidence: str | None) -> str:
     return f"Blocker reported: {reason}"
 
 
+def _goal_failure(*, missing_goal: bool = False) -> ToolResult:
+    if missing_goal:
+        return ToolResult.failure(
+            code="not_found",
+            message="No active goal exists for this session.",
+            preview="No goal",
+            recovery_action="Create a goal before trying to update its status.",
+        )
+    return ToolResult.failure(
+        code="not_configured",
+        message="Session goal service is unavailable.",
+        preview="Goal unavailable",
+        recovery_action="Retry from a persisted session with goal support enabled.",
+    )
+
+
 async def _emit_goal_updated(execution: ToolExecution, goal: dict) -> None:
     if execution.ctx.io.emit:
         await execution.ctx.io.emit(GoalUpdatedEvent(session_id=execution.ctx.session_id, goal=goal))
@@ -55,7 +71,7 @@ async def _emit_goal_updated(execution: ToolExecution, goal: dict) -> None:
 async def get_goal(execution: ToolExecution, args: EmptyInput) -> ToolResult:
     svc = execution.ctx.services.get("session")
     if not svc:
-        return ToolResult(content="Session service unavailable.", preview="No session service", is_error=True)
+        return _goal_failure()
     goal = await svc.get_goal(execution.ctx.session_id)
     return ToolResult(content=_format_goal(goal), preview=goal["status"] if goal else "No goal")
 
@@ -63,10 +79,10 @@ async def get_goal(execution: ToolExecution, args: EmptyInput) -> ToolResult:
 async def complete_goal(execution: ToolExecution, args: EmptyInput) -> ToolResult:
     svc = execution.ctx.services.get("session")
     if not svc:
-        return ToolResult(content="Session service unavailable.", preview="No session service", is_error=True)
+        return _goal_failure()
     goal = await svc.update_goal(execution.ctx.session_id, status="complete")
     if not goal:
-        return ToolResult(content="No active goal for this session.", preview="No goal", is_error=True)
+        return _goal_failure(missing_goal=True)
     await _emit_goal_updated(execution, goal)
     return ToolResult(
         content=(
@@ -85,13 +101,13 @@ class BlockGoalInput(BaseModel):
 async def block_goal(execution: ToolExecution, args: BlockGoalInput) -> ToolResult:
     svc = execution.ctx.services.get("session")
     if not svc:
-        return ToolResult(content="Session service unavailable.", preview="No session service", is_error=True)
+        return _goal_failure()
     get_goal = getattr(svc, "get_goal", None)
     if not get_goal:
-        return ToolResult(content="Session service cannot read goals.", preview="Goal unavailable", is_error=True)
+        return _goal_failure()
     current = await get_goal(execution.ctx.session_id)
     if not current:
-        return ToolResult(content="No active goal for this session.", preview="No goal", is_error=True)
+        return _goal_failure(missing_goal=True)
     attempts = _consecutive_block_attempts(current, args.reason) + 1
     terminal_blocked = attempts >= BLOCKED_CONFIRMATION_ATTEMPTS
     goal = await svc.update_goal(
@@ -103,7 +119,7 @@ async def block_goal(execution: ToolExecution, args: BlockGoalInput) -> ToolResu
         evidence_blocked_reason=args.reason,
     )
     if not goal:
-        return ToolResult(content="No active goal for this session.", preview="No goal", is_error=True)
+        return _goal_failure(missing_goal=True)
     await _emit_goal_updated(execution, goal)
     if not terminal_blocked:
         remaining = BLOCKED_CONFIRMATION_ATTEMPTS - attempts

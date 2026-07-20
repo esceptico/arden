@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ntrp.core.agent_types import SPAWN_SURFACE_GUIDANCE
 from ntrp.events.sse import WorkflowFinishedEvent, WorkflowStartedEvent
-from ntrp.orchestra.dynamic import format_script_traceback, run_script
+from ntrp.orchestra.dynamic import run_script
 from ntrp.orchestra.engine import Orchestra
 from ntrp.tools.core import ToolResult, tool
 from ntrp.tools.core.context import ToolExecution
@@ -26,9 +26,10 @@ class WorkflowInput(BaseModel):
     )
     phases: list[str] = Field(
         default_factory=list,
+        max_length=50,
         description="Optional phase labels rendered before the preset starts.",
     )
-    args: dict = Field(default_factory=dict, description="Parameters passed to the curated preset.")
+    args: dict = Field(default_factory=dict, max_length=100, description="Parameters passed to the curated preset.")
 
 
 def _jsonable(value: Any) -> Any:
@@ -77,7 +78,12 @@ def _render(result: Any) -> str:
 async def run_workflow(execution: ToolExecution, args: WorkflowInput) -> ToolResult:
     ctx = execution.ctx
     if ctx.spawn_fn is None:
-        return ToolResult(content="Error: spawn capability not available", preview="No spawn", is_error=True)
+        return ToolResult.failure(
+            code="not_configured",
+            message="Workflow spawn capability is unavailable.",
+            preview="Workflow unavailable",
+            recovery_action="Run the workflow from a session with agent spawning enabled.",
+        )
 
     # Only named, curated presets may reach the trusted in-process runner.
     script = None
@@ -85,13 +91,19 @@ async def run_workflow(execution: ToolExecution, args: WorkflowInput) -> ToolRes
     if args.name:
         registry = ctx.services.get("skill_registry")
         if registry is None:
-            return ToolResult(content="Error: skill registry not available.", preview="Unavailable", is_error=True)
+            return ToolResult.failure(
+                code="not_configured",
+                message="Workflow registry is unavailable.",
+                preview="Unavailable",
+                recovery_action="Enable the skill registry before running a named workflow.",
+            )
         meta = registry.get(args.name)
         if meta is not None and meta.kind == "workflow" and meta.location != "builtin":
-            return ToolResult(
-                content="User-authored Python workflow presets are disabled. Run a curated built-in preset.",
+            return ToolResult.failure(
+                code="permission_denied",
+                message="User-authored Python workflow presets are disabled.",
                 preview="Untrusted workflow",
-                is_error=True,
+                recovery_action="Run a curated built-in workflow preset.",
             )
         script = registry.load_workflow_script(args.name)
         if script is not None:
@@ -100,16 +112,18 @@ async def run_workflow(execution: ToolExecution, args: WorkflowInput) -> ToolRes
             presets = ", ".join(
                 m.name for m in registry.list_all() if m.kind == "workflow" and m.location == "builtin"
             )
-            return ToolResult(
-                content=f"No workflow preset named '{args.name}'. Saved presets: {presets or '(none)'}.",
+            return ToolResult.failure(
+                code="not_found",
+                message=f"No workflow preset named '{args.name}'. Built-in presets: {presets or '(none)'}.",
                 preview="Unknown preset",
-                is_error=True,
+                recovery_action="Retry with an exact listed built-in preset name.",
             )
     if not script:
-        return ToolResult(
-            content="Pass the name of a curated built-in workflow preset.",
+        return ToolResult.failure(
+            code="invalid_arguments",
+            message="Pass the name of a curated built-in workflow preset.",
             preview="No preset",
-            is_error=True,
+            recovery_action="Choose a built-in preset name from the workflow registry.",
         )
 
     workflow_id = f"wf-{uuid4().hex[:10]}"
@@ -153,23 +167,21 @@ async def run_workflow(execution: ToolExecution, args: WorkflowInput) -> ToolRes
         # so the tool executor still sees the cancellation.
         await asyncio.shield(_finish("cancelled", "stopped by user"))
         raise
-    except SyntaxError as exc:
-        await _finish("failed", f"script did not compile: {exc}")
-        # Self-correcting: hand back the exact compile error so the model can fix + retry.
-        return ToolResult(
-            content=f"Script did not compile: {exc}\nFix the Python and call the tool again.",
+    except SyntaxError:
+        await _finish("failed", "script did not compile")
+        return ToolResult.failure(
+            code="workflow_invalid",
+            message="The curated workflow preset did not compile.",
             preview="Script error",
-            is_error=True,
+            recovery_action="Report the broken built-in preset; do not retry it unchanged.",
         )
-    except Exception as exc:
-        await _finish("failed", str(exc)[:200])
-        # Trimmed to the script's own frames with rebased line numbers, so the
-        # model sees the line it wrote — the whole point of a self-correcting tool.
-        tb = format_script_traceback(exc, script)
-        return ToolResult(
-            content=f"Workflow raised {type(exc).__name__}: {exc}\n\n{tb}\nFix the script and call again.",
+    except Exception:
+        await _finish("failed", "workflow execution failed")
+        return ToolResult.failure(
+            code="workflow_failed",
+            message="The curated workflow preset failed during execution.",
             preview="Workflow failed",
-            is_error=True,
+            recovery_action="Inspect the workflow run trace or report the broken preset; do not retry blindly.",
         )
 
     await _finish("completed", "")

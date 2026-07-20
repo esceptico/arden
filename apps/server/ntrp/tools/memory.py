@@ -131,10 +131,11 @@ class RecallInput(BaseModel):
 
 
 def _unavailable() -> ToolResult:
-    return ToolResult(
-        content="Memory is not available.",
+    return ToolResult.failure(
+        code="not_configured",
+        message="Memory is not available.",
         preview="Memory unavailable",
-        is_error=True,
+        recovery_action="Enable the memory record service before retrying.",
     )
 
 
@@ -196,13 +197,27 @@ def _candidate_data(record: Any) -> dict[str, object]:
     }
 
 
-
 def _artifact_store() -> ArtifactMemoryStore:
     return ArtifactMemoryStore(get_config().memory_artifacts_dir)
 
 
 def _path_error(path: str) -> ToolResult:
-    return ToolResult(content=f"Invalid or unavailable memory artifact path: {path}", preview="Invalid path", is_error=True)
+    return ToolResult.failure(
+        code="not_found",
+        message=f"Invalid or unavailable memory artifact path: {path}",
+        preview="Invalid path",
+        recovery_action="Call memory_tree and retry with an exact returned relative path.",
+    )
+
+
+def _memory_filesystem_failure(operation: str) -> ToolResult:
+    return ToolResult.failure(
+        code="filesystem_error",
+        message=f"Could not {operation} the memory artifact.",
+        preview=f"{operation.title()} failed",
+        retryable=True,
+        recovery_action="Retry once; if it repeats, inspect memory health and filesystem permissions.",
+    )
 
 
 def _validate_relative_path(raw: str, *, allow_empty: bool = False) -> str | None:
@@ -394,8 +409,8 @@ def _memory_tree_sync(args: MemoryTreeInput) -> ToolResult:
     store = _artifact_store()
     try:
         artifacts = _list_artifacts_for_path(store, rel)
-    except OSError as exc:
-        return ToolResult(content=f"Error reading memory artifacts: {exc}", preview="Read failed", is_error=True)
+    except OSError:
+        return _memory_filesystem_failure("read")
     if rel and not artifacts:
         return _path_error(args.path)
     root_label = rel or "memory"
@@ -500,8 +515,8 @@ def _memory_search_sync(args: MemorySearchInput) -> ToolResult:
     store = _artifact_store()
     try:
         artifacts = _list_artifacts_for_path(store, rel)
-    except OSError as exc:
-        return ToolResult(content=f"Error searching memory artifacts: {exc}", preview="Search failed", is_error=True)
+    except OSError:
+        return _memory_filesystem_failure("search")
     if rel and not artifacts:
         return _path_error(args.path)
     if rel and Path(rel).suffix.casefold() in {".md", ".txt"} and not any(a.path == rel for a in artifacts):
@@ -590,8 +605,18 @@ def _memory_patch_sync(args: MemoryPatchInput) -> ToolResult:
         except (FileNotFoundError, OSError):
             return _path_error(args.path)
         if count == 0:
-            return ToolResult(content="Text block not found. Read the artifact and include more exact context.", preview="No match", is_error=True)
-        return ToolResult(content=f"Text block matched {count} times. Include a larger exact block so the edit is unique.", preview="Ambiguous", is_error=True)
+            return ToolResult.failure(
+                code="not_found",
+                message="Text block not found.",
+                preview="No match",
+                recovery_action="Read the artifact and include more exact context.",
+            )
+        return ToolResult.failure(
+            code="ambiguous_ref",
+            message=f"Text block matched {count} times.",
+            preview="Ambiguous",
+            recovery_action="Include a larger exact block so the edit is unique.",
+        )
     rel, _before, after, artifact = preview
     try:
         raw = _read_text_no_symlink(path)
@@ -599,14 +624,19 @@ def _memory_patch_sync(args: MemoryPatchInput) -> ToolResult:
         return _path_error(args.path)
     fm, _body = parse_frontmatter(raw)
     if bool(fm.get("generated", _artifact_generated(artifact))) and not args.force_generated:
-        return ToolResult(content=f"Refusing to edit generated memory artifact {rel}; use recall/record tools for DB-backed facts or set force_generated=true with approval for projection-only edits.", preview="Generated artifact", is_error=True)
+        return ToolResult.failure(
+            code="permission_denied",
+            message=f"Refusing to edit generated memory artifact {rel}.",
+            preview="Generated artifact",
+            recovery_action="Use record tools for durable facts or set force_generated=true with approval.",
+        )
     frontmatter = raw[: len(raw) - len(_body)] if fm else ""
     try:
         revision = atomic_compare_and_swap(path, frontmatter + after, args.expected_sha256)
     except RevisionConflict as conflict:
         return _write_conflict(rel, conflict.expected, conflict.observed)
-    except OSError as exc:
-        return ToolResult(content=f"Error patching memory artifact: {exc}", preview="Patch failed", is_error=True)
+    except OSError:
+        return _memory_filesystem_failure("patch")
     return ToolResult(
         content=f"Patched memory artifact {rel}.",
         preview="Patched",
@@ -645,14 +675,20 @@ def _write_target(args: MemoryWriteInput) -> tuple[str, str] | ToolResult:
     try:
         artifact = store.read_artifact(rel)
         if artifact.generated:
-            return ToolResult(content=f"{rel} is a generated report — it is rebuilt from the pages; there is nothing durable to write here.", preview="Generated artifact", is_error=True)
+            return ToolResult.failure(
+                code="permission_denied",
+                message=f"{rel} is a generated report rebuilt from source pages.",
+                preview="Generated artifact",
+                recovery_action="Edit the source page or record instead.",
+            )
     except FileNotFoundError:
         pass  # creating a new page
     if (store.root / "raw" / rel).is_file():
-        return ToolResult(
-            content=f"{rel} is a record-backed page — its prose is compiled from records and a whole-page write would be overwritten. Use remember for new facts or memory_patch for a prose fix.",
+        return ToolResult.failure(
+            code="permission_denied",
+            message=f"{rel} is a record-backed page and cannot be replaced wholesale.",
             preview="Record-backed page",
-            is_error=True,
+            recovery_action="Use remember for new facts or memory_patch for a prose correction.",
         )
     existing = ""
     path = _safe_existing_file_path(store.root, rel)
@@ -697,8 +733,8 @@ def _memory_write_sync(args: MemoryWriteInput) -> ToolResult:
         revision = atomic_compare_and_swap(path, content, args.expected_sha256)
     except RevisionConflict as conflict:
         return _write_conflict(rel, conflict.expected, conflict.observed)
-    except OSError as exc:
-        return ToolResult(content=f"Error writing memory page: {exc}", preview="Write failed", is_error=True)
+    except OSError:
+        return _memory_filesystem_failure("write")
     verb = "Updated" if existing else "Created"
     return ToolResult(
         content=f"{verb} memory page {rel}.",
@@ -795,10 +831,11 @@ async def remember(execution: ToolExecution, args: RememberInput) -> ToolResult:
 
     reconciler = execution.ctx.services.get(MEMORY_RECONCILER_SERVICE)
     if reconciler is None:
-        return ToolResult(
-            content="Memory reconciliation is unavailable; nothing was changed.",
+        return ToolResult.failure(
+            code="not_configured",
+            message="Memory reconciliation is unavailable; nothing was changed.",
             preview="Reconciliation unavailable",
-            is_error=True,
+            recovery_action="Enable the memory reconciler before retrying.",
         )
     operations = await reconciler.reconcile_direct_memory(
         text=args.text,
@@ -809,19 +846,26 @@ async def remember(execution: ToolExecution, args: RememberInput) -> ToolResult:
         tool_call_id=execution.tool_id,
     )
     if operations is None:
-        return ToolResult(
-            content="Memory reconciliation is unavailable; nothing was changed.",
+        return ToolResult.failure(
+            code="temporarily_unavailable",
+            message="Memory reconciliation is unavailable; nothing was changed.",
             preview="Reconciliation unavailable",
-            is_error=True,
+            retryable=True,
+            recovery_action="Retry once; if it repeats, inspect memory health.",
         )
     if not operations:
-        return ToolResult(
-            content="Memory reconciliation returned no decision; nothing was changed.",
+        return ToolResult.failure(
+            code="reconciliation_failed",
+            message="Memory reconciliation returned no decision; nothing was changed.",
             preview="Reconciliation unavailable",
-            is_error=True,
+            recovery_action="Rephrase the memory as one self-contained statement and retry.",
         )
     if question := next((operation.question for operation in operations if operation.op == "ASK"), None):
-        return ToolResult(content=question, preview="Clarification required", is_error=True)
+        return ToolResult(
+            content=question,
+            preview="Clarification required",
+            data={"clarification_required": True},
+        )
     if all(operation.op == "NOOP" for operation in operations):
         return ToolResult(content="No memory change was needed.", preview="Already known")
     return ToolResult(content="Remembered", preview="Remembered")

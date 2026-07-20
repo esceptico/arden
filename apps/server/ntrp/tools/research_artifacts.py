@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 from pydantic import BaseModel, Field
 
+from ntrp.agent.types.tools import ToolSourceRef, normalize_source_refs
 from ntrp.settings import NTRP_DIR
 from ntrp.tools.core import ToolResult, tool
 from ntrp.tools.core.context import ToolExecution
@@ -35,13 +36,13 @@ _MANIFEST = "manifest.json"
 
 
 class WriteResearchArtifactInput(BaseModel):
-    path: str = Field(description="Relative artifact path, e.g. 'sources/inventory.md'. No absolute paths or '..'.")
-    content: str = Field(description="UTF-8 text to write (overwrites any existing artifact at this path).")
+    path: str = Field(max_length=256, description="Relative artifact path, e.g. 'sources/inventory.md'. No absolute paths or '..'.")
+    content: str = Field(max_length=MAX_ARTIFACT_BYTES, description="UTF-8 text to write (overwrites any existing artifact at this path).")
 
 
 class AppendResearchArtifactInput(BaseModel):
-    path: str = Field(description="Relative artifact path to append to (created if absent).")
-    content: str = Field(description="UTF-8 text to append.")
+    path: str = Field(max_length=256, description="Relative artifact path to append to (created if absent).")
+    content: str = Field(max_length=MAX_ARTIFACT_BYTES, description="UTF-8 text to append.")
 
 
 class ReadResearchArtifactInput(BaseModel):
@@ -232,22 +233,42 @@ async def _put_fs_artifact(scope_id: str, rel_path: str, content: str) -> Path:
 
 
 def _invalid(err: str) -> ToolResult:
-    return ToolResult(content=f"Invalid path: {err}", preview="Invalid path", is_error=True)
+    return ToolResult.failure(
+        code="invalid_ref",
+        message=f"Invalid research artifact path: {err}",
+        preview="Invalid path",
+        recovery_action="Use a short relative path without '..' or control characters.",
+    )
+
+
+def _artifact_ref(scope: str, path: str) -> ToolSourceRef:
+    return ToolSourceRef(
+        provider="research",
+        kind="artifact",
+        ref=f"{scope}:{path}",
+        title=f"Research artifact {path}",
+    )
 
 
 async def write_research_artifact(execution: ToolExecution, args: WriteResearchArtifactInput) -> ToolResult:
     if err := _validate_path(args.path):
         return _invalid(err)
     if len(args.content.encode("utf-8")) > MAX_ARTIFACT_BYTES:
-        return ToolResult(content=f"Artifact too large (max {MAX_ARTIFACT_BYTES} bytes).", preview="Too large", is_error=True)
+        return ToolResult.failure(
+            code="result_too_large",
+            message=f"Artifact too large (max {MAX_ARTIFACT_BYTES} bytes).",
+            preview="Too large",
+            recovery_action="Split the content across multiple bounded artifacts.",
+        )
     scope = _scope(execution)
     store = _resolve_store(execution)
     existing = await list_scope_artifacts(scope, store=store)
     if args.path not in {a["path"] for a in existing} and len(existing) >= MAX_ARTIFACTS_PER_SCOPE:
-        return ToolResult(
-            content=f"Too many artifacts in this research scope (max {MAX_ARTIFACTS_PER_SCOPE}).",
+        return ToolResult.failure(
+            code="limit_exceeded",
+            message=f"Too many artifacts in this research scope (max {MAX_ARTIFACTS_PER_SCOPE}).",
             preview="Too many",
-            is_error=True,
+            recovery_action="Append to or overwrite an existing artifact instead.",
         )
     fs_path = await _put_fs_artifact(scope, args.path, args.content)
     if store is not None:
@@ -255,6 +276,7 @@ async def write_research_artifact(execution: ToolExecution, args: WriteResearchA
     return ToolResult(
         content=f"Wrote research artifact {args.path} ({len(args.content)} chars) at {fs_path}.",
         preview=f"Wrote {args.path}",
+        source_refs=(_artifact_ref(scope, args.path),),
     )
 
 
@@ -269,19 +291,29 @@ async def append_research_artifact(execution: ToolExecution, args: AppendResearc
     if existing is None:
         listed = await list_scope_artifacts(scope, store=store)
         if len(listed) >= MAX_ARTIFACTS_PER_SCOPE:
-            return ToolResult(
-                content=f"Too many artifacts in this research scope (max {MAX_ARTIFACTS_PER_SCOPE}).",
+            return ToolResult.failure(
+                code="limit_exceeded",
+                message=f"Too many artifacts in this research scope (max {MAX_ARTIFACTS_PER_SCOPE}).",
                 preview="Too many",
-                is_error=True,
+                recovery_action="Append to or overwrite an existing artifact instead.",
             )
     content = (existing or "") + args.content
     new_len = len(content.encode("utf-8"))
     if new_len > MAX_ARTIFACT_BYTES:
-        return ToolResult(content=f"Artifact would exceed max size ({MAX_ARTIFACT_BYTES} bytes).", preview="Too large", is_error=True)
+        return ToolResult.failure(
+            code="result_too_large",
+            message=f"Artifact would exceed max size ({MAX_ARTIFACT_BYTES} bytes).",
+            preview="Too large",
+            recovery_action="Start another artifact or replace this one with a compact summary.",
+        )
     fs_path = await _put_fs_artifact(scope, args.path, content)
     if store is not None:
         await store.put_research_artifact(scope_id=scope, path=args.path, content=content)
-    return ToolResult(content=f"Appended to {args.path} ({new_len} bytes total) at {fs_path}.", preview=f"Appended {args.path}")
+    return ToolResult(
+        content=f"Appended to {args.path} ({new_len} bytes total) at {fs_path}.",
+        preview=f"Appended {args.path}",
+        source_refs=(_artifact_ref(scope, args.path),),
+    )
 
 
 async def read_research_artifact(execution: ToolExecution, args: ReadResearchArtifactInput) -> ToolResult:
@@ -293,14 +325,23 @@ async def read_research_artifact(execution: ToolExecution, args: ReadResearchArt
     if content is None and store is not None:
         content = await store.get_research_artifact(scope_id=scope, path=args.path)
     if content is None:
-        return ToolResult(content=f"No research artifact at {args.path} in scope {scope}.", preview="Not found", is_error=True)
+        return ToolResult.failure(
+            code="not_found",
+            message=f"No research artifact at {args.path} in scope {scope}.",
+            preview="Not found",
+            recovery_action="Call list_research_artifacts and retry with an exact returned path.",
+        )
     total = len(content)
     chunk = content[args.offset : args.offset + args.limit]
     end = args.offset + len(chunk)
     fs_path = _artifact_path(scope, args.path)
     header = f"[{args.path} — {total} chars, showing {args.offset}-{end}; fs_path={fs_path}]\n"
     footer = f"\n... [{total - end} more chars; call again with offset={end}]" if end < total else ""
-    return ToolResult(content=f"{header}{chunk}{footer}", preview=f"Read {len(chunk)} of {total} chars")
+    return ToolResult(
+        content=f"{header}{chunk}{footer}",
+        preview=f"Read {len(chunk)} of {total} chars",
+        source_refs=(_artifact_ref(scope, args.path),),
+    )
 
 
 async def list_research_artifacts(execution: ToolExecution, args: ListResearchArtifactsInput) -> ToolResult:
@@ -313,6 +354,7 @@ async def list_research_artifacts(execution: ToolExecution, args: ListResearchAr
     return ToolResult(
         content=f"Research artifacts for scope {scope}:\nArtifact dir: {artifact_dir}\n" + "\n".join(lines),
         preview=f"{len(artifacts)} artifacts",
+        source_refs=normalize_source_refs(_artifact_ref(scope, artifact["path"]) for artifact in artifacts),
     )
 
 

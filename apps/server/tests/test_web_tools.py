@@ -187,7 +187,7 @@ async def test_web_search_keeps_provider_exceptions_as_errors_even_if_message_sa
 
     assert result.is_error is True
     assert result.preview == "Search failed"
-    assert "No results found for query" in result.content
+    assert result.content == "The web provider request failed."
 
 
 @pytest.mark.asyncio
@@ -199,7 +199,7 @@ async def test_web_search_keeps_real_provider_errors_as_errors():
 
     assert result.is_error is True
     assert result.preview == "Search failed"
-    assert "backend unavailable" in result.content
+    assert result.content == "The web provider request failed."
 
 
 @pytest.mark.asyncio
@@ -212,8 +212,7 @@ async def test_web_search_sanitizes_provider_failures():
 
     assert result.is_error is True
     assert result.preview == "Search failed"
-    assert "DuckDuckGo request failed" in result.content
-    assert "provider/network failure" in result.content
+    assert result.content == "DuckDuckGo request failed."
     assert raw_error not in result.content
 
 

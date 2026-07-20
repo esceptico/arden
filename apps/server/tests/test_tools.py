@@ -707,6 +707,45 @@ def test_function_tool_requires_explicit_approval_preview_callback():
 
 
 @pytest.mark.asyncio
+async def test_approval_callback_that_cannot_preview_fails_closed():
+    async def approve(execution: ToolExecution, args: EchoInput) -> None:
+        return None
+
+    async def echo(execution: ToolExecution, args: EchoInput) -> ToolResult:
+        raise AssertionError("tool must not execute without a preview")
+
+    registry = ToolRegistry()
+    _register_tools(
+        registry,
+        {
+            "echo": tool(
+                description="Echo text.",
+                input_model=EchoInput,
+                execute=echo,
+                approval=approve,
+                policy=WRITE_INTERNAL_APPROVAL_POLICY,
+            )
+        },
+    )
+
+    result = await registry.execute("echo", _make_execution("echo"), {"text": "hello"})
+
+    assert result.is_error
+    assert result.outcome is not None and result.outcome.error is not None
+    assert result.outcome.error.code == "approval_preview_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_bash_approval_always_describes_command_and_working_directory():
+    execution = _make_execution("bash")
+
+    approval = await bash_tool.approval_info(execution, command="echo hello", working_dir="/tmp")
+
+    assert approval is not None
+    assert approval.preview == "Command: echo hello\nCWD: /tmp"
+
+
+@pytest.mark.asyncio
 async def test_tool_approval_timeout_expires_pending_request():
     async def echo(execution: ToolExecution, args: EchoInput) -> ToolResult:
         return ToolResult(content=args.text, preview=args.text)
@@ -1457,7 +1496,7 @@ async def test_research_artifact_size_cap(session_store: SessionStore):
     ex = ToolExecution(tool_id="t", tool_name="write_research_artifact", ctx=ctx)
 
     res = await write_research_artifact(
-        ex, WriteResearchArtifactInput(path="big.md", content="x" * (MAX_ARTIFACT_BYTES + 1))
+        ex, WriteResearchArtifactInput(path="big.md", content="é" * (MAX_ARTIFACT_BYTES // 2 + 1))
     )
     assert res.is_error
 

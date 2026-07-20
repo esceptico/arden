@@ -58,6 +58,24 @@ def _triggers_label(triggers: list) -> str:
     return " | ".join(t.label for t in triggers)
 
 
+def _automation_not_found(task_id: str) -> ToolResult:
+    return ToolResult.failure(
+        code="not_found",
+        message=f"Automation not found: {task_id}",
+        preview="Not found",
+        recovery_action="Call list_automations and retry with an exact returned task_id.",
+    )
+
+
+def _automation_unavailable() -> ToolResult:
+    return ToolResult.failure(
+        code="not_configured",
+        message="Automation service unavailable.",
+        preview="Unavailable",
+        recovery_action="Enable the automation service before retrying.",
+    )
+
+
 async def _resolve_parent_context(
     execution: "ToolExecution",
     explicit_parent: str | None,
@@ -145,6 +163,7 @@ class CreateAutomationInput(BaseModel):
     )
     channels: list[str] | None = Field(
         default=None,
+        max_length=100,
         description="For trigger_type='message': Slack channel names to watch (one or more, e.g. ['feel-good-inc', 'eng-bugs']). Required for message triggers.",
     )
     from_user: str | None = Field(
@@ -153,6 +172,7 @@ class CreateAutomationInput(BaseModel):
     )
     contains: list[str] | None = Field(
         default=None,
+        max_length=100,
         description="For trigger_type='message': only react when the message text contains any of these keywords (case-insensitive). Optional.",
     )
     auto_approve: bool = Field(
@@ -165,6 +185,7 @@ class CreateAutomationInput(BaseModel):
     tool_scope: list[str] | None = Field(
         default=None,
         min_length=1,
+        max_length=200,
         description=(
             "Explicit tool-name allowlist patterns (exact names or prefixes like 'slack_*'). "
             "Omit for read-only access."
@@ -235,6 +256,7 @@ class UpdateAutomationInput(BaseModel):
     )
     channels: list[str] | None = Field(
         default=None,
+        max_length=100,
         description="For trigger_type='message': Slack channel names to watch (one or more). Replaces the existing channel set.",
     )
     from_user: str | None = Field(
@@ -243,6 +265,7 @@ class UpdateAutomationInput(BaseModel):
     )
     contains: list[str] | None = Field(
         default=None,
+        max_length=100,
         description="For trigger_type='message': only react when the message contains any of these keywords (case-insensitive).",
     )
     auto_approve: bool | None = Field(
@@ -252,6 +275,7 @@ class UpdateAutomationInput(BaseModel):
     tool_scope: list[str] | None = Field(
         default=None,
         min_length=1,
+        max_length=200,
         description="Replace the explicit tool-name allowlist patterns for this automation.",
     )
     enabled: bool | None = Field(default=None, description="Enable or disable the automation")
@@ -349,7 +373,12 @@ async def create_automation(execution: ToolExecution, args: CreateAutomationInpu
             execution, args.parent_automation_id, args.idempotency_scope
         )
     except ValueError as e:
-        return ToolResult(content=f"Error: {e}", preview="Failed", is_error=True)
+        return ToolResult.failure(
+            code="invalid_arguments",
+            message=str(e),
+            preview="Invalid automation",
+            recovery_action="Correct the parent or idempotency fields and retry.",
+        )
     message_triggers: list[dict] | None = None
     if args.trigger_type == "message":
         message_trigger: dict = {"type": "message", "source": "slack", "channels": args.channels or []}
@@ -386,7 +415,12 @@ async def create_automation(execution: ToolExecution, args: CreateAutomationInpu
             tool_scope=args.tool_scope,
         )
     except ValueError as e:
-        return ToolResult(content=f"Error: {e}", preview="Failed", is_error=True)
+        return ToolResult.failure(
+            code="invalid_arguments",
+            message=str(e),
+            preview="Invalid automation",
+            recovery_action="Correct the schedule, trigger, or target fields and retry.",
+        )
 
     if automation is None:
         return ToolResult(
@@ -489,9 +523,14 @@ async def update_automation(execution: ToolExecution, args: UpdateAutomationInpu
             tool_scope=args.tool_scope,
         )
     except KeyError:
-        return ToolResult(content=f"Error: automation '{args.task_id}' not found", preview="Not found", is_error=True)
+        return _automation_not_found(args.task_id)
     except ValueError as e:
-        return ToolResult(content=f"Error: {e}", preview="Invalid update", is_error=True)
+        return ToolResult.failure(
+            code="invalid_arguments",
+            message=str(e),
+            preview="Invalid update",
+            recovery_action="Call list_automations, inspect the current trigger, and retry with valid fields.",
+        )
 
     label = automation.name or automation.description[:60]
     lines = [
@@ -511,7 +550,11 @@ async def approve_delete_automation(execution: ToolExecution, args: DeleteAutoma
         automation = await execution.ctx.services["automation"].get(args.task_id)
     except KeyError:
         return None
-    return ApprovalInfo(description=f"Delete: {automation.description}", preview=None, diff=None)
+    return ApprovalInfo(
+        description=f"Delete automation {args.task_id}",
+        preview=f"Name: {automation.name or '(unnamed)'}\nPrompt: {automation.description[:1_200]}",
+        diff=f"- automation {args.task_id}",
+    )
 
 
 async def delete_automation(execution: ToolExecution, args: DeleteAutomationInput) -> ToolResult:
@@ -519,9 +562,14 @@ async def delete_automation(execution: ToolExecution, args: DeleteAutomationInpu
         automation = await execution.ctx.services["automation"].get(args.task_id)
         await execution.ctx.services["automation"].delete(args.task_id)
     except KeyError:
-        return ToolResult(content=f"Error: automation '{args.task_id}' not found", preview="Not found", is_error=True)
-    except ValueError as e:
-        return ToolResult(content=f"Error: {e}", preview="Cannot delete", is_error=True)
+        return _automation_not_found(args.task_id)
+    except ValueError:
+        return ToolResult.failure(
+            code="write_conflict",
+            message="The automation could not be deleted in its current state.",
+            preview="Cannot delete",
+            recovery_action="Call list_automations and retry with a current automation ID.",
+        )
 
     return ToolResult(content=f"Deleted: {automation.description} ({args.task_id})", preview="Deleted")
 
@@ -530,7 +578,7 @@ async def get_automation_result(execution: ToolExecution, args: GetAutomationRes
     try:
         automation = await execution.ctx.services["automation"].get(args.task_id)
     except KeyError:
-        return ToolResult(content=f"Error: automation '{args.task_id}' not found", preview="Not found", is_error=True)
+        return _automation_not_found(args.task_id)
 
     if not automation.last_result:
         last_run = format_timestamp(automation.last_run_at) if automation.last_run_at else "never"
@@ -554,7 +602,7 @@ async def approve_run_automation(execution: ToolExecution, args: RunAutomationIn
         return None
     return ApprovalInfo(
         description=f"Run now: {automation.name or automation.description[:60]}",
-        preview=None,
+        preview=f"Automation: {args.task_id}\nPrompt: {automation.description[:1_200]}",
         diff=None,
     )
 
@@ -563,9 +611,15 @@ async def run_automation(execution: ToolExecution, args: RunAutomationInput) -> 
     try:
         await execution.ctx.services["automation"].run_now(args.task_id)
     except KeyError:
-        return ToolResult(content=f"Error: automation '{args.task_id}' not found", preview="Not found", is_error=True)
-    except RuntimeError as e:
-        return ToolResult(content=f"Error: {e}", preview="Unavailable", is_error=True)
+        return _automation_not_found(args.task_id)
+    except RuntimeError:
+        return ToolResult.failure(
+            code="temporarily_unavailable",
+            message="The automation could not be started.",
+            preview="Unavailable",
+            retryable=True,
+            recovery_action="Check get_automation_result or list_automations before retrying.",
+        )
 
     return ToolResult(
         content=f"Automation {args.task_id} started. Use get_automation_result to check the outcome.",
@@ -679,10 +733,11 @@ class LoopDoneInput(BaseModel):
 def _loop_task_id_or_error(execution: ToolExecution) -> tuple[str | None, ToolResult | None]:
     task_id = execution.ctx.run.loop_task_id
     if not task_id:
-        return None, ToolResult(
-            content="This tool is only available inside a loop iteration.",
+        return None, ToolResult.failure(
+            code="invalid_context",
+            message="This tool is only available inside a loop iteration.",
             preview="Not a loop",
-            is_error=True,
+            recovery_action="Call create_loop from an active chat instead.",
         )
     return task_id, None
 
@@ -693,7 +748,7 @@ async def schedule_wakeup(execution: ToolExecution, args: ScheduleWakeupInput) -
         return err
     svc = execution.ctx.services.get("automation")
     if svc is None:
-        return ToolResult(content="Automation service unavailable.", preview="Unavailable", is_error=True)
+        return _automation_unavailable()
     next_run = datetime.now(UTC) + timedelta(seconds=args.delay_seconds)
     await svc.store.set_next_run(task_id, next_run)
     return ToolResult(
@@ -716,7 +771,7 @@ async def loop_done(execution: ToolExecution, args: LoopDoneInput) -> ToolResult
         return err
     svc = execution.ctx.services.get("automation")
     if svc is None:
-        return ToolResult(content="Automation service unavailable.", preview="Unavailable", is_error=True)
+        return _automation_unavailable()
     await svc.store.set_enabled(task_id, False)
     return ToolResult(
         content=f"Loop stopped: {args.reason}",
@@ -852,17 +907,27 @@ async def approve_create_loop(execution: ToolExecution, args: CreateLoopInput) -
 async def create_loop(execution: ToolExecution, args: CreateLoopInput) -> ToolResult:
     session_id = execution.ctx.session_id
     if not session_id:
-        return ToolResult(content="No active session.", preview="No session", is_error=True)
+        return ToolResult.failure(
+            code="invalid_context",
+            message="No active session is available for the loop.",
+            preview="No session",
+            recovery_action="Create the loop from an active chat session.",
+        )
     svc = execution.ctx.services.get("automation")
     if svc is None:
-        return ToolResult(content="Automation service unavailable.", preview="Unavailable", is_error=True)
+        return _automation_unavailable()
 
     try:
         parent_automation_id, parent_fire_at = await _resolve_parent_context(
             execution, args.parent_automation_id, args.idempotency_scope
         )
     except ValueError as e:
-        return ToolResult(content=f"Error: {e}", preview="Failed", is_error=True)
+        return ToolResult.failure(
+            code="invalid_arguments",
+            message=str(e),
+            preview="Invalid loop",
+            recovery_action="Correct the parent or idempotency fields and retry.",
+        )
     try:
         loop = await svc.create_loop(
             session_id=session_id,
@@ -878,7 +943,12 @@ async def create_loop(execution: ToolExecution, args: CreateLoopInput) -> ToolRe
             attempt_n=args.attempt_n,
         )
     except ValueError as e:
-        return ToolResult(content=f"Error: {e}", preview="Failed", is_error=True)
+        return ToolResult.failure(
+            code="invalid_arguments",
+            message=str(e),
+            preview="Invalid loop",
+            recovery_action="Correct the interval, limits, or stop condition and retry.",
+        )
 
     if loop is None:
         return ToolResult(

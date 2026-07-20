@@ -25,7 +25,9 @@ class NotifyInput(BaseModel):
     subject: str = Field(description="Short notification subject/title")
     body: str = Field(description="Notification body — concise, informative")
     names: list[str] | None = Field(
-        default=None, description="Notifier names to use, e.g. ['work-telegram'] (omit to send to all)"
+        default=None,
+        max_length=50,
+        description="Notifier names to use, e.g. ['work-telegram'] (omit to send to all)",
     )
 
 

@@ -35,7 +35,12 @@ async def background(execution: ToolExecution, args: BackgroundInput) -> ToolRes
     ctx = execution.ctx
 
     if not ctx.spawn_fn:
-        return ToolResult(content="Error: spawn capability not available", preview="Error", is_error=True)
+        return ToolResult.failure(
+            code="not_configured",
+            message="Background agent spawning is unavailable.",
+            preview="Background unavailable",
+            recovery_action="Run this from a session with agent spawning enabled.",
+        )
 
     tools = ctx.registry.get_schemas(read_only=True, capabilities=ctx.capabilities)
 
@@ -71,7 +76,12 @@ async def approve_cancel_background_task(
 async def cancel_background_task(execution: ToolExecution, args: CancelBackgroundTaskInput) -> ToolResult:
     registry = execution.ctx.background_tasks
     if (command := registry.cancel(args.task_id)) is None:
-        return ToolResult(content=f"No running task with ID {args.task_id}", preview="Not found", is_error=True)
+        return ToolResult.failure(
+            code="not_found",
+            message=f"No running background task has ID {args.task_id}.",
+            preview="Not found",
+            recovery_action="Call list_background_tasks and retry with an exact returned task_id.",
+        )
 
     if emit := execution.ctx.io.emit:
         await emit(BackgroundTaskEvent(task_id=args.task_id, command=command, status="cancelled"))
@@ -86,13 +96,14 @@ class GetBackgroundResultInput(BaseModel):
 async def get_background_result(execution: ToolExecution, args: GetBackgroundResultInput) -> ToolResult:
     content = await execution.ctx.background_tasks.read_background_result(args.task_id)
     if content is None:
-        return ToolResult(
-            content=(
+        return ToolResult.failure(
+            code="not_found",
+            message=(
                 f"No stored result for task {args.task_id}. "
                 "If it is still running, wait for the hidden completion notification; do not search files."
             ),
             preview="Not found",
-            is_error=True,
+            recovery_action="Call list_background_tasks; if absent, wait for automatic delivery or verify the task_id.",
         )
     lines = content.count("\n") + 1
     return ToolResult(content=content, preview=f"{lines} lines")
@@ -118,10 +129,11 @@ class SendToAgentInput(BaseModel):
 
 async def send_to_agent(execution: ToolExecution, args: SendToAgentInput) -> ToolResult:
     if not args.message.strip():
-        return ToolResult(
-            content="Cannot send an empty steering message — provide a non-empty instruction.",
+        return ToolResult.failure(
+            code="invalid_arguments",
+            message="Cannot send an empty steering message — provide a non-empty instruction.",
             preview="Empty",
-            is_error=True,
+            recovery_action="Pass a non-empty message for the running agent.",
         )
     registry = execution.ctx.background_tasks
     delivered = registry.queue_steering(args.task_id, args.message)
@@ -135,15 +147,17 @@ async def send_to_agent(execution: ToolExecution, args: SendToAgentInput) -> Too
     pending = registry.list_pending()
     if pending:
         listing = "\n".join(f"- {tid}: {cmd}" for tid, cmd in pending)
-        return ToolResult(
-            content=f"No running agent with id '{args.task_id}'. Currently running:\n{listing}",
+        return ToolResult.failure(
+            code="not_found",
+            message=f"No running agent with id '{args.task_id}'. Currently running:\n{listing}",
             preview="Not found",
-            is_error=True,
+            recovery_action="Retry with one of the listed task IDs.",
         )
-    return ToolResult(
-        content=f"No running agent with id '{args.task_id}' — nothing is running.",
+    return ToolResult.failure(
+        code="not_found",
+        message=f"No running agent with id '{args.task_id}' — nothing is running.",
         preview="Not found",
-        is_error=True,
+        recovery_action="Start a background agent before sending steering messages.",
     )
 
 

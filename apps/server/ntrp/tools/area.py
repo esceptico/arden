@@ -25,9 +25,9 @@ class AreaPageReadInput(BaseModel):
 
 
 class AreaPagePatchInput(BaseModel):
-    old_text: str = Field(min_length=1)
-    new_text: str
-    expected_sha256: str = Field(description="SHA-256 returned by area_page_read for the page being edited.")
+    old_text: str = Field(min_length=1, max_length=100_000)
+    new_text: str = Field(max_length=100_000)
+    expected_sha256: str = Field(min_length=6, max_length=64, description="SHA-256 returned by area_page_read for the page being edited.")
 
 
 class AreaPageWriteInput(BaseModel):
@@ -45,13 +45,28 @@ def _target(execution: ToolExecution) -> Path | ToolResult:
     area = execution.ctx.area
     vault = execution.ctx.services.get(AREA_PAGES_SERVICE)
     if area is None or not area.page_path:
-        return ToolResult(content="This Area has no attached page.", preview="No Area page", is_error=True)
+        return ToolResult.failure(
+            code="not_found",
+            message="This Area has no attached page.",
+            preview="No Area page",
+            recovery_action="Attach a page to the Area before using Area page tools.",
+        )
     if not isinstance(vault, Path):
-        return ToolResult(content="Area page service is unavailable.", preview="Unavailable", is_error=True)
+        return ToolResult.failure(
+            code="not_configured",
+            message="Area page service is unavailable.",
+            preview="Unavailable",
+            recovery_action="Configure the Area page vault before retrying.",
+        )
     try:
         return resolve_area_page(vault, area.page_path)
-    except ValueError as exc:
-        return ToolResult(content=f"Invalid Area page: {exc}", preview="Invalid Area page", is_error=True)
+    except ValueError:
+        return ToolResult.failure(
+            code="invalid_ref",
+            message="The attached Area page path is invalid.",
+            preview="Invalid Area page",
+            recovery_action="Attach a valid relative page path inside the configured Area vault.",
+        )
 
 
 def _frontmatter_prefix(raw: str) -> str:
@@ -95,7 +110,12 @@ async def area_page_read(execution: ToolExecution, args: AreaPageReadInput) -> T
     if isinstance(target, ToolResult):
         return target
     if not target.is_file():
-        return ToolResult(content="The attached Area page is missing.", preview="Page missing", is_error=True)
+        return ToolResult.failure(
+            code="not_found",
+            message="The attached Area page is missing.",
+            preview="Page missing",
+            recovery_action="Restore the attached page or update the Area page path.",
+        )
     snapshot, revision = read_file_snapshot(target)
     raw = snapshot.decode("utf-8")
     content = format_lines_with_pagination(raw, args.offset, args.limit)
@@ -120,16 +140,18 @@ async def area_page_patch(execution: ToolExecution, args: AreaPagePatchInput) ->
     raw = target.read_text(encoding="utf-8") if target.exists() else ""
     matches = raw.count(args.old_text)
     if matches == 0:
-        return ToolResult(
-            content="old_text not found in the page. Read the page and copy the exact block (whitespace included).",
+        return ToolResult.failure(
+            code="not_found",
+            message="old_text was not found in the Area page.",
             preview="Patch not applied",
-            is_error=True,
+            recovery_action="Read the page and copy the exact block, including whitespace.",
         )
     if matches > 1:
-        return ToolResult(
-            content=f"old_text matches {matches} places. Include more surrounding lines so the block is unique.",
+        return ToolResult.failure(
+            code="ambiguous_ref",
+            message=f"old_text matches {matches} places.",
             preview="Patch not applied",
-            is_error=True,
+            recovery_action="Include more surrounding lines so the block is unique.",
         )
     written = raw.replace(args.old_text, args.new_text, 1)
     try:
@@ -197,19 +219,36 @@ async def area_run_automation(execution: ToolExecution, args: AreaAutomationRunI
     service = execution.ctx.services.get("automation")
     prefix = f"area:{area.area_id}:" if area is not None else None
     if prefix is None or not args.task_id.startswith(prefix):
-        return ToolResult(
-            content="Only child automations owned by the current Area can be run.",
+        return ToolResult.failure(
+            code="permission_denied",
+            message="Only child automations owned by the current Area can be run.",
             preview="Outside Area boundary",
-            is_error=True,
+            recovery_action="Use an automation ID returned by this Area's work context.",
         )
     if service is None:
-        return ToolResult(content="Automation service unavailable.", preview="Unavailable", is_error=True)
+        return ToolResult.failure(
+            code="not_configured",
+            message="Automation service unavailable.",
+            preview="Unavailable",
+            recovery_action="Enable automation support before retrying.",
+        )
     try:
         await service.run_now(args.task_id)
     except KeyError:
-        return ToolResult(content="Area automation not found.", preview="Not found", is_error=True)
-    except RuntimeError as exc:
-        return ToolResult(content=f"Could not start Area automation: {exc}", preview="Unavailable", is_error=True)
+        return ToolResult.failure(
+            code="not_found",
+            message="Area automation not found.",
+            preview="Not found",
+            recovery_action="Refresh the Area work context and retry with an exact child automation ID.",
+        )
+    except RuntimeError:
+        return ToolResult.failure(
+            code="temporarily_unavailable",
+            message="The Area automation could not be started.",
+            preview="Unavailable",
+            retryable=True,
+            recovery_action="Check the current Area automation state before retrying.",
+        )
     return ToolResult(content=f"Started Area automation {args.task_id}.", preview="Area automation started")
 
 

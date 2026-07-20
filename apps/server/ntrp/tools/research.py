@@ -168,7 +168,11 @@ class ResearchInput(BaseModel):
 
 
 class ResearchOutlineInput(BaseModel):
-    sections: list[str] = Field(description="Required coverage sections for this research task.")
+    sections: list[str] = Field(
+        min_length=1,
+        max_length=50,
+        description="Required coverage sections for this research task (max 50).",
+    )
 
 
 class ResearchCoverInput(BaseModel):
@@ -196,7 +200,7 @@ class ResearchCurateInput(BaseModel):
 class ResearchVerifyClaimInput(BaseModel):
     claim: str = Field(description="Claim that was checked against sources.")
     verdict: Literal["supported", "contradicted", "uncertain"] = Field(description="Verification verdict.")
-    sources: list[str] = Field(default_factory=list, description="Sources consulted for the verdict.")
+    sources: list[str] = Field(default_factory=list, max_length=50, description="Sources consulted for the verdict.")
     rationale: str | None = Field(default=None, description="Brief reason, including what is missing if uncertain.")
 
 
@@ -208,6 +212,24 @@ class ResearchQuestionInput(BaseModel):
 
 class ResearchSearchInput(BaseModel):
     query: str = Field(description="Search query or exploration path tried during research.")
+
+
+def _research_harness_unavailable() -> ToolResult:
+    return ToolResult.failure(
+        code="not_configured",
+        message="Research harness state is unavailable.",
+        preview="No research harness",
+        recovery_action="Use research first so the child agent receives a scoped research harness.",
+    )
+
+
+def _invalid_research(message: str, preview: str) -> ToolResult:
+    return ToolResult.failure(
+        code="invalid_arguments",
+        message=message,
+        preview=preview,
+        recovery_action="Correct the cited research field and retry.",
+    )
 
 
 async def _build_research_prompt(ctx, depth: str, remaining_depth: int, tool_id: str) -> str:
@@ -234,7 +256,12 @@ async def research(execution: ToolExecution, args: ResearchInput) -> ToolResult:
     research_scope_id = f"research-{generate_slug(2)}"
 
     if not ctx.spawn_fn:
-        return ToolResult(content="Error: spawn capability not available", preview="Error", is_error=True)
+        return ToolResult.failure(
+            code="not_configured",
+            message="Research spawn capability is unavailable.",
+            preview="Research unavailable",
+            recovery_action="Run the research from a session with agent spawning enabled.",
+        )
 
     if ctx.ledger:
         await ctx.ledger.register(research_scope_id, args.task, depth=args.depth)
@@ -353,12 +380,12 @@ async def _list_scope_artifacts(ctx: ToolContext, scope_id: str) -> list[dict]:
 async def research_outline(execution: ToolExecution, args: ResearchOutlineInput) -> ToolResult:
     ledger = execution.ctx.ledger
     if not ledger:
-        return ToolResult(content="Error: research ledger not available", preview="No ledger", is_error=True)
+        return _research_harness_unavailable()
     sections = [section.strip() for section in args.sections if section.strip()]
     try:
         outline = ResearchOutline.from_titles(sections)
     except ValueError as exc:
-        return ToolResult(content=str(exc), preview="Invalid outline", is_error=True)
+        return _invalid_research(str(exc), "Invalid outline")
     ledger.set_outline(outline, scope=execution.ctx.run.research_scope_id or "default")
     return ToolResult(
         content=f"Research outline set: {', '.join(outline.titles)}", preview=f"Outline {len(outline.titles)} sections"
@@ -368,11 +395,11 @@ async def research_outline(execution: ToolExecution, args: ResearchOutlineInput)
 async def research_cover(execution: ToolExecution, args: ResearchCoverInput) -> ToolResult:
     ledger = execution.ctx.ledger
     if not ledger:
-        return ToolResult(content="Error: research ledger not available", preview="No ledger", is_error=True)
+        return _research_harness_unavailable()
     try:
         ledger.cover_section(args.section, args.source, scope=execution.ctx.run.research_scope_id or "default")
     except ValueError as exc:
-        return ToolResult(content=str(exc), preview="Coverage failed", is_error=True)
+        return _invalid_research(str(exc), "Coverage failed")
     report = ledger.coverage_report(scope=execution.ctx.run.research_scope_id or "default")
     assert report is not None
     percent = round(report.coverage * 100)
@@ -390,7 +417,7 @@ def _research_scope(execution: ToolExecution) -> str:
 def _require_ledger(execution: ToolExecution) -> SharedLedger | ToolResult:
     ledger = execution.ctx.ledger
     if not ledger:
-        return ToolResult(content="Error: research harness not available", preview="No harness", is_error=True)
+        return _research_harness_unavailable()
     return ledger
 
 
@@ -406,7 +433,7 @@ async def research_track_source(execution: ToolExecution, args: ResearchSourceIn
         reason=args.reason,
     )
     if not source.id or not source.title or not source.locator:
-        return ToolResult(content="source id, title, and locator are required", preview="Invalid source", is_error=True)
+        return _invalid_research("source id, title, and locator are required", "Invalid source")
     ledger.add_workspace_source(source, scope=_research_scope(execution))
     return ToolResult(
         content=f"Tracked source {source.id}: {source.title} ({source.status})", preview=f"Source {source.status}"
@@ -426,7 +453,7 @@ async def research_curate(execution: ToolExecution, args: ResearchCurateInput) -
         notes=args.notes,
     )
     if not evidence.claim or not evidence.source:
-        return ToolResult(content="claim and source are required", preview="Invalid evidence", is_error=True)
+        return _invalid_research("claim and source are required", "Invalid evidence")
     ledger.add_workspace_evidence(evidence, scope=_research_scope(execution))
     return ToolResult(
         content=f"Curated {args.importance}/{args.confidence} evidence: {evidence.claim}",
@@ -445,7 +472,7 @@ async def research_verify_claim(execution: ToolExecution, args: ResearchVerifyCl
         rationale=args.rationale,
     )
     if not verification.claim:
-        return ToolResult(content="claim is required", preview="Invalid verification", is_error=True)
+        return _invalid_research("claim is required", "Invalid verification")
     ledger.add_workspace_verification(verification, scope=_research_scope(execution))
     return ToolResult(
         content=f"Verified claim as {verification.verdict}: {verification.claim}", preview=f"{verification.verdict}"
@@ -462,7 +489,7 @@ async def research_question(execution: ToolExecution, args: ResearchQuestionInpu
         answer_or_reason=args.answer_or_reason,
     )
     if not question.question:
-        return ToolResult(content="question is required", preview="Invalid question", is_error=True)
+        return _invalid_research("question is required", "Invalid question")
     ledger.add_workspace_question(question, scope=_research_scope(execution))
     return ToolResult(
         content=f"Tracked {question.status} question: {question.question}", preview=f"Question {question.status}"
