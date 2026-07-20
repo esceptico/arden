@@ -2,7 +2,9 @@ from pydantic import BaseModel, Field
 
 from ntrp.agent.types.tools import ToolSourceRef, normalize_source_refs
 from ntrp.constants import EMAIL_FROM_TRUNCATE, EMAIL_SUBJECT_TRUNCATE
+from ntrp.integrations.base import IntegrationOperationError
 from ntrp.integrations.gmail.client import MultiGmailSource
+from ntrp.integrations.tool_errors import operation_error_result
 from ntrp.tools.core import ToolResult, tool
 from ntrp.tools.core.context import ToolExecution
 from ntrp.tools.core.types import ApprovalInfo, ToolAction, ToolPolicy, ToolScope
@@ -74,7 +76,10 @@ async def approve_send_email(execution: ToolExecution, args: SendEmailInput) -> 
 
 async def send_email(execution: ToolExecution, args: SendEmailInput) -> ToolResult:
     source = execution.ctx.get_client("gmail", MultiGmailSource)
-    result = source.send_email(account=args.account, to=args.to, subject=args.subject, body=args.body)
+    try:
+        result = source.send_email(account=args.account, to=args.to, subject=args.subject, body=args.body)
+    except IntegrationOperationError as error:
+        return operation_error_result(error, preview="Send failed")
     return ToolResult(content=result, preview="Sent")
 
 
@@ -86,9 +91,11 @@ async def read_email(execution: ToolExecution, args: ReadEmailInput) -> ToolResu
     source = execution.ctx.get_client("gmail", MultiGmailSource)
     email = source.read(args.email_id)
     if not email:
-        return ToolResult(
-            content=f"Email not found: {args.email_id}. Use emails() or emails(query) to find valid email IDs.",
+        return ToolResult.failure(
+            code="not_found",
+            message=f"Email not found: {args.email_id}. Use emails() or emails(query) to find valid email IDs.",
             preview="Not found",
+            recovery_action="Call emails with a query and retry using an exact returned email ID.",
         )
 
     lines = email.content.count("\n") + 1

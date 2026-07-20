@@ -4,9 +4,10 @@ from types import SimpleNamespace
 import pytest
 
 from ntrp.context.models import SessionState
-from ntrp.integrations.calendar.client import MultiCalendarSource
-from ntrp.integrations.calendar.tools import CalendarInput, calendar
-from ntrp.integrations.gmail.client import MultiGmailSource
+from ntrp.integrations.base import IntegrationOperationError
+from ntrp.integrations.calendar.client import GoogleCalendar, MultiCalendarSource
+from ntrp.integrations.calendar.tools import CalendarInput, CreateCalendarEventInput, calendar, create_calendar_event
+from ntrp.integrations.gmail.client import GmailSource, MultiGmailSource
 from ntrp.integrations.gmail.tools import (
     EmailsInput,
     ReadEmailInput,
@@ -14,6 +15,7 @@ from ntrp.integrations.gmail.tools import (
     approve_send_email,
     emails,
     read_email,
+    send_email,
 )
 from ntrp.integrations.slack.client import SlackClient, SlackThreadResult
 from ntrp.integrations.slack.tools import (
@@ -109,6 +111,103 @@ class FakeCalendarSource(MultiCalendarSource):
         return self.events[:limit]
 
 
+class FailingGoogleService:
+    def users(self):
+        return self
+
+    def messages(self):
+        return self
+
+    def events(self):
+        return self
+
+    def send(self, **kwargs):
+        return self
+
+    def insert(self, **kwargs):
+        return self
+
+    def execute(self):
+        raise RuntimeError("provider secret")
+
+
+def test_gmail_send_raises_sanitized_provider_failure(monkeypatch):
+    source = GmailSource()
+    monkeypatch.setattr(source, "has_send_scope", lambda: True)
+    monkeypatch.setattr(source, "_get_service", lambda: FailingGoogleService())
+
+    with pytest.raises(RuntimeError, match="Gmail provider request failed") as exc_info:
+        source.send(to="you@example.test", subject="Status", body="Ready")
+
+    assert "provider secret" not in str(exc_info.value)
+
+
+def test_calendar_create_raises_sanitized_provider_failure(monkeypatch):
+    source = GoogleCalendar()
+    monkeypatch.setattr(source, "_get_service", lambda: FailingGoogleService())
+
+    with pytest.raises(RuntimeError, match="Calendar provider request failed") as exc_info:
+        source.create_event(
+            summary="Review",
+            start=datetime(2026, 7, 20, 9, tzinfo=UTC),
+        )
+
+    assert "provider secret" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_send_email_maps_provider_failure_to_typed_result():
+    source = FakeGmailSource()
+
+    def fail_send(**kwargs):
+        raise IntegrationOperationError(
+            code="provider_error",
+            safe_message="Gmail provider request failed.",
+            retryable=True,
+        )
+
+    source.send_email = fail_send
+    result = await send_email(
+        _execution("gmail", source, "send_email"),
+        SendEmailInput(
+            account="me@example.test",
+            to="you@example.test",
+            subject="Status",
+            body="Ready",
+        ),
+    )
+
+    assert result.is_error
+    assert result.outcome is not None and result.outcome.error is not None
+    assert result.outcome.error.code == "provider_error"
+    assert result.outcome.error.retryable
+
+
+@pytest.mark.asyncio
+async def test_calendar_create_maps_provider_failure_to_typed_result():
+    source = FakeCalendarSource([])
+
+    def fail_create(**kwargs):
+        raise IntegrationOperationError(
+            code="rate_limited",
+            safe_message="Calendar provider request failed.",
+            retryable=True,
+        )
+
+    source.create_event = fail_create
+    result = await create_calendar_event(
+        _execution("calendar", source, "create_calendar_event"),
+        CreateCalendarEventInput(
+            summary="Review",
+            start="2026-07-20T09:00:00+04:00",
+        ),
+    )
+
+    assert result.is_error
+    assert result.outcome is not None and result.outcome.error is not None
+    assert result.outcome.error.code == "rate_limited"
+
+
 @pytest.mark.asyncio
 async def test_slack_search_uses_message_id_title_and_existing_permalink():
     source = FakeSlackSource(
@@ -152,6 +251,25 @@ async def test_slack_thread_uses_input_message_id_without_permalink_lookup():
             "title": "Slack message C123:1710000000.000100",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_slack_thread_missing_message_is_typed_and_recoverable():
+    source = FakeSlackSource([])
+
+    async def missing_thread(_source_id: str) -> SlackThreadResult | None:
+        return None
+
+    source.read_thread = missing_thread  # type: ignore[method-assign]
+    result = await slack_thread(
+        _execution("slack", source, "slack_thread"),
+        SlackThreadInput(message_id="C404:0"),
+    )
+
+    assert result.is_error
+    assert result.outcome is not None and result.outcome.error is not None
+    assert result.outcome.error.code == "not_found"
+    assert result.outcome.error.recovery_action == "Call slack_search first to obtain a current message reference."
 
 
 @pytest.mark.asyncio
@@ -289,7 +407,7 @@ async def test_slack_blocks_approval_includes_the_actual_blocks():
     )
 
     assert info is not None
-    assert '"text": "*Release is green*"' in (info.preview or "")
+    assert '"text":"*Release is green*"' in (info.preview or "")
 
 
 @pytest.mark.asyncio

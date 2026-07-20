@@ -407,23 +407,25 @@ def test_blocked_commands():
 
 def test_execute_bash_simple():
     output = execute_bash("echo hello")
-    assert "hello" in output
+    assert "hello" in output.content
 
 
 def test_execute_bash_stderr():
     output = execute_bash("echo err >&2")
-    assert "err" in output
-    assert "[stderr]" in output
+    assert "err" in output.content
+    assert "[stderr]" in output.content
 
 
 def test_execute_bash_exit_code():
     output = execute_bash("exit 1")
-    assert "[exit code: 1]" in output
+    assert "[exit code: 1]" in output.content
+    assert output.returncode == 1
 
 
 def test_execute_bash_timeout():
     output = execute_bash("sleep 10", timeout=1)
-    assert "timed out" in output.lower()
+    assert "timed out" in output.content.lower()
+    assert output.timed_out
 
 
 # --- Bash tool ---
@@ -434,6 +436,25 @@ async def test_bash_tool_execute():
     execution = _make_execution("bash")
     result = await bash_tool.execute(execution, command="echo test123")
     assert "test123" in result.content
+
+
+@pytest.mark.asyncio
+async def test_bash_tool_nonzero_exit_is_typed_failure():
+    result = await bash_tool.execute(_make_execution("bash"), command="exit 7")
+
+    assert result.is_error
+    assert result.outcome is not None and result.outcome.error is not None
+    assert result.outcome.error.code == "command_failed"
+
+
+@pytest.mark.asyncio
+async def test_bash_tool_timeout_is_typed_failure(monkeypatch):
+    monkeypatch.setattr("ntrp.tools.bash.BASH_TIMEOUT", 0.01)
+    result = await bash_tool.execute(_make_execution("bash"), command="sleep 1")
+
+    assert result.is_error
+    assert result.outcome is not None and result.outcome.error is not None
+    assert result.outcome.error.code == "timed_out"
 
 
 @pytest.mark.asyncio

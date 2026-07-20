@@ -14,7 +14,7 @@ import markdown
 from googleapiclient.discovery import build
 
 from ntrp.core.prompts import env
-from ntrp.integrations.base import IntegrationConnectionError
+from ntrp.integrations.base import IntegrationConnectionError, IntegrationOperationError, IntegrationProviderError
 from ntrp.integrations.google_auth.auth import (
     SCOPES_ALL,
     SCOPES_GMAIL_SEND,
@@ -284,7 +284,10 @@ class GmailSource:
 
     def send(self, to: str, subject: str, body: str, from_email: str | None = None, html: bool = False) -> str:
         if not to:
-            return "Error: recipient is required"
+            raise IntegrationOperationError(
+                code="invalid_ref",
+                safe_message="A recipient email address is required.",
+            )
 
         self.has_send_scope()
 
@@ -330,8 +333,9 @@ class GmailSource:
             return f"Sent email to {to}" + (f" (id: {msg_id})" if msg_id else "")
         except IntegrationConnectionError:
             raise
-        except Exception as e:
-            return f"Error sending email: {e}"
+        except Exception as exc:
+            _logger.exception("Gmail send failed")
+            raise IntegrationProviderError(integration_label="Gmail", cause=exc) from exc
 
     def _markdown_to_html(self, markdown_text: str) -> str:
         # Convert markdown to HTML with common extensions
@@ -581,7 +585,10 @@ class MultiGmailSource:
 
     def send_email(self, account: str, to: str, subject: str, body: str, html: bool = False) -> str:
         if not account:
-            return "Error: account is required"
+            raise IntegrationOperationError(
+                code="invalid_ref",
+                safe_message="A connected Gmail account is required.",
+            )
 
         account_lower = account.lower().strip()
         for src in self.sources:
@@ -591,8 +598,14 @@ class MultiGmailSource:
 
         accounts = self.list_accounts()
         if accounts:
-            return f"Error: account not found. Available: {', '.join(accounts)}"
-        return "Error: no Gmail accounts available"
+            raise IntegrationOperationError(
+                code="invalid_ref",
+                safe_message=f"Gmail account not found. Available: {', '.join(accounts)}",
+            )
+        raise IntegrationOperationError(
+            code="not_found",
+            safe_message="No Gmail accounts are available.",
+        )
 
     def read(self, source_id: str) -> ReadEmailResult | None:
         for src in self.sources:

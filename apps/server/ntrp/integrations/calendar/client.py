@@ -6,7 +6,7 @@ from typing import Any
 from google.auth.exceptions import RefreshError
 from googleapiclient.discovery import build
 
-from ntrp.integrations.base import IntegrationConnectionError
+from ntrp.integrations.base import IntegrationConnectionError, IntegrationOperationError, IntegrationProviderError
 from ntrp.integrations.google_auth.auth import (
     SCOPES_CALENDAR,
     get_google_credentials,
@@ -280,8 +280,11 @@ class GoogleCalendar:
             event_id = event.get("id", "")
             html_link = event.get("htmlLink", "")
             return f"Created event: {summary} (id: {event_id})\n{html_link}"
-        except Exception as e:
-            return f"Error creating event: {e}"
+        except IntegrationConnectionError:
+            raise
+        except Exception as exc:
+            _logger.exception("Calendar create failed")
+            raise IntegrationProviderError(integration_label="Calendar", cause=exc) from exc
 
     def delete_event(self, event_id: str) -> str:
         service = self._get_service()
@@ -292,8 +295,11 @@ class GoogleCalendar:
                 eventId=event_id,
             ).execute()
             return f"Deleted event: {event_id}"
-        except Exception as e:
-            return f"Error deleting event: {e}"
+        except IntegrationConnectionError:
+            raise
+        except Exception as exc:
+            _logger.exception("Calendar delete failed")
+            raise IntegrationProviderError(integration_label="Calendar", cause=exc) from exc
 
     def update_event(
         self,
@@ -345,8 +351,11 @@ class GoogleCalendar:
 
             html_link = updated.get("htmlLink", "")
             return f"Updated event: {updated.get('summary', event_id)}\n{html_link}"
-        except Exception as e:
-            return f"Error updating event: {e}"
+        except IntegrationConnectionError:
+            raise
+        except Exception as exc:
+            _logger.exception("Calendar update failed")
+            raise IntegrationProviderError(integration_label="Calendar", cause=exc) from exc
 
     def search(self, query: str, limit: int = 20) -> list[RawItem]:
         service = self._get_service()
@@ -492,7 +501,10 @@ class MultiCalendarSource:
                     attendees=attendees,
                     all_day=all_day,
                 )
-            return "Error: no calendar accounts available"
+            raise IntegrationOperationError(
+                code="not_found",
+                safe_message="No Calendar accounts are available.",
+            )
 
         account_lower = account.lower().strip()
         for src in self.sources:
@@ -510,15 +522,26 @@ class MultiCalendarSource:
 
         accounts = self.list_accounts()
         if accounts:
-            return f"Error: account not found. Available: {', '.join(accounts)}"
-        return "Error: no Calendar accounts available"
+            raise IntegrationOperationError(
+                code="invalid_ref",
+                safe_message=f"Calendar account not found. Available: {', '.join(accounts)}",
+            )
+        raise IntegrationOperationError(
+            code="not_found",
+            safe_message="No Calendar accounts are available.",
+        )
 
     def delete_event(self, event_id: str) -> str:
         for src in self.sources:
-            result = src.delete_event(event_id)
-            if not result.startswith("Error"):
-                return result
-        return f"Error: event not found: {event_id}"
+            try:
+                return src.delete_event(event_id)
+            except IntegrationProviderError as exc:
+                if exc.code != "not_found":
+                    raise
+        raise IntegrationOperationError(
+            code="invalid_ref",
+            safe_message=f"Calendar event not found: {event_id}",
+        )
 
     def update_event(
         self,
@@ -532,19 +555,24 @@ class MultiCalendarSource:
         all_day: bool | None = None,
     ) -> str:
         for src in self.sources:
-            result = src.update_event(
-                event_id=event_id,
-                summary=summary,
-                start=start,
-                end=end,
-                description=description,
-                location=location,
-                attendees=attendees,
-                all_day=all_day,
-            )
-            if not result.startswith("Error"):
-                return result
-        return f"Error: event not found: {event_id}"
+            try:
+                return src.update_event(
+                    event_id=event_id,
+                    summary=summary,
+                    start=start,
+                    end=end,
+                    description=description,
+                    location=location,
+                    attendees=attendees,
+                    all_day=all_day,
+                )
+            except IntegrationProviderError as exc:
+                if exc.code != "not_found":
+                    raise
+        raise IntegrationOperationError(
+            code="invalid_ref",
+            safe_message=f"Calendar event not found: {event_id}",
+        )
 
     def search(self, query: str, limit: int = 20) -> list[RawItem]:
         per = max(limit // len(self.sources), 5) if self.sources else limit

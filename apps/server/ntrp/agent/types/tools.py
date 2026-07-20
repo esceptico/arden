@@ -249,6 +249,15 @@ class ToolResult:
     source_refs: tuple[ToolSourceRef, ...] = ()
     outcome: ToolOutcome | None = None
 
+    def __post_init__(self) -> None:
+        if self.outcome is None:
+            return
+        succeeded = self.outcome.status == ToolOutcomeStatus.SUCCEEDED
+        if succeeded and self.is_error:
+            raise ValueError("ToolResult cannot pair is_error=True with a successful outcome")
+        if not succeeded and not self.is_error:
+            raise ValueError("ToolResult cannot pair is_error=False with a failed outcome")
+
     def with_default_outcome(self) -> "ToolResult":
         if self.outcome is not None:
             return self
@@ -275,11 +284,13 @@ class ToolResult:
         retryable: bool = False,
         recovery_action: str | None = None,
         diagnostic_ref: str | None = None,
+        data: dict | None = None,
     ) -> "ToolResult":
         return ToolResult(
             content=message,
             preview=preview,
             is_error=True,
+            data=data,
             outcome=ToolOutcome(
                 status=status,
                 error=ToolError(

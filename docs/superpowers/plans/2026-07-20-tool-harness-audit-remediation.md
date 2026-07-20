@@ -178,11 +178,11 @@ def atomic_compare_and_swap(path: Path, content: str, expected_sha256: str) -> F
 - Produces stable codes: `not_found`, `permission_denied`, `provider_error`, `rate_limited`, `timed_out`, `partial_failure`, `invalid_ref`.
 - Contract: `ToolResult` cannot contain `is_error=False` with a failed outcome or `is_error=True` with a succeeded outcome.
 
-- [ ] Add failing tests for Bash nonzero/timeout, read misses, zero-notifier delivery, and Gmail/Calendar provider exceptions.
-- [ ] Add a constructor invariant and use `ToolResult.failure(...)` for all blocking failures.
-- [ ] Replace integration clients' `"Error ..."` string returns with typed exceptions; map only domain-safe messages at tool boundaries. Do not expose arbitrary provider exceptions.
-- [ ] Add shared nearest-ref/call-this-first recovery helpers and convert bare `ToolResult(is_error=True)` call sites.
-- [ ] Run focused tests and commit: `fix(harness): make tool outcomes truthful`.
+- [x] Add failing tests for Bash nonzero/timeout, read misses, zero-notifier delivery, and Gmail/Calendar provider exceptions.
+- [x] Add a constructor invariant and use `ToolResult.failure(...)` for all blocking failures.
+- [x] Replace integration clients' `"Error ..."` string returns with typed exceptions; map only domain-safe messages at tool boundaries. Do not expose arbitrary provider exceptions.
+- [x] Add shared nearest-ref/call-this-first recovery helpers and convert bare `ToolResult(is_error=True)` call sites.
+- [x] Run focused tests and commit: `fix(harness): make tool outcomes truthful`.
 
 ### Task 5: Stable-Reference Memory Deletion
 

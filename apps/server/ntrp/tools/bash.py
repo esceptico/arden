@@ -1,6 +1,7 @@
 import asyncio
 import shlex
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -120,7 +121,15 @@ def is_blocked_command(command: str) -> bool:
     return any(blocked in cmd_lower for blocked in BLOCKED_PATTERNS)
 
 
-def execute_bash(command: str, working_dir: str | None = None, timeout: int = BASH_TIMEOUT) -> str:
+@dataclass(frozen=True, slots=True)
+class BashExecution:
+    content: str
+    returncode: int | None = None
+    timed_out: bool = False
+    failed_to_start: bool = False
+
+
+def execute_bash(command: str, working_dir: str | None = None, timeout: int = BASH_TIMEOUT) -> BashExecution:
     try:
         result = subprocess.run(
             command,
@@ -147,12 +156,12 @@ def execute_bash(command: str, working_dir: str | None = None, timeout: int = BA
             omitted = len(output) - BASH_MAX_OUTPUT_CHARS
             output = f"{output[:half]}\n\n[... {omitted} chars elided ...]\n\n{output[-half:]}"
 
-        return output if output else "(no output)"
+        return BashExecution(content=output if output else "(no output)", returncode=result.returncode)
 
     except subprocess.TimeoutExpired:
-        return f"Error: Command timed out after {timeout}s"
-    except Exception as e:
-        return f"Error: {e}"
+        return BashExecution(content=f"Command timed out after {timeout}s", timed_out=True)
+    except Exception:
+        return BashExecution(content="Command could not be started", failed_to_start=True)
 
 
 class BashInput(BaseModel):
@@ -173,11 +182,43 @@ async def approve_bash(execution: ToolExecution, args: BashInput) -> ApprovalInf
 
 async def run_bash(execution: ToolExecution, args: BashInput) -> ToolResult:
     if is_blocked_command(args.command):
-        return ToolResult(content=f"Blocked: {args.command}", preview="Blocked", is_error=True)
+        return ToolResult.failure(
+            code="permission_denied",
+            message=f"Blocked command: {args.command}",
+            preview="Blocked",
+            recovery_action="Use a safer command or a purpose-built file tool.",
+        )
 
-    output = await asyncio.to_thread(execute_bash, args.command, _working_dir(execution, args), BASH_TIMEOUT)
-    lines = output.count("\n") + 1
-    return ToolResult(content=output, preview=f"{lines} lines")
+    execution_result = await asyncio.to_thread(
+        execute_bash,
+        args.command,
+        _working_dir(execution, args),
+        BASH_TIMEOUT,
+    )
+    if execution_result.timed_out:
+        return ToolResult.failure(
+            code="timed_out",
+            message=execution_result.content,
+            preview="Timed out",
+            retryable=True,
+            recovery_action="Retry with a narrower command or a longer-running workflow.",
+        )
+    if execution_result.failed_to_start:
+        return ToolResult.failure(
+            code="command_failed",
+            message=execution_result.content,
+            preview="Command failed",
+            recovery_action="Check the executable and working directory, then retry.",
+        )
+    if execution_result.returncode:
+        return ToolResult.failure(
+            code="command_failed",
+            message=execution_result.content,
+            preview=f"Exit {execution_result.returncode}",
+            recovery_action="Inspect stderr and retry with corrected arguments.",
+        )
+    lines = execution_result.content.count("\n") + 1
+    return ToolResult(content=execution_result.content, preview=f"{lines} lines")
 
 
 bash_tool = tool(

@@ -7,6 +7,7 @@ from ntrp.agent.types.tools import ToolSourceRef, normalize_source_refs
 from ntrp.integrations.slack.client import SlackClient
 from ntrp.tools.core import ToolResult, tool
 from ntrp.tools.core.context import ToolExecution
+from ntrp.tools.core.error_results import invalid_ref_result, not_found_result
 from ntrp.tools.core.types import ApprovalInfo, ToolAction, ToolPolicy, ToolScope
 from ntrp.utils import truncate
 
@@ -126,7 +127,7 @@ async def slack_thread(execution: ToolExecution, args: SlackThreadInput) -> Tool
     source = execution.ctx.get_client("slack", SlackClient)
     result = await source.read_thread(args.message_id)
     if not result:
-        return ToolResult(content=f"Message not found: {args.message_id}", preview="Not found")
+        return not_found_result("message", args.message_id, call_first="slack_search")
     lines = result.text.count("\n") + 1
     return ToolResult(
         content=result.text,
@@ -182,7 +183,7 @@ async def slack_user(execution: ToolExecution, args: SlackUserInput) -> ToolResu
     source = execution.ctx.get_client("slack", SlackClient)
     profile = await source.read_user(args.user_id)
     if not profile:
-        return ToolResult(content=f"User not found: {args.user_id}", preview="Not found")
+        return not_found_result("user", args.user_id, call_first="slack_users")
     lines = [f"{key}: {value}" for key, value in profile.items() if value]
     return ToolResult(content="\n".join(lines), preview=profile.get("name", args.user_id))
 
@@ -201,7 +202,7 @@ async def slack_file(execution: ToolExecution, args: SlackFileInput) -> ToolResu
     source = execution.ctx.get_client("slack", SlackClient)
     result = await source.read_file_image(args.file_id)
     if not result:
-        return ToolResult(content=f"Slack image file not found or not readable: {args.file_id}", preview="Not readable")
+        return not_found_result("Slack image file", args.file_id, call_first="slack_search")
     return ToolResult(content=result.text, preview=f"Read image {args.file_id}", model_content=result.model_content)
 
 
@@ -326,8 +327,8 @@ async def slack_dm(execution: ToolExecution, args: SlackDmInput) -> ToolResult:
     source = execution.ctx.get_client("slack", SlackClient)
     try:
         channel_id = await source.resolve_dm_target(args.target)
-    except RuntimeError as e:
-        return ToolResult(content=str(e), preview="Not found")
+    except RuntimeError:
+        return invalid_ref_result("Slack DM", args.target, call_first="slack_dms or slack_users")
     results = await source.read_channel(channel_id, limit=args.limit)
     if not results:
         return ToolResult(content=f"No messages in DM with {args.target!r}", preview="0 messages")

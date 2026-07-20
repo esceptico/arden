@@ -39,6 +39,35 @@ class IntegrationConnectionError(RuntimeError):
         self.retry_safe = retry_safe
 
 
+class IntegrationOperationError(RuntimeError):
+    """A provider operation failure safe to expose at the tool boundary."""
+
+    def __init__(self, *, code: str, safe_message: str, retryable: bool = False):
+        super().__init__(safe_message)
+        self.code = code
+        self.safe_message = safe_message
+        self.retryable = retryable
+
+
+class IntegrationProviderError(IntegrationOperationError):
+    def __init__(self, *, integration_label: str, cause: Exception):
+        status = getattr(getattr(cause, "resp", None), "status", None)
+        if status == 429:
+            code = "rate_limited"
+            retryable = True
+        elif status == 404:
+            code = "not_found"
+            retryable = False
+        else:
+            code = "provider_error"
+            retryable = status in {408, 500, 502, 503, 504}
+        super().__init__(
+            code=code,
+            safe_message=f"{integration_label} provider request failed.",
+            retryable=retryable,
+        )
+
+
 @dataclass(frozen=True)
 class IntegrationConnectionSpec:
     connection_id: str

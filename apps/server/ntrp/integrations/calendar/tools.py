@@ -3,7 +3,9 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from ntrp.agent.types.tools import ToolSourceRef, normalize_source_refs
+from ntrp.integrations.base import IntegrationOperationError
 from ntrp.integrations.calendar.client import MultiCalendarSource
+from ntrp.integrations.tool_errors import operation_error_result
 from ntrp.tools.core import ToolResult, tool
 from ntrp.tools.core.context import ToolExecution
 from ntrp.tools.core.types import ApprovalInfo, ToolAction, ToolPolicy, ToolScope
@@ -118,8 +120,8 @@ def _calendar_search(source: MultiCalendarSource, query: str, limit: int) -> Too
             preview=f"{len(events)} events",
             source_refs=_event_source_refs(events),
         )
-    except Exception as e:
-        return ToolResult(content=f"Error searching events: {e}", preview="Search failed", is_error=True)
+    except IntegrationOperationError as error:
+        return operation_error_result(error, preview="Search failed")
 
 
 def _calendar_list(source: MultiCalendarSource, days_forward: int, days_back: int, limit: int) -> ToolResult:
@@ -187,26 +189,30 @@ async def approve_create_calendar_event(
 async def create_calendar_event(execution: ToolExecution, args: CreateCalendarEventInput) -> ToolResult:
     start_dt = _parse_datetime(args.start)
     if not start_dt:
-        return ToolResult(
-            content=f"Invalid start time: {args.start}. Use ISO format: 2024-01-15T14:00:00",
+        return ToolResult.failure(
+            code="invalid_ref",
+            message=f"Invalid start time: {args.start}. Use ISO format: 2024-01-15T14:00:00",
             preview="Invalid start",
-            is_error=True,
+            recovery_action="Retry with an ISO-8601 timestamp including a UTC offset.",
         )
 
     end_dt = _parse_datetime(args.end) if args.end else None
     attendee_list = [e.strip() for e in args.attendees.split(",") if e.strip()] if args.attendees else None
 
     source = execution.ctx.get_client("calendar", MultiCalendarSource)
-    result = source.create_event(
-        account=args.account or "",
-        summary=args.summary,
-        start=start_dt,
-        end=end_dt,
-        description=args.description or "",
-        location=args.location or "",
-        attendees=attendee_list,
-        all_day=args.all_day,
-    )
+    try:
+        result = source.create_event(
+            account=args.account or "",
+            summary=args.summary,
+            start=start_dt,
+            end=end_dt,
+            description=args.description or "",
+            location=args.location or "",
+            attendees=attendee_list,
+            all_day=args.all_day,
+        )
+    except IntegrationOperationError as error:
+        return operation_error_result(error, preview="Create failed")
     return ToolResult(content=result, preview="Created")
 
 
@@ -242,32 +248,37 @@ async def approve_edit_calendar_event(execution: ToolExecution, args: EditCalend
 async def edit_calendar_event(execution: ToolExecution, args: EditCalendarEventInput) -> ToolResult:
     start_dt = _parse_datetime(args.start) if args.start else None
     if args.start and not start_dt:
-        return ToolResult(
-            content=f"Invalid start time: {args.start}. Use ISO format: 2024-01-15T14:00:00",
+        return ToolResult.failure(
+            code="invalid_ref",
+            message=f"Invalid start time: {args.start}. Use ISO format: 2024-01-15T14:00:00",
             preview="Invalid start",
-            is_error=True,
+            recovery_action="Retry with an ISO-8601 timestamp including a UTC offset.",
         )
 
     end_dt = _parse_datetime(args.end) if args.end else None
     if args.end and not end_dt:
-        return ToolResult(
-            content=f"Invalid end time: {args.end}. Use ISO format: 2024-01-15T15:00:00",
+        return ToolResult.failure(
+            code="invalid_ref",
+            message=f"Invalid end time: {args.end}. Use ISO format: 2024-01-15T15:00:00",
             preview="Invalid end",
-            is_error=True,
+            recovery_action="Retry with an ISO-8601 timestamp including a UTC offset.",
         )
 
     attendee_list = [e.strip() for e in args.attendees.split(",") if e.strip()] if args.attendees else None
 
     source = execution.ctx.get_client("calendar", MultiCalendarSource)
-    result = source.update_event(
-        event_id=args.event_id,
-        summary=args.summary,
-        start=start_dt,
-        end=end_dt,
-        description=args.description,
-        location=args.location,
-        attendees=attendee_list,
-    )
+    try:
+        result = source.update_event(
+            event_id=args.event_id,
+            summary=args.summary,
+            start=start_dt,
+            end=end_dt,
+            description=args.description,
+            location=args.location,
+            attendees=attendee_list,
+        )
+    except IntegrationOperationError as error:
+        return operation_error_result(error, preview="Update failed")
     return ToolResult(content=result, preview="Updated")
 
 
@@ -283,7 +294,10 @@ async def approve_delete_calendar_event(
 
 async def delete_calendar_event(execution: ToolExecution, args: DeleteCalendarEventInput) -> ToolResult:
     source = execution.ctx.get_client("calendar", MultiCalendarSource)
-    result = source.delete_event(args.event_id)
+    try:
+        result = source.delete_event(args.event_id)
+    except IntegrationOperationError as error:
+        return operation_error_result(error, preview="Delete failed")
     return ToolResult(content=result, preview="Deleted")
 
 

@@ -174,15 +174,19 @@ def _read_file_sync(args: ReadFileInput, cwd: str | None = None) -> ToolResult:
         limit = _OFFLOAD_READ_LIMIT
 
     if not full_path.exists():
-        return ToolResult(
-            content=f"File not found: {args.path}. Check the path or use list_files() to list the directory.",
+        return ToolResult.failure(
+            code="not_found",
+            message=f"File not found: {args.path}. Check the path or use list_files() to list the directory.",
             preview="Not found",
+            recovery_action="Call list_files on the parent directory and retry with an existing path.",
         )
 
     if not full_path.is_file():
-        return ToolResult(
-            content=f"Path is a directory, not a file: {args.path}. Use list_files(path={args.path!r}) to list contents.",
+        return ToolResult.failure(
+            code="invalid_ref",
+            message=f"Path is a directory, not a file: {args.path}. Use list_files(path={args.path!r}) to list contents.",
             preview="Not a file",
+            recovery_action="Call list_files for directories or retry with a file path.",
         )
 
     try:
@@ -210,12 +214,20 @@ def _read_file_sync(args: ReadFileInput, cwd: str | None = None) -> ToolResult:
         )
 
     except PermissionError:
-        return ToolResult(
-            content=f"Permission denied: {args.path}. File may be protected or require elevated access.",
+        return ToolResult.failure(
+            code="permission_denied",
+            message=f"Permission denied: {args.path}. File may be protected or require elevated access.",
             preview="Denied",
+            recovery_action="Choose a readable path or request the required filesystem access.",
         )
     except Exception as e:
-        return ToolResult(content=f"Error reading file: {e}", preview="Read failed", is_error=True)
+        return ToolResult.failure(
+            code="read_failed",
+            message=f"Error reading file: {e}",
+            preview="Read failed",
+            retryable=True,
+            recovery_action="Retry the read or inspect the path with list_files.",
+        )
 
 
 async def read_file(execution: ToolExecution, args: ReadFileInput) -> ToolResult:
@@ -233,9 +245,19 @@ class ListFilesInput(BaseModel):
 def _list_files_sync(args: ListFilesInput, cwd: str | None = None) -> ToolResult:
     root = _resolve_path(args.path, cwd)
     if not root.exists():
-        return ToolResult(content=f"Directory not found: {args.path}", preview="Not found", is_error=True)
+        return ToolResult.failure(
+            code="not_found",
+            message=f"Directory not found: {args.path}",
+            preview="Not found",
+            recovery_action="List the parent directory and retry with an existing path.",
+        )
     if not root.is_dir():
-        return ToolResult(content=f"Path is not a directory: {args.path}", preview="Not a directory", is_error=True)
+        return ToolResult.failure(
+            code="invalid_ref",
+            message=f"Path is not a directory: {args.path}",
+            preview="Not a directory",
+            recovery_action="Retry with a directory path.",
+        )
 
     try:
         entries = []
@@ -263,9 +285,20 @@ def _list_files_sync(args: ListFilesInput, cwd: str | None = None) -> ToolResult
             data={**_path_data(root, cwd), "entries": visible, "total": len(entries)},
         )
     except PermissionError:
-        return ToolResult(content=f"Permission denied: {args.path}", preview="Denied", is_error=True)
+        return ToolResult.failure(
+            code="permission_denied",
+            message=f"Permission denied: {args.path}",
+            preview="Denied",
+            recovery_action="Choose a readable directory or request filesystem access.",
+        )
     except OSError as e:
-        return ToolResult(content=f"Error listing directory: {e}", preview="List failed", is_error=True)
+        return ToolResult.failure(
+            code="read_failed",
+            message=f"Error listing directory: {e}",
+            preview="List failed",
+            retryable=True,
+            recovery_action="Retry or inspect the parent directory.",
+        )
 
 
 async def list_files(execution: ToolExecution, args: ListFilesInput) -> ToolResult:
@@ -347,11 +380,13 @@ def _find_files_with_rg(root: Path, args: FindFilesInput) -> list[dict]:
 
 
 def _find_files_failed(root: Path, args: FindFilesInput, error: Exception) -> ToolResult:
-    return ToolResult(
-        content=f"Error finding files with ripgrep: {error}",
+    return ToolResult.failure(
+        code="search_failed",
+        message=f"Error finding files with ripgrep: {error}",
         preview="Find failed",
-        is_error=True,
         data={"path": str(root), "pattern": args.pattern, "matches": []},
+        retryable=True,
+        recovery_action="Check that ripgrep is installed, then narrow the path or pattern and retry.",
     )
 
 
@@ -372,9 +407,19 @@ def _format_find_files_result(
 def _find_files_sync(args: FindFilesInput, cwd: str | None = None) -> ToolResult:
     root = _resolve_path(args.path, cwd)
     if not root.exists():
-        return ToolResult(content=f"Directory not found: {args.path}", preview="Not found", is_error=True)
+        return ToolResult.failure(
+            code="not_found",
+            message=f"Directory not found: {args.path}",
+            preview="Not found",
+            recovery_action="List the parent directory and retry with an existing path.",
+        )
     if not root.is_dir():
-        return ToolResult(content=f"Path is not a directory: {args.path}", preview="Not a directory", is_error=True)
+        return ToolResult.failure(
+            code="invalid_ref",
+            message=f"Path is not a directory: {args.path}",
+            preview="Not a directory",
+            recovery_action="Retry with a directory path.",
+        )
 
     try:
         matches = _find_files_with_rg(root, args)
@@ -454,11 +499,13 @@ def _search_text_with_rg(root: Path, args: SearchTextInput) -> list[dict]:
 
 
 def _search_text_failed(root: Path, args: SearchTextInput, error: Exception) -> ToolResult:
-    return ToolResult(
-        content=f"Error searching files with ripgrep: {error}",
+    return ToolResult.failure(
+        code="search_failed",
+        message=f"Error searching files with ripgrep: {error}",
         preview="Search failed",
-        is_error=True,
         data={"path": str(root), "query": args.query, "matches": []},
+        retryable=True,
+        recovery_action="Check that ripgrep is installed, then narrow the path or query and retry.",
     )
 
 
@@ -479,7 +526,12 @@ def _format_search_text_result(root: Path, args: SearchTextInput, matches: list[
 def _search_text_sync(args: SearchTextInput, cwd: str | None = None) -> ToolResult:
     root = _resolve_path(args.path, cwd)
     if not root.exists():
-        return ToolResult(content=f"Path not found: {args.path}", preview="Not found", is_error=True)
+        return ToolResult.failure(
+            code="not_found",
+            message=f"Path not found: {args.path}",
+            preview="Not found",
+            recovery_action="List the parent directory and retry with an existing path.",
+        )
 
     try:
         matches = _search_text_with_rg(root, args)
@@ -524,12 +576,18 @@ async def approve_write_file(execution: ToolExecution, args: WriteFileInput) -> 
 def _write_file_sync(args: WriteFileInput, cwd: str | None = None) -> ToolResult:
     path = _resolve_path(args.path, cwd)
     if path.exists() and path.is_dir():
-        return ToolResult(content=f"Path is a directory: {args.path}", preview="Is directory", is_error=True)
+        return ToolResult.failure(
+            code="invalid_ref",
+            message=f"Path is a directory: {args.path}",
+            preview="Is directory",
+            recovery_action="Retry with a file path.",
+        )
     if not path.parent.exists():
-        return ToolResult(
-            content=f"Parent directory does not exist: {_display_path(path.parent, cwd)}",
+        return ToolResult.failure(
+            code="not_found",
+            message=f"Parent directory does not exist: {_display_path(path.parent, cwd)}",
             preview="No parent",
-            is_error=True,
+            recovery_action="Create or choose an existing parent directory before writing.",
         )
 
     try:
@@ -537,9 +595,20 @@ def _write_file_sync(args: WriteFileInput, cwd: str | None = None) -> ToolResult
     except RevisionConflict as conflict:
         return _write_conflict(path, conflict, cwd)
     except PermissionError:
-        return ToolResult(content=f"Permission denied: {args.path}", preview="Denied", is_error=True)
+        return ToolResult.failure(
+            code="permission_denied",
+            message=f"Permission denied: {args.path}",
+            preview="Denied",
+            recovery_action="Choose a writable path or request filesystem access.",
+        )
     except OSError as e:
-        return ToolResult(content=f"Error writing file: {e}", preview="Write failed", is_error=True)
+        return ToolResult.failure(
+            code="write_failed",
+            message=f"Error writing file: {e}",
+            preview="Write failed",
+            retryable=True,
+            recovery_action="Inspect the path and retry after resolving the filesystem error.",
+        )
 
     lines = args.content.count("\n") + 1 if args.content else 0
     display = _display_path(path, cwd)
@@ -601,26 +670,43 @@ async def approve_edit_file(execution: ToolExecution, args: EditFileInput) -> Ap
 def _edit_file_sync(args: EditFileInput, cwd: str | None = None) -> ToolResult:
     path = _resolve_path(args.path, cwd)
     if not path.exists():
-        return ToolResult(content=f"File not found: {args.path}", preview="Not found", is_error=True)
+        return ToolResult.failure(
+            code="not_found",
+            message=f"File not found: {args.path}",
+            preview="Not found",
+            recovery_action="Call list_files and read_file, then retry with an exact path.",
+        )
     if not path.is_file():
-        return ToolResult(content=f"Path is not a file: {args.path}", preview="Not a file", is_error=True)
+        return ToolResult.failure(
+            code="invalid_ref",
+            message=f"Path is not a file: {args.path}",
+            preview="Not a file",
+            recovery_action="Retry with a file path.",
+        )
 
     try:
         before = _read_text(path)
     except PermissionError:
-        return ToolResult(content=f"Permission denied: {args.path}", preview="Denied", is_error=True)
+        return ToolResult.failure(
+            code="permission_denied",
+            message=f"Permission denied: {args.path}",
+            preview="Denied",
+            recovery_action="Choose a readable file or request filesystem access.",
+        )
     count = before.count(args.old_text)
     if count == 0:
-        return ToolResult(
-            content="Text block not found. Read the file and include more exact context.",
+        return ToolResult.failure(
+            code="not_found",
+            message="Text block not found. Read the file and include more exact context.",
             preview="No match",
-            is_error=True,
+            recovery_action="Call read_file and retry with an exact text block from the current revision.",
         )
     if count > 1:
-        return ToolResult(
-            content=f"Text block matched {count} times. Include a larger exact block so the edit is unique.",
+        return ToolResult.failure(
+            code="invalid_ref",
+            message=f"Text block matched {count} times. Include a larger exact block so the edit is unique.",
             preview="Ambiguous",
-            is_error=True,
+            recovery_action="Call read_file and retry with a larger unique text block.",
         )
 
     after = before.replace(args.old_text, args.new_text, 1)
@@ -629,9 +715,20 @@ def _edit_file_sync(args: EditFileInput, cwd: str | None = None) -> ToolResult:
     except RevisionConflict as conflict:
         return _write_conflict(path, conflict, cwd)
     except PermissionError:
-        return ToolResult(content=f"Permission denied: {args.path}", preview="Denied", is_error=True)
+        return ToolResult.failure(
+            code="permission_denied",
+            message=f"Permission denied: {args.path}",
+            preview="Denied",
+            recovery_action="Choose a writable file or request filesystem access.",
+        )
     except OSError as e:
-        return ToolResult(content=f"Error editing file: {e}", preview="Edit failed", is_error=True)
+        return ToolResult.failure(
+            code="write_failed",
+            message=f"Error editing file: {e}",
+            preview="Edit failed",
+            retryable=True,
+            recovery_action="Inspect the path and retry after resolving the filesystem error.",
+        )
 
     display = _display_path(path, cwd)
     return ToolResult(

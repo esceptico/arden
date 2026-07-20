@@ -53,6 +53,18 @@ async def test_read_file_self_reports_source_refs(tmp_path):
     ]
 
 
+@pytest.mark.asyncio
+async def test_read_file_missing_is_typed_failure(tmp_path):
+    result = await read_file_tool.execute(
+        _make_execution("read_file"),
+        path=str(tmp_path / "missing.txt"),
+    )
+
+    assert result.is_error
+    assert result.outcome is not None and result.outcome.error is not None
+    assert result.outcome.error.code == "not_found"
+
+
 def test_atomic_compare_and_swap_preserves_old_file_when_replace_fails(tmp_path, monkeypatch):
     target = tmp_path / "note.txt"
     target.write_text("old", encoding="utf-8")

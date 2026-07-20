@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pydantic import BaseModel, Field
 from tenacity import before_sleep_log, retry, stop_after_attempt, wait_exponential
 
+from ntrp.agent import ToolOutcomeStatus
 from ntrp.logging import get_logger
 from ntrp.notifiers.base import Notifier
 from ntrp.tools.core import ToolResult, tool
@@ -73,10 +74,20 @@ async def notify(execution: ToolExecution, args: NotifyInput) -> ToolResult:
 
     if resolved.unknown:
         msg = f"Unknown notifier(s): {', '.join(resolved.unknown)}. Available: {', '.join(resolved.available)}"
-        return ToolResult(content=msg, preview="Unknown notifier", is_error=True)
+        return ToolResult.failure(
+            code="invalid_ref",
+            message=msg,
+            preview="Unknown notifier",
+            recovery_action="Retry with one of the available notifier names.",
+        )
 
     if not resolved.targets:
-        return ToolResult(content="No notifiers configured.", preview="No notifiers", is_error=True)
+        return ToolResult.failure(
+            code="not_found",
+            message="No notifiers configured.",
+            preview="No notifiers",
+            recovery_action="Configure a notification channel before retrying.",
+        )
 
     sent: list[str] = []
     failed: list[str] = []
@@ -90,9 +101,21 @@ async def notify(execution: ToolExecution, args: NotifyInput) -> ToolResult:
             failed.append(notifier.channel)
 
     if failed:
-        return ToolResult(
-            content=f"Sent to: {', '.join(sent)}. Failed: {', '.join(failed)}",
+        if not sent:
+            return ToolResult.failure(
+                code="provider_error",
+                message=f"Notification delivery failed for: {', '.join(failed)}.",
+                preview="Delivery failed",
+                retryable=True,
+                recovery_action="Retry later or choose another configured notifier.",
+            )
+        return ToolResult.failure(
+            code="partial_failure",
+            message=f"Sent to: {', '.join(sent)}. Failed: {', '.join(failed)}.",
             preview=f"Partial ({len(sent)}/{len(sent) + len(failed)})",
+            status=ToolOutcomeStatus.UNCERTAIN,
+            retryable=True,
+            recovery_action="Retry only the failed notifier channels.",
         )
 
     return ToolResult(
