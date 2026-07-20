@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import {
   gmailAccountSummary,
+  googleServiceConnectionSummary,
   googleConnectionSummary,
   serviceConnectionLabel,
   serviceConnectionPill,
@@ -14,6 +15,16 @@ test("summarizes Google accounts without exposing token filenames", () => {
   ];
 
   expect(gmailAccountSummary(accounts)).toBe("2 accounts");
+});
+
+test("summarizes each Google service from explicit account bindings", () => {
+  const accounts = [
+    { id: "acct-1", email: "one@example.com", services: ["gmail", "calendar"] as const, scopes: [] },
+  ];
+
+  expect(googleServiceConnectionSummary("gmail", true, accounts).label).toBe("Ready");
+  expect(googleServiceConnectionSummary("google_drive", true, accounts).label).toBe("Connect");
+  expect(googleServiceConnectionSummary("calendar", false, accounts).label).toBe("Disabled");
 });
 
 test("labels env-managed service tokens as read-only", () => {

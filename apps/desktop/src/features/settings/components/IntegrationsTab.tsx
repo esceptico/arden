@@ -1,16 +1,24 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import clsx from "clsx";
 import { RefreshCw } from "lucide-react";
-import { addGmailAccountApi, connectServiceApi, disconnectServiceApi, listGmailAccountsApi, listServicesApi, removeGmailAccountApi, type GmailAccount, type ServiceConnection } from "@/api/settings";
+import {
+  connectGoogleServiceApi,
+  connectServiceApi,
+  disconnectGoogleServiceApi,
+  disconnectServiceApi,
+  listGoogleAccountsApi,
+  listServicesApi,
+  removeGoogleAccountApi,
+  type GoogleAccountSummary,
+  type GoogleIntegrationId,
+  type ServiceConnection,
+} from "@/api/settings";
 import { fetchServerConfig, updateServerConfig } from "@/actions/server";
 import { useStore } from "@/stores";
 import { ReadinessCard } from "@/features/settings/components/ReadinessCard";
 import { GoogleCard } from "@/features/settings/components/GoogleCard";
 import { ServiceCard } from "@/features/settings/components/ServiceCard";
 import { SettingsTabSkeleton } from "@/features/settings/components/SettingsTabSkeleton";
-import {
-  googleConnectionSummary,
-} from "@/features/settings/lib/integrationConnection";
 import {
   settingsErrorMessage,
   settingsErrorTitle,
@@ -25,7 +33,7 @@ export function IntegrationsTab() {
   const config = useStore((s) => s.config);
   const serverConfig = useStore((s) => s.serverConfig);
   const [services, setServices] = useState<ServiceConnection[]>([]);
-  const [gmailAccounts, setGmailAccounts] = useState<GmailAccount[]>([]);
+  const [googleAccounts, setGoogleAccounts] = useState<GoogleAccountSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [loadedOnce, setLoadedOnce] = useState(false);
@@ -34,7 +42,14 @@ export function IntegrationsTab() {
   const [serviceKey, setServiceKey] = useState("");
   const [assistant, setAssistant] = useState<Extract<SetupAssistantKind, "google" | "slack"> | null>(null);
 
-  const googleEnabled = serverConfig?.google_enabled ?? false;
+  const googleEnabled = useMemo(() => {
+    const value = (id: GoogleIntegrationId) => {
+      const enabled = serverConfig?.integrations[id]?.enabled;
+      if (typeof enabled === "boolean") return enabled;
+      return id === "google_drive" ? false : (serverConfig?.google_enabled ?? false);
+    };
+    return { gmail: value("gmail"), calendar: value("calendar"), google_drive: value("google_drive") };
+  }, [serverConfig]);
   const slackServices = useMemo(
     () => services.filter((service) => service.id.startsWith("slack_")),
     [services],
@@ -47,23 +62,21 @@ export function IntegrationsTab() {
     () => slackServices.filter((service) => !service.connected),
     [slackServices],
   );
-  const googleSummary = useMemo(
-    () => googleConnectionSummary(googleEnabled, gmailAccounts),
-    [gmailAccounts, googleEnabled],
-  );
-  const readyToolsCount =
-    (googleSummary.tone === "ready" ? 1 : 0) + connectedSlackServices.length;
+  const readyGoogleCount = (["gmail", "calendar", "google_drive"] as GoogleIntegrationId[]).filter(
+    (id) => googleEnabled[id] && googleAccounts.some((account) => account.services.includes(id)),
+  ).length;
+  const readyToolsCount = readyGoogleCount + connectedSlackServices.length;
 
   const refresh = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [nextServices, nextGmail] = await Promise.all([
+      const [nextServices, nextGoogleAccounts] = await Promise.all([
         listServicesApi(config),
-        listGmailAccountsApi(config),
+        listGoogleAccountsApi(config),
       ]);
       setServices(nextServices);
-      setGmailAccounts(nextGmail);
+      setGoogleAccounts(nextGoogleAccounts);
       setLoadedOnce(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -76,11 +89,11 @@ export function IntegrationsTab() {
     void refresh();
   }, [refresh]);
 
-  async function toggleGoogle(enabled: boolean) {
-    setPendingId("google");
+  async function toggleGoogle(integrationId: GoogleIntegrationId, enabled: boolean) {
+    setPendingId(integrationId);
     setError(null);
     try {
-      await updateServerConfig({ integrations: { google: enabled } });
+      await updateServerConfig({ integrations: { [integrationId]: enabled } });
       await fetchServerConfig();
       await refresh();
     } catch (err) {
@@ -90,14 +103,12 @@ export function IntegrationsTab() {
     }
   }
 
-  async function addGoogleAccount() {
-    setPendingId("gmail:add");
+  async function connectGoogle(integrationId: GoogleIntegrationId, accountId?: string) {
+    setPendingId(`${integrationId}:connect${accountId ? `:${accountId}` : ""}`);
     setError(null);
     try {
-      await addGmailAccountApi(config);
-      if (!googleEnabled) {
-        await updateServerConfig({ integrations: { google: true } });
-      }
+      await connectGoogleServiceApi(config, integrationId, accountId);
+      await updateServerConfig({ integrations: { [integrationId]: true } });
       await fetchServerConfig();
       await refresh();
     } catch (err) {
@@ -107,11 +118,25 @@ export function IntegrationsTab() {
     }
   }
 
-  async function removeGoogleAccount(account: GmailAccount) {
-    setPendingId(`gmail:${account.token_file}`);
+  async function disconnectGoogle(integrationId: GoogleIntegrationId, account: GoogleAccountSummary) {
+    setPendingId(`${integrationId}:${account.id}`);
     setError(null);
     try {
-      await removeGmailAccountApi(config, account.token_file);
+      await disconnectGoogleServiceApi(config, integrationId, account.id);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPendingId(null);
+    }
+  }
+
+  async function removeGoogleAccount(account: GoogleAccountSummary) {
+    setPendingId(`account:${account.id}`);
+    setError(null);
+    try {
+      await removeGoogleAccountApi(config, account.id);
+      await fetchServerConfig();
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -149,7 +174,7 @@ export function IntegrationsTab() {
     }
   }
 
-  const hasLoadedData = loadedOnce || services.length > 0 || gmailAccounts.length > 0;
+  const hasLoadedData = loadedOnce || services.length > 0 || googleAccounts.length > 0;
   const showContent = shouldShowLoadedSettingsContent({ loading, error, hasData: hasLoadedData });
 
   return (
@@ -193,18 +218,18 @@ export function IntegrationsTab() {
           <ReadinessCard
             tone={readyToolsCount > 0 ? "ok" : "warn"}
             label={readyToolsCount > 0 ? "Tools ready" : "Connect tools"}
-            detail={`Google: ${googleSummary.label} · Slack: ${connectedSlackServices.length || "none"}`}
+            detail={`Google: ${readyGoogleCount || "none"} · Slack: ${connectedSlackServices.length || "none"}`}
             footnote="Tool integrations are optional, but connected tools become available to the agent."
           />
 
           <GoogleCard
             enabled={googleEnabled}
-            summary={googleSummary}
-            accounts={gmailAccounts}
+            accounts={googleAccounts}
             pendingId={pendingId}
             onToggle={toggleGoogle}
-            onAdd={addGoogleAccount}
-            onRemove={removeGoogleAccount}
+            onConnect={connectGoogle}
+            onDisconnect={disconnectGoogle}
+            onRemoveAccount={removeGoogleAccount}
             onAssistant={() => setAssistant("google")}
           />
 

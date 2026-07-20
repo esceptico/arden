@@ -1,121 +1,73 @@
-import clsx from "clsx";
-import { CalendarDays, Mail } from "lucide-react";
-import { type GmailAccount } from "@/api/settings";
-import { type GoogleConnectionSummary } from "@/features/settings/lib/integrationConnection";
-import { ICON } from "@/lib/icons";
-import { Badge, type BadgeTone } from "@/components/ui/Badge";
-import { BlurSwap } from "@/components/ui/BlurSwap";
-import { Button } from "@/components/ui/Button";
+import type { GoogleAccountSummary, GoogleIntegrationId } from "@/api/settings";
 import { ConfirmDeleteButton } from "@/components/ui/ConfirmDeleteButton";
-import { SwitchControl } from "@/components/ui/SwitchControl";
+import { Button } from "@/components/ui/Button";
+import { GoogleServiceCard } from "@/features/settings/components/GoogleServiceCard";
+import { googleServiceConnectionSummary } from "@/features/settings/lib/integrationConnection";
+
+const INTEGRATIONS: GoogleIntegrationId[] = ["gmail", "calendar", "google_drive"];
 
 export function GoogleCard({
   enabled,
-  summary,
   accounts,
   pendingId,
   onToggle,
-  onAdd,
-  onRemove,
+  onConnect,
+  onDisconnect,
+  onRemoveAccount,
   onAssistant,
 }: {
-  enabled: boolean;
-  summary: GoogleConnectionSummary;
-  accounts: GmailAccount[];
+  enabled: Record<GoogleIntegrationId, boolean>;
+  accounts: GoogleAccountSummary[];
   pendingId: string | null;
-  onToggle: (enabled: boolean) => Promise<void>;
-  onAdd: () => Promise<void>;
-  onRemove: (account: GmailAccount) => Promise<void>;
+  onToggle: (integrationId: GoogleIntegrationId, enabled: boolean) => Promise<void>;
+  onConnect: (integrationId: GoogleIntegrationId, accountId?: string) => Promise<void>;
+  onDisconnect: (integrationId: GoogleIntegrationId, account: GoogleAccountSummary) => Promise<void>;
+  onRemoveAccount: (account: GoogleAccountSummary) => Promise<void>;
   onAssistant: () => void;
 }) {
-  const pendingGoogle = pendingId === "google";
-  const pendingAdd = pendingId === "gmail:add";
-  const summaryTone = {
-    ready: "ok",
-    paused: "warn",
-    setup: "neutral",
-  }[summary.tone] as BadgeTone;
-
   return (
-    <section className="rounded-[12px] border border-line-soft bg-surface overflow-hidden">
-      <div className="flex flex-wrap items-start gap-3 px-3.5 py-3">
-        <div className="min-w-[150px] flex-1 grid gap-1">
-          <div className="flex items-center gap-2 min-w-0">
-            <GoogleIcon enabled={enabled} />
-            <div className="text-base font-medium text-ink truncate">Google Workspace</div>
-            <Badge tone={summaryTone}>{summary.label}</Badge>
-          </div>
-          <div className="text-xs text-muted leading-[1.4]">
-            Gmail and Calendar share the same Google account token.
-          </div>
-          <div className="text-xs text-muted font-mono truncate">
-            {summary.detail}
-          </div>
+    <section className="grid gap-3 rounded-[12px] border border-line-soft bg-surface p-3.5">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-base font-medium text-ink">Google services</div>
+          <div className="text-xs text-muted">One Google account can authorize services independently inside ntrp.</div>
         </div>
+        <Button variant="secondary" onClick={onAssistant}>Setup credentials</Button>
+      </div>
 
-        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-          <Button variant="secondary" onClick={onAssistant}>
-            Run setup assistant
-          </Button>
-          <Button variant="secondary" onClick={() => void onAdd()} disabled={pendingAdd}>
-            <BlurSwap swapKey={pendingAdd ? "connecting" : "add"} blur={2}>
-              {pendingAdd ? "Connecting…" : "Add account"}
-            </BlurSwap>
-          </Button>
-          <SwitchControl
-            checked={enabled}
-            onChange={(next) => void onToggle(next)}
-            disabled={pendingGoogle}
-            aria-label="Enable Google Workspace"
+      <div className="grid gap-2">
+        {INTEGRATIONS.map((integrationId) => (
+          <GoogleServiceCard
+            key={integrationId}
+            integrationId={integrationId}
+            enabled={enabled[integrationId]}
+            summary={googleServiceConnectionSummary(integrationId, enabled[integrationId], accounts)}
+            accounts={accounts}
+            pendingId={pendingId}
+            onToggle={onToggle}
+            onConnect={onConnect}
+            onDisconnect={onDisconnect}
           />
-        </div>
+        ))}
       </div>
 
       {accounts.length > 0 && (
-        <div className="grid gap-1 px-3.5 py-2.5 bg-surface-soft/35">
+        <div className="grid gap-1 pt-1">
+          <div className="text-xs font-medium text-muted">Connected Google accounts</div>
           {accounts.map((account) => (
-            <div
-              key={account.token_file}
-              className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 items-center text-sm"
-            >
-              <div className="min-w-0">
-                <div className="text-ink-soft truncate">{account.email || "Unknown account"}</div>
-                <div
-                  className={clsx(
-                    "text-xs truncate",
-                    account.error ? "text-bad" : "text-muted",
-                  )}
-                >
-                  {account.error
-                    ? account.error
-                    : account.has_send_scope
-                      ? "Read, send, and calendar access"
-                      : "Read and calendar access"}
-                </div>
-              </div>
+            <div key={account.id} className="flex items-center gap-2 text-xs">
+              <span className="min-w-0 flex-1 truncate text-ink-soft">{account.email || account.id}</span>
               <ConfirmDeleteButton
                 size="md"
-                label={`Remove ${account.email || account.token_file}`}
-                busy={pendingId === `gmail:${account.token_file}`}
-                onConfirm={() => void onRemove(account)}
+                label={`Remove Google account ${account.email || account.id}`}
+                busy={pendingId === `account:${account.id}`}
+                onConfirm={() => void onRemoveAccount(account)}
               />
             </div>
           ))}
+          <div className="text-xs text-faint">Removing an account revokes all Google services for it.</div>
         </div>
       )}
     </section>
-  );
-}
-
-function GoogleIcon({ enabled }: { enabled: boolean }) {
-  return (
-    <span className="relative grid place-items-center w-4 h-4 shrink-0">
-      <Mail size={ICON.MD} strokeWidth={2} className={enabled ? "text-ok" : "text-muted"} />
-      <CalendarDays
-        size={ICON.XS}
-        strokeWidth={1.9}
-        className={clsx("absolute -right-1 -bottom-0.5", enabled ? "text-ok" : "text-faint")}
-      />
-    </span>
   );
 }

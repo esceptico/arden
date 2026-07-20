@@ -1,13 +1,12 @@
-import type { GoogleServiceChoice, MCPServerConfigPayload, MCPTransport } from "@/api/settings";
+import type { GoogleIntegrationId, MCPServerConfigPayload, MCPTransport } from "@/api/settings";
 
-export const GOOGLE_SERVICE_OPTIONS: Array<{ value: GoogleServiceChoice; label: string; detail: string }> = [
-  { value: "email", label: "Email only", detail: "requests Gmail read/send scopes." },
-  { value: "email_calendar", label: "Email + Calendar", detail: "requests Gmail read/send and Calendar scopes." },
-  { value: "calendar", label: "Calendar only", detail: "requests Calendar scope; Gmail tools will not be ready." },
-  { value: "all", label: "All current Google services", detail: "is the legacy ntrp scope set and includes Pub/Sub." },
+export const GOOGLE_SERVICE_OPTIONS: Array<{ value: GoogleIntegrationId; label: string; detail: string }> = [
+  { value: "gmail", label: "Gmail", detail: "requests Gmail read and send access." },
+  { value: "calendar", label: "Google Calendar", detail: "requests calendar read and write access." },
+  { value: "google_drive", label: "Google Drive", detail: "requests Docs, Sheets, and Drive metadata access." },
 ];
 
-export function googleChoiceLabel(choice: GoogleServiceChoice): string {
+export function googleChoiceLabel(choice: GoogleIntegrationId): string {
   return GOOGLE_SERVICE_OPTIONS.find((option) => option.value === choice)?.label ?? choice;
 }
 

@@ -1,3 +1,5 @@
+import type { GoogleAccountSummary, GoogleIntegrationId } from "@/api/settings";
+
 export interface ServiceConnectionLike {
   id: string;
   name: string;
@@ -70,4 +72,18 @@ export function googleConnectionSummary(
     detail: `${accountLabel} enabled`,
     tone: "ready",
   };
+}
+
+export function googleServiceConnectionSummary(
+  integrationId: GoogleIntegrationId,
+  enabled: boolean,
+  accounts: readonly GoogleAccountSummary[],
+): GoogleConnectionSummary {
+  const count = accounts.filter((account) => account.services.includes(integrationId)).length;
+  if (count === 0) {
+    return { label: "Connect", detail: "No connected accounts", tone: "setup" };
+  }
+  const detail = `${count} ${count === 1 ? "account" : "accounts"}`;
+  if (!enabled) return { label: "Disabled", detail, tone: "paused" };
+  return { label: "Ready", detail, tone: "ready" };
 }

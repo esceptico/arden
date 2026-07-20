@@ -1,6 +1,6 @@
 import { useState } from "react";
-import type { GooglePreflightResponse, GoogleServiceChoice, SetupStatus } from "@/api/settings";
-import { addGmailAccountApi, getSetupStatusApi, preflightGoogleSetupApi, saveGoogleCredentialsApi } from "@/api/settings";
+import type { GoogleIntegrationId, GooglePreflightResponse, SetupStatus } from "@/api/settings";
+import { connectGoogleServiceApi, getSetupStatusApi, preflightGoogleSetupApi, saveGoogleCredentialsApi } from "@/api/settings";
 import { fetchServerConfig, updateServerConfig } from "@/actions/server";
 import { useStore } from "@/stores";
 import { GOOGLE_SERVICE_OPTIONS, googleChoiceLabel } from "@/features/settings/lib/setupAssistant";
@@ -12,8 +12,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/RadioGroup";
 
 export function GoogleSetupAssistant({ onDone }: { onDone: () => Promise<void> | void }) {
   const config = useStore((s) => s.config);
-  const serverConfig = useStore((s) => s.serverConfig);
-  const [serviceChoice, setServiceChoice] = useState<GoogleServiceChoice>("all");
+  const [serviceChoice, setServiceChoice] = useState<GoogleIntegrationId>("gmail");
   const [path, setPath] = useState("");
   const [jsonText, setJsonText] = useState("");
   const [preflight, setPreflight] = useState<GooglePreflightResponse | null>(null);
@@ -53,10 +52,8 @@ export function GoogleSetupAssistant({ onDone }: { onDone: () => Promise<void> |
 
   async function connect() {
     await run("connect", async () => {
-      await addGmailAccountApi(config, serviceChoice);
-      if (!serverConfig?.google_enabled) {
-        await updateServerConfig({ integrations: { google: true } });
-      }
+      await connectGoogleServiceApi(config, serviceChoice);
+      await updateServerConfig({ integrations: { [serviceChoice]: true } });
       await fetchServerConfig();
       setStatus(await getSetupStatusApi(config));
       setConnected(true);
@@ -78,7 +75,7 @@ export function GoogleSetupAssistant({ onDone }: { onDone: () => Promise<void> |
         <RadioGroup
           aria-label="Google service"
           value={serviceChoice}
-          onChange={(v) => setServiceChoice(v as GoogleServiceChoice)}
+          onChange={(v) => setServiceChoice(v as GoogleIntegrationId)}
         >
           {GOOGLE_SERVICE_OPTIONS.map((option, i) => (
             <RadioGroupItem
@@ -135,8 +132,11 @@ export function GoogleSetupAssistant({ onDone }: { onDone: () => Promise<void> |
         {status && (
           <div className="rounded-[10px] border border-line-soft bg-surface-soft/35 px-3 py-2 text-xs text-muted break-all grid gap-1">
             {status.google.provider_statuses.map((provider) => <div key={provider.id}>{provider.label}: {provider.status} ({provider.tool_count} tool{provider.tool_count === 1 ? "" : "s"}){provider.detail ? ` · ${provider.detail}` : ""}</div>)}
-            {status.google.accounts.map((account) => <div key={account.token_file}>Account: {account.email ?? account.token_file}</div>)}
-            {status.google.calendar_tokens.map((token) => <div key={token.token_file}>Calendar token: {token.token_file} · {token.has_calendar_scope ? "calendar scope" : "missing scope"}</div>)}
+            {status.google.google_accounts.map((account) => (
+              <div key={account.id}>
+                Account: {account.email ?? account.id} · {account.services.join(", ") || "no enabled services"}
+              </div>
+            ))}
           </div>
         )}
         {connected && (
