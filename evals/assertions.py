@@ -1,3 +1,28 @@
+from dataclasses import dataclass
+
+from evals.metrics import AgentErgonomicsMetrics
+
+
+@dataclass(frozen=True)
+class ErgonomicsThresholds:
+    max_wrong_tool_calls: int = 0
+    max_errors: int = 0
+    max_retries: int = 1
+    max_latency_ms: int = 120_000
+
+
+def assert_ergonomics_thresholds(metrics: AgentErgonomicsMetrics, thresholds: ErgonomicsThresholds) -> None:
+    checks = {
+        "wrong_tool_calls": (metrics.wrong_tool_calls, thresholds.max_wrong_tool_calls),
+        "errors": (metrics.errors, thresholds.max_errors),
+        "retries": (metrics.retries, thresholds.max_retries),
+        "latency_ms": (metrics.latency_ms, thresholds.max_latency_ms),
+    }
+    failures = [f"{name}={actual} > {limit}" for name, (actual, limit) in checks.items() if actual > limit]
+    if failures:
+        raise AssertionError("Ergonomics thresholds failed: " + ", ".join(failures))
+
+
 class EventAssertions:
     def __init__(self, events: list[dict]):
         self.events = events

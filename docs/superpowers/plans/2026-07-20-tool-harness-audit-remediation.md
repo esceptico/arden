@@ -405,10 +405,10 @@ def atomic_compare_and_swap(path: Path, content: str, expected_sha256: str) -> F
 - Discovers case files and records tool calls, wrong-tool calls, errors, retries, token use, truncation/offload, latency, and recovery.
 - Keeps hermetic scripted journeys as runtime regression tests; adds an opt-in provider-backed lane for ergonomics.
 
-- [ ] Add failing discovery and metrics tests.
-- [ ] Implement executable case discovery and trace-derived metrics with deterministic thresholds.
-- [ ] Add file, Slack/email, automation, memory, research, and MCP end-to-end tasks.
-- [ ] Run hermetic tests. Run the provider-backed smoke lane when configured; otherwise verify its `--dry-run` discovery/contract output without fabricating a provider result. Commit: `test(harness): add agent ergonomics evaluations`.
+- [x] Add failing discovery and metrics tests.
+- [x] Implement executable case discovery and trace-derived metrics with deterministic thresholds.
+- [x] Add file, Slack/email, automation, memory, research, and MCP end-to-end tasks.
+- [x] Run hermetic tests. Run the provider-backed smoke lane when configured; otherwise verify its `--dry-run` discovery/contract output without fabricating a provider result. Commit: `test(harness): add agent ergonomics evaluations`.
 
 ### Task 15: Completion Audit and Full Verification
 
