@@ -79,7 +79,7 @@ test("empty Sources panel describes turn-level provenance", () => {
   expect(renderToStaticMarkup(<SourcesPanel />)).toContain("No sources for this turn.");
 });
 
-test("proof summary is placed between final answer content and message actions", async () => {
+test("structured tool outcomes do not add a transcript card", async () => {
   setState({
     sourceRefsRevision: 1,
     messages: new Map([
@@ -112,8 +112,8 @@ test("proof summary is placed between final answer content and message actions",
     ));
     const children = Array.from(host.querySelector("article")?.children ?? []);
     expect(children[0]?.classList.contains("md")).toBe(true);
-    expect(children[1]?.getAttribute("data-proof-summary")).toBe("true");
-    expect(children[2]?.querySelector('button[aria-label="Copy"]')).not.toBeNull();
+    expect(host.querySelector("[data-proof-summary]")).toBeNull();
+    expect(children[1]?.querySelector('button[aria-label="Copy"]')).not.toBeNull();
   } finally {
     await act(async () => root.unmount());
     host.remove();

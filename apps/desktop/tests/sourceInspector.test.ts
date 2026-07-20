@@ -191,6 +191,9 @@ test("source revision ignores streamed content and bumps for live and history so
   getState().mutateMessage("assistant-1", { content: "a streamed token" });
   expect(getState().sourceRefsRevision).toBe(10);
 
+  getState().mergeActivityItem("tool-1", { outcome: { status: "failed" } });
+  expect(getState().sourceRefsRevision).toBe(10);
+
   getState().mergeActivityItem("tool-1", { sourceRefs: [source({ ref: "live" })] });
   expect(getState().sourceRefsRevision).toBeGreaterThan(10);
   const afterLive = getState().sourceRefsRevision;

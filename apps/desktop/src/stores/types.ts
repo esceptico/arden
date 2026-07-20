@@ -420,7 +420,7 @@ export interface State {
   sourceFocus: MessageSourceFocus | null;
   rightInspectorTab: "activity" | "sources";
   sourceTurnId: string | null;
-  /** Monotonic invalidation key for per-turn source and proof derivation. */
+  /** Monotonic invalidation key for per-turn source derivation. */
   sourceRefsRevision: number;
   paletteOpen: boolean;
   /** Tool approvals waiting on the user. Lives outside `messages` so the

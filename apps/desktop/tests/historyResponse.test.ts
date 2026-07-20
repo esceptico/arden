@@ -88,7 +88,7 @@ test("active history merge keeps child agent metadata from durable result data",
   });
 });
 
-test("history rebuild keeps durable tool outcomes for proof summaries", () => {
+test("history rebuild keeps durable tool outcomes", () => {
   const history: HistoryResponse = {
     messages: [
       { role: "user", content: "write", id: "user-1" },

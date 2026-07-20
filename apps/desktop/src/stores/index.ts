@@ -656,7 +656,7 @@ export const useStore = create<State & Actions>((set) => ({
       return touched
         ? {
             messages,
-            ...(patch.sourceRefs === undefined && patch.outcome === undefined
+            ...(patch.sourceRefs === undefined
               ? {}
               : { sourceRefsRevision: s.sourceRefsRevision + 1 }),
           }

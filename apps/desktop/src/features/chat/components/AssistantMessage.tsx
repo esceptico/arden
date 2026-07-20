@@ -5,7 +5,6 @@ import { useStore } from "@/stores";
 import { Markdown } from "@/components/ui/Markdown";
 import { useSmoothStreamedContent } from "@/features/chat/hooks/useSmoothStream";
 import { MessageActions } from "@/features/chat/components/MessageActions";
-import { ProofSummary } from "@/features/context/components/ProofSummary";
 import {
   SOURCE_FOCUS_CLASS,
   entryAnimation,
@@ -55,7 +54,6 @@ export const AssistantMessage = memo(function AssistantMessage({
         streaming={isStreaming}
         className="text-base leading-[1.5] text-ink break-words"
       />
-      {isFinal && sourceTurnId && <ProofSummary turnId={sourceTurnId} />}
       {isFinal && sourceTurnId && sourceCount > 0 && (
         <button
           type="button"
