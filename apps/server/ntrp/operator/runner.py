@@ -46,15 +46,12 @@ class RunRequest:
     model: str | None = None
     skip_approvals: bool = False
     automation_id: str | None = None
-    # Decouples the toolset from the approval-flow concern. auto_approve still
-    # separately controls whether irreversible tools skip the approval gate —
-    # a caller can be non-auto-approve (approvals still required) while
-    # granting a wider toolset than plain read-only, by naming specific
-    # additional tools here (e.g. area observe mode: READ tools + the named
-    # memory-write tools, but not bash/send/automation-write).
+    # Decouples the toolset from the approval-flow concern. A caller can keep
+    # approvals enabled while granting named additions to the read-only set.
     extra_tool_names: frozenset[str] = frozenset()
     # Allowlist patterns ('*', exact, 'slack_*') applied as the hard outer
-    # gate over whichever pool the flags above select. None = unrestricted.
+    # gate over the registry. For detached runs, None means read-only; an
+    # explicit scope is the only arbitrary write/execute capability grant.
     tool_scope: tuple[str, ...] | None = None
     # Pydantic schema for AI SDK-style structured output: the run ends with
     # one constrained completion whose validated dump rides RunResult.structured
@@ -77,18 +74,15 @@ async def _prepare(deps: OperatorDeps, request: RunRequest) -> tuple[Agent, list
     memory_context = await resident_profile(deps.memory_records)
 
     executor = deps.executor
-    # Two independent dials sharing two fields: auto_approve skips approval
-    # gates; extra_tool_names narrows the set. Combined they mean "skip
-    # approvals WITHIN this narrow set" — a detached run has no approval UI,
-    # so an agent trusted with only read + its own notebook (observe-mode
-    # area agents) must not stall on gates it can never answer.
-    scope_kw = {"scope": request.tool_scope} if request.tool_scope else {}
+    # Capability selection is independent from approval bypass. Detached runs
+    # are read-only unless the caller supplies an explicit outer scope.
+    scope_kw = {"scope": request.tool_scope} if request.tool_scope is not None else {}
     if request.extra_tool_names:
         tools = executor.get_tools(read_only=True, extra_names=request.extra_tool_names, **scope_kw)
-    elif request.auto_approve:
-        tools = executor.get_tools(**scope_kw)
+    elif request.tool_scope is not None:
+        tools = executor.get_tools(scope=request.tool_scope)
     else:
-        tools = executor.get_tools(read_only=True, **scope_kw)
+        tools = executor.get_tools(read_only=True)
 
     agent_config = deps.config
     if request.model:

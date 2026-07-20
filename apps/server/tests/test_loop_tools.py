@@ -191,7 +191,13 @@ async def test_create_automation_passes_thread_id_and_read_history(store_and_svc
     )
     result = await create_automation(
         execution,
-        args.model_copy(update={"thread_id": "sess-target", "read_history": True}),
+        args.model_copy(
+            update={
+                "thread_id": "sess-target",
+                "read_history": True,
+                "tool_scope": ["slack_search", "slack_post_message"],
+            }
+        ),
     )
     assert not result.is_error
 
@@ -199,6 +205,53 @@ async def test_create_automation_passes_thread_id_and_read_history(store_and_svc
     created = next(a for a in rows if a.name == "thread automation")
     assert created.thread_id == "sess-target"
     assert created.read_history is True
+    assert created.tool_scope == ["slack_search", "slack_post_message"]
+
+
+@pytest.mark.asyncio
+async def test_approve_create_automation_shows_tool_scope(store_and_svc):
+    _, svc = store_and_svc
+    execution = _execution(svc, loop_task_id=None)
+    args = CreateAutomationInput(
+        name="scoped sender",
+        description="post a reviewed update",
+        trigger_type="time",
+        every="1h",
+        auto_approve=True,
+        tool_scope=["slack_search", "slack_post_message"],
+    )
+
+    info = await approve_create_automation(execution, args)
+
+    assert info is not None
+    assert "Tools: slack_search, slack_post_message" in (info.preview or "")
+
+
+@pytest.mark.asyncio
+async def test_update_automation_changes_tool_scope(store_and_svc):
+    from ntrp.tools.automation import UpdateAutomationInput, update_automation
+
+    store, svc = store_and_svc
+    execution = _execution(svc, loop_task_id=None)
+    await create_automation(
+        execution,
+        CreateAutomationInput(
+            name="scope update",
+            description="read first",
+            trigger_type="time",
+            every="1h",
+        ),
+    )
+    created = next(a for a in await store.list_all() if a.name == "scope update")
+
+    result = await update_automation(
+        execution,
+        UpdateAutomationInput(task_id=created.task_id, tool_scope=["gmail_search", "read_email"]),
+    )
+
+    assert not result.is_error
+    updated = await store.get(created.task_id)
+    assert updated.tool_scope == ["gmail_search", "read_email"]
 
 
 class _FakeSlack:

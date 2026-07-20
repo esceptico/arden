@@ -698,10 +698,13 @@ class ToolExecution:
         override = self.ctx.registry.get_override(self.tool_name)
         ui_connected = self.ctx.io.emit is not None and self.ctx.io.pending_approvals is not None
         ask_must_block = override == ToolOverrideDecision.ASK and ui_connected
-        if not ask_must_block and (self.ctx.skip_approvals or self.tool_name in self.ctx.auto_approve):
+        tool = self.ctx.registry.get(self.tool_name)
+        bypass_allowed = tool is None or tool.policy.allow_approval_bypass
+        if bypass_allowed and not ask_must_block and (
+            self.ctx.skip_approvals or self.tool_name in self.ctx.auto_approve
+        ):
             return None
 
-        tool = self.ctx.registry.get(self.tool_name)
         action = tool.policy.action.value if tool else "write"
         scope = tool.policy.scope.value if tool else "internal"
         expires_at = (datetime.now(UTC) + timedelta(seconds=self.ctx.io.approval_timeout_seconds)).isoformat()

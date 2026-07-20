@@ -91,7 +91,9 @@ USE bash FOR:
 - File operations that do not have a native tool yet: mkdir, cp, mv
 - Checking system state: pwd, whoami, date
 
-Destructive commands (rm -rf) are blocked. Non-safe commands require approval."""
+Every Bash command requires interactive approval and cannot run in a headless
+auto-approved session. The small denylist is defense-in-depth, not the
+security boundary."""
 
 
 def is_safe_command(command: str) -> bool:
@@ -182,7 +184,12 @@ bash_tool = tool(
     display_name="Bash",
     description=BASH_DESCRIPTION,
     input_model=BashInput,
-    policy=ToolPolicy(action=ToolAction.EXECUTE, scope=ToolScope.INTERNAL, requires_approval=True),
+    policy=ToolPolicy(
+        action=ToolAction.EXECUTE,
+        scope=ToolScope.INTERNAL,
+        requires_approval=True,
+        allow_approval_bypass=False,
+    ),
     approval=approve_bash,
     execute=run_bash,
 )

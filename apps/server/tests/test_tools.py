@@ -105,6 +105,7 @@ def test_tool_policy_model_defaults():
     assert policy.audit is True
     assert policy.max_result_chars is None
     assert policy.offload is True
+    assert policy.allow_approval_bypass is True
 
 
 def test_function_tool_metadata_exposes_policy():
@@ -129,6 +130,7 @@ def test_function_tool_metadata_exposes_policy():
         "audit": True,
         "max_result_chars": None,
         "offload": True,
+        "allow_approval_bypass": True,
     }
 
 
@@ -305,6 +307,26 @@ async def test_non_overridden_tool_skip_approvals_bypasses():
     rejection = await ToolExecution(tool_id="call-1", tool_name="some_tool", ctx=ctx).request_approval("Approve")
 
     assert rejection is None
+
+
+@pytest.mark.asyncio
+async def test_bash_cannot_bypass_approval_in_headless_run():
+    registry = ToolRegistry()
+    _register_tools(registry, {"bash": bash_tool})
+    ctx = ToolContext(
+        session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
+        registry=registry,
+        run=RunContext(run_id="run-1", approval_controls=ApprovalControls(skip_approvals=True)),
+        io=IOBridge(),
+        background_tasks=BackgroundTaskRegistry(session_id="test"),
+    )
+
+    rejection = await ToolExecution(tool_id="call-1", tool_name="bash", ctx=ctx).request_approval(
+        "Run shell command"
+    )
+
+    assert rejection is not None
+    assert rejection.feedback == "No UI connected — cannot approve"
 
 
 def _make_execution(tool_name: str = "test") -> ToolExecution:

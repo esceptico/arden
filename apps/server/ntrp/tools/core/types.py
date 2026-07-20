@@ -33,6 +33,7 @@ class ToolPolicy(BaseModel):
     audit: bool = True
     max_result_chars: int | None = None
     offload: bool = True
+    allow_approval_bypass: bool = True
 
     @model_validator(mode="after")
     def _normalize_approval_mode(self):

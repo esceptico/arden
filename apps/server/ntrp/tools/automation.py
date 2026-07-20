@@ -154,7 +154,18 @@ class CreateAutomationInput(BaseModel):
     )
     auto_approve: bool = Field(
         default=False,
-        description="Run autonomously: enable write tools and skip per-tool approvals. False = read-only, no approvals.",
+        description=(
+            "Skip per-tool approvals within tool_scope. This never grants tools: "
+            "without tool_scope the automation remains read-only."
+        ),
+    )
+    tool_scope: list[str] | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Explicit tool-name allowlist patterns (exact names or prefixes like 'slack_*'). "
+            "Omit for read-only access."
+        ),
     )
     thread_id: str | None = Field(
         default=None,
@@ -233,7 +244,12 @@ class UpdateAutomationInput(BaseModel):
     )
     auto_approve: bool | None = Field(
         default=None,
-        description="Run autonomously: enable write tools and skip per-tool approvals. False = read-only, no approvals.",
+        description="Skip per-tool approvals within the existing tool_scope. This never grants tools.",
+    )
+    tool_scope: list[str] | None = Field(
+        default=None,
+        min_length=1,
+        description="Replace the explicit tool-name allowlist patterns for this automation.",
     )
     enabled: bool | None = Field(default=None, description="Enable or disable the automation")
 
@@ -289,6 +305,9 @@ async def approve_create_automation(execution: ToolExecution, args: CreateAutoma
         lines.append(f"Model: {args.model}")
     if args.auto_approve:
         lines.append("Auto-approve: yes (autonomous writes, skips approvals)")
+    lines.append(
+        f"Tools: {', '.join(args.tool_scope)}" if args.tool_scope else "Tools: read-only (no scope grant)"
+    )
     if args.thread_id:
         mode = "iteration" if args.read_history else "post"
         lines.append(f"Target session: {args.thread_id} ({mode} mode)")
@@ -361,6 +380,7 @@ async def create_automation(execution: ToolExecution, args: CreateAutomationInpu
             idempotency_key=args.idempotency_key,
             idempotency_scope=args.idempotency_scope,
             parent_fire_at=parent_fire_at,
+            tool_scope=args.tool_scope,
         )
     except ValueError as e:
         return ToolResult(content=f"Error: {e}", preview="Failed", is_error=True)
@@ -410,6 +430,7 @@ async def approve_update_automation(execution: ToolExecution, args: UpdateAutoma
         "description": args.description,
         "enabled": args.enabled,
         "auto_approve": args.auto_approve,
+        "tool_scope": args.tool_scope,
         "model": args.model,
         "trigger_type": args.trigger_type,
         "at": args.at,
@@ -462,6 +483,7 @@ async def update_automation(execution: ToolExecution, args: UpdateAutomationInpu
             end=args.end,
             auto_approve=args.auto_approve,
             enabled=args.enabled,
+            tool_scope=args.tool_scope,
         )
     except KeyError:
         return ToolResult(content=f"Error: automation '{args.task_id}' not found", preview="Not found", is_error=True)

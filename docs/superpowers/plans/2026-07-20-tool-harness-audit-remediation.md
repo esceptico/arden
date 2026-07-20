@@ -57,11 +57,11 @@
 - Produces: `CreateAutomationInput.tool_scope: list[str] | None`.
 - Contract: `auto_approve` changes approval flow only; it never widens the tool set.
 
-- [ ] Add failing tests proving an auto-approved run without `tool_scope` is read-only, explicit scope enables only matching tools, and Bash cannot bypass approval headlessly.
-- [ ] Run:
+- [x] Add failing tests proving an auto-approved run without `tool_scope` is read-only, explicit scope enables only matching tools, and Bash cannot bypass approval headlessly.
+- [x] Run:
   `env PYTHONPATH=apps/server:. uv run --project apps/server pytest -q apps/server/tests/test_operator_runner.py apps/server/tests/test_tools.py apps/server/tests/test_loop_tools.py`
   Expected: failures showing unrestricted auto-approved tools, missing `tool_scope`, and Bash approval bypass.
-- [ ] Add the policy field and gate the early approval bypass:
+- [x] Add the policy field and gate the early approval bypass:
 
 ```python
 class ToolPolicy(BaseModel):
@@ -77,8 +77,8 @@ if bypass_allowed and not ask_must_block and (
     return None
 ```
 
-- [ ] Set Bash `allow_approval_bypass=False`; update its description to state that non-read-only shell commands require an interactive approval and are unavailable headlessly.
-- [ ] Select tools independently from `auto_approve`:
+- [x] Set Bash `allow_approval_bypass=False`; update its description to state that non-read-only shell commands require an interactive approval and are unavailable headlessly.
+- [x] Select tools independently from `auto_approve`:
 
 ```python
 if request.extra_tool_names:
@@ -89,9 +89,9 @@ else:
     tools = executor.get_tools(read_only=True)
 ```
 
-- [ ] Add `tool_scope` to the agent-facing automation input and pass it to `AutomationService.create`; show it in the approval preview.
-- [ ] Re-run focused tests, then `git diff --check`.
-- [ ] Commit: `fix(harness): enforce least-privilege autonomous tools`.
+- [x] Add `tool_scope` to the agent-facing automation input and pass it to `AutomationService.create`; show it in the approval preview.
+- [x] Re-run focused tests, then `git diff --check`.
+- [x] Commit: `fix(harness): enforce least-privilege autonomous tools`.
 
 ### Task 2: Approval Integrity and Payload Visibility
 
