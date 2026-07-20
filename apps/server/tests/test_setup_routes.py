@@ -17,6 +17,17 @@ INSTALLED_CLIENT = {
 }
 
 
+def test_drive_scopes_cover_identity_metadata_docs_and_sheets():
+    assert google_auth.scopes_for_google_service("google_drive") == [
+        "openid",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "https://www.googleapis.com/auth/drive.metadata.readonly",
+        "https://www.googleapis.com/auth/drive.file",
+        "https://www.googleapis.com/auth/documents",
+        "https://www.googleapis.com/auth/spreadsheets",
+    ]
+
+
 def test_google_preflight_reports_missing_credentials_without_throwing(monkeypatch, tmp_path):
     monkeypatch.setattr(google_auth, "CREDENTIALS_PATH", tmp_path / "gmail_credentials.json")
 

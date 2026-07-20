@@ -9,6 +9,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
 from ntrp.integrations.base import IntegrationConnectionError
+from ntrp.integrations.google_auth.accounts import GoogleAccount, GoogleAccountStore, GoogleService
 from ntrp.settings import NTRP_DIR
 
 CREDENTIALS_PATH = NTRP_DIR / "gmail_credentials.json"
@@ -17,6 +18,19 @@ SCOPES_GMAIL_READ = ["https://www.googleapis.com/auth/gmail.readonly"]
 SCOPES_GMAIL_SEND = ["https://www.googleapis.com/auth/gmail.send"]
 SCOPES_CALENDAR = ["https://www.googleapis.com/auth/calendar"]
 SCOPES_PUBSUB = ["https://www.googleapis.com/auth/pubsub"]
+SCOPES_IDENTITY = ["openid", "https://www.googleapis.com/auth/userinfo.email"]
+SCOPES_DRIVE = [
+    "https://www.googleapis.com/auth/drive.metadata.readonly",
+    "https://www.googleapis.com/auth/drive.file",
+    "https://www.googleapis.com/auth/documents",
+    "https://www.googleapis.com/auth/spreadsheets",
+]
+
+GOOGLE_SERVICE_SCOPES: dict[GoogleService, list[str]] = {
+    "gmail": SCOPES_IDENTITY + SCOPES_GMAIL_READ + SCOPES_GMAIL_SEND,
+    "calendar": SCOPES_IDENTITY + SCOPES_CALENDAR,
+    "google_drive": SCOPES_IDENTITY + SCOPES_DRIVE,
+}
 
 # Default scopes for new tokens (Gmail + Calendar + Pub/Sub for push notifications)
 SCOPES_ALL = SCOPES_GMAIL_READ + SCOPES_GMAIL_SEND + SCOPES_CALENDAR + SCOPES_PUBSUB
@@ -35,6 +49,16 @@ def scopes_for_google_choice(choice: str) -> list[str]:
         return list(GOOGLE_SCOPE_CHOICES[choice])
     except KeyError:
         raise ValueError("service_choice must be one of: email, email_calendar, calendar, all")
+
+
+def scopes_for_google_service(service: GoogleService) -> list[str]:
+    return list(GOOGLE_SERVICE_SCOPES[service])
+
+
+def google_account_store() -> GoogleAccountStore:
+    store = GoogleAccountStore(NTRP_DIR)
+    store.migrate_legacy()
+    return store
 
 
 def _normalized_installed_payload(data: dict) -> dict:
@@ -212,6 +236,48 @@ def has_scope(creds: Credentials, scope: str) -> bool:
     if not creds.scopes:
         return False
     return scope in creds.scopes
+
+
+def authorize_google_service(
+    service: GoogleService,
+    *,
+    account_id: str | None = None,
+    store: GoogleAccountStore | None = None,
+) -> GoogleAccount:
+    if not CREDENTIALS_PATH.exists():
+        raise FileNotFoundError(
+            f"Google credentials not found at {CREDENTIALS_PATH}. "
+            "Download OAuth Desktop app credentials from Google Cloud Console."
+        )
+    store = store or google_account_store()
+    requested = scopes_for_google_service(service)
+    if account_id:
+        account = next((item for item in store.list_accounts() if item.id == account_id), None)
+        if account is None:
+            raise ValueError(f"Unknown Google account: {account_id}")
+        requested = list(dict.fromkeys((*account.scopes, *requested)))
+
+    flow = InstalledAppFlow.from_client_secrets_file(str(CREDENTIALS_PATH), requested)
+    creds = flow.run_local_server(port=0)
+    granted = tuple(creds.scopes or requested)
+    missing = tuple(scope for scope in GOOGLE_SERVICE_SCOPES[service] if scope not in granted)
+    if missing:
+        raise IntegrationConnectionError(
+            integration_id=service,
+            reason="scope_required",
+            detail="Google authorization is missing required permissions.",
+            required_scopes=missing,
+            retry_safe=True,
+        )
+    profile = build("oauth2", "v2", credentials=creds).userinfo().get().execute()
+    email = str(profile.get("email") or "").strip() or None
+    return store.upsert_authorization(
+        account_id=account_id,
+        email=email,
+        credential_json=creds.to_json(),
+        scopes=granted,
+        service=service,
+    )
 
 
 def add_google_account(service_choice: str = "all") -> dict:

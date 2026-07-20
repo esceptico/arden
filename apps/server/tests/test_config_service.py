@@ -2,8 +2,22 @@ from copy import deepcopy
 
 import pytest
 
+from ntrp.config import Config
 from ntrp.llm.models import Model, Provider
 from ntrp.services.config import ConfigService
+
+
+def test_integration_enabled_prefers_service_state_over_legacy_google():
+    config = Config(
+        _env_file=None,
+        memory=False,
+        google=True,
+        integration_states={"gmail": False, "calendar": True},
+    )
+
+    assert config.integration_enabled("gmail") is False
+    assert config.integration_enabled("calendar") is True
+    assert config.integration_enabled("google_drive") is False
 
 
 @pytest.mark.asyncio

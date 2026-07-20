@@ -86,6 +86,7 @@ PERSIST_KEYS = frozenset(
         "memory_timezone",
         "consolidation_interval",
         "google",
+        "integration_states",
         "gmail_days",
         "max_depth",
         "reasoning_effort",
@@ -147,6 +148,7 @@ class Config(BaseSettings):
 
     # Google (Gmail + Calendar)
     google: bool = False
+    integration_states: dict[str, bool] = Field(default_factory=dict)
     gmail_days: int = 30
 
     # Exa web search
@@ -302,6 +304,13 @@ class Config(BaseSettings):
             return None
         model = get_embedding_model(self.embedding_model)
         return EmbeddingConfig(model=model.id, dim=model.dim)
+
+    def integration_enabled(self, integration_id: str) -> bool:
+        if integration_id in self.integration_states:
+            return self.integration_states[integration_id]
+        if integration_id in {"gmail", "calendar"}:
+            return self.google
+        return False
 
     def reasoning_effort_for(self, model_id: str | None) -> str | None:
         if not model_id:

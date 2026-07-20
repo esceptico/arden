@@ -187,7 +187,19 @@ async def update_config(
 ):
     fields = req.model_dump(exclude_unset=True, mode="json")
     if toggles := fields.pop("integrations", None):
-        fields.update({k: v for k, v in toggles.items() if v is not None})
+        legacy_google = toggles.pop("google", None)
+        memory = toggles.pop("memory", None)
+        states = dict(runtime.config.integration_states)
+        if legacy_google is not None:
+            fields["google"] = legacy_google
+            states.update({"gmail": legacy_google, "calendar": legacy_google})
+        for integration_id, enabled in toggles.items():
+            if enabled is not None:
+                states[integration_id] = enabled
+        if toggles or legacy_google is not None:
+            fields["integration_states"] = states
+        if memory is not None:
+            fields["memory"] = memory
     try:
         _validate_reasoning_patch(fields, runtime.config)
         await cfg_svc.update(**fields)

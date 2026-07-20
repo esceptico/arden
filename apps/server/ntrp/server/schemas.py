@@ -501,6 +501,9 @@ class RevertRequest(BaseModel):
 
 class IntegrationToggles(BaseModel):
     google: bool | None = None
+    gmail: bool | None = None
+    calendar: bool | None = None
+    google_drive: bool | None = None
     memory: bool | None = None
 
 
