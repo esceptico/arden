@@ -446,7 +446,7 @@ class GmailSource:
             f"From: {meta.get('from', '')}",
             f"To: {meta.get('to', '')}",
             f"Subject: {meta.get('subject', '')}",
-            f"Date: {item.created_at.strftime('%Y-%m-%d %H:%M')}",
+            f"Date: {item.created_at.isoformat()}",
             "",
             item.content,
         ]

@@ -9,6 +9,7 @@ from ntrp.integrations.calendar.client import MultiCalendarSource
 from ntrp.integrations.mutations import execute_idempotent, mutation_result
 from ntrp.integrations.tool_errors import operation_error_result
 from ntrp.tools.core import ToolResult, tool
+from ntrp.tools.core.collections import format_timestamp
 from ntrp.tools.core.context import ToolExecution
 from ntrp.tools.core.types import ApprovalInfo, ToolAction, ToolPolicy, ToolScope
 
@@ -72,13 +73,11 @@ def _format_events(events: list) -> str:
         start = meta.get("start", "")
 
         if start:
-            dt = datetime.fromisoformat(start)
-            if dt.tzinfo is not None:
-                dt = dt.astimezone()
             if meta.get("is_all_day"):
-                time_str = dt.strftime("%a %b %d") + " (all day)"
+                time_str = f"{start} (all day)"
             else:
-                time_str = dt.strftime("%a %b %d, %H:%M")
+                dt = _parse_datetime(start)
+                time_str = format_timestamp(dt) if dt else start
         else:
             time_str = "No time"
 
@@ -96,13 +95,13 @@ _DEFAULT_CALENDAR_LIMIT = 30
 class CalendarInput(BaseModel):
     query: str | None = Field(default=None, description="Search query. Omit to list events by time range.")
     days_forward: int = Field(
-        default=_DEFAULT_DAYS_FORWARD, description=f"Days ahead to look when listing (default: {_DEFAULT_DAYS_FORWARD})"
+        default=_DEFAULT_DAYS_FORWARD, ge=0, le=3650, description=f"Days ahead to look when listing (default: {_DEFAULT_DAYS_FORWARD})"
     )
     days_back: int = Field(
-        default=_DEFAULT_DAYS_BACK, description=f"Days back to look when listing (default: {_DEFAULT_DAYS_BACK})"
+        default=_DEFAULT_DAYS_BACK, ge=0, le=3650, description=f"Days back to look when listing (default: {_DEFAULT_DAYS_BACK})"
     )
     limit: int = Field(
-        default=_DEFAULT_CALENDAR_LIMIT, description=f"Maximum results (default: {_DEFAULT_CALENDAR_LIMIT})"
+        default=_DEFAULT_CALENDAR_LIMIT, ge=1, le=100, description=f"Maximum results (default: {_DEFAULT_CALENDAR_LIMIT})"
     )
 
 
@@ -117,9 +116,12 @@ def _calendar_search(source: MultiCalendarSource, query: str, limit: int) -> Too
             )
 
         content = _format_events(events)
+        if len(events) == limit:
+            content += f"\nShowing {limit} events; more may exist. Narrow the query to continue."
         return ToolResult(
             content=content,
-            preview=f"{len(events)} events",
+            preview=f"{len(events)} events" + (" (possibly capped)" if len(events) == limit else ""),
+            data={"count": len(events), "may_have_more": len(events) == limit},
             source_refs=_event_source_refs(events),
         )
     except IntegrationOperationError as error:
@@ -142,11 +144,14 @@ def _calendar_list(source: MultiCalendarSource, days_forward: int, days_back: in
 
     events.sort(key=lambda e: e.metadata.get("start", ""))
     trimmed = events[:limit]
-
+    has_more = len(events) > limit
     content = _format_events(trimmed)
+    if has_more:
+        content += f"\nShowing {limit} events; more exist. Narrow the time range to continue."
     return ToolResult(
         content=content,
-        preview=f"{len(events)} events",
+        preview=f"{len(trimmed)} events" + (" (capped)" if has_more else ""),
+        data={"count": len(trimmed), "has_more": has_more},
         source_refs=_event_source_refs(trimmed),
     )
 
@@ -178,10 +183,10 @@ async def approve_create_calendar_event(
     start_dt = _parse_datetime(args.start)
     if not start_dt:
         return None
-    time_str = start_dt.strftime("%Y-%m-%d %H:%M")
+    time_str = format_timestamp(start_dt)
     end_dt = _parse_datetime(args.end)
     if end_dt:
-        time_str += f" - {end_dt.strftime('%H:%M')}"
+        time_str += f" - {format_timestamp(end_dt)}"
     return ApprovalInfo(
         description=args.summary,
         preview=f"Time: {time_str}\nLocation: {args.location or 'N/A'}",

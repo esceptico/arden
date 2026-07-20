@@ -7,6 +7,7 @@ from ntrp.automation.models import Automation
 from ntrp.automation.triggers import build_trigger
 from ntrp.events.triggers import EVENT_APPROACHING
 from ntrp.tools.core import EmptyInput, ToolResult, tool
+from ntrp.tools.core.collections import format_timestamp
 from ntrp.tools.core.context import ToolExecution
 from ntrp.tools.core.types import ApprovalInfo, ToolAction, ToolPolicy, ToolScope
 
@@ -26,7 +27,7 @@ CREATE_AUTOMATION_DESCRIPTION = (
     "Read-only by default, set auto_approve=true for autonomous memory/note writes (skips approvals)."
 )
 
-LIST_AUTOMATIONS_DESCRIPTION = "List all automations with their trigger, status, and next run."
+LIST_AUTOMATIONS_DESCRIPTION = "List all automations by stable ID with their trigger, status, and next run."
 
 UPDATE_AUTOMATION_DESCRIPTION = (
     "Update an existing automation. Only provide the fields you want to change. "
@@ -81,16 +82,16 @@ async def _resolve_parent_context(
             f"idempotency_scope={idempotency_scope!r} requires parent_automation_id "
             f"({parent_id!r}) to exist; not found"
         ) from exc
-    fire_at = parent.last_run_at.isoformat() if parent.last_run_at else None
+    fire_at = format_timestamp(parent.last_run_at) if parent.last_run_at else None
     return parent_id, fire_at
 
 
 def _format_automation_list(automations: list[Automation]) -> str:
     lines = []
-    for a in automations:
+    for a in sorted(automations, key=lambda item: item.task_id):
         status = "enabled" if a.enabled else "disabled"
-        next_run = a.next_run_at.strftime("%Y-%m-%d %H:%M") if a.next_run_at else "—"
-        last_run = a.last_run_at.strftime("%Y-%m-%d %H:%M") if a.last_run_at else "never"
+        next_run = format_timestamp(a.next_run_at) if a.next_run_at else "—"
+        last_run = format_timestamp(a.last_run_at) if a.last_run_at else "never"
         label = a.name or a.description[:60]
         builtin_tag = " [builtin]" if a.builtin else ""
 
@@ -300,7 +301,7 @@ async def approve_create_automation(execution: ToolExecution, args: CreateAutoma
     # can read what'll actually run without expanding anything.
     lines: list[str] = [f"Name: {args.name}", f"Schedule: {schedule_label}"]
     if next_run:
-        lines.append(f"Next run: {next_run.strftime('%Y-%m-%d %H:%M')}")
+        lines.append(f"Next run: {format_timestamp(next_run)}")
     if args.model:
         lines.append(f"Model: {args.model}")
     if args.auto_approve:
@@ -404,7 +405,7 @@ async def create_automation(execution: ToolExecution, args: CreateAutomationInpu
     if automation.parent_automation_id:
         lines.append(f"Parent: {automation.parent_automation_id}")
     if automation.next_run_at:
-        lines.append(f"Next run: {automation.next_run_at.strftime('%Y-%m-%d %H:%M')}")
+        lines.append(f"Next run: {format_timestamp(automation.next_run_at)}")
 
     return ToolResult(content="\n".join(lines), preview=f"Created ({automation.task_id})")
 
@@ -498,7 +499,7 @@ async def update_automation(execution: ToolExecution, args: UpdateAutomationInpu
         f"Enabled: {automation.enabled}",
     ]
     if automation.next_run_at:
-        lines.append(f"Next run: {automation.next_run_at.strftime('%Y-%m-%d %H:%M')}")
+        lines.append(f"Next run: {format_timestamp(automation.next_run_at)}")
 
     return ToolResult(content="\n".join(lines), preview=f"Updated ({automation.task_id})")
 
@@ -530,7 +531,7 @@ async def get_automation_result(execution: ToolExecution, args: GetAutomationRes
         return ToolResult(content=f"Error: automation '{args.task_id}' not found", preview="Not found", is_error=True)
 
     if not automation.last_result:
-        last_run = automation.last_run_at.strftime("%Y-%m-%d %H:%M") if automation.last_run_at else "never"
+        last_run = format_timestamp(automation.last_run_at) if automation.last_run_at else "never"
         return ToolResult(
             content=f"No result yet for '{automation.description}' (last run: {last_run})",
             preview="No result",
@@ -538,7 +539,7 @@ async def get_automation_result(execution: ToolExecution, args: GetAutomationRes
 
     header = (
         f"Automation: {automation.description}\n"
-        f"Last run: {automation.last_run_at.strftime('%Y-%m-%d %H:%M') if automation.last_run_at else '—'}\n"
+        f"Last run: {format_timestamp(automation.last_run_at) if automation.last_run_at else '—'}\n"
         f"---\n"
     )
     return ToolResult(content=header + automation.last_result, preview=f"Result ({automation.task_id})")
@@ -694,7 +695,7 @@ async def schedule_wakeup(execution: ToolExecution, args: ScheduleWakeupInput) -
     next_run = datetime.now(UTC) + timedelta(seconds=args.delay_seconds)
     await svc.store.set_next_run(task_id, next_run)
     return ToolResult(
-        content=f"Next iteration scheduled in {args.delay_seconds}s ({next_run.isoformat()}).",
+        content=f"Next iteration scheduled in {args.delay_seconds}s ({format_timestamp(next_run)}).",
         preview=f"Wake in {args.delay_seconds}s",
     )
 
@@ -896,7 +897,7 @@ async def create_loop(execution: ToolExecution, args: CreateLoopInput) -> ToolRe
     if loop.parent_automation_id:
         lines.append(f"Parent: {loop.parent_automation_id}")
     if loop.next_run_at:
-        lines.append(f"First run: {loop.next_run_at.strftime('%Y-%m-%d %H:%M')}")
+        lines.append(f"First run: {format_timestamp(loop.next_run_at)}")
     return ToolResult(content="\n".join(lines), preview=f"Loop · every {args.every}")
 
 

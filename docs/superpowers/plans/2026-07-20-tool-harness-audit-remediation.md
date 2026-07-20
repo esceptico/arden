@@ -304,11 +304,11 @@ def atomic_compare_and_swap(path: Path, content: str, expected_sha256: str) -> F
 - Produces: `Page[T](items, total, has_more, next_cursor)` with deterministic order.
 - Produces: `format_timestamp(datetime) -> ISO-8601-with-offset`.
 
-- [ ] Add failing tests for continuation, bounds, deterministic ordering, invalid enum rejection, and timezone output.
-- [ ] Replace silent slices and prose-only truncation with cursor envelopes; constrain all limits and enum-like parameters in Pydantic schemas.
-- [ ] Sort explicit lists before rendering and convert every canonical timestamp to offset-bearing ISO-8601.
-- [ ] Replace raw sheet/workflow JSON dumps with compact high-signal tables/summaries.
-- [ ] Run tests and commit: `fix(harness): standardize pages ordering and time`.
+- [x] Add failing tests for continuation, bounds, deterministic ordering, invalid enum rejection, and timezone output.
+- [x] Replace silent slices and prose-only truncation with cursor envelopes; constrain all limits and enum-like parameters in Pydantic schemas.
+- [x] Sort explicit lists before rendering and convert every canonical timestamp to offset-bearing ISO-8601.
+- [x] Replace raw sheet/workflow JSON dumps with compact high-signal tables/summaries.
+- [x] Run tests and commit: `fix(harness): standardize pages ordering and time`.
 
 ### Task 11: Clear Tool Ownership and Honest Policies
 

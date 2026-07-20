@@ -164,6 +164,24 @@ async def test_list_files_returns_directory_entries(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_list_files_returns_deterministic_cursor_pages(tmp_path):
+    for name in ("c.txt", "a.txt", "b.txt"):
+        (tmp_path / name).write_text(name, encoding="utf-8")
+
+    first = await list_files_tool.execute(_make_execution("list_files"), path=str(tmp_path), limit=2)
+    second = await list_files_tool.execute(
+        _make_execution("list_files"),
+        path=str(tmp_path),
+        limit=2,
+        cursor=first.data["next_cursor"],
+    )
+
+    assert [item["name"] for item in first.data["items"]] == ["a.txt", "b.txt"]
+    assert [item["name"] for item in second.data["items"]] == ["c.txt"]
+    assert second.data["has_more"] is False
+
+
+@pytest.mark.asyncio
 async def test_find_files_matches_glob_recursively(tmp_path):
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg" / "app.py").write_text("print('hi')", encoding="utf-8")
@@ -176,6 +194,20 @@ async def test_find_files_matches_glob_recursively(tmp_path):
     assert result.data["matches"] == [
         {"path": str(tmp_path / "pkg" / "app.py"), "relative_path": "pkg/app.py", "size": "11B"}
     ]
+
+
+@pytest.mark.asyncio
+async def test_find_files_discloses_capped_results(tmp_path):
+    for name in ("c.py", "a.py", "b.py"):
+        (tmp_path / name).write_text(name, encoding="utf-8")
+
+    result = await find_files_tool.execute(
+        _make_execution("find_files"), path=str(tmp_path), pattern="*.py", limit=2
+    )
+
+    assert [item["relative_path"] for item in result.data["matches"]] == ["a.py", "b.py"]
+    assert result.data["has_more"] is True
+    assert "more exist" in result.content
 
 
 @pytest.mark.asyncio
@@ -218,6 +250,19 @@ async def test_search_text_returns_line_matches(tmp_path):
     assert not result.is_error
     assert "one.txt:2:" in result.content
     assert result.data["matches"][0]["text"] == "needle here"
+
+
+@pytest.mark.asyncio
+async def test_search_text_discloses_capped_results(tmp_path):
+    (tmp_path / "notes.txt").write_text("needle\nneedle\nneedle\n", encoding="utf-8")
+
+    result = await search_text_tool.execute(
+        _make_execution("search_text"), path=str(tmp_path), query="needle", limit=2
+    )
+
+    assert len(result.data["matches"]) == 2
+    assert result.data["has_more"] is True
+    assert "more exist" in result.content
 
 
 @pytest.mark.asyncio

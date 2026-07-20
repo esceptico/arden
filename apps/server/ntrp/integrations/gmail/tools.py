@@ -9,6 +9,7 @@ from ntrp.integrations.gmail.client import MultiGmailSource
 from ntrp.integrations.mutations import execute_idempotent, mutation_result
 from ntrp.integrations.tool_errors import operation_error_result
 from ntrp.tools.core import ToolResult, tool
+from ntrp.tools.core.collections import format_timestamp
 from ntrp.tools.core.context import ToolExecution
 from ntrp.tools.core.types import ApprovalInfo, ToolAction, ToolPolicy, ToolScope
 from ntrp.utils import truncate
@@ -137,7 +138,9 @@ def _format_email_list(emails: list) -> str:
     for email in emails:
         title = truncate(email.title, EMAIL_SUBJECT_TRUNCATE) if email.title else "(no subject)"
         preview = truncate(email.preview, EMAIL_FROM_TRUNCATE) if email.preview else ""
-        line = f"• {title}" + (f" ({preview})" if preview else "")
+        timestamp = getattr(email, "timestamp", None)
+        when = f" [{format_timestamp(timestamp)}]" if timestamp else ""
+        line = f"•{when} {title}" + (f" ({preview})" if preview else "")
         if email.identity:
             line += f"  id: {_qualified_message_ref(email.account, email.identity)}"
         output.append(line)
@@ -150,7 +153,7 @@ def _format_email_search(results: list) -> str:
         meta = item.metadata
         subj = truncate(meta.get("subject", "No subject"), EMAIL_SUBJECT_TRUNCATE)
         frm = truncate(meta.get("from", ""), EMAIL_FROM_TRUNCATE)
-        output.append(f"• {subj}")
+        output.append(f"• [{format_timestamp(item.created_at)}] {subj}")
         output.append(f"  from: {frm}, id: {_qualified_message_ref(meta.get('account', ''), item.source_id)}")
     return "\n".join(output)
 
@@ -163,9 +166,11 @@ class EmailsInput(BaseModel):
     query: str | None = Field(default=None, description="Search query. Omit to list recent emails.")
     days: int = Field(
         default=_DEFAULT_EMAIL_DAYS,
+        ge=1,
+        le=3650,
         description=f"How many days back to look when listing (default: {_DEFAULT_EMAIL_DAYS})",
     )
-    limit: int = Field(default=_DEFAULT_EMAIL_LIMIT, description=f"Maximum results (default: {_DEFAULT_EMAIL_LIMIT})")
+    limit: int = Field(default=_DEFAULT_EMAIL_LIMIT, ge=1, le=100, description=f"Maximum results (default: {_DEFAULT_EMAIL_LIMIT})")
 
 
 def _list_emails(source: MultiGmailSource, days: int, limit: int) -> ToolResult:
@@ -180,12 +185,14 @@ def _list_emails(source: MultiGmailSource, days: int, limit: int) -> ToolResult:
             )
         return ToolResult(content=f"No emails in last {days} days", preview="0 emails")
 
-    trimmed = emails[:limit]
-    content = _format_email_list(trimmed)
+    content = _format_email_list(emails)
+    if len(emails) == limit:
+        content += f"\nShowing {limit} emails; more may exist. Narrow the date range to continue."
     return ToolResult(
         content=content,
-        preview=f"{len(emails)} emails",
-        source_refs=_message_source_refs(trimmed),
+        preview=f"{len(emails)} emails" + (" (possibly capped)" if len(emails) == limit else ""),
+        data={"count": len(emails), "may_have_more": len(emails) == limit},
+        source_refs=_message_source_refs(emails),
     )
 
 
@@ -194,12 +201,14 @@ def _search_emails(source: MultiGmailSource, query: str, limit: int) -> ToolResu
     if not results:
         return ToolResult(content=f"No emails found for '{query}'", preview="0 emails")
 
-    trimmed = results[:limit]
-    content = _format_email_search(trimmed)
+    content = _format_email_search(results)
+    if len(results) == limit:
+        content += f"\nShowing {limit} emails; more may exist. Narrow the query to continue."
     return ToolResult(
         content=content,
-        preview=f"{len(results)} emails",
-        source_refs=_message_source_refs(trimmed),
+        preview=f"{len(results)} emails" + (" (possibly capped)" if len(results) == limit else ""),
+        data={"count": len(results), "may_have_more": len(results) == limit},
+        source_refs=_message_source_refs(results),
     )
 
 

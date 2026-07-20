@@ -1,5 +1,4 @@
 import asyncio
-import json
 from typing import Any
 from uuid import uuid4
 
@@ -49,13 +48,37 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
+def _render_lines(value: Any, indent: int = 0) -> list[str]:
+    value = _jsonable(value)
+    prefix = "  " * indent
+    if isinstance(value, dict):
+        if not value:
+            return [f"{prefix}(empty object)"]
+        lines: list[str] = []
+        for key in sorted(value, key=str):
+            child = value[key]
+            if isinstance(child, (dict, list, tuple)):
+                lines.append(f"{prefix}{key}:")
+                lines.extend(_render_lines(child, indent + 1))
+            else:
+                lines.append(f"{prefix}{key}: {child}")
+        return lines
+    if isinstance(value, (list, tuple)):
+        if not value:
+            return [f"{prefix}(empty list)"]
+        lines = []
+        for child in value:
+            if isinstance(child, (dict, list, tuple)):
+                lines.append(f"{prefix}-")
+                lines.extend(_render_lines(child, indent + 1))
+            else:
+                lines.append(f"{prefix}- {child}")
+        return lines
+    return [f"{prefix}{value}"]
+
+
 def _render(result: Any) -> str:
-    if isinstance(result, str):
-        return result
-    try:
-        return json.dumps(_jsonable(result), indent=2, default=str)
-    except (TypeError, ValueError):
-        return str(result)
+    return "\n".join(_render_lines(result))
 
 
 async def run_workflow(execution: ToolExecution, args: WorkflowInput) -> ToolResult:

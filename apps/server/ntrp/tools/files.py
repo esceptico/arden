@@ -3,6 +3,7 @@ import difflib
 import json
 import shutil
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -10,6 +11,7 @@ from pydantic import BaseModel, Field
 from ntrp.agent.types.tools import ToolEffect, ToolOutcome, ToolOutcomeStatus, ToolSourceRef, normalize_source_refs
 from ntrp.core.tool_result_files import RESULTS_BASE
 from ntrp.tools.core import ToolResult, tool
+from ntrp.tools.core.collections import format_timestamp, paginate
 from ntrp.tools.core.context import ToolExecution
 from ntrp.tools.core.file_mutation import RevisionConflict, atomic_compare_and_swap, read_file_snapshot
 from ntrp.tools.core.formatting import format_lines_with_pagination
@@ -155,10 +157,16 @@ def _write_conflict(path: Path, conflict: RevisionConflict, cwd: str | None = No
 class ReadFileInput(BaseModel):
     path: str = Field(description="File path. Prefer relative paths from the area default cwd when set.")
     offset: int = Field(
-        default=_DEFAULT_OFFSET, description=f"Line number to start from (1-based, default: {_DEFAULT_OFFSET})"
+        default=_DEFAULT_OFFSET,
+        ge=1,
+        le=10_000_000,
+        description=f"Line number to start from (1-based, default: {_DEFAULT_OFFSET})",
     )
     limit: int = Field(
-        default=_DEFAULT_LINE_LIMIT, description=f"Maximum lines to read (default: {_DEFAULT_LINE_LIMIT})"
+        default=_DEFAULT_LINE_LIMIT,
+        ge=1,
+        le=10_000,
+        description=f"Maximum lines to read (default: {_DEFAULT_LINE_LIMIT})",
     )
 
 
@@ -240,6 +248,7 @@ class ListFilesInput(BaseModel):
     )
     limit: int = Field(default=_DEFAULT_ENTRY_LIMIT, ge=1, le=1000, description="Maximum entries to return.")
     include_hidden: bool = Field(default=False, description="Include dotfiles and dot-directories.")
+    cursor: str | None = Field(default=None, max_length=500, description="Opaque cursor from a previous list_files page.")
 
 
 def _list_files_sync(args: ListFilesInput, cwd: str | None = None) -> ToolResult:
@@ -271,18 +280,28 @@ def _list_files_sync(args: ListFilesInput, cwd: str | None = None) -> ToolResult
                     **_path_data(child, cwd),
                     "kind": "directory" if child.is_dir() else "file",
                     "size": _size_label(child),
+                    "modified_at": format_timestamp(datetime.fromtimestamp(child.stat().st_mtime, tz=UTC)),
                 }
             )
 
-        visible = entries[: args.limit]
-        lines = [f"{item['name']:<48} {item['size']}" for item in visible]
-        if len(entries) > args.limit:
-            lines.append(f"... {len(entries) - args.limit} more")
+        try:
+            page = paginate(entries, limit=args.limit, cursor=args.cursor)
+        except ValueError:
+            return ToolResult.failure(
+                code="invalid_ref",
+                message="Invalid list_files pagination cursor.",
+                preview="Invalid cursor",
+                recovery_action="Call list_files again without a cursor.",
+            )
+        visible = list(page.items)
+        lines = [f"{item['name']:<48} {item['size']:<8} {item['modified_at']}" for item in visible]
+        if page.has_more:
+            lines.append(f"... more available; next_cursor: {page.next_cursor}")
         header = f"{_display_path(root, cwd)} ({len(entries)} entries)"
         return ToolResult(
             content=header + ("\n" + "\n".join(lines) if lines else "\n(empty)"),
             preview=f"{len(entries)} entries",
-            data={**_path_data(root, cwd), "entries": visible, "total": len(entries)},
+            data={**_path_data(root, cwd), "entries": visible, **page.to_dict()},
         )
     except PermissionError:
         return ToolResult.failure(
@@ -353,7 +372,7 @@ class FindFilesInput(BaseModel):
 
 
 def _find_files_with_rg(root: Path, args: FindFilesInput) -> list[dict]:
-    command = ["--files", "--color", "never", "--glob", args.pattern]
+    command = ["--files", "--color", "never", "--sort", "path", "--glob", args.pattern]
     for glob in _RG_EXCLUDE_GLOBS:
         command.extend(["--glob", glob])
     if args.include_hidden:
@@ -371,7 +390,7 @@ def _find_files_with_rg(root: Path, args: FindFilesInput) -> list[dict]:
         if not path.is_file():
             continue
         matches.append({"path": str(path), "relative_path": relative, "size": _size_label(path)})
-        if len(matches) >= args.limit:
+        if len(matches) > args.limit:
             _stop_rg(process)
             return matches
 
@@ -393,14 +412,18 @@ def _find_files_failed(root: Path, args: FindFilesInput, error: Exception) -> To
 def _format_find_files_result(
     root: Path, args: FindFilesInput, matches: list[dict], cwd: str | None = None
 ) -> ToolResult:
-    matches = [{**item, **_path_data(Path(item["path"]), cwd)} for item in matches]
-    lines = [f"{item['relative_path']:<72} {item['size']}" for item in matches]
+    has_more = len(matches) > args.limit
+    visible = matches[: args.limit]
+    visible = [{**item, **_path_data(Path(item["path"]), cwd)} for item in visible]
+    lines = [f"{item['relative_path']:<72} {item['size']}" for item in visible]
     if not lines:
         lines = ["No files found."]
+    elif has_more:
+        lines.append(f"Showing {len(visible)} files; more exist. Narrow path/pattern to continue.")
     return ToolResult(
         content=f"{_display_path(root, cwd)} / {args.pattern}\n" + "\n".join(lines),
-        preview=f"{len(matches)} files",
-        data={**_path_data(root, cwd), "pattern": args.pattern, "matches": matches},
+        preview=f"{len(visible)} files" + (" (capped)" if has_more else ""),
+        data={**_path_data(root, cwd), "pattern": args.pattern, "matches": visible, "has_more": has_more},
     )
 
 
@@ -452,6 +475,8 @@ def _search_text_with_rg(root: Path, args: SearchTextInput) -> list[dict]:
     command = [
         "--json",
         "--fixed-strings",
+        "--sort",
+        "path",
         "--line-number",
         "--column",
         "--color",
@@ -490,7 +515,7 @@ def _search_text_with_rg(root: Path, args: SearchTextInput) -> list[dict]:
                 "text": line_text,
             }
         )
-        if len(matches) >= args.limit:
+        if len(matches) > args.limit:
             _stop_rg(process)
             return matches
 
@@ -516,10 +541,15 @@ def _format_search_text_result(root: Path, args: SearchTextInput, matches: list[
             preview="0 matches",
             data={"path": str(root), "query": args.query, "matches": []},
         )
+    has_more = len(matches) > args.limit
+    visible = matches[: args.limit]
+    content = "\n".join(_format_match(match) for match in visible)
+    if has_more:
+        content += f"\nShowing {len(visible)} matches; more exist. Narrow path/query to continue."
     return ToolResult(
-        content="\n".join(_format_match(match) for match in matches),
-        preview=f"{len(matches)} matches",
-        data={"path": str(root), "query": args.query, "matches": matches},
+        content=content,
+        preview=f"{len(visible)} matches" + (" (capped)" if has_more else ""),
+        data={"path": str(root), "query": args.query, "matches": visible, "has_more": has_more},
     )
 
 

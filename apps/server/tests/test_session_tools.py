@@ -81,6 +81,7 @@ async def test_list_recent_sessions_returns_formatted_list():
             },
         ]
     )
+    service._sessions.reverse()
     execution = _make_execution(services={"session": service})
 
     result = await list_recent_sessions(execution, ListRecentSessionsInput(limit=20))
@@ -90,6 +91,7 @@ async def test_list_recent_sessions_returns_formatted_list():
     assert "Daily standup" in result.content
     assert "(untitled)" in result.content  # falls back when name is None
     assert "12 msgs" in result.content
+    assert result.content.index("20260510_120000_000") < result.content.index("20260509_090000_000")
 
 
 @pytest.mark.asyncio

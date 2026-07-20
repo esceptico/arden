@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -7,6 +8,7 @@ from ntrp.agent.types.tools import ToolSourceRef, normalize_source_refs
 from ntrp.integrations.google_drive.client import MultiGoogleDriveClient
 from ntrp.integrations.mutations import execute_idempotent, mutation_result
 from ntrp.tools.core import ToolResult, tool
+from ntrp.tools.core.collections import format_timestamp
 from ntrp.tools.core.context import ToolExecution
 from ntrp.tools.core.types import ApprovalInfo, ToolAction, ToolPolicy, ToolScope
 
@@ -42,7 +44,15 @@ async def search_google_drive(execution: ToolExecution, args: SearchGoogleDriveI
     items = _drive(execution).search(args.query, kind=args.kind, account_id=args.account, limit=args.limit)
     if not items:
         return ToolResult(content="No matching Google Docs or Sheets", preview="0 files")
-    lines = [f"• {item.name} ({item.kind}) id: {item.ref}" for item in items]
+    lines = []
+    for item in items:
+        modified = ""
+        if item.modified_time:
+            modified = f" · modified {format_timestamp(datetime.fromisoformat(item.modified_time.replace('Z', '+00:00')))}"
+        lines.append(f"• {item.name} ({item.kind}) id: {item.ref}{modified}")
+    may_have_more = len(items) == args.limit
+    if may_have_more:
+        lines.append(f"Showing {args.limit} files; more may exist. Narrow the query to continue.")
     refs = normalize_source_refs(
         ToolSourceRef(
             provider="google_drive",
@@ -53,7 +63,12 @@ async def search_google_drive(execution: ToolExecution, args: SearchGoogleDriveI
         )
         for item in items
     )
-    return ToolResult(content="\n".join(lines), preview=f"{len(items)} files", source_refs=refs)
+    return ToolResult(
+        content="\n".join(lines),
+        preview=f"{len(items)} files" + (" (possibly capped)" if may_have_more else ""),
+        data={"count": len(items), "may_have_more": may_have_more},
+        source_refs=refs,
+    )
 
 
 class ReadGoogleDocInput(BaseModel):
@@ -79,9 +94,12 @@ async def read_google_sheet(execution: ToolExecution, args: ReadGoogleSheetInput
     client, spreadsheet_id = _drive(execution).resolve_ref(args.spreadsheet_ref)
     data = client.read_sheet(spreadsheet_id, args.range)
     data["title"] = f"Sheet {data['range']}"
+    rows = data["values"]
+    table = "\n".join(" | ".join("" if value is None else str(value) for value in row) for row in rows)
     return ToolResult(
-        content=json.dumps({"range": data["range"], "values": data["values"]}, ensure_ascii=False),
+        content=f"Range: {data['range']}\n{table or '(empty)'}",
         preview=f"Read {data['range']}",
+        data={"range": data["range"], "values": rows, "row_count": len(rows)},
         source_refs=_source_ref(data, "spreadsheet"),
     )
 

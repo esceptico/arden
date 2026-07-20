@@ -19,6 +19,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from ntrp.tools.core import ToolResult, tool
+from ntrp.tools.core.collections import format_timestamp
 from ntrp.tools.core.context import ToolExecution
 from ntrp.tools.core.types import ToolAction, ToolPolicy, ToolScope
 
@@ -206,7 +207,7 @@ def _format_when(raw) -> str:
     dt = _parse_when(raw)
     if dt is None:
         return str(raw)
-    return dt.strftime("%Y-%m-%d %H:%M")
+    return format_timestamp(dt)
 
 
 # --- Executors ---
@@ -225,6 +226,14 @@ async def list_recent_sessions(execution: ToolExecution, args: ListRecentSession
     if args.within_days is not None:
         cutoff = datetime.now(UTC) - timedelta(days=args.within_days)
         sessions = [s for s in sessions if (when := _parse_when(s.get("last_activity"))) is not None and when >= cutoff]
+    sessions.sort(
+        key=lambda session: (
+            _parse_when(session.get("last_activity") or session.get("started_at")) or datetime.min.replace(tzinfo=UTC),
+            str(session.get("session_id", "")),
+        ),
+        reverse=True,
+    )
+    has_more = len(sessions) > args.limit
     sessions = sessions[: args.limit]
 
     if not sessions:
@@ -238,9 +247,13 @@ async def list_recent_sessions(execution: ToolExecution, args: ListRecentSession
         count = s.get("message_count", 0)
         lines.append(f"- {sid} · {name} · {when} · {count} msgs")
 
+    if has_more:
+        lines.append(f"Showing {len(sessions)} sessions; more exist. Increase limit or narrow within_days.")
+
     return ToolResult(
         content="\n".join(lines),
-        preview=f"{len(sessions)} sessions",
+        preview=f"{len(sessions)} sessions" + (" (capped)" if has_more else ""),
+        data={"items": sessions, "count": len(sessions), "has_more": has_more},
     )
 
 

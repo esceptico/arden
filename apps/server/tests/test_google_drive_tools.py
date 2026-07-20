@@ -5,7 +5,9 @@ from ntrp.integrations.google_drive.tools import (
     CreateGoogleDocInput,
     CreateGoogleSheetInput,
     ReadGoogleDocInput,
+    ReadGoogleSheetInput,
     read_google_doc,
+    read_google_sheet,
 )
 from ntrp.tools.core.context import ToolExecution
 from ntrp.tools.core.types import ToolAction
@@ -22,6 +24,14 @@ class Drive:
             "text": "Plan",
             "revision_id": "rev-1",
             "url": "https://docs.google.com/document/d/doc-1/edit",
+        }
+
+    def read_sheet(self, spreadsheet_id, range_name):
+        return {
+            "ref": f"acct:{spreadsheet_id}",
+            "range": range_name,
+            "values": [["Name", "Count"], ["Ada", 2]],
+            "url": "https://docs.google.com/spreadsheets/d/sheet-1/edit",
         }
 
 
@@ -64,3 +74,16 @@ async def test_read_doc_returns_source_reference():
     assert result.content == "Plan"
     assert result.source_refs[0].provider == "google_drive"
     assert result.source_refs[0].ref == "acct:doc-1"
+
+
+async def test_read_sheet_returns_compact_table_and_structured_rows():
+    result = await read_google_sheet(
+        _execution(), ReadGoogleSheetInput(spreadsheet_ref="acct:sheet-1", range="A1:B2")
+    )
+
+    assert result.content == "Range: A1:B2\nName | Count\nAda | 2"
+    assert result.data == {
+        "range": "A1:B2",
+        "values": [["Name", "Count"], ["Ada", 2]],
+        "row_count": 2,
+    }
