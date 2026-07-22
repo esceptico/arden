@@ -815,6 +815,7 @@ body.dp-guides-on { cursor: crosshair; }
 }
 
 .dp-menu { min-width: 10rem; padding: .3125rem; overflow: auto; border-radius: var(--r-menu); color: var(--ink); background: var(--surface-5); box-shadow: var(--shadow-3); }
+.dp-section-label { margin: 0; color: var(--faint); font: 570 var(--text-meta)/1 var(--sans); letter-spacing: .07em; text-transform: uppercase; }
 .dp-menu-label { padding: .5rem .625rem .25rem; color: var(--faint); font: 570 var(--text-meta)/1 var(--sans); letter-spacing: .07em; text-transform: uppercase; }
 .dp-menu-item { width: 100%; min-height: 2.5rem; padding: .5rem .625rem; display: flex; align-items: center; gap: var(--space-3); border-radius: var(--r-row); color: var(--ink-soft); text-align: left; }
 .dp-menu-item:is(:hover, :focus-visible) { background: var(--state-hover-bg); outline: 0; }

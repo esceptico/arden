@@ -22,7 +22,7 @@ test("Mission Control is one self-describing attention desk", () => {
   expect(html).toContain('data-region="deck"');
   expect(html).toContain('data-region="ambient"');
   expect(html).toContain("Needs you");
-  expect(html).toContain("Working without you");
+  expect(html).toContain("Agent activity");
   for (const strip of ["working", "scheduled", "done", "aside"]) expect(html).toContain(`data-strip="${strip}"`);
 });
 
@@ -67,6 +67,11 @@ test("the page never scrolls and expanded ambient details own short-window overf
 });
 
 test("delegated work remains ambient but actionable", () => {
+  expect(html).toContain('aria-labelledby="agent-activity-title"');
+  expect(html).toContain('class="dp-section-label" id="agent-activity-title">Agent activity</h2>');
+  expect(system).toMatch(/\.dp-section-label\s*\{[^}]*text-transform:\s*uppercase/);
+  expect(html).not.toContain('agent-activity-hint');
+  expect(html).not.toContain('aria-label="Working without you"');
   expect(html).toContain('data-rows-working');
   expect(html).toContain('data-rows-scheduled');
   expect(html).toContain('data-rows-done');

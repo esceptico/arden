@@ -8,7 +8,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..700&amp;family=Geist+Mono:wght@400..600&amp;display=swap" rel="stylesheet">
 <script src="./board-icons.js?v=20260719-2"></script>
 <script src="./board-motion.js?v=20260722-42"></script>
-<link rel="stylesheet" href="./board-home.css?v=20260722-10">
+<link rel="stylesheet" href="./board-home.css?v=20260722-11">
 </head>
 <body data-page-enter>
 <div id="app">
@@ -67,7 +67,10 @@
         <div class="rest" data-rest aria-label="Waiting behind this one"></div>
       </section>
 
-      <section class="strips" data-region="ambient" aria-label="Working without you" data-page-enter-item>
+      <section class="strips" data-region="ambient" aria-labelledby="agent-activity-title" data-page-enter-item>
+        <header class="ambient-head">
+          <h2 class="dp-section-label" id="agent-activity-title">Agent activity</h2>
+        </header>
         <div class="strip" data-strip="working">
           <button type="button" class="strip-head" aria-expanded="false">
             <span class="strip-line" data-line-working>&nbsp;</span>
