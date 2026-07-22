@@ -88,12 +88,14 @@ test("Chat session rows use shared pill geometry", () => {
 });
 
 test("Interactive row stacks use one shared physical gap", () => {
+  expect(system).toContain("--interactive-row-height: 1.6875rem;");
   expect(system).toContain("--interactive-row-gap: var(--space-1);");
   expect(system).toMatch(/\.dp-row-stack\s*\{[^}]*display:\s*grid;[^}]*gap:\s*var\(--interactive-row-gap\);/s);
   expect(chatHtml).toContain('class="rail-nav dp-row-stack"');
   expect(chatHtml.match(/class="session-group dp-row-stack"/g)?.length).toBe(3);
   expect(memoryHtml).not.toMatch(/class="tree-nest depth-[12] dp-row-stack"/);
-  expect(memoryHtml).toMatch(/\.fold,\.trow\s*\{[^}]*height:27px;[^}]*border-radius:var\(--r-row\);/s);
+  expect(memoryHtml).toMatch(/\.tree,\.tree-group,\.tree-nest\s*\{[^}]*display:grid;[^}]*gap:var\(--interactive-row-gap\);/s);
+  expect(memoryHtml).toMatch(/\.fold,\.trow\s*\{[^}]*height:var\(--interactive-row-height\);[^}]*border-radius:var\(--r-row\);/s);
   expect(memoryHtml).not.toMatch(/\.(?:fold|trow)::after/);
   expect(memoryHtml).not.toContain(".tree>.tree-group+.tree-group{margin-top:10px;}");
 });

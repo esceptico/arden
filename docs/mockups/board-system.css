@@ -39,6 +39,7 @@
   --space-5: 1.25rem;
   --space-6: 1.5rem;
   --space-8: 2rem;
+  --interactive-row-height: 1.6875rem;
   --interactive-row-gap: var(--space-1);
   --interactive-row-inline-padding: var(--space-3);
   --field-hover-bg: #fbfbfa;
