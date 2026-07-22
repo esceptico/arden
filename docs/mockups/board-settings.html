@@ -1384,7 +1384,7 @@
       <div class="sheet-body dp-sheet-body" id="sheet-body"></div>
       <div class="sheet-actions dp-sheet-footer">
         <button class="btn sheet-cancel">Cancel</button
-        ><button class="btn primary sheet-primary">Continue</button>
+        ><button class="btn primary sheet-primary">Save connection</button>
       </div>
     </aside>
     <div class="veil top"></div>
@@ -2443,7 +2443,7 @@
           "Manage OpenAI Codex",
           "ACCOUNT CONNECTION",
           "OpenAI Codex",
-          "Account authentication supplies eleven models without exposing an API key.",
+          "Account authentication supplies 11 models without exposing an API key.",
           "Account login",
           "Signed in as escept1co",
           "Model access",
@@ -2963,11 +2963,10 @@
         button.setAttribute("aria-label", `Refreshing ${label.toLowerCase()}`);
         button.classList.add("is-refreshing");
         sharedMotion.textSwap.swap(text, "");
-        const active = sharedMotion.spinner.start(icon);
-        await new Promise((resolve) =>
-          setTimeout(resolve, motion.refreshRequest),
+        await sharedMotion.spinner.run(
+          icon,
+          new Promise((resolve) => setTimeout(resolve, motion.refreshRequest)),
         );
-        await sharedMotion.spinner.settle(icon, active);
         sharedMotion.iconSwap.swap(icon, "#dp-check");
         sharedMotion.textSwap.swap(text, "Done");
         button.classList.remove("is-refreshing");
@@ -3222,7 +3221,7 @@
       }
       function openSheet(key) {
         const primary = document.querySelector(".sheet-primary");
-        primary.textContent = "Continue";
+        primary.textContent = "Save connection";
         if (key === "mcp-add") {
           sheetTitle.textContent = "Add MCP server";
           primary.textContent = "Save";
@@ -3268,6 +3267,7 @@
         }
         if (key === "mcp-assistant") {
           sheetTitle.textContent = "MCP setup assistant";
+          primary.textContent = "Prepare configuration";
           sheetBody.innerHTML = `<div class="sheet-kicker">GUIDED SETUP</div><h3>Connect an MCP server</h3><p>Describe the server you have; the assistant prepares a reviewable configuration without enabling tools.</p><div class="sheet-step"><div class="sheet-field"><label>Server or package</label><input class="dp-field" placeholder="URL, package name, or command"></div></div><div class="sheet-step"><div class="scope-list"><b>Before enabling</b><br>Review transport, authentication, discovered tools, and each approval policy.</div></div>`;
           showSheet();
           return;

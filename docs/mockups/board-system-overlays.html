@@ -70,7 +70,7 @@
       </div>
       <div class="helper-panel" data-helper-panel="choice" hidden>
         <p class="helper-user">Open the brief</p>
-        <div class="helper-assistant"><p>I found two briefs. Which one should I open?</p><div class="helper-replies"><button type="button" data-helper-complete>Inbox brief <span>Automation</span></button><button type="button" data-helper-complete>Launch research brief <span>Chat</span></button></div></div>
+        <div class="helper-assistant"><p>I found 2 briefs. Which one should I open?</p><div class="helper-replies"><button type="button" data-helper-complete>Inbox brief <span>Automation</span></button><button type="button" data-helper-complete>Launch research brief <span>Chat</span></button></div></div>
       </div>
       <div class="helper-panel" data-helper-panel="done" hidden>
         <p class="helper-user">Open automations</p>
@@ -84,29 +84,29 @@
   </section>
 
   <section class="system-overlay quick-capture" data-surface="quick-capture" role="dialog" aria-modal="true" aria-labelledby="capture-title" aria-hidden="true" hidden inert>
-    <header class="system-overlay-head dp-sheet-header"><strong id="capture-title">Quick capture</strong><button class="dp-icon-button" data-close aria-label="Close quick capture"><svg><use href="#dp-close"/></svg></button></header>
+    <header class="system-overlay-head dp-sheet-header"><strong id="capture-title">Quick capture</strong><button class="dp-icon-button" data-close aria-label="Close quick capture" data-tooltip="Close quick capture · esc"><svg><use href="#dp-close"/></svg></button></header>
     <div class="system-overlay-body dp-sheet-body capture-composer"><textarea class="dp-field" aria-label="Capture message" placeholder="What needs attention?"></textarea><div class="capture-meta"><span>Inbox · new chat</span><span><kbd class="dp-kbd-group" data-slot="kbd-group" aria-label="Command Enter"><kbd class="dp-kbd" data-slot="kbd">⌘</kbd><kbd class="dp-kbd" data-slot="kbd">Enter</kbd></kbd> to send</span></div></div>
     <footer class="system-overlay-foot dp-sheet-footer"><button class="dp-button quiet" data-close>Cancel</button><button class="dp-button primary">Send</button></footer>
   </section>
 
   <section class="system-overlay dp-sheet review-sheet" data-surface="approval-review" role="dialog" aria-modal="true" aria-labelledby="approval-title" aria-hidden="true" hidden inert>
-    <header class="system-overlay-head dp-sheet-header"><strong id="approval-title">Review file changes</strong><span class="dp-status" data-tone="warning">Awaiting approval</span><button class="dp-icon-button" data-close aria-label="Close review"><svg><use href="#dp-close"/></svg></button></header>
+    <header class="system-overlay-head dp-sheet-header"><strong id="approval-title">Review file changes</strong><span class="dp-status" data-tone="warning">Awaiting approval</span><button class="dp-icon-button" data-close aria-label="Close review" data-tooltip="Close review · esc"><svg><use href="#dp-close"/></svg></button></header>
     <div class="system-overlay-body dp-sheet-body"><div class="review-summary"><div><strong>Update launch brief</strong><p>Writes one file. No external message is sent.</p></div><button class="dp-button" data-stacked="tool-viewer">Inspect tool call</button></div><div class="diff" aria-label="Proposed diff"><span class="diff-line remove">- Focus every segment equally.</span><span class="diff-line add">+ Prioritize developer-led teams.</span><span class="diff-line add">+ Keep operations teams as the retention countercase.</span></div></div>
     <footer class="system-overlay-foot dp-sheet-footer"><button class="dp-button quiet">Deny</button><button class="dp-button primary">Approve changes</button></footer>
   </section>
 
   <section class="system-overlay dp-sheet viewer-sheet" data-surface="tool-viewer" role="dialog" aria-modal="true" aria-labelledby="tool-title" aria-hidden="true" hidden inert>
-    <header class="system-overlay-head dp-sheet-header"><strong id="tool-title">Tool call</strong><span class="dp-status" data-tone="success">Completed</span><button class="dp-icon-button" data-close aria-label="Close tool viewer"><svg><use href="#dp-close"/></svg></button></header>
+    <header class="system-overlay-head dp-sheet-header"><strong id="tool-title">Tool call</strong><span class="dp-status" data-tone="success">Completed</span><button class="dp-icon-button" data-close aria-label="Close tool viewer" data-tooltip="Close tool viewer · esc"><svg><use href="#dp-close"/></svg></button></header>
     <div class="system-overlay-body dp-sheet-body tool-log"><div><strong>memory.write</strong><p>Raw request and result stay inspectable without competing with the answer.</p></div><pre class="tool-call">{"path":"areas/market-launch/brief.md","mode":"update"}</pre><pre class="tool-call">Saved 2 changed lines · source references preserved.</pre></div>
   </section>
 
   <section class="system-overlay dp-sheet viewer-sheet" data-surface="markdown-viewer" role="dialog" aria-modal="true" aria-labelledby="markdown-title" aria-hidden="true" hidden inert>
-    <header class="system-overlay-head dp-sheet-header"><strong id="markdown-title">launch-brief.md</strong><button class="dp-icon-button" data-close aria-label="Close Markdown viewer"><svg><use href="#dp-close"/></svg></button></header>
+    <header class="system-overlay-head dp-sheet-header"><strong id="markdown-title">launch-brief.md</strong><button class="dp-icon-button" data-close aria-label="Close Markdown viewer" data-tooltip="Close Markdown viewer · esc"><svg><use href="#dp-close"/></svg></button></header>
     <article class="system-overlay-body dp-sheet-body viewer-copy typeset typeset-notes"><h2>Two segments are carrying the launch</h2><p>Developer-led teams show the clearest intent. Operations teams remain the stronger retention countercase.</p><ul><li>Short evaluation cycles</li><li>Durable artifact use</li><li>Reviewable evidence</li></ul></article>
   </section>
 
   <section class="system-overlay dp-sheet viewer-sheet" data-surface="mermaid-viewer" role="dialog" aria-modal="true" aria-labelledby="mermaid-title" aria-hidden="true" hidden inert>
-    <header class="system-overlay-head dp-sheet-header"><strong id="mermaid-title">Workflow diagram</strong><button class="dp-icon-button" data-close aria-label="Close Mermaid viewer"><svg><use href="#dp-close"/></svg></button></header>
+    <header class="system-overlay-head dp-sheet-header"><strong id="mermaid-title">Workflow diagram</strong><button class="dp-icon-button" data-close aria-label="Close Mermaid viewer" data-tooltip="Close Mermaid viewer · esc"><svg><use href="#dp-close"/></svg></button></header>
     <div class="system-overlay-body dp-sheet-body mermaid-stage" role="img" aria-label="Collect evidence, review countercase, then save brief"><svg viewBox="0 0 600 180"><rect x="20" y="55" width="150" height="70" rx="12"/><rect x="225" y="55" width="150" height="70" rx="12"/><rect x="430" y="55" width="150" height="70" rx="12"/><path d="M170 90H225M375 90H430"/><text x="52" y="94">Collect evidence</text><text x="252" y="94">Review countercase</text><text x="475" y="94">Save brief</text></svg></div>
   </section>
 

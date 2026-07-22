@@ -44,6 +44,47 @@ body.rail-hidden .sheet-scroll{padding-left:0;}
 .crumb{font:500 var(--text-meta)/1 var(--mono);letter-spacing:.08em;color:var(--muted);margin-bottom:12px;}
 .crumb b{color:var(--ink-soft);font-weight:500;}
 h1{font-size:var(--text-display);font-weight:600;letter-spacing:-0.015em;margin-bottom:18px;text-wrap:balance;}
+/* frontmatter — Obsidian-shaped properties in the board register: quiet kv rows
+   under the title, one hairline before the prose; no box, no icons.
+   Editing is Obsidian-like: click a key or value to edit in place, tags are
+   removable chips with type-to-add. Affordances stay visible but faint —
+   hover only deepens tint, nothing appears or shifts. */
+.fm{margin:-2px 0 24px;padding-bottom:10px;border-bottom:var(--border-width) solid var(--edge);}
+.fm-head{display:flex;align-items:center;gap:var(--space-1);padding:2px 8px;margin-left:-8px;border-radius:var(--r-control);
+  font-size:var(--text-xs);color:var(--faint);cursor:pointer;
+  transition:color var(--motion-feedback) var(--ease-out),background var(--motion-feedback) var(--ease-out);}
+.fm-head:hover{color:var(--ink);background:var(--state-hover-bg);}
+.fm-head svg{width:.75rem;height:.75rem;opacity:.45;transition:rotate var(--motion-dissolve) var(--ease-out),opacity var(--motion-feedback) var(--ease-out);}
+.fm-head:hover svg,.fm-head[aria-expanded="true"] svg{opacity:1;}
+.fm-head[aria-expanded="true"] svg{rotate:180deg;}
+.fm-count{font:500 var(--text-meta)/1 var(--mono);font-variant-numeric:tabular-nums;color:var(--faint);}
+.fm-body{padding-top:8px;display:grid;grid-template-columns:8.5rem minmax(0,1fr);row-gap:var(--space-0-5);column-gap:var(--space-3);}
+.fm-body[hidden]{display:none;}
+.fm-key{min-height:24px;display:flex;align-items:center;font-size:var(--text-xs);color:var(--faint);}
+.fm-val{min-height:24px;display:flex;align-items:center;flex-wrap:wrap;gap:var(--space-1);
+  font-size:var(--text-sm);color:var(--ink-soft);}
+.fm-val.mono{font:500 var(--text-xs)/1 var(--mono);letter-spacing:.02em;color:var(--muted);
+  font-variant-numeric:tabular-nums;}
+.fm-key[data-fm],.fm-val[data-fm]{border-radius:var(--r-tag);cursor:text;padding-inline:6px;margin-left:-6px;
+  transition:background var(--motion-feedback) var(--ease-out);}
+.fm-key[data-fm]:hover,.fm-val[data-fm]:hover{background:var(--state-hover-bg);}
+.fm-key[contenteditable],.fm-val[contenteditable]{background:var(--state-hover-bg);outline:none;}
+.fm-val[data-fm]:empty::before{content:"empty";color:var(--faint);}
+.fm-tag{display:inline-flex;align-items:center;gap:var(--space-1);font:500 var(--text-meta)/1 var(--mono);
+  letter-spacing:.05em;color:var(--muted);background:var(--panel-soft);border-radius:var(--r-control);padding:4px 9px;}
+.fm-tag-x{display:inline-flex;color:var(--faint);opacity:.4;cursor:pointer;
+  transition:opacity var(--motion-feedback) var(--ease-out),color var(--motion-feedback) var(--ease-out);}
+.fm-tag:hover .fm-tag-x{opacity:1;color:var(--ink);}
+.fm-tag-add{display:inline-flex;align-items:center;font:500 var(--text-meta)/1 var(--mono);
+  color:var(--faint);background:none;border-radius:var(--r-control);padding:4px 8px;cursor:pointer;
+  transition:color var(--motion-feedback) var(--ease-out),background var(--motion-feedback) var(--ease-out);}
+.fm-tag-add:hover{color:var(--ink);background:var(--state-hover-bg);}
+.fm-tag-input{width:5.5rem;font:500 var(--text-meta)/1 var(--mono);letter-spacing:.05em;color:var(--ink);
+  background:var(--panel-soft);border:0;outline:0;border-radius:var(--r-control);padding:4px 9px;}
+.fm-add{grid-column:1 / -1;justify-self:start;margin-top:2px;font-size:var(--text-xs);color:var(--faint);
+  border-radius:var(--r-control);padding:2px 8px;margin-left:-8px;cursor:pointer;
+  transition:color var(--motion-feedback) var(--ease-out),background var(--motion-feedback) var(--ease-out);}
+.fm-add:hover{color:var(--ink);background:var(--state-hover-bg);}
 .prose{color:var(--ink-soft);text-wrap:pretty;}
 .wl{color:var(--accent-ink);text-decoration:none;border-bottom:var(--border-width) solid color-mix(in oklab, var(--accent) 32%, transparent);cursor:pointer;}
 /* page signature — quiet provenance only; navigation stays in the instruments */
@@ -100,7 +141,8 @@ body.rail-resizing .sheet-scroll{transition:none;}
 .nrow .fx{font-size:var(--text-control);line-height:var(--leading-body);color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
 
 /* ---------- TIER 1 · desk: open-page tabs ---------- */
-.tabs{position:fixed;top:var(--memory-chrome-top);z-index:var(--z-sticky);display:flex;align-items:center;gap:var(--space-0-5);height:36px;background:var(--panel);border-radius:var(--r-cluster);box-shadow:var(--e2);padding:4px;}
+/* desk clusters share the rail's tab-bar geometry — one 34px band, one 3px frame */
+.tabs{position:fixed;top:var(--memory-chrome-top);z-index:var(--z-sticky);display:flex;align-items:center;gap:var(--space-0-5);height:var(--tab-bar-height);background:var(--panel);border-radius:var(--r-cluster);box-shadow:var(--e2);padding:var(--tab-bar-padding);}
 .tab-strip{position:relative;display:flex;flex:1 1 auto;gap:var(--space-0-5);min-width:0;overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;overscroll-behavior-y:none;touch-action:pan-x;scrollbar-width:none;scroll-snap-type:x proximity;
   padding:4px;margin:-4px;scroll-padding-inline:4px;}
 .tabs.edge-left .tab-strip{-webkit-mask-image:linear-gradient(to right,transparent,#000 10px);mask-image:linear-gradient(to right,transparent,#000 10px);}
@@ -114,6 +156,7 @@ body.rail-resizing .sheet-scroll{transition:none;}
   border-radius:var(--r-icon);color:var(--faint);opacity:0;pointer-events:none;transform:translateY(-50%);
   transition:opacity var(--motion-press) var(--smooth-out),color var(--motion-feedback) var(--smooth-out),background var(--motion-feedback) var(--smooth-out),transform var(--motion-press) var(--smooth-out);}
 .tab-close svg{width:var(--icon-size);height:var(--icon-size);}
+.tab-close::after{content:"";position:absolute;inset:-3px;}
 .tab.on+.tab-close{opacity:1;pointer-events:auto;color:var(--muted);}
 .tab-slot:focus-within .tab-close{opacity:1;pointer-events:auto;}
 .tab-close[hidden]{display:none;}
@@ -126,12 +169,12 @@ body.rail-resizing .sheet-scroll{transition:none;}
 
 /* ---------- TIER 1 · desk: ornament ---------- */
 .ornament{position:fixed;top:var(--memory-chrome-top);z-index:var(--z-sticky);display:flex;align-items:center;gap:var(--space-0-5);
-  width:max-content;overflow:hidden;background:var(--panel);border-radius:var(--r-cluster);box-shadow:var(--e2);padding:4px;
+  width:max-content;overflow:hidden;background:var(--panel);border-radius:var(--r-cluster);box-shadow:var(--e2);padding:var(--tab-bar-padding);
   transition:opacity var(--motion-furniture) var(--smooth-out),filter var(--motion-furniture) var(--smooth-out),transform var(--motion-content) var(--smooth-out);}
 .ornament-surface{display:none;pointer-events:none;}
-.ornament.ready{height:36px;overflow:visible;background:transparent;box-shadow:none;}
+.ornament.ready{height:var(--tab-bar-height);overflow:visible;background:transparent;box-shadow:none;}
 .ornament.ready .ornament-surface{position:absolute;display:block;right:0;top:0;bottom:0;width:100%;z-index:var(--z-base);background:var(--panel);border-radius:inherit;box-shadow:var(--e2);}
-.ornament.ready .ornament-items{position:absolute;right:34px;top:4px;z-index:var(--z-raised);}
+.ornament.ready .ornament-items{position:absolute;right:calc(var(--control-size) + var(--tab-bar-padding) + var(--space-0-5));top:var(--tab-bar-padding);z-index:var(--z-raised);}
 .ornament-items{display:flex;align-items:center;gap:var(--space-0-5);flex:none;opacity:1;clip-path:inset(0 0 0 0);
   transition:clip-path var(--motion-instrument) var(--motion-drawer-ease),opacity var(--motion-instant) linear;}
 .ornament.collapsed .ornament-items{opacity:0;clip-path:inset(0 0 0 100%);pointer-events:none;
@@ -140,7 +183,7 @@ body.rail-resizing .sheet-scroll{transition:none;}
   border-radius:var(--r-control);color:var(--muted);transition:background var(--motion-feedback) var(--smooth-out),color var(--motion-feedback) var(--smooth-out),transform var(--motion-press) var(--smooth-out);}
 .ornament button:focus-visible{border-radius:var(--r-control);}
 .ornament svg{width:var(--icon-size);height:var(--icon-size);}
-#o-collapse{position:absolute;right:4px;top:4px;z-index:var(--z-raised);}
+#o-collapse{position:absolute;right:var(--tab-bar-padding);top:var(--tab-bar-padding);z-index:var(--z-raised);}
 /* instruments: page collections read as counts on the desk, open in the peek */
 .ornament .oinst{width:auto;gap:var(--space-1);padding:0 10px;font-size:var(--text-control);font-weight:500;color:var(--muted);}
 .ornament .oinst .oc{font:500 var(--text-meta)/1 var(--mono);font-variant-numeric:tabular-nums;color:var(--faint);}
@@ -170,10 +213,17 @@ body.rail-resizing .sheet-scroll{transition:none;}
 .peek-head .pk button.on .pkc{color:var(--muted);}
 .peek.nochips .peek-head .x{margin-left:auto;}
 .peek-body{flex:1;overflow:auto;padding:28px 30px;}
-.peek-body h2{font-size:var(--text-section);font-weight:600;letter-spacing:-0.01em;}
-.peek-body .tag{display:inline-block;font:500 var(--text-meta)/1 var(--mono);letter-spacing:.07em;color:var(--muted);background:var(--panel-soft);border-radius:var(--r-tag);padding:4px 7px;margin:8px 0 16px;}
+.peek-body h2{font-size:var(--text-section);font-weight:600;letter-spacing:-0.01em;margin-bottom:12px;}
 .peek-body .prose{font-size:var(--text-body);line-height:var(--leading-body);}
 .peek-back{margin-top:24px;padding-top:14px;border-top:var(--border-width) solid var(--line);}
+
+/* wiki hover preview — obsidian's page preview in the board register */
+.wiki-card{position:fixed;z-index:var(--z-popover);width:clamp(19rem,26vw,23rem);max-height:21rem;
+  overflow:auto;overscroll-behavior:contain;padding:16px 18px 18px;border-radius:var(--r-menu);
+  background:var(--card);box-shadow:var(--shadow-mid);}
+.wiki-card h2{font-size:var(--text-md);font-weight:600;letter-spacing:-0.01em;margin-bottom:8px;}
+.wiki-card .prose{font-size:var(--text-body);line-height:var(--leading-body);}
+.wiki-card .peek-back{margin-top:16px;padding-top:12px;}
 .peek-back .bt{font:500 var(--text-meta)/1 var(--mono);letter-spacing:.08em;color:var(--faint);margin-bottom:12px;}
 
 /* ---------- TIER 4 · notifications — REAL sonner, restyled to the tokens.
@@ -252,6 +302,15 @@ body.rail-resizing .sheet-scroll{transition:none;}
   <main class="sheet">
     <div class="crumb">pages / <b>marathon training</b></div>
     <h1>marathon training</h1>
+    <div class="fm collapsed" role="group" aria-label="Properties">
+      <button class="fm-head" type="button" aria-expanded="false">properties<span class="fm-count">4</span><svg aria-hidden="true"><use href="#dp-chevron-down"/></svg></button>
+      <div class="fm-body" data-disclosure-panel hidden>
+        <div class="fm-key">kind</div><div class="fm-val">page</div>
+        <div class="fm-key">tags</div><div class="fm-val"><span class="fm-tag">running</span><span class="fm-tag">training</span></div>
+        <div class="fm-key">created</div><div class="fm-val mono">2026-05-12</div>
+        <div class="fm-key">records</div><div class="fm-val mono">14</div>
+      </div>
+    </div>
     <div class="prose typeset typeset-notes">
       <p>Coach notes from <a class="wl" id="wl-ana" href="#" onclick="return false">Ana Ferreira</a>: keep long-run pace 60–75 seconds slower than goal pace, and stop banking miles in any week where sleep drops under 7 hours. Fueling every 35 minutes on anything over 90 minutes.</p>
       <p>Volume is climbing toward 55&nbsp;km against the <a class="wl" id="wl-health" href="#" onclick="return false">health</a> sleep rule — recovery weeks matter more now than added distance. Gear is settled; the softer trail section spared the knee on the 24&nbsp;km long run, so long runs stay on trail until taper.</p>
@@ -314,8 +373,8 @@ body.rail-resizing .sheet-scroll{transition:none;}
 <!-- TIER 1 · desk: open-page tabs -->
 <div class="tabs" id="tabs" data-page-enter-item>
   <div class="tab-strip" id="tab-strip" role="tablist" aria-label="Open pages">
-    <div class="tab-slot" data-context-actions="open:Open|copy-path:Copy path|-|close-tab:Close tab"><button class="tab on" role="tab" aria-selected="true">marathon training</button><button class="tab-close" aria-label="Close marathon training" tabindex="0"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#dp-close"/></svg></button></div>
-    <div class="tab-slot" data-context-actions="open:Open|copy-path:Copy path|-|close-tab:Close tab"><button class="tab" role="tab" aria-selected="false">health</button><button class="tab-close" aria-label="Close health" tabindex="-1"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#dp-close"/></svg></button></div>
+    <div class="tab-slot" data-context-actions="open:Open|copy-path:Copy path|-|close-tab:Close tab:⌘W|close-others:Close other tabs|close-right:Close tabs to the right|close-all:Close all tabs"><button class="tab on" role="tab" aria-selected="true" data-page="marathon training">marathon training</button><button class="tab-close" aria-label="Close marathon training" tabindex="0"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#dp-close"/></svg></button></div>
+    <div class="tab-slot" data-context-actions="open:Open|copy-path:Copy path|-|close-tab:Close tab:⌘W|close-others:Close other tabs|close-right:Close tabs to the right|close-all:Close all tabs"><button class="tab" role="tab" aria-selected="false" data-page="health">health</button><button class="tab-close" aria-label="Close health" tabindex="-1"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#dp-close"/></svg></button></div>
   </div>
   <button class="tab-more" id="tab-more" aria-label="Show open pages" aria-expanded="false" aria-controls="tab-menu" hidden></button>
   <div class="tab-menu" id="tab-menu" role="menu" hidden></div>
@@ -344,6 +403,11 @@ body.rail-resizing .sheet-scroll{transition:none;}
     <button class="x dp-icon-button" id="peek-x" aria-label="Close peek"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#dp-close"/></svg></button>
   </div>
   <div class="peek-body dp-peek-body" id="peek-body" data-tab-panels></div>
+</aside>
+
+<!-- TIER 2 · wiki hover preview — an anchored card, not a panel: it follows the link -->
+<aside class="wiki-card dp-popover" id="wiki-card" role="dialog" aria-label="Page preview" aria-hidden="true" inert>
+  <div class="wiki-card-body" id="wiki-card-body"></div>
 </aside>
 </div><!-- /#app: room + desk + open peek recede as one focus plane -->
 
@@ -380,7 +444,7 @@ body.rail-resizing .sheet-scroll{transition:none;}
   </div>
   <div class="sheet3-foot">
     <button class="btn quiet" id="s3-keep">Keep editing</button>
-    <button class="btn primary" id="s3-save">Save</button>
+    <button class="btn primary" id="s3-save">Save changes</button>
   </div>
 </aside>
 
@@ -442,7 +506,7 @@ const PEEK_KINDS = {
   person: {
     title: "Ana Ferreira",
     body: `
-      <h2>Ana Ferreira</h2><span class="tag">PEOPLE</span>
+      <h2>Ana Ferreira</h2>
       <div class="prose typeset typeset-notes">
         <p>Running coach since March. Prefers voice notes after long runs; reviews the training log on Sundays.</p>
         <p>Current guidance: long-run pace 60–75 seconds slower than goal pace; fuel every 35 minutes past the 90-minute mark; recovery weeks are non-negotiable once volume passes 50&nbsp;km.</p>
@@ -455,7 +519,7 @@ const PEEK_KINDS = {
   health: {
     title: "health",
     body: `
-      <h2>health</h2><span class="tag">PAGE</span>
+      <h2>health</h2>
       <div class="prose typeset typeset-notes">
         <p>Training health rules collected from sleep, recovery, and injury signals.</p>
         <p>Current rule: skip tempo work when weekly sleep averages under 7 hours; recovery weeks become non-negotiable above 50&nbsp;km.</p>
@@ -516,16 +580,17 @@ function openPeek(kind){
   setPeekTitle(t.title, direction || 1, wasOpen);
   peekTabs.innerHTML = t.tabs ? t.tabs.map(([n,,count]) => `<button data-pk="${n}" role="tab" aria-selected="${n === peekTab ? "true" : "false"}">${n}<span class="pkc">${count}</span></button>`).join("") : "";
   peek.classList.toggle("nochips", !t.tabs);
-  renderPeekBody();
   peekOpen = true;
   syncInstruments(); layoutChrome();
-  if (!wasOpen) void peekController.open({ focus: false });
+  if (!wasOpen) {
+    renderPeekBody();
+    void peekController.open({ focus: false });
+  } else {
+    MOTION.content.swap(peekBody, renderPeekBody, { axis: "x", direction });
+  }
   requestAnimationFrame(() => {
     peekTabsController.sync({ animate: false });
   });
-  if (wasOpen){
-    MOTION.content.enter(peekBody, { axis: "x", direction });
-  }
 }
 function closePeek(animateMotion = true){
   if (!peekOpen) return;
@@ -534,14 +599,67 @@ function closePeek(animateMotion = true){
   void peekController.close({ animate: animateMotion, restoreFocus: false });
 }
 peekBody.addEventListener("click", (e) => {
+  const jump = e.target.closest("[data-open-page]");
+  if (jump){
+    closePeek();
+    openPageTab(jump.dataset.openPage);
+    return;
+  }
   const b = e.target.closest(".arow");
   if (b) openSheet(`${b.dataset.diff} / <b>${PAGE_DATA[activePage]?.title || activePage}</b>`);
 });
 const sheetScroll = document.querySelector(".sheet-scroll");
 const sheet = document.querySelector(".sheet");
+/* wiki links — obsidian model: hover previews the page in an anchored card, click opens it */
+const WIKI_LINKS = { "wl-ana": { kind: "person", page: "ana-ferreira" }, "wl-health": { kind: "health", page: "health" } };
+const wikiCard = document.getElementById("wiki-card");
+const wikiCardBody = document.getElementById("wiki-card-body");
+let wikiTrigger = null;
+let wikiShowTimer = 0;
+let wikiHideTimer = 0;
+const wikiLinkAt = target => {
+  const link = target instanceof Element ? target.closest(".wl") : null;
+  return link && WIKI_LINKS[link.id] ? link : null;
+};
+function showWikiCard(link){
+  clearTimeout(wikiHideTimer);
+  wikiTrigger = link;
+  wikiCardBody.innerHTML = PEEK_KINDS[WIKI_LINKS[link.id].kind].body;
+  wikiCard.scrollTop = 0;
+  MOTION.popover.sync(wikiCard, link, wikiCard, true);
+  MOTION.popover.place(link, wikiCard);
+}
+function hideWikiCard(){
+  clearTimeout(wikiShowTimer);
+  if (!wikiTrigger) return;
+  MOTION.popover.sync(wikiCard, wikiTrigger, wikiCard, false);
+  wikiTrigger = null;
+}
+function scheduleWikiHide(){
+  clearTimeout(wikiShowTimer);
+  clearTimeout(wikiHideTimer);
+  wikiHideTimer = setTimeout(hideWikiCard, MOTION.duration.previewHide);
+}
+sheetScroll.addEventListener("pointerover", event => {
+  const link = wikiLinkAt(event.target);
+  if (!link) return;
+  clearTimeout(wikiHideTimer);
+  clearTimeout(wikiShowTimer);
+  if (wikiTrigger === link) return;
+  wikiShowTimer = setTimeout(() => showWikiCard(link), MOTION.duration.previewShow);
+});
+sheetScroll.addEventListener("pointerout", event => {
+  if (wikiLinkAt(event.target)) scheduleWikiHide();
+});
+wikiCard.addEventListener("pointerenter", () => clearTimeout(wikiHideTimer));
+wikiCard.addEventListener("pointerleave", scheduleWikiHide);
+sheetScroll.addEventListener("scroll", hideWikiCard, { passive: true });
+document.addEventListener("keydown", event => { if (event.key === "Escape") hideWikiCard(); });
 sheetScroll.addEventListener("click", event => {
-  if (event.target.closest("#wl-ana")) openPeek("person");
-  else if (event.target.closest("#wl-health")) openPeek("health");
+  const link = wikiLinkAt(event.target);
+  if (!link) return;
+  hideWikiCard();
+  openPageTab(WIKI_LINKS[link.id].page);
 });
 document.getElementById("o-links").addEventListener("click", () => openPeek("links"));
 document.getElementById("o-records").addEventListener("click", () => openPeek("records"));
@@ -671,9 +789,10 @@ MOTION.tabs.bind(railModes, {
   const previousIndex = RAIL_MODE_ORDER.indexOf(railMode);
   const nextIndex = RAIL_MODE_ORDER.indexOf(nextMode);
   railMode = nextMode;
-  tree.innerHTML = TREES[nextMode];
-  if (nextMode === "files") syncRailSelection(activePage);
-  MOTION.content.enter(tree, { axis: "x", direction: nextIndex > previousIndex ? 1 : -1 });
+  MOTION.content.swap(tree, () => {
+    tree.innerHTML = TREES[nextMode];
+    if (nextMode === "files") syncRailSelection(activePage);
+  }, { axis: "x", direction: nextIndex > previousIndex ? 1 : -1 });
   },
 });
 
@@ -793,6 +912,7 @@ const PAGE_DATA = {
       `Next block: hold 55&nbsp;km for two weeks, then the first 30&nbsp;km dress rehearsal on the race route — gels every 35 minutes, bottle drop at the turn, easy days capped at 6:30/km.`,
     ],
     edited: "edited 2d ago",
+    props: [["kind", "page"], ["tags", ["running", "training"]], ["created", "2026-05-12"], ["records", "14"]],
   },
   "health": {
     section: "pages",
@@ -801,6 +921,7 @@ const PAGE_DATA = {
       `Recovery weeks become non-negotiable above 50&nbsp;km. The softer trail remains the default for long runs until taper.`,
     ],
     edited: "edited 1d ago",
+    props: [["kind", "page"], ["tags", ["health", "rules"]], ["created", "2026-04-02"], ["records", "9"]],
   },
   "race plan": {
     section: "pages",
@@ -810,6 +931,7 @@ const PAGE_DATA = {
       `Fuel every 35 minutes. Bottle drop at the turn; backup gels stay in the right pocket.`,
     ],
     edited: "edited 3h ago",
+    props: [["kind", "page"], ["tags", ["running", "planning"]], ["created", "2026-07-06"], ["records", "6"]],
   },
   "sleep notes": {
     section: "pages",
@@ -818,6 +940,7 @@ const PAGE_DATA = {
       `No afternoon espresso on training days. Wind-down starts at 22:15.`,
     ],
     edited: "edited yesterday",
+    props: [["kind", "page"], ["tags", ["health", "sleep", "from chat"]], ["created", "2026-06-21"], ["records", "5"]],
   },
   "weekly review": {
     section: "pages",
@@ -826,6 +949,7 @@ const PAGE_DATA = {
       `Next week repeats the load before the 30&nbsp;km dress rehearsal.`,
     ],
     edited: "edited Sunday",
+    props: [["kind", "page"], ["tags", ["running", "review"]], ["created", "2026-07-18"], ["records", "3"]],
   },
   "gear": {
     section: "pages",
@@ -834,6 +958,7 @@ const PAGE_DATA = {
       `Pack two bottles, six gels, anti-chafe, light shell, and the spare watch strap.`,
     ],
     edited: "edited 6d ago",
+    props: [["kind", "page"], ["tags", ["running", "gear"]], ["created", "2026-05-30"], ["records", "4"]],
   },
   "race route": {
     section: "pages",
@@ -842,20 +967,124 @@ const PAGE_DATA = {
       `Dress rehearsal follows the opening 30&nbsp;km exactly, with the final 5&nbsp;km held at goal effort.`,
     ],
     edited: "edited 4d ago",
+    props: [["kind", "page"], ["tags", ["running", "planning"]], ["created", "2026-07-02"], ["records", "2"]],
   },
-  "me": { section: "pages", paragraphs: [`Current focus: marathon preparation, sleep consistency, and keeping recovery rules explicit.`], edited: "edited today" },
-  "ana-ferreira": { section: "people", title: "Ana Ferreira", paragraphs: [`Running coach since March. Prefers voice notes after long runs and reviews the training log on Sundays.`], edited: "updated 2d ago" },
+  "me": { section: "pages", paragraphs: [`Current focus: marathon preparation, sleep consistency, and keeping recovery rules explicit.`], edited: "edited today", props: [["kind", "profile"], ["tags", ["profile"]], ["created", "2026-03-14"], ["records", "21"]] },
+  "ana-ferreira": { section: "people", title: "Ana Ferreira", paragraphs: [`Running coach since March. Prefers voice notes after long runs and reviews the training log on Sundays.`], edited: "updated 2d ago", props: [["kind", "person"], ["tags", ["people", "coach", "from chat"]], ["created", "2026-03-20"], ["records", "7"]] },
   "2026-07-14": { section: "daily", paragraphs: [`Coach call completed. Long-run pace confirmed; recovery week remains scheduled after the dress rehearsal.`], edited: "captured 2d ago" },
   "2026-07-12": { section: "daily", paragraphs: [`24&nbsp;km long run completed on the softer trail with no knee pain. Fueling held at 35-minute intervals.`], edited: "captured 4d ago" },
   "sleep-vs-volume": { section: "insights", paragraphs: [`Quality sessions remain productive above seven hours of average sleep. Below that threshold, pace drifts while recovery cost rises sharply.`], edited: "updated yesterday" },
 };
 let activePage = "marathon training";
+const FM_MONO_KEYS = new Set(["created", "updated", "records"]);
+function frontmatterMarkup(page){
+  if (!page.props) return "";
+  const rows = page.props.map(([key, value], row) => {
+    const list = Array.isArray(value);
+    const rendered = list
+      ? value.map((tag, item) => `<span class="fm-tag">${tag}<span class="fm-tag-x" data-fm-untag="${row}:${item}" role="button" tabindex="0" aria-label="Remove ${tag}">×</span></span>`).join("")
+        + `<button class="fm-tag-add" type="button" data-fm-tagadd="${row}" aria-label="Add tag">+</button>`
+      : value;
+    const valAttrs = list ? "" : ` data-fm="${row}:val"`;
+    return `<div class="fm-key" data-fm="${row}:key">${key}</div><div class="fm-val${!list && FM_MONO_KEYS.has(key) ? " mono" : ""}"${valAttrs}>${rendered}</div>`;
+  }).join("");
+  const open = page.fmOpen === true;
+  return `<div class="fm${open ? "" : " collapsed"}" role="group" aria-label="Properties">
+    <button class="fm-head" type="button" aria-expanded="${open}">properties<span class="fm-count">${page.props.length}</span><svg aria-hidden="true"><use href="#dp-chevron-down"/></svg></button>
+    <div class="fm-body" data-disclosure-panel${open ? "" : " hidden"}>${rows}<button class="fm-add" type="button">+ add property</button></div>
+  </div>`;
+}
+function refreshFrontmatter(focusSelector){
+  const page = PAGE_DATA[activePage];
+  const block = sheet.querySelector(".fm");
+  if (!page?.props || !block) return;
+  block.outerHTML = frontmatterMarkup(page);
+  if (focusSelector) sheet.querySelector(focusSelector)?.focus();
+}
+function startFmCellEdit(cell){
+  const [row, part] = cell.dataset.fm.split(":");
+  const original = cell.textContent;
+  let save = true;
+  cell.contentEditable = "plaintext-only";
+  if (cell.contentEditable !== "plaintext-only") cell.contentEditable = "true";
+  cell.focus();
+  const range = document.createRange();
+  range.selectNodeContents(cell);
+  const selection = getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+  const onKey = event => {
+    if (event.key === "Enter") { event.preventDefault(); cell.blur(); }
+    if (event.key === "Escape") { save = false; cell.blur(); }
+  };
+  cell.addEventListener("keydown", onKey);
+  cell.addEventListener("blur", () => {
+    cell.removeEventListener("keydown", onKey);
+    cell.removeAttribute("contenteditable");
+    const next = cell.textContent.trim();
+    const props = PAGE_DATA[activePage]?.props;
+    if (props && save && next !== original) {
+      if (part === "key") props[Number(row)][0] = next || original;
+      else props[Number(row)][1] = next;
+    }
+    refreshFrontmatter();
+  }, { once: true });
+}
+function startFmTagInput(button){
+  const row = Number(button.dataset.fmTagadd);
+  const input = document.createElement("input");
+  input.className = "fm-tag-input";
+  input.setAttribute("aria-label", "New tag");
+  button.replaceWith(input);
+  input.focus();
+  let cancelled = false;
+  input.addEventListener("keydown", event => {
+    if (event.key === "Enter") { event.preventDefault(); input.blur(); }
+    if (event.key === "Escape") { cancelled = true; input.blur(); }
+  });
+  input.addEventListener("blur", () => {
+    const tag = input.value.trim();
+    if (!cancelled && tag) PAGE_DATA[activePage]?.props?.[row]?.[1]?.push(tag);
+    refreshFrontmatter();
+  }, { once: true });
+}
+sheet.addEventListener("click", event => {
+  const head = event.target.closest(".fm-head");
+  if (head){
+    const open = head.getAttribute("aria-expanded") !== "true";
+    const page = PAGE_DATA[activePage];
+    if (page) page.fmOpen = open;
+    MOTION.disclosure.set(head.closest(".fm"), open);
+    return;
+  }
+  const untag = event.target.closest("[data-fm-untag]");
+  if (untag) {
+    const [row, item] = untag.dataset.fmUntag.split(":").map(Number);
+    PAGE_DATA[activePage]?.props?.[row]?.[1]?.splice(item, 1);
+    refreshFrontmatter();
+    return;
+  }
+  const tagAdd = event.target.closest("[data-fm-tagadd]");
+  if (tagAdd) { startFmTagInput(tagAdd); return; }
+  if (event.target.closest(".fm-add")) {
+    const props = PAGE_DATA[activePage]?.props;
+    if (!props) return;
+    props.push(["property", ""]);
+    refreshFrontmatter(`[data-fm="${props.length - 1}:key"]`);
+    const cell = sheet.querySelector(`[data-fm="${props.length - 1}:key"]`);
+    if (cell) startFmCellEdit(cell);
+    return;
+  }
+  const cell = event.target.closest("[data-fm]");
+  if (cell && !cell.hasAttribute("contenteditable")) startFmCellEdit(cell);
+});
+refreshFrontmatter();
 function pageMarkup(key){
   const page = PAGE_DATA[key];
   const title = page.title || key;
   const crumbSegments = [...(page.path || [page.section]), title];
   const crumb = crumbSegments.join(" / ");
-  return `<div class="crumb">${crumb}</div><h1>${title}</h1><div class="prose typeset typeset-notes">${page.paragraphs.map(text => `<p>${text}</p>`).join("")}</div><div class="sig"><span class="t-text-swap" id="sig-state">${page.edited}</span></div>`;
+  return `<div class="crumb">${crumb}</div><h1>${title}</h1>${frontmatterMarkup(page)}<div class="prose typeset typeset-notes">${page.paragraphs.map(text => `<p>${text}</p>`).join("")}</div><div class="sig"><span class="t-text-swap" id="sig-state">${page.edited}</span></div>`;
 }
 function syncRailSelection(key){
   tree.querySelectorAll("[data-page]").forEach(row => row.classList.toggle("on", row.dataset.page === key));
@@ -867,13 +1096,16 @@ function renderPage(key, direction = 1, shouldAnimate = true){
   activePage = key;
   tabs.hidden = false;
   orn.hidden = false;
-  sheet.classList.remove("empty");
-  sheet.innerHTML = pageMarkup(key);
-  sigState = document.getElementById("sig-state");
-  sheetScroll.scrollTop = 0;
   syncRailSelection(key);
-  if (!shouldAnimate) return;
-  MOTION.content.enter(sheet, { axis: "x", direction });
+  const commit = () => {
+    sheet.classList.remove("empty");
+    sheet.innerHTML = pageMarkup(key);
+    sigState = document.getElementById("sig-state");
+    sheetScroll.scrollTop = 0;
+  };
+  if (!shouldAnimate) { commit(); return; }
+  // full swap — the old page blurs out along the travel axis before the next enters
+  MOTION.content.swap(sheet, commit, { axis: "x", direction });
 }
 function renderEmptyWorkspace(shouldAnimate = true){
   setEditing(false);
@@ -882,17 +1114,20 @@ function renderEmptyWorkspace(shouldAnimate = true){
   closeTabMenu();
   tabs.hidden = true;
   orn.hidden = true;
-  sheet.classList.add("empty");
-  sheet.innerHTML = `<div class="empty-page"><h1>No page open</h1><p>Choose a page from Files to open it here.</p></div>`;
-  sigState = null;
-  sheetScroll.scrollTop = 0;
   syncRailSelection(null);
-  if (shouldAnimate) MOTION.content.enter(sheet);
+  const commit = () => {
+    sheet.classList.add("empty");
+    sheet.innerHTML = `<div class="empty-page"><h1>No page open</h1><p>Choose a page from Files to open it here.</p></div>`;
+    sigState = null;
+    sheetScroll.scrollTop = 0;
+  };
+  if (!shouldAnimate) { commit(); return; }
+  MOTION.content.swap(sheet, commit);
 }
 function createTabSlot(label, demo = false){
   const slot = document.createElement("div");
   slot.className = "tab-slot";
-  slot.dataset.contextActions = "open:Open|copy-path:Copy path|-|close-tab:Close tab";
+  slot.dataset.contextActions = "open:Open|copy-path:Copy path|-|close-tab:Close tab:⌘W|close-others:Close other tabs|close-right:Close tabs to the right|close-all:Close all tabs";
   slot.dataset.contextValue = label;
   if (demo) slot.dataset.demoTab = "";
   const button = document.createElement("button");
@@ -900,11 +1135,13 @@ function createTabSlot(label, demo = false){
   if (demo) button.dataset.demoTab = "";
   button.setAttribute("role", "tab");
   button.setAttribute("aria-selected", "false");
-  button.textContent = label;
+  button.dataset.page = label;
+  const title = PAGE_DATA[label]?.title || label;
+  button.textContent = title;
   const close = document.createElement("button");
   close.className = "tab-close";
   close.tabIndex = -1;
-  close.setAttribute("aria-label", `Close ${label}`);
+  close.setAttribute("aria-label", `Close ${title}`);
   close.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#dp-close"/></svg>';
   slot.append(button, close);
   return slot;
@@ -927,7 +1164,7 @@ function activateTab(tab, { direction, animatePage = true } = {}){
   syncTabClosers();
   ensureTabVisible(tab, animatePage);
   closeTabMenu();
-  renderPage(tab.textContent.trim(), pageDirection, animatePage);
+  renderPage(tab.dataset.page || tab.textContent.trim(), pageDirection, animatePage);
 }
 function closeTab(tab, { animatePage = true } = {}){
   const buttons = openTabs();
@@ -958,6 +1195,28 @@ tabStripController = MOTION.tabs.bind(tabStrip, {
   valueAttribute: "data-page",
   activeClass: "on",
   onChange({ button }) { activateTab(button); },
+});
+/* obsidian-style tab housekeeping from the context menu */
+tabStrip.addEventListener("dp:context-action", event => {
+  const { action, target } = event.detail;
+  const tab = target.querySelector(".tab");
+  if (!tab) return;
+  if (action === "open"){
+    event.preventDefault();
+    activateTab(tab);
+    return;
+  }
+  if (action !== "close-others" && action !== "close-right" && action !== "close-all") return;
+  event.preventDefault();
+  const buttons = openTabs();
+  const index = buttons.indexOf(tab);
+  const closing =
+    action === "close-all" ? buttons :
+    action === "close-others" ? buttons.filter(button => button !== tab) :
+    buttons.slice(index + 1);
+  if (!closing.length) return;
+  closing.forEach(button => closeTab(button, { animatePage: button === closing[closing.length - 1] }));
+  if (action !== "close-all" && !tab.classList.contains("on")) activateTab(tab, { animatePage: true });
 });
 tabStrip.addEventListener("click", event => {
   const close = event.target.closest(".tab-close");
@@ -1101,11 +1360,9 @@ function setManyTabs(next){
 }
 kTabs.addEventListener("click", () => setManyTabs(!manyTabs));
 setManyTabs(new URLSearchParams(location.search).has("manytabs"));
-tree.addEventListener("click", event => {
-  const row = event.target.closest("[data-page]");
-  if (!row) return;
-  const key = row.dataset.page;
-  let tab = openTabs().find(button => button.textContent.trim() === key);
+function openPageTab(key, { direction = 1 } = {}){
+  if (!PAGE_DATA[key]) return;
+  let tab = openTabs().find(button => (button.dataset.page || button.textContent.trim()) === key);
   if (!tab){
     const slot = createTabSlot(key);
     tabStrip.append(slot);
@@ -1113,11 +1370,20 @@ tree.addEventListener("click", event => {
   }
   tabs.hidden = false;
   orn.hidden = false;
-  activateTab(tab, { direction: 1, animatePage: true });
+  activateTab(tab, { direction, animatePage: true });
   syncTabClosers();
   kTabs.textContent = `tabs: ${openTabs().length}`;
   if (COMPACT_RAIL_QUERY.matches) setRailHidden(true);
   else layoutChrome();
+}
+tree.addEventListener("click", event => {
+  const row = event.target.closest("[data-page]");
+  if (!row) return;
+  // travel follows the rail: opening a page below the current one reads forward, above reads back
+  const rows = [...tree.querySelectorAll("[data-page]")];
+  const fromIndex = rows.findIndex(item => item.dataset.page === activePage);
+  const direction = fromIndex >= 0 && rows.indexOf(row) < fromIndex ? -1 : 1;
+  openPageTab(row.dataset.page, { direction });
 });
 addEventListener("resize", () => {
   ornamentFitOverride = false;

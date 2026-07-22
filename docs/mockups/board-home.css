@@ -23,7 +23,7 @@ body.rail-hidden .workspace { padding-left: 0; }
 
 /* the front door — quiet ring at rest; material appears only under the hand (focus) */
 .capture {
-  flex: none; height: 42px; margin-top: 20px; display: flex; align-items: center; gap: var(--space-2-5); padding: 0 13px 0 16px;
+  flex: none; height: 42px; margin-top: 20px; display: flex; align-items: center; gap: var(--space-2-5); padding: 0 16px;
   border-radius: var(--r-control); background: var(--paper); box-shadow: inset 0 0 0 1px var(--line-strong);
   transition: box-shadow var(--motion-focus) var(--ease-out), background var(--motion-focus) var(--ease-out);
 }
@@ -43,7 +43,9 @@ body.rail-hidden .workspace { padding-left: 0; }
   grid-area: 1 / 1; position: relative; z-index: var(--z-raised); min-width: 0;
   display: flex; flex-direction: column;
 }
-.deck-card[data-depth="gone"] { z-index: var(--z-base); pointer-events: none; }
+/* the departing card leaves the flow at once — the room reflows to the next
+   card's height immediately (blocks below glide there via flipBlocks) */
+.deck-card[data-depth="gone"] { position: absolute; inset: 0 0 auto; z-index: var(--z-base); pointer-events: none; }
 
 .card-title {
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
@@ -56,11 +58,12 @@ body.rail-hidden .workspace { padding-left: 0; }
 .card-foot { margin-top: 18px; display: grid; }
 .card-foot > * {
   grid-area: 1 / 1;
-  transition: opacity var(--motion-feedback) var(--ease-out), transform var(--motion-dissolve) var(--ease-out), visibility 0s;
+  filter: blur(0);
+  transition: opacity var(--motion-feedback) var(--ease-out), transform var(--motion-dissolve) var(--ease-out), filter var(--motion-feedback) var(--ease-out), visibility 0s;
 }
 .card-foot > [data-io-hidden] {
-  opacity: 0; pointer-events: none; visibility: hidden; transform: translateY(3px);
-  transition: opacity var(--motion-feedback) var(--ease-out), transform var(--motion-dissolve) var(--ease-out), visibility 0s var(--motion-feedback);
+  opacity: 0; pointer-events: none; visibility: hidden; transform: translateY(3px); filter: blur(var(--swap-blur));
+  transition: opacity var(--motion-feedback) var(--ease-out), transform var(--motion-dissolve) var(--ease-out), filter var(--motion-feedback) var(--ease-out), visibility 0s var(--motion-feedback);
 }
 
 /* overlapping text crossfade — the ghost of the old line fades over the new one */

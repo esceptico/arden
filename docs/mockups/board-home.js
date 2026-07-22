@@ -252,7 +252,7 @@
     state.io = null;
   }
 
-  // blur-bridged head swap: the leaving ask exits on the verb's direction while the next rises in place
+  // swipe head swap: the leaving ask exits on the verb's direction; the next follows it in
   function swapHead(leaving, dir) {
     if (leaving) {
       leaving.dataset.depth = "gone";
@@ -262,8 +262,16 @@
     if (!state.queue.length) return;
     const node = cardNode(state.queue[0], 0);
     deckEl.append(node);
-    motion.deck.promote(node);
+    motion.deck.promote(node, { handoff: Boolean(leaving), direction: dir });
   }
+
+  // blocks that rest on the deck — when the head's height changes they glide, never snap
+  const roomBlocks = () => [
+    document.querySelector("[data-deck-chrome]"),
+    restEl,
+    document.querySelector(".strips"),
+  ];
+  const reflowRoom = mutate => motion.layout.flipBlocks(roomBlocks(), mutate);
 
   const headCard = () => deckEl.querySelector('[data-depth="0"]');
 
@@ -292,7 +300,9 @@
     const before = new Map([...restEl.children].map(node => [node, { top: node.getBoundingClientRect().top }]));
     const entering = next.filter(node => !existing.has(node.dataset.id));
     const staying = next.filter(node => existing.has(node.dataset.id));
-    const leaving = [...existing.values()].filter(node => !ids.includes(node.dataset.id));
+    // the promoted row's copy is already on the head card — a lingering ghost would duplicate it
+    const leaving = [...existing.values()].filter(node => !ids.includes(node.dataset.id) && node.dataset.id !== state.queue[0]);
+    existing.forEach(node => { if (node.dataset.id === state.queue[0]) node.remove(); });
     restEl.style.position = "relative";
     leaving.forEach(node => { node.style.cssText += `position:absolute;top:${node.offsetTop}px;left:0;right:0;pointer-events:none;`; });
     restEl.replaceChildren(...leaving, ...next, ...more);
@@ -304,9 +314,11 @@
     if (state.io || state.queue[0] === id || !state.queue.includes(id)) return;
     const leaving = headCard();
     while (state.queue[0] !== id) state.queue.push(state.queue.shift());
-    swapHead(leaving, 0);
+    reflowRoom(() => {
+      swapHead(leaving, 0);
+      renderRest();
+    });
     syncChrome();
-    renderRest();
   }
 
   function posLabel() {
@@ -392,9 +404,11 @@
     if (state.queue.length < 2 || state.io) return;
     const leaving = headCard();
     state.queue.push(state.queue.shift());
-    swapHead(leaving, 0);
+    reflowRoom(() => {
+      swapHead(leaving, 0);
+      renderRest();
+    });
     syncChrome();
-    renderRest();
   }
 
   function resolveHead(verb, note) {
@@ -418,16 +432,18 @@
     const leaving = headCard();
     state.queue.shift();
     state.io = null;
-    swapHead(leaving, dir);
+    reflowRoom(() => {
+      swapHead(leaving, dir);
+      renderRest();
+    });
     // the ask and its departing queue row own the first beat; the periphery follows one beat later
     syncChrome();
-    renderRest();
     setTimeout(() => {
       syncAnswer();
       syncStrips();
       syncCapacity();
     }, 140);
-    if (state.queue.length === 0) setTimeout(() => revealZero({ celebrate: true }), motion.duration.deckExit + 60);
+    if (state.queue.length === 0) setTimeout(() => reflowRoom(() => revealZero({ celebrate: true })), motion.duration.deckExit + 60);
   }
 
   function undo() {
@@ -443,21 +459,23 @@
       state.queue.unshift(last.id);
       state.aside = state.aside.filter(item => item.id !== last.id);
     }
-    if (state.zeroShown) hideZero();
-    const displaced = headCard();
-    if (displaced) {
-      displaced.dataset.depth = "gone";
-      motion.deck.exit(displaced, { direction: 0, duration: motion.duration.exit });
-      setTimeout(() => displaced.remove(), motion.duration.exit + 60);
-    }
-    const card = cardNode(last.id, 0);
-    deckEl.append(card);
-    motion.deck.return(card, { direction: last.dir });
+    reflowRoom(() => {
+      if (state.zeroShown) hideZero();
+      const displaced = headCard();
+      if (displaced) {
+        displaced.dataset.depth = "gone";
+        motion.deck.exit(displaced, { direction: 0, duration: motion.duration.exit });
+        setTimeout(() => displaced.remove(), motion.duration.exit + 60);
+      }
+      const card = cardNode(last.id, 0);
+      deckEl.append(card);
+      motion.deck.return(card, { direction: last.dir, handoff: Boolean(displaced) });
+      renderRest();
+    });
     syncAnswer();
     syncChrome();
     syncStrips();
     syncCapacity();
-    renderRest();
   }
 
   /* ---------- cleared attention — compact confirmation beside undo ---------- */
@@ -655,30 +673,34 @@
     if (state.queue.includes("labs") || state.aside.some(item => item.id === "labs")) { route("The new ask is already here"); return; }
     // arrivals append to the tail — the head never moves, only the numbers change
     state.queue.push("labs");
-    if (state.zeroShown) {
-      hideZero();
-      buildDeck();
-      motion.deck.promote(headCard());
-    }
+    reflowRoom(() => {
+      if (state.zeroShown) {
+        hideZero();
+        buildDeck();
+        motion.deck.promote(headCard());
+      }
+      renderRest();
+    });
     syncAnswer();
     syncChrome();
     syncCapacity();
-    renderRest();
   });
   plate.querySelector("[data-demo='stale-run']").addEventListener("click", () => {
     if (!state.running.includes("analyst") || state.queue.includes("run-timeout")) { route("Analyst is not running"); return; }
     state.running = state.running.filter(key => key !== "analyst");
     state.queue.push("run-timeout");
-    if (state.zeroShown) {
-      hideZero();
-      buildDeck();
-      motion.deck.promote(headCard());
-    }
+    reflowRoom(() => {
+      if (state.zeroShown) {
+        hideZero();
+        buildDeck();
+        motion.deck.promote(headCard());
+      }
+      renderRest();
+    });
     syncAnswer();
     syncChrome();
     syncStrips();
     syncCapacity();
-    renderRest();
   });
   plate.querySelector("[data-demo='reset']").addEventListener("click", () => applyScene(state.scene));
 

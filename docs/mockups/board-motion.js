@@ -36,12 +36,18 @@
     refreshLoop: 700,
     refreshDoneHold: 650,
     holdArm: 650,
-    deckExit: 100,
-    deckPromote: 500,
-    deckOpacity: 150,
+    deckExit: 160,
+    deckEnter: 450,
+    deckHandoff: 60,
     refreshRequest: 1050,
     refreshSettleMin: 80,
     refreshSettleMax: 320,
+    loadingShowDelay: 250,
+    loadingMinVisible: 450,
+    tooltipDelay: 500,
+    tooltipWarm: 300,
+    previewShow: 300,
+    previewHide: 200,
     acknowledge: 420,
     copyFeedback: 900,
     shimmer: 1800,
@@ -93,8 +99,6 @@
     sheet: Object.freeze({ type: "spring", stiffness: 360, damping: 32, mass: 0.75 }),
     layout: Object.freeze({ type: "spring", stiffness: 380, damping: 34, mass: 1 }),
     traceRow: Object.freeze({ type: "spring", stiffness: 350, damping: 40, mass: 0.8 }),
-    // SPRING_STACK from apps/desktop tokens/motion.ts — the shipped ApprovalBanner deck spring
-    stack: Object.freeze({ type: "spring", stiffness: 340, damping: 32, mass: 0.9 }),
   });
 
   function springEasing({ stiffness, damping, mass = 1 }, durationMs, samples = 30) {
@@ -1327,25 +1331,49 @@
     return () => cleanups.forEach(cleanup => cleanup());
   }
 
+  // FLIP for whole blocks: when a mutation reflows the room (the deck head
+  // changes height, a queue row leaves), the blocks below glide to their new
+  // resting place on the trace-row spring instead of snapping there.
+  function flipBlocks(blocks, mutate, options = {}) {
+    const targets = (blocks || []).filter(Boolean);
+    if (!targets.length || reducedMotion() || options.animate === false) {
+      mutate?.();
+      return;
+    }
+    const before = targets.map(element => element.getBoundingClientRect().top);
+    mutate?.();
+    targets.forEach((element, index) => {
+      const delta = before[index] - element.getBoundingClientRect().top;
+      if (Math.abs(delta) < 0.5) return;
+      element.animate([
+        { transform: `translateY(${delta}px)` },
+        { transform: "translateY(0)" },
+      ], { duration: duration.traceRow, easing: motion.curve.traceRowCss });
+    });
+  }
+
   const layout = Object.freeze({
     animateListChange,
     transitionCentered,
     positionIndicator,
     bindIntrinsicWidth,
     bindIntrinsicWidths,
+    flipBlocks,
   });
 
-  /* deck — the shipped ApprovalBanner choreography, ported verbatim from
-     apps/desktop (stackVariants + SPRING_STACK): approve exits x+32 y-4 at scale 1,
-     reject mirrors x-32 y+4 scale .97, set-aside drops y+4 scale .96 — all on a
-     100ms soft-out tween, NO blur. Entries spring 340/32/.9 from y8/scale.97 with
-     opacity on its own fast tween. */
+  /* deck — a horizontal swipe on the peek spring. Resolving an ask reads as one
+     stream of travel: the old card accelerates straight out along the verb's
+     direction (affirmative right, decline left) through swap blur, and after one
+     deckHandoff beat the next card follows from the opposite side, resolving on
+     the same 210/26 spring that opens peeks. Set-aside (direction 0) drops
+     behind instead, and its successor rises in place. Vectors stay strictly
+     horizontal for directional verbs — no diagonal drift, no scale wobble. */
   const deckRuns = new WeakMap();
 
   function deckVector(direction) {
     if (direction === 0) return { x: 0, y: 4, scale: 0.96 };
-    if (direction < 0) return { x: -32, y: 4, scale: 0.97 };
-    return { x: 32, y: -4, scale: 1 };
+    if (direction < 0) return { x: -32, y: 0, scale: 1 };
+    return { x: 32, y: 0, scale: 1 };
   }
 
   const deckPose = vector => `translate(${vector.x}px, ${vector.y}px) scale(${vector.scale})`;
@@ -1365,22 +1393,26 @@
     }
     const vector = deckVector(options.direction ?? 1);
     return settleDeckRun(card, card.animate([
-      { opacity: 1, transform: "translate(0, 0) scale(1)" },
-      { opacity: 0, transform: deckPose(vector) },
-    ], { duration: options.duration ?? duration.deckExit, easing: motion.curve.blurCss, fill: "forwards" }));
+      { opacity: 1, filter: "blur(0)", transform: "translate(0, 0) scale(1)" },
+      { opacity: 0, filter: `blur(${blur.swap}px)`, transform: deckPose(vector) },
+    ], { duration: options.duration ?? duration.deckExit, easing: motion.curve.accelerateCss, fill: "forwards" }));
   }
 
-  // entry: transform on the stack spring, opacity on its own fast tween (canon split)
+  // entry: one movement on the peek spring — opacity, blur, and travel together.
+  // Directional verbs continue the swipe (entry trails in from the opposite side);
+  // handoff waits one beat so the entry never renders under a still-legible exit.
   function deckPromote(card, options = {}) {
     if (!card?.animate || reducedMotion() || options.animate === false) return Promise.resolve(true);
     deckRuns.get(card)?.cancel();
-    card.animate([{ opacity: 0 }, { opacity: 1 }], {
-      duration: duration.deckOpacity, easing: motion.curve.blurCss, fill: "backwards",
-    });
+    const delay = options.handoff ? duration.deckHandoff : 0;
+    const direction = options.direction ?? 0;
+    const fromPose = direction === 0
+      ? `translateY(${distance.swap}px)`
+      : `translateX(${direction > 0 ? -distance.peekEnter : distance.peekEnter}px)`;
     return settleDeckRun(card, card.animate([
-      { transform: `translateY(${options.fromY ?? 8}px) scale(${options.fromScale ?? 0.97})` },
-      { transform: "translateY(0) scale(1)" },
-    ], { duration: options.duration ?? duration.deckPromote, easing: motion.curve.deckPromoteCss, fill: "backwards" }));
+      { opacity: 0, filter: `blur(${blur.swap}px)`, transform: fromPose },
+      { opacity: 1, filter: "blur(0)", transform: "translate(0, 0)" },
+    ], { duration: options.duration ?? duration.deckEnter, delay, easing: motion.curve.deckEnterCss, fill: "backwards" }));
   }
 
   // undo: the departed card physically comes back along its exit path on the stack spring
@@ -1391,13 +1423,11 @@
       return settleDeckRun(card, card.animate([{ opacity: 0 }, { opacity: 1 }], { duration: duration.reduced }));
     }
     const vector = deckVector(options.direction ?? 1);
-    card.animate([{ opacity: 0 }, { opacity: 1 }], {
-      duration: duration.deckOpacity, easing: motion.curve.blurCss, fill: "backwards",
-    });
+    const delay = options.handoff ? duration.deckHandoff : 0;
     return settleDeckRun(card, card.animate([
-      { transform: deckPose(vector) },
-      { transform: "translate(0, 0) scale(1)" },
-    ], { duration: options.duration ?? duration.deckPromote, easing: motion.curve.deckPromoteCss, fill: "backwards" }));
+      { opacity: 0, filter: `blur(${blur.swap}px)`, transform: deckPose(vector) },
+      { opacity: 1, filter: "blur(0)", transform: "translate(0, 0) scale(1)" },
+    ], { duration: options.duration ?? duration.deckEnter, delay, easing: motion.curve.deckEnterCss, fill: "backwards" }));
   }
 
   const deck = Object.freeze({ exit: deckExit, promote: deckPromote, return: deckReturn });
@@ -1431,7 +1461,92 @@
     await animation.finished.catch(() => {});
   }
 
-  const spinner = Object.freeze({ start: startSpinner, settle: settleSpinner });
+  // loading discipline: nothing spins for fast work (show delay), and once shown
+  // the indicator stays long enough to read as a state, not a flicker (min visible)
+  async function runSpinner(element, task, options = {}) {
+    const showDelay = options.showDelay ?? duration.loadingShowDelay;
+    const minVisible = options.minVisible ?? duration.loadingMinVisible;
+    let active = null;
+    let shownAt = 0;
+    const timer = setTimeout(() => {
+      shownAt = performance.now();
+      active = startSpinner(element, options);
+    }, reducedMotion() ? 0 : showDelay);
+    try {
+      return await task;
+    } finally {
+      clearTimeout(timer);
+      if (active) {
+        const remaining = minVisible - (performance.now() - shownAt);
+        if (remaining > 0 && !reducedMotion()) await new Promise(resolve => setTimeout(resolve, remaining));
+        await settleSpinner(element, active, options);
+      }
+    }
+  }
+
+  const spinner = Object.freeze({ start: startSpinner, settle: settleSpinner, run: runSpinner });
+
+  /* tooltip — group warm-up: the first tooltip waits tooltipDelay; while the group
+     is warm (a tooltip was visible within tooltipWarm) peers show immediately */
+  const tooltip = (() => {
+    let warmUntil = 0;
+    let showTimer = 0;
+    let bubble = null;
+
+    const ensureBubble = () => {
+      if (bubble?.isConnected) return bubble;
+      bubble = document.createElement("span");
+      bubble.className = "dp-tooltip";
+      bubble.setAttribute("role", "tooltip");
+      bubble.hidden = true;
+      document.body.append(bubble);
+      return bubble;
+    };
+
+    function show(trigger) {
+      const tip = ensureBubble();
+      tip.textContent = trigger.getAttribute("data-tooltip");
+      tip.hidden = false;
+      const rect = trigger.getBoundingClientRect();
+      const tipRect = tip.getBoundingClientRect();
+      const left = Math.max(8, Math.min(window.innerWidth - tipRect.width - 8, rect.left + rect.width / 2 - tipRect.width / 2));
+      const top = rect.bottom + 6 + tipRect.height > window.innerHeight ? rect.top - tipRect.height - 6 : rect.bottom + 6;
+      tip.style.left = `${left}px`;
+      tip.style.top = `${top}px`;
+    }
+
+    function hide() {
+      clearTimeout(showTimer);
+      showTimer = 0;
+      if (bubble && !bubble.hidden) {
+        bubble.hidden = true;
+        warmUntil = performance.now() + duration.tooltipWarm;
+      }
+    }
+
+    function bind(root = document) {
+      root.addEventListener("pointerenter", event => {
+        const trigger = event.target?.closest?.("[data-tooltip]");
+        if (!trigger) return;
+        clearTimeout(showTimer);
+        const warm = performance.now() < warmUntil;
+        if (warm) show(trigger);
+        else showTimer = setTimeout(() => show(trigger), duration.tooltipDelay);
+      }, true);
+      root.addEventListener("pointerleave", event => {
+        if (event.target?.closest?.("[data-tooltip]")) hide();
+      }, true);
+      root.addEventListener("focusin", event => {
+        const trigger = event.target?.closest?.("[data-tooltip]");
+        if (trigger?.matches(":focus-visible")) show(trigger);
+      });
+      root.addEventListener("focusout", () => hide());
+      window.addEventListener("scroll", hide, true);
+      return { hide };
+    }
+
+    return Object.freeze({ bind, hide });
+  })();
 
   const disclosureRuns = new WeakMap();
   function syncDisclosure(root, trigger, panel, open, options = {}) {
@@ -1820,7 +1935,7 @@
       drawerCss: "cubic-bezier(0.32, 0.72, 0, 1)",
       tabsLayoutCss: springEasing(spring.layout, duration.tabsLayout, 30),
       traceRowCss: springEasing(spring.traceRow, duration.traceRow, 36),
-      deckPromoteCss: springEasing(spring.stack, duration.deckPromote, 48),
+      deckEnterCss: springEasing(spring.peek, duration.deckEnter, 48),
     }),
     spring,
     tabs,
@@ -1840,6 +1955,7 @@
     overlay,
     layout,
     spinner,
+    tooltip,
     disclosure,
     textSwap,
     spinningCounter,
@@ -1908,9 +2024,6 @@
     "--motion-blur-dissolve": `${blur.dissolve}px`,
     "--motion-distance-dissolve": `${distance.dissolve}px`,
     "--motion-drawer-ease": motion.curve.drawerCss,
-    "--motion-deck-exit": `${duration.deckExit}ms`,
-    "--motion-deck-promote": `${duration.deckPromote}ms`,
-    "--motion-deck-promote-ease": motion.curve.deckPromoteCss,
   };
 
   for (const [name, value] of Object.entries(cssTokens)) {
@@ -1996,11 +2109,11 @@
       .filter(Boolean)
       .map((entry) => {
         if (entry === "-") return { separator: true };
-        const separator = entry.indexOf(":");
-        const rawAction = separator < 0 ? entry : entry.slice(0, separator);
+        const [rawAction, label, shortcut] = entry.split(":");
         return {
-          action: rawAction.replace(/!$/, ""),
-          label: separator < 0 ? entry : entry.slice(separator + 1),
+          action: (label === undefined ? entry : rawAction).replace(/!$/, ""),
+          label: label ?? entry,
+          shortcut: shortcut || null,
           tone: rawAction.endsWith("!") ? "danger" : "neutral",
         };
       });
@@ -2078,6 +2191,17 @@
         button.dataset.action = item.action;
         button.dataset.tone = item.tone;
         button.textContent = item.label;
+        if (item.shortcut) {
+          const shortcut = document.createElement("span");
+          shortcut.className = "dp-menu-shortcut";
+          shortcut.setAttribute("aria-hidden", "true");
+          // "⌘⇧W" → modifier chips + one key chip; space-separated forms pass through
+          const keys = item.shortcut.includes(" ")
+            ? item.shortcut.split(" ")
+            : [...item.shortcut.match(/[⌘⇧⌥⌃]/g) ?? [], item.shortcut.replace(/[⌘⇧⌥⌃]/g, "")].filter(Boolean);
+          shortcut.append(createKbdGroup(keys));
+          button.append(shortcut);
+        }
         button.addEventListener("click", () => activate(target, item));
         fragment.append(button);
       });

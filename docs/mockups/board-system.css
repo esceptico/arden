@@ -15,16 +15,16 @@
   --ink: #171717;
   --ink-soft: #3f3f3f;
   --ink-2: var(--ink-soft);
-  --muted: #707070;
-  --faint: #737373;
+  --muted: #676767;
+  --faint: #6b6b6b;
   --accent: #5b55ee;
   --accent-ink: #4a45d0;
   --accent-soft: color-mix(in oklab, var(--accent) 12%, transparent);
-  --success: #348b50;
+  --success: #2f7d48;
   --ok: var(--success);
-  --warning: #a16d14;
+  --warning: #8f6110;
   --warn: var(--warning);
-  --danger: #bd5252;
+  --danger: #b04b4b;
   --bad: var(--danger);
   --state-hover-bg: rgb(0 0 0 / 4%);
   --state-selected-bg: rgb(0 0 0 / 7%);
@@ -85,6 +85,10 @@
   --leading-body: 1.55;
   --leading-meta: 1.4;
   --icon-size: 1rem;
+  --kbd-size: 1.25rem;
+  --kbd-gap: var(--space-1);
+  --kbd-inline-padding: var(--space-1);
+  --kbd-radius: var(--r-mark);
   --icon-button-size: 1.75rem;
   --control-size: 1.75rem;
   --control-size-compact: 1.625rem;
@@ -133,6 +137,7 @@
   --popover-offset: .3125rem;
   --popover-offset-above: calc(-1 * var(--popover-offset));
   --popover-blur: .125rem;
+  --swap-blur: .125rem;
   --popover-scale: .985;
   --popover-anchor-gap: var(--space-1-5);
   --breakpoint-compact: 46.25rem;
@@ -262,17 +267,19 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 /* shadcn/Base UI Kbd: every rendered keyboard input consumes this primitive. */
 .dp-kbd {
   width: fit-content;
-  min-width: 1.25rem;
-  height: 1.25rem;
-  padding-inline: var(--space-1);
+  min-width: var(--kbd-size);
+  height: var(--kbd-size);
+  padding-inline: var(--kbd-inline-padding);
+  box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: var(--space-1);
-  border-radius: var(--r-mark);
+  gap: var(--kbd-gap);
+  border-radius: var(--kbd-radius);
   color: var(--muted);
-  background: var(--panel-soft);
+  background: var(--surface-4);
   font: 500 .75rem/1 var(--sans);
+  vertical-align: middle;
   white-space: nowrap;
   user-select: none;
   pointer-events: none;
@@ -281,7 +288,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .dp-kbd-group {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
+  justify-content: flex-end;
+  gap: var(--kbd-gap);
+  line-height: 1;
+  vertical-align: middle;
 }
 .dp-tooltip .dp-kbd {
   color: var(--paper);
@@ -379,15 +389,15 @@ body.dp-guides-on { cursor: crosshair; }
   --edge-strong: var(--line-strong);
   --ink: #ededed;
   --ink-soft: #c9c9c9;
-  --muted: #9f9f9f;
-  --faint: #a3a3a3;
+  --muted: #b3b3b3;
+  --faint: #ababab;
   --state-hover-bg: rgb(255 255 255 / 5%);
   --state-selected-bg: rgb(255 255 255 / 8%);
   --accent: #918cff;
-  --accent-ink: #aaa6ff;
-  --success: #61b477;
-  --warning: #d09a3c;
-  --danger: #e07373;
+  --accent-ink: #b8b5ff;
+  --success: #79c48d;
+  --warning: #ddab55;
+  --danger: #ee9494;
   --field-hover-bg: var(--panel-soft);
   --switch-track: var(--panel-strong);
   --switch-thumb: var(--ink);
@@ -405,15 +415,15 @@ body.dp-guides-on { cursor: crosshair; }
     --edge-strong: var(--line-strong);
     --ink: #ededed;
     --ink-soft: #c9c9c9;
-    --muted: #9f9f9f;
-    --faint: #868686;
+    --muted: #b3b3b3;
+    --faint: #ababab;
     --state-hover-bg: rgb(255 255 255 / 5%);
     --state-selected-bg: rgb(255 255 255 / 8%);
     --accent: #918cff;
-    --accent-ink: #aaa6ff;
-    --success: #61b477;
-    --warning: #d09a3c;
-    --danger: #e07373;
+    --accent-ink: #b8b5ff;
+    --success: #79c48d;
+    --warning: #ddab55;
+    --danger: #ee9494;
     --field-hover-bg: var(--panel-soft);
     --switch-track: var(--panel-strong);
     --switch-thumb: var(--ink);
@@ -454,6 +464,8 @@ body.dp-guides-on { cursor: crosshair; }
 }
 .dp-shell-toggle:hover { color: var(--ink); background: var(--state-hover-bg); }
 .dp-shell-toggle:active { transform: scale(var(--press-scale)); }
+/* 22px visual, ≥24px hit — expansion stays inside the chrome-control gap */
+.dp-shell-toggle::before { content: ""; position: absolute; inset: -.3125rem; border-radius: 50%; }
 .dp-shell-toggle > svg,
 .dp-shell-toggle > .t-icon-swap {
   position: absolute;
@@ -574,6 +586,9 @@ body.dp-guides-on { cursor: crosshair; }
 .btn.primary { color: var(--paper); background: var(--ink); box-shadow: none; }
 .dp-button.quiet,
 .btn.quiet { color: var(--ink-soft); background: var(--surface-2); }
+/* interaction raises contrast above the rest state, never below it */
+.dp-button.quiet:hover,
+.btn.quiet:hover { color: var(--ink); }
 .dp-button.danger,
 .btn.danger { color: var(--danger); }
 .dp-button[aria-busy="true"],
@@ -636,7 +651,13 @@ body.dp-guides-on { cursor: crosshair; }
   font-size: var(--text-control);
 }
 .dp-search-shell > input::placeholder { color: var(--faint); }
-.dp-search-trailing { color: var(--faint); font: 500 var(--text-meta)/1 var(--mono); white-space: nowrap; }
+.dp-search-trailing {
+  justify-self: end;
+  margin-inline-start: var(--space-1);
+  color: var(--faint);
+  font: 500 var(--text-meta)/1 var(--mono);
+  white-space: nowrap;
+}
 
 .dp-switch {
   position: relative;
@@ -648,6 +669,8 @@ body.dp-guides-on { cursor: crosshair; }
   box-shadow: var(--switch-track-shadow);
   transition: background var(--motion-feedback) var(--ease-out);
 }
+/* visual stays 18px tall; the hit target reaches the 24px floor (thumb owns ::after) */
+.dp-switch::before { content: ""; position: absolute; inset: -.25rem -.1875rem; }
 .dp-switch::after {
   content: "";
   position: absolute;
@@ -833,9 +856,22 @@ body.dp-guides-on { cursor: crosshair; }
   transform-origin: top left;
 }
 .dp-context-menu[hidden] { display: none; }
-.dp-context-menu .dp-menu-item { min-height: 2rem; padding-block: .375rem; }
-.dp-context-menu .dp-menu-separator { height: var(--border-width); margin: .25rem .375rem; background: var(--edge); }
+/* shadcn context-menu density: 4px frame padding, 28px rows, 4px item radius,
+   full-bleed separators, right-aligned shortcut hints */
+.dp-context-menu { min-width: 10rem; padding: var(--space-1); border-radius: var(--r-house); }
+.dp-context-menu .dp-menu-item {
+  min-height: 1.75rem;
+  padding: .3125rem var(--space-2);
+  gap: var(--space-2);
+  border-radius: var(--r-mark);
+  font-size: var(--text-sm);
+}
+.dp-context-menu .dp-menu-separator { height: var(--border-width); margin: var(--space-1) calc(-1 * var(--space-1)); background: var(--edge); }
 .dp-context-menu .dp-menu-item[data-tone="danger"] { color: var(--danger); }
+.dp-context-menu .dp-menu-item[data-tone="danger"]:is(:hover, :focus-visible) { color: var(--danger); background: color-mix(in oklab, var(--danger) 10%, transparent); }
+.dp-menu-shortcut { margin-left: auto; padding-left: var(--space-3); display: inline-flex; align-items: center; }
+/* menu rows are 28px — keycaps step down so they read as hints, not controls */
+.dp-menu-shortcut .dp-kbd { min-width: 1rem; height: 1rem; padding-inline: var(--space-0-5); font-size: .625rem; color: var(--faint); }
 
 .dp-row-stack { display: grid; gap: var(--interactive-row-gap); }
 .dp-dense-row { border-radius: var(--r-dense-row); }

@@ -292,12 +292,14 @@ test("every rendered keyboard shortcut uses the shared Kbd primitives", () => {
   }
 
   expect(system).toContain("width: fit-content;");
-  expect(system).toContain("min-width: 1.25rem;");
-  expect(system).toContain("height: 1.25rem;");
-  expect(system).toContain("border-radius: var(--r-mark);");
+  expect(system).toContain("--kbd-size: 1.25rem;");
+  expect(system).toContain("min-width: var(--kbd-size);");
+  expect(system).toContain("height: var(--kbd-size);");
+  expect(system).toContain("border-radius: var(--kbd-radius);");
+  expect(system).toContain("background: var(--surface-4);");
   expect(system).toContain("font: 500 .75rem/1 var(--sans);");
 
-  expect(home).toContain('class="dp-kbd-group" data-slot="kbd-group"');
+  expect(home).toContain('class="dp-kbd-group dp-search-trailing" data-slot="kbd-group"');
   expect(automationsHtml).toContain('class="dp-kbd-group dp-search-trailing" data-slot="kbd-group"');
   expect(settings).toContain('class="dp-kbd-group" data-slot="kbd-group"');
   expect(overlaysHtml).toContain('class="dp-kbd-group" data-slot="kbd-group"');
@@ -425,7 +427,8 @@ test("content and text state changes use one shared transition engine", () => {
   expect(chatJs).toContain("motion.content.swap([lane, chatTitle], swap)");
   expect(chatJs).not.toContain("function dissolve(");
   expect(chatJs).not.toContain("function dissolveGroup(");
-  expect(memory.match(/MOTION\.content\.enter/g)?.length).toBeGreaterThanOrEqual(4);
+  expect(memory.match(/MOTION\.content\.swap/g)?.length).toBeGreaterThanOrEqual(4);
+  expect(memory.match(/MOTION\.content\.enter/g)?.length).toBeGreaterThanOrEqual(1);
   expect(memory).toContain("MOTION.textSwap.swap(peekTitle");
   expect(memory).not.toContain("function animatePeekSwap");
   expect(memory).not.toContain("function animateRailSwap");
@@ -538,8 +541,9 @@ test("shared interactive primitives replace local variants", () => {
   expect(automationsJs).toContain("motion.popover.place");
   expect(settings).toContain("BOARD_MOTION.disclosure.sync");
   expect(settings).toContain("BOARD_TOAST.show");
-  expect(settingsCompact).toContain("sharedMotion.spinner.start(icon)");
-  expect(settingsCompact).toContain("sharedMotion.spinner.settle(icon,active)");
+  expect(settingsCompact).toContain("sharedMotion.spinner.run(icon,");
+  expect(motion).toContain("loadingShowDelay");
+  expect(motion).toContain("loadingMinVisible");
   expect(memory).not.toMatch(/\.btn\s*\{/);
   expect(settings).not.toMatch(/\.btn\s*\{/);
   expect(settings).not.toMatch(/\.switch\s*\{/);

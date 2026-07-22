@@ -213,6 +213,8 @@
       tone: "success",
     }),
   );
+  window.BOARD_MOTION.tooltip.bind(document);
+
   const initialSurface = surfaces.has(query.get("surface")) ? query.get("surface") : "command-palette";
   openSurface(initialSurface, document.querySelector(`[data-open="${initialSurface}"]`));
 })();

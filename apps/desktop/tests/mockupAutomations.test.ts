@@ -63,7 +63,7 @@ test("layout dimensions live in the shared Board token file", () => {
 });
 
 test("editing preserves explicit commit boundaries", () => {
-  expect(html).toContain('data-draft-create hidden>Create</button>');
+  expect(html).toContain('data-draft-create hidden>Create automation</button>');
   expect(html).toContain('data-draft-cancel hidden>Cancel</button>');
   expect(html).not.toContain("saved on blur");
   expect(js).not.toContain("Nothing is created until you confirm");
