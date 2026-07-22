@@ -44,7 +44,8 @@ test("the attention deck is backed by real ask semantics and reversible handling
   expect(js).toContain("function setAside");
   expect(js).toContain("function undo");
   expect(js).toContain("state.last");
-  expect(html).toContain('data-not-today');
+  expect(html).not.toContain('data-not-today');
+  expect(js).not.toContain("notTodayEl");
   expect(html).toContain('data-undo');
 });
 

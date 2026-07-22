@@ -11,7 +11,6 @@
   const zeroEl = document.querySelector("[data-zero]");
   const posEl = document.querySelector("[data-deck-pos]");
   const undoEl = document.querySelector("[data-undo]");
-  const notTodayEl = document.querySelector("[data-not-today]");
   const stripEls = Object.fromEntries([...document.querySelectorAll("[data-strip]")].map(node => [node.dataset.strip, node]));
   const lineEl = key => document.querySelector(`[data-line-${key}]`);
   const rowsEl = key => document.querySelector(`[data-rows-${key}]`);
@@ -322,7 +321,6 @@
     else if (/^1 of \d+$/.test(current) && /^1 of \d+$/.test(label)) motion.spinningCounter.set(posEl, label);
     else if (current !== label) { posEl.dataset.value = label; motion.textSwap.swap(posEl, label || " "); }
     undoEl.hidden = !state.last;
-    notTodayEl.hidden = state.queue.length === 0;
   }
 
   /* verbs ↔ inline reply ↔ snooze swap inside one fixed slot on the head card */
@@ -713,7 +711,6 @@
     if (trigger) route(trigger.dataset.route);
   });
   undoEl.addEventListener("click", undo);
-  notTodayEl.addEventListener("click", () => setAside("back tomorrow morning"));
 
   /* ---------- the front door ---------- */
 
