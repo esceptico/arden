@@ -6,7 +6,7 @@
 set -euo pipefail
 
 BRIEF="docs/internal/slices/slice-07-skill-inducer.md"
-SPEC="docs/internal/ntrp-memory-redesign-spec.md"
+SPEC="docs/internal/arden-memory-redesign-spec.md"
 
 if [ ! -f "$BRIEF" ] || [ ! -f "$SPEC" ]; then
   echo "Missing brief or spec" >&2
@@ -25,13 +25,13 @@ echo "==== Pre-flight: full suite baseline ===="
 (cd apps/server && uv run pytest tests/ -q 2>&1 | tail -3)
 echo ""
 
-# Pre-flight: ensure /tmp/ntrp/proposed-skills is writable
-echo "==== Pre-flight: /tmp/ntrp/proposed-skills writable? ===="
-mkdir -p /tmp/ntrp/proposed-skills 2>&1 && echo "  /tmp/ntrp/proposed-skills ✓" || echo "  FAILED to create /tmp/ntrp/proposed-skills"
+# Pre-flight: ensure /tmp/arden/proposed-skills is writable
+echo "==== Pre-flight: /tmp/arden/proposed-skills writable? ===="
+mkdir -p /tmp/arden/proposed-skills 2>&1 && echo "  /tmp/arden/proposed-skills ✓" || echo "  FAILED to create /tmp/arden/proposed-skills"
 
-# Pre-flight: ~/.ntrp/skills exists
-echo "==== Pre-flight: ~/.ntrp/skills/ exists? ===="
-ls -d "$HOME/.ntrp/skills" 2>&1 | head -1
+# Pre-flight: ~/.arden/skills exists
+echo "==== Pre-flight: ~/.arden/skills/ exists? ===="
+ls -d "$HOME/.arden/skills" 2>&1 | head -1
 echo ""
 
 # Extract verbatim prompt from §11 of slice-07 brief

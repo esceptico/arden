@@ -1,12 +1,12 @@
 # Subagent messaging + recursion — what to steal from codex & claude-code
 
-Research (2026-06) mining `~/src/codex` + `~/src/claude-code-leaked` against ntrp's
+Research (2026-06) mining `~/src/codex` + `~/src/claude-code-leaked` against Arden's
 current `core/spawner.py` + tools. Two questions: (1) send-to/receive-from a running
 sub-agent, (2) recursive (child-of-child) handling.
 
 ## Three mental models
 
-| | **claude-code** | **codex** | **ntrp today** |
+| | **claude-code** | **codex** | **arden today** |
 |---|---|---|---|
 | Send to running child | `SendMessage` → `queuePendingMessage` → child drains as `queued_command` attachment at next tool round (async) | `turn/steer{expected_turn_id}` (wire) / `AgentControl.send_input` (in-proc) | **inject_queue exists but only on top-level agent** |
 | Child → parent | `idle_notification`/results → lead mailbox; `plan_approval_request` → lead → human | `InterAgentCommunication` mailbox (QueueOnly vs trigger_turn); `wait_agent` blocks on `watch<AgentStatus>` | result text only; **approval Future is the one ask-back primitive (parent/UI-scoped)** |
@@ -17,7 +17,7 @@ sub-agent, (2) recursive (child-of-child) handling.
 | Cancel cascade | per-task AbortController; flat kill map; peer teammates deliberately UNLINKED | persist Closed → DFS-shutdown live subtree | **no explicit cascade** — grandchildren die only via asyncio CancelledError |
 | Lifecycle cleanup | `registerTeamForSessionCleanup` kills panes + dirs | RAII release on child death | salvage-on-fail/timeout/cancel (good) |
 
-## ntrp gaps (precise)
+## arden gaps (precise)
 - **Messaging**: `inject_queue` (`RunState.queue_injection`/`drain_injections`) is wired only to the
   top-level agent (`chat.py:1302`); subagent Agents get `on_response`+`on_step_finish` but never
   `get_pending_messages`, so `Agent._drain_pending` is a no-op for them (`agent.py:250`). The only
@@ -48,9 +48,9 @@ sub-agent, (2) recursive (child-of-child) handling.
 4. **Horizontal fan-out cap** — `agent_max_threads`-style atomic reservation alongside the shared
    `RunBudget`; normalize depth gate across `background()`/`research()`. (Avoid the CC whale blowup.)
 5. **Wake-on-message / resurrect** — a message to a *finished* child replays over its durable
-   transcript as a new turn (= CC `resumeAgentBackground`). ntrp child sessions are already durable →
+   transcript as a new turn (= CC `resumeAgentBackground`). arden child sessions are already durable →
    cheap; ties into the hub's "send to this agent" box.
 6. **Control-plane split** — keep structured control msgs (cancel/pause/answer) out of LLM context
-   (= CC `isStructuredProtocolMessage`); ntrp half-does this already (BackgroundTaskEvent + Future).
+   (= CC `isStructuredProtocolMessage`); arden half-does this already (BackgroundTaskEvent + Future).
 
 Full agent findings: workflow `whggpn4j2`.

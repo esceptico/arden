@@ -2,7 +2,7 @@
 
 > Microinteractions are tiny, single-purpose product moments — Trigger, Rules, Feedback, Loops/Modes — and the modern bar is short, spring-physics-driven, interruptible, GPU-cheap, and quiet enough that you barely notice it [1][6][13].
 
-This is a working reference for the NTRP desktop client. Every claim is sourced. Numbers are concrete (ms, cubic-bezier, stiffness/damping). Anti-patterns are called out explicitly.
+This is a working reference for the ARDEN desktop client. Every claim is sourced. Numbers are concrete (ms, cubic-bezier, stiffness/damping). Anti-patterns are called out explicitly.
 
 ---
 
@@ -60,7 +60,7 @@ Springs are physics simulations parameterised by **stiffness** (how snappy), **d
 - Anything **looping** (skeletons, pulses) — needs deterministic timing.
 - Animations where the *exact duration* matters (sync to audio, sync to a progress event).
 
-**Practical NTRP defaults (Motion)**:
+**Practical ARDEN defaults (Motion)**:
 
 ```ts
 // Direct manipulation, panels, sheets
@@ -202,7 +202,7 @@ import { MotionConfig } from "motion/react";
 </MotionConfig>
 ```
 
-Options: `"user"` (respect OS), `"always"` (force on, for testing), `"never"`. NTRP should default to `"user"`. The `useReducedMotion()` hook lets components opt into custom replacements (crossfade fallback for a slide) [11].
+Options: `"user"` (respect OS), `"always"` (force on, for testing), `"never"`. ARDEN should default to `"user"`. The `useReducedMotion()` hook lets components opt into custom replacements (crossfade fallback for a slide) [11].
 
 **CSS fallback**:
 
@@ -232,7 +232,7 @@ Everything else (top/left/width/height/margin/padding/box-shadow/filter) trigger
 
 **`will-change`**: a hint, not a guarantee. Use *just before* an animation starts and clear after; permanent `will-change: transform` on hundreds of nodes hogs GPU memory [18].
 
-**`backdrop-filter` is expensive.** Per the CSS Filter Effects spec it requires a *separate rendering pass* — roughly doubling render time and GPU bandwidth where used [18][19]. Concrete NTRP rules:
+**`backdrop-filter` is expensive.** Per the CSS Filter Effects spec it requires a *separate rendering pass* — roughly doubling render time and GPU bandwidth where used [18][19]. Concrete ARDEN rules:
 
 - Cap `backdrop-filter: blur()` to **one or two layers** simultaneously visible.
 - Avoid blur radii above ~20 px on large surfaces; cost scales with radius × area.

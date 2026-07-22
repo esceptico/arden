@@ -4,14 +4,14 @@ from datetime import UTC, datetime
 import pytest
 from ddgs.exceptions import DDGSException
 
-from ntrp.context.models import SessionState
-from ntrp.integrations.web import ddgs as ddgs_module
-from ntrp.integrations.web.ddgs import DDGSWebSource
-from ntrp.integrations.web.exceptions import NoSearchResultsException, WebSearchProviderException
-from ntrp.integrations.web.tools import WebFetchInput, WebSearchInput, web_fetch, web_search
-from ntrp.integrations.web.types import WebContentResult, WebSearchResult
-from ntrp.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
-from ntrp.tools.core.registry import ToolRegistry
+from arden.context.models import SessionState
+from arden.integrations.web import ddgs as ddgs_module
+from arden.integrations.web.ddgs import DDGSWebSource
+from arden.integrations.web.exceptions import NoSearchResultsException, WebSearchProviderException
+from arden.integrations.web.tools import WebFetchInput, WebSearchInput, web_fetch, web_search
+from arden.integrations.web.types import WebContentResult, WebSearchResult
+from arden.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
+from arden.tools.core.registry import ToolRegistry
 
 
 class FakeWebSource:
@@ -204,7 +204,9 @@ async def test_web_search_keeps_real_provider_errors_as_errors():
 
 @pytest.mark.asyncio
 async def test_web_search_sanitizes_provider_failures():
-    raw_error = "('error sending request for url (https://html.duckduckgo.com/html/)', 'https://html.duckduckgo.com/html/')"
+    raw_error = (
+        "('error sending request for url (https://html.duckduckgo.com/html/)', 'https://html.duckduckgo.com/html/')"
+    )
     result = await web_search(
         _execution(FakeWebSource(error=WebSearchProviderException("DuckDuckGo request failed."))),
         WebSearchInput(query="normal query", limit=5),
@@ -242,9 +244,7 @@ def test_ddgs_web_source_raises_provider_exception_for_request_failures(monkeypa
             return False
 
         def text(self, query: str, max_results: int):
-            raise DDGSException(
-                "RuntimeError: error sending request for url (https://html.duckduckgo.com/html/)"
-            )
+            raise DDGSException("RuntimeError: error sending request for url (https://html.duckduckgo.com/html/)")
 
     monkeypatch.setattr(ddgs_module, "DDGS", FakeDDGS)
 

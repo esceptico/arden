@@ -8,7 +8,7 @@ import { setState } from "@/stores";
 let root: Root | null = null;
 
 afterEach(async () => {
-  delete (window as unknown as { ntrpDesktop?: unknown }).ntrpDesktop;
+  delete (window as unknown as { ardenDesktop?: unknown }).ardenDesktop;
   await act(async () => {
     setState({ commandSidecar: createCommandSidecarState() });
     root?.unmount();
@@ -19,7 +19,7 @@ afterEach(async () => {
 
 test("shows command activity and submits canonical approval results", async () => {
   const calls: { path: string; body: Record<string, unknown> }[] = [];
-  (window as unknown as { ntrpDesktop: unknown }).ntrpDesktop = {
+  (window as unknown as { ardenDesktop: unknown }).ardenDesktop = {
     api: {
       request: async (_config: unknown, request: { path: string; body?: string }) => {
         calls.push({ path: request.path, body: request.body ? JSON.parse(request.body) : {} });
@@ -70,7 +70,7 @@ test("shows command activity and submits canonical approval results", async () =
 
 test("Close is passive while Stop cancels the run", async () => {
   const calls: { path: string; body: Record<string, unknown> }[] = [];
-  (window as unknown as { ntrpDesktop: unknown }).ntrpDesktop = {
+  (window as unknown as { ardenDesktop: unknown }).ardenDesktop = {
     api: {
       request: async (_config: unknown, request: { path: string; body?: string }) => {
         calls.push({ path: request.path, body: request.body ? JSON.parse(request.body) : {} });

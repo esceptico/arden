@@ -6,7 +6,7 @@
 set -euo pipefail
 
 BRIEF="docs/internal/slices/slice-06-contradiction-watcher.md"
-SPEC="docs/internal/ntrp-memory-redesign-spec.md"
+SPEC="docs/internal/arden-memory-redesign-spec.md"
 
 if [ ! -f "$BRIEF" ] || [ ! -f "$SPEC" ]; then
   echo "Missing brief or spec" >&2

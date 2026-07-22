@@ -1,10 +1,10 @@
-# ntrp server
+# Arden server
 
-Backend package for ntrp.
+Backend package for arden.
 
 It provides:
 
-- `ntrp-server` CLI entrypoint
+- `arden-server` CLI entrypoint
 - FastAPI HTTP/SSE server
 - agent runtime and multi-agent tooling
 - integrations and deferred tool loading
@@ -16,7 +16,7 @@ Run from source:
 
 ```bash
 uv sync --extra dev
-uv run ntrp-server serve
+uv run arden-server serve
 ```
 
 Run tests:
@@ -25,4 +25,4 @@ Run tests:
 uv run pytest
 ```
 
-Repository and full documentation: https://github.com/esceptico/ntrp
+Repository and full documentation: https://github.com/esceptico/arden

@@ -3,10 +3,10 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from ntrp.agent.llm.parsing import normalize_assistant_message
-from ntrp.agent.types.llm import ProviderToolCall, ToolCallStreamDelta
-from ntrp.llm.openai import OpenAIClient
-from ntrp.llm.openai_responses import (
+from arden.agent.llm.parsing import normalize_assistant_message
+from arden.agent.types.llm import ProviderToolCall, ToolCallStreamDelta
+from arden.llm.openai import OpenAIClient
+from arden.llm.openai_responses import (
     buffered_stream_responses_completion,
     complete_responses_completion,
     parse_responses_response,
@@ -99,9 +99,7 @@ def test_chat_completions_request_strips_internal_tool_result_data():
         response_format=None,
     )
 
-    assert request["messages"] == [
-        {"role": "tool", "tool_call_id": "call_1", "content": "Started background agent."}
-    ]
+    assert request["messages"] == [{"role": "tool", "tool_call_id": "call_1", "content": "Started background agent."}]
 
 
 def test_responses_request_formats_image_blocks_as_input_images():
@@ -180,9 +178,7 @@ def test_responses_request_allows_visible_tool_search_loader_with_native_deferre
                 },
             }
         ],
-        deferred_tools=[
-            {"type": "function", "function": {"name": "slack_search", "parameters": {"type": "object"}}}
-        ],
+        deferred_tools=[{"type": "function", "function": {"name": "slack_search", "parameters": {"type": "object"}}}],
         tool_choice="auto",
         temperature=None,
         max_tokens=None,
@@ -203,9 +199,7 @@ def test_responses_deferred_tool_search_preserves_prompt_cache_key():
         messages=[{"role": "user", "content": "search slack"}],
         model="gpt-5.5",
         tools=[{"type": "function", "function": {"name": "echo", "parameters": {"type": "object"}}}],
-        deferred_tools=[
-            {"type": "function", "function": {"name": "slack_search", "parameters": {"type": "object"}}}
-        ],
+        deferred_tools=[{"type": "function", "function": {"name": "slack_search", "parameters": {"type": "object"}}}],
         tool_choice="auto",
         temperature=None,
         max_tokens=None,
@@ -322,9 +316,7 @@ def test_responses_request_skips_native_deferred_tool_search_for_unsupported_mod
         messages=[{"role": "user", "content": "search slack"}],
         model="gpt-5.2",
         tools=[{"type": "function", "function": {"name": "load_tools", "parameters": {"type": "object"}}}],
-        deferred_tools=[
-            {"type": "function", "function": {"name": "slack_search", "parameters": {"type": "object"}}}
-        ],
+        deferred_tools=[{"type": "function", "function": {"name": "slack_search", "parameters": {"type": "object"}}}],
         tool_choice="auto",
         temperature=None,
         max_tokens=None,
@@ -618,7 +610,7 @@ async def test_live_responses_stream_reports_remote_protocol_disconnect():
 
 @pytest.mark.asyncio
 async def test_live_responses_stream_preserves_provider_error_code():
-    from ntrp.services.chat import _safe_error
+    from arden.services.chat import _safe_error
 
     stream = stream_responses_completion(
         _FailingResponsesOpenAI(),

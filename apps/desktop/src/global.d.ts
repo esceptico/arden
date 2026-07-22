@@ -11,7 +11,7 @@ interface QuickCapturePayload {
 }
 
 interface Window {
-  ntrpDesktop?: {
+  ardenDesktop?: {
     version: () => string;
     app: {
       /** Reload the renderer (Cmd-R equivalent). */

@@ -6,7 +6,7 @@ For brainstorm trees, concept hierarchies, knowledge maps. Indentation defines p
 
 ```
 mindmap
-  root((ntrp))
+  root((arden))
     Memory
       Facts
       Observations

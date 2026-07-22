@@ -28,7 +28,7 @@ export async function viewSkill(name: string): Promise<void> {
   } catch (error) {
     // Couldn't load via server. As a last resort, open externally if we
     // know the path locally.
-    if (skill?.path) void window.ntrpDesktop?.shell?.openPath(skill.path);
+    if (skill?.path) void window.ardenDesktop?.shell?.openPath(skill.path);
     else {
       s.appendMessage({
         id: crypto.randomUUID(),

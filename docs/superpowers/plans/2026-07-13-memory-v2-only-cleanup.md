@@ -20,11 +20,11 @@
 ### Task 1: V2-Only Startup and Validation
 
 **Files:**
-- Create: `apps/server/ntrp/memory/health.py`
-- Delete: `apps/server/ntrp/memory/migrate_ledger_v2.py`
-- Modify: `apps/server/ntrp/server/runtime/knowledge.py`
-- Modify: `apps/server/ntrp/memory/file_store.py`
-- Modify: `apps/server/ntrp/memory/artifacts.py`
+- Create: `apps/server/arden/memory/health.py`
+- Delete: `apps/server/arden/memory/migrate_ledger_v2.py`
+- Modify: `apps/server/arden/server/runtime/knowledge.py`
+- Modify: `apps/server/arden/memory/file_store.py`
+- Modify: `apps/server/arden/memory/artifacts.py`
 - Test: `apps/server/tests/test_memory_health.py`
 - Delete/replace: `apps/server/tests/test_memory_ledger_migration.py`
 
@@ -40,12 +40,12 @@
 ### Task 2: Delete Legacy Parsers and Aliases
 
 **Files:**
-- Modify: `apps/server/ntrp/memory/ledger.py`
-- Modify: `apps/server/ntrp/memory/pages.py`
-- Modify: `apps/server/ntrp/memory/file_store.py`
-- Modify: `apps/server/ntrp/memory/scopes.py`
-- Modify: `apps/server/ntrp/memory/curator.py`
-- Modify: `apps/server/ntrp/memory/models.py`
+- Modify: `apps/server/arden/memory/ledger.py`
+- Modify: `apps/server/arden/memory/pages.py`
+- Modify: `apps/server/arden/memory/file_store.py`
+- Modify: `apps/server/arden/memory/scopes.py`
+- Modify: `apps/server/arden/memory/curator.py`
+- Modify: `apps/server/arden/memory/models.py`
 - Modify corresponding `apps/server/tests/test_memory_*.py` files.
 
 **Interfaces:**
@@ -61,8 +61,8 @@
 ### Task 3: Delete Legacy Projection and Changelog Normalization
 
 **Files:**
-- Modify: `apps/server/ntrp/memory/artifacts.py`
-- Modify: `apps/server/ntrp/memory/synthesize.py`
+- Modify: `apps/server/arden/memory/artifacts.py`
+- Modify: `apps/server/arden/memory/synthesize.py`
 - Modify related artifact/synthesis tests.
 
 **Interfaces:**
@@ -83,5 +83,5 @@
 - [ ] Remove obsolete migration promises from current memory documentation.
 - [ ] Run the full server suite and scoped/full Ruff.
 - [ ] Run desktop tests, typecheck, lint, and build.
-- [ ] Validate a temporary copy of `~/.ntrp/memory` without modifying the original.
+- [ ] Validate a temporary copy of `~/.arden/memory` without modifying the original.
 - [ ] Confirm `git diff --check` and commit the cleanup.

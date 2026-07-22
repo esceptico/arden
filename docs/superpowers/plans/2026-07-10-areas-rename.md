@@ -39,7 +39,7 @@ debt ("otherwise we will have 100500 different names for one concept").
 
 ## Stages (commit per stage; gates each time)
 
-- [x] 1. Server code: ntrp/slices → ntrp/areas module; Slice→Area classes/fns;
+- [x] 1. Server code: arden/slices → arden/areas module; Slice→Area classes/fns;
        slice_key→area_key; slice:→area: task ids; events; runtime/automation.
 - [x] 2. Server storage: schema rename + boot migration (projects→areas,
        project_id→area_id, state-file renames, task-id re-key, asks field).
@@ -48,7 +48,7 @@ debt ("otherwise we will have 100500 different names for one concept").
        (2 pre-existing failures allowed: test_render_html_tool, test_tools).
 - [x] 5. Desktop: api/types/store/actions/features rename + UI copy ("Areas");
        SSE event name; gates = typecheck + lint + bun test tests/.
-- [x] 6. Live verify: migration dry-run against a COPY of ~/.ntrp/sessions.db;
+- [x] 6. Live verify: migration dry-run against a COPY of ~/.arden/sessions.db;
        preview harness pass on sidebar/home/popover/room.
 - [x] 7. Docs sweep (CLAUDE.md has no slices mentions — no change) + memory update.
 
@@ -59,6 +59,6 @@ debt ("otherwise we will have 100500 different names for one concept").
 - Never push; commit to local main only. Never touch the user's running
   server or dev processes; preview via renderer-alt (port 5186) only.
 - Desktop tests: `bun test tests/` from apps/desktop. Server: `uv run pytest
-  tests/ -q` + `uv run ruff check ntrp/` from apps/server.
+  tests/ -q` + `uv run ruff check arden/` from apps/server.
 - The user's live server is RUNNING on the old schema — the boot migration
   must be idempotent and only run on their restart.

@@ -6,7 +6,7 @@ Implemented prose parsing to extract "## Open loops" bullets from memory topic p
 
 ## Files Created
 
-- `apps/server/ntrp/slices/projection.py` — Core implementation
+- `apps/server/arden/slices/projection.py` — Core implementation
   - `parse_open_loops(prose: str) -> list[str]` — Extracts bullet texts under `## Open loops` heading, strips markdown bold, strips provenance suffixes `(from chat)` and `(record:...)`
   - `page_summary(page: Page) -> dict` — Returns dict with title, updated timestamp, and open_loops list
 

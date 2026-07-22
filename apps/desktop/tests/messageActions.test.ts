@@ -7,7 +7,7 @@ type CapturedRequest = { path: string; method: string; body?: string };
 function mockBridge(requests: CapturedRequest[]) {
   const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async (_config: unknown, request: CapturedRequest) => {
           requests.push(request);
@@ -105,7 +105,7 @@ test("enqueueMessage promotes stale queued submit when server starts a new run",
   const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
   const requests: unknown[] = [];
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async (_config: unknown, request: unknown) => {
           requests.push(request);
@@ -163,7 +163,7 @@ test("sendMessage with no current session lazily creates one, then sends into it
   const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
   const requests: { path: string; method?: string; body?: string }[] = [];
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async (_config: unknown, request: { path: string; method?: string; body?: string }) => {
           requests.push(request);
@@ -213,7 +213,7 @@ test("sendMessage with no current session lazily creates one, then sends into it
 test("enqueueMessage removes queue card when enqueue request fails", async () => {
   const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async () => {
           throw new Error("request failed");

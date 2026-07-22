@@ -3,7 +3,7 @@
 The pipeline components (admit/extract/reconcile/consolidate/retrieve, the
 capture boundary judge, and the recall tool) talk to a CompletionClient and an
 Embedder. Tests must never touch the network or a real model, and never open
-~/.ntrp/memory.db — every store is a tmp_path / in-memory SQLite DB.
+~/.arden/memory.db — every store is a tmp_path / in-memory SQLite DB.
 
 The fakes here cover the shared shapes; component tests that need scripted
 structured outputs keep their own local stubs (admit/reconcile/consolidate),
@@ -13,19 +13,19 @@ since those assert exact-call semantics per CONTRACTS.md.
 import numpy as np
 import pytest
 
-from ntrp.agent.types.llm import (
+from arden.agent.types.llm import (
     Choice,
     CompletionResponse,
     FinishReason,
     Message,
     Role,
 )
-from ntrp.agent.types.usage import Usage
+from arden.agent.types.usage import Usage
 
 
 @pytest.fixture(autouse=True)
 def isolate_raw_tool_result_blobs(monkeypatch, tmp_path):
-    import ntrp.core.raw_tool_results as raw_tool_results
+    import arden.core.raw_tool_results as raw_tool_results
 
     monkeypatch.setattr(raw_tool_results, "RAW_TOOL_RESULTS_BASE", tmp_path / "raw-tool-results")
 
@@ -75,9 +75,7 @@ class FakeCompletionClient:
         return payload.model_dump_json()
 
     async def completion(self, *, messages, model, response_format=None, **kwargs):
-        self.calls.append(
-            {"messages": messages, "model": model, "response_format": response_format}
-        )
+        self.calls.append({"messages": messages, "model": model, "response_format": response_format})
         payload = self._queue.pop(0) if self._queue else self.default
         return completion_response(self._content(payload))
 

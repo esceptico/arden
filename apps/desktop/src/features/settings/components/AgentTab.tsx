@@ -51,7 +51,7 @@ export function AgentTab({ serverConfig }: { serverConfig: ServerConfig | null }
 
       <NumberField
         label="Max sub-agent depth"
-        help="How deep ntrp will spawn sub-agents before refusing to recurse further."
+        help="How deep Arden will spawn sub-agents before refusing to recurse further."
         value={depth}
         min={1}
         max={16}

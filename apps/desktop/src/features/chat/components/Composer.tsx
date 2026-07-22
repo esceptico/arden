@@ -361,7 +361,7 @@ export function Composer() {
           <textarea
             ref={inputRef}
             id="message-input"
-            aria-label="Message ntrp"
+            aria-label="Message arden"
             value={draft}
             onChange={(e) => {
               // Real typing exits history mode (recall sets the draft
@@ -467,7 +467,7 @@ export function Composer() {
             }}
             rows={1}
             placeholder={
-              dragOver ? "Drop images here" : selectedSkill ? "if needed" : "Message ntrp…"
+              dragOver ? "Drop images here" : selectedSkill ? "if needed" : "Message arden…"
             }
             className="min-h-[44px] max-h-[220px] min-w-0 flex-1 resize-none border-0 bg-transparent p-0 text-md leading-[1.5] text-ink outline-none tracking-[-0.005em] placeholder:text-muted"
           />

@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ntrp.memory.artifacts import ArtifactMemoryStore
-from ntrp.memory.file_store import FilePageStore
-from ntrp.memory.health import initialize_empty_vault, validate_vault
-from ntrp.memory.models import now_iso, source_time
+from arden.memory.artifacts import ArtifactMemoryStore
+from arden.memory.file_store import FilePageStore
+from arden.memory.health import initialize_empty_vault, validate_vault
+from arden.memory.models import now_iso, source_time
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -45,18 +45,17 @@ def _entry(
 ) -> str:
     return (
         f"- {occurred} ^{record_id} [fact] Fact {record_id}.\n"
-        '  <!-- ntrp:meta {"recorded_at":"2026-07-12T10:23:42Z","sequence":1,'
+        '  <!-- arden:meta {"recorded_at":"2026-07-12T10:23:42Z","sequence":1,'
         f'"time_precision":"{precision}","scope":{scope},"sources":{sources}{extra}}} -->\n'
     )
 
 
 def test_health_reports_every_ledger_safety_field(tmp_path: Path) -> None:
-    header = "<!-- ntrp:records schema=2 page={} -->\n"
+    header = "<!-- arden:records schema=2 page={} -->\n"
     _write_raw(
         tmp_path,
         "me.md",
-        header.format("me.md")
-        + _entry("dup", precision="day", sources="[]", extra=',"supersedes":["missing"]'),
+        header.format("me.md") + _entry("dup", precision="day", sources="[]", extra=',"supersedes":["missing"]'),
     )
     _write_raw(
         tmp_path,
@@ -66,10 +65,9 @@ def test_health_reports_every_ledger_safety_field(tmp_path: Path) -> None:
     _write_raw(
         tmp_path,
         "topics/bad.md",
-        header.format("topics/bad.md")
-        + "- 2026-07-12T10:23:41Z ^bad [fact] Bad.\n  <!-- ntrp:meta {not-json} -->\n",
+        header.format("topics/bad.md") + "- 2026-07-12T10:23:41Z ^bad [fact] Bad.\n  <!-- arden:meta {not-json} -->\n",
     )
-    (tmp_path / ".ntrp" / "journal" / "interrupted").mkdir(parents=True)
+    (tmp_path / ".arden" / "journal" / "interrupted").mkdir(parents=True)
 
     health = validate_vault(tmp_path)
 
@@ -79,10 +77,8 @@ def test_health_reports_every_ledger_safety_field(tmp_path: Path) -> None:
     assert health.malformed_metadata == ("raw/topics/bad.md: record bad: invalid schema-v2 metadata JSON",)
     assert health.missing_evidence == ("raw/me.md: dup",)
     assert health.invalid_scope == ("raw/topics/x.md: dup: bogus",)
-    assert health.timestamp_precision_violations == (
-        "raw/me.md: dup: day precision requires a date-only occurred_at",
-    )
-    assert health.interrupted_journals == (".ntrp/journal/interrupted",)
+    assert health.timestamp_precision_violations == ("raw/me.md: dup: day precision requires a date-only occurred_at",)
+    assert health.interrupted_journals == (".arden/journal/interrupted",)
     assert health.healthy is False
 
 
@@ -90,8 +86,7 @@ def test_unknown_occurrence_requires_unknown_precision(tmp_path: Path) -> None:
     _write_raw(
         tmp_path,
         "me.md",
-        "<!-- ntrp:records schema=2 page=me.md -->\n"
-        + _entry("unknown", occurred="unknown", precision="day"),
+        "<!-- arden:records schema=2 page=me.md -->\n" + _entry("unknown", occurred="unknown", precision="day"),
     )
 
     health = validate_vault(tmp_path)
@@ -105,8 +100,7 @@ def test_valid_unknown_occurrence_is_healthy(tmp_path: Path) -> None:
     _write_raw(
         tmp_path,
         "me.md",
-        "<!-- ntrp:records schema=2 page=me.md -->\n"
-        + _entry("unknown", occurred="unknown", precision="unknown"),
+        "<!-- arden:records schema=2 page=me.md -->\n" + _entry("unknown", occurred="unknown", precision="unknown"),
     )
 
     assert validate_vault(tmp_path).healthy
@@ -116,7 +110,7 @@ def test_artifact_store_exposes_exact_vault_health(tmp_path: Path) -> None:
     _write_raw(
         tmp_path,
         "me.md",
-        "<!-- ntrp:records schema=2 page=me.md -->\n" + _entry("one"),
+        "<!-- arden:records schema=2 page=me.md -->\n" + _entry("one"),
     )
 
     assert ArtifactMemoryStore(tmp_path).vault_health() == validate_vault(tmp_path)
@@ -127,22 +121,19 @@ def test_file_store_exposes_invalid_v2_health_without_serving_reads(tmp_path: Pa
     _write_raw(
         tmp_path,
         "me.md",
-        "<!-- ntrp:records schema=2 page=me.md -->\n"
-        "- 2026-07-12T10:23:41Z ^bad [fact] Bad.\n",
+        "<!-- arden:records schema=2 page=me.md -->\n- 2026-07-12T10:23:41Z ^bad [fact] Bad.\n",
     )
 
     health = FilePageStore(tmp_path).vault_health()
 
-    assert health.malformed_metadata == (
-        "raw/me.md: record bad: schema-v2 record is missing its metadata comment",
-    )
+    assert health.malformed_metadata == ("raw/me.md: record bad: schema-v2 record is missing its metadata comment",)
 
 
 def test_missing_evidence_blocks_an_otherwise_valid_vault(tmp_path: Path) -> None:
     _write_raw(
         tmp_path,
         "me.md",
-        "<!-- ntrp:records schema=2 page=me.md -->\n" + _entry("one", sources="[]"),
+        "<!-- arden:records schema=2 page=me.md -->\n" + _entry("one", sources="[]"),
     )
 
     health = validate_vault(tmp_path)
@@ -152,10 +143,14 @@ def test_missing_evidence_blocks_an_otherwise_valid_vault(tmp_path: Path) -> Non
 
 
 def test_health_blocks_future_schema_and_invalid_scope_keys(tmp_path: Path) -> None:
-    _write_raw(tmp_path, "future.md", "<!-- ntrp:records schema=3 page=future.md -->\n")
+    _write_raw(tmp_path, "future.md", "<!-- arden:records schema=3 page=future.md -->\n")
     assert not validate_vault(tmp_path).healthy
 
-    _write_raw(tmp_path, "future.md", "<!-- ntrp:records schema=2 page=future.md -->\n" + _entry("area", scope='{"kind":"area"}'))
+    _write_raw(
+        tmp_path,
+        "future.md",
+        "<!-- arden:records schema=2 page=future.md -->\n" + _entry("area", scope='{"kind":"area"}'),
+    )
     health = validate_vault(tmp_path)
     assert health.invalid_scope == ("raw/future.md: area: area requires a scope key",)
 
@@ -168,17 +163,18 @@ def test_health_rejects_symlinked_raw_root(tmp_path: Path) -> None:
 
 
 def test_health_preserves_mixed_schema_versions(tmp_path: Path) -> None:
-    _write_raw(tmp_path, "two.md", "<!-- ntrp:records schema=2 page=two.md -->\n")
-    _write_raw(tmp_path, "three.md", "<!-- ntrp:records schema=3 page=three.md -->\n")
+    _write_raw(tmp_path, "two.md", "<!-- arden:records schema=2 page=two.md -->\n")
+    _write_raw(tmp_path, "three.md", "<!-- arden:records schema=3 page=three.md -->\n")
     health = validate_vault(tmp_path)
     assert health.schema_versions == (2, 3)
     assert not health.healthy
     assert health.first_error == "unsupported schema versions: [2, 3]"
+
 
 def test_empty_vault_initializes_without_migration_state(tmp_path: Path) -> None:
     initialize_empty_vault(tmp_path)
 
     assert validate_vault(tmp_path).healthy
     assert (tmp_path / "raw").is_dir()
-    assert (tmp_path / ".ntrp").is_dir()
-    assert not (tmp_path / ".ntrp/maintenance/migration-v2.json").exists()
+    assert (tmp_path / ".arden").is_dir()
+    assert not (tmp_path / ".arden/maintenance/migration-v2.json").exists()

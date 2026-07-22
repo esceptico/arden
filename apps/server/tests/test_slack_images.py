@@ -1,8 +1,8 @@
 import pytest
 
-from ntrp.core.content import ImageContent
-from ntrp.integrations.slack import SLACK
-from ntrp.integrations.slack.client import SlackClient
+from arden.core.content import ImageContent
+from arden.integrations.slack import SLACK
+from arden.integrations.slack.client import SlackClient
 
 STATIC_GIF = (
     b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff"
@@ -123,7 +123,9 @@ async def test_download_slack_image_accepts_static_gif_for_model_payloads():
 
     result = await client._download_slack_image(FakeSession(STATIC_GIF), file_obj)
 
-    assert result == ImageContent(media_type="image/gif", data="R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==")
+    assert result == ImageContent(
+        media_type="image/gif", data="R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAICRAEAOw=="
+    )
 
 
 @pytest.mark.asyncio

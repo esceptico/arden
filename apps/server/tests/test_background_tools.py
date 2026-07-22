@@ -4,12 +4,12 @@ from datetime import UTC, datetime
 
 import pytest
 
-import ntrp.tools.background as background_module
-from ntrp.context.models import SessionState
-from ntrp.core.spawner import SpawnResult
-from ntrp.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
-from ntrp.tools.core.registry import ToolRegistry
-from ntrp.tools.core.types import ToolAction
+import arden.tools.background as background_module
+from arden.context.models import SessionState
+from arden.core.spawner import SpawnResult
+from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
+from arden.tools.core.registry import ToolRegistry
+from arden.tools.core.types import ToolAction
 
 
 def _ctx(registry: BackgroundTaskRegistry) -> ToolContext:
@@ -155,7 +155,7 @@ async def test_list_background_tasks_is_sorted_by_task_id():
 
 @pytest.mark.asyncio
 async def test_cancel_subtree_cancels_descendant_background_agents():
-    from ntrp.server.state import RunRegistry
+    from arden.server.state import RunRegistry
 
     reg = RunRegistry()
     # Agent A (session "P") spawned B, which runs in A's child session "P::a"

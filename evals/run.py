@@ -32,7 +32,7 @@ class DiscoveredCase:
 
 
 def _load_case_module(path: Path) -> ModuleType:
-    spec = importlib.util.spec_from_file_location(f"ntrp_eval_{path.stem.replace('.', '_')}", path)
+    spec = importlib.util.spec_from_file_location(f"arden_eval_{path.stem.replace('.', '_')}", path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Cannot load eval case: {path}")
     module = importlib.util.module_from_spec(spec)
@@ -132,7 +132,7 @@ async def run_provider_cases(cases: list[DiscoveredCase], client: ProviderRuntim
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run ntrp eval suites.")
+    parser = argparse.ArgumentParser(description="Run arden eval suites.")
     parser.add_argument(
         "--suite",
         choices=("harness-reliability", "agent-ergonomics"),
@@ -143,8 +143,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true", help="Discover and validate cases without calling a provider.")
     parser.add_argument(
         "--base-url",
-        default=os.getenv("NTRP_EVAL_BASE_URL"),
-        help="Running ntrp server for agent-ergonomics (or NTRP_EVAL_BASE_URL).",
+        default=os.getenv("ARDEN_EVAL_BASE_URL"),
+        help="Running Arden server for agent-ergonomics (or ARDEN_EVAL_BASE_URL).",
     )
     return parser
 
@@ -171,10 +171,10 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(payload, indent=2) if args.json else "\n".join(f"DISCOVERED {row['name']}" for row in payload))
             return 0
         if not args.base_url:
-            _parser().error("agent-ergonomics requires --base-url or NTRP_EVAL_BASE_URL (or use --dry-run)")
+            _parser().error("agent-ergonomics requires --base-url or ARDEN_EVAL_BASE_URL (or use --dry-run)")
 
         async def run_live() -> list[EventEvalResult]:
-            client = ProviderRuntimeClient(args.base_url, api_key=os.getenv("NTRP_EVAL_API_KEY"))
+            client = ProviderRuntimeClient(args.base_url, api_key=os.getenv("ARDEN_EVAL_API_KEY"))
             try:
                 return await run_provider_cases(cases, client)
             finally:

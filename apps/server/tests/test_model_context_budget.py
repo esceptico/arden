@@ -1,5 +1,5 @@
-from ntrp.agent.types.llm import Role
-from ntrp.core.model_context_budget import (
+from arden.agent.types.llm import Role
+from arden.core.model_context_budget import (
     MODEL_TOOL_RESULT_KEEP_FULL_CHARS,
     MODEL_TOOL_RESULT_PREVIEW_CHARS,
     clamp_tool_results_for_model_context,

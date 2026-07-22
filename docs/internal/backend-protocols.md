@@ -6,11 +6,11 @@ This document describes the backend wiring after the generic in-process channel 
 
 | Protocol | Owner | Transport | Durable | Main producers | Main consumers |
 | --- | --- | --- | --- | --- | --- |
-| Session SSE stream | `ntrp.server.bus` and `ntrp.server.routers.chat` | In-process `asyncio.Queue` | No | Chat and agent run loop | `/chat/events/{session_id}` clients |
-| Automation SSE stream | `ntrp.automation.scheduler` | In-process `asyncio.Queue` under `automation:events` | No | Scheduler run progress | `/automations/events` clients |
-| Outbox | `ntrp.outbox` | SQLite table `outbox_events` | Yes | Chat, operator, CLI, memory service | `OutboxWorker` handlers in `RuntimeOutbox` |
-| Scheduler triggers | `ntrp.automation` | Scheduler methods and SQLite state | Mixed | Time tick, run completion, monitor events, manual run | Automation runner and built-in handlers |
-| Monitor events | `ntrp.monitor` | Direct async callback | No, then scheduler-owned persistence | Calendar monitor | `Scheduler.fire_event` |
+| Session SSE stream | `arden.server.bus` and `arden.server.routers.chat` | In-process `asyncio.Queue` | No | Chat and agent run loop | `/chat/events/{session_id}` clients |
+| Automation SSE stream | `arden.automation.scheduler` | In-process `asyncio.Queue` under `automation:events` | No | Scheduler run progress | `/automations/events` clients |
+| Outbox | `arden.outbox` | SQLite table `outbox_events` | Yes | Chat, operator, CLI, memory service | `OutboxWorker` handlers in `RuntimeOutbox` |
+| Scheduler triggers | `arden.automation` | Scheduler methods and SQLite state | Mixed | Time tick, run completion, monitor events, manual run | Automation runner and built-in handlers |
+| Monitor events | `arden.monitor` | Direct async callback | No, then scheduler-owned persistence | Calendar monitor | `Scheduler.fire_event` |
 
 The rule is simple: UI streaming is transient, cross-workflow side effects go through the outbox, and automation triggering is owned by the scheduler.
 
@@ -20,18 +20,18 @@ The tables below are implementation details of their owning store. Other modules
 
 | Table | Owner module | Public protocol |
 | --- | --- | --- |
-| `outbox_events` | `ntrp.outbox.store` | `OutboxStore` enqueue, claim, status, replay, prune methods |
-| `scheduled_tasks` | `ntrp.automation.store` | `AutomationStore` task CRUD and scheduler state methods |
-| `automation_event_dedupe` | `ntrp.automation.store` | `AutomationStore.claim_event()` and event dedupe helpers |
-| `automation_event_queue` | `ntrp.automation.store` | `AutomationStore` event queue methods |
-| `automation_count_state` | `ntrp.automation.store` | `AutomationStore` count trigger methods |
-| `monitor_state` | `ntrp.monitor.store` | `MonitorStateStore` namespace state methods |
+| `outbox_events` | `arden.outbox.store` | `OutboxStore` enqueue, claim, status, replay, prune methods |
+| `scheduled_tasks` | `arden.automation.store` | `AutomationStore` task CRUD and scheduler state methods |
+| `automation_event_dedupe` | `arden.automation.store` | `AutomationStore.claim_event()` and event dedupe helpers |
+| `automation_event_queue` | `arden.automation.store` | `AutomationStore` event queue methods |
+| `automation_count_state` | `arden.automation.store` | `AutomationStore` count trigger methods |
+| `monitor_state` | `arden.monitor.store` | `MonitorStateStore` namespace state methods |
 
 There is an architecture test that checks these table names do not appear in production modules outside their owner files. Tests may still inspect tables directly when they are exercising a store as a persistence adapter.
 
 ## Startup wiring
 
-`ntrp.server.app.lifespan` is the composition root for backend runtime protocols. HTTP endpoint behavior lives in routers; `ntrp.server.app` owns process lifecycle, middleware, and router registration.
+`arden.server.app.lifespan` is the composition root for backend runtime protocols. HTTP endpoint behavior lives in routers; `arden.server.app` owns process lifecycle, middleware, and router registration.
 
 1. `Runtime.connect()` initializes stores, search, memory, skills, notifiers, automation, MCP, and tools.
 2. `BusRegistry()` is created for SSE streams only.
@@ -45,9 +45,9 @@ Shutdown is the reverse ownership order: active runs are cancelled, monitor/outb
 
 Source files:
 
-- `apps/server/ntrp/server/bus.py`
-- `apps/server/ntrp/server/routers/chat.py`
-- `apps/server/ntrp/services/chat.py`
+- `apps/server/arden/server/bus.py`
+- `apps/server/arden/server/routers/chat.py`
+- `apps/server/arden/services/chat.py`
 
 The session stream exists only to deliver live UI events to connected clients. It is not a backend event bus.
 
@@ -102,9 +102,9 @@ Use this for live UI updates only. Do not attach domain side effects to this pat
 
 Source files:
 
-- `apps/server/ntrp/automation/scheduler.py`
-- `apps/server/ntrp/server/routers/automation.py`
-- `apps/server/ntrp/server/bus.py`
+- `apps/server/arden/automation/scheduler.py`
+- `apps/server/arden/server/routers/automation.py`
+- `apps/server/arden/server/bus.py`
 
 Automation progress uses the same queue primitive as chat streaming, but with the shared key `automation:events`.
 
@@ -128,11 +128,11 @@ If the stream fails, the automation still runs and final state is persisted thro
 
 Source files:
 
-- `apps/server/ntrp/outbox/store.py`
-- `apps/server/ntrp/outbox/worker.py`
-- `apps/server/ntrp/outbox/events.py`
-- `apps/server/ntrp/server/runtime/outbox.py`
-- `apps/server/ntrp/server/runtime/automation.py`
+- `apps/server/arden/outbox/store.py`
+- `apps/server/arden/outbox/worker.py`
+- `apps/server/arden/outbox/events.py`
+- `apps/server/arden/server/runtime/outbox.py`
+- `apps/server/arden/server/runtime/automation.py`
 
 The outbox owns side effects that should survive a process crash or should not run inline with the producer.
 
@@ -160,7 +160,7 @@ Operational endpoints:
 - `POST /outbox/dead/replay`: moves explicit dead row IDs back to `pending`.
 - `DELETE /outbox/completed`: deletes old completed rows with an age cutoff and limit.
 
-These endpoints live in `apps/server/ntrp/server/routers/ops.py`.
+These endpoints live in `apps/server/arden/server/routers/ops.py`.
 
 Retention:
 
@@ -185,10 +185,10 @@ Use the outbox when a side effect crosses subsystem boundaries and losing it wou
 
 Source files:
 
-- `apps/server/ntrp/automation/scheduler.py`
-- `apps/server/ntrp/automation/store.py`
-- `apps/server/ntrp/automation/triggers.py`
-- `apps/server/ntrp/automation/builtins.py`
+- `apps/server/arden/automation/scheduler.py`
+- `apps/server/arden/automation/store.py`
+- `apps/server/arden/automation/triggers.py`
+- `apps/server/arden/automation/builtins.py`
 
 The scheduler owns automation execution and trigger state. It is not a pub/sub fan-out service; it evaluates triggers against its store and starts automation work.
 
@@ -217,15 +217,15 @@ Operational endpoint:
 
 - `GET /scheduler/status`: scheduler liveness, registered built-in handlers, running task count, automation task summary, event queue summary, count trigger state count, and pending chat extraction count.
 
-This endpoint lives in `apps/server/ntrp/server/routers/ops.py`.
+This endpoint lives in `apps/server/arden/server/routers/ops.py`.
 
 ## Monitor events
 
 Source files:
 
-- `apps/server/ntrp/monitor/service.py`
-- `apps/server/ntrp/monitor/calendar.py`
-- `apps/server/ntrp/server/runtime/automation.py`
+- `apps/server/arden/monitor/service.py`
+- `apps/server/arden/monitor/calendar.py`
+- `apps/server/arden/server/runtime/automation.py`
 
 Monitor providers do not publish to a bus. Runtime wires them directly into the scheduler:
 

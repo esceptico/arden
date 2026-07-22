@@ -16,7 +16,7 @@
 - Desktop: features never import each other; cross-feature via stores/actions/api only. Domain state lives in `stores/*-domain.ts` as pure reducers.
 - Motion: reuse `lib/tokens/motion.ts` poses (RISE_IN/DISSOLVE_OUT/ROW_EXIT, SPRING_*); lab ports keep tuned values verbatim (values inlined in tasks below).
 - Light-first monochrome per docs/design-language.md: tone over lines, one accent, severity dots only where attention is required.
-- Server style: dataclasses, imports at top, no defensive fallbacks, constants in ntrp/constants.py.
+- Server style: dataclasses, imports at top, no defensive fallbacks, constants in arden/constants.py.
 - Server tests: `uv run pytest tests/ -k slices` from apps/server. Desktop gate: `bun test tests/` + `bun run typecheck` + `bun run lint` from apps/desktop.
 - Commits per task; do NOT push (user reviews on main).
 
@@ -25,9 +25,9 @@
 ### Task 1: Slice + Ask models and slice registry
 
 **Files:**
-- Create: `apps/server/ntrp/slices/__init__.py`
-- Create: `apps/server/ntrp/slices/models.py`
-- Create: `apps/server/ntrp/slices/registry.py`
+- Create: `apps/server/arden/slices/__init__.py`
+- Create: `apps/server/arden/slices/models.py`
+- Create: `apps/server/arden/slices/registry.py`
 - Test: `apps/server/tests/test_slices_registry.py`
 
 **Interfaces:**
@@ -39,8 +39,8 @@
 # apps/server/tests/test_slices_registry.py
 import json
 from pathlib import Path
-from ntrp.slices.models import Slice
-from ntrp.slices.registry import SliceRegistry
+from arden.slices.models import Slice
+from arden.slices.registry import SliceRegistry
 
 
 def test_registry_roundtrip(tmp_path: Path):
@@ -67,12 +67,12 @@ def test_registry_get_unknown_lists_valid_keys(tmp_path: Path):
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `cd apps/server && uv run pytest tests/test_slices_registry.py -v`
-Expected: FAIL with `ModuleNotFoundError: No module named 'ntrp.slices'`
+Expected: FAIL with `ModuleNotFoundError: No module named 'arden.slices'`
 
 - [ ] **Step 3: Write the implementation**
 
 ```python
-# apps/server/ntrp/slices/models.py
+# apps/server/arden/slices/models.py
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -105,12 +105,12 @@ class Ask:
 ```
 
 ```python
-# apps/server/ntrp/slices/registry.py
+# apps/server/arden/slices/registry.py
 import json
 from dataclasses import asdict
 from pathlib import Path
 
-from ntrp.slices.models import Slice
+from arden.slices.models import Slice
 
 
 class SliceRegistry:
@@ -136,13 +136,13 @@ class SliceRegistry:
 ```
 
 ```python
-# apps/server/ntrp/slices/__init__.py
+# apps/server/arden/slices/__init__.py
 ```
 
-Add to `apps/server/ntrp/constants.py` (follow existing NTRP_DIR-style constants there):
+Add to `apps/server/arden/constants.py` (follow existing ARDEN_DIR-style constants there):
 
 ```python
-SLICES_FILE = "slices.json"  # under the ~/.ntrp dir
+SLICES_FILE = "slices.json"  # under the ~/.arden dir
 SLICES_STATE_FILE = "slices-state.json"
 ```
 
@@ -154,7 +154,7 @@ Expected: 2 PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/server/ntrp/slices apps/server/ntrp/constants.py apps/server/tests/test_slices_registry.py
+git add apps/server/arden/slices apps/server/arden/constants.py apps/server/tests/test_slices_registry.py
 git commit -m "feat(slices): Slice/Ask models + file-backed registry"
 ```
 
@@ -163,18 +163,18 @@ git commit -m "feat(slices): Slice/Ask models + file-backed registry"
 ### Task 2: Page projection — open loops from prose
 
 **Files:**
-- Create: `apps/server/ntrp/slices/projection.py`
+- Create: `apps/server/arden/slices/projection.py`
 - Test: `apps/server/tests/test_slices_projection.py`
 
 **Interfaces:**
-- Consumes: `ntrp.memory.pages.parse_page(text) -> Page` (Page.prose, Page.frontmatter).
+- Consumes: `arden.memory.pages.parse_page(text) -> Page` (Page.prose, Page.frontmatter).
 - Produces: `parse_open_loops(prose: str) -> list[str]` (bullet texts under a `## Open loops` heading), `page_summary(page: Page) -> dict` with `{"title", "updated", "open_loops": [...]}`.
 
 - [ ] **Step 1: Write the failing test**
 
 ```python
 # apps/server/tests/test_slices_projection.py
-from ntrp.slices.projection import parse_open_loops
+from arden.slices.projection import parse_open_loops
 
 PROSE = """# O-1A
 
@@ -209,7 +209,7 @@ Expected: FAIL with `ModuleNotFoundError` / `ImportError: parse_open_loops`
 - [ ] **Step 3: Write the implementation**
 
 ```python
-# apps/server/ntrp/slices/projection.py
+# apps/server/arden/slices/projection.py
 import re
 
 _LOOP_HEADING = re.compile(r"^##\s+open loops\s*$", re.IGNORECASE)
@@ -239,7 +239,7 @@ def parse_open_loops(prose: str) -> list[str]:
 Then add `page_summary` in the same file:
 
 ```python
-from ntrp.memory.pages import Page
+from arden.memory.pages import Page
 
 
 def page_summary(page: Page) -> dict:
@@ -258,7 +258,7 @@ Expected: 2 PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/server/ntrp/slices/projection.py apps/server/tests/test_slices_projection.py
+git add apps/server/arden/slices/projection.py apps/server/tests/test_slices_projection.py
 git commit -m "feat(slices): open-loop projection from topic-page prose"
 ```
 
@@ -267,7 +267,7 @@ git commit -m "feat(slices): open-loop projection from topic-page prose"
 ### Task 3: Ask state store + focus-set nomination
 
 **Files:**
-- Create: `apps/server/ntrp/slices/asks.py`
+- Create: `apps/server/arden/slices/asks.py`
 - Test: `apps/server/tests/test_slices_asks.py`
 
 **Interfaces:**
@@ -279,8 +279,8 @@ git commit -m "feat(slices): open-loop projection from topic-page prose"
 ```python
 # apps/server/tests/test_slices_asks.py
 from pathlib import Path
-from ntrp.slices.asks import AskStore, nominate_focus
-from ntrp.slices.models import Ask
+from arden.slices.asks import AskStore, nominate_focus
+from arden.slices.models import Ask
 
 
 def ask(id: str, slice_key: str, kind: str, created: str = "2026-07-06T10:00:00") -> Ask:
@@ -322,13 +322,13 @@ Expected: FAIL with import error
 - [ ] **Step 3: Write the implementation**
 
 ```python
-# apps/server/ntrp/slices/asks.py
+# apps/server/arden/slices/asks.py
 import json
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
-from ntrp.slices.models import Ask, AskState
+from arden.slices.models import Ask, AskState
 
 _KIND_PRIORITY = {"decide": 0, "drift": 1, "review": 2, "act": 3}
 
@@ -392,7 +392,7 @@ Expected: 3 PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/server/ntrp/slices/asks.py apps/server/tests/test_slices_asks.py
+git add apps/server/arden/slices/asks.py apps/server/tests/test_slices_asks.py
 git commit -m "feat(slices): ask store with snooze re-admission + focus nomination"
 ```
 
@@ -401,10 +401,10 @@ git commit -m "feat(slices): ask store with snooze re-admission + focus nominati
 ### Task 4: Session slice tagging
 
 **Files:**
-- Modify: `apps/server/ntrp/context/models.py` (SessionState — add `slice_key: str | None = None` alongside `project_id`)
-- Modify: `apps/server/ntrp/services/session.py` (`provision(..., slice_key: str | None = None)` passes through)
-- Modify: `apps/server/ntrp/context/store.py` (persist/load `slice_key` wherever `project_id` is persisted — follow that column/field exactly; add migration if sessions table has explicit columns)
-- Modify: `apps/server/ntrp/server/routers/session.py` (accept `slice_key` in the create-session body; include in list/detail payloads next to `project_id`)
+- Modify: `apps/server/arden/context/models.py` (SessionState — add `slice_key: str | None = None` alongside `project_id`)
+- Modify: `apps/server/arden/services/session.py` (`provision(..., slice_key: str | None = None)` passes through)
+- Modify: `apps/server/arden/context/store.py` (persist/load `slice_key` wherever `project_id` is persisted — follow that column/field exactly; add migration if sessions table has explicit columns)
+- Modify: `apps/server/arden/server/routers/session.py` (accept `slice_key` in the create-session body; include in list/detail payloads next to `project_id`)
 - Test: `apps/server/tests/test_slices_session_tag.py`
 
 **Interfaces:**
@@ -417,7 +417,7 @@ git commit -m "feat(slices): ask store with snooze re-admission + focus nominati
 # apps/server/tests/test_slices_session_tag.py
 import pytest
 from datetime import UTC, datetime
-from ntrp.context.models import SessionState
+from arden.context.models import SessionState
 
 
 def test_session_state_carries_slice_key():
@@ -451,7 +451,7 @@ Expected: PASS (new + no regressions)
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/server/ntrp/context apps/server/ntrp/services/session.py apps/server/ntrp/server/routers/session.py apps/server/tests/test_slices_session_tag.py
+git add apps/server/arden/context apps/server/arden/services/session.py apps/server/arden/server/routers/session.py apps/server/tests/test_slices_session_tag.py
 git commit -m "feat(slices): slice_key tag on sessions, mirroring project_id"
 ```
 
@@ -460,7 +460,7 @@ git commit -m "feat(slices): slice_key tag on sessions, mirroring project_id"
 ### Task 5: SliceService — mechanical ask derivation + full projection
 
 **Files:**
-- Create: `apps/server/ntrp/slices/service.py`
+- Create: `apps/server/arden/slices/service.py`
 - Test: `apps/server/tests/test_slices_service.py`
 
 **Interfaces:**
@@ -475,11 +475,11 @@ git commit -m "feat(slices): slice_key tag on sessions, mirroring project_id"
 ```python
 # apps/server/tests/test_slices_service.py
 from pathlib import Path
-from ntrp.slices.models import Slice
-from ntrp.slices.registry import SliceRegistry
-from ntrp.slices.asks import AskStore
-from ntrp.slices.service import SliceService
-from ntrp.memory.pages import parse_page
+from arden.slices.models import Slice
+from arden.slices.registry import SliceRegistry
+from arden.slices.asks import AskStore
+from arden.slices.service import SliceService
+from arden.memory.pages import parse_page
 
 PAGE = "---\ntitle: O-1A\nupdated: 2026-07-05\n---\n# O-1A\n\n## Open loops\n- Find counsel.\n"
 
@@ -527,16 +527,16 @@ Expected: FAIL with import error
 - [ ] **Step 3: Write the implementation**
 
 ```python
-# apps/server/ntrp/slices/service.py
+# apps/server/arden/slices/service.py
 from collections.abc import Callable
 from dataclasses import asdict
 from datetime import UTC, datetime
 
-from ntrp.memory.pages import Page
-from ntrp.slices.asks import AskStore, nominate_focus
-from ntrp.slices.models import Ask
-from ntrp.slices.projection import page_summary
-from ntrp.slices.registry import SliceRegistry
+from arden.memory.pages import Page
+from arden.slices.asks import AskStore, nominate_focus
+from arden.slices.models import Ask
+from arden.slices.projection import page_summary
+from arden.slices.registry import SliceRegistry
 
 
 class SliceService:
@@ -629,7 +629,7 @@ Expected: 2 PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/server/ntrp/slices/service.py apps/server/tests/test_slices_service.py
+git add apps/server/arden/slices/service.py apps/server/tests/test_slices_service.py
 git commit -m "feat(slices): SliceService — overview/detail projection + mechanical asks"
 ```
 
@@ -638,9 +638,9 @@ git commit -m "feat(slices): SliceService — overview/detail projection + mecha
 ### Task 6: `/slices` router + app wiring + SSE
 
 **Files:**
-- Create: `apps/server/ntrp/server/routers/slices.py`
-- Modify: `apps/server/ntrp/server/app.py` (construct registry/store/service in lifespan next to the other services; `app.include_router(slices_router)`)
-- Modify: `apps/server/ntrp/events/sse.py` (add `SLICES_CHANGED = "slices_changed"` EventType + `SlicesChangedEvent(SSEEvent)` dataclass, mirroring `MemoryChangedEvent`)
+- Create: `apps/server/arden/server/routers/slices.py`
+- Modify: `apps/server/arden/server/app.py` (construct registry/store/service in lifespan next to the other services; `app.include_router(slices_router)`)
+- Modify: `apps/server/arden/events/sse.py` (add `SLICES_CHANGED = "slices_changed"` EventType + `SlicesChangedEvent(SSEEvent)` dataclass, mirroring `MemoryChangedEvent`)
 - Test: `apps/server/tests/test_slices_router.py`
 
 **Interfaces:**
@@ -675,7 +675,7 @@ def test_resolve_ask_and_unknown_slice_404(client):
 - [ ] **Step 3: Implement router**
 
 ```python
-# apps/server/ntrp/server/routers/slices.py
+# apps/server/arden/server/routers/slices.py
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
@@ -726,14 +726,14 @@ async def resolve_ask(request: Request, key: str, ask_id: str, body: ResolveBody
     return ask
 ```
 
-Add `SliceService.resolve_ask(ask_id, state, snoozed_until) -> dict` delegating to `AskStore.resolve` and returning `asdict`. In app.py lifespan, construct: `SliceRegistry(ntrp_dir / SLICES_FILE)`, `AskStore(ntrp_dir / SLICES_STATE_FILE)`, wire the real callables — `pending_approvals` from `context_store.list_pending_tool_approvals` across active sessions, `session_slice` reading `SessionState.slice_key`, `slice_automations` filtering `AutomationStore` by name prefix `slice:{key}:`, `slice_sessions` filtering the session list by `slice_key` — and `app.state.emit_slices_changed` publishing `SlicesChangedEvent` on `AUTOMATION_BUS_KEY`. Add `PUT /slices/{key}` and `POST /slices` endpoints updating the registry.
+Add `SliceService.resolve_ask(ask_id, state, snoozed_until) -> dict` delegating to `AskStore.resolve` and returning `asdict`. In app.py lifespan, construct: `SliceRegistry(arden_dir / SLICES_FILE)`, `AskStore(arden_dir / SLICES_STATE_FILE)`, wire the real callables — `pending_approvals` from `context_store.list_pending_tool_approvals` across active sessions, `session_slice` reading `SessionState.slice_key`, `slice_automations` filtering `AutomationStore` by name prefix `slice:{key}:`, `slice_sessions` filtering the session list by `slice_key` — and `app.state.emit_slices_changed` publishing `SlicesChangedEvent` on `AUTOMATION_BUS_KEY`. Add `PUT /slices/{key}` and `POST /slices` endpoints updating the registry.
 
 - [ ] **Step 4: Run tests** — `uv run pytest tests/test_slices_router.py -v` → PASS; then full `uv run pytest tests/ -x -q` for regressions.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/server/ntrp/server apps/server/ntrp/events/sse.py apps/server/ntrp/slices apps/server/tests/test_slices_router.py
+git add apps/server/arden/server apps/server/arden/events/sse.py apps/server/arden/slices apps/server/tests/test_slices_router.py
 git commit -m "feat(slices): /slices router, app wiring, slices_changed SSE"
 ```
 
@@ -742,21 +742,21 @@ git commit -m "feat(slices): /slices router, app wiring, slices_changed SSE"
 ### Task 7: Slice agent handler (Layer 2)
 
 **Files:**
-- Create: `apps/server/ntrp/slices/agent.py`
-- Modify: `apps/server/ntrp/server/app.py` (register handler with Scheduler; ensure one automation per registered slice exists: name `slice:{key}`, handler `slice_agent`, default TimeTrigger daily + EventTrigger on `memory_changed` paths matching the slice's page — copy the trigger construction idiom from automation/models.py usage)
+- Create: `apps/server/arden/slices/agent.py`
+- Modify: `apps/server/arden/server/app.py` (register handler with Scheduler; ensure one automation per registered slice exists: name `slice:{key}`, handler `slice_agent`, default TimeTrigger daily + EventTrigger on `memory_changed` paths matching the slice's page — copy the trigger construction idiom from automation/models.py usage)
 - Test: `apps/server/tests/test_slices_agent.py`
 
 **Interfaces:**
-- Consumes: `run_agent(deps: OperatorDeps, request: RunRequest) -> RunResult` (ntrp/operator/runner.py), `RunRequest(prompt, auto_approve, source_id, automation_id, ...)`, `Slice`, `AskStore`, `page_summary`.
+- Consumes: `run_agent(deps: OperatorDeps, request: RunRequest) -> RunResult` (arden/operator/runner.py), `RunRequest(prompt, auto_approve, source_id, automation_id, ...)`, `Slice`, `AskStore`, `page_summary`.
 - Produces: `build_slice_prompt(slice: Slice, page: Page, recent: list[dict]) -> str`; `parse_agent_ask(result_text: str) -> dict | None` (extracts the trailing ```json ask block```); `run_slice_agent(deps, slice, get_page, asks, recent) -> str | None` — spawns the agent (`auto_approve = slice.autonomy == "act"`), parses nomination, upserts `Ask(kind=..., source="agent", provenance=f"run:{result.run_id}")`, silence (no block) = no ask.
 
 - [ ] **Step 1: Write the failing test**
 
 ```python
 # apps/server/tests/test_slices_agent.py
-from ntrp.slices.agent import build_slice_prompt, parse_agent_ask
-from ntrp.slices.models import Slice
-from ntrp.memory.pages import parse_page
+from arden.slices.agent import build_slice_prompt, parse_agent_ask
+from arden.slices.models import Slice
+from arden.memory.pages import parse_page
 
 SLICE = Slice(key="o-1a", title="O-1A", page_path="topics/o-1a.md", autonomy="observe")
 PAGE = parse_page("---\ntitle: O-1A\n---\n# O-1A\n\n## Open loops\n- Find counsel.\n")
@@ -781,17 +781,17 @@ def test_parse_agent_ask_extracts_json_block_or_none():
 - [ ] **Step 3: Implement**
 
 ```python
-# apps/server/ntrp/slices/agent.py
+# apps/server/arden/slices/agent.py
 import json
 import re
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from ntrp.memory.pages import Page
-from ntrp.operator.runner import OperatorDeps, RunRequest, run_agent
-from ntrp.slices.asks import AskStore
-from ntrp.slices.models import Ask, Slice
-from ntrp.slices.projection import parse_open_loops
+from arden.memory.pages import Page
+from arden.operator.runner import OperatorDeps, RunRequest, run_agent
+from arden.slices.asks import AskStore
+from arden.slices.models import Ask, Slice
+from arden.slices.projection import parse_open_loops
 
 _ASK_BLOCK = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
 
@@ -847,14 +847,14 @@ async def run_slice_agent(
     return result.text
 ```
 
-(Adjust `result.text` / `result.run_id` attribute names to the actual `RunResult` dataclass — read ntrp/operator/runner.py at implementation time.) Then in app.py: register a scheduler handler named `slice_agent` that resolves the slice from the automation name (`slice:{key}`), loads its page via the file store, collects `recent` from the last-run watermark (store `last_run_at` already on the Automation), and calls `run_slice_agent`. On startup, for each registered slice ensure a `slice:{key}` automation exists (daily TimeTrigger + EventTrigger on memory changes to its page path).
+(Adjust `result.text` / `result.run_id` attribute names to the actual `RunResult` dataclass — read arden/operator/runner.py at implementation time.) Then in app.py: register a scheduler handler named `slice_agent` that resolves the slice from the automation name (`slice:{key}`), loads its page via the file store, collects `recent` from the last-run watermark (store `last_run_at` already on the Automation), and calls `run_slice_agent`. On startup, for each registered slice ensure a `slice:{key}` automation exists (daily TimeTrigger + EventTrigger on memory changes to its page path).
 
 - [ ] **Step 4: Run tests** — `uv run pytest tests/test_slices_agent.py -v` → PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/server/ntrp/slices/agent.py apps/server/ntrp/server/app.py apps/server/tests/test_slices_agent.py
+git add apps/server/arden/slices/agent.py apps/server/arden/server/app.py apps/server/tests/test_slices_agent.py
 git commit -m "feat(slices): standing slice agent — contract prompt, one-ask nomination, scheduler handler"
 ```
 
@@ -949,7 +949,7 @@ git commit -m "feat(desktop): slices store domain + API client"
 
 Tuned values to port verbatim (from the lab sources):
 - FieldSwap: `--duration-quick` (150ms fallback) `ease-in-out`; exit translateY(dir·−4px) blur(2px) opacity 0; enter from translateY(dir·4px); force reflow with `void el.offsetWidth` between phases; live children at rest, frozen snapshot only while the old state exits; skip animation under prefers-reduced-motion.
-- TravelingHighlight: travel `top/height var(--duration-fast) var(--ease-smooth-out)`, opacity `var(--duration-quick)`; fresh-guard (appear in place, then travel); `focusout` deferred via `queueMicrotask`; MutationObserver on `data-selected` for list mode; scroll repositions without transition. Map `--duration-fast/quick` and `--ease-smooth-out` to the ntrp motion tokens in styles.css (`MOTION.fast`=100ms, `MOTION.palette`-family easings — add CSS vars if absent rather than hardcoding).
+- TravelingHighlight: travel `top/height var(--duration-fast) var(--ease-smooth-out)`, opacity `var(--duration-quick)`; fresh-guard (appear in place, then travel); `focusout` deferred via `queueMicrotask`; MutationObserver on `data-selected` for list mode; scroll repositions without transition. Map `--duration-fast/quick` and `--ease-smooth-out` to the arden motion tokens in styles.css (`MOTION.fast`=100ms, `MOTION.palette`-family easings — add CSS vars if absent rather than hardcoding).
 - ChargeButton: WIND_MS 1100 linear border-opacity ramp; drain 500ms `cubic-bezier(0.22,1,0.36,1)` retargeting from `getComputedStyle` opacity; arm only if still held at full; label roll 450ms transform + 160ms/260ms blur (roll/land), mask gradient `transparent → #000 14%–86% → transparent`; revert 1400ms then 300ms fade `cubic-bezier(0.2,0.8,0.2,1)`; `transitioncancel` fires on retarget — listen for `transitionend` only.
 
 - [ ] **Step 1: Failing test** (FieldSwap is the testable one — behavioral, not visual)
@@ -1031,7 +1031,7 @@ test("prefix matches surface slices, sessions, automations", () => {
 
 - [ ] **Step 2: Run to verify failure** — module not found.
 - [ ] **Step 3: Implement** heroRouting (case-insensitive substring match, ordered chat → slices → sessions → automations → skills, max 6), then the components per the layout block; `useSlicesData` fetches overview on mount + refetches on `slices_changed`/`automation_finished` events (subscribe in the existing `useAutomationEvents` switch — add the `slices_changed` case there calling a store action, since that hook already owns the automation SSE stream).
-- [ ] **Step 4: Run** — `bun test tests/` + `bun run typecheck` + `bun run lint` → clean. Visual check via preview harness: seed `window.__ntrp.setState` with a slices overview, screenshot, compare against the Figma frame.
+- [ ] **Step 4: Run** — `bun test tests/` + `bun run typecheck` + `bun run lint` → clean. Visual check via preview harness: seed `window.__arden.setState` with a slices overview, screenshot, compare against the Figma frame.
 - [ ] **Step 5: Commit**
 
 ```bash
@@ -1070,11 +1070,11 @@ git commit -m "feat(desktop): slice room — ask card, open loops, activity, sco
 ### Task 12: Seed registry + end-to-end walkthrough + gate
 
 **Files:**
-- Create: `apps/server/ntrp/slices/seed.py` (optional CLI helper: `uv run python -m ntrp.slices.seed` prints candidate topic pages and writes slices.json for chosen keys — explicit promotion per spec open-question default)
+- Create: `apps/server/arden/slices/seed.py` (optional CLI helper: `uv run python -m arden.slices.seed` prints candidate topic pages and writes slices.json for chosen keys — explicit promotion per spec open-question default)
 - Modify: none beyond fixes the walkthrough surfaces
 
-- [ ] **Step 1:** Seed the user's real registry: `o-1a`, `dex`, `ntrp`, `aside`, `health`, `united-states` (explicit list; reference topics like `letta.md` stay unpromoted).
-- [ ] **Step 2:** Server up (`uv run ntrp-server serve` — do NOT restart the user's own running server; use a second port if theirs is up), hit `GET /slices`, verify overview JSON: slices present, mechanical asks appear when an approval is pending.
+- [ ] **Step 1:** Seed the user's real registry: `o-1a`, `dex`, `arden`, `aside`, `health`, `united-states` (explicit list; reference topics like `letta.md` stay unpromoted).
+- [ ] **Step 2:** Server up (`uv run arden-server serve` — do NOT restart the user's own running server; use a second port if theirs is up), hit `GET /slices`, verify overview JSON: slices present, mechanical asks appear when an approval is pending.
 - [ ] **Step 3:** Desktop preview harness: full flow — Home renders focus set from the live server, hero input routes (type "o-1" → slice suggestion → Enter opens room), ask resolve round-trips (SSE `slices_changed` → focus updates), scoped composer starts a tagged session, slice agent manual trigger (`POST` the automation invoke endpoint for `slice:o-1a`) produces a page update + at most one ask.
 - [ ] **Step 4:** Full gates: `cd apps/server && uv run pytest tests/ -q` and `cd apps/desktop && bun run typecheck && bun run lint && bun test tests/ && bun run build`. All green.
 - [ ] **Step 5: Commit** any walkthrough fixes; final commit `feat(slices): seed CLI + e2e polish`.

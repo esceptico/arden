@@ -6,7 +6,7 @@ product
 
 ## Users
 
-A single power user (the developer) running NTRP — a personal "entropy reduction" system — as a native macOS desktop app (Electron). They live in this app daily: chatting with an agent, watching multi-agent workflows and subagents run, reviewing tool approvals, browsing memory, and configuring models/integrations. Context is a focused desktop session, keyboard-heavy, often dense information on screen.
+A single power user (the developer) running ARDEN — a personal "entropy reduction" system — as a native macOS desktop app (Electron). They live in this app daily: chatting with an agent, watching multi-agent workflows and subagents run, reviewing tool approvals, browsing memory, and configuring models/integrations. Context is a focused desktop session, keyboard-heavy, often dense information on screen.
 
 ## Product Purpose
 

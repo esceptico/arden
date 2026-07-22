@@ -1,4 +1,4 @@
-# NTRP Desktop — Production Polish Spec
+# ARDEN Desktop — Production Polish Spec
 
 Shared contract for the multi-agent polish pass on `apps/desktop`. Every agent
 reads this file first. The goal is **Linear/Vercel-level craft**: minimal,

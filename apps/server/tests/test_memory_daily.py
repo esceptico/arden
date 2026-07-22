@@ -5,17 +5,17 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from ntrp.memory.daily import (
+from arden.memory.daily import (
     DailyGroup,
     DailyGroupingDecision,
     DailyProjector,
     daily_base_rel,
     daily_candidate_rel,
 )
-from ntrp.memory.ledger import LedgerEntry, LedgerMeta
-from ntrp.memory.models import Kind, SourceRef
-from ntrp.memory.page_events import AppliedPageOperation, PageEditEvent, page_revision, unified_patch
-from ntrp.server.runtime.knowledge import DailyProjectionCoordinator
+from arden.memory.ledger import LedgerEntry, LedgerMeta
+from arden.memory.models import Kind, SourceRef
+from arden.memory.page_events import AppliedPageOperation, PageEditEvent, page_revision, unified_patch
+from arden.server.runtime.knowledge import DailyProjectionCoordinator
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -52,8 +52,8 @@ def _entry(
 
 def _set_revision(root: Path, digit: str) -> str:
     revision = digit * 64
-    (root / ".ntrp").mkdir(parents=True, exist_ok=True)
-    (root / ".ntrp/canonical-revision").write_text(revision, encoding="ascii")
+    (root / ".arden").mkdir(parents=True, exist_ok=True)
+    (root / ".arden/canonical-revision").write_text(revision, encoding="ascii")
     return revision
 
 
@@ -114,9 +114,10 @@ def test_day_precision_uses_local_date_without_repeating_it_in_the_page(tmp_path
     assert b"- day-event" in local.content
     assert b"[day]" not in local.content
     assert b"^day-event" not in local.content
-    assert DailyProjector(tmp_path, timezone="America/Los_Angeles", entries=lambda: (entry,)).events_for(
-        date(2026, 7, 11)
-    ) == ()
+    assert (
+        DailyProjector(tmp_path, timezone="America/Los_Angeles", entries=lambda: (entry,)).events_for(date(2026, 7, 11))
+        == ()
+    )
 
 
 def test_local_midnight_and_dst_fallback_use_configured_zone(tmp_path: Path):
@@ -172,9 +173,11 @@ def test_one_action_per_event_and_all_evidence_refs_are_retained(tmp_path: Path)
     assert [event.action for event in events] == ["record", "page_edit"]
 
     revision = _set_revision(tmp_path, "1")
-    content = DailyProjector(
-        tmp_path, timezone="Asia/Yerevan", entries=lambda: (ledger,)
-    ).render(date(2026, 7, 12), revision).content
+    content = (
+        DailyProjector(tmp_path, timezone="Asia/Yerevan", entries=lambda: (ledger,))
+        .render(date(2026, 7, 12), revision)
+        .content
+    )
     assert b"gmail:message-1" not in content
     assert b"calendar:event-2" not in content
     assert b'"captured_at"' not in content
@@ -205,15 +208,18 @@ def test_daily_synthesis_event_does_not_feed_the_next_daily_projection(tmp_path:
     ).events_for(date(2026, 7, 12))
 
     assert events == ()
-    assert DailyProjector(
-        tmp_path,
-        timezone="Asia/Yerevan",
-        page_events=lambda: (event,),
-    ).local_dates() == ()
+    assert (
+        DailyProjector(
+            tmp_path,
+            timezone="Asia/Yerevan",
+            page_events=lambda: (event,),
+        ).local_dates()
+        == ()
+    )
 
 
 def test_legacy_llm_synthesis_does_not_claim_daily_projection_pages(tmp_path: Path):
-    from ntrp.memory.synthesize import _page_kind
+    from arden.memory.synthesize import _page_kind
 
     assert _page_kind(tmp_path, tmp_path / "daily/2026-07-12.md") is None
 
@@ -227,15 +233,17 @@ def test_invalid_grouping_falls_back_to_ungrouped_without_heuristics(tmp_path: P
 
     def group(_events):
         if invalid == "empty":
-            return DailyGroupingDecision(groups=(DailyGroup(event_ids=(), summary="Grouped"), DailyGroup(("a", "b"), "Rest")))
+            return DailyGroupingDecision(
+                groups=(DailyGroup(event_ids=(), summary="Grouped"), DailyGroup(("a", "b"), "Rest"))
+            )
         ids = {"duplicate": ("a", "a"), "missing": ("a",), "unknown": ("a", "nope"), "blank": ("a", "b")}[invalid]
         summary = "" if invalid == "blank" else "Grouped"
         return DailyGroupingDecision(groups=(DailyGroup(event_ids=ids, summary=summary),))
 
     revision = _set_revision(tmp_path, "1")
-    projection = DailyProjector(
-        tmp_path, timezone="Asia/Yerevan", entries=lambda: entries, grouping=group
-    ).render(date(2026, 7, 12), revision)
+    projection = DailyProjector(tmp_path, timezone="Asia/Yerevan", entries=lambda: entries, grouping=group).render(
+        date(2026, 7, 12), revision
+    )
 
     assert projection.grouped is False
     assert [group.event_ids for group in projection.groups] == [("a",), ("b",)]
@@ -271,12 +279,16 @@ def test_rendered_timeline_hides_machine_metadata_and_describes_page_edits(tmp_p
     page = _edit_event(operations=())
     revision = _set_revision(tmp_path, "1")
 
-    content = DailyProjector(
-        tmp_path,
-        timezone="Asia/Yerevan",
-        entries=lambda: (insight,),
-        page_events=lambda: (page,),
-    ).render(date(2026, 7, 12), revision).content
+    content = (
+        DailyProjector(
+            tmp_path,
+            timezone="Asia/Yerevan",
+            entries=lambda: (insight,),
+            page_events=lambda: (page,),
+        )
+        .render(date(2026, 7, 12), revision)
+        .content
+    )
 
     assert b"- A useful connection." in content
     assert b"- 18:45:00 \xe2\x80\x94 Edited `topics/a.md`" in content
@@ -302,7 +314,9 @@ def test_same_day_regeneration_preserves_user_edits_and_keys_revision_and_timezo
     assert b"User note." in second.content
     assert f"generated_from_revision: '{second_revision}'".encode() in second.content
     assert b'timezone: "Asia/Yerevan"' in second.content
-    assert (tmp_path / daily_base_rel(date(2026, 7, 12), second_revision, "Asia/Yerevan")).read_bytes() == second.generated
+    assert (
+        tmp_path / daily_base_rel(date(2026, 7, 12), second_revision, "Asia/Yerevan")
+    ).read_bytes() == second.generated
 
 
 def test_conflict_keeps_visible_bytes_and_writes_review_candidate(tmp_path: Path):
@@ -320,7 +334,9 @@ def test_conflict_keeps_visible_bytes_and_writes_review_candidate(tmp_path: Path
     assert conflict.review_required is True
     assert conflict.content == current
     assert first.path.read_bytes() == current
-    assert (tmp_path / daily_candidate_rel(date(2026, 7, 12), second_revision, "Asia/Yerevan")).read_bytes() == conflict.generated
+    assert (
+        tmp_path / daily_candidate_rel(date(2026, 7, 12), second_revision, "Asia/Yerevan")
+    ).read_bytes() == conflict.generated
 
 
 def test_base_write_failure_does_not_publish_page_and_retry_remains_clean(tmp_path: Path, monkeypatch):
@@ -431,11 +447,11 @@ async def test_runtime_coordinator_does_not_starve_later_dates_after_one_failure
 
 @pytest.mark.asyncio
 async def test_runtime_projection_writer_registers_crash_verifiable_engine_receipt(tmp_path: Path):
-    from ntrp.memory.file_store import FilePageStore
+    from arden.memory.file_store import FilePageStore
 
     vault = tmp_path / "memory"
     (vault / "raw").mkdir(parents=True)
-    (vault / "raw/me.md").write_text("<!-- ntrp:records schema=2 page=me.md -->\n", encoding="utf-8")
+    (vault / "raw/me.md").write_text("<!-- arden:records schema=2 page=me.md -->\n", encoding="utf-8")
     store = FilePageStore(vault)
     await store.open()
     record = await store.add(
@@ -470,11 +486,11 @@ async def test_runtime_projection_writer_registers_crash_verifiable_engine_recei
 
 @pytest.mark.asyncio
 async def test_direct_add_preserves_source_event_time_across_local_midnight(tmp_path: Path):
-    from ntrp.memory.file_store import FilePageStore
+    from arden.memory.file_store import FilePageStore
 
     vault = tmp_path / "memory"
     (vault / "raw").mkdir(parents=True)
-    (vault / "raw/me.md").write_text("<!-- ntrp:records schema=2 page=me.md -->\n", encoding="utf-8")
+    (vault / "raw/me.md").write_text("<!-- arden:records schema=2 page=me.md -->\n", encoding="utf-8")
     store = FilePageStore(vault)
     await store.open()
     record = await store.add(

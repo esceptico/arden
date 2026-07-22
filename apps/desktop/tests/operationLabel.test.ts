@@ -48,8 +48,8 @@ test("short heuristic tokens don't bleed into longer words", () => {
 });
 
 test("detail comes from args, preferring path-like keys; partial JSON is safe", () => {
-  expect(operationLabel(item({ kind: "read_file", args: '{"path":"ntrp/core/agent.py"}' })).detail).toBe(
-    "ntrp/core/agent.py",
+  expect(operationLabel(item({ kind: "read_file", args: '{"path":"arden/core/agent.py"}' })).detail).toBe(
+    "arden/core/agent.py",
   );
   expect(operationLabel(item({ kind: "read_file", args: '{"path":' })).detail).toBeNull();
   expect(operationLabel(item({ kind: "read_file" })).detail).toBeNull();

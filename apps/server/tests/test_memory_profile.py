@@ -1,4 +1,4 @@
-"""resident_profile — the always-resident memory block (ntrp/memory/profile.py).
+"""resident_profile — the always-resident memory block (arden/memory/profile.py).
 
 Areas directives + durable user facts + pins from the flat pool into the
 system-prompt block that rides every turn. Hermetic: a tmp memory.db, FTS-only.
@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from ntrp.memory.profile import DIRECTIVE_CHAR_BUDGET, FACT_CHAR_BUDGET, ROOT_MAP_CHAR_BUDGET, resident_profile
-from ntrp.memory.records import RecordStore
+from arden.memory.profile import DIRECTIVE_CHAR_BUDGET, FACT_CHAR_BUDGET, ROOT_MAP_CHAR_BUDGET, resident_profile
+from arden.memory.records import RecordStore
 
 pytestmark = pytest.mark.asyncio
 
@@ -41,12 +41,14 @@ async def test_profile_is_none_without_a_store():
 
 
 async def test_profile_includes_compact_root_map_without_nested_file_content(tmp_path: Path):
-    from ntrp.memory.file_store import FilePageStore
+    from arden.memory.file_store import FilePageStore
 
     root = tmp_path / "memory"
     (root / "research" / "models").mkdir(parents=True)
     (root / "research" / "README.md").write_text("---\nsummary: Research library\n---\n", encoding="utf-8")
-    (root / "research" / "models" / "private.md").write_text("# Secret experiment\n\nDo not embed this body.\n", encoding="utf-8")
+    (root / "research" / "models" / "private.md").write_text(
+        "# Secret experiment\n\nDo not embed this body.\n", encoding="utf-8"
+    )
     store = FilePageStore(root)
     await store.open()
 
@@ -60,7 +62,7 @@ async def test_profile_includes_compact_root_map_without_nested_file_content(tmp
 
 
 async def test_profile_root_map_enforces_budget_for_one_large_description(tmp_path: Path):
-    from ntrp.memory.file_store import FilePageStore
+    from arden.memory.file_store import FilePageStore
 
     root = tmp_path / "memory"
     root.mkdir()
@@ -75,7 +77,7 @@ async def test_profile_root_map_enforces_budget_for_one_large_description(tmp_pa
 
 
 async def test_profile_root_map_budget_counts_row_separators(tmp_path: Path):
-    from ntrp.memory.file_store import FilePageStore
+    from arden.memory.file_store import FilePageStore
 
     root = tmp_path / "memory"
     root.mkdir()
@@ -132,20 +134,22 @@ async def test_verbose_directives_do_not_starve_facts(tmp_path: Path):
 async def test_playbook_is_salience_ranked_not_recency_ranked(tmp_path: Path):
     """A char-budgeted playbook must carry the BEST lessons: a high-imp old lesson
     outranks a flood of newer low-imp ones."""
-    from ntrp.memory.file_store import FilePageStore
-    from ntrp.memory.models import SourceRef
+    from arden.memory.file_store import FilePageStore
+    from arden.memory.models import SourceRef
 
     store = FilePageStore(tmp_path / "memory")
     await store.open()
-    keeper = await store.add("KEEPER: never push to origin without approval.", kind="lesson", source_ref=SourceRef("curator", ""))
+    keeper = await store.add(
+        "KEEPER: never push to origin without approval.", kind="lesson", source_ref=SourceRef("curator", "")
+    )
     await store.set_pinned(keeper.id, False)  # ensure normal path
     # score the keeper high; bury it under many newer low-imp filler lessons
     for path, line in [store._find(keeper.id)]:
         store._replace_ledger_entry(path, replace(line, imp=9))
     for i in range(80):
-            r = await store.add(f"filler lesson {i} " + "y" * 30, kind="lesson", source_ref=SourceRef("curator", ""))
-            found = store._find(r.id)
-            store._replace_ledger_entry(found[0], replace(found[1], imp=1))
+        r = await store.add(f"filler lesson {i} " + "y" * 30, kind="lesson", source_ref=SourceRef("curator", ""))
+        found = store._find(r.id)
+        store._replace_ledger_entry(found[0], replace(found[1], imp=1))
 
     block = await resident_profile(store)
 

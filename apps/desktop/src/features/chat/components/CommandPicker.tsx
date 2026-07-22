@@ -10,7 +10,7 @@ import {
   Sparkles,
   Target,
   Trash2,
-  type NtrpIcon,
+  type ArdenIcon,
 } from "@/components/icons";
 import clsx from "clsx";
 import { motion } from "motion/react";
@@ -21,7 +21,7 @@ import { filterCommands, useCommandList, type CommandEntry } from "@/features/ch
 import { PickerRow } from "@/components/ui/PickerRow";
 import { Caption } from "@/components/ui/Caption";
 
-const BUILTIN_ICONS: Record<string, NtrpIcon> = {
+const BUILTIN_ICONS: Record<string, ArdenIcon> = {
   help: HelpCircle,
   clear: Trash2,
   compact: Layers,
@@ -32,7 +32,7 @@ const BUILTIN_ICONS: Record<string, NtrpIcon> = {
   goal: Target,
 };
 
-function iconFor(entry: CommandEntry): NtrpIcon {
+function iconFor(entry: CommandEntry): ArdenIcon {
   if (entry.kind === "builtin") return BUILTIN_ICONS[entry.name] ?? HelpCircle;
   return Sparkles;
 }

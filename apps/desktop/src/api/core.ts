@@ -32,7 +32,7 @@ export interface HealthCheck {
   hasProviders: boolean;
 }
 
-export const STORAGE_KEY = "ntrp.desktop.config";
+export const STORAGE_KEY = "arden.desktop.config";
 export const DEFAULT_API_TIMEOUT_MS = 60_000;
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -78,7 +78,7 @@ export async function apiWithConfig<T>(config: AppConfig, path: string, init: Re
   const { timeout, ...requestInit } = init as RequestInit & { timeout?: number };
   const effectiveTimeout = timeout ?? DEFAULT_API_TIMEOUT_MS;
   const body = typeof requestInit.body === "string" ? requestInit.body : undefined;
-  const desktopApi = window.ntrpDesktop?.api;
+  const desktopApi = window.ardenDesktop?.api;
 
   if (desktopApi) {
     const request = {
@@ -130,9 +130,9 @@ export async function apiWithConfig<T>(config: AppConfig, path: string, init: Re
 }
 
 export async function desktopRequestWithTimeout(
-  desktopApi: NonNullable<NonNullable<Window["ntrpDesktop"]>["api"]>,
+  desktopApi: NonNullable<NonNullable<Window["ardenDesktop"]>["api"]>,
   config: AppConfig,
-  request: Parameters<NonNullable<NonNullable<Window["ntrpDesktop"]>["api"]>["request"]>[1],
+  request: Parameters<NonNullable<NonNullable<Window["ardenDesktop"]>["api"]>["request"]>[1],
   timeoutMs: number,
 ): Promise<ApiBridgeResponse> {
   if (timeoutMs <= 0) return desktopApi.request(config, request);
@@ -173,7 +173,7 @@ export async function validateConnection(config: AppConfig): Promise<HealthCheck
   if (!normalized.apiKey) throw new Error("API key is required");
   const health = await checkHealth(normalized);
   if (!health.ok) {
-    throw new Error(health.version ? "Invalid API key" : "Could not reach ntrp server");
+    throw new Error(health.version ? "Invalid API key" : "Could not reach Arden server");
   }
   return health;
 }
@@ -189,7 +189,7 @@ function loadLegacyConfig(): AppConfig {
 }
 
 export async function loadInitialConfig(): Promise<AppConfig> {
-  const desktopConfig = window.ntrpDesktop?.config;
+  const desktopConfig = window.ardenDesktop?.config;
   if (!desktopConfig) return loadLegacyConfig();
 
   const config = await desktopConfig.get();
@@ -205,7 +205,7 @@ export async function loadInitialConfig(): Promise<AppConfig> {
 
 export async function saveConfig(config: AppConfig): Promise<AppConfig> {
   const normalized = normalizeConfig(config);
-  const desktopConfig = window.ntrpDesktop?.config;
+  const desktopConfig = window.ardenDesktop?.config;
   if (desktopConfig) {
     const saved = await desktopConfig.set(normalized);
     localStorage.removeItem(STORAGE_KEY);

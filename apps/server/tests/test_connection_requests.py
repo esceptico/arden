@@ -8,22 +8,22 @@ import pytest_asyncio
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import ntrp.database as database
-from ntrp.context.models import SessionState
-from ntrp.context.store import SessionStore
-from ntrp.events.sse import ConnectionNeededEvent
-from ntrp.integrations.base import IntegrationConnectionDescriptor, IntegrationConnectionError
-from ntrp.server.routers.chat import router as chat_router
-from ntrp.server.runtime import get_runtime
-from ntrp.server.state import RunRegistry
-from ntrp.tools.core.context import (
+import arden.database as database
+from arden.context.models import SessionState
+from arden.context.store import SessionStore
+from arden.events.sse import ConnectionNeededEvent
+from arden.integrations.base import IntegrationConnectionDescriptor, IntegrationConnectionError
+from arden.server.routers.chat import router as chat_router
+from arden.server.runtime import get_runtime
+from arden.server.state import RunRegistry
+from arden.tools.core.context import (
     BackgroundTaskRegistry,
     IOBridge,
     RunContext,
     ToolContext,
     ToolExecution,
 )
-from ntrp.tools.core.registry import ToolRegistry
+from arden.tools.core.registry import ToolRegistry
 
 
 @pytest_asyncio.fixture

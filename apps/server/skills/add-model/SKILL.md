@@ -1,11 +1,11 @@
 ---
 name: add-model
-description: Add a custom OpenAI-compatible model (OpenRouter, Ollama, vLLM, LM Studio, etc.) to ~/.ntrp/models.json
+description: Add a custom OpenAI-compatible model (OpenRouter, Ollama, vLLM, LM Studio, etc.) to ~/.arden/models.json
 ---
 
 # Add Custom Model
 
-Help the user register a custom model in `~/.ntrp/models.json`. Supports both **completion** (chat) models and **embedding** models.
+Help the user register a custom model in `~/.arden/models.json`. Supports both **completion** (chat) models and **embedding** models.
 
 ## Step 1: Determine model type
 
@@ -41,7 +41,7 @@ Only include `api_key_env` if the user provided one. Only include `max_output_to
 ### After adding
 
 - The model is available as `model-id`
-- Set it in `.env` as `NTRP_CHAT_MODEL=model-id` (or `NTRP_MEMORY_MODEL`, `NTRP_RESEARCH_MODEL`)
+- Set it in `.env` as `ARDEN_CHAT_MODEL=model-id` (or `ARDEN_MEMORY_MODEL`, `ARDEN_RESEARCH_MODEL`)
 - If they specified an `api_key_env`, remind them to set that environment variable
 
 ## Embedding models
@@ -74,7 +74,7 @@ Only include `api_key_env` if the user provided one.
 ### After adding
 
 - The model is available as `model-id`
-- Set it in `.env` as `NTRP_EMBEDDING_MODEL=model-id`
+- Set it in `.env` as `ARDEN_EMBEDDING_MODEL=model-id`
 - If they specified an `api_key_env`, remind them to set that environment variable
 - **Changing the embedding model triggers a full re-index** of all stored vectors
 
@@ -93,7 +93,7 @@ If the user mentions a known provider, pre-fill what you can:
 
 ## How to write the config
 
-1. Read `~/.ntrp/models.json` if it exists (it may not — create it as `{}` if missing)
+1. Read `~/.arden/models.json` if it exists (it may not — create it as `{}` if missing)
 2. Add the new model entry (top-level for completion, under `"embedding"` for embedding)
 3. Write the file back with proper JSON formatting
 

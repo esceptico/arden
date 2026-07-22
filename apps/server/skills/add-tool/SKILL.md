@@ -1,11 +1,11 @@
 ---
 name: add-tool
-description: Create a custom user tool in ~/.ntrp/tools/ using the current tool(...) API.
+description: Create a custom user tool in ~/.arden/tools/ using the current tool(...) API.
 ---
 
 # Add User Tool
 
-Help the user create a custom tool. User tools live in `~/.ntrp/tools/` as Python files and are discovered when the server starts.
+Help the user create a custom tool. User tools live in `~/.arden/tools/` as Python files and are discovered when the server starts.
 
 **Important**: Use `bash` to run the scaffold script and apply edits. Use `read_file` to read and verify. Do not create class-based tools. The only supported user-tool registration shape is a module-level `tools: dict[str, Tool]` built with `tool(...)`.
 
@@ -26,11 +26,11 @@ Run the scaffold script (path is relative to the `path` attribute from the `<ski
 bash <skill_path>/scripts/scaffold.sh <tool_name>
 ```
 
-This creates `~/.ntrp/tools/<tool_name>.py` from the current `tool(...)` template.
+This creates `~/.arden/tools/<tool_name>.py` from the current `tool(...)` template.
 
 ## Step 3: Customize
 
-Use `read_file` on `~/.ntrp/tools/<tool_name>.py`, then use `bash` to apply edits:
+Use `read_file` on `~/.arden/tools/<tool_name>.py`, then use `bash` to apply edits:
 
 - Rename `ToolInput` and `execute_tool` if clearer
 - Fill in `display_name` and `description`
@@ -54,8 +54,8 @@ Use `read_file` on `~/.ntrp/tools/<tool_name>.py`, then use `bash` to apply edit
 ```python
 from pydantic import BaseModel, Field
 
-from ntrp.tools.core import ToolAction, ToolPolicy, ToolResult, ToolScope, tool
-from ntrp.tools.core.context import ToolExecution
+from arden.tools.core import ToolAction, ToolPolicy, ToolResult, ToolScope, tool
+from arden.tools.core.context import ToolExecution
 
 
 class MyInput(BaseModel):
@@ -84,7 +84,7 @@ The execute function must return `ToolResult`. Returning a string, dict, or arbi
 ### Client-backed
 
 ```python
-from ntrp.integrations.slack.client import SlackClient
+from arden.integrations.slack.client import SlackClient
 
 
 async def search_slack(execution: ToolExecution, args: MyInput) -> ToolResult:
@@ -152,7 +152,7 @@ Policy fields:
 | Field | Description |
 |-------|-------------|
 | `action` | `READ`, `DRAFT`, `WRITE`, or `EXECUTE` |
-| `scope` | `INTERNAL` for ntrp/local state, `EXTERNAL` for third-party systems |
+| `scope` | `INTERNAL` for arden/local state, `EXTERNAL` for third-party systems |
 | `requires_approval` | `True` pauses for user approval before execution |
 | `permissions` | Service keys; tool is hidden when any is missing |
 | `timeout_seconds` | Optional per-tool execution timeout |
@@ -163,7 +163,7 @@ Policy fields:
 ## Step 4: Verify and inform
 
 1. Use `read_file` to verify the final tool file
-2. Tell the user to restart the server (`ntrp-server serve`) for discovery
+2. Tell the user to restart the server (`arden-server serve`) for discovery
 3. Name conflicts with built-ins are skipped with a warning; import errors are logged and skipped
 
 ## Notes

@@ -1,4 +1,4 @@
-import { Bot, Layers, Monitor, Moon, Sun, type NtrpIcon } from "@/components/icons";
+import { Bot, Layers, Monitor, Moon, Sun, type ArdenIcon } from "@/components/icons";
 import { updateServerConfig } from "@/actions/server";
 import type { ThemeChoice } from "@/stores";
 import { prettyProvider, stripProviderPrefix } from "@/features/command-palette/lib/filter";
@@ -57,7 +57,7 @@ export function buildThemeView(
   current: ThemeChoice,
   setPref: <K extends "theme">(key: K, value: ThemeChoice) => void,
 ): CommandView {
-  const options: { id: ThemeChoice; label: string; icon: NtrpIcon }[] = [
+  const options: { id: ThemeChoice; label: string; icon: ArdenIcon }[] = [
     { id: "system", label: "System", icon: Monitor },
     { id: "light", label: "Light", icon: Sun },
     { id: "dark", label: "Dark", icon: Moon },

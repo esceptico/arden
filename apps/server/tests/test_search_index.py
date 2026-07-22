@@ -4,8 +4,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from ntrp.search.index import SearchIndex
-from ntrp.search.types import RawItem
+from arden.search.index import SearchIndex
+from arden.search.types import RawItem
 
 pytestmark = pytest.mark.asyncio
 

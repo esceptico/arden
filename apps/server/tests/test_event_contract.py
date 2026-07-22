@@ -2,7 +2,7 @@ import json
 import re
 from pathlib import Path
 
-from ntrp.events.sse import (
+from arden.events.sse import (
     EventType,
     RunBackgroundedEvent,
     RunCancelledEvent,
@@ -12,7 +12,7 @@ from ntrp.events.sse import (
     SessionCreatedEvent,
     ThinkingEvent,
 )
-from ntrp.server.bus import StreamRecord, stream_record_to_sse_string
+from arden.server.bus import StreamRecord, stream_record_to_sse_string
 
 
 def _payload(event):

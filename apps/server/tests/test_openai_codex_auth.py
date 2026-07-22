@@ -2,8 +2,8 @@ import base64
 import json
 from unittest.mock import AsyncMock
 
-from ntrp.llm import openai_codex_auth as auth
-from ntrp.server.routers import providers
+from arden.llm import openai_codex_auth as auth
+from arden.server.routers import providers
 
 
 def _jwt(payload: dict) -> str:
@@ -41,7 +41,7 @@ def test_config_defaults_to_codex_models_when_oauth_is_connected(tmp_path, monke
     monkeypatch.setattr(auth, "TOKEN_PATH", tmp_path / "openai-codex-auth.json")
     auth.save_tokens(auth.OpenAICodexTokens(access="access", refresh="refresh", expires=123))
 
-    from ntrp.config import Config
+    from arden.config import Config
 
     config = Config(_env_file=None)
 

@@ -5,15 +5,15 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-import ntrp.database as database
-from ntrp.agent import Usage
-from ntrp.automation.models import Automation
-from ntrp.automation.scheduler import Scheduler
-from ntrp.automation.service import AutomationService
-from ntrp.automation.store import AutomationStore
-from ntrp.automation.triggers import MessageTrigger, TimeTrigger
-from ntrp.events.internal import RunCompleted
-from ntrp.events.triggers import MessageReceived
+import arden.database as database
+from arden.agent import Usage
+from arden.automation.models import Automation
+from arden.automation.scheduler import Scheduler
+from arden.automation.service import AutomationService
+from arden.automation.store import AutomationStore
+from arden.automation.triggers import MessageTrigger, TimeTrigger
+from arden.events.internal import RunCompleted
+from arden.events.triggers import MessageReceived
 
 
 @pytest_asyncio.fixture
@@ -27,8 +27,8 @@ async def store(tmp_path: Path):
 
 @pytest_asyncio.fixture
 async def session_service(tmp_path: Path):
-    from ntrp.context.store import SessionStore
-    from ntrp.services.session import SessionService
+    from arden.context.store import SessionStore
+    from arden.services.session import SessionService
 
     conn = await database.connect(tmp_path / "sessions.db")
     s = SessionStore(conn)
@@ -491,7 +491,7 @@ async def test_loop_fire_gate_allows_when_session_idle(store: AutomationStore):
 
 @pytest.mark.asyncio
 async def test_handle_run_completed_fires_due_loops_for_session(store: AutomationStore):
-    from ntrp.events.internal import RunCompleted
+    from arden.events.internal import RunCompleted
 
     await store.save(_loop(session_id="sess-1"))
     sched, dispatched = _make_scheduler(store)
@@ -508,7 +508,7 @@ async def test_handle_run_completed_fires_due_loops_for_session(store: Automatio
 
 @pytest.mark.asyncio
 async def test_handle_run_completed_respects_fire_gate(store: AutomationStore):
-    from ntrp.events.internal import RunCompleted
+    from arden.events.internal import RunCompleted
 
     await store.save(_loop(session_id="sess-1"))
     sched, dispatched = _make_scheduler(store)
@@ -529,7 +529,7 @@ async def test_handle_run_completed_respects_fire_gate(store: AutomationStore):
 
 @pytest.mark.asyncio
 async def test_handle_run_completed_ignores_other_sessions(store: AutomationStore):
-    from ntrp.events.internal import RunCompleted
+    from arden.events.internal import RunCompleted
 
     await store.save(_loop(session_id="sess-1"))
     sched, dispatched = _make_scheduler(store)
@@ -545,7 +545,7 @@ async def test_handle_run_completed_ignores_other_sessions(store: AutomationStor
 
 @pytest.mark.asyncio
 async def test_handle_run_completed_skips_loop_not_yet_due(store: AutomationStore):
-    from ntrp.events.internal import RunCompleted
+    from arden.events.internal import RunCompleted
 
     future_loop = _loop(next_run_at=datetime.now(UTC) + timedelta(minutes=5))
     await store.save(future_loop)
@@ -906,7 +906,7 @@ async def test_post_mode_fire_gate_defers_while_session_busy(store: AutomationSt
 
 @pytest.mark.asyncio
 async def test_post_mode_handle_run_completed_fires_due_loop(store: AutomationStore):
-    from ntrp.events.internal import RunCompleted
+    from arden.events.internal import RunCompleted
 
     await store.save(_loop(read_history=False, session_id="sess-post"))
     sched, dispatched, _results = _make_post_scheduler(store)
@@ -963,9 +963,9 @@ async def test_post_mode_aged_out_disables_without_firing(store: AutomationStore
 async def test_post_mode_persists_assistant_message_to_target_session(store: AutomationStore, tmp_path: Path):
     """End-to-end: the post dispatcher's return value must be saved as a
     role='assistant' message in the target session's history."""
-    from ntrp.context.models import SessionData
-    from ntrp.context.store import SessionStore
-    from ntrp.services.session import SessionService
+    from arden.context.models import SessionData
+    from arden.context.store import SessionStore
+    from arden.services.session import SessionService
 
     # Tmp session DB.
     session_conn = await database.connect(tmp_path / "sessions.db")
@@ -1025,7 +1025,7 @@ async def test_concurrent_post_dispatches_serialize_under_session_lock():
     overlap. Replicates the lock pattern wired in app.py's `_dispatch_post`."""
     import asyncio
 
-    from ntrp.server.app import _get_or_create_session_lock
+    from arden.server.app import _get_or_create_session_lock
 
     locks: dict[str, asyncio.Lock] = {}
     timeline: list[tuple[str, str]] = []  # (event, dispatch_id)
@@ -1058,7 +1058,7 @@ async def test_session_lock_is_per_session_not_global():
     lock map is per-session, so they should run in parallel."""
     import asyncio
 
-    from ntrp.server.app import _get_or_create_session_lock
+    from arden.server.app import _get_or_create_session_lock
 
     locks: dict[str, asyncio.Lock] = {}
     overlap = {"yes": False}
@@ -1081,7 +1081,7 @@ async def test_session_lock_is_per_session_not_global():
 
 
 def test_loop_target_id_returns_none_when_unset():
-    from ntrp.server.app import _loop_target_id
+    from arden.server.app import _loop_target_id
 
     auto = Automation(
         task_id="t",
@@ -1152,7 +1152,7 @@ async def test_handle_run_completed_fires_kind_automation_with_thread_id(
 ):
     """The run-completed fast-path must catch session-bound automations
     regardless of `kind` — they're identified by thread_id."""
-    from ntrp.events.internal import RunCompleted
+    from arden.events.internal import RunCompleted
 
     now = datetime.now(UTC)
     auto = Automation(
@@ -1303,7 +1303,7 @@ async def test_detached_run_settles_on_run_completed(store: AutomationStore):
 
 @pytest.mark.asyncio
 async def test_detached_run_reaped_when_completion_never_arrives(store: AutomationStore):
-    from ntrp.constants import DETACHED_RUN_MAX_AGE
+    from arden.constants import DETACHED_RUN_MAX_AGE
 
     auto = _loop()
     await store.save(auto)
@@ -1312,9 +1312,7 @@ async def test_detached_run_reaped_when_completion_never_arrives(store: Automati
     await sched._run_and_finalize(auto)
 
     # Backdate the dispatch past the max age — RunCompleted was lost.
-    sched._detached_task_ids[auto.task_id] = (
-        datetime.now(UTC) - DETACHED_RUN_MAX_AGE - timedelta(minutes=1)
-    )
+    sched._detached_task_ids[auto.task_id] = datetime.now(UTC) - DETACHED_RUN_MAX_AGE - timedelta(minutes=1)
     await sched._release_untracked_running()
 
     runs = await store.list_runs(auto.task_id)

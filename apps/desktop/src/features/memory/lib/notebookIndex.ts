@@ -1,4 +1,4 @@
-const RESERVED_DIRECTORIES = new Set(["raw", ".ntrp", ".index", ".maintenance"]);
+const RESERVED_DIRECTORIES = new Set(["raw", ".arden", ".index", ".maintenance"]);
 const RESERVED_ROOT_FILES = new Set(["README.md", "AGENTS.md", "health.md", "tooling.md"]);
 
 function pathParts(path: string): string[] {

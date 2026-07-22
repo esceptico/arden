@@ -23,7 +23,7 @@ const slackConnection: PendingConnection = {
 };
 
 afterEach(async () => {
-  delete (window as unknown as { ntrpDesktop?: unknown }).ntrpDesktop;
+  delete (window as unknown as { ardenDesktop?: unknown }).ardenDesktop;
   await act(async () => {
     setState({ pendingConnections: [], settingsOpen: false, settingsTab: null });
     root?.unmount();
@@ -50,7 +50,7 @@ test("Slack recovery opens secure integration settings and shows scopes", async 
 
 test("decline sends a separate connection result and removes the card", async () => {
   const calls: { path: string; body: Record<string, unknown> }[] = [];
-  (window as unknown as { ntrpDesktop: unknown }).ntrpDesktop = {
+  (window as unknown as { ardenDesktop: unknown }).ardenDesktop = {
     api: {
       request: async (_config: unknown, request: { path: string; body: string }) => {
         calls.push({ path: request.path, body: JSON.parse(request.body) });
@@ -70,7 +70,7 @@ test("decline sends a separate connection result and removes the card", async ()
 
 test("Google connection card delegates account choice to Google", async () => {
   const calls: { path: string; body: Record<string, unknown> }[] = [];
-  (window as unknown as { ntrpDesktop: unknown }).ntrpDesktop = {
+  (window as unknown as { ardenDesktop: unknown }).ardenDesktop = {
     api: {
       request: async (_config: unknown, request: { path: string; body?: string }) => {
         calls.push({ path: request.path, body: request.body ? JSON.parse(request.body) : {} });
@@ -136,7 +136,7 @@ test("Google connection runs OAuth, enables Google, then resolves", async () => 
     memory_enabled: true,
     integrations: {},
   };
-  (window as unknown as { ntrpDesktop: unknown }).ntrpDesktop = {
+  (window as unknown as { ardenDesktop: unknown }).ardenDesktop = {
     api: {
       request: async (_config: unknown, request: { path: string; body: string }) => {
         calls.push({ path: request.path, body: request.body ? JSON.parse(request.body) : {} });

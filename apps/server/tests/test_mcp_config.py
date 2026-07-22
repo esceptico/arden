@@ -2,11 +2,11 @@ import time
 
 import pytest
 
-from ntrp.mcp import oauth
-from ntrp.mcp.models import HttpTransport, parse_server_config
-from ntrp.server.routers import mcp as mcp_router
-from ntrp.server.routers.mcp import prepare_mcp_server_config
-from ntrp.tools.core.types import ToolAction, ToolScope
+from arden.mcp import oauth
+from arden.mcp.models import HttpTransport, parse_server_config
+from arden.server.routers import mcp as mcp_router
+from arden.server.routers.mcp import prepare_mcp_server_config
+from arden.tools.core.types import ToolAction, ToolScope
 
 
 def test_http_url_without_scheme_defaults_to_http():
@@ -41,7 +41,7 @@ def test_http_oauth_config_parses_public_options():
             "client_secret": "secret-123",
             "redirect_port": 8765,
             "scope": "mcp:connect",
-            "client_name": "ntrp-test",
+            "client_name": "arden-test",
         },
     )
 
@@ -51,7 +51,7 @@ def test_http_oauth_config_parses_public_options():
     assert config.transport.client_secret == "secret-123"
     assert config.transport.redirect_port == 8765
     assert config.transport.scope == "mcp:connect"
-    assert config.transport.client_name == "ntrp-test"
+    assert config.transport.client_name == "arden-test"
 
 
 def test_http_auth_rejects_unknown_mode():

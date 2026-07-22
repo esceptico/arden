@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import BaseModel
 
-from ntrp.agent import (
+from arden.agent import (
     Agent,
     Choice,
     CompletionResponse,
@@ -15,30 +15,30 @@ from ntrp.agent import (
     StopReason,
     Usage,
 )
-from ntrp.agent.model_request import ModelRequest, apply_model_request_middlewares
-from ntrp.agent.types.tool_choice import ToolChoiceMode
-from ntrp.context.models import SessionState
-from ntrp.core.compaction_model_request_middleware import CompactionModelRequestMiddleware
-from ntrp.core.deferred_tools_middleware import DeferredToolsModelRequestMiddleware
-from ntrp.core.factory import AgentConfig, create_agent
-from ntrp.core.model_context_budget import (
+from arden.agent.model_request import ModelRequest, apply_model_request_middlewares
+from arden.agent.types.tool_choice import ToolChoiceMode
+from arden.context.models import SessionState
+from arden.core.compaction_model_request_middleware import CompactionModelRequestMiddleware
+from arden.core.deferred_tools_middleware import DeferredToolsModelRequestMiddleware
+from arden.core.factory import AgentConfig, create_agent
+from arden.core.model_context_budget import (
     MODEL_TOOL_RESULT_KEEP_FULL_CHARS,
     ToolResultContextBudgetMiddleware,
 )
-from ntrp.core.spawner import create_spawn_fn
-from ntrp.core.tool_executor import NtrpToolExecutor
-from ntrp.tools.core import ToolAction, ToolPolicy, ToolResult, ToolScope, tool
-from ntrp.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
-from ntrp.tools.core.registry import ToolRegistry
-from ntrp.tools.core.types import ApprovalInfo
-from ntrp.tools.deferred import (
+from arden.core.spawner import create_spawn_fn
+from arden.core.tool_executor import ArdenToolExecutor
+from arden.tools.core import ToolAction, ToolPolicy, ToolResult, ToolScope, tool
+from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
+from arden.tools.core.registry import ToolRegistry
+from arden.tools.core.types import ApprovalInfo
+from arden.tools.deferred import (
     build_deferred_tools_prompt,
     build_deferred_tools_prompt_for_schemas,
     build_native_deferred_tools_prompt_for_schemas,
     load_tools_tool,
     tool_search_tool,
 )
-from ntrp.tools.executor import ToolExecutor
+from arden.tools.executor import ToolExecutor
 from tests.helpers import MockCompletionClient, MockLLMClient, make_text_response, make_tool_response
 
 READ_INTERNAL_POLICY = ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL)
@@ -426,7 +426,7 @@ async def test_hidden_tool_recovery_names_the_exposed_loader():
         run=run,
         io=IOBridge(),
     )
-    executor = NtrpToolExecutor(ToolExecutor().with_registry(registry), ctx)
+    executor = ArdenToolExecutor(ToolExecutor().with_registry(registry), ctx)
 
     classic = await executor.execute("slack_search", {"query": "x"}, "classic")
     assert classic.is_error
@@ -483,7 +483,7 @@ async def test_agent_load_tools_reveals_slack_on_next_model_step():
     agent = Agent(
         tools=registry.get_schemas(),
         client=MockLLMClient(llm),
-        executor=NtrpToolExecutor(executor, ctx),
+        executor=ArdenToolExecutor(executor, ctx),
         model="test-model",
         model_request_middlewares=(
             DeferredToolsModelRequestMiddleware(
@@ -527,7 +527,7 @@ async def test_agent_tool_search_reveals_slack_on_next_native_model_step():
     agent = Agent(
         tools=registry.get_schemas(),
         client=MockLLMClient(llm),
-        executor=NtrpToolExecutor(executor, ctx),
+        executor=ArdenToolExecutor(executor, ctx),
         model="gpt-5.5",
         model_request_middlewares=(
             DeferredToolsModelRequestMiddleware(
@@ -572,7 +572,7 @@ async def test_agent_accepts_provider_loaded_deferred_tool_call():
     agent = Agent(
         tools=registry.get_schemas(),
         client=MockLLMClient(llm),
-        executor=NtrpToolExecutor(executor, ctx),
+        executor=ArdenToolExecutor(executor, ctx),
         model="test-model",
         model_request_middlewares=(
             DeferredToolsModelRequestMiddleware(
@@ -587,7 +587,9 @@ async def test_agent_accepts_provider_loaded_deferred_tool_call():
 
     assert result.text == "done"
     assert "slack_search" in run.loaded_tools
-    assert any(msg.get("role") == "tool" and msg.get("content") == "searched: hello" for msg in llm.calls[1]["messages"])
+    assert any(
+        msg.get("role") == "tool" and msg.get("content") == "searched: hello" for msg in llm.calls[1]["messages"]
+    )
 
 
 @pytest.mark.asyncio
@@ -645,7 +647,7 @@ async def test_agent_marks_provider_searched_deferred_tools_loaded_for_next_step
     agent = Agent(
         tools=registry.get_schemas(),
         client=MockLLMClient(llm),
-        executor=NtrpToolExecutor(executor, ctx),
+        executor=ArdenToolExecutor(executor, ctx),
         model="gpt-5.5",
         model_request_middlewares=(
             DeferredToolsModelRequestMiddleware(
@@ -709,7 +711,7 @@ async def test_agent_continues_after_provider_only_tool_search_loads_names():
     agent = Agent(
         tools=registry.get_schemas(),
         client=MockLLMClient(llm),
-        executor=NtrpToolExecutor(executor, ctx),
+        executor=ArdenToolExecutor(executor, ctx),
         model="gpt-5.5",
         model_request_middlewares=(
             DeferredToolsModelRequestMiddleware(
@@ -1007,7 +1009,7 @@ async def test_spawned_agents_inherit_deferred_loading(monkeypatch):
             captured["messages"] = messages
             yield Result(text="done", stop_reason=StopReason.END_TURN, steps=1, usage=Usage())
 
-    monkeypatch.setattr("ntrp.core.spawner.Agent", FakeAgent)
+    monkeypatch.setattr("arden.core.spawner.Agent", FakeAgent)
 
     parent_ctx = ToolContext(
         session_state=SessionState(session_id="parent", started_at=datetime.now(UTC)),
@@ -1068,7 +1070,7 @@ async def test_spawned_agent_compaction_refreshes_deferred_schema(monkeypatch):
         async def stream(self, messages):
             yield Result(text="done", stop_reason=StopReason.END_TURN, steps=1, usage=Usage())
 
-    monkeypatch.setattr("ntrp.core.spawner.Agent", FakeAgent)
+    monkeypatch.setattr("arden.core.spawner.Agent", FakeAgent)
 
     parent_ctx = ToolContext(
         session_state=SessionState(session_id="parent", started_at=datetime.now(UTC)),
@@ -1149,7 +1151,7 @@ async def test_spawned_agent_compaction_uses_research_handoff_prompt_only_for_re
         async def stream(self, messages):
             yield Result(text="done", stop_reason=StopReason.END_TURN, steps=1, usage=Usage())
 
-    monkeypatch.setattr("ntrp.core.spawner.Agent", FakeAgent)
+    monkeypatch.setattr("arden.core.spawner.Agent", FakeAgent)
 
     generic_compactor = PromptAwareCompactor()
     parent_ctx = ToolContext(
@@ -1226,7 +1228,7 @@ async def test_spawned_agent_extra_tools_are_child_only(monkeypatch):
         async def stream(self, messages):
             yield Result(text="done", stop_reason=StopReason.END_TURN, steps=1, usage=Usage())
 
-    monkeypatch.setattr("ntrp.core.spawner.Agent", FakeAgent)
+    monkeypatch.setattr("arden.core.spawner.Agent", FakeAgent)
 
     executor = ToolExecutor().with_registry(registry)
     parent_ctx = ToolContext(
@@ -1310,7 +1312,7 @@ async def test_spawned_agent_clamps_tool_tail_after_compaction(monkeypatch):
         async def stream(self, messages):
             yield Result(text="done", stop_reason=StopReason.END_TURN, steps=1, usage=Usage())
 
-    monkeypatch.setattr("ntrp.core.spawner.Agent", FakeAgent)
+    monkeypatch.setattr("arden.core.spawner.Agent", FakeAgent)
 
     parent_ctx = ToolContext(
         session_state=SessionState(session_id="parent", started_at=datetime.now(UTC)),

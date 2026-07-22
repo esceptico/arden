@@ -1,4 +1,4 @@
-"""Curator (the Dreamer) — the sleep-time memory writer (ntrp/memory/curator.py).
+"""Curator (the Dreamer) — the sleep-time memory writer (arden/memory/curator.py).
 
 ONE LLM call per session emits a SINGLE JSON object `{"records": [ADD|UPDATE|
 SUPERSEDE|NOOP ...]}` whose write ops carry open-vocabulary `labels`. The call
@@ -6,7 +6,7 @@ reconciles the flat record pool; there is NO lens write path. Hermetic: a STUB
 LLM (scripted single-call JSON responses) + a STUB sessions store (in-memory
 `messages_since`) + a real tmp RecordStore (`search_index=None` -> FTS-only).
 The watermark + records live in a tmp sqlite (injected via the Curator's
-`db_path` arg so the real ~/.ntrp/memory.db is never touched).
+`db_path` arg so the real ~/.arden/memory.db is never touched).
 
 Covers:
   (a) empty ops (admit gate) -> no record writes, watermark advances;
@@ -27,13 +27,13 @@ from pathlib import Path
 
 import pytest
 
-from ntrp.memory.curator import Curator
-from ntrp.memory.file_store import FilePageStore
-from ntrp.memory.ledger import LedgerEntry, LedgerMeta, render_ledger_entry
-from ntrp.memory.models import Kind, SourceRef
-from ntrp.memory.page_events import PageEditAnalysis
-from ntrp.memory.records import RecordStore
-from ntrp.memory.scopes import MemoryScope
+from arden.memory.curator import Curator
+from arden.memory.file_store import FilePageStore
+from arden.memory.ledger import LedgerEntry, LedgerMeta, render_ledger_entry
+from arden.memory.models import Kind, SourceRef
+from arden.memory.page_events import PageEditAnalysis
+from arden.memory.records import RecordStore
+from arden.memory.scopes import MemoryScope
 from tests.conftest import completion_response
 
 pytestmark = pytest.mark.asyncio
@@ -132,7 +132,7 @@ async def _make_file_curator(tmp_path: Path, llm, sessions) -> tuple[Curator, Fi
     visible.parent.mkdir(parents=True)
     raw.parent.mkdir(parents=True)
     visible.write_text("# Me\n", encoding="utf-8")
-    raw.write_text("<!-- ntrp:records schema=2 page=me.md -->\n", encoding="utf-8")
+    raw.write_text("<!-- arden:records schema=2 page=me.md -->\n", encoding="utf-8")
     records = FilePageStore(vault)
     await records.open()
     curator = Curator(
@@ -436,11 +436,9 @@ async def test_retry_after_watermark_failure_does_not_duplicate_committed_batch(
     before = await records.list()
     before_history = sum(len(records.history(record.id)) for record in before)
     batch_key = curator._batch_key("s1", 0)
-    assert {
-        entry.meta.extra.get("batch_key")
-        for record in before
-        for entry in records.history(record.id)
-    } == {batch_key}
+    assert {entry.meta.extra.get("batch_key") for record in before for entry in records.history(record.id)} == {
+        batch_key
+    }
 
     assert await curator.curate_session("s1") is False
     after = await records.list()
@@ -664,7 +662,7 @@ async def test_update_op_uses_v2_successor_for_labels_and_evidence(tmp_path: Pat
         ),
     )
     raw.write_text(
-        "<!-- ntrp:records schema=2 page=topics/a.md -->\n" + render_ledger_entry(entry) + "\n",
+        "<!-- arden:records schema=2 page=topics/a.md -->\n" + render_ledger_entry(entry) + "\n",
         encoding="utf-8",
     )
     records = FilePageStore(vault)
@@ -673,7 +671,7 @@ async def test_update_op_uses_v2_successor_for_labels_and_evidence(tmp_path: Pat
     correction = SourceRef("curator", "s1", captured_at="2026-07-12T10:01:00Z")
 
     updated = await curator._apply_op(
-            {"op": "UPDATE", "id": entry.id, "text": "the user lives in Munich", "meta_labels": ["Munich"]},
+        {"op": "UPDATE", "id": entry.id, "text": "the user lives in Munich", "meta_labels": ["Munich"]},
         "s1",
         correction,
     )
@@ -789,7 +787,7 @@ async def test_narrative_summary_kind_is_not_minted(tmp_path: Path):
 async def test_curator_add_kinds_exclude_summary(tmp_path: Path):
     """The curator's writable ADD kinds are directive|fact|source|lesson — the
     prompt no longer offers 'summary'. `lesson` is the continual-learning playbook kind."""
-    from ntrp.memory.curator import _SYSTEM_PROMPT, ALLOWED_KINDS
+    from arden.memory.curator import _SYSTEM_PROMPT, ALLOWED_KINDS
 
     assert {"directive", "fact", "source", "lesson"} == ALLOWED_KINDS
     assert "summary" not in ALLOWED_KINDS
@@ -917,7 +915,9 @@ async def test_supersede_op_successor_takes_op_labels(tmp_path: Path):
     await records.set_labels(old.id, ["Acme", "work"])
 
     llm = StubLLM(
-        _ops_json([{"op": "SUPERSEDE", "id": old.id, "text": "the user works at Globex", "meta_labels": ["Globex", "work"]}])
+        _ops_json(
+            [{"op": "SUPERSEDE", "id": old.id, "text": "the user works at Globex", "meta_labels": ["Globex", "work"]}]
+        )
     )
     sessions = StubSessions({"s1": [_turn(0, "user", "I switched jobs to Globex")]})
     curator2 = Curator(
@@ -1077,8 +1077,8 @@ async def test_backfill_entity_labels_promotes_recurring_subject(tmp_path: Path)
     accumulates >=2 records and promotes to a topic page; pure self-facts stay untagged."""
     import json as _json
 
-    from ntrp.memory.file_store import FilePageStore
-    from ntrp.memory.models import SourceRef
+    from arden.memory.file_store import FilePageStore
+    from arden.memory.models import SourceRef
 
     store = FilePageStore(tmp_path / "memory")
     await store.open()

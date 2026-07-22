@@ -30,8 +30,8 @@ import {
   type WorkspaceDir,
 } from "@/features/memory/lib/workspaceTree";
 
-const COLLAPSED_KEY = "ntrp.desktop.memory.rail.collapsed";
-const PINS_KEY = "ntrp.desktop.memory.pins";
+const COLLAPSED_KEY = "arden.desktop.memory.rail.collapsed";
+const PINS_KEY = "arden.desktop.memory.pins";
 
 function loadStringSet(key: string, fallback: string[]): Set<string> {
   try {

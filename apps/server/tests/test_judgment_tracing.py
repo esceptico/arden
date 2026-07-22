@@ -1,7 +1,7 @@
 import pytest
 
-import ntrp.observability.judgment as judgment
-from ntrp.observability import activate_tracing, init_tracing, shutdown_tracing, tracing_enabled
+import arden.observability.judgment as judgment
+from arden.observability import activate_tracing, init_tracing, shutdown_tracing, tracing_enabled
 
 
 def test_unconfigured_is_safe_noop(monkeypatch):

@@ -15,7 +15,7 @@ HTML mockups are interaction labs. They must express one coherent system, not ac
 
 ## Product baseline
 
-The current ntrp desktop app is the primary reference for information architecture, placement, and established behavior. The redesign may refine its visual language, but must not invent product concepts.
+The current Arden desktop app is the primary reference for information architecture, placement, and established behavior. The redesign may refine its visual language, but must not invent product concepts.
 
 - Preserve the current Chat structure: global sidebar, centered chat lane, composer, conversation rail, and Activity/Sources inspector.
 - Automations is a separate window, not a sidebar tab.
@@ -85,7 +85,7 @@ Contract to adapt:
 - Attachments and queued items use layout-aware motion.
 - Enter sends; Shift+Enter inserts a newline.
 - Reduced-motion and accessible labels are first-class states.
-- Match ntrp's existing compact proportions; do not scale the reference blindly.
+- Match Arden's existing compact proportions; do not scale the reference blindly.
 
 ### Queue lifecycle
 

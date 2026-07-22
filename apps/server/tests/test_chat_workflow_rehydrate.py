@@ -1,4 +1,4 @@
-from ntrp.events.sse import (
+from arden.events.sse import (
     TaskFinishedEvent,
     TaskStartedEvent,
     ThinkingEvent,
@@ -6,8 +6,8 @@ from ntrp.events.sse import (
     WorkflowFinishedEvent,
     WorkflowStartedEvent,
 )
-from ntrp.server.bus import StreamRecord
-from ntrp.server.routers.chat import reconstruct_workflow_events
+from arden.server.bus import StreamRecord
+from arden.server.routers.chat import reconstruct_workflow_events
 
 
 def _rec(seq: int, event) -> StreamRecord:

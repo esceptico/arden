@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from ntrp.context.models import AreaContext, SessionState
-from ntrp.tools.area import (
+from arden.context.models import AreaContext, SessionState
+from arden.tools.area import (
     AreaAutomationRunInput,
     AreaPagePatchInput,
     AreaPageReadInput,
@@ -14,9 +14,9 @@ from ntrp.tools.area import (
     area_page_write,
     area_run_automation,
 )
-from ntrp.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
-from ntrp.tools.core.file_mutation import file_revision
-from ntrp.tools.core.registry import ToolRegistry
+from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
+from arden.tools.core.file_mutation import file_revision
+from arden.tools.core.registry import ToolRegistry
 
 
 def execution(

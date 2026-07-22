@@ -1,7 +1,7 @@
 """One-shot CONSOLIDATE/LINT over the live record pool.
 
 Runs the same O(delta) consolidation pass the Dreamer runs (merge duplicates,
-supersede stale, drop orphans) over EVERY active record in ~/.ntrp/memory.db,
+supersede stale, drop orphans) over EVERY active record in ~/.arden/memory.db,
 collapsing the seeded near-duplicate pile into a clean current set. Reports
 before/after active-record counts and a few merge examples.
 
@@ -17,11 +17,11 @@ idempotent, so a re-run is cheap.
 import argparse
 import asyncio
 
-from ntrp.config import get_config
-from ntrp.llm import router
-from ntrp.llm.router import get_completion_client
-from ntrp.memory.consolidate import WATERMARK_KEY, Consolidate
-from ntrp.memory.records import RecordStore
+from arden.config import get_config
+from arden.llm import router
+from arden.llm.router import get_completion_client
+from arden.memory.consolidate import WATERMARK_KEY, Consolidate
+from arden.memory.records import RecordStore
 
 
 async def _active_count(records: RecordStore) -> int:
@@ -50,7 +50,7 @@ async def main(apply: bool) -> None:
     router.init(config)
 
     if not config.memory_model:
-        raise SystemExit("no memory_model configured — set one in ~/.ntrp/settings.json")
+        raise SystemExit("no memory_model configured — set one in ~/.arden/settings.json")
 
     llm = get_completion_client(config.memory_model)
     records = RecordStore(db_path=config.memory_db_path, search_index=None)  # FTS-only recall

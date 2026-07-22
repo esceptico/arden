@@ -5,16 +5,16 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from ntrp.context.models import SessionState
-from ntrp.tools.core.context import (
+from arden.context.models import SessionState
+from arden.tools.core.context import (
     BackgroundTaskRegistry,
     IOBridge,
     RunContext,
     ToolContext,
     ToolExecution,
 )
-from ntrp.tools.core.registry import ToolRegistry
-from ntrp.tools.sessions import (
+from arden.tools.core.registry import ToolRegistry
+from arden.tools.sessions import (
     CreateSessionInput,
     ListRecentSessionsInput,
     ReadSessionInput,

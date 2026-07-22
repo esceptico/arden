@@ -2,7 +2,7 @@
 
 ## Goal
 
-Extend the existing command palette with `Cmd/Ctrl+Enter`: natural-language requests run in a transient side peek, reuse ntrp's canonical tool registry, execute permitted actions through the normal policy pipeline, and navigate directly to the resolved in-app resource.
+Extend the existing command palette with `Cmd/Ctrl+Enter`: natural-language requests run in a transient side peek, reuse Arden's canonical tool registry, execute permitted actions through the normal policy pipeline, and navigate directly to the resolved in-app resource.
 
 `Enter` remains the instant deterministic palette action. `Cmd/Ctrl+Enter` is the explicit agent boundary.
 

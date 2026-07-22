@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from ntrp.areas.suggester import (
+from arden.areas.suggester import (
     AreaSuggester,
     AreaSuggestionStore,
     candidate_pages,
@@ -21,10 +21,13 @@ def _vault(tmp_path, pages: dict[str, str]):
 
 
 def test_candidate_pages_excludes_promoted_areas(tmp_path):
-    vault = _vault(tmp_path, {
-        "o-1a": "---\ntitle: O-1A\n---\n# O-1A\nvisa case",
-        "letta": "---\ntitle: Letta\n---\n# Letta\nagent framework notes",
-    })
+    vault = _vault(
+        tmp_path,
+        {
+            "o-1a": "---\ntitle: O-1A\n---\n# O-1A\nvisa case",
+            "letta": "---\ntitle: Letta\n---\n# Letta\nagent framework notes",
+        },
+    )
     cands = candidate_pages(vault, {"o-1a"})
     assert [c["key"] for c in cands] == ["letta"]
     assert "agent framework" in cands[0]["head"]
@@ -49,15 +52,22 @@ class _FakeLLM:
 
 @pytest.mark.asyncio
 async def test_suggester_validates_keys_and_respects_dismissals(tmp_path):
-    vault = _vault(tmp_path, {
-        "mats": "---\ntitle: MATS\n---\n# MATS\nfellowship application arc",
-        "letta": "---\ntitle: Letta\n---\n# Letta\nframework reference",
-    })
+    vault = _vault(
+        tmp_path,
+        {
+            "mats": "---\ntitle: MATS\n---\n# MATS\nfellowship application arc",
+            "letta": "---\ntitle: Letta\n---\n# Letta\nframework reference",
+        },
+    )
     store = AreaSuggestionStore(tmp_path / "suggestions.json")
-    llm = _FakeLLM({"suggestions": [
-        {"key": "mats", "rationale": "Active application with deadlines."},
-        {"key": "nonexistent", "rationale": "hallucinated"},
-    ]})
+    llm = _FakeLLM(
+        {
+            "suggestions": [
+                {"key": "mats", "rationale": "Active application with deadlines."},
+                {"key": "nonexistent", "rationale": "hallucinated"},
+            ]
+        }
+    )
     suggester = AreaSuggester(attached_page_slugs=set(), vault_dir=vault, store=store, cheap_llm=llm, model="cheap")
 
     await suggester.run()

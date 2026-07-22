@@ -8,10 +8,10 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from ntrp.context.models import SessionData, SessionState
-from ntrp.context.store import SessionStore
-from ntrp.core.factory import AgentConfig
-from ntrp.events.sse import (
+from arden.context.models import SessionData, SessionState
+from arden.context.store import SessionStore
+from arden.core.factory import AgentConfig
+from arden.events.sse import (
     MessageIngestedEvent,
     TextMessageContentEvent,
     TextMessageEndEvent,
@@ -19,15 +19,15 @@ from ntrp.events.sse import (
     ThinkingEvent,
     ToolCallStartEvent,
 )
-from ntrp.server.app import app
-from ntrp.server.bus import BusRegistry, SessionBus, StreamRecord
-from ntrp.server.deps import get_bus_registry, require_run_registry
-from ntrp.server.routers.chat import _effective_after_seq, _event_stream, cancel_subagent, submit_tool_result
-from ntrp.server.runtime import get_runtime
-from ntrp.server.schemas import ChatRequest, ToolResultRequest
-from ntrp.server.state import RunRegistry, RunState, RunStatus
-from ntrp.services.chat import ChatDeps, _handle_background_result, expand_skill_command
-from ntrp.skills.registry import SkillRegistry
+from arden.server.app import app
+from arden.server.bus import BusRegistry, SessionBus, StreamRecord
+from arden.server.deps import get_bus_registry, require_run_registry
+from arden.server.routers.chat import _effective_after_seq, _event_stream, cancel_subagent, submit_tool_result
+from arden.server.runtime import get_runtime
+from arden.server.schemas import ChatRequest, ToolResultRequest
+from arden.server.state import RunRegistry, RunState, RunStatus
+from arden.services.chat import ChatDeps, _handle_background_result, expand_skill_command
+from arden.skills.registry import SkillRegistry
 
 
 class _RuntimeStub:
@@ -55,7 +55,7 @@ def _parse_sse_chunk(chunk: str) -> tuple[int, str, dict]:
 
 @pytest.mark.asyncio
 async def test_tools_result_resolves_durable_approval(tmp_path):
-    import ntrp.database as database
+    import arden.database as database
 
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
@@ -123,7 +123,7 @@ async def test_cancel_subagent_route_cancels_registered_child_task():
 
 @pytest.mark.asyncio
 async def test_tools_result_resolves_durable_approval_without_active_future(tmp_path):
-    import ntrp.database as database
+    import arden.database as database
 
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
@@ -159,7 +159,7 @@ async def test_tools_result_resolves_durable_approval_without_active_future(tmp_
 
 @pytest.mark.asyncio
 async def test_tools_result_resolves_durable_approval_without_active_run(tmp_path):
-    import ntrp.database as database
+    import arden.database as database
 
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
@@ -194,7 +194,7 @@ async def test_tools_result_resolves_durable_approval_without_active_run(tmp_pat
 
 @pytest.mark.asyncio
 async def test_tools_result_resumes_run_after_offline_approval(tmp_path):
-    import ntrp.database as database
+    import arden.database as database
 
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
@@ -262,7 +262,7 @@ async def test_tools_result_wakes_active_future_when_durable_update_fails():
 
 @pytest.mark.asyncio
 async def test_tools_result_durable_fallback_conflicts_for_terminal_approval(tmp_path):
-    import ntrp.database as database
+    import arden.database as database
 
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
@@ -304,7 +304,7 @@ async def test_tools_result_durable_fallback_conflicts_for_terminal_approval(tmp
 
 @pytest.mark.asyncio
 async def test_tools_result_active_future_conflicts_for_terminal_durable_approval(tmp_path):
-    import ntrp.database as database
+    import arden.database as database
 
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
@@ -451,7 +451,7 @@ async def test_event_stream_replay_honors_after_seq_without_old_duplicates():
 
 @pytest.mark.asyncio
 async def test_event_stream_replays_persisted_events_after_bus_recreation(tmp_path):
-    import ntrp.database as database
+    import arden.database as database
 
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
@@ -500,7 +500,7 @@ async def test_event_stream_replays_persisted_events_after_bus_recreation(tmp_pa
 
 @pytest.mark.asyncio
 async def test_event_stream_uses_persisted_checkpoint_as_cursor_boundary(tmp_path):
-    import ntrp.database as database
+    import arden.database as database
 
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
@@ -547,7 +547,7 @@ async def test_event_stream_uses_persisted_checkpoint_as_cursor_boundary(tmp_pat
 
 @pytest.mark.asyncio
 async def test_event_stream_reset_advances_cursor_to_persisted_checkpoint(tmp_path):
-    import ntrp.database as database
+    import arden.database as database
 
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
@@ -578,7 +578,7 @@ async def test_event_stream_reset_advances_cursor_to_persisted_checkpoint(tmp_pa
 
 @pytest.mark.asyncio
 async def test_event_stream_seeds_persisted_cursor_without_client_cursor(tmp_path):
-    import ntrp.database as database
+    import arden.database as database
 
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
@@ -624,7 +624,7 @@ async def test_event_stream_seeds_persisted_cursor_without_client_cursor(tmp_pat
 
 @pytest.mark.asyncio
 async def test_event_stream_replays_persisted_raw_events_above_checkpoint(tmp_path):
-    import ntrp.database as database
+    import arden.database as database
 
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
@@ -659,7 +659,7 @@ async def test_event_stream_replays_persisted_raw_events_above_checkpoint(tmp_pa
 
 @pytest.mark.asyncio
 async def test_event_stream_resets_instead_of_replaying_persisted_checkpointed_events(tmp_path):
-    import ntrp.database as database
+    import arden.database as database
 
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
@@ -833,7 +833,7 @@ def test_duplicate_post_returns_existing_run_without_requeueing(client_with_acti
 
 @pytest.mark.asyncio
 async def test_active_run_auto_message_resolves_pending_approval():
-    from ntrp.services import chat as chat_service
+    from arden.services import chat as chat_service
 
     registry = RunRegistry()
     run = registry.create_run("sess-1")
@@ -863,7 +863,7 @@ async def test_active_run_auto_message_resolves_pending_approval():
 
 @pytest.mark.asyncio
 async def test_concurrent_first_messages_share_one_top_level_run(monkeypatch):
-    from ntrp.services import chat as chat_service
+    from arden.services import chat as chat_service
 
     registry = RunRegistry()
 
@@ -921,7 +921,7 @@ async def test_concurrent_first_messages_share_one_top_level_run(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_submit_cancelled_during_setup_does_not_start_task(monkeypatch):
-    from ntrp.services import chat as chat_service
+    from arden.services import chat as chat_service
 
     registry = RunRegistry()
 
@@ -986,7 +986,7 @@ async def test_closed_run_is_not_accepting_for_final_drain_window():
 
 @pytest.mark.asyncio
 async def test_submit_missing_session_is_rejected_before_new_session(monkeypatch):
-    from ntrp.services import chat as chat_service
+    from arden.services import chat as chat_service
 
     class MissingSessionService:
         async def load(self, session_id=None):
@@ -1005,7 +1005,7 @@ async def test_submit_missing_session_is_rejected_before_new_session(monkeypatch
 
 def _drain_factory(bus: SessionBus, run: RunState):
     """Mirror the closure built inside services.chat.run_chat for testing."""
-    from ntrp.services.chat import _build_get_pending
+    from arden.services.chat import _build_get_pending
 
     return _build_get_pending(bus, run)
 
@@ -1211,7 +1211,7 @@ def test_cancel_returns_202_for_running_run(client_with_active_run):
 
 @pytest.mark.asyncio
 async def test_submit_message_after_cancel_starts_new_run(monkeypatch):
-    from ntrp.services import chat as chat_service
+    from arden.services import chat as chat_service
 
     registry = RunRegistry()
     old_run = registry.create_run("sess-1")
@@ -1271,7 +1271,7 @@ async def test_submit_message_after_cancel_starts_new_run(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_active_run_records_queued_message_in_ledger():
-    from ntrp.services import chat as chat_service
+    from arden.services import chat as chat_service
 
     class FakeSessionService:
         def __init__(self):
@@ -1314,7 +1314,7 @@ async def test_active_run_records_queued_message_in_ledger():
 
 @pytest.mark.asyncio
 async def test_active_run_does_not_queue_message_when_ledger_write_fails():
-    from ntrp.services import chat as chat_service
+    from arden.services import chat as chat_service
 
     class FakeSessionService:
         async def claim_chat_idempotency_key(self, **kwargs):
@@ -1343,7 +1343,7 @@ async def test_active_run_does_not_queue_message_when_ledger_write_fails():
 
 @pytest.mark.asyncio
 async def test_active_run_does_not_queue_message_when_idempotency_update_fails():
-    from ntrp.services import chat as chat_service
+    from arden.services import chat as chat_service
 
     class FakeSessionService:
         def __init__(self):
@@ -1384,7 +1384,7 @@ async def test_active_run_does_not_queue_message_when_idempotency_update_fails()
 
 @pytest.mark.asyncio
 async def test_pre_task_setup_failure_clears_prepared_run(monkeypatch):
-    from ntrp.services import chat as chat_service
+    from arden.services import chat as chat_service
 
     registry = RunRegistry()
 
@@ -1448,7 +1448,7 @@ async def test_pre_task_setup_failure_clears_prepared_run(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_pre_start_cancelled_task_emits_terminal_fallback():
-    from ntrp.services import chat as chat_service
+    from arden.services import chat as chat_service
 
     registry = RunRegistry()
 
@@ -1508,8 +1508,8 @@ async def test_pre_start_cancelled_task_emits_terminal_fallback():
 
 @pytest.mark.asyncio
 async def test_submit_chat_message_primes_bus_cursor_from_durable_events(tmp_path, monkeypatch):
-    import ntrp.database as database
-    from ntrp.services import chat as chat_service
+    import arden.database as database
+    from arden.services import chat as chat_service
 
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
@@ -1585,8 +1585,8 @@ async def test_full_chain_inject_during_run_emits_ingested_and_lands_in_messages
     is appended to inject_queue (as POST /chat/message would do), and the next
     iteration's drain must (a) emit a MessageIngestedEvent on the bus and
     (b) extend the message list so the LLM sees the injected text."""
-    from ntrp.agent import AgentHooks, ToolResult
-    from ntrp.services.chat import _build_get_pending
+    from arden.agent import AgentHooks, ToolResult
+    from arden.services.chat import _build_get_pending
     from tests.test_agent_lib import FakeExecutor, FakeLLM, _make_agent, _msgs, _response, _tc
 
     bus = SessionBus(session_id="sess-inj")
@@ -1643,8 +1643,8 @@ async def test_full_chain_inject_during_run_emits_ingested_and_lands_in_messages
 async def test_full_chain_inject_during_final_response_continues_loop():
     """User submits while the LLM is producing its end-turn response.
     My agent.py fix should drain pending, continue the loop, emit ingestion event."""
-    from ntrp.agent import AgentHooks
-    from ntrp.services.chat import _build_get_pending
+    from arden.agent import AgentHooks
+    from arden.services.chat import _build_get_pending
     from tests.test_agent_lib import FakeExecutor, FakeLLM, _make_agent, _msgs, _response
 
     bus = SessionBus(session_id="sess-inj2")

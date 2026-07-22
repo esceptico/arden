@@ -1,4 +1,4 @@
-from ntrp.server.routers.automation import _effective_after_seq
+from arden.server.routers.automation import _effective_after_seq
 
 
 def test_effective_after_seq_uses_last_event_id_header():

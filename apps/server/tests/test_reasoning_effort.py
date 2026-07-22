@@ -3,12 +3,12 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from ntrp.agent import ProviderToolCall
-from ntrp.agent.llm.parsing import normalize_assistant_message
-from ntrp.config import Config
-from ntrp.llm.anthropic import AnthropicClient
-from ntrp.llm.models import get_model
-from ntrp.server.routers.settings import _validate_reasoning_patch
+from arden.agent import ProviderToolCall
+from arden.agent.llm.parsing import normalize_assistant_message
+from arden.config import Config
+from arden.llm.anthropic import AnthropicClient
+from arden.llm.models import get_model
+from arden.server.routers.settings import _validate_reasoning_patch
 
 
 def test_reasoning_effort_patch_rejects_unsupported_model_value():
@@ -129,9 +129,7 @@ def test_anthropic_request_allows_visible_tool_search_loader_with_native_deferre
                 },
             }
         ],
-        deferred_tools=[
-            {"type": "function", "function": {"name": "slack_search", "parameters": {"type": "object"}}}
-        ],
+        deferred_tools=[{"type": "function", "function": {"name": "slack_search", "parameters": {"type": "object"}}}],
         tool_choice="auto",
         temperature=None,
         max_tokens=4096,
@@ -152,9 +150,7 @@ def test_anthropic_deferred_tools_do_not_get_cache_control_breakpoints():
         messages=[{"role": "user", "content": "search slack"}],
         model="claude-opus-4-7",
         tools=[{"type": "function", "function": {"name": "echo", "parameters": {"type": "object"}}}],
-        deferred_tools=[
-            {"type": "function", "function": {"name": "slack_search", "parameters": {"type": "object"}}}
-        ],
+        deferred_tools=[{"type": "function", "function": {"name": "slack_search", "parameters": {"type": "object"}}}],
         tool_choice="auto",
         temperature=None,
         max_tokens=4096,

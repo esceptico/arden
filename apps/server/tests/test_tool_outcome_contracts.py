@@ -3,11 +3,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from ntrp.agent import ToolOutcome, ToolOutcomeStatus, ToolResult
-from ntrp.context.models import SessionState
-from ntrp.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
-from ntrp.tools.core.registry import ToolRegistry
-from ntrp.tools.notify import NotifyInput, notify
+from arden.agent import ToolOutcome, ToolOutcomeStatus, ToolResult
+from arden.context.models import SessionState
+from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
+from arden.tools.core.registry import ToolRegistry
+from arden.tools.notify import NotifyInput, notify
 
 
 def _execution(*, services=None) -> ToolExecution:
@@ -52,7 +52,7 @@ async def test_notify_total_delivery_failure_is_typed_failure(monkeypatch):
     async def send_once(notifier, subject, body):
         await notifier.send(subject, body)
 
-    monkeypatch.setattr("ntrp.tools.notify._send_with_retry", send_once)
+    monkeypatch.setattr("arden.tools.notify._send_with_retry", send_once)
     result = await notify(
         _execution(services={"notifiers": SimpleNamespace(notifiers={"work": FailingNotifier()})}),
         NotifyInput(subject="Build", body="Failed"),

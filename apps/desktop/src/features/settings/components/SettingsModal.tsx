@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Archive, Boxes, Brain, Cable, Database, KeyRound, Palette, Plug, Sparkles, Wrench, X, type NtrpIcon } from "@/components/icons";
+import { Archive, Boxes, Brain, Cable, Database, KeyRound, Palette, Plug, Sparkles, Wrench, X, type ArdenIcon } from "@/components/icons";
 import { useStore } from "@/stores";
 import type { SettingsTabId } from "@/stores/types";
 import { saveAndReconnect, fetchServerConfig } from "@/actions/server";
@@ -26,7 +26,7 @@ type TabId = SettingsTabId;
 interface Tab {
   id: TabId;
   label: string;
-  icon: NtrpIcon;
+  icon: ArdenIcon;
 }
 
 const TABS: Tab[] = [

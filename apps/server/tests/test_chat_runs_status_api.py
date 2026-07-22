@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 
-from ntrp.server.app import app
-from ntrp.server.runtime import get_runtime
+from arden.server.app import app
+from arden.server.runtime import get_runtime
 
 
 class _Runtime:

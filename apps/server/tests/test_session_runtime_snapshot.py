@@ -5,17 +5,17 @@ from types import SimpleNamespace
 import pytest
 import pytest_asyncio
 
-import ntrp.database as database
-from ntrp.context.models import SessionState
-from ntrp.context.store import SessionStore
-from ntrp.core.model_context_budget import HISTORY_TOOL_RESULT_PREVIEW_CHARS
-from ntrp.events.sse import ThinkingEvent
-from ntrp.integrations.base import IntegrationConnectionDescriptor
-from ntrp.server.bus import BusRegistry
-from ntrp.server.routers import session as session_router
-from ntrp.server.routers.session import _history_tool_calls, get_session_history, list_sessions
-from ntrp.server.state import RunRegistry, RunStatus
-from ntrp.services.session import SessionService
+import arden.database as database
+from arden.context.models import SessionState
+from arden.context.store import SessionStore
+from arden.core.model_context_budget import HISTORY_TOOL_RESULT_PREVIEW_CHARS
+from arden.events.sse import ThinkingEvent
+from arden.integrations.base import IntegrationConnectionDescriptor
+from arden.server.bus import BusRegistry
+from arden.server.routers import session as session_router
+from arden.server.routers.session import _history_tool_calls, get_session_history, list_sessions
+from arden.server.state import RunRegistry, RunStatus
+from arden.services.session import SessionService
 
 
 @pytest_asyncio.fixture

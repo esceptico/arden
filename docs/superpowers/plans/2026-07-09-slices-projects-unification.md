@@ -11,13 +11,13 @@
 ## Global Constraints
 
 - Field **names** `key` (Slice, API payloads) and `slice_key` (Ask records) are KEPT; their **values** become the container's `project_id`. Only `sessions.slice_key` (column) is deleted outright — sessions already have `project_id`.
-- Automation task_id convention stays `slice:{identifier}`; identifier becomes the project_id. `slice_automation_match(task_id, key)` in `ntrp/slices/projection.py` is unchanged code (callers pass project_ids).
+- Automation task_id convention stays `slice:{identifier}`; identifier becomes the project_id. `slice_automation_match(task_id, key)` in `arden/slices/projection.py` is unchanged code (callers pass project_ids).
 - The boot migration must be idempotent: second boot is a no-op (guarded by `slices.json` existence; it is renamed to `slices.json.migrated` on success).
 - Slice capabilities on a project row: `page_path TEXT` (nullable), `autonomy TEXT` (nullable; `'observe'` or `'act'`; non-null iff the container has the standing-agent capability; `page_path` must be non-null whenever `autonomy` is).
 - Overview (`GET /slices`) lists only capability-bearing containers (page or agent or open asks) — plain containers (Design, mats, Life) never appear on Home.
 - The room's sessions list shows primary chats only: `session_type == "chat"` and no `parent_session_id`.
 - No `slice_key` reads or writes may survive on the sessions table (grep gate in Task 7).
-- Server commands run from `apps/server`: `uv run pytest tests/ -q`, `uv run ruff check ntrp/`. Desktop commands run from `apps/desktop`: `bun run typecheck`, `bun run lint`, `bun test tests/`.
+- Server commands run from `apps/server`: `uv run pytest tests/ -q`, `uv run ruff check arden/`. Desktop commands run from `apps/desktop`: `bun run typecheck`, `bun run lint`, `bun test tests/`.
 - Commit after every task (local main, never push).
 
 ---
@@ -25,8 +25,8 @@
 ### Task 1: Projects table grows capability columns
 
 **Files:**
-- Modify: `apps/server/ntrp/context/store.py` (SCHEMA ~line 40, `_column_migrations` list ~line 641, `create_project` ~line 688, `update_project` ~line 776 region)
-- Modify: `apps/server/ntrp/services/session.py` (`create_project`/`update_project` passthroughs ~line 432)
+- Modify: `apps/server/arden/context/store.py` (SCHEMA ~line 40, `_column_migrations` list ~line 641, `create_project` ~line 688, `update_project` ~line 776 region)
+- Modify: `apps/server/arden/services/session.py` (`create_project`/`update_project` passthroughs ~line 432)
 - Test: `apps/server/tests/test_project_capabilities.py` (create)
 
 **Interfaces:**
@@ -44,9 +44,9 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-import ntrp.database as database
-from ntrp.context.store import SessionStore
-from ntrp.services.session import SessionService
+import arden.database as database
+from arden.context.store import SessionStore
+from arden.services.session import SessionService
 
 
 @pytest_asyncio.fixture
@@ -83,7 +83,7 @@ Expected: FAIL — `create_project() got an unexpected keyword argument 'page_pa
 
 - [ ] **Step 3: Implement**
 
-In `apps/server/ntrp/context/store.py`:
+In `apps/server/arden/context/store.py`:
 
 1. SCHEMA `projects` table — add two columns after `knowledge_scope TEXT`:
 
@@ -98,7 +98,7 @@ In `apps/server/ntrp/context/store.py`:
 
 4. `update_project(...)`: it builds `assignments` from a whitelist of updatable fields — add `page_path` and `autonomy` to that whitelist.
 
-In `apps/server/ntrp/services/session.py`, extend the passthroughs:
+In `apps/server/arden/services/session.py`, extend the passthroughs:
 
 ```python
     async def create_project(
@@ -131,7 +131,7 @@ Expected: PASS (new tests + no regressions in project/session suites).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/server/ntrp/context/store.py apps/server/ntrp/services/session.py apps/server/tests/test_project_capabilities.py
+git add apps/server/arden/context/store.py apps/server/arden/services/session.py apps/server/tests/test_project_capabilities.py
 git commit -m "feat(unify): projects table carries slice capabilities (page_path, autonomy)"
 ```
 
@@ -140,23 +140,23 @@ git commit -m "feat(unify): projects table carries slice capabilities (page_path
 ### Task 2: Slice projection over projects; SliceService loses the registry
 
 **Files:**
-- Modify: `apps/server/ntrp/slices/models.py`
-- Modify: `apps/server/ntrp/slices/service.py`
-- Delete: `apps/server/ntrp/slices/registry.py`, `apps/server/ntrp/slices/seed.py`, `apps/server/tests/test_slices_registry.py`, `apps/server/tests/test_slices_seed.py`
+- Modify: `apps/server/arden/slices/models.py`
+- Modify: `apps/server/arden/slices/service.py`
+- Delete: `apps/server/arden/slices/registry.py`, `apps/server/arden/slices/seed.py`, `apps/server/tests/test_slices_registry.py`, `apps/server/tests/test_slices_seed.py`
 - Test: `apps/server/tests/test_slices_service.py` (update fixtures), `apps/server/tests/test_slices_projection.py` (add loader test)
 
 **Interfaces:**
 - Consumes: project dict rows with `project_id`, `name`, `page_path`, `autonomy` (Task 1).
 - Produces:
   - `Slice` dataclass: `key: str` (the project_id), `title: str`, `page_path: str | None`, `autonomy: Autonomy | None`. The `related: list[str]` field is DELETED (related now comes from the page's `## Related` section only).
-  - `slices_from_projects(projects: list[dict]) -> list[Slice]` in `ntrp/slices/models.py`: rows where `page_path` or `autonomy` is set, mapped `key=project_id, title=name`.
+  - `slices_from_projects(projects: list[dict]) -> list[Slice]` in `arden/slices/models.py`: rows where `page_path` or `autonomy` is set, mapped `key=project_id, title=name`.
   - `SliceService.__init__(self, *, slices: Callable[[], list[Slice]], asks, get_page, pending_approvals, session_slice, slice_automations, slice_sessions)` — `registry` param deleted; `update_autonomy` and `create_slice` methods deleted (they become project updates in the router, Task 5).
 
 - [ ] **Step 1: Write the failing loader test** (append to `tests/test_slices_projection.py`)
 
 ```python
 def test_slices_from_projects_projection():
-    from ntrp.slices.models import slices_from_projects
+    from arden.slices.models import slices_from_projects
 
     rows = [
         {"project_id": "p1", "name": "Health", "page_path": "topics/health.md", "autonomy": "observe"},
@@ -177,7 +177,7 @@ Expected: FAIL — `ImportError: cannot import name 'slices_from_projects'`.
 
 - [ ] **Step 3: Implement models + service**
 
-`ntrp/slices/models.py` — replace the `Slice` dataclass and add the loader:
+`arden/slices/models.py` — replace the `Slice` dataclass and add the loader:
 
 ```python
 @dataclass
@@ -205,8 +205,8 @@ def slices_from_projects(projects: list[dict]) -> list[Slice]:
     ]
 ```
 
-`ntrp/slices/service.py`:
-- Delete `from ntrp.slices.registry import SliceRegistry`.
+`arden/slices/service.py`:
+- Delete `from arden.slices.registry import SliceRegistry`.
 - Constructor: replace `registry: SliceRegistry` with `slices: Callable[[], list[Slice]]`, stored as `self._slices`; import `Slice` from models.
 - Every `self._registry.load()` → `self._slices()`.
 - `detail(key)`: replace `self._registry.get(key)` with:
@@ -233,19 +233,19 @@ def slices_from_projects(projects: list[dict]) -> list[Slice]:
 - `detail`/`overview`: guard `page_summary` for pageless slices — `summary = page_summary(self._get_page(s.page_path)) if s.page_path else {"title": s.title, "updated": "", "open_loops": [], "related": []}`.
 - Delete `update_autonomy` and `create_slice` methods.
 
-Delete `ntrp/slices/registry.py`, `ntrp/slices/seed.py`, `tests/test_slices_registry.py`, `tests/test_slices_seed.py` (the seed CLI is a bootstrap-era utility superseded by the suggester; check `pyproject.toml` for a console-script entry pointing at `ntrp.slices.seed` and remove it if present).
+Delete `arden/slices/registry.py`, `arden/slices/seed.py`, `tests/test_slices_registry.py`, `tests/test_slices_seed.py` (the seed CLI is a bootstrap-era utility superseded by the suggester; check `pyproject.toml` for a console-script entry pointing at `arden.slices.seed` and remove it if present).
 
 Update `tests/test_slices_service.py` fixtures: wherever a `SliceRegistry` was constructed and passed, pass `slices=lambda: [Slice(key=..., title=..., page_path=..., autonomy=...)]` with project_id-shaped keys (e.g. `"proj_health"`). Update `tests/test_slices_suggester.py` (registry import) minimally — the suggester still compares against existing slices; it now takes the keys set directly (see Task 5; if Task 5 hasn't run yet, adjust the import to models and construct `Slice` directly).
 
 - [ ] **Step 4: Run tests**
 
 Run: `uv run pytest tests/ -q -k "slice"`
-Expected: PASS (registry/seed tests deleted; service/projection tests green). `uv run ruff check ntrp/` clean.
+Expected: PASS (registry/seed tests deleted; service/projection tests green). `uv run ruff check arden/` clean.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add -A apps/server/ntrp/slices apps/server/tests
+git add -A apps/server/arden/slices apps/server/tests
 git commit -m "feat(unify): Slice becomes a projection over capability-bearing projects; registry and seed CLI deleted"
 ```
 
@@ -254,10 +254,10 @@ git commit -m "feat(unify): Slice becomes a projection over capability-bearing p
 ### Task 3: Boot migration — fold slices.json, re-key asks/automations/sessions
 
 **Files:**
-- Create: `apps/server/ntrp/slices/migrate.py`
-- Modify: `apps/server/ntrp/server/app.py` (replace the "Slices↔projects unification backfill" block in `lifespan`, ~line 110)
-- Modify: `apps/server/ntrp/automation/store.py` (add `rewrite_task_id`)
-- Modify: `apps/server/ntrp/context/store.py` (add `rewrite_origin_automation_ids` + `clear_session_slice_keys`... see Step 3 for exact names)
+- Create: `apps/server/arden/slices/migrate.py`
+- Modify: `apps/server/arden/server/app.py` (replace the "Slices↔projects unification backfill" block in `lifespan`, ~line 110)
+- Modify: `apps/server/arden/automation/store.py` (add `rewrite_task_id`)
+- Modify: `apps/server/arden/context/store.py` (add `rewrite_origin_automation_ids` + `clear_session_slice_keys`... see Step 3 for exact names)
 - Test: `apps/server/tests/test_slices_migration.py` (create)
 
 **Interfaces:**
@@ -277,12 +277,12 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-import ntrp.database as database
-from ntrp.context.store import SessionStore
-from ntrp.services.session import SessionService
-from ntrp.slices.asks import AskStore
-from ntrp.slices.migrate import migrate_slices_to_projects
-from ntrp.slices.models import Ask
+import arden.database as database
+from arden.context.store import SessionStore
+from arden.services.session import SessionService
+from arden.slices.asks import AskStore
+from arden.slices.migrate import migrate_slices_to_projects
+from arden.slices.models import Ask
 
 
 @pytest_asyncio.fixture
@@ -357,13 +357,13 @@ async def test_migration_folds_rekeys_and_renames(env):
 - [ ] **Step 2: Run to verify failure**
 
 Run: `uv run pytest tests/test_slices_migration.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'ntrp.slices.migrate'`.
+Expected: FAIL — `ModuleNotFoundError: No module named 'arden.slices.migrate'`.
 
 NOTE: `svc.provision(..., slice_key=...)` still exists at this point in the sequence — Task 4 deletes the sessions-table slice_key surface. For THIS test, after Task 4 lands, provision loses the kwarg; the migration reads raw rows instead. Write the migration to read `slice_key` via direct SQL (`SELECT session_id, slice_key FROM sessions WHERE slice_key IS NOT NULL`) on `session_store` so it keeps working when the ORM surface drops the field, and update this test's stranded-session setup to raw SQL then too (Task 4 Step 4 covers it).
 
 - [ ] **Step 3: Implement**
 
-`ntrp/slices/migrate.py`:
+`arden/slices/migrate.py`:
 
 ```python
 """One-shot fold of the slices.json era into the projects table.
@@ -376,7 +376,7 @@ scan never runs again. Idempotent by construction — no file, no work."""
 import json
 from pathlib import Path
 
-from ntrp.logging import get_logger
+from arden.logging import get_logger
 
 _logger = get_logger(__name__)
 
@@ -441,7 +441,7 @@ async def migrate_slices_to_projects(
     return summary
 ```
 
-`ntrp/context/store.py` — add:
+`arden/context/store.py` — add:
 
 ```python
     async def list_slice_tagged_sessions(self) -> list[dict]:
@@ -458,7 +458,7 @@ async def migrate_slices_to_projects(
 
 (match the file's actual fetch/update helper names — read the neighboring methods and use the same helpers.)
 
-`ntrp/automation/store.py` — add on the automation store class:
+`arden/automation/store.py` — add on the automation store class:
 
 ```python
     async def rewrite_task_id(self, old: str, new: str) -> None:
@@ -470,14 +470,14 @@ async def migrate_slices_to_projects(
 
 (match the class's actual connection attribute/commit pattern.)
 
-`ntrp/server/app.py` — delete the entire "Slices↔projects unification backfill" block (lines ~110-122, added earlier today) and the `ensure_project_for_slice` import; in its place:
+`arden/server/app.py` — delete the entire "Slices↔projects unification backfill" block (lines ~110-122, added earlier today) and the `ensure_project_for_slice` import; in its place:
 
 ```python
-        from ntrp.constants import SLICES_FILE
-        from ntrp.slices.migrate import migrate_slices_to_projects
+        from arden.constants import SLICES_FILE
+        from arden.slices.migrate import migrate_slices_to_projects
 
         await migrate_slices_to_projects(
-            slices_file=runtime.config.ntrp_dir / SLICES_FILE,
+            slices_file=runtime.config.arden_dir / SLICES_FILE,
             session_service=runtime.session_service,
             ask_store=runtime.automation.slice_asks,
             automation_store=runtime.stores.automations,
@@ -495,7 +495,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/server/ntrp/slices/migrate.py apps/server/ntrp/server/app.py apps/server/ntrp/automation/store.py apps/server/ntrp/context/store.py apps/server/tests/test_slices_migration.py
+git add apps/server/arden/slices/migrate.py apps/server/arden/server/app.py apps/server/arden/automation/store.py apps/server/arden/context/store.py apps/server/tests/test_slices_migration.py
 git commit -m "feat(unify): one-shot boot migration folds slices.json into projects and re-keys asks/automations/sessions"
 ```
 
@@ -504,18 +504,18 @@ git commit -m "feat(unify): one-shot boot migration folds slices.json into proje
 ### Task 4: Server re-key — runtime, agent pipeline, chat context, session surface
 
 **Files:**
-- Modify: `apps/server/ntrp/server/runtime/automation.py` (registry uses → projects loader; seeder; `_on_slice_run_completed`)
-- Modify: `apps/server/ntrp/slices/context.py` (project-record based)
-- Modify: `apps/server/ntrp/services/chat.py` (~line 628 injection)
-- Modify: `apps/server/ntrp/core/spawner.py` (~line 391 — delete the `slice_key` copy line; children inherit `project_id` already)
-- Modify: `apps/server/ntrp/services/session.py` (drop `slice_key` from `session_row`, `create`, `provision`; delete `move_session_to_slice`)
-- Modify: `apps/server/ntrp/context/store.py` (delete `SQL_UPDATE_SESSION_SLICE`, `update_session_slice`, `slice_key` from insert/select column lists and row dicts — keep the physical column and the migration's raw-SQL readers)
-- Modify: `apps/server/ntrp/context/models.py` (drop `SessionState.slice_key`)
-- Modify: `apps/server/ntrp/server/routers/session.py` (delete `/sessions/{id}/slice`, `ensure_project_for_slice`, `_project_for_slice`, `_slug`; triage candidates)
-- Modify: `apps/server/ntrp/server/schemas.py` (delete `MoveSessionSliceRequest`)
-- Modify: `apps/server/ntrp/slices/triage.py` (single-kind targets)
-- Modify: `apps/server/ntrp/server/app.py` (snapshot closures key off project_id)
-- Modify: `apps/server/ntrp/automation/service.py` (`_provision_channel`/`create` slice_key params → project_id)
+- Modify: `apps/server/arden/server/runtime/automation.py` (registry uses → projects loader; seeder; `_on_slice_run_completed`)
+- Modify: `apps/server/arden/slices/context.py` (project-record based)
+- Modify: `apps/server/arden/services/chat.py` (~line 628 injection)
+- Modify: `apps/server/arden/core/spawner.py` (~line 391 — delete the `slice_key` copy line; children inherit `project_id` already)
+- Modify: `apps/server/arden/services/session.py` (drop `slice_key` from `session_row`, `create`, `provision`; delete `move_session_to_slice`)
+- Modify: `apps/server/arden/context/store.py` (delete `SQL_UPDATE_SESSION_SLICE`, `update_session_slice`, `slice_key` from insert/select column lists and row dicts — keep the physical column and the migration's raw-SQL readers)
+- Modify: `apps/server/arden/context/models.py` (drop `SessionState.slice_key`)
+- Modify: `apps/server/arden/server/routers/session.py` (delete `/sessions/{id}/slice`, `ensure_project_for_slice`, `_project_for_slice`, `_slug`; triage candidates)
+- Modify: `apps/server/arden/server/schemas.py` (delete `MoveSessionSliceRequest`)
+- Modify: `apps/server/arden/slices/triage.py` (single-kind targets)
+- Modify: `apps/server/arden/server/app.py` (snapshot closures key off project_id)
+- Modify: `apps/server/arden/automation/service.py` (`_provision_channel`/`create` slice_key params → project_id)
 - Test: update `tests/test_slices_session_tag.py` (mostly deletions), `tests/test_slices_triage.py`, `tests/test_slices_agent.py`, `tests/test_slices_router.py`
 
 **Interfaces:**
@@ -550,7 +550,7 @@ In `automation/service.py`: rename the `slice_key` params on `_provision_channel
 ```python
 from pathlib import Path
 
-from ntrp.memory.pages import parse_page
+from arden.memory.pages import parse_page
 
 
 def load_slice_context(vault_dir: Path, project: dict | None) -> dict | None:
@@ -602,8 +602,8 @@ async def _triage_candidates(svc: SessionService) -> list[dict]:
 - `tests/test_slices_triage.py`: candidates lose `kind`; `test_move_restamps_from_catalog_not_model_echo` asserts `d.target.title == "O-1A Visa"` and no `kind` attr.
 - `tests/test_slices_agent.py` / `test_slices_router.py`: keys become project_id-shaped strings; constructor changes from Task 2 apply.
 
-Run: `uv run pytest tests/ -q` (full suite) and `uv run ruff check ntrp/`
-Expected: PASS / clean. Also: `grep -rn "slice_key" apps/server/ntrp --include="*.py" | grep -v migrate.py | grep -v "slices/models.py" | grep -v "slices/asks.py" | grep -v "slices/agent.py" | grep -v "slices/service.py"` returns NOTHING (the four allowed files keep the `slice_key` FIELD name on Ask records only).
+Run: `uv run pytest tests/ -q` (full suite) and `uv run ruff check arden/`
+Expected: PASS / clean. Also: `grep -rn "slice_key" apps/server/arden --include="*.py" | grep -v migrate.py | grep -v "slices/models.py" | grep -v "slices/asks.py" | grep -v "slices/agent.py" | grep -v "slices/service.py"` returns NOTHING (the four allowed files keep the `slice_key` FIELD name on Ask records only).
 
 - [ ] **Step 5: Commit**
 
@@ -617,9 +617,9 @@ git commit -m "feat(unify): server keyed by project_id end-to-end; sessions.slic
 ### Task 5: Slices router + suggester promote = project capabilities
 
 **Files:**
-- Modify: `apps/server/ntrp/server/routers/slices.py`
-- Modify: `apps/server/ntrp/server/app.py` (SliceService wiring; `_slice_sessions`/`_slice_session_slice` by project_id)
-- Modify: `apps/server/ntrp/slices/suggester.py` (exclusion set by page slug)
+- Modify: `apps/server/arden/server/routers/slices.py`
+- Modify: `apps/server/arden/server/app.py` (SliceService wiring; `_slice_sessions`/`_slice_session_slice` by project_id)
+- Modify: `apps/server/arden/slices/suggester.py` (exclusion set by page slug)
 - Test: `apps/server/tests/test_slices_router.py`, `tests/test_slices_suggester.py`
 
 **Interfaces:**
@@ -785,22 +785,22 @@ git commit -m "feat(unify): desktop keyed by project_id; universal room affordan
 - [ ] **Step 1: Migration dry-run against a COPY of live data**
 
 ```bash
-cp ~/.ntrp/sessions.db /tmp/claude-e2e/sessions.db && cp ~/.ntrp/slices.json /tmp/claude-e2e/slices.json
+cp ~/.arden/sessions.db /tmp/claude-e2e/sessions.db && cp ~/.arden/slices.json /tmp/claude-e2e/slices.json
 ```
 
-Write a scratch script that opens the copies, runs `migrate_slices_to_projects`, and prints the summary + resulting projects. Expected: 6 slices folded; Dex/ntrp reuse existing projects; Health/O-1A/Aside/United States projects created (Health may already exist from the earlier backfill); venlafaxine session linked; `.migrated` rename. Never touch the live files; do NOT restart the user's server.
+Write a scratch script that opens the copies, runs `migrate_slices_to_projects`, and prints the summary + resulting projects. Expected: 6 slices folded; Dex/arden reuse existing projects; Health/O-1A/Aside/United States projects created (Health may already exist from the earlier backfill); venlafaxine session linked; `.migrated` rename. Never touch the live files; do NOT restart the user's server.
 
 - [ ] **Step 2: Preview-harness sweep** (session's own vite server, `renderer-alt`): stage overview/detail with project_id keys; verify Home strip, room open (sidebar ↗ on slice groups only), triage chip accept → `moveSessionToProject`, breadcrumb from project_id. Light + dark screenshots.
 
 - [ ] **Step 3: Full gates, both apps**
 
-`uv run pytest tests/ -q` + `uv run ruff check ntrp/` (server); `bun run typecheck && bun run lint && bun test tests/` (desktop).
+`uv run pytest tests/ -q` + `uv run ruff check arden/` (server); `bun run typecheck && bun run lint && bun test tests/` (desktop).
 
 - [ ] **Step 4: Grep gates**
 
 ```bash
-grep -rn "slice_key" apps/server/ntrp --include="*.py" | grep -vE "migrate\.py|models\.py|asks\.py|agent\.py|service\.py"   # → empty
-grep -rn "_slug\|_project_for_slice\|ensure_project_for_slice" apps/server/ntrp   # → only migrate.py's _slug
+grep -rn "slice_key" apps/server/arden --include="*.py" | grep -vE "migrate\.py|models\.py|asks\.py|agent\.py|service\.py"   # → empty
+grep -rn "_slug\|_project_for_slice\|ensure_project_for_slice" apps/server/arden   # → only migrate.py's _slug
 grep -rn "slice_key" apps/desktop/src | grep -v "SliceAsk"   # → empty
 ```
 

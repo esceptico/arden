@@ -3,12 +3,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from ntrp.context.models import SessionState
-from ntrp.integrations.base import IntegrationOperationError
-from ntrp.integrations.calendar.client import GoogleCalendar, MultiCalendarSource
-from ntrp.integrations.calendar.tools import CalendarInput, CreateCalendarEventInput, calendar, create_calendar_event
-from ntrp.integrations.gmail.client import GmailSource, MultiGmailSource
-from ntrp.integrations.gmail.tools import (
+from arden.context.models import SessionState
+from arden.integrations.base import IntegrationOperationError
+from arden.integrations.calendar.client import GoogleCalendar, MultiCalendarSource
+from arden.integrations.calendar.tools import CalendarInput, CreateCalendarEventInput, calendar, create_calendar_event
+from arden.integrations.gmail.client import GmailSource, MultiGmailSource
+from arden.integrations.gmail.tools import (
     EmailsInput,
     ReadEmailInput,
     SendEmailInput,
@@ -17,9 +17,9 @@ from ntrp.integrations.gmail.tools import (
     read_email,
     send_email,
 )
-from ntrp.integrations.mutations import IDEMPOTENCY_LEDGER_SERVICE, IdempotencyLedger
-from ntrp.integrations.slack.client import SlackClient, SlackThreadResult
-from ntrp.integrations.slack.tools import (
+from arden.integrations.mutations import IDEMPOTENCY_LEDGER_SERVICE, IdempotencyLedger
+from arden.integrations.slack.client import SlackClient, SlackThreadResult
+from arden.integrations.slack.tools import (
     SlackPostBlocksInput,
     SlackSearchInput,
     SlackThreadInput,
@@ -27,9 +27,9 @@ from ntrp.integrations.slack.tools import (
     slack_search,
     slack_thread,
 )
-from ntrp.search.types import RawItem
-from ntrp.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
-from ntrp.tools.core.registry import ToolRegistry
+from arden.search.types import RawItem
+from arden.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
+from arden.tools.core.registry import ToolRegistry
 
 
 def _item(

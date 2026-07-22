@@ -48,7 +48,7 @@ All paths under `apps/desktop/` unless noted.
 The empty state (lines 204-210) also offers `Reload`/`Reloading…` via
 `onRebuild`. `onRebuild` → `rebuild()` in `ArtifactMemoryView.tsx:946-967`,
 which calls `rebuildMemoryArtifactSummaries` → POST `/memory/artifacts/rebuild`.
-The backend (`apps/server/ntrp/server/routers/memory.py:210-222`) documents it:
+The backend (`apps/server/arden/server/routers/memory.py:210-222`) documents it:
 "this is a no-op that just returns the current pages." So the button IS a
 refresh (re-list + re-fetch index docs via `acceptSummaries`), never a rebuild.
 

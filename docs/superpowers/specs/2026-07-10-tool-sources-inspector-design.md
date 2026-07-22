@@ -30,7 +30,7 @@ Alternatives rejected:
   to distinguish provenance from unrelated URLs.
 - **A separate citation ledger with answer-span annotations:** strongest
   attribution, but requires model/API citation support and a larger persistence
-  model. Defer until ntrp needs claim-level citations.
+  model. Defer until Arden needs claim-level citations.
 
 ## Source contract
 

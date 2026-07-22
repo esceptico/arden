@@ -6,14 +6,14 @@ from pathlib import Path
 
 import pytest
 
-import ntrp.tools.memory as memory_tools
-from ntrp.integrations.core import MEMORY
-from ntrp.memory.ledger import LedgerEntry, LedgerMeta, render_ledger_entry
-from ntrp.memory.models import Kind, SourceRef
-from ntrp.memory.records import RecordStore
-from ntrp.tools.core.file_mutation import file_revision
-from ntrp.tools.core.registry import ToolRegistry
-from ntrp.tools.memory import (
+import arden.tools.memory as memory_tools
+from arden.integrations.core import MEMORY
+from arden.memory.ledger import LedgerEntry, LedgerMeta, render_ledger_entry
+from arden.memory.models import Kind, SourceRef
+from arden.memory.records import RecordStore
+from arden.tools.core.file_mutation import file_revision
+from arden.tools.core.registry import ToolRegistry
+from arden.tools.memory import (
     MEMORY_RECONCILER_SERVICE,
     MEMORY_RECORDS_SERVICE,
     MemoryPatchInput,
@@ -72,7 +72,7 @@ def _v2_raw(page: str, record_id: str, text: str, *, sequence: int = 1, occurred
             sources=(SourceRef("user", record_id, occurred_at=occurred_at, time_precision="day"),),
         ),
     )
-    return f"<!-- ntrp:records schema=2 page={page} -->\n{render_ledger_entry(entry)}\n"
+    return f"<!-- arden:records schema=2 page={page} -->\n{render_ledger_entry(entry)}\n"
 
 
 async def _seed(artifacts_dir: Path):
@@ -81,10 +81,16 @@ async def _seed(artifacts_dir: Path):
     a = memory_tools.ArtifactMemoryStore(artifacts_dir)
     a.ensure_dirs()
     a._write("me.md", "Profile", "topic", "global", None, "# Profile\n\nThe user prefers oolong tea.\n", 1)
-    a._write("directives.md", "Directives", "directive", "global", None,
-             "# Directives\n\n- keep projection docs concise\n", 1)
-    a._write("topics/dex.md", "Dex", "topic", "entity", "dex",
-             "# Dex\n\nDex is the user's area; see [[Profile]].\n", 1)
+    a._write(
+        "directives.md",
+        "Directives",
+        "directive",
+        "global",
+        None,
+        "# Directives\n\n- keep projection docs concise\n",
+        1,
+    )
+    a._write("topics/dex.md", "Dex", "topic", "entity", "dex", "# Dex\n\nDex is the user's area; see [[Profile]].\n", 1)
     return list(artifacts_dir.rglob("*.md"))
 
 
@@ -117,9 +123,7 @@ async def test_memory_filesystem_tools_registered_and_permission_gated():
     names_with = {s["function"]["name"] for s in registry.get_schemas(capabilities=frozenset({MEMORY_RECORDS_SERVICE}))}
     names_with_reconciler = {
         s["function"]["name"]
-        for s in registry.get_schemas(
-            capabilities=frozenset({MEMORY_RECORDS_SERVICE, MEMORY_RECONCILER_SERVICE})
-        )
+        for s in registry.get_schemas(capabilities=frozenset({MEMORY_RECORDS_SERVICE, MEMORY_RECONCILER_SERVICE}))
     }
 
     expected = {"memory_tree", "memory_read", "memory_search", "memory_patch"}
@@ -200,8 +204,12 @@ async def test_memory_read_resolves_titles_directories_and_wikilinks(store: Reco
     assert not duplicate_title.is_error
     assert duplicate_title.data["path"] == "topics/dex.md"  # unified topics/ wins over legacy
 
-    artifact_store._write("entities/foo_bar.md", "Foo_bar", "topic", "entity", "foo_bar", "# Foo_bar\n\nEntity page.\n", 1)
-    artifact_store._write("projects/foo_bar.md", "Foo_bar", "topic", "project", "foo_bar", "# Foo_bar\n\nProject page.\n", 1)
+    artifact_store._write(
+        "entities/foo_bar.md", "Foo_bar", "topic", "entity", "foo_bar", "# Foo_bar\n\nEntity page.\n", 1
+    )
+    artifact_store._write(
+        "projects/foo_bar.md", "Foo_bar", "topic", "project", "foo_bar", "# Foo_bar\n\nProject page.\n", 1
+    )
     underscore_title = await memory_read(execution, MemoryReadInput(path="Foo_bar", offset=1, limit=3))
     assert not underscore_title.is_error
     assert underscore_title.data["path"] == "entities/foo_bar.md"
@@ -263,7 +271,9 @@ async def test_memory_tools_reject_symlink_and_fifo(store: RecordStore, artifact
     assert (await memory_read(execution, MemoryReadInput(path="me.md"))).is_error
 
 
-async def test_memory_patch_refuses_generated_without_force_and_force_patch_audits(store: RecordStore, artifacts_dir: Path):
+async def test_memory_patch_refuses_generated_without_force_and_force_patch_audits(
+    store: RecordStore, artifacts_dir: Path
+):
     """Canonical pages (me.md, topics/) patch freely; generated reports (health.md)
     refuse without force_generated."""
     await _seed(artifacts_dir)
@@ -273,16 +283,43 @@ async def test_memory_patch_refuses_generated_without_force_and_force_patch_audi
     old = store_obj.read_artifact("health.md").content.splitlines()[0]
     health_revision = file_revision(artifacts_dir / "health.md").sha256
 
-    refused = await memory_patch(execution, MemoryPatchInput(path="health.md", old_text=old, new_text="# Patched memory", force_generated=False, expected_sha256=health_revision))
+    refused = await memory_patch(
+        execution,
+        MemoryPatchInput(
+            path="health.md",
+            old_text=old,
+            new_text="# Patched memory",
+            force_generated=False,
+            expected_sha256=health_revision,
+        ),
+    )
     assert refused.is_error
     assert "Refusing to edit generated" in refused.content
 
-    approval = await approve_memory_patch(execution, MemoryPatchInput(path="health.md", old_text=old, new_text="# Patched memory", force_generated=True, expected_sha256=health_revision))
+    approval = await approve_memory_patch(
+        execution,
+        MemoryPatchInput(
+            path="health.md",
+            old_text=old,
+            new_text="# Patched memory",
+            force_generated=True,
+            expected_sha256=health_revision,
+        ),
+    )
     assert approval is not None
     assert approval.description == "Force edit generated memory artifact health.md"
     assert "-" in (approval.diff or "") and "+" in (approval.diff or "")
 
-    patched = await memory_patch(execution, MemoryPatchInput(path="health.md", old_text=old, new_text="# Patched memory", force_generated=True, expected_sha256=health_revision))
+    patched = await memory_patch(
+        execution,
+        MemoryPatchInput(
+            path="health.md",
+            old_text=old,
+            new_text="# Patched memory",
+            force_generated=True,
+            expected_sha256=health_revision,
+        ),
+    )
     assert not patched.is_error
     assert store_obj.read_artifact("health.md").content.startswith("# Patched memory")
     changelog = "\n".join(p.read_text(encoding="utf-8") for p in (artifacts_dir / "changelog").glob("**/*.md"))
@@ -290,7 +327,16 @@ async def test_memory_patch_refuses_generated_without_force_and_force_patch_audi
 
     # canonical prose pages are directly editable — no force needed
     me_old = store_obj.read_artifact("me.md").content.splitlines()[0]
-    edited = await memory_patch(execution, MemoryPatchInput(path="me.md", old_text=me_old, new_text="# Me, edited", force_generated=False, expected_sha256=file_revision(artifacts_dir / "me.md").sha256))
+    edited = await memory_patch(
+        execution,
+        MemoryPatchInput(
+            path="me.md",
+            old_text=me_old,
+            new_text="# Me, edited",
+            force_generated=False,
+            expected_sha256=file_revision(artifacts_dir / "me.md").sha256,
+        ),
+    )
     assert not edited.is_error
 
 
@@ -299,7 +345,16 @@ async def test_memory_patch_requires_unique_old_text(store: RecordStore, artifac
     path = artifacts_dir / "me.md"
     path.write_text("# A\nrepeat\nrepeat\n", encoding="utf-8")
 
-    result = await memory_patch(_execution(store), MemoryPatchInput(path="me.md", old_text="repeat", new_text="once", force_generated=True, expected_sha256=file_revision(path).sha256))
+    result = await memory_patch(
+        _execution(store),
+        MemoryPatchInput(
+            path="me.md",
+            old_text="repeat",
+            new_text="once",
+            force_generated=True,
+            expected_sha256=file_revision(path).sha256,
+        ),
+    )
 
     assert result.is_error
     assert result.preview == "Ambiguous"
@@ -340,28 +395,39 @@ async def test_memory_patch_rejects_change_after_approval(store: RecordStore, ar
 
 
 async def test_memory_write_creates_and_updates_feed_pages(store: RecordStore, artifacts_dir: Path):
-    from ntrp.tools.memory import MemoryWriteInput, approve_memory_write, memory_write
+    from arden.tools.memory import MemoryWriteInput, approve_memory_write, memory_write
 
     await _seed(artifacts_dir)
     execution = _execution(store)
 
-    approval = await approve_memory_write(execution, MemoryWriteInput(path="feeds/pr-queue.md", content="# PR queue\n\n- none open", expected_sha256="absent"))
+    approval = await approve_memory_write(
+        execution,
+        MemoryWriteInput(path="feeds/pr-queue.md", content="# PR queue\n\n- none open", expected_sha256="absent"),
+    )
     assert approval is not None and approval.description == "Create memory page feeds/pr-queue.md"
 
-    created = await memory_write(execution, MemoryWriteInput(path="feeds/pr-queue.md", content="# PR queue\n\n- none open", expected_sha256="absent"))
+    created = await memory_write(
+        execution,
+        MemoryWriteInput(path="feeds/pr-queue.md", content="# PR queue\n\n- none open", expected_sha256="absent"),
+    )
     assert not created.is_error
     assert created.outcome is not None and created.outcome.effect is not None
     assert created.outcome.effect.before_ref == "absent"
     assert created.outcome.effect.after_ref == created.data["sha256"]
     assert (artifacts_dir / "feeds" / "pr-queue.md").read_text(encoding="utf-8").startswith("# PR queue")
 
-    updated = await memory_write(execution, MemoryWriteInput(path="feeds/pr-queue.md", content="# PR queue\n\n- 2 open", expected_sha256=created.data["sha256"]))
+    updated = await memory_write(
+        execution,
+        MemoryWriteInput(
+            path="feeds/pr-queue.md", content="# PR queue\n\n- 2 open", expected_sha256=created.data["sha256"]
+        ),
+    )
     assert not updated.is_error and updated.preview == "Updated"
     assert "2 open" in (artifacts_dir / "feeds" / "pr-queue.md").read_text(encoding="utf-8")
 
 
 async def test_memory_write_refuses_record_backed_generated_and_bad_paths(store: RecordStore, artifacts_dir: Path):
-    from ntrp.tools.memory import MemoryWriteInput, memory_write
+    from arden.tools.memory import MemoryWriteInput, memory_write
 
     await _seed(artifacts_dir)
     execution = _execution(store)
@@ -369,7 +435,9 @@ async def test_memory_write_refuses_record_backed_generated_and_bad_paths(store:
     # record-backed page (raw/ sidecar exists) -> compiled prose, refuse whole-page write
     (artifacts_dir / "raw").mkdir(parents=True, exist_ok=True)
     (artifacts_dir / "raw" / "me.md").write_text(_v2_raw("me.md", "aaaa1111", "x"), encoding="utf-8")
-    refused = await memory_write(execution, MemoryWriteInput(path="me.md", content="# clobber", expected_sha256="absent"))
+    refused = await memory_write(
+        execution, MemoryWriteInput(path="me.md", content="# clobber", expected_sha256="absent")
+    )
     assert refused.is_error and "record-backed" in refused.content
 
     # generated report
@@ -385,11 +453,11 @@ async def test_memory_write_refuses_record_backed_generated_and_bad_paths(store:
 
 
 async def test_live_vault_absorbs_external_edits(tmp_path: Path):
-    """Obsidian-for-ntrp: an on-disk edit (new page, prose edit, raw timeline
+    """Obsidian-for-arden: an on-disk edit (new page, prose edit, raw timeline
     change, deletion) is absorbed by refresh_from_disk without a restart; the
     store's own writes never read as external changes."""
-    from ntrp.memory.file_store import FilePageStore
-    from ntrp.memory.models import SourceRef
+    from arden.memory.file_store import FilePageStore
+    from arden.memory.models import SourceRef
 
     root = tmp_path / "memory"
     store = FilePageStore(root)
@@ -422,7 +490,9 @@ async def test_live_vault_absorbs_external_edits(tmp_path: Path):
     # external raw-sidecar edit reloads the page's records
     raw_me = root / "raw" / "me.md"
     entry_text = _v2_raw("me.md", "ee11ff22", "Added via git.", sequence=2, occurred_at="2026-07-03")
-    raw_me.write_text(raw_me.read_text(encoding="utf-8") + "\n".join(entry_text.splitlines()[1:]) + "\n", encoding="utf-8")
+    raw_me.write_text(
+        raw_me.read_text(encoding="utf-8") + "\n".join(entry_text.splitlines()[1:]) + "\n", encoding="utf-8"
+    )
     assert await store.refresh_from_disk() == ["me.md"]
     assert (await store.get("ee11ff22")) is not None
 
@@ -434,13 +504,13 @@ async def test_live_vault_absorbs_external_edits(tmp_path: Path):
 
 
 async def test_visible_resource_record_syntax_never_enters_canonical_store(tmp_path: Path):
-    from ntrp.memory.file_store import FilePageStore
+    from arden.memory.file_store import FilePageStore
 
     root = tmp_path / "memory"
     (root / "raw").mkdir(parents=True)
-    (root / "raw" / "me.md").write_text("<!-- ntrp:records schema=2 page=me.md -->\n", encoding="utf-8")
-    (root / "raw" / ".ntrp").mkdir()
-    (root / "raw" / ".ntrp" / "secret.md").write_text(
+    (root / "raw" / "me.md").write_text("<!-- arden:records schema=2 page=me.md -->\n", encoding="utf-8")
+    (root / "raw" / ".arden").mkdir()
+    (root / "raw" / ".arden" / "secret.md").write_text(
         "- 2026-07-12 ^engine1 [fact] (src:user) Must remain internal.\n",
         encoding="utf-8",
     )
@@ -461,7 +531,7 @@ async def test_visible_resource_record_syntax_never_enters_canonical_store(tmp_p
 
 
 async def test_live_store_rejects_raw_and_visible_symlink_escapes(tmp_path: Path):
-    from ntrp.memory.file_store import FilePageStore
+    from arden.memory.file_store import FilePageStore
 
     root = tmp_path / "memory"
     outside = tmp_path / "outside"
@@ -469,7 +539,7 @@ async def test_live_store_rejects_raw_and_visible_symlink_escapes(tmp_path: Path
     outside.mkdir()
     (outside / "evil.md").write_text("- 2026-07-12 ^escape2 [fact] (src:user) Outside.\n", encoding="utf-8")
     _symlink_or_skip(root / "raw" / "evil.md", outside / "evil.md")
-    (root / "raw" / "me.md").write_text("<!-- ntrp:records schema=2 page=me.md -->\n", encoding="utf-8")
+    (root / "raw" / "me.md").write_text("<!-- arden:records schema=2 page=me.md -->\n", encoding="utf-8")
     (outside / "visible.md").write_text("# Outside visible\n", encoding="utf-8")
     _symlink_or_skip(root / "me.md", outside / "visible.md")
 
@@ -485,7 +555,7 @@ async def test_live_store_rejects_raw_and_visible_symlink_escapes(tmp_path: Path
 
 
 async def test_text_resource_create_move_delete_is_watched_without_record_reload(tmp_path: Path):
-    from ntrp.memory.file_store import FilePageStore
+    from arden.memory.file_store import FilePageStore
 
     root = tmp_path / "memory"
     store = FilePageStore(root)
@@ -510,7 +580,7 @@ async def test_text_resource_create_move_delete_is_watched_without_record_reload
 async def test_empty_and_readme_only_directory_lifecycle_is_watched_without_record_reload(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    from ntrp.memory.file_store import FilePageStore
+    from arden.memory.file_store import FilePageStore
 
     root = tmp_path / "memory"
     store = FilePageStore(root)
@@ -536,7 +606,7 @@ async def test_empty_and_readme_only_directory_lifecycle_is_watched_without_reco
 
 
 async def test_prose_only_write_rejects_nested_visible_parent_symlink(tmp_path: Path):
-    from ntrp.memory.file_store import FilePageStore
+    from arden.memory.file_store import FilePageStore
 
     root = tmp_path / "memory"
     outside = tmp_path / "outside"
@@ -560,7 +630,7 @@ async def test_prose_only_write_rejects_nested_visible_parent_symlink(tmp_path: 
 
 
 async def test_page_delete_rejects_nested_visible_parent_symlink_before_any_mutation(tmp_path: Path):
-    from ntrp.memory.file_store import FilePageStore
+    from arden.memory.file_store import FilePageStore
 
     root = tmp_path / "memory"
     outside = tmp_path / "outside"

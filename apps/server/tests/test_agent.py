@@ -1,10 +1,10 @@
 import pytest
 from pydantic import BaseModel
 
-from ntrp.agent import Agent, AgentHooks, Result, StopReason, ToolCompleted, ToolStarted
-from ntrp.constants import AGENT_MAX_OUTPUT_TOKENS
-from ntrp.tools.core import EmptyInput, Tool, ToolAction, ToolPolicy, ToolResult, ToolScope, tool
-from ntrp.tools.core.context import ToolExecution
+from arden.agent import Agent, AgentHooks, Result, StopReason, ToolCompleted, ToolStarted
+from arden.constants import AGENT_MAX_OUTPUT_TOKENS
+from arden.tools.core import EmptyInput, Tool, ToolAction, ToolPolicy, ToolResult, ToolScope, tool
+from arden.tools.core.context import ToolExecution
 from tests.helpers import (
     MockCompletionClient,
     MockLLMClient,
@@ -178,9 +178,9 @@ async def test_create_agent_returns_agent_with_hooks():
     """Smoke test: create_agent should return an Agent instance with working hooks attribute."""
     from datetime import UTC, datetime
 
-    from ntrp.context.models import SessionState
-    from ntrp.core.factory import AgentConfig, create_agent
-    from ntrp.tools.executor import ToolExecutor
+    from arden.context.models import SessionState
+    from arden.core.factory import AgentConfig, create_agent
+    from arden.tools.executor import ToolExecutor
 
     executor = ToolExecutor(get_services=dict)
     config = AgentConfig(model="claude-sonnet-4-6", research_model=None, max_depth=3)
@@ -204,10 +204,10 @@ async def test_create_agent_returns_agent_with_hooks():
 def test_create_agent_wires_run_budget_config():
     from datetime import UTC, datetime
 
-    from ntrp.context.models import SessionState
-    from ntrp.core.factory import AgentConfig, create_agent
-    from ntrp.core.usage_tracker import UsageTracker
-    from ntrp.tools.executor import ToolExecutor
+    from arden.context.models import SessionState
+    from arden.core.factory import AgentConfig, create_agent
+    from arden.core.usage_tracker import UsageTracker
+    from arden.tools.executor import ToolExecutor
 
     tracker = UsageTracker()
     executor = ToolExecutor(get_services=dict)
@@ -241,8 +241,8 @@ def test_create_agent_wires_run_budget_config():
 
 
 def test_agent_config_uses_finite_default_output_token_budget():
-    from ntrp.config import Config
-    from ntrp.core.factory import AgentConfig
+    from arden.config import Config
+    from arden.core.factory import AgentConfig
 
     config = AgentConfig.from_config(Config(chat_model="claude-sonnet-4-6"))
 

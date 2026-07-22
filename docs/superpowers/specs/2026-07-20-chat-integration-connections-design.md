@@ -2,7 +2,7 @@
 
 ## Goal
 
-Let ntrp recover broken native integrations and propose required disconnected integrations from chat, while keeping recovery and proactive suggestion as separate product features.
+Let arden recover broken native integrations and propose required disconnected integrations from chat, while keeping recovery and proactive suggestion as separate product features.
 
 Native `Integration` registrations are canonical. MCP servers may implement the same contract later, but MCP discovery and a public server catalog are out of scope.
 

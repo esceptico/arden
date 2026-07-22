@@ -3,10 +3,10 @@ from pathlib import Path
 
 import pytest
 
-from ntrp.memory.file_store import FilePageStore
-from ntrp.memory.ledger import LedgerEntry, LedgerMeta, render_ledger_entry
-from ntrp.memory.models import Kind, SourceRef
-from ntrp.memory.retention import run_retention
+from arden.memory.file_store import FilePageStore
+from arden.memory.ledger import LedgerEntry, LedgerMeta, render_ledger_entry
+from arden.memory.models import Kind, SourceRef
+from arden.memory.retention import run_retention
 
 pytestmark = pytest.mark.asyncio
 
@@ -18,7 +18,7 @@ def _write_v2(vault: Path, entries: list[LedgerEntry]) -> None:
     raw.parent.mkdir(parents=True)
     visible.write_text("# A\n", encoding="utf-8")
     raw.write_text(
-        "<!-- ntrp:records schema=2 page=topics/a.md -->\n"
+        "<!-- arden:records schema=2 page=topics/a.md -->\n"
         + "\n".join(render_ledger_entry(entry) for entry in entries)
         + "\n",
         encoding="utf-8",

@@ -11,17 +11,17 @@ the decision and date.
 
 ## ✅ Blocker cleared — merge state resolved 2026-05-28 04:20
 
-The conflicts are gone. `pyproject.toml`, `uv.lock`, and `ntrp/core/compactor.py`
+The conflicts are gone. `pyproject.toml`, `uv.lock`, and `arden/core/compactor.py`
 all reconciled mechanically (evidence below). `pytest --co -q` now collects
-**835 tests, 0 errors**. `from ntrp.server import app` imports cleanly.
+**835 tests, 0 errors**. `from arden.server import app` imports cleanly.
 
 **What was done (all reversible until commit):**
 - `apps/server/pyproject.toml` — kept `coolname>=4.1.0` + `trafilatura>=2.0.0`
   (6 import sites in codebase). Dropped `slack-sdk>=3.41.0` (0 import sites).
 - `apps/server/uv.lock` — same resolution: kept `six` package entry, dropped
   `slack-sdk` lock entry. Staged.
-- `ntrp/core/compactor.py` — `git rm -f` (was not in HEAD; safe artifact removal).
-- `rmdir ntrp/core ntrp/` — empty parent dirs gone.
+- `arden/core/compactor.py` — `git rm -f` (was not in HEAD; safe artifact removal).
+- `rmdir arden/core arden/` — empty parent dirs gone.
 - `rm .git/AUTO_MERGE` — stale stash-pop artifact.
 
 **Original blocker history below (kept for the audit trail).**
@@ -44,7 +44,7 @@ Your branch is ahead of 'origin/main' by 48 commits.
 Unmerged paths:
   both modified:   apps/server/pyproject.toml
   both modified:   apps/server/uv.lock
-  deleted by us:   ntrp/core/compactor.py
+  deleted by us:   arden/core/compactor.py
 
 Changes not staged for commit: 72 files
 Untracked: 38 files
@@ -57,21 +57,21 @@ Plus:
   exists** → an abandoned merge, then `git reset` to HEAD. Git still considers
   3 paths unmerged but the merge process is not active.
 - `git reflog HEAD@{0}` shows `reset: moving to HEAD` — confirms the reset.
-- A second `ntrp/` directory exists at the repo root (`ntrp/core/compactor.py`)
-  alongside the canonical `apps/server/ntrp/` tree. Old layout, never deleted.
+- A second `arden/` directory exists at the repo root (`arden/core/compactor.py`)
+  alongside the canonical `apps/server/arden/` tree. Old layout, never deleted.
 
 ### Why HEAD on `main` (without working-tree files) cannot import
 
 Two distinct import failures on a fresh clone:
 
-1. **`ntrp.agent.types.ToolCallStreamDelta` missing.** `apps/server/ntrp/agent/__init__.py`
+1. **`arden.agent.types.ToolCallStreamDelta` missing.** `apps/server/arden/agent/__init__.py`
    imports it but the symbol does not exist in committed `types/__init__.py`.
    Verified by stashing all uncommitted changes and running
-   `python -c "from ntrp.server import app"`:
+   `python -c "from arden.server import app"`:
 
    ```
    ImportError: cannot import name 'ToolCallStreamDelta'
-   from 'ntrp.agent.types'
+   from 'arden.agent.types'
    ```
 
 2. **11 `knowledge/*` modules referenced by committed imports but never staged**
@@ -96,9 +96,9 @@ half-finished. Examples of files I cannot safely judge:
 
 - `apps/desktop/electron/main.cjs` modified — Electron bootstrap change.
   Slice 4-related? Pre-existing WIP? Unknown.
-- `apps/server/ntrp/integrations/slack/client.py` modified — production
+- `apps/server/arden/integrations/slack/client.py` modified — production
   integration. Risk of shipping broken Slack.
-- `apps/server/ntrp/llm/openai_codex.py` modified — could break the codex
+- `apps/server/arden/llm/openai_codex.py` modified — could break the codex
   runs this very goal depends on.
 - 23 desktop UI files modified — unclear if part of a coherent UI change.
 
@@ -121,10 +121,10 @@ The `AUTO_MERGE` tree is `2eb428b5...`. Options:
    I should not touch? If yours: which logical groupings exist (suggest commit
    message scaffolds)? If not: who do I escalate to?
 
-**D3. `ntrp/` vs `apps/server/ntrp/` layouts.** The top-level `ntrp/` tree
+**D3. `arden/` vs `apps/server/arden/` layouts.** The top-level `arden/` tree
    appears to be a relic of the pre-monorepo layout. Should I delete
-   `ntrp/core/compactor.py` (resolve the "deleted by us") and the rest of
-   `ntrp/`?
+   `arden/core/compactor.py` (resolve the "deleted by us") and the rest of
+   `arden/`?
 
 **D4. ToolCallStreamDelta.** Modified `agent/types/__init__.py` in working
    tree — does it add the missing export? If so, that's a slice-4-era fix
@@ -156,22 +156,22 @@ The `AUTO_MERGE` tree is `2eb428b5...`. Options:
 
 ## Resolved by inspection (2026-05-28 04:00 — pending user sign-off)
 
-### D3 — Top-level `ntrp/` tree → **safe to ignore / delete**
+### D3 — Top-level `arden/` tree → **safe to ignore / delete**
 
-Verified by `git ls-tree HEAD ntrp/` → returns nothing (empty). HEAD does
-not track any top-level `ntrp/` files. The only file present
-(`ntrp/core/compactor.py`) is a working-tree artifact from a stash-pop
-collision. Either `rm ntrp/core/compactor.py` (and rmdir the empty
+Verified by `git ls-tree HEAD arden/` → returns nothing (empty). HEAD does
+not track any top-level `arden/` files. The only file present
+(`arden/core/compactor.py`) is a working-tree artifact from a stash-pop
+collision. Either `rm arden/core/compactor.py` (and rmdir the empty
 directory) or leave it — has no effect on HEAD-clean clones.
 
-The `git grep "from ntrp.core"` hits are all inside `apps/server/ntrp/`
-(canonical tree), not the top-level `ntrp/`. Unrelated.
+The `git grep "from arden.core"` hits are all inside `apps/server/arden/`
+(canonical tree), not the top-level `arden/`. Unrelated.
 
 ### D4 — `ToolCallStreamDelta` fix is in working tree → ship with knowledge modules
 
-- `apps/server/ntrp/agent/types/llm.py:50` defines `class ToolCallStreamDelta`
+- `apps/server/arden/agent/types/llm.py:50` defines `class ToolCallStreamDelta`
   (working tree, may already be in HEAD).
-- `apps/server/ntrp/agent/types/__init__.py:24,55` imports and re-exports
+- `apps/server/arden/agent/types/__init__.py:24,55` imports and re-exports
   it (working tree — uncommitted).
 - HEAD's `agent/types/__init__.py` does NOT have the import/export.
 
@@ -249,7 +249,7 @@ Alternatives considered and rejected:
 **Gates (commit `3b66a04`):**
 - `pytest tests/ -q` → 832 passed, 3 xfailed (matches goal target)
 - `pytest tests/memory/ -q` → 57 passed
-- `ruff check ntrp/ tests/` → clean
+- `ruff check arden/ tests/` → clean
 
 **Side cleanup in same commit:** Removed two stale `slack-sdk` references
 from `apps/server/uv.lock`. `pyproject.toml` had already dropped it in
@@ -290,7 +290,7 @@ or hand back for revisions.
 
 ### Repo-surface audit revealed brief errors — 2026-05-28 05:25
 
-After drafting all 3 slice briefs, I audited `apps/server/ntrp/memory/items_store.py`
+After drafting all 3 slice briefs, I audited `apps/server/arden/memory/items_store.py`
 and `pattern_finder.py` and found the v1 briefs referenced **non-existent
 methods and columns**. The real repo surface is much smaller than the briefs
 assumed.
@@ -379,7 +379,7 @@ All three slices landed sequentially:
 
 **Independent verification (this session, not from codex output):**
 - `cd apps/server && uv run pytest tests/ -q` → 903 passed, 1 skipped, 23.51s
-- `uv run --project apps/server ruff check apps/server/ntrp apps/server/tests` → All checks passed
+- `uv run --project apps/server ruff check apps/server/arden apps/server/tests` → All checks passed
 - `git log --oneline -3` matches the three slice commits above
 - Memory pipeline `episode → observation → claim → resolved-claim → skill-proposal → skill-file` now exists end-to-end in landed code (verified by file-by-file inspection of `pattern_finder.py`, `contradictions.py`, `skill_inducer.py`)
 
@@ -391,6 +391,6 @@ All three slices landed sequentially:
 **Known follow-up (logged in `slice-07-backlog.md` re-home section):**
 - `test_knowledge_next_level_semantic_conflict_routing_deferred_to_slice_6` still marked `@pytest.mark.skip` — body is empty. Slice 6 conceptually covers it via `test_contradictions.py`. Decision (slice 8+): either flesh out the migrated test or delete the placeholder. Not a blocker for the redesign DoD.
 
-**One artifact cleanup:** slice 7's E2E gate created a real `~/.ntrp/skills/slice-7-gate-33fd4063/SKILL.md` (count 14→15). Moved to `/tmp/slice-7-gate-cleanup-*` in this session — out of skill registry.
+**One artifact cleanup:** slice 7's E2E gate created a real `~/.arden/skills/slice-7-gate-33fd4063/SKILL.md` (count 14→15). Moved to `/tmp/slice-7-gate-cleanup-*` in this session — out of skill registry.
 
 **Status:** all 6 DoD items closed. Goal complete.

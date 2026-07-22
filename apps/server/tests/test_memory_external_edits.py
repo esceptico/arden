@@ -6,14 +6,14 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from ntrp.events.sse import MemoryChangedEvent
-from ntrp.memory.artifacts import ArtifactMemoryStore
-from ntrp.memory.file_store import FilePageStore, ObservedFileChange
-from ntrp.memory.models import SourceRef
-from ntrp.memory.page_edit_service import PageEditService, StalePageRevisionError
-from ntrp.memory.page_events import page_revision, unified_patch
-from ntrp.memory.reconciler import RecordOperation
-from ntrp.server.runtime.knowledge import KnowledgeRuntime
+from arden.events.sse import MemoryChangedEvent
+from arden.memory.artifacts import ArtifactMemoryStore
+from arden.memory.file_store import FilePageStore, ObservedFileChange
+from arden.memory.models import SourceRef
+from arden.memory.page_edit_service import PageEditService, StalePageRevisionError
+from arden.memory.page_events import page_revision, unified_patch
+from arden.memory.reconciler import RecordOperation
+from arden.server.runtime.knowledge import KnowledgeRuntime
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -37,14 +37,14 @@ async def _store(vault: Path) -> tuple[FilePageStore, Path]:
     page.write_bytes(b"# A\n\nOriginal.\n")
     raw = vault / "raw" / "topics" / "a.md"
     raw.parent.mkdir(parents=True)
-    raw.write_text("<!-- ntrp:records schema=2 page=topics/a.md -->\n", encoding="utf-8")
+    raw.write_text("<!-- arden:records schema=2 page=topics/a.md -->\n", encoding="utf-8")
     store = FilePageStore(vault)
     await store.open()
     return store, page
 
 
 def _observed(vault: Path) -> dict:
-    return json.loads((vault / ".ntrp" / "maintenance" / "observed-pages.json").read_text())
+    return json.loads((vault / ".arden" / "maintenance" / "observed-pages.json").read_text())
 
 
 async def test_external_edit_has_exact_durable_base_and_advances_only_after_event(tmp_path: Path):
@@ -64,7 +64,7 @@ async def test_external_edit_has_exact_durable_base_and_advances_only_after_even
     assert change.base_revision == page_revision(before)
     assert change.result_revision == page_revision(after)
     assert _observed(vault)["pages"]["topics/a.md"] == page_revision(before)
-    assert (vault / ".ntrp" / "maintenance" / "observed-page-bases" / page_revision(before)).read_bytes() == before
+    assert (vault / ".arden" / "maintenance" / "observed-page-bases" / page_revision(before)).read_bytes() == before
 
     service = PageEditService(vault, store, reconciler=Reconciler((RecordOperation.noop(),)))
     event = await service.ingest_external(change)
@@ -136,7 +136,9 @@ async def test_committed_external_event_is_reused_after_acknowledgement_failure(
     change = (await store.refresh_from_disk())[0]
     service = PageEditService(vault, store, reconciler=Reconciler((RecordOperation.noop(),)))
     acknowledge = store.acknowledge_observed_change
-    monkeypatch.setattr(store, "acknowledge_observed_change", lambda _change: (_ for _ in ()).throw(RuntimeError("crash")))
+    monkeypatch.setattr(
+        store, "acknowledge_observed_change", lambda _change: (_ for _ in ()).throw(RuntimeError("crash"))
+    )
 
     with pytest.raises(RuntimeError, match="crash"):
         await service.ingest_external(change)
@@ -195,7 +197,7 @@ async def test_generated_and_changelog_writes_never_become_user_page_edits(tmp_p
     daily.write_text("---\ngenerated: true\n---\n\n# Daily\n", encoding="utf-8")
     managed_index = vault / "daily/README.md"
     managed_index.write_text(
-        "<!-- ntrp:index:start -->\n- day.md — Day\n<!-- ntrp:index:end -->\n",
+        "<!-- arden:index:start -->\n- day.md — Day\n<!-- arden:index:end -->\n",
         encoding="utf-8",
     )
     manual = vault / "notes/manual.md"
@@ -386,9 +388,7 @@ async def test_runtime_publishes_revision_metadata_per_changed_page(tmp_path: Pa
     runtime.start_memory_watch(publish)
     await captured["callback"](page_changes)
 
-    assert published == [
-        ([change.path], change.result_revision, False) for change in page_changes
-    ]
+    assert published == [([change.path], change.result_revision, False) for change in page_changes]
     await store.close()
 
 
@@ -405,8 +405,8 @@ async def test_memory_changed_sse_keeps_paths_and_adds_revision_metadata():
 async def test_observed_state_read_rejects_symlinked_maintenance_parent(tmp_path: Path):
     vault = tmp_path / "memory"
     store, _page = await _store(vault)
-    maintenance = vault / ".ntrp" / "maintenance"
-    maintenance.rename(vault / ".ntrp" / "maintenance-real")
+    maintenance = vault / ".arden" / "maintenance"
+    maintenance.rename(vault / ".arden" / "maintenance-real")
     outside = tmp_path / "outside"
     outside.mkdir()
     maintenance.symlink_to(outside, target_is_directory=True)
@@ -416,12 +416,10 @@ async def test_observed_state_read_rejects_symlinked_maintenance_parent(tmp_path
     await store.close()
 
 
-async def test_observed_state_write_stays_on_open_parent_during_swap(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+async def test_observed_state_write_stays_on_open_parent_during_swap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     vault = tmp_path / "memory"
     store, _page = await _store(vault)
-    maintenance = vault / ".ntrp" / "maintenance"
+    maintenance = vault / ".arden" / "maintenance"
     outside = tmp_path / "outside"
     outside.mkdir()
     sentinel = outside / "observed-pages.json"
@@ -435,7 +433,7 @@ async def test_observed_state_write_stays_on_open_parent_during_swap(
         result = original(resources, rel, create_parents=create_parents)
         if not swapped:
             swapped = True
-            maintenance.rename(vault / ".ntrp" / "maintenance-real")
+            maintenance.rename(vault / ".arden" / "maintenance-real")
             maintenance.symlink_to(outside, target_is_directory=True)
         return result
 
@@ -447,9 +445,7 @@ async def test_observed_state_write_stays_on_open_parent_during_swap(
     await store.close()
 
 
-async def test_editable_page_read_cannot_escape_on_parent_swap(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+async def test_editable_page_read_cannot_escape_on_parent_swap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     vault = tmp_path / "memory"
     store, page = await _store(vault)
     outside = tmp_path / "outside"
@@ -572,9 +568,7 @@ async def test_engine_deletion_moves_page_to_durable_receipt_before_suppression(
     await store.close()
 
 
-async def test_external_ingest_never_stages_the_already_changed_page(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+async def test_external_ingest_never_stages_the_already_changed_page(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     vault = tmp_path / "memory"
     store, page = await _store(vault)
     page.write_bytes(page.read_bytes() + b"\nExternal.\n")
@@ -642,12 +636,8 @@ async def test_stale_engine_markers_are_pruned_without_a_file_change_and_track_e
     base = page.read_bytes()
     first = base + b"\nR1.\n"
     second = first + b"\nR2.\n"
-    store.register_engine_write_intent(
-        "topics/a.md", first, origin="synthesis", event_id="missing-first"
-    )
-    store.register_engine_write_intent(
-        "topics/a.md", second, origin="synthesis", event_id="missing-second"
-    )
+    store.register_engine_write_intent("topics/a.md", first, origin="synthesis", event_id="missing-first")
+    store.register_engine_write_intent("topics/a.md", second, origin="synthesis", event_id="missing-second")
 
     assert await store.refresh_from_disk() == []
     assert _observed(vault)["engine_writes"] == []
@@ -658,9 +648,7 @@ async def test_stale_engine_markers_are_pruned_without_a_file_change_and_track_e
     store.acknowledge_observed_change(change)
 
     page.write_bytes(b"")
-    store.register_engine_write_intent(
-        "topics/a.md", None, origin="synthesis", event_id="missing-delete"
-    )
+    store.register_engine_write_intent("topics/a.md", None, origin="synthesis", event_id="missing-delete")
     empty_change = next(change for change in await store.refresh_from_disk() if isinstance(change, ObservedFileChange))
     assert empty_change.origin == "external"
     await store.close()
@@ -710,7 +698,7 @@ async def test_uncommitted_generic_intent_cannot_suppress_later_matching_externa
             SourceRef("test", "uncommitted-intent"),
         )
     marker = _observed(vault)["engine_writes"][0]
-    desired = (vault / ".ntrp" / "maintenance" / "observed-page-bases" / marker["result_revision"]).read_bytes()
+    desired = (vault / ".arden" / "maintenance" / "observed-page-bases" / marker["result_revision"]).read_bytes()
     target = vault / marker["path"]
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(desired)

@@ -1,6 +1,6 @@
 ---
 title: "Quickstart"
-description: "Get ntrp running locally."
+description: "Get arden running locally."
 ---
 
 ## Prerequisites
@@ -12,19 +12,19 @@ description: "Get ntrp running locally."
 ## Install
 
 <Note>
-`uv tool install ntrp` installs the backend CLI. The Electron desktop app currently runs from a source checkout.
+`uv tool install arden` installs the backend CLI. The Electron desktop app currently runs from a source checkout.
 </Note>
 
 <Tabs>
   <Tab title="Backend package">
     ```bash
-    uv tool install ntrp    # or: pip install ntrp
+    uv tool install arden    # or: pip install arden
     ```
   </Tab>
   <Tab title="From source">
     ```bash
-    git clone https://github.com/esceptico/ntrp.git
-    cd ntrp
+    git clone https://github.com/esceptico/arden.git
+    cd arden
     just install
     ```
   </Tab>
@@ -45,14 +45,14 @@ export OPENAI_API_KEY=sk-...
 export GEMINI_API_KEY=...
 ```
 
-If you want to use an OpenAI subscription/account instead of an API key, skip the key export and choose **OpenAI Codex** in provider onboarding. ntrp opens a browser sign-in and stores refreshable OAuth tokens in `~/.ntrp/openai-codex-auth.json`.
+If you want to use an OpenAI subscription/account instead of an API key, skip the key export and choose **OpenAI Codex** in provider onboarding. Arden opens a browser sign-in and stores refreshable OAuth tokens in `~/.arden/openai-codex-auth.json`.
 
 ### Start the server
 
 <Tabs>
   <Tab title="Installed backend">
     ```bash
-    ntrp-server serve
+    arden-server serve
     ```
   </Tab>
   <Tab title="From source">
@@ -62,21 +62,21 @@ If you want to use an OpenAI subscription/account instead of an API key, skip th
   </Tab>
 </Tabs>
 
-On first run, ntrp generates an API key and prints it:
+On first run, arden generates an API key and prints it:
 
 ```
 Your API key: nBx7k2...
 Enter this in a desktop client to connect. It won't be shown again.
 ```
 
-<Warning>Copy this key — it's only shown once. Use `ntrp-server serve --reset-key` to generate a new one.</Warning>
+<Warning>Copy this key — it's only shown once. Use `arden-server serve --reset-key` to generate a new one.</Warning>
 
 ### Start the desktop app
 
 Desktop currently requires a source checkout. In a second terminal:
 
 ```bash
-cd ntrp
+cd arden
 just desktop
 ```
 
@@ -105,9 +105,9 @@ Open **Settings → Integrations** for Gmail/Google Calendar and Slack, or **Set
     Customize models, integrations, and runtime settings.
   </Card>
   <Card title="Memory" icon="brain" href="/guides/memory">
-    Understand how ntrp remembers things.
+    Understand how arden remembers things.
   </Card>
   <Card title="Connect Gmail" icon="envelope" href="/integrations/gmail">
-    Let ntrp read and send emails.
+    Let arden read and send emails.
   </Card>
 </CardGroup>

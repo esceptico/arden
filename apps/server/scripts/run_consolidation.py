@@ -9,12 +9,12 @@ merge dups, supersede stale, drop orphans. Run with the server stopped.
 
 import asyncio
 
-from ntrp.config import get_config
-from ntrp.llm.models import get_models
-from ntrp.llm.router import get_completion_client
-from ntrp.memory.consolidate import Consolidate
-from ntrp.memory.records import RecordStore
-from ntrp.server.indexer import Indexer
+from arden.config import get_config
+from arden.llm.models import get_models
+from arden.llm.router import get_completion_client
+from arden.memory.consolidate import Consolidate
+from arden.memory.records import RecordStore
+from arden.server.indexer import Indexer
 
 
 def _effort(config, model_id):

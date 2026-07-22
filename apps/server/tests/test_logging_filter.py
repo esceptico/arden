@@ -1,4 +1,4 @@
-"""Shutdown/disconnect quiet (ntrp/logging.py _DropAsgiCancelledError).
+"""Shutdown/disconnect quiet (arden/logging.py _DropAsgiCancelledError).
 
 uvicorn's run_asgi logs every BaseException that escapes the app — including the
 asyncio.CancelledError it raises when force-cancelling an in-flight request at the
@@ -23,7 +23,7 @@ from contextlib import redirect_stderr
 
 import pytest
 
-from ntrp.logging import UVICORN_LOG_CONFIG, _DropAsgiCancelledError
+from arden.logging import UVICORN_LOG_CONFIG, _DropAsgiCancelledError
 
 _UVICORN_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
 
@@ -50,8 +50,13 @@ def _record(exc: BaseException) -> logging.LogRecord:
         raise exc
     except BaseException as e:
         return logging.LogRecord(
-            "uvicorn.error", logging.ERROR, __file__, 0,
-            "Exception in ASGI application", (), (type(e), e, e.__traceback__),
+            "uvicorn.error",
+            logging.ERROR,
+            __file__,
+            0,
+            "Exception in ASGI application",
+            (),
+            (type(e), e, e.__traceback__),
         )
 
 

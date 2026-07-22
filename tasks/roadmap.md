@@ -1,4 +1,4 @@
-# ntrp desktop roadmap
+# Arden desktop roadmap
 
 Living punch list. Tick items as they ship; replace this file when it goes stale.
 
@@ -43,7 +43,7 @@ These are server endpoints that already work; just need a desktop surface.
 - [ ] **Persistent project containers** — `Project = (instructions + files + memory scope)` shared across sessions. (Claude Projects, LibreChat Presets.)
 - [ ] **Live/interactive artifacts** — chat-embedded UIs that re-render with fresh data. (Claude Live Artifacts, MCP Apps.)
 
-## Ranked picks (next-to-do, biased to ntrp's "personal entropy reduction" framing)
+## Ranked picks (next-to-do, biased to Arden's "personal entropy reduction" framing)
 
 1. ~~**`@`-mention context picker**~~ — built and reverted; parked.
 2. [ ] **Live token meter + auto-fork banner** — cheapest win; landed in ~an hour using existing compaction signal.
@@ -70,7 +70,7 @@ Cross-app themes that show up in 3+ polished agentic desktops (Claude / Codex / 
 - **Universal Cmd+K palette** that subsumes settings — search + nav + actions in one ranked list.
 - **Three-tier approval scope** — "Once / This session / Always (with pattern preview)" with the narrowest as the default keystroke.
 
-### Top 12 UX moves worth stealing for ntrp
+### Top 12 UX moves worth stealing for arden
 
 1. [ ] **Context chips above the composer** — fact/observation/skill/file the next turn will load, removable inline. Turns memory from backend feature into tangible surface.
 2. [ ] **Per-tool approval policy with patterns** (`bash:rm *` always-confirm, `read_file *` always-allow). Layered on the existing tool inspector.

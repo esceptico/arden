@@ -92,8 +92,8 @@ Update this section after every completed task.
 ### Task 1: Enforce Area storage invariants
 
 **Files:**
-- Modify: `apps/server/ntrp/context/store.py`
-- Modify: `apps/server/ntrp/services/session.py`
+- Modify: `apps/server/arden/context/store.py`
+- Modify: `apps/server/arden/services/session.py`
 - Test: `apps/server/tests/test_session_store.py`
 - Test: `apps/server/tests/test_area_capabilities.py`
 
@@ -113,10 +113,10 @@ page attachment, reversible archive/restore.
 ### Task 2: Add a transactional Area lifecycle boundary
 
 **Files:**
-- Create: `apps/server/ntrp/areas/lifecycle.py`
-- Modify: `apps/server/ntrp/server/runtime/automation.py`
-- Modify: `apps/server/ntrp/server/routers/areas.py`
-- Modify: `apps/server/ntrp/server/app.py`
+- Create: `apps/server/arden/areas/lifecycle.py`
+- Modify: `apps/server/arden/server/runtime/automation.py`
+- Modify: `apps/server/arden/server/routers/areas.py`
+- Modify: `apps/server/arden/server/app.py`
 - Test: `apps/server/tests/test_areas_lifecycle.py`
 - Test: `apps/server/tests/test_areas_router.py`
 
@@ -133,11 +133,11 @@ page attachment, reversible archive/restore.
 ### Task 3: Secure and expose the page capability
 
 **Files:**
-- Create: `apps/server/ntrp/areas/paths.py`
-- Modify: `apps/server/ntrp/areas/context.py`
-- Modify: `apps/server/ntrp/server/app.py`
-- Modify: `apps/server/ntrp/server/routers/areas.py`
-- Modify: `apps/server/ntrp/server/schemas.py`
+- Create: `apps/server/arden/areas/paths.py`
+- Modify: `apps/server/arden/areas/context.py`
+- Modify: `apps/server/arden/server/app.py`
+- Modify: `apps/server/arden/server/routers/areas.py`
+- Modify: `apps/server/arden/server/schemas.py`
 - Test: `apps/server/tests/test_area_capabilities.py`
 - Test: `apps/server/tests/test_areas_router.py`
 
@@ -155,10 +155,10 @@ create/attach/detach page lifecycle endpoints.
 ### Task 4: Make Area projections canonical and mechanical asks truthful
 
 **Files:**
-- Modify: `apps/server/ntrp/areas/models.py`
-- Modify: `apps/server/ntrp/areas/service.py`
-- Modify: `apps/server/ntrp/areas/asks.py`
-- Modify: `apps/server/ntrp/server/app.py`
+- Modify: `apps/server/arden/areas/models.py`
+- Modify: `apps/server/arden/areas/service.py`
+- Modify: `apps/server/arden/areas/asks.py`
+- Modify: `apps/server/arden/server/app.py`
 - Test: `apps/server/tests/test_areas_service.py`
 - Test: `apps/server/tests/test_areas_asks.py`
 
@@ -200,10 +200,10 @@ and page capability setup in every room.
 ### Task 6: Add Area-locked page and transcript tools
 
 **Files:**
-- Create: `apps/server/ntrp/tools/area.py`
-- Modify: `apps/server/ntrp/integrations/core.py`
-- Modify: `apps/server/ntrp/areas/agent.py`
-- Modify: `apps/server/ntrp/server/runtime/core.py`
+- Create: `apps/server/arden/tools/area.py`
+- Modify: `apps/server/arden/integrations/core.py`
+- Modify: `apps/server/arden/areas/agent.py`
+- Modify: `apps/server/arden/server/runtime/core.py`
 - Test: `apps/server/tests/test_area_tools.py`
 - Test: `apps/server/tests/test_areas_agent.py`
 
@@ -221,9 +221,9 @@ observe allowlist containing Area-scoped transcript reads but no global writes.
 ### Task 7: Rebuild live delegation permissions and provisioning
 
 **Files:**
-- Modify: `apps/server/ntrp/areas/lifecycle.py`
-- Modify: `apps/server/ntrp/server/runtime/automation.py`
-- Modify: `apps/server/ntrp/server/routers/areas.py`
+- Modify: `apps/server/arden/areas/lifecycle.py`
+- Modify: `apps/server/arden/server/runtime/automation.py`
+- Modify: `apps/server/arden/server/routers/areas.py`
 - Test: `apps/server/tests/test_areas_lifecycle.py`
 - Test: `apps/server/tests/test_areas_agent.py`
 
@@ -240,10 +240,10 @@ observe allowlist containing Area-scoped transcript reads but no global writes.
 ### Task 8: Rebuild scheduling, budgets, and write provenance
 
 **Files:**
-- Modify: `apps/server/ntrp/areas/custodian.py`
-- Modify: `apps/server/ntrp/tools/area.py`
-- Modify: `apps/server/ntrp/server/app.py`
-- Modify: `apps/server/ntrp/server/runtime/automation.py`
+- Modify: `apps/server/arden/areas/custodian.py`
+- Modify: `apps/server/arden/tools/area.py`
+- Modify: `apps/server/arden/server/app.py`
+- Modify: `apps/server/arden/server/runtime/automation.py`
 - Test: `apps/server/tests/test_areas_custodian.py`
 - Test: `apps/server/tests/test_area_tools.py`
 
@@ -262,10 +262,10 @@ digest-based self-write suppression.
 ### Task 9: Rebuild durable asks and reply/review flows
 
 **Files:**
-- Modify: `apps/server/ntrp/areas/agent.py`
-- Modify: `apps/server/ntrp/areas/asks.py`
-- Modify: `apps/server/ntrp/areas/models.py`
-- Modify: `apps/server/ntrp/server/routers/areas.py`
+- Modify: `apps/server/arden/areas/agent.py`
+- Modify: `apps/server/arden/areas/asks.py`
+- Modify: `apps/server/arden/areas/models.py`
+- Modify: `apps/server/arden/server/routers/areas.py`
 - Modify: `apps/desktop/src/features/areas/components/AskCard.tsx`
 - Modify: `apps/desktop/src/features/areas/components/AreaRoom.tsx`
 - Modify: `apps/desktop/src/actions/areas.ts`
@@ -291,7 +291,7 @@ Custodian-channel replies, and deduplicated notifications.
 **Files:**
 - Modify: `apps/desktop/src/features/areas/components/AreaControls.tsx`
 - Modify: `apps/desktop/src/features/areas/components/AreaRoom.tsx`
-- Modify: `apps/server/ntrp/areas/migrate.py`
+- Modify: `apps/server/arden/areas/migrate.py`
 - Modify: `docs/superpowers/plans/2026-07-10-areas-custodians-rebuild.md`
 - Test: all relevant server/desktop tests
 

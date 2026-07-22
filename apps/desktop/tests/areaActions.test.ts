@@ -12,11 +12,11 @@ beforeEach(() => {
     config: { serverUrl: "http://localhost:6877", apiKey: "" },
     areas: {
       ...getState().areas,
-      recordsById: { p1: area("p1", "ntrp"), p2: area("p2", "dex") },
+      recordsById: { p1: area("p1", "arden"), p2: area("p2", "dex") },
       recordOrder: ["p1", "p2"],
     },
     sessions: [
-      session("s1", "ntrp bug", "p1"),
+      session("s1", "arden bug", "p1"),
       session("s2", "dex bug", "p2"),
       session("s3", "loose note", null),
     ],
@@ -30,7 +30,7 @@ afterEach(() => {
 test("archiveArea removes the area view but preserves session membership for restore", async () => {
   const requests: { path: string; method?: string; body?: string; timeout?: number }[] = [];
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async (
           _config: unknown,
@@ -64,7 +64,7 @@ test("archiveArea removes the area view but preserves session membership for res
 test("replyToAsk targets the typed Custodian reply endpoint", async () => {
   const requests: { path: string; method?: string; body?: string; timeout?: number }[] = [];
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async (_config: unknown, req: { path: string; method?: string; body?: string; timeout?: number }) => {
           requests.push(req);
@@ -96,7 +96,7 @@ test("replyToAsk targets the typed Custodian reply endpoint", async () => {
 test("area work actions use encoded typed paths and refresh room plus overview", async () => {
   const requests: { path: string; method?: string; body?: string; timeout?: number }[] = [];
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async (_config: unknown, req: { path: string; method?: string; body?: string; timeout?: number }) => {
           requests.push(req);

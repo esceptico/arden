@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Slice 01 — invoke codex exec headless.
 # Prereq: tim has approved docs/internal/slices/slice-01-schema.md.
-# This script does NOT touch ~/.ntrp/memory.db. Tests run on temp DBs.
+# This script does NOT touch ~/.arden/memory.db. Tests run on temp DBs.
 # Run from repo root.
 
 set -euo pipefail
 
 BRIEF="docs/internal/slices/slice-01-schema.md"
-SPEC="docs/internal/ntrp-memory-redesign-spec.md"
+SPEC="docs/internal/arden-memory-redesign-spec.md"
 
 if [ ! -f "$BRIEF" ]; then
   echo "Missing $BRIEF" >&2

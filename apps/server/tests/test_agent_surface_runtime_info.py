@@ -4,13 +4,13 @@ from click.testing import CliRunner
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from ntrp.cli import main
-from ntrp.server.routers.runtime_info import router
+from arden.cli import main
+from arden.server.routers.runtime_info import router
 
 
 def test_agent_surface_manifest_discovers_path_ids(tmp_path):
-    from ntrp.agent_surface.discovery import discover_agent_surface
-    from ntrp.agent_surface.manifest import write_manifest
+    from arden.agent_surface.discovery import discover_agent_surface
+    from arden.agent_surface.manifest import write_manifest
 
     skill = tmp_path / "agent" / "skills" / "revenue-definitions" / "SKILL.md"
     skill.parent.mkdir(parents=True)
@@ -24,7 +24,7 @@ def test_agent_surface_manifest_discovers_path_ids(tmp_path):
 
     assert manifest.skills[0].id == "revenue-definitions"
     assert manifest.schedules[0].id == "memory/rebuild"
-    assert path == tmp_path / ".ntrp" / "manifest.json"
+    assert path == tmp_path / ".arden" / "manifest.json"
     data = json.loads(path.read_text())
     assert data["agent_surface"]["root"] == "agent/"
     assert data["skills"][0]["id"] == "revenue-definitions"
@@ -32,7 +32,7 @@ def test_agent_surface_manifest_discovers_path_ids(tmp_path):
 
 
 def test_runtime_info_endpoint_returns_manifest(tmp_path, monkeypatch):
-    from ntrp.agent_surface.runtime_info import build_runtime_info
+    from arden.agent_surface.runtime_info import build_runtime_info
 
     (tmp_path / "agent" / "skills" / "demo").mkdir(parents=True)
     (tmp_path / "agent" / "skills" / "demo" / "SKILL.md").write_text(
@@ -47,7 +47,7 @@ def test_runtime_info_endpoint_returns_manifest(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == build_runtime_info(tmp_path).model_dump(mode="json")
-    assert not (tmp_path / ".ntrp" / "manifest.json").exists()
+    assert not (tmp_path / ".arden" / "manifest.json").exists()
 
 
 def test_runtime_info_endpoint_reports_active_runtime_tools(tmp_path, monkeypatch):
@@ -78,5 +78,5 @@ def test_cli_info_prints_runtime_info(tmp_path, monkeypatch):
 
     assert result.exit_code == 0
     assert "Runtime" in result.output
-    assert ".ntrp/manifest.json" in result.output
-    assert not (tmp_path / ".ntrp" / "manifest.json").exists()
+    assert ".arden/manifest.json" in result.output
+    assert not (tmp_path / ".arden" / "manifest.json").exists()

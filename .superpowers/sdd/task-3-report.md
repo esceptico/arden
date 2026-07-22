@@ -11,7 +11,7 @@
 
 ## Changes
 
-### Created: `apps/server/ntrp/slices/asks.py`
+### Created: `apps/server/arden/slices/asks.py`
 
 - **AskStore** class:
   - `__init__(path: Path)` – loads existing asks from JSON file if exists
@@ -84,5 +84,5 @@ Sibling regression check: `uv run pytest tests/ -q -k slices` → `10 passed, 12
 
 ### Files touched (commit 0b7e3dd7, staged individually — no `-A`/`.`)
 
-- `apps/server/ntrp/slices/asks.py`
+- `apps/server/arden/slices/asks.py`
 - `apps/server/tests/test_slices_asks.py`

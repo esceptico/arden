@@ -17,7 +17,7 @@ interface AskActionHandlers {
   openArea: (areaKey: string) => void;
 }
 
-/** Maps an ask's declared verb (server contract: ntrp/areas/service.py +
+/** Maps an ask's declared verb (server contract: arden/areas/service.py +
  *  agent.py) to a primary action. `retry`'s ref is an automation NAME, not a
  *  task_id — the client run API takes task_id, so we resolve it against the
  *  live automations list. */

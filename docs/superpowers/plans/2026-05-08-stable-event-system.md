@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a stable server-owned event system for NTRP chat runs so desktop rendering, sub-agent progress, replay, and cancellation are ordered and reliable.
+**Goal:** Build a stable server-owned event system for ARDEN chat runs so desktop rendering, sub-agent progress, replay, and cancellation are ordered and reliable.
 
 **Architecture:** The server emits normalized wire events exactly once, assigns a monotonic per-session sequence number, and exposes cursor-based replay. Desktop consumes sequenced events as a reducer projection; it does not infer execution ordering from React timing.
 
@@ -37,16 +37,16 @@ Out of scope:
 - Modify `apps/desktop/electron/main.cjs`: pass `Last-Event-ID` or `after_seq` when reconnecting through the Electron bridge.
 - Modify `apps/desktop/tests/streamEvents.test.ts`: reducer tests for result race and task lifecycle.
 - Modify `apps/desktop/tests/streamOrdering.test.ts`: sequence and reconnect tests.
-- Modify `apps/server/ntrp/agent/types/events.py`: add explicit text boundary and task lifecycle agent events.
-- Modify `apps/server/ntrp/agent/agent.py`: emit text boundaries from the agent stream.
-- Modify `apps/server/ntrp/core/spawner.py`: emit sub-agent task lifecycle events.
-- Modify `apps/server/ntrp/events/sse.py`: convert new agent events to final wire events and add `StreamRecord` serialization.
-- Modify `apps/server/ntrp/server/bus.py`: own stream sequence assignment and replay by cursor.
-- Modify `apps/server/ntrp/server/routers/chat.py`: remove per-subscriber text boundary synthesis and accept `after_seq`.
-- Modify `apps/server/ntrp/server/state.py`: make cancel return a result and cancel drain/background tasks.
-- Modify `apps/server/ntrp/server/routers/chat.py`: make `/cancel` report unknown runs and return accepted cancellation state.
-- Modify `apps/server/ntrp/services/chat.py`: do not enqueue `RunCompleted` for cancelled runs.
-- Modify `apps/server/ntrp/tools/core/context.py`: expose cancellation of all pending background tasks to the run registry.
+- Modify `apps/server/arden/agent/types/events.py`: add explicit text boundary and task lifecycle agent events.
+- Modify `apps/server/arden/agent/agent.py`: emit text boundaries from the agent stream.
+- Modify `apps/server/arden/core/spawner.py`: emit sub-agent task lifecycle events.
+- Modify `apps/server/arden/events/sse.py`: convert new agent events to final wire events and add `StreamRecord` serialization.
+- Modify `apps/server/arden/server/bus.py`: own stream sequence assignment and replay by cursor.
+- Modify `apps/server/arden/server/routers/chat.py`: remove per-subscriber text boundary synthesis and accept `after_seq`.
+- Modify `apps/server/arden/server/state.py`: make cancel return a result and cancel drain/background tasks.
+- Modify `apps/server/arden/server/routers/chat.py`: make `/cancel` report unknown runs and return accepted cancellation state.
+- Modify `apps/server/arden/services/chat.py`: do not enqueue `RunCompleted` for cancelled runs.
+- Modify `apps/server/arden/tools/core/context.py`: expose cancellation of all pending background tasks to the run registry.
 - Modify `apps/server/tests/test_session_bus.py`: sequence and replay tests.
 - Modify `apps/server/tests/test_streaming_events.py`: text boundary and envelope tests.
 - Modify `apps/server/tests/test_run_state.py`: cancel semantics tests.
@@ -233,10 +233,10 @@ git commit -m "fix: preserve fast tool result updates"
 ### Task 2: Add Explicit Server Text Boundaries
 
 **Files:**
-- Modify: `apps/server/ntrp/agent/types/events.py`
-- Modify: `apps/server/ntrp/agent/agent.py`
-- Modify: `apps/server/ntrp/events/sse.py`
-- Modify: `apps/server/ntrp/server/routers/chat.py`
+- Modify: `apps/server/arden/agent/types/events.py`
+- Modify: `apps/server/arden/agent/agent.py`
+- Modify: `apps/server/arden/events/sse.py`
+- Modify: `apps/server/arden/server/routers/chat.py`
 - Test: `apps/server/tests/test_streaming_events.py`
 
 - [ ] **Step 1: Write tests for explicit text boundaries**
@@ -244,8 +244,8 @@ git commit -m "fix: preserve fast tool result updates"
 Append these tests to `apps/server/tests/test_streaming_events.py`:
 
 ```python
-from ntrp.agent import TextDelta, TextEnded, TextStarted
-from ntrp.events.sse import TextMessageEndEvent, TextMessageStartEvent
+from arden.agent import TextDelta, TextEnded, TextStarted
+from arden.events.sse import TextMessageEndEvent, TextMessageStartEvent
 
 
 def test_text_boundary_events_convert_to_sse():
@@ -299,7 +299,7 @@ Expected: failure because `TextStarted` and `TextEnded` do not exist yet.
 
 - [ ] **Step 3: Define text boundary agent events**
 
-In `apps/server/ntrp/agent/types/events.py`, add these dataclasses after `AgentEventBase`:
+In `apps/server/arden/agent/types/events.py`, add these dataclasses after `AgentEventBase`:
 
 ```python
 @dataclass(frozen=True, kw_only=True)
@@ -313,15 +313,15 @@ class TextEnded(AgentEventBase):
     content: str = ""
 ```
 
-Update `apps/server/ntrp/agent/types/__init__.py` exports if that file explicitly exports event classes. The complete import addition is:
+Update `apps/server/arden/agent/types/__init__.py` exports if that file explicitly exports event classes. The complete import addition is:
 
 ```python
-from ntrp.agent.types.events import TextEnded, TextStarted
+from arden.agent.types.events import TextEnded, TextStarted
 ```
 
 - [ ] **Step 4: Emit text boundaries from the agent**
 
-In `apps/server/ntrp/agent/agent.py`, import `TextStarted` and `TextEnded`. In `_call_llm`, replace the string delta handling block with:
+In `apps/server/arden/agent/agent.py`, import `TextStarted` and `TextEnded`. In `_call_llm`, replace the string delta handling block with:
 
 ```python
                 if isinstance(item, str):
@@ -357,7 +357,7 @@ Keep the existing `assistant_msg["client_id"] = text_id` logic unchanged.
 
 - [ ] **Step 5: Convert boundary agent events to SSE**
 
-In `apps/server/ntrp/events/sse.py`, import `TextStarted` and `TextEnded`, then add cases before `TextDelta()`:
+In `apps/server/arden/events/sse.py`, import `TextStarted` and `TextEnded`, then add cases before `TextDelta()`:
 
 ```python
         case TextStarted():
@@ -378,7 +378,7 @@ In `apps/server/ntrp/events/sse.py`, import `TextStarted` and `TextEnded`, then 
 
 - [ ] **Step 6: Remove subscriber-local boundary synthesis**
 
-In `apps/server/ntrp/server/routers/chat.py`, simplify `_event_stream` so it only replays/yields event strings. Replace the body after subscribe with:
+In `apps/server/arden/server/routers/chat.py`, simplify `_event_stream` so it only replays/yields event strings. Replace the body after subscribe with:
 
 ```python
     try:
@@ -426,7 +426,7 @@ Expected: all tests pass.
 Run:
 
 ```bash
-git add apps/server/ntrp/agent apps/server/ntrp/events/sse.py apps/server/ntrp/server/routers/chat.py apps/server/tests/test_streaming_events.py
+git add apps/server/arden/agent apps/server/arden/events/sse.py apps/server/arden/server/routers/chat.py apps/server/tests/test_streaming_events.py
 git commit -m "feat: emit explicit text stream boundaries"
 ```
 
@@ -435,9 +435,9 @@ git commit -m "feat: emit explicit text stream boundaries"
 ### Task 3: Add Sequenced Stream Records
 
 **Files:**
-- Modify: `apps/server/ntrp/events/sse.py`
-- Modify: `apps/server/ntrp/server/bus.py`
-- Modify: `apps/server/ntrp/server/routers/chat.py`
+- Modify: `apps/server/arden/events/sse.py`
+- Modify: `apps/server/arden/server/bus.py`
+- Modify: `apps/server/arden/server/routers/chat.py`
 - Test: `apps/server/tests/test_session_bus.py`
 - Test: `apps/server/tests/test_streaming_events.py`
 
@@ -446,7 +446,7 @@ git commit -m "feat: emit explicit text stream boundaries"
 Append this test to `apps/server/tests/test_streaming_events.py`:
 
 ```python
-from ntrp.events.sse import StreamRecord, ThinkingEvent
+from arden.events.sse import StreamRecord, ThinkingEvent
 
 
 def test_stream_record_adds_sequence_and_sse_id():
@@ -491,7 +491,7 @@ Expected: failure because `StreamRecord` and `after_seq` do not exist.
 
 - [ ] **Step 3: Add `StreamRecord`**
 
-In `apps/server/ntrp/events/sse.py`, add this dataclass after `SSEEvent`:
+In `apps/server/arden/events/sse.py`, add this dataclass after `SSEEvent`:
 
 ```python
 @dataclass(frozen=True)
@@ -518,7 +518,7 @@ class StreamRecord:
 
 - [ ] **Step 4: Sequence events in `SessionBus`**
 
-In `apps/server/ntrp/server/bus.py`, change the queue and buffer types from `SSEEvent` to `StreamRecord`.
+In `apps/server/arden/server/bus.py`, change the queue and buffer types from `SSEEvent` to `StreamRecord`.
 
 Add this field to `SessionBus`:
 
@@ -558,7 +558,7 @@ Update `subscribe` and `_close_queue` annotations to `StreamRecord | None`.
 
 - [ ] **Step 5: Update `_event_stream` to use records**
 
-In `apps/server/ntrp/server/routers/chat.py`, change `_event_stream` signature:
+In `apps/server/arden/server/routers/chat.py`, change `_event_stream` signature:
 
 ```python
 async def _event_stream(
@@ -621,7 +621,7 @@ Expected: all tests pass.
 Run:
 
 ```bash
-git add apps/server/ntrp/events/sse.py apps/server/ntrp/server/bus.py apps/server/ntrp/server/routers/chat.py apps/server/tests/test_session_bus.py apps/server/tests/test_streaming_events.py
+git add apps/server/arden/events/sse.py apps/server/arden/server/bus.py apps/server/arden/server/routers/chat.py apps/server/tests/test_session_bus.py apps/server/tests/test_streaming_events.py
 git commit -m "feat: sequence chat stream events"
 ```
 
@@ -818,10 +818,10 @@ git commit -m "feat: consume sequenced desktop events"
 ### Task 5: Fix Cancel Terminal Semantics
 
 **Files:**
-- Modify: `apps/server/ntrp/server/state.py`
-- Modify: `apps/server/ntrp/server/routers/chat.py`
-- Modify: `apps/server/ntrp/services/chat.py`
-- Modify: `apps/server/ntrp/tools/core/context.py`
+- Modify: `apps/server/arden/server/state.py`
+- Modify: `apps/server/arden/server/routers/chat.py`
+- Modify: `apps/server/arden/services/chat.py`
+- Modify: `apps/server/arden/tools/core/context.py`
 - Test: `apps/server/tests/test_run_state.py`
 - Test: `apps/server/tests/test_chat_inject.py`
 
@@ -887,7 +887,7 @@ Expected: failure because `cancel_run` returns `None` and the route always retur
 
 - [ ] **Step 4: Make `RunRegistry.cancel_run` return a result**
 
-Replace `cancel_run` in `apps/server/ntrp/server/state.py` with:
+Replace `cancel_run` in `apps/server/arden/server/state.py` with:
 
 ```python
     def cancel_run(self, run_id: str) -> dict[str, bool]:
@@ -919,7 +919,7 @@ Replace `cancel_run` in `apps/server/ntrp/server/state.py` with:
 
 - [ ] **Step 5: Make `/cancel` report accepted or missing**
 
-Replace the route in `apps/server/ntrp/server/routers/chat.py` with:
+Replace the route in `apps/server/arden/server/routers/chat.py` with:
 
 ```python
 @router.post("/cancel", status_code=202)
@@ -932,7 +932,7 @@ async def cancel_run(request: CancelRequest, run_registry: RunRegistry = Depends
 
 - [ ] **Step 6: Stop emitting `RunCompleted` for cancelled runs**
 
-In `apps/server/ntrp/services/chat.py`, in the `finally` block before creating `RunCompleted`, add:
+In `apps/server/arden/services/chat.py`, in the `finally` block before creating `RunCompleted`, add:
 
 ```python
             if run.cancelled:
@@ -962,7 +962,7 @@ Expected: all tests pass.
 Run:
 
 ```bash
-git add apps/server/ntrp/server/state.py apps/server/ntrp/server/routers/chat.py apps/server/ntrp/services/chat.py apps/server/tests/test_run_state.py apps/server/tests/test_chat_inject.py
+git add apps/server/arden/server/state.py apps/server/arden/server/routers/chat.py apps/server/arden/services/chat.py apps/server/tests/test_run_state.py apps/server/tests/test_chat_inject.py
 git commit -m "fix: make chat cancellation terminal-safe"
 ```
 
@@ -971,8 +971,8 @@ git commit -m "fix: make chat cancellation terminal-safe"
 ### Task 6: Add Sub-Agent Task Lifecycle Events
 
 **Files:**
-- Modify: `apps/server/ntrp/events/sse.py`
-- Modify: `apps/server/ntrp/core/spawner.py`
+- Modify: `apps/server/arden/events/sse.py`
+- Modify: `apps/server/arden/core/spawner.py`
 - Modify: `apps/desktop/src/api.ts`
 - Modify: `apps/desktop/src/store.ts`
 - Modify: `apps/desktop/src/hooks/useEvents.ts`
@@ -986,7 +986,7 @@ git commit -m "fix: make chat cancellation terminal-safe"
 Append to `apps/server/tests/test_streaming_events.py`:
 
 ```python
-from ntrp.events.sse import TaskFinishedEvent, TaskStartedEvent
+from arden.events.sse import TaskFinishedEvent, TaskStartedEvent
 
 
 def test_task_lifecycle_events_include_parent_tool_call():
@@ -1075,7 +1075,7 @@ Expected: failures because task events and desktop fields do not exist.
 
 - [ ] **Step 4: Add task SSE events**
 
-In `apps/server/ntrp/events/sse.py`, add enum values:
+In `apps/server/arden/events/sse.py`, add enum values:
 
 ```python
     TASK_STARTED = "task_started"
@@ -1124,7 +1124,7 @@ class TaskFinishedEvent(SSEEvent):
 
 - [ ] **Step 5: Emit task lifecycle around sub-agent runs**
 
-In `apps/server/ntrp/core/spawner.py`, import `TaskFinishedEvent` and `TaskStartedEvent`.
+In `apps/server/arden/core/spawner.py`, import `TaskFinishedEvent` and `TaskStartedEvent`.
 
 In `spawn_child`, after `parent_emit = calling_ctx.io.emit if not silent else None`, add:
 
@@ -1293,7 +1293,7 @@ Expected: all tests pass.
 Run:
 
 ```bash
-git add apps/server/ntrp/events/sse.py apps/server/ntrp/core/spawner.py apps/server/tests/test_streaming_events.py apps/server/tests/test_spawn_salvage.py apps/desktop/src/api.ts apps/desktop/src/store.ts apps/desktop/src/hooks/useEvents.ts apps/desktop/src/components/trace/ActivityTrace.tsx apps/desktop/tests/streamEvents.test.ts
+git add apps/server/arden/events/sse.py apps/server/arden/core/spawner.py apps/server/tests/test_streaming_events.py apps/server/tests/test_spawn_salvage.py apps/desktop/src/api.ts apps/desktop/src/store.ts apps/desktop/src/hooks/useEvents.ts apps/desktop/src/components/trace/ActivityTrace.tsx apps/desktop/tests/streamEvents.test.ts
 git commit -m "feat: stream sub-agent task lifecycle"
 ```
 
@@ -1302,8 +1302,8 @@ git commit -m "feat: stream sub-agent task lifecycle"
 ### Task 7: Add Cursor Replay Gap Handling
 
 **Files:**
-- Modify: `apps/server/ntrp/server/bus.py`
-- Modify: `apps/server/ntrp/server/routers/chat.py`
+- Modify: `apps/server/arden/server/bus.py`
+- Modify: `apps/server/arden/server/routers/chat.py`
 - Modify: `apps/desktop/src/hooks/useEvents.ts`
 - Test: `apps/server/tests/test_session_bus.py`
 - Test: `apps/desktop/tests/streamOrdering.test.ts`
@@ -1336,7 +1336,7 @@ Expected: failure because `subscribe_with_replay` returns two values and has no 
 
 - [ ] **Step 3: Return replay gap state**
 
-In `apps/server/ntrp/server/bus.py`, replace `subscribe_with_replay` with:
+In `apps/server/arden/server/bus.py`, replace `subscribe_with_replay` with:
 
 ```python
     def subscribe_with_replay(
@@ -1356,7 +1356,7 @@ Update tests that unpack `subscribe_with_replay()` to use `_gap`.
 
 - [ ] **Step 4: Emit a stream reset event on gap**
 
-In `apps/server/ntrp/events/sse.py`, add:
+In `apps/server/arden/events/sse.py`, add:
 
 ```python
     STREAM_RESET = "stream_reset"
@@ -1424,7 +1424,7 @@ Expected: all tests pass.
 Run:
 
 ```bash
-git add apps/server/ntrp/server/bus.py apps/server/ntrp/server/routers/chat.py apps/server/ntrp/events/sse.py apps/server/tests/test_session_bus.py apps/desktop/src/api.ts apps/desktop/src/hooks/useEvents.ts apps/desktop/tests/streamOrdering.test.ts
+git add apps/server/arden/server/bus.py apps/server/arden/server/routers/chat.py apps/server/arden/events/sse.py apps/server/tests/test_session_bus.py apps/desktop/src/api.ts apps/desktop/src/hooks/useEvents.ts apps/desktop/tests/streamOrdering.test.ts
 git commit -m "feat: detect chat stream replay gaps"
 ```
 
@@ -1443,7 +1443,7 @@ Create `apps/server/tests/test_event_contract.py`:
 ```python
 import json
 
-from ntrp.events.sse import RunCancelledEvent, RunErrorEvent, RunFinishedEvent, RunStartedEvent, StreamRecord
+from arden.events.sse import RunCancelledEvent, RunErrorEvent, RunFinishedEvent, RunStartedEvent, StreamRecord
 
 
 def _payload(event):

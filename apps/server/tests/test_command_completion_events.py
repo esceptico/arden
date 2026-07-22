@@ -1,10 +1,10 @@
 import json
 from datetime import UTC, datetime
 
-from ntrp.context.models import SessionState
-from ntrp.events.sse import CommandCompletedEvent, event_from_payload
-from ntrp.server.state import RunState
-from ntrp.services.chat import _command_completion_event
+from arden.context.models import SessionState
+from arden.events.sse import CommandCompletedEvent, event_from_payload
+from arden.server.state import RunState
+from arden.services.chat import _command_completion_event
 
 
 def test_command_completed_wire_shape():

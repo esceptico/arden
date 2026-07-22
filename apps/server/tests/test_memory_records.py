@@ -1,6 +1,6 @@
-"""RecordStore — the atomic memory unit, FLAT pool (ntrp/memory/records.py).
+"""RecordStore — the atomic memory unit, FLAT pool (arden/memory/records.py).
 
-Hermetic: a tmp `memory.db` (never ~/.ntrp/memory.db) plus EITHER a fake
+Hermetic: a tmp `memory.db` (never ~/.arden/memory.db) plus EITHER a fake
 SearchIndex (scripted vector hits, no real embeddings / search.db) OR no index at
 all (`search_index=None` -> FTS-only). The fake mirrors the exact surface
 RecordStore.search touches — `index.embedder.embed_one`, `index.store.vector_search`,
@@ -22,11 +22,11 @@ from shutil import move
 import numpy as np
 import pytest
 
-from ntrp.memory.file_store import CanonicalFileRole, FilePageStore
-from ntrp.memory.ledger import LedgerEntry, LedgerMeta, render_ledger_entry
-from ntrp.memory.models import Kind, SourceRef
-from ntrp.memory.pages import Page, render_raw
-from ntrp.memory.records import RecordStore
+from arden.memory.file_store import CanonicalFileRole, FilePageStore
+from arden.memory.ledger import LedgerEntry, LedgerMeta, render_ledger_entry
+from arden.memory.models import Kind, SourceRef
+from arden.memory.pages import Page, render_raw
+from arden.memory.records import RecordStore
 
 pytestmark = pytest.mark.asyncio
 
@@ -620,7 +620,7 @@ def _write_ledger_vault(vault: Path, entries: list[LedgerEntry], page: str = "to
     raw.parent.mkdir(parents=True, exist_ok=True)
     visible.write_text("# A\n", encoding="utf-8")
     raw.write_text(
-        "\n".join((f"<!-- ntrp:records schema=2 page={page} -->", *(render_ledger_entry(e) for e in entries))) + "\n",
+        "\n".join((f"<!-- arden:records schema=2 page={page} -->", *(render_ledger_entry(e) for e in entries))) + "\n",
         encoding="utf-8",
     )
 
@@ -891,7 +891,7 @@ async def test_page_event_ledgers_are_not_discovered_as_record_pages(tmp_path: P
     vault = tmp_path / "memory"
     event_path = vault / "raw" / "events" / "2026-07-13.md"
     event_path.parent.mkdir(parents=True)
-    event_path.write_text("# Page edit events 2026-07-13\n\n<!-- ntrp:page-edit-event -->\n{}\n", encoding="utf-8")
+    event_path.write_text("# Page edit events 2026-07-13\n\n<!-- arden:page-edit-event -->\n{}\n", encoding="utf-8")
     store = FilePageStore(vault)
 
     assert store._canonical_raw_files() == []
@@ -905,7 +905,7 @@ async def test_generated_index_is_pruned_from_stale_observed_page_state(tmp_path
     store = FilePageStore(vault)
     await store.open()
     path = "topics/README.md"
-    content = b"<!-- ntrp:index:start -->\n- a.md\n<!-- ntrp:index:end -->\n"
+    content = b"<!-- arden:index:start -->\n- a.md\n<!-- arden:index:end -->\n"
     revision = store._store_observed_base(content)
     state = store._read_observed_state()
     state["pages"][path] = revision
@@ -926,7 +926,7 @@ async def test_generated_index_is_pruned_from_stale_observed_page_state(tmp_path
 
 
 async def test_schema_v2_topic_records_can_be_synthesized(tmp_path: Path):
-    from ntrp.memory.synthesize import _synth_dossier
+    from arden.memory.synthesize import _synth_dossier
 
     class LLM:
         async def completion(self, **_kwargs):
@@ -947,7 +947,7 @@ async def test_schema_v2_topic_records_can_be_synthesized(tmp_path: Path):
 
 
 async def test_user_page_override_reloads_live_state_before_the_next_operation(tmp_path: Path):
-    from ntrp.memory.artifacts import ArtifactMemoryStore
+    from arden.memory.artifacts import ArtifactMemoryStore
 
     vault = tmp_path / "memory"
     original = _ledger_entry("original", "Original", sequence=1)
@@ -1063,16 +1063,16 @@ async def test_v2_non_lifecycle_mutations_replace_immutable_entry_in_place(tmp_p
     assert len(store.history(entry.id)) == 1
     assert await store.labels_of(entry.id) == ["Dex", "work"]
 
-    await store.rename_label("Dex", "Ntrp")
-    assert await store.labels_of(entry.id) == ["Ntrp", "work"]
-    assert await store.set_label_kind("Ntrp", "meta") == 1
-    assert await store.labels_of(entry.id) == ["Ntrp", "work"]
+    await store.rename_label("Dex", "Arden")
+    assert await store.labels_of(entry.id) == ["Arden", "work"]
+    assert await store.set_label_kind("Arden", "meta") == 1
+    assert await store.labels_of(entry.id) == ["Arden", "work"]
 
     await store.set_labels(entry.id, ["work"], entity_labels=["Dex"])
     await store.add_labels(entry.id, ["urgent"])
     assert await store.labels_of(entry.id) == ["Dex", "urgent", "work"]
-    await store.add_labels(entry.id, [], entity_labels=["Ntrp"])
-    assert await store.labels_of(entry.id) == ["Dex", "Ntrp", "urgent", "work"]
+    await store.add_labels(entry.id, [], entity_labels=["Arden"])
+    assert await store.labels_of(entry.id) == ["Arden", "Dex", "urgent", "work"]
     await store.close()
 
 

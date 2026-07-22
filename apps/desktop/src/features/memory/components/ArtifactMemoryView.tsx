@@ -44,14 +44,14 @@ import type { MemoryFrontmatter } from "@/features/memory/components/MemoryPrope
 import type { MemoryArtifactDetail, MemoryArtifactSummary, MemoryOperation, PageEditHistory, PageEditPreview, PageLinks } from "@/features/memory/lib/notebookTypes";
 
 const RECORD_PAGE_SIZE = 100;
-const RAIL_WIDTH_KEY = "ntrp.desktop.memory.railWidth";
-const CTX_WIDTH_KEY = "ntrp.desktop.memory.ctxWidth";
-const LAST_PATH_KEY = "ntrp.desktop.memory.lastPath";
+const RAIL_WIDTH_KEY = "arden.desktop.memory.railWidth";
+const CTX_WIDTH_KEY = "arden.desktop.memory.ctxWidth";
+const LAST_PATH_KEY = "arden.desktop.memory.lastPath";
 
 // Inspector open/closed is conceptually session state, not a Prefs field —
 // persisted separately to localStorage so the panel doesn't silently reset
 // on reload. Mirrors the SKIP_APPROVALS_KEY pattern in stores/prefs.ts.
-const INSPECTOR_OPEN_KEY = "ntrp.desktop.memory.inspectorOpen";
+const INSPECTOR_OPEN_KEY = "arden.desktop.memory.inspectorOpen";
 
 function loadInspectorOpen(): boolean {
   try {

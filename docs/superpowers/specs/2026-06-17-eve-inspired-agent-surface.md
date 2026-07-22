@@ -1,4 +1,4 @@
-# Eve-inspired ntrp agent surface
+# Eve-inspired Arden agent surface
 
 Date: 2026-06-17
 Status: proposal
@@ -8,7 +8,7 @@ Branch: `eve-agent-surface-spec`
 
 Vercel Eve's useful contribution is not a runtime we should adopt. It is a clean authoring and inspection shape for production agents: agents as directories, capabilities as files, durable sessions/runs as explicit objects, and evals/traces over the real event stream.
 
-ntrp should steal Eve's shape while keeping ntrp's existing runtime: deferred tools, approvals, memory, automations, SSE events, skills, desktop UI, and workflow orchestration.
+Arden should steal Eve's shape while keeping Arden's existing runtime: deferred tools, approvals, memory, automations, SSE events, skills, desktop UI, and workflow orchestration.
 
 ## Sources
 
@@ -24,11 +24,11 @@ ntrp should steal Eve's shape while keeping ntrp's existing runtime: deferred to
 
 ## Goals
 
-1. Make ntrp's runtime inspectable from one stable API and CLI command.
-2. Add a filesystem-authored agent surface that compiles into existing ntrp primitives.
+1. Make Arden's runtime inspectable from one stable API and CLI command.
+2. Add a filesystem-authored agent surface that compiles into existing arden primitives.
 3. Make parked workflow states first-class across UI, automations, tools, and evals.
-4. Let evals assert against real ntrp event streams instead of only final text.
-5. Preserve ntrp's current safety model: deferred tools, approvals, scoped memory, and explicit user confirmation for mutations.
+4. Let evals assert against real arden event streams instead of only final text.
+5. Preserve Arden's current safety model: deferred tools, approvals, scoped memory, and explicit user confirmation for mutations.
 
 ## Non-goals
 
@@ -56,13 +56,13 @@ agent/
 evals/
   *.eval.py
 
-.ntrp/
+.arden/
   manifest.json
   discovery.json
   warnings.json
 ```
 
-This directory is an optional project overlay. Built-in ntrp capabilities still come from the server, integration registries, memory system, and configured tool providers.
+This directory is an optional project overlay. Built-in arden capabilities still come from the server, integration registries, memory system, and configured tool providers.
 
 ## Runtime inspection
 
@@ -75,7 +75,7 @@ GET /runtime/info
 and:
 
 ```bash
-ntrp info
+arden info
 ```
 
 The response should expose the active runtime surface:
@@ -85,7 +85,7 @@ The response should expose the active runtime surface:
   "version": "...",
   "agent_surface": {
     "root": "agent/",
-    "manifest_path": ".ntrp/manifest.json"
+    "manifest_path": ".arden/manifest.json"
   },
   "tools": [],
   "deferred_tool_groups": [],
@@ -101,7 +101,7 @@ The response should expose the active runtime surface:
 }
 ```
 
-This is the highest-leverage first step because ntrp already has registries and event types, but developers cannot see the complete runtime shape in one place.
+This is the highest-leverage first step because arden already has registries and event types, but developers cannot see the complete runtime shape in one place.
 
 ## Path-derived discovery
 
@@ -148,7 +148,7 @@ Summarize last week's high-signal memory changes and post a concise report.
 id: daily-digest
 cron: "0 9 * * *"
 timezone: "Asia/Yerevan"
-prompt: "Prepare my daily ntrp digest."
+prompt: "Prepare my daily arden digest."
 channel: "chat"
 ```
 
@@ -162,7 +162,7 @@ This should start a real session/run and return identifiers.
 
 ## Skills as progressive disclosure
 
-Keep ntrp's current skill model: advertise only skill names/descriptions by default, then load full bodies via `use_skill` when relevant.
+Keep Arden's current skill model: advertise only skill names/descriptions by default, then load full bodies via `use_skill` when relevant.
 
 Filesystem skills should remain package-like:
 
@@ -221,7 +221,7 @@ This prevents Slack/email/webhook delivery state from leaking into runtime ident
 
 ## Event-aware eval DSL
 
-Build evals over real ntrp server events.
+Build evals over real Arden server events.
 
 Example:
 
@@ -317,7 +317,7 @@ Do not pretend continuation tokens are FIFO queues. Channel adapters should seri
 
 ## Sandbox boundary
 
-If ntrp adds Eve-style agent-written code execution, keep a hard boundary:
+If arden adds Eve-style agent-written code execution, keep a hard boundary:
 
 - no full repo mount by default,
 - seed only explicit workspace files,
@@ -339,26 +339,26 @@ agent/workspace/
 Create:
 
 ```txt
-apps/server/ntrp/agent_surface/__init__.py
-apps/server/ntrp/agent_surface/models.py
-apps/server/ntrp/agent_surface/discovery.py
-apps/server/ntrp/agent_surface/manifest.py
-apps/server/ntrp/server/routers/runtime_info.py
+apps/server/arden/agent_surface/__init__.py
+apps/server/arden/agent_surface/models.py
+apps/server/arden/agent_surface/discovery.py
+apps/server/arden/agent_surface/manifest.py
+apps/server/arden/server/routers/runtime_info.py
 docs/architecture/agent-surface.md
 ```
 
 Change:
 
 ```txt
-apps/server/ntrp/server/app.py
-apps/server/ntrp/cli.py
+apps/server/arden/server/app.py
+apps/server/arden/cli.py
 ```
 
 Deliverables:
 
 - `GET /runtime/info`
-- `ntrp info`
-- `.ntrp/manifest.json`
+- `arden info`
+- `.arden/manifest.json`
 - validation warnings for invalid/missing filesystem capabilities
 
 ### Phase 2: filesystem skills and schedules
@@ -366,19 +366,19 @@ Deliverables:
 Create:
 
 ```txt
-apps/server/ntrp/agent_surface/skills.py
-apps/server/ntrp/agent_surface/schedules.py
-apps/server/ntrp/server/routers/dev_runtime.py
+apps/server/arden/agent_surface/skills.py
+apps/server/arden/agent_surface/schedules.py
+apps/server/arden/server/routers/dev_runtime.py
 docs/guides/filesystem-agent.md
 ```
 
 Change:
 
 ```txt
-apps/server/ntrp/skills/registry.py
-apps/server/ntrp/automation/service.py
-apps/server/ntrp/automation/store.py
-apps/server/ntrp/server/app.py
+apps/server/arden/skills/registry.py
+apps/server/arden/automation/service.py
+apps/server/arden/automation/store.py
+apps/server/arden/server/app.py
 ```
 
 Deliverables:
@@ -393,19 +393,19 @@ Deliverables:
 Create:
 
 ```txt
-apps/server/ntrp/workflow/__init__.py
-apps/server/ntrp/workflow/models.py
-apps/server/ntrp/workflow/store.py
+apps/server/arden/workflow/__init__.py
+apps/server/arden/workflow/models.py
+apps/server/arden/workflow/store.py
 docs/architecture/runtime-events.md
 ```
 
 Change:
 
 ```txt
-apps/server/ntrp/events/sse.py
-apps/server/ntrp/server/routers/chat.py
-apps/server/ntrp/services/chat.py
-apps/server/ntrp/tools/core/types.py
+apps/server/arden/events/sse.py
+apps/server/arden/server/routers/chat.py
+apps/server/arden/services/chat.py
+apps/server/arden/tools/core/types.py
 ```
 
 Deliverables:
@@ -437,7 +437,7 @@ evals/report.py
 
 Deliverables:
 
-- drive a real ntrp server via HTTP/SSE
+- drive a real Arden server via HTTP/SSE
 - capture event streams
 - deterministic event assertions
 - CI-friendly reports
@@ -447,10 +447,10 @@ Deliverables:
 Change:
 
 ```txt
-apps/server/ntrp/tools/core/types.py
-apps/server/ntrp/tools/core/registry.py
-apps/server/ntrp/tools/core/base.py
-apps/server/ntrp/server/routers/chat.py
+apps/server/arden/tools/core/types.py
+apps/server/arden/tools/core/registry.py
+apps/server/arden/tools/core/base.py
+apps/server/arden/server/routers/chat.py
 apps/desktop/src/**/approval*.tsx
 ```
 
@@ -466,12 +466,12 @@ Deliverables:
 Create:
 
 ```txt
-apps/server/ntrp/channels/__init__.py
-apps/server/ntrp/channels/base.py
-apps/server/ntrp/channels/models.py
-apps/server/ntrp/channels/queue.py
-apps/server/ntrp/channels/slack.py
-apps/server/ntrp/channels/email.py
+apps/server/arden/channels/__init__.py
+apps/server/arden/channels/base.py
+apps/server/arden/channels/models.py
+apps/server/arden/channels/queue.py
+apps/server/arden/channels/slack.py
+apps/server/arden/channels/email.py
 docs/architecture/channels.md
 ```
 
@@ -486,7 +486,7 @@ Deliverables:
 
 If we only do three things:
 
-1. `/runtime/info` and `.ntrp/manifest.json`
+1. `/runtime/info` and `.arden/manifest.json`
 2. filesystem-authored schedules backed by existing automations
 3. event-aware evals over real runtime events
 

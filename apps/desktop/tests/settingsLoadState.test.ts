@@ -18,7 +18,7 @@ test("does not show empty loaded content after initial load failed", () => {
 });
 
 test("uses human wording for browser network errors", () => {
-  expect(settingsErrorMessage("Failed to fetch")).toBe("Couldn't reach ntrp server.");
+  expect(settingsErrorMessage("Failed to fetch")).toBe("Couldn't reach Arden server.");
   expect(settingsErrorMessage("Missing API key. Include Authorization: Bearer <key> header.")).toBe(
     "Missing API key. Include Authorization: Bearer <key> header.",
   );

@@ -5,10 +5,10 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
-from ntrp.context.models import SessionState
-from ntrp.server.app import app
-from ntrp.server.deps import require_run_registry
-from ntrp.server.state import RunRegistry, RunState
+from arden.context.models import SessionState
+from arden.server.app import app
+from arden.server.deps import require_run_registry
+from arden.server.state import RunRegistry, RunState
 
 
 def _make_run(session_id: str = "sess-1") -> RunState:

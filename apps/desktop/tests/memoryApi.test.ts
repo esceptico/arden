@@ -13,7 +13,7 @@ import {
 
 const config: AppConfig = { serverUrl: "http://localhost:6877", apiKey: "test-key" };
 const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
-const originalDesktopDescriptor = Object.getOwnPropertyDescriptor(originalWindow as Window, "ntrpDesktop");
+const originalDesktopDescriptor = Object.getOwnPropertyDescriptor(originalWindow as Window, "ardenDesktop");
 const originalFetch = globalThis.fetch;
 
 type BridgeRequest = { path: string; method?: string; body?: string; timeout?: number };
@@ -22,7 +22,7 @@ let request: BridgeRequest | null = null;
 function bridgeResponse(data: unknown, options: { ok?: boolean; status?: number } = {}) {
   request = null;
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async (_config: unknown, next: BridgeRequest) => {
           request = next;
@@ -137,9 +137,9 @@ const rawEvent = {
 afterEach(() => {
   (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
   if (originalDesktopDescriptor) {
-    Object.defineProperty(window, "ntrpDesktop", originalDesktopDescriptor);
+    Object.defineProperty(window, "ardenDesktop", originalDesktopDescriptor);
   } else {
-    Reflect.deleteProperty(window, "ntrpDesktop");
+    Reflect.deleteProperty(window, "ardenDesktop");
   }
   globalThis.fetch = originalFetch;
   request = null;
@@ -585,7 +585,7 @@ test("bridge errors retain structured revision-conflict data", async () => {
 
 test("fetch errors retain structured revision-conflict data", async () => {
   (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
-  Object.defineProperty(window, "ntrpDesktop", { configurable: true, value: undefined, writable: true });
+  Object.defineProperty(window, "ardenDesktop", { configurable: true, value: undefined, writable: true });
   const conflict = { detail: { error: "page_revision_conflict", current_revision: "sha256:current" } };
   globalThis.fetch = async () => new Response(JSON.stringify(conflict), {
     status: 409,
@@ -601,7 +601,7 @@ test("fetch errors retain structured revision-conflict data", async () => {
 
 test("fetch plain-text errors read the body once and preserve status and text", async () => {
   (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
-  Object.defineProperty(window, "ntrpDesktop", { configurable: true, value: undefined, writable: true });
+  Object.defineProperty(window, "ardenDesktop", { configurable: true, value: undefined, writable: true });
   let textReads = 0;
   globalThis.fetch = async () => ({
     ok: false,
@@ -627,7 +627,7 @@ test("fetch plain-text errors read the body once and preserve status and text", 
 
 test("fetch malformed JSON errors preserve the raw body and HTTP status", async () => {
   (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
-  Object.defineProperty(window, "ntrpDesktop", { configurable: true, value: undefined, writable: true });
+  Object.defineProperty(window, "ardenDesktop", { configurable: true, value: undefined, writable: true });
   globalThis.fetch = async () => new Response("{not-json", {
     status: 500,
     headers: { "content-type": "application/json" },

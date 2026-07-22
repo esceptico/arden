@@ -22,7 +22,7 @@
 ### Task 1: Owned Registry and Explicit Capability
 
 **Files:**
-- Modify: `apps/server/ntrp/llm/models.py`
+- Modify: `apps/server/arden/llm/models.py`
 - Test: `apps/server/tests/test_codex_models.py`
 
 **Interfaces:**
@@ -63,14 +63,14 @@ Expected: PASS.
 
 - [ ] **Step 5: Commit registry ownership**
 
-Run: `git add apps/server/ntrp/llm/models.py apps/server/tests/test_codex_models.py && git commit -m "refactor(llm): own model registry state"`
+Run: `git add apps/server/arden/llm/models.py apps/server/tests/test_codex_models.py && git commit -m "refactor(llm): own model registry state"`
 
 ### Task 2: Authenticated Codex Catalog
 
 **Files:**
-- Create: `apps/server/ntrp/llm/openai_codex_catalog.py`
-- Modify: `apps/server/ntrp/llm/openai_codex_auth.py`
-- Modify: `apps/server/ntrp/llm/openai_codex.py`
+- Create: `apps/server/arden/llm/openai_codex_catalog.py`
+- Modify: `apps/server/arden/llm/openai_codex_auth.py`
+- Modify: `apps/server/arden/llm/openai_codex.py`
 - Test: `apps/server/tests/test_openai_codex_catalog.py`
 - Test: `apps/server/tests/test_openai_codex_client.py`
 
@@ -117,15 +117,15 @@ Expected: PASS.
 
 - [ ] **Step 6: Commit Codex catalog support**
 
-Run: `git add apps/server/ntrp/llm/openai_codex_catalog.py apps/server/ntrp/llm/openai_codex_auth.py apps/server/ntrp/llm/openai_codex.py apps/server/tests/test_openai_codex_catalog.py apps/server/tests/test_openai_codex_client.py && git commit -m "feat(llm): load live Codex model catalog"`
+Run: `git add apps/server/arden/llm/openai_codex_catalog.py apps/server/arden/llm/openai_codex_auth.py apps/server/arden/llm/openai_codex.py apps/server/tests/test_openai_codex_catalog.py apps/server/tests/test_openai_codex_client.py && git commit -m "feat(llm): load live Codex model catalog"`
 
 ### Task 3: Runtime Refresh Integration
 
 **Files:**
-- Modify: `apps/server/ntrp/server/app.py`
-- Modify: `apps/server/ntrp/server/runtime/config.py`
-- Modify: `apps/server/ntrp/server/runtime/core.py`
-- Modify: `apps/server/ntrp/server/routers/providers.py`
+- Modify: `apps/server/arden/server/app.py`
+- Modify: `apps/server/arden/server/runtime/config.py`
+- Modify: `apps/server/arden/server/runtime/core.py`
+- Modify: `apps/server/arden/server/routers/providers.py`
 - Test: `apps/server/tests/test_runtime_config_status.py`
 - Test: `apps/server/tests/test_openai_codex_auth.py`
 
@@ -164,12 +164,12 @@ Expected: PASS.
 
 - [ ] **Step 5: Commit runtime refresh wiring**
 
-Run: `git add apps/server/ntrp/server/app.py apps/server/ntrp/server/runtime/config.py apps/server/ntrp/server/runtime/core.py apps/server/ntrp/server/routers/providers.py apps/server/tests/test_runtime_config_status.py apps/server/tests/test_openai_codex_auth.py && git commit -m "feat(server): refresh Codex models with runtime config"`
+Run: `git add apps/server/arden/server/app.py apps/server/arden/server/runtime/config.py apps/server/arden/server/runtime/core.py apps/server/arden/server/routers/providers.py apps/server/tests/test_runtime_config_status.py apps/server/tests/test_openai_codex_auth.py && git commit -m "feat(server): refresh Codex models with runtime config"`
 
 ### Task 4: Fallback Alignment and Verification
 
 **Files:**
-- Modify: `apps/server/ntrp/llm/models.py`
+- Modify: `apps/server/arden/llm/models.py`
 - Test: `apps/server/tests/test_codex_models.py`
 
 **Interfaces:**
@@ -187,7 +187,7 @@ Add Luna and Terra, remove stale 5.2/5.3 Codex entries, and set explicit capabil
 
 Run: `.venv/bin/pytest tests/test_codex_models.py tests/test_openai_codex_catalog.py tests/test_openai_codex_auth.py tests/test_openai_codex_client.py tests/test_provider_image_formats.py tests/test_runtime_config_status.py tests/test_config_service.py -q`
 
-Run: `.venv/bin/ruff check ntrp/llm/models.py ntrp/llm/openai_codex.py ntrp/llm/openai_codex_auth.py ntrp/llm/openai_codex_catalog.py ntrp/server/app.py ntrp/server/runtime/config.py ntrp/server/runtime/core.py ntrp/server/routers/providers.py tests/test_codex_models.py tests/test_openai_codex_catalog.py tests/test_openai_codex_client.py tests/test_runtime_config_status.py`
+Run: `.venv/bin/ruff check arden/llm/models.py arden/llm/openai_codex.py arden/llm/openai_codex_auth.py arden/llm/openai_codex_catalog.py arden/server/app.py arden/server/runtime/config.py arden/server/runtime/core.py arden/server/routers/providers.py tests/test_codex_models.py tests/test_openai_codex_catalog.py tests/test_openai_codex_client.py tests/test_runtime_config_status.py`
 
 Expected: all tests pass and Ruff reports no errors.
 
@@ -197,4 +197,4 @@ Fetch the authenticated catalog and verify the runtime registry matches API-supp
 
 - [ ] **Step 5: Commit fallback alignment**
 
-Run: `git add apps/server/ntrp/llm/models.py apps/server/tests/test_codex_models.py && git commit -m "fix(llm): align Codex fallback catalog"`
+Run: `git add apps/server/arden/llm/models.py apps/server/tests/test_codex_models.py && git commit -m "fix(llm): align Codex fallback catalog"`

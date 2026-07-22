@@ -61,7 +61,7 @@ Date: 2026-05-22
 - Earlier full pass: server focused suites → 135 passed; server full suite → 712 passed; desktop full tests → 157 passed; desktop typecheck → passed.
 - Follow-up focused server suites: `pytest apps/server/tests/test_session_bus.py apps/server/tests/test_session_store.py apps/server/tests/test_chat_inject.py apps/server/tests/test_event_contract.py apps/server/tests/test_chat_runs_status_api.py apps/server/tests/test_run_state.py apps/server/tests/test_automation_store.py -q` → 137 passed.
 - Follow-up server full suite: `pytest apps/server/tests -q` → 714 passed.
-- Follow-up server lint: `ruff check apps/server/ntrp/context/store.py apps/server/ntrp/server/stores.py apps/server/ntrp/server/bus.py apps/server/tests/test_session_store.py apps/server/tests/test_event_contract.py` → passed.
+- Follow-up server lint: `ruff check apps/server/arden/context/store.py apps/server/arden/server/stores.py apps/server/arden/server/bus.py apps/server/tests/test_session_store.py apps/server/tests/test_event_contract.py` → passed.
 - Follow-up desktop full tests: `bun test apps/desktop/tests` → 157 passed.
 - Follow-up desktop typecheck: `bun run typecheck` from `apps/desktop` → passed.
 

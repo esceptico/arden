@@ -1,15 +1,15 @@
 from pathlib import Path
 
-import ntrp.tools.executor as executor_module
-from ntrp.core.agent_types import SPAWN_SURFACE_GUIDANCE
-from ntrp.integrations.core import DIRECTIVES
-from ntrp.integrations.web.tools import WebSearchInput
-from ntrp.tools.background import SendToAgentInput
-from ntrp.tools.core import ToolResult, tool
-from ntrp.tools.core.types import ToolAction, ToolPolicy, ToolScope
-from ntrp.tools.discover import discover_user_tools
-from ntrp.tools.executor import ToolExecutor
-from ntrp.tools.memory import RecallInput
+import arden.tools.executor as executor_module
+from arden.core.agent_types import SPAWN_SURFACE_GUIDANCE
+from arden.integrations.core import DIRECTIVES
+from arden.integrations.web.tools import WebSearchInput
+from arden.tools.background import SendToAgentInput
+from arden.tools.core import ToolResult, tool
+from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
+from arden.tools.discover import discover_user_tools
+from arden.tools.executor import ToolExecutor
+from arden.tools.memory import RecallInput
 
 
 async def _noop(execution, args):
@@ -26,7 +26,7 @@ def _tool():
 
 def test_user_discovery_rejects_child_only_reserved_names(tmp_path: Path):
     (tmp_path / "custom.py").write_text(
-        "from ntrp.tools.core import ToolAction, ToolPolicy, ToolResult, ToolScope, tool\n"
+        "from arden.tools.core import ToolAction, ToolPolicy, ToolResult, ToolScope, tool\n"
         "async def run(execution, args):\n"
         "    return ToolResult(content='ok', preview='ok')\n"
         "candidate = tool(description='custom', policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL), execute=run)\n"
@@ -60,10 +60,7 @@ def test_dead_tools_are_not_registered_or_exposed_in_workflow_schema():
 
 
 def test_stateful_spawns_do_not_leak_into_read_only_schema():
-    read_names = {
-        schema["function"]["name"]
-        for schema in ToolExecutor().get_tools(read_only=True)
-    }
+    read_names = {schema["function"]["name"] for schema in ToolExecutor().get_tools(read_only=True)}
 
     assert "background" not in read_names
     assert "research" not in read_names

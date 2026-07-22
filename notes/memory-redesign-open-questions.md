@@ -4,9 +4,9 @@ This note tracks the remaining non-blocking follow-ups for the `memory_items` re
 
 ## Current decisions
 
-- Legacy `apps/server/ntrp/knowledge/*` package imports and old client knowledge panes were removed.
-- `apps/server/ntrp/memory/facts.py` was removed with the legacy fact-store path; the redesign runtime uses `MemoryDatabase` with `memory.items` for the graph primitive.
-- `apps/server/ntrp/memory/service.py` stays as the stable `MemoryService` shell and chat connector attachment point.
+- Legacy `apps/server/arden/knowledge/*` package imports and old client knowledge panes were removed.
+- `apps/server/arden/memory/facts.py` was removed with the legacy fact-store path; the redesign runtime uses `MemoryDatabase` with `memory.items` for the graph primitive.
+- `apps/server/arden/memory/service.py` stays as the stable `MemoryService` shell and chat connector attachment point.
 - `pattern_finder` and `skill_inducer` are the surviving memory automation builtins.
 - `/admin/memory/items` defaults to active items and now supports kind, status, scope, query, and validity filters.
 - Desktop memory uses the single `MemoryItemsPane` with existing shared primitives and exposes Today / Graph / Skills / Search.

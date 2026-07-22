@@ -5,10 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 
-import ntrp.constants as constants
-from ntrp.agent import Role
-from ntrp.constants import SESSION_HANDOFF_MARKER
-from ntrp.core.compactor import (
+import arden.constants as constants
+from arden.agent import Role
+from arden.constants import SESSION_HANDOFF_MARKER
+from arden.core.compactor import (
     SummaryCompactor,
     _build_compacted_messages,
     compact_needed,
@@ -125,7 +125,7 @@ def test_compact_needed_trusts_saved_usage_when_present():
 
 def test_compact_needed_uses_headroom_before_configured_threshold(monkeypatch):
     monkeypatch.setattr(
-        "ntrp.core.compactor.get_model",
+        "arden.core.compactor.get_model",
         lambda _model: type("Model", (), {"max_context_tokens": 1000})(),
     )
     messages = [{"role": "system", "content": "system"}]
@@ -164,7 +164,7 @@ async def test_compact_summarize_keeps_server_event_loop_responsive(monkeypatch)
         async def close(self):
             return None
 
-    monkeypatch.setattr("ntrp.core.compactor.create_completion_client", lambda _model: BlockingClient())
+    monkeypatch.setattr("arden.core.compactor.create_completion_client", lambda _model: BlockingClient())
 
     messages = [
         {"role": Role.SYSTEM, "content": "system"},
@@ -196,7 +196,7 @@ async def test_research_compaction_prompt_includes_research_context_and_tool_mes
         async def close(self):
             return None
 
-    monkeypatch.setattr("ntrp.core.compactor.create_completion_client", lambda _model: CapturingClient())
+    monkeypatch.setattr("arden.core.compactor.create_completion_client", lambda _model: CapturingClient())
 
     messages = [
         {"role": Role.SYSTEM, "content": "research system"},
@@ -235,8 +235,8 @@ async def test_compaction_timeouts_do_not_spawn_unbounded_threads(monkeypatch):
         async def close(self):
             return None
 
-    monkeypatch.setattr("ntrp.core.compactor.COMPACTION_TIMEOUT", 0.01)
-    monkeypatch.setattr("ntrp.core.compactor.create_completion_client", lambda _model: BlockingClient())
+    monkeypatch.setattr("arden.core.compactor.COMPACTION_TIMEOUT", 0.01)
+    monkeypatch.setattr("arden.core.compactor.create_completion_client", lambda _model: BlockingClient())
 
     messages = [
         {"role": Role.SYSTEM, "content": "system"},
@@ -250,10 +250,10 @@ async def test_compaction_timeouts_do_not_spawn_unbounded_threads(monkeypatch):
         with pytest.raises(asyncio.TimeoutError):
             await compact_summarize(messages, 1, 3, "gpt-5.2")
 
-    live = [thread for thread in threading.enumerate() if thread.name.startswith("ntrp-compaction-llm")]
+    live = [thread for thread in threading.enumerate() if thread.name.startswith("arden-compaction-llm")]
     assert len(live) <= 2
     deadline = time.perf_counter() + 1
     while time.perf_counter() < deadline:
-        if not [thread for thread in threading.enumerate() if thread.name.startswith("ntrp-compaction-llm")]:
+        if not [thread for thread in threading.enumerate() if thread.name.startswith("arden-compaction-llm")]:
             break
         await asyncio.sleep(0.01)

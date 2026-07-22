@@ -195,14 +195,14 @@ LEFT round 3 (reasons — not clean wins):
   unverified; line-soft bump likely already helps its border).
 
 ## ROUND 4 — PREVIEW VERIFICATION + react-scan (live in Claude Preview :5176, dev-harness)
-Switched from structural-only to LOOKING at the running app (window.__ntrp.setState
+Switched from structural-only to LOOKING at the running app (window.__arden.setState
 seeds connected surfaces w/o backend — see reference_react_scan_and_preview_harness).
 - [x] react-scan: `bun add -d react-scan` + main.tsx (import first, before React;
       `scan({enabled:isDev})`). NOT the CDN `init` (CSP script-src 'self' blocks it).
       Omitted `trackUnnecessaryRenders` (v0.5.7 runtime rejects it). Used it to
       profile: app intrinsic idle ~0.25/sec (useTimeTicker@30s + polls@5s); the 1.3/sec
       measured was react-scan's OWN FPS toolbar (shares app root). No re-render issue.
-- [x] HomeHero: disconnected hero had NO action despite "Open settings to point ntrp
+- [x] HomeHero: disconnected hero had NO action despite "Open settings to point arden
       at your server" → added `<Button leadingIcon={Settings}>Open settings</Button>`
       → openSettings(origin,"connection"). Verified renders + opens the right tab.
 - [x] VERIFIED IN PREVIEW (your flagged bugs, by looking not code-reading):
@@ -359,7 +359,7 @@ Suite green: typecheck 0, eslint 0, 478 tests, build ok. Uncommitted, staged for
 === CODE-VERIFIABLE SPACE EXHAUSTED ===
 FIVE adversarial workflows (212 agents, ~10M tok) across 24 dimensions: 94 candidates → 7 confirmed (6 applied, 1 deferred). Confirm rates 12/0/4/14/0%. SESSION TOTAL: 29 verified fixes. Suite green. Uncommitted.
 
-## Pass 16 — PIVOT to preview (re-read "stop asking about computer use" = stop POLLING not don't-use; [[feedback_improve_ui_loop_use_polish_skills]] for THIS loop says "use the preview dev-harness to actually look"; user wants VISIBLE changes). Looked at the running app on :5176 via window.__ntrp harness:
+## Pass 16 — PIVOT to preview (re-read "stop asking about computer use" = stop POLLING not don't-use; [[feedback_improve_ui_loop_use_polish_skills]] for THIS loop says "use the preview dev-harness to actually look"; user wants VISIBLE changes). Looked at the running app on :5176 via window.__arden harness:
 - Chat (light + dark): CLEAN, polished. Borders read in both themes.
 - Settings modal (Connection + Appearance): CLEAN — confirmed the big sidebar fix landed ("Settings" IS the sidebar header, aligned w/ the content title on one row, the "why settings not in sidebar" regression is gone). Segmented controls, shortcut chip, thinking-anim preview cards all good.
 - Disconnected first-run: designed empty states render well; HomeHero "Open settings" button present; mount MEASURED at 1280x880 = fills viewport exactly, no overflow (the "looks small" was screenshot scaling).

@@ -9,9 +9,9 @@ import numpy as np
 import pytest
 import pytest_asyncio
 
-import ntrp.database as database
-from ntrp.context.models import SessionState
-from ntrp.context.store import SessionStore
+import arden.database as database
+from arden.context.models import SessionState
+from arden.context.store import SessionStore
 
 
 @pytest_asyncio.fixture

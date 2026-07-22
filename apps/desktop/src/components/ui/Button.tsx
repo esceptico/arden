@@ -4,7 +4,7 @@ import {
   type ReactNode,
 } from "react";
 import clsx from "clsx";
-import { type NtrpIcon } from "@/components/icons";
+import { type ArdenIcon } from "@/components/icons";
 
 /**
  * Text button primitive — sibling to {@link IconButton}. Collapses the
@@ -26,8 +26,8 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;
   /** sm = h-7 (dense toolbars/rows), md = h-8 (default, forms/modals). */
   size?: ButtonSize;
-  leadingIcon?: NtrpIcon;
-  trailingIcon?: NtrpIcon;
+  leadingIcon?: ArdenIcon;
+  trailingIcon?: ArdenIcon;
   /** Force the pressed/engaged look — e.g. while this button's menu is open. */
   active?: boolean;
   children?: ReactNode;

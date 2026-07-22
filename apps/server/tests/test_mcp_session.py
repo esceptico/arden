@@ -2,9 +2,9 @@ import asyncio
 
 import pytest
 
-from ntrp.mcp import session as session_module
-from ntrp.mcp.models import MCPServerConfig, StdioTransport
-from ntrp.mcp.session import MCPServerSession
+from arden.mcp import session as session_module
+from arden.mcp.models import MCPServerConfig, StdioTransport
+from arden.mcp.session import MCPServerSession
 
 
 class HangingMCPServerSession(MCPServerSession):

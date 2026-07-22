@@ -10,7 +10,7 @@ source: builtin
 A workflow preset. Run it with the `workflow` tool:
 
 ```
-workflow(name="audit", args={"target": "apps/server/ntrp/server", "dimensions": ["bugs", "security"], "depth": "normal"})
+workflow(name="audit", args={"target": "apps/server/arden/server", "dimensions": ["bugs", "security"], "depth": "normal"})
 ```
 
 Parallel finders surface issues along each dimension, every fresh finding is

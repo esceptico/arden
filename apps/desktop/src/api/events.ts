@@ -136,7 +136,7 @@ export type ServerEvent = CommonServerEventFields & (
   | { type: "REASONING_MESSAGE_END"; message_id: string; depth?: number }
   | { type: "REASONING_END"; message_id: string; depth?: number }
 
-  // ─── ntrp-specific (non-AG-UI canonical) ───────────────────────────
+  // ─── arden-specific (non-AG-UI canonical) ───────────────────────────
   | { type: "approval_needed"; tool_id: string; name: string; path?: string | null; diff?: string | null; content_preview?: string | null }
   | { type: "input_needed"; tool_id: string; name: string; title: string; html: string }
   | { type: "connection_needed"; run_id: string; tool_id: string; integration_id: string; connection_id: string; label: string; reason: ConnectionState; detail: string; capability: string; action: ConnectionAction; settings_tab: string; required_scopes: string[]; source: "recovery" | "suggestion" }

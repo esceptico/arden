@@ -13,11 +13,11 @@ if TYPE_CHECKING:
 import pytest
 import pytest_asyncio
 
-import ntrp.database as database
-from ntrp.automation.models import Automation
-from ntrp.automation.scheduler import Scheduler
-from ntrp.automation.store import AutomationStore
-from ntrp.automation.triggers import TimeTrigger
+import arden.database as database
+from arden.automation.models import Automation
+from arden.automation.scheduler import Scheduler
+from arden.automation.store import AutomationStore
+from arden.automation.triggers import TimeTrigger
 
 NOW = datetime(2026, 6, 18, 9, 0, tzinfo=UTC)
 
@@ -33,11 +33,21 @@ async def store(tmp_path: Path):
 
 def _auto(**kw) -> Automation:
     base = {
-        "task_id": "t", "name": "n", "description": "d", "model": None,
-        "triggers": [TimeTrigger(at="03:00", days="daily")], "enabled": True,
-        "created_at": NOW, "next_run_at": NOW - timedelta(hours=6), "last_run_at": None,
-        "last_result": None, "running_since": None, "auto_approve": True,
-        "handler": "memory_consolidate", "builtin": True, "cooldown_minutes": None,
+        "task_id": "t",
+        "name": "n",
+        "description": "d",
+        "model": None,
+        "triggers": [TimeTrigger(at="03:00", days="daily")],
+        "enabled": True,
+        "created_at": NOW,
+        "next_run_at": NOW - timedelta(hours=6),
+        "last_run_at": None,
+        "last_result": None,
+        "running_since": None,
+        "auto_approve": True,
+        "handler": "memory_consolidate",
+        "builtin": True,
+        "cooldown_minutes": None,
     }
     base.update(kw)
     return Automation(**base)

@@ -40,7 +40,7 @@ beforeEach(() => {
 test("loadHistory does not rewind past a stream_reset cursor", async () => {
   const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async () => ({
           ok: true,
@@ -102,7 +102,7 @@ test("active-session cache refresh hydrates inactive running sessions with curre
   const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
   const requests: string[] = [];
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async (_config: unknown, request: { path: string }) => {
           requests.push(request.path);
@@ -190,7 +190,7 @@ test("active-session cache refresh hydrates inactive running sessions with curre
 test("active-session cache refresh preserves live agent trace not represented in history", async () => {
   const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async () => ({
           ok: true,
@@ -308,7 +308,7 @@ test("active-session cache refresh preserves live agent trace not represented in
 test("loadHistory preserves visible live agent trace not represented in history", async () => {
   const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async () => ({
           ok: true,
@@ -419,7 +419,7 @@ test("loadHistory reapplies local Auto to active runtime and hides stale approva
   const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
   const requests: { path: string; method?: string; body?: string }[] = [];
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async (_config: unknown, request: { path: string; method?: string; body?: string }) => {
           requests.push(request);
@@ -500,7 +500,7 @@ test("loadHistory reapplies local Auto to active runtime and hides stale approva
 test("loadHistory keeps active run tail activity open while a tool is being called", async () => {
   const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async () => ({
           ok: true,
@@ -561,7 +561,7 @@ test("loadHistory keeps active run tail activity open while a tool is being call
 test("loadHistory treats backgrounded runtime as non-foreground", async () => {
   const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async () => ({
           ok: true,

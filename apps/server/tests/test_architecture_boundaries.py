@@ -1,9 +1,9 @@
 from pathlib import Path
 
-from ntrp.server.app import app
+from arden.server.app import app
 
 SERVER_DIR = Path(__file__).resolve().parents[1]
-SERVER_ROOT = SERVER_DIR / "ntrp"
+SERVER_ROOT = SERVER_DIR / "arden"
 
 
 def server_path(path: str) -> Path:
@@ -12,12 +12,12 @@ def server_path(path: str) -> Path:
 
 def test_backend_persistence_tables_are_only_referenced_by_owner_modules():
     table_owners = {
-        "outbox_events": {server_path("ntrp/outbox/store.py")},
-        "scheduled_tasks": {server_path("ntrp/automation/store.py")},
-        "automation_event_dedupe": {server_path("ntrp/automation/store.py")},
-        "automation_event_queue": {server_path("ntrp/automation/store.py")},
-        "automation_count_state": {server_path("ntrp/automation/store.py")},
-        "monitor_state": {server_path("ntrp/monitor/store.py")},
+        "outbox_events": {server_path("arden/outbox/store.py")},
+        "scheduled_tasks": {server_path("arden/automation/store.py")},
+        "automation_event_dedupe": {server_path("arden/automation/store.py")},
+        "automation_event_queue": {server_path("arden/automation/store.py")},
+        "automation_count_state": {server_path("arden/automation/store.py")},
+        "monitor_state": {server_path("arden/monitor/store.py")},
     }
 
     violations: list[str] = []
@@ -36,7 +36,7 @@ def test_services_do_not_import_runtime_composition_root():
     for path in SERVER_ROOT.joinpath("services").rglob("*.py"):
         rel = path.relative_to(SERVER_DIR)
         source = path.read_text()
-        if "ntrp.server.runtime" in source:
+        if "arden.server.runtime" in source:
             violations.append(f"runtime imported from {rel}")
 
     assert violations == []

@@ -1,6 +1,6 @@
 # Memory (internal)
 
-The single living description of how ntrp memory works today. The substrate is
+The single living description of how Arden memory works today. The substrate is
 **file-canonical**: the markdown files on disk ARE the memory, not a projection
 of a database. Earlier designs (claims, lenses, derivation graphs, a SQLite
 record pool with a generated markdown view) are gone.
@@ -184,20 +184,20 @@ no separate projection to rebuild — editing a file edits memory.
 
 | Concern | File |
 | --- | --- |
-| Canonical file store / search / records | `apps/server/ntrp/memory/file_store.py` |
-| Record + Kind + SourceRef models | `apps/server/ntrp/memory/models.py` |
-| Page taxonomy / record-list rendering | `apps/server/ntrp/memory/artifacts.py`, `pages.py` |
-| Scope resolution | `apps/server/ntrp/memory/scopes.py` |
-| Background writer + observation ingest | `apps/server/ntrp/memory/curator.py` |
-| Consolidate | `apps/server/ntrp/memory/consolidate.py` |
-| Synthesize (prose zones + cite integrity) | `apps/server/ntrp/memory/synthesize.py` |
-| Retention / TTLs | `apps/server/ntrp/memory/retention.py` |
-| Cross-domain dream | `apps/server/ntrp/memory/dreamer.py` |
-| Resident profile injection | `apps/server/ntrp/memory/profile.py` |
-| Salience scoring | `apps/server/ntrp/memory/scorer.py` |
-| Agent tools (remember/recall/forget + fs) | `apps/server/ntrp/tools/memory.py` |
-| Automation wiring + triggers | `apps/server/ntrp/automation/builtins.py` |
-| Constants (TTLs, thresholds, schedule) | `apps/server/ntrp/constants.py` |
+| Canonical file store / search / records | `apps/server/arden/memory/file_store.py` |
+| Record + Kind + SourceRef models | `apps/server/arden/memory/models.py` |
+| Page taxonomy / record-list rendering | `apps/server/arden/memory/artifacts.py`, `pages.py` |
+| Scope resolution | `apps/server/arden/memory/scopes.py` |
+| Background writer + observation ingest | `apps/server/arden/memory/curator.py` |
+| Consolidate | `apps/server/arden/memory/consolidate.py` |
+| Synthesize (prose zones + cite integrity) | `apps/server/arden/memory/synthesize.py` |
+| Retention / TTLs | `apps/server/arden/memory/retention.py` |
+| Cross-domain dream | `apps/server/arden/memory/dreamer.py` |
+| Resident profile injection | `apps/server/arden/memory/profile.py` |
+| Salience scoring | `apps/server/arden/memory/scorer.py` |
+| Agent tools (remember/recall/forget + fs) | `apps/server/arden/tools/memory.py` |
+| Automation wiring + triggers | `apps/server/arden/automation/builtins.py` |
+| Constants (TTLs, thresholds, schedule) | `apps/server/arden/constants.py` |
 | Recall eval harness | `apps/server/scripts/memory_eval.py` |
 </content>
 </invoke>

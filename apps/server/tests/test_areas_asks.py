@@ -1,13 +1,14 @@
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
-from ntrp.areas.asks import AskStore, nominate_focus
-from ntrp.areas.models import Ask
+from arden.areas.asks import AskStore, nominate_focus
+from arden.areas.models import Ask
 
 
 def ask(id: str, area_key: str, kind: str, created: str = "2026-07-06T10:00:00", source: str = "open_loop") -> Ask:
-    return Ask(id=id, area_key=area_key, text=id, kind=kind, source=source,
-               actions=[], state="active", created_at=created)
+    return Ask(
+        id=id, area_key=area_key, text=id, kind=kind, source=source, actions=[], state="active", created_at=created
+    )
 
 
 def test_store_upsert_resolve_roundtrip(tmp_path: Path):
@@ -31,8 +32,10 @@ def test_snoozed_asks_hidden_until_deadline(tmp_path: Path):
 
 def test_nominate_focus_one_per_area_kind_priority():
     asks = [
-        ask("r", "dex", "notify"), ask("d", "dex", "question"),
-        ask("x", "aside", "review"), ask("y", "health", "notify"),
+        ask("r", "dex", "notify"),
+        ask("d", "dex", "question"),
+        ask("x", "aside", "review"),
+        ask("y", "health", "notify"),
     ]
     focus = nominate_focus(asks, cap=2)
     assert [a.id for a in focus] == ["d", "x"]  # question beats notify; review beats notify; cap 2
@@ -55,9 +58,7 @@ def test_snooze_comparison_handles_aware_and_naive(tmp_path: Path):
     # the actual UTC instant is already in the past. Lexicographic string comparison against
     # now.isoformat() (which is UTC, "+00:00") gets this backwards; real datetime math doesn't.
     now = datetime.now(UTC)
-    past_utc_with_positive_offset = (now - timedelta(hours=1)).astimezone(
-        timezone(timedelta(hours=5))
-    ).isoformat()
+    past_utc_with_positive_offset = (now - timedelta(hours=1)).astimezone(timezone(timedelta(hours=5))).isoformat()
     store.resolve("a1", "snoozed", snoozed_until=past_utc_with_positive_offset)
 
     # naive snooze in the past (treated as UTC) must re-admit too

@@ -178,11 +178,11 @@ Mitigations to budget for:
 
 **NN/g — Glassmorphism.** Empirical: glass fails when text contrast varies across backdrops; recommends more blur (not less) as backgrounds get intricate, plus user control over transparency [9].
 
-**Raycast.** Adopted Liquid Glass in AI Chat post-macOS Tahoe; renders popovers as native windows (not DOM) so they can extend beyond window bounds — relevant if NTRP needs popover work that escapes the Electron BrowserWindow [26].
+**Raycast.** Adopted Liquid Glass in AI Chat post-macOS Tahoe; renders popovers as native windows (not DOM) so they can extend beyond window bounds — relevant if ARDEN needs popover work that escapes the Electron BrowserWindow [26].
 
 ---
 
-## Practical Recipe for NTRP (starting point)
+## Practical Recipe for ARDEN (starting point)
 
 ```css
 /* Light mode */

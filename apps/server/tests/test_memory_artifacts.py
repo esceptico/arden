@@ -8,13 +8,13 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from ntrp.memory.artifacts import (
+from arden.memory.artifacts import (
     ArtifactMemoryStore,
     _redact_changelog,
 )
-from ntrp.memory.ledger import LedgerEntry, LedgerMeta, render_ledger_entry
-from ntrp.memory.models import Kind, SourceRef
-from ntrp.memory.page_events import page_revision
+from arden.memory.ledger import LedgerEntry, LedgerMeta, render_ledger_entry
+from arden.memory.models import Kind, SourceRef
+from arden.memory.page_events import page_revision
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -64,7 +64,6 @@ async def test_changelog_redactor_preserves_meaningful_identifiers():
         "/Users/me",
     ):
         assert sensitive not in content
-
 
 
 async def test_changelog_append_uses_monthly_file_after_missing_final_newline(tmp_path: Path):
@@ -121,13 +120,13 @@ async def test_artifact_root_under_symlinked_parent_is_allowed(tmp_path: Path):
         pytest.skip(f"directory symlinks unavailable: {exc}")
 
     artifacts = ArtifactMemoryStore(alias_parent / "memory")
-    artifacts.append_event("ntrp keeps artifacts under memory")
+    artifacts.append_event("Arden keeps artifacts under memory")
 
     index = artifacts.read_artifact("changelog/index.md").content
     assert "# Changelog" in index
     month = datetime.now(UTC).strftime("%Y-%m")
     monthly = artifacts.read_artifact(f"changelog/{month[:4]}/{month}.md").content
-    assert "ntrp keeps artifacts under memory" in monthly
+    assert "Arden keeps artifacts under memory" in monthly
 
 
 async def test_broken_symlink_nested_artifact_write_fails_safe(tmp_path: Path):
@@ -199,8 +198,7 @@ async def test_record_list_page_renders_active_schema_v2_entries(tmp_path: Path)
         ),
     )
     (root / "raw" / "directives.md").write_text(
-        "<!-- ntrp:records schema=2 page=directives.md -->\n"
-        f"{render_ledger_entry(entry)}\n",
+        f"<!-- arden:records schema=2 page=directives.md -->\n{render_ledger_entry(entry)}\n",
         encoding="utf-8",
     )
 
@@ -213,10 +211,7 @@ async def test_record_list_page_renders_active_schema_v2_entries(tmp_path: Path)
 async def test_artifact_summaries_are_stable_and_revisions_hash_exact_bytes(tmp_path: Path):
     root = tmp_path / "artifacts"
     (root / "research").mkdir(parents=True)
-    explicit = (
-        b"---\r\nsummary: Explicit durable summary\r\n---\r\n"
-        b"# Notes\r\n\r\nFirst prose line.\r\nSearch needle"
-    )
+    explicit = b"---\r\nsummary: Explicit durable summary\r\n---\r\n# Notes\r\n\r\nFirst prose line.\r\nSearch needle"
     fallback = b"# Fallback\r\n\r\nStable first line.\r\nSearch needle"
     (root / "research" / "explicit.md").write_bytes(explicit)
     (root / "research" / "fallback.md").write_bytes(fallback)

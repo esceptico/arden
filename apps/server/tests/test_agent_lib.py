@@ -1,4 +1,4 @@
-"""Standalone tests for the ntrp.agent library. No ntrp imports beyond ntrp.agent.*"""
+"""Standalone tests for the arden.agent library. No arden imports beyond arden.agent.*"""
 
 import asyncio
 import json
@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from ntrp.agent import (
+from arden.agent import (
     Agent,
     AgentHooks,
     Choice,
@@ -41,7 +41,7 @@ from ntrp.agent import (
 )
 
 # ============================================================
-# Test doubles — pure, zero ntrp dependencies
+# Test doubles — pure, zero arden dependencies
 # ============================================================
 
 
@@ -151,8 +151,6 @@ def _make_agent(llm: FakeLLM, executor: FakeExecutor, **kwargs) -> Agent:
 # ============================================================
 
 
-
-
 @pytest.mark.asyncio
 async def test_streamed_tool_input_surfaces_before_tool_execution():
     class StreamingToolLLM:
@@ -164,7 +162,7 @@ async def test_streamed_tool_input_surfaces_before_tool_execution():
             if self.call_count == 1:
                 yield ToolCallStreamDelta(index=0, tool_id="c1", name="test")
                 yield ToolCallStreamDelta(index=0, arguments_delta='{"x"')
-                yield ToolCallStreamDelta(index=0, arguments_delta=':1}')
+                yield ToolCallStreamDelta(index=0, arguments_delta=":1}")
                 yield ToolCallStreamDelta(index=0, tool_id="c1", name="test", done=True)
                 yield _response(tool_calls=[_tc("c1", "test", {"x": 1})])
                 return
@@ -197,7 +195,7 @@ async def test_streamed_tool_input_surfaces_before_tool_execution():
 
     event = await anext(stream)
     assert isinstance(event, ToolInputDelta)
-    assert event.delta == ':1}'
+    assert event.delta == ":1}"
     assert executor.call_log == []
 
     event = await anext(stream)
@@ -665,8 +663,7 @@ async def test_zero_text_non_end_turn_stop_after_tool_work_returns_fallback():
 
     assert result.stop_reason == StopReason.MAX_ITERATIONS
     assert result.text == (
-        "Stopped because max_iterations was reached after tool work. Recent tool results:\n"
-        "- useful result"
+        "Stopped because max_iterations was reached after tool work. Recent tool results:\n- useful result"
     )
 
 
@@ -894,7 +891,9 @@ async def test_max_token_budget_after_tool_work_tries_final_answer_once():
     assert result.stop_reason == StopReason.MAX_TOKEN_BUDGET
     assert llm.call_count == 2
     assert result.text == "final answer from evidence"
-    assert any("Return the final answer now from the tool results" in str(m.get("content")) for m in llm.last_messages or [])
+    assert any(
+        "Return the final answer now from the tool results" in str(m.get("content")) for m in llm.last_messages or []
+    )
 
 
 @pytest.mark.asyncio

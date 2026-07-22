@@ -30,7 +30,7 @@ export function ConnectionTab({
         value={draft.serverUrl}
         onChange={(v) => onUpdate({ serverUrl: v })}
         placeholder="http://localhost:6877"
-        help="The address where your ntrp server is running."
+        help="The address where your Arden server is running."
       />
 
       <Field
@@ -38,7 +38,7 @@ export function ConnectionTab({
         type="password"
         value={draft.apiKey}
         onChange={(v) => onUpdate({ apiKey: v })}
-        placeholder="ntrp_…"
+        placeholder="arden_…"
         help="From your server config. Used as a Bearer token."
       />
 

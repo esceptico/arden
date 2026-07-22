@@ -72,13 +72,13 @@
 
 ## File structure
 
-- `apps/server/ntrp/areas/work_models.py`: Pydantic report operations and typed persisted records.
-- `apps/server/ntrp/areas/work_store.py`: schema, queries, transactions, idempotency, and brief ranking; sole owner of `area_work_*` tables.
-- `apps/server/ntrp/areas/agent.py`: Custodian prompt and the final report schema composition.
-- `apps/server/ntrp/areas/custodian.py`: progress-aware cadence and continuation scheduling.
-- `apps/server/ntrp/server/runtime/automation.py`: inject snapshots and apply completed reports.
-- `apps/server/ntrp/areas/service.py`: synchronous Area detail/overview projection over hydrated work snapshots.
-- `apps/server/ntrp/server/routers/areas.py`: typed user work mutations.
+- `apps/server/arden/areas/work_models.py`: Pydantic report operations and typed persisted records.
+- `apps/server/arden/areas/work_store.py`: schema, queries, transactions, idempotency, and brief ranking; sole owner of `area_work_*` tables.
+- `apps/server/arden/areas/agent.py`: Custodian prompt and the final report schema composition.
+- `apps/server/arden/areas/custodian.py`: progress-aware cadence and continuation scheduling.
+- `apps/server/arden/server/runtime/automation.py`: inject snapshots and apply completed reports.
+- `apps/server/arden/areas/service.py`: synchronous Area detail/overview projection over hydrated work snapshots.
+- `apps/server/arden/server/routers/areas.py`: typed user work mutations.
 - `apps/desktop/src/features/areas/components/AreaWork.tsx`: compact work display and inline editing.
 - `apps/desktop/src/features/home/components/WorkBrief.tsx`: bounded Done/In progress sections.
 
@@ -87,9 +87,9 @@
 ### Task 1: Durable Area work store
 
 **Files:**
-- Create: `apps/server/ntrp/areas/work_models.py`
-- Create: `apps/server/ntrp/areas/work_store.py`
-- Modify: `apps/server/ntrp/server/stores.py`
+- Create: `apps/server/arden/areas/work_models.py`
+- Create: `apps/server/arden/areas/work_store.py`
+- Modify: `apps/server/arden/server/stores.py`
 - Test: `apps/server/tests/test_area_work_store.py`
 - Modify: `docs/superpowers/plans/2026-07-10-outcome-owning-custodians.md`
 
@@ -116,7 +116,7 @@ assert await work.update_outcome("area_b", "submit", title="wrong") is None
 - [x] **Step 2: Run the new store tests and verify red**
 
 Run: `cd apps/server && uv run pytest tests/test_area_work_store.py -q`  
-Expected: collection fails because `ntrp.areas.work_store` does not exist.
+Expected: collection fails because `arden.areas.work_store` does not exist.
 
 - [x] **Step 3: Implement models and store schema**
 
@@ -160,11 +160,11 @@ Commit: `feat(server): add durable area work store`
 ### Task 2: Atomic structured Custodian reports
 
 **Files:**
-- Modify: `apps/server/ntrp/areas/work_models.py`
-- Modify: `apps/server/ntrp/areas/work_store.py`
-- Modify: `apps/server/ntrp/areas/agent.py`
-- Modify: `apps/server/ntrp/automation/output_schemas.py`
-- Modify: `apps/server/ntrp/server/runtime/automation.py`
+- Modify: `apps/server/arden/areas/work_models.py`
+- Modify: `apps/server/arden/areas/work_store.py`
+- Modify: `apps/server/arden/areas/agent.py`
+- Modify: `apps/server/arden/automation/output_schemas.py`
+- Modify: `apps/server/arden/server/runtime/automation.py`
 - Test: `apps/server/tests/test_areas_agent.py`
 - Test: `apps/server/tests/test_area_work_store.py`
 - Test: `apps/server/tests/test_areas_runtime.py`
@@ -230,10 +230,10 @@ Commit: `feat(server): reconcile custodian work reports`
 ### Task 3: Progress-aware execution and responsiveness
 
 **Files:**
-- Modify: `apps/server/ntrp/areas/agent.py`
-- Modify: `apps/server/ntrp/areas/custodian.py`
-- Modify: `apps/server/ntrp/server/app.py`
-- Modify: `apps/server/ntrp/server/runtime/automation.py`
+- Modify: `apps/server/arden/areas/agent.py`
+- Modify: `apps/server/arden/areas/custodian.py`
+- Modify: `apps/server/arden/server/app.py`
+- Modify: `apps/server/arden/server/runtime/automation.py`
 - Test: `apps/server/tests/test_areas_custodian.py`
 - Test: `apps/server/tests/test_areas_runtime.py`
 - Modify: `docs/superpowers/plans/2026-07-10-outcome-owning-custodians.md`
@@ -285,10 +285,10 @@ Commit: `feat(server): let custodians continue useful work`
 ### Task 4: Canonical work projections and typed APIs
 
 **Files:**
-- Modify: `apps/server/ntrp/areas/service.py`
-- Modify: `apps/server/ntrp/server/app.py`
-- Modify: `apps/server/ntrp/server/routers/areas.py`
-- Modify: `apps/server/ntrp/server/schemas.py`
+- Modify: `apps/server/arden/areas/service.py`
+- Modify: `apps/server/arden/server/app.py`
+- Modify: `apps/server/arden/server/routers/areas.py`
+- Modify: `apps/server/arden/server/schemas.py`
 - Test: `apps/server/tests/test_areas_service.py`
 - Test: `apps/server/tests/test_areas_router.py`
 - Modify: `docs/superpowers/plans/2026-07-10-outcome-owning-custodians.md`
@@ -423,7 +423,7 @@ Commit: `feat(desktop): add chief of staff work brief`
 ### Task 7: Migration, full verification, and completion audit
 
 **Files:**
-- Modify: `apps/server/ntrp/areas/work_store.py`
+- Modify: `apps/server/arden/areas/work_store.py`
 - Modify: `docs/superpowers/plans/2026-07-10-outcome-owning-custodians.md`
 - Test: all server and desktop suites
 
@@ -443,7 +443,7 @@ Run: `cd apps/server && uv run pytest tests/test_area_work_store.py tests/test_a
 
 - [x] **Step 3: Run full server gates**
 
-Run: `cd apps/server && uv run pytest -q && uv run ruff check ntrp tests`  
+Run: `cd apps/server && uv run pytest -q && uv run ruff check arden tests`
 Expected: all tests and Ruff pass.
 
 - [x] **Step 4: Run full desktop gates**

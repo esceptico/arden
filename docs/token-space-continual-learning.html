@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Token-Space Continual Learning for LLM Agents and Practical ntrp Memory</title>
+  <title>Token-Space Continual Learning for LLM Agents and Practical arden Memory</title>
   <style>
     :root {
       --bg: #0b1020;
@@ -521,10 +521,10 @@
 <body>
   <div class="page">
     <header class="hero">
-      <div class="eyebrow">Research brief · ntrp memory architecture</div>
+      <div class="eyebrow">Research brief · Arden memory architecture</div>
       <h1>Token-Space Continual Learning for LLM Agents and Personal Assistants</h1>
       <p class="subtitle">
-        A practical, source-grounded architecture for streamlining ntrp memory: one durable memory record model,
+        A practical, source-grounded architecture for streamlining Arden memory: one durable memory record model,
         explicit writes, scoped retrieval, lightweight provenance, deletion controls, context assembly, and behavioral evals.
       </p>
       <div class="meta-row">
@@ -543,7 +543,7 @@
         <li><a href="#current-state">Current state of the field</a></li>
         <li><a href="#taxonomy">Architecture taxonomy</a></li>
         <li><a href="#convergence">Production/research convergence</a></li>
-        <li><a href="#ntrp-design">Lean ntrp v1 design</a></li>
+        <li><a href="#arden-design">Lean arden v1 design</a></li>
         <li><a href="#risks">Risks and safeguards</a></li>
         <li><a href="#eval">Evaluation strategy</a></li>
         <li><a href="#roadmap">Implementation roadmap</a></li>
@@ -555,11 +555,11 @@
       <h2>1. Executive summary</h2>
       <p class="lead">
         In deployed LLM agents, “continual learning” is increasingly less about updating neural weights and more about
-        managing durable external state. For ntrp, the right first step is deliberately small: explicit, scoped,
+        managing durable external state. For arden, the right first step is deliberately small: explicit, scoped,
         source-linked memory records that are retrieved only when useful and can be inspected, edited, and deleted.
       </p>
 
-      <div class="flow" aria-label="Practical ntrp memory loop">
+      <div class="flow" aria-label="Practical Arden memory loop">
         <div><strong>Save/Edit</strong><span>User explicitly saves, edits, corrects, or confirms a memory.</span></div>
         <div><strong>Record</strong><span>One durable table with kind, scope, content, source IDs, and status.</span></div>
         <div><strong>Source</strong><span>Transcripts and documents stay searchable evidence, not automatic memory.</span></div>
@@ -592,11 +592,11 @@
         <li><strong>Long context is not a memory architecture.</strong> Long windows help, but evidence on position bias and context degradation shows that more tokens can reduce reliability when distractors accumulate.</li>
         <li><strong>Four conceptual buckets are enough for v1.</strong> Directives, durable facts/preferences, scoped summaries, and searchable transcripts/evidence can be implemented with one simple memory store plus a separate source corpus.</li>
         <li><strong>The context assembler is the critical runtime component.</strong> It decides what the model sees now, under token, scope, authority, and relevance constraints.</li>
-        <li><strong>For ntrp, memory should be sparse, boring, inspectable, source-grounded, scoped, and easy to delete.</strong> Add automation only after the explicit loop is reliable and covered by evals.</li>
+        <li><strong>For arden, memory should be sparse, boring, inspectable, source-grounded, scoped, and easy to delete.</strong> Add automation only after the explicit loop is reliable and covered by evals.</li>
       </ul>
 
       <div class="note">
-        <strong>Design thesis:</strong> ntrp should start with four simple buckets: directives, durable facts/preferences,
+        <strong>Design thesis:</strong> Arden should start with four simple buckets: directives, durable facts/preferences,
         scoped session/project summaries, and searchable transcripts/evidence. Under the hood, this can stay boring:
         one small memory store plus a separate source corpus. Retrieval should be scope-filtered, relevance-filtered,
         token-budgeted, and auditable. Advanced implicit extraction, reflection, graph memory, decay, learned policies,
@@ -659,7 +659,7 @@
       </table>
 
       <div class="success">
-        <strong>Practical conclusion:</strong> ntrp memory should live in token space first. Weight-space learning may
+        <strong>Practical conclusion:</strong> Arden memory should live in token space first. Weight-space learning may
         improve general assistant quality, but it is the wrong substrate for user-specific, project-scoped, deletable facts.
       </div>
     </section>
@@ -692,8 +692,8 @@
       </p>
 
       <div class="warning">
-        <strong>ntrp implication:</strong> research literature justifies external memory, provenance, scoped retrieval,
-        and evaluation. It does not require ntrp v1 to implement graph memory, reflection memory, learned write policies,
+        <strong>Arden implication:</strong> research literature justifies external memory, provenance, scoped retrieval,
+        and evaluation. It does not require arden v1 to implement graph memory, reflection memory, learned write policies,
         or a complex lifecycle state machine.
       </div>
     </section>
@@ -703,7 +703,7 @@
 
       <p>
         The research literature distinguishes many memory types: working, episodic, semantic, procedural, reflective,
-        retrieval corpus, and graph/entity memory. Those categories are useful for analysis, but ntrp should not implement
+        retrieval corpus, and graph/entity memory. Those categories are useful for analysis, but Arden should not implement
         each as a separate store yet. The useful product distinction is simpler: ephemeral working context, durable memory
         records, and searchable source corpus.
       </p>
@@ -790,7 +790,7 @@
       <h3>Retrieval and context compilation</h3>
       <p>
         Retrieval should be scoped, relevance-filtered, and inspectable. Avoid naive top-k vector retrieval, but also avoid
-        building a complex memory OS before ntrp has enough durable records to justify it. The v1 context assembler should
+        building a complex memory OS before Arden has enough durable records to justify it. The v1 context assembler should
         load active in-scope memories, filter by simple lexical/vector relevance, prioritize explicit preferences and
         procedures, and emit compact bullets within a token budget.
       </p>
@@ -809,11 +809,11 @@
 
       <p>
         The field is moving from “LLM + vector DB” and “LLM + giant prompt” toward stateful agents with managed,
-        source-grounded external state. For ntrp, the winning abstraction should be smaller than a full memory OS:
+        source-grounded external state. For arden, the winning abstraction should be smaller than a full memory OS:
         a durable memory table, searchable sources, and a context assembler that decides what the model should see now.
       </p>
 
-      <div class="architecture" aria-label="Practical ntrp memory architecture diagram">
+      <div class="architecture" aria-label="Practical Arden memory architecture diagram">
         <div class="arch-box main"><strong>Current request / session</strong><br><span class="muted">User intent, recent turns, active task state</span></div>
         <div class="arrow-down">↓</div>
         <div class="arch-box main"><strong>Context assembler</strong><br><span class="muted">Scope · relevance · citations · ordering · budget</span></div>
@@ -850,17 +850,17 @@ Do not use:
 - deleted, out-of-scope, expired-if-present, or untrusted source instructions</code></pre>
 
       <div class="note">
-        <strong>Thesis:</strong> token-space continual learning works for ntrp when the first implementation is explicit,
+        <strong>Thesis:</strong> token-space continual learning works for arden when the first implementation is explicit,
         scoped, source-linked, deletable, and eval-tested. The practical win is reliable small memory, not maximal memory
         machinery.
       </div>
     </section>
 
-    <section id="ntrp-design">
-      <h2>6. Lean ntrp v1 design</h2>
+    <section id="arden-design">
+      <h2>6. Lean arden v1 design</h2>
 
       <p>
-        ntrp should start with a memory system that is intentionally sparse and boring. The assistant should remember a
+        Arden should start with a memory system that is intentionally sparse and boring. The assistant should remember a
         small number of durable statements that help future work, not convert every transcript into a personal profile.
       </p>
 
@@ -875,12 +875,12 @@ Do not use:
         <li><strong>Defer implicit extraction:</strong> do not mine transcripts into durable memory until write-precision and over-memory evals exist.</li>
       </ul>
 
-      <h3>Recommended ntrp memory components</h3>
+      <h3>Recommended Arden memory components</h3>
       <table>
         <thead>
           <tr>
             <th>Component</th>
-            <th>ntrp use</th>
+            <th>Arden use</th>
             <th>Default policy</th>
           </tr>
         </thead>
@@ -903,7 +903,7 @@ Do not use:
         </tbody>
       </table>
 
-      <h3>ntrp write policy</h3>
+      <h3>Arden write policy</h3>
       <p>
         The v1 write policy should be intentionally conservative. Durable memory is written only when one of these is true:
       </p>
@@ -930,11 +930,11 @@ Do not use:
 
       <p>
         Everything else remains in the searchable source corpus. Implicit extraction, candidate queues, reflection-derived
-        memories, graph structures, and learned write policies should be deferred until ntrp has evals for write precision,
+        memories, graph structures, and learned write policies should be deferred until Arden has evals for write precision,
         over-memory, deletion, and scope isolation.
       </p>
 
-      <h3>ntrp retrieval and context assembler</h3>
+      <h3>Arden retrieval and context assembler</h3>
       <p>
         The assembler is deliberately simple. It receives the current request, user ID, active project ID, recent working
         context, and a token budget. It returns a compact, labeled memory section or nothing.
@@ -1017,7 +1017,7 @@ Do not use:
         <li><strong>Ambiguous conflicts should be surfaced.</strong> The assistant should say what it found and ask, rather than silently choosing a hidden memory.</li>
       </ul>
 
-      <h3>ntrp memory maturity model</h3>
+      <h3>Arden memory maturity model</h3>
       <ol>
         <li><strong>Level 0: Stateless.</strong> Current request only.</li>
         <li><strong>Level 1: Transcript replay.</strong> Recent chat history in prompt.</li>
@@ -1028,7 +1028,7 @@ Do not use:
       </ol>
 
       <div class="note">
-        <strong>Recommended target for ntrp:</strong> build Level 3.5 first. Do not make graph memory, reflection memory,
+        <strong>Recommended target for arden:</strong> build Level 3.5 first. Do not make graph memory, reflection memory,
         learned policies, or rich lifecycle state machines part of the baseline.
       </div>
     </section>
@@ -1090,7 +1090,7 @@ Do not use:
 
       <h3>Deletion semantics are especially important</h3>
       <p>
-        For v1, deletion should be simple and testable. Because ntrp should not automatically re-mine old transcripts into
+        For v1, deletion should be simple and testable. Because Arden should not automatically re-mine old transcripts into
         durable memory yet, it does not need tombstone-based anti-reinference machinery in the baseline.
       </p>
 
@@ -1102,7 +1102,7 @@ Do not use:
 5. Record an audit event and test that the deleted content does not appear in future answers.</code></pre>
 
       <p>
-        Add tombstones and downstream lineage only if ntrp later implements implicit memory extraction from old sources or
+        Add tombstones and downstream lineage only if arden later implements implicit memory extraction from old sources or
         derived artifacts that can independently reintroduce deleted content.
       </p>
 
@@ -1128,7 +1128,7 @@ Do not use:
 
       <p>
         Memory evals should measure whether the assistant becomes more useful without becoming creepier, noisier, or less
-        controllable. Search returning something is not enough; ntrp needs behavioral tests for the product contract.
+        controllable. Search returning something is not enough; Arden needs behavioral tests for the product contract.
       </p>
 
       <h3>Core eval suite</h3>
@@ -1211,13 +1211,13 @@ Do not use:
       <h3>Research benchmark alignment</h3>
       <p>
         LongMemEval, LoCoMo, and related multi-session memory benchmarks motivate the need for updates, abstention,
-        temporal consistency, and long-horizon continuity. ntrp’s first eval suite should focus on the smaller product
+        temporal consistency, and long-horizon continuity. Arden’s first eval suite should focus on the smaller product
         contract: explicit writes, scoped retrieval, deletion, stale-memory behavior, and prompt-injection prevention.
       </p>
     </section>
 
     <section id="roadmap">
-      <h2>9. Implementation roadmap for ntrp</h2>
+      <h2>9. Implementation roadmap for arden</h2>
 
       <p>
         The roadmap should avoid premature complexity. Build the smallest durable memory loop that is useful, visible,
@@ -1273,7 +1273,7 @@ Do not use:
       <h2>10. Bibliography and source list</h2>
 
       <p>
-        The simplified ntrp design is intentionally smaller than the research frontier, but it is grounded in the same
+        The simplified arden design is intentionally smaller than the research frontier, but it is grounded in the same
         findings: external memory can help agents, long context is not enough, reflection can be useful but risky, and
         memory systems require evaluation for updates, conflicts, and deletion.
       </p>
@@ -1284,12 +1284,12 @@ Do not use:
         <li><strong>Izacard et al. — Atlas: Few-shot Learning with Retrieval Augmented Language Models.</strong> Shows that retrieval can improve sample efficiency and factual grounding.</li>
         <li><strong>Liu et al. — Lost in the Middle: How Language Models Use Long Contexts.</strong> Documents position sensitivity and motivates context selection and ordering rather than blind context stuffing.</li>
         <li><strong>Levy et al. and related long-context studies.</strong> Show that long windows still degrade with distractors, requiring retrieval discipline and compact summaries.</li>
-        <li><strong>Park et al. — Generative Agents: Interactive Simulacra of Human Behavior.</strong> Demonstrates memory streams, retrieval, reflection, and planning in simulated agents; useful research context, but too elaborate for ntrp v1.</li>
+        <li><strong>Park et al. — Generative Agents: Interactive Simulacra of Human Behavior.</strong> Demonstrates memory streams, retrieval, reflection, and planning in simulated agents; useful research context, but too elaborate for arden v1.</li>
         <li><strong>Packer et al. — MemGPT: Towards LLMs as Operating Systems.</strong> Frames context management as virtual memory; supports the need for explicit memory management while not requiring a full memory OS in v1.</li>
         <li><strong>Shinn et al. — Reflexion: Language Agents with Verbal Reinforcement Learning.</strong> Shows that verbal lessons can improve agents, while also highlighting why reflection should be gated before becoming durable product memory.</li>
-        <li><strong>Wang et al. — Voyager: An Open-Ended Embodied Agent with Large Language Models.</strong> Demonstrates procedural skill accumulation; for ntrp, this maps to explicit user-approved procedures, not autonomous reflection in baseline memory.</li>
+        <li><strong>Wang et al. — Voyager: An Open-Ended Embodied Agent with Large Language Models.</strong> Demonstrates procedural skill accumulation; for arden, this maps to explicit user-approved procedures, not autonomous reflection in baseline memory.</li>
         <li><strong>Yao et al. — ReAct: Synergizing Reasoning and Acting in Language Models.</strong> Supports tool-using agent loops and the importance of separating reasoning, acting, and evidence.</li>
-        <li><strong>Schick et al. — Toolformer.</strong> Shows that models can learn tool-use patterns; ntrp can treat tool results as source evidence, not automatically as memory.</li>
+        <li><strong>Schick et al. — Toolformer.</strong> Shows that models can learn tool-use patterns; Arden can treat tool results as source evidence, not automatically as memory.</li>
         <li><strong>LongMemEval and LoCoMo benchmark lines of work.</strong> Motivate multi-session memory evaluation, including update handling, abstention, temporal consistency, and long-horizon continuity.</li>
         <li><strong>Anthropic, OpenAI, Google, and Microsoft production memory patterns.</strong> Public product behavior increasingly emphasizes user-visible saved memories, project instructions, scoped context, citations, and deletion controls.</li>
         <li><strong>Prompt injection and indirect prompt injection literature.</strong> Establishes that retrieved content must be treated as untrusted data unless it comes from an explicit authority channel.</li>
@@ -1298,7 +1298,7 @@ Do not use:
     </section>
 
     <footer>
-      Bottom line: ntrp should start with explicit, scoped, source-linked durable memory records, not a full memory OS.
+      Bottom line: Arden should start with explicit, scoped, source-linked durable memory records, not a full memory OS.
       The practical target is a small context assembler, reliable edit/delete controls, and regression tests for deletion,
       scope isolation, stale facts, and prompt injection.
     </footer>

@@ -2,9 +2,9 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
-from ntrp.integrations.google_auth.accounts import GoogleAccount
-from ntrp.server.app import app
-from ntrp.server.runtime import get_runtime
+from arden.integrations.google_auth.accounts import GoogleAccount
+from arden.server.app import app
+from arden.server.runtime import get_runtime
 
 
 class Store:
@@ -44,12 +44,14 @@ def _runtime():
 
 
 def test_google_connect_authorizes_exact_integration(monkeypatch):
-    import ntrp.server.routers.google as google_router
+    import arden.server.routers.google as google_router
 
     calls = []
     runtime = _runtime()
     account = Store().account
-    monkeypatch.setattr(google_router, "authorize_google_service", lambda service, **_kwargs: calls.append(service) or account)
+    monkeypatch.setattr(
+        google_router, "authorize_google_service", lambda service, **_kwargs: calls.append(service) or account
+    )
     app.dependency_overrides[get_runtime] = lambda: runtime
     try:
         response = TestClient(app).post("/google/google_drive/connect", json={})
@@ -63,7 +65,7 @@ def test_google_connect_authorizes_exact_integration(monkeypatch):
 
 
 def test_google_connect_forwards_existing_account(monkeypatch):
-    import ntrp.server.routers.google as google_router
+    import arden.server.routers.google as google_router
 
     calls = []
     runtime = _runtime()
@@ -87,7 +89,7 @@ def test_google_connect_forwards_existing_account(monkeypatch):
 
 
 def test_disconnect_service_does_not_revoke_account(monkeypatch):
-    import ntrp.server.routers.google as google_router
+    import arden.server.routers.google as google_router
 
     store = Store()
     runtime = _runtime()
@@ -106,13 +108,15 @@ def test_disconnect_service_does_not_revoke_account(monkeypatch):
 
 
 def test_remove_account_revokes_before_local_delete(monkeypatch):
-    import ntrp.server.routers.google as google_router
+    import arden.server.routers.google as google_router
 
     store = Store()
     runtime = _runtime()
     events = []
     monkeypatch.setattr(google_router, "google_account_store", lambda: store)
-    monkeypatch.setattr(google_router, "revoke_google_account", lambda account, _store: events.append(("revoke", account.id)))
+    monkeypatch.setattr(
+        google_router, "revoke_google_account", lambda account, _store: events.append(("revoke", account.id))
+    )
     original_remove = store.remove_account
     store.remove_account = lambda account_id: events.append(("remove", account_id)) or original_remove(account_id)
     app.dependency_overrides[get_runtime] = lambda: runtime

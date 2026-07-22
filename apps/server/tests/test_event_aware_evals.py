@@ -72,4 +72,9 @@ async def test_run_event_case_executes_case_against_runtime_case():
 def test_event_eval_result_serializes_summary():
     result = EventEvalResult(name="basic_chat", passed=True, events=[{"type": "RUN_FINISHED"}])
 
-    assert result.to_dict() == {"name": "basic_chat", "passed": True, "events": [{"type": "RUN_FINISHED"}], "error": None}
+    assert result.to_dict() == {
+        "name": "basic_chat",
+        "passed": True,
+        "events": [{"type": "RUN_FINISHED"}],
+        "error": None,
+    }

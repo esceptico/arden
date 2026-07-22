@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from ntrp.server.state import RunRegistry, RunState, RunStatus
+from arden.server.state import RunRegistry, RunState, RunStatus
 
 
 def test_run_registry_restores_explicit_run_id():
@@ -17,8 +17,8 @@ def test_run_registry_restores_explicit_run_id():
 
 @pytest.mark.asyncio
 async def test_cancel_endpoint_resolves_active_run_by_session():
-    from ntrp.server.routers.chat import cancel_run as cancel_run_endpoint
-    from ntrp.server.schemas import CancelRequest
+    from arden.server.routers.chat import cancel_run as cancel_run_endpoint
+    from arden.server.schemas import CancelRequest
 
     registry = RunRegistry()
     run = registry.create_run("sess-x")
@@ -35,8 +35,8 @@ async def test_cancel_endpoint_resolves_active_run_by_session():
 async def test_cancel_endpoint_404_when_no_active_run_for_session():
     from fastapi import HTTPException
 
-    from ntrp.server.routers.chat import cancel_run as cancel_run_endpoint
-    from ntrp.server.schemas import CancelRequest
+    from arden.server.routers.chat import cancel_run as cancel_run_endpoint
+    from arden.server.schemas import CancelRequest
 
     registry = RunRegistry()
     with pytest.raises(HTTPException) as exc:
@@ -311,7 +311,7 @@ def test_lookup_otid_returns_run_when_registered():
 
 
 def test_lookup_otid_expires_after_ttl():
-    from ntrp.server.state import OTID_DEDUP_TTL
+    from arden.server.state import OTID_DEDUP_TTL
 
     registry = RunRegistry()
     run = registry.create_run("sess-1")

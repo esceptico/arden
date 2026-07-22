@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ntrp.agent import (
+from arden.agent import (
     ReasoningContentDelta,
     ReasoningDelta,
     Result,
@@ -16,13 +16,13 @@ from ntrp.agent import (
     TextStarted,
     Usage,
 )
-from ntrp.agent.types.events import ToolCompleted
-from ntrp.agent.types.tools import ToolEffect, ToolOutcome, ToolOutcomeStatus, ToolSourceRef
-from ntrp.context.models import SessionData, SessionState
-from ntrp.core import spawner as spawner_module
-from ntrp.core.spawner import create_spawn_fn
-from ntrp.core.usage_tracker import UsageTracker
-from ntrp.events.sse import (
+from arden.agent.types.events import ToolCompleted
+from arden.agent.types.tools import ToolEffect, ToolOutcome, ToolOutcomeStatus, ToolSourceRef
+from arden.context.models import SessionData, SessionState
+from arden.core import spawner as spawner_module
+from arden.core.spawner import create_spawn_fn
+from arden.core.usage_tracker import UsageTracker
+from arden.events.sse import (
     ApprovalNeededEvent,
     AutomationProgressEvent,
     CompactionFinishedEvent,
@@ -43,19 +43,19 @@ from ntrp.events.sse import (
     ToolCallStartEvent,
     agent_events_to_sse,
 )
-from ntrp.server.bus import RECENT_BUFFER_MAX, BusRegistry, SessionBus
-from ntrp.server.routers.automation import _automation_event_stream
-from ntrp.server.routers.chat import _event_stream, _keepalive
-from ntrp.server.state import RunRegistry, RunState, RunStatus
-from ntrp.server.stream import run_agent_loop
-from ntrp.services.chat import (
+from arden.server.bus import RECENT_BUFFER_MAX, BusRegistry, SessionBus
+from arden.server.routers.automation import _automation_event_stream
+from arden.server.routers.chat import _event_stream, _keepalive
+from arden.server.state import RunRegistry, RunState, RunStatus
+from arden.server.stream import run_agent_loop
+from arden.services.chat import (
     ChatContext,
     _checkpoint_tool_step,
     _drain_backgrounded,
     _recover_durable_tool_calls,
     run_chat,
 )
-from ntrp.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext
+from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext
 from tests.helpers import make_executor, make_text_response
 
 
@@ -78,7 +78,12 @@ async def test_recovery_reuses_terminal_calls_blocks_ambiguous_calls_and_leaves_
         async def list_tool_calls(self, *, run_id):
             assert run_id == "run-1"
             return [
-                {"tool_call_id": "c1", "status": "success", "result_preview": "done", "outcome": {"status": "succeeded"}},
+                {
+                    "tool_call_id": "c1",
+                    "status": "success",
+                    "result_preview": "done",
+                    "outcome": {"status": "succeeded"},
+                },
                 {"tool_call_id": "c2", "status": "running", "result_preview": None, "outcome": None},
                 {"tool_call_id": "c3", "status": "created", "result_preview": None, "outcome": None},
                 {"tool_call_id": "c4", "status": "awaiting", "result_preview": None, "outcome": None},
@@ -119,9 +124,7 @@ async def test_tool_step_checkpoint_saves_assistant_turn_before_call_intents():
         {
             "role": "assistant",
             "content": "",
-            "tool_calls": [
-                {"id": "c1", "type": "function", "function": {"name": "write", "arguments": '{"x":1}'}}
-            ],
+            "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "write", "arguments": '{"x":1}'}}],
         },
     ]
     executor = SimpleNamespace(
@@ -476,9 +479,9 @@ async def test_full_subagent_tool_calls_stay_on_child_bus(monkeypatch):
     child session bus; the parent trace gets lifecycle events only (the parent
     renders FULL agents as drill-in leaves). To watch a FULL agent's tool calls
     live you open its session — they are never forwarded to the parent trace."""
-    from ntrp.tools.core import ToolResult, tool
-    from ntrp.tools.core.context import ChildSession
-    from ntrp.tools.core.types import ToolAction, ToolPolicy, ToolScope
+    from arden.tools.core import ToolResult, tool
+    from arden.tools.core.context import ChildSession
+    from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
     from tests.helpers import make_tool_response
 
     class FakeLLM:
@@ -567,8 +570,8 @@ async def test_child_io_factory_frames_full_run_lifecycle_on_child_bus():
     content.) finish() is idempotent, so the terminal frame fires exactly once."""
     from unittest.mock import AsyncMock
 
-    from ntrp.services.chat import make_child_io_factory
-    from ntrp.tools.core.context import ChildIOParams
+    from arden.services.chat import make_child_io_factory
+    from arden.tools.core.context import ChildIOParams
 
     buses = BusRegistry()
     factory = make_child_io_factory(
@@ -600,8 +603,8 @@ async def test_child_io_factory_emits_run_cancelled_on_cancel():
     not RunFinished — so the desktop reads it as cancelled, not completed."""
     from unittest.mock import AsyncMock
 
-    from ntrp.services.chat import make_child_io_factory
-    from ntrp.tools.core.context import ChildIOParams
+    from arden.services.chat import make_child_io_factory
+    from arden.tools.core.context import ChildIOParams
 
     buses = BusRegistry()
     factory = make_child_io_factory(
@@ -624,8 +627,8 @@ async def test_child_io_factory_aclose_keeps_bus_while_run_active():
     `is_active=lambda: False` raced that window and reset the bus seq."""
     from unittest.mock import AsyncMock
 
-    from ntrp.services.chat import make_child_io_factory
-    from ntrp.tools.core.context import ChildIOParams
+    from arden.services.chat import make_child_io_factory
+    from arden.tools.core.context import ChildIOParams
 
     active = {"on": True}
     buses = BusRegistry()
@@ -972,7 +975,7 @@ async def test_automation_event_stream_replays_after_seq():
 
 @pytest.mark.asyncio
 async def test_automation_event_stream_without_cursor_does_not_replay_old_events(monkeypatch):
-    monkeypatch.setattr("ntrp.server.routers.automation.KEEPALIVE_INTERVAL", 0)
+    monkeypatch.setattr("arden.server.routers.automation.KEEPALIVE_INTERVAL", 0)
     buses = BusRegistry()
     bus = buses.get_or_create("automation:events")
     await bus.emit(AutomationProgressEvent(task_id="loop-a", status="old"))
@@ -1226,7 +1229,7 @@ async def test_run_agent_loop_collects_current_tool_sources_before_background_ha
 
 @pytest.mark.asyncio
 async def test_run_chat_keeps_backgrounded_run_active_until_drain_finishes(monkeypatch):
-    from ntrp.services import chat as chat_service
+    from arden.services import chat as chat_service
 
     registry = RunRegistry()
     run = registry.create_run("sess-bg")
@@ -1431,7 +1434,7 @@ async def test_run_chat_emits_cancelled_when_task_cancelled_before_agent_loop():
 
 @pytest.mark.asyncio
 async def test_run_chat_persists_budget_stop_reason(monkeypatch):
-    from ntrp.services import chat as chat_service
+    from arden.services import chat as chat_service
 
     registry = RunRegistry()
     run = registry.create_run("sess-1")
@@ -1486,7 +1489,7 @@ async def test_run_chat_persists_budget_stop_reason(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_run_chat_records_durable_message_count_for_trimmed_loop(monkeypatch):
-    from ntrp.services import chat as chat_service
+    from arden.services import chat as chat_service
 
     registry = RunRegistry()
     run = registry.create_run("sess-1")
@@ -1547,7 +1550,7 @@ async def test_run_chat_records_durable_message_count_for_trimmed_loop(monkeypat
 
 @pytest.mark.asyncio
 async def test_run_chat_final_save_failure_emits_error_not_finished(monkeypatch):
-    from ntrp.services import chat as chat_service
+    from arden.services import chat as chat_service
 
     registry = RunRegistry()
     run = registry.create_run("sess-1")
@@ -1620,7 +1623,7 @@ async def test_run_chat_final_save_failure_emits_error_not_finished(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_run_chat_completed_outbox_failure_does_not_reclassify_run(monkeypatch):
-    from ntrp.services import chat as chat_service
+    from arden.services import chat as chat_service
 
     registry = RunRegistry()
     run = registry.create_run("sess-1")
@@ -1696,7 +1699,7 @@ async def test_run_chat_completed_outbox_failure_does_not_reclassify_run(monkeyp
 
 @pytest.mark.asyncio
 async def test_run_chat_completed_bus_failure_does_not_reclassify_run(monkeypatch):
-    from ntrp.services import chat as chat_service
+    from arden.services import chat as chat_service
 
     registry = RunRegistry()
     run = registry.create_run("sess-1")
@@ -1772,7 +1775,7 @@ async def test_run_chat_completed_bus_failure_does_not_reclassify_run(monkeypatc
 
 @pytest.mark.asyncio
 async def test_run_chat_emits_live_token_usage_after_model_response(monkeypatch):
-    from ntrp.services import chat as chat_service
+    from arden.services import chat as chat_service
 
     registry = RunRegistry()
     run = registry.create_run("sess-1")
@@ -1848,7 +1851,7 @@ async def test_run_chat_emits_live_token_usage_after_model_response(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_active_goal_dispatches_hidden_continuation_after_user_turn(monkeypatch):
-    from ntrp.services import chat as chat_service
+    from arden.services import chat as chat_service
 
     registry = RunRegistry()
     run = registry.create_run("sess-1")
@@ -1922,7 +1925,7 @@ async def test_active_goal_dispatches_hidden_continuation_after_user_turn(monkey
 
 @pytest.mark.asyncio
 async def test_goal_meta_run_dispatches_followup_even_without_tool_activity(monkeypatch):
-    from ntrp.services import chat as chat_service
+    from arden.services import chat as chat_service
 
     registry = RunRegistry()
     run = registry.create_run("sess-1")
@@ -2003,7 +2006,7 @@ async def test_goal_meta_run_dispatches_followup_even_without_tool_activity(monk
 
 @pytest.mark.asyncio
 async def test_run_chat_does_not_overwrite_error_status(monkeypatch):
-    from ntrp.services import chat as chat_service
+    from arden.services import chat as chat_service
 
     registry = RunRegistry()
     run = registry.create_run("sess-1")
@@ -2047,7 +2050,7 @@ async def test_run_chat_does_not_overwrite_error_status(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_run_chat_surfaces_context_length_provider_error(monkeypatch):
-    from ntrp.services import chat as chat_service
+    from arden.services import chat as chat_service
 
     registry = RunRegistry()
     run = registry.create_run("sess-1")
@@ -2131,7 +2134,7 @@ async def test_run_chat_surfaces_context_length_provider_error(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_run_chat_final_save_failure_preserves_provider_error(monkeypatch):
-    from ntrp.services import chat as chat_service
+    from arden.services import chat as chat_service
 
     registry = RunRegistry()
     run = registry.create_run("sess-1")
@@ -2208,7 +2211,7 @@ async def test_run_chat_final_save_failure_preserves_provider_error(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_run_chat_provider_error_status_write_failure_is_not_silently_completed(monkeypatch):
-    from ntrp.services import chat as chat_service
+    from arden.services import chat as chat_service
 
     registry = RunRegistry()
     run = registry.create_run("sess-1")
@@ -2268,7 +2271,7 @@ async def test_run_chat_provider_error_status_write_failure_is_not_silently_comp
 
 
 def test_safe_error_classifies_context_window_exception_class():
-    from ntrp.services import chat as chat_service
+    from arden.services import chat as chat_service
 
     class ContextWindowExceededError(Exception):
         pass
@@ -2282,7 +2285,7 @@ def test_safe_error_classifies_context_window_exception_class():
 
 @pytest.mark.asyncio
 async def test_run_chat_compacts_and_retries_context_length_provider_error(monkeypatch):
-    from ntrp.services import chat as chat_service
+    from arden.services import chat as chat_service
 
     registry = RunRegistry()
     run = registry.create_run("sess-1")
@@ -2397,7 +2400,7 @@ async def test_run_chat_compacts_and_retries_context_length_provider_error(monke
 
 @pytest.mark.asyncio
 async def test_context_retry_compacts_loop_prefix_into_persisted_summary(monkeypatch):
-    from ntrp.services import chat as chat_service
+    from arden.services import chat as chat_service
 
     registry = RunRegistry()
     run = registry.create_run("sess-1")
@@ -2588,7 +2591,7 @@ async def test_cancelled_run_finally_does_not_clear_newer_replay_events():
 
 @pytest.mark.asyncio
 async def test_background_result_after_cancel_is_ignored_for_cancelled_run(monkeypatch):
-    from ntrp.services import chat as chat_service
+    from arden.services import chat as chat_service
 
     registry = RunRegistry()
     run = registry.create_run("sess-1")
@@ -2812,9 +2815,7 @@ async def test_backgrounded_completion_is_not_acknowledged_when_direct_save_fail
 
     assert registry.on_result is not None
     with pytest.raises(RuntimeError, match="disk unavailable"):
-        await registry.on_result(
-            [{"role": "user", "content": "done", "client_id": "bg:bg-1:completed"}]
-        )
+        await registry.on_result([{"role": "user", "content": "done", "client_id": "bg:bg-1:completed"}])
 
 
 @pytest.mark.asyncio
@@ -2993,7 +2994,7 @@ async def test_run_agent_loop_retries_text_end_when_emit_is_cancelled():
 
 @pytest.mark.asyncio
 async def test_automation_event_stream_uses_typed_keepalive(monkeypatch):
-    monkeypatch.setattr("ntrp.server.routers.automation.KEEPALIVE_INTERVAL", 0)
+    monkeypatch.setattr("arden.server.routers.automation.KEEPALIVE_INTERVAL", 0)
     buses = BusRegistry()
     stream = _automation_event_stream(buses)
     try:
@@ -3009,7 +3010,7 @@ async def test_automation_event_stream_uses_typed_keepalive(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_automation_event_stream_resumes_after_durable_cursor(monkeypatch):
-    monkeypatch.setattr("ntrp.server.routers.automation.KEEPALIVE_INTERVAL", 0)
+    monkeypatch.setattr("arden.server.routers.automation.KEEPALIVE_INTERVAL", 0)
 
     class EventStore:
         async def get_latest_session_event_seq(self, session_id):
@@ -3041,8 +3042,8 @@ def test_foreground_child_suppression_drops_nested_text_keeps_tool_args():
     token text — the firehose, already dropped client-side via !event.depth —
     while keeping its tool-call args, which feed the nested row's label and are
     emitted atomically (never part of the volume problem)."""
-    from ntrp.agent import TextDelta, TextEnded, TextStarted, ToolStarted
-    from ntrp.core.spawner import _SUPPRESSED_NESTED_SSE
+    from arden.agent import TextDelta, TextEnded, TextStarted, ToolStarted
+    from arden.core.spawner import _SUPPRESSED_NESTED_SSE
 
     def forwarded(event) -> tuple[str, ...]:
         return tuple(type(e).__name__ for e in agent_events_to_sse(event) if not isinstance(e, _SUPPRESSED_NESTED_SSE))
@@ -3065,7 +3066,7 @@ async def test_durable_replay_serves_sparse_ledger_without_reset():
     durable replay. The old contiguity check treated every hole as a gap and
     returned None → a bogus replay_gap reset → reload loop. With a sparse store
     and an empty buffer, the stream must REPLAY the persisted rows, not reset."""
-    from ntrp.server.bus import StreamRecord
+    from arden.server.bus import StreamRecord
 
     buses = BusRegistry()
 

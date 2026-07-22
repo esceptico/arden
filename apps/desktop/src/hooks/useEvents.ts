@@ -43,7 +43,7 @@ function headersFor(config: AppConfig): HeadersInit {
   return config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {};
 }
 
-type DesktopEventsBridge = NonNullable<NonNullable<Window["ntrpDesktop"]>["events"]>;
+type DesktopEventsBridge = NonNullable<NonNullable<Window["ardenDesktop"]>["events"]>;
 
 type DesktopEventPayload = {
   connectionId: string;
@@ -272,7 +272,7 @@ export function useEvents(sessionId: string | null) {
       document.removeEventListener("visibilitychange", onVisibility);
     };
 
-    const desktopEvents = window.ntrpDesktop?.events;
+    const desktopEvents = window.ardenDesktop?.events;
     if (desktopEvents) {
       const controller = new AbortController();
       void runDesktopEventStreamLoop({

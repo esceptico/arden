@@ -11,7 +11,7 @@ const viteCompatible =
 
 if (!viteCompatible) {
   console.error(
-    `ntrp desktop requires Node ^20.19.0 or >=22.12.0 for Vite 7. Current: ${major}.${minor}.${patch}`,
+    `Arden desktop requires Node ^20.19.0 or >=22.12.0 for Vite 7. Current: ${major}.${minor}.${patch}`,
   );
   console.error("Use a Node version manager from apps/desktop/.node-version, or run with `npx -y node@22.12.0 ...`.");
   process.exit(1);

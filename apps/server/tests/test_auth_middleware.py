@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 
-from ntrp.server.app import app
-from ntrp.settings import hash_api_key
+from arden.server.app import app
+from arden.settings import hash_api_key
 
 
 class _Config:

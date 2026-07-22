@@ -9,25 +9,25 @@
 ## Install
 
 ```bash
-uv tool install ntrp    # or: pip install ntrp
+uv tool install arden    # or: pip install arden
 ```
 
 ## Quick Start
 
-Create `~/.ntrp/.env` or repo-root `.env` with at least one LLM provider key and the model variables, or connect OpenAI Codex with browser sign-in from the desktop app. See [.env.example](../../.env.example) for all options.
+Create `~/.arden/.env` or repo-root `.env` with at least one LLM provider key and the model variables, or connect OpenAI Codex with browser sign-in from the desktop app. See [.env.example](../../.env.example) for all options.
 
 ```bash
-mkdir -p ~/.ntrp
+mkdir -p ~/.arden
 cp .env.example .env   # if developing from source
-# or create ~/.ntrp/.env manually with your keys
+# or create ~/.arden/.env manually with your keys
 ```
 
 ```bash
-ntrp-server serve   # starts backend, prints a one-time API key
+arden-server serve   # starts backend, prints a one-time API key
 cd apps/desktop && bun run dev  # desktop client (separate terminal) – paste the key on first launch
 ```
 
-Config priority: environment variables > CWD `.env` > `~/.ntrp/.env` > defaults.
+Config priority: environment variables > CWD `.env` > `~/.arden/.env` > defaults.
 
 ## OpenAI Account Sign-In
 
@@ -36,7 +36,7 @@ OpenAI can be used in two ways:
 - `OPENAI_API_KEY` for normal platform API billing and embeddings.
 - OpenAI Codex browser sign-in for account/subscription-backed models.
 
-Choose **OpenAI Codex** in provider onboarding, `/connect`, or `/settings`. ntrp starts a local callback server on `localhost:1455`, opens the OpenAI authorization page, and stores refreshable tokens in `~/.ntrp/openai-codex-auth.json`.
+Choose **OpenAI Codex** in provider onboarding, `/connect`, or `/settings`. arden starts a local callback server on `localhost:1455`, opens the OpenAI authorization page, and stores refreshable tokens in `~/.arden/openai-codex-auth.json`.
 
 Default Codex models:
 
@@ -45,11 +45,11 @@ chat   openai-codex/gpt-5.5
 memory openai-codex/gpt-5.4-mini
 ```
 
-For GPT reasoning models with tools, ntrp uses the Responses API request shape internally. This avoids the `reasoning_effort` + function tools limitation in Chat Completions.
+For GPT reasoning models with tools, Arden uses the Responses API request shape internally. This avoids the `reasoning_effort` + function tools limitation in Chat Completions.
 
 ## Custom Models
 
-You can use any OpenAI-compatible model (OpenRouter, Ollama, vLLM, LM Studio, etc.) by defining it in `~/.ntrp/models.json`:
+You can use any OpenAI-compatible model (OpenRouter, Ollama, vLLM, LM Studio, etc.) by defining it in `~/.arden/models.json`:
 
 ```json
 {
@@ -76,7 +76,7 @@ Each model needs:
 Then use the model ID in your `.env`:
 
 ```
-NTRP_CHAT_MODEL=deepseek/deepseek-r1
+ARDEN_CHAT_MODEL=deepseek/deepseek-r1
 ```
 
 Custom models appear in the settings UI alongside built-in models.
@@ -103,17 +103,17 @@ Manual path:
 4. Configure **APIs & Services → OAuth consent screen**.
    - Add yourself as a test user while the app is in Testing.
 5. Create **OAuth client ID → Desktop app** credentials.
-6. Save/import the JSON as `~/.ntrp/gmail_credentials.json`.
+6. Save/import the JSON as `~/.arden/gmail_credentials.json`.
 7. Enable in `.env` as needed:
 
 ```
-NTRP_GMAIL=true
-NTRP_CALENDAR=true
+ARDEN_GMAIL=true
+ARDEN_CALENDAR=true
 ```
 
-Account add still uses Google's local browser OAuth flow. Tokens are saved under `~/.ntrp/` as `gmail_token_<email>.json` or `calendar_token*.json` and refresh automatically.
+Account add still uses Google's local browser OAuth flow. Tokens are saved under `~/.arden/` as `gmail_token_<email>.json` or `calendar_token*.json` and refresh automatically.
 
-Google note: ntrp intentionally uses BYO OAuth credentials for now. Gmail read/send scopes are restricted Google scopes, so a shared public Google OAuth app would require Google's verification/security-assessment process.
+Google note: arden intentionally uses BYO OAuth credentials for now. Gmail read/send scopes are restricted Google scopes, so a shared public Google OAuth app would require Google's verification/security-assessment process.
 
 ## Telegram Notifications
 
@@ -159,8 +159,8 @@ Control the provider with `WEB_SEARCH` (`auto` | `exa` | `ddgs` | `none`). Defau
 Reads local browser history for context. macOS only.
 
 ```
-NTRP_BROWSER=chrome    # or: safari, arc
-NTRP_BROWSER_DAYS=30   # how far back to look
+ARDEN_BROWSER=chrome    # or: safari, arc
+ARDEN_BROWSER_DAYS=30   # how far back to look
 ```
 
 ## Context Compaction
@@ -179,7 +179,7 @@ Compaction triggers when either the message count exceeds `max_messages` or actu
 
 ## Deferred Tools
 
-`NTRP_DEFERRED_TOOLS=true` by default. Deferred loading keeps infrequent tool schemas out of the prompt until needed. The model always sees `load_tools`; Gmail, calendar, Slack, automation, background task, notification, directive, and MCP tools are loaded by group on demand.
+`ARDEN_DEFERRED_TOOLS=true` by default. Deferred loading keeps infrequent tool schemas out of the prompt until needed. The model always sees `load_tools`; Gmail, calendar, Slack, automation, background task, notification, directive, and MCP tools are loaded by group on demand.
 
 Compaction unloads deferred tools so a long session does not keep carrying stale schemas forever. The sidebar context box shows visible/total tools plus loaded/deferred counts for the active run.
 
@@ -192,9 +192,9 @@ docker compose up -d
 
 The Compose file stays at the repo root because it owns root `.env` interpolation and service orchestration. The backend image definition lives at `apps/server/Dockerfile`.
 
-Data (sessions, memory, search index) is persisted in the `ntrp-data` volume, mapped to `~/.ntrp` inside the container. The server runs as a non-root user and is available at `http://localhost:6877` (or `NTRP_PORT`).
+Data (sessions, memory, search index) is persisted in the `arden-data` volume, mapped to `~/.arden` inside the container. The server runs as a non-root user and is available at `http://localhost:6877` (or `ARDEN_PORT`).
 
-Gmail and Calendar tokens are stored in `~/.ntrp/` (covered by the data volume). Browser history is not available in Docker.
+Gmail and Calendar tokens are stored in `~/.arden/` (covered by the data volume). Browser history is not available in Docker.
 
 ## API Authentication
 
@@ -207,7 +207,7 @@ cd apps/desktop && bun run dev   # paste the key in the connection screen
 To regenerate the key:
 
 ```bash
-ntrp-server serve --reset-key
+arden-server serve --reset-key
 ```
 
 All API requests require `Authorization: Bearer <key>`.

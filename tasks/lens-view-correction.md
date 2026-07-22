@@ -16,7 +16,7 @@ auto-minted per subject, member_of edges, graph nodes/squares). This corrects it
 4. **Detail level → plain labels**: `gist/structured/dossier` → **Summary / List / Full** (or simpler / cut entirely). No internal jargon in the UI.
 5. **Lens view = grouped + profiles** (the persons-lens shape above): grouped-by-subject, per-subject profile synthesized from claims, drill-down to claims.
 6. Heuristic ban holds (LLM judges; embed+FTS recalls; no keyword/regex/threshold gate). Grep-gate.
-7. **Purge live ~/.ntrp/memory.db** after (schema changed again) so the corrected schema rebuilds clean on restart.
+7. **Purge live ~/.arden/memory.db** after (schema changed again) so the corrected schema rebuilds clean on restart.
 
 ## Autonomous plan (user asleep)
 - Let wt6br10p4 (structural) finish → verify hard (boot, build, structural gate: no lens rows/nodes/squares).

@@ -3,15 +3,15 @@ from datetime import UTC, datetime
 import pytest
 from fastapi.testclient import TestClient
 
-from ntrp.context.models import SessionData, SessionState
-from ntrp.server.app import app
-from ntrp.server.bus import BusRegistry
-from ntrp.server.deps import get_bus_registry, require_session_service
-from ntrp.server.runtime import get_runtime
-from ntrp.tools.core import EmptyInput
-from ntrp.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
-from ntrp.tools.core.registry import ToolRegistry
-from ntrp.tools.goals import BlockGoalInput, block_goal, complete_goal
+from arden.context.models import SessionData, SessionState
+from arden.server.app import app
+from arden.server.bus import BusRegistry
+from arden.server.deps import get_bus_registry, require_session_service
+from arden.server.runtime import get_runtime
+from arden.tools.core import EmptyInput
+from arden.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
+from arden.tools.core.registry import ToolRegistry
+from arden.tools.goals import BlockGoalInput, block_goal, complete_goal
 from tests.helpers import make_text_response
 
 
@@ -135,7 +135,7 @@ def test_goal_proposal_uses_recent_context_without_persisting(monkeypatch):
     svc = ProposalSessionService()
     app.dependency_overrides[require_session_service] = lambda: svc
     app.dependency_overrides[get_runtime] = lambda: RuntimeStub()
-    monkeypatch.setattr("ntrp.server.routers.session.llm_client", FakeLLM(), raising=False)
+    monkeypatch.setattr("arden.server.routers.session.llm_client", FakeLLM(), raising=False)
     try:
         response = TestClient(app).post("/sessions/sess-1/goal/propose")
     finally:

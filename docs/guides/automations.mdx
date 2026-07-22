@@ -5,7 +5,7 @@ description: "Schedule tasks that run autonomously."
 
 ## Overview
 
-Automations let ntrp act on its own — daily summaries, inbox monitoring, reminders, or any task you'd otherwise forget to do manually.
+Automations let arden act on its own — daily summaries, inbox monitoring, reminders, or any task you'd otherwise forget to do manually.
 
 Each automation has one or more **triggers** (when to run), a **description** (what to do in natural language), and optional notification behavior through configured notifiers. When multiple triggers are defined, the automation fires when **any** trigger condition is met.
 
@@ -73,7 +73,7 @@ An automation can declare a named **output schema**, so its run returns a valida
 
 ## Builtin automations
 
-ntrp ships with system automations that run automatically, such as memory consolidation, synthesis, and the slice suggester. They appear in the **System** tab. What they do is fixed, but their schedule is yours: adjust the cadence, pause, or run now.
+arden ships with system automations that run automatically, such as memory consolidation, synthesis, and the slice suggester. They appear in the **System** tab. What they do is fixed, but their schedule is yours: adjust the cadence, pause, or run now.
 
 ## Creating automations
 
@@ -91,7 +91,7 @@ Notify me with the result.
 
 ```bash
 curl -X POST http://localhost:6877/automations \
-  -H "Authorization: Bearer $NTRP_API_KEY" \
+  -H "Authorization: Bearer $ARDEN_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Morning briefing",
@@ -106,7 +106,7 @@ Multi-trigger:
 
 ```bash
 curl -X POST http://localhost:6877/automations \
-  -H "Authorization: Bearer $NTRP_API_KEY" \
+  -H "Authorization: Bearer $ARDEN_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Extract conversation facts",

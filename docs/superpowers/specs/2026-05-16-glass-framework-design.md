@@ -2,7 +2,7 @@
 
 ## Goal
 
-Create a reusable glass material framework for ntrp so frosted surfaces and instruments share one visual recipe. The framework should make glass look physical: translucent tint, backdrop blur with saturation, white-alpha rim, and inset top highlight.
+Create a reusable glass material framework for arden so frosted surfaces and instruments share one visual recipe. The framework should make glass look physical: translucent tint, backdrop blur with saturation, white-alpha rim, and inset top highlight.
 
 This replaces ad hoc glass recipes in components such as `GlassToggle` and the existing `.glass-pane*` family over time. Dense reading surfaces and settings forms should remain mostly solid unless they are floating chrome.
 

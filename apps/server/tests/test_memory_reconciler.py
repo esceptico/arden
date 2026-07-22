@@ -2,10 +2,10 @@ from pathlib import Path
 
 import pytest
 
-from ntrp.memory.file_store import FilePageStore
-from ntrp.memory.models import Kind, Record, SourceRef
-from ntrp.memory.reconciler import RecordOperation, validate_operations
-from ntrp.memory.scopes import MemoryScope
+from arden.memory.file_store import FilePageStore
+from arden.memory.models import Kind, Record, SourceRef
+from arden.memory.reconciler import RecordOperation, validate_operations
+from arden.memory.scopes import MemoryScope
 
 
 def _source(**changes) -> SourceRef:
@@ -159,7 +159,7 @@ async def test_plan_is_read_only_and_apply_commits_the_whole_batch_once(tmp_path
     visible.parent.mkdir(parents=True)
     raw.parent.mkdir(parents=True)
     visible.write_text("# Me\n", encoding="utf-8")
-    raw.write_text("<!-- ntrp:records schema=2 page=me.md -->\n", encoding="utf-8")
+    raw.write_text("<!-- arden:records schema=2 page=me.md -->\n", encoding="utf-8")
     store = FilePageStore(vault)
     await store.open()
     before = {path: path.read_bytes() for path in (visible, raw)}
@@ -198,7 +198,7 @@ async def test_noop_and_ask_never_mutate(tmp_path: Path):
     (vault / "raw").mkdir(parents=True)
     (vault / "me.md").write_text("# Me\n", encoding="utf-8")
     (vault / "raw" / "me.md").write_text(
-        "<!-- ntrp:records schema=2 page=me.md -->\n",
+        "<!-- arden:records schema=2 page=me.md -->\n",
         encoding="utf-8",
     )
     store = FilePageStore(vault)

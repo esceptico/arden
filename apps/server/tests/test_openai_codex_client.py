@@ -3,9 +3,9 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import BaseModel
 
-from ntrp.agent import FinishReason, Role
-from ntrp.llm.openai_codex import OpenAICodexClient
-from ntrp.llm.openai_codex_auth import OpenAICodexTokens
+from arden.agent import FinishReason, Role
+from arden.llm.openai_codex import OpenAICodexClient
+from arden.llm.openai_codex_auth import OpenAICodexTokens
 
 
 class _Structured(BaseModel):
@@ -195,7 +195,7 @@ def test_prepare_responses_request_uses_codex_model_and_response_shapes():
 @pytest.mark.asyncio
 async def test_client_advertises_compatible_codex_version(monkeypatch):
     monkeypatch.setattr(
-        "ntrp.llm.openai_codex.get_valid_tokens",
+        "arden.llm.openai_codex.get_valid_tokens",
         AsyncMock(return_value=OpenAICodexTokens("access", "refresh", 123, "account")),
     )
 

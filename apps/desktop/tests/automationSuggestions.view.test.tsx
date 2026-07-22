@@ -8,10 +8,10 @@ import type { AutomationSuggestion, CreateAutomationPayload } from "@/api/types"
 function suggestion(overrides: Partial<AutomationSuggestion> = {}): AutomationSuggestion {
   return {
     id: "s1",
-    name: "Weekly ntrp PR digest",
-    description: "Summarize merged PRs in ntrp this week.",
+    name: "Weekly arden PR digest",
+    description: "Summarize merged PRs in arden this week.",
     triggers: [{ type: "time", at: "09:00", days: "mon" }],
-    rationale: "You review ntrp PRs most mornings",
+    rationale: "You review arden PRs most mornings",
     evidence: ["recent PR reviews"],
     category: "Status reports",
     icon: "GitPullRequest",
@@ -52,11 +52,11 @@ test("suggestions lead the New menu with their rationale; templates follow", asy
   try {
     const text = appEl.textContent ?? "";
     expect(text).toContain("For you");
-    expect(text).toContain("Weekly ntrp PR digest");
-    expect(text).toContain("You review ntrp PRs most mornings");
+    expect(text).toContain("Weekly arden PR digest");
+    expect(text).toContain("You review arden PRs most mornings");
     expect(text).toContain("Inbox triage sweep");
     // The raw prompt/description never surfaces in the menu.
-    expect(text).not.toContain("Summarize merged PRs in ntrp this week.");
+    expect(text).not.toContain("Summarize merged PRs in arden this week.");
     expect(text).toContain("Templates");
     expect(text).toContain("Start from scratch");
     // Suggestions sort above templates.
@@ -89,14 +89,14 @@ test("picking a suggestion hands over the mapped payload with from_suggestion_id
   const { appEl, root, restore } = await renderMenu((p) => (picked = p));
   try {
     const item = [...appEl.querySelectorAll('[role="menuitem"]')].find((el) =>
-      el.textContent?.includes("Weekly ntrp PR digest"),
+      el.textContent?.includes("Weekly arden PR digest"),
     );
     if (!item) throw new Error("missing suggestion menu item");
     await act(async () => {
       item.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     expect(picked?.from_suggestion_id).toBe("s1");
-    expect(picked?.name).toBe("Weekly ntrp PR digest");
+    expect(picked?.name).toBe("Weekly arden PR digest");
     await act(async () => root.unmount());
   } finally {
     restore();

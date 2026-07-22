@@ -13,16 +13,16 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from ntrp.areas.asks import AskStore
-from ntrp.areas.lifecycle import AreaLifecycleService, AreaPageService
-from ntrp.areas.models import Ask, areas_from_records
-from ntrp.areas.service import AreaService
-from ntrp.areas.suggester import AreaSuggestionStore
-from ntrp.areas.work_models import AreaWorkSnapshot
-from ntrp.areas.work_store import AreaWorkConflict
-from ntrp.memory.pages import parse_page
-from ntrp.server.app import app
-from ntrp.server.routers.areas import router as areas_router
+from arden.areas.asks import AskStore
+from arden.areas.lifecycle import AreaLifecycleService, AreaPageService
+from arden.areas.models import Ask, areas_from_records
+from arden.areas.service import AreaService
+from arden.areas.suggester import AreaSuggestionStore
+from arden.areas.work_models import AreaWorkSnapshot
+from arden.areas.work_store import AreaWorkConflict
+from arden.memory.pages import parse_page
+from arden.server.app import app
+from arden.server.routers.areas import router as areas_router
 
 PAGE = "---\ntitle: O-1A\nupdated: 2026-07-05\n---\n# O-1A\n\n## Open loops\n- Find counsel.\n"
 
@@ -95,9 +95,13 @@ class _FakeWorkStore:
 
     async def create_outcome(self, area_id: str, **values):
         row = {
-            "outcome_id": f"outcome:{area_id}:{values['key']}", "area_id": area_id,
-            "stable_key": values.pop("key"), "status": "active",
-            "created_at": "2026-07-10T00:00:00Z", "updated_at": "v1", "completed_at": None,
+            "outcome_id": f"outcome:{area_id}:{values['key']}",
+            "area_id": area_id,
+            "stable_key": values.pop("key"),
+            "status": "active",
+            "created_at": "2026-07-10T00:00:00Z",
+            "updated_at": "v1",
+            "completed_at": None,
             **values,
         }
         self.outcomes[(area_id, row["stable_key"])] = row
@@ -122,7 +126,6 @@ class _FakeWorkStore:
         row.update(patch)
         row["updated_at"] = "v2"
         return SimpleNamespace(model_dump=lambda mode=None: row, **row)
-
 
 
 @pytest.fixture
@@ -157,9 +160,19 @@ def client(tmp_path: Path):
     test_app.include_router(areas_router)
     suggestions = AreaSuggestionStore(tmp_path / "suggestions.json")
     suggestions.replace_suggestions(
-        [{"id": "sg1", "key": "health", "title": "Health", "page_path": "topics/health.md", "rationale": "r", "created_at": "2026-07-07"}]
+        [
+            {
+                "id": "sg1",
+                "key": "health",
+                "title": "Health",
+                "page_path": "topics/health.md",
+                "rationale": "r",
+                "created_at": "2026-07-07",
+            }
+        ]
     )
     test_app.state.area_service = svc
+
     class _Automations:
         async def get(self, task_id: str):
             if task_id != f"area:{o1a['area_id']}":
@@ -178,6 +191,7 @@ def client(tmp_path: Path):
         dispatch_session_message=_dispatch_session_message,
     )
     test_app.state.dispatched = dispatched
+
     async def _sync_custodian(area: dict) -> None:
         return None
 
@@ -252,16 +266,25 @@ def test_get_area_detail_happy_path(client):
 def test_create_and_update_outcome_emit_and_wake(client):
     c, _, emitted, o1a, _ = client
 
-    created = c.post(f"/areas/{o1a}/outcomes", json={
-        "key": "petition-filed", "title": "Petition filed",
-        "success_criteria": "Receipt exists", "priority": 5,
-    })
+    created = c.post(
+        f"/areas/{o1a}/outcomes",
+        json={
+            "key": "petition-filed",
+            "title": "Petition filed",
+            "success_criteria": "Receipt exists",
+            "priority": 5,
+        },
+    )
     assert created.status_code == 200
     assert created.json()["source"] == "user"
 
-    updated = c.patch(f"/areas/{o1a}/outcomes/petition-filed", json={
-        "expected_updated_at": "v1", "status": "completed",
-    })
+    updated = c.patch(
+        f"/areas/{o1a}/outcomes/petition-filed",
+        json={
+            "expected_updated_at": "v1",
+            "status": "completed",
+        },
+    )
     assert updated.status_code == 200
     assert updated.json()["status"] == "completed"
     assert emitted == [[o1a], [o1a]]
@@ -272,19 +295,35 @@ def test_work_mutations_validate_area_key_and_optimistic_version(client):
     c, _, emitted, o1a, _ = client
     work = c.app.state.runtime.stores.area_work
     work.items[(o1a, "collect-evidence")] = {
-        "item_id": f"work:{o1a}:collect-evidence", "area_id": o1a,
-        "stable_key": "collect-evidence", "outcome_id": None, "kind": "action",
-        "text": "Collect evidence", "status": "active", "owner": "custodian",
-        "due_at": None, "next_attempt_at": None, "created_at": "t0",
-        "updated_at": "v1", "completed_at": None,
+        "item_id": f"work:{o1a}:collect-evidence",
+        "area_id": o1a,
+        "stable_key": "collect-evidence",
+        "outcome_id": None,
+        "kind": "action",
+        "text": "Collect evidence",
+        "status": "active",
+        "owner": "custodian",
+        "due_at": None,
+        "next_attempt_at": None,
+        "created_at": "t0",
+        "updated_at": "v1",
+        "completed_at": None,
     }
 
-    stale = c.patch(f"/areas/{o1a}/work/collect-evidence", json={
-        "expected_updated_at": "old", "status": "in_progress",
-    })
-    missing_area = c.patch("/areas/nope/work/collect-evidence", json={
-        "expected_updated_at": "v1", "status": "completed",
-    })
+    stale = c.patch(
+        f"/areas/{o1a}/work/collect-evidence",
+        json={
+            "expected_updated_at": "old",
+            "status": "in_progress",
+        },
+    )
+    missing_area = c.patch(
+        "/areas/nope/work/collect-evidence",
+        json={
+            "expected_updated_at": "v1",
+            "status": "completed",
+        },
+    )
 
     assert stale.status_code == 409
     assert missing_area.status_code == 404
@@ -327,10 +366,19 @@ def test_resolve_ask_and_unknown_area_404(client):
 
 def test_reply_posts_linked_message_to_custodian_channel(client):
     c, svc, emitted, o1a, _ = client
-    svc._asks.upsert(Ask(
-        id=f"agent:{o1a}:dose", area_key=o1a, text="Which dose?", kind="question", source="agent",
-        actions=[], state="active", created_at="2026-07-06T10:00:00", stable_key="dose",
-    ))
+    svc._asks.upsert(
+        Ask(
+            id=f"agent:{o1a}:dose",
+            area_key=o1a,
+            text="Which dose?",
+            kind="question",
+            source="agent",
+            actions=[],
+            state="active",
+            created_at="2026-07-06T10:00:00",
+            stable_key="dose",
+        )
+    )
 
     res = c.post(f"/areas/{o1a}/asks/agent:{o1a}:dose/reply", json={"message": "Use 5 mg."})
 
@@ -357,10 +405,18 @@ def test_resolve_ask_404s_when_ask_belongs_to_a_different_area(client):
     res = c.post("/areas", json={"name": "Dex", "page_path": "topics/dex.md"})
     dex = res.json()["area_id"]
     emitted.clear()  # the attach above legitimately emitted; the resolve below must NOT
-    svc._asks.upsert(Ask(
-        id="agent:dex:1", area_key=dex, text="Dex thing", kind="review", source="agent",
-        actions=[], state="active", created_at="2026-07-06T10:00:00",
-    ))
+    svc._asks.upsert(
+        Ask(
+            id="agent:dex:1",
+            area_key=dex,
+            text="Dex thing",
+            kind="review",
+            source="agent",
+            actions=[],
+            state="active",
+            created_at="2026-07-06T10:00:00",
+        )
+    )
 
     res = c.post(f"/areas/{o1a}/asks/agent:dex:1/resolve", json={"state": "dismissed"})
     assert res.status_code == 404

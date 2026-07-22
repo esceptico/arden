@@ -12,16 +12,16 @@ from zoneinfo import ZoneInfo
 import pytest
 from pydantic import ValidationError
 
-from ntrp.memory.artifacts import ArtifactMemoryStore
-from ntrp.memory.file_store import FilePageStore
-from ntrp.memory.models import Kind, SourceRef
-from ntrp.memory.page_edit_service import (
+from arden.memory.artifacts import ArtifactMemoryStore
+from arden.memory.file_store import FilePageStore
+from arden.memory.models import Kind, SourceRef
+from arden.memory.page_edit_service import (
     PageEditService,
     PreviewExpiredError,
     ReconciliationPendingError,
     StalePageRevisionError,
 )
-from ntrp.memory.page_events import (
+from arden.memory.page_events import (
     AppliedPageOperation,
     PageEditDecision,
     PageEditEvent,
@@ -30,7 +30,7 @@ from ntrp.memory.page_events import (
     render_page_edit_event,
     unified_patch,
 )
-from ntrp.memory.reconciler import RecordOperation
+from arden.memory.reconciler import RecordOperation
 
 
 class Clock:
@@ -56,7 +56,7 @@ async def _store(vault: Path, *, notify=None) -> FilePageStore:
     (vault / "raw" / "topics").mkdir(parents=True)
     (vault / "topics" / "a.md").write_bytes(b"# A\n\nOriginal durable statement.\n")
     (vault / "raw" / "topics" / "a.md").write_text(
-        "<!-- ntrp:records schema=2 page=topics/a.md -->\n",
+        "<!-- arden:records schema=2 page=topics/a.md -->\n",
         encoding="utf-8",
     )
     store = FilePageStore(vault, post_canonical_commit=notify)
@@ -69,26 +69,31 @@ def test_revision_hashes_bytes_and_exact_unified_patch():
     result = b"# A\n\nNew.\n"
 
     assert page_revision(base) == "a578e665b596d40d6c3b173e5331f9ed9a5a891429ecd1ccb14b13185a4462eb"
-    assert unified_patch(base, result) == (
-        "--- a/page\n"
-        "+++ b/page\n"
-        "@@ -1,3 +1,3 @@\n"
-        " # A\n"
-        " \n"
-        "-Old.\n"
-        "+New.\n"
+    assert unified_patch(base, result) == ("--- a/page\n+++ b/page\n@@ -1,3 +1,3 @@\n # A\n \n-Old.\n+New.\n")
+
+
+def test_pre_arden_page_event_marker_remains_readable():
+    event = PageEditEvent(
+        id="event-1",
+        occurred_at="2026-07-12T10:23:42.000Z",
+        sequence=1,
+        actor="user",
+        origin="desktop",
+        path="me.md",
+        base_revision="before",
+        result_revision="after",
+        patch="",
+        operations=(),
+        reconciliation="applied",
     )
+    legacy = render_page_edit_event(event).replace("arden:page-edit-event", "ntrp:page-edit-event")
+
+    assert parse_page_edit_events(legacy) == (event,)
 
 
 def test_unified_patch_marks_both_files_without_final_newline():
     assert unified_patch(b"Old", b"New") == (
-        "--- a/page\n"
-        "+++ b/page\n"
-        "@@ -1 +1 @@\n"
-        "-Old\n"
-        "\\ No newline at end of file\n"
-        "+New\n"
-        "\\ No newline at end of file\n"
+        "--- a/page\n+++ b/page\n@@ -1 +1 @@\n-Old\n\\ No newline at end of file\n+New\n\\ No newline at end of file\n"
     )
 
 
@@ -203,7 +208,7 @@ async def test_preview_is_non_mutating_and_passes_only_structural_changes(tmp_pa
     assert reconciler.analyses[0].after == ("Original durable statement.", "A second durable statement.")
     assert reconciler.analyses[0].changed_before == ()
     assert reconciler.analyses[0].changed_after == ("A second durable statement.",)
-    assert (vault / ".ntrp" / "maintenance" / "page-edit-previews" / f"{preview.id}.json").is_file()
+    assert (vault / ".arden" / "maintenance" / "page-edit-previews" / f"{preview.id}.json").is_file()
     await store.close()
 
 
@@ -338,7 +343,7 @@ async def test_apply_commits_page_patch_event_and_operations_together(tmp_path: 
     ]
     assert event.operations[0].sources[0].ref == f"page_edit:{event.id}"
     assert parse_page_edit_events((vault / "raw" / "events" / "2026-07-12.md").read_text())[0] == event
-    assert not (vault / ".ntrp" / "maintenance" / "page-edit-previews" / f"{preview.id}.json").exists()
+    assert not (vault / ".arden" / "maintenance" / "page-edit-previews" / f"{preview.id}.json").exists()
     await store.close()
 
 
@@ -388,7 +393,7 @@ async def test_apply_rejects_tampered_persisted_preview_before_commit(tmp_path: 
         content=base + b"\nCandidate.\n",
         actor="user:desktop",
     )
-    persisted = vault / ".ntrp" / "maintenance" / "page-edit-previews" / f"{preview.id}.json"
+    persisted = vault / ".arden" / "maintenance" / "page-edit-previews" / f"{preview.id}.json"
     payload = json.loads(persisted.read_text(encoding="utf-8"))
     if tamper == "id":
         payload["preview"]["id"] = "other-id"
@@ -414,14 +419,20 @@ async def test_same_millisecond_uses_sequence_as_history_tie_breaker(tmp_path: P
     vault = tmp_path / "memory"
     store = await _store(vault)
     clock = Clock(datetime(2026, 7, 12, 20, 10, 11, 123000, tzinfo=timezone(timedelta(hours=4))))
-    service = PageEditService(vault, store, reconciler=Reconciler((RecordOperation.noop(),), (RecordOperation.noop(),)), now=clock)
+    service = PageEditService(
+        vault, store, reconciler=Reconciler((RecordOperation.noop(),), (RecordOperation.noop(),)), now=clock
+    )
     page = vault / "topics" / "a.md"
 
     base = page.read_bytes()
-    first = await service.preview(path="topics/a.md", base_revision=page_revision(base), content=base + b"\nFirst.\n", actor="agent:x")
+    first = await service.preview(
+        path="topics/a.md", base_revision=page_revision(base), content=base + b"\nFirst.\n", actor="agent:x"
+    )
     event1 = await service.apply(first.id, decisions={})
     base = page.read_bytes()
-    second = await service.preview(path="topics/a.md", base_revision=page_revision(base), content=base + b"\nSecond.\n", actor="agent:x")
+    second = await service.preview(
+        path="topics/a.md", base_revision=page_revision(base), content=base + b"\nSecond.\n", actor="agent:x"
+    )
     event2 = await service.apply(second.id, decisions={})
 
     assert event1.occurred_at == event2.occurred_at
@@ -485,7 +496,9 @@ async def test_ask_requires_explicit_note_only_or_forget_decision(tmp_path: Path
     )
     page = vault / "topics" / "a.md"
     base = page.read_bytes()
-    preview = await service.preview(path="topics/a.md", base_revision=page_revision(base), content=base + b"\nNo coffee.\n", actor="user:desktop")
+    preview = await service.preview(
+        path="topics/a.md", base_revision=page_revision(base), content=base + b"\nNo coffee.\n", actor="user:desktop"
+    )
 
     with pytest.raises(ValueError, match="decision"):
         await service.apply(preview.id, decisions={})
@@ -514,7 +527,12 @@ async def test_note_only_resolves_ask_without_semantic_mutation(tmp_path: Path):
     service = PageEditService(vault, store, reconciler=Reconciler((RecordOperation.ask("Forget it?", record.id),)))
     page = vault / "topics" / "a.md"
     base = page.read_bytes()
-    preview = await service.preview(path="topics/a.md", base_revision=page_revision(base), content=base + b"\nPage note only.\n", actor="user:desktop")
+    preview = await service.preview(
+        path="topics/a.md",
+        base_revision=page_revision(base),
+        content=base + b"\nPage note only.\n",
+        actor="user:desktop",
+    )
 
     event = await service.apply(preview.id, decisions={preview.questions[0].id: "Note only"})
 
@@ -530,7 +548,9 @@ async def test_apply_rejects_stale_page_revision_without_committing(tmp_path: Pa
     service = PageEditService(vault, store, reconciler=Reconciler((RecordOperation.noop(),)))
     page = vault / "topics" / "a.md"
     base = page.read_bytes()
-    preview = await service.preview(path="topics/a.md", base_revision=page_revision(base), content=base + b"\nCandidate.\n", actor="user:desktop")
+    preview = await service.preview(
+        path="topics/a.md", base_revision=page_revision(base), content=base + b"\nCandidate.\n", actor="user:desktop"
+    )
     page.write_bytes(base + b"\nExternal edit.\n")
     monkeypatch.setattr(store._journal, "commit", lambda files: pytest.fail("stale edit committed"))
 
@@ -580,7 +600,9 @@ async def test_analysis_unavailable_can_save_pending_and_retry_exact_patch_once(
     page = vault / "topics" / "a.md"
     base = page.read_bytes()
     candidate = base + b"\nOriginal candidate statement.\n"
-    preview = await service.preview(path="topics/a.md", base_revision=page_revision(base), content=candidate, actor="user:desktop")
+    preview = await service.preview(
+        path="topics/a.md", base_revision=page_revision(base), content=candidate, actor="user:desktop"
+    )
 
     with pytest.raises(ReconciliationPendingError):
         await service.apply(preview.id, decisions={})
@@ -692,13 +714,15 @@ async def test_pending_retry_cas_rejects_canonical_change_during_analysis(tmp_pa
         await retry.retry(pending.id)
 
     assert (vault / "external.md").read_bytes() == b"external\n"
-    assert not any(event.reconciliation == "applied" and event.reconciles_event_id == pending.id for event in retry.history())
+    assert not any(
+        event.reconciliation == "applied" and event.reconciles_event_id == pending.id for event in retry.history()
+    )
     await store.close()
 
 
 def test_preview_creation_fsyncs_parent_directory(tmp_path: Path, monkeypatch):
     vault = tmp_path / "memory"
-    (vault / ".ntrp" / "maintenance" / "page-edit-previews").mkdir(parents=True)
+    (vault / ".arden" / "maintenance" / "page-edit-previews").mkdir(parents=True)
     resources = ArtifactMemoryStore(vault)
     synced_directory = False
     fsync = os.fsync
@@ -711,7 +735,7 @@ def test_preview_creation_fsyncs_parent_directory(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(os, "fsync", capture)
 
     resources.write_page_edit_preview(
-        ".ntrp/maintenance/page-edit-previews/test.json",
+        ".arden/maintenance/page-edit-previews/test.json",
         b"{}\n",
     )
 
@@ -723,10 +747,14 @@ async def test_restart_uses_persisted_preview_and_expiry(tmp_path: Path):
     vault = tmp_path / "memory"
     store = await _store(vault)
     clock = Clock(datetime(2026, 7, 12, 10, 0, tzinfo=UTC))
-    service = PageEditService(vault, store, reconciler=Reconciler((RecordOperation.noop(),)), now=clock, preview_ttl=timedelta(minutes=5))
+    service = PageEditService(
+        vault, store, reconciler=Reconciler((RecordOperation.noop(),)), now=clock, preview_ttl=timedelta(minutes=5)
+    )
     page = vault / "topics" / "a.md"
     base = page.read_bytes()
-    preview = await service.preview(path="topics/a.md", base_revision=page_revision(base), content=base + b"\nCandidate.\n", actor="user:desktop")
+    preview = await service.preview(
+        path="topics/a.md", base_revision=page_revision(base), content=base + b"\nCandidate.\n", actor="user:desktop"
+    )
     clock.value += timedelta(minutes=6)
     restarted = PageEditService(vault, store, reconciler=Reconciler(), now=clock, preview_ttl=timedelta(days=1))
 
@@ -734,5 +762,5 @@ async def test_restart_uses_persisted_preview_and_expiry(tmp_path: Path):
         await restarted.apply(preview.id, decisions={})
 
     assert page.read_bytes() == base
-    assert not (vault / ".ntrp" / "maintenance" / "page-edit-previews" / f"{preview.id}.json").exists()
+    assert not (vault / ".arden" / "maintenance" / "page-edit-previews" / f"{preview.id}.json").exists()
     await store.close()

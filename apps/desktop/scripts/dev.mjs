@@ -61,7 +61,7 @@ try {
 const electron = run("electron", ["."], {
   env: {
     ...process.env,
-    NTRP_DESKTOP_DEV_SERVER_URL: devUrl,
+    ARDEN_DESKTOP_DEV_SERVER_URL: devUrl,
   },
 });
 

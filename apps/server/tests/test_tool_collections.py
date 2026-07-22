@@ -3,11 +3,11 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from ntrp.integrations.calendar.tools import CalendarInput
-from ntrp.integrations.gmail.tools import EmailsInput
-from ntrp.integrations.slack.tools import SlackSearchInput
-from ntrp.tools.core.collections import format_timestamp, paginate
-from ntrp.tools.workflow import _render
+from arden.integrations.calendar.tools import CalendarInput
+from arden.integrations.gmail.tools import EmailsInput
+from arden.integrations.slack.tools import SlackSearchInput
+from arden.tools.core.collections import format_timestamp, paginate
+from arden.tools.workflow import _render
 
 
 def test_page_cursor_continues_without_overlap():

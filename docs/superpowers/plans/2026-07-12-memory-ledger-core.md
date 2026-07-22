@@ -25,9 +25,9 @@
 ### Task 1: Schema-v2 Record and Evidence Codec
 
 **Files:**
-- Modify: `apps/server/ntrp/memory/models.py`
-- Create: `apps/server/ntrp/memory/ledger.py`
-- Modify: `apps/server/ntrp/memory/pages.py`
+- Modify: `apps/server/arden/memory/models.py`
+- Create: `apps/server/arden/memory/ledger.py`
+- Modify: `apps/server/arden/memory/pages.py`
 - Test: `apps/server/tests/test_memory_ledger.py`
 - Modify: `apps/server/tests/test_memory_records.py`
 
@@ -44,7 +44,7 @@
 def test_v2_entry_round_trips_all_evidence_and_unknown_metadata():
     raw = (
         "- 2026-07-12T14:23:41.582+04:00 ^rec-1 [fact] [imp:8] Concise replies.\n"
-        '  <!-- ntrp:meta {"recorded_at":"2026-07-12T10:23:42.014Z",'
+        '  <!-- arden:meta {"recorded_at":"2026-07-12T10:23:42.014Z",'
         '"sequence":42,"time_precision":"millisecond","scope":{"kind":"user"},'
         '"sources":[{"kind":"chat_message","ref":"s:m","role":"user",'
         '"occurred_at":"2026-07-12T14:23:41.582+04:00"}],"future":{"x":1}} -->'
@@ -99,7 +99,7 @@ Validate RFC 3339 offsets without normalizing away the original text. The readab
 
 - [ ] **Step 4: Route raw-page parsing through the new codec**
 
-Recognize `<!-- ntrp:records schema=2 ... -->`. Parse legacy lines into conservative in-memory entries, but render schema 2 only when the containing page has migrated. Keep visible-page parsing unchanged.
+Recognize `<!-- arden:records schema=2 ... -->`. Parse legacy lines into conservative in-memory entries, but render schema 2 only when the containing page has migrated. Keep visible-page parsing unchanged.
 
 - [ ] **Step 5: Run codec and existing record tests**
 
@@ -109,15 +109,15 @@ Expected: PASS.
 
 - [ ] **Step 6: Commit the codec**
 
-Run: `git add apps/server/ntrp/memory/models.py apps/server/ntrp/memory/ledger.py apps/server/ntrp/memory/pages.py apps/server/tests/test_memory_ledger.py apps/server/tests/test_memory_records.py && git commit -m "feat(memory): add schema v2 ledger codec"`
+Run: `git add apps/server/arden/memory/models.py apps/server/arden/memory/ledger.py apps/server/arden/memory/pages.py apps/server/tests/test_memory_ledger.py apps/server/tests/test_memory_records.py && git commit -m "feat(memory): add schema v2 ledger codec"`
 
 ### Task 2: Append-only Lifecycle and Stable Record Scope
 
 **Files:**
-- Modify: `apps/server/ntrp/memory/file_store.py`
-- Modify: `apps/server/ntrp/memory/pages.py`
-- Modify: `apps/server/ntrp/memory/scopes.py`
-- Modify: `apps/server/ntrp/memory/models.py`
+- Modify: `apps/server/arden/memory/file_store.py`
+- Modify: `apps/server/arden/memory/pages.py`
+- Modify: `apps/server/arden/memory/scopes.py`
+- Modify: `apps/server/arden/memory/models.py`
 - Test: `apps/server/tests/test_memory_records.py`
 - Modify: `apps/server/tests/test_memory_scopes.py`
 
@@ -173,14 +173,14 @@ Expected: PASS.
 
 - [ ] **Step 7: Commit append-only storage**
 
-Run: `git add apps/server/ntrp/memory/file_store.py apps/server/ntrp/memory/pages.py apps/server/ntrp/memory/scopes.py apps/server/ntrp/memory/models.py apps/server/tests/test_memory_records.py apps/server/tests/test_memory_scopes.py && git commit -m "refactor(memory): preserve scope and lifecycle history"`
+Run: `git add apps/server/arden/memory/file_store.py apps/server/arden/memory/pages.py apps/server/arden/memory/scopes.py apps/server/arden/memory/models.py apps/server/tests/test_memory_records.py apps/server/tests/test_memory_scopes.py && git commit -m "refactor(memory): preserve scope and lifecycle history"`
 
 ### Task 3: Recoverable Multi-file Canonical Commits
 
 **Files:**
-- Create: `apps/server/ntrp/memory/journal.py`
-- Modify: `apps/server/ntrp/memory/file_store.py`
-- Modify: `apps/server/ntrp/server/runtime/knowledge.py`
+- Create: `apps/server/arden/memory/journal.py`
+- Modify: `apps/server/arden/memory/file_store.py`
+- Modify: `apps/server/arden/server/runtime/knowledge.py`
 - Test: `apps/server/tests/test_memory_journal.py`
 - Modify: `apps/server/tests/test_memory_records.py`
 
@@ -211,7 +211,7 @@ Expected: FAIL on import.
 
 - [ ] **Step 3: Implement manifest-based prepare/commit/recovery**
 
-Each `.ntrp/journal/<commit-id>/manifest.json` records target, staged file, backup file, and SHA-256. Fsync staged bytes and manifest, write `PREPARED`, replace all targets, validate hashes, then write `COMMITTED`. Recovery validates the manifest and either finishes replacement or restores all backups before removing the journal directory.
+Each `.arden/journal/<commit-id>/manifest.json` records target, staged file, backup file, and SHA-256. Fsync staged bytes and manifest, write `PREPARED`, replace all targets, validate hashes, then write `COMMITTED`. Recovery validates the manifest and either finishes replacement or restores all backups before removing the journal directory.
 
 - [ ] **Step 4: Make `FilePageStore` stage complete file sets**
 
@@ -229,16 +229,16 @@ Expected: PASS.
 
 - [ ] **Step 7: Commit journaled writes**
 
-Run: `git add apps/server/ntrp/memory/journal.py apps/server/ntrp/memory/file_store.py apps/server/ntrp/server/runtime/knowledge.py apps/server/tests/test_memory_journal.py apps/server/tests/test_memory_records.py && git commit -m "feat(memory): journal canonical vault writes"`
+Run: `git add apps/server/arden/memory/journal.py apps/server/arden/memory/file_store.py apps/server/arden/server/runtime/knowledge.py apps/server/tests/test_memory_journal.py apps/server/tests/test_memory_records.py && git commit -m "feat(memory): journal canonical vault writes"`
 
 ### Task 4: Typed Reconciliation, Curator Context, and Watermark Safety
 
 **Files:**
-- Create: `apps/server/ntrp/memory/reconciler.py`
-- Modify: `apps/server/ntrp/memory/file_store.py`
-- Modify: `apps/server/ntrp/memory/curator.py`
-- Modify: `apps/server/ntrp/services/session.py`
-- Modify: `apps/server/ntrp/context/store.py`
+- Create: `apps/server/arden/memory/reconciler.py`
+- Modify: `apps/server/arden/memory/file_store.py`
+- Modify: `apps/server/arden/memory/curator.py`
+- Modify: `apps/server/arden/services/session.py`
+- Modify: `apps/server/arden/context/store.py`
 - Test: `apps/server/tests/test_memory_reconciler.py`
 - Modify: `apps/server/tests/test_memory_curator.py`
 
@@ -305,13 +305,13 @@ Expected: PASS.
 
 - [ ] **Step 7: Commit reconciliation and curator fixes**
 
-Run: `git add apps/server/ntrp/memory/reconciler.py apps/server/ntrp/memory/file_store.py apps/server/ntrp/memory/curator.py apps/server/ntrp/services/session.py apps/server/ntrp/context/store.py apps/server/tests/test_memory_reconciler.py apps/server/tests/test_memory_curator.py && git commit -m "fix(memory): reconcile curated records atomically"`
+Run: `git add apps/server/arden/memory/reconciler.py apps/server/arden/memory/file_store.py apps/server/arden/memory/curator.py apps/server/arden/services/session.py apps/server/arden/context/store.py apps/server/tests/test_memory_reconciler.py apps/server/tests/test_memory_curator.py && git commit -m "fix(memory): reconcile curated records atomically"`
 
 ### Task 5: Direct Tools and Consolidation Correctness
 
 **Files:**
-- Modify: `apps/server/ntrp/tools/memory.py`
-- Modify: `apps/server/ntrp/memory/consolidate.py`
+- Modify: `apps/server/arden/tools/memory.py`
+- Modify: `apps/server/arden/memory/consolidate.py`
 - Test: `apps/server/tests/test_memory_remember.py`
 - Modify: `apps/server/tests/test_memory_consolidate.py`
 
@@ -346,15 +346,15 @@ Expected: PASS.
 
 - [ ] **Step 6: Commit correctness fixes**
 
-Run: `git add apps/server/ntrp/tools/memory.py apps/server/ntrp/memory/consolidate.py apps/server/tests/test_memory_remember.py apps/server/tests/test_memory_consolidate.py && git commit -m "fix(memory): reconcile direct and consolidated writes"`
+Run: `git add apps/server/arden/tools/memory.py apps/server/arden/memory/consolidate.py apps/server/tests/test_memory_remember.py apps/server/tests/test_memory_consolidate.py && git commit -m "fix(memory): reconcile direct and consolidated writes"`
 
 ### Task 6: Automatic Backup, Migration, and Health Validation
 
 **Files:**
-- Create: `apps/server/ntrp/memory/migrate_ledger_v2.py`
-- Modify: `apps/server/ntrp/memory/artifacts.py`
-- Modify: `apps/server/ntrp/memory/file_store.py`
-- Modify: `apps/server/ntrp/server/runtime/knowledge.py`
+- Create: `apps/server/arden/memory/migrate_ledger_v2.py`
+- Modify: `apps/server/arden/memory/artifacts.py`
+- Modify: `apps/server/arden/memory/file_store.py`
+- Modify: `apps/server/arden/server/runtime/knowledge.py`
 - Test: `apps/server/tests/test_memory_ledger_migration.py`
 - Create: `apps/server/tests/test_memory_health.py`
 
@@ -365,7 +365,7 @@ Run: `git add apps/server/ntrp/tools/memory.py apps/server/ntrp/memory/consolida
 
 - [ ] **Step 1: Create migration fixtures and failing tests**
 
-Cover clean legacy records, duplicate identical IDs, conflicting duplicate IDs, malformed lines, missing metadata, date-only records, interrupted staging, and a second idempotent run. Assert a full `.ntrp/backups/<timestamp>/` exists before target replacement.
+Cover clean legacy records, duplicate identical IDs, conflicting duplicate IDs, malformed lines, missing metadata, date-only records, interrupted staging, and a second idempotent run. Assert a full `.arden/backups/<timestamp>/` exists before target replacement.
 
 - [ ] **Step 2: Run migration tests and confirm the migrator is missing**
 
@@ -375,7 +375,7 @@ Expected: FAIL on import and missing validation fields.
 
 - [ ] **Step 3: Implement staged migration**
 
-Parse the source vault, copy it to backup, render into `.ntrp/maintenance/migration-v2/<run-id>/`, validate every staged page, then journal-commit staged targets. Collapse byte-equivalent duplicate IDs; allocate new IDs for conflicting duplicates and update internal relationship references. Record `time_precision: day` for legacy dates and `unknown` when absent.
+Parse the source vault, copy it to backup, render into `.arden/maintenance/migration-v2/<run-id>/`, validate every staged page, then journal-commit staged targets. Collapse byte-equivalent duplicate IDs; allocate new IDs for conflicting duplicates and update internal relationship references. Record `time_precision: day` for legacy dates and `unknown` when absent.
 
 - [ ] **Step 4: Expand memory health**
 
@@ -389,13 +389,13 @@ Runtime order must be: journal recovery, migration detection/staging/commit, vau
 
 Run: `uv run pytest -q -p no:cacheprovider tests/test_memory_*.py`
 
-Run: `uv run ruff check ntrp tests`
+Run: `uv run ruff check arden tests`
 
 Expected: PASS.
 
 - [ ] **Step 7: Commit migration and health checks**
 
-Run: `git add apps/server/ntrp/memory/migrate_ledger_v2.py apps/server/ntrp/memory/artifacts.py apps/server/ntrp/memory/file_store.py apps/server/ntrp/server/runtime/knowledge.py apps/server/tests/test_memory_ledger_migration.py apps/server/tests/test_memory_health.py && git commit -m "feat(memory): migrate vaults to ledger schema v2"`
+Run: `git add apps/server/arden/memory/migrate_ledger_v2.py apps/server/arden/memory/artifacts.py apps/server/arden/memory/file_store.py apps/server/arden/server/runtime/knowledge.py apps/server/tests/test_memory_ledger_migration.py apps/server/tests/test_memory_health.py && git commit -m "feat(memory): migrate vaults to ledger schema v2"`
 
 ## Completion Gate
 

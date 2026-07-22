@@ -1,7 +1,7 @@
-from ntrp.tools.core.base import Tool
-from ntrp.tools.core.registry import ToolRegistry
-from ntrp.tools.core.types import ToolAction, ToolPolicy, ToolScope
-from ntrp.tools.deferred import tool_schema_names
+from arden.tools.core.base import Tool
+from arden.tools.core.registry import ToolRegistry
+from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
+from arden.tools.deferred import tool_schema_names
 
 
 class _Tool(Tool):
@@ -12,6 +12,7 @@ class _Tool(Tool):
 
     async def execute(self, execution, **kwargs):  # pragma: no cover
         raise NotImplementedError
+
 
 def test_command_filter_is_explicit_and_preserves_outer_scope():
     registry = ToolRegistry()
@@ -39,6 +40,4 @@ def test_registry_copy_preserves_command_eligibility():
 
     copied = registry.copy_with({"temporary": _Tool()})
 
-    assert tool_schema_names(copied.get_schemas(command_eligible=True)) == {
-        "list_automations"
-    }
+    assert tool_schema_names(copied.get_schemas(command_eligible=True)) == {"list_automations"}

@@ -1,6 +1,6 @@
 import pytest
 
-import ntrp.core.naming as naming
+import arden.core.naming as naming
 from tests.helpers import make_text_response
 
 

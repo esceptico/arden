@@ -1,4 +1,4 @@
-"""remember()/recall()/forget() tools over the FLAT RecordStore (ntrp/tools/memory.py).
+"""remember()/recall()/forget() tools over the FLAT RecordStore (arden/tools/memory.py).
 
 The tools add/search/delete atomic records via a real tmp RecordStore
 (`search_index=None` -> FTS-only, no embeddings, no search.db). No scope, no lens
@@ -13,17 +13,17 @@ from pathlib import Path
 
 import pytest
 
-import ntrp.database as database
-import ntrp.tools.memory as memory_tools
-from ntrp.context.models import SessionState
-from ntrp.context.store import SessionStore
-from ntrp.memory.curator import Curator
-from ntrp.memory.file_store import FilePageStore
-from ntrp.memory.models import SourceRef
-from ntrp.memory.reconciler import RecordOperation
-from ntrp.memory.records import RecordStore
-from ntrp.services.session import SessionService
-from ntrp.tools.memory import (
+import arden.database as database
+import arden.tools.memory as memory_tools
+from arden.context.models import SessionState
+from arden.context.store import SessionStore
+from arden.memory.curator import Curator
+from arden.memory.file_store import FilePageStore
+from arden.memory.models import SourceRef
+from arden.memory.reconciler import RecordOperation
+from arden.memory.records import RecordStore
+from arden.services.session import SessionService
+from arden.tools.memory import (
     MEMORY_RECONCILER_SERVICE,
     MEMORY_RECORDS_SERVICE,
     ForgetInput,
@@ -89,7 +89,7 @@ async def _ledger_dependencies(tmp_path: Path, *decisions: dict):
     (vault / "raw").mkdir(parents=True)
     (vault / "me.md").write_text("# Me\n", encoding="utf-8")
     (vault / "raw" / "me.md").write_text(
-        "<!-- ntrp:records schema=2 page=me.md -->\n",
+        "<!-- arden:records schema=2 page=me.md -->\n",
         encoding="utf-8",
     )
     store = FilePageStore(vault)
@@ -140,9 +140,7 @@ async def test_remember_adds_a_record_with_kind(store: RecordStore, tmp_path: Pa
         store,
         _reconciler(tmp_path, store, {"op": "ADD", "text": "the user prefers tea", "kind": "fact"}),
     )
-    result = await remember(
-        execution, RememberInput(text="the user prefers tea", kind="fact")
-    )
+    result = await remember(execution, RememberInput(text="the user prefers tea", kind="fact"))
 
     assert not result.is_error
     assert result.preview == "Remembered"
@@ -203,9 +201,7 @@ async def test_remember_keeps_complementary_fact_selected_as_add(store: RecordSt
 
 
 @pytest.mark.parametrize("decision", ["ADD", "SUPERSEDE"])
-async def test_remember_applies_model_selected_contradiction(
-    store: RecordStore, tmp_path: Path, decision: str
-):
+async def test_remember_applies_model_selected_contradiction(store: RecordStore, tmp_path: Path, decision: str):
     old = await store.add("the user works at Acme")
     raw = {"op": decision, "text": "the user works at Globex", "kind": "fact"}
     if decision == "SUPERSEDE":

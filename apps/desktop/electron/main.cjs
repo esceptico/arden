@@ -1,6 +1,7 @@
 const { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, nativeTheme, safeStorage, screen, session, shell } = require("electron");
 const crypto = require("node:crypto");
 const { execFile } = require("node:child_process");
+const fsSync = require("node:fs");
 const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
@@ -11,8 +12,10 @@ const { parseApiResponseBody } = require("./api-response.cjs");
 // promise where it's used. CJS can't `require` ESM or top-level await.
 const sseFrameParserModule = import("./sse-frame-parser.js");
 
-const isDev = Boolean(process.env.NTRP_DESKTOP_DEV_SERVER_URL);
+const devServerUrl = process.env.ARDEN_DESKTOP_DEV_SERVER_URL ?? process.env.NTRP_DESKTOP_DEV_SERVER_URL;
+const isDev = Boolean(devServerUrl);
 const configFileName = "config.json";
+const legacyUserDataNames = ["ntrp", "ntrp-desktop"];
 
 // App icon. macOS dev: dock picks up the PNG via app.dock.setIcon below
 // (Electron's dock.setIcon is more reliable with a high-res PNG than an
@@ -34,6 +37,32 @@ function configPath() {
   return path.join(app.getPath("userData"), configFileName);
 }
 
+function migrateLegacyUserData() {
+  const current = app.getPath("userData");
+  const appData = app.getPath("appData");
+  const entries = [configFileName, "Local Storage"];
+  try {
+    fsSync.mkdirSync(current, { recursive: true });
+  } catch {
+    return;
+  }
+
+  for (const name of legacyUserDataNames) {
+    const legacy = path.join(appData, name);
+    if (path.resolve(legacy) === path.resolve(current) || !fsSync.existsSync(legacy)) continue;
+    for (const entry of entries) {
+      const source = path.join(legacy, entry);
+      const target = path.join(current, entry);
+      if (!fsSync.existsSync(source) || fsSync.existsSync(target)) continue;
+      try {
+        fsSync.cpSync(source, target, { recursive: true, force: false, errorOnExist: false });
+      } catch {
+        // A locked legacy profile must not prevent Arden from launching.
+      }
+    }
+  }
+}
+
 function rendererIndexPath() {
   return path.join(__dirname, "../dist/renderer/index.html");
 }
@@ -52,7 +81,7 @@ function isTrustedSender(event) {
 }
 
 function isTrustedRendererUrl(frameUrl) {
-  if (isDev) return originOf(frameUrl) === originOf(process.env.NTRP_DESKTOP_DEV_SERVER_URL);
+  if (isDev) return originOf(frameUrl) === originOf(devServerUrl);
   if (!frameUrl.startsWith("file://")) return false;
   try {
     return path.normalize(fileURLToPath(frameUrl)) === path.normalize(rendererIndexPath());
@@ -65,7 +94,7 @@ function isTrustedRendererUrl(frameUrl) {
 // subframe navigation to a real URL the app performs itself.
 function isWidgetFrameUrl(url) {
   if (isDev) {
-    const devUrl = process.env.NTRP_DESKTOP_DEV_SERVER_URL;
+    const devUrl = devServerUrl;
     return originOf(url) === originOf(devUrl) && new URL(url).pathname === "/widget-frame.html";
   }
   if (!url.startsWith("file://")) return false;
@@ -306,7 +335,7 @@ function setQuickShortcut(accelerator) {
   }
   if (!target) {
     // eslint-disable-next-line no-console
-    console.log("[ntrp] quick-capture shortcut: disabled");
+    console.log("[arden] quick-capture shortcut: disabled");
     return true;
   }
   try {
@@ -314,16 +343,16 @@ function setQuickShortcut(accelerator) {
     if (ok) {
       registeredShortcut = target;
       // eslint-disable-next-line no-console
-      console.log(`[ntrp] quick-capture shortcut: bound ${target}`);
+      console.log(`[arden] quick-capture shortcut: bound ${target}`);
       return true;
     }
   } catch (error) {
     // eslint-disable-next-line no-console
-    console.warn(`[ntrp] quick-capture shortcut: bind threw for ${target}:`, error);
+    console.warn(`[arden] quick-capture shortcut: bind threw for ${target}:`, error);
     return false;
   }
   // eslint-disable-next-line no-console
-  console.warn(`[ntrp] quick-capture shortcut: OS refused ${target} (another app already owns it?)`);
+  console.warn(`[arden] quick-capture shortcut: OS refused ${target} (another app already owns it?)`);
   return false;
 }
 
@@ -334,7 +363,7 @@ function createWindow({ show }) {
     height: 880,
     minWidth: 980,
     minHeight: 660,
-    title: "ntrp",
+    title: "Arden",
     icon: ICON_PATH,
     backgroundColor: nativeTheme.shouldUseDarkColors ? "#100f0f" : "#ece9e0",
     titleBarStyle: "hiddenInset",
@@ -345,7 +374,7 @@ function createWindow({ show }) {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
-      // ntrp streams agent activity the user watches from OTHER windows. With
+      // arden streams agent activity the user watches from OTHER windows. With
       // the default (true), Chromium throttles/pauses rAF + timers when this
       // window is backgrounded or occluded, freezing the SSE-driven UI until
       // refocus. Keep the renderer live in the background — the whole point of
@@ -387,7 +416,7 @@ function createWindow({ show }) {
   });
 
   if (isDev) {
-    mainWindow.loadURL(process.env.NTRP_DESKTOP_DEV_SERVER_URL);
+    mainWindow.loadURL(devServerUrl);
   } else {
     mainWindow.loadFile(rendererIndexPath());
   }
@@ -403,7 +432,7 @@ function createQuickWindow() {
 
   quickWindow = new BrowserWindow({
     // macOS: a non-activating NSPanel. The composer takes keyboard focus
-    // WITHOUT activating ntrp — the user's current app stays active, its
+    // WITHOUT activating arden — the user's current app stays active, its
     // menu bar stays up, and dismissal hands focus straight back. This is
     // what lets dismissQuickWindow be a plain hide() instead of the old
     // app.hide() hack that vanished the main window along with the panel.
@@ -439,7 +468,7 @@ function createQuickWindow() {
   // this the window is invisible if the user is in a fullscreen Chrome
   // tab when they hit the shortcut. skipTransformProcessType is load-
   // bearing: without it, visibleOnFullScreen flips the app's process
-  // type to UIElementApplication — which REMOVES the ntrp icon from the
+  // type to UIElementApplication — which REMOVES the arden icon from the
   // Dock. The panel window type already floats over fullscreen, so the
   // transformation is pure downside.
   quickWindow.setVisibleOnAllWorkspaces(true, {
@@ -466,7 +495,7 @@ function createQuickWindow() {
   });
 
   if (isDev) {
-    const devUrl = process.env.NTRP_DESKTOP_DEV_SERVER_URL;
+    const devUrl = devServerUrl;
     quickWindow.loadURL(`${devUrl}#quick-capture`);
   } else {
     quickWindow.loadFile(rendererIndexPath(), { hash: "quick-capture" });
@@ -542,6 +571,8 @@ function dismissQuickWindow() {
   if (!quickWindow || quickWindow.isDestroyed() || !quickWindow.isVisible()) return;
   quickWindow.hide();
 }
+
+migrateLegacyUserData();
 
 app.whenReady().then(() => {
   // macOS shows the bundle icon for packaged apps; in `electron .` dev
@@ -638,7 +669,7 @@ app.whenReady().then(() => {
   // the store, the SSE subscription, etc. already wired). Capture is
   // silent: the main window is NOT brought forward — the point of the
   // quick composer is firing off a thought without leaving the current
-  // app. The session is waiting in ntrp whenever the user next switches.
+  // app. The session is waiting in arden whenever the user next switches.
   ipcMain.handle("quick:submit", (event, payload) => {
     assertTrustedSender(event);
     if (typeof payload?.message !== "string") return false;
@@ -668,7 +699,7 @@ app.whenReady().then(() => {
     assertTrustedSender(event);
     if (process.platform !== "darwin") return null;
     if (quickWindow && !quickWindow.isDestroyed()) dismissQuickWindow();
-    const file = path.join(os.tmpdir(), `ntrp-quick-capture-${Date.now()}.png`);
+    const file = path.join(os.tmpdir(), `arden-quick-capture-${Date.now()}.png`);
     await new Promise(resolve => {
       // -i interactive selection, -x no shutter sound. Exits non-zero /
       // writes nothing when the user cancels with Esc — not an error.
@@ -718,7 +749,7 @@ app.whenReady().then(() => {
   // overwrite this on boot if they've customized it.
   if (!setQuickShortcut(DEFAULT_QUICK_SHORTCUT)) {
     // eslint-disable-next-line no-console
-    console.warn(`[ntrp] failed to register default global shortcut ${DEFAULT_QUICK_SHORTCUT} — already in use?`);
+    console.warn(`[arden] failed to register default global shortcut ${DEFAULT_QUICK_SHORTCUT} — already in use?`);
   }
 
   app.on("activate", () => {

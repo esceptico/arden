@@ -1,6 +1,6 @@
 # Event System Intel - 2026-05-08
 
-Scope: server and desktop event streaming for NTRP.
+Scope: server and desktop event streaming for ARDEN.
 
 ## External Systems
 
@@ -49,7 +49,7 @@ Weakness to avoid: Hermes does not provide a durable sequence/replay contract. G
 
 Path: `/Users/escept1co/src/letta`
 
-Letta has the best ordering and replay model. Stream messages include `message_type`, `run_id`, `seq_id`, `step_id`, and `otid`. Redis streams provide replay with a `starting_after` cursor. The exact Redis machinery is heavier than NTRP needs right now, but the contract is right.
+Letta has the best ordering and replay model. Stream messages include `message_type`, `run_id`, `seq_id`, `step_id`, and `otid`. Redis streams provide replay with a `starting_after` cursor. The exact Redis machinery is heavier than ARDEN needs right now, but the contract is right.
 
 Useful files:
 
@@ -79,36 +79,36 @@ Useful files:
 
 What to copy: control request/response/cancel request as a shape, task lifecycle events, parent tool use id.
 
-## Pre-Implementation NTRP Findings
+## Pre-Implementation ARDEN Findings
 
 These findings describe the state before the stable event-system implementation pass later in this file.
 
 ### High Confidence Bugs Found
 
 - Desktop can permanently lose tool results in fast bursts. `TOOL_CALL_END` can delay non-first activity rows with `setTimeout`, while `TOOL_CALL_RESULT` immediately tries to merge into a row that may not exist yet. Relevant files:
-  - `/Users/escept1co/src/ntrp/apps/desktop/src/hooks/useEvents.ts:39`
-  - `/Users/escept1co/src/ntrp/apps/desktop/src/hooks/useEvents.ts:220`
-  - `/Users/escept1co/src/ntrp/apps/desktop/src/hooks/useEvents.ts:252`
-  - `/Users/escept1co/src/ntrp/apps/desktop/src/store.ts:583`
+  - `/Users/escept1co/src/arden/apps/desktop/src/hooks/useEvents.ts:39`
+  - `/Users/escept1co/src/arden/apps/desktop/src/hooks/useEvents.ts:220`
+  - `/Users/escept1co/src/arden/apps/desktop/src/hooks/useEvents.ts:252`
+  - `/Users/escept1co/src/arden/apps/desktop/src/store.ts:583`
 - Cancelled runs still enqueue internal `RunCompleted`, which can feed memory extraction and count-trigger automations as if the run completed. Relevant files:
-  - `/Users/escept1co/src/ntrp/apps/server/ntrp/server/stream.py:36`
-  - `/Users/escept1co/src/ntrp/apps/server/ntrp/services/chat.py:476`
-  - `/Users/escept1co/src/ntrp/apps/server/ntrp/services/chat.py:522`
-  - `/Users/escept1co/src/ntrp/apps/server/ntrp/server/runtime/outbox.py:48`
-  - `/Users/escept1co/src/ntrp/apps/server/ntrp/automation/scheduler.py:173`
+  - `/Users/escept1co/src/arden/apps/server/arden/server/stream.py:36`
+  - `/Users/escept1co/src/arden/apps/server/arden/services/chat.py:476`
+  - `/Users/escept1co/src/arden/apps/server/arden/services/chat.py:522`
+  - `/Users/escept1co/src/arden/apps/server/arden/server/runtime/outbox.py:48`
+  - `/Users/escept1co/src/arden/apps/server/arden/automation/scheduler.py:173`
 - Legacy terminal streaming is out of scope.
 - SSE replay had no event id, no cursor, and no `Last-Event-ID`. The replay buffer was cleared after checkpoint saves, so reconnect could miss events. Relevant files:
-  - `/Users/escept1co/src/ntrp/apps/server/ntrp/events/sse.py:75`
-  - `/Users/escept1co/src/ntrp/apps/server/ntrp/server/bus.py:54`
-  - `/Users/escept1co/src/ntrp/apps/server/ntrp/services/chat.py:451`
-  - `/Users/escept1co/src/ntrp/apps/desktop/src/hooks/useEvents.ts:347`
-  - `/Users/escept1co/src/ntrp/apps/desktop/electron/main.cjs:187`
+  - `/Users/escept1co/src/arden/apps/server/arden/events/sse.py:75`
+  - `/Users/escept1co/src/arden/apps/server/arden/server/bus.py:54`
+  - `/Users/escept1co/src/arden/apps/server/arden/services/chat.py:451`
+  - `/Users/escept1co/src/arden/apps/desktop/src/hooks/useEvents.ts:347`
+  - `/Users/escept1co/src/arden/apps/desktop/electron/main.cjs:187`
 - `/cancel` returned cancelled even for unknown run ids, only cancelled `run.task`, and did not cancel `drain_task` or background tasks.
 - Blocking subprocess tools are not truly abortable. `bash` runs through `asyncio.to_thread`, so cancellation does not necessarily kill the underlying process.
 
 ### Architectural Fault Line
 
-NTRP mixes domain events and UI rendering rules across too many places:
+ARDEN mixes domain events and UI rendering rules across too many places:
 
 - Agent events are domain-ish.
 - `events/sse.py` converts domain-ish events into AG-UI-ish wire events.
@@ -123,7 +123,7 @@ This makes ordering, replay, and sub-agent display fragile. The stable direction
 4. Desktop applies events in sequence order and renders a projection.
 5. Sub-agents have first-class task lifecycle events linked to the parent tool call.
 
-## Target NTRP Event Envelope
+## Target ARDEN Event Envelope
 
 Every streamed event should eventually carry:
 

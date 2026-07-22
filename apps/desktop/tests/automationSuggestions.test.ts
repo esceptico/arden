@@ -14,10 +14,10 @@ afterEach(() => {
 function suggestion(overrides: Partial<AutomationSuggestion> = {}): AutomationSuggestion {
   return {
     id: "s1",
-    name: "Weekly ntrp PR digest",
-    description: "Summarize merged PRs in ntrp this week.",
+    name: "Weekly arden PR digest",
+    description: "Summarize merged PRs in arden this week.",
     triggers: [{ type: "time", at: "09:00", days: "mon" }],
-    rationale: "You review ntrp PRs most mornings",
+    rationale: "You review arden PRs most mornings",
     evidence: ["recent PR reviews"],
     category: "Status reports",
     icon: "GitPullRequest",
@@ -31,8 +31,8 @@ test("suggestionToPayload maps a time trigger to flat schedule fields", () => {
   );
 
   expect(payload).toEqual({
-    name: "Weekly ntrp PR digest",
-    description: "Summarize merged PRs in ntrp this week.",
+    name: "Weekly arden PR digest",
+    description: "Summarize merged PRs in arden this week.",
     from_suggestion_id: "s1",
     trigger_type: "time",
     at: "09:00",
@@ -50,8 +50,8 @@ test("suggestionToPayload maps an event trigger to flat schedule fields", () => 
   );
 
   expect(payload).toEqual({
-    name: "Weekly ntrp PR digest",
-    description: "Summarize merged PRs in ntrp this week.",
+    name: "Weekly arden PR digest",
+    description: "Summarize merged PRs in arden this week.",
     from_suggestion_id: "s2",
     trigger_type: "event",
     event_type: "approaching",
@@ -62,7 +62,7 @@ test("suggestionToPayload maps an event trigger to flat schedule fields", () => 
 test("dismissSuggestion removes from state and calls the API", async () => {
   let request: { path: string; method?: string; body?: string } | null = null;
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async (_config: unknown, req: typeof request) => {
           request = req;

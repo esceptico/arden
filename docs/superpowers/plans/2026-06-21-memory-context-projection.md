@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Improve ntrp memory by turning flat records into better generated markdown context without adding CRM-style typed memory.
+**Goal:** Improve Arden memory by turning flat records into better generated markdown context without adding CRM-style typed memory.
 
 **Architecture:** `RecordStore` remains canonical. Markdown remains a generated, read-only agent filesystem. This plan adds deterministic context pages and integration overview pages from existing records/source refs, then fixes docs to match the flat model.
 
@@ -14,12 +14,12 @@
 
 - Do not add new canonical memory kinds, facets, graph tables, lens tables, or derivation edges.
 - Do not bring back `sources/`, `files/`, or `docs/`; keep `references/`.
-- Do not edit unrelated dirty files in `apps/server/ntrp/agent/`, `apps/server/ntrp/core/spawner.py`, or `apps/server/tests/test_spawn_salvage.py`.
+- Do not edit unrelated dirty files in `apps/server/arden/agent/`, `apps/server/arden/core/spawner.py`, or `apps/server/tests/test_spawn_salvage.py`.
 - Preserve generated-artifact symlink/FIFO safety patterns.
 
 ## File Structure
 
-- Modify `apps/server/ntrp/memory/artifacts.py`: context directory registration, generated `context/` pages, integration grouping helpers.
+- Modify `apps/server/arden/memory/artifacts.py`: context directory registration, generated `context/` pages, integration grouping helpers.
 - Modify `apps/server/tests/test_memory_artifacts.py`: deterministic artifact tests.
 - Modify `apps/server/tests/test_memory_router.py`: route/browser contract expectations.
 - Modify `docs/api-reference/memory.mdx`: current flat model and generated artifact layout.
@@ -29,7 +29,7 @@
 ### Task 1: Generated Context Index And Schema
 
 **Files:**
-- Modify: `apps/server/ntrp/memory/artifacts.py`
+- Modify: `apps/server/arden/memory/artifacts.py`
 - Modify: `apps/server/tests/test_memory_artifacts.py`
 - Modify: `apps/server/tests/test_memory_router.py`
 
@@ -67,7 +67,7 @@ Expected: fail because `context/` is not registered/generated yet.
 
 - [ ] **Step 3: Implement minimal exporter support**
 
-In `apps/server/ntrp/memory/artifacts.py`:
+In `apps/server/arden/memory/artifacts.py`:
 
 - Add `"context": "topic"` to `ARTIFACT_DIR_KINDS`.
 - Include `context` in generated cleanup.
@@ -88,7 +88,7 @@ Expected: pass.
 - [ ] **Step 5: Commit only touched files**
 
 ```bash
-git add apps/server/ntrp/memory/artifacts.py apps/server/tests/test_memory_artifacts.py apps/server/tests/test_memory_router.py
+git add apps/server/arden/memory/artifacts.py apps/server/tests/test_memory_artifacts.py apps/server/tests/test_memory_router.py
 git commit -m "Add memory context artifact index"
 ```
 
@@ -97,7 +97,7 @@ git commit -m "Add memory context artifact index"
 ### Task 2: Generated Integration Reference Pages
 
 **Files:**
-- Modify: `apps/server/ntrp/memory/artifacts.py`
+- Modify: `apps/server/arden/memory/artifacts.py`
 - Modify: `apps/server/tests/test_memory_artifacts.py`
 - Modify: `apps/server/tests/test_memory_router.py`
 
@@ -108,7 +108,7 @@ Add a test with records carrying integration-like source refs and integration sc
 Expected setup:
 
 ```python
-from ntrp.memory.models import SourceRef
+from arden.memory.models import SourceRef
 
 await records.add(
     "Slack channel #eng discussed memory publish ordering",
@@ -150,7 +150,7 @@ Expected: fail because integration pages do not exist yet.
 
 - [ ] **Step 3: Implement mechanical integration pages**
 
-In `apps/server/ntrp/memory/artifacts.py`:
+In `apps/server/arden/memory/artifacts.py`:
 
 - Add helper `_integration_key(record)`:
   - Prefer known `source_ref.kind` values so per-message integration scopes do not fragment pages.
@@ -178,7 +178,7 @@ Expected: pass.
 - [ ] **Step 5: Commit only touched files**
 
 ```bash
-git add apps/server/ntrp/memory/artifacts.py apps/server/tests/test_memory_artifacts.py apps/server/tests/test_memory_router.py
+git add apps/server/arden/memory/artifacts.py apps/server/tests/test_memory_artifacts.py apps/server/tests/test_memory_router.py
 git commit -m "Add memory integration context artifacts"
 ```
 
@@ -188,7 +188,7 @@ git commit -m "Add memory integration context artifacts"
 
 **Files:**
 - Modify: `docs/api-reference/memory.mdx`
-- Optionally modify: `apps/server/ntrp/server/routers/memory.py`
+- Optionally modify: `apps/server/arden/server/routers/memory.py`
 - Optionally modify: `apps/server/tests/test_memory_router.py`
 
 - [ ] **Step 1: Fix docs**
@@ -235,6 +235,6 @@ Expected: no whitespace errors. Dirty unrelated files may remain, but only task 
 - [ ] **Step 5: Commit only docs/router test changes**
 
 ```bash
-git add docs/api-reference/memory.mdx apps/server/ntrp/server/routers/memory.py apps/server/tests/test_memory_router.py
+git add docs/api-reference/memory.mdx apps/server/arden/server/routers/memory.py apps/server/tests/test_memory_router.py
 git commit -m "Document flat memory context artifacts"
 ```

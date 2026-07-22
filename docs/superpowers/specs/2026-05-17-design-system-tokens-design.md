@@ -4,7 +4,7 @@
 **Status**: Draft pending user review
 **Research basis**: `docs/research/{glass-design,linen-design,color-rules,microactions,animations-by-material}.md`
 
-This spec codifies the application of the 5 research docs into the NTRP desktop app. Approach **A** chosen (tokens-first, surfaces-second): build a design-token layer that names every research finding as a primitive, then sweep consumers to replace inline literals with token references.
+This spec codifies the application of the 5 research docs into the ARDEN desktop app. Approach **A** chosen (tokens-first, surfaces-second): build a design-token layer that names every research finding as a primitive, then sweep consumers to replace inline literals with token references.
 
 ---
 

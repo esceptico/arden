@@ -4,34 +4,34 @@
 
 **Goal:** Replace scattered tool-control fields with one explicit `ToolPolicy`, then use it for approvals, audit, result limits, MCP classification, and run budgets.
 
-**Architecture:** Keep ntrp's existing manual model-tool-observation loop, tool registry, middleware chain, `SessionStore`, SSE replay, deferred tools, and provider adapters. Introduce one consolidated policy object at the tool boundary, then thread it through metadata, permission decisions, execution, persistence, and tests. Broader compaction, telemetry, eval, planning-mode, and skill-governance work stays as a roadmap after the first runtime-safety slice.
+**Architecture:** Keep Arden's existing manual model-tool-observation loop, tool registry, middleware chain, `SessionStore`, SSE replay, deferred tools, and provider adapters. Introduce one consolidated policy object at the tool boundary, then thread it through metadata, permission decisions, execution, persistence, and tests. Broader compaction, telemetry, eval, planning-mode, and skill-governance work stays as a roadmap after the first runtime-safety slice.
 
-**Tech Stack:** Python 3.13, Pydantic, FastAPI, aiosqlite, pytest, existing ntrp agent/tool abstractions.
+**Tech Stack:** Python 3.13, Pydantic, FastAPI, aiosqlite, pytest, existing Arden agent/tool abstractions.
 
 ---
 
 ## File Structure
 
-- `apps/server/ntrp/tools/core/types.py`: define `ToolAction`, `ToolScope`, `ToolPolicy`, and `PermissionDecision`.
-- `apps/server/ntrp/tools/core/base.py`: make `Tool.policy` required and expose policy metadata.
-- `apps/server/ntrp/tools/core/function.py`: require `policy` in `tool(...)` and `_FunctionTool`.
-- `apps/server/ntrp/tools/core/registry.py`: validate loaded tools have policy and use `policy.permissions`.
-- `apps/server/ntrp/tools/core/middleware.py`: use `policy.requires_approval` for approval routing.
-- `apps/server/ntrp/tools/core/context.py`: add bounded approval callbacks and structured rejection/expiry results.
-- `apps/server/ntrp/core/tool_executor.py`: apply timeout, audit, `max_result_chars`, and `offload` from policy.
-- `apps/server/ntrp/tools/deferred.py`: replace `requires` reads with `policy.permissions`.
-- `apps/server/ntrp/mcp/models.py`: parse MCP per-tool policies.
-- `apps/server/ntrp/mcp/manager.py`: pass MCP policy into tool construction.
-- `apps/server/ntrp/mcp/tool.py`: use configured or conservative default policy.
-- `apps/server/ntrp/context/store.py`: add durable `tool_calls` and `tool_approvals`.
-- `apps/server/ntrp/agent/tools/dispatch.py`: append cause-specific missing/cancelled results.
-- `apps/server/ntrp/agent/tools/runner.py`: preserve timeout/cancellation causes.
-- `apps/server/ntrp/agent/agent.py`: enforce tool-call, wall-time, and cost budgets.
-- `apps/server/ntrp/agent/types/stop.py`: add explicit budget stop reasons.
-- `apps/server/ntrp/config.py`: expose budget and approval timeout config.
-- `apps/server/ntrp/core/factory.py`: wire budgets into `Agent` and `RunContext`.
-- `apps/server/ntrp/services/chat.py`: persist stop reasons and approval/audit services.
-- `apps/server/ntrp/server/routers/chat.py`: resolve durable approval rows in `/tools/result`.
+- `apps/server/arden/tools/core/types.py`: define `ToolAction`, `ToolScope`, `ToolPolicy`, and `PermissionDecision`.
+- `apps/server/arden/tools/core/base.py`: make `Tool.policy` required and expose policy metadata.
+- `apps/server/arden/tools/core/function.py`: require `policy` in `tool(...)` and `_FunctionTool`.
+- `apps/server/arden/tools/core/registry.py`: validate loaded tools have policy and use `policy.permissions`.
+- `apps/server/arden/tools/core/middleware.py`: use `policy.requires_approval` for approval routing.
+- `apps/server/arden/tools/core/context.py`: add bounded approval callbacks and structured rejection/expiry results.
+- `apps/server/arden/core/tool_executor.py`: apply timeout, audit, `max_result_chars`, and `offload` from policy.
+- `apps/server/arden/tools/deferred.py`: replace `requires` reads with `policy.permissions`.
+- `apps/server/arden/mcp/models.py`: parse MCP per-tool policies.
+- `apps/server/arden/mcp/manager.py`: pass MCP policy into tool construction.
+- `apps/server/arden/mcp/tool.py`: use configured or conservative default policy.
+- `apps/server/arden/context/store.py`: add durable `tool_calls` and `tool_approvals`.
+- `apps/server/arden/agent/tools/dispatch.py`: append cause-specific missing/cancelled results.
+- `apps/server/arden/agent/tools/runner.py`: preserve timeout/cancellation causes.
+- `apps/server/arden/agent/agent.py`: enforce tool-call, wall-time, and cost budgets.
+- `apps/server/arden/agent/types/stop.py`: add explicit budget stop reasons.
+- `apps/server/arden/config.py`: expose budget and approval timeout config.
+- `apps/server/arden/core/factory.py`: wire budgets into `Agent` and `RunContext`.
+- `apps/server/arden/services/chat.py`: persist stop reasons and approval/audit services.
+- `apps/server/arden/server/routers/chat.py`: resolve durable approval rows in `/tools/result`.
 - Tests: `apps/server/tests/test_tools.py`, `test_mcp_config.py`, `test_mcp_tool.py`, `test_session_store.py`, `test_tool_runner.py`, `test_agent_lib.py`, and `test_chat_inject.py` for `/tools/result` approval resolution.
 
 ## Phase B Tasks
@@ -39,13 +39,13 @@
 ### Task 1: Define Consolidated Tool Policy Types
 
 **Files:**
-- Modify: `apps/server/ntrp/tools/core/types.py`
+- Modify: `apps/server/arden/tools/core/types.py`
 - Test: `apps/server/tests/test_tools.py`
 
 - [ ] Add failing tests that import the new policy types and assert the enum values.
 
 ```python
-from ntrp.tools.core.types import ToolAction, ToolPolicy, ToolScope
+from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
 
 
 def test_tool_policy_model_defaults():
@@ -67,7 +67,7 @@ Run: `cd apps/server && uv run pytest tests/test_tools.py::test_tool_policy_mode
 
 Expected: import failure for `ToolAction`, `ToolScope`, or `ToolPolicy`.
 
-- [ ] Implement the policy types in `apps/server/ntrp/tools/core/types.py`.
+- [ ] Implement the policy types in `apps/server/arden/tools/core/types.py`.
 
 ```python
 from enum import Enum
@@ -115,16 +115,16 @@ Expected: pass.
 ### Task 2: Require Policy On Core Tool Objects
 
 **Files:**
-- Modify: `apps/server/ntrp/tools/core/base.py`
-- Modify: `apps/server/ntrp/tools/core/function.py`
-- Modify: `apps/server/ntrp/tools/core/__init__.py`
+- Modify: `apps/server/arden/tools/core/base.py`
+- Modify: `apps/server/arden/tools/core/function.py`
+- Modify: `apps/server/arden/tools/core/__init__.py`
 - Test: `apps/server/tests/test_tools.py`
 
 - [ ] Add a failing test that builds a function tool with policy and checks metadata.
 
 ```python
-from ntrp.tools.core.function import tool
-from ntrp.tools.core.types import ToolAction, ToolPolicy, ToolScope
+from arden.tools.core.function import tool
+from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
 
 
 def test_function_tool_metadata_exposes_policy():
@@ -205,15 +205,15 @@ Expected: pass.
 ### Task 3: Migrate Built-In Tool Declarations To Policy
 
 **Files:**
-- Modify all files matching `apps/server/ntrp/tools/*.py`
-- Modify all files matching `apps/server/ntrp/integrations/*/tools.py`
-- Modify: `apps/server/ntrp/skills/tool.py`
+- Modify all files matching `apps/server/arden/tools/*.py`
+- Modify all files matching `apps/server/arden/integrations/*/tools.py`
+- Modify: `apps/server/arden/skills/tool.py`
 - Test: `apps/server/tests/test_tools.py`
 
 - [ ] Add a test that every registered tool has a `ToolPolicy`.
 
 ```python
-from ntrp.tools.core.types import ToolPolicy
+from arden.tools.core.types import ToolPolicy
 
 
 def test_all_registered_tools_have_policy(tool_executor):
@@ -224,8 +224,8 @@ def test_all_registered_tools_have_policy(tool_executor):
 If `test_tools.py` has no executor fixture, build one directly:
 
 ```python
-from ntrp.config import Config
-from ntrp.tools.executor import ToolExecutor
+from arden.config import Config
+from arden.tools.executor import ToolExecutor
 
 
 def test_all_registered_tools_have_policy():
@@ -271,7 +271,7 @@ If a tool previously had `offload=False`, use `offload=False` in policy.
 - [ ] Update imports in migrated files.
 
 ```python
-from ntrp.tools.core.types import ToolAction, ToolPolicy, ToolScope
+from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
 ```
 
 - [ ] Run the registry test again.
@@ -283,9 +283,9 @@ Expected: pass.
 ### Task 4: Switch Deferred Loading And Approval Middleware To Policy
 
 **Files:**
-- Modify: `apps/server/ntrp/tools/deferred.py`
-- Modify: `apps/server/ntrp/tools/core/registry.py`
-- Modify: `apps/server/ntrp/tools/core/middleware.py`
+- Modify: `apps/server/arden/tools/deferred.py`
+- Modify: `apps/server/arden/tools/core/registry.py`
+- Modify: `apps/server/arden/tools/core/middleware.py`
 - Test: `apps/server/tests/test_deferred_tools.py`
 - Test: `apps/server/tests/test_tools.py`
 
@@ -310,7 +310,7 @@ Expected: failures around missing `requires` or old metadata.
 Search command:
 
 ```bash
-rg -n "\.requires|requires=" apps/server/ntrp apps/server/tests
+rg -n "\.requires|requires=" apps/server/arden apps/server/tests
 ```
 
 Expected after migration: no production reads of `tool.requires`; only references to policy permissions or historical docs.
@@ -336,7 +336,7 @@ Expected: pass.
 ### Task 5: Apply Policy In Tool Executor
 
 **Files:**
-- Modify: `apps/server/ntrp/core/tool_executor.py`
+- Modify: `apps/server/arden/core/tool_executor.py`
 - Test: `apps/server/tests/test_tool_runner.py`
 - Test: `apps/server/tests/test_tools.py`
 
@@ -368,7 +368,7 @@ Run: `cd apps/server && uv run pytest tests/test_tool_runner.py tests/test_tools
 
 Expected: failures for timeout/result limit/offload policy.
 
-- [ ] Update `NtrpToolExecutor` to read `tool.policy.offload` instead of `tool.offload`.
+- [ ] Update `ArdenToolExecutor` to read `tool.policy.offload` instead of `tool.offload`.
 
 - [ ] Wrap tool execution with `asyncio.wait_for(...)` when `tool.policy.timeout_seconds` is not `None`.
 
@@ -395,8 +395,8 @@ Expected: pass.
 ### Task 6: Add Durable Tool Call Audit
 
 **Files:**
-- Modify: `apps/server/ntrp/context/store.py`
-- Modify: `apps/server/ntrp/core/tool_executor.py`
+- Modify: `apps/server/arden/context/store.py`
+- Modify: `apps/server/arden/core/tool_executor.py`
 - Test: `apps/server/tests/test_session_store.py`
 - Test: `apps/server/tests/test_tool_runner.py`
 
@@ -457,7 +457,7 @@ async def record_tool_call_finished(...): ...
 async def list_tool_calls(self, *, run_id: str) -> list[dict]: ...
 ```
 
-- [ ] In `NtrpToolExecutor`, when `tool.policy.audit` is true:
+- [ ] In `ArdenToolExecutor`, when `tool.policy.audit` is true:
 
 1. hash JSON-serialized validated args with sorted keys;
 2. record started before execution;
@@ -473,11 +473,11 @@ Expected: pass.
 ### Task 7: Add Durable Bounded Approvals
 
 **Files:**
-- Modify: `apps/server/ntrp/context/store.py`
-- Modify: `apps/server/ntrp/tools/core/context.py`
-- Modify: `apps/server/ntrp/services/chat.py`
-- Modify: `apps/server/ntrp/server/routers/chat.py`
-- Modify: `apps/server/ntrp/config.py`
+- Modify: `apps/server/arden/context/store.py`
+- Modify: `apps/server/arden/tools/core/context.py`
+- Modify: `apps/server/arden/services/chat.py`
+- Modify: `apps/server/arden/server/routers/chat.py`
+- Modify: `apps/server/arden/config.py`
 - Test: `apps/server/tests/test_session_store.py`
 - Test: `apps/server/tests/test_tools.py`
 
@@ -559,8 +559,8 @@ Expected: pass.
 ### Task 8: Preserve Explicit Abort Causes For Tool Results
 
 **Files:**
-- Modify: `apps/server/ntrp/agent/tools/dispatch.py`
-- Modify: `apps/server/ntrp/agent/tools/runner.py`
+- Modify: `apps/server/arden/agent/tools/dispatch.py`
+- Modify: `apps/server/arden/agent/tools/runner.py`
 - Test: `apps/server/tests/test_tool_runner.py`
 - Test: `apps/server/tests/test_agent_lib.py`
 
@@ -609,13 +609,13 @@ Expected: pass.
 ### Task 9: Enforce Run Budgets
 
 **Files:**
-- Modify: `apps/server/ntrp/constants.py`
-- Modify: `apps/server/ntrp/config.py`
-- Modify: `apps/server/ntrp/core/factory.py`
-- Modify: `apps/server/ntrp/tools/core/context.py`
-- Modify: `apps/server/ntrp/agent/agent.py`
-- Modify: `apps/server/ntrp/agent/types/stop.py`
-- Modify: `apps/server/ntrp/services/chat.py`
+- Modify: `apps/server/arden/constants.py`
+- Modify: `apps/server/arden/config.py`
+- Modify: `apps/server/arden/core/factory.py`
+- Modify: `apps/server/arden/tools/core/context.py`
+- Modify: `apps/server/arden/agent/agent.py`
+- Modify: `apps/server/arden/agent/types/stop.py`
+- Modify: `apps/server/arden/services/chat.py`
 - Test: `apps/server/tests/test_agent_lib.py`
 
 - [ ] Add failing tests for `max_iterations` being wired from `AgentConfig` into `Agent`.
@@ -649,7 +649,7 @@ agent_max_wall_time_seconds: float | None = None
 agent_max_cost: float | None = None
 ```
 
-Add the fields to `Config` using these exact names so env vars become `NTRP_AGENT_MAX_ITERATIONS`, `NTRP_AGENT_MAX_TOOL_CALLS`, `NTRP_AGENT_MAX_WALL_TIME_SECONDS`, and `NTRP_AGENT_MAX_COST`.
+Add the fields to `Config` using these exact names so env vars become `ARDEN_AGENT_MAX_ITERATIONS`, `ARDEN_AGENT_MAX_TOOL_CALLS`, `ARDEN_AGENT_MAX_WALL_TIME_SECONDS`, and `ARDEN_AGENT_MAX_COST`.
 
 - [ ] Add `max_iterations`, `max_tool_calls`, `max_wall_time_seconds`, and `max_cost` to `AgentConfig`.
 
@@ -678,9 +678,9 @@ Expected: pass.
 ### Task 10: MCP Tool Policies
 
 **Files:**
-- Modify: `apps/server/ntrp/mcp/models.py`
-- Modify: `apps/server/ntrp/mcp/manager.py`
-- Modify: `apps/server/ntrp/mcp/tool.py`
+- Modify: `apps/server/arden/mcp/models.py`
+- Modify: `apps/server/arden/mcp/manager.py`
+- Modify: `apps/server/arden/mcp/tool.py`
 - Test: `apps/server/tests/test_mcp_config.py`
 - Test: `apps/server/tests/test_mcp_tool.py`
 
@@ -751,7 +751,7 @@ Expected: pass.
 Run:
 
 ```bash
-rg -n "\bmutates\b|\bvolatile\b|\brequires\b|\.offload\b" apps/server/ntrp
+rg -n "\bmutates\b|\bvolatile\b|\brequires\b|\.offload\b" apps/server/arden
 ```
 
 Expected: no production use of removed tool fields; `requires_approval` is allowed.

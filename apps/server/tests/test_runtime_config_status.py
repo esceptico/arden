@@ -1,13 +1,13 @@
 import pytest
 from pydantic import ValidationError
 
-from ntrp.config import Config
-from ntrp.llm.models import EmbeddingModel, Provider
-from ntrp.server.runtime.config import RuntimeConfig
-from ntrp.server.runtime.core import Runtime
-from ntrp.server.runtime.knowledge import KnowledgeRuntime
-from ntrp.server.schemas import UpdateConfigRequest
-from ntrp.tools.memory import MEMORY_RECONCILER_SERVICE
+from arden.config import Config
+from arden.llm.models import EmbeddingModel, Provider
+from arden.server.runtime.config import RuntimeConfig
+from arden.server.runtime.core import Runtime
+from arden.server.runtime.knowledge import KnowledgeRuntime
+from arden.server.schemas import UpdateConfigRequest
+from arden.tools.memory import MEMORY_RECONCILER_SERVICE
 
 
 class _Integrations:
@@ -49,7 +49,7 @@ def test_update_config_request_rejects_non_positive_max_depth():
 
 @pytest.mark.asyncio
 async def test_runtime_reload_advances_config_version_after_success(monkeypatch):
-    import ntrp.server.runtime.config as config_module
+    import arden.server.runtime.config as config_module
 
     original = Config(memory=False)
     runtime = Runtime(config=original)
@@ -77,7 +77,7 @@ async def test_runtime_reload_advances_config_version_after_success(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_runtime_reload_does_not_advance_config_version_after_failure(monkeypatch):
-    import ntrp.server.runtime.config as config_module
+    import arden.server.runtime.config as config_module
 
     original = Config(memory=False)
     runtime = Runtime(config=original)
@@ -100,7 +100,7 @@ async def test_runtime_reload_does_not_advance_config_version_after_failure(monk
 
 @pytest.mark.asyncio
 async def test_runtime_reload_refreshes_models_before_reading_config(monkeypatch):
-    import ntrp.server.runtime.config as config_module
+    import arden.server.runtime.config as config_module
 
     events: list[str] = []
     updated = Config(memory=False, max_depth=12)
@@ -135,7 +135,7 @@ async def test_runtime_reload_refreshes_models_before_reading_config(monkeypatch
 
 @pytest.mark.asyncio
 async def test_knowledge_runtime_syncs_indexer_with_embedding_config(tmp_path, monkeypatch):
-    import ntrp.llm.models as llm_models
+    import arden.llm.models as llm_models
 
     monkeypatch.setitem(
         llm_models._registry._embedding_models,
@@ -143,7 +143,7 @@ async def test_knowledge_runtime_syncs_indexer_with_embedding_config(tmp_path, m
         EmbeddingModel("test-embedding", Provider.OPENAI, 3),
     )
 
-    initial = Config(ntrp_dir=tmp_path, memory=False, embedding_model=None)
+    initial = Config(arden_dir=tmp_path, memory=False, embedding_model=None)
     initial.db_dir.mkdir(parents=True, exist_ok=True)
     knowledge = KnowledgeRuntime(initial)
 
@@ -153,13 +153,13 @@ async def test_knowledge_runtime_syncs_indexer_with_embedding_config(tmp_path, m
     assert knowledge.indexer is None
     assert knowledge.search_index is None
 
-    enabled = Config(ntrp_dir=tmp_path, memory=False, embedding_model="test-embedding")
+    enabled = Config(arden_dir=tmp_path, memory=False, embedding_model="test-embedding")
     await knowledge.reload_config(enabled, stores=None)
 
     assert knowledge.indexer is not None
     assert knowledge.search_index is not None
 
-    disabled = Config(ntrp_dir=tmp_path, memory=False, embedding_model=None)
+    disabled = Config(arden_dir=tmp_path, memory=False, embedding_model=None)
     await knowledge.reload_config(disabled, stores=None)
 
     assert knowledge.indexer is None

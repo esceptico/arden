@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from ntrp.events.sse import (
+from arden.events.sse import (
     EventType,
     StreamResetEvent,
     TextMessageContentEvent,
@@ -11,9 +11,9 @@ from ntrp.events.sse import (
     ThinkingEvent,
     ToolCallArgsEvent,
 )
-from ntrp.server import sse_stream
-from ntrp.server.bus import BusRegistry, SessionBus, SessionEventWriter, StreamRecord
-from ntrp.server.sse_stream import live_records
+from arden.server import sse_stream
+from arden.server.bus import BusRegistry, SessionBus, SessionEventWriter, StreamRecord
+from arden.server.sse_stream import live_records
 
 
 def _seqs(records):
@@ -560,7 +560,7 @@ async def test_buffer_overflow_drops_oldest_silently():
     are dropped silently — replay sees only the tail. Documented behavior;
     the bump from 2k to 10k makes this rare in practice but the failure
     mode (orphaned tool-call events on the client) is on us if it hits."""
-    from ntrp.server.bus import RECENT_BUFFER_MAX
+    from arden.server.bus import RECENT_BUFFER_MAX
 
     bus = SessionBus(session_id="sess-1")
     overflow = RECENT_BUFFER_MAX + 50

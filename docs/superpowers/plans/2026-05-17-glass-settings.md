@@ -99,7 +99,7 @@ Above the `@layer components { … }` block (right after the existing "Glass fra
 - [ ] **Step 8: Typecheck**
 
 ```sh
-cd /Users/escept1co/src/ntrp/apps/desktop && bun run typecheck
+cd /Users/escept1co/src/arden/apps/desktop && bun run typecheck
 ```
 
 Expected: clean exit. No CSS-affecting TS changes.
@@ -111,7 +111,7 @@ The app should look identical before and after this task. All fallback values ma
 - [ ] **Step 10: Commit**
 
 ```sh
-cd /Users/escept1co/src/ntrp
+cd /Users/escept1co/src/arden
 git add apps/desktop/src/styles.css
 git commit -m "Add Smoke/Milk variants, parameterize glass via CSS custom properties
 
@@ -274,7 +274,7 @@ import { useGlassEffect } from "../lib/glass";
 - [ ] **Step 5: Typecheck**
 
 ```sh
-cd /Users/escept1co/src/ntrp/apps/desktop && bun run typecheck
+cd /Users/escept1co/src/arden/apps/desktop && bun run typecheck
 ```
 
 Expected: clean.
@@ -292,7 +292,7 @@ Expected: `"rgba(255, 255, 255, 0.35)"`. App still looks the same.
 - [ ] **Step 7: Commit**
 
 ```sh
-cd /Users/escept1co/src/ntrp
+cd /Users/escept1co/src/arden
 git add apps/desktop/src/store/types.ts apps/desktop/src/store/prefs.ts apps/desktop/src/lib/glass.ts apps/desktop/src/components/App.tsx
 git commit -m "Glass prefs: types, defaults, and useGlassEffect
 
@@ -365,7 +365,7 @@ export function RangeField({
 - [ ] **Step 2: Typecheck**
 
 ```sh
-cd /Users/escept1co/src/ntrp/apps/desktop && bun run typecheck
+cd /Users/escept1co/src/arden/apps/desktop && bun run typecheck
 ```
 
 Expected: clean.
@@ -373,7 +373,7 @@ Expected: clean.
 - [ ] **Step 3: Commit**
 
 ```sh
-cd /Users/escept1co/src/ntrp
+cd /Users/escept1co/src/arden
 git add apps/desktop/src/components/settings/RangeField.tsx
 git commit -m "Add RangeField primitive (labeled slider with value display)"
 ```
@@ -624,7 +624,7 @@ If the tab labels are defined as a typed union (e.g. `type SettingsTabId = "appe
 - [ ] **Step 4: Typecheck**
 
 ```sh
-cd /Users/escept1co/src/ntrp/apps/desktop && bun run typecheck
+cd /Users/escept1co/src/arden/apps/desktop && bun run typecheck
 ```
 
 Expected: clean.
@@ -641,7 +641,7 @@ Run the app, open Settings → Glass.
 - [ ] **Step 6: Commit**
 
 ```sh
-cd /Users/escept1co/src/ntrp
+cd /Users/escept1co/src/arden
 git add apps/desktop/src/components/settings/GlassTab.tsx apps/desktop/src/styles.css apps/desktop/src/components/SettingsModal.tsx
 git commit -m "Add Glass tab to Settings — per-variant tuning + live preview
 

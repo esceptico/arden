@@ -1,4 +1,4 @@
-from ntrp.core.prompts import build_system_blocks
+from arden.core.prompts import build_system_blocks
 
 
 def _text(blocks: list[dict]) -> str:

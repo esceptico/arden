@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make ntrp's current harness safe, restartable, idempotent, and evidence-bearing without replacing it.
+**Goal:** Make Arden's current harness safe, restartable, idempotent, and evidence-bearing without replacing it.
 
 **Architecture:** Fix known boundary bugs first. Then introduce one optional `ToolOutcome` carried by existing result/event/storage paths, generalize durable approval rows into suspensions, replay only provably safe work, and derive context/evidence sidecars from durable facts.
 
@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Keep abstractions simple and generic; do not add a parallel agent framework.
-- Preserve ntrp's provider adapters, loop, sessions, budgets, outbox, and SSE protocol.
+- Preserve Arden's provider adapters, loop, sessions, budgets, outbox, and SSE protocol.
 - Write a failing regression test before each production change.
 - Commit each task independently and stage only named paths.
 - Do not touch unrelated desktop or memory worktree changes.
@@ -22,8 +22,8 @@
 ### Task 1: Disable model-authored inline Python
 
 **Files:**
-- Modify: `apps/server/ntrp/orchestra/dynamic.py`
-- Modify: `apps/server/ntrp/tools/workflow.py`
+- Modify: `apps/server/arden/orchestra/dynamic.py`
+- Modify: `apps/server/arden/tools/workflow.py`
 - Test: `apps/server/tests/test_dynamic_orchestra.py`
 
 **Contract:** `build_dynamic_orchestra(...)` rejects any step with inline Python before compilation. Curated Python callables remain available through normal registered tools.
@@ -37,7 +37,7 @@
 ### Task 2: Prevent child tool-scope widening
 
 **Files:**
-- Modify: `apps/server/ntrp/core/spawner.py`
+- Modify: `apps/server/arden/core/spawner.py`
 - Test: `apps/server/tests/test_spawner.py`
 
 **Contract:** Child-visible tools are `requested ∩ parent_allowed ∩ registry`; an unset child request still inherits the parent boundary.
@@ -51,13 +51,13 @@
 ### Task 3: Separate display metadata from tool arguments
 
 **Files:**
-- Modify: `apps/server/ntrp/tools/core/base.py`
-- Modify: `apps/server/ntrp/tools/core/registry.py`
-- Modify: `apps/server/ntrp/events/sse.py`
+- Modify: `apps/server/arden/tools/core/base.py`
+- Modify: `apps/server/arden/tools/core/registry.py`
+- Modify: `apps/server/arden/events/sse.py`
 - Test: `apps/server/tests/test_tools.py`
 - Test: `apps/server/tests/test_event_contract.py`
 
-**Contract:** Display labels use `_ntrp_display_title` outside validated user arguments. A real schema field named `title` reaches the tool unchanged.
+**Contract:** Display labels use `_arden_display_title` outside validated user arguments. A real schema field named `title` reaches the tool unchanged.
 
 - [ ] Add a tool with a required `title` and prove registry execution currently strips it.
 - [ ] Replace the pseudo-argument with namespaced event/provider metadata.
@@ -68,9 +68,9 @@
 ### Task 4: Reject malformed tool arguments without execution
 
 **Files:**
-- Modify: `apps/server/ntrp/agent/llm/parsing.py`
-- Modify: `apps/server/ntrp/agent/types/tool_call.py`
-- Modify: `apps/server/ntrp/agent/tools/runner.py`
+- Modify: `apps/server/arden/agent/llm/parsing.py`
+- Modify: `apps/server/arden/agent/types/tool_call.py`
+- Modify: `apps/server/arden/agent/tools/runner.py`
 - Test: `apps/server/tests/test_agent_lib.py`
 - Test: `apps/server/tests/test_tool_runner.py`
 
@@ -85,8 +85,8 @@
 ### Task 5: Contain background result paths
 
 **Files:**
-- Modify: `apps/server/ntrp/tools/background.py`
-- Modify: `apps/server/ntrp/tools/core/context.py`
+- Modify: `apps/server/arden/tools/background.py`
+- Modify: `apps/server/arden/tools/core/context.py`
 - Test: `apps/server/tests/test_background_tool.py`
 
 **Contract:** A result can be read only for a task owned by the current run/session, and every resolved fallback path remains under `RESULT_BASE`.
@@ -100,10 +100,10 @@
 ### Task 6: Add the generic terminal outcome contract
 
 **Files:**
-- Modify: `apps/server/ntrp/agent/types/tools.py`
-- Modify: `apps/server/ntrp/agent/types/events.py`
-- Modify: `apps/server/ntrp/agent/tools/runner.py`
-- Modify: `apps/server/ntrp/core/tool_executor.py`
+- Modify: `apps/server/arden/agent/types/tools.py`
+- Modify: `apps/server/arden/agent/types/events.py`
+- Modify: `apps/server/arden/agent/tools/runner.py`
+- Modify: `apps/server/arden/core/tool_executor.py`
 - Test: `apps/server/tests/test_tool_runner.py`
 - Test: `apps/server/tests/test_tools.py`
 
@@ -119,9 +119,9 @@
 ### Task 7: Persist and project tool outcomes
 
 **Files:**
-- Modify: `apps/server/ntrp/context/store.py`
-- Modify: `apps/server/ntrp/core/tool_executor.py`
-- Modify: `apps/server/ntrp/events/sse.py`
+- Modify: `apps/server/arden/context/store.py`
+- Modify: `apps/server/arden/core/tool_executor.py`
+- Modify: `apps/server/arden/events/sse.py`
 - Modify: `apps/desktop/src/stores/chat-stream-types.ts`
 - Modify: `apps/desktop/src/stores/transcript-projection.ts`
 - Test: `apps/server/tests/test_session_store.py`
@@ -139,9 +139,9 @@
 ### Task 8: Generalize approvals into durable suspensions
 
 **Files:**
-- Modify: `apps/server/ntrp/context/store.py`
-- Modify: `apps/server/ntrp/tools/core/context.py`
-- Modify: `apps/server/ntrp/server/routers/chat.py`
+- Modify: `apps/server/arden/context/store.py`
+- Modify: `apps/server/arden/tools/core/context.py`
+- Modify: `apps/server/arden/server/routers/chat.py`
 - Test: `apps/server/tests/test_session_store.py`
 - Test: `apps/server/tests/test_chat_inject.py`
 
@@ -157,10 +157,10 @@
 ### Task 9: Resume suspended foreground runs safely
 
 **Files:**
-- Modify: `apps/server/ntrp/services/chat.py`
-- Modify: `apps/server/ntrp/agent/agent.py`
-- Modify: `apps/server/ntrp/agent/llm/parsing.py`
-- Modify: `apps/server/ntrp/server/state.py`
+- Modify: `apps/server/arden/services/chat.py`
+- Modify: `apps/server/arden/agent/agent.py`
+- Modify: `apps/server/arden/agent/llm/parsing.py`
+- Modify: `apps/server/arden/server/state.py`
 - Test: `apps/server/tests/test_streaming_events.py`
 - Test: `apps/server/tests/test_agent_lib.py`
 - Test: `apps/server/tests/test_chat_inject.py`
@@ -178,10 +178,10 @@
 ### Task 10: Make background completion exactly-once
 
 **Files:**
-- Modify: `apps/server/ntrp/context/store.py`
-- Modify: `apps/server/ntrp/tools/core/context.py`
-- Modify: `apps/server/ntrp/services/chat.py`
-- Modify: `apps/server/ntrp/server/bus.py`
+- Modify: `apps/server/arden/context/store.py`
+- Modify: `apps/server/arden/tools/core/context.py`
+- Modify: `apps/server/arden/services/chat.py`
+- Modify: `apps/server/arden/server/bus.py`
 - Test: `apps/server/tests/test_session_store.py`
 - Test: `apps/server/tests/test_streaming_events.py`
 
@@ -197,10 +197,10 @@
 ### Task 11: Persist context manifests and derive run evidence
 
 **Files:**
-- Modify: `apps/server/ntrp/core/content.py`
-- Modify: `apps/server/ntrp/core/prompts.py`
-- Modify: `apps/server/ntrp/context/store.py`
-- Modify: `apps/server/ntrp/services/chat.py`
+- Modify: `apps/server/arden/core/content.py`
+- Modify: `apps/server/arden/core/prompts.py`
+- Modify: `apps/server/arden/context/store.py`
+- Modify: `apps/server/arden/services/chat.py`
 - Test: `apps/server/tests/test_prompts.py`
 - Test: `apps/server/tests/test_session_store.py`
 

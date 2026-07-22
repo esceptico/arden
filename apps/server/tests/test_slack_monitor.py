@@ -14,10 +14,10 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-import ntrp.database as database
-from ntrp.events.triggers import MessageReceived
-from ntrp.monitor.slack import SlackMonitor
-from ntrp.monitor.store import MonitorStateStore
+import arden.database as database
+from arden.events.triggers import MessageReceived
+from arden.monitor.slack import SlackMonitor
+from arden.monitor.store import MonitorStateStore
 
 CHANNEL = "C123"
 NS = f"slack:{CHANNEL}"

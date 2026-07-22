@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from ntrp.memory.artifacts import ArtifactMemoryStore
-from ntrp.memory.link_index import LinkIndex
-from ntrp.server.runtime.knowledge import LinkIndexProjection
+from arden.memory.artifacts import ArtifactMemoryStore
+from arden.memory.link_index import LinkIndex
+from arden.server.runtime.knowledge import LinkIndexProjection
 
 
 def _write(path: Path, content: str) -> None:
@@ -167,9 +167,13 @@ def test_fragment_only_and_nested_basename_resolution_are_explicit(tmp_path: Pat
 
     assert ambiguous[0].resolved_path == "source.md"
     assert ambiguous[1].status == ambiguous[2].status == "ambiguous"
-    assert ambiguous[1].candidates == ambiguous[2].candidates == (
-        "nested/alpha.md",
-        "other/alpha.md",
+    assert (
+        ambiguous[1].candidates
+        == ambiguous[2].candidates
+        == (
+            "nested/alpha.md",
+            "other/alpha.md",
+        )
     )
 
 
@@ -201,7 +205,7 @@ def test_rebuild_replaces_renamed_pages_and_round_trips_snapshot(tmp_path: Path)
     assert second.backlinks("old.md") == ()
     assert [link.source_path for link in second.backlinks("renamed.md")] == ["source.md"]
     assert reloaded == second
-    assert json.loads((tmp_path / ".ntrp/indexes/links.json").read_text())["revision"] == "revision-2"
+    assert json.loads((tmp_path / ".arden/indexes/links.json").read_text())["revision"] == "revision-2"
 
 
 def test_rebuild_indexes_arbitrary_user_files_but_excludes_engine_and_symlinks(tmp_path: Path):
@@ -210,7 +214,7 @@ def test_rebuild_indexes_arbitrary_user_files_but_excludes_engine_and_symlinks(t
     _write(tmp_path / "target.md", "# Target\n")
     _write(tmp_path / "nested/custom.txt", "# Custom\n\n[[Target]]\n")
     _write(tmp_path / "raw/private.md", "[[Target]]\n")
-    _write(tmp_path / ".ntrp/private.md", "[[Target]]\n")
+    _write(tmp_path / ".arden/private.md", "[[Target]]\n")
     try:
         (tmp_path / "linked.md").symlink_to(outside)
     except (NotImplementedError, OSError) as exc:
@@ -220,7 +224,7 @@ def test_rebuild_indexes_arbitrary_user_files_but_excludes_engine_and_symlinks(t
 
     assert [link.source_path for link in snapshot.backlinks("target.md")] == ["nested/custom.txt"]
     assert snapshot.outgoing("raw/private.md") == ()
-    assert snapshot.outgoing(".ntrp/private.md") == ()
+    assert snapshot.outgoing(".arden/private.md") == ()
     assert snapshot.outgoing("linked.md") == ()
 
 
@@ -229,11 +233,11 @@ def test_failed_snapshot_publish_keeps_last_valid_snapshot(tmp_path: Path, monke
     _write(tmp_path / "source.md", "[[Target]]\n")
     index = LinkIndex(tmp_path)
     first = index.rebuild(ArtifactMemoryStore(tmp_path), "revision-1")
-    persisted = (tmp_path / ".ntrp/indexes/links.json").read_bytes()
+    persisted = (tmp_path / ".arden/indexes/links.json").read_bytes()
     real_rename = os.rename
 
     def fail_snapshot(source, target, **kwargs):
-        if target == "links.json" or Path(target) == tmp_path / ".ntrp/indexes/links.json":
+        if target == "links.json" or Path(target) == tmp_path / ".arden/indexes/links.json":
             raise OSError("index unavailable")
         return real_rename(source, target, **kwargs)
 
@@ -242,7 +246,7 @@ def test_failed_snapshot_publish_keeps_last_valid_snapshot(tmp_path: Path, monke
         index.rebuild(ArtifactMemoryStore(tmp_path), "revision-2")
 
     assert index.snapshot == first
-    assert (tmp_path / ".ntrp/indexes/links.json").read_bytes() == persisted
+    assert (tmp_path / ".arden/indexes/links.json").read_bytes() == persisted
 
 
 def test_snapshot_publish_stays_anchored_when_parent_path_is_swapped(tmp_path: Path, monkeypatch):
@@ -258,15 +262,15 @@ def test_snapshot_publish_stays_anchored_when_parent_path_is_swapped(tmp_path: P
         nonlocal swapped
         if target == "links.json" and not swapped:
             swapped = True
-            real_rename(tmp_path / ".ntrp/indexes", tmp_path / ".ntrp/indexes-real")
-            (tmp_path / ".ntrp/indexes").symlink_to(outside, target_is_directory=True)
+            real_rename(tmp_path / ".arden/indexes", tmp_path / ".arden/indexes-real")
+            (tmp_path / ".arden/indexes").symlink_to(outside, target_is_directory=True)
         return real_rename(source, target, **kwargs)
 
     monkeypatch.setattr(os, "rename", swap_parent_before_publish)
     index.rebuild(ArtifactMemoryStore(tmp_path), "revision-2")
 
     assert tuple(outside.iterdir()) == ()
-    assert json.loads((tmp_path / ".ntrp/indexes-real/links.json").read_text())["revision"] == "revision-2"
+    assert json.loads((tmp_path / ".arden/indexes-real/links.json").read_text())["revision"] == "revision-2"
 
 
 @pytest.mark.parametrize(
@@ -306,7 +310,7 @@ def test_semantically_corrupt_persisted_snapshot_loads_empty_and_stale(tmp_path:
     _write(tmp_path / "target.md", "# Target\n")
     _write(tmp_path / "source.md", "[[Target]]\n")
     LinkIndex(tmp_path).rebuild(ArtifactMemoryStore(tmp_path), "revision-1")
-    path = tmp_path / ".ntrp/indexes/links.json"
+    path = tmp_path / ".arden/indexes/links.json"
     data = json.loads(path.read_text())
     mutate(data)
     path.write_text(json.dumps(data), encoding="utf-8")
@@ -325,9 +329,9 @@ def test_semantically_corrupt_persisted_snapshot_loads_empty_and_stale(tmp_path:
 def test_snapshot_write_rejects_symlinked_index_parent(tmp_path: Path):
     outside = tmp_path / "outside"
     outside.mkdir()
-    (tmp_path / ".ntrp").mkdir()
+    (tmp_path / ".arden").mkdir()
     try:
-        (tmp_path / ".ntrp/indexes").symlink_to(outside, target_is_directory=True)
+        (tmp_path / ".arden/indexes").symlink_to(outside, target_is_directory=True)
     except (NotImplementedError, OSError) as exc:
         pytest.skip(f"symlinks unavailable: {exc}")
     _write(tmp_path / "source.md", "[[Missing]]\n")
@@ -469,11 +473,11 @@ async def test_projection_close_joins_active_rebuild_and_rejects_late_callbacks(
     assert not closing.done()
     release.set()
     await closing
-    snapshot = (tmp_path / ".ntrp/indexes/links.json").read_bytes()
+    snapshot = (tmp_path / ".arden/indexes/links.json").read_bytes()
     projection.schedule()
     projection.retry_now()
     await asyncio.sleep(0)
 
     assert projection.closed is True
     assert projection.retry_scheduled is False
-    assert (tmp_path / ".ntrp/indexes/links.json").read_bytes() == snapshot
+    assert (tmp_path / ".arden/indexes/links.json").read_bytes() == snapshot

@@ -3,11 +3,11 @@ import asyncio
 import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
-from ntrp.agent import ToolResult, ToolStarted
-from ntrp.events.sse import ToolCallArgsEvent, ToolCallStartEvent, agent_events_to_sse
-from ntrp.tools.core.base import RESERVED_ARG_KEYS, TITLE_ARG, Tool
-from ntrp.tools.core.registry import ToolRegistry
-from ntrp.tools.core.types import ToolAction, ToolPolicy, ToolScope
+from arden.agent import ToolResult, ToolStarted
+from arden.events.sse import ToolCallArgsEvent, ToolCallStartEvent, agent_events_to_sse
+from arden.tools.core.base import RESERVED_ARG_KEYS, TITLE_ARG, Tool
+from arden.tools.core.registry import ToolRegistry
+from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
 
 
 class _StrictIn(BaseModel):

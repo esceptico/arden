@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
  *  In a plain browser tab there is no native chrome, so this is false. */
 export const IS_DESKTOP_MAC =
   typeof window !== "undefined" &&
-  !!window.ntrpDesktop &&
+  !!window.ardenDesktop &&
   typeof navigator !== "undefined" &&
   navigator.platform.toUpperCase().includes("MAC");
 
@@ -16,8 +16,8 @@ export function useHasTrafficLights(): boolean {
   const [fullscreen, setFullscreen] = useState(false);
   useEffect(() => {
     if (!IS_DESKTOP_MAC) return;
-    void window.ntrpDesktop?.window?.isFullScreen?.().then(setFullscreen);
-    return window.ntrpDesktop?.window?.onFullScreenChange?.(setFullscreen);
+    void window.ardenDesktop?.window?.isFullScreen?.().then(setFullscreen);
+    return window.ardenDesktop?.window?.onFullScreenChange?.(setFullscreen);
   }, []);
   return IS_DESKTOP_MAC && !fullscreen;
 }

@@ -4,14 +4,14 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import BaseModel
 
-from ntrp.agent.ledger import SharedLedger
-from ntrp.context.models import SessionState
-from ntrp.core.tool_executor import NtrpToolExecutor
-from ntrp.tools.core import ToolResult, tool
-from ntrp.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
-from ntrp.tools.core.registry import ToolRegistry
-from ntrp.tools.core.types import ToolAction, ToolPolicy, ToolScope
-from ntrp.tools.executor import ToolExecutor
+from arden.agent.ledger import SharedLedger
+from arden.context.models import SessionState
+from arden.core.tool_executor import ArdenToolExecutor
+from arden.tools.core import ToolResult, tool
+from arden.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
+from arden.tools.core.registry import ToolRegistry
+from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
+from arden.tools.executor import ToolExecutor
 
 READ_INTERNAL_POLICY = ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL)
 
@@ -26,7 +26,7 @@ def _tool_context(registry: ToolRegistry) -> ToolContext:
 
 
 @pytest.mark.asyncio
-async def test_ntrp_tool_executor_skips_duplicate_successful_read():
+async def test_arden_tool_executor_skips_duplicate_successful_read():
     calls = 0
     first_started = asyncio.Event()
     release_first = asyncio.Event()
@@ -51,7 +51,7 @@ async def test_ntrp_tool_executor_skips_duplicate_successful_read():
             policy=READ_INTERNAL_POLICY,
         ),
     )
-    executor = NtrpToolExecutor(
+    executor = ArdenToolExecutor(
         ToolExecutor().with_registry(registry),
         _tool_context(registry),
         ledger=SharedLedger(),
@@ -74,7 +74,7 @@ async def test_ntrp_tool_executor_skips_duplicate_successful_read():
 
 
 @pytest.mark.asyncio
-async def test_ntrp_tool_executor_retries_duplicate_read_after_failure():
+async def test_arden_tool_executor_retries_duplicate_read_after_failure():
     calls = 0
     first_started = asyncio.Event()
     release_first = asyncio.Event()
@@ -101,7 +101,7 @@ async def test_ntrp_tool_executor_retries_duplicate_read_after_failure():
             policy=READ_INTERNAL_POLICY,
         ),
     )
-    executor = NtrpToolExecutor(
+    executor = ArdenToolExecutor(
         ToolExecutor().with_registry(registry),
         _tool_context(registry),
         ledger=SharedLedger(),
@@ -124,7 +124,7 @@ async def test_ntrp_tool_executor_retries_duplicate_read_after_failure():
 
 
 @pytest.mark.asyncio
-async def test_ntrp_tool_executor_allows_duplicate_reads_by_default():
+async def test_arden_tool_executor_allows_duplicate_reads_by_default():
     calls = 0
 
     class SearchInput(BaseModel):
@@ -145,7 +145,7 @@ async def test_ntrp_tool_executor_allows_duplicate_reads_by_default():
             policy=READ_INTERNAL_POLICY,
         ),
     )
-    executor = NtrpToolExecutor(ToolExecutor().with_registry(registry), _tool_context(registry), ledger=SharedLedger())
+    executor = ArdenToolExecutor(ToolExecutor().with_registry(registry), _tool_context(registry), ledger=SharedLedger())
 
     first_result = await executor.execute("search", {"query": "mcp"}, "call-1")
     second_result = await executor.execute("search", {"query": "mcp"}, "call-2")
@@ -177,7 +177,7 @@ async def test_duplicate_read_retries_after_post_processing_failure(monkeypatch)
             policy=READ_INTERNAL_POLICY,
         ),
     )
-    executor = NtrpToolExecutor(
+    executor = ArdenToolExecutor(
         ToolExecutor().with_registry(registry),
         _tool_context(registry),
         ledger=SharedLedger(),

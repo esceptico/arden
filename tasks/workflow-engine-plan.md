@@ -1,13 +1,13 @@
-# Workflow engine for ntrp (Shape A1 — registered Python workflows)
+# Workflow engine for arden (Shape A1 — registered Python workflows)
 
-Port ultracode's deterministic orchestration into ntrp. Workflows are **Python
+Port ultracode's deterministic orchestration into arden. Workflows are **Python
 modules registered like skills**, invoked by name via a `workflow` tool. The LLM
 picks one + passes args; the orchestration itself is plain Python (no codegen,
 no sandbox).
 
 ## Why this is small
 
-`apps/server/ntrp/tools/research.py` is already a hand-rolled single-purpose
+`apps/server/arden/tools/research.py` is already a hand-rolled single-purpose
 version of this. It: grabs `ctx.spawn_fn`, builds a tools list + system prompt,
 calls `spawn_fn(... wait=True)`, returns `spawn.text`. The engine just
 generalizes that and adds combinators.
@@ -19,7 +19,7 @@ Already exists → reuse:
 - `asyncio.TaskGroup` fan-out — already the pattern in `agent/tools/runner.py:90`.
 - `TaskStartedEvent/TaskProgressEvent/TaskFinishedEvent` (events/sse.py) — spawn
   already emits these per child; phase/log piggyback on the same bus.
-- Skill scanning pattern (`skills/`, `.skills/`, `~/.ntrp/skills/`) — mirror for workflows.
+- Skill scanning pattern (`skills/`, `.skills/`, `~/.arden/skills/`) — mirror for workflows.
 - `ToolPolicy` + `tool(...)` registration pattern (research.py:308).
 
 Net new → build:
@@ -30,7 +30,7 @@ Net new → build:
 
 ## Files
 
-### NEW `apps/server/ntrp/orchestra/engine.py`
+### NEW `apps/server/arden/orchestra/engine.py`
 `Orchestra` dataclass holding `ctx` + a concurrency `Semaphore(AGENT_MAX_CONCURRENT)`.
 - `agent(task, *, schema=None, tools=None, model=None, system_prompt=None, label=None, phase=None)`
   → `await ctx.spawn_fn(..., wait=True, agent_type="workflow")`; returns
@@ -45,7 +45,7 @@ JS `Promise.allSettled`). To match the Workflow tool's "failed item → null,
 others survive", wrap every thunk so an exception is caught and returned as
 `None`. Callers `.filter`/comprehension out the `None`s.
 
-### NEW `apps/server/ntrp/orchestra/schema.py`
+### NEW `apps/server/arden/orchestra/schema.py`
 `coerce(text, schema) -> BaseModel`: extract the JSON blob from the subagent's
 final text, `schema.model_validate_json(...)`.
 - MVP: on `ValidationError`, `agent()` re-asks the subagent ONCE with the error
@@ -55,12 +55,12 @@ final text, `schema.model_validate_json(...)`.
   exists in `llm/anthropic.py` / `gemini.py` / `openai_codex.py`, OR force a
   `submit(payload)` finishing tool. Removes the parse-and-pray step.
 
-### NEW `apps/server/ntrp/orchestra/registry.py`
-Scan `workflows/` (builtin) + `.workflows/` (project) + `~/.ntrp/workflows/`
+### NEW `apps/server/arden/orchestra/registry.py`
+Scan `workflows/` (builtin) + `.workflows/` (project) + `~/.arden/workflows/`
 (global), import each module, collect `META` + `run`. `WORKFLOWS: dict[str, Workflow]`.
 `Workflow` = `{meta, params: type[BaseModel], run: Callable[[Orchestra, BaseModel], Awaitable]}`.
 
-### NEW `apps/server/ntrp/tools/workflow.py`
+### NEW `apps/server/arden/tools/workflow.py`
 `workflow` tool (`ToolPolicy(action=READ, scope=INTERNAL)`, `kind="agent"`):
 - input `{name: str, args: dict}`.
 - unknown name → return `is_error` listing available names (self-correcting; do
@@ -69,7 +69,7 @@ Scan `workflows/` (builtin) + `.workflows/` (project) + `~/.ntrp/workflows/`
   return `ToolResult(content=render(result), data={...})`.
 - guard `if not ctx.spawn_fn` like research.py:174.
 
-### NEW `apps/server/ntrp/workflows/review_diff.py` (example)
+### NEW `apps/server/arden/workflows/review_diff.py` (example)
 `META` + `ReviewParams(base="main")` + `run(o, args)`:
 pipeline(DIMENSIONS, review→FindingList schema, verify each finding in parallel),
 flatten + filter to confirmed. ~40 lines. Reads like the JS demo, in Python.
@@ -93,7 +93,7 @@ flatten + filter to confirmed. ~40 lines. Reads like the JS demo, in Python.
 - Do workflows get their own progress event type, or reuse `TaskProgressEvent`? — reuse for MVP.
 
 ## Lean check
-This generalizes ntrp's OWN `research.py` orchestration; it does not import a
+This generalizes Arden's OWN `research.py` orchestration; it does not import a
 foreign framework's mechanics. The reasoning loop still drives WHEN to invoke a
 workflow; the workflow only makes the fan-out deterministic + reusable. (cf.
 lessons: lean over framework mechanics.)

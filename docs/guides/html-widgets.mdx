@@ -33,16 +33,16 @@ Prefer semantic HTML and the built-in widget styles for common controls: heading
 
 ## Input widgets
 
-Submit exactly once with `ntrp.submit({...})`, or use `ntrp.submitForm(form)` for normal form collection.
+Submit exactly once with `arden.submit({...})`, or use `arden.submitForm(form)` for normal form collection.
 
 ```html
-<form onsubmit="ntrp.submitForm(this); return false">
+<form onsubmit="arden.submitForm(this); return false">
   <label class="field">
     Rating
     <input name="rating" type="number" min="1" max="5" />
   </label>
   <div class="actions">
-    <button type="button" onclick="ntrp.cancel()">Cancel</button>
+    <button type="button" onclick="arden.cancel()">Cancel</button>
     <button class="primary" type="submit">Submit</button>
   </div>
 </form>

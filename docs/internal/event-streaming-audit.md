@@ -8,13 +8,13 @@ Scope: server event production, replay, desktop propagation, UI projection, and 
 
 The server currently has a real event ledger plus a live SSE fanout.
 
-`apps/server/ntrp/events/sse.py` defines the public event vocabulary. It mixes AG-UI-style run/text/tool events (`RUN_STARTED`, `TEXT_MESSAGE_CONTENT`, `TOOL_CALL_RESULT`) with ntrp-specific events (`background_task`, `stream_reset`, `compaction_*`, `automation_*`, `goal_*`). `agent_events_to_sse()` is the main adapter from internal agent events to SSE events.
+`apps/server/arden/events/sse.py` defines the public event vocabulary. It mixes AG-UI-style run/text/tool events (`RUN_STARTED`, `TEXT_MESSAGE_CONTENT`, `TOOL_CALL_RESULT`) with arden-specific events (`background_task`, `stream_reset`, `compaction_*`, `automation_*`, `goal_*`). `agent_events_to_sse()` is the main adapter from internal agent events to SSE events.
 
-`apps/server/ntrp/server/bus.py` is the live event bus. `SessionBus.emit()` assigns a monotonic per-session `seq`, writes a `StreamRecord`, appends to the in-memory replay buffer, optionally persists through `record_event`, and fans out to subscribers. `subscribe_with_replay(after_seq)` returns buffered events after the cursor unless a checkpoint or buffer boundary forces a replay gap.
+`apps/server/arden/server/bus.py` is the live event bus. `SessionBus.emit()` assigns a monotonic per-session `seq`, writes a `StreamRecord`, appends to the in-memory replay buffer, optionally persists through `record_event`, and fans out to subscribers. `subscribe_with_replay(after_seq)` returns buffered events after the cursor unless a checkpoint or buffer boundary forces a replay gap.
 
-`apps/server/ntrp/context/store.py` persists `session_events` as the durable stream ledger. It reconstructs `StreamRecord` objects from stored event JSON. `chat_runs.last_seq` is also used as a checkpoint watermark for recovery.
+`apps/server/arden/context/store.py` persists `session_events` as the durable stream ledger. It reconstructs `StreamRecord` objects from stored event JSON. `chat_runs.last_seq` is also used as a checkpoint watermark for recovery.
 
-`apps/server/ntrp/server/routers/chat.py` exposes the session SSE endpoint. It subscribes to the bus, replays buffered records, emits `stream_reset` on replay gap, and sends keepalive comments with the latest seq.
+`apps/server/arden/server/routers/chat.py` exposes the session SSE endpoint. It subscribes to the bus, replays buffered records, emits `stream_reset` on replay gap, and sends keepalive comments with the latest seq.
 
 `apps/desktop/electron/main.cjs` reads the SSE response and forwards only `data:` lines over IPC as `events:data`. Comment keepalives are ignored. Browser fallback in `apps/desktop/src/hooks/useEvents.ts` behaves similarly through `EventSource`/stream parsing.
 
@@ -26,18 +26,18 @@ The server currently has a real event ledger plus a live SSE fanout.
 
 | Area | Evidence | Meaning |
 | --- | --- | --- |
-| Event vocabulary | `apps/server/ntrp/events/sse.py:33` defines mixed AG-UI and ntrp-specific `EventType` values | The stream is one shared channel for transcript, lifecycle, tools, background, automations, compaction, and goals |
-| Text final event | `apps/server/ntrp/events/sse.py:157` carries cumulative `TextMessageEndEvent.content` | Server already has a final reconciliation payload |
-| Agent adapter | `apps/server/ntrp/events/sse.py:479` maps internal agent events to SSE events | Internal agent events are not the desktop contract; SSE is the boundary |
-| Dropped cumulative block | `apps/server/ntrp/events/sse.py:512` drops `TextBlock` to avoid duplicate UI text | Correct for streaming, but it increases importance of `TEXT_MESSAGE_END` reconciliation |
-| Live bus | `apps/server/ntrp/server/bus.py:81` assigns seq, stores recent records, persists, then fans out | `SessionBus` is both live fanout and volatile replay buffer |
-| Replay floor | `apps/server/ntrp/server/bus.py:102` filters replay by `max(after_seq, checkpoint_seq)` | Checkpoint decides whether desktop should reload history |
-| Replay gap detection | `apps/server/ntrp/server/bus.py:119` treats future cursors, below-checkpoint cursors, and evicted buffers as gaps | The server already distinguishes safe replay from reset-required replay |
-| Durable ledger | `apps/server/ntrp/context/store.py:141` creates `session_events(session_id, seq, event_json)` | The durable event log exists, but is mostly used as cursor ledger |
-| Event persistence | `apps/server/ntrp/context/store.py:1407` stores payload JSON and `run_id` | Persisted event schema is currently payload-centric, not typed envelope-centric |
-| Cursor restoration | `apps/server/ntrp/server/routers/chat.py:40` restores bus cursor from `session_events` and `chat_runs.last_seq` | Recreated buses recover seq/checkpoint state from disk |
-| Reset emission | `apps/server/ntrp/server/routers/chat.py:77` emits synthetic `stream_reset` on replay gap | Desktop must respond by reloading history |
-| Keepalive | `apps/server/ntrp/server/routers/chat.py:29` emits comment frame `: seq=...` | Server intends to communicate seq while idle |
+| Event vocabulary | `apps/server/arden/events/sse.py:33` defines mixed AG-UI and arden-specific `EventType` values | The stream is one shared channel for transcript, lifecycle, tools, background, automations, compaction, and goals |
+| Text final event | `apps/server/arden/events/sse.py:157` carries cumulative `TextMessageEndEvent.content` | Server already has a final reconciliation payload |
+| Agent adapter | `apps/server/arden/events/sse.py:479` maps internal agent events to SSE events | Internal agent events are not the desktop contract; SSE is the boundary |
+| Dropped cumulative block | `apps/server/arden/events/sse.py:512` drops `TextBlock` to avoid duplicate UI text | Correct for streaming, but it increases importance of `TEXT_MESSAGE_END` reconciliation |
+| Live bus | `apps/server/arden/server/bus.py:81` assigns seq, stores recent records, persists, then fans out | `SessionBus` is both live fanout and volatile replay buffer |
+| Replay floor | `apps/server/arden/server/bus.py:102` filters replay by `max(after_seq, checkpoint_seq)` | Checkpoint decides whether desktop should reload history |
+| Replay gap detection | `apps/server/arden/server/bus.py:119` treats future cursors, below-checkpoint cursors, and evicted buffers as gaps | The server already distinguishes safe replay from reset-required replay |
+| Durable ledger | `apps/server/arden/context/store.py:141` creates `session_events(session_id, seq, event_json)` | The durable event log exists, but is mostly used as cursor ledger |
+| Event persistence | `apps/server/arden/context/store.py:1407` stores payload JSON and `run_id` | Persisted event schema is currently payload-centric, not typed envelope-centric |
+| Cursor restoration | `apps/server/arden/server/routers/chat.py:40` restores bus cursor from `session_events` and `chat_runs.last_seq` | Recreated buses recover seq/checkpoint state from disk |
+| Reset emission | `apps/server/arden/server/routers/chat.py:77` emits synthetic `stream_reset` on replay gap | Desktop must respond by reloading history |
+| Keepalive | `apps/server/arden/server/routers/chat.py:29` emits comment frame `: seq=...` | Server intends to communicate seq while idle |
 | Electron parser | `apps/desktop/electron/main.cjs:235` forwards only `data:` lines | Electron ignores keepalive comments |
 | Browser parser | `apps/desktop/src/hooks/useEvents.ts:113` also ignores non-`data:` lines | Browser path has the same keepalive blind spot |
 | Desktop cursor | `apps/desktop/src/store/chat-stream.ts:108` accepts/drops events by seq | Cursor logic exists but only advances on typed data events |
@@ -45,8 +45,8 @@ The server currently has a real event ledger plus a live SSE fanout.
 | Global stream state | `apps/desktop/src/store/chat-stream.ts:52` stores `chatStreamState` as a module singleton | Projection/cursor state is outside normal app store lifecycle |
 | End ignored | `apps/desktop/src/store/transcript-projection.ts:207` ignores `TEXT_MESSAGE_END` | Final content is not used to correct streamed deltas |
 | History rebuild | `apps/desktop/src/store/transcript-projection.ts:373` rebuilds visible transcript from durable messages | Reload path is a separate projection mode from stream path |
-| Automation stream | `apps/server/ntrp/server/routers/automation.py:88` uses live-only `bus.subscribe()` | Automation events do not have the chat stream replay contract |
-| Automation keepalive | `apps/server/ntrp/server/routers/automation.py:83` emits plain `: keepalive` comments | Automation stream has even less cursor/liveness information |
+| Automation stream | `apps/server/arden/server/routers/automation.py:88` uses live-only `bus.subscribe()` | Automation events do not have the chat stream replay contract |
+| Automation keepalive | `apps/server/arden/server/routers/automation.py:83` emits plain `: keepalive` comments | Automation stream has even less cursor/liveness information |
 
 ## Existing Tests
 
@@ -196,7 +196,7 @@ Use three separate identities, not one overloaded id:
 | --- | --- | --- |
 | `seq` | Transport ordering and resume within one session stream | Current `SessionBus` model, Claude transport resume, Letta Redis stream |
 | `event_id` | Dedup/idempotency across delivery paths | Claude UUID dedup, Hermes exactly-once completion |
-| `message_id` / `task_id` / `run_id` | Domain object identity | Current ntrp event payloads, Letta run/message model, Codex subagent ids |
+| `message_id` / `task_id` / `run_id` | Domain object identity | Current arden event payloads, Letta run/message model, Codex subagent ids |
 
 Use two visibility axes:
 
@@ -237,4 +237,4 @@ That avoids the current ambiguity where a background result may need to wake the
 
 ## TLDR
 
-ntrp already has the right core primitive: a persisted per-session event log with seq ids. The fragile part is that desktop projection state and recovery logic are split across too many places, and some events are still side-channel-ish. Letta points to typed seq-carrying keepalives and queryable runs/messages. Codex and Hermes point to first-class background completion notifications. Claude points to resume cursors and stable dedup ids. The next serious fix should make event log -> typed reducers -> UI/model notifications the explicit architecture.
+arden already has the right core primitive: a persisted per-session event log with seq ids. The fragile part is that desktop projection state and recovery logic are split across too many places, and some events are still side-channel-ish. Letta points to typed seq-carrying keepalives and queryable runs/messages. Codex and Hermes point to first-class background completion notifications. Claude points to resume cursors and stable dedup ids. The next serious fix should make event log -> typed reducers -> UI/model notifications the explicit architecture.

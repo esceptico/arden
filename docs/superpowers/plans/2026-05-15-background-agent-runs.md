@@ -12,24 +12,24 @@
 
 ## File Structure
 
-- Modify `apps/server/ntrp/context/store.py`
+- Modify `apps/server/arden/context/store.py`
   - schema
   - background run/event CRUD
   - startup interruption
-- Modify `apps/server/ntrp/events/sse.py`
+- Modify `apps/server/arden/events/sse.py`
   - extend `BackgroundTaskEvent` with `session_id`, `run_id`, `result_ref`, `terminal`
-- Modify `apps/server/ntrp/tools/core/context.py`
+- Modify `apps/server/arden/tools/core/context.py`
   - registry depends on optional lifecycle sink
   - no durable truth in registry maps
-- Modify `apps/server/ntrp/core/spawner.py`
+- Modify `apps/server/arden/core/spawner.py`
   - create run before `asyncio.create_task`
   - emit status through lifecycle sink
-- Modify `apps/server/ntrp/tools/background.py`
+- Modify `apps/server/arden/tools/background.py`
   - list/cancel/read use durable store when available
-- Modify `apps/server/ntrp/server/routers/chat.py`
+- Modify `apps/server/arden/server/routers/chat.py`
   - snapshot endpoint returns durable background runs
   - cancel endpoint writes `cancel_requested` and emits final state when worker cancels
-- Modify `apps/server/ntrp/server/schemas.py`
+- Modify `apps/server/arden/server/schemas.py`
   - response models for background runs
 - Modify `apps/desktop/src/api.ts`
   - background event and snapshot types
@@ -49,7 +49,7 @@
 ### Task 1: Durable Store
 
 **Files:**
-- Modify: `apps/server/ntrp/context/store.py`
+- Modify: `apps/server/arden/context/store.py`
 - Test: `apps/server/tests/test_session_store.py`
 
 - [ ] **Step 1: Write failing store tests**
@@ -250,9 +250,9 @@ Expected: pass.
 ### Task 2: Server Lifecycle Contract
 
 **Files:**
-- Modify: `apps/server/ntrp/events/sse.py`
-- Modify: `apps/server/ntrp/tools/core/context.py`
-- Modify: `apps/server/ntrp/core/spawner.py`
+- Modify: `apps/server/arden/events/sse.py`
+- Modify: `apps/server/arden/tools/core/context.py`
+- Modify: `apps/server/arden/core/spawner.py`
 - Test: `apps/server/tests/test_background_agent_runs.py`
 
 - [ ] **Step 1: Write failing lifecycle tests**
@@ -262,7 +262,7 @@ Create `apps/server/tests/test_background_agent_runs.py`:
 ```python
 import asyncio
 
-from ntrp.tools.core.context import BackgroundTaskRegistry
+from arden.tools.core.context import BackgroundTaskRegistry
 
 
 async def test_background_registry_records_started_activity_and_completed():
@@ -371,8 +371,8 @@ Expected: pass.
 ### Task 3: Snapshot And Cancel APIs
 
 **Files:**
-- Modify: `apps/server/ntrp/server/schemas.py`
-- Modify: `apps/server/ntrp/server/routers/chat.py`
+- Modify: `apps/server/arden/server/schemas.py`
+- Modify: `apps/server/arden/server/routers/chat.py`
 - Test: `apps/server/tests/test_chat_background_tasks_api.py`
 
 - [ ] **Step 1: Write failing API tests**
@@ -382,8 +382,8 @@ Create tests:
 ```python
 from fastapi.testclient import TestClient
 
-from ntrp.server.app import app
-from ntrp.server.runtime import get_runtime
+from arden.server.app import app
+from arden.server.runtime import get_runtime
 
 
 class _Store:

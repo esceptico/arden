@@ -4,8 +4,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-import ntrp.database as database
-from ntrp.agent import (
+import arden.database as database
+from arden.agent import (
     Agent,
     AgentHooks,
     Choice,
@@ -24,7 +24,7 @@ from ntrp.agent import (
     ToolVerification,
     Usage,
 )
-from ntrp.context.store import SessionStore
+from arden.context.store import SessionStore
 
 
 @dataclass(frozen=True)

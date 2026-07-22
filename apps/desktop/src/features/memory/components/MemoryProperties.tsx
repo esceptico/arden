@@ -1,16 +1,16 @@
 import { useRef, useState } from "react";
 import clsx from "clsx";
-import { Calendar, Hash, List, SquareCheck, Tag, Text, type NtrpIcon } from "@/components/icons";
+import { Calendar, Hash, List, SquareCheck, Tag, Text, type ArdenIcon } from "@/components/icons";
 
 export type MemoryFrontmatterValue = string | number | boolean | null | Array<string | number | boolean | null>;
 export type MemoryFrontmatter = Record<string, MemoryFrontmatterValue>;
 
-// ntrp-maintained fields — kept in the file, hidden from the Properties UI.
+// arden-maintained fields — kept in the file, hidden from the Properties UI.
 const SYSTEM_PROPS = new Set(["type", "updated"]);
 
 type PropKind = "tags" | "list" | "checkbox" | "number" | "date" | "text";
 
-const PROP_ICONS: Record<PropKind, NtrpIcon> = {
+const PROP_ICONS: Record<PropKind, ArdenIcon> = {
   tags: Tag,
   list: List,
   checkbox: SquareCheck,

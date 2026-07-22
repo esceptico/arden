@@ -10,7 +10,7 @@ source: builtin
 A workflow preset. Run it with the `workflow` tool:
 
 ```
-workflow(name="investigate", args={"target": "apps/server/ntrp", "question": "How does the event/SSE pipeline work end to end?", "breadth": "normal"})
+workflow(name="investigate", args={"target": "apps/server/arden", "question": "How does the event/SSE pipeline work end to end?", "breadth": "normal"})
 ```
 
 It derives N distinct investigation angles, sends a reader at each in parallel

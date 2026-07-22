@@ -3,17 +3,17 @@ from types import SimpleNamespace
 
 import pytest
 
-from ntrp.agent.tools.dispatch import dispatch_tools
-from ntrp.agent.tools.runner import ToolRunner
-from ntrp.agent.types.events import ToolCompleted
-from ntrp.agent.types.llm import Role
-from ntrp.agent.types.tool_call import FunctionCall, PendingToolCall, ToolCall
-from ntrp.agent.types.tools import ToolMeta, ToolResult, ToolSourceRef, normalize_source_refs
-from ntrp.constants import OFFLOAD_THRESHOLD
-from ntrp.core.tool_executor import NtrpToolExecutor
-from ntrp.core.tool_result_data import persistable_tool_result_data
-from ntrp.server.bus import BusRegistry
-from ntrp.server.routers.session import get_session_history
+from arden.agent.tools.dispatch import dispatch_tools
+from arden.agent.tools.runner import ToolRunner
+from arden.agent.types.events import ToolCompleted
+from arden.agent.types.llm import Role
+from arden.agent.types.tool_call import FunctionCall, PendingToolCall, ToolCall
+from arden.agent.types.tools import ToolMeta, ToolResult, ToolSourceRef, normalize_source_refs
+from arden.constants import OFFLOAD_THRESHOLD
+from arden.core.tool_executor import ArdenToolExecutor
+from arden.core.tool_result_data import persistable_tool_result_data
+from arden.server.bus import BusRegistry
+from arden.server.routers.session import get_session_history
 
 
 def _source(
@@ -214,16 +214,16 @@ async def test_tool_runner_carries_source_refs_to_completion():
 def test_tool_executor_truncation_preserves_source_refs():
     result = ToolResult(content="long result", preview="long", source_refs=(_source(),))
 
-    truncated = NtrpToolExecutor._truncate_result(object(), result, 4)
+    truncated = ArdenToolExecutor._truncate_result(object(), result, 4)
 
     assert truncated.content == "long... [truncated]"
     assert truncated.source_refs == (_source(),)
 
 
 def test_tool_executor_offload_preserves_source_refs(monkeypatch, tmp_path: Path):
-    executor = object.__new__(NtrpToolExecutor)
+    executor = object.__new__(ArdenToolExecutor)
     executor._ctx = SimpleNamespace(session_id="session-1")
-    monkeypatch.setattr("ntrp.core.tool_executor.persist_result", lambda *_args: tmp_path / "call-1.txt")
+    monkeypatch.setattr("arden.core.tool_executor.persist_result", lambda *_args: tmp_path / "call-1.txt")
     result = ToolResult(content="x" * (OFFLOAD_THRESHOLD + 1), preview="large", source_refs=(_source(),))
 
     offloaded = executor._maybe_offload(result, "call-1")

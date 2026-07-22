@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Slice 03 — invoke codex exec headless.
 # Prereq: tim has approved docs/internal/slices/slice-03-retrieval.md (§1–§12).
-# This script does NOT touch ~/.ntrp/memory.db. Tests run on temp DBs.
+# This script does NOT touch ~/.arden/memory.db. Tests run on temp DBs.
 # Run from repo root.
 
 set -euo pipefail
 
 BRIEF="docs/internal/slices/slice-03-retrieval.md"
-SPEC="docs/internal/ntrp-memory-redesign-spec.md"
+SPEC="docs/internal/arden-memory-redesign-spec.md"
 
 if [ ! -f "$BRIEF" ]; then
   echo "Missing $BRIEF" >&2
@@ -34,23 +34,23 @@ echo ""
 
 # Pre-flight: schema_version=31 in live DB?
 echo "==== Pre-flight: schema_version in live DB ===="
-SCHEMA_VER=$(sqlite3 ~/.ntrp/memory.db "SELECT value FROM meta WHERE key='schema_version';" 2>/dev/null || echo "")
+SCHEMA_VER=$(sqlite3 ~/.arden/memory.db "SELECT value FROM meta WHERE key='schema_version';" 2>/dev/null || echo "")
 if [ "$SCHEMA_VER" != "31" ]; then
   echo "Live DB schema_version='$SCHEMA_VER' (expected 31)." >&2
   exit 1
 fi
-EMBED_DIM=$(sqlite3 ~/.ntrp/memory.db "SELECT value FROM meta WHERE key='embedding_dim';" 2>/dev/null || echo "")
+EMBED_DIM=$(sqlite3 ~/.arden/memory.db "SELECT value FROM meta WHERE key='embedding_dim';" 2>/dev/null || echo "")
 echo "schema_version=$SCHEMA_VER ✓"
 echo "embedding_dim=$EMBED_DIM"
 echo ""
 
 # Pre-flight: confirm dead cluster still exists (we'll be deleting it)
 echo "==== Pre-flight: dead cluster files present (to be deleted) ===="
-for f in apps/server/ntrp/knowledge/activation.py \
-         apps/server/ntrp/knowledge/activation_scoring.py \
-         apps/server/ntrp/knowledge/activation_bundles.py \
-         apps/server/ntrp/knowledge/activation_query.py \
-         apps/server/ntrp/knowledge/activation_evidence.py; do
+for f in apps/server/arden/knowledge/activation.py \
+         apps/server/arden/knowledge/activation_scoring.py \
+         apps/server/arden/knowledge/activation_bundles.py \
+         apps/server/arden/knowledge/activation_query.py \
+         apps/server/arden/knowledge/activation_evidence.py; do
   if [ ! -f "$f" ]; then
     echo "WARN: $f already missing — brief assumes it exists" >&2
   else

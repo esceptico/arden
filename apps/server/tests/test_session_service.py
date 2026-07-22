@@ -3,8 +3,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from ntrp.context.models import SessionState
-from ntrp.services.session import SessionService
+from arden.context.models import SessionState
+from arden.services.session import SessionService
 
 
 class _SlowStore:

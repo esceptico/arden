@@ -84,7 +84,7 @@ export function Home() {
         </span>
         <div className="grid gap-1.5 max-w-[420px]">
           <h2 className="m-0 text-2xl font-semibold tracking-[-0.018em] text-ink">Connect to get started</h2>
-          <p className="m-0 text-base text-muted leading-snug">Open settings to point ntrp at your server.</p>
+          <p className="m-0 text-base text-muted leading-snug">Open settings to point arden at your server.</p>
         </div>
         <Button
           variant="secondary"

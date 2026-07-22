@@ -60,7 +60,7 @@ SSE comment-frame keepalive currently bare. Add `: seq=<N>` so a client subscrib
 Root cause of reverted animation work. Both history and live should use the same stable key (canonical message id from server, generated at message creation, persisted to SQLite). On `RUN_FINISHED`, no remount because keys match. Removes the need for animation suppression altogether.
 
 ### P6 — Sub-agent lifecycle envelope
-NTRP already streams sub-agent task lifecycle. Formalize: `task_started { task_id, parent_run_id, agent_type, prompt_preview }` + `task_finished { task_id, result_preview, status }`. UI gets typed nesting without parsing.
+ARDEN already streams sub-agent task lifecycle. Formalize: `task_started { task_id, parent_run_id, agent_type, prompt_preview }` + `task_finished { task_id, result_preview, status }`. UI gets typed nesting without parsing.
 
 ### P7 — Race fix: `BusRegistry.remove()`
 The check at `chat.py:87-88` is unguarded. Wrap in registry lock; double-check active run + subscribers under lock before removing.

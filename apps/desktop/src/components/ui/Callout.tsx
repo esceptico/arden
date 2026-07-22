@@ -1,6 +1,6 @@
 import { motion } from "motion/react";
 import clsx from "clsx";
-import { type NtrpIcon } from "@/components/icons";
+import { type ArdenIcon } from "@/components/icons";
 import type { ReactNode } from "react";
 import { RISE_IN, RISE_SETTLED, DISSOLVE_OUT, MOTION, EASE_OUT, EASE_DECELERATE } from "@/lib/tokens/motion";
 import { ICON } from "@/lib/icons";
@@ -26,7 +26,7 @@ const TONE_ROLE: Record<CalloutTone, "alert" | "status"> = {
 interface CalloutProps {
   tone?: CalloutTone;
   /** Optional leading icon (e.g. TriangleAlert for warnings). */
-  icon?: NtrpIcon;
+  icon?: ArdenIcon;
   /** Bold first line. */
   title?: ReactNode;
   /** Body copy. */

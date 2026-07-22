@@ -1,4 +1,4 @@
-# ntrp Home surface — grounded facts (as shipped, main @ 5905ade5)
+# Arden Home surface — grounded facts (as shipped, main @ 5905ade5)
 
 ## Routing (`apps/desktop/src/app/App.tsx`)
 - Home = **no session selected**: `const showHome = useStore((s) => s.currentSessionId === null)` (App.tsx:92).
@@ -15,7 +15,7 @@ One centered, vertically-centered **640px column**; the page never scrolls as a 
 5. **Focus scroller** (`max-h-[48vh]`, internal scroll, ScrollFade edges) — **`WorkBrief`**.
 6. **`AreasStrip`** (pinned below).
 
-Disconnected state replaces everything: Sparkles glyph, `"Connect to get started"`, `"Open settings to point ntrp at your server."`, secondary Button `"Open settings"` → `openSettings(origin, "connection")`.
+Disconnected state replaces everything: Sparkles glyph, `"Connect to get started"`, `"Open settings to point arden at your server."`, secondary Button `"Open settings"` → `openSettings(origin, "connection")`.
 
 ### Data plumbing
 - `useAreasData()` (features/home/hooks/useAreasData.ts) reads `s.areas.overview` / `s.areas.loading`; fetches `GET /areas/overview` whenever `connected` flips true. Live refetch on `areas_changed` / `automation_finished` SSE lives in `useAutomationEvents`. Action layer: `src/actions/areas.ts`; API layer: `src/api/areas.ts`; store slice: `src/stores/areas-domain.ts` (`openAreaKey`, `overview`, `detailByKey`, `recordsById`).
@@ -71,16 +71,16 @@ Fixed-viewport 640px column, only the middle scrolls. Fetches `GET /areas/{key}`
 `GET /areas/overview` · `GET /areas/{key}` · `POST /areas` (`{name, page_path}`) · `POST/PATCH /areas/{key}/outcomes[/{key}]` · `PATCH /areas/{key}/work/{key}` · `POST /areas/{key}/asks/{id}/resolve` (`{state, snoozed_until?, resolution?}`) · `POST /areas/{key}/asks/{id}/reply` · `PUT /areas/{key}/autonomy` · `PATCH /areas/{key}` (attention/interrupts/paused/instructions) · `POST|DELETE /areas/{key}/page` · `POST /areas/suggestions/{key}/dismiss`.
 
 ## Server composition (grounding for what the numbers mean)
-- `apps/server/ntrp/areas/service.py overview()`: `focus = nominate_focus(asks, cap=4)` — **one best ask per area**, ranked kind-priority then recency; `brief.needs_you` = those focus asks + `area_title`. `live` = area has any active ask OR its automation is running.
-- `apps/server/ntrp/areas/work_store.py brief()`: `done` = `completed` work events **with a run_ref** (i.e. agent receipts) in the last **72h**, limit 6, `text` = event summary; `in_progress` = top-ranked active work item **per area** (in_progress first, custodian-owned first), limit 6.
-- `suggested` merged in `apps/server/ntrp/server/routers/areas.py:69` from the area-suggestions store (LLM suggester over unattached topic pages).
+- `apps/server/arden/areas/service.py overview()`: `focus = nominate_focus(asks, cap=4)` — **one best ask per area**, ranked kind-priority then recency; `brief.needs_you` = those focus asks + `area_title`. `live` = area has any active ask OR its automation is running.
+- `apps/server/arden/areas/work_store.py brief()`: `done` = `completed` work events **with a run_ref** (i.e. agent receipts) in the last **72h**, limit 6, `text` = event summary; `in_progress` = top-ranked active work item **per area** (in_progress first, custodian-owned first), limit 6.
+- `suggested` merged in `apps/server/arden/server/routers/areas.py:69` from the area-suggestions store (LLM suggester over unattached topic pages).
 
 ## Existing analogues of "suggested focus / needs you / running"
 - **"Needs you"** exists verbatim, twice: WorkBrief section title (Home) and the blocker row label in AreaWork (room).
 - **"Running"** vocabulary: Home watch line `"· N running now"`; AgentPresence `"Working… m:ss"`; AgentStatusLine `"Checking now…"`; live chips (opacity contrast, no dot); `Automation.last_status` enum `"completed" | "failed" | "running"`.
-- **"Suggested focus"**: the focus set itself is already server-nominated (`nominate_focus`, cap 4, one ask per area) — Home doesn't rank beyond that; "suggested" as a word only applies to **suggested areas** (ghost chips with a `rationale` tooltip). There is no separate "suggested focus" section; the greeting + Needs-you list is that role today.# Asks & Approvals in ntrp — ground truth
+- **"Suggested focus"**: the focus set itself is already server-nominated (`nominate_focus`, cap 4, one ask per area) — Home doesn't rank beyond that; "suggested" as a word only applies to **suggested areas** (ghost chips with a `rationale` tooltip). There is no separate "suggested focus" section; the greeting + Needs-you list is that role today.# Asks & Approvals in arden — ground truth
 
-## 1. The Ask data model (server: `apps/server/ntrp/areas/models.py`)
+## 1. The Ask data model (server: `apps/server/arden/areas/models.py`)
 
 `Ask` dataclass — exact fields:
 
@@ -158,16 +158,16 @@ Client resolve: `actions/approvals.ts respondToApproval(toolId, approved, feedba
 
 ## 7. Push + attention decay (`server/runtime/automation.py`)
 
-`_notify_asks`: newly created agent asks push through notifiers gated by the area's `interrupts` policy — `"asks"`→{question,review}, `"all"`→all three, `"none"`→nothing. Subject `f"ntrp · {area.title}: {ask.kind}"`, body = text + Why now + Next. Comment: "the push IS the interrupt; Home holds the queue either way."
+`_notify_asks`: newly created agent asks push through notifiers gated by the area's `interrupts` policy — `"asks"`→{question,review}, `"all"`→all three, `"none"`→nothing. Subject `f"arden · {area.title}: {ask.kind}"`, body = text + Why now + Next. Comment: "the push IS the interrupt; Home holds the queue either way."
 Agent asks unanswered for `AREA_ASK_IGNORED_DAYS = 7` step the area's attention down `active→ambient→dormant` ("asks unanswered").
 
-Key files: `apps/server/ntrp/areas/{models,asks,service,agent}.py`, `apps/server/ntrp/server/routers/areas.py`, `apps/server/ntrp/server/runtime/automation.py`, `apps/server/ntrp/tools/core/{context,middleware}.py`, `apps/desktop/src/features/areas/components/{AskCard,AreaRoom}.tsx`, `apps/desktop/src/features/home/components/{Home,WorkBrief,FocusRow}.tsx`, `apps/desktop/src/features/chat/components/ApprovalBanner.tsx`, `apps/desktop/src/{api/areas.ts,actions/{areas,approvals}.ts,lib/{askActions,areaKind}.ts}`.# ntrp supervision substance — grounded research (repo: /Users/escept1co/src/ntrp)
+Key files: `apps/server/arden/areas/{models,asks,service,agent}.py`, `apps/server/arden/server/routers/areas.py`, `apps/server/arden/server/runtime/automation.py`, `apps/server/arden/tools/core/{context,middleware}.py`, `apps/desktop/src/features/areas/components/{AskCard,AreaRoom}.tsx`, `apps/desktop/src/features/home/components/{Home,WorkBrief,FocusRow}.tsx`, `apps/desktop/src/features/chat/components/ApprovalBanner.tsx`, `apps/desktop/src/{api/areas.ts,actions/{areas,approvals}.ts,lib/{askActions,areaKind}.ts}`.# arden supervision substance — grounded research (repo: /Users/escept1co/src/arden)
 
 ## The three run primitives
 
 1. **Background/child agents** — spawned via `ctx.spawn_fn` (core/spawner.py), tracked per-session, shown in the right-sidebar "Activity" hub.
-2. **Workflows** — deterministic multi-agent runs via the `workflow` tool (`apps/server/ntrp/tools/workflow.py`) driving the `Orchestra` engine (`apps/server/ntrp/orchestra/engine.py`). Curated built-in presets only: `"audit"`, `"investigate"`, `"panel"`, `"implement"` (tool description); user-authored Python presets return `"User-authored Python workflow presets are disabled."`
-3. **Automations** — scheduled/triggered agent runs (`apps/server/ntrp/automation/`), surfaced in the AutomationsModal (rail + detail) and, while running, in the sidebar hub.
+2. **Workflows** — deterministic multi-agent runs via the `workflow` tool (`apps/server/arden/tools/workflow.py`) driving the `Orchestra` engine (`apps/server/arden/orchestra/engine.py`). Curated built-in presets only: `"audit"`, `"investigate"`, `"panel"`, `"implement"` (tool description); user-authored Python presets return `"User-authored Python workflow presets are disabled."`
+3. **Automations** — scheduled/triggered agent runs (`apps/server/arden/automation/`), surfaced in the AutomationsModal (rail + detail) and, while running, in the sidebar hub.
 
 ## Status enums (exact values)
 
@@ -175,7 +175,7 @@ Key files: `apps/server/ntrp/areas/{models,asks,service,agent}.py`, `apps/server
 - `WorkflowStatus` (`stores/workflow-domain.ts`): `"running" | "completed" | "failed" | "cancelled"`. `WorkflowPhaseStatus`: `"pending" | "running" | "completed" | "failed"`.
 - Automation run rows (SQLite `automation_runs`, `automation/store.py`): `status TEXT NOT NULL DEFAULT 'running'` → settled to `'completed'` / `'failed'`. Detached runs stay `'running'` until the child's RunCompleted settles them (idempotent status guard).
 - Automation object itself has **no status field** — state is bimodal: `running_since != null` → running; else `last_status` (`"completed" | "failed" | "running"`, derived server-side as `recent_statuses[0]`); `enabled=false` = paused. Client folds it via `resolveAutomationStatus()`: running → `"running"`, last failed → `"failed"`, last ok → `"completed"`, never-ran → `"interrupted"` (muted idle tone). Paused-ness deliberately NOT in status.
-- Server session-level `WorkflowState` (`apps/server/ntrp/workflow/models.py`): `running, waiting_for_approval, waiting_for_input, waiting_for_auth, waiting_for_subagent, completed, failed, cancelled`.
+- Server session-level `WorkflowState` (`apps/server/arden/workflow/models.py`): `running, waiting_for_approval, waiting_for_input, waiting_for_auth, waiting_for_subagent, completed, failed, cancelled`.
 
 ## AgentRunView — the one view-model (`apps/desktop/src/lib/agentRun.ts`)
 
@@ -202,7 +202,7 @@ Expanded (`WorkflowDetail`): optional **summary line** (the "why" of a settled r
 
 Per-agent live data (`WorkflowAgent`): `taskId, phase, name, agentType, childSessionId, status, detail, startedAt, completedAt, durationMs, tokens {prompt, completion, total, cache_read, cache_write}, cost, toolCount, lastTokenSeq` (seq dedupes replayed token events — spend accumulates).
 
-## Server events feeding it (`apps/server/ntrp/events/sse.py`)
+## Server events feeding it (`apps/server/arden/events/sse.py`)
 
 - `WORKFLOW_STARTED` (`workflow_started`): `session_id, run_id, workflow_id, parent_tool_call_id, name, description, phases: list[str]` — the **declared plan**, rendered as pending segments before any agent spawns.
 - `TASK_STARTED` / `TASK_PROGRESS` / `TASK_FINISHED` (`task_started/progress/finished`): `task_id, parent_task_id, parent_tool_call_id, child_run_id, child_session_id, agent_type, wait, name, status, summary, depth, workflow_id, phase`; finished adds `tool_count`.

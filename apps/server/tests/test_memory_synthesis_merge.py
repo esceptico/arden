@@ -4,23 +4,21 @@ from pathlib import Path
 
 import pytest
 
-from ntrp.memory.merge import three_way_merge
-from ntrp.memory.page_edit_service import PageEditService
-from ntrp.memory.page_events import page_revision
-from ntrp.memory.pages import Page
-from ntrp.memory.synthesize import _stale
+from arden.memory.merge import three_way_merge
+from arden.memory.page_edit_service import PageEditService
+from arden.memory.page_events import page_revision
+from arden.memory.pages import Page
+from arden.memory.synthesize import _stale
 
 
 def test_three_way_merge_applies_nonoverlapping_generated_hunks_exactly():
     base = b"---\ntitle: A\n---\n\n# A\n\nGenerated old.\n\nKeep.\n"
-    current = b"---\ntitle: A\naliases: [\"Alpha\"]\n---\n\n# A\n\nGenerated old.\n\n*Keep.*\n"
+    current = b'---\ntitle: A\naliases: ["Alpha"]\n---\n\n# A\n\nGenerated old.\n\n*Keep.*\n'
     generated = b"---\ntitle: A\n---\n\n# A\n\nGenerated new.\n\nKeep.\n"
 
     result = three_way_merge(base, current, generated)
 
-    assert result.merged == (
-        b"---\ntitle: A\naliases: [\"Alpha\"]\n---\n\n# A\n\nGenerated new.\n\n*Keep.*\n"
-    )
+    assert result.merged == (b'---\ntitle: A\naliases: ["Alpha"]\n---\n\n# A\n\nGenerated new.\n\n*Keep.*\n')
     assert result.review_required is False
     assert result.candidate == result.merged
 
@@ -92,8 +90,8 @@ def test_freshness_distinguishes_two_canonical_revisions_on_the_same_day():
 
 @pytest.mark.asyncio
 async def test_generated_page_preserves_exact_frontmatter_bytes(tmp_path: Path):
-    from ntrp.memory.file_store import FilePageStore
-    from ntrp.memory.synthesize import _render_generated_page
+    from arden.memory.file_store import FilePageStore
+    from arden.memory.synthesize import _render_generated_page
 
     vault = tmp_path / "memory"
     (vault / "topics").mkdir(parents=True)
@@ -102,7 +100,7 @@ async def test_generated_page_preserves_exact_frontmatter_bytes(tmp_path: Path):
     frontmatter = b"---\n# user comment\ntitle:  \"A\"\naliases: ['Alpha']\n---\n"
     page.write_bytes(frontmatter)
     (vault / "raw/topics/a.md").write_text(
-        "<!-- ntrp:records schema=2 page=topics/a.md -->\n",
+        "<!-- arden:records schema=2 page=topics/a.md -->\n",
         encoding="utf-8",
     )
     store = FilePageStore(vault)
@@ -115,14 +113,14 @@ async def test_generated_page_preserves_exact_frontmatter_bytes(tmp_path: Path):
 
 
 def test_synthesis_maintenance_write_rejects_symlinked_parent(tmp_path: Path):
-    from ntrp.memory.artifacts import ArtifactMemoryStore
-    from ntrp.memory.merge import synthesis_base_rel
+    from arden.memory.artifacts import ArtifactMemoryStore
+    from arden.memory.merge import synthesis_base_rel
 
     vault = tmp_path / "memory"
     outside = tmp_path / "outside"
     outside.mkdir()
-    (vault / ".ntrp").mkdir(parents=True)
-    (vault / ".ntrp/maintenance").symlink_to(outside, target_is_directory=True)
+    (vault / ".arden").mkdir(parents=True)
+    (vault / ".arden/maintenance").symlink_to(outside, target_is_directory=True)
 
     with pytest.raises(FileNotFoundError):
         ArtifactMemoryStore(vault).write_synthesis_maintenance(
@@ -135,9 +133,9 @@ def test_synthesis_maintenance_write_rejects_symlinked_parent(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_missing_base_persists_candidate_without_touching_visible_page(tmp_path: Path):
-    from ntrp.memory.file_store import FilePageStore
-    from ntrp.memory.merge import synthesis_candidate_rel
-    from ntrp.memory.synthesize import _merge_generated_page
+    from arden.memory.file_store import FilePageStore
+    from arden.memory.merge import synthesis_candidate_rel
+    from arden.memory.synthesize import _merge_generated_page
 
     vault = tmp_path / "memory"
     (vault / "topics").mkdir(parents=True)
@@ -147,7 +145,7 @@ async def test_missing_base_persists_candidate_without_touching_visible_page(tmp
     generated = b"# A\n\nGenerated prose.\n"
     page.write_bytes(current)
     (vault / "raw" / "topics" / "a.md").write_text(
-        "<!-- ntrp:records schema=2 page=topics/a.md -->\n",
+        "<!-- arden:records schema=2 page=topics/a.md -->\n",
         encoding="utf-8",
     )
     store = FilePageStore(vault)
@@ -172,28 +170,28 @@ async def test_missing_base_persists_candidate_without_touching_visible_page(tmp
 
 @pytest.mark.asyncio
 async def test_accepted_merge_preserves_user_formatting_and_rotates_exact_base(tmp_path: Path):
-    from ntrp.memory.file_store import FilePageStore
-    from ntrp.memory.merge import synthesis_base_rel
-    from ntrp.memory.pages import render_raw
-    from ntrp.memory.synthesize import _merge_generated_page
+    from arden.memory.file_store import FilePageStore
+    from arden.memory.merge import synthesis_base_rel
+    from arden.memory.pages import render_raw
+    from arden.memory.synthesize import _merge_generated_page
 
     vault = tmp_path / "memory"
     (vault / "topics").mkdir(parents=True)
     (vault / "raw" / "topics").mkdir(parents=True)
     page = vault / "topics" / "a.md"
     old_base = b"---\ntitle: A\n---\n\n# A\n\nGenerated old.\n\nKeep.\n"
-    current = b"---\ntitle: A\naliases: [\"Alpha\"]\n---\n\n# A\n\nGenerated old.\n\n*Keep.*\n"
+    current = b'---\ntitle: A\naliases: ["Alpha"]\n---\n\n# A\n\nGenerated old.\n\n*Keep.*\n'
     generated = b"---\ntitle: A\n---\n\n# A\n\nGenerated new.\n\nKeep.\n"
     page.write_bytes(current)
     raw_rel = Path("raw/topics/a.md")
-    (vault / raw_rel).write_text("<!-- ntrp:records schema=2 page=topics/a.md -->\n", encoding="utf-8")
+    (vault / raw_rel).write_text("<!-- arden:records schema=2 page=topics/a.md -->\n", encoding="utf-8")
     store = FilePageStore(vault)
     await store.open()
     await store.add("Fact")
     revision = store.canonical_revision
     store._pages[page].frontmatter["generated_from_revision"] = revision
     store._journal.commit_projection({raw_rel: render_raw(store._pages[page]).encode()})
-    from ntrp.memory.artifacts import ArtifactMemoryStore
+    from arden.memory.artifacts import ArtifactMemoryStore
 
     ArtifactMemoryStore(vault).write_synthesis_maintenance(synthesis_base_rel("topics/a.md", revision), old_base)
     store._reload_canonical_state()
@@ -207,9 +205,7 @@ async def test_accepted_merge_preserves_user_formatting_and_rotates_exact_base(t
     )
 
     assert result.review_required is False
-    assert page.read_bytes() == (
-        b"---\ntitle: A\naliases: [\"Alpha\"]\n---\n\n# A\n\nGenerated new.\n\n*Keep.*\n"
-    )
+    assert page.read_bytes() == (b'---\ntitle: A\naliases: ["Alpha"]\n---\n\n# A\n\nGenerated new.\n\n*Keep.*\n')
     assert (vault / synthesis_base_rel("topics/a.md", revision)).read_bytes() == generated
     assert store._pages[page].frontmatter["generated_from_revision"] == revision
     assert store._pages[page].frontmatter["prose_cites"] == ["deadbeef"]
@@ -232,10 +228,10 @@ async def test_accepted_merge_preserves_user_formatting_and_rotates_exact_base(t
 
 @pytest.mark.asyncio
 async def test_overlapping_generated_change_persists_candidate_only(tmp_path: Path):
-    from ntrp.memory.file_store import FilePageStore
-    from ntrp.memory.merge import synthesis_base_rel, synthesis_candidate_rel
-    from ntrp.memory.pages import render_raw
-    from ntrp.memory.synthesize import _merge_generated_page
+    from arden.memory.file_store import FilePageStore
+    from arden.memory.merge import synthesis_base_rel, synthesis_candidate_rel
+    from arden.memory.pages import render_raw
+    from arden.memory.synthesize import _merge_generated_page
 
     vault = tmp_path / "memory"
     (vault / "topics").mkdir(parents=True)
@@ -246,14 +242,14 @@ async def test_overlapping_generated_change_persists_candidate_only(tmp_path: Pa
     generated = b"# A\n\nGenerated.\n"
     page.write_bytes(current)
     raw_rel = Path("raw/topics/a.md")
-    (vault / raw_rel).write_text("<!-- ntrp:records schema=2 page=topics/a.md -->\n", encoding="utf-8")
+    (vault / raw_rel).write_text("<!-- arden:records schema=2 page=topics/a.md -->\n", encoding="utf-8")
     store = FilePageStore(vault)
     await store.open()
     await store.add("Fact")
     revision = store.canonical_revision
     store._pages[page].frontmatter["generated_from_revision"] = revision
     store._journal.commit_projection({raw_rel: render_raw(store._pages[page]).encode()})
-    from ntrp.memory.artifacts import ArtifactMemoryStore
+    from arden.memory.artifacts import ArtifactMemoryStore
 
     ArtifactMemoryStore(vault).write_synthesis_maintenance(synthesis_base_rel("topics/a.md", revision), base)
     store._reload_canonical_state()
@@ -276,9 +272,9 @@ async def test_overlapping_generated_change_persists_candidate_only(tmp_path: Pa
 
 @pytest.mark.asyncio
 async def test_new_in_memory_generated_page_bootstraps_from_exact_empty_page(tmp_path: Path):
-    from ntrp.memory.file_store import FilePageStore
-    from ntrp.memory.merge import synthesis_base_rel
-    from ntrp.memory.synthesize import _merge_generated_page
+    from arden.memory.file_store import FilePageStore
+    from arden.memory.merge import synthesis_base_rel
+    from arden.memory.synthesize import _merge_generated_page
 
     vault = tmp_path / "memory"
     store = FilePageStore(vault)
@@ -308,9 +304,9 @@ async def test_new_in_memory_generated_page_bootstraps_from_exact_empty_page(tmp
 
 @pytest.mark.asyncio
 async def test_revision_change_during_generation_persists_retry_candidate(tmp_path: Path):
-    from ntrp.memory.file_store import FilePageStore
-    from ntrp.memory.merge import synthesis_candidate_rel
-    from ntrp.memory.synthesize import _merge_generated_page
+    from arden.memory.file_store import FilePageStore
+    from arden.memory.merge import synthesis_candidate_rel
+    from arden.memory.synthesize import _merge_generated_page
 
     vault = tmp_path / "memory"
     store = FilePageStore(vault)
@@ -337,8 +333,8 @@ async def test_revision_change_during_generation_persists_retry_candidate(tmp_pa
 
 @pytest.mark.asyncio
 async def test_failed_atomic_merge_does_not_advance_generated_base(tmp_path: Path, monkeypatch):
-    from ntrp.memory.file_store import FilePageStore
-    from ntrp.memory.merge import synthesis_base_rel
+    from arden.memory.file_store import FilePageStore
+    from arden.memory.merge import synthesis_base_rel
 
     vault = tmp_path / "memory"
     (vault / "topics").mkdir(parents=True)
@@ -348,7 +344,7 @@ async def test_failed_atomic_merge_does_not_advance_generated_base(tmp_path: Pat
     generated = b"# A\n\nGenerated.\n"
     page.write_bytes(current)
     (vault / "raw/topics/a.md").write_text(
-        "<!-- ntrp:records schema=2 page=topics/a.md -->\n",
+        "<!-- arden:records schema=2 page=topics/a.md -->\n",
         encoding="utf-8",
     )
     store = FilePageStore(vault)
@@ -378,9 +374,9 @@ async def test_failed_atomic_merge_does_not_advance_generated_base(tmp_path: Pat
 
 @pytest.mark.asyncio
 async def test_post_commit_base_failure_does_not_duplicate_accepted_event(tmp_path: Path, monkeypatch):
-    from ntrp.memory.file_store import FilePageStore
-    from ntrp.memory.merge import synthesis_base_rel
-    from ntrp.memory.synthesize import _merge_generated_page
+    from arden.memory.file_store import FilePageStore
+    from arden.memory.merge import synthesis_base_rel
+    from arden.memory.synthesize import _merge_generated_page
 
     vault = tmp_path / "memory"
     (vault / "topics").mkdir(parents=True)
@@ -390,7 +386,7 @@ async def test_post_commit_base_failure_does_not_duplicate_accepted_event(tmp_pa
     generated = b"# A\n\nGenerated.\n"
     page.write_bytes(current)
     (vault / "raw/topics/a.md").write_text(
-        "<!-- ntrp:records schema=2 page=topics/a.md -->\n",
+        "<!-- arden:records schema=2 page=topics/a.md -->\n",
         encoding="utf-8",
     )
     store = FilePageStore(vault)
@@ -436,10 +432,10 @@ async def test_synthesis_merge_commits_visible_page_and_exact_event_together(tmp
     result = b"# A\n\nNew.\n"
     page.write_bytes(base)
     (vault / "raw" / "topics" / "a.md").write_text(
-        "<!-- ntrp:records schema=2 page=topics/a.md -->\n",
+        "<!-- arden:records schema=2 page=topics/a.md -->\n",
         encoding="utf-8",
     )
-    from ntrp.memory.file_store import FilePageStore
+    from arden.memory.file_store import FilePageStore
 
     store = FilePageStore(vault)
     await store.open()

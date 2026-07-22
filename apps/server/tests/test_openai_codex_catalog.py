@@ -3,9 +3,9 @@ from unittest.mock import AsyncMock, Mock
 import httpx
 import pytest
 
-from ntrp.llm.models import Provider
-from ntrp.llm.openai_codex_auth import OpenAICodexTokens
-from ntrp.llm.openai_codex_catalog import parse_codex_catalog, refresh_codex_models
+from arden.llm.models import Provider
+from arden.llm.openai_codex_auth import OpenAICodexTokens
+from arden.llm.openai_codex_catalog import parse_codex_catalog, refresh_codex_models
 
 
 def _entry(
@@ -57,10 +57,10 @@ class _FailingClient:
 async def test_refresh_failure_retains_existing_models(monkeypatch):
     replace = Mock()
     monkeypatch.setattr(
-        "ntrp.llm.openai_codex_catalog.get_valid_tokens",
+        "arden.llm.openai_codex_catalog.get_valid_tokens",
         AsyncMock(return_value=OpenAICodexTokens("access", "refresh", 123, "account")),
     )
-    monkeypatch.setattr("ntrp.llm.openai_codex_catalog.replace_provider_models", replace)
+    monkeypatch.setattr("arden.llm.openai_codex_catalog.replace_provider_models", replace)
 
     assert await refresh_codex_models(client=_FailingClient()) is False
     replace.assert_not_called()
@@ -88,10 +88,10 @@ async def test_refresh_replaces_codex_provider(monkeypatch):
     client = _CatalogClient()
     replace = Mock(return_value=True)
     monkeypatch.setattr(
-        "ntrp.llm.openai_codex_catalog.get_valid_tokens",
+        "arden.llm.openai_codex_catalog.get_valid_tokens",
         AsyncMock(return_value=OpenAICodexTokens("access", "refresh", 123, "account")),
     )
-    monkeypatch.setattr("ntrp.llm.openai_codex_catalog.replace_provider_models", replace)
+    monkeypatch.setattr("arden.llm.openai_codex_catalog.replace_provider_models", replace)
 
     assert await refresh_codex_models(client=client) is True
     models = replace.call_args.args[1]

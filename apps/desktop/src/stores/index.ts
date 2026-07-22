@@ -552,7 +552,7 @@ export const useStore = create<State & Actions>((set) => ({
     set((s) => {
       const idx = s.order.indexOf(id);
       if (idx < 0) {
-        console.warn("[ntrp] truncateFrom: id not found in order", { id, order: s.order });
+        console.warn("[arden] truncateFrom: id not found in order", { id, order: s.order });
         return s;
       }
       const keep = s.order.slice(0, idx);
@@ -959,7 +959,7 @@ export const useStore = create<State & Actions>((set) => ({
 // manual UI/animation verification in a renderer with no backend. Tree-shaken
 // out of production builds via the `import.meta.env.DEV` guard.
 if ((import.meta as { env?: { DEV?: boolean } }).env?.DEV) {
-  (globalThis as { __ntrpStore?: typeof useStore }).__ntrpStore = useStore;
+  (globalThis as { __ardenStore?: typeof useStore }).__ardenStore = useStore;
 }
 
 // Helpers for use outside React (e.g. inside event-stream handlers).
@@ -970,5 +970,5 @@ export const setState = useStore.setState;
 // seed state without a live server. The renderer runs no untrusted scripts, so
 // exposing the store costs nothing.
 if (typeof window !== "undefined") {
-  (window as unknown as { __ntrp?: unknown }).__ntrp = { useStore, getState, setState };
+  (window as unknown as { __arden?: unknown }).__arden = { useStore, getState, setState };
 }

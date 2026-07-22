@@ -1,8 +1,8 @@
-# ntrp State Domain Architecture Design
+# Arden State Domain Architecture Design
 
 ## Goal
 
-Make ntrp state simple to reason about and robust under streaming, replay, reconnects, session switches, automations, and background agents.
+Make arden state simple to reason about and robust under streaming, replay, reconnects, session switches, automations, and background agents.
 
 The core mental model is:
 

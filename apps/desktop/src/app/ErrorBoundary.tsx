@@ -26,7 +26,7 @@ export class ErrorBoundary extends Component<Props, State> {
   componentDidCatch(error: Error, info: ErrorInfo): void {
     // Surface to devtools console; production logging hook can attach
     // here later (Sentry/etc).
-    console.error("[ntrp] render error caught by ErrorBoundary", error, info);
+    console.error("[arden] render error caught by ErrorBoundary", error, info);
   }
 
   reset = (): void => {

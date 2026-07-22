@@ -11,7 +11,7 @@ import type { MemoryArtifactDetail, MemoryArtifactSummary, PageLinks } from "@/f
 import { useStore } from "@/stores";
 
 const config: AppConfig = { serverUrl: "http://localhost:6877", apiKey: "test-key" };
-const originalDesktop = window.ntrpDesktop;
+const originalDesktop = window.ardenDesktop;
 const originalVaultVersion = useStore.getState().memoryVaultVersion;
 const roots = new Set<Root>();
 
@@ -46,8 +46,8 @@ function setup(lastPath?: string) {
   // request counts. Tests that specifically want the inspector open re-seed
   // and click the toggle themselves. Seeding lastPath drives the initial
   // selection (it beats the index.md fallback).
-  localStorage.setItem("ntrp.desktop.memory.inspectorOpen", "false");
-  if (lastPath) localStorage.setItem("ntrp.desktop.memory.lastPath", lastPath);
+  localStorage.setItem("arden.desktop.memory.inspectorOpen", "false");
+  if (lastPath) localStorage.setItem("arden.desktop.memory.lastPath", lastPath);
   const app = document.createElement("div");
   app.id = "app";
   const host = document.createElement("div");
@@ -71,15 +71,15 @@ async function settleUntil(predicate: () => boolean, timeout = 1_500) {
 afterEach(async () => {
   for (const root of roots) await act(async () => root.unmount());
   roots.clear();
-  window.ntrpDesktop = originalDesktop;
+  window.ardenDesktop = originalDesktop;
   useStore.setState({ memoryVaultVersion: originalVaultVersion });
   document.body.replaceChildren();
   for (const key of [
-    "ntrp.desktop.memory.inspectorOpen",
-    "ntrp.desktop.memory.lastPath",
-    "ntrp.desktop.memory.pins",
-    "ntrp.desktop.memory.rail.collapsed",
-    "ntrp.desktop.memory.ctxPane",
+    "arden.desktop.memory.inspectorOpen",
+    "arden.desktop.memory.lastPath",
+    "arden.desktop.memory.pins",
+    "arden.desktop.memory.rail.collapsed",
+    "arden.desktop.memory.ctxPane",
   ]) localStorage.removeItem(key);
 });
 
@@ -300,7 +300,7 @@ test("notebook history shortcuts restore pages and ignore focused editors", asyn
   const b = summary("b.md", "B");
   const rows = [index, a, b];
   const requests: string[] = [];
-  window.ntrpDesktop = { api: { request: async (_config, request) => {
+  window.ardenDesktop = { api: { request: async (_config, request) => {
     requests.push(request.path);
     if (request.path === "/admin/memory/artifacts") return response({ artifacts: rows.map((item) => rawArtifact(item)) });
     if (request.path.startsWith("/admin/memory/links")) {
@@ -317,7 +317,7 @@ test("notebook history shortcuts restore pages and ignore focused editors", asyn
     const item = rows.find((row) => row.path === path)!;
     const content = path === "index.md" ? "Index body" : path === "a.md" ? "[[Bee|B first]] · [[Bee|B second]] · `b.md` · `b.md` · [[#Details|Details]]\n\n## Details\n\nMore." : "B body";
     return response({ artifact: rawArtifact(item, content) });
-  } } } as Window["ntrpDesktop"];
+  } } } as Window["ardenDesktop"];
   const { host, root } = setup("a.md");
   await act(async () => root.render(<ArtifactMemoryView config={config} />));
   await settle(350);
@@ -395,7 +395,7 @@ test("a delayed link snapshot cannot resolve the next page or overwrite a later 
   const rows = [index, a, b, x, y];
   let releaseB: (() => void) | null = null;
   const bGate = new Promise<void>((resolve) => { releaseB = resolve; });
-  window.ntrpDesktop = { api: { request: async (_config, request) => {
+  window.ardenDesktop = { api: { request: async (_config, request) => {
     if (request.path === "/admin/memory/artifacts") return response({ artifacts: rows.map((item) => rawArtifact(item)) });
     if (request.path.startsWith("/admin/memory/links")) {
       const path = new URL(`http://x${request.path}`).searchParams.get("path")!;
@@ -411,7 +411,7 @@ test("a delayed link snapshot cannot resolve the next page or overwrite a later 
       ? "Index body"
       : path === "a.md" || path === "b.md" ? "[[Shared]]" : `${item.title} body`;
     return response({ artifact: rawArtifact(item, content) });
-  } } } as Window["ntrpDesktop"];
+  } } } as Window["ardenDesktop"];
   const { host, root } = setup("a.md");
   await act(async () => root.render(<ArtifactMemoryView config={config} />));
   await settle(350);
@@ -446,7 +446,7 @@ test("opening the inspector fetches full-page links and history once and pane sw
     patch: "@@", operations: [], reconciliation: "applied", analysis: null, reconciles_event_id: null,
     review_operations: [], questions: [], review_event_id: null, observation_id: null, source_canonical_revision: null,
   });
-  window.ntrpDesktop = { api: { request: async (_config, request) => {
+  window.ardenDesktop = { api: { request: async (_config, request) => {
     requests.push(request.path);
     if (request.path === "/admin/memory/artifacts") return response({ artifacts: rows.map((item) => rawArtifact(item)) });
     if (request.path.startsWith("/admin/memory/links")) {
@@ -461,7 +461,7 @@ test("opening the inspector fetches full-page links and history once and pane sw
     const path = decodeURIComponent(request.path.replace("/admin/memory/artifacts/", ""));
     if (path === "index.md") return response({ artifact: rawArtifact(index, "Index body") });
     return response({ artifact: rawArtifact(path === "roadmap.md" ? roadmap : note, "Note body") });
-  } } } as Window["ntrpDesktop"];
+  } } } as Window["ardenDesktop"];
   const { host, root } = setup("note.md");
   await act(async () => root.render(<ArtifactMemoryView config={config} />));
   await settle(300);
@@ -503,7 +503,7 @@ test("stale links stay unresolved and a vault change refetches the snapshot from
   const rows = [index, note, target];
   const offsets: number[] = [];
   let linkRead = 0;
-  window.ntrpDesktop = { api: { request: async (_config, request) => {
+  window.ardenDesktop = { api: { request: async (_config, request) => {
     if (request.path === "/admin/memory/artifacts") return response({ artifacts: rows.map((item) => rawArtifact(item)) });
     if (request.path.startsWith("/admin/memory/links")) {
       const offset = Number(new URL(`http://x${request.path}`).searchParams.get("offset") ?? 0);
@@ -517,7 +517,7 @@ test("stale links stay unresolved and a vault change refetches the snapshot from
     const path = decodeURIComponent(request.path.replace("/admin/memory/artifacts/", ""));
     if (path === "index.md") return response({ artifact: rawArtifact(index, "Index body") });
     return response({ artifact: rawArtifact(path === "note.md" ? note : target, path === "note.md" ? "[[Target]]" : "Target body") });
-  } } } as Window["ntrpDesktop"];
+  } } } as Window["ardenDesktop"];
   const { host, root } = setup("note.md");
   await act(async () => root.render(<ArtifactMemoryView config={config} />));
   await settle(350);
@@ -541,7 +541,7 @@ test("vault revision refresh invalidates the selected detail cache", async () =>
   const index = summary("index.md", "Index");
   let note = summary("note.md", "Note", "r1");
   let detailReads = 0;
-  window.ntrpDesktop = { api: { request: async (_config, request) => {
+  window.ardenDesktop = { api: { request: async (_config, request) => {
     if (request.path === "/admin/memory/artifacts") return response({ artifacts: [rawArtifact(index), rawArtifact(note)] });
     if (request.path.startsWith("/admin/memory/links")) return response({ path: "note.md", revision: "ledger:1", stale: false, outgoing: [], backlinks: [], total_outgoing: 0, total_backlinks: 0, limit: 100, offset: 0 });
     if (request.path.startsWith("/admin/memory/page-edits/history")) return response({ events: [], total: 0, limit: 100, next_before_sequence: null });
@@ -549,7 +549,7 @@ test("vault revision refresh invalidates the selected detail cache", async () =>
     if (path === "index.md") return response({ artifact: rawArtifact(index, "Index body") });
     detailReads += 1;
     return response({ artifact: rawArtifact(note, `version ${detailReads}`) });
-  } } } as Window["ntrpDesktop"];
+  } } } as Window["ardenDesktop"];
   const { host, root } = setup("note.md");
   await act(async () => root.render(<ArtifactMemoryView config={config} />));
   await settle(250);

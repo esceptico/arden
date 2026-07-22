@@ -74,12 +74,12 @@ export function QuickCapture() {
 
   const closePicker = useCallback(() => {
     setPickerOpen(false);
-    void window.ntrpDesktop?.quickCapture?.resize?.(BASE_WINDOW_HEIGHT);
+    void window.ardenDesktop?.quickCapture?.resize?.(BASE_WINDOW_HEIGHT);
   }, []);
 
   const openPicker = useCallback(() => {
     const rows = Math.min(sessions.length, MAX_PICKER_SESSIONS) + 1;
-    void window.ntrpDesktop?.quickCapture?.resize?.(
+    void window.ardenDesktop?.quickCapture?.resize?.(
       BASE_WINDOW_HEIGHT + rows * PICKER_ROW_HEIGHT + PICKER_PADDING,
     );
     setPickerIndex(Math.max(0, items.findIndex((i) => i.sessionId === (target?.session_id ?? null))));
@@ -115,7 +115,7 @@ export function QuickCapture() {
     present();
     // The window persists across summons (hidden, never destroyed), so
     // main signals each one over IPC rather than relying on focus events.
-    return window.ntrpDesktop?.quickCapture?.onSummon?.(present);
+    return window.ardenDesktop?.quickCapture?.onSummon?.(present);
   }, []);
 
   // Focus is genuinely racy in a non-activating panel: the window becomes
@@ -141,7 +141,7 @@ export function QuickCapture() {
   const onSubmit = useCallback(() => {
     const trimmed = text.trim();
     if ((!trimmed && images.length === 0) || phase !== "compose") return;
-    void window.ntrpDesktop?.quickCapture?.submit({
+    void window.ardenDesktop?.quickCapture?.submit({
       message: trimmed,
       images: images.length > 0 ? images : undefined,
       sessionId: target?.session_id ?? null,
@@ -161,7 +161,7 @@ export function QuickCapture() {
   // Esc arrives via IPC: AppKit consumes the key at the NSPanel layer
   // before the DOM ever sees it, so main claims it as a global shortcut
   // while the panel is visible and signals us instead.
-  useEffect(() => window.ntrpDesktop?.quickCapture?.onDismiss?.(onClose), [onClose]);
+  useEffect(() => window.ardenDesktop?.quickCapture?.onDismiss?.(onClose), [onClose]);
 
   const onCapture = useCallback(async () => {
     if (capturing || phase !== "compose" || images.length >= MAX_IMAGES) return;
@@ -169,7 +169,7 @@ export function QuickCapture() {
     try {
       // The panel hides during the interactive snip and re-presents
       // after (a fresh summon — draft and chips survive in state).
-      const image = await window.ntrpDesktop?.quickCapture?.captureScreen?.();
+      const image = await window.ardenDesktop?.quickCapture?.captureScreen?.();
       if (image) setImages((prev) => (prev.length >= MAX_IMAGES ? prev : [...prev, image]));
     } finally {
       setCapturing(false);
@@ -192,7 +192,7 @@ export function QuickCapture() {
     setText("");
     setImages([]);
     setTarget(null);
-    void window.ntrpDesktop?.quickCapture?.close();
+    void window.ardenDesktop?.quickCapture?.close();
   }, []);
 
   const exiting = phase !== "compose";

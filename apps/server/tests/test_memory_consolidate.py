@@ -1,4 +1,4 @@
-"""Consolidate/Lint — the records consolidation pass (ntrp/memory/consolidate.py).
+"""Consolidate/Lint — the records consolidation pass (arden/memory/consolidate.py).
 
 THIS is the memory step: the background O(delta) pass that merges duplicates,
 supersedes stale/contradicted records, and drops orphans over the flat record
@@ -21,10 +21,10 @@ from pathlib import Path
 
 import pytest
 
-from ntrp.memory.consolidate import Consolidate, ConsolidateReport
-from ntrp.memory.models import Record, SourceRef
-from ntrp.memory.prompts_consolidate import LabelOps, LintOps, MergeOp, RetypeOp
-from ntrp.memory.records import RecordStore
+from arden.memory.consolidate import Consolidate, ConsolidateReport
+from arden.memory.models import Record, SourceRef
+from arden.memory.prompts_consolidate import LabelOps, LintOps, MergeOp, RetypeOp
+from arden.memory.records import RecordStore
 from tests.conftest import completion_response
 
 pytestmark = pytest.mark.asyncio
@@ -71,8 +71,8 @@ async def test_consolidate_runs_on_file_page_store_and_skips_observations(tmp_pa
     """The nightly consolidation now runs on the canonical FilePageStore: it merges
     duplicate DURABLE records but never pulls a low-trust observation/lesson into a
     merge (that would launder trust)."""
-    from ntrp.memory.file_store import FilePageStore
-    from ntrp.memory.models import SourceRef
+    from arden.memory.file_store import FilePageStore
+    from arden.memory.models import SourceRef
 
     store = FilePageStore(tmp_path / "memory")
     await store.open()
@@ -100,8 +100,8 @@ async def test_consolidate_runs_on_file_page_store_and_skips_observations(tmp_pa
 async def test_file_store_set_label_kind_meta_to_entity_is_not_data_loss(tmp_path: Path):
     """meta->entity has no faithful mapping on the page-level meta model — it must leave
     the label in place, never silently delete it."""
-    from ntrp.memory.file_store import FilePageStore
-    from ntrp.memory.models import SourceRef
+    from arden.memory.file_store import FilePageStore
+    from arden.memory.models import SourceRef
 
     store = FilePageStore(tmp_path / "memory")
     await store.open()
@@ -367,9 +367,7 @@ async def test_label_hygiene_reclassifies_entity_vs_meta(tmp_path: Path):
     await records.set_labels(b1.id, ["Bug"])
     await records.set_labels(b2.id, ["Bug"])
 
-    reclass_ops = LabelOps.model_validate(
-        {"reclass": [{"label": "Dex", "kind": "entity"}]}
-    ).model_dump_json()
+    reclass_ops = LabelOps.model_validate({"reclass": [{"label": "Dex", "kind": "entity"}]}).model_dump_json()
     consolidate = _consolidate(tmp_path, records, StubLLM())
 
     report = ConsolidateReport()
@@ -390,9 +388,9 @@ async def test_empty_delta_reruns_label_hygiene_when_fingerprint_changes(tmp_pat
     fingerprint changed outside the record delta path."""
     records = RecordStore(tmp_path / "memory.db", search_index=None)
     a = await records.add("Dex is the user's son")
-    b = await records.add("the user works on ntrp")
+    b = await records.add("the user works on arden")
     await records.set_labels(a.id, ["Dex"])
-    await records.set_labels(b.id, ["ntrp"])
+    await records.set_labels(b.id, ["arden"])
     consolidate = _consolidate(tmp_path, records, StubLLM())
 
     # First sweep advances the watermark past both records and stores the label
@@ -487,9 +485,9 @@ async def test_idle_sweep_makes_zero_llm_calls(tmp_path: Path):
     hygiene — zero LLM calls (the waste-elimination over a full re-scan)."""
     records = RecordStore(tmp_path / "memory.db", search_index=None)
     a = await records.add("Dex is sleeping through the night")
-    b = await records.add("ntrp has a memory system")
+    b = await records.add("Arden has a memory system")
     await records.set_labels(a.id, ["Dex"])
-    await records.set_labels(b.id, ["ntrp"])
+    await records.set_labels(b.id, ["arden"])
     llm = StubLLM()  # default no-op LintOps/LabelOps for every call
     consolidate = _consolidate(tmp_path, records, llm)
 
@@ -511,9 +509,9 @@ async def test_idle_sweep_makes_zero_llm_calls(tmp_path: Path):
 async def test_failed_label_hygiene_does_not_persist_fingerprint_and_idle_sweep_retries(tmp_path: Path):
     records = RecordStore(tmp_path / "memory.db", search_index=None)
     a = await records.add("Dex is the user's son")
-    b = await records.add("ntrp has a memory system")
+    b = await records.add("Arden has a memory system")
     await records.set_labels(a.id, ["Dex"])
-    await records.set_labels(b.id, ["ntrp"])
+    await records.set_labels(b.id, ["arden"])
     consolidate = _consolidate(tmp_path, records, StubLLM())
 
     calls = {"n": 0}
@@ -645,13 +643,19 @@ async def test_neighborhood_excludes_self(tmp_path: Path):
 async def test_lessons_merge_with_lessons_but_never_cross_into_durable_hoods(tmp_path: Path):
     """Playbook hygiene: near-duplicate lessons dedup like facts do, but the
     neighborhoods are kind-partitioned so a lesson never merges with a fact."""
-    from ntrp.memory.file_store import FilePageStore
-    from ntrp.memory.models import SourceRef
+    from arden.memory.file_store import FilePageStore
+    from arden.memory.models import SourceRef
 
     store = FilePageStore(tmp_path / "memory")
     await store.open()
-    l1 = await store.add("Verify against the running system before reporting status.", kind="lesson", source_ref=SourceRef("curator", ""))
-    l2 = await store.add("Always verify claims against the live system before reporting.", kind="lesson", source_ref=SourceRef("curator", ""))
+    l1 = await store.add(
+        "Verify against the running system before reporting status.", kind="lesson", source_ref=SourceRef("curator", "")
+    )
+    l2 = await store.add(
+        "Always verify claims against the live system before reporting.",
+        kind="lesson",
+        source_ref=SourceRef("curator", ""),
+    )
     fact = await store.add("The user verifies systems at Dex.", kind="fact", source_ref=SourceRef("user", ""))
 
     class _HoodAwareLLM(StubLLM):
@@ -661,7 +665,9 @@ async def test_lessons_merge_with_lessons_but_never_cross_into_durable_hoods(tmp
             self.calls.append({"messages": messages, "model": model, "response_format": response_format})
             body = messages[-1]["content"]
             if l1.id in body and l2.id in body:
-                return completion_response(_merge_ops([l1.id, l2.id], merged_text="Verify against the running system before reporting status."))
+                return completion_response(
+                    _merge_ops([l1.id, l2.id], merged_text="Verify against the running system before reporting status.")
+                )
             return completion_response(LintOps().model_dump_json())
 
     llm = _HoodAwareLLM()
@@ -685,8 +691,8 @@ async def test_lessons_merge_with_lessons_but_never_cross_into_durable_hoods(tmp
 
 async def test_lesson_is_never_retyped_to_durable(tmp_path: Path):
     """Trust boundary: the judge cannot promote an agent-inferred lesson to a fact."""
-    from ntrp.memory.file_store import FilePageStore
-    from ntrp.memory.models import SourceRef
+    from arden.memory.file_store import FilePageStore
+    from arden.memory.models import SourceRef
 
     store = FilePageStore(tmp_path / "memory")
     await store.open()

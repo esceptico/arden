@@ -8,23 +8,23 @@ import {
 import { HugeiconsIcon, type HugeiconsProps, type IconSvgElement } from "@hugeicons/react";
 import * as Hugeicons from "./iconData";
 
-export type NtrpIconProps = HugeiconsProps & {
+export type ArdenIconProps = HugeiconsProps & {
   mirrored?: boolean;
 };
 
-export type NtrpIcon = ForwardRefExoticComponent<
-  Omit<NtrpIconProps, "ref"> & RefAttributes<SVGSVGElement>
+export type ArdenIcon = ForwardRefExoticComponent<
+  Omit<ArdenIconProps, "ref"> & RefAttributes<SVGSVGElement>
 >;
 
-type IconDefaults = Pick<NtrpIconProps, "color" | "size" | "strokeWidth">;
+type IconDefaults = Pick<ArdenIconProps, "color" | "size" | "strokeWidth">;
 
 export const IconContext = createContext<IconDefaults>({
   color: "currentColor",
   strokeWidth: 1.5,
 });
 
-function defineIcon(icon: IconSvgElement, displayName: string): NtrpIcon {
-  const Component = forwardRef<SVGSVGElement, NtrpIconProps>(
+function defineIcon(icon: IconSvgElement, displayName: string): ArdenIcon {
+  const Component = forwardRef<SVGSVGElement, ArdenIconProps>(
     ({ color, size, strokeWidth, mirrored, style, ...props }, ref) => {
       const defaults = useContext(IconContext);
       return (

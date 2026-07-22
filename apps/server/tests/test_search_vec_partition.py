@@ -11,8 +11,8 @@ on the query point and asserts memory_line still returns its rows.
 import numpy as np
 import pytest
 
-import ntrp.database as database
-from ntrp.search.store import SearchStore
+import arden.database as database
+from arden.search.store import SearchStore
 
 pytestmark = pytest.mark.asyncio
 

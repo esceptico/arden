@@ -5,11 +5,11 @@ import pytest
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from mcp.types import Tool as McpTool
 
-from ntrp.context.models import SessionState
-from ntrp.mcp.tool import MCPTool
-from ntrp.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
-from ntrp.tools.core.registry import ToolRegistry
-from ntrp.tools.core.types import ToolAction, ToolPolicy, ToolScope
+from arden.context.models import SessionState
+from arden.mcp.tool import MCPTool
+from arden.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
+from arden.tools.core.registry import ToolRegistry
+from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
 
 
 class FakeMCPSession:

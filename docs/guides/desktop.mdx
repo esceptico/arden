@@ -5,7 +5,7 @@ description: "Use the Electron desktop client for chat, approvals, memory, setti
 
 ## Overview
 
-The desktop app is the primary ntrp client. It connects to the local server over HTTP/SSE and renders chat, streaming activity, approvals, memory views, settings, automations, and sandboxed HTML widgets.
+The desktop app is the primary arden client. It connects to the local server over HTTP/SSE and renders chat, streaming activity, approvals, memory views, settings, automations, and sandboxed HTML widgets.
 
 ## Run from source
 
@@ -15,14 +15,14 @@ bun install
 bun run dev
 ```
 
-The app connects to `http://localhost:6877` by default. Start the server first with `ntrp-server serve` or `just server`.
+The app connects to `http://localhost:6877` by default. Start the server first with `arden-server serve` or `just server`.
 
 ## Connect
 
 On first launch, enter:
 
 - **Server URL**: usually `http://localhost:6877`
-- **API key**: the one-time key printed by `ntrp-server serve`
+- **API key**: the one-time key printed by `arden-server serve`
 
 The API key is stored locally. When the OS supports Electron `safeStorage`, the desktop app encrypts it before persisting.
 

@@ -21,8 +21,8 @@
 ### Task 1: Context Link Map And Tool Addressing
 
 **Files:**
-- Modify: `apps/server/ntrp/memory/artifacts.py`
-- Modify: `apps/server/ntrp/tools/memory.py`
+- Modify: `apps/server/arden/memory/artifacts.py`
+- Modify: `apps/server/arden/tools/memory.py`
 - Test: `apps/server/tests/test_memory_artifacts.py`
 - Test: `apps/server/tests/test_memory_filesystem_tools.py`
 

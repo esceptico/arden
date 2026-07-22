@@ -12,9 +12,9 @@ Apple treats sidebars as navigation/control material, not as content cards. The 
 
 Materials are used to establish hierarchy. Navigation and controls sit in a functional material layer; content sits behind or beside it. The material can be translucent, but the goal is legibility and hierarchy, not visible blur as decoration.
 
-AppKit has a semantic `sidebar` material. That is the key signal for ntrp: the sidebar should have its own slate/material treatment, distinct from content, instead of being another generic floating glass surface.
+AppKit has a semantic `sidebar` material. That is the key signal for arden: the sidebar should have its own slate/material treatment, distinct from content, instead of being another generic floating glass surface.
 
-## Implication For ntrp
+## Implication For arden
 
 The current main window feels over-framed when the sidebar is a separate rounded card inside the app window. It creates a card-within-card effect: outer window, floating sidebar slab, chat area, floating composer.
 

@@ -4,13 +4,13 @@ from email import message_from_bytes
 
 import pytest
 
-from ntrp.context.models import SessionState
-from ntrp.integrations.base import IntegrationOperationError
-from ntrp.integrations.gmail.client import GmailSource, MultiGmailSource
-from ntrp.integrations.gmail.tools import ReplyEmailInput, approve_reply_email, reply_email
-from ntrp.integrations.mutations import IDEMPOTENCY_LEDGER_SERVICE, IdempotencyLedger
-from ntrp.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
-from ntrp.tools.core.registry import ToolRegistry
+from arden.context.models import SessionState
+from arden.integrations.base import IntegrationOperationError
+from arden.integrations.gmail.client import GmailSource, MultiGmailSource
+from arden.integrations.gmail.tools import ReplyEmailInput, approve_reply_email, reply_email
+from arden.integrations.mutations import IDEMPOTENCY_LEDGER_SERVICE, IdempotencyLedger
+from arden.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
+from arden.tools.core.registry import ToolRegistry
 
 
 class _Request:

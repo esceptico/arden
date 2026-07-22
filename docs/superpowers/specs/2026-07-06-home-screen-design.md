@@ -5,7 +5,7 @@ Status: draft, awaiting review
 
 ## Purpose
 
-ntrp is not a coding agent; its persistent value is the state of the user's
+Arden is not a coding agent; its persistent value is the state of the user's
 world (approvals, automations, agents, calendar, memory), and today all of
 that hides in modals and sidebars orbiting the chat. Home makes that state
 the primary surface — and it must be a screen the user *works from*, not a

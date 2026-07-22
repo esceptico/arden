@@ -2,14 +2,14 @@ import asyncio
 
 import pytest
 
-from ntrp.agent import SharedLedger
-from ntrp.agent.coverage import ResearchOutline
-from ntrp.agent.ledger import FactNote, GapNote
+from arden.agent import SharedLedger
+from arden.agent.coverage import ResearchOutline
+from arden.agent.ledger import FactNote, GapNote
 
 
 def test_ledger_records_research_notes_in_order():
     ledger = SharedLedger()
-    first = FactNote(claim="ntrp has research agents.", source="repo")
+    first = FactNote(claim="Arden has research agents.", source="repo")
     second = GapNote(what_missing="No coverage for prompt behavior.")
 
     ledger.add_note(first)
@@ -55,7 +55,7 @@ def test_ledger_reports_outline_coverage_and_gap_notes():
     ledger = SharedLedger()
     ledger.set_outline(ResearchOutline.from_titles(["Repo state", "Prompt behavior"]))
 
-    ledger.cover_section("Repo state", "apps/server/ntrp/tools/research.py")
+    ledger.cover_section("Repo state", "apps/server/arden/tools/research.py")
     report = ledger.coverage_report()
     gaps = ledger.add_coverage_gap_notes()
 

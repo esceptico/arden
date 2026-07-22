@@ -1,6 +1,6 @@
-# NTRP desktop design system
+# ARDEN desktop design system
 
-This is the sole normative human-readable contract for the NTRP desktop interface. The product should feel calm, exact, and alive: a quiet reading room with operational furniture that appears only when it helps the work.
+This is the sole normative human-readable contract for the ARDEN desktop interface. The product should feel calm, exact, and alive: a quiet reading room with operational furniture that appears only when it helps the work.
 
 ## Authority map
 

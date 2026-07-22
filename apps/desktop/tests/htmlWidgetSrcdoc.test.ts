@@ -16,7 +16,7 @@ test("buildSrcdoc assembles CSP, theme :root, bridge, and body", () => {
     `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; form-action 'none'">`,
   );
   expect(doc).toContain(":root{--color-ink:#111}");
-  expect(doc).toContain("window.ntrp");
+  expect(doc).toContain("window.arden");
   expect(doc).toContain("ui/submit");
   expect(doc).toContain("ui/cancel");
   expect(doc).toContain("ui/size-changed");

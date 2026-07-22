@@ -3,17 +3,17 @@ from types import SimpleNamespace
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from ntrp.agent import RunBudget
-from ntrp.orchestra.dynamic import format_script_traceback, run_script
-from ntrp.orchestra.engine import (
+from arden.agent import RunBudget
+from arden.orchestra.dynamic import format_script_traceback, run_script
+from arden.orchestra.engine import (
     Orchestra,
     TokenBudget,
     WorkflowBudgetExceeded,
     WorkflowSpawnLimit,
     WorkflowStructuredOutputMissing,
 )
-from ntrp.orchestra.schema import model_from_schema
-from ntrp.tools.core.types import ToolAction
+from arden.orchestra.schema import model_from_schema
+from arden.tools.core.types import ToolAction
 
 
 class _Schema(BaseModel):
@@ -331,7 +331,7 @@ async def test_run_script_syntax_error_propagates():
 async def test_spawn_cap_aborts_parallel_instead_of_silent_none(monkeypatch):
     # The runaway guard must surface, not degrade to None the model misreads as a
     # partial failure.
-    monkeypatch.setattr("ntrp.orchestra.engine._MAX_WORKFLOW_SPAWNS", 2)
+    monkeypatch.setattr("arden.orchestra.engine._MAX_WORKFLOW_SPAWNS", 2)
     ctx, _ = _ctx_with(["ok"])
     o = Orchestra.for_ctx(ctx)
     with pytest.raises(BaseException) as ei:
@@ -372,7 +372,7 @@ async def test_format_script_traceback_renders_the_passed_script_not_shared_stat
 async def test_spawn_cap_traceback_surfaces_runaway_message(monkeypatch):
     # When the cap fires inside parallel(), the TaskGroup wraps it in an
     # ExceptionGroup — the leaf runaway-guard message must still surface.
-    monkeypatch.setattr("ntrp.orchestra.engine._MAX_WORKFLOW_SPAWNS", 1)
+    monkeypatch.setattr("arden.orchestra.engine._MAX_WORKFLOW_SPAWNS", 1)
     ctx, _ = _ctx_with(["ok"])
     o = Orchestra.for_ctx(ctx)
     script = "return await parallel([agent('a'), agent('b'), agent('c')])"

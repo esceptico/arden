@@ -468,7 +468,7 @@ interface SliderComfortableProps {
  * row for settings panels: inline label + value, a fill that grows from the
  * left, and either evenly-spaced discrete pips (`pips`) or a continuous handle
  * (`scrubber`). Ported faithfully from FF's `SliderComfortable`, with Radix
- * swapped for hand-rolled keyboard + ARIA (ntrp is radix-free). The control
+ * swapped for hand-rolled keyboard + ARIA (Arden is radix-free). The control
  * carries its own `bg-surface` so the pip-occlusion behind the label/value
  * lines up regardless of the panel it sits on.
  */

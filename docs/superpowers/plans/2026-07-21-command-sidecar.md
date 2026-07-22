@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
-**Goal:** Add `Cmd/Ctrl+Enter` to the existing command palette so a transient agent can reuse canonical ntrp tools, respect their policies, and navigate directly to typed in-app destinations.
+**Goal:** Add `Cmd/Ctrl+Enter` to the existing command palette so a transient agent can reuse canonical arden tools, respect their policies, and navigate directly to typed in-app destinations.
 
 **Architecture:** A new command-run endpoint provisions a hidden `agent` session and invokes the existing chat runner with an explicit command-eligible tool scope plus a `CommandOutcome` schema. Its ordinary SSE stream gains one `command_completed` terminal event. The desktop owns a small command-run store, a local SSE projection, a right-side peek, and a closed destination dispatcher; domain actions continue to execute through existing tools.
 
-**Tech Stack:** FastAPI, Pydantic, existing ntrp Agent/ToolRegistry/SSE runtime, React 19, Zustand, TypeScript, Vitest-compatible desktop tests.
+**Tech Stack:** FastAPI, Pydantic, existing arden Agent/ToolRegistry/SSE runtime, React 19, Zustand, TypeScript, Vitest-compatible desktop tests.
 
 ## Global Constraints
 
@@ -22,14 +22,14 @@
 ### Task 1: Command-eligible tool scope
 
 **Files:**
-- Modify: `apps/server/ntrp/integrations/base.py`
-- Modify: `apps/server/ntrp/integrations/core.py`
-- Modify: `apps/server/ntrp/integrations/gmail/__init__.py`
-- Modify: `apps/server/ntrp/integrations/calendar/__init__.py`
-- Modify: `apps/server/ntrp/integrations/google_drive/__init__.py`
-- Modify: `apps/server/ntrp/integrations/slack/__init__.py`
-- Modify: `apps/server/ntrp/tools/core/registry.py`
-- Modify: `apps/server/ntrp/tools/executor.py`
+- Modify: `apps/server/arden/integrations/base.py`
+- Modify: `apps/server/arden/integrations/core.py`
+- Modify: `apps/server/arden/integrations/gmail/__init__.py`
+- Modify: `apps/server/arden/integrations/calendar/__init__.py`
+- Modify: `apps/server/arden/integrations/google_drive/__init__.py`
+- Modify: `apps/server/arden/integrations/slack/__init__.py`
+- Modify: `apps/server/arden/tools/core/registry.py`
+- Modify: `apps/server/arden/tools/executor.py`
 - Test: `apps/server/tests/test_command_tool_scope.py`
 
 **Interfaces:**
@@ -85,17 +85,17 @@ Expected: all pass.
 - [x] **Step 5: Commit**
 
 ```bash
-git add apps/server/ntrp/integrations apps/server/ntrp/tools/core/registry.py apps/server/ntrp/tools/executor.py apps/server/tests/test_command_tool_scope.py
+git add apps/server/arden/integrations apps/server/arden/tools/core/registry.py apps/server/arden/tools/executor.py apps/server/tests/test_command_tool_scope.py
 git commit -m "feat(commands): register command-eligible tools"
 ```
 
 ### Task 2: Typed command run endpoint
 
 **Files:**
-- Create: `apps/server/ntrp/commands/models.py`
-- Create: `apps/server/ntrp/commands/prompt.py`
-- Create: `apps/server/ntrp/server/routers/commands.py`
-- Modify: `apps/server/ntrp/server/app.py`
+- Create: `apps/server/arden/commands/models.py`
+- Create: `apps/server/arden/commands/prompt.py`
+- Create: `apps/server/arden/server/routers/commands.py`
+- Modify: `apps/server/arden/server/app.py`
 - Test: `apps/server/tests/test_command_runs.py`
 
 **Interfaces:**
@@ -157,15 +157,15 @@ Expected: command tests and chat idempotency tests pass.
 - [x] **Step 5: Commit**
 
 ```bash
-git add apps/server/ntrp/commands apps/server/ntrp/server/routers/commands.py apps/server/ntrp/server/app.py apps/server/tests/test_command_runs.py
+git add apps/server/arden/commands apps/server/arden/server/routers/commands.py apps/server/arden/server/app.py apps/server/tests/test_command_runs.py
 git commit -m "feat(commands): start scoped command runs"
 ```
 
 ### Task 3: Command completion SSE
 
 **Files:**
-- Modify: `apps/server/ntrp/events/sse.py`
-- Modify: `apps/server/ntrp/services/chat.py`
+- Modify: `apps/server/arden/events/sse.py`
+- Modify: `apps/server/arden/services/chat.py`
 - Modify: `apps/desktop/src/api/events.ts`
 - Test: `apps/server/tests/test_command_completion_events.py`
 - Test: `apps/server/tests/test_streaming_events.py`
@@ -215,7 +215,7 @@ Expected: all pass.
 - [x] **Step 5: Commit**
 
 ```bash
-git add apps/server/ntrp/events/sse.py apps/server/ntrp/services/chat.py apps/server/tests/test_command_completion_events.py apps/server/tests/test_streaming_events.py apps/desktop/src/api/events.ts
+git add apps/server/arden/events/sse.py apps/server/arden/services/chat.py apps/server/tests/test_command_completion_events.py apps/server/tests/test_streaming_events.py apps/desktop/src/api/events.ts
 git commit -m "feat(commands): stream validated command outcomes"
 ```
 

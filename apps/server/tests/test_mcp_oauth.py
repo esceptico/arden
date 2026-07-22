@@ -4,8 +4,8 @@ import time
 
 import pytest
 
-from ntrp.mcp import oauth as oauth_module
-from ntrp.mcp.oauth import MCPTokenStorage, OAuthOptions, create_oauth_provider, ensure_oauth_metadata
+from arden.mcp import oauth as oauth_module
+from arden.mcp.oauth import MCPTokenStorage, OAuthOptions, create_oauth_provider, ensure_oauth_metadata
 
 SERVER_URL = "https://api.smith.langchain.com/mcp"
 TOKEN_ENDPOINT = "https://api.smith.langchain.com/oauth/token"

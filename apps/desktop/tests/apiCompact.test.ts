@@ -17,7 +17,7 @@ afterEach(() => {
 test("compactSessionApi uses an extended timeout", async () => {
   let request: { path: string; method?: string; body?: string; timeout?: number } | null = null;
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async (_config: unknown, req: typeof request) => {
           request = req;
@@ -47,7 +47,7 @@ test("compactSessionApi uses an extended timeout", async () => {
 test("standard API calls use the default timeout", async () => {
   let request: { path: string; method?: string; body?: string; timeout?: number } | null = null;
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async (_config: unknown, req: typeof request) => {
           request = req;
@@ -77,7 +77,7 @@ test("standard API calls use the default timeout", async () => {
 test("archiveAreaApi sends DELETE to the area route", async () => {
   let request: { path: string; method?: string; body?: string; timeout?: number } | null = null;
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async (_config: unknown, req: typeof request) => {
           request = req;
@@ -107,7 +107,7 @@ test("archiveAreaApi sends DELETE to the area route", async () => {
 test("getChildAgentResultApi uses child-agent result route with wait params", async () => {
   let request: { path: string; method?: string; body?: string; timeout?: number } | null = null;
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async (_config: unknown, req: typeof request) => {
           request = req;
@@ -150,7 +150,7 @@ test("getChildAgentResultApi uses child-agent result route with wait params", as
 
 test("desktop API bridge rejects when the renderer timeout elapses", async () => {
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async () => new Promise(() => {}),
       },
@@ -177,7 +177,7 @@ test("memory search routes through the desktop bridge like other memory calls", 
   // every other memory call.
   const calls: string[] = [];
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async (_config: unknown, req: { path: string }) => {
           calls.push(req.path);
@@ -216,7 +216,7 @@ test("compact command does not reload or claim success when compaction is below 
     order: [],
   });
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async (_config: unknown, req: { path: string }) => {
           requests.push(req.path);

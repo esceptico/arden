@@ -184,7 +184,7 @@ export function PaletteBody({
         </div>
       </motion.div>
 
-      {/* cmdk owns list semantics and selection; ntrp keeps its ranked filter
+      {/* cmdk owns list semantics and selection; Arden keeps its ranked filter
           and nested-view direction. */}
       <Command.List
         ref={listRef}

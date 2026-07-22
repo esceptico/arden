@@ -23,8 +23,8 @@
 ### Task 1: Canonical Google account store and legacy migration
 
 **Files:**
-- Create: `apps/server/ntrp/integrations/google_auth/accounts.py`
-- Modify: `apps/server/ntrp/integrations/google_auth/__init__.py`
+- Create: `apps/server/arden/integrations/google_auth/accounts.py`
+- Modify: `apps/server/arden/integrations/google_auth/__init__.py`
 - Test: `apps/server/tests/test_google_accounts.py`
 
 **Interfaces:**
@@ -77,7 +77,7 @@ def test_legacy_migration_is_idempotent_and_classifies_scopes(tmp_path):
 - [ ] **Step 2: Run tests and verify failure**
 
 Run: `cd apps/server && uv run pytest tests/test_google_accounts.py -q`
-Expected: FAIL because `ntrp.integrations.google_auth.accounts` does not exist.
+Expected: FAIL because `arden.integrations.google_auth.accounts` does not exist.
 
 - [ ] **Step 3: Implement models, locked mutations, atomic JSON writes, and migration**
 
@@ -118,17 +118,17 @@ Expected: PASS.
 - [ ] **Step 5: Commit account store**
 
 ```bash
-git add apps/server/ntrp/integrations/google_auth/accounts.py apps/server/ntrp/integrations/google_auth/__init__.py apps/server/tests/test_google_accounts.py
+git add apps/server/arden/integrations/google_auth/accounts.py apps/server/arden/integrations/google_auth/__init__.py apps/server/tests/test_google_accounts.py
 git commit -m "feat(server): add canonical Google account store"
 ```
 
 ### Task 2: Service-scoped OAuth and per-integration enabled state
 
 **Files:**
-- Modify: `apps/server/ntrp/integrations/google_auth/auth.py`
-- Modify: `apps/server/ntrp/config.py`
-- Modify: `apps/server/ntrp/server/schemas.py`
-- Modify: `apps/server/ntrp/server/routers/settings.py`
+- Modify: `apps/server/arden/integrations/google_auth/auth.py`
+- Modify: `apps/server/arden/config.py`
+- Modify: `apps/server/arden/server/schemas.py`
+- Modify: `apps/server/arden/server/routers/settings.py`
 - Test: `apps/server/tests/test_setup_routes.py`
 - Test: `apps/server/tests/test_config_service.py`
 
@@ -211,16 +211,16 @@ Expected: PASS.
 - [ ] **Step 6: Commit auth and config**
 
 ```bash
-git add apps/server/ntrp/integrations/google_auth/auth.py apps/server/ntrp/config.py apps/server/ntrp/server/schemas.py apps/server/ntrp/server/routers/settings.py apps/server/tests/test_setup_routes.py apps/server/tests/test_config_service.py
+git add apps/server/arden/integrations/google_auth/auth.py apps/server/arden/config.py apps/server/arden/server/schemas.py apps/server/arden/server/routers/settings.py apps/server/tests/test_setup_routes.py apps/server/tests/test_config_service.py
 git commit -m "feat(server): scope Google connections by service"
 ```
 
 ### Task 3: Decouple Gmail and Calendar registrations
 
 **Files:**
-- Modify: `apps/server/ntrp/integrations/gmail/__init__.py`
-- Modify: `apps/server/ntrp/integrations/calendar/__init__.py`
-- Modify: `apps/server/ntrp/integrations/calendar/client.py`
+- Modify: `apps/server/arden/integrations/gmail/__init__.py`
+- Modify: `apps/server/arden/integrations/calendar/__init__.py`
+- Modify: `apps/server/arden/integrations/calendar/client.py`
 - Test: `apps/server/tests/test_integration_connections.py`
 - Create: `apps/server/tests/test_calendar_multi_account.py`
 
@@ -238,7 +238,7 @@ def test_registered_google_integrations_have_independent_connections():
 
 
 def test_calendar_never_falls_back_to_gmail_token(monkeypatch, tmp_path):
-    monkeypatch.setattr(calendar_client, "NTRP_DIR", tmp_path)
+    monkeypatch.setattr(calendar_client, "ARDEN_DIR", tmp_path)
     (tmp_path / "gmail_token_user@example.com.json").write_text("{}")
     assert GoogleCalendar().token_path == tmp_path / "calendar_token.json"
 ```
@@ -270,15 +270,15 @@ Expected: PASS.
 - [ ] **Step 5: Commit decoupling**
 
 ```bash
-git add apps/server/ntrp/integrations/gmail/__init__.py apps/server/ntrp/integrations/calendar/__init__.py apps/server/ntrp/integrations/calendar/client.py apps/server/tests/test_integration_connections.py apps/server/tests/test_calendar_multi_account.py
+git add apps/server/arden/integrations/gmail/__init__.py apps/server/arden/integrations/calendar/__init__.py apps/server/arden/integrations/calendar/client.py apps/server/tests/test_integration_connections.py apps/server/tests/test_calendar_multi_account.py
 git commit -m "refactor(server): separate Gmail and Calendar connections"
 ```
 
 ### Task 4: Google Drive Docs/Sheets client
 
 **Files:**
-- Create: `apps/server/ntrp/integrations/google_drive/client.py`
-- Create: `apps/server/ntrp/integrations/google_drive/render.py`
+- Create: `apps/server/arden/integrations/google_drive/client.py`
+- Create: `apps/server/arden/integrations/google_drive/render.py`
 - Test: `apps/server/tests/test_google_drive_client.py`
 
 **Interfaces:**
@@ -329,18 +329,18 @@ Expected: PASS.
 - [ ] **Step 6: Commit Drive client**
 
 ```bash
-git add apps/server/ntrp/integrations/google_drive/client.py apps/server/ntrp/integrations/google_drive/render.py apps/server/tests/test_google_drive_client.py
+git add apps/server/arden/integrations/google_drive/client.py apps/server/arden/integrations/google_drive/render.py apps/server/tests/test_google_drive_client.py
 git commit -m "feat(server): add Google Docs and Sheets client"
 ```
 
 ### Task 5: Drive tools, approvals, provenance, and registration
 
 **Files:**
-- Create: `apps/server/ntrp/integrations/google_drive/tools.py`
-- Create: `apps/server/ntrp/integrations/google_drive/__init__.py`
-- Modify: `apps/server/ntrp/integrations/__init__.py`
-- Modify: `apps/server/ntrp/tools/deferred.py`
-- Modify: `apps/server/ntrp/agent/types/tool_presentation.py`
+- Create: `apps/server/arden/integrations/google_drive/tools.py`
+- Create: `apps/server/arden/integrations/google_drive/__init__.py`
+- Modify: `apps/server/arden/integrations/__init__.py`
+- Modify: `apps/server/arden/tools/deferred.py`
+- Modify: `apps/server/arden/agent/types/tool_presentation.py`
 - Test: `apps/server/tests/test_google_drive_tools.py`
 - Test: `apps/server/tests/test_deferred_tools.py`
 - Test: `apps/server/tests/test_tool_presentation.py`
@@ -404,18 +404,18 @@ Expected: PASS.
 - [ ] **Step 6: Commit tools**
 
 ```bash
-git add apps/server/ntrp/integrations/google_drive apps/server/ntrp/integrations/__init__.py apps/server/ntrp/tools/deferred.py apps/server/ntrp/agent/types/tool_presentation.py apps/server/tests/test_google_drive_tools.py apps/server/tests/test_deferred_tools.py apps/server/tests/test_tool_presentation.py apps/server/tests/test_integration_connections.py
+git add apps/server/arden/integrations/google_drive apps/server/arden/integrations/__init__.py apps/server/arden/tools/deferred.py apps/server/arden/agent/types/tool_presentation.py apps/server/tests/test_google_drive_tools.py apps/server/tests/test_deferred_tools.py apps/server/tests/test_tool_presentation.py apps/server/tests/test_integration_connections.py
 git commit -m "feat(server): expose Google Drive agent tools"
 ```
 
 ### Task 6: Generic Google routes and chat connection actions
 
 **Files:**
-- Create: `apps/server/ntrp/server/routers/google.py`
-- Modify: `apps/server/ntrp/server/app.py`
-- Modify: `apps/server/ntrp/server/routers/gmail.py`
-- Modify: `apps/server/ntrp/server/routers/setup.py`
-- Modify: `apps/server/ntrp/server/runtime/core.py`
+- Create: `apps/server/arden/server/routers/google.py`
+- Modify: `apps/server/arden/server/app.py`
+- Modify: `apps/server/arden/server/routers/gmail.py`
+- Modify: `apps/server/arden/server/routers/setup.py`
+- Modify: `apps/server/arden/server/runtime/core.py`
 - Modify: `apps/desktop/src/api/settings.ts`
 - Modify: `apps/desktop/src/actions/connections.ts`
 - Test: `apps/server/tests/test_google_routes.py`
@@ -478,7 +478,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit routes and dispatcher**
 
 ```bash
-git add apps/server/ntrp/server/routers/google.py apps/server/ntrp/server/app.py apps/server/ntrp/server/routers/gmail.py apps/server/ntrp/server/routers/setup.py apps/server/ntrp/server/runtime/core.py apps/desktop/src/api/settings.ts apps/desktop/src/actions/connections.ts apps/server/tests/test_google_routes.py apps/server/tests/test_provider_routes.py apps/desktop/tests/connectionBanner.test.tsx
+git add apps/server/arden/server/routers/google.py apps/server/arden/server/app.py apps/server/arden/server/routers/gmail.py apps/server/arden/server/routers/setup.py apps/server/arden/server/runtime/core.py apps/desktop/src/api/settings.ts apps/desktop/src/actions/connections.ts apps/server/tests/test_google_routes.py apps/server/tests/test_provider_routes.py apps/desktop/tests/connectionBanner.test.tsx
 git commit -m "feat: connect Google services independently"
 ```
 
@@ -568,7 +568,7 @@ git commit -m "feat(desktop): manage Google services separately"
 ### Task 8: Migration, regression, and final verification
 
 **Files:**
-- Modify: `apps/server/ntrp/integrations/README.md`
+- Modify: `apps/server/arden/integrations/README.md`
 - Modify: `apps/server/tests/test_setup_routes.py`
 - Modify: `apps/server/tests/test_integration_connections.py`
 - Modify: `apps/desktop/tests/connectionBanner.test.tsx`
@@ -595,7 +595,7 @@ Expected: PASS.
 
 - [ ] **Step 3: Run server lint**
 
-Run: `cd apps/server && uv run ruff check ntrp/integrations/google_auth ntrp/integrations/google_drive ntrp/integrations/gmail ntrp/integrations/calendar ntrp/server/routers/google.py tests/test_google_accounts.py tests/test_google_drive_client.py tests/test_google_drive_tools.py tests/test_google_routes.py`
+Run: `cd apps/server && uv run ruff check arden/integrations/google_auth arden/integrations/google_drive arden/integrations/gmail arden/integrations/calendar arden/server/routers/google.py tests/test_google_accounts.py tests/test_google_drive_client.py tests/test_google_drive_tools.py tests/test_google_routes.py`
 Expected: PASS.
 
 - [ ] **Step 4: Run desktop regression suite**
@@ -613,6 +613,6 @@ Document the account store, service-binding semantics, exact Drive tool boundary
 - [ ] **Step 6: Commit verification and docs**
 
 ```bash
-git add apps/server/ntrp/integrations/README.md apps/server/tests/test_setup_routes.py apps/server/tests/test_integration_connections.py apps/desktop/tests/connectionBanner.test.tsx
+git add apps/server/arden/integrations/README.md apps/server/tests/test_setup_routes.py apps/server/tests/test_integration_connections.py apps/desktop/tests/connectionBanner.test.tsx
 git commit -m "docs: document separate Google service connections"
 ```

@@ -15,12 +15,12 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-import ntrp.database as database
-from ntrp.automation.models import Automation
-from ntrp.automation.scheduler import Scheduler
-from ntrp.automation.store import AutomationStore
-from ntrp.automation.triggers import MessageTrigger, TimeTrigger, parse_triggers
-from ntrp.events.triggers import MessageReceived
+import arden.database as database
+from arden.automation.models import Automation
+from arden.automation.scheduler import Scheduler
+from arden.automation.store import AutomationStore
+from arden.automation.triggers import MessageTrigger, TimeTrigger, parse_triggers
+from arden.events.triggers import MessageReceived
 
 
 @pytest_asyncio.fixture
@@ -133,10 +133,12 @@ def test_parse_triggers_round_trips_message_trigger():
         contains=["crash"],
     )
     # parse_triggers reads what the store writes: {"type": ..., **params()}.
-    raw = '[{"type": "message", "source": "slack", ' \
-        '"channels": [{"id": "C7", "name": "bugs"}], ' \
-        '"from_user_id": "U1", "from_user_name": "alice", ' \
+    raw = (
+        '[{"type": "message", "source": "slack", '
+        '"channels": [{"id": "C7", "name": "bugs"}], '
+        '"from_user_id": "U1", "from_user_name": "alice", '
         '"contains": ["crash"]}]'
+    )
 
     parsed = parse_triggers(raw)
 

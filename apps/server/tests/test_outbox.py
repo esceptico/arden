@@ -4,10 +4,10 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-import ntrp.database as database
-from ntrp.agent import Usage
-from ntrp.events.internal import RunCompleted
-from ntrp.outbox import (
+import arden.database as database
+from arden.agent import Usage
+from arden.events.internal import RunCompleted
+from arden.outbox import (
     OUTBOX_RUN_COMPLETED,
     OutboxStore,
     OutboxWorker,

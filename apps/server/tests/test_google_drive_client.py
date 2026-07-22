@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from ntrp.integrations.google_drive.client import GoogleDriveClient, MultiGoogleDriveClient
-from ntrp.integrations.google_drive.render import flatten_google_doc
+from arden.integrations.google_drive.client import GoogleDriveClient, MultiGoogleDriveClient
+from arden.integrations.google_drive.render import flatten_google_doc
 
 
 class Request:

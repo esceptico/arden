@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from ntrp.server.app import app
+from arden.server.app import app
 
 
 def test_provider_routes_are_registered_once():

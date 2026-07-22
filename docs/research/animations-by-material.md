@@ -2,7 +2,7 @@
 
 > Glass is a living, refractive medium — its motion is atmospheric (parallax, specular drift, tint pulse, no scale-from-zero); Linen is paper-on-paper — its motion is architectural (shadow lift, scale, FLIP reshuffles, no shimmer-of-light) [1][2][3][4]. The general principles in [`microactions.md`](./microactions.md) still apply; this doc is only what *changes* per material.
 
-NTRP ships both materials as user-selectable surfaces. Motion has to feel native to each — the same spring constants and durations, but different *what* moves and what doesn't. Anti-patterns differ too: a tint pulse that sells a glass card as alive will look like a bug on linen; a shadow lift that grounds a linen card will look flat and lifeless under glass.
+ARDEN ships both materials as user-selectable surfaces. Motion has to feel native to each — the same spring constants and durations, but different *what* moves and what doesn't. Anti-patterns differ too: a tint pulse that sells a glass card as alive will look like a bug on linen; a shadow lift that grounds a linen card will look flat and lifeless under glass.
 
 ---
 
@@ -12,7 +12,7 @@ Glass is Apple's Liquid Glass language: a digital meta-material that combines re
 
 ### 1. What works with translucency
 
-- **Background parallax.** Because content behind the glass is visible (blurred, tinted, but visible), moving the *background* a few px while the glass surface stays put creates instant depth. Vision Pro app icons do exactly this — layers drift at different rates on gaze/hover [4][5]. NTRP rule: on hover of a glass card over a scrollable region, translate the *backdrop content* by 2–4 px on the cursor axis (parallax factor 0.04–0.08).
+- **Background parallax.** Because content behind the glass is visible (blurred, tinted, but visible), moving the *background* a few px while the glass surface stays put creates instant depth. Vision Pro app icons do exactly this — layers drift at different rates on gaze/hover [4][5]. ARDEN rule: on hover of a glass card over a scrollable region, translate the *backdrop content* by 2–4 px on the cursor axis (parallax factor 0.04–0.08).
 - **Specular / rim drift.** A 1 px inner highlight whose angular position tracks the pointer (or device tilt) is the single highest-leverage glass micro-motion. Apple's spec: "highlights move with device motion, reinforcing realism and depth" [1][2]. Implement as a conic-gradient or SVG `feSpecularLighting` whose light source position is bound to pointer x/y [6][7]. Cap response at ~60 fps with `requestAnimationFrame`, ease the light position with a stiff spring (`stiffness: 220, damping: 28`) so it lags the cursor by ~80 ms — chasing 1:1 reads as jittery.
 - **Subtle warp on press.** Liquid Glass "flexes and morphs… simulating a thicker material with deeper shadows and more pronounced lensing" [2]. On the web this is an SVG displacement map (`feTurbulence` + `feDisplacementMap`) ramped from 0 → ~6 on press, easing back over ~220 ms [6][8][9]. Keep the displacement scale single-digit; anything above ~10 reads as a broken filter.
 - **Tint pulse on background change.** When the content behind the glass changes (route swap, image load), pulse the surface's internal tint by ±4 % luminance over ~400 ms ease-out. This sells the surface as *sampling* the new background rather than statically painted.
@@ -77,7 +77,7 @@ Linen is the opposite metaphor: opaque, slightly-textured paper surfaces stacked
 
 ### 1. What works with solid surfaces
 
-- **Shadow lift.** The signature linen interaction: hover/press shifts elevation. Material 3 cards use ambient + key shadow pairs at named elevation tokens; Geist encodes elevation in a `Material type` (`base`, `small`, `large`, `tooltip`, `menu`, `modal`, `fullscreen`) [27]. NTRP rule: hover transitions `box-shadow` from elevation-1 → elevation-2 over 140 ms ease-out.
+- **Shadow lift.** The signature linen interaction: hover/press shifts elevation. Material 3 cards use ambient + key shadow pairs at named elevation tokens; Geist encodes elevation in a `Material type` (`base`, `small`, `large`, `tooltip`, `menu`, `modal`, `fullscreen`) [27]. ARDEN rule: hover transitions `box-shadow` from elevation-1 → elevation-2 over 140 ms ease-out.
 - **Clean scale transforms.** Solid cards take scale gracefully — there's no refraction to misalign. Press scale 0.97, hover scale 1.00 (no growth on hover on a list; reserve hover-scale 1.02 for isolated cards) [18][19].
 - **Container transform.** Material 3's flagship pattern: a tappable element seamlessly morphs its bounds into the destination container [25][28]. Works on linen because the surface is opaque — the morphing rectangle reads as a single object reshaping. (On glass, the same animation looks like two filters cross-fading.) Duration 300–400 ms `emphasized` easing `cubic-bezier(0.2, 0.0, 0, 1.0)` [16][25].
 - **Tonal background shift.** Hover lightens the surface fill by one tonal step (e.g., `--surface` → `--surface-hover`, +3–5 % luminance). This is the linen equivalent of glass's tint pulse — but it's a *static* state change, not a breathing pulse.
@@ -191,7 +191,7 @@ If a single animation has to work across both (a shared component), drive the *p
 12. Roberto Moreno Celta — *The Real Cost of Animations: Performance Budget vs. User Delight* (2025-10). https://robertcelt95.medium.com/the-real-cost-of-animations-performance-budget-vs-user-delight-227199cf5d27
 13. GitHub — `shadcn-ui/ui` issue #327 *CSS Backdrop filter causing performance issues*. https://github.com/shadcn-ui/ui/issues/327
 14. Mozilla Bugzilla 1718471 — *backdrop-filter: blur is laggy when many elements are rendered*. https://bugzilla.mozilla.org/show_bug.cgi?id=1718471
-15. NTRP project lessons — *backdrop-filter containing block*. (internal memory)
+15. ARDEN project lessons — *backdrop-filter containing block*. (internal memory)
 16. Material Design 3 — *Easing and duration tokens*. https://m3.material.io/styles/motion/easing-and-duration/tokens-specs
 17. Rauno Freiberg — *Designing Depth*. https://rauno.me/craft/depth
 18. Emil Kowalski — *Good vs Great Animations*. https://emilkowal.ski/ui/good-vs-great-animations

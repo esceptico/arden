@@ -5,7 +5,7 @@ description: "Server-Sent Events for real-time agent execution."
 
 ## Overview
 
-ntrp uses a persistent SSE connection per session. Connect to `GET /chat/events/{session_id}` to receive all events (agent responses, tool calls, background task results). Messages are sent via `POST /chat/message` as fire-and-forget — the response arrives on the SSE stream.
+Arden uses a persistent SSE connection per session. Connect to `GET /chat/events/{session_id}` to receive all events (agent responses, tool calls, background task results). Messages are sent via `POST /chat/message` as fire-and-forget — the response arrives on the SSE stream.
 
 Each event has a `type` field indicating what happened.
 
@@ -82,7 +82,7 @@ Agent invoked a tool.
 
 ### `TOOL_CALL_ARGS`
 
-Tool arguments. NTRP currently emits arguments atomically as a JSON string.
+Tool arguments. ARDEN currently emits arguments atomically as a JSON string.
 
 ```json
 {"type": "TOOL_CALL_ARGS", "tool_call_id": "tc_abc123", "delta": "{\"query\":\"meeting notes\"}"}

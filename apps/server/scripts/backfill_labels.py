@@ -11,10 +11,10 @@ carry labels are skipped.
 import asyncio
 import json
 
-from ntrp.config import get_config
-from ntrp.llm.models import get_models
-from ntrp.llm.router import get_completion_client
-from ntrp.memory.records import RecordStore
+from arden.config import get_config
+from arden.llm.models import get_models
+from arden.llm.router import get_completion_client
+from arden.memory.records import RecordStore
 
 BATCH_SIZE = 25
 VOCAB_LIMIT = 40

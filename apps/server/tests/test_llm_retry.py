@@ -1,6 +1,6 @@
 from google.genai.errors import ClientError
 
-from ntrp.llm.retry import _is_retryable
+from arden.llm.retry import _is_retryable
 
 
 def test_gemini_daily_quota_exhaustion_is_not_retryable():

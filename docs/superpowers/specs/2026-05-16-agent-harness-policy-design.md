@@ -2,7 +2,7 @@
 
 ## Objective
 
-Make ntrp's agent harness safer and more legible by replacing scattered tool-control fields with one explicit `ToolPolicy`, then using that policy for runtime approval, audit, result limits, connector classification, and budgets.
+Make Arden's agent harness safer and more legible by replacing scattered tool-control fields with one explicit `ToolPolicy`, then using that policy for runtime approval, audit, result limits, connector classification, and budgets.
 
 This design implements the first buildable slice of the `agents-best-practices` review, with a roadmap for the broader harness improvements.
 
@@ -80,7 +80,7 @@ Definitions:
 - `action=draft`: creates a reviewable proposal, draft, or staged artifact without committing it.
 - `action=write`: changes source-of-truth state.
 - `action=execute`: runs code, shell, browser automation, or another process-like action.
-- `scope=internal`: ntrp-controlled state, local workspace/files, local process, local DB, session, memory, or artifacts.
+- `scope=internal`: arden-controlled state, local workspace/files, local process, local DB, session, memory, or artifacts.
 - `scope=external`: third-party systems, remote services, external people, remote MCP, or network side effects.
 
 Examples:

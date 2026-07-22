@@ -1,4 +1,4 @@
-from ntrp.services.chat import _merge_background_messages
+from arden.services.chat import _merge_background_messages
 
 
 def test_background_merge_appends_background_tail_to_saved_prefix():

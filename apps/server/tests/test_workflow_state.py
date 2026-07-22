@@ -1,8 +1,8 @@
 import json
 
-from ntrp.events.sse import ApprovalNeededEvent, BackgroundTaskEvent, EventType, RunFinishedEvent, event_from_payload
-from ntrp.workflow.models import WorkflowState, state_for_event, state_for_event_type
-from ntrp.workflow.store import WorkflowStateStore
+from arden.events.sse import ApprovalNeededEvent, BackgroundTaskEvent, EventType, RunFinishedEvent, event_from_payload
+from arden.workflow.models import WorkflowState, state_for_event, state_for_event_type
+from arden.workflow.store import WorkflowStateStore
 
 
 def test_event_types_map_to_normalized_workflow_states():

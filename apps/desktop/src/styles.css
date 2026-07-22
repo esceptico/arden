@@ -86,7 +86,7 @@
                halving offsets (1/3/6/12/24/48/96px);
        dark  = inset top highlight + inset ring + outer hairline + stacked
                drops, opacities escalating per level (the --dm-* recipe).
-     Each surface pairs 1:1 with its shadow. ntrp decouples bg-tone from
+     Each surface pairs 1:1 with its shadow. arden decouples bg-tone from
      shadow-tier per surface class (anchored chrome sits low with a deep
      shadow; floating surfaces lift), and approximates FF's substrate
      context via `.modal-scrim` descendant selectors. */

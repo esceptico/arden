@@ -7,14 +7,14 @@ import pytest
 import pytest_asyncio
 from pydantic import BaseModel
 
-import ntrp.database as database
-from ntrp.agent import Agent
-from ntrp.context.models import SessionState
-from ntrp.context.store import SessionStore
-from ntrp.services.chat import _retain_user_content, _time_gap_note
-from ntrp.tools.core import ToolAction, ToolPolicy, ToolResult, ToolScope, tool
-from ntrp.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
-from ntrp.tools.core.registry import ToolRegistry
+import arden.database as database
+from arden.agent import Agent
+from arden.context.models import SessionState
+from arden.context.store import SessionStore
+from arden.services.chat import _retain_user_content, _time_gap_note
+from arden.tools.core import ToolAction, ToolPolicy, ToolResult, ToolScope, tool
+from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
+from arden.tools.core.registry import ToolRegistry
 from tests.helpers import MockCompletionClient, MockLLMClient, make_executor, make_test_executor, make_text_response
 
 # --- Context block stripping ---
@@ -130,7 +130,7 @@ ECHO_TOOL = tool(
 @pytest.mark.asyncio
 async def test_agent_text_and_tool_calls():
     """Some models return both content and tool_calls. Agent should handle both."""
-    from ntrp.agent import Choice, CompletionResponse, FunctionCall, Message, ToolCall, Usage
+    from arden.agent import Choice, CompletionResponse, FunctionCall, Message, ToolCall, Usage
 
     mixed = CompletionResponse(
         choices=[
@@ -201,7 +201,7 @@ async def test_save_message_with_newlines_and_quotes(store: SessionStore):
 @pytest.mark.asyncio
 async def test_registry_deliver_result_with_no_callback(tmp_path, monkeypatch):
     """deliver_result with on_result=None should not crash (just warn)."""
-    monkeypatch.setattr("ntrp.tools.core.context.RESULT_BASE", tmp_path)
+    monkeypatch.setattr("arden.tools.core.context.RESULT_BASE", tmp_path)
     registry = BackgroundTaskRegistry(session_id="sess-1")
     # No on_result set — should log warning but not crash
     await registry.deliver_result(
@@ -222,7 +222,7 @@ async def test_registry_deliver_result_with_no_callback(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_approval_rejected_when_no_ui():
     """Tools requiring approval should be rejected when no UI is connected."""
-    from ntrp.tools.core.context import Rejection
+    from arden.tools.core.context import Rejection
 
     ctx = ToolContext(
         session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
@@ -245,7 +245,7 @@ async def test_parallel_approvals_resolve_independently():
     other's — the old single-queue model would have raced."""
     import asyncio
 
-    from ntrp.events.sse import ApprovalNeededEvent
+    from arden.events.sse import ApprovalNeededEvent
 
     emitted: list = []
 
@@ -282,7 +282,7 @@ async def test_parallel_approvals_resolve_independently():
     # Now resolve t1 with rejection.
     pending["t1"].set_result({"approved": False, "result": "no"})
     result1 = await task1
-    from ntrp.tools.core.context import Rejection
+    from arden.tools.core.context import Rejection
 
     assert isinstance(result1, Rejection)
     assert result1.feedback == "no"

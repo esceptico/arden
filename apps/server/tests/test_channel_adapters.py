@@ -1,7 +1,7 @@
 import pytest
 
-from ntrp.channels.models import ChannelDeliveryHandle, RuntimeIdentity
-from ntrp.channels.queue import ChannelQueue
+from arden.channels.models import ChannelDeliveryHandle, RuntimeIdentity
+from arden.channels.queue import ChannelQueue
 
 
 def test_channel_delivery_handle_is_not_runtime_identity():

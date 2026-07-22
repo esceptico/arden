@@ -2,9 +2,9 @@ from datetime import UTC, datetime
 
 import pytest
 
-from ntrp.events.triggers import EventApproaching
-from ntrp.monitor.calendar import CalendarMonitor
-from ntrp.monitor.service import Monitor
+from arden.events.triggers import EventApproaching
+from arden.monitor.calendar import CalendarMonitor
+from arden.monitor.service import Monitor
 
 
 def _event(event_id: str = "event-1") -> EventApproaching:

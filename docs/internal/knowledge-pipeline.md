@@ -55,7 +55,7 @@ Different outputs need different trust levels:
 - External publishing should require review unless explicitly automated.
 - No processor should silently rewrite source objects or procedures in place.
 
-## Current ntrp Mapping
+## Current arden Mapping
 
 - Saved sessions and outbox events are the start of the source/event layer.
 - Chat extraction is an `extract` processor.

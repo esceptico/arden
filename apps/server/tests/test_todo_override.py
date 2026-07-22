@@ -3,12 +3,12 @@ from datetime import UTC, datetime
 import pytest
 from fastapi.testclient import TestClient
 
-import ntrp.tools.todos as todos_module
-from ntrp.context.models import SessionData, SessionState
-from ntrp.server.app import app
-from ntrp.server.deps import require_session_service
-from ntrp.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
-from ntrp.tools.core.registry import ToolRegistry
+import arden.tools.todos as todos_module
+from arden.context.models import SessionData, SessionState
+from arden.server.app import app
+from arden.server.deps import require_session_service
+from arden.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
+from arden.tools.core.registry import ToolRegistry
 
 
 class _TodoSessionService:

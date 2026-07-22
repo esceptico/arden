@@ -4,7 +4,7 @@ Last updated: 2026-05-07
 
 ## North Star
 
-ntrp should feel like a native personal AI operating layer, not a chat page with tools bolted on.
+Arden should feel like a native personal AI operating layer, not a chat page with tools bolted on.
 
 The target vibe is:
 

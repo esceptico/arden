@@ -15,8 +15,8 @@
 ### Task 1: Inject SessionService into AutomationService
 
 **Files:**
-- Modify: `apps/server/ntrp/automation/service.py:50-58` (`__init__`)
-- Modify: `apps/server/ntrp/server/runtime/automation.py:41-44` (construction)
+- Modify: `apps/server/arden/automation/service.py:50-58` (`__init__`)
+- Modify: `apps/server/arden/server/runtime/automation.py:41-44` (construction)
 - Test: `apps/server/tests/automation/test_service_channel_provisioning.py` (create)
 
 - [ ] **Step 1: Write the failing test**
@@ -24,12 +24,12 @@
 ```python
 # apps/server/tests/automation/test_service_channel_provisioning.py
 import pytest
-from ntrp.automation.service import AutomationService
-from ntrp.automation.scheduler import Scheduler
-from ntrp.automation.store import AutomationStore
-from ntrp.services.session import SessionService
-from ntrp.context.store import SessionStore
-from ntrp import database
+from arden.automation.service import AutomationService
+from arden.automation.scheduler import Scheduler
+from arden.automation.store import AutomationStore
+from arden.services.session import SessionService
+from arden.context.store import SessionStore
+from arden import database
 
 
 @pytest.fixture
@@ -57,7 +57,7 @@ Expected: FAIL — `AutomationService.__init__() got an unexpected keyword argum
 
 - [ ] **Step 3: Add the parameter**
 
-In `apps/server/ntrp/automation/service.py`, update `__init__`:
+In `apps/server/arden/automation/service.py`, update `__init__`:
 
 ```python
     def __init__(
@@ -74,10 +74,10 @@ In `apps/server/ntrp/automation/service.py`, update `__init__`:
 Add the import at the top of the file (use TYPE_CHECKING to avoid a circular import if one arises; a direct import is fine if it doesn't):
 
 ```python
-from ntrp.services.session import SessionService
+from arden.services.session import SessionService
 ```
 
-In `apps/server/ntrp/server/runtime/automation.py`, update the construction:
+In `apps/server/arden/server/runtime/automation.py`, update the construction:
 
 ```python
         self.automation_service = AutomationService(
@@ -94,13 +94,13 @@ Expected: PASS
 
 - [ ] **Step 5: Fix any other AutomationService construction sites**
 
-Run: `cd apps/server && grep -rn "AutomationService(" ntrp/ tests/ | grep -v "session_service"`
+Run: `cd apps/server && grep -rn "AutomationService(" arden/ tests/ | grep -v "session_service"`
 For each remaining site (tests included), add `session_service=...`. Test fixtures that don't need a real session service can pass a minimal `SessionService` built on a tmp `SessionStore` (as in the fixture above).
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add apps/server/ntrp/automation/service.py apps/server/ntrp/server/runtime/automation.py apps/server/tests/automation/test_service_channel_provisioning.py
+git add apps/server/arden/automation/service.py apps/server/arden/server/runtime/automation.py apps/server/tests/automation/test_service_channel_provisioning.py
 git commit -m "feat(automation): inject SessionService into AutomationService"
 ```
 
@@ -109,7 +109,7 @@ git commit -m "feat(automation): inject SessionService into AutomationService"
 ### Task 2: Provision a channel in `AutomationService.create`
 
 **Files:**
-- Modify: `apps/server/ntrp/automation/service.py` (`create`, lines ~231-328)
+- Modify: `apps/server/arden/automation/service.py` (`create`, lines ~231-328)
 - Test: `apps/server/tests/automation/test_service_channel_provisioning.py` (add)
 
 The channel is provisioned only when the caller did NOT already pass a `thread_id` (loops and other explicitly-bound automations keep their existing target). After provisioning we set `thread_id` to the channel session id and force `read_history=True` so the scheduler routes it through the iteration dispatcher.
@@ -151,7 +151,7 @@ async def test_create_with_explicit_thread_id_skips_channel(svc):
     assert session.state.origin_automation_id is None
 ```
 
-NOTE: confirm the exact accessor for the loaded session's state. `SessionService.load` returns `SessionData`; the test above assumes `session.state`. If the attribute differs (e.g. `session.session_state`), adjust both assertions to match — check `apps/server/ntrp/services/session.py` `SessionData` definition before running.
+NOTE: confirm the exact accessor for the loaded session's state. `SessionService.load` returns `SessionData`; the test above assumes `session.state`. If the attribute differs (e.g. `session.session_state`), adjust both assertions to match — check `apps/server/arden/services/session.py` `SessionData` definition before running.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -160,7 +160,7 @@ Expected: FAIL — `automation.thread_id is None`
 
 - [ ] **Step 3: Implement provisioning in `create`**
 
-In `apps/server/ntrp/automation/service.py`, inside `create`, after `task_id = generate_slug(2)` and before the `loop_prompt = ...` line, insert:
+In `apps/server/arden/automation/service.py`, inside `create`, after `task_id = generate_slug(2)` and before the `loop_prompt = ...` line, insert:
 
 ```python
         # Auto-provision a bound channel for agent automations that aren't
@@ -191,13 +191,13 @@ Expected: PASS (all three tests)
 
 `create` is the agent-automation entry point; internal handler automations are seeded via `seed_builtins` / store directly, not via `create`. Confirm:
 
-Run: `cd apps/server && grep -rn "\.create(" ntrp/automation/builtins.py`
+Run: `cd apps/server && grep -rn "\.create(" arden/automation/builtins.py`
 Expected: no matches (builtins construct `Automation` directly). If any builtin uses `create`, it would now get a channel — flag it and pass an explicit `thread_id` or a dedicated skip; otherwise no action.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add apps/server/ntrp/automation/service.py apps/server/tests/automation/test_service_channel_provisioning.py
+git add apps/server/arden/automation/service.py apps/server/tests/automation/test_service_channel_provisioning.py
 git commit -m "feat(automation): provision bound channel on automation create"
 ```
 
@@ -214,14 +214,14 @@ This task adds no production code if Tasks 1-2 are correct — the scheduler alr
 
 ```python
 # apps/server/tests/automation/test_channel_execution.py
-from ntrp.automation.scheduler import Scheduler
+from arden.automation.scheduler import Scheduler
 
 
 def test_channel_automation_is_session_bound():
     # A created channel automation must be classified session-bound so the
     # scheduler picks the iteration dispatcher (persists full turn + SSE),
     # not the headless _run_agent path (final text only, no channel).
-    from ntrp.automation.models import Automation
+    from arden.automation.models import Automation
     from datetime import UTC, datetime
     a = Automation(
         task_id="t1",
@@ -263,7 +263,7 @@ git commit -m "test(automation): lock channel automations to session-bound itera
 Existing agent automations (created before this change) have no `thread_id`. On upgrade, give each one a channel so they gain visibility too. This is a data migration that runs once at startup, after the schema is ready.
 
 **Files:**
-- Modify: `apps/server/ntrp/server/runtime/automation.py` (`start_scheduler`, after `seed_builtins`)
+- Modify: `apps/server/arden/server/runtime/automation.py` (`start_scheduler`, after `seed_builtins`)
 - Test: `apps/server/tests/automation/test_channel_backfill.py` (create)
 
 Backfill targets only agent automations: `handler is None` (not internal handlers), `kind != "loop"` (loops bind to their chat session), and `thread_id is None`. Implement as a method on `AutomationService` so it's unit-testable and reuses provisioning logic.
@@ -274,7 +274,7 @@ Backfill targets only agent automations: `handler is None` (not internal handler
 # apps/server/tests/automation/test_channel_backfill.py
 import pytest
 from datetime import UTC, datetime
-from ntrp.automation.models import Automation
+from arden.automation.models import Automation
 # reuse the svc fixture pattern from test_service_channel_provisioning
 from tests.automation.test_service_channel_provisioning import svc  # noqa: F401
 
@@ -316,7 +316,7 @@ Expected: FAIL — `AttributeError: 'AutomationService' object has no attribute 
 
 - [ ] **Step 3: Implement `backfill_channels`**
 
-Add to `AutomationService` in `apps/server/ntrp/automation/service.py`:
+Add to `AutomationService` in `apps/server/arden/automation/service.py`:
 
 ```python
     async def backfill_channels(self) -> int:
@@ -339,7 +339,7 @@ Add to `AutomationService` in `apps/server/ntrp/automation/service.py`:
         return count
 ```
 
-`replace` is already imported from `dataclasses` at the top of the file. Confirm `update_metadata` persists `thread_id`, `read_history`, and `loop_prompt` — check `apps/server/ntrp/automation/store.py` `_SQL_UPDATE_METADATA`. If any of those columns is not in the UPDATE set, use `self.store.save(updated)` instead (full upsert).
+`replace` is already imported from `dataclasses` at the top of the file. Confirm `update_metadata` persists `thread_id`, `read_history`, and `loop_prompt` — check `apps/server/arden/automation/store.py` `_SQL_UPDATE_METADATA`. If any of those columns is not in the UPDATE set, use `self.store.save(updated)` instead (full upsert).
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -348,7 +348,7 @@ Expected: PASS
 
 - [ ] **Step 5: Wire backfill into startup**
 
-In `apps/server/ntrp/server/runtime/automation.py`, in `start_scheduler`, after `await seed_builtins(self.stores.automations)` and before `self.scheduler.start()`:
+In `apps/server/arden/server/runtime/automation.py`, in `start_scheduler`, after `await seed_builtins(self.stores.automations)` and before `self.scheduler.start()`:
 
 ```python
         await self.automation_service.backfill_channels()
@@ -362,7 +362,7 @@ Expected: PASS
 - [ ] **Step 7: Commit**
 
 ```bash
-git add apps/server/ntrp/automation/service.py apps/server/ntrp/server/runtime/automation.py apps/server/tests/automation/test_channel_backfill.py
+git add apps/server/arden/automation/service.py apps/server/arden/server/runtime/automation.py apps/server/tests/automation/test_channel_backfill.py
 git commit -m "feat(automation): backfill channels for existing automations on startup"
 ```
 
@@ -481,7 +481,7 @@ Expected: clean.
 
 - [ ] **Step 3: Live smoke test**
 
-1. Start server (`uv run ntrp-server serve`) and desktop app.
+1. Start server (`uv run arden-server serve`) and desktop app.
 2. Create a new automation (auto-approve ON) with a near-term trigger or fire it manually.
 3. Confirm: a channel session appears in Inbox with the radio glyph; hovering the glyph shows the tooltip; the automation card links to it.
 4. When the automation fires, confirm the channel shows the **full turn** — assistant text plus `tool_call`/`tool_result` activity — rendered live.

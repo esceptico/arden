@@ -31,7 +31,7 @@ export const WIDGET_BRIDGE_SCRIPT = `<script>
   function send(method, params) {
     parent.postMessage({ jsonrpc: "2.0", method: method, params: params }, "*");
   }
-  window.ntrp = {
+  window.arden = {
     submit: function (values) {
       if (resolved) return;
       resolved = true;
@@ -49,7 +49,7 @@ export const WIDGET_BRIDGE_SCRIPT = `<script>
           values[key] = value;
         }
       });
-      window.ntrp.submit(values);
+      window.arden.submit(values);
     },
     cancel: function () {
       if (resolved) return;

@@ -19,8 +19,8 @@
 ### Task 1: Remove transcript semantic indexing
 
 **Files:**
-- Modify: `apps/server/ntrp/context/store.py`
-- Modify: `apps/server/ntrp/server/runtime/knowledge.py`
+- Modify: `apps/server/arden/context/store.py`
+- Modify: `apps/server/arden/server/runtime/knowledge.py`
 - Modify: `apps/server/tests/test_transcript_search.py`
 - Delete: `apps/server/tests/test_transcript_hybrid_search.py`
 

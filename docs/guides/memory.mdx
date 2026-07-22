@@ -1,14 +1,14 @@
 ---
 title: "Memory"
-description: "How ntrp remembers, maintains, and recalls what matters."
+description: "How arden remembers, maintains, and recalls what matters."
 ---
 
 ## Overview
 
-ntrp keeps long-term memory as one flat pool of small, self-contained
+Arden keeps long-term memory as one flat pool of small, self-contained
 **records**. Each record is a single durable statement, typed by what it does:
 
-- **directive** — a rule or procedure that should steer how ntrp behaves.
+- **directive** — a rule or procedure that should steer how arden behaves.
 - **fact** — a durable statement about you or your world. Preferences and
   project facts are facts; they just live in different scopes.
 - **source** — a captured reference or receipt from a connected integration or
@@ -28,7 +28,7 @@ by a standing agent.
 
 A record carries its text, an optional source reference, timestamps, a scope, a
 pinned flag, and lifecycle state. It should answer one question on its own:
-"what concrete, durable thing should ntrp know?"
+"what concrete, durable thing should arden know?"
 
 Examples:
 
@@ -53,7 +53,7 @@ Scopes are visibility metadata, not folders or a hierarchy.
 
 ## How memory is written
 
-ntrp writes memory two ways:
+arden writes memory two ways:
 
 1. **The Curator** runs in the background after a conversation and periodically.
    It reads the new turns, compares them against your existing similar records,
@@ -84,7 +84,7 @@ via the API (see the [Memory API](/api-reference/memory)).
 
 ## Recall
 
-For every prompt, ntrp combines two layers:
+For every prompt, arden combines two layers:
 
 1. **Resident profile** — a small, always-on `## Profile` block injected into the
    system prompt for both chat and automation runs. It contains your directives,

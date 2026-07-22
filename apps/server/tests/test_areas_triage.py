@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from ntrp.areas.triage import triage_chat
+from arden.areas.triage import triage_chat
 
 CANDIDATES = [
     {"key": "o-1a", "title": "O-1A Visa"},
@@ -47,11 +47,13 @@ async def _run(payload=None, raises=False, candidates=CANDIDATES):
 @pytest.mark.asyncio
 async def test_move_restamps_from_catalog_not_model_echo():
     # Model echoes a wrong title; we trust our catalog.
-    d = await _run({
-        "decision": "move",
-        "target": {"key": "o-1a", "title": "WRONG"},
-        "rationale": "About the visa.",
-    })
+    d = await _run(
+        {
+            "decision": "move",
+            "target": {"key": "o-1a", "title": "WRONG"},
+            "rationale": "About the visa.",
+        }
+    )
     assert d.decision == "move"
     assert d.target.title == "O-1A Visa"
 

@@ -3,15 +3,15 @@ from hashlib import sha256
 
 import pytest
 
-from ntrp.context.models import AreaContext, SessionState
-from ntrp.core.prompts import AREA_BLOCK
-from ntrp.tools import files as file_tools_module
-from ntrp.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
-from ntrp.tools.core.file_mutation import RevisionConflict, atomic_compare_and_swap, file_revision
-from ntrp.tools.core.registry import ToolRegistry
-from ntrp.tools.deferred import is_deferred_tool
-from ntrp.tools.executor import ToolExecutor
-from ntrp.tools.files import (
+from arden.context.models import AreaContext, SessionState
+from arden.core.prompts import AREA_BLOCK
+from arden.tools import files as file_tools_module
+from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
+from arden.tools.core.file_mutation import RevisionConflict, atomic_compare_and_swap, file_revision
+from arden.tools.core.registry import ToolRegistry
+from arden.tools.deferred import is_deferred_tool
+from arden.tools.executor import ToolExecutor
+from arden.tools.files import (
     edit_file_tool,
     find_files_tool,
     list_files_tool,
@@ -73,7 +73,7 @@ def test_atomic_compare_and_swap_preserves_old_file_when_replace_fails(tmp_path,
     def fail_replace(_source, _target):
         raise OSError("replace failed")
 
-    monkeypatch.setattr("ntrp.tools.core.file_mutation.os.replace", fail_replace)
+    monkeypatch.setattr("arden.tools.core.file_mutation.os.replace", fail_replace)
 
     with pytest.raises(OSError, match="replace failed"):
         atomic_compare_and_swap(target, "new", expected)
@@ -97,9 +97,7 @@ def test_atomic_compare_and_swap_rejects_stale_revision(tmp_path):
 
 
 def test_area_prompt_tells_agent_to_use_relative_paths():
-    prompt = AREA_BLOCK.render(
-        area=AreaContext(area_id="proj-1", name="Area", default_cwd="/Users/me/src/area")
-    )
+    prompt = AREA_BLOCK.render(area=AreaContext(area_id="proj-1", name="Area", default_cwd="/Users/me/src/area"))
 
     assert "Default cwd: /Users/me/src/area" in prompt
     assert "Use relative paths from the default cwd" in prompt
@@ -201,9 +199,7 @@ async def test_find_files_discloses_capped_results(tmp_path):
     for name in ("c.py", "a.py", "b.py"):
         (tmp_path / name).write_text(name, encoding="utf-8")
 
-    result = await find_files_tool.execute(
-        _make_execution("find_files"), path=str(tmp_path), pattern="*.py", limit=2
-    )
+    result = await find_files_tool.execute(_make_execution("find_files"), path=str(tmp_path), pattern="*.py", limit=2)
 
     assert [item["relative_path"] for item in result.data["matches"]] == ["a.py", "b.py"]
     assert result.data["has_more"] is True
@@ -256,9 +252,7 @@ async def test_search_text_returns_line_matches(tmp_path):
 async def test_search_text_discloses_capped_results(tmp_path):
     (tmp_path / "notes.txt").write_text("needle\nneedle\nneedle\n", encoding="utf-8")
 
-    result = await search_text_tool.execute(
-        _make_execution("search_text"), path=str(tmp_path), query="needle", limit=2
-    )
+    result = await search_text_tool.execute(_make_execution("search_text"), path=str(tmp_path), query="needle", limit=2)
 
     assert len(result.data["matches"]) == 2
     assert result.data["has_more"] is True

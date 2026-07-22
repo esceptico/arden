@@ -15,7 +15,7 @@ export function MarkdownViewer() {
   const close = useStore((s) => s.setViewingMarkdown);
 
   const openExternal = () => {
-    if (view?.sourcePath) void window.ntrpDesktop?.shell?.openPath(view.sourcePath);
+    if (view?.sourcePath) void window.ardenDesktop?.shell?.openPath(view.sourcePath);
   };
 
   return (

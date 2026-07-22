@@ -15,14 +15,14 @@ import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
 
-import ntrp.database as database
-from ntrp.automation.models import Automation
-from ntrp.automation.store import AutomationStore
-from ntrp.automation.suggestions import AutomationSuggestion
-from ntrp.automation.triggers import EventTrigger, TimeTrigger
-from ntrp.server.app import app
-from ntrp.server.deps import require_automation_runtime, require_automation_service
-from ntrp.server.runtime.automation import SuggesterUnavailableError
+import arden.database as database
+from arden.automation.models import Automation
+from arden.automation.store import AutomationStore
+from arden.automation.suggestions import AutomationSuggestion
+from arden.automation.triggers import EventTrigger, TimeTrigger
+from arden.server.app import app
+from arden.server.deps import require_automation_runtime, require_automation_service
+from arden.server.runtime.automation import SuggesterUnavailableError
 
 
 def _suggestion(
@@ -139,9 +139,7 @@ async def test_get_returns_active_suggestions(store, client):
 
     second = suggestions[1]
     assert second["icon"] is None
-    assert second["triggers"] == [
-        {"type": "event", "event_type": "calendar.event_approaching", "lead_minutes": 30}
-    ]
+    assert second["triggers"] == [{"type": "event", "event_type": "calendar.event_approaching", "lead_minutes": 30}]
 
 
 async def test_dismiss_removes_from_active(store, client):

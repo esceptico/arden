@@ -6,7 +6,7 @@ Status: execution plan
 
 Scope: chat/session agent runs, server-to-client event delivery, desktop reconnection, idempotent message submission, durable replay, run recovery, and typed event contract hygiene.
 
-This plan comes from a comparison of the current `ntrp` server/client transport with Letta, Vercel AI SDK UI, AG-UI, LangGraph, and OpenAI Agents SDK. The immediate goal is to make server <-> client transport reliable under disconnects, retries, process restarts, slow consumers, and ambiguous POST failures.
+This plan comes from a comparison of the current `arden` server/client transport with Letta, Vercel AI SDK UI, AG-UI, LangGraph, and OpenAI Agents SDK. The immediate goal is to make server <-> client transport reliable under disconnects, retries, process restarts, slow consumers, and ambiguous POST failures.
 
 ## Executive Summary
 
@@ -43,19 +43,19 @@ The three highest-value fixes are:
 
 Current code was inspected as:
 
-- Repo root: `/Users/escept1co/src/ntrp`
-- Server: `/Users/escept1co/src/ntrp/apps/server`
-- Desktop: `/Users/escept1co/src/ntrp/apps/desktop`
+- Repo root: `/Users/escept1co/src/arden`
+- Server: `/Users/escept1co/src/arden/apps/server`
+- Desktop: `/Users/escept1co/src/arden/apps/desktop`
 
 Key current files:
 
-- `apps/server/ntrp/events/sse.py` — public SSE event vocabulary and adapter from internal agent events.
-- `apps/server/ntrp/server/bus.py` — per-session live event bus, `seq` assignment, in-memory replay buffer.
-- `apps/server/ntrp/server/routers/chat.py` — `/chat/events/{session_id}` SSE endpoint.
-- `apps/server/ntrp/server/stream.py` — agent loop to SSE bridge.
-- `apps/server/ntrp/server/state.py` — in-memory run registry and short-lived OTID dedupe.
-- `apps/server/ntrp/context/store.py` — `session_events`, chat run/message persistence, queued messages.
-- `apps/server/ntrp/services/chat.py` — chat submit/run/checkpoint lifecycle.
+- `apps/server/arden/events/sse.py` — public SSE event vocabulary and adapter from internal agent events.
+- `apps/server/arden/server/bus.py` — per-session live event bus, `seq` assignment, in-memory replay buffer.
+- `apps/server/arden/server/routers/chat.py` — `/chat/events/{session_id}` SSE endpoint.
+- `apps/server/arden/server/stream.py` — agent loop to SSE bridge.
+- `apps/server/arden/server/state.py` — in-memory run registry and short-lived OTID dedupe.
+- `apps/server/arden/context/store.py` — `session_events`, chat run/message persistence, queued messages.
+- `apps/server/arden/services/chat.py` — chat submit/run/checkpoint lifecycle.
 - `apps/desktop/src/hooks/useEvents.ts` — desktop chat SSE loop and reconnect behavior.
 - `apps/desktop/electron/main.cjs` — Electron SSE stream bridge.
 - `apps/desktop/src/api.ts` — TypeScript event union.
@@ -208,10 +208,10 @@ The problem is not the basic direction. The problem is that the implementation i
 
 Current evidence:
 
-- `apps/server/ntrp/server/state.py`
+- `apps/server/arden/server/state.py`
 - `OTID_DEDUP_TTL = timedelta(seconds=30)`
 - `RunRegistry._otid_runs` is in memory.
-- `apps/server/ntrp/services/chat.py` checks `run_registry.lookup_otid(session_id, client_id)` before creating/injecting work.
+- `apps/server/arden/services/chat.py` checks `run_registry.lookup_otid(session_id, client_id)` before creating/injecting work.
 - `apps/desktop/src/actions/messages.ts` sends `client_id` from the user message id.
 
 Problem:
@@ -281,7 +281,7 @@ Acceptance tests:
 
 Current evidence:
 
-- `apps/server/ntrp/server/bus.py::SessionBus.emit()` assigns seq, appends to `_recent`, pushes to subscriber queues, then schedules persistence asynchronously.
+- `apps/server/arden/server/bus.py::SessionBus.emit()` assigns seq, appends to `_recent`, pushes to subscriber queues, then schedules persistence asynchronously.
 - Persistence failure is logged but does not fail live delivery.
 
 Problem:
@@ -343,7 +343,7 @@ Acceptance tests:
 
 Current evidence:
 
-- `apps/server/ntrp/context/store.py::list_session_events()` can list persisted events after a cursor.
+- `apps/server/arden/context/store.py::list_session_events()` can list persisted events after a cursor.
 - `/chat/events/{session_id}` currently uses in-memory `bus.subscribe_with_replay(after_seq)`.
 - On bus recreation, server seeds latest seq/checkpoint from DB but does not hydrate/replay the durable event log.
 
@@ -385,7 +385,7 @@ Acceptance tests:
 
 Current evidence:
 
-- `apps/server/ntrp/server/state.py::RunRegistry` stores active runs in memory.
+- `apps/server/arden/server/state.py::RunRegistry` stores active runs in memory.
 - `_runs`, `_active_by_session`, and `_otid_runs` disappear on process restart.
 - `chat_runs.last_seq` exists but run lifecycle is not a complete durable active-run source of truth.
 
@@ -624,7 +624,7 @@ Acceptance tests:
 
 Current evidence:
 
-`apps/server/ntrp/server/app.py` has a TODO to extend lock acquisition into `submit_chat_message` to fully serialize session-message writes and cover residual post-vs-chat race during agent run.
+`apps/server/arden/server/app.py` has a TODO to extend lock acquisition into `submit_chat_message` to fully serialize session-message writes and cover residual post-vs-chat race during agent run.
 
 Problem:
 
@@ -652,7 +652,7 @@ Acceptance tests:
 
 Current evidence:
 
-- Server event definitions live in `apps/server/ntrp/events/sse.py`.
+- Server event definitions live in `apps/server/arden/events/sse.py`.
 - Client event union lives in `apps/desktop/src/api.ts`.
 - Automation events have separate inline typing.
 
@@ -682,12 +682,12 @@ Acceptance tests:
 
 Current evidence:
 
-The code already uses AG-UI-ish names for run/text/tool/reasoning events, plus ntrp-specific events.
+The code already uses AG-UI-ish names for run/text/tool/reasoning events, plus arden-specific events.
 
 Target behavior:
 
 - Keep canonical AG-UI names where possible.
-- Put ntrp-specific events under a clear custom/control namespace or payload convention.
+- Put arden-specific events under a clear custom/control namespace or payload convention.
 - Preserve the distinction documented in `events/sse.py`:
   - `seq` is transport cursor
   - `event_id` is domain idempotency
@@ -696,7 +696,7 @@ Target behavior:
 Acceptance tests:
 
 - Chat transcript events map cleanly to AG-UI lifecycle/text/tool events.
-- ntrp-specific events do not collide with AG-UI canonical names.
+- arden-specific events do not collide with AG-UI canonical names.
 
 ### P2. Automation Event Dead-Lettering
 
@@ -901,7 +901,7 @@ Expected impact:
 
 Files likely touched:
 
-- `apps/server/ntrp/server/routers/chat.py`
+- `apps/server/arden/server/routers/chat.py`
 - `apps/desktop/src/hooks/useEvents.ts`
 - `apps/desktop/electron/main.cjs`
 - `apps/desktop/src/store/chat-stream.ts`
@@ -916,9 +916,9 @@ Deliverables:
 
 Files likely touched:
 
-- `apps/server/ntrp/context/store.py`
-- `apps/server/ntrp/services/chat.py`
-- `apps/server/ntrp/server/state.py`
+- `apps/server/arden/context/store.py`
+- `apps/server/arden/services/chat.py`
+- `apps/server/arden/server/state.py`
 - `apps/server/tests/...`
 
 Deliverables:
@@ -931,9 +931,9 @@ Deliverables:
 
 Files likely touched:
 
-- `apps/server/ntrp/server/bus.py`
-- `apps/server/ntrp/server/stream.py`
-- `apps/server/ntrp/context/store.py`
+- `apps/server/arden/server/bus.py`
+- `apps/server/arden/server/stream.py`
+- `apps/server/arden/context/store.py`
 - `apps/server/tests/test_session_bus.py`
 
 Deliverables:
@@ -945,9 +945,9 @@ Deliverables:
 
 Files likely touched:
 
-- `apps/server/ntrp/server/routers/chat.py`
-- `apps/server/ntrp/server/bus.py`
-- `apps/server/ntrp/context/store.py`
+- `apps/server/arden/server/routers/chat.py`
+- `apps/server/arden/server/bus.py`
+- `apps/server/arden/context/store.py`
 - `apps/server/tests/test_chat_inject.py`
 
 Deliverables:
@@ -960,10 +960,10 @@ Deliverables:
 
 Files likely touched:
 
-- `apps/server/ntrp/context/store.py`
-- `apps/server/ntrp/services/chat.py`
-- `apps/server/ntrp/server/app.py`
-- `apps/server/ntrp/server/state.py`
+- `apps/server/arden/context/store.py`
+- `apps/server/arden/services/chat.py`
+- `apps/server/arden/server/app.py`
+- `apps/server/arden/server/state.py`
 
 Deliverables:
 
@@ -975,7 +975,7 @@ Deliverables:
 
 Files likely touched:
 
-- `apps/server/ntrp/events/sse.py`
+- `apps/server/arden/events/sse.py`
 - `apps/desktop/src/api.ts`
 - `apps/desktop/src/store/transcript-projection.ts`
 - build/codegen scripts

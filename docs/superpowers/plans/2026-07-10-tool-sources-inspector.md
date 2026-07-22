@@ -31,19 +31,19 @@
 
 **Files:**
 
-- Modify: `apps/server/ntrp/agent/types/tools.py`
-- Modify: `apps/server/ntrp/agent/types/events.py`
-- Modify: `apps/server/ntrp/agent/tools/runner.py`
-- Modify: `apps/server/ntrp/core/tool_executor.py`
-- Modify: `apps/server/ntrp/core/tool_result_data.py`
-- Modify: `apps/server/ntrp/agent/tools/dispatch.py`
-- Modify: `apps/server/ntrp/events/sse.py`
-- Modify: `apps/server/ntrp/server/state.py`
-- Modify: `apps/server/ntrp/server/stream.py`
-- Modify: `apps/server/ntrp/services/chat.py`
-- Modify: `apps/server/ntrp/server/routers/session.py`
-- Modify: `apps/server/ntrp/integrations/web/tools.py` (existing singular emitter only)
-- Modify: `apps/server/ntrp/tools/files.py` (existing singular emitter only)
+- Modify: `apps/server/arden/agent/types/tools.py`
+- Modify: `apps/server/arden/agent/types/events.py`
+- Modify: `apps/server/arden/agent/tools/runner.py`
+- Modify: `apps/server/arden/core/tool_executor.py`
+- Modify: `apps/server/arden/core/tool_result_data.py`
+- Modify: `apps/server/arden/agent/tools/dispatch.py`
+- Modify: `apps/server/arden/events/sse.py`
+- Modify: `apps/server/arden/server/state.py`
+- Modify: `apps/server/arden/server/stream.py`
+- Modify: `apps/server/arden/services/chat.py`
+- Modify: `apps/server/arden/server/routers/session.py`
+- Modify: `apps/server/arden/integrations/web/tools.py` (existing singular emitter only)
+- Modify: `apps/server/arden/tools/files.py` (existing singular emitter only)
 - Test: `apps/server/tests/test_tool_sources.py`
 - Test: `apps/server/tests/test_streaming_events.py`
 - Test: `apps/server/tests/test_web_tools.py` (existing singular assertion only)
@@ -100,7 +100,7 @@ Extend `persistable_tool_result_data()` to retain only existing `child_agent` da
 
 ```bash
 uv run pytest tests/test_tool_sources.py tests/test_streaming_events.py -q
-uv run ruff check ntrp/agent/types/tools.py ntrp/agent/types/events.py ntrp/agent/tools/runner.py ntrp/core/tool_executor.py ntrp/core/tool_result_data.py ntrp/agent/tools/dispatch.py ntrp/events/sse.py ntrp/server/routers/session.py tests/test_tool_sources.py tests/test_streaming_events.py
+uv run ruff check arden/agent/types/tools.py arden/agent/types/events.py arden/agent/tools/runner.py arden/core/tool_executor.py arden/core/tool_result_data.py arden/agent/tools/dispatch.py arden/events/sse.py arden/server/routers/session.py tests/test_tool_sources.py tests/test_streaming_events.py
 git add apps/server
 git commit -m "feat(server): transport tool source references"
 ```
@@ -111,13 +111,13 @@ git commit -m "feat(server): transport tool source references"
 
 **Files:**
 
-- Modify: `apps/server/ntrp/mcp/results.py`
-- Modify: `apps/server/ntrp/mcp/tool.py`
-- Modify: `apps/server/ntrp/integrations/web/tools.py`
-- Modify: `apps/server/ntrp/integrations/slack/tools.py`
-- Modify: `apps/server/ntrp/integrations/gmail/tools.py`
-- Modify: `apps/server/ntrp/integrations/calendar/tools.py`
-- Modify: `apps/server/ntrp/tools/files.py`
+- Modify: `apps/server/arden/mcp/results.py`
+- Modify: `apps/server/arden/mcp/tool.py`
+- Modify: `apps/server/arden/integrations/web/tools.py`
+- Modify: `apps/server/arden/integrations/slack/tools.py`
+- Modify: `apps/server/arden/integrations/gmail/tools.py`
+- Modify: `apps/server/arden/integrations/calendar/tools.py`
+- Modify: `apps/server/arden/tools/files.py`
 - Test: `apps/server/tests/test_mcp_results.py`
 - Test: `apps/server/tests/test_mcp_tool.py`
 - Test: `apps/server/tests/test_web_tools.py`
@@ -174,7 +174,7 @@ Cover web search result URLs, fetched pages, Slack message permalinks, Gmail mes
 
 ```bash
 uv run pytest tests/test_mcp_results.py tests/test_mcp_tool.py tests/test_web_tools.py tests/test_file_tools.py tests/test_integration_tool_sources.py -q
-uv run ruff check ntrp/mcp ntrp/integrations/web/tools.py ntrp/integrations/slack/tools.py ntrp/integrations/gmail/tools.py ntrp/integrations/calendar/tools.py ntrp/tools/files.py tests/test_mcp_results.py tests/test_mcp_tool.py tests/test_web_tools.py tests/test_file_tools.py tests/test_integration_tool_sources.py
+uv run ruff check arden/mcp arden/integrations/web/tools.py arden/integrations/slack/tools.py arden/integrations/gmail/tools.py arden/integrations/calendar/tools.py arden/tools/files.py tests/test_mcp_results.py tests/test_mcp_tool.py tests/test_web_tools.py tests/test_file_tools.py tests/test_integration_tool_sources.py
 git add apps/server
 git commit -m "feat(server): extract explicit tool sources"
 ```
@@ -321,7 +321,7 @@ From `apps/server`:
 
 ```bash
 uv run pytest tests/test_tool_sources.py tests/test_streaming_events.py tests/test_mcp_results.py tests/test_mcp_tool.py tests/test_web_tools.py tests/test_file_tools.py tests/test_integration_tool_sources.py -q
-uv run ruff check ntrp/agent/types/tools.py ntrp/agent/types/events.py ntrp/agent/tools/runner.py ntrp/core/tool_executor.py ntrp/core/tool_result_data.py ntrp/agent/tools/dispatch.py ntrp/events/sse.py ntrp/server/routers/session.py ntrp/mcp ntrp/integrations/web/tools.py ntrp/integrations/slack/tools.py ntrp/integrations/gmail/tools.py ntrp/integrations/calendar/tools.py ntrp/tools/files.py
+uv run ruff check arden/agent/types/tools.py arden/agent/types/events.py arden/agent/tools/runner.py arden/core/tool_executor.py arden/core/tool_result_data.py arden/agent/tools/dispatch.py arden/events/sse.py arden/server/routers/session.py arden/mcp arden/integrations/web/tools.py arden/integrations/slack/tools.py arden/integrations/gmail/tools.py arden/integrations/calendar/tools.py arden/tools/files.py
 ```
 
 - [ ] **Step 2: Run focused desktop verification**

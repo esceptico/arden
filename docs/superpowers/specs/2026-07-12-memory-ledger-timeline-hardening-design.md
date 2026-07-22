@@ -2,7 +2,7 @@
 
 ## Goal
 
-Make ntrp memory trustworthy as a local, file-canonical personal knowledge system. Every durable memory must preserve its identity, scope, time, and evidence while remaining understandable and editable as Markdown.
+Make Arden memory trustworthy as a local, file-canonical personal knowledge system. Every durable memory must preserve its identity, scope, time, and evidence while remaining understandable and editable as Markdown.
 
 Dex is only a source of design observations. This design does not copy its schema, prompts, storage model, or implementation.
 
@@ -38,14 +38,14 @@ memory/
   raw/
     <same path as record-backed pages>
     events/YYYY-MM-DD.md
-  .ntrp/
+  .arden/
     backups/
     journal/
     indexes/
     maintenance/
 ```
 
-`raw/` and `.ntrp/` are engine-only namespaces. Users may otherwise create any files and directories. Conventional paths such as `topics/` and `daily/` are defaults, not a restriction on user organization. Engine-created pages declare their purpose in frontmatter so behavior does not depend only on their path.
+`raw/` and `.arden/` are engine-only namespaces. Users may otherwise create any files and directories. Conventional paths such as `topics/` and `daily/` are defaults, not a restriction on user organization. Engine-created pages declare their purpose in frontmatter so behavior does not depend only on their path.
 
 `index.md`, `AGENTS.md`, and directory `README.md` files may contain user prose. The engine owns only explicitly marked sections inside them and never rewrites content outside those markers.
 
@@ -69,9 +69,9 @@ Arbitrary Markdown and text files are searchable resources. They do not become a
 A visible memory page contains human or synthesized prose. A record-backed page has a machine-owned Markdown ledger at `raw/<same-path>.md`. The readable record line carries the fields a human commonly needs:
 
 ```md
-<!-- ntrp:records schema=2 page=topics/memory-engine.md -->
+<!-- arden:records schema=2 page=topics/memory-engine.md -->
 - 2026-07-12T14:23:41.582+04:00 ^a1b2c3d4 [fact] [imp:8] User prefers concise replies.
-  <!-- ntrp:meta {"recorded_at":"2026-07-12T10:23:42.014Z","sequence":42,"scope":{"kind":"user"},"sources":[{"kind":"chat_message","ref":"session-id:message-id","role":"user","occurred_at":"2026-07-12T14:23:41.582+04:00"}]} -->
+  <!-- arden:meta {"recorded_at":"2026-07-12T10:23:42.014Z","sequence":42,"scope":{"kind":"user"},"sources":[{"kind":"chat_message","ref":"session-id:message-id","role":"user","occurred_at":"2026-07-12T14:23:41.582+04:00"}]} -->
 ```
 
 The visible line is authoritative for occurrence time, record ID, kind, importance, entity labels, and text. The adjacent JSON comment stores only structured fields that cannot be represented safely in the readable line. It must not duplicate authoritative line fields.
@@ -95,7 +95,7 @@ Lifecycle entries are internal ledger operations, not new user-facing memory kin
 New records use RFC 3339 timestamps with millisecond precision and an explicit offset.
 
 - `occurred_at`: when the remembered event or statement occurred, when known.
-- `recorded_at`: when ntrp committed the record.
+- `recorded_at`: when arden committed the record.
 - source `occurred_at`: when each evidence item occurred.
 - `sequence`: a monotonic local tie-breaker when timestamps are equal.
 - `time_precision`: `millisecond`, `second`, `minute`, `day`, or `unknown`.
@@ -149,7 +149,7 @@ The reconciler emits typed `ADD`, `SUPERSEDE`, `MERGE`, `RETRACT`, `NOOP`, or `A
 
 ### Canonical commit
 
-Multi-file changes use a journaled commit under `.ntrp/journal/`: prepare temporary files, validate the complete result, atomically replace targets, and write a commit marker. Startup completes or rolls back an interrupted journal before accepting new writes.
+Multi-file changes use a journaled commit under `.arden/journal/`: prepare temporary files, validate the complete result, atomically replace targets, and write a commit marker. Startup completes or rolls back an interrupted journal before accepting new writes.
 
 The curator watermark advances only after the canonical commit marker exists. A failed write remains retryable. Derived work never participates in this commit.
 
@@ -184,7 +184,7 @@ Search indexes, resident profile text, synthesized page prose, health reports, a
 
 ### Preserving user prose
 
-The current page is the user's visible revision. Synthesis keeps the last generated body as a rebuildable merge base under `.ntrp/maintenance/`. When records change, it generates a candidate and performs a three-way merge against the current page:
+The current page is the user's visible revision. Synthesis keeps the last generated body as a rebuildable merge base under `.arden/maintenance/`. When records change, it generates a candidate and performs a three-way merge against the current page:
 
 - non-overlapping generated changes merge automatically;
 - user formatting and wording remain intact;
@@ -206,7 +206,7 @@ Daily summaries are not an audit log and are never used as evidence for new memo
 Migration runs before the server accepts memory writes:
 
 1. Detect the legacy ledger schema.
-2. Copy the complete vault to `.ntrp/backups/<timestamp>/`.
+2. Copy the complete vault to `.arden/backups/<timestamp>/`.
 3. Parse and validate all visible pages and raw sidecars into a staged result.
 4. Preserve text, IDs, kinds, labels, pins, and known dates.
 5. Collapse byte-equivalent duplicate IDs; assign new IDs to conflicting duplicates and update their internal references.
@@ -233,7 +233,7 @@ If staging or validation fails, the original vault remains untouched and startup
 
 ## Notebook UI
 
-The desktop memory surface is one notebook, not parallel Files and Records applications. It uses ntrp's three-zone workbench shape:
+The desktop memory surface is one notebook, not parallel Files and Records applications. It uses Arden's three-zone workbench shape:
 
 ```text
 index rail | note workspace | optional trust inspector
@@ -244,7 +244,7 @@ index rail | note workspace | optional trust inspector
 - Use `index.md` and nested `README.md` descriptions as the primary meaning-based navigation.
 - Keep search and a keyboard quick switcher at the top.
 - Provide a collapsed Files utility for arbitrary paths; do not make the filesystem tree the product hierarchy.
-- Hide `raw/`, `.ntrp/`, health reports, and other machine pages from normal navigation.
+- Hide `raw/`, `.arden/`, health reports, and other machine pages from normal navigation.
 - Remove the top-level Files/Records toggle. A global raw-record inspector remains available through the command palette for diagnostics.
 
 ### Note workspace
@@ -279,7 +279,7 @@ Selecting a source opens the exact local source when available. Missing or chang
 
 ## Change Review and Diff UI
 
-`DiffReview` is a shared ntrp component used first by memory editing and then by tool approvals. It presents two coordinated views:
+`DiffReview` is a shared arden component used first by memory editing and then by tool approvals. It presents two coordinated views:
 
 1. **Page diff:** rendered prose comparison by default, with a raw Markdown toggle.
 2. **Memory effects:** the proposed `ADD`, `SUPERSEDE`, `RETRACT`, `NOOP`, and `ASK` operations with their evidence targets.
@@ -290,12 +290,12 @@ An `ASK` annotation appears beside the affected hunk. For an ambiguous deletion,
 
 ### Renderer boundary
 
-The Apache-2.0 [`@pierre/diffs`](https://diffs.com/docs) package ([npm](https://www.npmjs.com/package/@pierre/diffs)) is the preferred low-level raw Markdown renderer. It is isolated behind `DiffReview`; package-specific types and styles do not leak into memory features. ntrp retains ownership of rendered-prose comparison, memory-effect annotations, event metadata, decisions, and actions. Adopting it does not replace the existing Markdown/code renderer elsewhere in the app.
+The Apache-2.0 [`@pierre/diffs`](https://diffs.com/docs) package ([npm](https://www.npmjs.com/package/@pierre/diffs)) is the preferred low-level raw Markdown renderer. It is isolated behind `DiffReview`; package-specific types and styles do not leak into memory features. arden retains ownership of rendered-prose comparison, memory-effect annotations, event metadata, decisions, and actions. Adopting it does not replace the existing Markdown/code renderer elsewhere in the app.
 
 Before adoption, a focused prototype must verify:
 
 - Electron, React 19, Bun, and Vite production compatibility;
-- dark/light ntrp theme adaptation across the package's Shadow DOM;
+- dark/light arden theme adaptation across the package's Shadow DOM;
 - keyboard navigation, screen-reader labels, selection, and reduced motion;
 - lazy-loaded bundle and startup impact from Shiki;
 - correct split/stacked responsive behavior on real Markdown pages.

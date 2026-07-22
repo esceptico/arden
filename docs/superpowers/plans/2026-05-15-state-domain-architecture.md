@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make ntrp state replay-safe and reload-stable by separating cached history, live streams, run lifecycle, automations, background agents, and UI shell into explicit domains with clear ownership.
+**Goal:** Make arden state replay-safe and reload-stable by separating cached history, live streams, run lifecycle, automations, background agents, and UI shell into explicit domains with clear ownership.
 
 **Architecture:** Keep Zustand as the app store, but replace hidden module state and mixed mutations with small domain reducers/controllers. Server history remains canonical; SSE is only the live tail; cache is preview only; UI is a rebuildable projection.
 
@@ -40,7 +40,7 @@ apps/desktop/src/hooks/useActiveRuns.ts
 apps/desktop/src/hooks/useAutomationEvents.ts
 apps/desktop/tests/sessionCache.test.ts
 apps/desktop/tests/streamEvents.test.ts
-apps/server/ntrp/server/routers/chat.py
+apps/server/arden/server/routers/chat.py
 apps/server/tests/test_chat_inject.py
 ```
 
@@ -167,7 +167,7 @@ apps/server/tests/test_chat_inject.py
 
 ## Phase 3: Server Replay Boundary
 
-- [ ] Keep `apps/server/ntrp/server/routers/chat.py` aligned with the replay contract.
+- [ ] Keep `apps/server/arden/server/routers/chat.py` aligned with the replay contract.
 
   Required behavior:
 

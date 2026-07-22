@@ -3,16 +3,16 @@ from datetime import UTC, datetime
 
 import pytest
 
-from ntrp.context.models import SessionState
-from ntrp.integrations.base import IntegrationConnectionDescriptor
-from ntrp.tools.connections import (
+from arden.context.models import SessionState
+from arden.integrations.base import IntegrationConnectionDescriptor
+from arden.tools.connections import (
     ConnectionService,
     RequestConnectionInput,
     render_connection_catalog,
     request_connection,
 )
-from ntrp.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
-from ntrp.tools.core.registry import ToolRegistry
+from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
+from arden.tools.core.registry import ToolRegistry
 
 
 def _descriptor(
@@ -43,9 +43,7 @@ def test_catalog_lists_only_registered_disconnected_connections():
 
 def test_catalog_escapes_provider_owned_copy():
     descriptor = _descriptor()
-    descriptor = IntegrationConnectionDescriptor(
-        **{**descriptor.__dict__, "capability": 'Read <mail> & "messages"'}
-    )
+    descriptor = IntegrationConnectionDescriptor(**{**descriptor.__dict__, "capability": 'Read <mail> & "messages"'})
 
     text = render_connection_catalog([descriptor])
 

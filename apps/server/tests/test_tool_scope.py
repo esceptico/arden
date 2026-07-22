@@ -6,9 +6,9 @@ from datetime import UTC, datetime
 
 import pytest
 
-from ntrp.automation.models import Automation
-from ntrp.automation.triggers import TimeTrigger
-from ntrp.tools.core.scope import matches_scope
+from arden.automation.models import Automation
+from arden.automation.triggers import TimeTrigger
+from arden.tools.core.scope import matches_scope
 
 
 def test_matches_scope_grammar():
@@ -21,9 +21,9 @@ def test_matches_scope_grammar():
 
 
 def test_registry_scope_is_outer_gate_over_extras():
-    from ntrp.tools.core.base import Tool
-    from ntrp.tools.core.registry import ToolRegistry
-    from ntrp.tools.core.types import ToolAction, ToolPolicy, ToolScope
+    from arden.tools.core.base import Tool
+    from arden.tools.core.registry import ToolRegistry
+    from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
 
     reg = ToolRegistry()
 
@@ -49,8 +49,7 @@ def test_registry_scope_is_outer_gate_over_extras():
 
     # scope gates even extra_names — no path widens past the allowlist
     names = {
-        t["name"]
-        for t in reg.get_schemas(read_only=True, extra_names=frozenset({"memory_patch"}), scope=("slack_*",))
+        t["name"] for t in reg.get_schemas(read_only=True, extra_names=frozenset({"memory_patch"}), scope=("slack_*",))
     }
     assert names == {"slack_search"}
 
@@ -63,7 +62,7 @@ def test_registry_scope_is_outer_gate_over_extras():
 async def test_automation_tool_scope_roundtrip(tmp_path):
     import aiosqlite
 
-    from ntrp.automation.store import AutomationStore
+    from arden.automation.store import AutomationStore
 
     conn = await aiosqlite.connect(tmp_path / "a.db")
     conn.row_factory = aiosqlite.Row
@@ -72,10 +71,18 @@ async def test_automation_tool_scope_roundtrip(tmp_path):
     trigger = TimeTrigger(at="06:30", days="daily")
     await store.save(
         Automation(
-            task_id="t1", name="slack only", description="d", model=None,
-            triggers=[trigger], enabled=True, created_at=datetime.now(UTC),
-            next_run_at=None, last_run_at=None, last_result=None,
-            running_since=None, auto_approve=False,
+            task_id="t1",
+            name="slack only",
+            description="d",
+            model=None,
+            triggers=[trigger],
+            enabled=True,
+            created_at=datetime.now(UTC),
+            next_run_at=None,
+            last_run_at=None,
+            last_result=None,
+            running_since=None,
+            auto_approve=False,
             tool_scope=["slack_*", "current_time"],
         )
     )
@@ -84,10 +91,18 @@ async def test_automation_tool_scope_roundtrip(tmp_path):
 
     await store.save(
         Automation(
-            task_id="t2", name="unrestricted", description="d", model=None,
-            triggers=[trigger], enabled=True, created_at=datetime.now(UTC),
-            next_run_at=None, last_run_at=None, last_result=None,
-            running_since=None, auto_approve=False,
+            task_id="t2",
+            name="unrestricted",
+            description="d",
+            model=None,
+            triggers=[trigger],
+            enabled=True,
+            created_at=datetime.now(UTC),
+            next_run_at=None,
+            last_run_at=None,
+            last_result=None,
+            running_since=None,
+            auto_approve=False,
         )
     )
     assert (await store.get("t2")).tool_scope is None

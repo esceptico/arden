@@ -8,7 +8,7 @@ import { splitFrontmatter } from "@/features/memory/lib/format";
 import { useStore } from "@/stores";
 
 const config: AppConfig = { serverUrl: "http://localhost:6877", apiKey: "test-key" };
-const originalDesktop = window.ntrpDesktop;
+const originalDesktop = window.ardenDesktop;
 const originalVaultVersion = useStore.getState().memoryVaultVersion;
 const roots = new Set<Root>();
 
@@ -103,13 +103,13 @@ function installBridge(options: {
   let listCalls = 0;
   let rebuildCalls = 0;
   const requests: Array<{ path: string; method: string; body: unknown }> = [];
-  window.ntrpDesktop = { api: { request: async (_config, request) => {
+  window.ardenDesktop = { api: { request: async (_config, request) => {
     const method = request.method ?? "GET";
     const body = request.body ? JSON.parse(request.body) : null;
     requests.push({ path: request.path, method, body });
     if (request.path.startsWith("/admin/memory/artifacts?") || request.path === "/admin/memory/artifacts") {
       listCalls += 1;
-      const query = new URL(request.path, "http://ntrp.test").searchParams.get("q");
+      const query = new URL(request.path, "http://arden.test").searchParams.get("q");
       if (options.onList) return options.onList(query, listCalls);
       return ok({ artifacts: [index, current, ...(currentB ? [currentB] : [])] });
     }
@@ -119,18 +119,18 @@ function installBridge(options: {
       return ok({ artifacts: [index, current, ...(currentB ? [currentB] : [])] });
     }
     if (request.path === "/admin/memory/artifacts/index.md") {
-      return ok({ artifact: { ...index, content: `<!-- ntrp:index:start -->\n- topics/a.md <!-- ntrp:path=topics%2Fa.md -->${currentB ? "\n- topics/b.md <!-- ntrp:path=topics%2Fb.md -->" : ""}\n<!-- ntrp:index:end -->`, editable_content: null, timeline: [], frontmatter: {} } });
+      return ok({ artifact: { ...index, content: `<!-- arden:index:start -->\n- topics/a.md <!-- arden:path=topics%2Fa.md -->${currentB ? "\n- topics/b.md <!-- arden:path=topics%2Fb.md -->" : ""}\n<!-- arden:index:end -->`, editable_content: null, timeline: [], frontmatter: {} } });
     }
     if (request.path === "/admin/memory/artifacts/topics/a.md") return ok({ artifact: current });
     if (request.path === "/admin/memory/artifacts/topics/b.md" && currentB) return ok({ artifact: currentB });
     if (request.path.startsWith("/admin/memory/links")) {
-      const path = new URL(request.path, "http://ntrp.test").searchParams.get("path") ?? "topics/a.md";
+      const path = new URL(request.path, "http://arden.test").searchParams.get("path") ?? "topics/a.md";
       const revision = path === "topics/b.md" ? currentB?.revision ?? "note-b-r1" : current.revision;
       return ok({ path, revision, stale: false, outgoing: [], backlinks: [], total_outgoing: 0, total_backlinks: 0, limit: 100, offset: 0 });
     }
     if (request.path.startsWith("/admin/memory/page-edits/history")) {
       historyCalls += 1;
-      const path = new URL(request.path, "http://ntrp.test").searchParams.get("path");
+      const path = new URL(request.path, "http://arden.test").searchParams.get("path");
       if (options.onHistory) return options.onHistory(historyCalls, path);
       return ok({ events: historyEvents, total: historyEvents.length, limit: 100, next_before_sequence: null });
     }
@@ -164,7 +164,7 @@ function installBridge(options: {
       return ok({ event: rawEvent({ id: "resolved-1", reconciliation: "applied", reconciles_event_id: "external-1" }), revision: current.revision });
     }
     throw new Error(`Unexpected request: ${method} ${request.path}`);
-  } } } as Window["ntrpDesktop"];
+  } } } as Window["ardenDesktop"];
   return {
     requests,
     update(next: ReturnType<typeof note>) { current = next; },
@@ -179,10 +179,10 @@ function installBridge(options: {
 function setup() {
   // Inspector now defaults open (persisted); these tests exercise editing
   // and review flows, so seed it closed to keep prior request counts.
-  localStorage.setItem("ntrp.desktop.memory.inspectorOpen", "false");
+  localStorage.setItem("arden.desktop.memory.inspectorOpen", "false");
   // Initial selection prefers the persisted last path (then index.md); pin it
   // to the note under test so the workspace opens on topics/a.md.
-  localStorage.setItem("ntrp.desktop.memory.lastPath", "topics/a.md");
+  localStorage.setItem("arden.desktop.memory.lastPath", "topics/a.md");
   const host = document.createElement("div");
   host.style.height = "800px";
   document.body.append(host);
@@ -217,12 +217,12 @@ afterEach(async () => {
   for (const root of roots) await act(async () => root.unmount());
   roots.clear();
   clearDrafts();
-  window.ntrpDesktop = originalDesktop;
+  window.ardenDesktop = originalDesktop;
   useStore.setState({ memoryVaultVersion: originalVaultVersion, memoryVaultChanges: [] });
   document.body.replaceChildren();
   // happy-dom localStorage is shared across test files in one bun invocation.
-  localStorage.removeItem("ntrp.desktop.memory.inspectorOpen");
-  localStorage.removeItem("ntrp.desktop.memory.lastPath");
+  localStorage.removeItem("arden.desktop.memory.inspectorOpen");
+  localStorage.removeItem("arden.desktop.memory.lastPath");
 });
 
 test("Cmd+E edits the page body and Cmd+S previews the exact recomposed source bytes", async () => {

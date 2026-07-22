@@ -15,13 +15,13 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-import ntrp.database as database
-from ntrp.automation.models import Automation
-from ntrp.automation.scheduler import Scheduler
-from ntrp.automation.service import AutomationService
-from ntrp.automation.store import AutomationStore
-from ntrp.context.store import SessionStore
-from ntrp.services.session import SessionService
+import arden.database as database
+from arden.automation.models import Automation
+from arden.automation.scheduler import Scheduler
+from arden.automation.service import AutomationService
+from arden.automation.store import AutomationStore
+from arden.context.store import SessionStore
+from arden.services.session import SessionService
 
 
 @pytest_asyncio.fixture
@@ -43,9 +43,7 @@ async def session_service(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_watcher_fanout_dedup_cascade(
-    store: AutomationStore, session_service: SessionService
-):
+async def test_watcher_fanout_dedup_cascade(store: AutomationStore, session_service: SessionService):
     # Real scheduler with a stub post dispatcher that mimics what
     # app.py wires: run "agent", append assistant message into the
     # target session.

@@ -25,7 +25,7 @@ export const ACCENT_PALETTES: AccentPalette[] = [
 
 export const DEFAULT_ACCENT = "slate";
 
-const STYLE_ID = "ntrp-accent";
+const STYLE_ID = "arden-accent";
 const mix = (hex: string, pct: number) => `color-mix(in srgb, ${hex} ${pct}%, transparent)`;
 
 /** Inject the chosen palette as a <style> appended to <head> — last in the

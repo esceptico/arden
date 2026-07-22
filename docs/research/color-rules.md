@@ -1,4 +1,4 @@
-# Color Rules — A Reference for the NTRP Design System
+# Color Rules — A Reference for the ARDEN Design System
 
 > A modern UI color system is built on **perceptual color spaces (OKLCH)**, **functional 10–12 step ramps** (Radix/Geist-style), **APCA-grade contrast**, and **luminance hierarchy** (not shadow) for dark mode. Brand identity comes from the *neutral* and the *one accent that survives every surface* — not from a six-color rainbow.
 
@@ -16,7 +16,7 @@
 
 Because `L` is perceptual, "lightness 0.7" looks roughly equally bright across blue, red, and green — making it trivial to build a ramp where every step has the same visual weight [1][8]. OKLCH also describes **P3 wide-gamut** colors that hex/HSL cannot represent; sRGB covers only ~35% of human-visible colors, and modern Apple/OLED screens add ~30% on top [1].
 
-**Practical rule for NTRP:** define palette tokens in `oklch()`, fallback to hex only for legacy targets. Tailwind v4 has already migrated its default palette to OKLCH for exactly this reason — same class names, more vivid output on P3 displays [8].
+**Practical rule for ARDEN:** define palette tokens in `oklch()`, fallback to hex only for legacy targets. Tailwind v4 has already migrated its default palette to OKLCH for exactly this reason — same class names, more vivid output on P3 displays [8].
 
 **Manipulation:** prefer `color-mix(in oklab, var(--accent) 12%, transparent)` over hand-tuned alphas, and prefer relative-color-syntax (`oklch(from var(--accent) calc(l - 0.1) c h)`) over Sass mixins. `oklab` is the gradient-interpolation default because it never passes through a desaturated "dead zone" [9]. Vercel and Linear both use perceptual spaces for theme generation for the same reason [4][10].
 
@@ -48,7 +48,7 @@ The canonical step-purpose mapping is **Radix Colors' 12-step scale** [3], which
 
 This is not arbitrary — every step has a job, and "you cannot rely purely on math to craft the perfect palette" [11]: the visual judgment goes into picking step 9 (the brand-defining solid) first, then filling steps 1–8 by interpolation and steps 11–12 by APCA target [3].
 
-**The 60/30/10 rule** is a starter heuristic, not a law. It breaks for image-heavy apps, data-dense tools, and design systems that grow over time (color drift) [13]. NTRP's actual ratio is closer to ~85% neutral / ~10% accent / ~5% semantic — typical of tools like Linear, Vercel, and Notion.
+**The 60/30/10 rule** is a starter heuristic, not a law. It breaks for image-heavy apps, data-dense tools, and design systems that grow over time (color drift) [13]. ARDEN's actual ratio is closer to ~85% neutral / ~10% accent / ~5% semantic — typical of tools like Linear, Vercel, and Notion.
 
 ---
 
@@ -102,9 +102,9 @@ GitHub's Primer team audited 100+ token pairs across default / dimmed / high-con
 
 **Linear and Vercel reject this.** Their elevated surfaces are *pure neutral steps* — a modal is "step 2" of the gray ramp, not "step 1 + 8% accent tint" [4][12]. The rationale: tint reads as accidental on a tool you stare at all day, and accent-tinted surfaces ruin neutral hierarchy.
 
-**When tint works:** brand-forward consumer products (M3 reference apps), where the surface tint reinforces brand identity. **When it fails:** information-dense workspaces (Linear, Notion, NTRP) where neutrality is the point. Linear's redesign explicitly moved *away from* a cool blue tint toward "a warmer gray that still feels crisp but less saturated" [4].
+**When tint works:** brand-forward consumer products (M3 reference apps), where the surface tint reinforces brand identity. **When it fails:** information-dense workspaces (Linear, Notion, ARDEN) where neutrality is the point. Linear's redesign explicitly moved *away from* a cool blue tint toward "a warmer gray that still feels crisp but less saturated" [4].
 
-**NTRP's call:** elevation through neutral steps, not accent tint. The "glass" and "linen" materials carry texture; they should not carry brand color.
+**ARDEN's call:** elevation through neutral steps, not accent tint. The "glass" and "linen" materials carry texture; they should not carry brand color.
 
 ---
 

@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { Callout } from "@/components/ui/Callout";
 
 export function SettingsConnectionHint({
-  title = "Connect the desktop to ntrp first",
+  title = "Connect the desktop to arden first",
   detail = "Check the server URL and API key in the Connection tab, then refresh this view.",
 }: {
   title?: string;

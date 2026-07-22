@@ -12,7 +12,7 @@ install:
 
 # Run the backend server.
 server:
-    uv run --project apps/server ntrp-server serve
+    uv run --project apps/server arden-server serve
 
 # Run the desktop client.
 desktop:

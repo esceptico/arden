@@ -2,9 +2,9 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
-from ntrp.integrations.google_auth import auth as google_auth
-from ntrp.server.app import app
-from ntrp.server.runtime import get_runtime
+from arden.integrations.google_auth import auth as google_auth
+from arden.server.app import app
+from arden.server.runtime import get_runtime
 
 INSTALLED_CLIENT = {
     "installed": {
@@ -105,7 +105,7 @@ def test_slack_verify_rejects_wrong_prefix_without_network():
 
 
 def test_setup_status_flattens_google_slack_mcp_shapes(monkeypatch):
-    import ntrp.server.routers.setup as setup_router
+    import arden.server.routers.setup as setup_router
 
     class Provider:
         def __init__(self, id, label, kind, status, detail, tool_count):
@@ -206,7 +206,7 @@ def test_setup_status_flattens_google_slack_mcp_shapes(monkeypatch):
 
 
 def test_google_status_reads_gmail_tokens_passively_without_oauth(monkeypatch, tmp_path):
-    import ntrp.server.routers.setup as setup_router
+    import arden.server.routers.setup as setup_router
 
     token = tmp_path / "gmail_token_user@example.com.json"
     token.write_text(
@@ -214,7 +214,7 @@ def test_google_status_reads_gmail_tokens_passively_without_oauth(monkeypatch, t
         '"refresh_token":null,"scopes":["https://www.googleapis.com/auth/gmail.send"],'
         '"expiry":"2000-01-01T00:00:00Z"}'
     )
-    monkeypatch.setattr(google_auth, "NTRP_DIR", tmp_path)
+    monkeypatch.setattr(google_auth, "ARDEN_DIR", tmp_path)
 
     def fail_oauth(*args, **kwargs):
         raise AssertionError("status must not start OAuth")
@@ -234,7 +234,7 @@ def test_google_status_reads_gmail_tokens_passively_without_oauth(monkeypatch, t
 
 
 def test_google_status_reads_calendar_tokens_passively_without_oauth(monkeypatch, tmp_path):
-    import ntrp.server.routers.setup as setup_router
+    import arden.server.routers.setup as setup_router
 
     token = tmp_path / "calendar_token.json"
     token.write_text(
@@ -242,7 +242,7 @@ def test_google_status_reads_calendar_tokens_passively_without_oauth(monkeypatch
         '"refresh_token":null,"scopes":["https://www.googleapis.com/auth/calendar"],'
         '"expiry":"2000-01-01T00:00:00Z"}'
     )
-    monkeypatch.setattr(google_auth, "NTRP_DIR", tmp_path)
+    monkeypatch.setattr(google_auth, "ARDEN_DIR", tmp_path)
 
     def fail_oauth(*args, **kwargs):
         raise AssertionError("status must not start OAuth")

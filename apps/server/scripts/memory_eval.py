@@ -5,7 +5,7 @@ the memory store and check recall surfaces the supporting record. Pass = any
 expected substring appears in the top-k recall results. Runs against a COPY of the
 live memory (never mutates the running server's dir).
 
-    uv run python -m scripts.memory_eval            # against ~/.ntrp/memory (copied)
+    uv run python -m scripts.memory_eval            # against ~/.arden/memory (copied)
     uv run python -m scripts.memory_eval <dir>      # against another memory dir
 
 Probes are user-specific by design — edit PROBES for your own memory. Lexical-only
@@ -19,7 +19,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from ntrp.memory.file_store import FilePageStore
+from arden.memory.file_store import FilePageStore
 
 # (question, [any-of expected substrings, lowercased]) — grounded in the user's wiki.
 PROBES: list[tuple[str, list[str]]] = [
@@ -37,7 +37,7 @@ PROBES: list[tuple[str, list[str]]] = [
     ("does the user have pets", ["cat", "cats"]),
     ("what is the user's native language", ["russian"]),
     ("what was the user's role at Replika", ["replika", "post-training", "dpo", "safety"]),
-    ("what is ntrp", ["ntrp", "assistant", "agent os", "memory"]),
+    ("what is arden", ["arden", "assistant", "agent os", "memory"]),
     ("what is the Nexus project", ["nexus", "context view", "computed", "column"]),
     ("what does the user prefer about committing code", ["review", "commit", "before"]),
     ("what is the user's primary github handle", ["esceptico"]),
@@ -68,7 +68,7 @@ async def run(root: Path) -> int:
 
 
 async def main() -> None:
-    src = Path(sys.argv[1]) if len(sys.argv) > 1 else Path.home() / ".ntrp" / "memory"
+    src = Path(sys.argv[1]) if len(sys.argv) > 1 else Path.home() / ".arden" / "memory"
     tmp = Path(tempfile.mkdtemp()) / "memory"
     shutil.copytree(src, tmp)  # never open the live dir directly (it would reconcile/rewrite)
     try:

@@ -1,6 +1,6 @@
 from datetime import date
 
-from ntrp.llm.models import Provider, _model_from_generated_entry
+from arden.llm.models import Provider, _model_from_generated_entry
 from scripts.update_models import iter_filtered_models
 
 

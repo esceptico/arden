@@ -5,7 +5,7 @@ from pathlib import Path
 from urllib.request import Request, urlopen
 
 MODELS_DEV_URL = "https://models.dev/api.json"
-OUT_PATH = Path(__file__).resolve().parents[1] / "ntrp" / "llm" / "generated_models.json"
+OUT_PATH = Path(__file__).resolve().parents[1] / "arden" / "llm" / "generated_models.json"
 PROVIDERS = ("openai", "anthropic", "google", "openrouter")
 REASONING_EFFORT_OVERRIDES = {
     "claude-opus-4-7": ["low", "medium", "high", "xhigh", "max"],
@@ -94,7 +94,7 @@ def reasoning_efforts(provider: str, raw: dict) -> list[str]:
 
 
 def fetch_models_dev() -> dict:
-    request = Request(MODELS_DEV_URL, headers={"User-Agent": "ntrp-model-registry/1.0"})
+    request = Request(MODELS_DEV_URL, headers={"User-Agent": "arden-model-registry/1.0"})
     with urlopen(request, timeout=30) as response:
         data = json.loads(response.read().decode("utf-8"))
     if not isinstance(data, dict):

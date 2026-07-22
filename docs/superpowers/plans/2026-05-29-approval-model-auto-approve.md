@@ -17,16 +17,16 @@ Spec: `docs/superpowers/specs/2026-05-29-automation-channels-and-approval-model-
 ## File Structure
 
 **Backend (modify):**
-- `apps/server/ntrp/tools/core/context.py` — the ASK-when-headless fix (the only behavior change).
-- `apps/server/ntrp/automation/models.py` — `Automation.writable` → `auto_approve`.
-- `apps/server/ntrp/automation/store.py` — schema, columns, SQL, row mapping, `set_writable`→`set_auto_approve`, v8 migration.
-- `apps/server/ntrp/automation/service.py` — `toggle_writable`→`toggle_auto_approve`, `_build_metadata_changes`, `update`, `create`, `create_loop`.
-- `apps/server/ntrp/operator/runner.py` — `RunRequest.writable` → `auto_approve`.
-- `apps/server/ntrp/automation/scheduler.py` — `skip_approvals=automation.writable` → `automation.auto_approve`, plus `RunRequest(writable=...)` call sites.
-- `apps/server/ntrp/server/app.py` — `_dispatch_post`/`_dispatch_iteration` `skip_approvals=automation.writable` and `RunRequest(writable=...)`.
-- `apps/server/ntrp/server/schemas.py` — request models carrying `writable`.
-- `apps/server/ntrp/server/routers/automation.py` — `/writable` route + field usages.
-- `apps/server/ntrp/tools/automation.py` — the `create_automation`/`update_automation` tool input + plumbing.
+- `apps/server/arden/tools/core/context.py` — the ASK-when-headless fix (the only behavior change).
+- `apps/server/arden/automation/models.py` — `Automation.writable` → `auto_approve`.
+- `apps/server/arden/automation/store.py` — schema, columns, SQL, row mapping, `set_writable`→`set_auto_approve`, v8 migration.
+- `apps/server/arden/automation/service.py` — `toggle_writable`→`toggle_auto_approve`, `_build_metadata_changes`, `update`, `create`, `create_loop`.
+- `apps/server/arden/operator/runner.py` — `RunRequest.writable` → `auto_approve`.
+- `apps/server/arden/automation/scheduler.py` — `skip_approvals=automation.writable` → `automation.auto_approve`, plus `RunRequest(writable=...)` call sites.
+- `apps/server/arden/server/app.py` — `_dispatch_post`/`_dispatch_iteration` `skip_approvals=automation.writable` and `RunRequest(writable=...)`.
+- `apps/server/arden/server/schemas.py` — request models carrying `writable`.
+- `apps/server/arden/server/routers/automation.py` — `/writable` route + field usages.
+- `apps/server/arden/tools/automation.py` — the `create_automation`/`update_automation` tool input + plumbing.
 
 **Desktop (modify):**
 - `apps/desktop/src/api.ts` — `Automation.writable`, `CreateAutomationPayload.writable`, `UpdateAutomationPayload.writable`, the toggle-writable client fn + route.
@@ -44,7 +44,7 @@ Spec: `docs/superpowers/specs/2026-05-29-automation-channels-and-approval-model-
 This is the highest-value change and is independent of the rename. Do it first.
 
 **Files:**
-- Modify: `apps/server/ntrp/tools/core/context.py:360-364`
+- Modify: `apps/server/arden/tools/core/context.py:360-364`
 - Test: add to the existing tool-context/approval test module (find with `grep -rln "request_approval\|skip_approvals" apps/server/tests`).
 
 - [ ] **Step 1: Find the approval test module**
@@ -58,7 +58,7 @@ Add tests covering the truth table. Build a `ToolExecution` whose `ctx` has: a r
 
 ```python
 import pytest
-from ntrp.tools.core.types import ToolOverrideDecision
+from arden.tools.core.types import ToolOverrideDecision
 
 @pytest.mark.asyncio
 async def test_ask_override_blocks_when_ui_connected(make_execution):
@@ -111,7 +111,7 @@ Expected: the headless-bypass test FAILS (currently returns a `Rejection` becaus
 
 - [ ] **Step 4: Implement the fix**
 
-In `apps/server/ntrp/tools/core/context.py`, replace the guard at lines 360-364:
+In `apps/server/arden/tools/core/context.py`, replace the guard at lines 360-364:
 
 ```python
         override = self.ctx.registry.get_override(self.tool_name)
@@ -129,7 +129,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add apps/server/ntrp/tools/core/context.py apps/server/tests
+git add apps/server/arden/tools/core/context.py apps/server/tests
 git commit -m "fix(approvals): ASK override blocks only when a UI is connected
 
 Lets ASK-tagged tools (e.g. notify) fire in headless auto-approve
@@ -141,7 +141,7 @@ automations while still prompting in interactive chat. DENY unaffected."
 ## Task 2: Store migration v8 — rename `writable` column → `auto_approve`
 
 **Files:**
-- Modify: `apps/server/ntrp/automation/store.py`
+- Modify: `apps/server/arden/automation/store.py`
 - Test: `apps/server/tests/` automation-store test module (find with `grep -rln "AutomationStore\|init_schema" apps/server/tests`).
 
 - [ ] **Step 1: Write a failing migration test**
@@ -152,7 +152,7 @@ Create a test that opens an in-memory/temp DB seeded at schema v7 with a `writab
 @pytest.mark.asyncio
 async def test_v8_renames_writable_to_auto_approve(tmp_path):
     import aiosqlite
-    from ntrp.automation.store import AutomationStore, _SCHEMA
+    from arden.automation.store import AutomationStore, _SCHEMA
     db = tmp_path / "auto.db"
     async with aiosqlite.connect(db) as conn:
         conn.row_factory = aiosqlite.Row
@@ -182,7 +182,7 @@ Expected: FAIL (`auto_approve` column missing / attribute error).
 
 - [ ] **Step 3: Update `_SCHEMA` and add the v8 migration**
 
-In `apps/server/ntrp/automation/store.py`:
+In `apps/server/arden/automation/store.py`:
 
 In `_SCHEMA` (line ~130) change:
 ```
@@ -220,7 +220,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/server/ntrp/automation/store.py apps/server/tests
+git add apps/server/arden/automation/store.py apps/server/tests
 git commit -m "feat(automation): v8 migration renames writable column to auto_approve"
 ```
 
@@ -229,8 +229,8 @@ git commit -m "feat(automation): v8 migration renames writable column to auto_ap
 ## Task 3: Rename `writable` → `auto_approve` in store SQL + model + row mapping
 
 **Files:**
-- Modify: `apps/server/ntrp/automation/models.py:23`
-- Modify: `apps/server/ntrp/automation/store.py` (columns, SQL, row mapping, save/save_with_claim/update_metadata, `set_writable`)
+- Modify: `apps/server/arden/automation/models.py:23`
+- Modify: `apps/server/arden/automation/store.py` (columns, SQL, row mapping, save/save_with_claim/update_metadata, `set_writable`)
 
 - [ ] **Step 1: Update the model**
 
@@ -256,7 +256,7 @@ Expected: PASS (round-trip + migration tests green). Fix any `AttributeError: 'A
 - [ ] **Step 4: Commit**
 
 ```bash
-git add apps/server/ntrp/automation/models.py apps/server/ntrp/automation/store.py
+git add apps/server/arden/automation/models.py apps/server/arden/automation/store.py
 git commit -m "refactor(automation): rename writable->auto_approve in model and store"
 ```
 
@@ -265,10 +265,10 @@ git commit -m "refactor(automation): rename writable->auto_approve in model and 
 ## Task 4: Rename `writable` → `auto_approve` in service + runner + scheduler + app
 
 **Files:**
-- Modify: `apps/server/ntrp/automation/service.py` (`toggle_writable`, `_build_metadata_changes`, `update`, `create`, `create_loop`)
-- Modify: `apps/server/ntrp/operator/runner.py` (`RunRequest.writable`, tool-filter usage)
-- Modify: `apps/server/ntrp/automation/scheduler.py` (`RunRequest(writable=...)`, `skip_approvals=automation.writable`)
-- Modify: `apps/server/ntrp/server/app.py` (`RunRequest(writable=...)`, `skip_approvals=automation.writable`)
+- Modify: `apps/server/arden/automation/service.py` (`toggle_writable`, `_build_metadata_changes`, `update`, `create`, `create_loop`)
+- Modify: `apps/server/arden/operator/runner.py` (`RunRequest.writable`, tool-filter usage)
+- Modify: `apps/server/arden/automation/scheduler.py` (`RunRequest(writable=...)`, `skip_approvals=automation.writable`)
+- Modify: `apps/server/arden/server/app.py` (`RunRequest(writable=...)`, `skip_approvals=automation.writable`)
 
 - [ ] **Step 1: Service**
 
@@ -299,7 +299,7 @@ In `server/app.py`:
 
 - [ ] **Step 5: Grep for stragglers**
 
-Run: `cd apps/server && grep -rn "\.writable\|writable=" ntrp | grep -v "read_only\|read.only"`
+Run: `cd apps/server && grep -rn "\.writable\|writable=" arden | grep -v "read_only\|read.only"`
 Expected: no remaining references to the automation `writable` field (ignore unrelated `writable` words). Fix any found.
 
 - [ ] **Step 6: Run the full backend suite**
@@ -310,7 +310,7 @@ Expected: PASS. Fix references until green.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add apps/server/ntrp
+git add apps/server/arden
 git commit -m "refactor(automation): rename writable->auto_approve in service/runner/scheduler/app"
 ```
 
@@ -319,9 +319,9 @@ git commit -m "refactor(automation): rename writable->auto_approve in service/ru
 ## Task 5: Rename in HTTP schemas + routes + automation tool
 
 **Files:**
-- Modify: `apps/server/ntrp/server/schemas.py` (lines 442, 463 — `writable` fields)
-- Modify: `apps/server/ntrp/server/routers/automation.py` (lines 37, 64, 173-179, 213)
-- Modify: `apps/server/ntrp/tools/automation.py` (input fields lines 137, 201; usages 244, 295, 353, 391)
+- Modify: `apps/server/arden/server/schemas.py` (lines 442, 463 — `writable` fields)
+- Modify: `apps/server/arden/server/routers/automation.py` (lines 37, 64, 173-179, 213)
+- Modify: `apps/server/arden/tools/automation.py` (input fields lines 137, 201; usages 244, 295, 353, 391)
 
 - [ ] **Step 1: Schemas**
 
@@ -341,14 +341,14 @@ In `tools/automation.py`: rename the `writable` Field on the create/update input
 
 - [ ] **Step 4: Run backend suite + grep**
 
-Run: `cd apps/server && grep -rn "writable" ntrp | grep -vi "read_only\|read-only"` → expect none related to the field.
+Run: `cd apps/server && grep -rn "writable" arden | grep -vi "read_only\|read-only"` → expect none related to the field.
 Run: `cd apps/server && uv run pytest tests/ -x -q`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/server/ntrp
+git add apps/server/arden
 git commit -m "refactor(api): rename writable->auto_approve in schemas, routes, automation tool"
 ```
 
@@ -418,7 +418,7 @@ Expected: PASS.
 
 - [ ] **Step 2: Manual notify-in-automation check**
 
-Start the server (`cd apps/server && uv run ntrp-server serve`), create an `auto_approve=true` automation whose prompt calls `notify`, with `notify→ASK` configured. Trigger it (run-now). Confirm via logs/run record that `notify` sent (no "No UI connected" rejection). In an interactive chat session, confirm `notify` still prompts for approval.
+Start the server (`cd apps/server && uv run arden-server serve`), create an `auto_approve=true` automation whose prompt calls `notify`, with `notify→ASK` configured. Trigger it (run-now). Confirm via logs/run record that `notify` sent (no "No UI connected" rejection). In an interactive chat session, confirm `notify` still prompts for approval.
 
 - [ ] **Step 3: Migration smoke on a real DB copy**
 

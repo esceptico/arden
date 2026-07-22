@@ -3,8 +3,8 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from ntrp.commands.models import CommandOutcome, CommandRunRequest
-from ntrp.server.routers.commands import start_command_run
+from arden.commands.models import CommandOutcome, CommandRunRequest
+from arden.server.routers.commands import start_command_run
 
 
 def test_command_outcome_rejects_arbitrary_url_destination():
@@ -63,7 +63,7 @@ async def test_start_command_run_creates_hidden_scoped_agent_session(monkeypatch
         submitted.append(kwargs)
         return {"run_id": "run-1", "session_id": kwargs["session_id"], "status": "running"}
 
-    monkeypatch.setattr("ntrp.server.routers.commands.submit_chat_message", fake_submit)
+    monkeypatch.setattr("arden.server.routers.commands.submit_chat_message", fake_submit)
     sessions = _SessionService()
     runtime = SimpleNamespace(
         session_service=sessions,
@@ -95,7 +95,7 @@ async def test_start_command_run_reuses_stable_session(monkeypatch):
     async def fake_submit(*args, **kwargs):
         return {"run_id": "run-1", "session_id": kwargs["session_id"], "status": "running"}
 
-    monkeypatch.setattr("ntrp.server.routers.commands.submit_chat_message", fake_submit)
+    monkeypatch.setattr("arden.server.routers.commands.submit_chat_message", fake_submit)
     sessions = _SessionService()
     runtime = SimpleNamespace(
         session_service=sessions,

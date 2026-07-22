@@ -1,27 +1,27 @@
 # Agent Harness Architecture Audit
 
-Review lens: full `agents-best-practices` skill and references, applied to current `ntrp`.
+Review lens: full `agents-best-practices` skill and references, applied to current `arden`.
 
 Source: https://github.com/DenisSergeevitch/agents-best-practices
 
 ## Verdict
 
-`ntrp` already has the right base shape: a manual model-tool-observation loop, typed tool middleware, approval UI path, deferred tool loading, durable session/run/event tables, background-agent run records, memory access logging, compaction, MCP integration, and provider adapters.
+`arden` already has the right base shape: a manual model-tool-observation loop, typed tool middleware, approval UI path, deferred tool loading, durable session/run/event tables, background-agent run records, memory access logging, compaction, MCP integration, and provider adapters.
 
 The main gap is not architecture direction. It is making policy, budgets, rehydration, and eval coverage more mechanical. Several important controls exist as prompt guidance, booleans, or in-memory state rather than typed durable harness state.
 
 ## Strong Parts
 
-- `apps/server/ntrp/agent/agent.py` owns the provider-neutral model/tool loop.
-- `apps/server/ntrp/tools/core/middleware.py` validates tool args and routes approvals before execution.
-- `apps/server/ntrp/tools/core/context.py` routes approval responses by `tool_id`, so parallel mutating calls do not share one response queue.
-- `apps/server/ntrp/tools/deferred.py` implements progressive disclosure for Gmail, calendar, Slack, automations, notifications, directives, file writes, background agents, and MCP servers.
-- `apps/server/ntrp/context/store.py` has durable `chat_runs`, `chat_queued_messages`, `session_events`, `chat_compactions`, and `background_agent_*` tables.
-- `apps/server/ntrp/services/chat.py` checkpoints after agent steps and advances replay watermarks through `SessionBus`.
-- `apps/server/ntrp/core/tool_executor.py` offloads large tool results to temp files and returns compact refs.
-- `apps/server/ntrp/core/prompts.py` separates static and dynamic prompt blocks and uses provider-specific cache controls where supported.
-- `apps/server/ntrp/llm/openai.py`, `apps/server/ntrp/llm/openai_responses.py`, and `apps/server/ntrp/llm/anthropic.py` normalize cache-read token usage into `Usage`.
-- `apps/server/ntrp/mcp/manager.py` and `apps/server/ntrp/mcp/tool.py` namespace MCP tools by server.
+- `apps/server/arden/agent/agent.py` owns the provider-neutral model/tool loop.
+- `apps/server/arden/tools/core/middleware.py` validates tool args and routes approvals before execution.
+- `apps/server/arden/tools/core/context.py` routes approval responses by `tool_id`, so parallel mutating calls do not share one response queue.
+- `apps/server/arden/tools/deferred.py` implements progressive disclosure for Gmail, calendar, Slack, automations, notifications, directives, file writes, background agents, and MCP servers.
+- `apps/server/arden/context/store.py` has durable `chat_runs`, `chat_queued_messages`, `session_events`, `chat_compactions`, and `background_agent_*` tables.
+- `apps/server/arden/services/chat.py` checkpoints after agent steps and advances replay watermarks through `SessionBus`.
+- `apps/server/arden/core/tool_executor.py` offloads large tool results to temp files and returns compact refs.
+- `apps/server/arden/core/prompts.py` separates static and dynamic prompt blocks and uses provider-specific cache controls where supported.
+- `apps/server/arden/llm/openai.py`, `apps/server/arden/llm/openai_responses.py`, and `apps/server/arden/llm/anthropic.py` normalize cache-read token usage into `Usage`.
+- `apps/server/arden/mcp/manager.py` and `apps/server/arden/mcp/tool.py` namespace MCP tools by server.
 
 ## Gaps
 

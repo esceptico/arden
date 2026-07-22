@@ -1,4 +1,4 @@
-from ntrp.services.token_directive import parse_token_budget
+from arden.services.token_directive import parse_token_budget
 
 
 def test_parses_k_and_m_units():

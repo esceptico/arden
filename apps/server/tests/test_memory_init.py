@@ -1,10 +1,10 @@
-"""run_memory_init (ntrp/memory/init.py) — the /init full re-derivation driver.
+"""run_memory_init (arden/memory/init.py) — the /init full re-derivation driver.
 
 Phase 1 = TRANSCRIPTS ONLY. Hermetic: a STUB curator LLM (scripted single-call
 JSON ops, reusing the test_memory_curator pattern), a STUB consolidate LLM (empty
 ops so the sweep no-ops but still advances its watermark), a STUB sessions store,
 and a real tmp RecordStore (`search_index=None` -> FTS-only). The whole memory
-lives in a tmp sqlite so ~/.ntrp is never touched.
+lives in a tmp sqlite so ~/.Arden is never touched.
 
 Proves:
   (a) the PINNED record survives the wipe;
@@ -20,10 +20,10 @@ from pathlib import Path
 
 import pytest
 
-from ntrp.memory.consolidate import Consolidate
-from ntrp.memory.curator import Curator
-from ntrp.memory.init import run_memory_init
-from ntrp.memory.records import RecordStore
+from arden.memory.consolidate import Consolidate
+from arden.memory.curator import Curator
+from arden.memory.init import run_memory_init
+from arden.memory.records import RecordStore
 from tests.conftest import completion_response
 from tests.test_memory_curator import StubSessions, _make_file_curator, _scope, _turn
 
@@ -83,7 +83,7 @@ class FakeKnowledge:
 
 
 async def _read_meta(db_path: Path, key_like: str) -> list[tuple[str, str]]:
-    from ntrp.database import connect as db_connect
+    from arden.database import connect as db_connect
 
     conn = await db_connect(db_path)
     try:
@@ -214,7 +214,9 @@ async def test_run_memory_init_additive_default_keeps_records_and_uses_bulk_gate
         scopes=[_scope("chat1")],
     )
     curator_llm = CuratorStubLLM(
-        json.dumps({"records": [{"op": "ADD", "text": "the user is a research engineer at ThirdLayer", "kind": "fact"}]})
+        json.dumps(
+            {"records": [{"op": "ADD", "text": "the user is a research engineer at ThirdLayer", "kind": "fact"}]}
+        )
     )
     curator = Curator(curator_llm, sessions, model="memory-model", db_path=db_path, record_store=records)
     consolidate = Consolidate(records, ConsolidateStubLLM(), model="memory-model", db_path=db_path)
@@ -273,7 +275,7 @@ async def test_run_memory_init_caps_at_budget(tmp_path: Path):
 
 
 def test_prune_init_backups_keeps_newest(tmp_path: Path):
-    from ntrp.memory.init import _prune_init_backups
+    from arden.memory.init import _prune_init_backups
 
     db = tmp_path / "memory.db"
     db.write_text("db", encoding="utf-8")

@@ -1,6 +1,6 @@
 ---
 title: "Tools"
-description: "All tools available to the ntrp agent."
+description: "All tools available to the Arden agent."
 ---
 
 ## Overview
@@ -139,7 +139,7 @@ Deferred group: `notifications`.
 
 Connected MCP server tools are deferred by server. Use `load_tools(group="mcp:<server>")`, for example `load_tools(group="mcp:obsidian")`. MCP tools still keep their own approval/mutation behavior after loading.
 
-MCP tools default to conservative external execution: approval required. Per-tool config can override that with `tool_policies.<tool_name>`. If a server is trusted, `trust_tool_annotations=true` lets ntrp use MCP `Tool.annotations` hints such as `readOnlyHint` and `destructiveHint`; explicit `tool_policies` still win.
+MCP tools default to conservative external execution: approval required. Per-tool config can override that with `tool_policies.<tool_name>`. If a server is trusted, `trust_tool_annotations=true` lets Arden use MCP `Tool.annotations` hints such as `readOnlyHint` and `destructiveHint`; explicit `tool_policies` still win.
 
 ## Canonical workflows
 
@@ -221,14 +221,14 @@ Automations reference a named schema (`output_schema`), resolved on the server. 
 
 ## User-defined tools
 
-Create custom tools in `~/.ntrp/tools/`. Each file exports a `tools` mapping. Inputs must be bounded, failures typed, and stable results sourced:
+Create custom tools in `~/.arden/tools/`. Each file exports a `tools` mapping. Inputs must be bounded, failures typed, and stable results sourced:
 
 ```python
 from pydantic import BaseModel, Field
 
-from ntrp.agent.types.tools import ToolSourceRef
-from ntrp.tools.core import ToolAction, ToolPolicy, ToolResult, ToolScope, tool
-from ntrp.tools.core.context import ToolExecution
+from arden.agent.types.tools import ToolSourceRef
+from arden.tools.core import ToolAction, ToolPolicy, ToolResult, ToolScope, tool
+from arden.tools.core.context import ToolExecution
 
 
 class LookupInput(BaseModel):

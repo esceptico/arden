@@ -2,9 +2,9 @@ from copy import deepcopy
 
 import pytest
 
-from ntrp.config import Config
-from ntrp.llm.models import Model, Provider
-from ntrp.services.config import ConfigService
+from arden.config import Config
+from arden.llm.models import Model, Provider
+from arden.services.config import ConfigService
 
 
 def test_integration_enabled_prefers_service_state_over_legacy_google():
@@ -22,7 +22,7 @@ def test_integration_enabled_prefers_service_state_over_legacy_google():
 
 @pytest.mark.asyncio
 async def test_config_service_rolls_back_nested_settings_and_reloads_runtime(monkeypatch):
-    import ntrp.services.config as config_module
+    import arden.services.config as config_module
 
     persisted = {"provider_keys": {"openai": "old-key"}}
     reload_seen: list[dict] = []
@@ -56,7 +56,7 @@ async def test_config_service_rolls_back_nested_settings_and_reloads_runtime(mon
 
 @pytest.mark.asyncio
 async def test_config_service_creates_custom_model_and_stores_api_key(monkeypatch):
-    import ntrp.services.config as config_module
+    import arden.services.config as config_module
 
     persisted = {}
     added: list[dict] = []
@@ -112,7 +112,7 @@ async def test_config_service_creates_custom_model_and_stores_api_key(monkeypatc
 
 @pytest.mark.asyncio
 async def test_config_service_deletes_custom_model_and_clears_active_fields(monkeypatch):
-    import ntrp.services.config as config_module
+    import arden.services.config as config_module
 
     model = Model(
         id="local/test",

@@ -488,7 +488,7 @@ test("replace loadHistory preserves event cursor for reconnect after canonical r
   const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
   const config = { serverUrl: "http://localhost:6877", apiKey: "" };
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async () => ({
           ok: true,
@@ -557,7 +557,7 @@ test("rebuilds persisted transcript without replay animation marker", async () =
     ];
 
     (globalThis as typeof globalThis & { window?: unknown }).window = {
-      ntrpDesktop: {
+      ardenDesktop: {
         api: {
           request: async () => ({
             ok: true,
@@ -824,7 +824,7 @@ test("buffers a stable source union across partial history results until their r
     },
   ] satisfies Array<{ messages: HistoryMessage[]; active_run_id: null; page: { has_more_before: boolean; has_more_after: boolean } }>;
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async () => ({
           ok: true,
@@ -883,7 +883,7 @@ function activityMessageWithSources(sourceRefs?: SourceRef[]): UiMessage {
 test("active history hydrates old calls as executed and new tail as ongoing", async () => {
   const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async () => ({
           ok: true,
@@ -1555,7 +1555,7 @@ test("stream_reset keeps tail blocked when history reload fails", async () => {
   expect(getState().error).toBe("reload failed");
 
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async () => ({
           ok: true,
@@ -1630,7 +1630,7 @@ test("stopRun clears running state after successful cancel request", async () =>
   const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
   const requests: Array<{ path: string; method: string; body?: string }> = [];
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async (_config: unknown, request: { path: string; method: string; body?: string }) => {
           requests.push(request);
@@ -1675,7 +1675,7 @@ test("stopRun clears stopped session after switching sessions during cancel", as
     resolveCancel = resolve;
   });
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async () => {
           await cancelAccepted;
@@ -1729,7 +1729,7 @@ test("cancelSubagent failure after session switch does not mutate current sessio
     rejectCancel = () => reject(new Error("cancel failed"));
   });
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async () => cancelFailed,
       },
@@ -1806,7 +1806,7 @@ test("old-session send failure does not clear newer optimistic run", async () =>
     rejectSend = () => reject(new Error("send failed"));
   });
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async () => sendFailed,
       },
@@ -1859,7 +1859,7 @@ test("stopRun failure after session switch clears cached old-session stopping st
     rejectCancel = () => reject(new Error("cancel failed"));
   });
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async () => cancelFailed,
       },
@@ -1919,7 +1919,7 @@ test("old-session edit revert failure does not mutate newer transcript", async (
     rejectRevert = () => reject(new Error("revert failed"));
   });
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async () => revertFailed,
       },
@@ -1973,7 +1973,7 @@ test("old-session edit revert success does not mutate newer transcript or post e
   });
   let chatPostCount = 0;
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async (_config: unknown, request: { path: string }) => {
           if (request.path === "/session/revert") return revertSucceeded;
@@ -2028,7 +2028,7 @@ test("old-session edit revert success does not mutate newer transcript or post e
 test("stopRun clears running state when server no longer knows the run", async () => {
   const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async () => ({
           ok: false,
@@ -2146,7 +2146,7 @@ test("run_cancelled marks active activity stopped instead of executed", () => {
 test("loadHistory restores currentRunId for active sessions", async () => {
   const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async () => ({
           ok: true,
@@ -2198,7 +2198,7 @@ test("loadHistory lets replayed tools continue the active trailing history group
     },
   ];
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async () => ({
           ok: true,
@@ -2277,7 +2277,7 @@ test("loadHistory starts replayed tools after a trailing hidden meta boundary", 
     { role: "user", content: "hidden wakeup", id: "meta-user-1", is_meta: true },
   ];
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async () => ({
           ok: true,
@@ -2365,7 +2365,7 @@ test("live tools keep appending after canonical reload merged hidden-split activ
     },
   ];
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async () => ({
           ok: true,

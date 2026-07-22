@@ -10,20 +10,20 @@ import pytest
 import pytest_asyncio
 from pydantic import BaseModel, Field
 
-import ntrp.database as database
-import ntrp.tools.executor as tool_executor_module
-from ntrp.agent import ToolEffect, ToolOutcome, ToolOutcomeStatus, ToolResult, ToolVerification
-from ntrp.constants import OFFLOAD_PREVIEW_CHARS, OFFLOAD_THRESHOLD
-from ntrp.context.models import SessionState
-from ntrp.context.store import SessionStore
-from ntrp.core.tool_executor import NtrpToolExecutor
-from ntrp.integrations.base import Integration
-from ntrp.tool_call_metadata import DISPLAY_TITLE_ARG
-from ntrp.tools.automation import loop_done_tool, schedule_wakeup_tool
-from ntrp.tools.background import cancel_background_task_tool
-from ntrp.tools.bash import bash_tool, execute_bash, is_blocked_command, is_safe_command
-from ntrp.tools.core import EmptyInput, Tool, ToolCall, ToolNext, tool
-from ntrp.tools.core.context import (
+import arden.database as database
+import arden.tools.executor as tool_executor_module
+from arden.agent import ToolEffect, ToolOutcome, ToolOutcomeStatus, ToolResult, ToolVerification
+from arden.constants import OFFLOAD_PREVIEW_CHARS, OFFLOAD_THRESHOLD
+from arden.context.models import SessionState
+from arden.context.store import SessionStore
+from arden.core.tool_executor import ArdenToolExecutor
+from arden.integrations.base import Integration
+from arden.tool_call_metadata import DISPLAY_TITLE_ARG
+from arden.tools.automation import loop_done_tool, schedule_wakeup_tool
+from arden.tools.background import cancel_background_task_tool
+from arden.tools.bash import bash_tool, execute_bash, is_blocked_command, is_safe_command
+from arden.tools.core import EmptyInput, Tool, ToolCall, ToolNext, tool
+from arden.tools.core.context import (
     ApprovalControls,
     BackgroundTaskRegistry,
     IOBridge,
@@ -31,13 +31,13 @@ from ntrp.tools.core.context import (
     ToolContext,
     ToolExecution,
 )
-from ntrp.tools.core.registry import ToolRegistry
-from ntrp.tools.core.types import ApprovalInfo, ToolAction, ToolOverrideDecision, ToolPolicy, ToolScope
-from ntrp.tools.discover import discover_user_tools
-from ntrp.tools.executor import ToolExecutor
-from ntrp.tools.notify import notify_tool
-from ntrp.tools.todos import update_todos_tool
-from ntrp.tools.workflow import workflow_tool
+from arden.tools.core.registry import ToolRegistry
+from arden.tools.core.types import ApprovalInfo, ToolAction, ToolOverrideDecision, ToolPolicy, ToolScope
+from arden.tools.discover import discover_user_tools
+from arden.tools.executor import ToolExecutor
+from arden.tools.notify import notify_tool
+from arden.tools.todos import update_todos_tool
+from arden.tools.workflow import workflow_tool
 
 READ_INTERNAL_POLICY = ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL)
 WRITE_INTERNAL_APPROVAL_POLICY = ToolPolicy(
@@ -127,10 +127,10 @@ def test_function_tool_metadata_exposes_policy():
     metadata = t.get_metadata("read_state")
 
     assert metadata["policy"] == {
-            "action": "read",
-            "scope": "internal",
-            "requires_approval": False,
-            "approval_mode": "never",
+        "action": "read",
+        "scope": "internal",
+        "requires_approval": False,
+        "approval_mode": "never",
         "permissions": [],
         "timeout_seconds": None,
         "audit": True,
@@ -334,9 +334,7 @@ async def test_bash_cannot_bypass_approval_in_headless_run():
         background_tasks=BackgroundTaskRegistry(session_id="test"),
     )
 
-    rejection = await ToolExecution(tool_id="call-1", tool_name="bash", ctx=ctx).request_approval(
-        "Run shell command"
-    )
+    rejection = await ToolExecution(tool_id="call-1", tool_name="bash", ctx=ctx).request_approval("Run shell command")
 
     assert rejection is not None
     assert rejection.feedback == "No UI connected — cannot approve"
@@ -365,11 +363,11 @@ def _make_tool_context(registry: ToolRegistry, session_id: str = "test") -> Tool
 
 @pytest.fixture(autouse=True)
 def _isolate_result_files(tmp_path, monkeypatch):
-    import ntrp.core.tool_result_files as trf
-    import ntrp.tools.research_artifacts as research_artifacts
+    import arden.core.tool_result_files as trf
+    import arden.tools.research_artifacts as research_artifacts
 
     monkeypatch.setattr(trf, "RESULTS_BASE", tmp_path / "tool-results")
-    monkeypatch.setattr(research_artifacts, "NTRP_DIR", tmp_path / ".ntrp")
+    monkeypatch.setattr(research_artifacts, "ARDEN_DIR", tmp_path / ".arden")
 
 
 @pytest_asyncio.fixture
@@ -455,7 +453,7 @@ async def test_bash_tool_nonzero_exit_is_typed_failure():
 
 @pytest.mark.asyncio
 async def test_bash_tool_timeout_is_typed_failure(monkeypatch):
-    monkeypatch.setattr("ntrp.tools.bash.BASH_TIMEOUT", 0.01)
+    monkeypatch.setattr("arden.tools.bash.BASH_TIMEOUT", 0.01)
     result = await bash_tool.execute(_make_execution("bash"), command="sleep 1")
 
     assert result.is_error
@@ -1081,7 +1079,7 @@ async def test_function_tool_rejects_non_tool_result_output():
 
 
 @pytest.mark.asyncio
-async def test_ntrp_tool_executor_policy_offload_false_keeps_retrieval_pointer():
+async def test_arden_tool_executor_policy_offload_false_keeps_retrieval_pointer():
     large_content = "x" * (OFFLOAD_THRESHOLD + 1)
 
     async def large_result(execution: ToolExecution, args: EmptyInput) -> ToolResult:
@@ -1096,7 +1094,7 @@ async def test_ntrp_tool_executor_policy_offload_false_keeps_retrieval_pointer()
             policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, offload=False),
         ),
     )
-    executor = NtrpToolExecutor(ToolExecutor().with_registry(registry), _make_tool_context(registry))
+    executor = ArdenToolExecutor(ToolExecutor().with_registry(registry), _make_tool_context(registry))
 
     result = await executor.execute("large_result", {}, "call-1")
 
@@ -1111,7 +1109,7 @@ async def test_ntrp_tool_executor_policy_offload_false_keeps_retrieval_pointer()
 
 
 @pytest.mark.asyncio
-async def test_ntrp_tool_executor_bounds_large_structured_data():
+async def test_arden_tool_executor_bounds_large_structured_data():
     async def large_result(execution: ToolExecution, args: EmptyInput) -> ToolResult:
         return ToolResult(content="summary", preview="large", data={"rows": [{"body": "x" * 100_000}]})
 
@@ -1124,7 +1122,7 @@ async def test_ntrp_tool_executor_bounds_large_structured_data():
             policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, offload=False),
         ),
     )
-    executor = NtrpToolExecutor(ToolExecutor().with_registry(registry), _make_tool_context(registry))
+    executor = ArdenToolExecutor(ToolExecutor().with_registry(registry), _make_tool_context(registry))
 
     result = await executor.execute("large_result", {}, "call-data")
 
@@ -1137,7 +1135,7 @@ async def test_ntrp_tool_executor_bounds_large_structured_data():
 
 
 @pytest.mark.asyncio
-async def test_ntrp_tool_executor_rejects_registered_tool_outside_run_allowlist():
+async def test_arden_tool_executor_rejects_registered_tool_outside_run_allowlist():
     called = False
 
     async def hidden(execution: ToolExecution, args: EmptyInput) -> ToolResult:
@@ -1156,7 +1154,7 @@ async def test_ntrp_tool_executor_rejects_registered_tool_outside_run_allowlist(
     )
     ctx = _make_tool_context(registry)
     ctx.run.allowed_tool_names = {"visible"}
-    executor = NtrpToolExecutor(ToolExecutor().with_registry(registry), ctx)
+    executor = ArdenToolExecutor(ToolExecutor().with_registry(registry), ctx)
 
     result = await executor.execute("hidden", {}, "call-1")
 
@@ -1170,7 +1168,7 @@ async def test_ntrp_tool_executor_rejects_registered_tool_outside_run_allowlist(
 
 
 @pytest.mark.asyncio
-async def test_ntrp_tool_executor_offload_clamps_single_long_line_preview():
+async def test_arden_tool_executor_offload_clamps_single_long_line_preview():
     large_content = "x" * (OFFLOAD_THRESHOLD + 1)
 
     async def large_result(execution: ToolExecution, args: EmptyInput) -> ToolResult:
@@ -1185,7 +1183,7 @@ async def test_ntrp_tool_executor_offload_clamps_single_long_line_preview():
             policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL),
         ),
     )
-    executor = NtrpToolExecutor(ToolExecutor().with_registry(registry), _make_tool_context(registry))
+    executor = ArdenToolExecutor(ToolExecutor().with_registry(registry), _make_tool_context(registry))
 
     result = await executor.execute("large_result", {}, "call-1")
 
@@ -1196,7 +1194,7 @@ async def test_ntrp_tool_executor_offload_clamps_single_long_line_preview():
 
 
 @pytest.mark.asyncio
-async def test_ntrp_tool_executor_policy_max_result_chars_truncates_before_model_result():
+async def test_arden_tool_executor_policy_max_result_chars_truncates_before_model_result():
     async def long_error(execution: ToolExecution, args: EmptyInput) -> ToolResult:
         return ToolResult(content="abcdefghijklmnopqrstuvwxyz", preview="original", is_error=True)
 
@@ -1214,7 +1212,7 @@ async def test_ntrp_tool_executor_policy_max_result_chars_truncates_before_model
             ),
         ),
     )
-    executor = NtrpToolExecutor(ToolExecutor().with_registry(registry), _make_tool_context(registry))
+    executor = ArdenToolExecutor(ToolExecutor().with_registry(registry), _make_tool_context(registry))
 
     result = await executor.execute("long_error", {}, "call-1")
 
@@ -1227,7 +1225,7 @@ async def test_ntrp_tool_executor_policy_max_result_chars_truncates_before_model
 
 
 @pytest.mark.asyncio
-async def test_ntrp_tool_executor_policy_timeout_seconds_returns_error_result():
+async def test_arden_tool_executor_policy_timeout_seconds_returns_error_result():
     async def slow(execution: ToolExecution, args: EmptyInput) -> ToolResult:
         await asyncio.sleep(1)
         return ToolResult(content="late", preview="late")
@@ -1241,7 +1239,7 @@ async def test_ntrp_tool_executor_policy_timeout_seconds_returns_error_result():
             policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, timeout_seconds=0),
         ),
     )
-    executor = NtrpToolExecutor(ToolExecutor().with_registry(registry), _make_tool_context(registry))
+    executor = ArdenToolExecutor(ToolExecutor().with_registry(registry), _make_tool_context(registry))
 
     result = await executor.execute("slow", {}, "call-1")
 
@@ -1254,7 +1252,7 @@ async def test_ntrp_tool_executor_policy_timeout_seconds_returns_error_result():
 
 
 @pytest.mark.asyncio
-async def test_ntrp_tool_executor_mutation_timeout_is_uncertain_and_not_retryable():
+async def test_arden_tool_executor_mutation_timeout_is_uncertain_and_not_retryable():
     async def slow(execution: ToolExecution, args: EmptyInput) -> ToolResult:
         await asyncio.sleep(1)
         return ToolResult(content="late", preview="late")
@@ -1268,7 +1266,7 @@ async def test_ntrp_tool_executor_mutation_timeout_is_uncertain_and_not_retryabl
             policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.EXTERNAL, timeout_seconds=0),
         ),
     )
-    executor = NtrpToolExecutor(ToolExecutor().with_registry(registry), _make_tool_context(registry))
+    executor = ArdenToolExecutor(ToolExecutor().with_registry(registry), _make_tool_context(registry))
 
     result = await executor.execute("slow_write", {}, "call-write-timeout")
 
@@ -1279,8 +1277,8 @@ async def test_ntrp_tool_executor_mutation_timeout_is_uncertain_and_not_retryabl
 
 
 @pytest.mark.asyncio
-async def test_ntrp_tool_executor_defaults_external_tool_timeout(monkeypatch):
-    import ntrp.core.tool_executor as core_tool_executor_module
+async def test_arden_tool_executor_defaults_external_tool_timeout(monkeypatch):
+    import arden.core.tool_executor as core_tool_executor_module
 
     monkeypatch.setattr(core_tool_executor_module, "DEFAULT_EXTERNAL_TOOL_TIMEOUT_SECONDS", 0.001)
 
@@ -1297,7 +1295,7 @@ async def test_ntrp_tool_executor_defaults_external_tool_timeout(monkeypatch):
             policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.EXTERNAL),
         ),
     )
-    executor = NtrpToolExecutor(ToolExecutor().with_registry(registry), _make_tool_context(registry))
+    executor = ArdenToolExecutor(ToolExecutor().with_registry(registry), _make_tool_context(registry))
 
     result = await executor.execute("slow_external", {}, "call-1")
 
@@ -1309,7 +1307,7 @@ async def test_ntrp_tool_executor_defaults_external_tool_timeout(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ntrp_tool_executor_audits_policy_enabled_calls(session_store: SessionStore):
+async def test_arden_tool_executor_audits_policy_enabled_calls(session_store: SessionStore):
     async def echo(execution: ToolExecution, args: EchoInput) -> ToolResult:
         return ToolResult(content=f"echo: {args.text}", preview="ok")
 
@@ -1325,7 +1323,7 @@ async def test_ntrp_tool_executor_audits_policy_enabled_calls(session_store: Ses
     )
     ctx = _make_tool_context(registry, session_id="sess-1")
     ctx.services["store"] = session_store
-    executor = NtrpToolExecutor(ToolExecutor().with_registry(registry), ctx)
+    executor = ArdenToolExecutor(ToolExecutor().with_registry(registry), ctx)
 
     result = await executor.execute("echo", {"text": "hello"}, "call-1")
     rows = await session_store.list_tool_calls(run_id="run-1")
@@ -1346,7 +1344,7 @@ async def test_ntrp_tool_executor_audits_policy_enabled_calls(session_store: Ses
 
 @pytest.mark.asyncio
 async def test_offloaded_result_persisted_to_file(session_store: SessionStore):
-    import ntrp.core.tool_result_files as trf
+    import arden.core.tool_result_files as trf
 
     big = "data line\n" * 8000  # > OFFLOAD_THRESHOLD
 
@@ -1365,7 +1363,7 @@ async def test_offloaded_result_persisted_to_file(session_store: SessionStore):
     )
     ctx = _make_tool_context(registry, session_id="sess-1")
     ctx.services["store"] = session_store
-    executor = NtrpToolExecutor(ToolExecutor().with_registry(registry), ctx)
+    executor = ArdenToolExecutor(ToolExecutor().with_registry(registry), ctx)
 
     result = await executor.execute("big_offload", {}, "call-7")
 
@@ -1385,7 +1383,7 @@ def test_prune_offload_store_drops_old_keeps_recent(monkeypatch, tmp_path):
     import os
     import time
 
-    import ntrp.core.tool_result_files as trf
+    import arden.core.tool_result_files as trf
 
     monkeypatch.setattr(trf, "RESULTS_BASE", tmp_path / "tool-results")
     old = trf.persist_result("old-sess", "call-old", "x" * 100)
@@ -1424,7 +1422,7 @@ async def test_offload_preview_keeps_head_and_tail(session_store: SessionStore):
     )
     ctx = _make_tool_context(registry, session_id="sess-1")
     ctx.services["store"] = session_store
-    executor = NtrpToolExecutor(ToolExecutor().with_registry(registry), ctx)
+    executor = ArdenToolExecutor(ToolExecutor().with_registry(registry), ctx)
 
     result = await executor.execute("big_ht", {}, "call-ht")
 
@@ -1435,7 +1433,7 @@ async def test_offload_preview_keeps_head_and_tail(session_store: SessionStore):
 
 @pytest.mark.asyncio
 async def test_research_artifact_write_then_read(session_store: SessionStore):
-    from ntrp.tools.research_artifacts import (
+    from arden.tools.research_artifacts import (
         ReadResearchArtifactInput,
         WriteResearchArtifactInput,
         read_research_artifact,
@@ -1457,7 +1455,7 @@ async def test_research_artifact_write_then_read(session_store: SessionStore):
     assert "hello world" in r.content
     assert "fs_path=" in r.content
 
-    from ntrp.tools.research_artifacts import artifact_scope_dir
+    from arden.tools.research_artifacts import artifact_scope_dir
 
     artifact_file = artifact_scope_dir("run-1") / "sources" / "inv.md"
     assert artifact_file.read_text() == "hello world"
@@ -1466,7 +1464,7 @@ async def test_research_artifact_write_then_read(session_store: SessionStore):
 
 @pytest.mark.asyncio
 async def test_research_artifact_rejects_traversal(session_store: SessionStore):
-    from ntrp.tools.research_artifacts import WriteResearchArtifactInput, write_research_artifact
+    from arden.tools.research_artifacts import WriteResearchArtifactInput, write_research_artifact
 
     class _Svc:
         store = session_store
@@ -1482,7 +1480,7 @@ async def test_research_artifact_rejects_traversal(session_store: SessionStore):
 
 @pytest.mark.asyncio
 async def test_research_artifact_size_cap(session_store: SessionStore):
-    from ntrp.tools.research_artifacts import (
+    from arden.tools.research_artifacts import (
         MAX_ARTIFACT_BYTES,
         WriteResearchArtifactInput,
         write_research_artifact,
@@ -1503,7 +1501,7 @@ async def test_research_artifact_size_cap(session_store: SessionStore):
 
 @pytest.mark.asyncio
 async def test_research_artifact_count_cap(session_store: SessionStore):
-    from ntrp.tools.research_artifacts import (
+    from arden.tools.research_artifacts import (
         MAX_ARTIFACTS_PER_SCOPE,
         WriteResearchArtifactInput,
         write_research_artifact,
@@ -1524,7 +1522,7 @@ async def test_research_artifact_count_cap(session_store: SessionStore):
 
 
 @pytest.mark.asyncio
-async def test_ntrp_tool_executor_audits_cancelled_policy_enabled_call(session_store: SessionStore):
+async def test_arden_tool_executor_audits_cancelled_policy_enabled_call(session_store: SessionStore):
     entered = asyncio.Event()
 
     async def wait_forever(execution: ToolExecution, args: EmptyInput) -> ToolResult:
@@ -1543,7 +1541,7 @@ async def test_ntrp_tool_executor_audits_cancelled_policy_enabled_call(session_s
     )
     ctx = _make_tool_context(registry, session_id="sess-1")
     ctx.services["store"] = session_store
-    executor = NtrpToolExecutor(ToolExecutor().with_registry(registry), ctx)
+    executor = ArdenToolExecutor(ToolExecutor().with_registry(registry), ctx)
 
     task = asyncio.create_task(executor.execute("wait_forever", {}, "call-1"))
     await entered.wait()
@@ -1562,7 +1560,7 @@ async def test_ntrp_tool_executor_audits_cancelled_policy_enabled_call(session_s
 
 
 @pytest.mark.asyncio
-async def test_ntrp_tool_executor_audits_internal_failure_outcome(session_store: SessionStore):
+async def test_arden_tool_executor_audits_internal_failure_outcome(session_store: SessionStore):
     async def explode(execution: ToolExecution, args: EmptyInput) -> ToolResult:
         raise RuntimeError("boom")
 
@@ -1577,7 +1575,7 @@ async def test_ntrp_tool_executor_audits_internal_failure_outcome(session_store:
     )
     ctx = _make_tool_context(registry, session_id="sess-1")
     ctx.services["store"] = session_store
-    executor = NtrpToolExecutor(ToolExecutor().with_registry(registry), ctx)
+    executor = ArdenToolExecutor(ToolExecutor().with_registry(registry), ctx)
 
     with pytest.raises(RuntimeError, match="boom"):
         await executor.execute("explode", {}, "call-1")
@@ -1589,7 +1587,7 @@ async def test_ntrp_tool_executor_audits_internal_failure_outcome(session_store:
 
 
 @pytest.mark.asyncio
-async def test_ntrp_tool_executor_skips_audit_when_policy_disabled(session_store: SessionStore):
+async def test_arden_tool_executor_skips_audit_when_policy_disabled(session_store: SessionStore):
     async def echo(execution: ToolExecution, args: EchoInput) -> ToolResult:
         return ToolResult(content=f"echo: {args.text}", preview="ok")
 
@@ -1605,7 +1603,7 @@ async def test_ntrp_tool_executor_skips_audit_when_policy_disabled(session_store
     )
     ctx = _make_tool_context(registry, session_id="sess-1")
     ctx.services["store"] = session_store
-    executor = NtrpToolExecutor(ToolExecutor().with_registry(registry), ctx)
+    executor = ArdenToolExecutor(ToolExecutor().with_registry(registry), ctx)
 
     result = await executor.execute("echo", {"text": "hello"}, "call-1")
 
@@ -1614,7 +1612,7 @@ async def test_ntrp_tool_executor_skips_audit_when_policy_disabled(session_store
 
 
 @pytest.mark.asyncio
-async def test_ntrp_tool_executor_audits_rejected_approval_as_error(session_store: SessionStore):
+async def test_arden_tool_executor_audits_rejected_approval_as_error(session_store: SessionStore):
     async def echo(execution: ToolExecution, args: EchoInput) -> ToolResult:
         return ToolResult(content=args.text, preview=args.text)
 
@@ -1634,7 +1632,7 @@ async def test_ntrp_tool_executor_audits_rejected_approval_as_error(session_stor
     )
     ctx = _make_tool_context(registry, session_id="sess-1")
     ctx.services["store"] = session_store
-    executor = NtrpToolExecutor(ToolExecutor().with_registry(registry), ctx)
+    executor = ArdenToolExecutor(ToolExecutor().with_registry(registry), ctx)
 
     result = await executor.execute("echo", {"text": "hello"}, "call-1")
     rows = await session_store.list_tool_calls(run_id="run-1")
@@ -1718,7 +1716,7 @@ def test_tool_registry_rejects_duplicate_tool_names():
 def test_discover_user_tools_loads_named_tool_map(tmp_path):
     (tmp_path / "custom.py").write_text(
         """
-from ntrp.tools.core import EmptyInput, ToolAction, ToolPolicy, ToolResult, ToolScope, tool
+from arden.tools.core import EmptyInput, ToolAction, ToolPolicy, ToolResult, ToolScope, tool
 
 
 async def hello(execution, args: EmptyInput) -> ToolResult:

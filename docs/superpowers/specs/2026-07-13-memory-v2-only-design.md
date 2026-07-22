@@ -6,14 +6,14 @@ Make the local memory engine schema-v2-only. Remove upgrade compatibility and ke
 
 ## Scope
 
-This cleanup applies only to `apps/server/ntrp/memory`, its runtime wiring, memory APIs, desktop memory UI, and their tests. Unrelated areas, sessions, automations, and database migrations remain unchanged.
+This cleanup applies only to `apps/server/arden/memory`, its runtime wiring, memory APIs, desktop memory UI, and their tests. Unrelated areas, sessions, automations, and database migrations remain unchanged.
 
 ## Current Vault Contract
 
 - Visible knowledge lives in ordinary Markdown pages.
 - Canonical records live in `raw/<page>.md` with the schema-v2 header and structured metadata.
 - Page edits live in `raw/events/YYYY-MM-DD.md`.
-- Journal state, projections, indexes, and maintenance data live under `.ntrp/`.
+- Journal state, projections, indexes, and maintenance data live under `.arden/`.
 - An empty vault initializes directly in this format.
 
 No schema-v1 line, inline timeline sentinel, legacy directory, legacy scope alias, legacy label shape, or SQLite memory database is accepted.

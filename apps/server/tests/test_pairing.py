@@ -2,7 +2,7 @@ from urllib.parse import parse_qs, urlparse
 
 import segno
 
-from ntrp.pairing import (
+from arden.pairing import (
     build_pairing,
     build_pairing_link,
     render_qr,
@@ -13,7 +13,7 @@ from ntrp.pairing import (
 def test_build_pairing_link_encodes_url_and_key():
     link = build_pairing_link("192.168.1.50", 6877, "abc/with+special=chars")
     parsed = urlparse(link)
-    assert parsed.scheme == "ntrp"
+    assert parsed.scheme == "arden"
     assert parsed.netloc == "connect"
     qs = parse_qs(parsed.query)
     assert qs["url"] == ["http://192.168.1.50:6877"]
@@ -42,5 +42,5 @@ def test_render_qr_round_trips_to_same_link():
 def test_build_pairing_returns_lan_host_and_qr():
     lan_host, link, qr = build_pairing("127.0.0.1", 6877, "key")
     assert lan_host in link
-    assert link.startswith("ntrp://connect?url=")
+    assert link.startswith("arden://connect?url=")
     assert qr

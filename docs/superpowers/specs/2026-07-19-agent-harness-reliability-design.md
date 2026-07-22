@@ -2,7 +2,7 @@
 
 ## Objective
 
-Improve ntrp's existing harness without replacing its agent loop, provider adapters, persistence, sessions, budgets, outbox, or desktop protocol.
+Improve Arden's existing harness without replacing its agent loop, provider adapters, persistence, sessions, budgets, outbox, or desktop protocol.
 
 The result must make risky execution safe, failures legible, suspended runs restartable, background completion idempotent, and run claims traceable to durable evidence.
 

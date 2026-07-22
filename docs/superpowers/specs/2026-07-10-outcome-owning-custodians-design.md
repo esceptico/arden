@@ -36,7 +36,7 @@ load by continuously maintaining a plan after inputs change. Lindy's useful
 unit is a completed loop, such as meeting preparation through follow-up, not a
 notification about the loop.
 
-ntrp therefore keeps the finite Home ending but changes its content from a
+arden therefore keeps the finite Home ending but changes its content from a
 notification queue into a work brief.
 
 ## Canonical data model

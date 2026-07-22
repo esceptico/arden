@@ -3,11 +3,11 @@ import { respondToHtmlInput } from "@/actions/htmlInput";
 import { getState, setState } from "@/stores/index";
 
 afterEach(() => {
-  delete (globalThis.window as unknown as { ntrpDesktop?: unknown }).ntrpDesktop;
+  delete (globalThis.window as unknown as { ardenDesktop?: unknown }).ardenDesktop;
 });
 
 function stubApi(calls: { path: string; body: unknown }[], options: { fail?: boolean } = {}) {
-  (globalThis.window as unknown as { ntrpDesktop: unknown }).ntrpDesktop = {
+  (globalThis.window as unknown as { ardenDesktop: unknown }).ardenDesktop = {
     api: {
       request: async (_cfg: unknown, req: { path: string; body?: string }) => {
         calls.push({ path: req.path, body: req.body ? JSON.parse(req.body) : null });

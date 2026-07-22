@@ -5,7 +5,7 @@ import type { AppConfig } from "@/api/core";
 import { ArtifactMemoryView } from "@/features/memory/components/ArtifactMemoryView";
 
 const config: AppConfig = { serverUrl: "http://localhost:6877", apiKey: "test-key" };
-const originalDesktop = window.ntrpDesktop;
+const originalDesktop = window.ardenDesktop;
 const mountedRoots = new Set<Root>();
 
 const base = {
@@ -43,7 +43,7 @@ interface BridgeOptions {
 
 function installBridge(options: BridgeOptions = {}) {
   const requests: string[] = [];
-  window.ntrpDesktop = {
+  window.ardenDesktop = {
     api: {
       request: async (_config, request) => {
         requests.push(request.path);
@@ -82,7 +82,7 @@ function installBridge(options: BridgeOptions = {}) {
         };
       },
     },
-  } as Window["ntrpDesktop"];
+  } as Window["ardenDesktop"];
   return { requests };
 }
 
@@ -111,7 +111,7 @@ async function openRecords(host: HTMLElement) {
 afterEach(async () => {
   for (const root of mountedRoots) await act(async () => root.unmount());
   mountedRoots.clear();
-  window.ntrpDesktop = originalDesktop;
+  window.ardenDesktop = originalDesktop;
   document.body.replaceChildren();
 });
 

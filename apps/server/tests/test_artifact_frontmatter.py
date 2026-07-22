@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from ntrp.memory.artifacts import ArtifactMemoryStore
-from ntrp.memory.frontmatter import (
+from arden.memory.artifacts import ArtifactMemoryStore
+from arden.memory.frontmatter import (
     QuotedStr,
     dump_frontmatter,
     parse_frontmatter,
@@ -82,11 +82,16 @@ async def test_artifact_meta_reads_kind_and_scope_from_frontmatter(tmp_path: Pat
     root = tmp_path / "artifacts"
     root.mkdir()
     (root / "entities").mkdir()
-    content = dump_frontmatter({
-        "kind": "dossier",
-        "title": "Regina",
-        "scope": {"kind": "entity", "key": "regina"},
-    }) + "# Regina\n\nbody\n"
+    content = (
+        dump_frontmatter(
+            {
+                "kind": "dossier",
+                "title": "Regina",
+                "scope": {"kind": "entity", "key": "regina"},
+            }
+        )
+        + "# Regina\n\nbody\n"
+    )
     (root / "entities" / "regina.md").write_text(content, encoding="utf-8")
 
     store = ArtifactMemoryStore(root)

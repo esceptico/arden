@@ -42,10 +42,10 @@ test("persists browser fallback connection config", async () => {
 
   const saved = await saveConfig({
     serverUrl: "http://127.0.0.1:6877/",
-    apiKey: "ntrp_test",
+    apiKey: "arden_test",
   });
 
-  expect(saved).toEqual({ serverUrl: "http://127.0.0.1:6877", apiKey: "ntrp_test" });
+  expect(saved).toEqual({ serverUrl: "http://127.0.0.1:6877", apiKey: "arden_test" });
   expect(storage.getItem(STORAGE_KEY)).toBe(JSON.stringify(saved));
   expect(await loadInitialConfig()).toEqual(saved);
 });

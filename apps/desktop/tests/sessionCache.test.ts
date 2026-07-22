@@ -229,7 +229,7 @@ test("switchSession preserves cached preview until canonical history replaces it
   const requests: string[] = [];
   let resolveRequest: ((value: unknown) => void) | null = null;
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async (_config: unknown, request: { path: string }) => {
           requests.push(request.path);
@@ -317,7 +317,7 @@ test("refresh loads areas/sessions but does not auto-select a current session", 
   const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
   const requests: string[] = [];
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async (_config: unknown, request: { path: string }) => {
           requests.push(request.path);
@@ -357,7 +357,7 @@ test("older replace history response cannot override newer response", async () =
   const requests: string[] = [];
   const resolvers: Array<(value: unknown) => void> = [];
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async (_config: unknown, request: { path: string }) => {
           requests.push(request.path);
@@ -438,7 +438,7 @@ test("newer history tool-only page updates result and advances cursor", async ()
   const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
   const requests: string[] = [];
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async (_config: unknown, request: { path: string }) => {
           requests.push(request.path);
@@ -514,7 +514,7 @@ test("newer history tool-only page updates result and advances cursor", async ()
 test("history tool result page can load before the tool call page", async () => {
   const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async (_config: unknown, request: { path: string }) => ({
           ok: true,
@@ -588,7 +588,7 @@ test("history tool result page can load before the tool call page", async () => 
 test("canonical history replace drops stale pending tool result patches", async () => {
   const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async (_config: unknown, request: { path: string }) => ({
           ok: true,
@@ -661,7 +661,7 @@ test("canonical history replace drops stale pending tool result patches", async 
 test("newer non-tail active history page does not steal live activity target", async () => {
   const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async () => ({
           ok: true,

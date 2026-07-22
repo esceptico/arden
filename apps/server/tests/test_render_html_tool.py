@@ -9,20 +9,20 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from ntrp.context.models import SessionState
-from ntrp.events.sse import InputNeededEvent
-from ntrp.server.routers.chat import router as chat_router
-from ntrp.server.runtime import get_runtime
-from ntrp.server.state import RunRegistry
-from ntrp.tools.core.context import (
+from arden.context.models import SessionState
+from arden.events.sse import InputNeededEvent
+from arden.server.routers.chat import router as chat_router
+from arden.server.runtime import get_runtime
+from arden.server.state import RunRegistry
+from arden.tools.core.context import (
     BackgroundTaskRegistry,
     IOBridge,
     RunContext,
     ToolContext,
     ToolExecution,
 )
-from ntrp.tools.core.registry import ToolRegistry
-from ntrp.tools.render_html import render_html_tool
+from arden.tools.core.registry import ToolRegistry
+from arden.tools.render_html import render_html_tool
 
 
 def _make_execution(io: IOBridge, tool_id: str = "toolu_01abc") -> ToolExecution:

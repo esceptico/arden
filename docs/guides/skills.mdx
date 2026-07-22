@@ -1,11 +1,11 @@
 ---
 title: "Skills"
-description: "Installable commands that extend ntrp's capabilities."
+description: "Installable commands that extend Arden's capabilities."
 ---
 
 ## Overview
 
-Skills are user-facing commands that add new functionality to ntrp. They're distinct from tools — skills are invoked with `/skill-name` in chat and can orchestrate multiple tool calls.
+Skills are user-facing commands that add new functionality to arden. They're distinct from tools — skills are invoked with `/skill-name` in chat and can orchestrate multiple tool calls.
 
 ## Builtin skills
 
@@ -22,8 +22,8 @@ Skills are discovered from six locations (in order):
 1. `apps/server/skills/` — builtin skills when developing from source; packaged as `skills/` in installed builds
 2. `agent/skills/` — filesystem-agent skills
 3. `.agents/skills/` — project skills shared with agent clients
-4. `.skills/` — ntrp project-level skills (per-directory)
-5. `~/.ntrp/skills/` — global user skills
+4. `.skills/` — arden project-level skills (per-directory)
+5. `~/.arden/skills/` — global user skills
 6. `~/.agents/skills/` — global skills shared with other agent clients
 
 ## Installing skills
@@ -32,7 +32,7 @@ Install a skill from GitHub:
 
 ```bash
 curl -X POST http://localhost:6877/skills/install \
-  -H "Authorization: Bearer $NTRP_API_KEY" \
+  -H "Authorization: Bearer $ARDEN_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"source": "owner/repo/path/to/skill"}'
 ```
@@ -55,7 +55,7 @@ my-skill/
 
 The `SKILL.md` tells the agent what the skill does and how to execute it. The agent follows these instructions when the user invokes `/my-skill`.
 
-Restart the server after creating a skill manually so the registry rescans builtin skills, `agent/skills/`, `.agents/skills/`, `.skills/`, `~/.ntrp/skills/`, and `~/.agents/skills/`. Skills installed through the API are reloaded automatically.
+Restart the server after creating a skill manually so the registry rescans builtin skills, `agent/skills/`, `.agents/skills/`, `.skills/`, `~/.arden/skills/`, and `~/.agents/skills/`. Skills installed through the API are reloaded automatically.
 
 ## Governance
 
@@ -69,7 +69,7 @@ Optional governance fields:
 | `version` | Version, date, commit, or release label reviewed by the user. |
 | `reviewed_at` | ISO date for the last human review. |
 
-`GET /skills/governance` returns inventory, validation issues, and cleanup candidates. Cleanup candidates are read-only recommendations; ntrp does not remove skills unless the user explicitly uses the remove action.
+`GET /skills/governance` returns inventory, validation issues, and cleanup candidates. Cleanup candidates are read-only recommendations; Arden does not remove skills unless the user explicitly uses the remove action.
 
 ## Managing skills
 

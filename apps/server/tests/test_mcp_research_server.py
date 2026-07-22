@@ -4,31 +4,31 @@ from types import SimpleNamespace
 import pytest
 from starlette.testclient import TestClient
 
-import ntrp.mcp.server as mcp_server
-import ntrp.tools.research as research_module
-from ntrp.agent.ledger import ContradictionNote, FactNote, GapNote
-from ntrp.settings import hash_api_key
-from ntrp.tools.core import ToolResult
+import arden.mcp.server as mcp_server
+import arden.tools.research as research_module
+from arden.agent.ledger import ContradictionNote, FactNote, GapNote
+from arden.settings import hash_api_key
+from arden.tools.core import ToolResult
 
 
 class FakeRunner:
-    def __init__(self, output: mcp_server.NtrpResearchOutput):
+    def __init__(self, output: mcp_server.ArdenResearchOutput):
         self.output = output
         self.calls = []
 
-    async def run(self, *, task: str, depth: mcp_server.ResearchDepth) -> mcp_server.NtrpResearchOutput:
+    async def run(self, *, task: str, depth: mcp_server.ResearchDepth) -> mcp_server.ArdenResearchOutput:
         self.calls.append({"task": task, "depth": depth})
         return self.output
 
 
 @pytest.mark.asyncio
-async def test_mcp_server_exposes_structured_ntrp_research_tool():
-    output = mcp_server.NtrpResearchOutput(
-        answer="Dex can call ntrp as a research oracle.",
+async def test_mcp_server_exposes_structured_arden_research_tool():
+    output = mcp_server.ArdenResearchOutput(
+        answer="Dex can call arden as a research oracle.",
         evidence=[
             mcp_server.ResearchEvidence(
-                claim="ntrp has a research tool",
-                source="apps/server/ntrp/tools/research.py",
+                claim="Arden has a research tool",
+                source="apps/server/arden/tools/research.py",
                 quote="Spawn a research agent",
             )
         ],
@@ -45,10 +45,10 @@ async def test_mcp_server_exposes_structured_ntrp_research_tool():
     server = mcp_server.create_mcp_server(runner_factory=runner_factory)
 
     tools = await server.list_tools()
-    result = await server.call_tool("ntrp_research", {"task": "research Dex integration"})
+    result = await server.call_tool("arden_research", {"task": "research Dex integration"})
 
     content, structured = result
-    assert [tool.name for tool in tools] == ["ntrp_research"]
+    assert [tool.name for tool in tools] == ["arden_research"]
     assert runner.calls == [{"task": "research Dex integration", "depth": "normal"}]
     assert content[0].text.startswith("{")
     assert structured == output.model_dump(mode="json")
@@ -59,7 +59,7 @@ async def test_runtime_research_runner_areas_internal_ledger_notes(monkeypatch):
     async def fake_research(execution, args):
         execution.ctx.ledger.add_note(
             FactNote(
-                claim="Dex should call ntrp as a research oracle.",
+                claim="Dex should call arden as a research oracle.",
                 source="docs/internal/mcp.md",
                 quote="consultation oracle",
             )
@@ -107,7 +107,7 @@ async def test_runtime_research_runner_areas_internal_ledger_notes(monkeypatch):
     assert result.run_id == "research-1"
     assert [e.model_dump() for e in result.evidence] == [
         {
-            "claim": "Dex should call ntrp as a research oracle.",
+            "claim": "Dex should call arden as a research oracle.",
             "source": "docs/internal/mcp.md",
             "quote": "consultation oracle",
         }
@@ -131,8 +131,8 @@ async def test_api_key_token_verifier_accepts_existing_client_key():
     rejected = await verifier.verify_token("wrong-key")
 
     assert accepted is not None
-    assert accepted.client_id == "ntrp-client"
-    assert accepted.scopes == ["ntrp:mcp"]
+    assert accepted.client_id == "arden-client"
+    assert accepted.scopes == ["arden:mcp"]
     assert rejected is None
 
 

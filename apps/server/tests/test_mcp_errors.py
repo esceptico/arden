@@ -1,6 +1,6 @@
 import httpx
 
-from ntrp.mcp.errors import describe_mcp_error
+from arden.mcp.errors import describe_mcp_error
 
 
 def test_describe_mcp_error_unwraps_http_exception_group():

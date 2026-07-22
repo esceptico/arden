@@ -9,7 +9,7 @@ if [[ ! "$tool_name" =~ ^[a-z][a-z0-9_]*$ ]]; then
 fi
 
 skill_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-target_dir="${NTRP_DIR:-$HOME/.ntrp}/tools"
+target_dir="${ARDEN_DIR:-$HOME/.arden}/tools"
 target="$target_dir/${tool_name}.py"
 
 if [[ -e "$target" ]]; then

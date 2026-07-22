@@ -1,9 +1,9 @@
 from pydantic import BaseModel
 
-from ntrp.agent import ToolResult
-from ntrp.tools.core.base import Tool
-from ntrp.tools.core.registry import ToolRegistry
-from ntrp.tools.core.types import ToolAction, ToolPolicy, ToolScope
+from arden.agent import ToolResult
+from arden.tools.core.base import Tool
+from arden.tools.core.registry import ToolRegistry
+from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
 
 
 class _EmptyIn(BaseModel):
@@ -62,10 +62,7 @@ def test_read_only_excludes_write_and_execute_tools_by_default():
 
 def test_extra_names_admits_named_write_tool_without_widening_to_other_write_or_execute_tools():
     reg = _registry()
-    names = {
-        s["function"]["name"]
-        for s in reg.get_schemas(read_only=True, extra_names=frozenset({"write_memory"}))
-    }
+    names = {s["function"]["name"] for s in reg.get_schemas(read_only=True, extra_names=frozenset({"write_memory"}))}
     assert names == {"read_thing", "write_memory"}
     assert "bash" not in names
 

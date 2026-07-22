@@ -132,7 +132,7 @@ Rendered in the scroll area, after the Active sections, with `mt-3` when precede
 
 ### 3.4 `AgentRightSidebar.tsx` — collapsed persistence + connection badge
 - Replace `useState(true)` for `collapsed` with a `localStorage`-backed init:
-  key `ntrp:right-panel:collapsed`, default `true`; write on every toggle.
+  key `arden:right-panel:collapsed`, default `true`; write on every toggle.
 - Collapsed toggle badge (`AgentRightSidebar.tsx:392–408`): in addition to the
   existing active-work pulse + count, show a **static `bg-bad` dot** when the current
   session's SSE phase is `disconnected`/`failed`/`reconnecting`. This is the only

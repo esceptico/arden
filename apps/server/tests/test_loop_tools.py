@@ -4,15 +4,15 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-import ntrp.database as database
-from ntrp.automation.models import Automation
-from ntrp.automation.scheduler import Scheduler
-from ntrp.automation.service import AutomationService
-from ntrp.automation.store import AutomationStore
-from ntrp.automation.triggers import TimeTrigger
-from ntrp.context.models import SessionState
-from ntrp.services.chat import _loop_task_id_from_client_id
-from ntrp.tools.automation import (
+import arden.database as database
+from arden.automation.models import Automation
+from arden.automation.scheduler import Scheduler
+from arden.automation.service import AutomationService
+from arden.automation.store import AutomationStore
+from arden.automation.triggers import TimeTrigger
+from arden.context.models import SessionState
+from arden.services.chat import _loop_task_id_from_client_id
+from arden.tools.automation import (
     CreateAutomationInput,
     CreateLoopInput,
     LoopDoneInput,
@@ -24,20 +24,20 @@ from ntrp.tools.automation import (
     loop_done,
     schedule_wakeup,
 )
-from ntrp.tools.core.context import (
+from arden.tools.core.context import (
     BackgroundTaskRegistry,
     IOBridge,
     RunContext,
     ToolContext,
     ToolExecution,
 )
-from ntrp.tools.core.registry import ToolRegistry
+from arden.tools.core.registry import ToolRegistry
 
 
 @pytest_asyncio.fixture
 async def store_and_svc(tmp_path: Path):
-    from ntrp.context.store import SessionStore
-    from ntrp.services.session import SessionService
+    from arden.context.store import SessionStore
+    from arden.services.session import SessionService
 
     conn = await database.connect(tmp_path / "automation.db")
     store = AutomationStore(conn)
@@ -229,7 +229,7 @@ async def test_approve_create_automation_shows_tool_scope(store_and_svc):
 
 @pytest.mark.asyncio
 async def test_update_automation_changes_tool_scope(store_and_svc):
-    from ntrp.tools.automation import UpdateAutomationInput, update_automation
+    from arden.tools.automation import UpdateAutomationInput, update_automation
 
     store, svc = store_and_svc
     execution = _execution(svc, loop_task_id=None)
@@ -264,9 +264,9 @@ class _FakeSlack:
 
 @pytest.mark.asyncio
 async def test_create_automation_message_trigger_resolves_channels(tmp_path: Path):
-    from ntrp.automation.triggers import MessageTrigger
-    from ntrp.context.store import SessionStore
-    from ntrp.services.session import SessionService
+    from arden.automation.triggers import MessageTrigger
+    from arden.context.store import SessionStore
+    from arden.services.session import SessionService
 
     conn = await database.connect(tmp_path / "automation.db")
     store = AutomationStore(conn)
@@ -304,10 +304,10 @@ async def test_create_automation_message_trigger_resolves_channels(tmp_path: Pat
 
 @pytest.mark.asyncio
 async def test_update_automation_to_message_trigger_resolves_channels(tmp_path: Path):
-    from ntrp.automation.triggers import MessageTrigger
-    from ntrp.context.store import SessionStore
-    from ntrp.services.session import SessionService
-    from ntrp.tools.automation import UpdateAutomationInput, update_automation
+    from arden.automation.triggers import MessageTrigger
+    from arden.context.store import SessionStore
+    from arden.services.session import SessionService
+    from arden.tools.automation import UpdateAutomationInput, update_automation
 
     conn = await database.connect(tmp_path / "automation.db")
     store = AutomationStore(conn)

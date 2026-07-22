@@ -6,24 +6,24 @@ import pytest
 import pytest_asyncio
 from pydantic import BaseModel, ValidationError
 
-import ntrp.database as database
-import ntrp.tools.research as research_module
-import ntrp.tools.research_artifacts as research_artifacts_module
-from ntrp.agent import Result, SharedLedger, StopReason, ToolCompleted, ToolStarted, Usage
-from ntrp.agent.types.tools import ToolSourceRef
-from ntrp.context.models import SessionState
-from ntrp.context.store import SessionStore
-from ntrp.core.agent_types import apply_profile
-from ntrp.core.spawner import SpawnResult, create_spawn_fn
-from ntrp.tools.core import ToolAction, ToolPolicy, ToolResult, ToolScope, tool
-from ntrp.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
-from ntrp.tools.core.registry import ToolRegistry
-from ntrp.tools.executor import ToolExecutor
+import arden.database as database
+import arden.tools.research as research_module
+import arden.tools.research_artifacts as research_artifacts_module
+from arden.agent import Result, SharedLedger, StopReason, ToolCompleted, ToolStarted, Usage
+from arden.agent.types.tools import ToolSourceRef
+from arden.context.models import SessionState
+from arden.context.store import SessionStore
+from arden.core.agent_types import apply_profile
+from arden.core.spawner import SpawnResult, create_spawn_fn
+from arden.tools.core import ToolAction, ToolPolicy, ToolResult, ToolScope, tool
+from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
+from arden.tools.core.registry import ToolRegistry
+from arden.tools.executor import ToolExecutor
 
 
 @pytest.fixture(autouse=True)
 def _isolate_research_artifacts(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(research_artifacts_module, "NTRP_DIR", tmp_path / ".ntrp")
+    monkeypatch.setattr(research_artifacts_module, "ARDEN_DIR", tmp_path / ".arden")
 
 
 @pytest_asyncio.fixture
@@ -54,7 +54,7 @@ HARNESS_TOOL_NAMES = {
 
 
 def test_scratchpad_tools_are_research_only():
-    from ntrp.integrations.core import CORE_INTEGRATIONS
+    from arden.integrations.core import CORE_INTEGRATIONS
 
     assert set(research_module.RESEARCH_AGENT_TOOLS) >= SCRATCHPAD_TOOL_NAMES | HARNESS_TOOL_NAMES
     main_tool_names = {name for integ in CORE_INTEGRATIONS for name in integ.tools}
@@ -289,7 +289,7 @@ async def test_research_profile_builds_read_only_child_toolset(monkeypatch):
         async def stream(self, messages):
             yield Result(text="done", stop_reason=StopReason.END_TURN, steps=1, usage=Usage())
 
-    monkeypatch.setattr("ntrp.core.spawner.Agent", FakeAgent)
+    monkeypatch.setattr("arden.core.spawner.Agent", FakeAgent)
 
     parent_ctx = _spawn_parent_ctx(_base_registry())
     profile = apply_profile(research_module.RESEARCH_AGENT_TYPE, system_prompt="prompt")
@@ -320,7 +320,7 @@ async def test_nested_research_profile_does_not_double_register_ledger_tools(mon
         async def stream(self, messages):
             yield Result(text="done", stop_reason=StopReason.END_TURN, steps=1, usage=Usage())
 
-    monkeypatch.setattr("ntrp.core.spawner.Agent", FakeAgent)
+    monkeypatch.setattr("arden.core.spawner.Agent", FakeAgent)
 
     registry = _base_registry().copy_with(dict(research_module.RESEARCH_AGENT_TOOLS))
     parent_ctx = _spawn_parent_ctx(registry)
@@ -368,7 +368,7 @@ async def test_spawner_carries_child_tool_calls_and_source_refs(monkeypatch):
             )
             yield Result(text="done", stop_reason=StopReason.END_TURN, steps=1, usage=Usage())
 
-    monkeypatch.setattr("ntrp.core.spawner.Agent", FakeAgent)
+    monkeypatch.setattr("arden.core.spawner.Agent", FakeAgent)
     parent_ctx = _spawn_parent_ctx(_base_registry())
 
     result = await parent_ctx.spawn_fn(
@@ -445,7 +445,7 @@ async def test_research_outline_and_cover_track_gap_notes():
         ToolExecution(tool_id="cover-1", tool_name="research_cover", ctx=_context(ledger)),
         research_module.ResearchCoverInput(
             section="Repo state",
-            source="apps/server/ntrp/tools/research.py",
+            source="apps/server/arden/tools/research.py",
         ),
     )
 
@@ -484,7 +484,7 @@ async def test_research_outline_coverage_is_scoped_per_research_agent():
             tool_name="research_cover",
             ctx=_context(ledger, research_scope_id="research-a"),
         ),
-        research_module.ResearchCoverInput(section="Repo state", source="apps/server/ntrp/tools/research.py"),
+        research_module.ResearchCoverInput(section="Repo state", source="apps/server/arden/tools/research.py"),
     )
 
     report_a = ledger.coverage_report(scope="research-a")

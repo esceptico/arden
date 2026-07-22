@@ -11,7 +11,7 @@ import type {
 
 type CtxPane = "links" | "outline" | "activity";
 
-const PANE_STORAGE_KEY = "ntrp.desktop.memory.ctxPane";
+const PANE_STORAGE_KEY = "arden.desktop.memory.ctxPane";
 const PANES: Array<{ key: CtxPane; label: string; icon: typeof Link2 }> = [
   { key: "links", label: "Links", icon: Link2 },
   { key: "outline", label: "Outline", icon: List },

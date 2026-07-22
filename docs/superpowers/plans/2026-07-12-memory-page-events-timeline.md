@@ -25,10 +25,10 @@
 ### Task 1: Open Vault Filesystem and Managed Directory Indexes
 
 **Files:**
-- Create: `apps/server/ntrp/memory/vault_index.py`
-- Modify: `apps/server/ntrp/memory/artifacts.py`
-- Modify: `apps/server/ntrp/tools/memory.py`
-- Modify: `apps/server/ntrp/server/runtime/knowledge.py`
+- Create: `apps/server/arden/memory/vault_index.py`
+- Modify: `apps/server/arden/memory/artifacts.py`
+- Modify: `apps/server/arden/tools/memory.py`
+- Modify: `apps/server/arden/server/runtime/knowledge.py`
 - Create: `apps/server/tests/test_memory_vault_index.py`
 - Modify: `apps/server/tests/test_memory_artifacts.py`
 - Modify: `apps/server/tests/test_memory_filesystem_tools.py`
@@ -36,8 +36,8 @@
 **Interfaces:**
 - Produces: `VaultIndexer.scan() -> IndexReport`
 - Produces: `VaultIndexer.render_updates() -> Mapping[Path, bytes]`
-- Expands artifact reads/search to arbitrary Markdown and text outside `raw/` and `.ntrp/`
-- Preserves user prose outside `<!-- ntrp:index:start -->` markers
+- Expands artifact reads/search to arbitrary Markdown and text outside `raw/` and `.arden/`
+- Preserves user prose outside `<!-- arden:index:start -->` markers
 
 - [ ] **Step 1: Write failing arbitrary-path and managed-block tests**
 
@@ -50,7 +50,7 @@ def test_nested_user_file_is_searchable_and_indexed(vault):
     assert report.missing_descriptions == ()
 
 def test_index_update_preserves_user_prose(vault):
-    write(vault / "index.md", "My intro\n\n<!-- ntrp:index:start -->old<!-- ntrp:index:end -->\nFooter")
+    write(vault / "index.md", "My intro\n\n<!-- arden:index:start -->old<!-- arden:index:end -->\nFooter")
     VaultIndexer(vault).apply()
     assert read(vault / "index.md").startswith("My intro")
     assert read(vault / "index.md").endswith("Footer")
@@ -68,7 +68,7 @@ Expected: FAIL because artifact path allowlists reject arbitrary directories and
 
 - [ ] **Step 3: Implement safe open-file discovery**
 
-Permit regular `.md` and `.txt` files under the resolved vault root. Exclude `raw/`, `.ntrp/`, generated health files, symlinks, sockets, and paths escaping the root. Arbitrary files are searchable resources, not automatically parsed as records.
+Permit regular `.md` and `.txt` files under the resolved vault root. Exclude `raw/`, `.arden/`, generated health files, symlinks, sockets, and paths escaping the root. Arbitrary files are searchable resources, not automatically parsed as records.
 
 - [ ] **Step 4: Implement deterministic managed blocks**
 
@@ -88,14 +88,14 @@ Run: `uv run pytest -q -p no:cacheprovider tests/test_memory_vault_index.py test
 
 Expected: PASS.
 
-Run: `git add apps/server/ntrp/memory/vault_index.py apps/server/ntrp/memory/artifacts.py apps/server/ntrp/tools/memory.py apps/server/ntrp/server/runtime/knowledge.py apps/server/tests/test_memory_vault_index.py apps/server/tests/test_memory_artifacts.py apps/server/tests/test_memory_filesystem_tools.py && git commit -m "feat(memory): index open vault directories"`
+Run: `git add apps/server/arden/memory/vault_index.py apps/server/arden/memory/artifacts.py apps/server/arden/tools/memory.py apps/server/arden/server/runtime/knowledge.py apps/server/tests/test_memory_vault_index.py apps/server/tests/test_memory_artifacts.py apps/server/tests/test_memory_filesystem_tools.py && git commit -m "feat(memory): index open vault directories"`
 
 ### Task 2: Page Revisions and Exact Event Ledger
 
 **Files:**
-- Create: `apps/server/ntrp/memory/page_events.py`
-- Create: `apps/server/ntrp/memory/page_edit_service.py`
-- Modify: `apps/server/ntrp/memory/artifacts.py`
+- Create: `apps/server/arden/memory/page_events.py`
+- Create: `apps/server/arden/memory/page_edit_service.py`
+- Modify: `apps/server/arden/memory/artifacts.py`
 - Create: `apps/server/tests/test_memory_page_events.py`
 
 **Interfaces:**
@@ -156,7 +156,7 @@ class PageEditEvent(BaseModel):
     reconciliation: Literal["applied", "pending", "needs_review"]
 ```
 
-Persist the accepted preview payload under `.ntrp/maintenance/page-edit-previews/` until applied or expired so restart cannot change its semantics.
+Persist the accepted preview payload under `.arden/maintenance/page-edit-previews/` until applied or expired so restart cannot change its semantics.
 
 - [ ] **Step 4: Implement structural preview analysis**
 
@@ -176,13 +176,13 @@ Run: `uv run pytest -q -p no:cacheprovider tests/test_memory_page_events.py test
 
 Expected: PASS.
 
-Run: `git add apps/server/ntrp/memory/page_events.py apps/server/ntrp/memory/page_edit_service.py apps/server/ntrp/memory/artifacts.py apps/server/tests/test_memory_page_events.py && git commit -m "feat(memory): record revision-safe page edits"`
+Run: `git add apps/server/arden/memory/page_events.py apps/server/arden/memory/page_edit_service.py apps/server/arden/memory/artifacts.py apps/server/tests/test_memory_page_events.py && git commit -m "feat(memory): record revision-safe page edits"`
 
 ### Task 3: Page-edit HTTP Contract and Conflict Responses
 
 **Files:**
-- Modify: `apps/server/ntrp/server/routers/memory.py`
-- Modify: `apps/server/ntrp/server/runtime/knowledge.py`
+- Modify: `apps/server/arden/server/routers/memory.py`
+- Modify: `apps/server/arden/server/runtime/knowledge.py`
 - Modify: `apps/server/tests/test_memory_router.py`
 
 **Interfaces:**
@@ -228,15 +228,15 @@ Run: `uv run pytest -q -p no:cacheprovider tests/test_memory_router.py tests/tes
 
 Expected: PASS.
 
-Run: `git add apps/server/ntrp/server/routers/memory.py apps/server/ntrp/server/runtime/knowledge.py apps/server/tests/test_memory_router.py && git commit -m "feat(server): expose memory page edit review"`
+Run: `git add apps/server/arden/server/routers/memory.py apps/server/arden/server/runtime/knowledge.py apps/server/tests/test_memory_router.py && git commit -m "feat(server): expose memory page edit review"`
 
 ### Task 4: External Edit Ingestion and Origin-loop Suppression
 
 **Files:**
-- Modify: `apps/server/ntrp/memory/file_store.py`
-- Modify: `apps/server/ntrp/memory/page_edit_service.py`
-- Modify: `apps/server/ntrp/server/app.py`
-- Modify: `apps/server/ntrp/server/runtime/knowledge.py`
+- Modify: `apps/server/arden/memory/file_store.py`
+- Modify: `apps/server/arden/memory/page_edit_service.py`
+- Modify: `apps/server/arden/server/app.py`
+- Modify: `apps/server/arden/server/runtime/knowledge.py`
 - Create: `apps/server/tests/test_memory_external_edits.py`
 - Modify: `apps/server/tests/test_memory_filesystem_tools.py`
 
@@ -257,7 +257,7 @@ Expected: FAIL because `refresh_from_disk()` has no before/after snapshot or ori
 
 - [ ] **Step 3: Persist the observed revision map**
 
-Store last observed editable-page bytes/revisions under `.ntrp/maintenance/observed-pages.json` plus content-addressed bases. Update it only after the external event is committed or an engine-origin revision is acknowledged.
+Store last observed editable-page bytes/revisions under `.arden/maintenance/observed-pages.json` plus content-addressed bases. Update it only after the external event is committed or an engine-origin revision is acknowledged.
 
 - [ ] **Step 4: Ingest external changes through the same event contract**
 
@@ -277,21 +277,21 @@ Run: `uv run pytest -q -p no:cacheprovider tests/test_memory_external_edits.py t
 
 Expected: PASS.
 
-Run: `git add apps/server/ntrp/memory/file_store.py apps/server/ntrp/memory/page_edit_service.py apps/server/ntrp/server/app.py apps/server/ntrp/server/runtime/knowledge.py apps/server/tests/test_memory_external_edits.py apps/server/tests/test_memory_filesystem_tools.py && git commit -m "feat(memory): ingest external page edits"`
+Run: `git add apps/server/arden/memory/file_store.py apps/server/arden/memory/page_edit_service.py apps/server/arden/server/app.py apps/server/arden/server/runtime/knowledge.py apps/server/tests/test_memory_external_edits.py apps/server/tests/test_memory_filesystem_tools.py && git commit -m "feat(memory): ingest external page edits"`
 
 ### Task 5: Revision-based Synthesis and Three-way Merge
 
 **Files:**
-- Create: `apps/server/ntrp/memory/merge.py`
-- Modify: `apps/server/ntrp/memory/synthesize.py`
-- Modify: `apps/server/ntrp/memory/page_edit_service.py`
+- Create: `apps/server/arden/memory/merge.py`
+- Modify: `apps/server/arden/memory/synthesize.py`
+- Modify: `apps/server/arden/memory/page_edit_service.py`
 - Create: `apps/server/tests/test_memory_synthesis_merge.py`
 - Modify: `apps/server/tests/test_memory_records.py`
 
 **Interfaces:**
 - Produces: `three_way_merge(base, current, generated) -> MergeResult`
 - Synthesis freshness consumes `canonical_revision`, not a date
-- Generated bases live at `.ntrp/maintenance/synthesis-bases/<page-key>/<revision>.md`
+- Generated bases live at `.arden/maintenance/synthesis-bases/<page-key>/<revision>.md`
 - Accepted merges emit `SYNTHESIS_MERGE` events
 
 - [ ] **Step 1: Write failing freshness and merge tests**
@@ -322,14 +322,14 @@ Run: `uv run pytest -q -p no:cacheprovider tests/test_memory_synthesis_merge.py 
 
 Expected: PASS.
 
-Run: `git add apps/server/ntrp/memory/merge.py apps/server/ntrp/memory/synthesize.py apps/server/ntrp/memory/page_edit_service.py apps/server/tests/test_memory_synthesis_merge.py apps/server/tests/test_memory_records.py && git commit -m "feat(memory): merge synthesis without losing prose"`
+Run: `git add apps/server/arden/memory/merge.py apps/server/arden/memory/synthesize.py apps/server/arden/memory/page_edit_service.py apps/server/tests/test_memory_synthesis_merge.py apps/server/tests/test_memory_records.py && git commit -m "feat(memory): merge synthesis without losing prose"`
 
 ### Task 6: Granular Daily Timeline Projection
 
 **Files:**
-- Create: `apps/server/ntrp/memory/daily.py`
-- Modify: `apps/server/ntrp/server/runtime/knowledge.py`
-- Modify: `apps/server/ntrp/memory/artifacts.py`
+- Create: `apps/server/arden/memory/daily.py`
+- Modify: `apps/server/arden/server/runtime/knowledge.py`
+- Modify: `apps/server/arden/memory/artifacts.py`
 - Create: `apps/server/tests/test_memory_daily.py`
 
 **Interfaces:**
@@ -365,21 +365,21 @@ Run: `uv run pytest -q -p no:cacheprovider tests/test_memory_daily.py tests/test
 
 Expected: PASS.
 
-Run: `git add apps/server/ntrp/memory/daily.py apps/server/ntrp/server/runtime/knowledge.py apps/server/ntrp/memory/artifacts.py apps/server/tests/test_memory_daily.py && git commit -m "feat(memory): project granular daily timelines"`
+Run: `git add apps/server/arden/memory/daily.py apps/server/arden/server/runtime/knowledge.py apps/server/arden/memory/artifacts.py apps/server/tests/test_memory_daily.py && git commit -m "feat(memory): project granular daily timelines"`
 
 ### Task 7: Rebuildable Link and Backlink Index
 
 **Files:**
-- Create: `apps/server/ntrp/memory/link_index.py`
-- Modify: `apps/server/ntrp/server/routers/memory.py`
-- Modify: `apps/server/ntrp/server/runtime/knowledge.py`
+- Create: `apps/server/arden/memory/link_index.py`
+- Modify: `apps/server/arden/server/routers/memory.py`
+- Modify: `apps/server/arden/server/runtime/knowledge.py`
 - Create: `apps/server/tests/test_memory_link_index.py`
 - Modify: `apps/server/tests/test_memory_router.py`
 
 **Interfaces:**
 - Produces: `LinkIndex.rebuild(artifacts, revision) -> LinkIndexSnapshot`
 - `GET /admin/memory/links?path=<path>` returns outgoing links and backlinks with context snippets
-- Index stored under `.ntrp/indexes/links.json`
+- Index stored under `.arden/indexes/links.json`
 
 - [ ] **Step 1: Write failing alias, rename, and context tests**
 
@@ -407,12 +407,12 @@ Expected: PASS.
 
 - [ ] **Step 6: Commit link indexing**
 
-Run: `git add apps/server/ntrp/memory/link_index.py apps/server/ntrp/server/routers/memory.py apps/server/ntrp/server/runtime/knowledge.py apps/server/tests/test_memory_link_index.py apps/server/tests/test_memory_router.py && git commit -m "feat(memory): index links and backlinks"`
+Run: `git add apps/server/arden/memory/link_index.py apps/server/arden/server/routers/memory.py apps/server/arden/server/runtime/knowledge.py apps/server/tests/test_memory_link_index.py apps/server/tests/test_memory_router.py && git commit -m "feat(memory): index links and backlinks"`
 
 ## Completion Gate
 
 - [ ] Run: `uv run pytest -q -p no:cacheprovider tests/test_memory_*.py tests/test_artifact_frontmatter.py`
-- [ ] Run: `uv run ruff check ntrp tests`
+- [ ] Run: `uv run ruff check arden tests`
 - [ ] Manually edit one page through HTTP and one through an external editor; inspect page, event, records, indexes, timeline, and SSE payload.
 - [ ] Confirm stale save, synthesis overlap, and ambiguous deletion each preserve user content and require review.
 - [ ] Confirm the daily page rebuilds twice on the same local day after distinct canonical revisions.

@@ -7,7 +7,7 @@ import {
 } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import clsx from "clsx";
-import { ArrowUp, Check, Keyboard, Monitor, Moon, RotateCcw, Sun, type NtrpIcon } from "@/components/icons";
+import { ArrowUp, Check, Keyboard, Monitor, Moon, RotateCcw, Sun, type ArdenIcon } from "@/components/icons";
 import {
   DEFAULT_QUICK_CAPTURE_SHORTCUT,
   useStore,
@@ -31,7 +31,7 @@ const VARIANTS: { id: ThinkingAnimation; label: string; hint: string }[] = [
   { id: "send-orbit", label: "Send orbit", hint: "Spinner around the send button only" },
 ];
 
-const THEMES: { id: ThemeChoice; label: string; icon: NtrpIcon }[] = [
+const THEMES: { id: ThemeChoice; label: string; icon: ArdenIcon }[] = [
   { id: "light", label: "Light", icon: Sun },
   { id: "dark", label: "Dark", icon: Moon },
   { id: "system", label: "System", icon: Monitor },
@@ -182,7 +182,7 @@ function ShortcutRecorder() {
 
     // Unregister so the OS-level handler doesn't eat the chord we're
     // trying to record.
-    void window.ntrpDesktop?.quickCapture?.setShortcut?.("");
+    void window.ardenDesktop?.quickCapture?.setShortcut?.("");
 
     const handler = async (event: KeyboardEvent) => {
       event.preventDefault();
@@ -194,7 +194,7 @@ function ShortcutRecorder() {
       }
       const accelerator = eventToAccelerator(event);
       if (!accelerator) return; // modifier-only or unsupported key — wait
-      const ok = await window.ntrpDesktop?.quickCapture?.setShortcut?.(accelerator);
+      const ok = await window.ardenDesktop?.quickCapture?.setShortcut?.(accelerator);
       if (ok) {
         bound = true;
         setPref("quickCaptureShortcut", accelerator);
@@ -210,7 +210,7 @@ function ShortcutRecorder() {
       window.removeEventListener("keydown", handler, true);
       // If we didn't successfully bind a new chord, put the previous
       // one back so the user isn't left with no shortcut at all.
-      if (!bound) void window.ntrpDesktop?.quickCapture?.setShortcut?.(previous);
+      if (!bound) void window.ardenDesktop?.quickCapture?.setShortcut?.(previous);
     };
     // value is captured via `previous`; intentionally only re-running
     // when recording flips so we don't re-snapshot mid-recording.
@@ -218,7 +218,7 @@ function ShortcutRecorder() {
   }, [recording]);
 
   const reset = async () => {
-    const ok = await window.ntrpDesktop?.quickCapture?.setShortcut?.(DEFAULT_QUICK_CAPTURE_SHORTCUT);
+    const ok = await window.ardenDesktop?.quickCapture?.setShortcut?.(DEFAULT_QUICK_CAPTURE_SHORTCUT);
     if (ok) {
       setPref("quickCaptureShortcut", DEFAULT_QUICK_CAPTURE_SHORTCUT);
       setError(null);

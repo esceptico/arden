@@ -39,7 +39,7 @@ interface ToolMeta {
 }
 
 // Curated registry for the tools a user actually sees, keyed by the exact tool
-// name the server sends (apps/server/ntrp/integrations). Labels name the CORPUS
+// name the server sends (apps/server/arden/integrations). Labels name the CORPUS
 // so "Searched email" / "Searched Slack" / "Searched the web" are unambiguous.
 // `noun` drives the grouped summary ("Read 4 files"). The long tail falls back
 // to a category icon (PREFIX_ICON) + the server display_name, humanized.

@@ -1,8 +1,8 @@
 {
-  "name": "ntrp-desktop",
+  "name": "arden-desktop",
   "version": "1.0.0-rc.3",
   "private": true,
-  "description": "ntrp desktop client",
+  "description": "Arden desktop client",
   "main": "electron/main.cjs",
   "type": "module",
   "scripts": {
@@ -69,9 +69,9 @@
     "zustand": "^5.0.12"
   },
   "build": {
-    "appId": "com.ntrp.desktop",
-    "productName": "ntrp",
-    "copyright": "Copyright © ntrp",
+    "appId": "com.arden.desktop",
+    "productName": "Arden",
+    "copyright": "Copyright © Arden",
     "directories": {
       "output": "release",
       "buildResources": "electron/icons"
@@ -112,7 +112,7 @@
       "identity": null
     },
     "dmg": {
-      "title": "ntrp ${version}",
+      "title": "Arden ${version}",
       "writeUpdateInfo": false,
       "contents": [
         {

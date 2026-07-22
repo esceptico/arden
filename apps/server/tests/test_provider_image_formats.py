@@ -1,12 +1,12 @@
-from ntrp.agent import Role
-from ntrp.llm.anthropic import AnthropicClient
-from ntrp.llm.gemini import GeminiClient
-from ntrp.llm.openai import OpenAIClient
-from ntrp.llm.openai_codex import OpenAICodexClient
-from ntrp.llm.openai_responses import prepare_responses_request
-from ntrp.tools.core.base import TITLE_ARG
-from ntrp.tools.core.registry import ToolRegistry
-from ntrp.tools.deferred import load_tools_tool
+from arden.agent import Role
+from arden.llm.anthropic import AnthropicClient
+from arden.llm.gemini import GeminiClient
+from arden.llm.openai import OpenAIClient
+from arden.llm.openai_codex import OpenAICodexClient
+from arden.llm.openai_responses import prepare_responses_request
+from arden.tools.core.base import TITLE_ARG
+from arden.tools.core.registry import ToolRegistry
+from arden.tools.deferred import load_tools_tool
 
 
 def _load_tools_schema() -> list[dict]:

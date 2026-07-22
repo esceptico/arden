@@ -9,7 +9,7 @@ import {
   SendHorizontal,
   Split,
   Square,
-  type NtrpIcon,
+  type ArdenIcon,
 } from "@/components/icons";
 import { ICON } from "@/lib/icons";
 import { EASE_OUT, MOTION } from "@/lib/tokens/motion";
@@ -126,7 +126,7 @@ export interface AgentHandoff {
  *  serves agent handoffs and automation controls (run / history / delete / …),
  *  so the two surfaces speak one affordance vocabulary. */
 export interface AgentRunAction {
-  icon: NtrpIcon;
+  icon: ArdenIcon;
   label: string;
   onClick: () => void | Promise<void>;
   busy?: boolean;

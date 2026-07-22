@@ -1,4 +1,4 @@
-from ntrp.search.fts import build_fts_or_query
+from arden.search.fts import build_fts_or_query
 
 
 def test_build_fts_or_query_caps_terms_and_dedupes():

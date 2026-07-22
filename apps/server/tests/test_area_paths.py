@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from ntrp.areas.paths import resolve_area_page
+from arden.areas.paths import resolve_area_page
 
 
 def test_resolve_area_page_accepts_contained_markdown(tmp_path: Path) -> None:

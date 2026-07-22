@@ -1,6 +1,6 @@
-# ntrp desktop
+# Arden desktop
 
-Electron client for the local ntrp server.
+Electron client for the local Arden server.
 
 It provides:
 
@@ -17,7 +17,7 @@ Start the backend first and keep the one-time API key it prints:
 ```bash
 cd ../server
 uv sync --extra dev
-uv run ntrp-server serve
+uv run arden-server serve
 ```
 
 Then run the desktop client:

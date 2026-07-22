@@ -5,7 +5,7 @@ import type { AppConfig } from "@/api/core";
 import { ArtifactMemoryView } from "@/features/memory/components/ArtifactMemoryView";
 
 const config: AppConfig = { serverUrl: "http://localhost:6877", apiKey: "test-key" };
-const originalDesktop = window.ntrpDesktop;
+const originalDesktop = window.ardenDesktop;
 const mountedRoots = new Set<Root>();
 
 const base = {
@@ -35,7 +35,7 @@ const summaries = [
   { ...base, path: "scratch.md", directory: "", title: "Scratch", summary: "Unsorted working notes." },
   { ...base, path: "health.md", directory: "", title: "Health", summary: "Machine health report.", generated: true, editable: false },
   { ...base, path: "raw/events/1.md", directory: "raw/events", title: "Raw event", summary: "Machine event." },
-  { ...base, path: ".ntrp/maintenance/state.md", directory: ".ntrp/maintenance", title: "State", summary: "Machine state." },
+  { ...base, path: ".arden/maintenance/state.md", directory: ".arden/maintenance", title: "State", summary: "Machine state." },
 ];
 
 function detail(path: string) {
@@ -61,7 +61,7 @@ function installBridge(options: { list?: typeof summaries; directories?: string[
   const requests: string[] = [];
   let resolveList: (() => void) | null = null;
   const listGate = new Promise<void>((resolve) => { resolveList = resolve; });
-  window.ntrpDesktop = {
+  window.ardenDesktop = {
     api: {
       request: async (_config, request) => {
         requests.push(request.path);
@@ -107,14 +107,14 @@ function installBridge(options: { list?: typeof summaries; directories?: string[
         return { ok: true, status: 200, statusText: "OK", contentType: "application/json", data: { artifact: detail(path) }, text: "" };
       },
     },
-  } as Window["ntrpDesktop"];
+  } as Window["ardenDesktop"];
   return { requests, releaseList: () => resolveList?.() };
 }
 
 function setupDom(): { host: HTMLElement; root: Root } {
   // Inspector defaults open (persisted); seed closed to keep request counts
   // scoped to the tree/note flows these tests exercise.
-  localStorage.setItem("ntrp.desktop.memory.inspectorOpen", "false");
+  localStorage.setItem("arden.desktop.memory.inspectorOpen", "false");
   const app = document.createElement("div");
   app.id = "app";
   const host = document.createElement("div");
@@ -140,13 +140,13 @@ async function unmountRoot(root: Root) {
 afterEach(async () => {
   for (const root of mountedRoots) await act(async () => root.unmount());
   mountedRoots.clear();
-  window.ntrpDesktop = originalDesktop;
+  window.ardenDesktop = originalDesktop;
   document.body.replaceChildren();
   for (const key of [
-    "ntrp.desktop.memory.inspectorOpen",
-    "ntrp.desktop.memory.lastPath",
-    "ntrp.desktop.memory.pins",
-    "ntrp.desktop.memory.rail.collapsed",
+    "arden.desktop.memory.inspectorOpen",
+    "arden.desktop.memory.lastPath",
+    "arden.desktop.memory.pins",
+    "arden.desktop.memory.rail.collapsed",
   ]) localStorage.removeItem(key);
 });
 
@@ -185,7 +185,7 @@ test("memory opens as a filesystem notebook with a plain tree, tabs, and stems",
   expect(rail?.textContent).not.toContain("topics/dex.md");
   // Reserved machine paths never surface as tree rows.
   expect(rail?.querySelector('[data-memory-entry="raw/events/1.md"]')).toBeNull();
-  expect(rail?.querySelector('[data-memory-entry=".ntrp/maintenance/state.md"]')).toBeNull();
+  expect(rail?.querySelector('[data-memory-entry=".arden/maintenance/state.md"]')).toBeNull();
   expect(rail?.querySelector('[data-memory-entry="health.md"]')).toBeNull();
 
   // Pinned cluster at the top of the tree — me.md is pinned by default.
@@ -308,7 +308,7 @@ test("default selection restores the last path, falls back to index.md, then the
   document.body.replaceChildren();
 
   // A remembered last path beats index.md when it still exists.
-  localStorage.setItem("ntrp.desktop.memory.lastPath", "me.md");
+  localStorage.setItem("arden.desktop.memory.lastPath", "me.md");
   installBridge({ list: shuffled });
   const lastPathDom = setupDom();
   await act(async () => lastPathDom.root.render(<ArtifactMemoryView config={config} />));
@@ -318,7 +318,7 @@ test("default selection restores the last path, falls back to index.md, then the
   document.body.replaceChildren();
 
   // Without index.md or a remembered path, the first navigable note wins.
-  localStorage.removeItem("ntrp.desktop.memory.lastPath");
+  localStorage.removeItem("arden.desktop.memory.lastPath");
   installBridge({ list: [byPath("scratch.md"), byPath("topics/dex.md"), byPath("me.md")] });
   const fallbackDom = setupDom();
   await act(async () => fallbackDom.root.render(<ArtifactMemoryView config={config} />));

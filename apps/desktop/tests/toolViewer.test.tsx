@@ -7,7 +7,7 @@ import { createBackgroundAgentsDomainState } from "@/stores/background-agent-dom
 import type { ActivityItem } from "@/stores/types";
 
 afterEach(() => {
-  delete (globalThis.window as unknown as { ntrpDesktop?: unknown }).ntrpDesktop;
+  delete (globalThis.window as unknown as { ardenDesktop?: unknown }).ardenDesktop;
 });
 
 test("agent inspector loads durable child-agent result by child run id", async () => {
@@ -31,7 +31,7 @@ test("agent inspector loads durable child-agent result by child run id", async (
     },
   };
 
-  globalThis.window.ntrpDesktop = {
+  globalThis.window.ardenDesktop = {
     api: {
       request: async (_config: unknown, req: { path: string }) => {
         requests.push(req.path);
@@ -113,7 +113,7 @@ test("agent inspector keeps waited child-agent local result without fetching dur
     },
   };
 
-  globalThis.window.ntrpDesktop = {
+  globalThis.window.ardenDesktop = {
     api: {
       request: async (_config: unknown, req: { path: string }) => {
         requests.push(req.path);

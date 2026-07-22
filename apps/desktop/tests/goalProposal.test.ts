@@ -24,7 +24,7 @@ afterEach(() => {
 test("empty goal command stores proposed goal draft without persisting", async () => {
   const requests: { path: string; method: string }[] = [];
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async (_config: unknown, req: { path: string; method?: string }) => {
           requests.push({ path: req.path, method: req.method ?? "GET" });
@@ -56,7 +56,7 @@ test("empty goal command stores proposed goal draft without persisting", async (
 test("accept goal proposal persists objective and clears draft", async () => {
   const requests: { path: string; method: string; body?: string }[] = [];
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async (_config: unknown, req: { path: string; method?: string; body?: string }) => {
           requests.push({ path: req.path, method: req.method ?? "GET", body: req.body });

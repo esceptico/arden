@@ -12,17 +12,17 @@
 
 ## File Structure
 
-- Modify `apps/server/ntrp/skills/registry.py`: add validation issues, source/version/review metadata, and duplicate/invalid reporting.
-- Modify `apps/server/ntrp/skills/service.py`: expose a read-only governance report.
-- Modify `apps/server/ntrp/server/schemas.py`: add response schemas.
-- Modify `apps/server/ntrp/server/routers/skills.py`: add `GET /skills/governance`.
+- Modify `apps/server/arden/skills/registry.py`: add validation issues, source/version/review metadata, and duplicate/invalid reporting.
+- Modify `apps/server/arden/skills/service.py`: expose a read-only governance report.
+- Modify `apps/server/arden/server/schemas.py`: add response schemas.
+- Modify `apps/server/arden/server/routers/skills.py`: add `GET /skills/governance`.
 - Modify `docs/guides/skills.mdx`: document required metadata and cleanup-candidate semantics.
 - Test `apps/server/tests/test_skills.py`: validation and report behavior.
 
 ## Task 1: Validate Skill Metadata
 
 **Files:**
-- Modify: `apps/server/ntrp/skills/registry.py`
+- Modify: `apps/server/arden/skills/registry.py`
 - Test: `apps/server/tests/test_skills.py`
 
 - [ ] **Step 1: Write failing test**
@@ -66,7 +66,7 @@ Expected: fail because `validation_issues` does not exist and name validation is
 
 - [ ] **Step 3: Implement validator**
 
-Add to `apps/server/ntrp/skills/registry.py`:
+Add to `apps/server/arden/skills/registry.py`:
 
 ```python
 _SKILL_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,47}$")
@@ -140,7 +140,7 @@ Expected: pass.
 ## Task 2: Track Governance Metadata
 
 **Files:**
-- Modify: `apps/server/ntrp/skills/registry.py`
+- Modify: `apps/server/arden/skills/registry.py`
 - Test: `apps/server/tests/test_skills.py`
 
 - [ ] **Step 1: Write failing test**
@@ -214,7 +214,7 @@ Expected: pass.
 ## Task 3: Build Read-Only Stale Skill Report
 
 **Files:**
-- Modify: `apps/server/ntrp/skills/service.py`
+- Modify: `apps/server/arden/skills/service.py`
 - Test: `apps/server/tests/test_skills.py`
 
 - [ ] **Step 1: Write failing test**
@@ -309,8 +309,8 @@ Expected: pass.
 ## Task 4: Expose Governance API
 
 **Files:**
-- Modify: `apps/server/ntrp/server/schemas.py`
-- Modify: `apps/server/ntrp/server/routers/skills.py`
+- Modify: `apps/server/arden/server/schemas.py`
+- Modify: `apps/server/arden/server/routers/skills.py`
 - Test: `apps/server/tests/test_skills.py`
 
 - [ ] **Step 1: Write router-level test**
@@ -320,8 +320,8 @@ Add to `apps/server/tests/test_skills.py`:
 ```python
 from fastapi.testclient import TestClient
 
-from ntrp.server.app import app
-from ntrp.server.deps import require_skill_service
+from arden.server.app import app
+from arden.server.deps import require_skill_service
 
 
 def test_skill_governance_endpoint_returns_report(tmp_path):
@@ -361,7 +361,7 @@ Expected: fail because the route is missing.
 
 - [ ] **Step 3: Add route**
 
-In `apps/server/ntrp/server/routers/skills.py`:
+In `apps/server/arden/server/routers/skills.py`:
 
 ```python
 @router.get("/governance")
@@ -403,7 +403,7 @@ Optional governance fields:
 | `version` | Version, date, commit, or release label reviewed by the user. |
 | `reviewed_at` | ISO date for the last human review. |
 
-`GET /skills/governance` returns inventory, validation issues, and cleanup candidates. Cleanup candidates are read-only recommendations; ntrp does not remove skills unless the user explicitly uses the remove action.
+`GET /skills/governance` returns inventory, validation issues, and cleanup candidates. Cleanup candidates are read-only recommendations; Arden does not remove skills unless the user explicitly uses the remove action.
 ```
 
 - [ ] **Step 2: Verify docs diff**
@@ -429,7 +429,7 @@ Expected: pass.
 - [ ] Run lint/diff checks.
 
 ```bash
-cd apps/server && uv run ruff check ntrp/skills/registry.py ntrp/skills/service.py ntrp/server/routers/skills.py ntrp/server/schemas.py
+cd apps/server && uv run ruff check arden/skills/registry.py arden/skills/service.py arden/server/routers/skills.py arden/server/schemas.py
 git diff --check
 ```
 

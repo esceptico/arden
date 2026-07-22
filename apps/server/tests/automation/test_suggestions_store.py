@@ -4,10 +4,10 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-import ntrp.database as database
-from ntrp.automation.store import AutomationStore
-from ntrp.automation.suggestions import AutomationSuggestion
-from ntrp.automation.triggers import EventTrigger, TimeTrigger
+import arden.database as database
+from arden.automation.store import AutomationStore
+from arden.automation.suggestions import AutomationSuggestion
+from arden.automation.triggers import EventTrigger, TimeTrigger
 
 
 @pytest_asyncio.fixture

@@ -1,4 +1,4 @@
-import type { NtrpIcon } from "@/components/icons";
+import type { ArdenIcon } from "@/components/icons";
 
 /** A palette entry. Either an executable leaf (`run`) or a folder
  *  (`children`) that opens a sub-view via breadcrumb drill-down. */
@@ -8,7 +8,7 @@ export interface CommandEntry {
   label: string;
   hint?: string;
   shortcut?: string;
-  icon: NtrpIcon;
+  icon: ArdenIcon;
   /** Leaf action. Mutually exclusive with `children`. */
   run?: () => void | Promise<void>;
   /** Folder. Returning a view defers entries until drilled into. */

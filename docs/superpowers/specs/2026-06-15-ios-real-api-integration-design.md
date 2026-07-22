@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-15
 **Status:** Approved (scope chosen: "everything real" + QR pairing)
-**Scope:** Connect the iOS app to the real ntrp FastAPI server — real chat,
+**Scope:** Connect the iOS app to the real arden FastAPI server — real chat,
 streaming, approvals, cancel, **real workflows/subagents**, **real automations**,
 and **QR/pairing** for the API key. Grounded in the API mapping in
 `tasks/wawvqdpqz` (server vs iOS client gap analysis).
@@ -15,7 +15,7 @@ exists). The mock-data toggle is **kept** as an offline/demo mode.
 ## Server API (verified, source of truth)
 
 - Auth: **Bearer token** (`Authorization: Bearer <key>`) on **every** endpoint
-  except `GET /health`. Key generated at `ntrp-server serve` (hash in
+  except `GET /health`. Key generated at `arden-server serve` (hash in
   `runtime.config.api_key_hash`). 401 if missing/blank.
 - REST: `GET /health`, `GET/POST /sessions`, `GET /session/history`,
   `POST /chat/message` → `{run_id}`, `GET /chat/events/{session_id}?stream=&after_seq=`
@@ -69,18 +69,18 @@ exists). The mock-data toggle is **kept** as an offline/demo mode.
   the desktop's event→workflow reducer shape. The real path appends these to the
   transcript instead of the mock trigger words.
 - Add `GET /chat/child-agents/{id}/result` (+`wait`) and `POST .../cancel` to
-  `NtrpAPIClient`; wire into `AgentDetailSheet`/`SubagentList` (final result +
+  `ArdenAPIClient`; wire into `AgentDetailSheet`/`SubagentList` (final result +
   cancel; deep trace via child `/session/history`).
 
 ### Phase 3 — Real automations (iOS)
 - Add automation REST calls (`server/routers/automation.py`: list/toggle/run) to
-  `NtrpAPIClient`; subscribe to the `__automation__` bus events
+  `ArdenAPIClient`; subscribe to the `__automation__` bus events
   (`automation_progress/finished/suggestions_updated`). `AutomationsView` reads
   real data in non-mock mode (keeps mock list in mock mode).
 
 ### Phase 4 — QR pairing (server + iOS)
-- **Server:** emit connection info as a QR / deep link `ntrp://connect?url=<lan>&key=<key>`
-  (a `ntrp-server pair` command or QR printed at `serve`; the plaintext key is
+- **Server:** emit connection info as a QR / deep link `arden://connect?url=<lan>&key=<key>`
+  (a `arden-server pair` command or QR printed at `serve`; the plaintext key is
   known at startup).
 - **iOS:** "Scan to connect" in Settings → camera (AVFoundation) scans the QR →
   parse the deep link → fill `serverURL` + `apiKey` → connect. Add
@@ -94,8 +94,8 @@ exists). The mock-data toggle is **kept** as an offline/demo mode.
 
 ## Verification
 - Each phase: `xcodebuild` compiles clean; iOS unit tests
-  (`Tests/NtrpCoreTests`) updated with real `task_*`/`workflow_*`/`background_task`
+  (`Tests/ArdenCoreTests`) updated with real `task_*`/`workflow_*`/`background_task`
   SSE fixtures.
-- End-to-end is **on-device** (user runs `uv run ntrp-server serve` with a real
+- End-to-end is **on-device** (user runs `uv run arden-server serve` with a real
   key): basic chat, a tool-approval run, a workflow/subagent-spawning prompt,
   automations, and QR pairing. The mock toggle stays for offline/demo.

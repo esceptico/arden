@@ -21,6 +21,6 @@ export function shouldShowLoadedSettingsContent({
 }
 
 export function settingsErrorMessage(error: string): string {
-  if (error === "Failed to fetch") return "Couldn't reach ntrp server.";
+  if (error === "Failed to fetch") return "Couldn't reach Arden server.";
   return error;
 }

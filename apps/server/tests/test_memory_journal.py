@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from ntrp.memory.journal import VaultJournal
+from arden.memory.journal import VaultJournal
 
 
 class InjectedFailure(RuntimeError):
@@ -46,12 +46,12 @@ def _read_pair(root: Path) -> tuple[bytes, bytes]:
 
 
 def _commit_id_on_disk(root: Path) -> str:
-    journal = root / ".ntrp" / "journal"
+    journal = root / ".arden" / "journal"
     if journal.is_dir():
         pending = list(journal.iterdir())
         if pending:
             return pending[0].name[:64]
-    versions = root / ".ntrp" / "versions"
+    versions = root / ".arden" / "versions"
     return next(versions.iterdir()).name[:64]
 
 
@@ -81,7 +81,7 @@ def _seed_v1_journal(
     }
     manifest_bytes = (json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n").encode()
     commit_id = hashlib.sha256(manifest_bytes).hexdigest()
-    commit_path = root / ".ntrp" / "journal" / commit_id
+    commit_path = root / ".arden" / "journal" / commit_id
     (commit_path / "staged").mkdir(parents=True)
     (commit_path / "backups").mkdir()
     (root / "me.md").write_bytes(target_content)
@@ -92,7 +92,7 @@ def _seed_v1_journal(
     if marker is not None:
         (commit_path / marker).write_bytes(b"")
     revision_value = commit_id if revision == "commit" else previous_revision
-    (root / ".ntrp" / "canonical-revision").write_text(revision_value + "\n", encoding="ascii")
+    (root / ".arden" / "canonical-revision").write_text(revision_value + "\n", encoding="ascii")
     return commit_id, previous_revision, commit_path
 
 
@@ -127,7 +127,7 @@ def test_v1_recovery_honors_legacy_decision_and_revision_state(
     expected_revision = commit_id if expected_revision_kind == "commit" else previous_revision
     assert VaultJournal(tmp_path).canonical_revision == expected_revision
     assert VaultJournal(tmp_path).recover() == ()
-    assert not (tmp_path / ".ntrp" / "journal").exists()
+    assert not (tmp_path / ".arden" / "journal").exists()
 
 
 def test_rollback_replacement_race_keeps_external_bytes_visible(tmp_path: Path, monkeypatch) -> None:
@@ -158,7 +158,7 @@ def test_rollback_replacement_race_keeps_external_bytes_visible(tmp_path: Path, 
 
     assert _read_pair(tmp_path) == (b"external", b"raw-old")
     assert VaultJournal(tmp_path).canonical_revision == ""
-    archived = next((tmp_path / ".ntrp" / "versions").iterdir())
+    archived = next((tmp_path / ".arden" / "versions").iterdir())
     assert (archived / "rejected" / "0000").read_bytes() == b"external"
     assert (archived / "markers" / "CONFLICT").exists()
     assert VaultJournal(tmp_path).recover() == ()
@@ -216,7 +216,7 @@ def test_rejected_external_inode_recovery_is_idempotent_at_every_boundary(
         VaultJournal(tmp_path).recover()
     assert _read_pair(tmp_path) == (b"external", b"raw-old")
     assert VaultJournal(tmp_path).canonical_revision == ""
-    archived = next((tmp_path / ".ntrp" / "versions").iterdir())
+    archived = next((tmp_path / ".arden" / "versions").iterdir())
     assert (archived / "rejected" / "0000").read_bytes() == b"external"
     assert archived.name.startswith(commit_id)
     assert (archived / "markers" / "CONFLICT").exists()
@@ -263,7 +263,7 @@ def test_rejected_candidate_inode_resumes_rollback_at_every_boundary(
     assert VaultJournal(tmp_path).recover() == (commit_id,)
     assert _read_pair(tmp_path) == (b"old", b"raw-old")
     assert VaultJournal(tmp_path).canonical_revision == ""
-    archived = next((tmp_path / ".ntrp" / "versions").iterdir())
+    archived = next((tmp_path / ".arden" / "versions").iterdir())
     assert (archived / "rejected" / "0000").read_bytes() == b"new"
     assert (archived / "markers" / "ROLLED_BACK").exists()
     assert not (archived / "markers" / "CONFLICT").exists()
@@ -288,7 +288,7 @@ def test_commit_preserves_an_external_atomic_replacement_at_finish_entry(tmp_pat
         journal.commit({Path("me.md"): b"candidate"}, expected_files={Path("me.md"): b"old"})
 
     assert target.read_bytes() == b"external"
-    versions = list((tmp_path / ".ntrp" / "versions").glob("*/"))
+    versions = list((tmp_path / ".arden" / "versions").glob("*/"))
     assert len(versions) == 1
     assert (versions[0] / "staged" / "0000").read_bytes() == b"candidate"
     assert (versions[0] / "displaced" / "0000").read_bytes() == b"external"
@@ -335,7 +335,7 @@ def test_late_open_descriptor_write_survives_in_displaced_version(tmp_path: Path
         journal.commit({Path("me.md"): b"candidate"}, expected_files={Path("me.md"): b"old"})
 
     assert target.read_bytes() == b"candidate"
-    versions = list((tmp_path / ".ntrp" / "versions").glob("*/displaced/0000"))
+    versions = list((tmp_path / ".arden" / "versions").glob("*/displaced/0000"))
     assert len(versions) == 1
     assert versions[0].read_bytes() == b"external-late"
 
@@ -357,7 +357,7 @@ def test_external_replacement_after_install_is_not_overwritten(tmp_path: Path, m
         journal.commit({Path("me.md"): b"candidate"}, expected_files={Path("me.md"): b"old"})
 
     assert target.read_bytes() == b"external"
-    archived = next((tmp_path / ".ntrp" / "versions").iterdir())
+    archived = next((tmp_path / ".arden" / "versions").iterdir())
     assert (archived / "staged" / "0000").read_bytes() == b"candidate"
     assert (archived / "displaced" / "0000").read_bytes() == b"old"
 
@@ -379,7 +379,7 @@ def test_external_replacement_in_move_link_gap_is_preserved(tmp_path: Path, monk
         journal.commit({Path("me.md"): b"candidate"}, expected_files={Path("me.md"): b"old"})
 
     assert target.read_bytes() == b"external"
-    archived = next((tmp_path / ".ntrp" / "versions").iterdir())
+    archived = next((tmp_path / ".arden" / "versions").iterdir())
     assert (archived / "staged" / "0000").read_bytes() == b"candidate"
     assert (archived / "displaced" / "0000").read_bytes() == b"old"
 
@@ -401,7 +401,7 @@ def test_external_replacement_after_commit_decision_remains_visible(tmp_path: Pa
 
     assert target.read_bytes() == b"external"
     assert journal.canonical_revision == revision
-    archived = tmp_path / ".ntrp" / "versions" / revision
+    archived = tmp_path / ".arden" / "versions" / revision
     assert (archived / "staged" / "0000").read_bytes() == b"candidate"
     assert (archived / "displaced" / "0000").read_bytes() == b"old"
 
@@ -445,7 +445,7 @@ def test_recovery_is_idempotent_at_publish_boundaries(
     assert _read_pair(tmp_path) == expected
     assert VaultJournal(tmp_path).canonical_revision == (commit_id if expected[0] == b"new" else "")
     assert VaultJournal(tmp_path).recover() == ()
-    assert not (tmp_path / ".ntrp" / "journal").exists()
+    assert not (tmp_path / ".arden" / "journal").exists()
 
 
 @pytest.mark.parametrize(
@@ -486,7 +486,7 @@ def test_recovery_handles_every_v2_marker_fsync_boundary(
 
     assert _read_pair(tmp_path) == expected
     assert VaultJournal(tmp_path).canonical_revision == (commit_id if expected[0] == b"new" else "")
-    archived = next((tmp_path / ".ntrp" / "versions").iterdir())
+    archived = next((tmp_path / ".arden" / "versions").iterdir())
     assert (archived / "markers" / marker).exists()
     assert VaultJournal(tmp_path).recover() == ()
 
@@ -551,7 +551,7 @@ def test_commit_survives_every_archive_boundary(tmp_path: Path, monkeypatch, fai
     assert _read_pair(tmp_path) == (b"new", b"raw-new")
     assert VaultJournal(tmp_path).canonical_revision == commit_id
     assert VaultJournal(tmp_path).recover() == ()
-    assert not (tmp_path / ".ntrp" / "journal").exists()
+    assert not (tmp_path / ".arden" / "journal").exists()
 
 
 @pytest.mark.parametrize(
@@ -592,7 +592,7 @@ def test_recovery_replays_every_rollback_marker_fsync_boundary(
     assert VaultJournal(tmp_path).recover() == (commit_id,)
     assert _read_pair(tmp_path) == (b"old", b"raw-old")
     assert VaultJournal(tmp_path).canonical_revision == ""
-    archived = next((tmp_path / ".ntrp" / "versions").iterdir())
+    archived = next((tmp_path / ".arden" / "versions").iterdir())
     assert (archived / "markers" / "ROLLED_BACK").exists()
     assert VaultJournal(tmp_path).recover() == ()
 
@@ -630,7 +630,7 @@ def test_recovery_replays_every_conflict_marker_fsync_boundary(
     assert VaultJournal(tmp_path).recover() == (commit_id,)
     assert target.read_bytes() == b"external"
     assert VaultJournal(tmp_path).canonical_revision == ""
-    archived = next((tmp_path / ".ntrp" / "versions").iterdir())
+    archived = next((tmp_path / ".arden" / "versions").iterdir())
     assert (archived / "markers" / "CONFLICT").exists()
     assert VaultJournal(tmp_path).recover() == ()
 
@@ -671,7 +671,7 @@ def test_unsupported_hard_links_fail_closed_before_displacement(tmp_path: Path, 
         VaultJournal(tmp_path).commit({Path("me.md"): b"candidate"})
 
     assert target.read_bytes() == b"old"
-    archived = next((tmp_path / ".ntrp" / "versions").iterdir())
+    archived = next((tmp_path / ".arden" / "versions").iterdir())
     assert (archived / "staged" / "0000").read_bytes() == b"candidate"
 
 
@@ -700,7 +700,7 @@ def test_recovery_never_leaves_a_mixed_file_set(tmp_path: Path, monkeypatch, fai
 
     assert len(recovered) == 1
     assert _read_pair(tmp_path) == expected
-    assert not (tmp_path / ".ntrp" / "journal").exists()
+    assert not (tmp_path / ".arden" / "journal").exists()
 
 
 def test_recovery_restores_all_backups_when_staged_content_is_invalid(tmp_path: Path, monkeypatch) -> None:
@@ -715,7 +715,7 @@ def test_recovery_restores_all_backups_when_staged_content_is_invalid(tmp_path: 
     with pytest.raises(InjectedFailure):
         journal.commit({Path("me.md"): b"new", Path("raw/me.md"): b"raw-new"})
 
-    commit_dir = next((tmp_path / ".ntrp" / "journal").iterdir())
+    commit_dir = next((tmp_path / ".arden" / "journal").iterdir())
     manifest = json.loads((commit_dir / "manifest.json").read_text(encoding="utf-8"))
     staged = commit_dir / manifest["files"][1]["staged"]
     staged.write_bytes(b"corrupt")
@@ -723,7 +723,7 @@ def test_recovery_restores_all_backups_when_staged_content_is_invalid(tmp_path: 
     VaultJournal(tmp_path).recover()
 
     assert _read_pair(tmp_path) == (b"old", b"raw-old")
-    assert not (tmp_path / ".ntrp" / "journal").exists()
+    assert not (tmp_path / ".arden" / "journal").exists()
 
 
 def test_projection_rollback_preserves_a_newer_canonical_revision(tmp_path: Path) -> None:
@@ -739,7 +739,7 @@ def test_projection_rollback_preserves_a_newer_canonical_revision(tmp_path: Path
 
     assert (tmp_path / "me.md").read_bytes() == b"old projection"
     assert VaultJournal(tmp_path).canonical_revision == newer
-    assert not (tmp_path / ".ntrp" / "journal").exists()
+    assert not (tmp_path / ".arden" / "journal").exists()
 
 
 def test_recovery_resumes_cleanup_after_a_completed_rollback(tmp_path: Path, monkeypatch) -> None:
@@ -753,7 +753,7 @@ def test_recovery_resumes_cleanup_after_a_completed_rollback(tmp_path: Path, mon
     monkeypatch.setattr(journal, "_checkpoint", inject)
     with pytest.raises(InjectedFailure):
         journal.commit({Path("me.md"): b"new", Path("raw/me.md"): b"raw-new"})
-    commit_dir = next((tmp_path / ".ntrp" / "journal").iterdir())
+    commit_dir = next((tmp_path / ".arden" / "journal").iterdir())
     manifest = json.loads((commit_dir / "manifest.json").read_text(encoding="utf-8"))
     (commit_dir / manifest["files"][1]["staged"]).write_bytes(b"corrupt")
 
@@ -772,7 +772,7 @@ def test_recovery_resumes_cleanup_after_a_completed_rollback(tmp_path: Path, mon
     monkeypatch.setattr(recovering, "_archive_commit", archive_commit)
     VaultJournal(tmp_path).recover()
     assert _read_pair(tmp_path) == (b"old", b"raw-old")
-    assert not (tmp_path / ".ntrp" / "journal").exists()
+    assert not (tmp_path / ".arden" / "journal").exists()
 
 
 def test_prepare_records_targets_artifacts_and_hashes_without_replacing_targets(tmp_path: Path) -> None:
@@ -826,7 +826,7 @@ def test_commit_rejects_intervening_change_to_expected_file(tmp_path: Path, monk
         )
 
     assert _read_pair(tmp_path) == (b"external", b"raw-old")
-    assert not (tmp_path / ".ntrp" / "journal").exists()
+    assert not (tmp_path / ".arden" / "journal").exists()
 
 
 @pytest.mark.parametrize("hostile", ["meta", "journal", "versions", "revision", "lock"])
@@ -837,9 +837,9 @@ def test_commit_rejects_symlinked_internal_journal_paths(tmp_path: Path, hostile
     target.write_bytes(b"old")
 
     if hostile == "meta":
-        (tmp_path / ".ntrp").symlink_to(outside, target_is_directory=True)
+        (tmp_path / ".arden").symlink_to(outside, target_is_directory=True)
     else:
-        meta = tmp_path / ".ntrp"
+        meta = tmp_path / ".arden"
         meta.mkdir()
         if hostile == "journal":
             (meta / "journal").symlink_to(outside, target_is_directory=True)
@@ -859,7 +859,7 @@ def test_commit_rejects_symlinked_internal_journal_paths(tmp_path: Path, hostile
 
 
 def test_recovery_rejects_a_symlinked_commit_directory(tmp_path: Path) -> None:
-    journal_root = tmp_path / ".ntrp" / "journal"
+    journal_root = tmp_path / ".arden" / "journal"
     journal_root.mkdir(parents=True)
     outside = tmp_path / "outside"
     outside.mkdir()

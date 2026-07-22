@@ -6,7 +6,7 @@ import type { Area, SessionListItem } from "@/api/types";
 const areas: Area[] = [
   {
     area_id: "p1",
-    name: "ntrp",
+    name: "arden",
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     default_cwd: "/repo",
@@ -27,7 +27,7 @@ const areas: Area[] = [
 ];
 
 const sessions: SessionListItem[] = [
-  session("s1", "ntrp bug", "p1"),
+  session("s1", "arden bug", "p1"),
   session("s2", "loose note", null),
   session("s3", "dex review", "p2"),
 ];
@@ -46,7 +46,7 @@ function opts(overrides: Partial<GroupOptions> = {}): GroupOptions {
 
 test("area grouping keeps inbox and area folders separate", () => {
   expect(groupSessions(areas, sessions, opts())).toEqual([
-    { key: "p1", label: "ntrp", area: areas[0], sessions: [sessions[0]] },
+    { key: "p1", label: "arden", area: areas[0], sessions: [sessions[0]] },
     { key: "p2", label: "dex", area: areas[1], sessions: [sessions[2]] },
     { key: "inbox", label: "Inbox", area: null, sessions: [sessions[1]] },
   ]);
@@ -55,7 +55,7 @@ test("area grouping keeps inbox and area folders separate", () => {
 test("empty area folders are dropped — a group earns its row through conversations", () => {
   // dex has no chats: no sidebar group (the area still lives on Home's strip).
   expect(groupSessions(areas, [sessions[0]], opts())).toEqual([
-    { key: "p1", label: "ntrp", area: areas[0], sessions: [sessions[0]] },
+    { key: "p1", label: "arden", area: areas[0], sessions: [sessions[0]] },
   ]);
 });
 
@@ -63,7 +63,7 @@ test("a filter drops empty area folders", () => {
   // unread filter that matches only s1 -> p2 (empty) should not appear
   const groups = groupSessions(areas, sessions, opts({ unreadOnly: true, unread: new Set(["s1"]) }));
   expect(groups).toEqual([
-    { key: "p1", label: "ntrp", area: areas[0], sessions: [sessions[0]] },
+    { key: "p1", label: "arden", area: areas[0], sessions: [sessions[0]] },
   ]);
 });
 

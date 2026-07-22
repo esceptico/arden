@@ -2,13 +2,13 @@ from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 
-from ntrp.context.models import SessionData, SessionState
-from ntrp.server.app import app
-from ntrp.server.bus import BusRegistry
-from ntrp.server.deps import get_bus_registry, require_session_service
-from ntrp.server.runtime import get_runtime
-from ntrp.server.state import RunRegistry, RunStatus
-from ntrp.tools.executor import ToolExecutor
+from arden.context.models import SessionData, SessionState
+from arden.server.app import app
+from arden.server.bus import BusRegistry
+from arden.server.deps import get_bus_registry, require_session_service
+from arden.server.runtime import get_runtime
+from arden.server.state import RunRegistry, RunStatus
+from arden.tools.executor import ToolExecutor
 
 
 def test_context_routes_are_registered():
@@ -164,7 +164,7 @@ def test_manual_compact_bypasses_auto_threshold(monkeypatch):
             "messages_compressed": 2,
         }
 
-    monkeypatch.setattr("ntrp.server.routers.context.compact_session", fake_compact_session)
+    monkeypatch.setattr("arden.server.routers.context.compact_session", fake_compact_session)
 
     app.dependency_overrides[get_runtime] = lambda: runtime
     app.dependency_overrides[require_session_service] = lambda: session_service

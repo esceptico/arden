@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Work in `/Users/escept1co/src/ntrp`; do not create a worktree.
+- Work in `/Users/escept1co/src/arden`; do not create a worktree.
 - Preserve unrelated dirty-worktree changes.
 - Surface colors and shadow recipes live only in `docs/mockups/board-surfaces.css`.
 - Keep exactly three visible live tool rows.

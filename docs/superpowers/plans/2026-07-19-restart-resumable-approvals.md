@@ -22,11 +22,11 @@
 ### Task 1: Make Approval and Execution Phases Durable
 
 **Files:**
-- Modify: `apps/server/ntrp/context/store.py`
-- Modify: `apps/server/ntrp/services/session.py`
-- Modify: `apps/server/ntrp/tools/core/context.py`
-- Modify: `apps/server/ntrp/tools/core/middleware.py`
-- Modify: `apps/server/ntrp/core/tool_executor.py`
+- Modify: `apps/server/arden/context/store.py`
+- Modify: `apps/server/arden/services/session.py`
+- Modify: `apps/server/arden/tools/core/context.py`
+- Modify: `apps/server/arden/tools/core/middleware.py`
+- Modify: `apps/server/arden/core/tool_executor.py`
 - Test: `apps/server/tests/test_session_store.py`
 - Test: `apps/server/tests/test_tools.py`
 
@@ -160,14 +160,14 @@ Expected: all selected tests pass.
 - [ ] **Step 6: Commit the persistence contract**
 
 ```bash
-git add apps/server/ntrp/context/store.py apps/server/ntrp/services/session.py apps/server/ntrp/tools/core/context.py apps/server/ntrp/tools/core/middleware.py apps/server/ntrp/core/tool_executor.py apps/server/tests/test_session_store.py apps/server/tests/test_tools.py
+git add apps/server/arden/context/store.py apps/server/arden/services/session.py apps/server/arden/tools/core/context.py apps/server/arden/tools/core/middleware.py apps/server/arden/core/tool_executor.py apps/server/tests/test_session_store.py apps/server/tests/test_tools.py
 git commit -m "feat: persist approval execution phases"
 ```
 
 ### Task 2: Checkpoint the Model Response Before Tool Dispatch
 
 **Files:**
-- Modify: `apps/server/ntrp/services/chat.py`
+- Modify: `apps/server/arden/services/chat.py`
 - Test: `apps/server/tests/test_streaming_events.py`
 
 **Interfaces:**
@@ -205,17 +205,17 @@ Expected: selected tests pass with one assistant message and unchanged SSE order
 - [ ] **Step 5: Commit the checkpoint boundary**
 
 ```bash
-git add apps/server/ntrp/services/chat.py apps/server/tests/test_streaming_events.py
+git add apps/server/arden/services/chat.py apps/server/tests/test_streaming_events.py
 git commit -m "feat: checkpoint tool calls before dispatch"
 ```
 
 ### Task 3: Rehydrate a Run Suspended at an Approval Gate
 
 **Files:**
-- Modify: `apps/server/ntrp/agent/agent.py`
-- Modify: `apps/server/ntrp/agent/llm/parsing.py`
-- Modify: `apps/server/ntrp/services/chat.py`
-- Modify: `apps/server/ntrp/server/state.py`
+- Modify: `apps/server/arden/agent/agent.py`
+- Modify: `apps/server/arden/agent/llm/parsing.py`
+- Modify: `apps/server/arden/services/chat.py`
+- Modify: `apps/server/arden/server/state.py`
 - Test: `apps/server/tests/test_agent_lib.py`
 - Test: `apps/server/tests/test_streaming_events.py`
 
@@ -263,17 +263,17 @@ Expected: all recovery tests pass.
 - [ ] **Step 7: Commit run rehydration**
 
 ```bash
-git add apps/server/ntrp/agent/agent.py apps/server/ntrp/agent/llm/parsing.py apps/server/ntrp/services/chat.py apps/server/ntrp/server/state.py apps/server/tests/test_agent_lib.py apps/server/tests/test_streaming_events.py
+git add apps/server/arden/agent/agent.py apps/server/arden/agent/llm/parsing.py apps/server/arden/services/chat.py apps/server/arden/server/state.py apps/server/tests/test_agent_lib.py apps/server/tests/test_streaming_events.py
 git commit -m "feat: resume approval-gated chat runs"
 ```
 
 ### Task 4: Wire Offline Approval Resolution to Safe Resume
 
 **Files:**
-- Modify: `apps/server/ntrp/context/store.py`
-- Modify: `apps/server/ntrp/server/routers/chat.py`
-- Modify: `apps/server/ntrp/server/stores.py`
-- Modify: `apps/server/ntrp/server/runtime/core.py`
+- Modify: `apps/server/arden/context/store.py`
+- Modify: `apps/server/arden/server/routers/chat.py`
+- Modify: `apps/server/arden/server/stores.py`
+- Modify: `apps/server/arden/server/runtime/core.py`
 - Test: `apps/server/tests/test_chat_inject.py`
 - Test: `apps/server/tests/test_session_store.py`
 
@@ -321,7 +321,7 @@ Expected: all tests pass, including existing live-Future approval behavior.
 - [ ] **Step 6: Commit recovery orchestration**
 
 ```bash
-git add apps/server/ntrp/context/store.py apps/server/ntrp/server/routers/chat.py apps/server/ntrp/server/stores.py apps/server/ntrp/server/runtime/core.py apps/server/tests/test_chat_inject.py apps/server/tests/test_session_store.py
+git add apps/server/arden/context/store.py apps/server/arden/server/routers/chat.py apps/server/arden/server/stores.py apps/server/arden/server/runtime/core.py apps/server/tests/test_chat_inject.py apps/server/tests/test_session_store.py
 git commit -m "feat: resume offline approval decisions"
 ```
 
@@ -329,7 +329,7 @@ git commit -m "feat: resume offline approval decisions"
 
 **Files:**
 - Create: `apps/server/tests/test_chat_approval_recovery.py`
-- Modify: `apps/server/ntrp/integrations/README.md`
+- Modify: `apps/server/arden/integrations/README.md`
 
 **Interfaces:**
 - Verifies the complete contract from Tasks 1-4.
@@ -366,7 +366,7 @@ Expected: all server tests pass.
 - [ ] **Step 5: Commit verification and documentation**
 
 ```bash
-git add apps/server/tests/test_chat_approval_recovery.py apps/server/ntrp/integrations/README.md
+git add apps/server/tests/test_chat_approval_recovery.py apps/server/arden/integrations/README.md
 git commit -m "test: verify approval recovery crash safety"
 ```
 

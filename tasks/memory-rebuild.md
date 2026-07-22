@@ -1,4 +1,4 @@
-# NTRP Memory Rebuild — Build Plan
+# ARDEN Memory Rebuild — Build Plan
 
 Design source of truth: `~/vault/Memory Consolidation/Memory — vision (new spec).md` + `Lens — spec.md` (+ `_grounding (validated).md`, `_devils-advocate.md`).
 Branch: `feature/memory-rebuild` (NOT main). Orchestration: `/workflows`, **stage-by-stage** — commit + user review between stages.
@@ -7,10 +7,10 @@ Hard rules: server stays bootable after each commit; ruff + pytest green per sta
 ## Stage 0 — Prep (main loop, not a workflow)
 - [ ] Create `feature/memory-rebuild` branch.
 - [ ] **(USER) stop the server.**
-- [ ] Backup `~/.ntrp/memory.db` once → `.bak-rebuild-<ts>`, then drop/delete it (start empty). Backups remain the replay/eval corpus.
+- [ ] Backup `~/.arden/memory.db` once → `.bak-rebuild-<ts>`, then drop/delete it (start empty). Backups remain the replay/eval corpus.
 
 ## Stage 1 — Strip old memory (workflow: map → remove → verify-boot) → commit
-- Fan-out: impact-map who imports `apps/server/ntrp/memory/*` (runtime/knowledge.py, routers admin_memory + learnings, agent-loop injection/activation, memory tools, tests).
+- Fan-out: impact-map who imports `apps/server/arden/memory/*` (runtime/knowledge.py, routers admin_memory + learnings, agent-loop injection/activation, memory tools, tests).
 - Remove memory internals: `episodes, items_store, lenses, lens_pass, lens_author, activation, pattern_finder, contradictions, learnings, skill_inducer, buffers_store, runtime, retrieval, models, store/, connectors/*`.
 - Cut/stub all call sites so the server still imports & boots. Delete `tests/memory/`.
 - Verify: server boots, ruff clean, pytest collects/green. Commit: "strip memory to bare".

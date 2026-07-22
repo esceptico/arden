@@ -7,14 +7,14 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-import ntrp.database as database
-from ntrp.constants import RAW_TOOL_RESULT_INLINE_MAX_BYTES
-from ntrp.context.models import SessionState
-from ntrp.context.store import SessionStore
-from ntrp.core.raw_tool_results import RAW_TOOL_RESULT_DATA_KEY, persist_raw_tool_result
-from ntrp.events.sse import ThinkingEvent, ToolCallResultEvent
-from ntrp.server.bus import StreamRecord
-from ntrp.services.session import SessionService
+import arden.database as database
+from arden.constants import RAW_TOOL_RESULT_INLINE_MAX_BYTES
+from arden.context.models import SessionState
+from arden.context.store import SessionStore
+from arden.core.raw_tool_results import RAW_TOOL_RESULT_DATA_KEY, persist_raw_tool_result
+from arden.events.sse import ThinkingEvent, ToolCallResultEvent
+from arden.server.bus import StreamRecord
+from arden.services.session import SessionService
 
 
 @pytest_asyncio.fixture
@@ -39,14 +39,14 @@ def _make_state(session_id: str = "test-session", name: str | None = None) -> Se
 @pytest.mark.asyncio
 async def test_area_round_trip_and_session_scoping(store: SessionStore):
     area = await store.create_area(
-        name="ntrp",
-        default_cwd=" /Users/me/src/ntrp ",
+        name="arden",
+        default_cwd=" /Users/me/src/arden ",
         instructions="Prefer small focused changes.",
     )
 
     assert area["area_id"].startswith("area_")
-    assert area["name"] == "ntrp"
-    assert area["default_cwd"] == "/Users/me/src/ntrp"
+    assert area["name"] == "arden"
+    assert area["default_cwd"] == "/Users/me/src/arden"
     assert area["instructions"] == "Prefer small focused changes."
     assert area["knowledge_scope"] == f"area:{area['area_id']}"
 
@@ -2185,7 +2185,7 @@ async def test_channel_session_type_and_origin_roundtrip(store: SessionStore):
 
 @pytest.mark.asyncio
 async def test_agent_session_parent_metadata_roundtrip(store: SessionStore):
-    area = await store.create_area(name="ntrp")
+    area = await store.create_area(name="arden")
     state = SessionState(
         session_id="parent::agent",
         started_at=datetime.now(UTC),

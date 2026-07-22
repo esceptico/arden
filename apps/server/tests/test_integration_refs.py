@@ -2,9 +2,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from ntrp.integrations.calendar.client import MultiCalendarSource
-from ntrp.integrations.gmail.client import MultiGmailSource
-from ntrp.integrations.slack.client import SlackClient
+from arden.integrations.calendar.client import MultiCalendarSource
+from arden.integrations.gmail.client import MultiGmailSource
+from arden.integrations.slack.client import SlackClient
 
 
 def test_gmail_qualified_ref_reads_only_named_account():

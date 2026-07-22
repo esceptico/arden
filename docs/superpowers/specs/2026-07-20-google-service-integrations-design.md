@@ -18,7 +18,7 @@ Each service can be connected or disconnected for each Google account. The share
 
 Google combines OAuth grants for the same user and API project, and revocation invalidates all scopes granted to that project. Therefore:
 
-- **Disconnect service** removes ntrp's local service binding and immediately removes that integration's tools. It does not call Google's project-wide revoke endpoint.
+- **Disconnect service** removes Arden's local service binding and immediately removes that integration's tools. It does not call Google's project-wide revoke endpoint.
 - **Remove Google account** revokes the Google grant and deletes every local binding/token for that account.
 - The UI explains this distinction instead of implying that one Google scope can be revoked independently.
 
@@ -28,7 +28,7 @@ This follows Google's incremental-authorization and revocation model: <https://d
 
 ### Canonical account store
 
-Replace filename discovery as the source of truth with a `GoogleAccountStore` under `ntrp/integrations/google_auth/`. It owns:
+Replace filename discovery as the source of truth with a `GoogleAccountStore` under `arden/integrations/google_auth/`. It owns:
 
 - stable account ID and display email;
 - one credential file per account, protected by user-only filesystem permissions;
@@ -46,11 +46,11 @@ Service scopes:
 
 - Gmail: existing Gmail read/send scopes and Pub/Sub only when notifier setup needs it.
 - Calendar: existing Calendar scope.
-- Drive: `drive.metadata.readonly` for discovery, `documents` for Docs, and `spreadsheets` for Sheets. Use `drive.file` for files created or explicitly selected through ntrp where supported.
+- Drive: `drive.metadata.readonly` for discovery, `documents` for Docs, and `spreadsheets` for Sheets. Use `drive.file` for files created or explicitly selected through arden where supported.
 
 The Drive setup assistant warns that broad metadata access is a restricted Drive scope and identifies the Drive, Docs, and Sheets APIs that must be enabled. Google recommends narrow `drive.file` access, but it cannot provide autonomous search across all existing files: <https://developers.google.com/workspace/drive/api/guides/api-specific-auth>.
 
-After OAuth, ntrp checks the scopes Google actually granted. Missing scopes produce the existing typed `scope_required` state.
+After OAuth, arden checks the scopes Google actually granted. Missing scopes produce the existing typed `scope_required` state.
 
 ### Server API
 
@@ -80,7 +80,7 @@ Their `configured` callbacks query service bindings from `GoogleAccountStore`; t
 
 ## Google Drive client
 
-Add `ntrp/integrations/google_drive/` with a multi-account client. It builds Drive v3, Docs v1, and Sheets v4 clients from explicitly bound accounts.
+Add `arden/integrations/google_drive/` with a multi-account client. It builds Drive v3, Docs v1, and Sheets v4 clients from explicitly bound accounts.
 
 All file identities are account-qualified (`account_id:file_id`) so duplicate IDs or multiple Google accounts cannot resolve ambiguously. Search results include stable source references, title, MIME kind, modified time, account, and `webViewLink`.
 

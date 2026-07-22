@@ -4,8 +4,8 @@ coalescing with budget/pause gating, and the ignored-asks attention signal."""
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from ntrp.areas.custodian import EVENT_WAKE_DEBOUNCE_MINUTES, CustodianStore
-from ntrp.constants import AREA_ATTENTION_PRESETS
+from arden.areas.custodian import EVENT_WAKE_DEBOUNCE_MINUTES, CustodianStore
+from arden.constants import AREA_ATTENTION_PRESETS
 
 NOW = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
 

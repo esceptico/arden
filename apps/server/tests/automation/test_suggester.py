@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from ntrp.automation.suggestions import (
+from arden.automation.suggestions import (
     AutomationSuggester,
     ScheduleDraft,
     SuggestionDraft,
@@ -25,12 +25,12 @@ class StubCheapLLM:
 
 class StubRecords:
     async def list(self, *, pinned_only=False, limit=30):
-        return [SimpleNamespace(kind="action", text="User reviews ntrp PRs each morning")]
+        return [SimpleNamespace(kind="action", text="User reviews arden PRs each morning")]
 
 
 class StubSessions:
     async def list_sessions(self, limit=20):
-        return [{"name": "ntrp work"}]
+        return [{"name": "arden work"}]
 
 
 class StubAutomations:
@@ -71,9 +71,7 @@ def _invalid_draft() -> SuggestionDraft:
 
 
 async def test_run_drops_invalid_and_persists_valid():
-    suggestion_set = SuggestionSet(
-        suggestions=[_valid_draft("digest-a"), _invalid_draft(), _valid_draft("digest-b")]
-    )
+    suggestion_set = SuggestionSet(suggestions=[_valid_draft("digest-a"), _invalid_draft(), _valid_draft("digest-b")])
     cheap_llm = StubCheapLLM(suggestion_set)
     automations = StubAutomations()
 

@@ -5,7 +5,7 @@ description: "Use OpenRouter, Ollama, vLLM, or any OpenAI-compatible endpoint."
 
 ## Overview
 
-ntrp supports any OpenAI-compatible API endpoint. Register custom models via `~/.ntrp/models.json` or the `/add-model` skill.
+Arden supports any OpenAI-compatible API endpoint. Register custom models via `~/.arden/models.json` or the `/add-model` skill.
 
 Built-in providers cover Anthropic, OpenAI API keys, OpenAI account sign-in through the Codex endpoint, Google Gemini, and OpenRouter.
 
@@ -13,8 +13,8 @@ Built-in providers cover Anthropic, OpenAI API keys, OpenAI account sign-in thro
 
 If you have an OpenAI subscription/account and do not want to use an API key, connect **OpenAI Codex** from provider onboarding, `/connect`, or `/settings`.
 
-- ntrp opens the OpenAI browser authorization flow.
-- Tokens are stored locally at `~/.ntrp/openai-codex-auth.json`.
+- Arden opens the OpenAI browser authorization flow.
+- Tokens are stored locally at `~/.arden/openai-codex-auth.json`.
 - Default chat model: `openai-codex/gpt-5.5`.
 - Default memory model: `openai-codex/gpt-5.4-mini`.
 - Tool-using reasoning calls use the Responses API shape internally (`reasoning: { effort: ... }`) so GPT reasoning models can call tools without hitting Chat Completions compatibility limits.
@@ -23,7 +23,7 @@ Use the regular **OpenAI** provider instead when you want API-key billing, embed
 
 ## models.json
 
-Create `~/.ntrp/models.json` with model IDs as top-level keys:
+Create `~/.arden/models.json` with model IDs as top-level keys:
 
 ```json
 {
@@ -64,7 +64,7 @@ Create `~/.ntrp/models.json` with model IDs as top-level keys:
 After adding to `models.json`, set the model in your environment or settings:
 
 ```bash
-export NTRP_CHAT_MODEL=deepseek-r1
+export ARDEN_CHAT_MODEL=deepseek-r1
 ```
 
 Or change it in the desktop client via `/settings`.

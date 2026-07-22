@@ -119,7 +119,7 @@ export async function cancelQueuedMessageApi(
   clientId: string,
 ): Promise<CancelQueuedResult> {
   const path = `/chat/inject/${encodeURIComponent(clientId)}?session_id=${encodeURIComponent(sessionId)}`;
-  const desktopApi = window.ntrpDesktop?.api;
+  const desktopApi = window.ardenDesktop?.api;
   let status: number;
   if (desktopApi) {
     const response = await desktopApi.request(config, { path, method: "DELETE" });

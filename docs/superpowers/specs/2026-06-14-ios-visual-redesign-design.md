@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-14
 **Status:** Approved (direction chosen from 3 rendered mockups)
-**Scope:** Pure visual/UX redesign of the existing iOS app (`apps/ios/ntrp`). No
+**Scope:** Pure visual/UX redesign of the existing iOS app (`apps/ios/arden`). No
 API, networking, store logic, or model changes. The fake/mock data path is what
 renders during this work, so mock content is updated to match the design.
 
@@ -12,7 +12,7 @@ Reference mockup: `designs/ios/direction-b-neutral.html` (the binding visual con
 
 ## 1. Why
 
-The current app applies iOS-26 Liquid Glass (`glassEffect`/`ntrpGlass`) to every
+The current app applies iOS-26 Liquid Glass (`glassEffect`/`ardenGlass`) to every
 surface — top bar, every message bubble, tool rows, activity pills, composer,
 send button, model pill, session cards, settings groups, approval card. The
 reference Claude/Codex iOS apps use **zero glass on content**; the only
@@ -29,7 +29,7 @@ primary pill.
 
 ## 2. Design tokens (the contract)
 
-Implemented in a new `Support/NtrpTheme.swift` as semantic `Color`s that adapt
+Implemented in a new `Support/ArdenTheme.swift` as semantic `Color`s that adapt
 automatically light/dark via a dynamic `UIColor` provider (no asset catalog
 needed). Hex values are taken verbatim from the mockup `:root` / `.screen.dark`.
 
@@ -98,7 +98,7 @@ horizontal margin 16–20. One accent only; the dark pill is the single bold ele
   calls `cancelRun()`.
 
 ### SessionListView (drawer/sheet)
-- Flat list on `canvas` (no giant glass card). Header row: `NTRP` wordmark (24pt
+- Flat list on `canvas` (no giant glass card). Header row: `ARDEN` wordmark (24pt
   bold) + circular `pill` avatar with user initials.
 - Sessions rendered as flat rows (radius 10): leading glyph (accent filled dot
   when `activeRunID != nil`, else outline bubble), title 16pt, mono meta
@@ -124,15 +124,15 @@ horizontal margin 16–20. One accent only; the dark pill is the single bold ele
   button. No glass.
 
 ### App / Root
-- `NtrpMobileApp`: `.tint(Theme.accent)` instead of `.blue`.
+- `ArdenMobileApp`: `.tint(Theme.accent)` instead of `.blue`.
 
 ---
 
 ## 4. Mock data (renders during this work)
 
-Update `Core/MockNtrpData.swift` so the running app matches the mockup content:
+Update `Core/MockArdenData.swift` so the running app matches the mockup content:
 sessions `IRF540N slayer excitor circuit` (active run + 1 to approve, 34 msgs),
-`NTRP project overview` (12), `Xcode incompatibility after macOS update` (8),
+`ARDEN project overview` (12), `Xcode incompatibility after macOS update` (8),
 `Cold outreach message feedback` (21), `Rephrasing a startup tweet` (6),
 `Job security comparison: US vs EU` (15). Transcripts use the realistic
 electronics/agent content from the mockup; assistant label `opus 4.8 · high`;
@@ -142,22 +142,22 @@ subtitle host `macbook.local`; composer model `Opus 4.8 · High`.
 
 ## 5. Files
 
-- **New:** `Support/NtrpTheme.swift` (tokens, `Color(hex:)`, dynamic provider,
+- **New:** `Support/ArdenTheme.swift` (tokens, `Color(hex:)`, dynamic provider,
   mono helper, `PressScaleButtonStyle`, `Hairline`, shared icon-button + send
   primitives).
-- **Remove/replace:** `Support/NtrpGlass.swift` (glass helpers deleted; keep
-  `PressScaleButtonStyle` by moving it into `NtrpTheme.swift`).
+- **Remove/replace:** `Support/ArdenGlass.swift` (glass helpers deleted; keep
+  `PressScaleButtonStyle` by moving it into `ArdenTheme.swift`).
 - **Rewrite:** `Views/ChatView.swift`, `Views/SessionListView.swift`,
   `Views/SettingsView.swift`, `Views/ApprovalCard.swift`.
-- **Edit:** `App/NtrpMobileApp.swift` (tint), `Core/MockNtrpData.swift` (content).
-- No changes to `Store/`, `Core/Ntrp*Client`, `SSEParser`, `MobileTranscript`,
+- **Edit:** `App/ArdenMobileApp.swift` (tint), `Core/MockArdenData.swift` (content).
+- No changes to `Store/`, `Core/Arden*Client`, `SSEParser`, `MobileTranscript`,
   or models beyond what's listed.
 
 ---
 
 ## 6. Verification
 
-1. `xcodebuild -project apps/ios/ntrp/ntrp.xcodeproj -scheme ntrp -destination
+1. `xcodebuild -project apps/ios/arden/Arden.xcodeproj -scheme arden -destination
    'platform=iOS Simulator,name=iPhone 16 Pro' CODE_SIGNING_ALLOWED=NO build`
    compiles clean.
 2. Boot the simulator, install, launch in mock mode.

@@ -108,7 +108,7 @@ test("decision radios support roving keyboard traversal with no default", async 
   expect(host.querySelector<HTMLButtonElement>('button[aria-label="Apply changes"]')?.disabled).toBe(false);
 });
 
-test("exposes rendered and raw modes with ntrp split and stacked layout inputs", async () => {
+test("exposes rendered and raw modes with arden split and stacked layout inputs", async () => {
   const { host, root } = setup();
   await act(async () => root.render(
     <DiffReview {...files} operations={[]} decisions={{}} onDecision={() => {}} layout="split" />,
@@ -187,11 +187,11 @@ test("rendered mode uses the real Markdown pipeline for rich block semantics", a
     "#### Heading four", "##### Heading five", "###### Heading six",
     "", "1. First", "2. Second", "",
     "[Source](https://example.com/source)", "",
-    "| Name | State |", "| --- | --- |", "| ntrp | old |", "",
+    "| Name | State |", "| --- | --- |", "| arden | old |", "",
     "```ts", "const state = 'old';", "```", "",
     "![Diagram](https://example.com/diagram.png)",
   ].join("\n");
-  const after = before.replace("| ntrp | old |", "| ntrp | new |").replace("'old'", "'new'");
+  const after = before.replace("| arden | old |", "| arden | new |").replace("'old'", "'new'");
   const { host, root } = setup();
   await act(async () => root.render(
     <DiffReview

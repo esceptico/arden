@@ -8,8 +8,8 @@ from mcp.types import (
     TextResourceContents,
 )
 
-from ntrp.core.raw_tool_results import RAW_TOOL_RESULT_DATA_KEY, read_raw_tool_result
-from ntrp.mcp import results as mcp_results
+from arden.core.raw_tool_results import RAW_TOOL_RESULT_DATA_KEY, read_raw_tool_result
+from arden.mcp import results as mcp_results
 
 
 def _adapt(result: CallToolResult):
@@ -110,9 +110,7 @@ def test_large_structured_payload_is_bounded_and_durably_retrievable():
 
 
 def test_large_media_payload_is_bounded_and_not_inlined_to_model():
-    result = _adapt(
-        CallToolResult(content=[ImageContent(type="image", data="x" * 100_000, mimeType="image/png")])
-    )
+    result = _adapt(CallToolResult(content=[ImageContent(type="image", data="x" * 100_000, mimeType="image/png")]))
 
     assert result.data["truncated"] is True
     assert result.model_content == ()
@@ -303,9 +301,7 @@ def test_canonical_mcp_sources_use_ids_when_titles_are_blank():
 def test_mcp_extraction_ignores_nested_or_inexact_contracts():
     nested = CallToolResult(
         content=[],
-        structuredContent={
-            "wrapper": {"results": [{"id": "x", "title": "Hidden", "url": "https://ignored.test"}]}
-        },
+        structuredContent={"wrapper": {"results": [{"id": "x", "title": "Hidden", "url": "https://ignored.test"}]}},
     )
     inexact_name = CallToolResult(
         content=[],

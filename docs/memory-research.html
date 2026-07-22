@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NTRP Memory — Research & Redesign</title>
+<title>ARDEN Memory — Research & Redesign</title>
 <style>
   :root{
     --bg:#0c0e12; --bg2:#11141a; --panel:#151922; --panel2:#1a1f2b;
@@ -109,11 +109,11 @@
 <header class="hero">
   <div class="wrap">
     <p class="eyebrow">Research dossier · personal memory systems</p>
-    <h1>Building NTRP's memory like the field actually builds it
+    <h1>Building ARDEN's memory like the field actually builds it
       <span class="sub">A survey of dex / Karpathy-wiki, Vercel Eve, Letta·MemGPT, Mem0, Zep, the commercial note-stores, the academic canon, and continual-learning-in-token-space — then a concrete redesign for a generic, file-based, self-evolving personal memory.</span>
     </h1>
     <div class="meta">
-      <span><b>Prepared for</b> Tim · NTRP</span>
+      <span><b>Prepared for</b> Tim · ARDEN</span>
       <span><b>Date</b> 2026-06-21</span>
       <span><b>Method</b> 19-agent research workflow · 1.88M tokens · 124 sources</span>
       <span><b>Scope</b> storage · maintenance flows · retrieval · evolution</span>
@@ -129,7 +129,7 @@
     <a href="#dives">System deep-dives</a>
     <a href="#continual">Continual learning</a>
     <a href="#maint">Maintenance patterns</a>
-    <a href="#ntrp">NTRP today</a>
+    <a href="#arden">ARDEN today</a>
     <a href="#gaps">Gaps</a>
     <a href="#proposals">Three proposals</a>
     <a href="#rec">Recommendation</a>
@@ -145,7 +145,7 @@
 <section id="tldr">
   <div class="wrap">
     <h2><span class="n">00</span>The one-screen version</h2>
-    <p class="lead">The field has quietly converged, and NTRP is already on the right side of the biggest decision — but it has built the wrong half well and left the right half as dead code.</p>
+    <p class="lead">The field has quietly converged, and ARDEN is already on the right side of the biggest decision — but it has built the wrong half well and left the right half as dead code.</p>
 
     <div class="grid2" style="margin-top:22px">
       <div class="card">
@@ -158,7 +158,7 @@
         </ul>
       </div>
       <div class="card">
-        <h4 style="color:var(--warn)">Where NTRP actually stands</h4>
+        <h4 style="color:var(--warn)">Where ARDEN actually stands</h4>
         <ul style="margin:0;padding-left:18px">
           <li><strong>Ahead on "generic, not CRM."</strong> One flat <code>directive|fact|source</code> pool with open-vocabulary labels — subjects (<em>Bicycles, MATS, Wife, Health</em>) emerge bottom-up. <strong>Strictly better than dex/gbrain</strong>, which must swap a schema-pack to escape person/company.</li>
           <li><strong>Behind on what you care about most.</strong> The maintenance "brain" is <em>spec'd in dead constants</em>: <code>REFLECTION</code>, <code>RETENTION</code>, <code>HEALTH</code>, <code>PROFILE_REFRESH</code> are defined and <strong>zero are wired</strong>. There is <strong>no cross-domain dreaming</strong>, no forgetting, no health surface.</li>
@@ -212,7 +212,7 @@
           <text x="620" y="204" fill="#5fd39a" font-size="11.5">user can read &amp; correct directly</text>
           <rect x="600" y="222" width="340" height="64" rx="9" fill="#13231b" stroke="#234a36"/>
           <text x="620" y="244">Append-then-compress wiki + thin index</text>
-          <text x="620" y="264" fill="#aab4c4" font-size="11.5">Karpathy LLM-Wiki · gbrain · dex · NTRP</text>
+          <text x="620" y="264" fill="#aab4c4" font-size="11.5">Karpathy LLM-Wiki · gbrain · dex · ARDEN</text>
           <text x="620" y="280" fill="#5fd39a" font-size="11.5">vector index = throwaway, rebuildable</text>
         </g>
         <!-- bottom band: the real product -->
@@ -264,11 +264,11 @@
           <tr><td>Zep / Graphiti</td><td>bi-temporal knowledge graph</td><td class="no">Neo4j graph</td><td class="no">entity/edge schema</td><td class="yes">online per-episode</td><td class="yes">temporal invalidation</td><td class="part">community summaries</td></tr>
           <tr><td>ChatGPT / Claude / Cursor</td><td>profile + notes / files</td><td class="part">varies</td><td class="part">mostly generic</td><td class="part">inline-prompt, no job</td><td class="part">Copilot 28-day TTL</td><td class="no">no</td></tr>
           <tr><td>Generative Agents (Stanford)</td><td>append-only memory stream</td><td class="yes">flat NL stream</td><td class="yes">no schema</td><td class="yes">importance-gated reflection</td><td class="part">recency decay in ranking</td><td class="yes">reflection tree</td></tr>
-          <tr><td><strong>NTRP (today)</strong></td><td>SQLite + vector + md projection</td><td class="no">SQLite (3 stores)</td><td class="yes">flat typed pool + labels</td><td class="part">curator + consolidate only</td><td class="no">supersede+prune only</td><td class="no">dead code</td></tr>
+          <tr><td><strong>ARDEN (today)</strong></td><td>SQLite + vector + md projection</td><td class="no">SQLite (3 stores)</td><td class="yes">flat typed pool + labels</td><td class="part">curator + consolidate only</td><td class="no">supersede+prune only</td><td class="no">dead code</td></tr>
         </tbody>
       </table>
     </div>
-    <p style="font-size:13px;color:var(--ink3)">* getdex hard-codes person fields ("How you met / Family / Gift Ideas"); gbrain ships a swappable 15-type schema-pack with a <code>schema detect</code> clusterer — generic-<em>capable</em> but generic-<em>by-config</em>, not by default. NTRP is generic <em>by construction</em>.</p>
+    <p style="font-size:13px;color:var(--ink3)">* getdex hard-codes person fields ("How you met / Family / Gift Ideas"); gbrain ships a swappable 15-type schema-pack with a <code>schema detect</code> clusterer — generic-<em>capable</em> but generic-<em>by-config</em>, not by default. ARDEN is generic <em>by construction</em>.</p>
   </div>
 </section>
 
@@ -285,11 +285,11 @@
       <ul>
         <li><strong>getdex.com</strong> — a literal personal CRM with hard-coded person fields. This is the rigidity you dislike.</li>
         <li><strong>davekilleen/Dex</strong> — a PARA-folder markdown "AI Chief of Staff."</li>
-        <li><strong>gbrain (Garry Tan, open-source)</strong> — the deepest, most generic implementation: 146K+ pages, a swappable type taxonomy, an overnight dream cycle, and the <code>(record:id)</code>-style provenance NTRP already borrowed.</li>
+        <li><strong>gbrain (Garry Tan, open-source)</strong> — the deepest, most generic implementation: 146K+ pages, a swappable type taxonomy, an overnight dream cycle, and the <code>(record:id)</code>-style provenance ARDEN already borrowed.</li>
       </ul>
       <p><strong>The page format (gbrain) — adopt this.</strong> Each entity = one living page with a stable slug-id. Two zones: <strong>compiled truth above the line</strong> (synthesized prose) and an <strong>append-only dated timeline below</strong> (<code>- YYYY-MM-DD | Source — summary</code>). Every fact carries inline provenance (<code>[Source: User, …]</code> / <code>[Source: url]</code> / <code>[Source: compiled from …]</code>) with a precedence ladder: <em>user &gt; compiled &gt; timeline &gt; external API</em>. Beliefs are split from facts into a fenced "takes" table where each row names a <em>holder</em> and a weight.</p>
-      <p><strong>What makes it CRM-ish vs generic.</strong> The smell is presuming a fixed entity taxonomy centered on people &amp; companies, with relationship-management sections ("What They Believe", "Open Threads"). gbrain's escape hatch is <code>schema detect/suggest</code> — cluster the actual filesystem and let types <em>emerge</em>. NTRP already does this one better: no taxonomy at all, just open-vocabulary labels.</p>
-      <p><strong>The dream cycle (the part you care about) — "the most important cron job, NOT optional."</strong> Nightly at 02:00, 8 phases: lint → backlinks → sync → <strong>synthesize</strong> → extract → <strong>patterns</strong> → embed → orphans. A cheap Haiku "is this worth processing?" verdict filters routine sessions before a Sonnet subagent writes reflections; the PATTERNS pass writes a pattern page only when ≥3 reflections support it. Safety throttles directly transferable to NTRP: <code>cooldown_hours</code>, content-hash idempotency, an <code>exclude_patterns</code> pre-LLM filter (medical/therapy), a write <strong>allow-list</strong> of slug prefixes, and a per-run <code>--max-usd</code> cost cap.</p>
+      <p><strong>What makes it CRM-ish vs generic.</strong> The smell is presuming a fixed entity taxonomy centered on people &amp; companies, with relationship-management sections ("What They Believe", "Open Threads"). gbrain's escape hatch is <code>schema detect/suggest</code> — cluster the actual filesystem and let types <em>emerge</em>. ARDEN already does this one better: no taxonomy at all, just open-vocabulary labels.</p>
+      <p><strong>The dream cycle (the part you care about) — "the most important cron job, NOT optional."</strong> Nightly at 02:00, 8 phases: lint → backlinks → sync → <strong>synthesize</strong> → extract → <strong>patterns</strong> → embed → orphans. A cheap Haiku "is this worth processing?" verdict filters routine sessions before a Sonnet subagent writes reflections; the PATTERNS pass writes a pattern page only when ≥3 reflections support it. Safety throttles directly transferable to ARDEN: <code>cooldown_hours</code>, content-hash idempotency, an <code>exclude_patterns</code> pre-LLM filter (medical/therapy), a write <strong>allow-list</strong> of slug prefixes, and a per-run <code>--max-usd</code> cost cap.</p>
       <p><strong>Forgetting</strong> uses two orthogonal axes: <em>salience</em> (mattering, time-free) and <em>recency</em> (per-prefix decay; concepts evergreen, daily/chat decay fast) — Ebbinghaus-style, reset on access.</p>
     </details>
 
@@ -304,18 +304,18 @@
       <summary>Letta / MemGPT → MemFS — self-editing memory &amp; sleep-time compute</summary>
       <p><strong>MemGPT (2023):</strong> treat the context window like an OS's RAM. Tiered virtual memory — <em>main context</em> (system instructions + a writeable "core memory" block + a FIFO queue with a recursive summary at index 0) and <em>external context</em> (recall storage = full message history; archival = vector store). The LLM pages info in/out via tool calls; the system raises "memory pressure" warnings at ~70% of the window and flushes at ~100%, regenerating a recursive summary.</p>
       <p><strong>Sleep-time compute:</strong> a background agent that <em>shares</em> the memory blocks and owns the editing tools — the primary agent is <strong>not</strong> given block-edit tools (one clean write gate). Fires every <code>N=5</code> primary-agent steps (docs say keep N high — too frequent is expensive); processes only the new-messages delta; can use a <em>stronger</em> model since it isn't latency-bound.</p>
-      <p><strong>MemFS / Context Repositories (newest, closest to your goal):</strong> git-tracked markdown memory files edited with bash tools, a <code>system/</code> always-resident folder, and reflection/defrag subagents. This is the direction NTRP should converge toward.</p>
+      <p><strong>MemFS / Context Repositories (newest, closest to your goal):</strong> git-tracked markdown memory files edited with bash tools, a <code>system/</code> always-resident folder, and reflection/defrag subagents. This is the direction ARDEN should converge toward.</p>
     </details>
 
     <details>
-      <summary>Mem0 — the inline two-phase reconciler (NTRP's curator is this)</summary>
-      <p>Unit of memory = a single NL fact string in a vector point (UUID + embedding + text + scope metadata). <strong>Two-phase LLM pipeline:</strong> an <em>extraction</em> phase pulls salient facts from recent turns + a rolling summary; an <em>update</em> phase, for each fact, retrieves the top-10 similar existing memories and asks the LLM to choose <code>ADD / UPDATE / DELETE / NOOP</code> — operating only on real ids shown to it (anti-hallucination). Consolidation is <strong>inline on every write</strong>, not a nightly batch. <strong>The 2026 rewrite dropped Neo4j graph mode</strong> for lightweight in-store entity linking — direct support for your "graphs are too hard" stance. NTRP's Curator is a near-identical clone, plus an offline consolidate pass and a prose projection Mem0 lacks.</p>
+      <summary>Mem0 — the inline two-phase reconciler (ARDEN's curator is this)</summary>
+      <p>Unit of memory = a single NL fact string in a vector point (UUID + embedding + text + scope metadata). <strong>Two-phase LLM pipeline:</strong> an <em>extraction</em> phase pulls salient facts from recent turns + a rolling summary; an <em>update</em> phase, for each fact, retrieves the top-10 similar existing memories and asks the LLM to choose <code>ADD / UPDATE / DELETE / NOOP</code> — operating only on real ids shown to it (anti-hallucination). Consolidation is <strong>inline on every write</strong>, not a nightly batch. <strong>The 2026 rewrite dropped Neo4j graph mode</strong> for lightweight in-store entity linking — direct support for your "graphs are too hard" stance. ARDEN's Curator is a near-identical clone, plus an offline consolidate pass and a prose projection Mem0 lacks.</p>
     </details>
 
     <details>
       <summary>Zep / Graphiti — the graph approach (and why to skip it)</summary>
       <p>A bi-temporal knowledge graph: episodic subgraph (raw verbatim) → semantic entity subgraph (deduped entities + typed edges) → community subgraph (clustered summaries). Every edge tracks 4 timestamps (when true in world / when system learned / when invalidated) so contradictions are <em>expired, not deleted</em>. Per-episode online pipeline: entity extraction → resolution/dedup → fact/edge extraction → temporal invalidation — <strong>each step an LLM call</strong>.</p>
-      <div class="callout"><span class="tag">What to steal without the graph</span><strong>Bi-temporal validity</strong> ("what did I believe on date X") and <strong>edge invalidation</strong> as the conflict model. NTRP gets ~80% of this cheaply via <code>superseded_by</code> + git history. The cost that makes it "hard to use": multiple LLM calls per write, a graph DB to operate, and extraction quality that gates everything.</div>
+      <div class="callout"><span class="tag">What to steal without the graph</span><strong>Bi-temporal validity</strong> ("what did I believe on date X") and <strong>edge invalidation</strong> as the conflict model. ARDEN gets ~80% of this cheaply via <code>superseded_by</code> + git history. The cost that makes it "hard to use": multiple LLM calls per write, a graph DB to operate, and extraction quality that gates everything.</div>
     </details>
 
     <details>
@@ -325,7 +325,7 @@
         <li><strong>Claude memory tool</strong> — the purest file model: a <code>/memories</code> dir with <code>view / create / str_replace / insert / delete / rename</code>, and a system-prompt protocol "ALWAYS VIEW YOUR MEMORY DIRECTORY FIRST… ASSUME INTERRUPTION." No scheduled job — <em>you</em> build the expiry. No imposed schema.</li>
         <li><strong>Copilot memory</strong> — citation-validation + a <strong>28-day unused-fact TTL that resets on use</strong> (clean LRU forgetting), on by default 2026.</li>
         <li><strong>Cursor</strong> — <em>deprecated</em> opaque "Memories" for editable <code>.cursor/rules/*.md</code>. The market voting for files over a fact-store.</li>
-        <li><strong>Security lesson:</strong> ChatGPT's memory-injection attacks (Embrace The Red) — untrusted content writing into memory is a live poisoning vector. Matters for NTRP's passive ingest.</li>
+        <li><strong>Security lesson:</strong> ChatGPT's memory-injection attacks (Embrace The Red) — untrusted content writing into memory is a live poisoning vector. Matters for ARDEN's passive ingest.</li>
       </ul>
     </details>
 
@@ -349,15 +349,15 @@
 
     <div class="grid3">
       <div class="card"><h4>ACE <span class="lbl">2510.04618</span></h4><p style="font-size:14.5px">An <strong>evolving playbook</strong> of itemized bullets, each with an id + <em>helpful</em>/<em>harmful</em> counters. A <strong>Generator → Reflector → Curator</strong> loop: Reflector distills lessons, Curator emits a small delta, <strong>code merges it</strong>. "Grow-and-refine": append new ids, bump counters in place, lazily dedup by embedding only when over budget.</p></div>
-      <div class="card"><h4>Dynamic Cheatsheet <span class="lbl">2504.07952</span></h4><p style="font-size:14.5px">A single evolving text block of distilled strategies/snippets. The useful variant — <strong>DC-Retrieval-Synthesis</strong> — stores past (input,output) pairs, retrieves top-3 by cosine, and synthesizes a <em>fresh, task-specific</em> cheatsheet per query rather than dumping the whole store. (This is the fix for NTRP's resident bullet-dump.)</p></div>
-      <div class="card"><h4>GEPA <span class="lbl">2507.19457</span></h4><p style="font-size:14.5px">Memory = the system prompts themselves, plus a <strong>versioned pool</strong> of candidates with ancestry + a score matrix. Mutate, eval on a minibatch, and <strong>only keep it if it doesn't regress</strong>. The "regression guard" idea NTRP needs on its synthesis pass.</p></div>
+      <div class="card"><h4>Dynamic Cheatsheet <span class="lbl">2504.07952</span></h4><p style="font-size:14.5px">A single evolving text block of distilled strategies/snippets. The useful variant — <strong>DC-Retrieval-Synthesis</strong> — stores past (input,output) pairs, retrieves top-3 by cosine, and synthesizes a <em>fresh, task-specific</em> cheatsheet per query rather than dumping the whole store. (This is the fix for ARDEN's resident bullet-dump.)</p></div>
+      <div class="card"><h4>GEPA <span class="lbl">2507.19457</span></h4><p style="font-size:14.5px">Memory = the system prompts themselves, plus a <strong>versioned pool</strong> of candidates with ancestry + a score matrix. Mutate, eval on a minibatch, and <strong>only keep it if it doesn't regress</strong>. The "regression guard" idea ARDEN needs on its synthesis pass.</p></div>
     </div>
 
     <div class="callout bad" style="margin-top:24px">
       <span class="tag">The one law: context collapse</span>
       The dominant failure mode is <strong>brevity bias</strong>. When you ask an LLM to rewrite the <em>whole</em> memory each time, it silently compresses away hard-won specifics. ACE measured a single rewrite dropping <strong class="num">18,282 → 122 tokens</strong> and accuracy <strong class="num">66.7% → 57.1%</strong> in one step.
-      <br><br><strong>The fix (and NTRP's missing guard):</strong> treat memory as append-mostly, item-structured, edited with small deltas merged by deterministic code — and add a regression check that <em>rejects</em> any re-synthesis that drops size/citation-count past a threshold.
-      <span style="display:block;margin-top:8px;font-size:13px;color:var(--ink3)">Caveat from our own critic: this 18k→122 figure is one paper's anecdote, repeated as if it were a law. It's a real risk to guard against, not a proven universal — NTRP's existing synthesis already has citation-rejection; whether it empirically collapses is untested.</span>
+      <br><br><strong>The fix (and ARDEN's missing guard):</strong> treat memory as append-mostly, item-structured, edited with small deltas merged by deterministic code — and add a regression check that <em>rejects</em> any re-synthesis that drops size/citation-count past a threshold.
+      <span style="display:block;margin-top:8px;font-size:13px;color:var(--ink3)">Caveat from our own critic: this 18k→122 figure is one paper's anecdote, repeated as if it were a law. It's a real risk to guard against, not a proven universal — ARDEN's existing synthesis already has citation-rejection; whether it empirically collapses is untested.</span>
     </div>
 
     <figure>
@@ -392,7 +392,7 @@
           <text x="125" y="78" fill="#7d8798" font-size="12" text-anchor="middle" font-family="var(--mono)">= the learning signal</text>
         </g>
       </svg>
-      <figcaption>The Generator → Reflector → Curator separation, with deterministic merge. NTRP already has the Curator; the missing piece is a label-free Reflector step and the procedural ("playbook") item kinds — strategies and failure-modes, which brevity-biased summarizers almost always drop.</figcaption>
+      <figcaption>The Generator → Reflector → Curator separation, with deterministic merge. ARDEN already has the Curator; the missing piece is a label-free Reflector step and the procedural ("playbook") item kinds — strategies and failure-modes, which brevity-biased summarizers almost always drop.</figcaption>
     </figure>
 
     <p><strong>Empirical lesson on forgetting (from the experience-following study, 2505.16067):</strong> "add-all" memory <em>degrades</em> accuracy — one run dropped to <span class="num">13%</span> (2,400 records) vs <span class="num">39%</span> selective (248 records); utility/retrieval-history deletion was worth ~+10%. <em>Caveat:</em> domain-specific (medical reasoning), so treat the exact numbers as directional, not gospel — but the direction is unambiguous: <strong>forgetting is not optional.</strong></p>
@@ -530,14 +530,14 @@ Rating: &lt;int&gt;</div>
   </div>
 </section>
 
-<!-- ============================ NTRP TODAY ============================ -->
-<section id="ntrp">
+<!-- ============================ ARDEN TODAY ============================ -->
+<section id="arden">
   <div class="wrap">
-    <h2><span class="n">06</span>NTRP today — what's really running</h2>
-    <div class="callout warn"><span class="tag">First finding: your docs lie</span><code>CLAUDE.md</code> references <code>ntrp/memory/facts.py</code> and a "facts → entities → observations → dreams (cross-domain)" pipeline. <strong>None of that exists.</strong> That was the deleted "claims+lens" design. The live system (under <code>apps/server/ntrp/memory/</code>) is one flat record pool + open-vocabulary labels + a markdown projection. "Dreamer" is just a nickname for the curator. Worth fixing the docs before they mislead the next reader (or agent).</div>
+    <h2><span class="n">06</span>ARDEN today — what's really running</h2>
+    <div class="callout warn"><span class="tag">First finding: your docs lie</span><code>CLAUDE.md</code> references <code>arden/memory/facts.py</code> and a "facts → entities → observations → dreams (cross-domain)" pipeline. <strong>None of that exists.</strong> That was the deleted "claims+lens" design. The live system (under <code>apps/server/arden/memory/</code>) is one flat record pool + open-vocabulary labels + a markdown projection. "Dreamer" is just a nickname for the curator. Worth fixing the docs before they mislead the next reader (or agent).</div>
 
     <figure>
-      <svg viewBox="0 0 960 470" role="img" aria-label="NTRP current architecture">
+      <svg viewBox="0 0 960 470" role="img" aria-label="ARDEN current architecture">
         <defs>
           <marker id="a3" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#7d8798"/></marker>
           <marker id="a3b" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#f0786a"/></marker>
@@ -567,7 +567,7 @@ Rating: &lt;int&gt;</div>
           <text x="316" y="212" fill="#f0786a" font-size="11">SHARED w/ transcripts · bridged by id</text>
 
           <rect x="300" y="234" width="220" height="50" rx="10" fill="#1a1f2b" stroke="#242b38"/>
-          <text x="316" y="256" fill="#e7ecf3" font-size="13" font-weight="600">~/.ntrp/memory/*.md</text>
+          <text x="316" y="256" fill="#e7ecf3" font-size="13" font-weight="600">~/.arden/memory/*.md</text>
           <text x="316" y="274" fill="#aab4c4" font-size="11">read-only projection (me.md, dossiers)</text>
 
           <!-- drift -->
@@ -609,10 +609,10 @@ Rating: &lt;int&gt;</div>
           <text x="30" y="452" fill="#7d8798" font-size="11.5" font-family="var(--mono)">artifacts.py = 2196 lines, mostly regex/slug/changelog plumbing.</text>
         </g>
       </svg>
-      <figcaption>NTRP's live memory architecture. Green = canonical stores (there are three). Red = drift machinery &amp; ungated paths. The dashed boxes bottom-right are the maintenance brain you care about — defined in <code>constants.py:162–187</code>, wired nowhere.</figcaption>
+      <figcaption>ARDEN's live memory architecture. Green = canonical stores (there are three). Red = drift machinery &amp; ungated paths. The dashed boxes bottom-right are the maintenance brain you care about — defined in <code>constants.py:162–187</code>, wired nowhere.</figcaption>
     </figure>
 
-    <h3>What NTRP genuinely gets right (keep these)</h3>
+    <h3>What ARDEN genuinely gets right (keep these)</h3>
     <ul>
       <li><span class="pill ok">best-in-class</span><strong>Generic, not CRM — by construction.</strong> No entity tables, no graph, no person/company schema. Subjects emerge from open-vocabulary labels classified entity-vs-meta by an LLM. This is <em>strictly ahead</em> of dex/gbrain.</li>
       <li><span class="pill ok">keep</span><strong>Provenance stricter than dex.</strong> Synthesized prose must cite <code>(record:id)</code>; a fabricated citation <em>rejects the whole page</em> back to a mechanical brief.</li>
@@ -667,8 +667,8 @@ Rating: &lt;int&gt;</div>
     <div class="grid3" style="margin-top:8px">
       <div class="card" style="border-top:3px solid var(--accent)">
         <span class="lbl">Direction A</span><h4 style="margin-top:4px">Brain-as-Folder</h4>
-        <p style="font-size:14px">Memory <em>is</em> a git-tracked markdown dir the agent edits with the file tools NTRP already ships. <strong>Delete the SQLite store and the record-source vectors</strong> (the shared <code>search.db</code> keeps its transcript vectors); rebuild a thin grep+optional-embedding index on demand. Eve/MemFS, taken literally.</p>
-        <p style="font-size:13px;color:var(--ink2)"><strong>Novelty:</strong> inversion <em>with deletion</em> — flip canonicality to the files NTRP currently treats as a read-only projection, and delete the canonical DB rather than adding a layer.</p>
+        <p style="font-size:14px">Memory <em>is</em> a git-tracked markdown dir the agent edits with the file tools ARDEN already ships. <strong>Delete the SQLite store and the record-source vectors</strong> (the shared <code>search.db</code> keeps its transcript vectors); rebuild a thin grep+optional-embedding index on demand. Eve/MemFS, taken literally.</p>
+        <p style="font-size:13px;color:var(--ink2)"><strong>Novelty:</strong> inversion <em>with deletion</em> — flip canonicality to the files ARDEN currently treats as a read-only projection, and delete the canonical DB rather than adding a layer.</p>
       </div>
       <div class="card" style="border-top:3px solid var(--accent2)">
         <span class="lbl">Direction B</span><h4 style="margin-top:4px">Living Playbook</h4>
@@ -788,7 +788,7 @@ Rating: &lt;int&gt;</div>
     </figure>
 
     <h3>The target end-state (Phase 4)</h3>
-    <div class="kbd">~/.ntrp/memory/            # git repo · single source of truth
+    <div class="kbd">~/.arden/memory/            # git repo · single source of truth
   AGENTS.md                # conventions: zones, ids, scoring, filing rule
   system/                  # ALWAYS resident, in full (small, user-editable → caches)
     me.md  directives.md  active-work.md
@@ -840,7 +840,7 @@ Rating: &lt;int&gt;</div>
 
     <div class="tbl-wrap">
       <table>
-        <thead><tr><th style="width:22%">Element</th><th>OKF v0.1 says</th><th>Maps to NTRP plan</th></tr></thead>
+        <thead><tr><th style="width:22%">Element</th><th>OKF v0.1 says</th><th>Maps to ARDEN plan</th></tr></thead>
         <tbody>
           <tr><td>Frontmatter</td><td>Required: <code>type</code>. Recommended: <code>title</code>, <code>description</code>, <code>resource</code> (a URI for the underlying asset), <code>tags</code>, <code>timestamp</code> (ISO 8601). Unknown keys <strong>must be preserved</strong>.</td><td class="yes">already near-identical to the page frontmatter</td></tr>
           <tr><td><code>type</code> values</td><td>"Type values are <strong>not</strong> registered centrally" — <code>Metric</code>, <code>Playbook</code>, <code>Reference</code>… consumers tolerate unknown types.</td><td class="yes">= your emergent, anti-CRM win, blessed by a spec</td></tr>
@@ -852,7 +852,7 @@ Rating: &lt;int&gt;</div>
       </table>
     </div>
 
-    <h3>An OKF-conformant NTRP page</h3>
+    <h3>An OKF-conformant ARDEN page</h3>
     <p>The two-zone page from §08 stays exactly as designed; it just gains OKF frontmatter. Nothing about the maintenance brain changes.</p>
     <div class="kbd">---
 type: topic                      # OKF required · emergent, not registered
@@ -860,7 +860,7 @@ title: Bicycles
 description: Tim's bikes, builds, and gear decisions
 tags: [hobby, gear]
 timestamp: 2026-06-21T18:04:00Z  # ISO 8601 last meaningful change
-limit: 8000                      # NTRP extension (DEFRAG budget) — unknown keys preserved
+limit: 8000                      # ARDEN extension (DEFRAG budget) — unknown keys preserved
 ---
 
 &lt;!--COMPILED--&gt;
@@ -915,7 +915,7 @@ the road bike is sidelined with a failed bottom bracket (^9c2).
       <div class="card">
         <h4>Also unaddressed</h4>
         <ul style="font-size:14px;margin:0;padding-left:18px">
-          <li><strong>Obsidian.</strong> NTRP's primary source is a markdown+wikilink vault. A file-canonical memory makes a <em>second</em> markdown+<code>[[link]]</code> tree. Decide: (a) memory is a subfolder Obsidian indexes (human gets links into agent knowledge for free), or (b) Obsidian is read-only, never written. Currently ignored.</li>
+          <li><strong>Obsidian.</strong> ARDEN's primary source is a markdown+wikilink vault. A file-canonical memory makes a <em>second</em> markdown+<code>[[link]]</code> tree. Decide: (a) memory is a subfolder Obsidian indexes (human gets links into agent knowledge for free), or (b) Obsidian is read-only, never written. Currently ignored.</li>
           <li><strong>Cost budget.</strong> Dream+reflect+retain+health+per-write poignancy vs today's near-zero anti-heartbeat. Set a per-night token/$ ceiling (reuse <code>INTEGRATION_INGEST_MAX_LLM_CALLS</code>) and have HEALTH report actual spend.</li>
           <li><strong>The topic-page UI</strong> (render_html widget) already projects these pages — a file-canonical flip changes what it reads.</li>
         </ul>
@@ -925,7 +925,7 @@ the road bike is sidelined with a failed bottom bracket (^9c2).
         <ul style="font-size:14px;margin:0;padding-left:18px">
           <li>The "field decisively converged on files" leans on <strong>days-old 2026 vendor sources</strong> (Eve, Copilot/Cursor numbers) that can't be independently corroborated yet. Zep is still shipping graphs.</li>
           <li>The ACE <strong>18,282→122</strong> collapse figure is one paper's anecdote, repeated as if it were law. Real risk; not a proven universal.</li>
-          <li>"NTRP strictly better than gbrain on generic" undersells gbrain's concept-synthesis tiering (richer emergent <em>structure</em> than NTRP's flat labels).</li>
+          <li>"ARDEN strictly better than gbrain on generic" undersells gbrain's concept-synthesis tiering (richer emergent <em>structure</em> than ARDEN's flat labels).</li>
           <li>"Brute-force cosine fine to ~10–20k pages" is asserted, not benchmarked. With obsidian+browser+email ingest the count could blow past that.</li>
           <li><strong>Sequencing tension:</strong> Phases 1–2 make the system <em>more</em> complex before simplifying. If you want simple-first, an alternative is to do the A flip earlier — but accept the no-baseline migration risk.</li>
         </ul>
@@ -1058,7 +1058,7 @@ the road bike is sidelined with a failed bottom bracket (^9c2).
 </section>
 
 <div class="wrap foot">
-  <p>Generated 2026-06-21 from a 19-agent research workflow (1.88M tokens, 373 tool calls). All NTRP internal claims verified against the live code under <code>apps/server/ntrp/memory/</code> and the running store at <code>~/.ntrp/</code>. External claims cite the sources above; treat 2026-dated vendor sources as directional.</p>
+  <p>Generated 2026-06-21 from a 19-agent research workflow (1.88M tokens, 373 tool calls). All ARDEN internal claims verified against the live code under <code>apps/server/arden/memory/</code> and the running store at <code>~/.arden/</code>. External claims cite the sources above; treat 2026-dated vendor sources as directional.</p>
   <p style="margin-top:10px">
     <span class="swatch" style="background:var(--good)"></span>keep / does-well &nbsp;
     <span class="swatch" style="background:var(--warn)"></span>partial / caution &nbsp;

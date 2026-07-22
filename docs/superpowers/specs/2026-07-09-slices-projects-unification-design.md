@@ -49,7 +49,7 @@ rooms reachable from the sidebar.
 `page_path TEXT`, `autonomy TEXT` (`observe` | `act`; non-null iff the
 slice has the agent capability — `page_path` non-null is implied then).
 
-**Deleted:** `~/.ntrp/slices.json` (SliceRegistry), `sessions.slice_key`
+**Deleted:** `~/.arden/slices.json` (SliceRegistry), `sessions.slice_key`
 (column stays physically but is no longer read/written; drop opportunistically
 at next schema rev), the `_slug`/`_project_for_slice` bridge,
 `ensure_project_for_slice` (obsolete — filing is just `project_id`).

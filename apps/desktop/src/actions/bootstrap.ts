@@ -56,7 +56,7 @@ export async function refresh(): Promise<void> {
   try {
     const health = await checkHealth(s.config);
     if (!health.ok) {
-      throw new Error(health.version ? "Invalid API key" : "Could not reach ntrp server");
+      throw new Error(health.version ? "Invalid API key" : "Could not reach Arden server");
     }
     s.setConnected(true);
     s.setError(null);

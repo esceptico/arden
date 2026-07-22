@@ -6,12 +6,12 @@
 
 **Architecture:** `ArtifactMemoryView` remains the orchestration boundary but renders an index rail, note workspace, and optional trust inspector. Server revisions drive cached reads, drafts, conflicts, links, and history. A shared `DiffReview` owns review behavior while a lazy `RawDiffRenderer` adapter isolates `@pierre/diffs`.
 
-**Tech Stack:** React 19, TypeScript, Bun, Vite, Electron, `@pierre/diffs`, existing ntrp UI primitives, Bun test runner
+**Tech Stack:** React 19, TypeScript, Bun, Vite, Electron, `@pierre/diffs`, existing arden UI primitives, Bun test runner
 
 ## Global Constraints
 
 - This plan starts after page-edit, link-index, and event-history APIs pass their completion gate.
-- Build a notebook for ntrp; do not clone Obsidian chrome or interaction density.
+- Build a notebook for arden; do not clone Obsidian chrome or interaction density.
 - Remove the top-level Files/Records mode toggle.
 - Keep raw records and filesystem browsing as secondary diagnostics.
 - Do not load full artifact bodies in list/navigation responses.
@@ -123,7 +123,7 @@ Remove `mode: "files" | "records"`. Keep one selected page. Load list metadata o
 
 - [ ] **Step 4: Build meaning-first `NotebookRail`**
 
-Render root `index.md` sections and nested README descriptions. Put search/quick-switcher input first. Keep arbitrary filesystem paths under a collapsed `Files` utility. Exclude `raw/`, `.ntrp/`, health, and generated maintenance pages.
+Render root `index.md` sections and nested README descriptions. Put search/quick-switcher input first. Keep arbitrary filesystem paths under a collapsed `Files` utility. Exclude `raw/`, `.arden/`, health, and generated maintenance pages.
 
 - [ ] **Step 5: Make the note the dominant surface**
 
@@ -232,13 +232,13 @@ Expected: FAIL on missing modules.
 
 - [ ] **Step 3: Implement `DiffReview` without a package dependency**
 
-Define stable ntrp props and compose `RenderedProseDiff`, a lazy raw-renderer slot, and the memory-effects pane. Wide layout is split; narrow is stacked. Use restrained change bars and word highlights in rendered mode. Require explicit decision for every `ASK`.
+Define stable arden props and compose `RenderedProseDiff`, a lazy raw-renderer slot, and the memory-effects pane. Wide layout is split; narrow is stacked. Use restrained change bars and word highlights in rendered mode. Require explicit decision for every `ASK`.
 
 - [ ] **Step 4: Install and isolate the preferred renderer**
 
 Run: `bun add @pierre/diffs`
 
-Implement `RawDiffRenderer` with a dynamic import from `@pierre/diffs/react`, using its two-file React diff component in controlled mode, Markdown language, wrapping, line numbers, collapsed hunks, `split`/`stacked` layout, and ntrp light/dark Shiki themes. Do not import worker-pool APIs.
+Implement `RawDiffRenderer` with a dynamic import from `@pierre/diffs/react`, using its two-file React diff component in controlled mode, Markdown language, wrapping, line numbers, collapsed hunks, `split`/`stacked` layout, and arden light/dark Shiki themes. Do not import worker-pool APIs.
 
 - [ ] **Step 5: Verify the compatibility gate**
 
@@ -252,7 +252,7 @@ Expected: PASS, with the package in a lazy production chunk rather than the star
 
 Manually verify in packaged Electron: light/dark Shadow DOM theme variables, split/stacked resize, wrapping/selection, keyboard and screen-reader labels, reduced motion, and a 5,000-line Markdown diff without a worker pool. Record bundle sizes before/after in the commit message body.
 
-If any gate cannot be fixed inside the adapter, remove the dependency and implement the same `RawDiffRenderer` contract with ntrp primitives; do not leak a partial package API into memory features.
+If any gate cannot be fixed inside the adapter, remove the dependency and implement the same `RawDiffRenderer` contract with arden primitives; do not leak a partial package API into memory features.
 
 - [ ] **Step 6: Commit the shared diff surface**
 

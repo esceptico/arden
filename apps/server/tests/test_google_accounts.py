@@ -1,6 +1,6 @@
 import json
 
-from ntrp.integrations.google_auth.accounts import GoogleAccountStore
+from arden.integrations.google_auth.accounts import GoogleAccountStore
 
 
 def _credential(scopes: list[str]) -> str:
@@ -65,16 +65,22 @@ def test_version_one_account_uses_its_existing_token_for_each_bound_service(tmp_
     token_path = tmp_path / "google_tokens" / "acct-1.json"
     token_path.parent.mkdir()
     token_path.write_text("legacy-token")
-    (tmp_path / "google_accounts.json").write_text(json.dumps({
-        "version": 1,
-        "accounts": [{
-            "id": "acct-1",
-            "email": "user@example.com",
-            "token_file": "google_tokens/acct-1.json",
-            "scopes": ["gmail.readonly", "calendar"],
-            "services": ["gmail", "calendar"],
-        }],
-    }))
+    (tmp_path / "google_accounts.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "accounts": [
+                    {
+                        "id": "acct-1",
+                        "email": "user@example.com",
+                        "token_file": "google_tokens/acct-1.json",
+                        "scopes": ["gmail.readonly", "calendar"],
+                        "services": ["gmail", "calendar"],
+                    }
+                ],
+            }
+        )
+    )
     store = GoogleAccountStore(tmp_path)
 
     [account] = store.list_accounts()

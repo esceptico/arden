@@ -4,14 +4,14 @@ import json
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 
-from ntrp.agent import Choice, CompletionResponse, FunctionCall, Message, ReasoningContentDelta, ToolCall, Usage
-from ntrp.context.models import SessionState
-from ntrp.core.tool_executor import NtrpToolExecutor
-from ntrp.llm.base import CompletionClient
-from ntrp.tools.core import Tool
-from ntrp.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext
-from ntrp.tools.core.registry import ToolRegistry
-from ntrp.tools.executor import ToolExecutor
+from arden.agent import Choice, CompletionResponse, FunctionCall, Message, ReasoningContentDelta, ToolCall, Usage
+from arden.context.models import SessionState
+from arden.core.tool_executor import ArdenToolExecutor
+from arden.llm.base import CompletionClient
+from arden.tools.core import Tool
+from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext
+from arden.tools.core.registry import ToolRegistry
+from arden.tools.executor import ToolExecutor
 
 
 def make_text_response(content: str, model: str = "test-model") -> CompletionResponse:
@@ -121,6 +121,6 @@ class MockLLMClient:
         return await self._client.completion(model=model, messages=messages, **kwargs)
 
 
-def make_test_executor(executor: ToolExecutor) -> NtrpToolExecutor:
+def make_test_executor(executor: ToolExecutor) -> ArdenToolExecutor:
     ctx = make_tool_context(executor)
-    return NtrpToolExecutor(executor, ctx)
+    return ArdenToolExecutor(executor, ctx)

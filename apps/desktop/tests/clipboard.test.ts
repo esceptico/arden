@@ -5,18 +5,18 @@ import { copyText } from "@/lib/clipboard";
 const w = globalThis.window as any;
 
 afterEach(() => {
-  delete w.ntrpDesktop;
+  delete w.ardenDesktop;
 });
 
 test("copyText copies via the Electron bridge when it succeeds", async () => {
   const seen: string[] = [];
-  w.ntrpDesktop = { clipboard: { writeText: async (t: string) => (seen.push(t), true) } };
+  w.ardenDesktop = { clipboard: { writeText: async (t: string) => (seen.push(t), true) } };
   expect(await copyText("hello")).toBe(true);
   expect(seen).toEqual(["hello"]);
 });
 
 test("copyText falls back to execCommand when the bridge is unavailable", async () => {
-  delete w.ntrpDesktop;
+  delete w.ardenDesktop;
   const orig = document.execCommand;
   let called = false;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -32,7 +32,7 @@ test("copyText falls back to execCommand when the bridge is unavailable", async 
 // The bug this guards: navigator.clipboard resolves without writing in the
 // Electron webview, so trusting it flashed "Copied" over an empty clipboard.
 test("copyText returns false — never a misleading success — when every path fails", async () => {
-  delete w.ntrpDesktop;
+  delete w.ardenDesktop;
   const origExec = document.execCommand;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   document.execCommand = (() => false) as any;

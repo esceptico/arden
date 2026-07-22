@@ -2,8 +2,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from ntrp.integrations.google_auth import auth
-from ntrp.integrations.google_auth.accounts import GoogleAccountStore
+from arden.integrations.google_auth import auth
+from arden.integrations.google_auth.accounts import GoogleAccountStore
 
 
 class Flow:
@@ -53,7 +53,13 @@ def test_service_oauth_detects_existing_account_by_email_without_requiring_optio
         service="gmail",
     )
     store.bind_service(account.id, "calendar")
-    granted = tuple(auth.SCOPES_IDENTITY + auth.SCOPES_GMAIL_READ + auth.SCOPES_GMAIL_SEND + auth.SCOPES_CALENDAR + auth.SCOPES_DRIVE)
+    granted = tuple(
+        auth.SCOPES_IDENTITY
+        + auth.SCOPES_GMAIL_READ
+        + auth.SCOPES_GMAIL_SEND
+        + auth.SCOPES_CALENDAR
+        + auth.SCOPES_DRIVE
+    )
     credentials = SimpleNamespace(scopes=granted, to_json=lambda: "expanded-token")
     credentials_path = tmp_path / "credentials.json"
     credentials_path.write_text("{}")

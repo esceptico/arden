@@ -253,23 +253,23 @@ export function useEntries(): CommandEntry[] {
       search: "theme dark light system mode",
     });
     // System — Electron-only utilities.
-    if (window.ntrpDesktop?.app) {
+    if (window.ardenDesktop?.app) {
       entries.push({
         id: "system:reload",
         section: "system",
         label: "Reload window",
         icon: RotateCw,
         shortcut: "⌘R",
-        run: () => window.ntrpDesktop!.app.reload(),
+        run: () => window.ardenDesktop!.app.reload(),
         search: "reload refresh restart window",
       });
       entries.push({
         id: "system:quit",
         section: "system",
-        label: "Quit ntrp",
+        label: "Quit arden",
         icon: Power,
         shortcut: "⌘Q",
-        run: () => window.ntrpDesktop!.app.quit(),
+        run: () => window.ardenDesktop!.app.quit(),
         search: "quit exit close app",
       });
     }

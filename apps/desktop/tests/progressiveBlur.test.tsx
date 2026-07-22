@@ -26,6 +26,7 @@ test("static mockups mount the same eight-layer progressive blur field", () => {
     document: window.document,
     matchMedia: () => ({ matches: false }),
     getComputedStyle: window.getComputedStyle.bind(window),
+    requestAnimationFrame: () => 0,
   } as Record<string, unknown> & { window?: unknown; BOARD_MOTION?: any };
   context.window = context;
   runInNewContext(source, context);

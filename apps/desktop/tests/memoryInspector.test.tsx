@@ -7,9 +7,9 @@ import { MemoryInspector } from "@/features/memory/components/MemoryInspector";
 import type { MemoryArtifactDetail, PageEditEvent, PageEditHistory, PageLinks } from "@/features/memory/lib/notebookTypes";
 
 const roots = new Set<Root>();
-const originalDesktop = window.ntrpDesktop;
-const INSPECTOR_OPEN_KEY = "ntrp.desktop.memory.inspectorOpen";
-const CTX_PANE_KEY = "ntrp.desktop.memory.ctxPane";
+const originalDesktop = window.ardenDesktop;
+const INSPECTOR_OPEN_KEY = "arden.desktop.memory.inspectorOpen";
+const CTX_PANE_KEY = "arden.desktop.memory.ctxPane";
 const viewConfig: AppConfig = { serverUrl: "http://localhost:6877", apiKey: "test-key" };
 
 function setup() {
@@ -41,26 +41,26 @@ function rawArtifact(path: string, title: string, content = "") {
 function installViewBridge() {
   const index = rawArtifact("index.md", "Index", "Index body");
   const note = rawArtifact("note.md", "Note", "Note body");
-  window.ntrpDesktop = { api: { request: async (_config, request) => {
+  window.ardenDesktop = { api: { request: async (_config, request) => {
     if (request.path === "/admin/memory/artifacts") return response({ artifacts: [index, note] });
     if (request.path.startsWith("/admin/memory/links")) return response({ path: "note.md", revision: "ledger:1", stale: false, outgoing: [], backlinks: [], unlinked: [], total_outgoing: 0, total_backlinks: 0, limit: 100, offset: 0 });
     if (request.path.startsWith("/admin/memory/page-edits/history")) return response({ events: [], total: 0, limit: 100, next_before_sequence: null });
     const path = decodeURIComponent(request.path.replace("/admin/memory/artifacts/", ""));
     return response({ artifact: path === "index.md" ? index : note });
-  } } } as Window["ntrpDesktop"];
+  } } } as Window["ardenDesktop"];
 }
 
 afterEach(async () => {
   for (const root of roots) await act(async () => root.unmount());
   roots.clear();
-  window.ntrpDesktop = originalDesktop;
+  window.ardenDesktop = originalDesktop;
   document.body.replaceChildren();
   for (const key of [
     INSPECTOR_OPEN_KEY,
     CTX_PANE_KEY,
-    "ntrp.desktop.memory.lastPath",
-    "ntrp.desktop.memory.pins",
-    "ntrp.desktop.memory.rail.collapsed",
+    "arden.desktop.memory.lastPath",
+    "arden.desktop.memory.pins",
+    "arden.desktop.memory.rail.collapsed",
   ]) localStorage.removeItem(key);
 });
 
@@ -287,7 +287,7 @@ test("links pane shows empty states when the page has no links or mentions", asy
 
 test("the notebook inspector defaults open with the links pane", async () => {
   localStorage.removeItem(INSPECTOR_OPEN_KEY);
-  localStorage.setItem("ntrp.desktop.memory.lastPath", "note.md");
+  localStorage.setItem("arden.desktop.memory.lastPath", "note.md");
   installViewBridge();
   const { host, root } = setup();
   await act(async () => root.render(<ArtifactMemoryView config={viewConfig} />));

@@ -10,8 +10,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-import ntrp.database as database
-from ntrp.agent import (
+import arden.database as database
+from arden.agent import (
     Choice,
     CompletionResponse,
     FunctionCall,
@@ -24,19 +24,19 @@ from ntrp.agent import (
     ToolCall,
     Usage,
 )
-from ntrp.agent.types.tools import ToolMeta
-from ntrp.agent.types.tools import ToolResult as AgentToolResult
-from ntrp.context.models import AreaContext, SessionState
-from ntrp.context.store import SessionStore
-from ntrp.core import spawner as spawner_module
-from ntrp.core.isolation import IsolationLevel
-from ntrp.core.spawner import (
+from arden.agent.types.tools import ToolMeta
+from arden.agent.types.tools import ToolResult as AgentToolResult
+from arden.context.models import AreaContext, SessionState
+from arden.context.store import SessionStore
+from arden.core import spawner as spawner_module
+from arden.core.isolation import IsolationLevel
+from arden.core.spawner import (
     _clamp_for_salvage,
     _deterministic_salvage,
     _salvage_summary,
     create_spawn_fn,
 )
-from ntrp.events.sse import (
+from arden.events.sse import (
     BackgroundTaskEvent,
     TaskFinishedEvent,
     TaskProgressEvent,
@@ -44,10 +44,10 @@ from ntrp.events.sse import (
     TextMessageContentEvent,
     TokenUsageEvent,
 )
-from ntrp.server.state import RunRegistry
-from ntrp.services.session import SessionService
-from ntrp.tools.core import ToolAction, ToolPolicy, ToolResult, ToolScope, tool
-from ntrp.tools.core.context import BackgroundTaskRegistry, ChildSession, IOBridge, RunContext, ToolContext
+from arden.server.state import RunRegistry
+from arden.services.session import SessionService
+from arden.tools.core import ToolAction, ToolPolicy, ToolResult, ToolScope, tool
+from arden.tools.core.context import BackgroundTaskRegistry, ChildSession, IOBridge, RunContext, ToolContext
 from tests.helpers import make_executor, make_text_response
 
 
@@ -115,8 +115,8 @@ async def test_spawned_agent_prompt_includes_area_context(monkeypatch):
         background_tasks=BackgroundTaskRegistry(session_id="test"),
         area=AreaContext(
             area_id="proj-1",
-            name="Ntrp",
-            default_cwd="/Users/me/src/ntrp",
+            name="Arden",
+            default_cwd="/Users/me/src/arden",
             instructions="Use the repo conventions.",
             knowledge_scope="area:proj-1",
         ),
@@ -128,8 +128,8 @@ async def test_spawned_agent_prompt_includes_area_context(monkeypatch):
     assert result.text == "done"
     prompt = captured["messages"][0]["content"]
     assert "## AREA" in prompt
-    assert "Name: Ntrp" in prompt
-    assert "Default cwd: /Users/me/src/ntrp" in prompt
+    assert "Name: Arden" in prompt
+    assert "Default cwd: /Users/me/src/arden" in prompt
     assert "Instructions:\nUse the repo conventions." in prompt
 
 
@@ -308,9 +308,7 @@ async def test_spawn_persists_child_agent_session(monkeypatch, tmp_path: Path):
 
         executor = make_executor()
         area = await store.create_area(name="Area One")
-        parent = SessionState(
-            session_id="parent", started_at=datetime.now(UTC), area_id=area["area_id"]
-        )
+        parent = SessionState(session_id="parent", started_at=datetime.now(UTC), area_id=area["area_id"])
         ctx = ToolContext(
             session_state=parent,
             registry=executor.registry,
@@ -496,6 +494,7 @@ async def test_spawn_wait_false_persists_child_session_and_background_snapshot(m
     await store.init_schema()
     session_service = SessionService(store)
     try:
+
         async def record(**event):
             status = event["status"]
             if status == "started":
@@ -702,7 +701,9 @@ async def test_background_agent_drains_steering_message_mid_run(monkeypatch):
                                 role="assistant",
                                 content=None,
                                 tool_calls=[
-                                    ToolCall(id="c1", type="function", function=FunctionCall(name="finder", arguments="{}"))
+                                    ToolCall(
+                                        id="c1", type="function", function=FunctionCall(name="finder", arguments="{}")
+                                    )
                                 ],
                                 reasoning_content=None,
                             ),
@@ -734,7 +735,7 @@ async def test_background_agent_drains_steering_message_mid_run(monkeypatch):
         def get_meta(self, name):
             return ToolMeta(name="finder", display_name="Finder", kind="tool")
 
-    monkeypatch.setattr("ntrp.core.spawner.NtrpToolExecutor", lambda *_a, **_k: FinderExecutor())
+    monkeypatch.setattr("arden.core.spawner.ArdenToolExecutor", lambda *_a, **_k: FinderExecutor())
 
     executor = make_executor()
     ctx = ToolContext(
@@ -769,7 +770,7 @@ async def test_background_agent_drains_steering_message_mid_run(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_background_spawn_rejected_at_concurrency_cap(monkeypatch):
-    from ntrp.constants import AGENT_MAX_CONCURRENT
+    from arden.constants import AGENT_MAX_CONCURRENT
 
     bg_registry = BackgroundTaskRegistry(session_id="test")
     fillers = [asyncio.create_task(asyncio.sleep(3600)) for _ in range(AGENT_MAX_CONCURRENT)]
@@ -1200,7 +1201,7 @@ async def test_spawn_salvage_preserves_tool_results_after_loop_progress(monkeypa
         def get_meta(self, name):
             return ToolMeta(name="finder", display_name="Finder", kind="tool")
 
-    monkeypatch.setattr("ntrp.core.spawner.NtrpToolExecutor", lambda *_args, **_kwargs: FinderExecutor())
+    monkeypatch.setattr("arden.core.spawner.ArdenToolExecutor", lambda *_args, **_kwargs: FinderExecutor())
 
     child_emitted = []
 
@@ -1319,7 +1320,7 @@ async def test_spawn_salvages_when_inner_agent_returns_empty_final(monkeypatch):
         def get_meta(self, name):
             return ToolMeta(name="finder", display_name="Finder", kind="tool")
 
-    monkeypatch.setattr("ntrp.core.spawner.NtrpToolExecutor", lambda *_args, **_kwargs: FinderExecutor())
+    monkeypatch.setattr("arden.core.spawner.ArdenToolExecutor", lambda *_args, **_kwargs: FinderExecutor())
 
     child_emitted = []
 

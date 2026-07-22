@@ -15,20 +15,20 @@ import pytest_asyncio
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from ntrp.memory.artifacts import ArtifactMemoryStore
-from ntrp.memory.file_store import FilePageStore
-from ntrp.memory.journal import JournalConflictError
-from ntrp.memory.ledger import LedgerEntry, LedgerMeta, render_ledger_entry
-from ntrp.memory.link_index import LinkIndex
-from ntrp.memory.models import Kind, SourceRef
-from ntrp.memory.page_edit_service import PageEditService
-from ntrp.memory.page_events import PageEditAnalysis, page_revision
-from ntrp.memory.reconciler import RecordOperation
-from ntrp.memory.records import RecordStore
-from ntrp.server.app import app
-from ntrp.server.deps import require_knowledge_runtime
-from ntrp.server.routers.memory import router as memory_router
-from ntrp.server.runtime.knowledge import KnowledgeRuntime
+from arden.memory.artifacts import ArtifactMemoryStore
+from arden.memory.file_store import FilePageStore
+from arden.memory.journal import JournalConflictError
+from arden.memory.ledger import LedgerEntry, LedgerMeta, render_ledger_entry
+from arden.memory.link_index import LinkIndex
+from arden.memory.models import Kind, SourceRef
+from arden.memory.page_edit_service import PageEditService
+from arden.memory.page_events import PageEditAnalysis, page_revision
+from arden.memory.reconciler import RecordOperation
+from arden.memory.records import RecordStore
+from arden.server.app import app
+from arden.server.deps import require_knowledge_runtime
+from arden.server.routers.memory import router as memory_router
+from arden.server.runtime.knowledge import KnowledgeRuntime
 
 
 class _Knowledge:
@@ -61,16 +61,14 @@ async def client(tmp_path: Path):
     records = RecordStore(tmp_path / "memory.db", search_index=None)
     allergy = await records.add("Regina is allergic to penicillin", kind="fact")
     tea = await records.add("Regina prefers tea over coffee", kind="directive")
-    fastapi = await records.add("ntrp uses FastAPI on the backend", kind="fact")
+    fastapi = await records.add("Arden uses FastAPI on the backend", kind="fact")
     await records.set_labels(allergy.id, ["health"], entity_labels=["Regina"])
     await records.set_labels(tea.id, [], entity_labels=["Regina"])
-    await records.set_labels(fastapi.id, ["ntrp"])
+    await records.set_labels(fastapi.id, ["arden"])
 
     test_app = FastAPI()
     test_app.include_router(memory_router)
-    test_app.dependency_overrides[require_knowledge_runtime] = lambda: _Knowledge(
-        records, tmp_path / "artifacts"
-    )
+    test_app.dependency_overrides[require_knowledge_runtime] = lambda: _Knowledge(records, tmp_path / "artifacts")
     with TestClient(test_app) as c:
         yield c, records
     await records.close()
@@ -95,7 +93,7 @@ async def page_edit_client(tmp_path: Path):
     (vault / "health.md").write_text("# Health\n", encoding="utf-8")
     (vault / "index.md").write_text("# Memory\n", encoding="utf-8")
     (vault / "raw" / "topics" / "a.md").write_text(
-        "<!-- ntrp:records schema=2 page=topics/a.md -->\n",
+        "<!-- arden:records schema=2 page=topics/a.md -->\n",
         encoding="utf-8",
     )
     store = FilePageStore(vault)
@@ -130,8 +128,6 @@ def test_routes_registered():
         "/admin/memory/search",
     ):
         assert p in paths
-
-
 
 
 def test_links_route_returns_paginated_outgoing_and_backlinks(tmp_path: Path):
@@ -243,9 +239,7 @@ def test_page_edit_forget_memory_uses_ask_targets_and_rejects_unrelated_override
         "/admin/memory/record",
         json={"text": "User drinks coffee", "kind_tag": "fact"},
     ).json()["record"]["id"]
-    reconciler.answer = (
-        RecordOperation(op="ASK", question="Forget the coffee memory?", target_ids=(target_id,)),
-    )
+    reconciler.answer = (RecordOperation(op="ASK", question="Forget the coffee memory?", target_ids=(target_id,)),)
     base = page.read_bytes()
     preview = c.post(
         "/admin/memory/page-edits/preview",
@@ -438,10 +432,13 @@ def test_page_edit_history_is_newest_first_with_stable_pagination(page_edit_clie
                 "content": candidate.decode(),
             },
         ).json()["preview"]
-        assert c.put(
-            "/admin/memory/page-edits/apply",
-            json={"preview_id": preview["id"], "decisions": {}},
-        ).status_code == 200
+        assert (
+            c.put(
+                "/admin/memory/page-edits/apply",
+                json={"preview_id": preview["id"], "decisions": {}},
+            ).status_code
+            == 200
+        )
 
     first = c.get(
         "/admin/memory/page-edits/history",
@@ -457,10 +454,13 @@ def test_page_edit_history_is_newest_first_with_stable_pagination(page_edit_clie
             "content": (base + b"\nFour.\n").decode(),
         },
     ).json()["preview"]
-    assert c.put(
-        "/admin/memory/page-edits/apply",
-        json={"preview_id": preview["id"], "decisions": {}},
-    ).status_code == 200
+    assert (
+        c.put(
+            "/admin/memory/page-edits/apply",
+            json={"preview_id": preview["id"], "decisions": {}},
+        ).status_code
+        == 200
+    )
     second = c.get(
         "/admin/memory/page-edits/history",
         params={
@@ -710,7 +710,7 @@ def test_artifact_detail_serializes_schema_v2_timeline(tmp_path: Path):
         ),
     )
     (vault / "raw" / "topics" / "mats.md").write_text(
-        "<!-- ntrp:records schema=2 page=topics/mats.md -->\n"
+        "<!-- arden:records schema=2 page=topics/mats.md -->\n"
         f"{render_ledger_entry(old)}\n{render_ledger_entry(new)}\n",
         encoding="utf-8",
     )
@@ -778,7 +778,7 @@ def test_list_items_shape(client):
     # Labels are batch-hydrated onto every item.
     by_content = {i["content"]: i for i in body["items"]}
     assert by_content["Regina is allergic to penicillin"]["labels"] == ["Regina", "health"]
-    assert by_content["ntrp uses FastAPI on the backend"]["labels"] == ["ntrp"]
+    assert by_content["Arden uses FastAPI on the backend"]["labels"] == ["arden"]
 
 
 def test_list_items_filters_by_kind(client):
@@ -943,7 +943,7 @@ def test_notebook_create_folder_appears_in_artifact_directories(page_edit_client
     directories = c.get("/admin/memory/artifacts").json()["directories"]
     assert "topics/" in directories
     assert "topics/subarea/" in directories
-    assert not any(d.startswith(("raw/", "changelog/", ".ntrp/")) for d in directories)
+    assert not any(d.startswith(("raw/", "changelog/", ".arden/")) for d in directories)
 
     assert c.post("/admin/memory/notebook/create", json={"path": "topics/subarea", "kind": "folder"}).status_code == 409
     assert c.post("/admin/memory/notebook/create", json={"path": "topics/note.md", "kind": "folder"}).status_code == 422

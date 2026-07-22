@@ -15,7 +15,7 @@
 - Follow strict RED → GREEN → REFACTOR. Every production behavior change starts with a failing regression test.
 - Keep native Slack/Gmail/Calendar/Drive integrations canonical; MCP uses the same normalized contracts.
 - Never use keyword or regex heuristics for tool selection, routing, or suggestions.
-- Never retry an externally visible mutation unless a provider/ntrp idempotency key or verified no-op proves it safe.
+- Never retry an externally visible mutation unless a provider/arden idempotency key or verified no-op proves it safe.
 - Canonical timestamps are ISO-8601 with an explicit offset.
 - Every bounded collection returns `has_more` and a continuation token or explicit narrowing contract.
 
@@ -43,11 +43,11 @@
 ### Task 1: Least-Privilege Autonomous Execution
 
 **Files:**
-- Modify: `apps/server/ntrp/tools/core/types.py`
-- Modify: `apps/server/ntrp/tools/core/context.py`
-- Modify: `apps/server/ntrp/tools/bash.py`
-- Modify: `apps/server/ntrp/operator/runner.py`
-- Modify: `apps/server/ntrp/tools/automation.py`
+- Modify: `apps/server/arden/tools/core/types.py`
+- Modify: `apps/server/arden/tools/core/context.py`
+- Modify: `apps/server/arden/tools/bash.py`
+- Modify: `apps/server/arden/operator/runner.py`
+- Modify: `apps/server/arden/tools/automation.py`
 - Test: `apps/server/tests/test_tools.py`
 - Test: `apps/server/tests/test_operator_runner.py`
 - Test: `apps/server/tests/test_loop_tools.py`
@@ -96,13 +96,13 @@ else:
 ### Task 2: Approval Integrity and Payload Visibility
 
 **Files:**
-- Modify: `apps/server/ntrp/tools/core/function.py`
-- Modify: `apps/server/ntrp/tools/core/context.py`
-- Modify: `apps/server/ntrp/integrations/gmail/tools.py`
-- Modify: `apps/server/ntrp/integrations/slack/tools.py`
-- Modify: `apps/server/ntrp/tools/notify.py`
-- Modify: `apps/server/ntrp/tools/automation.py`
-- Modify: `apps/server/ntrp/tools/background.py`
+- Modify: `apps/server/arden/tools/core/function.py`
+- Modify: `apps/server/arden/tools/core/context.py`
+- Modify: `apps/server/arden/integrations/gmail/tools.py`
+- Modify: `apps/server/arden/integrations/slack/tools.py`
+- Modify: `apps/server/arden/tools/notify.py`
+- Modify: `apps/server/arden/tools/automation.py`
+- Modify: `apps/server/arden/tools/background.py`
 - Test: `apps/server/tests/test_tools.py`
 - Test: `apps/server/tests/test_loop_tools.py`
 - Test: `apps/server/tests/test_integration_tool_sources.py`
@@ -120,11 +120,11 @@ else:
 ### Task 3: Approval-Bound Compare-and-Swap Writes
 
 **Files:**
-- Create: `apps/server/ntrp/tools/core/file_mutation.py`
-- Modify: `apps/server/ntrp/tools/files.py`
-- Modify: `apps/server/ntrp/tools/directives.py`
-- Modify: `apps/server/ntrp/tools/area.py`
-- Modify: `apps/server/ntrp/tools/memory.py`
+- Create: `apps/server/arden/tools/core/file_mutation.py`
+- Modify: `apps/server/arden/tools/files.py`
+- Modify: `apps/server/arden/tools/directives.py`
+- Modify: `apps/server/arden/tools/area.py`
+- Modify: `apps/server/arden/tools/memory.py`
 - Test: `apps/server/tests/test_file_tools.py`
 - Test: `apps/server/tests/test_area_tools.py`
 - Test: `apps/server/tests/test_memory_filesystem_tools.py`
@@ -159,15 +159,15 @@ def atomic_compare_and_swap(path: Path, content: str, expected_sha256: str) -> F
 ### Task 4: Truthful Typed Failures
 
 **Files:**
-- Modify: `apps/server/ntrp/agent/types/tools.py`
-- Modify: `apps/server/ntrp/tools/bash.py`
-- Modify: `apps/server/ntrp/tools/files.py`
-- Modify: `apps/server/ntrp/tools/notify.py`
-- Modify: `apps/server/ntrp/integrations/gmail/client.py`
-- Modify: `apps/server/ntrp/integrations/gmail/tools.py`
-- Modify: `apps/server/ntrp/integrations/calendar/client.py`
-- Modify: `apps/server/ntrp/integrations/calendar/tools.py`
-- Modify: `apps/server/ntrp/integrations/slack/tools.py`
+- Modify: `apps/server/arden/agent/types/tools.py`
+- Modify: `apps/server/arden/tools/bash.py`
+- Modify: `apps/server/arden/tools/files.py`
+- Modify: `apps/server/arden/tools/notify.py`
+- Modify: `apps/server/arden/integrations/gmail/client.py`
+- Modify: `apps/server/arden/integrations/gmail/tools.py`
+- Modify: `apps/server/arden/integrations/calendar/client.py`
+- Modify: `apps/server/arden/integrations/calendar/tools.py`
+- Modify: `apps/server/arden/integrations/slack/tools.py`
 - Test: `apps/server/tests/test_tool_outcome_contracts.py`
 - Test: `apps/server/tests/test_tools.py`
 - Test: `apps/server/tests/test_file_tools.py`
@@ -187,7 +187,7 @@ def atomic_compare_and_swap(path: Path, content: str, expected_sha256: str) -> F
 ### Task 5: Stable-Reference Memory Deletion
 
 **Files:**
-- Modify: `apps/server/ntrp/tools/memory.py`
+- Modify: `apps/server/arden/tools/memory.py`
 - Test: `apps/server/tests/test_memory_remember.py`
 
 **Interfaces:**
@@ -201,9 +201,9 @@ def atomic_compare_and_swap(path: Path, content: str, expected_sha256: str) -> F
 ### Task 6: Lossless MCP Schemas and Risk Metadata
 
 **Files:**
-- Modify: `apps/server/ntrp/mcp/tool.py`
-- Modify: `apps/server/ntrp/tools/core/types.py`
-- Modify: `apps/server/ntrp/tools/core/base.py`
+- Modify: `apps/server/arden/mcp/tool.py`
+- Modify: `apps/server/arden/tools/core/types.py`
+- Modify: `apps/server/arden/tools/core/base.py`
 - Test: `apps/server/tests/test_mcp_tool.py`
 - Test: `apps/server/tests/test_tools.py`
 
@@ -219,10 +219,10 @@ def atomic_compare_and_swap(path: Path, content: str, expected_sha256: str) -> F
 ### Task 7: Bounded MCP and Non-Offloaded Results
 
 **Files:**
-- Modify: `apps/server/ntrp/mcp/results.py`
-- Modify: `apps/server/ntrp/mcp/tool.py`
-- Modify: `apps/server/ntrp/core/tool_executor.py`
-- Modify: `apps/server/ntrp/core/model_context_budget.py`
+- Modify: `apps/server/arden/mcp/results.py`
+- Modify: `apps/server/arden/mcp/tool.py`
+- Modify: `apps/server/arden/core/tool_executor.py`
+- Modify: `apps/server/arden/core/model_context_budget.py`
 - Test: `apps/server/tests/test_mcp_results.py`
 - Test: `apps/server/tests/test_mcp_tool.py`
 - Test: `apps/server/tests/test_tools.py`
@@ -240,17 +240,17 @@ def atomic_compare_and_swap(path: Path, content: str, expected_sha256: str) -> F
 ### Task 8: Retry-Safe Mutation Outcomes
 
 **Files:**
-- Modify: `apps/server/ntrp/integrations/gmail/tools.py`
-- Modify: `apps/server/ntrp/integrations/calendar/tools.py`
-- Modify: `apps/server/ntrp/integrations/slack/tools.py`
-- Modify: `apps/server/ntrp/integrations/google_drive/tools.py`
-- Modify: `apps/server/ntrp/core/tool_executor.py`
+- Modify: `apps/server/arden/integrations/gmail/tools.py`
+- Modify: `apps/server/arden/integrations/calendar/tools.py`
+- Modify: `apps/server/arden/integrations/slack/tools.py`
+- Modify: `apps/server/arden/integrations/google_drive/tools.py`
+- Modify: `apps/server/arden/core/tool_executor.py`
 - Test: `apps/server/tests/test_integration_mutations.py`
 - Test: `apps/server/tests/test_google_drive_tools.py`
 - Test: `apps/server/tests/test_tool_executor_reads.py`
 
 **Interfaces:**
-- Mutation inputs accept `idempotency_key`; outputs populate `ToolEffect`, `ToolVerification`, and provider/ntrp receipt.
+- Mutation inputs accept `idempotency_key`; outputs populate `ToolEffect`, `ToolVerification`, and provider/arden receipt.
 - Contract: an uncertain timeout instructs verification and never silently retries.
 
 - [x] Add failing duplicate-call and timeout-ambiguity tests for each external mutation family.
@@ -261,14 +261,14 @@ def atomic_compare_and_swap(path: Path, content: str, expected_sha256: str) -> F
 ### Task 9: Chain-Safe Integration References
 
 **Files:**
-- Modify: `apps/server/ntrp/integrations/gmail/client.py`
-- Modify: `apps/server/ntrp/integrations/gmail/tools.py`
-- Modify: `apps/server/ntrp/integrations/calendar/client.py`
-- Modify: `apps/server/ntrp/integrations/calendar/tools.py`
-- Modify: `apps/server/ntrp/integrations/google_drive/client.py`
-- Modify: `apps/server/ntrp/integrations/google_drive/tools.py`
-- Modify: `apps/server/ntrp/integrations/slack/client.py`
-- Modify: `apps/server/ntrp/integrations/slack/tools.py`
+- Modify: `apps/server/arden/integrations/gmail/client.py`
+- Modify: `apps/server/arden/integrations/gmail/tools.py`
+- Modify: `apps/server/arden/integrations/calendar/client.py`
+- Modify: `apps/server/arden/integrations/calendar/tools.py`
+- Modify: `apps/server/arden/integrations/google_drive/client.py`
+- Modify: `apps/server/arden/integrations/google_drive/tools.py`
+- Modify: `apps/server/arden/integrations/slack/client.py`
+- Modify: `apps/server/arden/integrations/slack/tools.py`
 - Test: `apps/server/tests/test_integration_refs.py`
 - Test: `apps/server/tests/test_calendar_multi_account.py`
 - Test: `apps/server/tests/test_google_drive_tools.py`
@@ -285,16 +285,16 @@ def atomic_compare_and_swap(path: Path, content: str, expected_sha256: str) -> F
 ### Task 10: Common Pagination, Ordering, and Time Contracts
 
 **Files:**
-- Create: `apps/server/ntrp/tools/core/collections.py`
-- Modify: `apps/server/ntrp/tools/files.py`
-- Modify: `apps/server/ntrp/tools/automation.py`
-- Modify: `apps/server/ntrp/tools/sessions.py`
-- Modify: `apps/server/ntrp/tools/time.py`
-- Modify: `apps/server/ntrp/integrations/slack/tools.py`
-- Modify: `apps/server/ntrp/integrations/gmail/tools.py`
-- Modify: `apps/server/ntrp/integrations/calendar/tools.py`
-- Modify: `apps/server/ntrp/integrations/google_drive/tools.py`
-- Modify: `apps/server/ntrp/tools/workflow.py`
+- Create: `apps/server/arden/tools/core/collections.py`
+- Modify: `apps/server/arden/tools/files.py`
+- Modify: `apps/server/arden/tools/automation.py`
+- Modify: `apps/server/arden/tools/sessions.py`
+- Modify: `apps/server/arden/tools/time.py`
+- Modify: `apps/server/arden/integrations/slack/tools.py`
+- Modify: `apps/server/arden/integrations/gmail/tools.py`
+- Modify: `apps/server/arden/integrations/calendar/tools.py`
+- Modify: `apps/server/arden/integrations/google_drive/tools.py`
+- Modify: `apps/server/arden/tools/workflow.py`
 - Test: `apps/server/tests/test_tool_collections.py`
 - Test: `apps/server/tests/test_file_tools.py`
 - Test: `apps/server/tests/test_session_tools.py`
@@ -313,18 +313,18 @@ def atomic_compare_and_swap(path: Path, content: str, expected_sha256: str) -> F
 ### Task 11: Clear Tool Ownership and Honest Policies
 
 **Files:**
-- Modify: `apps/server/ntrp/tools/discover.py`
-- Modify: `apps/server/ntrp/core/spawner.py`
-- Modify: `apps/server/ntrp/tools/background.py`
-- Modify: `apps/server/ntrp/tools/research_artifacts.py`
-- Modify: `apps/server/ntrp/tools/research.py`
-- Modify: `apps/server/ntrp/tools/workflow.py`
-- Modify: `apps/server/ntrp/tools/memory.py`
-- Modify: `apps/server/ntrp/tools/directives.py`
-- Modify: `apps/server/ntrp/tools/deferred.py`
-- Modify: `apps/server/ntrp/core/deferred_tools_middleware.py`
-- Modify: `apps/server/ntrp/integrations/core.py`
-- Delete: `apps/server/ntrp/integrations/obsidian/__pycache__/`
+- Modify: `apps/server/arden/tools/discover.py`
+- Modify: `apps/server/arden/core/spawner.py`
+- Modify: `apps/server/arden/tools/background.py`
+- Modify: `apps/server/arden/tools/research_artifacts.py`
+- Modify: `apps/server/arden/tools/research.py`
+- Modify: `apps/server/arden/tools/workflow.py`
+- Modify: `apps/server/arden/tools/memory.py`
+- Modify: `apps/server/arden/tools/directives.py`
+- Modify: `apps/server/arden/tools/deferred.py`
+- Modify: `apps/server/arden/core/deferred_tools_middleware.py`
+- Modify: `apps/server/arden/integrations/core.py`
+- Delete: `apps/server/arden/integrations/obsidian/__pycache__/`
 - Test: `apps/server/tests/test_tool_registry_ergonomics.py`
 - Test: `apps/server/tests/test_deferred_tools.py`
 - Test: `apps/server/tests/test_research_ledger.py`
@@ -345,12 +345,12 @@ def atomic_compare_and_swap(path: Path, content: str, expected_sha256: str) -> F
 ### Task 12: End-to-End Provenance
 
 **Files:**
-- Modify: `apps/server/ntrp/core/spawner.py`
-- Modify: `apps/server/ntrp/tools/research.py`
-- Modify: `apps/server/ntrp/core/tool_result_data.py`
-- Modify: `apps/server/ntrp/integrations/slack/tools.py`
-- Modify: `apps/server/ntrp/tools/memory.py`
-- Modify: `apps/server/ntrp/tools/sessions.py`
+- Modify: `apps/server/arden/core/spawner.py`
+- Modify: `apps/server/arden/tools/research.py`
+- Modify: `apps/server/arden/core/tool_result_data.py`
+- Modify: `apps/server/arden/integrations/slack/tools.py`
+- Modify: `apps/server/arden/tools/memory.py`
+- Modify: `apps/server/arden/tools/sessions.py`
 - Test: `apps/server/tests/test_research_provenance.py`
 - Test: `apps/server/tests/test_tool_sources.py`
 - Test: `apps/server/tests/test_session_store.py`
@@ -367,8 +367,8 @@ def atomic_compare_and_swap(path: Path, content: str, expected_sha256: str) -> F
 ### Task 13: Complete Common Workflows and Documentation
 
 **Files:**
-- Modify: `apps/server/ntrp/integrations/gmail/client.py`
-- Modify: `apps/server/ntrp/integrations/gmail/tools.py`
+- Modify: `apps/server/arden/integrations/gmail/client.py`
+- Modify: `apps/server/arden/integrations/gmail/tools.py`
 - Modify: `docs/guides/tools.mdx`
 - Modify: `apps/server/skills/add-tool/SKILL.md`
 - Test: `apps/server/tests/test_gmail_reply.py`

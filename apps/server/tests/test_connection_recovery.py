@@ -3,18 +3,18 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import BaseModel
 
-from ntrp.context.models import SessionState
-from ntrp.core.tool_executor import NtrpToolExecutor
-from ntrp.integrations.base import IntegrationConnectionDescriptor, IntegrationConnectionError
-from ntrp.integrations.gmail.client import GmailSource
-from ntrp.integrations.google_auth import auth as google_auth
-from ntrp.integrations.slack.client import SlackClient
-from ntrp.tools.connections import ConnectionService
-from ntrp.tools.core import ToolResult, tool
-from ntrp.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
-from ntrp.tools.core.registry import ToolRegistry
-from ntrp.tools.core.types import ToolAction, ToolPolicy, ToolScope
-from ntrp.tools.executor import ToolExecutor
+from arden.context.models import SessionState
+from arden.core.tool_executor import ArdenToolExecutor
+from arden.integrations.base import IntegrationConnectionDescriptor, IntegrationConnectionError
+from arden.integrations.gmail.client import GmailSource
+from arden.integrations.google_auth import auth as google_auth
+from arden.integrations.slack.client import SlackClient
+from arden.tools.connections import ConnectionService
+from arden.tools.core import ToolResult, tool
+from arden.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
+from arden.tools.core.registry import ToolRegistry
+from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
+from arden.tools.executor import ToolExecutor
 
 
 class EmptyInput(BaseModel):
@@ -42,7 +42,7 @@ class StubConnectionRegistry:
         return self.client
 
 
-def _executor(action: ToolAction, handler, *, approved: bool = True) -> NtrpToolExecutor:
+def _executor(action: ToolAction, handler, *, approved: bool = True) -> ArdenToolExecutor:
     registry = ToolRegistry()
     registry.register(
         "search_slack",
@@ -65,7 +65,7 @@ def _executor(action: ToolAction, handler, *, approved: bool = True) -> NtrpTool
         io=IOBridge(emit=emit, pending_connections=pending),
         services={"connections": ConnectionService(StubConnectionRegistry())},
     )
-    return NtrpToolExecutor(ToolExecutor().with_registry(registry), ctx)
+    return ArdenToolExecutor(ToolExecutor().with_registry(registry), ctx)
 
 
 @pytest.mark.asyncio

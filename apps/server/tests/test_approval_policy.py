@@ -1,6 +1,6 @@
-from ntrp.tools.core.base import Tool
-from ntrp.tools.core.registry import ToolRegistry
-from ntrp.tools.core.types import ApprovalMode, ToolAction, ToolOverrideDecision, ToolPolicy, ToolScope
+from arden.tools.core.base import Tool
+from arden.tools.core.registry import ToolRegistry
+from arden.tools.core.types import ApprovalMode, ToolAction, ToolOverrideDecision, ToolPolicy, ToolScope
 
 
 class DummyTool(Tool):

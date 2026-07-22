@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from ntrp.tools.core.context import BackgroundTaskRegistry
+from arden.tools.core.context import BackgroundTaskRegistry
 
 
 @pytest.mark.asyncio
@@ -125,9 +125,7 @@ async def test_background_registry_delivers_claimed_completion_once():
     assert len(emitted) == 1
     assert emitted[0].event_id == "bg:bg-1:completed"
     assert len(injected) == 1
-    assert marked == [
-        {"session_id": "sess-1", "task_id": "bg-1", "completion_id": "bg:bg-1:completed"}
-    ]
+    assert marked == [{"session_id": "sess-1", "task_id": "bg-1", "completion_id": "bg:bg-1:completed"}]
 
 
 @pytest.mark.asyncio
@@ -174,7 +172,7 @@ async def _extend(items, values):
 
 @pytest.mark.asyncio
 async def test_background_result_fallback_rejects_path_traversal(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr("ntrp.tools.core.context.RESULT_BASE", tmp_path)
+    monkeypatch.setattr("arden.tools.core.context.RESULT_BASE", tmp_path)
     result_dir = tmp_path / "sess-1" / "bg_results"
     result_dir.mkdir(parents=True)
     (tmp_path / "secret.txt").write_text("other session secret")
@@ -187,7 +185,7 @@ async def test_background_result_fallback_rejects_path_traversal(tmp_path: Path,
 
 @pytest.mark.asyncio
 async def test_durable_background_reader_is_authoritative(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr("ntrp.tools.core.context.RESULT_BASE", tmp_path)
+    monkeypatch.setattr("arden.tools.core.context.RESULT_BASE", tmp_path)
 
     async def missing_owned_result(_task_id: str) -> None:
         return None

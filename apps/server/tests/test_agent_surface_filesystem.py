@@ -6,11 +6,11 @@ import pytest_asyncio
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import ntrp.database as database
-from ntrp.agent_surface.schedules import compile_schedules_to_automations, discover_schedules
-from ntrp.automation.store import AutomationStore
-from ntrp.server.routers.dev_runtime import router as dev_runtime_router
-from ntrp.skills.service import get_skills_dirs
+import arden.database as database
+from arden.agent_surface.schedules import compile_schedules_to_automations, discover_schedules
+from arden.automation.store import AutomationStore
+from arden.server.routers.dev_runtime import router as dev_runtime_router
+from arden.skills.service import get_skills_dirs
 
 
 @pytest_asyncio.fixture
@@ -49,9 +49,7 @@ def test_shared_global_agent_skills_dir_is_loaded(tmp_path, monkeypatch):
 def test_discovers_markdown_and_yaml_schedules(tmp_path):
     md = tmp_path / "agent" / "schedules" / "weekly_digest.md"
     md.parent.mkdir(parents=True)
-    md.write_text(
-        '---\ncron: "0 9 * * 1"\ntimezone: "America/Los_Angeles"\nchannel: "chat"\n---\nWeekly digest.'
-    )
+    md.write_text('---\ncron: "0 9 * * 1"\ntimezone: "America/Los_Angeles"\nchannel: "chat"\n---\nWeekly digest.')
     yaml_path = tmp_path / "agent" / "schedules" / "memory" / "rebuild.yaml"
     yaml_path.parent.mkdir(parents=True)
     yaml_path.write_text('cron: "0 10 * * *"\nprompt: "Rebuild memory."\nchannel: "chat"\n')

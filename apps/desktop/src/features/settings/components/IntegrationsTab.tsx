@@ -181,7 +181,7 @@ export function IntegrationsTab() {
     <div className="grid gap-5">
       <div className="flex items-start justify-between gap-3">
         <p className="m-0 text-sm text-muted leading-[1.45] max-w-[540px]">
-          Connect the data and action providers ntrp can use as tools. Model providers stay in
+          Connect the data and action providers Arden can use as tools. Model providers stay in
           Providers; MCP servers stay in MCP.
         </p>
         <Button variant="secondary" onClick={() => void refresh()} disabled={loading}>

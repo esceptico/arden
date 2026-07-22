@@ -1,4 +1,4 @@
-import { Briefcase, FileSearch, GitPullRequest, Inbox, Mail, type NtrpIcon } from "@/components/icons";
+import { Briefcase, FileSearch, GitPullRequest, Inbox, Mail, type ArdenIcon } from "@/components/icons";
 import type { CreateAutomationPayload } from "@/api/types";
 
 /** Starter automations the user can pick to bootstrap a new automation
@@ -9,7 +9,7 @@ import type { CreateAutomationPayload } from "@/api/types";
 export interface AutomationTemplate {
   id: string;
   category: string;
-  icon: NtrpIcon;
+  icon: ArdenIcon;
   name: string;
   blurb: string;
   payload: Omit<CreateAutomationPayload, "name" | "description"> & {

@@ -1,9 +1,9 @@
 from pydantic import BaseModel, Field
 
-from ntrp.tools.core import ToolAction, ToolPolicy, ToolResult, ToolScope, tool
-from ntrp.tools.core.context import ToolExecution
+from arden.tools.core import ToolAction, ToolPolicy, ToolResult, ToolScope, tool
+from arden.tools.core.context import ToolExecution
 
-# from ntrp.tools.core.types import ApprovalInfo
+# from arden.tools.core.types import ApprovalInfo
 
 
 class ToolInput(BaseModel):

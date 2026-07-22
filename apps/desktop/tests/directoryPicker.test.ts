@@ -14,17 +14,17 @@ afterEach(() => {
 test("selectDirectory returns the native directory choice", async () => {
   const calls: unknown[] = [];
   setWindow({
-    ntrpDesktop: {
+    ardenDesktop: {
       dialog: {
         selectDirectory: async (options: unknown) => {
           calls.push(options);
-          return "/Users/me/src/ntrp";
+          return "/Users/me/src/arden";
         },
       },
     },
   });
 
-  await expect(selectDirectory({ defaultPath: "/Users/me" })).resolves.toBe("/Users/me/src/ntrp");
+  await expect(selectDirectory({ defaultPath: "/Users/me" })).resolves.toBe("/Users/me/src/arden");
   expect(calls).toEqual([{ defaultPath: "/Users/me" }]);
 });
 
@@ -33,7 +33,7 @@ test("selectDirectory returns null when the bridge is unavailable or cancelled",
   await expect(selectDirectory()).resolves.toBeNull();
 
   setWindow({
-    ntrpDesktop: {
+    ardenDesktop: {
       dialog: {
         selectDirectory: async () => null,
       },

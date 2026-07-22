@@ -4,13 +4,13 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-import ntrp.database as database
-from ntrp.automation.models import IdempotencyClaim
-from ntrp.automation.scheduler import Scheduler
-from ntrp.automation.service import AutomationService
-from ntrp.automation.store import AutomationStore
-from ntrp.context.store import SessionStore
-from ntrp.services.session import SessionService
+import arden.database as database
+from arden.automation.models import IdempotencyClaim
+from arden.automation.scheduler import Scheduler
+from arden.automation.service import AutomationService
+from arden.automation.store import AutomationStore
+from arden.context.store import SessionStore
+from arden.services.session import SessionService
 
 
 @pytest_asyncio.fixture
@@ -42,23 +42,15 @@ async def service(store: AutomationStore, session_service: SessionService):
 
 @pytest.mark.asyncio
 async def test_global_claim_first_succeeds_second_fails(store: AutomationStore):
-    assert await store.try_claim_idempotency(
-        scope="global", key="item-42", automation_task_id="child-a"
-    )
-    assert not await store.try_claim_idempotency(
-        scope="global", key="item-42", automation_task_id="child-b"
-    )
+    assert await store.try_claim_idempotency(scope="global", key="item-42", automation_task_id="child-a")
+    assert not await store.try_claim_idempotency(scope="global", key="item-42", automation_task_id="child-b")
 
 
 @pytest.mark.asyncio
 async def test_global_claim_ignores_parent(store: AutomationStore):
     # Global scope: same key conflicts regardless of which parent.
-    assert await store.try_claim_idempotency(
-        scope="global", key="news-7", automation_task_id="child-a"
-    )
-    assert not await store.try_claim_idempotency(
-        scope="global", key="news-7", automation_task_id="child-b"
-    )
+    assert await store.try_claim_idempotency(scope="global", key="news-7", automation_task_id="child-a")
+    assert not await store.try_claim_idempotency(scope="global", key="news-7", automation_task_id="child-b")
 
 
 @pytest.mark.asyncio
@@ -424,9 +416,7 @@ async def test_claim_rejects_null_in_automation_task_id(store: AutomationStore):
 
 
 @pytest.mark.asyncio
-async def test_create_rolls_back_claim_on_save_failure(
-    service: AutomationService, store: AutomationStore, monkeypatch
-):
+async def test_create_rolls_back_claim_on_save_failure(service: AutomationService, store: AutomationStore, monkeypatch):
     """If the automation row write fails inside save_with_claim, the claim
     must also rollback so a retry under the same key can succeed."""
     # Simulate the INSERT INTO scheduled_tasks step failing by patching the

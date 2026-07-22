@@ -1,11 +1,11 @@
 ---
 title: "Authentication"
-description: "API key authentication for the ntrp server."
+description: "API key authentication for the Arden server."
 ---
 
 ## API key
 
-ntrp uses Bearer token authentication. Include the key in the `Authorization` header:
+Arden uses Bearer token authentication. Include the key in the `Authorization` header:
 
 ```bash
 Authorization: Bearer YOUR_API_KEY
@@ -13,11 +13,11 @@ Authorization: Bearer YOUR_API_KEY
 
 ## Getting a key
 
-An API key is generated on first `ntrp-server serve`:
+An API key is generated on first `arden-server serve`:
 
 ```bash
 cd apps/server
-uv run ntrp-server serve
+uv run arden-server serve
 # Your API key: nBx7k2...
 # Enter this in the desktop client to connect. It won't be shown again.
 ```
@@ -26,7 +26,7 @@ uv run ntrp-server serve
 
 ```bash
 cd apps/server
-uv run ntrp-server serve --reset-key
+uv run arden-server serve --reset-key
 ```
 
 This invalidates the old key immediately.

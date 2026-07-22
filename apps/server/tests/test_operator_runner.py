@@ -3,19 +3,17 @@ from pathlib import Path
 
 import pytest
 
-from ntrp.context.models import SessionState
-from ntrp.core.factory import AgentConfig
-from ntrp.operator import runner
-from ntrp.operator.runner import OperatorDeps, RunRequest
-from ntrp.skills.registry import SkillRegistry
+from arden.context.models import SessionState
+from arden.core.factory import AgentConfig
+from arden.operator import runner
+from arden.operator.runner import OperatorDeps, RunRequest
+from arden.skills.registry import SkillRegistry
 
 
 def _write_skill(root: Path, name: str, description: str) -> None:
     skill_dir = root / name
     skill_dir.mkdir()
-    (skill_dir / "SKILL.md").write_text(
-        f"---\nname: {name}\ndescription: {description}\n---\n\n# Body\n"
-    )
+    (skill_dir / "SKILL.md").write_text(f"---\nname: {name}\ndescription: {description}\n---\n\n# Body\n")
 
 
 class FakeExecutor:
@@ -110,7 +108,9 @@ async def test_prepare_auto_approve_ignores_extra_tool_names(monkeypatch):
     await runner._prepare(
         _deps(None, executor=executor),
         RunRequest(
-            prompt="do it", auto_approve=True, source_id="test",
+            prompt="do it",
+            auto_approve=True,
+            source_id="test",
             extra_tool_names=frozenset({"remember"}),
         ),
     )
@@ -137,7 +137,9 @@ async def test_prepare_non_auto_approve_threads_extra_tool_names(monkeypatch):
     await runner._prepare(
         _deps(None, executor=executor),
         RunRequest(
-            prompt="do it", auto_approve=False, source_id="test",
+            prompt="do it",
+            auto_approve=False,
+            source_id="test",
             extra_tool_names=frozenset({"remember", "memory_patch"}),
         ),
     )
@@ -163,9 +165,7 @@ async def test_prepare_auto_approve_without_scope_stays_read_only(monkeypatch):
         RunRequest(prompt="do it", auto_approve=True, skip_approvals=True, source_id="test"),
     )
 
-    assert executor.calls == [
-        {"read_only": True, "actions": None, "extra_names": frozenset(), "scope": None}
-    ]
+    assert executor.calls == [{"read_only": True, "actions": None, "extra_names": frozenset(), "scope": None}]
 
 
 @pytest.mark.asyncio

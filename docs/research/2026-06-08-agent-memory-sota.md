@@ -37,7 +37,7 @@ ChatGPT/Gemini     CLAUDE.md          ChatGPT saved mem  MemoryOS             Me
 - **Mid (extract facts + vector)** is the modal 2026 design: Mem0 distills atomic facts and reconciles with ADD/UPDATE/DELETE/NOOP.
 - **Heaviest (temporal KG)**: Zep/Graphiti — facts as edges with four timestamps, invalidated (not deleted) on contradiction. **The field is retreating from here** — Mem0 OSS v2→v3 *removed* its external graph store for in-vector entity linking.
 
-ntrp today (curated docs per scope + per-turn curator + hybrid transcript search) = **file-blocks + the mid-tier's best part (hybrid retrieval), minus a fact store.** A deliberately good place to sit.
+arden today (curated docs per scope + per-turn curator + hybrid transcript search) = **file-blocks + the mid-tier's best part (hybrid retrieval), minus a fact store.** A deliberately good place to sit.
 
 ## 2. How SOTA memory actually works — the shared 5-stage pipeline
 
@@ -72,7 +72,7 @@ License: **Sleep-time Compute** paper (Lin et al., arxiv 2504.13171) — precomp
 | **Async "dreaming"** (ChatGPT/Mem0) | cheap inline write + background curates a durable profile w/ confidence tags | **idle / between sessions** (user never waits) |
 | **Forgetting/decay** | time-decay / access-count / importance-thresholded prune | same background cadence; the *missing piece* in most modules |
 
-**For one user:** a **cron/idle-triggered reflective pass**, not a second *live* agent — same benefit, far less machinery. (ntrp's `feat/memory-rebuild` sweep is exactly this shape.) Dex runs a "dreamer" cron over new data; throttled cadence; explicit anti-heartbeat stance.
+**For one user:** a **cron/idle-triggered reflective pass**, not a second *live* agent — same benefit, far less machinery. (Arden's `feat/memory-rebuild` sweep is exactly this shape.) Dex runs a "dreamer" cron over new data; throttled cadence; explicit anti-heartbeat stance.
 
 ## 5. What the evidence actually says
 
@@ -90,7 +90,7 @@ License: **Sleep-time Compute** paper (Lin et al., arxiv 2504.13171) — precomp
 - **Aliases-first entity resolution** is the load-bearing hard problem; context-pollution-at-retrieval is the other ("the win is not injecting more context — it is injecting the right tiny slice").
 - **Background "dreamer" cron**; daily append-only logs; `me.md` grounding (write the user's profile from `auth.users`, not the most-mentioned Slack person); explicit `remember` tool; reference = Claude Code 4-part memory.
 
-## 7. Implications for ntrp (minimal design)
+## 7. Implications for arden (minimal design)
 
 **Keep (already SOTA-right):**
 - Curated markdown docs per scope (file-blocks) — proven for the sub-150-conversation single-user regime. Borrow Claude's anti-clutter + size-limit disciplines.

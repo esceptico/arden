@@ -22,7 +22,7 @@ Choose the Google services you want:
 - **Email only** — Gmail read/send scopes
 - **Email + Calendar** — Gmail read/send plus Calendar
 - **Calendar only** — Calendar without Gmail tools
-- **All current Google services** — legacy full ntrp scope set, including Pub/Sub
+- **All current Google services** — legacy full arden scope set, including Pub/Sub
 
 ### Create Google OAuth credentials
 
@@ -42,11 +42,11 @@ Use the assistant to either:
 - Select/import the downloaded credentials file by path, or
 - Paste the credentials JSON directly
 
-ntrp saves the normalized credentials to `~/.ntrp/gmail_credentials.json`.
+arden saves the normalized credentials to `~/.arden/gmail_credentials.json`.
 
 ### Add account
 
-Click **Add account**. ntrp opens a local browser OAuth consent flow and saves the token under `~/.ntrp/`.
+Click **Add account**. Arden opens a local browser OAuth consent flow and saves the token under `~/.arden/`.
 
 </Steps>
 
@@ -55,34 +55,34 @@ Click **Add account**. ntrp opens a local browser OAuth consent flow and saves t
 If you do not use the desktop assistant, place your Google OAuth Desktop app credentials at:
 
 ```bash
-~/.ntrp/gmail_credentials.json
+~/.arden/gmail_credentials.json
 ```
 
 Then enable Gmail:
 
 ```bash
-export NTRP_GMAIL=true
+export ARDEN_GMAIL=true
 ```
 
 Start the server and desktop app, then add the account from **Settings → Integrations** or call:
 
 ```bash
 curl -X POST http://localhost:6877/gmail/add \
-  -H "Authorization: Bearer $NTRP_API_KEY" \
+  -H "Authorization: Bearer $ARDEN_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"service_choice":"email"}'
 ```
 
 ## Google verification note
 
-ntrp currently uses **bring-your-own Google OAuth credentials**. Gmail scopes such as read/send are restricted Google scopes, so shipping a shared public OAuth app would require Google's verification/security-assessment process. BYO credentials keep setup local and avoid routing Gmail access through a third-party auth broker.
+arden currently uses **bring-your-own Google OAuth credentials**. Gmail scopes such as read/send are restricted Google scopes, so shipping a shared public OAuth app would require Google's verification/security-assessment process. BYO credentials keep setup local and avoid routing Gmail access through a third-party auth broker.
 
 ## Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NTRP_GMAIL` | `false` | Enable Gmail integration |
-| `NTRP_GMAIL_DAYS` | `30` | Days of email history to index |
+| `ARDEN_GMAIL` | `false` | Enable Gmail integration |
+| `ARDEN_GMAIL_DAYS` | `30` | Days of email history to index |
 
 ## Available tools
 

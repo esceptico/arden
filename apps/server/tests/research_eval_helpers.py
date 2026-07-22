@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 
-from ntrp.agent.ledger import GapNote, SharedLedger
+from arden.agent.ledger import GapNote, SharedLedger
 
 
 @dataclass(frozen=True, slots=True)

@@ -2,10 +2,10 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from ntrp.server.app import app
-from ntrp.server.deps import require_skill_service
-from ntrp.skills.registry import SkillRegistry
-from ntrp.skills.service import SkillService, get_skills_dirs
+from arden.server.app import app
+from arden.server.deps import require_skill_service
+from arden.skills.registry import SkillRegistry
+from arden.skills.service import SkillService, get_skills_dirs
 
 
 def _write_skill(root: Path, name: str, frontmatter: str, body: str = "# Body\n") -> None:
@@ -59,7 +59,6 @@ def test_registry_loads_skill_governance_metadata(tmp_path):
     assert skill.reviewed_at == "2026-05-16"
 
 
-
 def test_registry_renders_skill_xml_with_arguments(tmp_path):
     _write_skill(
         tmp_path,
@@ -82,11 +81,7 @@ def test_skill_service_governance_report_marks_cleanup_candidates(tmp_path):
     _write_skill(
         tmp_path,
         "old-helper",
-        (
-            "name: old-helper\n"
-            "description: Old helper\n"
-            "reviewed_at: 2025-01-01\n"
-        ),
+        ("name: old-helper\ndescription: Old helper\nreviewed_at: 2025-01-01\n"),
     )
     registry = SkillRegistry()
     registry.load([(tmp_path, "area")])
@@ -104,11 +99,7 @@ def test_skill_governance_endpoint_returns_report(tmp_path):
     _write_skill(
         tmp_path,
         "old-helper",
-        (
-            "name: old-helper\n"
-            "description: Old helper\n"
-            "reviewed_at: 2025-01-01\n"
-        ),
+        ("name: old-helper\ndescription: Old helper\nreviewed_at: 2025-01-01\n"),
     )
     registry = SkillRegistry()
     registry.load([(tmp_path, "area")])

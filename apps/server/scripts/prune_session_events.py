@@ -18,8 +18,8 @@ import argparse
 import sqlite3
 from pathlib import Path
 
-from ntrp.config import get_config
-from ntrp.events.sse import EPHEMERAL_EVENT_TYPES
+from arden.config import get_config
+from arden.events.sse import EPHEMERAL_EVENT_TYPES
 
 EPHEMERAL_VALUES = sorted(t.value for t in EPHEMERAL_EVENT_TYPES)
 

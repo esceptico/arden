@@ -2,7 +2,7 @@
 
 **Status:** PORTED 2026-07-14 — desktop + server shipped on codex/memory-ledger-v2 (uncommitted); gates green (desktop 700/700 tests + typecheck + lint + build; server 1834 passed). Pixel-verified via CDP rig against the fixture vault (light/dark/nb/editor/activity/diff/sort/create).
 **Draft:** `docs/mockups/memory-workspace-draft.html` (published: https://claude.ai/code/artifact/031fb505-bda2-4ca1-85a2-33f5343bbfff)
-**Generator:** scratchpad `build-draft.py` + `draft-template.html` — builds the draft from the real vault at `~/.ntrp/memory`. The TEMPLATE is the pixel spec (CSS + behaviors).
+**Generator:** scratchpad `build-draft.py` + `draft-template.html` — builds the draft from the real vault at `~/.arden/memory`. The TEMPLATE is the pixel spec (CSS + behaviors).
 **Hard rule (user-mandated):** port AS IS. No reinterpretation, no "improvements" during the port. Where the draft and the current app differ, the draft wins.
 
 ## Material model (final)

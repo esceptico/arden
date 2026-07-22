@@ -1,6 +1,6 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
-contextBridge.exposeInMainWorld("ntrpDesktop", {
+contextBridge.exposeInMainWorld("ardenDesktop", {
   version: () => process.versions.electron,
   app: {
     reload: () => ipcRenderer.invoke("app:reload"),

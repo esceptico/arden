@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Slice 05 — invoke codex exec headless.
 # Prereq: user has approved docs/internal/slices/slice-05-claim-layer.md (§1–§16).
-# This script does NOT touch ~/.ntrp/memory.db. Tests run on temp DBs.
+# This script does NOT touch ~/.arden/memory.db. Tests run on temp DBs.
 # Run from repo root.
 
 set -euo pipefail
 
 BRIEF="docs/internal/slices/slice-05-claim-layer.md"
-SPEC="docs/internal/ntrp-memory-redesign-spec.md"
+SPEC="docs/internal/arden-memory-redesign-spec.md"
 
 if [ ! -f "$BRIEF" ]; then
   echo "Missing $BRIEF" >&2
@@ -33,14 +33,14 @@ echo ""
 
 # Pre-flight: schema_version in live DB still 31?
 echo "==== Pre-flight: schema_version in live DB ===="
-SCHEMA_VER=$(sqlite3 ~/.ntrp/memory.db "SELECT value FROM meta WHERE key='schema_version';" 2>/dev/null || echo "")
+SCHEMA_VER=$(sqlite3 ~/.arden/memory.db "SELECT value FROM meta WHERE key='schema_version';" 2>/dev/null || echo "")
 echo "schema_version=$SCHEMA_VER"
 echo ""
 
 # Pre-flight: confirm pass-1 prompt + pattern_finder.py exist
 echo "==== Pre-flight: slice 4 artifacts present ===="
-for f in apps/server/ntrp/memory/pattern_finder.py \
-         apps/server/ntrp/memory/prompts/pass1.txt \
+for f in apps/server/arden/memory/pattern_finder.py \
+         apps/server/arden/memory/prompts/pass1.txt \
          apps/server/tests/memory/test_pattern_finder.py; do
   if [ ! -f "$f" ]; then
     echo "MISSING: $f — slice 4 prereq not satisfied" >&2
@@ -52,7 +52,7 @@ echo ""
 
 # Pre-flight: confirm dead search_* wrappers still present (slice 5 will delete them)
 echo "==== Pre-flight: dead search_* wrappers present (to be deleted in slice 5) ===="
-DEAD_COUNT=$(grep -cE 'def search_(text|vector|entities|temporal)' apps/server/ntrp/memory/service.py || echo "0")
+DEAD_COUNT=$(grep -cE 'def search_(text|vector|entities|temporal)' apps/server/arden/memory/service.py || echo "0")
 echo "Found $DEAD_COUNT dead wrapper definitions (expect 4)"
 if [ "$DEAD_COUNT" != "4" ]; then
   echo "WARN: expected 4 dead wrappers, found $DEAD_COUNT — backlog §3A may already be partially addressed" >&2

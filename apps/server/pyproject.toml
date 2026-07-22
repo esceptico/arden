@@ -1,5 +1,5 @@
 [project]
-name = "ntrp"
+name = "arden"
 version = "1.0.0-rc.3"
 description = "Personal AI assistant with persistent memory and multi-source knowledge integration"
 readme = "README.md"
@@ -39,7 +39,7 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/esceptico/ntrp"
+Repository = "https://github.com/esceptico/arden"
 
 [project.optional-dependencies]
 gmail = [
@@ -53,19 +53,19 @@ dev = [
 ]
 
 [project.scripts]
-ntrp-server = "ntrp.cli:main"
+arden-server = "arden.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["ntrp"]
+packages = ["arden"]
 exclude = ["**/.DS_Store"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "skills" = "skills"
-"ntrp/llm/generated_models.json" = "ntrp/llm/generated_models.json"
+"arden/llm/generated_models.json" = "arden/llm/generated_models.json"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
@@ -113,7 +113,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["ntrp"]
+known-first-party = ["arden"]
 
 [tool.ruff.format]
 quote-style = "double"

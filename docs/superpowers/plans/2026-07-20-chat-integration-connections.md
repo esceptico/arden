@@ -24,11 +24,11 @@
 ### Task 1: Native connection descriptors
 
 **Files:**
-- Modify: `apps/server/ntrp/integrations/base.py`
-- Modify: `apps/server/ntrp/integrations/registry.py`
-- Modify: `apps/server/ntrp/integrations/gmail/__init__.py`
-- Modify: `apps/server/ntrp/integrations/calendar/__init__.py`
-- Modify: `apps/server/ntrp/integrations/slack/__init__.py`
+- Modify: `apps/server/arden/integrations/base.py`
+- Modify: `apps/server/arden/integrations/registry.py`
+- Modify: `apps/server/arden/integrations/gmail/__init__.py`
+- Modify: `apps/server/arden/integrations/calendar/__init__.py`
+- Modify: `apps/server/arden/integrations/slack/__init__.py`
 - Test: `apps/server/tests/test_integration_connections.py`
 
 **Interfaces:**
@@ -91,18 +91,18 @@ Run: `cd apps/server && uv run pytest tests/test_integration_connections.py -q`
 - [ ] **Step 5: Commit the descriptor contract**
 
 ```bash
-git add apps/server/ntrp/integrations apps/server/tests/test_integration_connections.py
+git add apps/server/arden/integrations apps/server/tests/test_integration_connections.py
 git commit -m "feat: add native integration connection descriptors"
 ```
 
 ### Task 2: Connection prompt and request tool
 
 **Files:**
-- Create: `apps/server/ntrp/tools/connections.py`
-- Modify: `apps/server/ntrp/integrations/core.py`
-- Modify: `apps/server/ntrp/core/prompts.py`
-- Modify: `apps/server/ntrp/services/chat.py`
-- Modify: `apps/server/ntrp/server/runtime/core.py`
+- Create: `apps/server/arden/tools/connections.py`
+- Modify: `apps/server/arden/integrations/core.py`
+- Modify: `apps/server/arden/core/prompts.py`
+- Modify: `apps/server/arden/services/chat.py`
+- Modify: `apps/server/arden/server/runtime/core.py`
 - Test: `apps/server/tests/test_connection_suggestions.py`
 
 **Interfaces:**
@@ -155,21 +155,21 @@ Run: `cd apps/server && uv run pytest tests/test_connection_suggestions.py -q`
 - [ ] **Step 5: Commit suggestion support**
 
 ```bash
-git add apps/server/ntrp/tools/connections.py apps/server/ntrp/integrations/core.py apps/server/ntrp/core/prompts.py apps/server/ntrp/services/chat.py apps/server/ntrp/server/runtime/core.py apps/server/tests/test_connection_suggestions.py
+git add apps/server/arden/tools/connections.py apps/server/arden/integrations/core.py apps/server/arden/core/prompts.py apps/server/arden/services/chat.py apps/server/arden/server/runtime/core.py apps/server/tests/test_connection_suggestions.py
 git commit -m "feat: add constrained integration connection requests"
 ```
 
 ### Task 3: Durable connection suspension and HTTP resolution
 
 **Files:**
-- Modify: `apps/server/ntrp/events/sse.py`
-- Modify: `apps/server/ntrp/tools/core/context.py`
-- Modify: `apps/server/ntrp/server/state.py`
-- Modify: `apps/server/ntrp/context/store.py`
-- Modify: `apps/server/ntrp/services/chat.py`
-- Modify: `apps/server/ntrp/server/schemas.py`
-- Modify: `apps/server/ntrp/server/routers/chat.py`
-- Modify: `apps/server/ntrp/server/routers/session.py`
+- Modify: `apps/server/arden/events/sse.py`
+- Modify: `apps/server/arden/tools/core/context.py`
+- Modify: `apps/server/arden/server/state.py`
+- Modify: `apps/server/arden/context/store.py`
+- Modify: `apps/server/arden/services/chat.py`
+- Modify: `apps/server/arden/server/schemas.py`
+- Modify: `apps/server/arden/server/routers/chat.py`
+- Modify: `apps/server/arden/server/routers/session.py`
 - Test: `apps/server/tests/test_connection_requests.py`
 - Test: `apps/server/tests/test_streaming_events.py`
 
@@ -241,17 +241,17 @@ Run: `cd apps/server && uv run pytest tests/test_connection_requests.py tests/te
 - [ ] **Step 5: Commit durable connection requests**
 
 ```bash
-git add apps/server/ntrp/events/sse.py apps/server/ntrp/tools/core/context.py apps/server/ntrp/server/state.py apps/server/ntrp/context/store.py apps/server/ntrp/services/chat.py apps/server/ntrp/server/schemas.py apps/server/ntrp/server/routers/chat.py apps/server/ntrp/server/routers/session.py apps/server/tests
+git add apps/server/arden/events/sse.py apps/server/arden/tools/core/context.py apps/server/arden/server/state.py apps/server/arden/context/store.py apps/server/arden/services/chat.py apps/server/arden/server/schemas.py apps/server/arden/server/routers/chat.py apps/server/arden/server/routers/session.py apps/server/tests
 git commit -m "feat: persist chat connection requests"
 ```
 
 ### Task 4: Typed provider recovery and safe retry
 
 **Files:**
-- Modify: `apps/server/ntrp/integrations/google_auth/auth.py`
-- Modify: `apps/server/ntrp/integrations/gmail/client.py`
-- Modify: `apps/server/ntrp/integrations/slack/client.py`
-- Modify: `apps/server/ntrp/core/tool_executor.py`
+- Modify: `apps/server/arden/integrations/google_auth/auth.py`
+- Modify: `apps/server/arden/integrations/gmail/client.py`
+- Modify: `apps/server/arden/integrations/slack/client.py`
+- Modify: `apps/server/arden/core/tool_executor.py`
 - Test: `apps/server/tests/test_connection_recovery.py`
 - Test: `apps/server/tests/test_gmail.py`
 - Test: `apps/server/tests/test_slack.py`
@@ -299,7 +299,7 @@ Run: `cd apps/server && uv run pytest tests/test_connection_recovery.py tests/te
 - [ ] **Step 5: Commit typed recovery**
 
 ```bash
-git add apps/server/ntrp/integrations apps/server/ntrp/core/tool_executor.py apps/server/tests
+git add apps/server/arden/integrations apps/server/arden/core/tool_executor.py apps/server/tests
 git commit -m "feat: recover typed native integration failures"
 ```
 
@@ -391,7 +391,7 @@ Run: `cd apps/server && uv run pytest tests/test_integration_connections.py test
 
 - [ ] **Step 2: Run server type/lint gates used by the repository**
 
-Run: `cd apps/server && uv run ruff check ntrp tests`
+Run: `cd apps/server && uv run ruff check arden tests`
 
 - [ ] **Step 3: Run focused desktop suite**
 
@@ -408,6 +408,6 @@ Confirm from current files and test output that recovery, suggestion, durable re
 - [ ] **Step 6: Commit verification fixes if any**
 
 ```bash
-git add apps/server/ntrp/integrations/base.py apps/server/ntrp/integrations/registry.py apps/server/ntrp/integrations/gmail/__init__.py apps/server/ntrp/integrations/calendar/__init__.py apps/server/ntrp/integrations/slack/__init__.py apps/server/ntrp/integrations/google_auth/auth.py apps/server/ntrp/integrations/gmail/client.py apps/server/ntrp/integrations/slack/client.py apps/server/ntrp/integrations/core.py apps/server/ntrp/tools/connections.py apps/server/ntrp/tools/core/context.py apps/server/ntrp/core/prompts.py apps/server/ntrp/core/tool_executor.py apps/server/ntrp/services/chat.py apps/server/ntrp/server/runtime/core.py apps/server/ntrp/events/sse.py apps/server/ntrp/server/state.py apps/server/ntrp/context/store.py apps/server/ntrp/server/schemas.py apps/server/ntrp/server/routers/chat.py apps/server/ntrp/server/routers/session.py apps/server/tests/test_integration_connections.py apps/server/tests/test_connection_suggestions.py apps/server/tests/test_connection_requests.py apps/server/tests/test_connection_recovery.py apps/desktop/src/api/events.ts apps/desktop/src/api/chat.ts apps/desktop/src/stores/types.ts apps/desktop/src/stores/index.ts apps/desktop/src/stores/chat-stream.ts apps/desktop/src/actions/connections.ts apps/desktop/src/features/chat/components/ConnectionBanner.tsx apps/desktop/src/features/chat/components/Chat.tsx apps/desktop/tests/connectionProjection.test.ts apps/desktop/tests/connectionBanner.test.tsx
+git add apps/server/arden/integrations/base.py apps/server/arden/integrations/registry.py apps/server/arden/integrations/gmail/__init__.py apps/server/arden/integrations/calendar/__init__.py apps/server/arden/integrations/slack/__init__.py apps/server/arden/integrations/google_auth/auth.py apps/server/arden/integrations/gmail/client.py apps/server/arden/integrations/slack/client.py apps/server/arden/integrations/core.py apps/server/arden/tools/connections.py apps/server/arden/tools/core/context.py apps/server/arden/core/prompts.py apps/server/arden/core/tool_executor.py apps/server/arden/services/chat.py apps/server/arden/server/runtime/core.py apps/server/arden/events/sse.py apps/server/arden/server/state.py apps/server/arden/context/store.py apps/server/arden/server/schemas.py apps/server/arden/server/routers/chat.py apps/server/arden/server/routers/session.py apps/server/tests/test_integration_connections.py apps/server/tests/test_connection_suggestions.py apps/server/tests/test_connection_requests.py apps/server/tests/test_connection_recovery.py apps/desktop/src/api/events.ts apps/desktop/src/api/chat.ts apps/desktop/src/stores/types.ts apps/desktop/src/stores/index.ts apps/desktop/src/stores/chat-stream.ts apps/desktop/src/actions/connections.ts apps/desktop/src/features/chat/components/ConnectionBanner.tsx apps/desktop/src/features/chat/components/Chat.tsx apps/desktop/tests/connectionProjection.test.ts apps/desktop/tests/connectionBanner.test.tsx
 git commit -m "test: verify integration connection flows"
 ```

@@ -1,4 +1,4 @@
-from ntrp.areas.projection import area_automation_match, parse_open_loops
+from arden.areas.projection import area_automation_match, parse_open_loops
 
 PROSE = """# O-1A
 
@@ -15,7 +15,7 @@ Stuff.
 
 
 def test_areas_from_records_projection():
-    from ntrp.areas.models import areas_from_records
+    from arden.areas.models import areas_from_records
 
     rows = [
         {"area_id": "p1", "name": "Health", "page_path": "topics/health.md", "autonomy": "observe"},
@@ -64,12 +64,12 @@ def test_area_automation_match_rejects_unrelated_name():
 
 def test_parse_related_extracts_wikilink_slugs():
     prose = "# O-1A\n\n## Open loops\n- Find counsel.\n\n## Related\n- [[United States]] — visa planning context.\n- [[Health]]\n"
-    from ntrp.areas.projection import parse_related
+    from arden.areas.projection import parse_related
 
     assert parse_related(prose) == ["united-states", "health"]
 
 
 def test_parse_related_missing_section_is_empty():
-    from ntrp.areas.projection import parse_related
+    from arden.areas.projection import parse_related
 
     assert parse_related("# T\n\n## Open loops\n- x\n") == []

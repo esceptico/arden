@@ -5,15 +5,16 @@ split into sequential mutating + parallel non-mutating phases. Approvals
 are routed per tool_id via Future, so multiple mutating tools can each
 await their own approval without racing on a shared queue.
 """
+
 import asyncio
 
 import pytest
 
-from ntrp.agent.tools.dispatch import _append_results
-from ntrp.agent.tools.runner import ToolRunner
-from ntrp.agent.types.events import ToolCompleted, ToolStarted
-from ntrp.agent.types.tool_call import FunctionCall, PendingToolCall, ToolArgumentError, ToolCall
-from ntrp.agent.types.tools import ToolMeta, ToolOutcomeStatus, ToolResult
+from arden.agent.tools.dispatch import _append_results
+from arden.agent.tools.runner import ToolRunner
+from arden.agent.types.events import ToolCompleted, ToolStarted
+from arden.agent.types.tool_call import FunctionCall, PendingToolCall, ToolArgumentError, ToolCall
+from arden.agent.types.tools import ToolMeta, ToolOutcomeStatus, ToolResult
 
 
 class _FakeExecutor:

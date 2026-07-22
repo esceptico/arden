@@ -2,7 +2,7 @@
 
 Date: 2026-05-29 (updated)
 Status: Gap A (capture) SHIPPED; Gap B (typing) deferred — see §4
-Extends: `ntrp-memory-redesign-spec.md` §2.5 (`artifact_ref`), §3.3 (pattern finder)
+Extends: `arden-memory-redesign-spec.md` §2.5 (`artifact_ref`), §3.3 (pattern finder)
 
 ## 0. History / what shipped
 
@@ -84,7 +84,7 @@ linked to the artifact_ref via a DAG edge**, not a new `sop`/usage column.
 - BUT nothing currently *creates* that edge — so using SOPs needs one small
   producer (or a manual UI link), same shape as the artifact_ref gap.
 - Granularity rule:
-  - reusable, multi-step procedure → real `skill` (file in `~/.ntrp/skills/` +
+  - reusable, multi-step procedure → real `skill` (file in `~/.arden/skills/` +
     lifecycle), linked to the artifact. Worth the weight.
   - throwaway one-liner ("always filter by quarter") → a `skill` node is overkill;
     ONLY this case justifies a future inline caption field on the artifact. Add it

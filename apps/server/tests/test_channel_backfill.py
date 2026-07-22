@@ -4,14 +4,14 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-import ntrp.database as database
-from ntrp.automation.models import Automation
-from ntrp.automation.scheduler import Scheduler
-from ntrp.automation.service import AutomationService
-from ntrp.automation.store import AutomationStore
-from ntrp.automation.triggers import TimeTrigger
-from ntrp.context.store import SessionStore
-from ntrp.services.session import SessionService
+import arden.database as database
+from arden.automation.models import Automation
+from arden.automation.scheduler import Scheduler
+from arden.automation.service import AutomationService
+from arden.automation.store import AutomationStore
+from arden.automation.triggers import TimeTrigger
+from arden.context.store import SessionStore
+from arden.services.session import SessionService
 
 
 @pytest_asyncio.fixture

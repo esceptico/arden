@@ -59,7 +59,7 @@ test("opening Sources scopes the exact turn and expands the persisted right pane
   expect(getState().rightInspectorTab).toBe("sources");
   expect(getState().sourceTurnId).toBe("user-1");
   expect(getState().prefs.rightPanelCollapsed).toBe(false);
-  expect(JSON.parse(localStorage.getItem("ntrp.desktop.prefs") ?? "{}").rightPanelCollapsed).toBe(false);
+  expect(JSON.parse(localStorage.getItem("arden.desktop.prefs") ?? "{}").rightPanelCollapsed).toBe(false);
 });
 
 test("manual Sources selection clears exact scope so the latest source-bearing turn is selected", () => {

@@ -6,19 +6,19 @@
 
 **Architecture:** Server events carry the owner of each transient action: top-level run or a specific subagent tool call. Desktop routes subagent-owned events into `ActivityItem` state and keeps global compaction UI non-persistent. Subagent cancellation is handled by a run-local handle registry so cancelling one child summarizes partial work without cancelling the parent run.
 
-**Tech Stack:** Python FastAPI/asyncio server, ntrp agent loop, SSE event contracts, React/Zustand desktop, Bun/Vitest-style tests, pytest.
+**Tech Stack:** Python FastAPI/asyncio server, Arden agent loop, SSE event contracts, React/Zustand desktop, Bun/Vitest-style tests, pytest.
 
 ---
 
 ## File Map
 
-- Create `apps/server/ntrp/core/naming.py`: deterministic name helpers for chat sessions, foreground subagents, and background agents.
-- Modify `apps/server/ntrp/events/sse.py`: add `scope` and `parent_tool_call_id` ownership fields to compaction events.
-- Modify `apps/server/ntrp/core/compaction_model_request_middleware.py`: emit compaction events with owner metadata.
-- Modify `apps/server/ntrp/core/spawner.py`: register foreground subagents, support cancel-with-summary, emit trace-local compaction, and use generated agent names.
-- Modify `apps/server/ntrp/server/state.py`: store foreground subagent handles under each active run.
-- Modify `apps/server/ntrp/server/routers/chat.py`: add `POST /chat/subagents/{tool_call_id}/cancel`.
-- Modify `apps/server/ntrp/services/chat.py`: use generated conversation names and keep top-level compaction metadata run-scoped.
+- Create `apps/server/arden/core/naming.py`: deterministic name helpers for chat sessions, foreground subagents, and background agents.
+- Modify `apps/server/arden/events/sse.py`: add `scope` and `parent_tool_call_id` ownership fields to compaction events.
+- Modify `apps/server/arden/core/compaction_model_request_middleware.py`: emit compaction events with owner metadata.
+- Modify `apps/server/arden/core/spawner.py`: register foreground subagents, support cancel-with-summary, emit trace-local compaction, and use generated agent names.
+- Modify `apps/server/arden/server/state.py`: store foreground subagent handles under each active run.
+- Modify `apps/server/arden/server/routers/chat.py`: add `POST /chat/subagents/{tool_call_id}/cancel`.
+- Modify `apps/server/arden/services/chat.py`: use generated conversation names and keep top-level compaction metadata run-scoped.
 - Modify `apps/desktop/src/api.ts`: extend event types and add `cancelSubagentApi`.
 - Modify `apps/desktop/src/store/types.ts`: add later task-specific `ActivityItem` fields for agent naming/cancel state.
 - Modify `apps/desktop/src/store/chat-stream.ts`: route run-owned compaction to global state and agent-owned compaction into transcript projection.
@@ -33,9 +33,9 @@
 ### Task 1: Route Compaction By Owner
 
 **Files:**
-- Modify: `apps/server/ntrp/events/sse.py`
-- Modify: `apps/server/ntrp/core/compaction_model_request_middleware.py`
-- Modify: `apps/server/ntrp/core/spawner.py`
+- Modify: `apps/server/arden/events/sse.py`
+- Modify: `apps/server/arden/core/compaction_model_request_middleware.py`
+- Modify: `apps/server/arden/core/spawner.py`
 - Modify: `apps/desktop/src/api.ts`
 - Modify: `apps/desktop/src/store/chat-stream.ts`
 - Modify: `apps/desktop/src/store/transcript-projection.ts`
@@ -184,10 +184,10 @@ Expected: pass.
 ### Task 3: Cancel Foreground Subagents With Partial Summary
 
 **Files:**
-- Modify: `apps/server/ntrp/server/state.py`
-- Modify: `apps/server/ntrp/core/spawner.py`
-- Modify: `apps/server/ntrp/server/routers/chat.py`
-- Modify: `apps/server/ntrp/events/sse.py`
+- Modify: `apps/server/arden/server/state.py`
+- Modify: `apps/server/arden/core/spawner.py`
+- Modify: `apps/server/arden/server/routers/chat.py`
+- Modify: `apps/server/arden/events/sse.py`
 - Modify: `apps/desktop/src/api.ts`
 - Modify: `apps/desktop/src/components/trace/ActivityTrace.tsx`
 - Modify: `apps/desktop/src/components/ToolViewer.tsx`
@@ -253,7 +253,7 @@ Expected: fails because foreground subagents are not registered or cancellable.
 
 - [x] **Step 3: Implement subagent handles**
 
-In `apps/server/ntrp/server/state.py`, add:
+In `apps/server/arden/server/state.py`, add:
 
 ```python
 @dataclass
@@ -299,7 +299,7 @@ def cancel_subagent(self, run_id: str, tool_call_id: str) -> dict[str, bool]:
 
 - [x] **Step 4: Wrap foreground subagent execution**
 
-In `apps/server/ntrp/core/spawner.py`, run foreground `_stream_to` in a child task, register it, and distinguish parent cancellation from subagent cancellation:
+In `apps/server/arden/core/spawner.py`, run foreground `_stream_to` in a child task, register it, and distinguish parent cancellation from subagent cancellation:
 
 ```python
 stream_task = asyncio.create_task(_stream_to(_foreground_child_events))
@@ -322,7 +322,7 @@ Return a `SpawnResult` whose `text` is the partial summary so the parent receive
 
 - [x] **Step 5: Add API route**
 
-In `apps/server/ntrp/server/routers/chat.py`:
+In `apps/server/arden/server/routers/chat.py`:
 
 ```python
 @router.post("/chat/subagents/{tool_call_id}/cancel", status_code=202)
@@ -426,10 +426,10 @@ Expected: pass.
 ### Task 4: Generated Names For Conversations And Agents
 
 **Files:**
-- Create: `apps/server/ntrp/core/naming.py`
-- Modify: `apps/server/ntrp/services/chat.py`
-- Modify: `apps/server/ntrp/core/spawner.py`
-- Modify: `apps/server/ntrp/events/sse.py`
+- Create: `apps/server/arden/core/naming.py`
+- Modify: `apps/server/arden/services/chat.py`
+- Modify: `apps/server/arden/core/spawner.py`
+- Modify: `apps/server/arden/events/sse.py`
 - Modify: `apps/desktop/src/store/transcript-projection.ts`
 - Modify: `apps/desktop/src/store/types.ts`
 - Test: `apps/server/tests/test_naming.py`
@@ -440,7 +440,7 @@ Expected: pass.
 Create `apps/server/tests/test_naming.py`:
 
 ```python
-from ntrp.core.naming import agent_name, conversation_name
+from arden.core.naming import agent_name, conversation_name
 
 
 def test_conversation_name_removes_request_filler():
@@ -463,11 +463,11 @@ Run:
 uv run pytest apps/server/tests/test_naming.py -q
 ```
 
-Expected: fails because `ntrp.core.naming` does not exist.
+Expected: fails because `arden.core.naming` does not exist.
 
 - [x] **Step 3: Implement deterministic naming helper**
 
-Create `apps/server/ntrp/core/naming.py`:
+Create `apps/server/arden/core/naming.py`:
 
 ```python
 import re
@@ -506,7 +506,7 @@ def agent_name(kind: str, task: str) -> str:
 
 - [x] **Step 4: Use helper for chat session names**
 
-In `apps/server/ntrp/services/chat.py`, replace:
+In `apps/server/arden/services/chat.py`, replace:
 
 ```python
 name_candidate = message.strip() or ("[image]" if images else "")
@@ -523,7 +523,7 @@ if not session_state.name and not is_init and not message.strip().startswith("/"
 
 - [x] **Step 5: Use helper for agents**
 
-In `apps/server/ntrp/core/spawner.py`:
+In `apps/server/arden/core/spawner.py`:
 
 ```python
 agent_label = agent_name("sub-agent", task)
@@ -679,7 +679,7 @@ Expected: typecheck passes, build exits 0, diff check is clean. Existing Vite ch
 Run:
 
 ```bash
-git add apps/server/ntrp apps/server/tests apps/desktop/src apps/desktop/tests docs/superpowers/plans/2026-05-23-agent-trace-control.md
+git add apps/server/arden apps/server/tests apps/desktop/src apps/desktop/tests docs/superpowers/plans/2026-05-23-agent-trace-control.md
 git commit -m "Improve subagent trace controls"
 ```
 

@@ -3,11 +3,11 @@ from datetime import UTC, datetime
 
 import pytest
 
-import ntrp.tools.directives as directives_module
-from ntrp.context.models import SessionState
-from ntrp.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
-from ntrp.tools.core.registry import ToolRegistry
-from ntrp.tools.directives import (
+import arden.tools.directives as directives_module
+from arden.context.models import SessionState
+from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
+from arden.tools.core.registry import ToolRegistry
+from arden.tools.directives import (
     GetDirectivesInput,
     SetDirectivesInput,
     approve_set_directives,

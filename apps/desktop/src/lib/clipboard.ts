@@ -9,7 +9,7 @@
  *  Clipboard API is the last resort for plain secure browser contexts. */
 export async function copyText(text: string): Promise<boolean> {
   try {
-    if (await window.ntrpDesktop?.clipboard?.writeText(text)) return true;
+    if (await window.ardenDesktop?.clipboard?.writeText(text)) return true;
   } catch {
     // bridge unavailable or rejected — fall through
   }

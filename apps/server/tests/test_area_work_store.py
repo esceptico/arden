@@ -4,11 +4,11 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-import ntrp.database as database
-from ntrp.areas.agent import AreaCustodianReport
-from ntrp.areas.work_store import AreaWorkConflict, AreaWorkReportError, AreaWorkStore
-from ntrp.context.store import SessionStore
-from ntrp.services.session import SessionService
+import arden.database as database
+from arden.areas.agent import AreaCustodianReport
+from arden.areas.work_store import AreaWorkConflict, AreaWorkReportError, AreaWorkStore
+from arden.context.store import SessionStore
+from arden.services.session import SessionService
 
 
 @pytest_asyncio.fixture
@@ -113,40 +113,52 @@ async def test_brief_caps_recent_completions_and_selects_one_active_item_per_are
     for area, prefix in ((health, "health"), (visa, "visa")):
         for index in range(2):
             item = await work.create_work_item(
-                area["area_id"], key=f"{prefix}-{index}", outcome_key=None,
-                kind="action", text=f"{prefix} action {index}", owner="custodian",
+                area["area_id"],
+                key=f"{prefix}-{index}",
+                outcome_key=None,
+                kind="action",
+                text=f"{prefix} action {index}",
+                owner="custodian",
             )
             if index == 0:
                 await work.update_work_item(
-                    area["area_id"], item.stable_key,
-                    expected_updated_at=item.updated_at, status="in_progress",
+                    area["area_id"],
+                    item.stable_key,
+                    expected_updated_at=item.updated_at,
+                    status="in_progress",
                 )
-    target = next(
-        row for row in (await work.snapshot(health["area_id"])).work_items
-        if row.stable_key == "health-1"
-    )
+    target = next(row for row in (await work.snapshot(health["area_id"])).work_items if row.stable_key == "health-1")
     completion = report(
         outcome_changes=[],
-        work_changes=[{
-            "op": "complete", "key": target.stable_key,
-            "expected_updated_at": target.updated_at,
-        }],
-        evidence=[{
-            "target_type": "work", "target_key": target.stable_key,
-            "event_type": "completed", "summary": "Finished the health action",
-            "source_refs": ["session:proof"],
-        }],
+        work_changes=[
+            {
+                "op": "complete",
+                "key": target.stable_key,
+                "expected_updated_at": target.updated_at,
+            }
+        ],
+        evidence=[
+            {
+                "target_type": "work",
+                "target_key": target.stable_key,
+                "event_type": "completed",
+                "summary": "Finished the health action",
+                "source_refs": ["session:proof"],
+            }
+        ],
     )
     assert await work.apply_report(health["area_id"], "run:brief", completion)
 
     brief = await work.brief(
-        {health["area_id"], visa["area_id"]}, now=datetime.now(UTC),
+        {health["area_id"], visa["area_id"]},
+        now=datetime.now(UTC),
     )
 
     assert [row["stable_key"] for row in brief["done"]] == ["health-1"]
     assert brief["done"][0]["text"] == "Finished the health action"
     assert {row["area_id"] for row in brief["in_progress"]} == {
-        health["area_id"], visa["area_id"],
+        health["area_id"],
+        visa["area_id"],
     }
     assert all(row["status"] == "in_progress" for row in brief["in_progress"])
 
@@ -179,18 +191,34 @@ def report(**overrides) -> AreaCustodianReport:
         "next_check_reason": "continue tomorrow",
         "made_progress": True,
         "work_remaining": True,
-        "outcome_changes": [{
-            "op": "create", "key": "labs-normal", "title": "Lab values normalized",
-            "success_criteria": "All flagged values are in range", "priority": 5,
-        }],
-        "work_changes": [{
-            "op": "create", "key": "book-labs", "outcome_key": "labs-normal",
-            "kind": "action", "text": "Book the follow-up panel", "owner": "custodian",
-        }],
-        "evidence": [{
-            "target_type": "work", "target_key": "book-labs", "event_type": "progress",
-            "summary": "Found the correct lab and opening hours", "source_refs": ["https://example.test/lab"],
-        }],
+        "outcome_changes": [
+            {
+                "op": "create",
+                "key": "labs-normal",
+                "title": "Lab values normalized",
+                "success_criteria": "All flagged values are in range",
+                "priority": 5,
+            }
+        ],
+        "work_changes": [
+            {
+                "op": "create",
+                "key": "book-labs",
+                "outcome_key": "labs-normal",
+                "kind": "action",
+                "text": "Book the follow-up panel",
+                "owner": "custodian",
+            }
+        ],
+        "evidence": [
+            {
+                "target_type": "work",
+                "target_key": "book-labs",
+                "event_type": "progress",
+                "summary": "Found the correct lab and opening hours",
+                "source_refs": ["https://example.test/lab"],
+            }
+        ],
     }
     data.update(overrides)
     return AreaCustodianReport.model_validate(data)
@@ -212,9 +240,15 @@ async def test_report_applies_atomically_once_with_evidence(work_env) -> None:
 @pytest.mark.asyncio
 async def test_invalid_report_rolls_back_every_operation(work_env) -> None:
     _conn, _sessions, work, health, _visa = work_env
-    invalid = report(work_changes=[{
-        "op": "complete", "key": "unknown", "expected_updated_at": "missing",
-    }])
+    invalid = report(
+        work_changes=[
+            {
+                "op": "complete",
+                "key": "unknown",
+                "expected_updated_at": "missing",
+            }
+        ]
+    )
 
     with pytest.raises(AreaWorkReportError):
         await work.apply_report(health["area_id"], "run:bad", invalid)
@@ -227,19 +261,30 @@ async def test_invalid_report_rolls_back_every_operation(work_env) -> None:
 async def test_agent_report_loses_to_a_newer_user_edit(work_env) -> None:
     _conn, _sessions, work, health, _visa = work_env
     outcome = await work.create_outcome(
-        health["area_id"], key="labs-normal", title="Labs normalized",
-        success_criteria="All values in range", priority=5, source="user",
+        health["area_id"],
+        key="labs-normal",
+        title="Labs normalized",
+        success_criteria="All values in range",
+        priority=5,
+        source="user",
     )
     stale_report = report(
-        outcome_changes=[{
-            "op": "update", "key": outcome.stable_key, "title": "Agent title",
-            "expected_updated_at": outcome.updated_at,
-        }],
-        work_changes=[], evidence=[],
+        outcome_changes=[
+            {
+                "op": "update",
+                "key": outcome.stable_key,
+                "title": "Agent title",
+                "expected_updated_at": outcome.updated_at,
+            }
+        ],
+        work_changes=[],
+        evidence=[],
     )
     await work.update_outcome(
-        health["area_id"], outcome.stable_key,
-        expected_updated_at=outcome.updated_at, title="User title",
+        health["area_id"],
+        outcome.stable_key,
+        expected_updated_at=outcome.updated_at,
+        title="User title",
     )
 
     with pytest.raises(AreaWorkReportError, match="changed since the run started"):

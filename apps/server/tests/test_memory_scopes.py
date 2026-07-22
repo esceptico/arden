@@ -3,11 +3,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from ntrp.memory.file_store import FilePageStore
-from ntrp.memory.ledger import LedgerEntry, LedgerMeta, render_ledger_entry
-from ntrp.memory.models import Kind, SourceRef
-from ntrp.memory.records import RecordStore
-from ntrp.memory.scopes import (
+from arden.memory.file_store import FilePageStore
+from arden.memory.ledger import LedgerEntry, LedgerMeta, render_ledger_entry
+from arden.memory.models import Kind, SourceRef
+from arden.memory.records import RecordStore
+from arden.memory.scopes import (
     GLOBAL_SCOPE,
     USER_SCOPE,
     MemoryScope,
@@ -39,7 +39,11 @@ def test_scope_for_write_rules():
 
 def test_scopes_for_read_and_source_mirroring():
     assert project_scope(area("ks", "p")) == MemoryScope("area", "p")
-    assert scopes_for_read(project=area("ks", "p"), session_id="s") == [GLOBAL_SCOPE, USER_SCOPE, MemoryScope("area", "p")]
+    assert scopes_for_read(project=area("ks", "p"), session_id="s") == [
+        GLOBAL_SCOPE,
+        USER_SCOPE,
+        MemoryScope("area", "p"),
+    ]
     # No "session" read leg — nothing writes scope_kind="session", so reads are
     # global + user (session_id is accepted but does not scope reads).
     assert scopes_for_read(session_id="s") == [GLOBAL_SCOPE, USER_SCOPE]
@@ -72,7 +76,7 @@ async def test_file_store_new_area_write_round_trips_canonical_scope(tmp_path: P
         ),
     )
     raw.write_text(
-        "<!-- ntrp:records schema=2 page=topics/a.md -->\n" + render_ledger_entry(entry) + "\n",
+        "<!-- arden:records schema=2 page=topics/a.md -->\n" + render_ledger_entry(entry) + "\n",
         encoding="utf-8",
     )
     store = FilePageStore(vault)

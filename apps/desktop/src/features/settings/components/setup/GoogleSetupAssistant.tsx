@@ -103,7 +103,7 @@ export function GoogleSetupAssistant({ onDone }: { onDone: () => Promise<void> |
 
       <section className="grid gap-2">
         <div className="text-sm font-medium text-ink">3. Preflight</div>
-        <p className="m-0 text-xs text-muted">This repo has no IMAP/app-password Gmail path today, so ntrp uses Google OAuth.</p>
+        <p className="m-0 text-xs text-muted">This repo has no IMAP/app-password Gmail path today, so Arden uses Google OAuth.</p>
         <Button variant="secondary" size="md" className="justify-self-start" disabled={busy === "preflight"} onClick={() => void checkPreflight()}>
           {busy === "preflight" ? "Checking…" : `Preflight ${googleChoiceLabel(serviceChoice)}`}
         </Button>
@@ -118,7 +118,7 @@ export function GoogleSetupAssistant({ onDone }: { onDone: () => Promise<void> |
 
       <section className="grid gap-2">
         <div className="text-sm font-medium text-ink">4. Connect</div>
-        <p className="m-0 text-xs text-muted">ntrp opens a browser and waits for the local OAuth redirect.</p>
+        <p className="m-0 text-xs text-muted">Arden opens a browser and waits for the local OAuth redirect.</p>
         <Button size="md" className="justify-self-start" disabled={busy === "connect"} onClick={() => void connect()}>
           {busy === "connect" ? "Connecting…" : "Connect Google account"}
         </Button>

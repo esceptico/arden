@@ -46,7 +46,7 @@ test("treats known knowledge handlers as internal even before builtin metadata i
 });
 
 test("splits seeded area agents from the user's own automations", () => {
-  const custodian = automation({ task_id: "area:ntrp:custodian", name: "ntrp custodian" });
+  const custodian = automation({ task_id: "area:arden:custodian", name: "arden custodian" });
   const own = automation({ task_id: "own", name: "Daily brief" });
   const groups = groupAutomations([custodian, own]);
   expect(groups.user).toEqual([own]);

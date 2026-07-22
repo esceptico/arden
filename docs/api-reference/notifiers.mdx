@@ -72,7 +72,7 @@ Bash:
 curl -X POST http://localhost:6877/notifiers/configs \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"name":"local-notify","type":"bash","config":{"command":"osascript -e '\''display notification $NTRP_BODY with title $NTRP_SUBJECT'\''"}}'
+  -d '{"name":"local-notify","type":"bash","config":{"command":"osascript -e '\''display notification $ARDEN_BODY with title $ARDEN_SUBJECT'\''"}}'
 ```
 
 ## Update config

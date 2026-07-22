@@ -5,11 +5,11 @@ description: "Reference for environment variables and persisted settings."
 
 ## Config resolution
 
-ntrp resolves configuration in this order, highest priority first:
+arden resolves configuration in this order, highest priority first:
 
-1. **Environment variables** — `NTRP_*` prefix or standard provider key names
-2. **`.env` files** — loaded from `~/.ntrp/.env` and `./.env` when developing from source or running Docker Compose
-3. **Settings file** — `~/.ntrp/settings.json`
+1. **Environment variables** — `ARDEN_*` prefix or standard provider key names
+2. **`.env` files** — loaded from `~/.arden/.env` and `./.env` when developing from source or running Docker Compose
+3. **Settings file** — `~/.arden/settings.json`
 4. **Auto-detection** — models and integrations inferred from available keys/tokens
 
 ## LLM providers
@@ -25,37 +25,37 @@ Set at least one provider API key, or connect OpenAI Codex with browser sign-in 
 | OpenRouter/custom | Desktop settings or custom model config | Provider model | depends |
 
 <Note>
-Claude Pro/Max OAuth is not supported. ntrp will not integrate it until Anthropic officially allows third-party applications to use subscription-based OAuth.
+Claude Pro/Max OAuth is not supported. Arden will not integrate it until Anthropic officially allows third-party applications to use subscription-based OAuth.
 </Note>
 
 Override auto-detection with explicit model IDs:
 
 ```bash
-export NTRP_CHAT_MODEL=claude-sonnet-4-6
-export NTRP_RESEARCH_MODEL=claude-sonnet-4-6
-export NTRP_WORKFLOW_MODEL=claude-sonnet-4-6
-export NTRP_MEMORY_MODEL=claude-haiku-4-5
-export NTRP_EMBEDDING_MODEL=text-embedding-3-small
+export ARDEN_CHAT_MODEL=claude-sonnet-4-6
+export ARDEN_RESEARCH_MODEL=claude-sonnet-4-6
+export ARDEN_WORKFLOW_MODEL=claude-sonnet-4-6
+export ARDEN_MEMORY_MODEL=claude-haiku-4-5
+export ARDEN_EMBEDDING_MODEL=text-embedding-3-small
 ```
 
-<Note>Embedding is optional. Without it, vector search is disabled but ntrp still works with full-text search.</Note>
+<Note>Embedding is optional. Without it, vector search is disabled but arden still works with full-text search.</Note>
 
 ## Server
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NTRP_HOST` | `127.0.0.1` | Server bind address |
-| `NTRP_PORT` | `6877` | Server port |
+| `ARDEN_HOST` | `127.0.0.1` | Server bind address |
+| `ARDEN_PORT` | `6877` | Server port |
 
 ## Features
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NTRP_MEMORY` | `true` | Enable persistent memory |
-| `NTRP_CONSOLIDATION_INTERVAL` | `30` | Minutes between consolidation runs |
-| `NTRP_GOOGLE` | `false` | Enable Google integrations, including Gmail and Calendar tools |
-| `NTRP_GMAIL_DAYS` | `30` | Days of Gmail history to index |
-| `NTRP_DEFERRED_TOOLS` | `true` | Hide infrequent integration/action tool schemas until loaded |
+| `ARDEN_MEMORY` | `true` | Enable persistent memory |
+| `ARDEN_CONSOLIDATION_INTERVAL` | `30` | Minutes between consolidation runs |
+| `ARDEN_GOOGLE` | `false` | Enable Google integrations, including Gmail and Calendar tools |
+| `ARDEN_GMAIL_DAYS` | `30` | Days of Gmail history to index |
+| `ARDEN_DEFERRED_TOOLS` | `true` | Hide infrequent integration/action tool schemas until loaded |
 
 ## Optional integrations
 
@@ -73,26 +73,26 @@ For Google, Slack, and MCP, prefer the desktop setup assistants in **Settings �
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NTRP_MAX_DEPTH` | `8` | Max agentic recursion depth |
-| `NTRP_REASONING_EFFORT` | unset | Optional model-specific reasoning effort |
-| `NTRP_COMPRESSION_THRESHOLD` | app default | Token threshold for context compaction |
-| `NTRP_MAX_MESSAGES` | app default | Message-count threshold for compaction |
+| `ARDEN_MAX_DEPTH` | `8` | Max agentic recursion depth |
+| `ARDEN_REASONING_EFFORT` | unset | Optional model-specific reasoning effort |
+| `ARDEN_COMPRESSION_THRESHOLD` | app default | Token threshold for context compaction |
+| `ARDEN_MAX_MESSAGES` | app default | Message-count threshold for compaction |
 
 Deferred tools reduce prompt size and improve cache stability. Gmail, calendar, Slack, automation, background-task, notification, directive, file-write, and MCP tools are loaded on demand. Always-visible tools include local file reads, web search/fetch, research, skills, current time, and `load_tools` itself.
 
 ## Authentication
 
-On first `ntrp-server serve`, an API key is generated and printed. The server stores only a salted SHA-256 hash — the plaintext key is never persisted.
+On first `arden-server serve`, an API key is generated and printed. The server stores only a salted SHA-256 hash — the plaintext key is never persisted.
 
 ```bash
-ntrp-server serve --reset-key
+arden-server serve --reset-key
 ```
 
 Desktop clients store the key locally and encrypt it with OS-backed storage when supported.
 
 ## Settings file
 
-`~/.ntrp/settings.json` stores persisted configuration. Fields set here act as defaults that environment variables can override.
+`~/.arden/settings.json` stores persisted configuration. Fields set here act as defaults that environment variables can override.
 
 ```json
 {

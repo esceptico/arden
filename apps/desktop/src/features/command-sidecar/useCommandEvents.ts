@@ -25,7 +25,7 @@ export function useCommandEvents(): void {
       if (typeof event.seq === "number") afterSeq = event.seq;
       applyEvent(event);
     };
-    const desktopEvents = window.ntrpDesktop?.events;
+    const desktopEvents = window.ardenDesktop?.events;
 
     if (desktopEvents) {
       let connectionId: string | null = null;

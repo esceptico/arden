@@ -10,7 +10,7 @@ afterEach(() => {
 function installRequestRecorder(data: unknown = {}) {
   const requests: { path: string; method?: string; body?: string; timeout?: number }[] = [];
   (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ntrpDesktop: {
+    ardenDesktop: {
       api: {
         request: async (_config: unknown, req: { path: string; method?: string; body?: string; timeout?: number }) => {
           requests.push(req);

@@ -1,7 +1,7 @@
 import type { ComponentProps } from "react";
 import clsx from "clsx";
 
-/** Inline conversation marker (shadcn/ui Marker recipe on ntrp tokens):
+/** Inline conversation marker (shadcn/ui Marker recipe on arden tokens):
  *  a quiet one-line icon + text row for status notes in a message stream.
  *  `separator` centers the label between hairlines; `border` underlines
  *  the row. Compose: <Marker><MarkerIcon>…</MarkerIcon><MarkerContent>…

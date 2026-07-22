@@ -2,7 +2,7 @@
 stale cache_control (the API allows 4 total; accumulation 400s the request),
 and injection must not mutate the stored session blocks."""
 
-from ntrp.llm.anthropic import AnthropicClient
+from arden.llm.anthropic import AnthropicClient
 
 
 def _assistant(text: str) -> dict:

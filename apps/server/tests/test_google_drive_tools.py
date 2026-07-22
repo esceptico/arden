@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from ntrp.integrations.google_drive.tools import (
+from arden.integrations.google_drive.tools import (
     DRIVE_TOOLS,
     CreateGoogleDocInput,
     CreateGoogleSheetInput,
@@ -9,8 +9,8 @@ from ntrp.integrations.google_drive.tools import (
     read_google_doc,
     read_google_sheet,
 )
-from ntrp.tools.core.context import ToolExecution
-from ntrp.tools.core.types import ToolAction
+from arden.tools.core.context import ToolExecution
+from arden.tools.core.types import ToolAction
 
 
 class Drive:
@@ -77,9 +77,7 @@ async def test_read_doc_returns_source_reference():
 
 
 async def test_read_sheet_returns_compact_table_and_structured_rows():
-    result = await read_google_sheet(
-        _execution(), ReadGoogleSheetInput(spreadsheet_ref="acct:sheet-1", range="A1:B2")
-    )
+    result = await read_google_sheet(_execution(), ReadGoogleSheetInput(spreadsheet_ref="acct:sheet-1", range="A1:B2"))
 
     assert result.content == "Range: A1:B2\nName | Count\nAda | 2"
     assert result.data == {

@@ -5,10 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from ntrp.memory.dreamer import run_dream
-from ntrp.memory.file_store import FilePageStore, load_conventions
-from ntrp.memory.maintenance import _path, append_learnings, read_learnings
-from ntrp.memory.models import TRUST_LEVEL, SourceRef
+from arden.memory.dreamer import run_dream
+from arden.memory.file_store import FilePageStore, load_conventions
+from arden.memory.maintenance import _path, append_learnings, read_learnings
+from arden.memory.models import TRUST_LEVEL, SourceRef
 
 pytestmark = pytest.mark.asyncio
 
@@ -88,13 +88,18 @@ async def test_dream_learnings_partitioned_and_conventions_injected(tmp_path: Pa
     a = await store.add("The user works on Dex.", kind="fact", source_ref=SourceRef("user", ""), entity_labels=["Dex"])
     for t in ("The user prefers async.", "The user is in Armenia.", "The user uses Obsidian."):
         await store.add(t, kind="fact", source_ref=SourceRef("user", ""))
-    b = await store.add("The Nexus review is scheduled weekly.", kind="fact", source_ref=SourceRef("user", ""), entity_labels=["Nexus"])
+    b = await store.add(
+        "The Nexus review is scheduled weekly.", kind="fact", source_ref=SourceRef("user", ""), entity_labels=["Nexus"]
+    )
     await store.add("Regina runs a weekly 1:1.", kind="fact", source_ref=SourceRef("user", ""))
 
     llm = _DreamLLM(b.id, a.id)
     _summary, learnings = await run_dream(
-        store, llm, "memory-model",
-        conventions=load_conventions(), learnings="- prior gotcha to avoid",
+        store,
+        llm,
+        "memory-model",
+        conventions=load_conventions(),
+        learnings="- prior gotcha to avoid",
     )
 
     # the LEARNINGS gotcha is returned for the sidecar, NOT minted as a dreamer record
@@ -109,8 +114,8 @@ async def test_dream_learnings_partitioned_and_conventions_injected(tmp_path: Pa
 
 def test_curator_and_consolidate_prepend_conventions():
     # the manual is a leading system block; the tuned rubric/system prompt is untouched
-    from ntrp.memory.curator import _SYSTEM_PROMPT
-    from ntrp.memory.prompts_consolidate import LINT_RUBRIC
+    from arden.memory.curator import _SYSTEM_PROMPT
+    from arden.memory.prompts_consolidate import LINT_RUBRIC
 
     man = load_conventions()
     composed_curator = f"<operating_manual>\n{man}\n</operating_manual>\n\n" + _SYSTEM_PROMPT

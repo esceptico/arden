@@ -1,25 +1,25 @@
-# ntrp
+# Arden
 
-**ntrp** is entropy: the measure of disorder in a system. Your calendar, emails, memory, half-remembered conversations, and recurring chores all accumulate. This project exists to reduce it.
+**Arden** is a personal AI agent that connects your conversations, memory, tools, and recurring work in one durable workspace.
 
 A local-first personal assistant. Not a coding agent: a place to keep the moving parts of your life in one system that remembers them and tells you what needs you. Python backend, Electron desktop app.
 
-![ntrp](docs/images/main.png)
+![Arden](docs/images/main.png)
 
-Details, screenshots, and the API reference live in `docs/` and at **[docs.ntrp.io](https://docs.ntrp.io)**.
+Details, screenshots, and the API reference live in `docs/` and at **[docs.arden.io](https://docs.arden.io)**.
 
 ## Install
 
 ```bash
-uv tool install ntrp    # or: pip install ntrp
-ntrp-server serve       # starts the backend, prints a one-time API key
+uv tool install arden    # or: pip install arden
+arden-server serve       # starts the backend, prints a one-time API key
 ```
 
 The package doesn't include the desktop app. For that, use a source checkout:
 
 ```bash
-git clone https://github.com/esceptico/ntrp.git
-cd ntrp
+git clone https://github.com/esceptico/arden.git
+cd arden
 just install
 just server      # terminal 1
 just desktop     # terminal 2

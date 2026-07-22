@@ -19,7 +19,7 @@ Click **Run setup assistant** and choose either:
 
 - **Calendar only** — Calendar tools without Gmail
 - **Email + Calendar** — Gmail and Calendar tools together
-- **All current Google services** — legacy full ntrp scope set, including Pub/Sub
+- **All current Google services** — legacy full arden scope set, including Pub/Sub
 
 ### Enable the Calendar API
 
@@ -27,7 +27,7 @@ In the Google Cloud project used for your OAuth Desktop app credentials, enable 
 
 ### Import credentials and add account
 
-Import/paste your Google OAuth Desktop app credentials in the assistant, then click **Add account**. ntrp opens the local browser OAuth flow and saves a token under `~/.ntrp/`.
+Import/paste your Google OAuth Desktop app credentials in the assistant, then click **Add account**. Arden opens the local browser OAuth flow and saves a token under `~/.arden/`.
 
 </Steps>
 
@@ -36,20 +36,20 @@ Import/paste your Google OAuth Desktop app credentials in the assistant, then cl
 Use the same credentials file as Gmail:
 
 ```bash
-~/.ntrp/gmail_credentials.json
+~/.arden/gmail_credentials.json
 ```
 
 Enable Calendar:
 
 ```bash
-export NTRP_CALENDAR=true
+export ARDEN_CALENDAR=true
 ```
 
 Then add an account from desktop settings, or call:
 
 ```bash
 curl -X POST http://localhost:6877/gmail/add \
-  -H "Authorization: Bearer $NTRP_API_KEY" \
+  -H "Authorization: Bearer $ARDEN_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"service_choice":"calendar"}'
 ```

@@ -30,23 +30,23 @@ After slice 4 ships, this works end-to-end:
 ## 2. Hard scope boundaries
 
 **MUST do:**
-- New module `apps/server/ntrp/memory/pattern_finder.py` with `PatternFinder` class
+- New module `apps/server/arden/memory/pattern_finder.py` with `PatternFinder` class
 - New repository methods on `MemoryItemsRepository`:
   - `list_recent_items(*, kind, window_days, limit, scope)` — pull candidates
   - `insert_parent_edge(child_id, parent_id, role, order=None)` — write evidence edges
   - `list_parent_edges(child_id)` — read helper for tests
 - New admin endpoint `POST /admin/memory/pattern-finder/run` (returns JSON: clusters found, observations written, elapsed_ms)
-- New Trigger.dev task `pattern-finder-daily` in `apps/server/ntrp/triggers/` (or equivalent — see §6)
+- New Trigger.dev task `pattern-finder-daily` in `apps/server/arden/triggers/` (or equivalent — see §6)
 - New tests `apps/server/tests/memory/test_pattern_finder.py` (≥ 12 tests)
 - Wire `PatternFinder` into the DI graph (see §7)
 
 **MUST NOT do:**
-- Touch `apps/server/ntrp/memory/retrieval.py` (slice 3 surface, frozen)
-- Touch `apps/server/ntrp/memory/activation.py` (slice 3)
-- Touch `apps/server/ntrp/memory/connectors/` (slice 2 surface — episode close is upstream of us, we consume it)
+- Touch `apps/server/arden/memory/retrieval.py` (slice 3 surface, frozen)
+- Touch `apps/server/arden/memory/activation.py` (slice 3)
+- Touch `apps/server/arden/memory/connectors/` (slice 2 surface — episode close is upstream of us, we consume it)
 - Implement pass 2 (`observation → claim`) — slice 5
 - Implement contradiction detection — slice 6
-- Restore the 11 untracked `ntrp/knowledge/*.py` modules — explicit per slice-07-backlog §3B
+- Restore the 11 untracked `arden/knowledge/*.py` modules — explicit per slice-07-backlog §3B
 - Add new columns to `memory_items` schema — kind=observation reuses the existing row shape
 
 **Allowed to read but not edit:**
@@ -124,7 +124,7 @@ async def summarize_cluster(
     )
 ```
 
-**Prompt** (`apps/server/ntrp/memory/prompts/pass1.txt`):
+**Prompt** (`apps/server/arden/memory/prompts/pass1.txt`):
 
 ```
 You are summarizing a cluster of related conversation episodes into a single observation.
@@ -187,10 +187,10 @@ Supersession on pattern-finder reruns is honest: clusters grow as new episodes a
 
 ## 6. Scheduler — Trigger.dev (or equivalent)
 
-**Honest check first:** does the ntrp server already use Trigger.dev? Or apscheduler? Or a custom asyncio scheduler?
+**Honest check first:** does the Arden server already use Trigger.dev? Or apscheduler? Or a custom asyncio scheduler?
 
 ```bash
-grep -rn 'trigger\|Trigger\|scheduler\|crontab\|APScheduler' apps/server/ntrp/ --include='*.py' | head
+grep -rn 'trigger\|Trigger\|scheduler\|crontab\|APScheduler' apps/server/arden/ --include='*.py' | head
 ```
 
 If Trigger.dev is in use → register the daily task there.
@@ -232,7 +232,7 @@ async def run_pattern_finder(
 - `SummaryClient` (LLM call for cluster summarization)
 - `EmbeddingClient` (embed observation body before insert)
 
-Wire into existing FastAPI DI graph (`apps/server/ntrp/server/deps.py` or wherever `MemoryRetrieval` was wired in slice 3 — codex finds the symmetric spot).
+Wire into existing FastAPI DI graph (`apps/server/arden/server/deps.py` or wherever `MemoryRetrieval` was wired in slice 3 — codex finds the symmetric spot).
 
 ---
 
@@ -243,7 +243,7 @@ The slice 2 anomaly: `episode_buffers.tokens=546940` for one episode. Slice 4 in
 **Required investigation (~30min) before clustering work starts:**
 
 1. Run smoke: open a fresh chat session, send 5 turns, close it (or wait for episode close).
-2. `sqlite3 ~/.ntrp/memory.db 'SELECT id, tokens, turn_count FROM episode_buffers ORDER BY id DESC LIMIT 5'`
+2. `sqlite3 ~/.arden/memory.db 'SELECT id, tokens, turn_count FROM episode_buffers ORDER BY id DESC LIMIT 5'`
 3. **Expected:** `tokens` in low thousands per episode; `turn_count` ≤ 20 for a short chat.
 4. **If wrong:** trace the token-accumulation path in `memory/connectors/chat.py` and `memory/store/episode_buffers.py`. Find the bug. Either fix it in slice 4 (if ≤ 30min) or file a precise repro in slice-07-backlog §4 and proceed without fixing.
 
@@ -318,11 +318,11 @@ cd apps/server
 .venv/bin/pytest tests/ -q 2>&1 | tail -10
 
 # 4. no new dead imports
-grep -rn 'from ntrp.memory.pattern_finder\b' apps/server/ --include='*.py'
-grep -rn 'pattern_finder\|PatternFinder' apps/server/ntrp/ --include='*.py' | head -20
+grep -rn 'from arden.memory.pattern_finder\b' apps/server/ --include='*.py'
+grep -rn 'pattern_finder\|PatternFinder' apps/server/arden/ --include='*.py' | head -20
 
 # 5. ruff
-.venv/bin/ruff check ntrp/ tests/ 2>&1 | tail -5
+.venv/bin/ruff check arden/ tests/ 2>&1 | tail -5
 
 # 6. admin endpoint smoke (if FastAPI app boots in tests)
 .venv/bin/pytest tests/test_pattern_finder_routes.py -q 2>&1 | tail -5  # optional file
@@ -355,22 +355,22 @@ Codex must answer all of these in its final report:
 ## 13. Codex prompt (verbatim — extracted by invoke.sh §11)
 
 ```
-You are implementing slice 4 of the ntrp memory redesign: pattern finder pass 1
+You are implementing slice 4 of the Arden memory redesign: pattern finder pass 1
 (episode → observation). The full brief is at
 `docs/internal/slices/slice-04-pattern-finder.md`. Read it end-to-end before
-writing any code. Authoritative spec: `docs/internal/ntrp-memory-redesign-spec.md`.
+writing any code. Authoritative spec: `docs/internal/arden-memory-redesign-spec.md`.
 
 HARD CONSTRAINTS — violating any fails the pass:
-- DO NOT touch apps/server/ntrp/memory/retrieval.py
-- DO NOT touch apps/server/ntrp/memory/activation.py
-- DO NOT touch apps/server/ntrp/memory/connectors/* (read-only reference)
+- DO NOT touch apps/server/arden/memory/retrieval.py
+- DO NOT touch apps/server/arden/memory/activation.py
+- DO NOT touch apps/server/arden/memory/connectors/* (read-only reference)
 - DO NOT implement pass 2 (observation→claim) — slice 5
-- DO NOT restore any of the 11 untracked ntrp/knowledge/*.py modules
+- DO NOT restore any of the 11 untracked arden/knowledge/*.py modules
 
 REQUIRED OUTPUTS:
-1. apps/server/ntrp/memory/pattern_finder.py — PatternFinder + helpers
-2. apps/server/ntrp/memory/prompts/pass1.txt — LLM prompt template
-3. Repo method additions in apps/server/ntrp/memory/items_store.py:
+1. apps/server/arden/memory/pattern_finder.py — PatternFinder + helpers
+2. apps/server/arden/memory/prompts/pass1.txt — LLM prompt template
+3. Repo method additions in apps/server/arden/memory/items_store.py:
    list_recent_items, insert_parent_edge, list_parent_edges
 4. Admin endpoint POST /admin/memory/pattern-finder/run
 5. Daily scheduler hookup IF a real scheduler exists in the repo (else punt
@@ -432,7 +432,7 @@ Estimated total: ~5h codex wall time at xhigh reasoning.
 - Skill induction (slice 7)
 - Restoring deleted `test_knowledge_next_level.py` / `test_knowledge_write_gate.py` tests (slice-07-backlog §2A, §2B)
 - Fixing dead `_repo.search_*` wrappers in `memory/service.py` (slice-07-backlog §3A)
-- The 11 pre-existing untracked `ntrp/knowledge/*.py` modules — leave dirty (slice-07-backlog §3B)
+- The 11 pre-existing untracked `arden/knowledge/*.py` modules — leave dirty (slice-07-backlog §3B)
 - Restoring `semantic_alias_match` reason labels (slice 5)
 - New schema columns on `memory_items`
 - UI surfacing of observations (slice 8/9)

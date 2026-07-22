@@ -2,14 +2,14 @@ from datetime import UTC, datetime
 
 import pytest
 
-from ntrp.agent import Usage
-from ntrp.events.internal import RunCompleted
-from ntrp.outbox import (
+from arden.agent import Usage
+from arden.events.internal import RunCompleted
+from arden.outbox import (
     OUTBOX_RUN_COMPLETED,
     OutboxEvent,
     run_completed_payload,
 )
-from ntrp.server.runtime.outbox import RuntimeOutbox
+from arden.server.runtime.outbox import RuntimeOutbox
 
 
 def _event(event_type: str, payload: dict) -> OutboxEvent:

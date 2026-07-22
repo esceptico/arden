@@ -7,9 +7,9 @@
 
 Three related defects and one missing capability around automations:
 
-1. **`notify()` dead-ends in headless automations even with `writable=true`.** `notify` carries a user `tool_overrides` entry of `ASK`. In `request_approval` ([context.py:360-364](../../../apps/server/ntrp/tools/core/context.py)) an `ASK` override beats `skip_approvals`, so the call falls through to the "No UI connected" rejection. The fact that it's an automation (no human to ask) is never considered.
+1. **`notify()` dead-ends in headless automations even with `writable=true`.** `notify` carries a user `tool_overrides` entry of `ASK`. In `request_approval` ([context.py:360-364](../../../apps/server/arden/tools/core/context.py)) an `ASK` override beats `skip_approvals`, so the call falls through to the "No UI connected" rejection. The fact that it's an automation (no human to ask) is never considered.
 
-2. **Plain automation output is silently dropped.** Non-session-bound automations run through `_run_agent` ([scheduler.py:507-528](../../../apps/server/ntrp/automation/scheduler.py)) and return their text to the scheduler as a run record. There is no channel binding, so generated output (e.g. a nudge) never lands anywhere the user reads.
+2. **Plain automation output is silently dropped.** Non-session-bound automations run through `_run_agent` ([scheduler.py:507-528](../../../apps/server/arden/automation/scheduler.py)) and return their text to the scheduler as a run record. There is no channel binding, so generated output (e.g. a nudge) never lands anywhere the user reads.
 
 3. **`writable` conflates two concepts:** "can use write tools" (tool availability) and "skip approval for write tools." There is no way to express "auto-approve safe actions, still gate destructive ones" — but in a headless run there is no one to approve anyway, so the practical need is a clean two-state.
 
@@ -39,11 +39,11 @@ Three related defects and one missing capability around automations:
 
 Rename the field `writable` → `auto_approve` across its full surface:
 
-- **Model:** `Automation.writable` ([models.py:23](../../../apps/server/ntrp/automation/models.py))
-- **Store:** column `writable` ([store.py:130](../../../apps/server/ntrp/automation/store.py)), `_COLUMNS`, all `_SQL_*` strings, `_row_to_automation` mapping, `set_writable`, `update_metadata`, `save`, `save_with_claim`. Requires a schema migration (see Part D).
+- **Model:** `Automation.writable` ([models.py:23](../../../apps/server/arden/automation/models.py))
+- **Store:** column `writable` ([store.py:130](../../../apps/server/arden/automation/store.py)), `_COLUMNS`, all `_SQL_*` strings, `_row_to_automation` mapping, `set_writable`, `update_metadata`, `save`, `save_with_claim`. Requires a schema migration (see Part D).
 - **Service:** `toggle_writable` → `toggle_auto_approve`, `create`/`update` param, `_build_metadata_changes`, `create_loop` (hardcoded `writable=True` → `auto_approve=True`).
-- **Runner:** `RunRequest.writable` → `auto_approve` ([runner.py:48](../../../apps/server/ntrp/operator/runner.py)); still used to filter tools (`get_tools(read_only=not auto_approve)`, [runner.py:100](../../../apps/server/ntrp/operator/runner.py)).
-- **Scheduler/app:** `skip_approvals=automation.writable` → `automation.auto_approve` ([scheduler.py:518](../../../apps/server/ntrp/automation/scheduler.py), [app.py:114,145](../../../apps/server/ntrp/server/app.py)).
+- **Runner:** `RunRequest.writable` → `auto_approve` ([runner.py:48](../../../apps/server/arden/operator/runner.py)); still used to filter tools (`get_tools(read_only=not auto_approve)`, [runner.py:100](../../../apps/server/arden/operator/runner.py)).
+- **Scheduler/app:** `skip_approvals=automation.writable` → `automation.auto_approve` ([scheduler.py:518](../../../apps/server/arden/automation/scheduler.py), [app.py:114,145](../../../apps/server/arden/server/app.py)).
 - **Desktop:**
   - The "Writable" toggle ([AutomationEditor.tsx:312-325](../../../apps/desktop/src/components/automations/AutomationEditor.tsx)) → "Auto-Approve" (label + `aria-label`), plus `FormState.writable` and the form↔payload mapping.
   - API types: `Automation.writable`, `CreateAutomationPayload.writable`, `UpdateAutomationPayload.writable` in [api.ts](../../../apps/desktop/src/api.ts) → `auto_approve`.
@@ -58,7 +58,7 @@ The dual role is retained deliberately: a write tool that requires approval cann
 
 ### The ASK fix
 
-`ASK` means "ask the human." Make that conditional on a human being reachable. In `ToolExecution.request_approval` ([context.py:360-364](../../../apps/server/ntrp/tools/core/context.py)):
+`ASK` means "ask the human." Make that conditional on a human being reachable. In `ToolExecution.request_approval` ([context.py:360-364](../../../apps/server/arden/tools/core/context.py)):
 
 ```python
 ui_connected = self.ctx.io.emit is not None and self.ctx.io.pending_approvals is not None
@@ -70,7 +70,7 @@ if not ask_must_block and (self.ctx.skip_approvals or self.tool_name in self.ctx
 
 - Interactive chat (UI connected) + `notify→ASK` → still prompts.
 - Headless auto-approve automation + `notify→ASK` → bypasses and fires.
-- `DENY` is unaffected — it blocks upstream at [registry.py:49](../../../apps/server/ntrp/tools/core/registry.py) before middleware, regardless of approval state.
+- `DENY` is unaffected — it blocks upstream at [registry.py:49](../../../apps/server/arden/tools/core/registry.py) before middleware, regardless of approval state.
 
 This resolves defects #1 and #3 and does **not** require removing the user's `notify→ASK` override.
 
@@ -92,12 +92,12 @@ Applies to **all** automations, including one-shots — the one-shot's output is
 
 ### Execution: in-session (chat pipeline)
 
-All auto-channel automations execute **inside their channel session** via the chat/iteration path (`_dispatch_iteration` → `submit_chat_message`, [app.py:104-116](../../../apps/server/ntrp/server/app.py)), not the headless post pipeline. The scheduler selects the iteration dispatcher when `read_history=True` ([scheduler.py:552](../../../apps/server/ntrp/automation/scheduler.py)), so auto-channel automations are created with `read_history=True` (this becomes the default rather than an opt-in). Consequences:
+All auto-channel automations execute **inside their channel session** via the chat/iteration path (`_dispatch_iteration` → `submit_chat_message`, [app.py:104-116](../../../apps/server/arden/server/app.py)), not the headless post pipeline. The scheduler selects the iteration dispatcher when `read_history=True` ([scheduler.py:552](../../../apps/server/arden/automation/scheduler.py)), so auto-channel automations are created with `read_history=True` (this becomes the default rather than an opt-in). Consequences:
 
 - The full turn — assistant text **plus** `tool_call`/`tool_result` messages — persists into the channel.
 - Live SSE updates render activity in real time.
 - The channel is a normal session, so the user can send their own messages into it; the next automation fire sees them (history is read in-session).
-- `skip_approvals` flows from `auto_approve` exactly as today ([app.py:114](../../../apps/server/ntrp/server/app.py)).
+- `skip_approvals` flows from `auto_approve` exactly as today ([app.py:114](../../../apps/server/arden/server/app.py)).
 
 This makes every agent automation session-bound. The post pipeline (`_dispatch_post`) and `_run_agent` become vestigial for agent automations (internal `_run_handler` automations are unaffected) — flag for cleanup after verifying no remaining callers.
 

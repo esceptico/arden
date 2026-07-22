@@ -1,8 +1,8 @@
-# Mission Control for ntrp
+# Mission Control for arden
 
 ## Product thesis
 
-Mission Control is the trust layer for personal agent delegation: a global cockpit that shows what ntrp is doing on the user's behalf, what needs human judgment, and how completed work turns into replies, memory, follow-ups, artifacts, or automations.
+Mission Control is the trust layer for personal agent delegation: a global cockpit that shows what Arden is doing on the user's behalf, what needs human judgment, and how completed work turns into replies, memory, follow-ups, artifacts, or automations.
 
 ## MVP wedge
 
@@ -10,7 +10,7 @@ Do **not** start with traces, analytics, charts, or enterprise governance.
 
 Start with one job:
 
-> I have ntrp doing several things. Show me what is happening, what needs me, and let me intervene without hunting through chats.
+> I have arden doing several things. Show me what is happening, what needs me, and let me intervene without hunting through chats.
 
 The MVP should be an attention router:
 

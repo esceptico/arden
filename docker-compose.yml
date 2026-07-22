@@ -1,25 +1,25 @@
 services:
-  ntrp-backend:
+  arden-backend:
     build:
       context: .
       dockerfile: apps/server/Dockerfile
-    container_name: ntrp-backend
+    container_name: arden-backend
     restart: unless-stopped
     ports:
-      - "${NTRP_PORT:-6877}:6877"
+      - "${ARDEN_PORT:-6877}:6877"
     volumes:
-      - ntrp-data:/home/ntrp/.ntrp
+      - arden-data:/home/arden/.arden
     env_file: .env
     environment:
       # browser history doesn't work in docker
-      - NTRP_BROWSER=
+      - ARDEN_BROWSER=
     networks:
-      - ntrp-network
+      - arden-network
 
 volumes:
-  ntrp-data:
+  arden-data:
     driver: local
 
 networks:
-  ntrp-network:
+  arden-network:
     driver: bridge

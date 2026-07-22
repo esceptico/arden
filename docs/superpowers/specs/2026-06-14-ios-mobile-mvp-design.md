@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-14
 **Status:** Draft
-**Scope:** Build a simple native iOS client for the existing ntrp server. Keep
+**Scope:** Build a simple native iOS client for the existing Arden server. Keep
 the design compatible with future desktop-hosted local tools, but do not build
 desktop pairing, relay, or local tools in v1.
 
@@ -10,10 +10,10 @@ desktop pairing, relay, or local tools in v1.
 
 ## 1. Goal
 
-Use ntrp from an iPhone with the current server as the only backend:
+Use arden from an iPhone with the current server as the only backend:
 
 ```text
-iOS app <-> ntrp server
+iOS app <-> Arden server
 ```
 
 The iOS app is a thin client. The server remains the source of truth for agent
@@ -90,7 +90,7 @@ Recommended stack:
 Core modules:
 
 ```text
-NtrpApiClient
+ArdenApiClient
   - request JSON endpoints
   - attach bearer token
   - normalize errors
@@ -142,7 +142,7 @@ Development:
 
 Production later:
 
-- Prefer a cloud-hosted ntrp server for simple mobile access.
+- Prefer a cloud-hosted Arden server for simple mobile access.
 - If execution must happen on a private desktop, add a relay/host model later
   instead of exposing the desktop server directly.
 
@@ -153,7 +153,7 @@ Production later:
 Future target:
 
 ```text
-mobile <-> ntrp server <-> desktop host
+mobile <-> Arden server <-> desktop host
              |
              +-> agent loop
              +-> DB/session state
@@ -227,7 +227,7 @@ desktop host -> relay <- mobile/server
 Both sides open outbound connections. This avoids opening inbound ports on the
 desktop.
 
-In ntrp's preferred architecture, the cloud ntrp server can be the relay/control
+In Arden's preferred architecture, the cloud Arden server can be the relay/control
 plane. It should forward typed protocol messages, not arbitrary HTTP:
 
 - `host_online`
@@ -247,7 +247,7 @@ Pair where dangerous capability lives.
 If execution is fully cloud-hosted:
 
 ```text
-mobile <-> cloud ntrp server
+mobile <-> cloud Arden server
 ```
 
 No desktop pairing needed.

@@ -1,4 +1,4 @@
-from ntrp.llm.models import (
+from arden.llm.models import (
     FALLBACK_DEFAULTS,
     Model,
     ModelRegistry,
@@ -53,11 +53,7 @@ def test_registry_reads_explicit_deferred_tool_capability():
 
 
 def test_codex_fallback_matches_supported_api_models():
-    fallback = {
-        model.id: model
-        for model in FALLBACK_DEFAULTS
-        if model.provider == Provider.OPENAI_CODEX
-    }
+    fallback = {model.id: model for model in FALLBACK_DEFAULTS if model.provider == Provider.OPENAI_CODEX}
 
     assert set(fallback) == {
         "openai-codex/gpt-5.4",

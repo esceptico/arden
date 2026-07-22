@@ -5,10 +5,10 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-import ntrp.database as database
-from ntrp.areas.models import areas_from_records
-from ntrp.context.store import SessionStore
-from ntrp.services.session import SessionService
+import arden.database as database
+from arden.areas.models import areas_from_records
+from arden.context.store import SessionStore
+from arden.services.session import SessionService
 
 
 @pytest_asyncio.fixture
@@ -51,8 +51,6 @@ async def test_service_restores_archived_area_without_losing_capabilities(svc):
 
 
 def test_plain_area_is_a_first_class_area_projection():
-    projected = areas_from_records(
-        [{"area_id": "area_1", "name": "Design", "page_path": None, "autonomy": None}]
-    )
+    projected = areas_from_records([{"area_id": "area_1", "name": "Design", "page_path": None, "autonomy": None}])
 
     assert [area.key for area in projected] == ["area_1"]

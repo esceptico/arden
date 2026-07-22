@@ -4,27 +4,35 @@ from types import SimpleNamespace
 
 import pytest
 
-from ntrp.areas.agent import AreaCustodianReport, render_work_context
-from ntrp.areas.asks import AskStore
-from ntrp.areas.work_models import AreaOutcome, AreaWorkEvent, AreaWorkItem, AreaWorkSnapshot
-from ntrp.server.runtime.automation import AutomationRuntime
+from arden.areas.agent import AreaCustodianReport, render_work_context
+from arden.areas.asks import AskStore
+from arden.areas.work_models import AreaOutcome, AreaWorkEvent, AreaWorkItem, AreaWorkSnapshot
+from arden.server.runtime.automation import AutomationRuntime
 
 
 def report() -> AreaCustodianReport:
-    return AreaCustodianReport.model_validate({
-        "asks": [{
-            "key": "choose-lab", "text": "Which lab should I use?", "kind": "question",
-            "salience": 5, "why_now": "Booking is open", "what_next": "I will book it",
-        }],
-        "report": "Prepared the booking",
-        "next_check_hours": 24,
-        "next_check_reason": "waiting for lab choice",
-        "made_progress": True,
-        "work_remaining": True,
-        "outcome_changes": [],
-        "work_changes": [],
-        "evidence": [],
-    })
+    return AreaCustodianReport.model_validate(
+        {
+            "asks": [
+                {
+                    "key": "choose-lab",
+                    "text": "Which lab should I use?",
+                    "kind": "question",
+                    "salience": 5,
+                    "why_now": "Booking is open",
+                    "what_next": "I will book it",
+                }
+            ],
+            "report": "Prepared the booking",
+            "next_check_hours": 24,
+            "next_check_reason": "waiting for lab choice",
+            "made_progress": True,
+            "work_remaining": True,
+            "outcome_changes": [],
+            "work_changes": [],
+            "evidence": [],
+        }
+    )
 
 
 @pytest.mark.asyncio
@@ -41,9 +49,7 @@ async def test_work_report_commits_before_asks(tmp_path: Path) -> None:
     runtime.area_asks = AskStore(tmp_path / "asks.json")
 
     with pytest.raises(RuntimeError, match="work commit failed"):
-        await runtime._commit_area_report(
-            "area_health", "topics/health.md", report().model_dump(), "run:r1"
-        )
+        await runtime._commit_area_report("area_health", "topics/health.md", report().model_dump(), "run:r1")
 
     assert calls == ["work"]
     assert runtime.area_asks.list("area_health") == []
@@ -57,31 +63,57 @@ def test_work_context_uses_report_keys_instead_of_internal_ids() -> None:
         "completed_at": None,
     }
     snapshot = AreaWorkSnapshot(
-        outcomes=[AreaOutcome(
-            outcome_id="outcome:area_health:labs-normal", stable_key="labs-normal",
-            title="Lab values normalized", success_criteria="All values in range",
-            status="active", priority=5, source="user", **common,
-        )],
+        outcomes=[
+            AreaOutcome(
+                outcome_id="outcome:area_health:labs-normal",
+                stable_key="labs-normal",
+                title="Lab values normalized",
+                success_criteria="All values in range",
+                status="active",
+                priority=5,
+                source="user",
+                **common,
+            )
+        ],
         work_items=[
             AreaWorkItem(
-                item_id="work:area_health:book-labs", stable_key="book-labs",
-                outcome_id="outcome:area_health:labs-normal", kind="action",
-                text="Book the follow-up panel", status="in_progress", owner="custodian",
-                due_at=None, next_attempt_at=None, **common,
+                item_id="work:area_health:book-labs",
+                stable_key="book-labs",
+                outcome_id="outcome:area_health:labs-normal",
+                kind="action",
+                text="Book the follow-up panel",
+                status="in_progress",
+                owner="custodian",
+                due_at=None,
+                next_attempt_at=None,
+                **common,
             ),
             AreaWorkItem(
-                item_id="work:area_health:choose-lab", stable_key="choose-lab",
-                outcome_id="outcome:area_health:labs-normal", kind="blocker",
-                text="Need the user's preferred lab", status="active", owner="user",
-                due_at=None, next_attempt_at=None, **common,
+                item_id="work:area_health:choose-lab",
+                stable_key="choose-lab",
+                outcome_id="outcome:area_health:labs-normal",
+                kind="blocker",
+                text="Need the user's preferred lab",
+                status="active",
+                owner="user",
+                due_at=None,
+                next_attempt_at=None,
+                **common,
             ),
         ],
-        events=[AreaWorkEvent(
-            event_id=7, area_id="area_health", outcome_id=None,
-            item_id="work:area_health:book-labs", run_ref="run:r1",
-            event_type="progress", summary="Found an available appointment",
-            source_refs=["session:s1"], created_at="2026-07-10T01:00:00+00:00",
-        )],
+        events=[
+            AreaWorkEvent(
+                event_id=7,
+                area_id="area_health",
+                outcome_id=None,
+                item_id="work:area_health:book-labs",
+                run_ref="run:r1",
+                event_type="progress",
+                summary="Found an available appointment",
+                source_refs=["session:s1"],
+                created_at="2026-07-10T01:00:00+00:00",
+            )
+        ],
     )
 
     text = render_work_context(snapshot)

@@ -16,7 +16,7 @@ import {
   History,
   Image,
   ListChecks,
-  type NtrpIcon,
+  type ArdenIcon,
   Mail,
   MessageSquare,
   PenLine,
@@ -46,7 +46,7 @@ type RowProps = {
   last?: boolean;
 };
 
-const ICON_BY_KEY: Record<StepIconKey, NtrpIcon> = {
+const ICON_BY_KEY: Record<StepIconKey, ArdenIcon> = {
   search: Search,
   globe: Globe,
   folder: FolderOpen,

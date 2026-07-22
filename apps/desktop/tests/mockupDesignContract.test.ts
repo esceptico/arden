@@ -9,7 +9,7 @@ const legacy = read("../../../docs/design-language.md");
 const language = read("../../../docs/mockups/board-language.html");
 
 test("DESIGN.md is the sole normative human-readable design contract", () => {
-  expect(design).toContain("# NTRP desktop design system");
+  expect(design).toContain("# ARDEN desktop design system");
   expect(design).toContain("## Authority map");
   expect(design).toContain("board-surfaces.css");
   expect(design).toContain("board-system.css");

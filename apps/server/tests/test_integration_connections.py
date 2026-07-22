@@ -1,15 +1,15 @@
 from dataclasses import replace
 
-from ntrp.config import Config
-from ntrp.integrations.base import (
+from arden.config import Config
+from arden.integrations.base import (
     Integration,
     IntegrationConnectionError,
     IntegrationConnectionSpec,
 )
-from ntrp.integrations.calendar import CALENDAR
-from ntrp.integrations.gmail import GMAIL
-from ntrp.integrations.registry import IntegrationRegistry
-from ntrp.integrations.slack import SLACK
+from arden.integrations.calendar import CALENDAR
+from arden.integrations.gmail import GMAIL
+from arden.integrations.registry import IntegrationRegistry
+from arden.integrations.slack import SLACK
 
 
 def _connection() -> IntegrationConnectionSpec:

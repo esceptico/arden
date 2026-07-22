@@ -6,7 +6,7 @@ Supersedes: 2026-07-06-home-screen-design.md (briefing/timeline concept — reje
 
 ## Thesis
 
-Drive from entropy reduction. A **slice** is a life domain (Dex, ntrp,
+Drive from entropy reduction. A **slice** is a life domain (Dex, arden,
 O-1A, Aside, Health, United States) that persists for months and
 accumulates chats, memory, automations, and open loops. Each slice
 *compresses* its domain: it absorbs noise and emits either silence or
@@ -23,7 +23,7 @@ Nothing else. Figma reference: file n0nHncW83UnnR0GufEF6u0, frames
 "Slices / Home — entrypoint" and "Slices / O-1A room".
 
 Rejected on the way here (do not resurrect): status dashboard, calm
-briefing/ledger, timeline tape, triage queue — all "views of ntrp's
+briefing/ledger, timeline tape, triage queue — all "views of Arden's
 state". The user's own memory already states the direction: "personal
 AI control center … command palette as the central interaction model"
 (active-work.md).
@@ -37,7 +37,7 @@ views navigated from the strip / focus rows / ⌘K.
 
 ## The slice entity
 
-Slices map 1:1 to memory **topic pages** (`~/.ntrp/memory/topics/*.md`)
+Slices map 1:1 to memory **topic pages** (`~/.arden/memory/topics/*.md`)
 — they already exist, with "Open loops" sections, updated dates, and
 related links. A slice adds runtime linkage on top:
 
@@ -128,7 +128,7 @@ than observe/act, auto-widening trust from track record, mobile.
 
 ## UI reuse from ~/src/interaction-lab
 
-Port faithfully per the established lab→ntrp idiom map; don't re-derive
+Port faithfully per the established lab→arden idiom map; don't re-derive
 tuned values.
 
 - **Combobox** → the hero input. "Searchable list, origin-grow surface,

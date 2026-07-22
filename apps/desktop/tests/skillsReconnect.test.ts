@@ -4,8 +4,8 @@ import { reloadAllCollections } from "@/actions/bootstrap";
 import { getState, setState } from "@/stores";
 
 test("reconnect reloads skills after an initially empty fetch", async () => {
-  const originalDesktop = window.ntrpDesktop;
-  window.ntrpDesktop = {
+  const originalDesktop = window.ardenDesktop;
+  window.ardenDesktop = {
     api: {
       request: async (_config, request) => {
         const data = request.path === "/skills"
@@ -18,7 +18,7 @@ test("reconnect reloads skills after an initially empty fetch", async () => {
         return { ok: true, status: 200, statusText: "OK", contentType: "application/json", data, text: "" };
       },
     },
-  } as typeof window.ntrpDesktop;
+  } as typeof window.ardenDesktop;
 
   try {
     setState({
@@ -32,6 +32,6 @@ test("reconnect reloads skills after an initially empty fetch", async () => {
 
     expect(getState().skills.map((skill) => skill.name)).toEqual(["apple-design"]);
   } finally {
-    window.ntrpDesktop = originalDesktop;
+    window.ardenDesktop = originalDesktop;
   }
 });

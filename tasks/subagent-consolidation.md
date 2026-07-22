@@ -1,7 +1,7 @@
 # Consolidated subagent control — "facade + edge" (recommended)
 
 Decision doc from a 3-architect + adversarial-critic design pass (workflow wl55uxqui).
-Question: should ntrp's fragmented subagent control (two registries, 3 cancel routes,
+Question: should Arden's fragmented subagent control (two registries, 3 cancel routes,
 inbox only on bg, inject_queue only on top-level run) converge onto one model?
 
 ## Answer: yes, but the SWEET SPOT for a single-user system is "facade + edge"

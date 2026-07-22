@@ -5,11 +5,11 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-import ntrp.database as database
-from ntrp.automation.models import Automation
-from ntrp.automation.scheduler import Scheduler
-from ntrp.automation.store import AutomationStore
-from ntrp.automation.triggers import TimeTrigger, parse_triggers
+import arden.database as database
+from arden.automation.models import Automation
+from arden.automation.scheduler import Scheduler
+from arden.automation.store import AutomationStore
+from arden.automation.triggers import TimeTrigger, parse_triggers
 
 
 @pytest_asyncio.fixture
@@ -28,9 +28,7 @@ async def test_finalize_latest_run_settles_only_in_flight_rows(automation_store:
     deliveries safe."""
     t0 = datetime(2026, 1, 1, tzinfo=UTC)
     done_id = await automation_store.record_run_start("loop-1", t0)
-    await automation_store.record_run_finish(
-        done_id, status="completed", result="old report", error=None, ended_at=t0
-    )
+    await automation_store.record_run_finish(done_id, status="completed", result="old report", error=None, ended_at=t0)
     # settled row → no-op
     assert not await automation_store.finalize_latest_run("loop-1", "late duplicate", t0)
     runs = await automation_store.list_runs("loop-1")
@@ -51,9 +49,7 @@ async def test_orphaned_running_rows_fail_terminal(automation_store: AutomationS
     await automation_store.record_run_start("loop-1", t0)
     await automation_store.record_run_start("loop-2", t0)
 
-    swept = await automation_store.fail_orphaned_runs(
-        t0 + timedelta(minutes=5), "interrupted by server restart"
-    )
+    swept = await automation_store.fail_orphaned_runs(t0 + timedelta(minutes=5), "interrupted by server restart")
     assert swept == 2
     for task in ("loop-1", "loop-2"):
         runs = await automation_store.list_runs(task)
@@ -66,9 +62,7 @@ async def test_fail_latest_running_run_targets_one_task(automation_store: Automa
     await automation_store.record_run_start("loop-1", t0)
     await automation_store.record_run_start("loop-2", t0)
 
-    await automation_store.fail_latest_running_run(
-        "loop-1", t0 + timedelta(hours=3), "run never reported back"
-    )
+    await automation_store.fail_latest_running_run("loop-1", t0 + timedelta(hours=3), "run never reported back")
     assert (await automation_store.list_runs("loop-1"))[0]["status"] == "failed"
     assert (await automation_store.list_runs("loop-2"))[0]["status"] == "running"
 
@@ -77,9 +71,7 @@ async def test_update_last_run_preserve_result(automation_store: AutomationStore
     await automation_store.save(_automation("loop-1"))
     t0 = datetime(2026, 1, 1, tzinfo=UTC)
     await automation_store.update_last_run("loop-1", t0, None, result="real report")
-    await automation_store.update_last_run(
-        "loop-1", t0 + timedelta(hours=1), None, preserve_result=True
-    )
+    await automation_store.update_last_run("loop-1", t0 + timedelta(hours=1), None, preserve_result=True)
     auto = await automation_store.get("loop-1")
     assert auto.last_result == "real report"
     assert auto.last_run_at == t0 + timedelta(hours=1)
@@ -133,7 +125,9 @@ async def test_recent_run_statuses_newest_first_per_task(automation_store: Autom
     r1 = await automation_store.record_run_start("A", base)
     await automation_store.record_run_finish(r1, status="completed", result="ok", error=None, ended_at=base)
     r2 = await automation_store.record_run_start("A", base + timedelta(minutes=1))
-    await automation_store.record_run_finish(r2, status="failed", result=None, error="x", ended_at=base + timedelta(minutes=1))
+    await automation_store.record_run_finish(
+        r2, status="failed", result=None, error="x", ended_at=base + timedelta(minutes=1)
+    )
     await automation_store.record_run_start("A", base + timedelta(minutes=2))  # still running
     await automation_store.record_run_start("B", base)
 
@@ -679,10 +673,11 @@ def test_scheduler_constructor_has_no_learning_recorder(automation_store: Automa
             record_learning_event=record_learning_event,
         )
 
+
 @pytest.mark.asyncio
 async def test_seed_builtins_schedules_suggester_job(automation_store: AutomationStore):
-    from ntrp.automation.builtins import seed_builtins
-    from ntrp.constants import BUILTIN_AUTOMATION_SUGGESTER_DAILY_ID
+    from arden.automation.builtins import seed_builtins
+    from arden.constants import BUILTIN_AUTOMATION_SUGGESTER_DAILY_ID
 
     await seed_builtins(automation_store)
 
@@ -694,7 +689,7 @@ async def test_seed_builtins_schedules_suggester_job(automation_store: Automatio
 
 @pytest.mark.asyncio
 async def test_seed_builtins_removes_retired_pipeline_jobs(automation_store: AutomationStore):
-    from ntrp.automation.builtins import seed_builtins
+    from arden.automation.builtins import seed_builtins
 
     # A pattern_finder builtin seeded by an older version must be garbage-collected
     # now that its handler registration is gone (claims+lens pipeline removed).
@@ -728,8 +723,8 @@ async def test_seed_builtins_removes_retired_pipeline_jobs(automation_store: Aut
 
 @pytest.mark.asyncio
 async def test_seed_builtins_repairs_missing_next_run_at(automation_store: AutomationStore):
-    from ntrp.automation.builtins import seed_builtins
-    from ntrp.constants import BUILTIN_AUTOMATION_SUGGESTER_DAILY_ID
+    from arden.automation.builtins import seed_builtins
+    from arden.constants import BUILTIN_AUTOMATION_SUGGESTER_DAILY_ID
 
     automation = _automation(
         BUILTIN_AUTOMATION_SUGGESTER_DAILY_ID,
@@ -752,8 +747,8 @@ async def test_seed_builtins_repairs_missing_next_run_at(automation_store: Autom
 async def test_seed_builtins_respects_user_cadence_and_pause(automation_store: AutomationStore):
     """Triggers and enabled are user dials once the row exists — re-seeding
     must not revert an edited schedule or re-enable a paused builtin."""
-    from ntrp.automation.builtins import seed_builtins
-    from ntrp.constants import BUILTIN_AUTOMATION_SUGGESTER_DAILY_ID
+    from arden.automation.builtins import seed_builtins
+    from arden.constants import BUILTIN_AUTOMATION_SUGGESTER_DAILY_ID
 
     await seed_builtins(automation_store)
     seeded = await automation_store.get(BUILTIN_AUTOMATION_SUGGESTER_DAILY_ID)
@@ -769,7 +764,7 @@ async def test_seed_builtins_respects_user_cadence_and_pause(automation_store: A
 
 @pytest.mark.asyncio
 async def test_output_schema_round_trips(automation_store: AutomationStore):
-    from ntrp.automation.output_schemas import resolve_output_schema
+    from arden.automation.output_schemas import resolve_output_schema
 
     auto = dc_replace(_automation("with-schema"), output_schema="area_ask")
     await automation_store.save(auto)

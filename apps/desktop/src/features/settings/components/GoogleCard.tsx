@@ -30,7 +30,7 @@ export function GoogleCard({
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="text-base font-medium text-ink">Google services</div>
-          <div className="text-xs text-muted">One Google account can authorize services independently inside ntrp.</div>
+          <div className="text-xs text-muted">One Google account can authorize services independently inside arden.</div>
         </div>
         <Button variant="secondary" onClick={onAssistant}>Setup credentials</Button>
       </div>

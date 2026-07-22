@@ -248,7 +248,7 @@ Shipped 2026-07-10, commits 2efe8405 (server) + bc516eca/... (desktop):
 
 ## E2E verification (2026-07-10, isolated sandbox server on live-data copy)
 
-Booted the branch server against a copy of the live NTRP dir (neutralized
+Booted the branch server against a copy of the live ARDEN dir (neutralized
 notifiers, API-key model). Proven end-to-end, over HTTP, with a real LLM run:
 migrations (settings columns, ask-kind fold: 15 question + 2 notify, 0
 legacy); PATCH attention/interrupts; pause disables the agent automation,

@@ -23,9 +23,9 @@ test("ordinary parentheticals never become provenance chips", () => {
 });
 
 test("piped wikilinks show the label and carry the target", () => {
-  const html = renderToStaticMarkup(<Markdown content="See [[topics/dex|Dex]] and [[ntrp]]." />);
+  const html = renderToStaticMarkup(<Markdown content="See [[topics/dex|Dex]] and [[arden]]." />);
   expect(html).toContain('data-wikilink="topics/dex"');
   expect(html).toContain(">Dex</a>");
-  expect(html).toContain('data-wikilink="ntrp"');
+  expect(html).toContain('data-wikilink="arden"');
   expect(html).not.toContain("topics/dex|Dex");
 });

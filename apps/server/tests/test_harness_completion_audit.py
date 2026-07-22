@@ -6,13 +6,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from ntrp.memory.reconciler import RecordOperation
-from ntrp.tools.automation import CreateAutomationInput, UpdateAutomationInput
-from ntrp.tools.deferred import LoadToolsInput
-from ntrp.tools.memory import MEMORY_RECONCILER_SERVICE, MEMORY_RECORDS_SERVICE, RememberInput, remember
-from ntrp.tools.notify import NotifyInput
-from ntrp.tools.research import ResearchOutlineInput, ResearchVerifyClaimInput
-from ntrp.tools.workflow import WorkflowInput
+from arden.memory.reconciler import RecordOperation
+from arden.tools.automation import CreateAutomationInput, UpdateAutomationInput
+from arden.tools.deferred import LoadToolsInput
+from arden.tools.memory import MEMORY_RECONCILER_SERVICE, MEMORY_RECORDS_SERVICE, RememberInput, remember
+from arden.tools.notify import NotifyInput
+from arden.tools.research import ResearchOutlineInput, ResearchVerifyClaimInput
+from arden.tools.workflow import WorkflowInput
 
 
 def _schema_limit(model, field: str, keyword: str) -> int | None:
@@ -57,7 +57,7 @@ def test_agent_controlled_collections_are_bounded(model, field, limit):
 def test_production_tools_do_not_construct_string_only_errors():
     server_root = Path(__file__).parents[1]
     violations: list[str] = []
-    for source_root in (server_root / "ntrp" / "tools", server_root / "ntrp" / "integrations"):
+    for source_root in (server_root / "arden" / "tools", server_root / "arden" / "integrations"):
         for path in source_root.rglob("*.py"):
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for node in ast.walk(tree):

@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ntrp.server.runtime.automation import AutomationRuntime
+from arden.server.runtime.automation import AutomationRuntime
 
 pytestmark = pytest.mark.asyncio
 

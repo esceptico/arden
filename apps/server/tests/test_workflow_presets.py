@@ -7,18 +7,18 @@ from pathlib import Path
 
 import pytest
 
-from ntrp.context.models import SessionState
-from ntrp.skills.registry import SkillRegistry
-from ntrp.skills.service import BUILTIN_SKILLS_DIR
-from ntrp.tools.core.context import (
+from arden.context.models import SessionState
+from arden.skills.registry import SkillRegistry
+from arden.skills.service import BUILTIN_SKILLS_DIR
+from arden.tools.core.context import (
     BackgroundTaskRegistry,
     IOBridge,
     RunContext,
     ToolContext,
     ToolExecution,
 )
-from ntrp.tools.core.registry import ToolRegistry
-from ntrp.tools.workflow import WorkflowInput, run_workflow
+from arden.tools.core.registry import ToolRegistry
+from arden.tools.workflow import WorkflowInput, run_workflow
 
 PRESET_DESCRIPTION = "Echo preset returning args x."
 PRESET_SCRIPT = 'return args.get("x", "ok")'

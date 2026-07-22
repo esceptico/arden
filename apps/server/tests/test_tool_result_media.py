@@ -1,10 +1,10 @@
 import pytest
 
-from ntrp.agent.tools.dispatch import dispatch_tools
-from ntrp.agent.types.events import ToolCompleted
-from ntrp.agent.types.llm import Role
-from ntrp.agent.types.tool_call import FunctionCall, PendingToolCall, ToolCall
-from ntrp.core.content import ImageContent
+from arden.agent.tools.dispatch import dispatch_tools
+from arden.agent.types.events import ToolCompleted
+from arden.agent.types.llm import Role
+from arden.agent.types.tool_call import FunctionCall, PendingToolCall, ToolCall
+from arden.core.content import ImageContent
 
 
 class FakeRunner:

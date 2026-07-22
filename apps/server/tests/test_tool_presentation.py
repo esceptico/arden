@@ -1,7 +1,7 @@
 import json
 
-from ntrp.agent.types.tool_presentation import tool_presentation
-from ntrp.events.sse import ToolCallStartEvent
+from arden.agent.types.tool_presentation import tool_presentation
+from arden.events.sse import ToolCallStartEvent
 
 
 def test_known_tools_map_to_icon_and_noun():

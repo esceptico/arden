@@ -12,11 +12,11 @@
 
 ## File Structure
 
-- Modify `apps/server/ntrp/tools/core/context.py`: add `active_plan_ref` and snapshot helpers on `RunContext`; add pending approval/background snapshot helpers.
-- Modify `apps/server/ntrp/core/compactor.py`: embed structured `rehydration` metadata in the compacted handoff message.
-- Modify `apps/server/ntrp/core/compaction_model_request_middleware.py`: capture and restore runtime state around compaction.
-- Modify `apps/server/ntrp/context/store.py`: add `rehydration_state` JSON column to `chat_compactions`.
-- Modify `apps/server/ntrp/services/session.py`: pass the optional `rehydration_state` into the store.
+- Modify `apps/server/arden/tools/core/context.py`: add `active_plan_ref` and snapshot helpers on `RunContext`; add pending approval/background snapshot helpers.
+- Modify `apps/server/arden/core/compactor.py`: embed structured `rehydration` metadata in the compacted handoff message.
+- Modify `apps/server/arden/core/compaction_model_request_middleware.py`: capture and restore runtime state around compaction.
+- Modify `apps/server/arden/context/store.py`: add `rehydration_state` JSON column to `chat_compactions`.
+- Modify `apps/server/arden/services/session.py`: pass the optional `rehydration_state` into the store.
 - Test `apps/server/tests/test_deferred_tools.py`: deferred tools are dropped while control-plane refs survive compaction.
 - Test `apps/server/tests/test_compactor.py`: compacted handoff contains rehydration metadata.
 - Test `apps/server/tests/test_session_store.py`: `chat_compactions.rehydration_state` round trips.
@@ -24,7 +24,7 @@
 ## Task 1: Runtime Snapshot Shape
 
 **Files:**
-- Modify: `apps/server/ntrp/tools/core/context.py`
+- Modify: `apps/server/arden/tools/core/context.py`
 - Test: `apps/server/tests/test_deferred_tools.py`
 
 - [ ] **Step 1: Write failing test**
@@ -68,7 +68,7 @@ Expected: fail because `active_plan_ref`, `to_rehydration_state`, or `apply_rehy
 
 - [ ] **Step 3: Implement minimal snapshot API**
 
-Add to `RunContext` in `apps/server/ntrp/tools/core/context.py`:
+Add to `RunContext` in `apps/server/arden/tools/core/context.py`:
 
 ```python
 active_plan_ref: str | None = None
@@ -108,7 +108,7 @@ Expected: pass.
 ## Task 2: Capture Pending Approval And Background Refs
 
 **Files:**
-- Modify: `apps/server/ntrp/tools/core/context.py`
+- Modify: `apps/server/arden/tools/core/context.py`
 - Test: `apps/server/tests/test_deferred_tools.py`
 
 - [ ] **Step 1: Write failing test**
@@ -183,7 +183,7 @@ Expected: pass.
 ## Task 3: Store Rehydration Metadata In Compacted Messages
 
 **Files:**
-- Modify: `apps/server/ntrp/core/compactor.py`
+- Modify: `apps/server/arden/core/compactor.py`
 - Test: `apps/server/tests/test_compactor.py`
 
 - [ ] **Step 1: Write failing test**
@@ -251,9 +251,9 @@ Expected: pass.
 ## Task 4: Drop Loaded Tools And Rehydrate Control State During Compaction
 
 **Files:**
-- Modify: `apps/server/ntrp/core/compaction_model_request_middleware.py`
-- Modify: `apps/server/ntrp/core/factory.py`
-- Modify: `apps/server/ntrp/core/spawner.py`
+- Modify: `apps/server/arden/core/compaction_model_request_middleware.py`
+- Modify: `apps/server/arden/core/factory.py`
+- Modify: `apps/server/arden/core/spawner.py`
 - Test: `apps/server/tests/test_deferred_tools.py`
 
 - [ ] **Step 1: Replace the old expectation**
@@ -327,7 +327,7 @@ if self.apply_rehydration_state:
     self.apply_rehydration_state(rehydration_state)
 ```
 
-Keep `on_compact=run.loaded_tools.clear` in `apps/server/ntrp/core/factory.py` and `apps/server/ntrp/core/spawner.py`. Wire `get_rehydration_state=ctx.to_rehydration_state` and `apply_rehydration_state=run.apply_rehydration_state` so approval/background/plan refs survive without restoring deferred tools.
+Keep `on_compact=run.loaded_tools.clear` in `apps/server/arden/core/factory.py` and `apps/server/arden/core/spawner.py`. Wire `get_rehydration_state=ctx.to_rehydration_state` and `apply_rehydration_state=run.apply_rehydration_state` so approval/background/plan refs survive without restoring deferred tools.
 
 - [ ] **Step 4: Verify green**
 
@@ -342,8 +342,8 @@ Expected: pass.
 ## Task 5: Persist Rehydration State With Compaction Rows
 
 **Files:**
-- Modify: `apps/server/ntrp/context/store.py`
-- Modify: `apps/server/ntrp/services/session.py`
+- Modify: `apps/server/arden/context/store.py`
+- Modify: `apps/server/arden/services/session.py`
 - Test: `apps/server/tests/test_session_store.py`
 
 - [ ] **Step 1: Write failing test**
@@ -415,7 +415,7 @@ Expected: pass.
 - [ ] Run formatting/lint checks.
 
 ```bash
-cd apps/server && uv run ruff check ntrp/core/compactor.py ntrp/core/compaction_model_request_middleware.py ntrp/tools/core/context.py ntrp/context/store.py ntrp/services/session.py
+cd apps/server && uv run ruff check arden/core/compactor.py arden/core/compaction_model_request_middleware.py arden/tools/core/context.py arden/context/store.py arden/services/session.py
 git diff --check
 ```
 

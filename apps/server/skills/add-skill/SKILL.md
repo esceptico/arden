@@ -6,16 +6,16 @@ description: Use this skill when the user wants to create a new skill or remove 
 # Add / Remove a Skill
 
 Skills are discovered from three places:
-- **Builtin**: shipped with ntrp, don't touch
+- **Builtin**: shipped with arden, don't touch
 - **Project**: `.skills/` under the server working directory
-- **Global**: `~/.ntrp/skills/` — user skills, create here
+- **Global**: `~/.arden/skills/` — user skills, create here
 
 A skill is a directory containing at minimum a `SKILL.md` file.
 
 ## Directory structure
 
 ```
-~/.ntrp/skills/my-skill/
+~/.arden/skills/my-skill/
 ├── SKILL.md          # required
 ├── scripts/          # optional: executable scripts
 ├── references/       # optional: extra docs loaded on demand
@@ -42,7 +42,7 @@ Step-by-step instructions...
 
 ## Creating a skill
 
-1. Ask whether the skill should be global (`~/.ntrp/skills/<name>/`) or project-local (`.skills/<name>/`). Default to global unless the user asks for project-local behavior.
+1. Ask whether the skill should be global (`~/.arden/skills/<name>/`) or project-local (`.skills/<name>/`). Default to global unless the user asks for project-local behavior.
 2. `mkdir -p <target>/<name>/scripts`
 3. Write `SKILL.md` with frontmatter + instructions
 4. Add any scripts/assets/references only when needed — reference them with `<skill_path>/...` in SKILL.md
@@ -55,8 +55,8 @@ Delete the directory. Only project/global skills can be removed (not builtins).
 ## Listing installed skills
 
 ```bash
-ls ~/.ntrp/skills/
-ls /Users/escept1co/src/ntrp/skills/
+ls ~/.arden/skills/
+ls /Users/escept1co/src/arden/skills/
 ```
 
 ## After creating

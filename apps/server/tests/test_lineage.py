@@ -4,14 +4,14 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-import ntrp.database as database
-from ntrp.automation.models import Automation
-from ntrp.automation.scheduler import Scheduler
-from ntrp.automation.service import AutomationService
-from ntrp.automation.store import AutomationStore
-from ntrp.automation.triggers import TimeTrigger
-from ntrp.context.store import SessionStore
-from ntrp.services.session import SessionService
+import arden.database as database
+from arden.automation.models import Automation
+from arden.automation.scheduler import Scheduler
+from arden.automation.service import AutomationService
+from arden.automation.store import AutomationStore
+from arden.automation.triggers import TimeTrigger
+from arden.context.store import SessionStore
+from arden.services.session import SessionService
 
 
 @pytest_asyncio.fixture
@@ -94,9 +94,7 @@ async def test_list_by_parent_returns_empty_when_no_children(store: AutomationSt
 
 
 @pytest.mark.asyncio
-async def test_list_children_returns_expected_automations(
-    store: AutomationStore, service: AutomationService
-):
+async def test_list_children_returns_expected_automations(store: AutomationStore, service: AutomationService):
     await store.save(_automation("parent"))
     await store.save(_automation("child-1", parent_automation_id="parent"))
     await store.save(_automation("child-2", parent_automation_id="parent"))
@@ -106,17 +104,13 @@ async def test_list_children_returns_expected_automations(
 
 
 @pytest.mark.asyncio
-async def test_list_children_empty_when_no_children(
-    store: AutomationStore, service: AutomationService
-):
+async def test_list_children_empty_when_no_children(store: AutomationStore, service: AutomationService):
     await store.save(_automation("parent"))
     assert await service.list_children("parent") == []
 
 
 @pytest.mark.asyncio
-async def test_cancel_children_disables_all_and_returns_count(
-    store: AutomationStore, service: AutomationService
-):
+async def test_cancel_children_disables_all_and_returns_count(store: AutomationStore, service: AutomationService):
     await store.save(_automation("parent"))
     await store.save(_automation("c1", parent_automation_id="parent"))
     await store.save(_automation("c2", parent_automation_id="parent"))
@@ -132,17 +126,13 @@ async def test_cancel_children_disables_all_and_returns_count(
 
 
 @pytest.mark.asyncio
-async def test_cancel_children_zero_when_no_children(
-    store: AutomationStore, service: AutomationService
-):
+async def test_cancel_children_zero_when_no_children(store: AutomationStore, service: AutomationService):
     await store.save(_automation("parent"))
     assert await service.cancel_children("parent") == 0
 
 
 @pytest.mark.asyncio
-async def test_cancel_children_only_touches_matching_parent(
-    store: AutomationStore, service: AutomationService
-):
+async def test_cancel_children_only_touches_matching_parent(store: AutomationStore, service: AutomationService):
     await store.save(_automation("parent-a"))
     await store.save(_automation("parent-b"))
     await store.save(_automation("a1", parent_automation_id="parent-a"))
@@ -158,9 +148,7 @@ async def test_cancel_children_only_touches_matching_parent(
 
 
 @pytest.mark.asyncio
-async def test_disable_by_parent_only_disables_currently_enabled(
-    store: AutomationStore, service: AutomationService
-):
+async def test_disable_by_parent_only_disables_currently_enabled(store: AutomationStore, service: AutomationService):
     # Pre-disable one child; cancel_children should only report the rows it
     # actually flipped (rowcount under `AND enabled = 1`), not the total
     # number of children attached to the parent.
@@ -182,9 +170,7 @@ async def test_disable_by_parent_only_disables_currently_enabled(
 
 
 @pytest.mark.asyncio
-async def test_delete_parent_disables_children_and_preserves_them(
-    store: AutomationStore, service: AutomationService
-):
+async def test_delete_parent_disables_children_and_preserves_them(store: AutomationStore, service: AutomationService):
     await store.save(_automation("parent"))
     await store.save(_automation("c1", parent_automation_id="parent"))
     await store.save(_automation("c2", parent_automation_id="parent"))
@@ -201,9 +187,7 @@ async def test_delete_parent_disables_children_and_preserves_them(
 
 
 @pytest.mark.asyncio
-async def test_delete_parent_with_no_children_returns_zero(
-    store: AutomationStore, service: AutomationService
-):
+async def test_delete_parent_with_no_children_returns_zero(store: AutomationStore, service: AutomationService):
     await store.save(_automation("parent"))
     disabled = await service.delete("parent")
     assert disabled == 0

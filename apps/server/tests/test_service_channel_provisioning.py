@@ -5,14 +5,14 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-import ntrp.database as database
-from ntrp.automation.scheduler import AUTOMATION_BUS_KEY, Scheduler
-from ntrp.automation.service import AutomationService
-from ntrp.automation.store import AutomationStore
-from ntrp.context.store import SessionStore
-from ntrp.events.sse import EventType
-from ntrp.server.bus import BusRegistry
-from ntrp.services.session import SessionService
+import arden.database as database
+from arden.automation.scheduler import AUTOMATION_BUS_KEY, Scheduler
+from arden.automation.service import AutomationService
+from arden.automation.store import AutomationStore
+from arden.context.store import SessionStore
+from arden.events.sse import EventType
+from arden.server.bus import BusRegistry
+from arden.services.session import SessionService
 
 
 @pytest_asyncio.fixture
@@ -68,9 +68,7 @@ async def test_create_provisions_channel(service: AutomationService, session_ser
 
 
 @pytest.mark.asyncio
-async def test_create_emits_session_created_on_automation_bus(
-    store: AutomationStore, session_service: SessionService
-):
+async def test_create_emits_session_created_on_automation_bus(store: AutomationStore, session_service: SessionService):
     registry = BusRegistry()
     bus = registry.get_or_create(AUTOMATION_BUS_KEY)
     session_service.set_event_sink(bus.emit)
@@ -105,9 +103,7 @@ async def test_channel_content_save_emits_session_activity(session_service: Sess
     bus = registry.get_or_create(AUTOMATION_BUS_KEY)
     session_service.set_event_sink(bus.emit)
 
-    channel = await session_service.provision(
-        name="feed", session_type="channel", origin_automation_id="t1"
-    )
+    channel = await session_service.provision(name="feed", session_type="channel", origin_automation_id="t1")
     # Subscribe after creation so we only observe the activity delta.
     queue = bus.subscribe()
     await session_service.save_progress(channel, [{"role": "assistant", "content": "hi"}])
@@ -135,12 +131,10 @@ async def test_chat_session_saves_do_not_emit_activity(session_service: SessionS
 
 
 @pytest.mark.asyncio
-async def test_session_created_reaches_automation_event_stream(
-    store: AutomationStore, session_service: SessionService
-):
+async def test_session_created_reaches_automation_event_stream(store: AutomationStore, session_service: SessionService):
     # Full server transport path: provision() -> SessionService sink -> bus
     # -> the real /automations/events stream generator -> SSE wire frame.
-    from ntrp.server.routers.automation import _automation_event_stream
+    from arden.server.routers.automation import _automation_event_stream
 
     registry = BusRegistry()
     bus = registry.get_or_create(AUTOMATION_BUS_KEY)

@@ -7,12 +7,12 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-import ntrp.database as database
-from ntrp.agent import Agent
-from ntrp.context.models import SessionState
-from ntrp.context.store import SessionStore
-from ntrp.tools.core import EmptyInput, Tool, ToolAction, ToolPolicy, ToolResult, ToolScope, tool
-from ntrp.tools.core.context import BackgroundTaskRegistry, ToolExecution
+import arden.database as database
+from arden.agent import Agent
+from arden.context.models import SessionState
+from arden.context.store import SessionStore
+from arden.tools.core import EmptyInput, Tool, ToolAction, ToolPolicy, ToolResult, ToolScope, tool
+from arden.tools.core.context import BackgroundTaskRegistry, ToolExecution
 from tests.helpers import (
     MockCompletionClient,
     MockLLMClient,
@@ -55,7 +55,7 @@ def _make_agent(client, tools: dict[str, Tool] | None = None) -> Agent:
 async def test_agent_multiple_tool_calls_in_one_turn():
     """LLM returns multiple tool calls in a single response."""
 
-    from ntrp.agent import Choice, CompletionResponse, FunctionCall, Message, ToolCall, Usage
+    from arden.agent import Choice, CompletionResponse, FunctionCall, Message, ToolCall, Usage
 
     multi_tool = CompletionResponse(
         choices=[

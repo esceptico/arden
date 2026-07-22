@@ -1,4 +1,4 @@
-# ntrp Mission Control mockups
+# Arden Mission Control mockups
 
 Standalone HTML design explorations for a coherent Mission Control layer.
 

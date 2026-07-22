@@ -1,9 +1,9 @@
 import pytest
 
-import ntrp.database as database
-from ntrp.database import serialize_embedding
-from ntrp.search.migrations import CURRENT_SCHEMA_VERSION
-from ntrp.search.store import SearchStore
+import arden.database as database
+from arden.database import serialize_embedding
+from arden.search.migrations import CURRENT_SCHEMA_VERSION
+from arden.search.store import SearchStore
 
 
 @pytest.mark.asyncio

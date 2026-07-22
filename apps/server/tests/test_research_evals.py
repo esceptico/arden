@@ -1,6 +1,6 @@
-from ntrp.agent import SharedLedger
-from ntrp.agent.coverage import ResearchOutline
-from ntrp.agent.ledger import FactNote
+from arden.agent import SharedLedger
+from arden.agent.coverage import ResearchOutline
+from arden.agent.ledger import FactNote
 from tests.research_eval_helpers import ResearchLedgerEvalCase, run_research_ledger_eval_cases
 
 
@@ -8,7 +8,7 @@ def test_research_ledger_eval_passes_when_required_notes_and_coverage_exist():
     ledger = SharedLedger()
     ledger.add_note(FactNote(claim="research agents have ledger tools", source="repo"))
     ledger.set_outline(ResearchOutline.from_titles(["Repo state", "Prompt behavior"]))
-    ledger.cover_section("Repo state", "apps/server/ntrp/tools/research.py")
+    ledger.cover_section("Repo state", "apps/server/arden/tools/research.py")
     ledger.cover_section("Prompt behavior", "research system prompt")
 
     result = run_research_ledger_eval_cases(
@@ -30,7 +30,7 @@ def test_research_ledger_eval_passes_when_required_notes_and_coverage_exist():
 def test_research_ledger_eval_flags_missing_sections_notes_and_forbidden_gaps():
     ledger = SharedLedger()
     ledger.set_outline(ResearchOutline.from_titles(["Repo state", "Prompt behavior"]))
-    ledger.cover_section("Repo state", "apps/server/ntrp/tools/research.py")
+    ledger.cover_section("Repo state", "apps/server/arden/tools/research.py")
     ledger.add_coverage_gap_notes()
 
     result = run_research_ledger_eval_cases(

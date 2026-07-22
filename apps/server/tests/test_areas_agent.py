@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from ntrp.areas.agent import (
+from arden.areas.agent import (
     ACT_TOOL_SCOPE,
     OBSERVE_TOOL_SCOPE,
     AreaAskNomination,
@@ -18,9 +18,9 @@ from ntrp.areas.agent import (
     custodian_contract,
     record_area_run,
 )
-from ntrp.areas.asks import AskStore
-from ntrp.areas.models import Area
-from ntrp.tools.core.scope import matches_scope
+from arden.areas.asks import AskStore
+from arden.areas.models import Area
+from arden.tools.core.scope import matches_scope
 
 AREA = Area(key="o-1a", title="O-1A", page_path="topics/o-1a.md", autonomy="observe")
 
@@ -41,7 +41,14 @@ def _nom(asks, report="tended", hours=24.0, reason="routine"):
 
 
 def _draft(text, kind, salience=4):
-    return {"key": "deadline", "text": text, "kind": kind, "salience": salience, "why_now": "deadline", "what_next": "opens page"}
+    return {
+        "key": "deadline",
+        "text": text,
+        "kind": kind,
+        "salience": salience,
+        "why_now": "deadline",
+        "what_next": "opens page",
+    }
 
 
 def test_nomination_schema_validates_at_the_trust_boundary():
@@ -57,43 +64,53 @@ def test_nomination_schema_validates_at_the_trust_boundary():
 
 
 def test_custodian_report_requires_complete_explicit_work_operations():
-    report = AreaCustodianReport.model_validate({
-        **_nom([], report="Started evidence collection"),
-        "made_progress": True,
-        "work_remaining": True,
-        "outcome_changes": [{
-            "op": "create",
-            "key": "petition-filed",
-            "title": "Petition filed",
-            "success_criteria": "Receipt notice exists",
-            "priority": 5,
-        }],
-        "work_changes": [{
-            "op": "create",
-            "key": "collect-exhibits",
-            "outcome_key": "petition-filed",
-            "kind": "action",
-            "text": "Collect final exhibits",
-            "owner": "custodian",
-        }],
-        "evidence": [],
-    })
+    report = AreaCustodianReport.model_validate(
+        {
+            **_nom([], report="Started evidence collection"),
+            "made_progress": True,
+            "work_remaining": True,
+            "outcome_changes": [
+                {
+                    "op": "create",
+                    "key": "petition-filed",
+                    "title": "Petition filed",
+                    "success_criteria": "Receipt notice exists",
+                    "priority": 5,
+                }
+            ],
+            "work_changes": [
+                {
+                    "op": "create",
+                    "key": "collect-exhibits",
+                    "outcome_key": "petition-filed",
+                    "kind": "action",
+                    "text": "Collect final exhibits",
+                    "owner": "custodian",
+                }
+            ],
+            "evidence": [],
+        }
+    )
     assert report.outcome_changes[0].key == "petition-filed"
     assert report.work_changes[0].outcome_key == "petition-filed"
 
     with pytest.raises(ValidationError):
-        AreaCustodianReport.model_validate({
-            **_nom([]),
-            "made_progress": True,
-            "work_remaining": True,
-            "outcome_changes": [{"op": "create", "key": "missing-fields"}],
-        })
+        AreaCustodianReport.model_validate(
+            {
+                **_nom([]),
+                "made_progress": True,
+                "work_remaining": True,
+                "outcome_changes": [{"op": "create", "key": "missing-fields"}],
+            }
+        )
 
 
 def test_record_area_run_nominates_and_supersedes(tmp_path):
     store = AskStore(tmp_path / "state.json")
     record_area_run(
-        store, "o-1a", "topics/o-1a.md",
+        store,
+        "o-1a",
+        "topics/o-1a.md",
         _nom([_draft("First ask", "review")]),
         run_ref="run:r1",
     )
@@ -102,7 +119,9 @@ def test_record_area_run_nominates_and_supersedes(tmp_path):
     assert first[0].why_now == "deadline" and first[0].what_next == "opens page"
 
     record_area_run(
-        store, "o-1a", "topics/o-1a.md",
+        store,
+        "o-1a",
+        "topics/o-1a.md",
         _nom([_draft("Second ask", "question")]),
         run_ref="run:r2",
     )
@@ -113,18 +132,24 @@ def test_record_area_run_nominates_and_supersedes(tmp_path):
 def test_record_area_run_salience_threshold_and_notify_expiry(tmp_path):
     store = AskStore(tmp_path / "state.json")
     record_area_run(
-        store, "o-1a", "topics/o-1a.md",
-        _nom([
-            _draft("Big thing", "notify", salience=4),
-            _draft("Marginal thing", "notify", salience=2),  # below threshold → page only
-        ]),
+        store,
+        "o-1a",
+        "topics/o-1a.md",
+        _nom(
+            [
+                _draft("Big thing", "notify", salience=4),
+                _draft("Marginal thing", "notify", salience=2),  # below threshold → page only
+            ]
+        ),
         run_ref="run:r1",
     )
     active = store.list("o-1a")
     assert [a.text for a in active] == ["Big thing"]
     assert active[0].expires_at is not None  # notify asks expire quietly
     record_area_run(
-        store, "o-1a", "topics/o-1a.md",
+        store,
+        "o-1a",
+        "topics/o-1a.md",
         _nom([_draft("Needs you", "question", salience=5)]),
         run_ref="run:r2",
     )
@@ -135,7 +160,9 @@ def test_record_area_run_salience_threshold_and_notify_expiry(tmp_path):
 def test_quiet_or_malformed_run_preserves_unresolved_decision(tmp_path):
     store = AskStore(tmp_path / "state.json")
     record_area_run(
-        store, "o-1a", "topics/o-1a.md",
+        store,
+        "o-1a",
+        "topics/o-1a.md",
         _nom([_draft("Old ask", "review")]),
         run_ref="run:r1",
     )
@@ -203,7 +230,7 @@ def test_live_autonomy_contracts_are_exact_and_never_globally_auto_approve():
 
 @pytest.mark.asyncio
 async def test_runtime_reconciles_permission_downgrades_in_place():
-    from ntrp.server.runtime.automation import AutomationRuntime
+    from arden.server.runtime.automation import AutomationRuntime
 
     automation = SimpleNamespace(
         task_id="area:o-1a",
@@ -241,14 +268,14 @@ async def test_runtime_reconciles_permission_downgrades_in_place():
 
 
 def test_custodian_report_is_the_registered_runtime_schema():
-    from ntrp.automation.output_schemas import resolve_output_schema
+    from arden.automation.output_schemas import resolve_output_schema
 
     assert resolve_output_schema("area_custodian") is AreaCustodianReport
     assert resolve_output_schema("area_ask") is AreaCustodianReport
 
 
 def test_load_area_context_reads_page_or_degrades(tmp_path):
-    from ntrp.areas.context import load_area_context
+    from arden.areas.context import load_area_context
 
     vault = tmp_path / "memory"
     (vault / "topics").mkdir(parents=True)
@@ -266,7 +293,7 @@ def test_load_area_context_reads_page_or_degrades(tmp_path):
 
 
 def test_system_blocks_include_area_block():
-    from ntrp.core.prompts import build_system_blocks
+    from arden.core.prompts import build_system_blocks
 
     blocks = build_system_blocks(source_details={}, area_page_context={"title": "O-1A", "page": "# O-1A\ncase notes"})
     joined = "\n".join(b["text"] for b in blocks)

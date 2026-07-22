@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from ntrp.memory.records import RecordStore
+from arden.memory.records import RecordStore
 
 
 @pytest.mark.anyio

@@ -7,7 +7,7 @@ import { rankSwitcherMatches } from "@/features/memory/components/MemoryQuickSwi
 import type { MemoryArtifactSummary } from "@/features/memory/lib/notebookTypes";
 
 const config: AppConfig = { serverUrl: "http://localhost:6877", apiKey: "test-key" };
-const originalDesktop = window.ntrpDesktop;
+const originalDesktop = window.ardenDesktop;
 const roots = new Set<Root>();
 
 const base = {
@@ -45,7 +45,7 @@ function detail(path: string) {
 }
 
 function installBridge() {
-  window.ntrpDesktop = {
+  window.ardenDesktop = {
     api: {
       request: async (_config, request) => {
         if (request.path.startsWith("/admin/memory/artifacts?") || request.path === "/admin/memory/artifacts") {
@@ -65,14 +65,14 @@ function installBridge() {
         return { ok: true, status: 200, statusText: "OK", contentType: "application/json", data: { artifact: detail(path) }, text: "" };
       },
     },
-  } as Window["ntrpDesktop"];
+  } as Window["ardenDesktop"];
 }
 
 function setup() {
   // Inspector now defaults open (persisted); seed closed so switcher tests
   // don't pull in extra link requests. happy-dom localStorage is shared
   // across test files in one bun invocation — cleaned up in afterEach.
-  localStorage.setItem("ntrp.desktop.memory.inspectorOpen", "false");
+  localStorage.setItem("arden.desktop.memory.inspectorOpen", "false");
   const app = document.createElement("div");
   app.id = "app";
   const host = document.createElement("div");
@@ -98,13 +98,13 @@ async function shortcut(key: string, target: EventTarget = window) {
 afterEach(async () => {
   for (const root of roots) await act(async () => root.unmount());
   roots.clear();
-  window.ntrpDesktop = originalDesktop;
+  window.ardenDesktop = originalDesktop;
   document.body.replaceChildren();
   for (const key of [
-    "ntrp.desktop.memory.inspectorOpen",
-    "ntrp.desktop.memory.lastPath",
-    "ntrp.desktop.memory.pins",
-    "ntrp.desktop.memory.rail.collapsed",
+    "arden.desktop.memory.inspectorOpen",
+    "arden.desktop.memory.lastPath",
+    "arden.desktop.memory.pins",
+    "arden.desktop.memory.rail.collapsed",
   ]) localStorage.removeItem(key);
 });
 

@@ -21,9 +21,9 @@
 ### Task 1: Exact turn lookup and durable outcome hydration
 
 **Files:**
-- Modify: `apps/server/ntrp/context/store.py`
-- Modify: `apps/server/ntrp/server/schemas.py`
-- Modify: `apps/server/ntrp/server/routers/session.py`
+- Modify: `apps/server/arden/context/store.py`
+- Modify: `apps/server/arden/server/schemas.py`
+- Modify: `apps/server/arden/server/routers/session.py`
 - Modify: `apps/server/tests/test_session_store.py`
 - Modify: `apps/server/tests/test_session_runtime_snapshot.py`
 
@@ -101,7 +101,7 @@ Expected: PASS.
 - [ ] **Step 8: Commit Task 1**
 
 ```bash
-git add apps/server/ntrp/context/store.py apps/server/ntrp/server/schemas.py apps/server/ntrp/server/routers/session.py apps/server/tests/test_session_store.py apps/server/tests/test_session_runtime_snapshot.py
+git add apps/server/arden/context/store.py apps/server/arden/server/schemas.py apps/server/arden/server/routers/session.py apps/server/tests/test_session_store.py apps/server/tests/test_session_runtime_snapshot.py
 git commit -m "feat: expose durable turn evidence"
 ```
 
@@ -255,7 +255,7 @@ git commit -m "feat: add context evidence inspector"
 
 Run: `uv run pytest tests/test_session_store.py tests/test_session_runtime_snapshot.py -q`
 
-Run: `uv run ruff check ntrp/context/store.py ntrp/server/schemas.py ntrp/server/routers/session.py tests/test_session_store.py tests/test_session_runtime_snapshot.py`
+Run: `uv run ruff check arden/context/store.py arden/server/schemas.py arden/server/routers/session.py tests/test_session_store.py tests/test_session_runtime_snapshot.py`
 
 - [ ] **Step 2: Run desktop checks**
 

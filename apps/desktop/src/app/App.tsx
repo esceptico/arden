@@ -67,8 +67,8 @@ function useFullscreenClass(): void {
     const setFullscreen = (isFullScreen: boolean) => {
       root.dataset.fullscreen = isFullScreen ? "true" : "false";
     };
-    void window.ntrpDesktop?.window?.isFullScreen?.().then(setFullscreen);
-    const unsubscribe = window.ntrpDesktop?.window?.onFullScreenChange?.(setFullscreen);
+    void window.ardenDesktop?.window?.isFullScreen?.().then(setFullscreen);
+    const unsubscribe = window.ardenDesktop?.window?.onFullScreenChange?.(setFullscreen);
     return () => {
       unsubscribe?.();
       delete root.dataset.fullscreen;
@@ -174,9 +174,9 @@ export function App() {
   // NOT the current session's area) and send. Capture is silent —
   // this window is NOT brought forward — so the session (and its
   // streamed response) is simply waiting the next time the user
-  // switches to ntrp.
+  // switches to arden.
   useEffect(() => {
-    const unsubscribe = window.ntrpDesktop?.quickCapture?.onMessage?.(async (payload) => {
+    const unsubscribe = window.ardenDesktop?.quickCapture?.onMessage?.(async (payload) => {
       try {
         if (payload.sessionId) {
           await switchSession(payload.sessionId);
@@ -197,7 +197,7 @@ export function App() {
   // it — prefs live in localStorage which the main process can't read.
   const quickCaptureShortcut = useStore((s) => s.prefs.quickCaptureShortcut);
   useEffect(() => {
-    void window.ntrpDesktop?.quickCapture?.setShortcut?.(quickCaptureShortcut);
+    void window.ardenDesktop?.quickCapture?.setShortcut?.(quickCaptureShortcut);
   }, [quickCaptureShortcut]);
 
   return (

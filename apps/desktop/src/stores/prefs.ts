@@ -14,7 +14,7 @@ export const RIGHT_PANEL_SNAP_THRESHOLD_PX = 12;
 
 export const DEFAULT_QUICK_CAPTURE_SHORTCUT = "CommandOrControl+Shift+Space";
 
-const PREFS_KEY = "ntrp.desktop.prefs";
+const PREFS_KEY = "arden.desktop.prefs";
 const PREFS_VERSION = 9;
 
 export const DEFAULT_PREFS: Prefs = {
@@ -72,7 +72,7 @@ export function persistPrefs(prefs: Prefs): void {
 // reopening doesn't silently flip the user back into approval-required
 // mode without warning. Stored separately from `prefs` so the migration
 // surface stays narrow.
-const SKIP_APPROVALS_KEY = "ntrp.desktop.skipApprovals";
+const SKIP_APPROVALS_KEY = "arden.desktop.skipApprovals";
 
 export function loadSkipApprovals(): boolean {
   try {

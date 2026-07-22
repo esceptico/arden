@@ -6,7 +6,7 @@ import { ArtifactMemoryView } from "@/features/memory/components/ArtifactMemoryV
 import { useStore } from "@/stores";
 
 const config: AppConfig = { serverUrl: "http://localhost:6877", apiKey: "test-key" };
-const originalDesktop = window.ntrpDesktop;
+const originalDesktop = window.ardenDesktop;
 const originalVaultVersion = useStore.getState().memoryVaultVersion;
 const mountedRoots = new Set<Root>();
 
@@ -55,7 +55,7 @@ function installBridge(handler: (
   method: string,
 ) => Promise<ReturnType<typeof response> | ReturnType<typeof failure>> | ReturnType<typeof response> | ReturnType<typeof failure>) {
   const requests: Array<{ path: string; method: string }> = [];
-  window.ntrpDesktop = {
+  window.ardenDesktop = {
     api: {
       request: async (_config, request) => {
         const method = request.method ?? "GET";
@@ -63,17 +63,17 @@ function installBridge(handler: (
         return handler(request.path, method);
       },
     },
-  } as Window["ntrpDesktop"];
+  } as Window["ardenDesktop"];
   return requests;
 }
 
 function setupDom(): { host: HTMLElement; root: Root } {
   // Inspector now defaults open (persisted); these tests exercise unrelated
   // review/refetch behavior, so seed it closed to keep prior request counts.
-  localStorage.setItem("ntrp.desktop.memory.inspectorOpen", "false");
+  localStorage.setItem("arden.desktop.memory.inspectorOpen", "false");
   // The initial selection prefers the persisted last path; clear any leak from
   // other test files so the index.md fallback stays deterministic.
-  localStorage.removeItem("ntrp.desktop.memory.lastPath");
+  localStorage.removeItem("arden.desktop.memory.lastPath");
   const host = document.createElement("div");
   host.id = "app"; // quick switcher / popovers portal into #app
   host.style.height = "800px";
@@ -99,12 +99,12 @@ async function typeInto(input: HTMLInputElement, value: string) {
 afterEach(async () => {
   for (const root of mountedRoots) await act(async () => root.unmount());
   mountedRoots.clear();
-  window.ntrpDesktop = originalDesktop;
+  window.ardenDesktop = originalDesktop;
   useStore.setState({ memoryVaultVersion: originalVaultVersion });
   document.body.replaceChildren();
   // happy-dom localStorage is shared across test files in one bun invocation.
-  localStorage.removeItem("ntrp.desktop.memory.inspectorOpen");
-  localStorage.removeItem("ntrp.desktop.memory.lastPath");
+  localStorage.removeItem("arden.desktop.memory.inspectorOpen");
+  localStorage.removeItem("arden.desktop.memory.lastPath");
 });
 
 test("rail mirrors the plain directory structure with filename stems and precise reserved paths", async () => {
@@ -247,7 +247,7 @@ test("vault change refetches selected timeline even when page revision is unchan
     }]) });
   });
   const { host, root } = setupDom();
-  localStorage.setItem("ntrp.desktop.memory.lastPath", "me.md");
+  localStorage.setItem("arden.desktop.memory.lastPath", "me.md");
   await act(async () => root.render(<ArtifactMemoryView config={config} />));
   await settle(220);
   // The record ledger is collapsed under the prose — open it once; the

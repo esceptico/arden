@@ -26,12 +26,12 @@ note, rename one, move one between directories, or delete one. Whether and
 how to add these is constrained by the system's core design: memory is
 file-canonical (markdown pages ARE the source of truth), pages carry
 revisions and an append-only event ledger, and the rail's structure comes
-from managed `<!-- ntrp:index -->` blocks in `index.md`/README files. This
+from managed `<!-- arden:index -->` blocks in `index.md`/README files. This
 spike produces the decision document so the build is a known quantity.
 
 ## Current state (the constraints, with evidence)
 
-- **File-canonical**: `apps/server/ntrp/server/routers/memory.py:210-222` —
+- **File-canonical**: `apps/server/arden/server/routers/memory.py:210-222` —
   the rebuild endpoint is a no-op: "the markdown pages ARE the source of
   truth, there is no projection to re-derive."
 - **Client API surface is read/edit-only**:
@@ -47,7 +47,7 @@ spike produces the decision document so the build is a known quantity.
   "This appends a RETRACT event. It does not delete history.").
 - **Rail structure comes from managed index blocks**:
   `apps/desktop/src/features/memory/lib/notebookIndex.ts` parses
-  `<!-- ntrp:index -->` blocks out of `index.md`/READMEs
+  `<!-- arden:index -->` blocks out of `index.md`/READMEs
   (`parseManagedIndex`, `buildNotebookRailModel`); a page absent from any
   index lands in the flat "Files" bucket. Creating a note therefore has TWO
   halves: the file, and (optionally) its index entry.
@@ -55,7 +55,7 @@ spike produces the decision document so the build is a known quantity.
   has a link index (`getPageLinks`, stale flag) — a rename design must say
   whether the server rewrites `[[links]]` in referring pages (Obsidian does)
   or marks them unresolved.
-- Server-side page store: `apps/server/ntrp/memory/pages.py`,
+- Server-side page store: `apps/server/arden/memory/pages.py`,
   `artifacts.py`, `ledger.py`, `journal.py` (recently churned on this
   branch) — read their public surfaces before proposing endpoints.
 
@@ -83,7 +83,7 @@ spike produces the decision document so the build is a known quantity.
 
 ### Step 1: Map the server's actual invariants
 
-Read `apps/server/ntrp/memory/pages.py`, `artifacts.py`, `ledger.py`,
+Read `apps/server/arden/memory/pages.py`, `artifacts.py`, `ledger.py`,
 `file_store.py` and list, in the design doc: how a page comes into existence
 today (who writes files — consolidation? curator? synth?), what the ledger
 records per page mutation, what path/slug rules exist, and what happens to

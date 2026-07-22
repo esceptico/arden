@@ -17,9 +17,9 @@
 **`GET /automations/suggestions` → `200`**
 ```json
 { "suggestions": [
-  { "id": "uuid", "name": "Weekly ntrp PR digest", "description": "Summarize merged PRs in ntrp this week...",
+  { "id": "uuid", "name": "Weekly arden PR digest", "description": "Summarize merged PRs in arden this week...",
     "triggers": [ { "type": "time", "at": "09:00", "days": "mon" } ],
-    "rationale": "You review ntrp PRs most mornings", "evidence": ["..."],
+    "rationale": "You review arden PRs most mornings", "evidence": ["..."],
     "category": "Status reports", "icon": "GitPullRequest" } ] }
 ```
 **`POST /automations/suggestions/{id}/dismiss` → `204`**
@@ -36,9 +36,9 @@ Trigger object shape inside `triggers[]` matches `scheduled_tasks.triggers` JSON
 ### Task S1: Data layer (constants, migration v11, store CRUD, models)
 
 **Files:**
-- Modify: `apps/server/ntrp/constants.py`
-- Modify: `apps/server/ntrp/automation/store.py` (migration tail after `_set_schema_version(conn, 10)` ~L967; `automation_meta` versioning)
-- Create: `apps/server/ntrp/automation/suggestions.py` (dataclass + Pydantic only in this task)
+- Modify: `apps/server/arden/constants.py`
+- Modify: `apps/server/arden/automation/store.py` (migration tail after `_set_schema_version(conn, 10)` ~L967; `automation_meta` versioning)
+- Create: `apps/server/arden/automation/suggestions.py` (dataclass + Pydantic only in this task)
 - Test: `apps/server/tests/automation/test_suggestions_store.py`
 
 - [ ] **S1.1 Constants.** Add:
@@ -54,7 +54,7 @@ Trigger object shape inside `triggers[]` matches `scheduled_tasks.triggers` JSON
   from datetime import datetime
   from typing import Literal
   from pydantic import BaseModel
-  from ntrp.automation.triggers import Trigger
+  from arden.automation.triggers import Trigger
 
   SuggestionStatus = Literal["active", "dismissed", "accepted"]
 
@@ -124,12 +124,12 @@ Trigger object shape inside `triggers[]` matches `scheduled_tasks.triggers` JSON
 ### Task S2: Suggester service + prompt + wiring
 
 **Files:**
-- Modify: `apps/server/ntrp/automation/suggestions.py` (add `AutomationSuggester`)
-- Modify: `apps/server/ntrp/automation/prompts.py` (synthesis prompt)
-- Modify: `apps/server/ntrp/automation/builtins.py` (BuiltinSpec)
-- Modify: `apps/server/ntrp/events/sse.py` (EventType + event class + registry)
-- Modify: `apps/server/ntrp/server/runtime/automation.py` (get_cheap_llm param, handler builder, register)
-- Modify: `apps/server/ntrp/server/runtime/core.py` (wire `get_cheap_llm`)
+- Modify: `apps/server/arden/automation/suggestions.py` (add `AutomationSuggester`)
+- Modify: `apps/server/arden/automation/prompts.py` (synthesis prompt)
+- Modify: `apps/server/arden/automation/builtins.py` (BuiltinSpec)
+- Modify: `apps/server/arden/events/sse.py` (EventType + event class + registry)
+- Modify: `apps/server/arden/server/runtime/automation.py` (get_cheap_llm param, handler builder, register)
+- Modify: `apps/server/arden/server/runtime/core.py` (wire `get_cheap_llm`)
 - Test: `apps/server/tests/automation/test_suggester.py`
 
 - [ ] **S2.1 Prompt** in `prompts.py`: `AUTOMATION_SUGGESTER_SYSTEM` — instructs the model to propose up to `MAX_AUTOMATION_SUGGESTIONS` NEW automations grounded in the provided memory/activity context, each with name, prompt, a schedule (time `at`+`days` or `every`, or `event` with `event_type`), a one-line rationale, category, and optional lucide icon name; must NOT duplicate the listed existing automations or excluded signatures.
@@ -171,15 +171,15 @@ Trigger object shape inside `triggers[]` matches `scheduled_tasks.triggers` JSON
   get_cheap_llm=lambda: get_completion_client(self.config.memory_model) if self.config.memory_model else None,
   cheap_model=self.config.memory_model,
   ```
-  (import `get_completion_client` from `ntrp.llm.router`).
+  (import `get_completion_client` from `arden.llm.router`).
 
 - [ ] **S2.7 Tests** (`test_suggester.py`): stub `cheap_llm` returning a `SuggestionSet` (2 valid + 1 invalid-schedule draft); assert invalid dropped, `replace_active_suggestions` called with valid set, summary string. Stub stores minimally. Run: `uv run pytest apps/server/tests/automation/test_suggester.py -v`.
 
 ### Task S3: API endpoints + schemas
 
 **Files:**
-- Modify: `apps/server/ntrp/server/schemas.py` (response models + `from_suggestion_id`)
-- Modify: `apps/server/ntrp/server/routers/automation.py` (3 routes + accept-on-create)
+- Modify: `apps/server/arden/server/schemas.py` (response models + `from_suggestion_id`)
+- Modify: `apps/server/arden/server/routers/automation.py` (3 routes + accept-on-create)
 - Test: `apps/server/tests/memory/test_memory_router.py` sibling → `apps/server/tests/automation/test_suggestions_router.py`
 
 - [ ] **S3.1 Schemas:** `AutomationSuggestionResponse` (id, name, description, triggers (serialized via the existing trigger→dict helper used by `_automation_to_dict`), rationale, evidence, category, icon) and `AutomationSuggestionsResponse(suggestions: list[...])`. Add `from_suggestion_id: str | None = None` to `CreateAutomationRequest`.

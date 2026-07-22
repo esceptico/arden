@@ -43,21 +43,21 @@ generation must be server-side and grounded in structured signal.
 
 ## Existing patterns this builds on
 
-- **Builtin reflector precedent:** [`automation/builtins.py`](../../../apps/server/ntrp/automation/builtins.py)
+- **Builtin reflector precedent:** [`automation/builtins.py`](../../../apps/server/arden/automation/builtins.py)
   defines `BUILTINS: list[BuiltinSpec]` and `seed_builtins(store)`. The scheduler registers
-  handler callables in [`server/runtime/automation.py`](../../../apps/server/ntrp/server/runtime/automation.py)
+  handler callables in [`server/runtime/automation.py`](../../../apps/server/arden/server/runtime/automation.py)
   `start_scheduler()` via `scheduler.register_handler(name, callable)`. Current builtins:
   `pattern_finder_daily` (04:00) and `skill_inducer_daily` (06:00). `skill_inducer_daily`
   already reflects over memory to draft *skill* proposals — the direct analogue for drafting
   *automation* proposals.
 - **Handler shape:** `async def handler(context: dict | None) -> str | None`, returning a
   short summary string for `last_result`. Dispatched by
-  [`automation/scheduler.py`](../../../apps/server/ntrp/automation/scheduler.py)
+  [`automation/scheduler.py`](../../../apps/server/arden/automation/scheduler.py)
   `_run_handler` via `self._handlers.get(automation.handler)`.
 - **Structured LLM output:** `await cheap_llm.completion(..., response_format=PydanticModel)`,
-  parsed like [`memory/pipeline/retrieve.py`](../../../apps/server/ntrp/memory/pipeline/retrieve.py)
+  parsed like [`memory/pipeline/retrieve.py`](../../../apps/server/arden/memory/pipeline/retrieve.py)
   `CompressionResult` (`_parse_compression`). `cheap_llm = get_completion_client(config.memory_model)`
-  (see [`server/runtime/knowledge.py`](../../../apps/server/ntrp/server/runtime/knowledge.py)).
+  (see [`server/runtime/knowledge.py`](../../../apps/server/arden/server/runtime/knowledge.py)).
 - **Memory retrieval/queries:** `MemoryStore.distinct_subjects(scope)`, `query(scope, status, limit)`,
   `lens_registry.list()`, and `Retriever.retrieve(Retrieval(...))`.
 - **Editor seed path (reused as-is):** clicking a template calls
@@ -189,7 +189,7 @@ triggers) for the editor seed.
      (email/calendar/web); recently created/run automations.
    - Exclusions: `automations.list_all()` (existing) + `list_excluded_signatures()`.
 2. **Synthesize:** build the system prompt (new entry in
-   [`automation/prompts.py`](../../../apps/server/ntrp/automation/prompts.py)) describing what
+   [`automation/prompts.py`](../../../apps/server/arden/automation/prompts.py)) describing what
    the user works on, recent activity, existing automations, and the exclusion list; instruct
    the model to propose up to N **new** automations grounded in the evidence. Call
    `cheap_llm.completion(response_format=SuggestionSet)`.

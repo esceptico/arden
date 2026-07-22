@@ -428,7 +428,7 @@ test("preserves persisted switch-back order when assistant text is between tool 
     },
     {
       role: "assistant",
-      content: "I’ll read the Slack thread, then inspect ~/src/ntrp.",
+      content: "I’ll read the Slack thread, then inspect ~/src/arden.",
       id: "progress-assistant",
       seq: 4,
       tool_calls: [{ id: "slack-thread", name: "slack_thread", arguments: '{"message_id":"C:1"}' }],

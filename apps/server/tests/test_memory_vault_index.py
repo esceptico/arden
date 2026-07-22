@@ -8,10 +8,10 @@ from urllib.parse import quote
 
 import pytest
 
-from ntrp.memory.artifacts import ArtifactMemoryStore
-from ntrp.memory.file_store import FilePageStore
-from ntrp.memory.models import SourceRef
-from ntrp.memory.vault_index import INDEX_END, INDEX_START, VaultIndexer
+from arden.memory.artifacts import ArtifactMemoryStore
+from arden.memory.file_store import FilePageStore
+from arden.memory.models import SourceRef
+from arden.memory.vault_index import INDEX_END, INDEX_START, VaultIndexer
 
 
 @pytest.fixture
@@ -77,12 +77,29 @@ def test_render_updates_is_side_effect_free_and_apply_preserves_user_prose(vault
     assert "notes.md — Notes" in _managed(vault / "index.md")
 
 
+def test_pre_arden_index_markers_are_upgraded_without_losing_prose(vault: Path):
+    _write(vault / "notes.md", "# Notes\n")
+    _write(
+        vault / "index.md",
+        "Intro\n\n<!-- ntrp:index:start -->\n"
+        "- notes.md — Curated <!-- ntrp:path=notes.md -->\n"
+        "<!-- ntrp:index:end -->\nFooter",
+    )
+
+    VaultIndexer(vault).apply()
+
+    rendered = (vault / "index.md").read_text(encoding="utf-8")
+    assert rendered.startswith("Intro") and rendered.endswith("Footer")
+    assert "notes.md — Curated" in _managed(vault / "index.md")
+    assert "ntrp" not in rendered
+
+
 def test_discovery_rejects_symlinks_engine_namespaces_health_and_special_files(vault: Path):
     outside = vault.parent / "outside.md"
     _write(outside, "# Outside\n")
     _symlink_or_skip(vault / "linked.md", outside)
     _write(vault / "raw/private.md", "secret raw")
-    _write(vault / ".ntrp/private.txt", "secret engine")
+    _write(vault / ".arden/private.txt", "secret engine")
     _write(vault / "health.md", "generated health")
     _write(vault / "safe/readme.txt", "Safe text")
     fifo = vault / "pipe.txt"
@@ -94,9 +111,9 @@ def test_discovery_rejects_symlinks_engine_namespaces_health_and_special_files(v
     indexer.apply()
 
     assert "safe/readme.txt" in paths
-    assert not {"linked.md", "raw/private.md", ".ntrp/private.txt", "health.md", "pipe.txt"} & paths
+    assert not {"linked.md", "raw/private.md", ".arden/private.txt", "health.md", "pipe.txt"} & paths
     root_block = _managed(vault / "index.md")
-    assert "raw/" not in root_block and ".ntrp/" not in root_block and "health.md" not in root_block
+    assert "raw/" not in root_block and ".arden/" not in root_block and "health.md" not in root_block
 
 
 def test_move_and_delete_remove_stale_managed_rows(vault: Path):
@@ -179,7 +196,7 @@ def test_filename_with_description_delimiter_keeps_existing_description(vault: P
     _write(vault / name, "# Original description\n")
     indexer = VaultIndexer(vault)
     indexer.apply()
-    assert f"ntrp:path={quote(name, safe='')}" in _managed(vault / "index.md")
+    assert f"arden:path={quote(name, safe='')}" in _managed(vault / "index.md")
 
     _write(vault / name, "# Changed heading\n")
     indexer.apply()
@@ -235,14 +252,14 @@ def test_corrupt_nested_readme_is_preserved_and_not_used_as_parent_description(v
 
 def test_hidden_user_paths_are_indexed_but_hidden_engine_paths_are_not(vault: Path):
     _write(vault / ".research/.notes.md", "# Hidden user note\n")
-    _write(vault / ".ntrp/secret.md", "# Engine secret\n")
+    _write(vault / ".arden/secret.md", "# Engine secret\n")
     _write(vault / ".maintenance/secret.md", "# Internal secret\n")
 
     VaultIndexer(vault).apply()
 
     assert ".research/" in _managed(vault / "index.md")
     assert ".notes.md — Hidden user note" in _managed(vault / ".research/README.md")
-    assert ".ntrp/" not in _managed(vault / "index.md")
+    assert ".arden/" not in _managed(vault / "index.md")
     assert ".maintenance/" not in _managed(vault / "index.md")
 
 
@@ -296,9 +313,9 @@ def test_description_fallback_order_and_health_output(vault: Path):
 
 @pytest.mark.asyncio
 async def test_canonical_commit_survives_projection_failure_and_retry_repairs_index(vault: Path):
-    from ntrp.server.runtime.knowledge import VaultIndexProjection
+    from arden.server.runtime.knowledge import VaultIndexProjection
 
-    _write(vault / "raw/me.md", "<!-- ntrp:records schema=2 page=me.md -->\n")
+    _write(vault / "raw/me.md", "<!-- arden:records schema=2 page=me.md -->\n")
     projection = VaultIndexProjection(vault, retry_delay=60)
     real_apply = projection._indexer.apply
     attempts = 0
@@ -335,7 +352,7 @@ async def test_canonical_commit_survives_projection_failure_and_retry_repairs_in
 
 @pytest.mark.asyncio
 async def test_projection_close_cancels_pending_work_and_rejects_late_callbacks(vault: Path):
-    from ntrp.server.runtime.knowledge import VaultIndexProjection
+    from arden.server.runtime.knowledge import VaultIndexProjection
 
     _write(vault / "notes.md", "# Notes\n")
     projection = VaultIndexProjection(vault, retry_delay=60)
@@ -353,7 +370,7 @@ async def test_projection_close_cancels_pending_work_and_rejects_late_callbacks(
 
 @pytest.mark.asyncio
 async def test_projection_close_waits_for_active_executor_before_returning(vault: Path):
-    from ntrp.server.runtime.knowledge import VaultIndexProjection
+    from arden.server.runtime.knowledge import VaultIndexProjection
 
     _write(vault / "notes.md", "# Notes\n")
     projection = VaultIndexProjection(vault, retry_delay=60)

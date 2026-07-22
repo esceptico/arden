@@ -90,7 +90,7 @@ complaining about the delta — they were complaining about the **contrast
 ratio** between bg and surface, which is `Y2/Y1`, and gets dramatically
 worse the closer step 1 sits to true black.
 
-All four NTRP palettes (warm, graphite, raycast, notion) shared the same
+All four ARDEN palettes (warm, graphite, raycast, notion) shared the same
 `neutralRampDark()` curve, so all four had the same issue.
 
 ---
@@ -117,7 +117,7 @@ Two moves:
 1. **Lift step 1** to 0.180 — matches Radix's empirically-tuned floor.
 2. **Tighten step 1→2** to 0.022 — the surface "lifts" off the page
    instead of "splitting" into a new tone. This is *intentionally
-   smaller* than Radix (0.035) because the NTRP UI uses glass/linen
+   smaller* than Radix (0.035) because the ARDEN UI uses glass/linen
    materials with their own visual weight; a smaller token delta lets
    the material carry the rest of the elevation cue.
 
@@ -147,7 +147,7 @@ Full report: [docs/internal/contrast-report.md](../internal/contrast-report.md).
 - **High-contrast accessibility variants**: invert — *increase* the 1→2
   delta to 0.06–0.08 so low-vision users can locate surfaces.
 
-For NTRP's default dark theme (the common case), 0.022 is the call.
+For ARDEN's default dark theme (the common case), 0.022 is the call.
 
 ---
 

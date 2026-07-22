@@ -12,12 +12,12 @@ from datetime import UTC, datetime
 
 import pytest
 
-from ntrp.constants import LOOP_ITERATION_HISTORY_WINDOW
-from ntrp.context.models import SessionData, SessionState
-from ntrp.core.factory import AgentConfig
-from ntrp.server.bus import BusRegistry
-from ntrp.server.state import RunRegistry
-from ntrp.services.chat import (
+from arden.constants import LOOP_ITERATION_HISTORY_WINDOW
+from arden.context.models import SessionData, SessionState
+from arden.core.factory import AgentConfig
+from arden.server.bus import BusRegistry
+from arden.server.state import RunRegistry
+from arden.services.chat import (
     ChatDeps,
     _loop_task_id_from_client_id,
     _persistable_messages,
@@ -39,7 +39,7 @@ def _make_history(n: int, *, with_system: bool = True) -> list[dict]:
 
 class _StubExecutor:
     def __init__(self) -> None:
-        from ntrp.tools.core.registry import ToolRegistry
+        from arden.tools.core.registry import ToolRegistry
 
         self.registry = ToolRegistry()
         self.tool_services: dict[str, object] = {}
@@ -172,9 +172,7 @@ async def test_prepare_chat_records_context_manifest_with_explicit_provenance():
         ],
     )
 
-    selected = next(
-        item for item in ctx.run.context_manifest if item["content_type"] == "selected_text"
-    )
+    selected = next(item for item in ctx.run.context_manifest if item["content_type"] == "selected_text")
     assert selected["source"] == "desktop"
     assert selected["ref"] == "selection:1"
     assert selected["selection_reason"] == "user selected"
@@ -189,9 +187,7 @@ async def test_prepare_resumed_chat_restores_run_without_appending_user_message(
         {
             "role": "assistant",
             "content": "",
-            "tool_calls": [
-                {"id": "call-1", "type": "function", "function": {"name": "write", "arguments": "{}"}}
-            ],
+            "tool_calls": [{"id": "call-1", "type": "function", "function": {"name": "write", "arguments": "{}"}}],
         },
     ]
     svc = _StubSessionService(history)
@@ -211,7 +207,7 @@ async def test_prepare_resumed_chat_restores_run_without_appending_user_message(
 
 @pytest.mark.asyncio
 async def test_resume_suspended_chat_run_schedules_original_run(monkeypatch):
-    from ntrp.services import chat as chat_service
+    from arden.services import chat as chat_service
 
     history = [
         {"role": "system", "content": "old"},
@@ -219,9 +215,7 @@ async def test_resume_suspended_chat_run_schedules_original_run(monkeypatch):
         {
             "role": "assistant",
             "content": "",
-            "tool_calls": [
-                {"id": "call-1", "type": "function", "function": {"name": "write", "arguments": "{}"}}
-            ],
+            "tool_calls": [{"id": "call-1", "type": "function", "function": {"name": "write", "arguments": "{}"}}],
         },
     ]
     svc = _StubSessionService(history)
@@ -466,9 +460,7 @@ async def test_loop_iteration_save_progress_persists_full_history():
 
     # Simulate any save path firing (start_chat's pre-stream save,
     # _checkpoint, _save_snapshot, or the final save in `finally`).
-    await deps.session_service.save_progress(
-        ctx.session_state, _persistable_messages(ctx.run)
-    )
+    await deps.session_service.save_progress(ctx.session_state, _persistable_messages(ctx.run))
 
     assert svc.save_progress_calls, "save_progress should have been called"
     persisted = svc.save_progress_calls[-1]
@@ -477,9 +469,7 @@ async def test_loop_iteration_save_progress_persists_full_history():
     assert persisted == [*ctx.run.history_prefix, *ctx.run.messages]
     # Every original prior message survives — none of msg-0..msg-59 went
     # missing from disk just because the agent view was trimmed.
-    persisted_contents = {
-        m.get("content") for m in persisted if isinstance(m.get("content"), str)
-    }
+    persisted_contents = {m.get("content") for m in persisted if isinstance(m.get("content"), str)}
     for i in range(60):
         assert f"msg-{i}" in persisted_contents, f"msg-{i} dropped from disk"
     # Tail is the fresh loop-dispatched user message.
@@ -540,7 +530,7 @@ def test_trim_expands_when_cut_lands_inside_tool_sequence(monkeypatch):
     # parent assistant (with tool_calls) sits one slot earlier. The trim
     # must walk the boundary backward to a clean split so OpenAI doesn't
     # reject the request with "No tool call found for function call output".
-    monkeypatch.setattr("ntrp.services.chat.LOOP_ITERATION_HISTORY_WINDOW", 2)
+    monkeypatch.setattr("arden.services.chat.LOOP_ITERATION_HISTORY_WINDOW", 2)
     history = [
         {"role": "user", "content": "kick it off"},
         {
@@ -568,7 +558,7 @@ def test_trim_expands_when_cut_lands_inside_tool_sequence(monkeypatch):
 def test_trim_no_expansion_when_cut_lands_on_clean_assistant(monkeypatch):
     # Cut lands on an assistant with no tool_calls — already a clean
     # boundary, no expansion needed. Tail is exactly WINDOW messages.
-    monkeypatch.setattr("ntrp.services.chat.LOOP_ITERATION_HISTORY_WINDOW", 2)
+    monkeypatch.setattr("arden.services.chat.LOOP_ITERATION_HISTORY_WINDOW", 2)
     history = [
         {"role": "user", "content": "user1"},
         {"role": "assistant", "content": "asst1"},
@@ -589,7 +579,7 @@ def test_trim_no_expansion_when_cut_lands_on_clean_assistant(monkeypatch):
 
 def test_trim_no_expansion_when_cut_lands_on_user(monkeypatch):
     # Cut lands on a user message — clean boundary, no expansion.
-    monkeypatch.setattr("ntrp.services.chat.LOOP_ITERATION_HISTORY_WINDOW", 2)
+    monkeypatch.setattr("arden.services.chat.LOOP_ITERATION_HISTORY_WINDOW", 2)
     history = [
         {"role": "assistant", "content": "asst1"},
         {"role": "user", "content": "user2"},

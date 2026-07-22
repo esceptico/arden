@@ -121,7 +121,7 @@ test("Chat composer uses a single theme-aware elevation layer", () => {
   expect(chat).toMatch(/\.model-config-trigger\s*\{[^}]*background:\s*var\(--surface-3\);[^}]*box-shadow:\s*var\(--shadow-1\);/);
 });
 
-test("Chat composer uses the shipped ntrp icon contract", () => {
+test("Chat composer uses the shipped arden icon contract", () => {
   expect(iconSync).toContain('"i-attach": Hugeicons.ImageAdd01Icon');
   expect(iconSync).toContain('"i-shield-slash": Hugeicons.ShieldBanIcon');
   expect(iconSync).toContain('"i-arrow-up": Hugeicons.ArrowUp01Icon');
