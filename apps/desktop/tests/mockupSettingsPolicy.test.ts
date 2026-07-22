@@ -46,8 +46,8 @@ test("Memory file rows are visibly nested beneath directory labels", () => {
   expect(memorySource).toContain(".trow::before");
   expect(memorySource).toContain('class="fold subfold"');
   expect(memorySource).toContain('class="trow depth-2"');
-  expect(memorySource).toContain('class="tree-nest depth-1"');
-  expect(memorySource).toContain('class="tree-nest depth-2"');
+  expect(memorySource).toMatch(/class="tree-nest depth-1(?: [^"]+)?"/);
+  expect(memorySource).toMatch(/class="tree-nest depth-2(?: [^"]+)?"/);
 });
 
 test("Memory breadcrumbs preserve the complete directory path", () => {
