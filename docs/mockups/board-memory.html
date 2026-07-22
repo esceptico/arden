@@ -87,10 +87,12 @@ body.rail-resizing .sheet-scroll{transition:none;}
 .tree-nest.depth-1::before{left:calc(var(--memory-tree-base-inset) + var(--memory-tree-indent-step) * .5);}
 .tree-nest.depth-2::before{left:calc(var(--memory-tree-base-inset) + var(--memory-tree-indent-step) * 1.5);}
 .fold.subfold{padding-left:calc(var(--memory-tree-base-inset) + var(--memory-tree-indent-step));}
-.trow{position:relative;z-index:var(--z-raised);display:flex;align-items:center;gap:var(--space-1);width:100%;height:27px;padding:0 8px 0 calc(var(--memory-tree-base-inset) + var(--memory-tree-indent-step));border-radius:var(--r-row);color:var(--ink-soft);text-align:left;transition:background var(--motion-feedback) var(--smooth-out);}
+.trow{position:relative;z-index:var(--z-raised);isolation:isolate;display:flex;align-items:center;gap:var(--space-1);width:100%;height:27px;padding:0 8px 0 calc(var(--memory-tree-base-inset) + var(--memory-tree-indent-step));border-radius:var(--r-row);color:var(--ink-soft);text-align:left;}
 .trow::before{content:"";width:var(--memory-tree-twisty-size);height:var(--memory-tree-twisty-size);flex:none;}
+.trow::after{content:"";position:absolute;z-index:var(--z-below);inset-block:calc(var(--interactive-row-gap)/2);inset-inline:0;border-radius:var(--r-row);pointer-events:none;transition:background var(--motion-feedback) var(--smooth-out);}
 .trow.depth-2{padding-left:calc(var(--memory-tree-base-inset) + var(--memory-tree-indent-step) * 2);}
-.trow.on{background:var(--state-selected-bg);color:var(--ink);font-weight:500;}
+.trow.on{color:var(--ink);font-weight:500;}
+.trow.on::after{background:var(--state-selected-bg);}
 /* notebook / facts rail rows */
 .nrow{display:flex;flex-direction:column;gap:var(--space-0-5);width:100%;padding:6px 8px;border-radius:var(--r-row);text-align:left;transition:background var(--motion-feedback) var(--smooth-out);}
 .nrow+.nrow{margin-top:2px;}
@@ -222,7 +224,8 @@ body.rail-resizing .sheet-scroll{transition:none;}
 @media (hover:hover) and (pointer:fine){
   .wl:hover{border-bottom-color:var(--accent-ink);}
   .seg button:hover{color:var(--ink-soft);}
-  .fold:hover,.trow:hover,.nrow:hover,.arow:hover{background:var(--state-hover-bg);}
+  .fold:hover,.nrow:hover,.arow:hover{background:var(--state-hover-bg);}
+  .trow:hover::after{background:var(--state-hover-bg);}
   .tab:hover{color:var(--ink);}
   .tab-slot:hover .tab-close{opacity:1;pointer-events:auto;}
   .tab-close:hover{background:var(--panel-soft);color:var(--ink);}
@@ -277,12 +280,12 @@ body.rail-resizing .sheet-scroll{transition:none;}
   <div class="tree">
     <div class="tree-group">
       <button class="fold"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#dp-chevron-down"/></svg>pages</button>
-      <div class="tree-nest depth-1 dp-row-stack">
+      <div class="tree-nest depth-1">
         <button class="trow on" data-page="marathon training" data-context-value="pages / marathon training" data-context-actions="open:Open|copy-path:Copy path">marathon training</button>
         <button class="trow" data-page="health" data-context-value="pages / health" data-context-actions="open:Open|copy-path:Copy path">health</button>
         <div class="tree-group">
           <button class="fold subfold"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#dp-chevron-down"/></svg>planning</button>
-          <div class="tree-nest depth-2 dp-row-stack">
+          <div class="tree-nest depth-2">
             <button class="trow depth-2" data-page="race plan" data-context-value="pages / planning / race plan" data-context-actions="open:Open|copy-path:Copy path">race plan</button>
           </div>
         </div>
@@ -291,18 +294,18 @@ body.rail-resizing .sheet-scroll{transition:none;}
     </div>
     <div class="tree-group">
       <button class="fold"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#dp-chevron-down"/></svg>people</button>
-      <div class="tree-nest depth-1 dp-row-stack"><button class="trow" data-page="ana-ferreira" data-context-value="people / ana-ferreira" data-context-actions="open:Open|copy-path:Copy path">ana-ferreira</button></div>
+      <div class="tree-nest depth-1"><button class="trow" data-page="ana-ferreira" data-context-value="people / ana-ferreira" data-context-actions="open:Open|copy-path:Copy path">ana-ferreira</button></div>
     </div>
     <div class="tree-group">
       <button class="fold"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#dp-chevron-down"/></svg>daily</button>
-      <div class="tree-nest depth-1 dp-row-stack">
+      <div class="tree-nest depth-1">
         <button class="trow" data-page="2026-07-14" data-context-value="daily / 2026-07-14" data-context-actions="open:Open|copy-path:Copy path">2026-07-14</button>
         <button class="trow" data-page="2026-07-12" data-context-value="daily / 2026-07-12" data-context-actions="open:Open|copy-path:Copy path">2026-07-12</button>
       </div>
     </div>
     <div class="tree-group">
       <button class="fold"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#dp-chevron-down"/></svg>insights</button>
-      <div class="tree-nest depth-1 dp-row-stack"><button class="trow" data-page="sleep-vs-volume" data-context-value="insights / sleep-vs-volume" data-context-actions="open:Open|copy-path:Copy path">sleep-vs-volume</button></div>
+      <div class="tree-nest depth-1"><button class="trow" data-page="sleep-vs-volume" data-context-value="insights / sleep-vs-volume" data-context-actions="open:Open|copy-path:Copy path">sleep-vs-volume</button></div>
     </div>
   </div>
 </nav>
