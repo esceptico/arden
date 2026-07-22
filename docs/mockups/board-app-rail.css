@@ -1,0 +1,24 @@
+.traffic, .sidebar-toggle { z-index: var(--z-shell); }
+.rail { z-index: var(--z-sticky); padding: 48px 10px 12px; display: flex; flex-direction: column; }
+.rail-nav { display: grid; gap: var(--interactive-row-gap); }
+.nav-row, .area-row {
+  width: 100%; min-width: 0; color: var(--ink-2); text-align: left; border-radius: var(--r-row);
+  text-decoration: none;
+  transition: background var(--motion-feedback) var(--ease-out), color var(--motion-feedback) var(--ease-out), transform var(--motion-press) var(--ease-out);
+}
+.nav-row { height: 30px; padding: 0 var(--interactive-row-inline-padding); display: grid; grid-template-columns: var(--icon-size) minmax(0, 1fr) auto; align-items: center; gap: var(--space-2); }
+.nav-row:hover, .area-row:hover, .nav-row.on, .area-row.on { color: var(--ink); background: var(--state-hover-bg); }
+.nav-row.on, .area-row.on { background: var(--state-selected-bg); }
+.nav-row svg { width: var(--icon-size); height: var(--icon-size); color: var(--muted); }
+.nav-count { font-size: var(--text-2xs); color: var(--faint); }
+.area-bar { height: 32px; margin-top: 10px; padding: 0 var(--space-1) 0 var(--interactive-row-inline-padding); display: flex; align-items: center; justify-content: space-between; }
+.area-bar > span { font-size: var(--text-xs); font-weight: 590; color: var(--muted); }
+.area-list { flex: 1; min-height: 0; display: grid; align-content: start; gap: var(--interactive-row-gap); overflow: auto; }
+.area-row { height: 30px; padding: 0 var(--interactive-row-inline-padding); display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-2); }
+.area-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.area-row small { font-size: var(--text-2xs); font-weight: 520; color: var(--faint); font-variant-numeric: tabular-nums; }
+.area-row small.warn { color: var(--warning); }
+.area-row small.live { color: var(--accent-ink); }
+.rail-bottom { display: flex; align-items: center; gap: var(--space-1); padding-top: 7px; border-top: var(--border-width) solid var(--edge); }
+.rail-bottom .nav-row { flex: 1; }
+.rail-resize { top: 72px; bottom: 58px; }

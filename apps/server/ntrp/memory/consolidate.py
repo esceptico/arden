@@ -47,12 +47,10 @@ _logger = get_logger(__name__)
 _KINDS = {"directive", "fact", "source"}
 
 NEIGHBORHOOD_LIMIT = 8
-# Legacy `observation` lines (retired kind) are never judged. Lessons ARE judged,
-# but only against other lessons: a lesson may merge with / supersede a lesson,
+# Lessons are judged only against other lessons: a lesson may merge with / supersede a lesson,
 # never cross the boundary into durable facts (that would launder agent-inferred
 # rules into user-grade knowledge) — enforced by kind-partitioned neighborhoods
 # plus the retype guard.
-_SKIP_KINDS = {"observation"}
 LABEL_FINGERPRINT_KEY = "consolidate_label_fingerprint"
 JUDGES_PER_SWEEP = 200  # cap LLM judgments/run; changed hoods beyond it roll to the next run
 
@@ -180,12 +178,12 @@ class Consolidate:
     # --- candidate selection (bounded) ------------------------------------
 
     async def _select_delta(self) -> list[Record]:
-        """The active candidate pool (retired observations excluded). Unchanged
+        """The active candidate pool. Unchanged
         neighborhoods are skipped via the fingerprint cache in run_once, so scanning the
         whole pool is cheap on a clean night and there is no record-count ceiling — the
         per-run cost is bounded by JUDGES_PER_SWEEP changed hoods, not the corpus size."""
         rows = await self._records.updated_since(None, limit=JUDGES_PER_SWEEP * 100)
-        return [r for r in rows if r.kind not in _SKIP_KINDS]
+        return rows
 
     async def _build_neighborhoods(self, delta: list[Record]) -> list[list[Record]]:
         """One neighborhood per delta record: the record plus a handful of active
@@ -200,8 +198,6 @@ class Consolidate:
             lesson_pool = record.kind == "lesson"
             members = {record.id: record}
             for hit in await self._records.neighborhood(record, limit=NEIGHBORHOOD_LIMIT):
-                if hit.kind in _SKIP_KINDS:
-                    continue  # retired kinds never re-enter through a merge
                 if (hit.kind == "lesson") != lesson_pool:
                     continue  # lessons only ever merge with lessons
                 members.setdefault(hit.id, hit)

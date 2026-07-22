@@ -75,7 +75,7 @@ def _edit_event(*, operations: tuple[AppliedPageOperation, ...]) -> PageEditEven
     )
 
 
-def test_orders_by_utc_then_sequence_while_preserving_source_timestamp_text(tmp_path: Path):
+def test_orders_by_utc_then_sequence_and_renders_compact_local_times(tmp_path: Path):
     entries = (
         _entry("later-sequence", "2026-07-12T10:00:00.123+04:00", sequence=8),
         _entry("same-instant", "2026-07-12T06:00:00.123Z", sequence=7),
@@ -92,12 +92,15 @@ def test_orders_by_utc_then_sequence_while_preserving_source_timestamp_text(tmp_
         "2026-07-12T10:00:00.123+04:00",
         "2026-07-12T10:00:00.124+04:00",
     ]
-    assert b"2026-07-12T10:00:00.123+04:00" in projection.content
-    assert b"[millisecond]" in projection.content
+    assert b"- 10:00:00 \xe2\x80\x94 same-instant" in projection.content
+    assert b"- 10:00:00 \xe2\x80\x94 later-sequence" in projection.content
+    assert b"- 10:00:00 \xe2\x80\x94 later-instant" in projection.content
+    assert b"[millisecond]" not in projection.content
+    assert b"^same-instant" not in projection.content
 
 
-def test_date_only_legacy_uses_local_date_and_explicit_day_precision(tmp_path: Path):
-    entry = _entry("legacy", "2026-07-12", sequence=0, precision="day")
+def test_day_precision_uses_local_date_without_repeating_it_in_the_page(tmp_path: Path):
+    entry = _entry("day-event", "2026-07-12", sequence=0, precision="day")
 
     revision = _set_revision(tmp_path, "1")
     local = DailyProjector(tmp_path, timezone="Asia/Yerevan", entries=lambda: (entry,)).render(
@@ -108,6 +111,9 @@ def test_date_only_legacy_uses_local_date_and_explicit_day_precision(tmp_path: P
     assert local.events[0].occurred_at == "2026-07-12"
     assert local.events[0].time_precision == "day"
     assert local.events[0].utc_instant is None
+    assert b"- day-event" in local.content
+    assert b"[day]" not in local.content
+    assert b"^day-event" not in local.content
     assert DailyProjector(tmp_path, timezone="America/Los_Angeles", entries=lambda: (entry,)).events_for(
         date(2026, 7, 11)
     ) == ()
@@ -169,8 +175,8 @@ def test_one_action_per_event_and_all_evidence_refs_are_retained(tmp_path: Path)
     content = DailyProjector(
         tmp_path, timezone="Asia/Yerevan", entries=lambda: (ledger,)
     ).render(date(2026, 7, 12), revision).content
-    assert b"gmail:message-1 @ 2026-07-12T09:00:00+04:00 [second]" in content
-    assert b"calendar:event-2 @ 2026-07-12T09:00:00+04:00 [second]" in content
+    assert b"gmail:message-1" not in content
+    assert b"calendar:event-2" not in content
     assert b'"captured_at"' not in content
     assert b'"excerpt_hash"' not in content
     assert b'"scope_kind"' not in content
@@ -253,6 +259,33 @@ def test_valid_grouping_uses_each_explicit_event_id_once(tmp_path: Path):
     assert b"Morning" in projection.content
 
 
+def test_rendered_timeline_hides_machine_metadata_and_describes_page_edits(tmp_path: Path):
+    insight = _entry(
+        "insight-id",
+        "2026-07-12",
+        sequence=1,
+        precision="day",
+        text="A useful connection. (because of ^source-a, ^source-b)",
+        sources=(SourceRef("dreamer", "insight-id", occurred_at="2026-07-12", time_precision="day"),),
+    )
+    page = _edit_event(operations=())
+    revision = _set_revision(tmp_path, "1")
+
+    content = DailyProjector(
+        tmp_path,
+        timezone="Asia/Yerevan",
+        entries=lambda: (insight,),
+        page_events=lambda: (page,),
+    ).render(date(2026, 7, 12), revision).content
+
+    assert b"- A useful connection." in content
+    assert b"- 18:45:00 \xe2\x80\x94 Edited `topics/a.md`" in content
+    assert b"because of" not in content
+    assert b"insight-id" not in content
+    assert b"page-edit" not in content
+    assert b"sources:" not in content
+
+
 def test_same_day_regeneration_preserves_user_edits_and_keys_revision_and_timezone(tmp_path: Path):
     entries = [_entry("a", "2026-07-12T09:00:00+04:00", sequence=1)]
     projector = DailyProjector(tmp_path, timezone="Asia/Yerevan", entries=lambda: tuple(entries))
@@ -277,7 +310,7 @@ def test_conflict_keeps_visible_bytes_and_writes_review_candidate(tmp_path: Path
     projector = DailyProjector(tmp_path, timezone="Asia/Yerevan", entries=lambda: tuple(entries))
     first_revision = _set_revision(tmp_path, "1")
     first = projector.render(date(2026, 7, 12), first_revision)
-    current = first.content.replace(b"**record** a", b"**record** User rewrote this")
+    current = first.content.replace(b"09:00:00 \xe2\x80\x94 a", b"09:00:00 \xe2\x80\x94 User rewrote this")
     first.path.write_bytes(current)
     entries[0] = _entry("a", "2026-07-12T09:00:00+04:00", sequence=1, text="Changed canonical text")
 
@@ -312,7 +345,7 @@ def test_base_write_failure_does_not_publish_page_and_retry_remains_clean(tmp_pa
     monkeypatch.setattr(projector._resources, "write_daily_maintenance", write_base)
     retried = projector.render(date(2026, 7, 12), revision)
     assert retried.review_required is False
-    assert b"User note." in retried.content and b"^b " in retried.content
+    assert b"User note." in retried.content and b"10:00:00 \xe2\x80\x94 b" in retried.content
     assert (tmp_path / daily_base_rel(date(2026, 7, 12), revision, "Asia/Yerevan")).read_bytes() == retried.generated
 
 
@@ -429,7 +462,9 @@ async def test_runtime_projection_writer_registers_crash_verifiable_engine_recei
     assert marker["origin"] == "synthesis"
     assert marker["receipt_id"]
     assert (vault / "raw/write-receipts" / f"{marker['receipt_id']}.json").is_file()
-    assert record.id in (vault / "daily/2026-07-12.md").read_text(encoding="utf-8")
+    daily = (vault / "daily/2026-07-12.md").read_text(encoding="utf-8")
+    assert "Canonical action" in daily
+    assert record.id not in daily
     await store.close()
 
 

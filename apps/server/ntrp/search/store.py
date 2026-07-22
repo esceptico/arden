@@ -13,7 +13,7 @@ _logger = get_logger(__name__)
 
 # Bump when the items_vec schema changes (forces a rebuild + full re-embed).
 # v2: added a `source` partition key so per-source KNN doesn't starve small
-# partitions (e.g. ~89 memory_line vectors vs ~53k transcript vectors).
+# partitions when another source contains many more vectors.
 _VEC_SCHEMA_VERSION = "2"
 
 SNIPPET_DISPLAY_LIMIT = 500

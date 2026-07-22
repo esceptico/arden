@@ -13,12 +13,6 @@ export function stripCites(s: string): string {
   return s.replace(_CITE_RE, "");
 }
 
-// The detail header already shows the page title, so a leading `# Title` H1 in the
-// body just double-prints it (index.md, health.md, topic pages). Drop it for the view.
-export function stripLeadingH1(s: string): string {
-  return s.replace(/^\s*#\s+.*\r?\n+/, "");
-}
-
 export function scopeLabel(scope: { kind: string; key: string | null }) {
   return scope.key ? `${scope.kind}:${scope.key}` : scope.kind;
 }
@@ -32,4 +26,34 @@ const _KIND_LABELS: Record<string, string> = {
 };
 export function kindLabel(kind: string) {
   return _KIND_LABELS[kind] ?? kind;
+}
+
+// Frontmatter handling for body-only editing and Properties saves. The
+// draft edits the BODY in the editor and the frontmatter through the
+// Properties grid; both recompose the full source before the review flow.
+const _FM_RE = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/;
+
+export function splitFrontmatter(source: string): { frontmatter: string; body: string } {
+  const match = _FM_RE.exec(source);
+  if (!match) return { frontmatter: "", body: source };
+  return { frontmatter: match[0], body: source.slice(match[0].length) };
+}
+
+function yamlScalar(value: string | number | boolean | null): string {
+  if (value === null) return "null";
+  if (typeof value !== "string") return String(value);
+  return /^[\w./ -]*$/.test(value) && value.trim() === value && value !== "" ? value : JSON.stringify(value);
+}
+
+export function serializeFrontmatter(
+  frontmatter: Record<string, string | number | boolean | null | Array<string | number | boolean | null>>,
+): string {
+  const keys = Object.keys(frontmatter);
+  if (keys.length === 0) return "";
+  const lines = keys.map((key) => {
+    const value = frontmatter[key]!;
+    if (Array.isArray(value)) return `${key}: [${value.map(yamlScalar).join(", ")}]`;
+    return `${key}: ${yamlScalar(value)}`;
+  });
+  return `---\n${lines.join("\n")}\n---\n`;
 }

@@ -133,12 +133,12 @@ function MemoryEffects({
             key={operation.id}
             className={clsx(
               "rounded-lg bg-surface-soft/55 p-2.5",
-              operation.kind === "ASK" && "border border-warning/30 bg-warning/5",
+              operation.kind === "ASK" && "border border-warn/30 bg-warn/5",
             )}
           >
             <div className={clsx(
               "text-2xs font-semibold uppercase tracking-[0.07em]",
-              operation.kind === "ASK" ? "text-warning" : "text-muted",
+              operation.kind === "ASK" ? "text-warn" : "text-muted",
             )}>
               {OPERATION_LABEL[operation.kind]}
             </div>
@@ -244,7 +244,7 @@ export function DiffReview({
       data-layout={layout}
       data-motion={reduced ? "reduced" : "standard"}
       aria-label={`Review changes to ${after.path || before.path}`}
-      className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-line-soft bg-bg-main"
+      className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-line-soft bg-bg-main"
     >
       <header className="flex flex-wrap items-center gap-3 border-b border-line-soft bg-surface px-3 py-2.5">
         <div className="min-w-0">

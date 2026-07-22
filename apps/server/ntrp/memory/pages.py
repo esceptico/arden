@@ -25,10 +25,6 @@ from datetime import UTC, datetime
 
 from ntrp.memory.ledger import LedgerEntry, parse_ledger_entry, render_ledger_entry
 
-SENTINEL = (
-    "<!-- timeline (append-only; edit prose above, not below) -->"  # legacy two-zone marker, parsed for migration only
-)
-
 # Engine bookkeeping — rendered into the raw sidecar, never the visible page.
 # prose_cites is the page's grounding: the record ids its prose was verified
 # against at synthesis time (the visible prose carries readable source tags,
@@ -40,11 +36,7 @@ RAW_FM_KEYS = (
     "meta_labels",
     "generated_from_revision",
     "prose_cites",
-    "prose_synced",
 )
-# Legacy bookkeeping is dropped on visible and raw parse. Keeping it in
-# RAW_FM_KEYS is defense-in-depth: an old value can never render visibly.
-_DROPPED_FM_KEYS = ("prose_tokens", "prose_synced")
 _V2_HEADER_RE = re.compile(r"^<!-- ntrp:records schema=2(?: [^>]*)? -->$")
 
 # Greedy text + bracket tags only (incl. [superseded]) so the text body can
@@ -189,23 +181,16 @@ def _split_frontmatter(text: str) -> tuple[dict, str]:
 
 
 def parse_page(text: str) -> Page:
-    """Parse a page file. Tolerates the legacy two-zone format (prose + SENTINEL +
-    timeline in one file) so a pre-split vault migrates on first load."""
+    """Parse a visible schema-v2 page."""
     fm, body = _split_frontmatter(text)
-    for key in _DROPPED_FM_KEYS:
-        fm.pop(key, None)
-    if not isinstance(fm.get("prose_cites"), list):  # legacy int count — superseded by the id list
+    if not isinstance(fm.get("prose_cites"), list):
         fm.pop("prose_cites", None)
-    prose, _, timeline = body.partition(SENTINEL)
-    lines = [ln for ln in (parse_line(r) for r in timeline.splitlines()) if ln]
-    return Page(frontmatter=fm, prose=prose.strip(), lines=lines)
+    return Page(frontmatter=fm, prose=body.strip())
 
 
 def parse_raw(text: str) -> tuple[dict, list[Line | LedgerEntry]]:
     """Parse a raw sidecar: engine frontmatter + every parseable timeline line."""
     fm, body = _split_frontmatter(text)
-    for key in _DROPPED_FM_KEYS:
-        fm.pop(key, None)
     rows = body.splitlines()
     first = next((index for index, row in enumerate(rows) if row.strip()), None)
     header_rows = [index for index, row in enumerate(rows) if _V2_HEADER_RE.fullmatch(row)]
@@ -223,7 +208,9 @@ def parse_raw(text: str) -> tuple[dict, list[Line | LedgerEntry]]:
             entries.append(parse_ledger_entry(f"{rows[index]}\n{rows[index + 1]}"))
             index += 2
         return fm, entries
-    return fm, [ln for ln in (parse_line(r) for r in body.splitlines()) if ln]
+    if first is not None:
+        raise ValueError("raw sidecar is missing the schema-v2 header")
+    return fm, []
 
 
 def merge_split(page: Page, raw_text: str | None) -> Page:
@@ -281,8 +268,6 @@ if __name__ == "__main__":
     assert rt.superseded and rt.text == "old claim", rt
     scored = Line(id="bb11", text="scored fact", kind="fact", date="2026-06-21", src="user", pinned=True, imp=7)
     assert parse_line(format_line(scored)) == scored, parse_line(format_line(scored))
-    legacy = parse_line("- 2026-06-21 ^cc22 [fact] (src:curator) no imp tag")  # back-compat
-    assert legacy is not None and legacy.imp is None and legacy.entity is None, legacy
     # per-line entity slug round-trips and coexists with other tags
     ent = Line(id="9911", text="works at Dex.", kind="fact", date="2026-06-21", src="curator", entity="dex-nexus")
     assert parse_line(format_line(ent)) == ent, parse_line(format_line(ent))
@@ -322,16 +307,6 @@ if __name__ == "__main__":
     assert rp.frontmatter["entity_labels"] == ["Bicycles"]
     assert len(rp.lines) == 3 and len(rp.active_lines()) == 2
     assert rp.prose == "Tim's bikes."
-    # legacy two-zone file still parses (migration path), incl. dropped bookkeeping keys
-    legacy_text = (
-        "---\ntitle: Bicycles\nprose_tokens: 12\nprose_cites: 3\n---\n\nTim's bikes.\n\n"
-        + SENTINEL
-        + "\n\n"
-        + format_line(src)
-        + "\n"
-    )
-    lp = parse_page(legacy_text)
-    assert lp.prose == "Tim's bikes." and len(lp.lines) == 1 and "prose_tokens" not in lp.frontmatter, lp
     # prose-only page (no fm-worthy machine state, no lines) needs no raw sidecar
     assert render_raw(Page(frontmatter={"title": "2026-07-02"}, prose="Did things.")) == ""
     print("pages.py self-check OK")

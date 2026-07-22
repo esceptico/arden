@@ -1,0 +1,51 @@
+.answer { flex: none; padding: 6px 2px 0; }
+.answer-line { margin: 0; font-size: var(--text-3xl); line-height: 1.2; font-weight: 620; letter-spacing: -.021em; text-wrap: balance; }
+.answer-sub { margin: 8px 0 0; max-width: 64ch; color: var(--muted); font: 460 var(--text-sm)/1.5 var(--sans); font-variant-numeric: tabular-nums; }
+.answer-sub b { color: var(--ink-soft); font-weight: 560; }
+
+.deck-card { padding: 0 2px; }
+.card-eyebrow { margin: 0; display: flex; align-items: baseline; gap: var(--space-1-5); color: var(--faint); font-size: var(--text-xs); }
+.card-eyebrow time { margin-left: auto; flex: none; font: 500 var(--text-xs)/1 var(--mono); font-variant-numeric: tabular-nums; }
+.card-title { margin: 9px 0 0; font-size: var(--text-2xl); line-height: 1.3; font-weight: 620; letter-spacing: -.018em; text-wrap: balance; }
+.card-reason { margin: 7px 0 0; max-width: 58ch; color: var(--muted); font-size: var(--text-sm); line-height: 1.5; text-wrap: pretty; }
+.card-verbs { display: flex; align-items: center; gap: var(--space-1-5); }
+.verb { display: inline-flex; align-items: center; }
+.verb-key { margin-right: 7px; opacity: .5; font: 560 var(--text-xs)/1 var(--mono); }
+
+/* Focused attention queue — one expanded request with visible peer rows. */
+.deck-chrome {
+  position: relative;
+  z-index: var(--z-sticky);
+  width: 100%;
+  min-height: 24px;
+  margin-top: 14px;
+  padding: 0 2px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.deck-pos { color: var(--faint); font: 500 var(--text-meta)/1 var(--mono); font-variant-numeric: tabular-nums; }
+.rest { margin-top: 10px; display: grid; gap: var(--interactive-row-gap); }
+.rest-row {
+  width: 100%;
+  min-height: 38px;
+  padding: 0 2px;
+  border-radius: var(--r-row);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  text-align: left;
+  transition: background var(--motion-feedback) var(--ease-out), transform var(--motion-press) var(--ease-out);
+}
+.rest-row:hover { background: var(--state-hover-bg); }
+.rest-row:not(:disabled):active { transform: scale(var(--press-scale-subtle)); }
+.rest-row b { min-width: 0; overflow: hidden; color: var(--ink-soft); font-size: var(--text-sm); font-weight: 560; text-overflow: ellipsis; white-space: nowrap; }
+.rest-row small { flex: none; margin-left: auto; color: var(--faint); font: 500 var(--text-2xs)/1 var(--mono); font-variant-numeric: tabular-nums; }
+.rest-more { padding: 5px 10px 0; color: var(--faint); font-size: var(--text-2xs); font-variant-numeric: tabular-nums; }
+
+@media (max-height: 47rem) {
+  .answer-line { font-size: var(--text-2xl); }
+  .answer-sub { margin-top: 5px; }
+  .card-title { margin-top: 8px; font-size: var(--text-xl); }
+}

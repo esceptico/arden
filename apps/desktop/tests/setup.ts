@@ -17,3 +17,13 @@ if (document.compatMode === undefined) {
 
 // React's act() environment flag — every interaction test renders under act.
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT ??= true;
+
+// Happy DOM's localStorage is one store shared by every test file in a bun
+// invocation — leftover keys from one file can mask deterministic failures
+// in another (a suite once passed only because an earlier file left a value
+// behind). Reset per test so isolation matches a fresh browser profile.
+import { beforeEach } from "bun:test";
+beforeEach(() => {
+  localStorage.clear();
+  sessionStorage.clear();
+});

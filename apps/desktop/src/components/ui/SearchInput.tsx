@@ -1,5 +1,5 @@
 import type { Ref } from "react";
-import { Loader2, Search, X } from "lucide-react";
+import { Loader2, Search, X } from "@/components/icons";
 import clsx from "clsx";
 import { ICON } from "@/lib/icons";
 

@@ -6,7 +6,7 @@ ACTIVE_WORK — the same ones that produced the old prose), validates that every
 (record:XXXXXXXX) cite resolves to a real record, and writes the prose into
 page.prose then persists. Stale-gated: a pass only re-synthesizes pages whose
 prose is empty or older than their newest record. Reuses prompts_synthesis verbatim;
-no new prompts, no dependency on the legacy ArtifactMemoryStore.
+no new prompts and no dependency on ArtifactMemoryStore.
 """
 
 from __future__ import annotations
@@ -36,8 +36,6 @@ from ntrp.observability import observed_trace
 _logger = get_logger(__name__)
 
 ACTIVE_WORK_RECENT_DAYS = 7
-DAILY_RECENT_DAYS = 7  # regenerate daily logs for this trailing window; older days freeze
-DAILY_MIN_RECORDS = 2  # a day with fewer meaningful records gets no page
 PROFILE_RECORD_CAP = 80
 REGRESSION_FLOOR = 0.60  # reject a re-synthesis that drops below 60% of prior size/cites (anti-collapse)
 _SKIP_DIRS = {"changelog", "context", "facts", ".index", ".maintenance", "sources", "insights"}
@@ -330,7 +328,8 @@ async def _synth_profile(store, labels, llm, model, effort, conventions: str = "
 
 async def _synth_dossier(store, path, labels, llm, model, effort, conventions: str = "") -> str | None:
     page = store._pages[path]
-    rows = [store._to_record(ln, path) for ln in page.active_lines() if ln.src != "dreamer"]
+    rows = [store._to_record(entry, path) for entry in page.active_entries()]
+    rows = [row for row in rows if not (row.source_ref and row.source_ref.kind == "dreamer")]
     if page.frontmatter.get("scope_key"):  # a project page (now in topics/) — resolve human name
         title = resolve_project_title(page, getattr(store, "_project_names", {}) or {})
     else:
@@ -368,39 +367,6 @@ async def _synth_active_work(store, labels, llm, model, effort, conventions: str
     return out.rstrip()
 
 
-_DAILY_SKIP_KINDS = {"observation", "changelog"}  # observation = legacy lines pre-retirement
-
-
-def _daily_records(store, day: str) -> list:
-    """Meaningful records that entered memory on `day` (by append date), gathered
-    across the whole store. Integration observations, housekeeping, and dream
-    insights are excluded so the daily log reads as what the USER did — not inbox
-    noise, and not a mirror of the insights page."""
-    out: list = []
-    for path, page in store._pages.items():
-        if _page_kind(store._root, path) == "daily":
-            continue
-        for ln in page.active_lines():
-            if ln.date == day and ln.kind not in _DAILY_SKIP_KINDS and ln.src != "dreamer":
-                out.append(store._to_record(ln, path))
-    return out
-
-
-async def _synth_daily(store, path, labels, llm, model, effort, conventions: str = "") -> str | None:
-    day = path.stem
-    recs = _daily_records(store, day)
-    if len(recs) < DAILY_MIN_RECORDS:
-        return None
-    recs.sort(key=lambda r: r.last_confirmed_at)
-    user = ps.daily_user_message(day, recs, _flat(labels, recs))
-    out = await _complete(llm, model, _pre(ps.DAILY_SYSTEM, conventions), user, effort)
-    if not out or out.strip() == ps.NO_DAILY:
-        return None
-    if not _provenance_ok(out, {r.id for r in recs}):
-        return None
-    return out.rstrip()
-
-
 # -- driver --------------------------------------------------------------------
 
 
@@ -434,13 +400,10 @@ async def run_synthesis(store, llm, model: str, *, reasoning_effort: str | None 
         # track the store's current state. Past-window daily pages fall through to
         # _stale and freeze once written.
         force = kind == "active_work"
-        # Re-synthesize if a new record arrived, a grounding id went dangling (the
-        # cited record was merged/superseded/pruned away), or the prose still carries
-        # the legacy inline `(record:..)` dialect (one-time migration to source tags).
+        # Re-synthesize if a new record arrived or a grounding id went dangling.
         grounding = {str(i).lower() for i in (page.frontmatter.get("prose_cites") or [])}
-        legacy_cites = bool(ps.cited_ids(page.prose)) if page.prose else False
         dangling = bool(page.prose) and not grounding.issubset(live_ids)
-        if not force and not dangling and not legacy_cites and not _stale(page, source_revision):
+        if not force and not dangling and not _stale(page, source_revision):
             continue
         if kind == "profile":
             prose = await _synth_profile(store, labels, llm, model, reasoning_effort, conventions)
@@ -449,10 +412,8 @@ async def run_synthesis(store, llm, model: str, *, reasoning_effort: str | None 
         else:
             prose = await _synth_dossier(store, path, labels, llm, model, reasoning_effort, conventions)
         if prose is None:
-            # Couldn't re-synthesize (e.g. a frozen daily log whose records consolidated
-            # away). Keep the prose but keep its bookkeeping honest: translate any legacy
-            # inline id-cites to readable source tags and drop dead ids from the grounding.
-            if page.prose and (legacy_cites or dangling):
+            # Couldn't re-synthesize. Keep the prose and drop dead grounding ids.
+            if page.prose and dangling:
                 generated = _render_generated_page(store, path, _humanize_cites(page.prose, src_by_id))
                 merged = await _merge_generated_page(
                     store,
@@ -468,11 +429,8 @@ async def run_synthesis(store, llm, model: str, *, reasoning_effort: str | None 
         # so the vault has no dangling [[X]] links in Obsidian — every pass, not just profile.
         prose = _strip_unknown_wikilinks(prose, known_titles)
         # Sentinels are deliberate short strings — exempt from the regression guard.
-        # Legacy-cite pages are also exempt: their baseline is the old essay register,
-        # and the briefing register is SUPPOSED to be tighter (one-time migration).
         if (
             prose not in (ps.NO_ACTIVE_WORK, ps.INSUFFICIENT_DOSSIER)
-            and not legacy_cites
             and not _regression_ok(page, prose)
         ):
             continue
@@ -524,7 +482,7 @@ if __name__ == "__main__":
     async def _demo():
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
-            store = FilePageStore(root)  # no name map yet -> simulates legacy opaque filing
+            store = FilePageStore(root)
             await store.open()
             # Two records promote "Bicycles" to its own page (one would just park on me.md).
             r = await store.add("Tim rides a gravel bike daily.", kind="fact", source_ref=SourceRef("user", ""))
@@ -548,11 +506,10 @@ if __name__ == "__main__":
             aw = root / "active-work.md"
             assert aw in store._pages and store._pages[aw].prose, "active-work.md synthesized from across the store"
 
-            # stale gate: unchanged dossiers are skipped; active-work and today's
-            # daily log always refresh (both are timeline-less, window-current pages).
+            # stale gate: unchanged dossiers are skipped; active-work always refreshes.
             before = fake.calls
             await run_synthesis(store, fake, "m")
-            assert fake.calls == before + 2, "only active-work + today's daily re-synthesize; stale dossiers are skipped"
+            assert fake.calls == before + 1, "only active-work re-synthesizes; stale dossiers are skipped"
 
             # provenance rejection: a new page whose synthesis cites a fake id is rejected
             r2 = await store.add("Cats are great.", kind="fact", source_ref=SourceRef("user", ""))
@@ -562,20 +519,6 @@ if __name__ == "__main__":
             fake.mode = "fabricate"
             await run_synthesis(store, fake, "m")
             assert store._pages[root / "topics" / "cats.md"].prose == "", "fabricated cite must be rejected"
-
-            fake.mode = "echo"
-
-            # daily log: a dated, prose-only page aggregating the day's MEANINGFUL
-            # records (facts), with integration observations filtered out.
-            today = datetime.now(UTC).date().isoformat()
-            day_recs = _daily_records(store, today)
-            assert all(r.kind not in _DAILY_SKIP_KINDS for r in day_recs), "observations/changelog excluded from daily"
-            assert any(r.kind == "fact" for r in day_recs), "facts feed the daily log"
-            daily_path = root / "daily" / f"{today}.md"
-            assert daily_path in store._pages, "daily page created for today"
-            dp = store._pages[daily_path]
-            assert dp.prose and "(from" in dp.prose and "(record:" not in dp.prose, "daily page synthesized with readable source tags"
-            assert not dp.active_lines(), "daily page is a prose-only projection (no own records)"
 
             # project rename: opaque-id page -> human name (add files under slug of scope_key)
             await store.add("ntrp is the OS.", kind="fact", scope_kind="project", scope_key="proj_x", source_ref=SourceRef("user", ""))

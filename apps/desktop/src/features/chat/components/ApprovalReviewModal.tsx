@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Check, X } from "lucide-react";
+import { Check, X } from "@/components/icons";
 import { useStore } from "@/stores";
 import { respondToApproval } from "@/actions/approvals";
 import { IconButton } from "@/components/ui/IconButton";

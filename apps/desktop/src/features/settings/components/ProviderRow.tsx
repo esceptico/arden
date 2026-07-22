@@ -1,6 +1,6 @@
 import { type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { CheckCircle2, ExternalLink, KeyRound, Loader2 } from "lucide-react";
+import { CheckCircle2, ExternalLink, KeyRound, Loader2 } from "@/components/icons";
 import { type ModelProvider, type OpenAICodexOAuthStatus } from "@/api/settings";
 import {
   providerActionLabel,

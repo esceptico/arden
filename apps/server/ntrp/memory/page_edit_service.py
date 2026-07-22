@@ -165,6 +165,45 @@ class PageEditService:
         async with self._apply_lock:
             return await self._apply(preview_id, decisions=decisions, save_as_pending=save_as_pending)
 
+    async def create_page(self, *, path: str, actor: str) -> PageEditEvent:
+        """Atomically create one EMPTY user page with its audit event."""
+        async with self._apply_lock:
+            safe_path = self._validate_page_path(path)
+            if not actor.strip():
+                raise ValueError("page edit actor is required")
+            try:
+                (self._vault / safe_path).lstat()
+            except FileNotFoundError:
+                pass
+            else:
+                raise FileExistsError(safe_path)
+            occurred = self._local_now()
+            event = PageEditEvent(
+                id=uuid4().hex,
+                occurred_at=_milliseconds(occurred),
+                sequence=self._next_sequence(),
+                actor=actor,
+                origin="desktop",
+                path=safe_path,
+                base_revision=page_revision(b""),
+                result_revision=page_revision(b""),
+                patch=unified_patch(b"", b""),
+                operations=(),
+                reconciliation="applied",
+            )
+            event_rel, event_bytes, expected_event = self._event_file(event)
+            files = self._store._validate_caller_files(
+                {Path(safe_path): b"", event_rel: event_bytes},
+                {Path(safe_path): CanonicalFileRole.USER_PAGE, event_rel: CanonicalFileRole.EVENT},
+            )
+            self._commit(
+                files,
+                expected_files={Path(safe_path): None, event_rel: expected_event},
+                expected_revision=self._store.canonical_revision,
+                engine_write=(safe_path, b"", "desktop", event.id),
+            )
+            return event
+
     async def ingest_external(self, change: ObservedFileChange) -> PageEditEvent | None:
         """Persist one observed page change before advancing its durable base."""
         if change.origin != "external":
@@ -322,28 +361,8 @@ class PageEditService:
                 candidate_revision=change.result_revision,
             )
 
-        analysis = _analyze(safe_path, before, after, patch)
-        answer = await self._reconcile(analysis)
-        raw_operations = tuple(answer or ())
         occurred = self._local_now()
         event_id = uuid4().hex
-        source = self._source(event_id, "external:filesystem", occurred)
-        if raw_operations:
-            records = tuple(await self._store.list(limit=None, scopes=None))
-            raw_operations = validate_operations(raw_operations, records, source)
-        questions = tuple(
-            PageEditQuestion(id=f"operation:{index}", operation_index=index, question=operation.question or "")
-            for index, operation in enumerate(raw_operations)
-            if operation.op == "ASK"
-        )
-        reconciliation: Literal["applied", "pending", "needs_review"]
-        if answer is None:
-            reconciliation = "pending"
-        elif questions:
-            reconciliation = "needs_review"
-        else:
-            reconciliation = "applied"
-        applied_operations = raw_operations if reconciliation == "applied" else ()
         event = PageEditEvent(
             id=event_id,
             occurred_at=_milliseconds(occurred),
@@ -354,25 +373,15 @@ class PageEditService:
             base_revision=change.base_revision,
             result_revision=change.result_revision,
             patch=patch,
-            operations=tuple(AppliedPageOperation.from_operation(operation, (source,)) for operation in applied_operations),
-            reconciliation=reconciliation,
-            analysis=analysis,
-            review_operations=raw_operations if reconciliation == "needs_review" else (),
-            questions=questions,
+            operations=(),
+            reconciliation="applied",
             observation_id=change.observation_id,
         )
         expected_revision = self._store.canonical_revision
-        planned = (
-            self._store.plan_operations(applied_operations, source, batch_key=f"page-edit:{event.id}")
-            if applied_operations
-            else {}
-        )
-        planned.pop(Path(safe_path), None)
         event_rel, event_bytes, expected_event = self._event_file(event)
         caller_roles = {event_rel: CanonicalFileRole.EVENT}
         caller_files = {event_rel: event_bytes}
-        files = dict(planned)
-        files.update(self._store._validate_caller_files(caller_files, caller_roles))
+        files = self._store._validate_caller_files(caller_files, caller_roles)
         try:
             self._commit(
                 files,

@@ -1,5 +1,5 @@
 import { memo, useMemo } from "react";
-import { Box, Target } from "lucide-react";
+import { Box, Target } from "@/components/icons";
 import clsx from "clsx";
 import { useStore } from "@/stores";
 import type { SkillDescriptor } from "@/api/types";

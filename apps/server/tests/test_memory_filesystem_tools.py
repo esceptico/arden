@@ -8,6 +8,8 @@ import pytest
 
 import ntrp.tools.memory as memory_tools
 from ntrp.integrations.core import MEMORY
+from ntrp.memory.ledger import LedgerEntry, LedgerMeta, render_ledger_entry
+from ntrp.memory.models import Kind, SourceRef
 from ntrp.memory.records import RecordStore
 from ntrp.tools.core.file_mutation import file_revision
 from ntrp.tools.core.registry import ToolRegistry
@@ -53,6 +55,24 @@ def _execution(store=None):
         tool_id="t1",
         tool_name="memory",
     )
+
+
+def _v2_raw(page: str, record_id: str, text: str, *, sequence: int = 1, occurred_at: str = "2026-07-12") -> str:
+    entry = LedgerEntry(
+        id=record_id,
+        text=text,
+        kind=Kind.FACT,
+        occurred_at=occurred_at,
+        meta=LedgerMeta(
+            recorded_at="2026-07-12T10:00:00Z",
+            sequence=sequence,
+            time_precision="day",
+            scope_kind="user",
+            scope_key=None,
+            sources=(SourceRef("user", record_id, occurred_at=occurred_at, time_precision="day"),),
+        ),
+    )
+    return f"<!-- ntrp:records schema=2 page={page} -->\n{render_ledger_entry(entry)}\n"
 
 
 async def _seed(artifacts_dir: Path):
@@ -348,7 +368,7 @@ async def test_memory_write_refuses_record_backed_generated_and_bad_paths(store:
 
     # record-backed page (raw/ sidecar exists) -> compiled prose, refuse whole-page write
     (artifacts_dir / "raw").mkdir(parents=True, exist_ok=True)
-    (artifacts_dir / "raw" / "me.md").write_text("- 2026-07-02 ^aaaa1111 [fact] (src:user) x\n", encoding="utf-8")
+    (artifacts_dir / "raw" / "me.md").write_text(_v2_raw("me.md", "aaaa1111", "x"), encoding="utf-8")
     refused = await memory_write(execution, MemoryWriteInput(path="me.md", content="# clobber", expected_sha256="absent"))
     assert refused.is_error and "record-backed" in refused.content
 
@@ -401,8 +421,8 @@ async def test_live_vault_absorbs_external_edits(tmp_path: Path):
 
     # external raw-sidecar edit reloads the page's records
     raw_me = root / "raw" / "me.md"
-    raw_text = raw_me.read_text(encoding="utf-8")
-    raw_me.write_text(raw_text + "- 2026-07-03 ^ee11ff22 [fact] (src:user) Added via git.\n", encoding="utf-8")
+    entry_text = _v2_raw("me.md", "ee11ff22", "Added via git.", sequence=2, occurred_at="2026-07-03")
+    raw_me.write_text(raw_me.read_text(encoding="utf-8") + "\n".join(entry_text.splitlines()[1:]) + "\n", encoding="utf-8")
     assert await store.refresh_from_disk() == ["me.md"]
     assert (await store.get("ee11ff22")) is not None
 
@@ -415,7 +435,6 @@ async def test_live_vault_absorbs_external_edits(tmp_path: Path):
 
 async def test_visible_resource_record_syntax_never_enters_canonical_store(tmp_path: Path):
     from ntrp.memory.file_store import FilePageStore
-    from ntrp.memory.pages import SENTINEL
 
     root = tmp_path / "memory"
     (root / "raw").mkdir(parents=True)
@@ -428,7 +447,7 @@ async def test_visible_resource_record_syntax_never_enters_canonical_store(tmp_p
     resource = root / "research" / "fake.md"
     resource.parent.mkdir()
     resource.write_text(
-        f"# Resource\n\n{SENTINEL}\n- 2026-07-12 ^escape1 [fact] (src:user) Must remain resource-only.\n",
+        "# Resource\n\n- 2026-07-12 ^escape1 [fact] Must remain resource-only.\n",
         encoding="utf-8",
     )
 
@@ -522,7 +541,7 @@ async def test_prose_only_write_rejects_nested_visible_parent_symlink(tmp_path: 
     root = tmp_path / "memory"
     outside = tmp_path / "outside"
     (root / "raw" / "notes").mkdir(parents=True)
-    (root / "raw" / "notes" / "a.md").write_text("- 2026-07-12 ^safe1 [fact] (src:user) Safe.\n", encoding="utf-8")
+    (root / "raw" / "notes" / "a.md").write_text(_v2_raw("notes/a.md", "safe1", "Safe."), encoding="utf-8")
     outside.mkdir()
     outside_page = outside / "a.md"
     outside_page.write_text("outside original\n", encoding="utf-8")

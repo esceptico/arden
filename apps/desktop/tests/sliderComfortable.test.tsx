@@ -2,7 +2,11 @@ import { expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { SliderComfortable } from "@/components/ui/Slider";
+import {
+  SliderComfortable,
+  sliderMarkerOpacity,
+  sliderPipStopCenter,
+} from "@/components/ui/Slider";
 
 function mount(): { el: HTMLElement; root: Root; restore: () => void } {
   const el = document.createElement("div");
@@ -39,6 +43,20 @@ test("SliderComfortable renders the formatted label + value", () => {
   );
   expect(html).toContain("Tokens");
   expect(html).toContain("512 tokens");
+});
+
+test("slider marker yields to label and value lanes with a short fade", () => {
+  expect(sliderMarkerOpacity(40, 60, 240)).toBe(0);
+  expect(sliderMarkerOpacity(250, 60, 240)).toBe(0);
+  expect(sliderMarkerOpacity(140, 60, 240)).toBe(1);
+  expect(sliderMarkerOpacity(64, 60, 240)).toBe(0.5);
+  expect(sliderMarkerOpacity(236, 60, 240)).toBe(0.5);
+});
+
+test("discrete slider uses one stop center for dots, fill, and marker", () => {
+  expect(sliderPipStopCenter(0, 390)).toBe(14.5);
+  expect(sliderPipStopCenter(0.5, 390)).toBe(195);
+  expect(sliderPipStopCenter(1, 390)).toBe(375.5);
 });
 
 // ── keyboard stepping ───────────────────────────────────────────────────────

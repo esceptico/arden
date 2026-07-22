@@ -5,7 +5,7 @@ import pytest
 
 from ntrp.memory.file_store import FilePageStore
 from ntrp.memory.ledger import LedgerEntry, LedgerMeta, render_ledger_entry
-from ntrp.memory.models import Kind, Record, SourceRef
+from ntrp.memory.models import Kind, SourceRef
 from ntrp.memory.records import RecordStore
 from ntrp.memory.scopes import (
     GLOBAL_SCOPE,
@@ -47,11 +47,6 @@ def test_scopes_for_read_and_source_mirroring():
     assert src is not None
     assert src.scope_kind == "session"
     assert src.scope_key == "s"
-
-
-def test_legacy_project_scope_is_an_area_alias_for_reads():
-    legacy = Record(id="legacy", text="Legacy", scope_kind="project", scope_key="a1")
-    assert FilePageStore._scope_ok(legacy, [("area", "a1")])
 
 
 @pytest.mark.anyio

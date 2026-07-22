@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "motion/react";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight } from "@/components/icons";
 import { ICON } from "@/lib/icons";
 import { EASE_EMPHASIZED, MOTION } from "@/lib/tokens/motion";
 import type { Crumb } from "@/features/command-palette/types";

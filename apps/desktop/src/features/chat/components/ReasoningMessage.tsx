@@ -1,6 +1,6 @@
 import { memo, useState } from "react";
 import { AnimatePresence } from "motion/react";
-import { Brain, ChevronDown } from "lucide-react";
+import { Brain, ChevronDown } from "@/components/icons";
 import clsx from "clsx";
 import { useStore } from "@/stores";
 import { Markdown } from "@/components/ui/Markdown";

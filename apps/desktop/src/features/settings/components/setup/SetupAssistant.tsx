@@ -1,4 +1,4 @@
-import { X } from "lucide-react";
+import { X } from "@/components/icons";
 import { ICON } from "@/lib/icons";
 import { IconButton } from "@/components/ui/IconButton";
 import { GoogleSetupAssistant } from "@/features/settings/components/setup/GoogleSetupAssistant";

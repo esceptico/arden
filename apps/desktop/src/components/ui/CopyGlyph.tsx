@@ -1,11 +1,11 @@
-import { Check, Copy } from "lucide-react";
-import { BlurSwap } from "@/components/ui/BlurSwap";
+import { Check, Copy } from "@/components/icons";
+import { IconSwap } from "@/components/ui/IconSwap";
 
 /**
  * The Copy → Check glyph swap shared by every copy button in the app
  * (messages, code blocks, tool output, diagrams). Wrapping the swap in
- * BlurSwap means the flash-to-checkmark crossfades in place instead of
- * hard-cutting. Button chrome + clipboard logic stay at each call site —
+ * IconSwap keeps both glyphs mounted and transitions only their visual state.
+ * Button chrome + clipboard logic stay at each call site —
  * only the icon swap is shared, since those legitimately differ.
  */
 export function CopyGlyph({
@@ -19,12 +19,10 @@ export function CopyGlyph({
   checkClassName?: string;
 }) {
   return (
-    <BlurSwap swapKey={copied ? "check" : "copy"} blur={3}>
-      {copied ? (
-        <Check size={size} strokeWidth={2.4} className={checkClassName} />
-      ) : (
-        <Copy size={size} strokeWidth={2} />
-      )}
-    </BlurSwap>
+    <IconSwap
+      state={copied ? "b" : "a"}
+      iconA={<Copy size={size} strokeWidth={2} />}
+      iconB={<Check size={size} strokeWidth={2.4} className={checkClassName} />}
+    />
   );
 }

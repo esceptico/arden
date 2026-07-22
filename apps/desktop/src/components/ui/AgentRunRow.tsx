@@ -9,8 +9,8 @@ import {
   SendHorizontal,
   Split,
   Square,
-  type LucideIcon,
-} from "lucide-react";
+  type NtrpIcon,
+} from "@/components/icons";
 import { ICON } from "@/lib/icons";
 import { EASE_OUT, MOTION } from "@/lib/tokens/motion";
 import {
@@ -19,7 +19,7 @@ import {
   type AgentRunStatus,
   type AgentRunView,
 } from "@/lib/agentRun";
-import { BlurSwap } from "@/components/ui/BlurSwap";
+import { IconSwap } from "@/components/ui/IconSwap";
 import { StatusDot } from "@/components/ui/StatusDot";
 import { Collapse } from "@/components/ui/Collapse";
 import { ConfirmDeleteButton } from "@/components/ui/ConfirmDeleteButton";
@@ -126,7 +126,7 @@ export interface AgentHandoff {
  *  serves agent handoffs and automation controls (run / history / delete / …),
  *  so the two surfaces speak one affordance vocabulary. */
 export interface AgentRunAction {
-  icon: LucideIcon;
+  icon: NtrpIcon;
   label: string;
   onClick: () => void | Promise<void>;
   busy?: boolean;
@@ -165,13 +165,11 @@ function ActionButton({ action }: { action: AgentRunAction }) {
         action.danger ? "hover:text-bad" : "hover:text-ink",
       )}
     >
-      <BlurSwap swapKey={busy ? "busy" : "idle"} blur={3}>
-        {busy ? (
-          <Loader2 size={ICON.XS} strokeWidth={2} className="animate-spin" />
-        ) : (
-          <action.icon size={ICON.XS} strokeWidth={2} />
-        )}
-      </BlurSwap>
+      <IconSwap
+        state={busy ? "b" : "a"}
+        iconA={<action.icon size={ICON.XS} strokeWidth={2} />}
+        iconB={<Loader2 size={ICON.XS} strokeWidth={2} className="animate-spin" />}
+      />
     </button>
   );
 }

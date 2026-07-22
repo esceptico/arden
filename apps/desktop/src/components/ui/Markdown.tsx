@@ -122,7 +122,7 @@ export function Markdown({
                 [rehypeSanitize, sanitizeSchema],
               ]
         }
-        components={{ pre: streaming ? StreamingPreBlock : PreBlock, a: Anchor, code: InlineCode }}
+        components={{ pre: streaming ? StreamingPreBlock : PreBlock, a: Anchor, code: InlineCode, td: TableCell }}
       >
         {content}
       </ReactMarkdown>
@@ -194,6 +194,14 @@ function InlineCode({ className, children, ...rest }: React.HTMLAttributes<HTMLE
       {children}
     </code>
   );
+}
+
+// A cell holding one short token (a date, a version) must not break at its
+// hyphens — CSS alone can't forbid that; long or multi-word content wraps.
+function TableCell({ children, ...rest }: React.TdHTMLAttributes<HTMLTableCellElement>) {
+  const text = extractText(children).trim();
+  const nowrap = text.length > 0 && text.length <= 24 && !/\s/.test(text);
+  return <td {...rest} style={nowrap ? { whiteSpace: "nowrap" } : undefined}>{children}</td>;
 }
 
 function StreamingPreBlock({ children }: { children?: ReactNode }) {

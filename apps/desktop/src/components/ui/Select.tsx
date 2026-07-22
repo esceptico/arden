@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { Check, ChevronDown } from "lucide-react";
+import { Check, ChevronDown } from "@/components/icons";
 import clsx from "clsx";
 import { ICON } from "@/lib/icons";
 import { AnchoredPopover } from "@/components/ui/AnchoredPopover";

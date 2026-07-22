@@ -10,7 +10,7 @@ def _build(config: Config) -> MultiGmailSource | None:
     if not config.integration_enabled("gmail"):
         return None
     store = google_account_store()
-    token_paths = [store.token_path(account) for account in store.accounts_for("gmail")]
+    token_paths = [store.token_path(account, "gmail") for account in store.accounts_for("gmail")]
     if not token_paths:
         return None
     source = MultiGmailSource(token_paths=token_paths, days_back=config.gmail_days)
@@ -26,6 +26,7 @@ GMAIL = Integration(
         "send_email": send_email_tool,
         "reply_email": reply_email_tool,
     },
+    command_tool_names=frozenset({"emails", "read_email", "send_email", "reply_email"}),
     notifier_class=EmailNotifier,
     build=_build,
     connection=IntegrationConnectionSpec(

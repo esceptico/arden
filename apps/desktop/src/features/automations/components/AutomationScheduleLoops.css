@@ -1,0 +1,147 @@
+.automation-radial {
+  position: relative;
+  width: min(100%, 1138px);
+  aspect-ratio: 1138 / 986;
+  color: #e2e4ea;
+  background: #07080a;
+  font-family: "Geist Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  user-select: none;
+  touch-action: none;
+}
+
+.automation-radial > svg { display: block; width: 100%; height: 100%; overflow: visible; }
+
+.automation-radial__tick {
+  stroke: #62666f;
+  stroke-width: 2;
+  opacity: 0.68;
+  vector-effect: non-scaling-stroke;
+}
+
+.automation-radial__tick.is-major { stroke: #cfd2da; opacity: 0.92; }
+
+.automation-radial__decorative-arc {
+  fill: none;
+  stroke: #d8dbe3;
+  stroke-linecap: round;
+  stroke-width: 2;
+  opacity: 0.95;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.automation-radial__ring-title,
+.automation-radial__summary-kicker {
+  fill: #5e626c;
+  font-size: 10px;
+  font-weight: 560;
+  letter-spacing: 0.16em;
+}
+
+.automation-radial__day,
+.automation-radial__cadence { cursor: pointer; outline: none; }
+
+.automation-radial__option-hit { fill: #07080a; fill-opacity: 0.88; stroke: transparent; }
+
+.automation-radial__day text,
+.automation-radial__cadence text {
+  fill: #555963;
+  font-size: 12px;
+  font-weight: 520;
+  pointer-events: none;
+  transition: fill 130ms ease;
+}
+
+.automation-radial__day.is-active text,
+.automation-radial__cadence.is-active text { fill: #eceef3; }
+
+.automation-radial__day.is-active .automation-radial__option-hit,
+.automation-radial__cadence.is-active .automation-radial__option-hit {
+  fill: #111318;
+  stroke: rgb(255 255 255 / 10%);
+  stroke-width: 1;
+}
+
+.automation-radial__day:hover text,
+.automation-radial__cadence:hover text { fill: #fff; }
+
+.automation-radial__day:focus-visible .automation-radial__option-hit,
+.automation-radial__cadence:focus-visible .automation-radial__option-hit {
+  stroke: #aeb1ba;
+  stroke-width: 2;
+}
+
+.automation-radial__time-rule {
+  fill: #07080a;
+  stroke: #5d616b;
+  stroke-width: 2;
+  stroke-dasharray: 2 9;
+}
+
+.automation-radial__time-arc {
+  fill: none;
+  stroke: #e4e6ec;
+  stroke-linecap: round;
+  stroke-width: 3;
+  filter: drop-shadow(0 0 5px rgb(255 255 255 / 12%));
+}
+
+.automation-radial__time-handle {
+  fill: #e8eaf0;
+  stroke: #07080a;
+  stroke-width: 3;
+  cursor: grab;
+  outline: none;
+}
+
+.automation-radial__time-handle:active { cursor: grabbing; }
+.automation-radial__time-handle:focus-visible { stroke: #8e82ff; stroke-width: 5; }
+
+.automation-radial__summary-value {
+  fill: #eef0f5;
+  font-size: 28px;
+  font-variation-settings: "wght" 450;
+  font-weight: 450;
+  letter-spacing: -0.05em;
+}
+
+.automation-radial__summary-detail,
+.automation-radial__summary-time {
+  fill: #777b85;
+  font-size: 11px;
+  font-weight: 480;
+}
+
+.automation-radial__summary-time { fill: #5f636d; font-size: 10px; }
+
+.automation-radial__receipt {
+  position: absolute;
+  right: 12%;
+  bottom: 4.5%;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  color: #747883;
+  font-size: 11px;
+  font-weight: 450;
+  line-height: 1;
+}
+
+.automation-radial__receipt span {
+  color: #5f636d;
+  font-size: 9px;
+  font-weight: 540;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+}
+
+.automation-radial__receipt strong { color: #a6a9b2; font-weight: 450; }
+
+@media (max-width: 700px) {
+  .automation-radial__receipt { right: 6%; bottom: 2%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .automation-radial__day text,
+  .automation-radial__cadence text { transition: none; }
+}

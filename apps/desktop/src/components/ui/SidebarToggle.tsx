@@ -1,7 +1,7 @@
-import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { PanelLeftClose, PanelLeftOpen } from "@/components/icons";
 import { useStore } from "@/stores";
 import { IconButton } from "@/components/ui/IconButton";
-import { BlurSwap } from "@/components/ui/BlurSwap";
+import { IconSwap } from "@/components/ui/IconSwap";
 import { ICON } from "@/lib/icons";
 
 /** The fixed-viewport sidebar collapse control, anchored near the macOS
@@ -19,13 +19,11 @@ export function SidebarToggle() {
       title={sidebarHidden ? "Show sidebar (⌘B)" : "Hide sidebar (⌘B)"}
       aria-label={sidebarHidden ? "Show sidebar" : "Hide sidebar"}
     >
-      <BlurSwap swapKey={sidebarHidden ? "show" : "hide"} scaleFrom={0.25}>
-        {sidebarHidden ? (
-          <PanelLeftOpen size={ICON.MD} strokeWidth={2} />
-        ) : (
-          <PanelLeftClose size={ICON.MD} strokeWidth={2} />
-        )}
-      </BlurSwap>
+      <IconSwap
+        state={sidebarHidden ? "b" : "a"}
+        iconA={<PanelLeftClose size={ICON.MD} strokeWidth={2} />}
+        iconB={<PanelLeftOpen size={ICON.MD} strokeWidth={2} />}
+      />
     </IconButton>
   );
 }

@@ -388,6 +388,7 @@ ON CONFLICT(session_id) DO UPDATE SET
 SQL_GET_LATEST = """
 SELECT session_id FROM sessions
 WHERE archived_at IS NULL
+  AND COALESCE(agent_type, '') != 'command_sidecar'
 ORDER BY last_activity DESC LIMIT 1
 """
 
@@ -398,6 +399,7 @@ SELECT session_id, started_at, last_activity, name,
        json_array_length(COALESCE(messages, '[]')) AS message_count
 FROM sessions
 WHERE archived_at IS NULL
+  AND COALESCE(agent_type, '') != 'command_sidecar'
 ORDER BY last_activity DESC
 LIMIT ? OFFSET ?
 """
@@ -408,7 +410,9 @@ SELECT session_id, started_at, last_activity, name,
        agent_type, agent_status, area_id, chat_model,
        json_array_length(COALESCE(messages, '[]')) AS message_count
 FROM sessions
-WHERE archived_at IS NULL AND COALESCE(session_type, 'chat') != 'agent'
+WHERE archived_at IS NULL
+  AND COALESCE(session_type, 'chat') != 'agent'
+  AND COALESCE(agent_type, '') != 'command_sidecar'
 ORDER BY last_activity DESC
 LIMIT ? OFFSET ?
 """
@@ -466,14 +470,6 @@ class SessionStore:
         self._session_write_locks: dict[str, asyncio.Lock] = {}
         # Durable-event writes per session since the last retention prune.
         self._events_since_prune: dict[str, int] = {}
-        # Optional semantic index over transcript rows (search.db). Attached by
-        # the knowledge runtime after the indexer is up; None -> FTS-only.
-        self._search_index: Any = None
-
-    def attach_search_index(self, idx: Any) -> None:
-        """Wire the runtime's SearchIndex so new transcript rows get embedded on
-        insert and search_messages can fuse FTS with vector hits. Idempotent."""
-        self._search_index = idx
 
     async def _session_write_lock(self, session_id: str) -> asyncio.Lock:
         async with self._session_locks_guard:
@@ -1531,13 +1527,6 @@ class SessionStore:
         # cache of the compacted model context. Rewrites update known rows
         # and append new ones, but must not delete raw pre-compaction rows.
         if not messages:
-            if self._search_index is not None:
-                rows = await self.conn.execute_fetchall(
-                    "SELECT seq, role FROM session_messages WHERE session_id = ?",
-                    (session_id,),
-                )
-                for row in rows:
-                    self._schedule_transcript_index_update(session_id, int(row["seq"]), str(row["role"] or ""), "")
             await self.conn.execute("DELETE FROM session_messages WHERE session_id = ?", (session_id,))
             await self.conn.execute("DELETE FROM session_turns WHERE session_id = ?", (session_id,))
             return
@@ -1561,7 +1550,6 @@ class SessionStore:
             search_text = self._flatten_message_text(msg)
 
             if message_id in existing:
-                seq = existing[message_id]
                 await self.conn.execute(
                     """
                     UPDATE session_messages
@@ -1570,9 +1558,7 @@ class SessionStore:
                     """,
                     (role, message_json, client_id, created_at, search_text, session_id, message_id),
                 )
-                self._schedule_transcript_index_update(session_id, seq, role, search_text)
             else:
-                seq = next_seq
                 await self.conn.execute(
                     """
                     INSERT INTO session_messages
@@ -1581,34 +1567,8 @@ class SessionStore:
                     """,
                     (session_id, message_id, next_seq, role, message_json, client_id, created_at, search_text),
                 )
-                # Semantic index for hybrid transcript search. Fire-and-forget so
-                # a slow embed never blocks message persistence.
-                self._schedule_transcript_index_update(session_id, seq, role, search_text)
                 next_seq += 1
         await self._rebuild_session_turns(session_id)
-
-    def _schedule_transcript_index_update(self, session_id: str, seq: int, role: str, search_text: str) -> None:
-        index = self._search_index
-        if index is None:
-            return
-
-        async def _update() -> None:
-            source_id = f"{session_id}:{seq}"
-            try:
-                if search_text.strip():
-                    await index.upsert(
-                        source="transcript",
-                        source_id=source_id,
-                        title=f"{role} @ {session_id}",
-                        content=search_text,
-                        metadata={"session_id": session_id, "seq": seq, "role": role},
-                    )
-                else:
-                    await index.delete("transcript", source_id)
-            except Exception:
-                _logger.warning("Failed to update transcript semantic index", exc_info=True)
-
-        asyncio.create_task(_update())
 
     def _message_row_payload(self, row: aiosqlite.Row) -> dict:
         return {
@@ -3445,6 +3405,7 @@ class SessionStore:
                 FROM sessions
                 WHERE archived_at IS NULL
                   AND area_id IS NULL
+                  AND COALESCE(agent_type, '') != 'command_sidecar'
                   AND (? OR COALESCE(session_type, 'chat') != 'agent')
                 ORDER BY last_activity DESC
                 LIMIT ? OFFSET ?
@@ -3461,6 +3422,7 @@ class SessionStore:
                 FROM sessions
                 WHERE archived_at IS NULL
                   AND area_id = ?
+                  AND COALESCE(agent_type, '') != 'command_sidecar'
                   AND (? OR COALESCE(session_type, 'chat') != 'agent')
                 ORDER BY last_activity DESC
                 LIMIT ? OFFSET ?
@@ -3739,8 +3701,7 @@ class SessionStore:
         until: str | None = None,
         area_id: str | None | object = AREA_FILTER_UNSET,
     ) -> dict:
-        """Hybrid search across transcript messages: FTS (BM25) fused with the
-        semantic index via RRF when a SearchIndex is attached, FTS-only otherwise.
+        """Full-text search across transcript messages using SQLite FTS5.
 
         Returns {hits, has_more}. Each hit carries session_id + session name,
         seq, role, created_at, and a trimmed snippet. Scope to one chat with
@@ -3773,13 +3734,8 @@ class SessionStore:
                 where.append("s.area_id = ?")
                 params.append(area_id)
 
-        # FTS-only paginates directly in SQL (LIMIT limit+1 OFFSET offset — one
-        # extra row signals a further page). Hybrid over-fetches a larger pool
-        # with NO sql offset and paginates in Python after the RRF fusion.
-        if self._search_index is None:
-            fts_sql_limit, fts_sql_offset = limit + 1, offset
-        else:
-            fts_sql_limit, fts_sql_offset = max((limit + offset) * 4, 40), 0
+        # One extra row signals a further page.
+        fts_sql_limit, fts_sql_offset = limit + 1, offset
         sql = f"""
             SELECT m.session_id AS session_id, s.name AS session_name,
                    m.seq AS seq, m.role AS role, m.created_at AS created_at,
@@ -3802,21 +3758,9 @@ class SessionStore:
             params[0] = phrase
             fts_rows = await self.read_conn.execute_fetchall(sql, tuple(params))
 
-        if self._search_index is None:
-            has_more = len(fts_rows) > limit
-            hits = [self._search_hit(r) for r in fts_rows[:limit]]
-            return {"hits": hits, "has_more": has_more}
-
-        return await self._hybrid_search_messages(
-            q,
-            fts_rows,
-            limit=limit,
-            offset=offset,
-            session_id=session_id,
-            since=since,
-            until=until,
-            area_id=area_id,
-        )
+        has_more = len(fts_rows) > limit
+        hits = [self._search_hit(r) for r in fts_rows[:limit]]
+        return {"hits": hits, "has_more": has_more}
 
     @staticmethod
     def _search_hit(r: Any, snippet: str | None = None) -> dict:
@@ -3829,148 +3773,12 @@ class SessionStore:
             "snippet": (snippet if snippet is not None else (r["snippet"] or "")).strip(),
         }
 
-    async def _hybrid_search_messages(
-        self,
-        query: str,
-        fts_rows: list[Any],
-        *,
-        limit: int,
-        offset: int,
-        session_id: str | None,
-        since: str | None,
-        until: str | None,
-        area_id: str | None | object,
-    ) -> dict:
-        """Fuse the FTS ranking with the vector index via RRF, keyed on
-        (session_id, seq) so the two separate databases bridge in Python."""
-        from ntrp.constants import RRF_K
-        from ntrp.search.retrieval import rrf_merge
-
-        index = self._search_index
-        fts_ranked: list[tuple[tuple[str, int], float]] = [((r["session_id"], r["seq"]), 1.0) for r in fts_rows]
-
-        vec_ranked: list[tuple[tuple[str, int], float]] = []
-        try:
-            embedding = await index.embedder.embed_one(query)
-            from ntrp.database import serialize_embedding
-
-            raw = await index.store.vector_search(
-                serialize_embedding(embedding), sources=["transcript"], limit=max(limit * 4, 40)
-            )
-            for item_id, score in raw:
-                item = await index.store.get_by_id(item_id)
-                meta = item.metadata if item and item.metadata else None
-                if not meta or "session_id" not in meta or "seq" not in meta:
-                    continue
-                if session_id is not None and meta["session_id"] != session_id:
-                    continue
-                key = (meta["session_id"], int(meta["seq"]))
-                if not await self._message_matches_search_scope(
-                    key[0],
-                    key[1],
-                    since=since,
-                    until=until,
-                    area_id=area_id,
-                    indexed_content=item.content if item else None,
-                ):
-                    continue
-                vec_ranked.append((key, score))
-        except Exception:
-            _logger.warning("transcript vector search failed; FTS-only fallback", exc_info=True)
-
-        fused = rrf_merge([fts_ranked, vec_ranked], k=RRF_K)
-        ordered_keys = sorted(fused, key=lambda key: fused[key], reverse=True)
-        page_keys = ordered_keys[offset : offset + limit]
-        has_more = len(ordered_keys) > offset + limit
-
-        # Hydrate snippet/role/created_at for the page from session_messages.
-        fts_by_key = {(r["session_id"], r["seq"]): r for r in fts_rows}
-        hits: list[dict] = []
-        for key in page_keys:
-            row = fts_by_key.get(key)
-            if row is not None:
-                hits.append(self._search_hit(row))
-            else:
-                hydrated = await self._hydrate_message_hit(
-                    key[0], key[1], since=since, until=until, area_id=area_id
-                )
-                if hydrated is not None:
-                    hits.append(hydrated)
-        return {"hits": hits, "has_more": has_more}
-
-    async def _message_matches_search_scope(
-        self,
-        session_id: str,
-        seq: int,
-        *,
-        since: str | None,
-        until: str | None,
-        area_id: str | None | object,
-        indexed_content: str | None = None,
-    ) -> bool:
-        rows = await self.read_conn.execute_fetchall(
-            """
-            SELECT m.created_at AS created_at, m.search_text AS search_text, s.area_id AS area_id
-            FROM session_messages m
-            LEFT JOIN sessions s ON s.session_id = m.session_id
-            WHERE m.session_id = ? AND m.seq = ?
-            LIMIT 1
-            """,
-            (session_id, seq),
-        )
-        if not rows:
-            return False
-        row = rows[0]
-        if since is not None and row["created_at"] < since:
-            return False
-        if until is not None and row["created_at"] > until:
-            return False
-        if area_id is not AREA_FILTER_UNSET and row["area_id"] != area_id:
-            return False
-        if indexed_content is not None and (row["search_text"] or "").strip() != indexed_content.strip():
-            return False
-        return True
-
     async def _session_matches_area(self, session_id: str, area_id: str | None | object) -> bool:
         rows = await self.read_conn.execute_fetchall(
             "SELECT area_id FROM sessions WHERE session_id = ? LIMIT 1",
             (session_id,),
         )
         return bool(rows) and rows[0]["area_id"] == area_id
-
-    async def _hydrate_message_hit(
-        self,
-        session_id: str,
-        seq: int,
-        *,
-        since: str | None = None,
-        until: str | None = None,
-        area_id: str | None | object = AREA_FILTER_UNSET,
-    ) -> dict | None:
-        if not await self._message_matches_search_scope(
-            session_id,
-            seq,
-            since=since,
-            until=until,
-            area_id=area_id,
-        ):
-            return None
-        rows = await self.read_conn.execute_fetchall(
-            """
-            SELECT m.session_id AS session_id, s.name AS session_name,
-                   m.seq AS seq, m.role AS role, m.created_at AS created_at,
-                   m.search_text AS search_text
-            FROM session_messages m
-            LEFT JOIN sessions s ON s.session_id = m.session_id
-            WHERE m.session_id = ? AND m.seq = ?
-            """,
-            (session_id, seq),
-        )
-        if not rows:
-            return None
-        r = rows[0]
-        snippet = (r["search_text"] or "").replace("\n", " ")[:160]
-        return self._search_hit(r, snippet=snippet)
 
     def _row_is_visible_user(self, row: Any) -> bool:
         if row["role"] != "user":

@@ -825,6 +825,8 @@ def test_duplicate_post_returns_existing_run_without_requeueing(client_with_acti
     assert first.status_code == 200
     assert second.status_code == 200
     assert first.json()["run_id"] == second.json()["run_id"] == run.run_id
+    assert first.json()["status"] == "queued"
+    assert second.json()["status"] == "accepted"
     # Only the first POST queued the message; the second was deduped.
     assert len(run.inject_queue) == 1
 
@@ -1257,6 +1259,7 @@ async def test_submit_message_after_cancel_starts_new_run(monkeypatch):
     )
 
     new_run = registry.get_run(result["run_id"])
+    assert result["status"] == "running"
     assert result["run_id"] != old_run.run_id
     assert old_run.pending_injection_count == 0
     assert new_run is not None

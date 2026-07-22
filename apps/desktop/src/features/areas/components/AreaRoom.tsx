@@ -5,7 +5,7 @@ import { createAreaPage, fetchAreaDetail, replyToAsk, updateAreaAutonomy } from 
 import { runAutomation } from "@/actions/automations";
 import { createSession, goToNewSessionHome, switchSession } from "@/actions/sessions";
 import { sendMessage } from "@/actions/messages";
-import { Bot, Eye, FilePlus2, Zap } from "lucide-react";
+import { Bot, Eye, FilePlus2, Zap } from "@/components/icons";
 import { AskCard } from "@/features/areas/components/AskCard";
 import { AgentPresence, type AgentInfo } from "@/features/areas/components/AgentPresence";
 import { AgentStatusLine, AreaSettingsButton } from "@/features/areas/components/AreaControls";

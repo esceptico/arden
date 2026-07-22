@@ -68,6 +68,50 @@ test("decline sends a separate connection result and removes the card", async ()
   expect(getState().pendingConnections).toEqual([]);
 });
 
+test("Google connection card delegates account choice to Google", async () => {
+  const calls: { path: string; body: Record<string, unknown> }[] = [];
+  (window as unknown as { ntrpDesktop: unknown }).ntrpDesktop = {
+    api: {
+      request: async (_config: unknown, request: { path: string; body?: string }) => {
+        calls.push({ path: request.path, body: request.body ? JSON.parse(request.body) : {} });
+        const data = request.path === "/google/accounts"
+          ? { accounts: [] }
+          : request.path === "/config"
+            ? { integrations: {} }
+            : {};
+        return { ok: true, status: 200, statusText: "OK", contentType: "application/json", data, text: "" };
+      },
+    },
+  };
+  const drive: PendingConnection = {
+    ...slackConnection,
+    integrationId: "google_drive",
+    connectionId: "google_drive",
+    label: "Google Drive",
+    reason: "not_configured",
+    detail: "Create a spreadsheet",
+    capability: "Search, read, create, and edit Google Docs and Sheets",
+    action: "oauth",
+    requiredScopes: ["https://www.googleapis.com/auth/spreadsheets"],
+    source: "suggestion",
+  };
+  setState({ pendingConnections: [drive] });
+  const host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+
+  await act(async () => root?.render(<ConnectionBanner />));
+
+  expect(host.textContent).not.toContain("Choose a Google account");
+  const addAccountButton = [...host.querySelectorAll("button")].find((button) => button.textContent === "Add account");
+  expect(addAccountButton).toBeTruthy();
+  await act(async () => addAccountButton?.click());
+
+  const oauthCall = calls.find((call) => call.path === "/google/google_drive/connect");
+  expect(oauthCall?.body).toEqual({});
+  expect(calls.some((call) => call.path === "/google/accounts")).toBe(false);
+});
+
 test("Google connection runs OAuth, enables Google, then resolves", async () => {
   const calls: { path: string; body: Record<string, unknown> }[] = [];
   const serverConfig = {

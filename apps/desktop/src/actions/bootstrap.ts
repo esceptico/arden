@@ -21,7 +21,7 @@ let lastResyncAt = 0;
 let connectionPollTimer: ReturnType<typeof setInterval> | null = null;
 
 /** Re-fetch the collections that have no live SSE delta feed (sessions list,
- *  automations, loops, goal, server config) after a chat-stream (re)connect or
+ *  automations, skills, loops, goal, server config) after a chat-stream (re)connect or
  *  server restart. Live deltas remain the fast path; this is the correctness
  *  backstop so nothing stays stale until a manual reload. Debounced + rate-
  *  limited so flappy reconnects collapse into one resync. */
@@ -34,6 +34,7 @@ export function reloadAllCollections(sessionId: string | null): void {
     // Session-agnostic collections always reflect current truth.
     void refreshSessions();
     void fetchAutomations();
+    void fetchSkills();
     void fetchServerConfig();
     // Per-session refreshes only if this is STILL the active session — the
     // debounce can outlive a session switch / unmount, and must not write a

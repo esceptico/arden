@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Bot, Square } from "lucide-react";
+import { Bot, Square } from "@/components/icons";
 import { useShallow } from "zustand/react/shallow";
 import { useStore, type ActivityItem } from "@/stores";
 import { highlight } from "@/lib/highlight";

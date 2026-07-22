@@ -287,18 +287,6 @@ def authorize_google_service(
         )
     profile = build("oauth2", "v2", credentials=creds).userinfo().get().execute()
     email = str(profile.get("email") or "").strip() or None
-    existing = next(
-        (
-            item
-            for item in store.list_accounts()
-            if email and item.email and item.email.casefold() == email.casefold()
-        ),
-        None,
-    )
-    if account_id is None and existing and not set(existing.scopes).issubset(granted):
-        raise ValueError(
-            "This Google account is already connected. Choose it explicitly so existing permissions are preserved."
-        )
     return store.upsert_authorization(
         account_id=account_id,
         email=email,
@@ -310,20 +298,21 @@ def authorize_google_service(
 
 def revoke_google_account(account: GoogleAccount, store: GoogleAccountStore | None = None) -> None:
     store = store or google_account_store()
-    creds = Credentials.from_authorized_user_file(str(store.token_path(account)))
-    token = creds.refresh_token or creds.token
-    if not token:
-        return
-    body = urlencode({"token": token}).encode()
-    request = URLRequest(
-        "https://oauth2.googleapis.com/revoke",
-        data=body,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-        method="POST",
-    )
-    with urlopen(request, timeout=15) as response:
-        if response.status not in {200, 400}:
-            raise RuntimeError(f"Google token revocation failed with HTTP {response.status}")
+    for token_path in store.token_paths(account):
+        creds = Credentials.from_authorized_user_file(str(token_path))
+        token = creds.refresh_token or creds.token
+        if not token:
+            continue
+        body = urlencode({"token": token}).encode()
+        request = URLRequest(
+            "https://oauth2.googleapis.com/revoke",
+            data=body,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            method="POST",
+        )
+        with urlopen(request, timeout=15) as response:
+            if response.status not in {200, 400}:
+                raise RuntimeError(f"Google token revocation failed with HTTP {response.status}")
 
 
 def add_google_account(service_choice: str = "all") -> dict:

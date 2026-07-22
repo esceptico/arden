@@ -10,7 +10,7 @@ def _build(config: Config) -> MultiGoogleDriveClient | None:
         return None
     store = google_account_store()
     clients = [
-        GoogleDriveClient(store.token_path(account), account.id, account.email)
+        GoogleDriveClient(store.token_path(account, "google_drive"), account.id, account.email)
         for account in store.accounts_for("google_drive")
     ]
     return MultiGoogleDriveClient(clients) if clients else None
@@ -20,6 +20,7 @@ GOOGLE_DRIVE = Integration(
     id="google_drive",
     label="Google Drive",
     tools=DRIVE_TOOLS,
+    command_tool_names=frozenset(DRIVE_TOOLS),
     build=_build,
     connection=IntegrationConnectionSpec(
         connection_id="google_drive",

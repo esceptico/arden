@@ -47,6 +47,18 @@ test("segmented variant renders the track, pill indicator, and item sizing", () 
   expect(html).toContain("h-7");
 });
 
+test("expanding tabs mount the shared pill inside the active content", () => {
+  const html = renderToStaticMarkup(
+    <Tabs value="approve" onChange={() => {}} variant="expanding">
+      <Tab value="approve">Approve</Tab>
+      <Tab value="ask">Ask</Tab>
+    </Tabs>,
+  );
+  expect(html).toContain('data-tab-indicator="expanding"');
+  expect(html).toContain("data-[active]:flex-none");
+  expect((html.match(/data-tab-indicator="expanding"/g) ?? []).length).toBe(1);
+});
+
 test("page panel variant matches settings-style directional swaps", () => {
   expect(SLIDE_PAGE_VARIANTS.exit(-1)).toMatchObject({ x: 16 });
   expect(SLIDE_PAGE_VARIANTS.enter(-1)).toMatchObject({ x: -16 });

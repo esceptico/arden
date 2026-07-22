@@ -1,6 +1,6 @@
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from threading import RLock
 from typing import Literal
@@ -22,12 +22,20 @@ _DRIVE_SCOPES = {
 
 
 @dataclass(frozen=True)
+class GoogleAuthorization:
+    service: GoogleService
+    token_file: str
+    scopes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class GoogleAccount:
     id: str
     email: str | None
     token_file: str
     scopes: tuple[str, ...]
     services: frozenset[GoogleService]
+    authorizations: dict[GoogleService, GoogleAuthorization] = field(default_factory=dict)
 
 
 class GoogleAccountStore:
@@ -42,16 +50,63 @@ class GoogleAccountStore:
             return []
         data = json.loads(self.index_path.read_text())
         records = data.get("accounts", []) if isinstance(data, dict) else []
-        return [record for record in records if isinstance(record, dict)]
+        return [self._normalize_record(record) for record in records if isinstance(record, dict)]
+
+    @staticmethod
+    def _sync_legacy_fields(record: dict) -> None:
+        authorizations = record.get("authorizations", {})
+        record["services"] = sorted(authorizations)
+        record["scopes"] = sorted({
+            str(scope)
+            for authorization in authorizations.values()
+            for scope in authorization.get("scopes", [])
+        })
+        if authorizations:
+            first_service = sorted(authorizations)[0]
+            record["token_file"] = authorizations[first_service]["token_file"]
+
+    @classmethod
+    def _normalize_record(cls, record: dict) -> dict:
+        normalized = dict(record)
+        raw_authorizations = normalized.get("authorizations")
+        if not isinstance(raw_authorizations, dict):
+            token_file = str(normalized.get("token_file") or "")
+            scopes = [str(scope) for scope in normalized.get("scopes", [])]
+            raw_authorizations = {
+                str(service): {"token_file": token_file, "scopes": scopes}
+                for service in normalized.get("services", [])
+                if token_file
+            }
+        normalized["authorizations"] = {
+            str(service): {
+                "token_file": str(authorization.get("token_file") or ""),
+                "scopes": sorted({str(scope) for scope in authorization.get("scopes", [])}),
+            }
+            for service, authorization in raw_authorizations.items()
+            if service in {"gmail", "calendar", "google_drive"}
+            and isinstance(authorization, dict)
+            and authorization.get("token_file")
+        }
+        cls._sync_legacy_fields(normalized)
+        return normalized
 
     @staticmethod
     def _account(record: dict) -> GoogleAccount:
+        authorizations = {
+            service: GoogleAuthorization(
+                service=service,
+                token_file=str(authorization["token_file"]),
+                scopes=tuple(str(scope) for scope in authorization.get("scopes", [])),
+            )
+            for service, authorization in record.get("authorizations", {}).items()
+        }
         return GoogleAccount(
             id=str(record["id"]),
             email=str(record["email"]) if record.get("email") else None,
             token_file=str(record["token_file"]),
             scopes=tuple(str(scope) for scope in record.get("scopes", [])),
             services=frozenset(record.get("services", [])),
+            authorizations=authorizations,
         )
 
     def list_accounts(self) -> list[GoogleAccount]:
@@ -64,8 +119,19 @@ class GoogleAccountStore:
     def is_bound(self, service: GoogleService) -> bool:
         return bool(self.accounts_for(service))
 
-    def token_path(self, account: GoogleAccount) -> Path:
+    def token_path(self, account: GoogleAccount, service: GoogleService | None = None) -> Path:
+        if service is not None:
+            authorization = account.authorizations.get(service)
+            if authorization is None:
+                raise KeyError(f"Google account {account.id} is not authorized for {service}")
+            return self.root / authorization.token_file
         return self.root / account.token_file
+
+    def token_paths(self, account: GoogleAccount) -> list[Path]:
+        token_files = {authorization.token_file for authorization in account.authorizations.values()}
+        if not token_files and account.token_file:
+            token_files.add(account.token_file)
+        return [self.root / token_file for token_file in sorted(token_files)]
 
     @staticmethod
     def _write_private(path: Path, content: str) -> None:
@@ -80,7 +146,7 @@ class GoogleAccountStore:
                 temp.unlink()
 
     def _write_records(self, records: list[dict]) -> None:
-        payload = json.dumps({"version": 1, "accounts": records}, indent=2, sort_keys=True)
+        payload = json.dumps({"version": 2, "accounts": records}, indent=2, sort_keys=True)
         self._write_private(self.index_path, payload)
 
     def upsert_authorization(
@@ -112,21 +178,33 @@ class GoogleAccountStore:
                 record = {
                     "id": resolved_id,
                     "email": email,
-                    "token_file": f"google_tokens/{resolved_id}.json",
-                    "scopes": [],
-                    "services": [],
+                    "authorizations": {},
                     "legacy_sources": [],
                 }
                 records.append(record)
 
             if email:
                 record["email"] = email
-            record["scopes"] = sorted(set(scopes))
-            record["services"] = sorted(set(record.get("services", [])) | {service})
+            authorizations = record.setdefault("authorizations", {})
+            current = authorizations.get(service)
+            shared = bool(current) and any(
+                other_service != service and authorization.get("token_file") == current.get("token_file")
+                for other_service, authorization in authorizations.items()
+            )
+            token_file = (
+                str(current["token_file"])
+                if current and not shared
+                else f"google_tokens/{record['id']}-{service}.json"
+            )
+            authorizations[service] = {
+                "token_file": token_file,
+                "scopes": sorted(set(scopes)),
+            }
+            self._sync_legacy_fields(record)
             if legacy_source:
                 record["legacy_sources"] = sorted(set(record.get("legacy_sources", [])) | {legacy_source})
 
-            self._write_private(self.root / record["token_file"], credential_json)
+            self._write_private(self.root / token_file, credential_json)
             self._write_records(records)
             return self._account(record)
 
@@ -136,7 +214,13 @@ class GoogleAccountStore:
             record = next((item for item in records if item.get("id") == account_id), None)
             if record is None:
                 raise KeyError(f"Unknown Google account: {account_id}")
-            record["services"] = sorted(set(record.get("services", [])) | {service})
+            authorizations = record.setdefault("authorizations", {})
+            if service not in authorizations:
+                source = next(iter(authorizations.values()), None)
+                if source is None:
+                    raise KeyError(f"Google account {account_id} has no authorization to bind")
+                authorizations[service] = dict(source)
+            self._sync_legacy_fields(record)
             self._write_records(records)
             return self._account(record)
 
@@ -146,7 +230,8 @@ class GoogleAccountStore:
             record = next((item for item in records if item.get("id") == account_id), None)
             if record is None:
                 raise KeyError(f"Unknown Google account: {account_id}")
-            record["services"] = sorted(set(record.get("services", [])) - {service})
+            record.setdefault("authorizations", {}).pop(service, None)
+            self._sync_legacy_fields(record)
             self._write_records(records)
             return self._account(record)
 
@@ -158,9 +243,17 @@ class GoogleAccountStore:
                 raise KeyError(f"Unknown Google account: {account_id}")
             records.remove(record)
             self._write_records(records)
-            token_path = self.root / record["token_file"]
-            if token_path.exists():
-                token_path.unlink()
+            token_files = {
+                str(authorization.get("token_file"))
+                for authorization in record.get("authorizations", {}).values()
+                if authorization.get("token_file")
+            }
+            if record.get("token_file"):
+                token_files.add(str(record["token_file"]))
+            for token_file in token_files:
+                token_path = self.root / token_file
+                if token_path.exists():
+                    token_path.unlink()
             return self._account(record)
 
     @staticmethod

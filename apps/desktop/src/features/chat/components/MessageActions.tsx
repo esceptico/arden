@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { GitBranch, Pencil } from "lucide-react";
+import { GitBranch, Pencil } from "@/components/icons";
 import clsx from "clsx";
 import { useStore } from "@/stores";
 import { CopyGlyph } from "@/components/ui/CopyGlyph";

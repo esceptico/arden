@@ -1,11 +1,11 @@
-import { Loader2, X } from "lucide-react";
+import { Loader2, X } from "@/components/icons";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "motion/react";
 import { cancelQueuedMessage } from "@/actions/messages";
 import { useStore, type QueuedMessage } from "@/stores";
 import { ICON } from "@/lib/icons";
 import { EASE_EMPHASIZED, EASE_HOVER, EASE_OUT, DURATION_PANEL, DURATION_POPOVER, MOTION, ROW_EXIT } from "@/lib/tokens/motion";
-import { BlurSwap } from "@/components/ui/BlurSwap";
+import { IconSwap } from "@/components/ui/IconSwap";
 
 const CARD_TRANSITION = { duration: DURATION_PANEL, ease: EASE_EMPHASIZED };
 const ROW_TRANSITION = { duration: DURATION_POPOVER, ease: EASE_EMPHASIZED };
@@ -98,13 +98,11 @@ function QueueRow({ message }: { message: QueuedMessage }) {
         aria-label="Cancel queued message"
         className="grid place-items-center w-5 h-5 shrink-0 rounded-md text-faint hover:text-ink hover:bg-surface-soft transition-[color,background-color,scale] duration-check ease-out active:scale-[0.97] disabled:opacity-[0.45] disabled:hover:bg-transparent disabled:hover:text-faint"
       >
-        <BlurSwap swapKey={cancelling ? "loading" : "delete"} blur={3}>
-          {cancelling ? (
-            <Loader2 size={ICON.XS} strokeWidth={2} className="animate-spin" />
-          ) : (
-            <X size={ICON.XS} strokeWidth={2} />
-          )}
-        </BlurSwap>
+        <IconSwap
+          state={cancelling ? "b" : "a"}
+          iconA={<X size={ICON.XS} strokeWidth={2} />}
+          iconB={<Loader2 size={ICON.XS} strokeWidth={2} className="animate-spin" />}
+        />
       </button>
     </div>
   );

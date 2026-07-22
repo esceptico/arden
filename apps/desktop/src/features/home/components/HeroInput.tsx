@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { CornerDownLeft } from "lucide-react";
+import { CornerDownLeft } from "@/components/icons";
 import { useStore } from "@/stores";
 import { sendMessage } from "@/actions/messages";
 import { runAutomation } from "@/actions/automations";

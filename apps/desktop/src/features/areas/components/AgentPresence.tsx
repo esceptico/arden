@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Play } from "lucide-react";
+import { Play } from "@/components/icons";
 import { resultSnippet, formatRelative } from "@/lib/agentRun";
 import { ICON } from "@/lib/icons";
 

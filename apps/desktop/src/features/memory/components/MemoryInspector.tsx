@@ -1,139 +1,96 @@
-import { useState } from "react";
-import { AlertCircle, ArrowUpRight, Copy, Link2 } from "lucide-react";
-import { Button } from "@/components/ui/Button";
-import { copyText } from "@/lib/clipboard";
+import { useEffect, useMemo, useState, type ReactNode, type RefObject } from "react";
+import { Clock, Link2, List } from "@/components/icons";
+import { MemoryDiffOverlay, patchStat } from "@/features/memory/components/MemoryDiffOverlay";
 import type {
   MemoryArtifactDetail,
   MemoryLink,
-  MemoryOperation,
-  MemorySourceRef,
   PageEditEvent,
   PageEditHistory,
   PageLinks,
 } from "@/features/memory/lib/notebookTypes";
 
-function scopeText(scope: { kind: string; key: string | null }) {
-  return scope.key ? `${scope.kind}:${scope.key}` : scope.kind;
+type CtxPane = "links" | "outline" | "activity";
+
+const PANE_STORAGE_KEY = "ntrp.desktop.memory.ctxPane";
+const PANES: Array<{ key: CtxPane; label: string; icon: typeof Link2 }> = [
+  { key: "links", label: "Links", icon: Link2 },
+  { key: "outline", label: "Outline", icon: List },
+  { key: "activity", label: "Activity", icon: Clock },
+];
+
+function storedPane(): CtxPane {
+  const value = localStorage.getItem(PANE_STORAGE_KEY);
+  return value === "links" || value === "outline" || value === "activity" ? value : "links";
 }
 
-function safeHttpUrl(ref: string) {
-  try {
-    const url = new URL(ref);
-    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
-    if (url.username || url.password) return null;
-    return url.href;
-  } catch {
-    return null;
+function stem(path: string): string {
+  return (path.split("/").pop() ?? path).replace(/\.md$/, "");
+}
+
+function parentDir(path: string): string {
+  return path.includes("/") ? path.split("/").slice(0, -1).join("/") : "";
+}
+
+/** Wikilinks resolved to their display text, markdown markup stripped,
+ *  collapsed to a single line — the excerpt form the draft renders. */
+function cleanContext(context: string): string {
+  return context
+    .replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_match, target: string, display?: string) => display ?? target)
+    .replace(/[*_`]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** First case-insensitive occurrence of `needle` wrapped in <mark>. */
+function markFirst(text: string, needle: string): ReactNode {
+  const trimmed = needle.trim();
+  if (!trimmed) return text;
+  const index = text.toLowerCase().indexOf(trimmed.toLowerCase());
+  if (index < 0) return text;
+  return (
+    <>
+      {text.slice(0, index)}
+      <mark>{text.slice(index, index + trimmed.length)}</mark>
+      {text.slice(index + trimmed.length)}
+    </>
+  );
+}
+
+type OutlineHeading = { text: string; level: number };
+
+/** Headings h1–h4 from raw markdown, skipping fenced code blocks. */
+function parseOutline(content: string): OutlineHeading[] {
+  const headings: OutlineHeading[] = [];
+  let fenced = false;
+  for (const line of content.split("\n")) {
+    if (/^\s*(```|~~~)/.test(line)) { fenced = !fenced; continue; }
+    if (fenced) continue;
+    const match = /^(#{1,4})\s+(.+?)\s*$/.exec(line);
+    if (match) headings.push({ level: match[1].length, text: match[2].replace(/[*_`[\]]/g, "") });
   }
+  return headings;
 }
 
-function operationSources(operation: MemoryOperation): MemorySourceRef[] {
-  return "sources" in operation ? operation.sources : [];
+function normalizeHeading(text: string): string {
+  return text.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
-function operationTargets(operation: MemoryOperation) {
-  return "targetIds" in operation ? operation.targetIds : [];
+function noteScroller(container: HTMLElement | null): HTMLElement | null {
+  return container?.querySelector<HTMLElement>("[data-memory-note-scroll]") ?? null;
 }
 
-function SourceRow({ source }: { source: MemorySourceRef }) {
-  const url = safeHttpUrl(source.ref);
-  const copy = () => { void copyText(source.ref); };
-  const state = source.metadata.evidence_state;
-  return (
-    <li className="rounded-[8px] bg-surface-soft/45 p-2.5 text-xs">
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <div className="font-medium text-ink">{source.kind}{source.role ? ` · ${source.role}` : ""}</div>
-          <div className="break-all font-mono text-faint">{source.ref}</div>
-        </div>
-        {url ? (
-          <a href={url} target="_blank" rel="noopener noreferrer" aria-label={`Open source ${source.ref}`} className="rounded p-1 text-muted hover:bg-surface-soft hover:text-ink">
-            <ArrowUpRight className="size-3.5" />
-          </a>
-        ) : (
-          <button
-            type="button"
-            aria-label={`Copy source ${source.ref}`}
-            onClick={copy}
-            onKeyDown={(event) => {
-              if (event.key !== "Enter" && event.key !== " ") return;
-              event.preventDefault();
-              copy();
-            }}
-            className="rounded p-1 text-muted hover:bg-surface-soft hover:text-ink"
-          >
-            <Copy className="size-3.5" />
-          </button>
-        )}
-      </div>
-      <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-0.5 text-faint">
-        <dt>Occurred</dt><dd className="break-all text-muted">{source.occurredAt ?? "Unknown"} · {source.timePrecision}</dd>
-        <dt>Captured</dt><dd className="break-all text-muted">{source.capturedAt ?? "Unknown"}</dd>
-        <dt>Hash</dt><dd className="break-all font-mono text-muted">{source.excerptHash ?? "Unavailable"}</dd>
-        {source.scope && <><dt>Source scope</dt><dd className="text-muted">{scopeText(source.scope)}</dd></>}
-      </dl>
-      {(state === "missing" || state === "changed") && (
-        <div className="mt-2 flex items-center gap-1 text-warning"><AlertCircle className="size-3" />Evidence {state}</div>
-      )}
-    </li>
-  );
+function headingNodes(scroller: HTMLElement, headings: OutlineHeading[]): Array<HTMLElement | null> {
+  const nodes = [...scroller.querySelectorAll<HTMLElement>("h1, h2, h3, h4")];
+  return headings.map((heading) =>
+    nodes.find((node) => normalizeHeading(node.textContent ?? "") === normalizeHeading(heading.text)) ?? null);
 }
 
-function LinkRow({ link, kind, stale, navigationDisabled, onNavigate }: {
-  link: MemoryLink;
-  kind: "outgoing" | "backlink";
-  stale: boolean;
-  navigationDisabled: boolean;
-  onNavigate: (path: string, anchor: string | null) => void;
-}) {
-  const path = kind === "backlink" ? link.sourcePath : link.resolvedPath;
-  const anchor = kind === "backlink" ? link.heading : link.target.split("#", 2)[1] ?? null;
-  return (
-    <li className="rounded-[8px] bg-surface-soft/40 p-2.5 text-xs">
-      <button
-        type="button"
-        disabled={navigationDisabled || stale || !path}
-        aria-label={kind === "backlink" ? `Open backlink from ${link.sourcePath}` : `Open outgoing link ${link.display}`}
-        onClick={() => !stale && path && onNavigate(path, anchor)}
-        className="flex w-full items-center gap-1.5 text-left font-medium text-ink disabled:text-faint"
-      >
-        <Link2 className="size-3.5 shrink-0" />
-        <span className="truncate">{kind === "backlink" ? link.sourcePath : link.display}</span>
-        {link.status !== "resolved" && <span className="ml-auto text-faint">{link.status}</span>}
-      </button>
-      {link.heading && <div className="mt-1 text-faint">{link.heading}</div>}
-      <p className="mt-1 leading-relaxed text-muted">{link.context}</p>
-      <div className="mt-1 text-2xs text-faint">Line {link.line}:{link.column}</div>
-      {link.candidates.length > 1 && <div className="mt-1 break-all font-mono text-2xs text-faint">Candidates: {link.candidates.join(", ")}</div>}
-    </li>
-  );
-}
+// Optional server field; typed locally until the /memory/links API lands it.
+type UnlinkedMention = { sourcePath: string; context: string };
+type PageLinksWithUnlinked = PageLinks & { unlinked?: UnlinkedMention[] };
 
-function Section({ id, title, children }: { id: string; title: string; children: React.ReactNode }) {
-  return (
-    <section data-memory-inspector-section={id} className="grid gap-2">
-      <h3 className="text-2xs font-semibold uppercase tracking-[0.08em] text-faint">{title}</h3>
-      {children}
-    </section>
-  );
-}
-
-function ErrorText({ message }: { message: string }) {
-  return <p role="alert" className="text-xs text-danger">{message}</p>;
-}
-
-function EventRows({ events }: { events: PageEditEvent[] }) {
-  return (
-    <ul className="grid gap-1.5">{events.map((event) => (
-      <li key={event.id} className="rounded-[8px] bg-surface-soft/40 p-2.5 text-xs">
-        <div className="flex items-center justify-between gap-2"><strong className="text-ink">{event.actor}</strong><span className="text-faint">{event.occurredAt}</span></div>
-        <div className="mt-1 font-mono text-muted">{event.baseRevision} → {event.resultRevision}</div>
-        <div className="mt-1 text-faint">{event.eventType.toLowerCase().replaceAll("_", " ")} · {event.origin} · {event.reconciliation.replaceAll("_", " ")}</div>
-        <div className="mt-1 text-faint">{event.operations.length} applied · {event.reviewOperations.length} review</div>
-      </li>
-    ))}</ul>
-  );
-}
+const OUTLINE_LEVEL_CLASS: Record<number, string> = { 1: "", 2: " l2", 3: " l3", 4: " l4" };
+const ACTIVITY_PREVIEW = 8;
 
 export function MemoryInspector({
   page,
@@ -143,15 +100,11 @@ export function MemoryInspector({
   historyLoading,
   linkError,
   historyError,
-  linksLoadingMore = false,
-  historyLoadingMore = false,
-  navigationDisabled = false,
+  navigationDisabled,
+  titleForPath,
   onNavigate,
   onRetryLinks,
-  onLoadMoreLinks,
-  onLoadMoreHistory,
-  onCorrect,
-  onForget,
+  scrollTargetRef,
 }: {
   page: MemoryArtifactDetail;
   links: PageLinks | null;
@@ -160,148 +113,261 @@ export function MemoryInspector({
   historyLoading: boolean;
   linkError: string | null;
   historyError: string | null;
-  linksLoadingMore?: boolean;
-  historyLoadingMore?: boolean;
-  navigationDisabled?: boolean;
+  navigationDisabled: boolean;
+  titleForPath: (path: string) => string | undefined;
   onNavigate: (path: string, anchor: string | null) => void;
-  onRetryLinks?: () => void;
-  onLoadMoreLinks?: () => void;
-  onLoadMoreHistory?: () => void;
-  onCorrect?: (recordId: string) => void;
-  onForget?: (recordId: string, eventId: string, questionId: string) => Promise<void>;
+  onRetryLinks: () => void;
+  scrollTargetRef: RefObject<HTMLElement | null>;
 }) {
-  const [confirmForget, setConfirmForget] = useState<string | null>(null);
-  const [forgetting, setForgetting] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const appliedOperations = history?.events.flatMap((event) => event.operations) ?? [];
-  const proposedOperations = history?.events.flatMap((event) => event.reviewOperations) ?? [];
-  const appliedSources = appliedOperations.flatMap(operationSources);
-  const proposedSources = proposedOperations.flatMap(operationSources);
-  const appliedScopes = [...new Set(appliedOperations.flatMap((operation) => "scope" in operation && operation.scope ? [scopeText(operation.scope)] : []))];
-  const proposedScopes = [...new Set(proposedOperations.flatMap((operation) => "scope" in operation && operation.scope ? [scopeText(operation.scope)] : []))];
-  const appliedTargets = appliedOperations.flatMap((operation) => operationTargets(operation).map((target) => ({ operation, target })));
-  const proposedTargets = proposedOperations.flatMap((operation) => operationTargets(operation).map((target) => ({ operation, target })));
-  const pending = history?.events
-    .filter((event) => !history.events.some((resolver) => resolver.reconciliation === "applied"
-      && resolver.sequence > event.sequence
-      && (resolver.reconcilesEventId === event.id || resolver.reviewEventId === event.id)))
-    .flatMap((event) => event.questions.map((question) => ({ event, question }))) ?? [];
-  const actionableTargets = pending.flatMap(({ event, question }) => {
-    const operation = event.reviewOperations[question.operationIndex];
-    return operation && operation.kind === "ASK"
-      ? operation.targetIds.map((target) => ({ target, eventId: event.id, questionId: question.id }))
-      : [];
-  }).filter((entry, index, entries) => entries.findIndex((candidate) => candidate.target === entry.target) === index);
-  const partialHistory = history != null && history.events.length < history.total;
-  const moreLinks = links != null && (links.outgoing.length < links.totalOutgoing || links.backlinks.length < links.totalBacklinks);
+  const [pane, setPane] = useState<CtxPane>(storedPane);
+  const [diffEvent, setDiffEvent] = useState<PageEditEvent | null>(null);
+  const [activityExpanded, setActivityExpanded] = useState(false);
+  const [activeHeading, setActiveHeading] = useState(0);
+
+  useEffect(() => {
+    setDiffEvent(null);
+    setActivityExpanded(false);
+    setActiveHeading(0);
+  }, [page.path]);
+
+  const selectPane = (next: CtxPane) => {
+    setPane(next);
+    localStorage.setItem(PANE_STORAGE_KEY, next);
+  };
+
+  const outgoing = useMemo(() => {
+    const seen = new Set<string>();
+    const rows: MemoryLink[] = [];
+    for (const link of links?.outgoing ?? []) {
+      const key = link.resolvedPath ?? link.target;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      rows.push(link);
+    }
+    return rows;
+  }, [links]);
+
+  const backlinkGroups = useMemo(() => {
+    const groups = new Map<string, MemoryLink[]>();
+    for (const link of links?.backlinks ?? []) {
+      const group = groups.get(link.sourcePath);
+      if (group) group.push(link);
+      else groups.set(link.sourcePath, [link]);
+    }
+    return [...groups];
+  }, [links]);
+
+  const unlinked = (links as PageLinksWithUnlinked | null)?.unlinked ?? [];
+
+  const headings = useMemo(() => parseOutline(page.content), [page.content]);
+
+  useEffect(() => {
+    if (pane !== "outline") return;
+    const scroller = noteScroller(scrollTargetRef.current);
+    if (!scroller || headings.length === 0) return;
+    const onScroll = () => {
+      const nodes = headingNodes(scroller, headings);
+      const top = scroller.getBoundingClientRect().top + 96;
+      let current = 0;
+      nodes.forEach((node, index) => {
+        if (node && node.getBoundingClientRect().top <= top) current = index;
+      });
+      setActiveHeading(current);
+    };
+    onScroll();
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    return () => scroller.removeEventListener("scroll", onScroll);
+  }, [pane, headings, scrollTargetRef, page.path]);
+
+  const jumpToHeading = (index: number) => {
+    const scroller = noteScroller(scrollTargetRef.current);
+    if (!scroller) return;
+    headingNodes(scroller, headings)[index]?.scrollIntoView({ block: "start" });
+  };
+
+  const events = useMemo(() => {
+    const list = [...(history?.events ?? [])];
+    list.sort((a, b) => b.sequence - a.sequence);
+    return list;
+  }, [history]);
+  const visibleEvents = activityExpanded ? events : events.slice(0, ACTIVITY_PREVIEW);
+
+  const pageStem = stem(page.path);
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-bg-main">
-      <div className="border-b border-line-soft px-4 py-3">
-        <h2 className="text-sm font-semibold text-ink">Trust context</h2>
-        <p className="text-2xs text-muted">Links, evidence, and history</p>
+    <>
+      <div className="mw-ctx-toolbar">
+        {PANES.map(({ key, label, icon: Icon }) => (
+          <button
+            key={key}
+            type="button"
+            className={pane === key ? "mw-icon-btn on" : "mw-icon-btn"}
+            aria-pressed={pane === key}
+            aria-label={label}
+            title={label}
+            onClick={() => selectPane(key)}
+          >
+            <Icon size={15} />
+          </button>
+        ))}
       </div>
-      <div className="flex-1 space-y-6 overflow-y-auto p-4 scroll-thin">
-        <Section id="links" title="Links">
-          {linkError && <ErrorText message={linkError} />}
-          {linksLoading && !links && <p role="status" className="text-xs text-muted">Loading links…</p>}
-          {links && <>
-            {links.stale && <div className="flex items-center justify-between gap-3 text-xs text-warning">
-              <span>Link index is refreshing. Navigation is temporarily disabled.</span>
-              {onRetryLinks && <button type="button" aria-label="Refresh memory links" onClick={onRetryLinks} className="shrink-0 font-medium hover:text-ink">Refresh links</button>}
-            </div>}
-            <div className="text-2xs text-faint">Backlinks · {links.totalBacklinks}</div>
-            <ul className="grid gap-1.5">{links.backlinks.map((link, index) => <LinkRow key={`back:${link.sourcePath}:${link.line}:${index}`} link={link} kind="backlink" stale={links.stale} navigationDisabled={navigationDisabled} onNavigate={onNavigate} />)}</ul>
-            <div className="mt-1 text-2xs text-faint">Outgoing · {links.totalOutgoing}</div>
-            <ul className="grid gap-1.5">{links.outgoing.map((link, index) => <LinkRow key={`out:${link.target}:${link.line}:${index}`} link={link} kind="outgoing" stale={links.stale} navigationDisabled={navigationDisabled} onNavigate={onNavigate} />)}</ul>
-            <p className="text-2xs text-faint">Showing {links.outgoing.length} of {links.totalOutgoing} outgoing · {links.backlinks.length} of {links.totalBacklinks} backlinks</p>
-            {moreLinks && onLoadMoreLinks && <button type="button" aria-label="Load more memory links" disabled={linksLoadingMore || links.stale} onClick={onLoadMoreLinks} className="text-xs font-medium text-muted hover:text-ink disabled:opacity-50">{linksLoadingMore ? "Loading…" : "Load more links"}</button>}
-          </>}
-        </Section>
 
-        <Section id="scope" title="Scope">
-          <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs">
-            <dt className="text-faint">Page placement</dt><dd className="break-all font-mono text-muted">{page.path}</dd>
-            <dt className="text-faint">Page scope</dt><dd className="text-muted">{scopeText(page.scope)}</dd>
-            {appliedScopes.map((scope) => <div key={`applied:${scope}`} className="contents"><dt className="text-faint">Record scope</dt><dd className="text-muted">{scope}</dd></div>)}
-            {proposedScopes.map((scope) => <div key={`proposed:${scope}`} className="contents"><dt className="text-faint">Proposed scope</dt><dd className="text-muted">{scope}</dd></div>)}
-          </dl>
-          {partialHistory && <p className="text-2xs text-faint">Based on {history.events.length} of {history.total} events</p>}
-        </Section>
+      {pane === "links" && (
+        <div>
+          <div className="mw-ctx-pane-head">
+            <h2>Links</h2>
+            <span className="mw-ctx-count">{outgoing.length}</span>
+          </div>
+          {linkError ? (
+            <>
+              <p role="alert" className="mw-ctx-empty">{linkError}</p>
+              <button type="button" className="mw-recs-more" onClick={onRetryLinks}>Retry</button>
+            </>
+          ) : linksLoading && !links ? (
+            <p className="mw-ctx-empty">Loading…</p>
+          ) : (
+            <>
+              {outgoing.length === 0 && <p className="mw-ctx-empty">No links on this page.</p>}
+              {outgoing.map((link) => {
+                const path = link.resolvedPath;
+                const title = link.display || (path ? titleForPath(path) ?? stem(path) : link.target);
+                return (
+                  <button
+                    key={path ?? link.target}
+                    type="button"
+                    className="mw-lk-row"
+                    disabled={navigationDisabled || !path}
+                    onClick={() => path && onNavigate(path, link.heading)}
+                  >
+                    <span className="mw-lk-icon"><Link2 size={13} /></span>
+                    <span className="mw-lk-body">
+                      <span className="mw-lk-title">{title}</span>
+                      <span className="mw-lk-sub">{path ? parentDir(path) : "unresolved"}</span>
+                    </span>
+                  </button>
+                );
+              })}
 
-        <Section id="evidence" title="Evidence">
-          {historyError && <ErrorText message={historyError} />}
-          {historyLoading && !history && <p role="status" className="text-xs text-muted">Loading evidence…</p>}
-          {history && <>
-            <div className="text-2xs text-faint">Applied evidence</div>
-            {appliedSources.length ? <ul className="grid gap-1.5">{appliedSources.map((source, index) => <SourceRow key={`applied:${source.ref}:${index}`} source={source} />)}</ul> : <p className="text-xs text-faint">No applied source evidence.</p>}
-            <div className="mt-1 text-2xs text-faint">Proposed evidence</div>
-            {proposedSources.length ? <ul className="grid gap-1.5">{proposedSources.map((source, index) => <SourceRow key={`proposed:${source.ref}:${index}`} source={source} />)}</ul> : <p className="text-xs text-faint">No proposed source evidence.</p>}
-          </>}
-        </Section>
-
-        <Section id="lifecycle" title="Lifecycle">
-          {history && (appliedTargets.length || proposedTargets.length) ? <ul className="grid gap-1 text-xs text-muted">
-            {appliedTargets.map(({ operation, target }) => <li key={`actual:${operation.id}:${target}`} className="rounded-[8px] bg-surface-soft/40 p-2"><span className="font-medium text-ink">{operation.kind}</span> · Target <span className="font-mono">{target}</span></li>)}
-            {proposedTargets.map(({ operation, target }) => <li key={`proposed:${operation.id}:${target}`} className="rounded-[8px] bg-warning/10 p-2"><span className="font-medium text-ink">{operation.kind}</span> · Proposed target <span className="font-mono">{target}</span></li>)}
-          </ul> : <p className="text-xs text-faint">No lifecycle relationships.</p>}
-          {actionableTargets.map(({ target, eventId, questionId }) => {
-            const related = [...appliedTargets, ...proposedTargets].filter((entry) => entry.target === target);
-            const evidenceCount = related.reduce((count, entry) => count + operationSources(entry.operation).length, 0);
-            return (
-              <div key={`actions:${target}`} className="rounded-[8px] border border-line-soft p-2.5 text-xs">
-                <div className="break-all font-mono text-ink">{target}</div>
-                <div className="mt-1 text-2xs text-faint">{related.length} relationship{related.length === 1 ? "" : "s"} · {evidenceCount} evidence reference{evidenceCount === 1 ? "" : "s"}</div>
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  <Button size="sm" variant="secondary" aria-label={`Correct record ${target}`} disabled={!onCorrect || !page.editable || navigationDisabled} onClick={() => onCorrect?.(target)}>Correct</Button>
-                  <Button size="sm" variant="danger" aria-label={`Forget record ${target}`} disabled={!onForget || navigationDisabled} onClick={() => { setActionError(null); setConfirmForget(target); }}>Forget</Button>
-                  <Button size="sm" variant="secondary" aria-label={`Dispute record ${target}`} disabled title="Dispute events are not supported by this ledger">Dispute</Button>
-                  <Button size="sm" variant="secondary" aria-label={`Archive record ${target}`} disabled title="Records have no archived state">Archive</Button>
-                </div>
-                {confirmForget === target && (
-                  <div role="alertdialog" aria-label={`Confirm forget ${target}`} className="mt-2 rounded-[7px] bg-bad-soft p-2.5">
-                    <strong className="text-ink">Forget {target}?</strong>
-                    <p className="mt-1 text-ink-soft">This appends a RETRACT event. It does not delete history.</p>
-                    <div className="mt-2 flex gap-1.5">
-                      <Button size="sm" variant="secondary" disabled={forgetting === target} onClick={() => setConfirmForget(null)}>Cancel</Button>
-                      <Button
-                        size="sm"
-                        variant="danger"
-                        aria-label={`Confirm forget ${target}`}
-                        disabled={forgetting === target}
-                        onClick={() => {
-                          if (!onForget) return;
-                          setForgetting(target);
-                          setActionError(null);
-                          void onForget(target, eventId, questionId)
-                            .then(() => setConfirmForget(null))
-                            .catch((reason) => setActionError(reason instanceof Error ? reason.message : String(reason)))
-                            .finally(() => setForgetting(null));
-                        }}
-                      >{forgetting === target ? "Forgetting…" : "Confirm forget"}</Button>
-                    </div>
-                  </div>
-                )}
+              <div className="mw-ctx-pane-head sub">
+                <h2>Linked mentions</h2>
+                <span className="mw-ctx-count">{links?.totalBacklinks ?? 0}</span>
               </div>
-            );
-          })}
-          {actionError && <ErrorText message={actionError} />}
-        </Section>
+              {backlinkGroups.length === 0 && <p className="mw-ctx-empty">No backlinks yet.</p>}
+              {backlinkGroups.map(([sourcePath, group]) => (
+                <div key={sourcePath} className="mw-bl-group">
+                  <button
+                    type="button"
+                    className="mw-bl-title"
+                    disabled={navigationDisabled}
+                    title={sourcePath}
+                    onClick={() => onNavigate(sourcePath, null)}
+                  >
+                    {titleForPath(sourcePath) ?? stem(sourcePath)}
+                  </button>
+                  {group.slice(0, 2).map((link, index) => (
+                    <p key={`${link.line}:${link.column}:${index}`} className="mw-bl-excerpt">
+                      {markFirst(cleanContext(link.context), link.display)}
+                    </p>
+                  ))}
+                </div>
+              ))}
 
-        <Section id="page-events" title="Page events">
-          {historyError && <ErrorText message={historyError} />}
-          {historyLoading && !history && <p role="status" className="text-xs text-muted">Loading page events…</p>}
-          {history && <>
-            <EventRows events={history.events} />
-            <p className="text-2xs text-faint">Showing {history.events.length} of {history.total} events</p>
-            {history.nextBeforeSequence != null && onLoadMoreHistory && <button type="button" aria-label="Load older page events" disabled={historyLoadingMore} onClick={onLoadMoreHistory} className="text-xs font-medium text-muted hover:text-ink disabled:opacity-50">{historyLoadingMore ? "Loading…" : "Load older events"}</button>}
-          </>}
-        </Section>
+              <div className="mw-ctx-pane-head sub">
+                <h2>Unlinked mentions</h2>
+                <span className="mw-ctx-count">{unlinked.length}</span>
+              </div>
+              {unlinked.length === 0 && <p className="mw-ctx-empty">None found.</p>}
+              {unlinked.map((mention, index) => (
+                <div key={`${mention.sourcePath}:${index}`} className="mw-bl-group">
+                  <button
+                    type="button"
+                    className="mw-bl-title"
+                    disabled={navigationDisabled}
+                    title={mention.sourcePath}
+                    onClick={() => onNavigate(mention.sourcePath, null)}
+                  >
+                    {titleForPath(mention.sourcePath) ?? stem(mention.sourcePath)}
+                  </button>
+                  <p className="mw-bl-excerpt">{markFirst(cleanContext(mention.context), pageStem)}</p>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
 
-        <Section id="pending-review" title="Pending review">
-          {history && (pending.length ? <ul className="grid gap-1.5">{pending.map(({ event, question }) => <li key={`${event.id}:${question.id}`} className="rounded-[8px] bg-warning/10 p-2.5 text-xs text-ink">{question.question}<div className="mt-1 font-mono text-faint">{event.id}</div></li>)}</ul> : <p className="text-xs text-faint">No pending questions.</p>)}
-        </Section>
-      </div>
-    </div>
+      {pane === "outline" && (
+        <div>
+          <div className="mw-ctx-pane-head">
+            <h2>Outline</h2>
+            <span className="mw-ctx-count">{headings.length}</span>
+          </div>
+          {headings.length === 0 && <p className="mw-ctx-empty">No headings.</p>}
+          {headings.map((heading, index) => (
+            <button
+              key={`${heading.text}:${index}`}
+              type="button"
+              className={`mw-outline-row${OUTLINE_LEVEL_CLASS[heading.level]}${index === activeHeading ? " active" : ""}`}
+              onClick={() => jumpToHeading(index)}
+            >
+              {heading.text}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {pane === "activity" && (
+        <div>
+          <div className="mw-ctx-pane-head">
+            <h2>Activity</h2>
+            <span className="mw-ctx-count">{history?.total ?? 0}</span>
+          </div>
+          {historyError ? (
+            <p role="alert" className="mw-ctx-empty">{historyError}</p>
+          ) : historyLoading && !history ? (
+            <p className="mw-ctx-empty">Loading…</p>
+          ) : events.length === 0 ? (
+            <p className="mw-ctx-empty">No edits recorded.</p>
+          ) : (
+            <>
+              <div className="mw-recs">
+                {visibleEvents.map((event, index) => {
+                  const at = event.occurredAt.slice(0, 16).replace("T", " ");
+                  return (
+                    <div key={event.id} className={index === 0 ? "mw-rec accent" : "mw-rec"}>
+                      <span className="dot" />
+                      <button
+                        type="button"
+                        title={`${at} — show diff`}
+                        onClick={() => setDiffEvent(event)}
+                      >
+                        <div className="when">
+                          <span>{at.slice(5)}</span>
+                          <span className="actor">{event.actor}</span>
+                          <span className="stat">{patchStat(event.patch)}</span>
+                        </div>
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+              {events.length > ACTIVITY_PREVIEW && (
+                <button
+                  type="button"
+                  className="mw-recs-more"
+                  onClick={() => setActivityExpanded((expanded) => !expanded)}
+                >
+                  {activityExpanded ? "Show fewer" : `All ${history?.total ?? events.length} events ›`}
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {diffEvent && (
+        <MemoryDiffOverlay event={diffEvent} path={page.path} onClose={() => setDiffEvent(null)} />
+      )}
+    </>
   );
 }

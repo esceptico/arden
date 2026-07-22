@@ -57,7 +57,11 @@ class SearchIndex:
         if await self.store.exists_with_hash(source, source_id, content_hash):
             return False
 
-        embedding = await self.embedder.embed_one(f"{title}\n{content}")
+        try:
+            embedding = await self.embedder.embed_one(f"{title}\n{content}")
+        except Exception as exc:
+            _logger.warning("semantic index embedding failed; skipping update", error=str(exc))
+            return False
         embedding_bytes = serialize_embedding(embedding)
 
         return await self.store.upsert(source, source_id, title, content, embedding_bytes, metadata)
@@ -101,7 +105,11 @@ class SearchIndex:
             batch = items_to_embed[batch_start : batch_start + batch_size]
 
             texts = [f"{item.title}\n{item.content}" for item in batch]
-            embeddings = await self.embedder.embed(texts)
+            try:
+                embeddings = await self.embedder.embed(texts)
+            except Exception as exc:
+                _logger.warning("semantic index batch embedding failed; skipping batch", error=str(exc), size=len(batch))
+                continue
 
             for item, embedding in zip(batch, embeddings):
                 embedding_bytes = serialize_embedding(embedding)

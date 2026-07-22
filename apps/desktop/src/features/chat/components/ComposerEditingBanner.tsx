@@ -1,5 +1,5 @@
 import { motion } from "motion/react";
-import { X } from "lucide-react";
+import { X } from "@/components/icons";
 import { Button } from "@/components/ui/Button";
 import { RISE_IN, RISE_SETTLED } from "@/lib/tokens/motion";
 import { SECTION_ENTER, SECTION_EXIT } from "@/features/chat/lib/composerMotion";

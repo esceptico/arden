@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { Plus, X } from "lucide-react";
+import { Plus, X } from "@/components/icons";
 import type { AreaSuggestion, AreaSummary } from "@/api/areas";
 import { useStore } from "@/stores";
 import { dismissAreaSuggestion, promoteSuggestedArea } from "@/actions/areas";

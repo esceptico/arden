@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Chat C — Ledger</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..700&family=Geist+Mono:wght@400..600&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   CONCEPT C — LEDGER
+   The session is a recording, hung on a time ruler. A hairline
+   rail on the left carries graduation ticks and mono timestamps;
+   every event — words, tools, asks — is an entry at its moment.
+   The instrument-graphics candidate (lifeline) applied to chat:
+   precision in the statics, prose still fully readable.
+   ============================================================ */
+:root{
+  color-scheme:light dark;
+  --paper:#fff;--line:#ececec;--line-strong:#dedede;
+  --ink:#171717;--ink-soft:#3d3d3d;--muted:#666;--faint:#767676;
+  --wash:#f7f7f5;
+  --hov:color-mix(in oklab,var(--ink) 4%,transparent);
+  --accent:#4f46e5;
+  --sans:"Geist",-apple-system,sans-serif;--mono:"Geist Mono",ui-monospace,monospace;
+  --ease:cubic-bezier(.22,1,.36,1);
+}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --paper:#191919;--line:#262626;--line-strong:#303030;
+  --ink:#ededed;--ink-soft:#c8c8c8;--muted:#9c9c9c;--faint:#8a8a8a;
+  --wash:#1e1e1e;--accent:#818cf8;
+}}
+:root[data-theme="dark"]{color-scheme:dark;
+  --paper:#191919;--line:#262626;--line-strong:#303030;
+  --ink:#ededed;--ink-soft:#c8c8c8;--muted:#9c9c9c;--faint:#8a8a8a;
+  --wash:#1e1e1e;--accent:#818cf8;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{font-family:var(--sans);font-size:14px;background:var(--paper);color:var(--ink);-webkit-font-smoothing:antialiased}
+button{font:inherit;border:0;background:none;color:inherit;cursor:default;padding:0}
+button:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+.frame{height:100%;display:flex;flex-direction:column}
+.scroll{flex:1;overflow-y:auto}
+.tape{max-width:760px;margin:0 auto;padding:40px 32px 48px}
+
+.head{display:flex;align-items:baseline;gap:10px;margin:0 0 36px 96px}
+.head h1{margin:0;font-size:14px;font-weight:600;letter-spacing:-.01em}
+.head time{font:500 10.5px/1 var(--mono);color:var(--faint)}
+.head .theme{margin-left:auto;font:500 10.5px/1 var(--mono);color:var(--faint)}
+.head .theme:hover{color:var(--ink)}
+
+/* — The ruler — */
+/* Entries are grid rows: [timestamp 64px][rail 32px][content].
+   The rail is a continuous dotted line (texture, not ticks);
+   real ticks exist only where an entry anchors. */
+.entry{display:grid;grid-template-columns:64px 32px minmax(0,1fr);align-items:start}
+.entry .when{padding-top:2px;font:500 10.5px/1 var(--mono);color:var(--faint);
+  text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.entry .rail{position:relative;align-self:stretch;min-height:100%}
+.entry .rail::before{content:"";position:absolute;left:15px;top:0;bottom:0;width:1px;
+  background-image:linear-gradient(to bottom,var(--line-strong) 1px,transparent 1px);
+  background-size:1px 5px}
+.entry .rail::after{content:"";position:absolute;left:11px;top:6px;width:9px;height:1px;background:var(--faint)}
+.entry.mark-you .rail::after{width:13px;left:9px;height:1.5px;background:var(--ink)}
+.entry.mark-none .rail::after{display:none}
+.entry:last-child .rail::before{bottom:auto;height:14px}
+
+.entry .body{min-width:0;padding:0 0 26px 16px}
+
+/* You: heavier ink, small mono attribution set off the ruler. */
+.entry.mark-you .body .who{font:500 10.5px/1 var(--mono);color:var(--faint);margin-bottom:5px;display:block}
+.you-text{margin:0;font-size:14px;line-height:1.55;font-weight:560;letter-spacing:-.004em;text-wrap:pretty}
+
+/* Agent prose: same reading text as everywhere. */
+.agent{font-size:14px;line-height:1.7;color:var(--ink-soft)}
+.agent p{margin:0 0 13px;text-wrap:pretty}
+.agent p:last-child{margin-bottom:0}
+.agent strong{color:var(--ink);font-weight:600}
+.agent ul{margin:0 0 13px;padding-left:19px}
+.agent li{margin:4px 0}
+.agent li::marker{color:var(--faint)}
+.agent code{font:500 12.5px var(--mono);background:var(--wash);padding:1px 5px;border-radius:4px;color:var(--ink)}
+
+/* Tool events: pure ledger lines. Verb · object · reading. */
+.op{display:flex;align-items:baseline;gap:10px;font:500 11.5px/1.5 var(--mono);color:var(--muted);
+  white-space:nowrap;overflow:hidden}
+.op .obj{overflow:hidden;text-overflow:ellipsis}
+.op .out{margin-left:auto;flex:none;color:var(--faint)}
+.op+.op{margin-top:2px}
+.entry.dense .body{padding-bottom:8px}
+.entry.dense:has(+ .entry:not(.dense)) .body{padding-bottom:26px}
+.op.sub{padding-left:14px}
+
+/* Live entry: reading in progress. */
+.op.live{color:var(--ink-soft)}
+.op.live .out{color:var(--muted)}
+.pulse{animation:breathe 2s var(--ease) infinite}
+@keyframes breathe{0%,100%{opacity:.45}50%{opacity:1}}
+
+/* Ask: a held entry — the ruler tick doubles, entry indents. */
+.entry.ask .rail::after{height:1.5px;background:var(--ink);box-shadow:0 4px 0 var(--ink)}
+.ask-body b{display:block;font-size:13px;font-weight:600}
+.ask-body>p{margin:4px 0 0;font-size:12.5px;line-height:1.5;color:var(--muted)}
+.ask-body .cmd{margin:9px 0 0;max-width:540px;font:400 12.5px/1.6 var(--sans);color:var(--ink-soft);background:var(--wash);
+  padding:9px 11px;border-radius:6px}
+.ask-actions{display:flex;gap:6px;margin-top:10px}
+.ask-actions button{height:26px;padding:0 11px;border-radius:6px;font-size:12px;font-weight:530;
+  color:var(--muted);box-shadow:inset 0 0 0 1px var(--line-strong);transition:all .15s var(--ease)}
+.ask-actions button:hover{color:var(--ink);background:var(--hov)}
+.ask-actions .go{background:var(--ink);color:var(--paper);box-shadow:none}
+
+/* Composer: the next entry. Timestamp slot shows "now". */
+.foot{flex:none;padding:0 32px 16px}
+.composer{max-width:760px;margin:0 auto;display:grid;grid-template-columns:64px 32px minmax(0,1fr)}
+.composer .when{padding-top:16px;font:500 10.5px/1 var(--mono);color:var(--faint);text-align:right}
+.composer .rail{position:relative}
+.composer .rail::after{content:"";position:absolute;left:9px;top:20px;width:13px;height:1.5px;background:var(--ink)}
+.composer-inner{border-top:1px solid var(--line-strong);padding:13px 0 4px 16px}
+.composer textarea{width:100%;border:0;outline:none;resize:none;background:none;color:var(--ink);
+  font:400 14px/1.55 var(--sans);height:40px;padding:0}
+.composer textarea::placeholder{color:var(--faint)}
+.composer-row{display:flex;align-items:center;margin-top:2px}
+.composer-row .hint{font:500 10.5px/1 var(--mono);color:var(--faint)}
+.composer-row .model{margin-left:auto;font:500 10.5px/1 var(--mono);color:var(--faint)}
+.composer-row .model:hover{color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="frame">
+  <div class="scroll"><main class="tape">
+
+    <header class="head">
+      <h1>Week triage</h1>
+      <time>thu · session 09:41–09:45</time>
+      <button class="theme" onclick="const r=document.documentElement;r.dataset.theme=r.dataset.theme==='dark'?'light':'dark'">theme</button>
+    </header>
+
+    <div class="entry mark-you">
+      <span class="when">09:41:07</span><span class="rail"></span>
+      <div class="body">
+        <span class="who">you</span>
+        <p class="you-text">What's on my plate this week? Check calendar and mail, and cross-check with what I promised people.</p>
+      </div>
+    </div>
+
+    <div class="entry dense">
+      <span class="when">09:41:09</span><span class="rail"></span>
+      <div class="body">
+        <div class="op"><span>read</span><span class="obj">calendar.list wk29</span><span class="out">14 events</span></div>
+        <div class="op"><span>read</span><span class="obj">email.search unread|flagged</span><span class="out">31 threads</span></div>
+        <div class="op"><span>read</span><span class="obj">memory.recall commitments</span><span class="out">4 facts</span></div>
+      </div>
+    </div>
+    <div class="entry dense">
+      <span class="when">09:41:31</span><span class="rail"></span>
+      <div class="body">
+        <div class="op sub"><span>agent</span><span class="obj">scout · read 8 long threads</span><span class="out">8s</span></div>
+        <div class="op"><span>read</span><span class="obj">email.thread anna, sergey</span><span class="out">ok</span></div>
+      </div>
+    </div>
+
+    <div class="entry">
+      <span class="when">09:41:52</span><span class="rail"></span>
+      <div class="body agent">
+        <p>Three things actually need you this week; the rest is noise I can hold.</p>
+        <ul>
+          <li><strong>The Q3 report to Anna</strong> — you told her "end of last week". Oldest open loop; she nudged again yesterday.</li>
+          <li><strong>Thursday's design review</strong> — 6 attendees, no agenda yet. You own it.</li>
+          <li><strong>Sergey's contract question</strong> — a two-line answer, and he's been blocked on you since Monday.</li>
+        </ul>
+        <p>Calendar is quiet otherwise: 14 events, only the review needs prep. Of 31 unread threads, 26 are newsletters or FYI — I can archive them. Your standing note says <code>report &gt; meetings</code> when they collide.</p>
+      </div>
+    </div>
+
+    <div class="entry mark-you">
+      <span class="when">09:44:18</span><span class="rail"></span>
+      <div class="body">
+        <span class="who">you</span>
+        <p class="you-text">Draft a reply to Anna — honest about the delay, report lands Wednesday.</p>
+      </div>
+    </div>
+
+    <div class="entry dense">
+      <span class="when">09:44:20</span><span class="rail"></span>
+      <div class="body">
+        <div class="op"><span>read</span><span class="obj">email.thread anna</span><span class="out">ok</span></div>
+        <div class="op live"><span class="pulse">draft</span><span class="obj">matching tone · last 3 replies</span><span class="out">…</span></div>
+      </div>
+    </div>
+
+    <div class="entry ask">
+      <span class="when">09:44:41</span><span class="rail"></span>
+      <div class="body ask-body">
+        <b>Send mail to Anna Kovaleva?</b>
+        <p>Replies in-thread to "Q3 report?" · your work account</p>
+        <div class="cmd">Anna — the report slipped, that's on me. It lands Wednesday with the retention numbers you asked about. If Wednesday breaks anything on your side, tell me and I'll send the raw tables today.</div>
+        <div class="ask-actions">
+          <button class="go">Send</button>
+          <button>Edit</button>
+          <button>Skip</button>
+        </div>
+      </div>
+    </div>
+
+  </main></div>
+
+  <footer class="foot"><div class="composer">
+    <span class="when">now</span><span class="rail"></span>
+    <div class="composer-inner">
+      <textarea placeholder="Write the next entry…"></textarea>
+      <div class="composer-row">
+        <span class="hint">⏎ send · ⇧⏎ newline</span>
+        <button class="model">sonnet-5 · high</button>
+      </div>
+    </div>
+  </div></footer>
+</div>
+</body>
+</html>

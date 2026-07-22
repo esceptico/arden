@@ -1,4 +1,4 @@
-import { Database, Pin, Search } from "lucide-react";
+import { Database, Pin, Search } from "@/components/icons";
 import { AnimatePresence, motion } from "motion/react";
 import clsx from "clsx";
 import { IconButton } from "@/components/ui/IconButton";
@@ -53,7 +53,7 @@ export function RecordListPane({
         empty={query.trim() ? "No records match your search" : "No memory records yet"}
         emptyIcon={query.trim() ? Search : Database}
         emptyAction={query.trim() ? <GhostBtn onClick={() => onQueryChange("")}>Clear search</GhostBtn> : undefined}
-        totalLabel={records.length ? `${records.length} records` : null}
+        totalLabel={null}
         wrapItems={(children) => <AnimatePresence initial={false}>{children}</AnimatePresence>}
         renderItem={(record) => (
           <motion.li
@@ -68,7 +68,7 @@ export function RecordListPane({
             <button
               type="button"
               onClick={() => onSelectRecord(record.id)}
-              className="app-row w-full rounded-[10px] p-2 pr-7 text-left"
+              className="app-row w-full rounded-lg p-2 pr-7 text-left"
               data-active={selectedRecordId === record.id}
             >
               <div className="line-clamp-2 text-sm text-ink">{record.content}</div>
@@ -100,7 +100,7 @@ export function RecordListPane({
               onClick={() => onTogglePinned(record)}
               className={clsx("absolute right-1 top-1 focus-visible:opacity-100", record.pinned ? "opacity-100" : "opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100")}
             >
-              <Pin className="h-3.5 w-3.5" fill={record.pinned ? "currentColor" : "none"} strokeWidth={2} />
+              <Pin className="h-3.5 w-3.5" />
             </IconButton>
           </motion.li>
         )}

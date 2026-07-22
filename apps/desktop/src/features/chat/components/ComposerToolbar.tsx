@@ -1,15 +1,13 @@
-import { AnimatePresence, motion } from "motion/react";
-import { ArrowUp, ImagePlus, ShieldOff, ShieldCheck, Square } from "lucide-react";
+import { ArrowUp, ImagePlus, ShieldOff, ShieldCheck, Stop } from "@/components/icons";
 import clsx from "clsx";
 import { Chip } from "@/components/ui/Chip";
-import { BlurSwap } from "@/components/ui/BlurSwap";
+import { IconSwap } from "@/components/ui/IconSwap";
 import { ModelReasoningChip } from "@/components/ui/ComposerSelectors";
 import { IconButton } from "@/components/ui/IconButton";
 import { GoalStatusBar } from "@/features/chat/components/GoalStrip";
 import { LoopStatusBar } from "@/features/chat/components/LoopStatus";
 import { BudgetDial } from "@/features/chat/components/BudgetDial";
 import { ICON } from "@/lib/icons";
-import { EASE_OUT, MOTION } from "@/lib/tokens/motion";
 
 export function ComposerToolbar({
   onAttach,
@@ -43,9 +41,11 @@ export function ComposerToolbar({
         active={skipApprovals}
         tone="accent"
         leading={
-          <BlurSwap swapKey={skipApprovals ? "auto" : "approve"}>
-            {skipApprovals ? <ShieldOff size={ICON.SM} strokeWidth={2} /> : <ShieldCheck size={ICON.SM} strokeWidth={2} />}
-          </BlurSwap>
+          <IconSwap
+            state={skipApprovals ? "b" : "a"}
+            iconA={<ShieldCheck size={ICON.SM} strokeWidth={2} />}
+            iconB={<ShieldOff size={ICON.SM} strokeWidth={2} />}
+          />
         }
         onClick={onToggleAuto}
         title={skipApprovals ? "Auto-approving every tool call. Click to require approval." : "Approvals required for sensitive tools. Click to enable Auto mode."}
@@ -58,8 +58,8 @@ export function ComposerToolbar({
       <span className="flex-1" />
       <BudgetDial />
       <ModelReasoningChip />
-      {/* One persistent button so the glyph genuinely swaps (rotate+fade)
-          between send and stop instead of the button remounting. */}
+      {/* One persistent button; the shared icon primitive keeps both glyphs
+          mounted and changes only their visual state. */}
       <button
         type={running ? "button" : "submit"}
         onClick={running ? onStop : undefined}
@@ -74,22 +74,11 @@ export function ComposerToolbar({
           sendPressing && "scale-[0.97]",
         )}
       >
-        <AnimatePresence initial={false}>
-          <motion.span
-            key={running ? "stop" : "send"}
-            className="col-start-1 row-start-1 grid place-items-center"
-            initial={{ opacity: 0, rotate: -18, scale: 0.92, filter: "blur(4px)" }}
-            animate={{ opacity: 1, rotate: 0, scale: 1, filter: "blur(0px)" }}
-            exit={{ opacity: 0, rotate: 18, scale: 0.92, filter: "blur(4px)" }}
-            transition={{ duration: MOTION.palette, ease: EASE_OUT }}
-          >
-            {running ? (
-              <Square size={ICON.SM} strokeWidth={0} fill="currentColor" />
-            ) : (
-              <ArrowUp size={ICON.LG} strokeWidth={2.4} />
-            )}
-          </motion.span>
-        </AnimatePresence>
+        <IconSwap
+          state={running ? "b" : "a"}
+          iconA={<ArrowUp size={ICON.LG} strokeWidth={2.4} />}
+          iconB={<Stop size={ICON.SM} />}
+        />
       </button>
     </div>
   );

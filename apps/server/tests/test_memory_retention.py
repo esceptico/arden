@@ -73,16 +73,3 @@ async def test_v2_retention_appends_sourced_retract_and_is_idempotent(tmp_path: 
     await reopened.open()
     assert await reopened.get(old.id) is None
     await reopened.close()
-
-
-async def test_legacy_retention_keeps_existing_mutation_behavior(tmp_path: Path):
-    store = FilePageStore(tmp_path / "memory")
-    await store.open()
-    old_date = (datetime.now(UTC) - timedelta(days=800)).date().isoformat()
-    record = await store.add("Old fact", date=old_date)
-
-    report = await run_retention(store)
-
-    assert report.superseded == 1
-    assert store._find(record.id)[1].superseded is True
-    await store.close()

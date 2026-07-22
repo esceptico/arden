@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import clsx from "clsx";
-import { X } from "lucide-react";
+import { X } from "@/components/icons";
 import { useStore } from "@/stores";
 import type { Automation, AutomationSuggestion } from "@/api/types";
 import { dismissSuggestion } from "@/actions/automations";

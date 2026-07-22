@@ -43,6 +43,7 @@ from ntrp.memory.pages import Line, Page, merge_split, parse_page, render_page, 
 from ntrp.memory.reconciler import RecordOperation, validate_operations
 from ntrp.memory.scorer import salience
 from ntrp.search.retrieval import rrf_merge
+from ntrp.search.store import SearchStore
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -55,8 +56,6 @@ _REFERENCES = "references.md"
 _ME = "me.md"
 _LESSONS = "lessons.md"  # continual-learning playbook (distilled lesson records)
 _ENTITIES = "topics"  # one folder for every emergent subject (people/products/projects/topics)
-_LEGACY_SUBJECT_DIRS = ("entities", "projects")  # folded into topics/ at open() (migration)
-_OBSERVATIONS = "observations"  # RETIRED raw integration streams — folded away at open() (feeds/ replaced them)
 _RAW = "raw"  # machine layer: per-page record timelines (raw/<page-path>.md sidecars)
 _INSIGHTS = "insights"  # cross-domain DREAM outputs (OKF insights/), kept out of facts/entities
 _GENERATED_FILES = {"index.md", "AGENTS.md", "health.md"}  # generated reports, not record pages
@@ -85,19 +84,18 @@ truth (no DB). An agent reads it to understand the user and act on their behalf.
 Each visible page is **compiled prose** — the current, human-readable briefing.
 Its append-only **timeline** of atomic records lives in `raw/<same-path>.md`:
 
-    - 2026-06-21 ^a1b2c3d4 [fact] [imp:6] (src:curator) Tim rides a gravel bike.
+    - 2026-06-21 ^a1b2c3d4 [fact] [imp:6] Tim rides a gravel bike.
+      <!-- ntrp:meta {"recorded_at":"...","sequence":1,"time_precision":"day","scope":{"kind":"user"},"sources":[...]} -->
 
-A timeline line is the canonical record. Tags: `[pin]` (never dropped),
-`[imp:1-10]` (poignancy), `[ent:slug]` (primary entity), `[superseded]`.
-`(src:…)` is provenance. Never edit `raw/` by hand — it is machine-owned;
-pages are compiled from it.
+A readable line plus its metadata comment is one canonical record. Tags: `[pin]`
+(never dropped), `[imp:1-10]` (poignancy), and `[ent:slug]` (subject).
+Lifecycle and provenance live in the metadata. Never edit `raw/` by hand.
 
 ## Record kinds (by FUNCTION, not subject)
 - `directive` — a standing behaviour rule the USER stated.
 - `fact` — a stable, durable truth about the user or their world.
 - `source` — a re-findable pointer (receipt), evidence for a fact.
 - `lesson` — a working-pattern the agent DISTILLED (the continual-learning playbook).
-- `changelog` — housekeeping; ignore for synthesis.
 
 ## Layout
 - `me.md` — the user's profile (root of the wiki).
@@ -134,10 +132,9 @@ Cite only real record ids you were given — never invent, reformat, or guess on
 only what the cited records support; bring in no outside knowledge. On conflict between
 records: directive > fact > source. Pinned records are never dropped; changelog records
 are ignored for synthesis. Never leak a record id or file path into user-facing prose.
-Cite dialects: synthesis passes emit `(record:<8hex>)`, which the store verifies and
-then renders as a readable source tag — `(from chat)`, `(from gmail)`, `(inferred)` —
-keeping the verified id list in the page's raw sidecar (`prose_cites`); dream insights
-write `(because of ^id1, ^id2)`.
+Synthesis emits `(record:<8hex>)`; the store verifies it and renders a readable
+source tag while retaining the verified ids in raw frontmatter (`prose_cites`).
+Dream insights cite cross-domain evidence as `(because of ^id1, ^id2)`.
 
 ## Authoring
 Re-read a page before editing it. Update prose IN PLACE — don't append corrections as new
@@ -254,7 +251,7 @@ class FilePageStore:
         return self._journal.canonical_revision
 
     def vault_health(self):
-        from ntrp.memory.migrate_ledger_v2 import validate_vault
+        from ntrp.memory.health import validate_vault
 
         return validate_vault(self._root)
 
@@ -266,28 +263,10 @@ class FilePageStore:
         if stat.S_ISLNK(root_st.st_mode) or not stat.S_ISDIR(root_st.st_mode):
             raise NotADirectoryError(str(self._root))
         self._load_canonical_pages()
-        if self._ledger_mode():
-            self._active_ledger_entries()  # validate identity + relationship targets before serving reads
-            self._write_conventions()
-            self._file_state = self._scan_files()
-            self._load_or_initialize_observed_pages()
-            await self._sync_index()
-            return
-        self._migrate_insights()  # relocate pre-insights/ dream records (one-time, idempotent)
-        self._retire_observations()  # drop the retired raw integration streams (feeds/ replaced them)
-        self._migrate_to_topics()  # fold entities/+projects/ into one topics/ folder (idempotent)
-        self._heal_structural_pages()  # repair cross-contaminated identity + canonical titles
-        self._backfill_entities()
-        from ntrp.memory.synthesize import _rename_project_pages
-
-        _rename_project_pages(self)  # opaque scope-id -> human name, so a renamed project doesn't split
-        stats = await self.reconcile_entities()
-        self._write_conventions()  # AGENTS.md (OKF conventions) — static, once
-        self._write_health()       # health.md (self-audit / surfaced gaps) — deterministic
-        self._write_index()        # index.md — one line of meaning per page (navigate by index)
-        self._file_state = self._scan_files()  # live-vault baseline (post-migration state)
+        self._active_ledger_entries()
+        self._write_conventions()
+        self._file_state = self._scan_files()
         self._load_or_initialize_observed_pages()
-        _logger.info("file memory ready", pages=len(self._pages), lines=len(self._loc), root=str(self._root), **stats)
         await self._sync_index()
 
     async def close(self) -> None:
@@ -381,7 +360,7 @@ class FilePageStore:
         return self._walk_regular_files(
             self._root / _RAW,
             suffixes={".md"},
-            excluded_dirs={*_INTERNAL_DIRS, _RAW},
+            excluded_dirs={*_INTERNAL_DIRS, _RAW, "events"},
         )
 
     def _load_canonical_pages(self) -> None:
@@ -678,11 +657,27 @@ class FilePageStore:
         return False
 
     def _observed_page_changes(self) -> list[ObservedFileChange]:
+        from ntrp.memory.artifacts import artifact_is_editable
+
         state = self._read_observed_state()
         pages: dict[str, str] = state["pages"]
         current = self._editable_page_bytes()
         changes: list[ObservedFileChange] = []
         state_changed = False
+        for path, revision in tuple(pages.items()):
+            base = self._read_observed_file(_OBSERVED_BASES / revision)
+            try:
+                editable = base is None or artifact_is_editable(path, base.decode("utf-8"))
+            except UnicodeDecodeError:
+                editable = True
+            if editable:
+                continue
+            pages.pop(path, None)
+            state["pending_changes"].pop(path, None)
+            state["engine_writes"] = [
+                marker for marker in state["engine_writes"] if marker.get("path") != path
+            ]
+            state_changed = True
         marker_paths = {
             marker["path"]
             for marker in state["engine_writes"]
@@ -980,13 +975,17 @@ class FilePageStore:
             for stale in set(indexed) - set(active):
                 await index.delete(_MEMORY_LINE_SOURCE, stale)
             for line in active.values():
-                await index.upsert(
+                stored = indexed.get(line.id)
+                if stored is not None and stored[1] == SearchStore.hash_content(line.text):
+                    continue
+                if not await index.upsert(
                     source=_MEMORY_LINE_SOURCE,
                     source_id=line.id,
                     title=f"{line.kind} line",
                     content=line.text,
                     metadata={"record_id": line.id, "kind": line.kind},
-                )
+                ):
+                    break
         except Exception:
             _logger.warning("memory_line index sync failed", exc_info=True)
 
@@ -1022,17 +1021,7 @@ class FilePageStore:
                 return rid
 
     def _ledger_mode(self) -> bool:
-        if any(page.records_header is not None for page in self._pages.values()):
-            return True
-        marker = self._root / ".ntrp" / "maintenance" / "migration-v2.json"
-        try:
-            marker_st = marker.lstat()
-            if stat.S_ISLNK(marker_st.st_mode) or not stat.S_ISREG(marker_st.st_mode):
-                return False
-            data = json.loads(marker.read_text(encoding="utf-8"))
-        except (FileNotFoundError, OSError, UnicodeDecodeError, json.JSONDecodeError):
-            return False
-        return isinstance(data, dict) and data.get("schema_version") == 2
+        return True
 
     def _ledger_entries(self) -> tuple[LedgerEntry, ...]:
         return tuple(
@@ -1073,55 +1062,27 @@ class FilePageStore:
     def _meta_labels(self, path: Path) -> list[str]:
         return list(self._pages[path].frontmatter.get("meta_labels", [])) if path in self._pages else []
 
-    def _legacy_scope_for(self, path: Path, kind: str) -> tuple[str | None, str | None]:
-        # Scope is a property of the page (frontmatter scope_key), not its folder — a
-        # project page and an emergent topic both live in topics/; only the scope_key
-        # tells them apart. This keeps active-work's project view working after the
-        # entities/+projects/ folders were unified.
-        page = self._pages.get(path)
-        key = page.frontmatter.get("scope_key") if page else None
-        if key:
-            return ("area", str(key))
-        if kind in (Kind.DIRECTIVE, Kind.LESSON):
-            return ("global", None)  # behaviour rules + distilled playbook apply everywhere
-        return ("user", None)
-
-    def _to_record(self, line: Line | LedgerEntry, path: Path) -> Record:
-        if isinstance(line, LedgerEntry):
-            successor = next(
-                (
-                    str(entry.meta.successor_id or entry.id)
-                    for entry in self._ledger_entries()
-                    if line.id in entry.meta.supersedes
-                ),
-                None,
-            )
-            return Record(
-                id=line.id,
-                text=line.text,
-                kind=line.kind,
-                scope_kind=line.meta.scope_kind,
-                scope_key=line.meta.scope_key,
-                created_at=line.occurred_at or line.meta.recorded_at,
-                last_confirmed_at=line.meta.recorded_at,
-                superseded_by=successor,
-                pinned=line.pinned,
-                source_ref=(line.meta.sources[0] if line.meta.sources else None),
-                sources=line.meta.sources,
-                imp=line.imp,
-            )
-        scope_kind, scope_key = self._legacy_scope_for(path, line.kind)
+    def _to_record(self, line: LedgerEntry, path: Path) -> Record:
+        successor = next(
+            (
+                str(entry.meta.successor_id or entry.id)
+                for entry in self._ledger_entries()
+                if line.id in entry.meta.supersedes
+            ),
+            None,
+        )
         return Record(
             id=line.id,
             text=line.text,
             kind=line.kind,
-            scope_kind=scope_kind,
-            scope_key=scope_key,
-            created_at=_iso(line.date),
-            last_confirmed_at=_iso(line.date),
-            superseded_by=("superseded" if line.superseded else None),
+            scope_kind=line.meta.scope_kind,
+            scope_key=line.meta.scope_key,
+            created_at=line.occurred_at or line.meta.recorded_at,
+            last_confirmed_at=line.meta.recorded_at,
+            superseded_by=successor,
             pinned=line.pinned,
-            source_ref=SourceRef(kind=line.src, ref=line.id),
+            source_ref=(line.meta.sources[0] if line.meta.sources else None),
+            sources=line.meta.sources,
             imp=line.imp,
         )
 
@@ -1137,19 +1098,19 @@ class FilePageStore:
             return self._root / _DIRECTIVES
         if kind == Kind.LESSON:
             return self._root / _LESSONS
-        if scope_kind in ("area", "project") and scope_key:
+        if scope_kind == "area" and scope_key:
             return self._root / _ENTITIES / f"{_slug(self._project_names.get(scope_key, scope_key))}.md"
         if kind == Kind.SOURCE:
             return self._root / _REFERENCES
         return self._root / _ME
 
-    def _park_path(self, line: Line) -> Path:
+    def _park_path(self, line: LedgerEntry) -> Path:
         """Where a sub-threshold entity record lives: its kind-appropriate generic
         page (references for source pointers, me.md otherwise)."""
         return self._root / (_REFERENCES if line.kind == Kind.SOURCE else _ME)
 
-    def _entity_members(self, slug: str) -> list[tuple[Path, Line]]:
-        return [(p, ln) for p, page in self._pages.items() for ln in page.lines if ln.entity == slug]
+    def _entity_members(self, slug: str) -> list[tuple[Path, LedgerEntry]]:
+        return [(p, ln) for p, page in self._pages.items() for ln in page.lines if slug in ln.entity]
 
     def _entity_display(self, slug: str) -> str:
         """Human label for a slug: the entity page's title when one exists, else a
@@ -1184,7 +1145,8 @@ class FilePageStore:
         # A project page (frontmatter scope_key) is a real workstream — its lifecycle
         # follows the project, not the entity-tag count, so it is never demoted/parked.
         is_project = existing is not None and bool(existing.frontmatter.get("scope_key"))
-        promoted = is_project or sum(1 for _, ln in members if not ln.superseded) >= MEMORY_MIN_ENTITY_RECORDS
+        active_ids = {entry.id for entry in self._active_ledger_entries()}
+        promoted = is_project or sum(1 for _, ln in members if ln.id in active_ids) >= MEMORY_MIN_ENTITY_RECORDS
         touched: set[Path] = set()
         for path, line in members:
             dest = entity_page if promoted else self._park_path(line)
@@ -1223,7 +1185,7 @@ class FilePageStore:
         so a supersede that thins a page folds it back the same night. Sweeps both
         the slugs carried by lines AND existing entity-page files, so a page emptied
         by delete/prune/wipe (no tagged line left to name it) still gets reclaimed."""
-        tagged = {ln.entity for page in self._pages.values() for ln in page.lines if ln.entity}
+        tagged = {slug for page in self._pages.values() for ln in page.lines for slug in ln.entity}
         files = {p.stem for p in self._pages if p.parent.name == _ENTITIES and p.name not in ("index.md", "needs-triage.md")}
         slugs = sorted(tagged | files)
         existed = {s for s in slugs if self._entity_path(s) in self._pages}
@@ -1263,108 +1225,6 @@ class FilePageStore:
                 elif not needs_alias and aliases == [title]:
                     # redundant auto-alias (e.g. "Dex" on dex.md) — Obsidian resolves it already; drop the noise
                     del page.frontmatter["aliases"]
-                    changed = True
-            if changed:
-                self._persist(path)
-
-    def _migrate_to_topics(self) -> None:
-        """Fold the legacy entities/ + projects/ folders into one topics/ folder.
-        The split was incoherent: projects/ pages existed only when a CHAT was tagged
-        to a project workspace, while entities/ emerged from labels — so the same
-        subject (e.g. Dex) landed in BOTH, and real workstreams (e.g. MATS) hid under
-        entities/. A subject now has exactly one topics/<slug>.md; scope lives in
-        frontmatter (scope_key), not the folder. Idempotent: a no-op once migrated."""
-        legacy = [p for p in list(self._pages.keys()) if p.parent.name in _LEGACY_SUBJECT_DIRS]
-        for src in legacy:
-            page = self._pages[src]
-            target = self._root / _ENTITIES / src.name
-            if target == src:
-                continue
-            existing = self._pages.get(target)
-            if existing is None:  # reparent
-                self._pages[target] = page
-                del self._pages[src]
-                for ln in page.lines:
-                    self._loc[ln.id] = target
-                page.frontmatter["type"] = "project" if page.frontmatter.get("scope_key") else "topic"
-                self._persist(target)
-            else:  # collision (e.g. Dex as both entity + project) — merge onto one page
-                existing.lines.extend(page.lines)
-                for ln in page.lines:
-                    self._loc[ln.id] = target
-                for key in ("scope_key", "title", "aliases", "entity_labels", "meta_labels"):
-                    if key not in existing.frontmatter and key in page.frontmatter:
-                        existing.frontmatter[key] = page.frontmatter[key]
-                existing.frontmatter["type"] = "project" if existing.frontmatter.get("scope_key") else "topic"
-                del self._pages[src]
-                self._persist(target)
-            self._remove_page_files(src)
-        for name in _LEGACY_SUBJECT_DIRS:  # drop the now-empty legacy folders
-            d = self._root / name
-            if d.is_dir() and not any(d.iterdir()):
-                try:
-                    d.rmdir()
-                except OSError:
-                    pass
-
-    def _retire_observations(self) -> None:
-        """One-time/idempotent: the raw per-source integration streams
-        (observations/<source>.md) are retired — targeted feed automations (feeds/)
-        replaced them. Their records were 90d-TTL noise by design; drop the pages,
-        their raw/ sidecars, and the records outright. Dream insights that cited
-        them lose those cites via the synthesis dangling-cite pass."""
-        pages = [p for p in list(self._pages.keys()) if p.parent.name == _OBSERVATIONS]
-        dropped = 0
-        for path in pages:
-            for line in self._pages[path].lines:
-                self._loc.pop(line.id, None)
-                self._unindex_line(line.id)
-                dropped += 1
-            del self._pages[path]
-            self._remove_page_files(path)
-        for root in (self._root / _OBSERVATIONS, self._root / _RAW / _OBSERVATIONS):
-            if root.is_dir() and not any(root.iterdir()):
-                try:
-                    root.rmdir()
-                except OSError:
-                    pass
-        if pages:
-            _logger.info("retired observation streams", pages=len(pages), records=dropped)
-
-    def _migrate_insights(self) -> None:
-        """One-time/idempotent: dream insights used to file to entities/insights.md via
-        [ent:Insights]; they now belong in insights/<month>.md. Relocate any stray
-        src=dreamer record so the emptied entity page is then dropped by reconcile."""
-        for path in list(self._pages.keys()):
-            if path.parent.name == _INSIGHTS:
-                continue
-            page = self._pages.get(path)
-            if page is None:
-                continue
-            movers = [ln for ln in page.lines if ln.src == "dreamer"]
-            if not movers:
-                continue
-            page.lines = [ln for ln in page.lines if ln.src != "dreamer"]
-            for ln in movers:
-                ln.entity = None
-                month = (ln.date or now_iso())[:7]
-                dest = self._root / _INSIGHTS / f"{month}.md"
-                self._ensure_page(dest, title=f"Insights {month}").lines.append(ln)
-                self._loc[ln.id] = dest
-                self._persist(dest)
-            self._persist(path)
-
-    def _backfill_entities(self) -> None:
-        """One-time: entity pages predate the per-line `entity` tag. Stamp each
-        entities/<slug>.md record with its page slug so the promotion model sees it."""
-        for path, page in self._pages.items():
-            if path.parent.name != _ENTITIES or path.name in ("index.md", "needs-triage.md"):
-                continue
-            slug = path.stem
-            changed = False
-            for line in page.lines:
-                if line.entity is None:
-                    line.entity = slug
                     changed = True
             if changed:
                 self._persist(path)
@@ -1512,13 +1372,16 @@ class FilePageStore:
                 rel = path.relative_to(self._root)
             except ValueError:
                 rel = path
-            page_type = {"entities": "entity", "projects": "project"}.get(rel.parts[0], "topic") if len(rel.parts) > 1 else "topic"
+            page_type = "topic"
             canonical = _STRUCTURAL_TITLES.get(rel.name) if len(rel.parts) == 1 else None
             resolved = title or canonical or path.stem
             fm = {"type": page_type, "title": resolved, "updated": now_iso()[:10]}
             if resolved.lower() != path.stem:  # only when Obsidian's case-insensitive filename match fails
                 fm["aliases"] = [resolved]  # e.g. [[Interaction Lab]] -> interaction-lab.md (not for "Dex"->dex.md)
-            page = Page(frontmatter=fm)
+            page = Page(
+                frontmatter=fm,
+                records_header=f"<!-- ntrp:records schema=2 page={rel.as_posix()} -->",
+            )
             self._pages[path] = page
         return page
 
@@ -1992,6 +1855,8 @@ class FilePageStore:
             )
             self.append_entries((entry,))
             self._index_line(entry)
+            if entry.entity:
+                self._reconcile_entity(entry.entity[0], display=entity_labels[0])
             found = self._find(entry.id)
             assert found is not None
             return self._to_record(entry, found[0])
@@ -2374,6 +2239,13 @@ class FilePageStore:
             page = self._pages[path]
             page.frontmatter["meta_labels"] = sorted(set(labels))
             self._replace_ledger_entry(path, updated)
+            if line.meta.scope_kind != "area":
+                for slug in {*line.entity, *updated.entity}:
+                    self._reconcile_entity(slug, display=next((label for label in (entity_labels or []) if _slug(label) == slug), None))
+            final_path = self._loc.get(record_id, path)
+            if final_path != path:
+                self._pages[final_path].frontmatter["meta_labels"] = sorted(set(labels))
+                self._persist(final_path)
             return
         primary = _slug(entity_labels[0]) if entity_labels else None
         # Entity-place only records on the generic pages or an existing entity page;
@@ -2404,6 +2276,13 @@ class FilePageStore:
             page = self._pages[path]
             page.frontmatter["meta_labels"] = sorted({*self._meta_labels(path), *labels})
             self._replace_ledger_entry(path, replace(line, entity=entities))
+            if line.meta.scope_kind != "area":
+                for slug in entities:
+                    self._reconcile_entity(slug, display=next((label for label in (entity_labels or []) if _slug(label) == slug), None))
+            final_path = self._loc.get(record_id, path)
+            if final_path != path:
+                self._pages[final_path].frontmatter["meta_labels"] = sorted({*self._meta_labels(final_path), *labels})
+                self._persist(final_path)
             return
         await self.set_labels(record_id, labels, entity_labels=entity_labels)
 
@@ -2700,9 +2579,7 @@ class FilePageStore:
             if sk == "global" and sv is None:
                 if (record.scope_kind in (None, "global")) and record.scope_key is None:
                     return True
-            elif record.scope_key == sv and (
-                record.scope_kind == sk or (sk == "area" and record.scope_kind == "project")
-            ):
+            elif record.scope_key == sv and record.scope_kind == sk:
                 return True
         return False
 
@@ -2903,22 +2780,6 @@ if __name__ == "__main__":
             await again.delete(q2.id)
             await again.reconcile_entities()
             assert not zeta.exists(), "empty entity page is reclaimed by the sweep"
-
-            # RETIRED observation streams: legacy observations/<source>.md pages are
-            # dropped (pages + raw sidecars + records) on open — feeds/ replaced them.
-            legacy_obs = Path(d) / "observations" / "gmail.md"
-            legacy_obs.parent.mkdir(parents=True, exist_ok=True)
-            legacy_obs.write_text(
-                "---\ntitle: gmail\n---\n\nOld overview.\n\n<!-- timeline (append-only; edit prose above, not below) -->\n\n"
-                "- 2026-06-22 ^0bs01234 [observation] (src:gmail) Old bot mail.\n",
-                encoding="utf-8",
-            )
-            relegacy = FilePageStore(Path(d))
-            await relegacy.open()
-            assert not legacy_obs.exists(), "observation stream retired on open"
-            assert not (Path(d) / "observations").exists(), "empty observations/ folder removed"
-            assert await relegacy.get("0bs01234") is None, "observation records dropped"
-            again = relegacy
 
             # LESSON routing: continual-learning playbook records stream to lessons.md, global scope.
             les = await again.add("Verify against the running system before reporting status.", kind="lesson", source_ref=SourceRef("curator", ""))

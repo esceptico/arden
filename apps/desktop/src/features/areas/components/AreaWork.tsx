@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Check, Pause, Pencil, Play, Plus, X } from "lucide-react";
+import { Check, Pause, Pencil, Play, Plus, X } from "@/components/icons";
 import type { AreaOutcome, AreaWorkItem, AreaWorkSnapshot } from "@/api/areas";
 import { createAreaOutcome, updateAreaOutcome, updateAreaWorkItem } from "@/actions/areas";
 import { useStore } from "@/stores";

@@ -1665,6 +1665,17 @@ async def test_list_sessions(store: SessionStore):
 
 
 @pytest.mark.asyncio
+async def test_command_sidecar_sessions_stay_out_of_user_lists(store: SessionStore):
+    command = _make_state("command-1", name="Command")
+    command.session_type = "agent"
+    command.agent_type = "command_sidecar"
+    command.agent_status = "running"
+    await store.save_session(command, [{"role": "user", "content": "open automations"}])
+
+    assert not any(row["session_id"] == "command-1" for row in await store.list_sessions(include_agents=True))
+
+
+@pytest.mark.asyncio
 async def test_load_nonexistent_returns_none(store: SessionStore):
     loaded = await store.load_session("does-not-exist")
     assert loaded is None

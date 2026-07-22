@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { FolderOpen } from "lucide-react";
+import { FolderOpen } from "@/components/icons";
 import type { Area } from "@/api/types";
 import { archiveArea, saveArea } from "@/actions/sessions";
 import { detachAreaPage, updateAreaAutonomy } from "@/actions/areas";

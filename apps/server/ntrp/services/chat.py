@@ -14,6 +14,7 @@ from ntrp.agent.llm.parsing import trailing_incomplete_tool_step
 from ntrp.agent.types.events import Result, ToolCompleted
 from ntrp.agent.types.tool_call import PendingToolCall
 from ntrp.areas.context import load_area_context
+from ntrp.commands.models import CommandOutcome
 from ntrp.config import get_config
 from ntrp.constants import CONVERSATION_GAP_THRESHOLD, LOOP_ITERATION_HISTORY_WINDOW
 from ntrp.context.models import AreaContext, SessionData, SessionState
@@ -31,6 +32,7 @@ from ntrp.core.prompts import INIT_INSTRUCTION, build_system_blocks
 from ntrp.core.usage_tracker import UsageTracker
 from ntrp.events.internal import RunCompleted
 from ntrp.events.sse import (
+    CommandCompletedEvent,
     CompactionFinishedEvent,
     CompactionStartedEvent,
     MessageIngestedEvent,
@@ -70,6 +72,22 @@ from ntrp.tools.executor import ToolExecutor
 _logger = get_logger(__name__)
 
 INIT_AUTO_APPROVE = {"remember", "forget"}
+
+
+def _command_completion_event(
+    session_state: SessionState,
+    run: RunState,
+) -> CommandCompletedEvent | None:
+    if session_state.agent_type != "command_sidecar":
+        return None
+    try:
+        outcome = CommandOutcome.model_validate(run.structured_output).model_dump(exclude_none=True)
+    except Exception:
+        outcome = CommandOutcome(
+            status="failed",
+            summary="The command did not return a valid result.",
+        ).model_dump(exclude_none=True)
+    return CommandCompletedEvent(run_id=run.run_id, outcome=outcome)
 
 
 async def _recover_durable_tool_calls(
@@ -991,7 +1009,7 @@ async def _submit_chat_message_locked(
     elif client_id:
         existing = run_registry.lookup_otid(session_id, client_id)
         if existing:
-            return {"run_id": existing.run_id, "session_id": session_id}
+            return {"run_id": existing.run_id, "session_id": session_id, "status": "accepted"}
 
     active_run = run_registry.get_accepting_run(session_id)
     if active_run:
@@ -1130,7 +1148,11 @@ async def _submit_chat_message_locked(
     if client_id:
         run_registry.register_otid(session_id, client_id, ctx.run.run_id)
 
-    return {"run_id": ctx.run.run_id, "session_id": ctx.session_state.session_id}
+    return {
+        "run_id": ctx.run.run_id,
+        "session_id": ctx.session_state.session_id,
+        "status": "running",
+    }
 
 
 async def _emit_cancelled_terminal_fallback(run: RunState, bus: SessionBus, run_registry: RunRegistry) -> None:
@@ -1838,6 +1860,9 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
                 run.close_injections()
                 run.usage = tracker.usage
                 run_finished = True
+                if session_state.agent_type == "command_sidecar":
+                    session_state.agent_status = "cancelled"
+                    await ctx.session_service.save(session_state, _persistable_messages(run))
             else:
                 pending_messages = run.close_injections()
                 if pending_messages:
@@ -1862,6 +1887,8 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
                         metadata["last_input_tokens"] = input_tokens
                     metadata["last_message_count"] = len(_persistable_messages(run))
                 try:
+                    if session_state.agent_type == "command_sidecar":
+                        session_state.agent_status = "failed" if run_failed else "completed"
                     if run.usage.total_tokens:
                         await ctx.session_service.update_goal(
                             session_state.session_id,
@@ -1891,6 +1918,9 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
                         source_refs=tuple(run.source_refs),
                         structured_output=run.structured_output,
                     )
+                    command_event = _command_completion_event(session_state, run)
+                    if command_event is not None:
+                        await bus.emit(command_event)
                     if run_finished_event is not None:
                         await bus.emit(run_finished_event)
                     if ctx.enqueue_run_completed:

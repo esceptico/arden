@@ -4,17 +4,44 @@ Scopes are default visibility metadata, not a graph hierarchy. Records are
 atomic artifacts with sparse metadata and optional source evidence.
 """
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Literal
 
 TimePrecision = Literal["millisecond", "second", "minute", "day", "unknown"]
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?P<fraction>\.\d+)?(?:Z|[+-]\d{2}:\d{2})$")
 
 
 def now_iso() -> str:
-    return datetime.now(UTC).isoformat()
+    return datetime.now(UTC).isoformat(timespec="milliseconds")
+
+
+def source_time(value: object) -> tuple[str | None, TimePrecision]:
+    if not isinstance(value, str):
+        return None, "unknown"
+
+    if _DATE_RE.fullmatch(value):
+        try:
+            date.fromisoformat(value)
+        except ValueError:
+            return None, "unknown"
+        return value, "day"
+
+    match = _TIMESTAMP_RE.fullmatch(value)
+    if match is None:
+        return None, "unknown"
+    try:
+        timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None, "unknown"
+
+    if match["fraction"] is None:
+        return timestamp.isoformat(timespec="seconds"), "second"
+    return timestamp.isoformat(timespec="milliseconds"), "millisecond"
 
 
 @dataclass(frozen=True)

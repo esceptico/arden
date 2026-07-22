@@ -30,6 +30,22 @@ def test_area_agent_skills_dir_is_loaded(tmp_path, monkeypatch):
     assert (tmp_path / "agent" / "skills", "agent") in dirs
 
 
+def test_codex_project_skills_dir_is_loaded(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    dirs = get_skills_dirs()
+
+    assert (tmp_path / ".agents" / "skills", "project") in dirs
+
+
+def test_shared_global_agent_skills_dir_is_loaded(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+
+    dirs = get_skills_dirs()
+
+    assert (tmp_path / ".agents" / "skills", "shared-global") in dirs
+
+
 def test_discovers_markdown_and_yaml_schedules(tmp_path):
     md = tmp_path / "agent" / "schedules" / "weekly_digest.md"
     md.parent.mkdir(parents=True)

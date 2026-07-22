@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "motion/react";
-import { Check, Loader2 } from "lucide-react";
+import { Check, Loader2 } from "@/components/icons";
 import clsx from "clsx";
 import { ICON } from "@/lib/icons";
 import { EASE_OUT, MOTION } from "@/lib/tokens/motion";

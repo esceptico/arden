@@ -664,6 +664,30 @@ class _LedgerIndex:
         return True
 
 
+class _FailingLedgerIndex(_LedgerIndex):
+    def __init__(self):
+        super().__init__()
+        self.upsert_calls = 0
+
+    async def upsert(self, *, source, source_id, title, content, metadata=None):
+        assert source == "memory_line"
+        self.upsert_calls += 1
+        return False
+
+
+async def test_memory_index_sync_stops_after_first_embedding_failure(tmp_path: Path):
+    index = _FailingLedgerIndex()
+    entries = [
+        _ledger_entry("first", "First", sequence=1),
+        _ledger_entry("second", "Second", sequence=2),
+        _ledger_entry("third", "Third", sequence=3),
+    ]
+
+    await _file_store_pages(tmp_path / "memory", {"topics/a.md": entries}, index=index)
+
+    assert index.upsert_calls == 1
+
+
 async def test_page_active_entries_uses_relationship_graph_and_rejects_invalid_targets():
     first = _ledger_entry("first", "First", sequence=1)
     second = _ledger_entry("second", "Second", sequence=2, supersedes=("first",))
@@ -863,6 +887,65 @@ async def test_append_entries_stages_every_touched_page_and_caller_file_in_one_c
     await store.close()
 
 
+async def test_page_event_ledgers_are_not_discovered_as_record_pages(tmp_path: Path):
+    vault = tmp_path / "memory"
+    event_path = vault / "raw" / "events" / "2026-07-13.md"
+    event_path.parent.mkdir(parents=True)
+    event_path.write_text("# Page edit events 2026-07-13\n\n<!-- ntrp:page-edit-event -->\n{}\n", encoding="utf-8")
+    store = FilePageStore(vault)
+
+    assert store._canonical_raw_files() == []
+
+    await store.open()
+    assert vault / "events" / "2026-07-13.md" not in store._pages
+
+
+async def test_generated_index_is_pruned_from_stale_observed_page_state(tmp_path: Path):
+    vault = tmp_path / "memory"
+    store = FilePageStore(vault)
+    await store.open()
+    path = "topics/README.md"
+    content = b"<!-- ntrp:index:start -->\n- a.md\n<!-- ntrp:index:end -->\n"
+    revision = store._store_observed_base(content)
+    state = store._read_observed_state()
+    state["pages"][path] = revision
+    state["pending_changes"][path] = {
+        "id": "stale",
+        "base_revision": revision,
+        "base_exists": True,
+        "result_revision": store._content_revision(None),
+        "after_exists": False,
+        "origin": "external",
+    }
+    store._write_observed_state(state)
+
+    assert store._observed_page_changes() == []
+    state = store._read_observed_state()
+    assert path not in state["pages"]
+    assert path not in state["pending_changes"]
+
+
+async def test_schema_v2_topic_records_can_be_synthesized(tmp_path: Path):
+    from ntrp.memory.synthesize import _synth_dossier
+
+    class LLM:
+        async def completion(self, **_kwargs):
+            message = type("Message", (), {"content": f"Readable topic summary. (record:{first.id})"})()
+            choice = type("Choice", (), {"message": message})()
+            return type("Response", (), {"choices": [choice]})()
+
+    store = FilePageStore(tmp_path / "memory")
+    await store.open()
+    first = await store.add("First MATS fact.", entity_labels=["MATS"], source_ref=SourceRef("user", "chat"))
+    await store.add("Second MATS fact.", entity_labels=["MATS"], source_ref=SourceRef("user", "chat"))
+    path = next(path for path in store._pages if path.parent.name == "topics")
+
+    result = await _synth_dossier(store, path, {}, LLM(), "test", None)
+
+    assert result == f"Readable topic summary. (record:{first.id})"
+    await store.close()
+
+
 async def test_user_page_override_reloads_live_state_before_the_next_operation(tmp_path: Path):
     from ntrp.memory.artifacts import ArtifactMemoryStore
 
@@ -917,37 +1000,6 @@ async def test_generated_prose_only_write_is_excluded_from_canonical_revision(tm
     assert "Generated briefing." in page_path.read_text(encoding="utf-8")
     assert store._pages[page_path].frontmatter["generated_from_revision"] == revision
     assert store.canonical_revision == revision
-    await store.close()
-
-
-async def test_legacy_prose_synced_is_dropped_without_leaking_into_visible_frontmatter(tmp_path: Path):
-    vault = tmp_path / "memory"
-    (vault / "topics").mkdir(parents=True)
-    (vault / "raw/topics").mkdir(parents=True)
-    page_path = vault / "topics/a.md"
-    raw_path = vault / "raw/topics/a.md"
-    revision = "a" * 64
-    page_path.write_text("---\ntitle: A\n---\n\nExisting prose.\n", encoding="utf-8")
-    raw_path.write_text(
-        "---\n"
-        "prose_synced: 2026-07-12\n"
-        f"generated_from_revision: {revision}\n"
-        "---\n\n"
-        "<!-- ntrp:records schema=2 page=topics/a.md -->\n",
-        encoding="utf-8",
-    )
-    store = FilePageStore(vault)
-    await store.open()
-
-    store._pages[page_path].prose = "Persisted prose."
-    store._persist(page_path)
-
-    visible = page_path.read_text(encoding="utf-8")
-    raw = raw_path.read_text(encoding="utf-8")
-    assert "prose_synced" not in visible
-    assert "prose_synced" not in raw
-    assert "generated_from_revision" not in visible
-    assert f"generated_from_revision: {revision}" in raw
     await store.close()
 
 

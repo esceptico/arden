@@ -18,7 +18,9 @@ from fastapi.testclient import TestClient
 from ntrp.memory.artifacts import ArtifactMemoryStore
 from ntrp.memory.file_store import FilePageStore
 from ntrp.memory.journal import JournalConflictError
+from ntrp.memory.ledger import LedgerEntry, LedgerMeta, render_ledger_entry
 from ntrp.memory.link_index import LinkIndex
+from ntrp.memory.models import Kind, SourceRef
 from ntrp.memory.page_edit_service import PageEditService
 from ntrp.memory.page_events import PageEditAnalysis, page_revision
 from ntrp.memory.reconciler import RecordOperation
@@ -122,6 +124,7 @@ def test_routes_registered():
         "/admin/memory/page-edits/retry",
         "/admin/memory/page-edits/history",
         "/admin/memory/links",
+        "/admin/memory/notebook/create",
         "/admin/memory/items",
         "/admin/memory/record/{record_id}/forget",
         "/admin/memory/search",
@@ -129,37 +132,6 @@ def test_routes_registered():
         assert p in paths
 
 
-@pytest.mark.asyncio
-async def test_external_page_review_retry_applies_only_memory_decisions_and_is_idempotent(page_edit_client):
-    c, store, service, reconciler, page = page_edit_client
-    target = await store.add("Original durable statement.", kind="fact")
-    await store.refresh_from_disk()
-    page.write_text("# A\n\nChanged outside ntrp.\n", encoding="utf-8")
-    change = (await store.refresh_from_disk())[0]
-    reconciler.answer = (RecordOperation.ask("Forget the old memory?", target.id),)
-    review = await service.ingest_external(change)
-    assert review is not None and review.reconciliation == "needs_review"
-    current_bytes = page.read_bytes()
-
-    payload = {
-        "event_id": review.id,
-        "decisions": {
-            review.questions[0].id: {
-                "choice": "forget_memory",
-                "target_ids": [target.id],
-            }
-        },
-    }
-    first = c.put("/admin/memory/page-edits/retry", json=payload)
-    second = c.put("/admin/memory/page-edits/retry", json=payload)
-
-    assert first.status_code == 200
-    assert first.json()["event"]["reconciles_event_id"] == review.id
-    assert first.json()["revision"] == review.result_revision
-    assert second.status_code == 200
-    assert second.json()["event"]["id"] == first.json()["event"]["id"]
-    assert page.read_bytes() == current_bytes
-    assert await store.get(target.id) is None
 
 
 def test_links_route_returns_paginated_outgoing_and_backlinks(tmp_path: Path):
@@ -701,6 +673,79 @@ def test_artifact_list_and_rebuild_are_metadata_only_with_exact_revisions(tmp_pa
     assert {"content", "timeline", "frontmatter"}.issubset(detail)
 
 
+def test_artifact_detail_serializes_schema_v2_timeline(tmp_path: Path):
+    vault = tmp_path / "artifacts"
+    (vault / "topics").mkdir(parents=True)
+    (vault / "raw" / "topics").mkdir(parents=True)
+    (vault / "topics" / "mats.md").write_text("# MATS\n\nReadable note.\n", encoding="utf-8")
+    old = LedgerEntry(
+        id="old",
+        text="Old claim",
+        kind=Kind.FACT,
+        occurred_at="2026-07-10",
+        pinned=True,
+        meta=LedgerMeta(
+            recorded_at="2026-07-10T12:00:00+04:00",
+            sequence=1,
+            time_precision="day",
+            scope_kind="user",
+            scope_key=None,
+            sources=(SourceRef("dreamer", "old", occurred_at="2026-07-10", time_precision="day"),),
+            successor_id="new",
+        ),
+    )
+    new = LedgerEntry(
+        id="new",
+        text="Current claim",
+        kind=Kind.FACT,
+        occurred_at=None,
+        meta=LedgerMeta(
+            recorded_at="2026-07-11T09:30:00+04:00",
+            sequence=2,
+            time_precision="unknown",
+            scope_kind="user",
+            scope_key=None,
+            sources=(),
+            supersedes=("old",),
+        ),
+    )
+    (vault / "raw" / "topics" / "mats.md").write_text(
+        "<!-- ntrp:records schema=2 page=topics/mats.md -->\n"
+        f"{render_ledger_entry(old)}\n{render_ledger_entry(new)}\n",
+        encoding="utf-8",
+    )
+    knowledge = _Knowledge(None, vault)
+    test_app = FastAPI()
+    test_app.include_router(memory_router)
+    test_app.dependency_overrides[require_knowledge_runtime] = lambda: knowledge
+
+    with TestClient(test_app) as c:
+        response = c.get("/admin/memory/artifacts/topics/mats.md")
+
+    assert response.status_code == 200
+    timeline = response.json()["artifact"]["timeline"]
+    assert timeline == [
+        {
+            "id": "old",
+            "text": "Old claim",
+            "kind": "fact",
+            "date": "2026-07-10",
+            "src": "dreamer",
+            "pinned": True,
+            "superseded": True,
+        },
+        {
+            "id": "new",
+            "text": "Current claim",
+            "kind": "fact",
+            "date": "2026-07-11",
+            "src": "unknown",
+            "pinned": False,
+            "superseded": False,
+        },
+    ]
+
+
 def test_list_items_shape(client):
     c, *_ = client
     body = c.get("/admin/memory/items").json()
@@ -853,3 +898,97 @@ def test_forget_record_requires_confirmation_and_retracts_exact_ledger_id(page_e
 
     repeated = c.post(f"/admin/memory/record/{first['id']}/forget", json={"confirm": True})
     assert repeated.status_code == 409
+
+
+def test_notebook_create_note_returns_summary_and_conflicts_on_duplicate(page_edit_client):
+    c, _store, service, _reconciler, _page = page_edit_client
+
+    created = c.post("/admin/memory/notebook/create", json={"path": "topics/new-note.md", "kind": "note"})
+
+    assert created.status_code == 200
+    artifact = created.json()["artifact"]
+    assert artifact["path"] == "topics/new-note.md"
+    assert artifact["editable"] is True
+    assert artifact["revision"] == page_revision(b"")
+    event = next(e for e in service.history(path="topics/new-note.md"))
+    assert event.actor == "user:desktop" and event.origin == "desktop"
+    assert artifact["created_at"] == event.occurred_at
+    assert (service.artifact_store.root / "topics" / "new-note.md").read_bytes() == b""
+
+    duplicate = c.post("/admin/memory/notebook/create", json={"path": "topics/new-note.md", "kind": "note"})
+    assert duplicate.status_code == 409
+
+    nested = c.post("/admin/memory/notebook/create", json={"path": "areas/nested/deep.md", "kind": "note"})
+    assert nested.status_code == 200  # parent directories are created by the journal commit
+    assert (service.artifact_store.root / "areas" / "nested" / "deep.md").read_bytes() == b""
+
+
+def test_notebook_create_note_rejects_machine_and_invalid_paths(page_edit_client):
+    c, *_ = page_edit_client
+    assert c.post("/admin/memory/notebook/create", json={"path": "raw/x.md", "kind": "note"}).status_code == 403
+    assert c.post("/admin/memory/notebook/create", json={"path": "changelog/x.md", "kind": "note"}).status_code == 403
+    assert c.post("/admin/memory/notebook/create", json={"path": "../x.md", "kind": "note"}).status_code == 422
+    assert c.post("/admin/memory/notebook/create", json={"path": "/etc/x.md", "kind": "note"}).status_code == 422
+    assert c.post("/admin/memory/notebook/create", json={"path": "topics/x.txt", "kind": "note"}).status_code == 422
+    assert c.post("/admin/memory/notebook/create", json={"path": "x" * 1001 + ".md", "kind": "note"}).status_code == 422
+
+
+def test_notebook_create_folder_appears_in_artifact_directories(page_edit_client):
+    c, *_ = page_edit_client
+
+    created = c.post("/admin/memory/notebook/create", json={"path": "topics/subarea", "kind": "folder"})
+
+    assert created.status_code == 200
+    assert created.json() == {"path": "topics/subarea/"}
+    directories = c.get("/admin/memory/artifacts").json()["directories"]
+    assert "topics/" in directories
+    assert "topics/subarea/" in directories
+    assert not any(d.startswith(("raw/", "changelog/", ".ntrp/")) for d in directories)
+
+    assert c.post("/admin/memory/notebook/create", json={"path": "topics/subarea", "kind": "folder"}).status_code == 409
+    assert c.post("/admin/memory/notebook/create", json={"path": "topics/note.md", "kind": "folder"}).status_code == 422
+    assert c.post("/admin/memory/notebook/create", json={"path": "raw/sub", "kind": "folder"}).status_code == 403
+
+
+def test_artifact_summaries_carry_sane_created_at(page_edit_client):
+    c, *_ = page_edit_client
+    listed = c.get("/admin/memory/artifacts").json()["artifacts"]
+    assert listed
+    now = datetime.now(UTC)
+    for artifact in listed:
+        created = datetime.fromisoformat(artifact["created_at"])
+        assert created <= now
+
+    detail = c.get("/admin/memory/artifacts/topics/a.md").json()["artifact"]
+    assert datetime.fromisoformat(detail["created_at"]) <= now
+
+
+def test_links_route_reports_unlinked_mentions(tmp_path: Path):
+    vault = tmp_path / "artifacts"
+    (vault / "topics").mkdir(parents=True)
+    (vault / "topics/alpha.md").write_text("# Alpha\n\nAlpha is the subject page.\n", encoding="utf-8")
+    (vault / "topics/b.md").write_text("# B\n\nWe discussed Alpha at length yesterday.\n", encoding="utf-8")
+    (vault / "topics/c.md").write_text("# C\n\n[[Alpha]] is already linked, and Alpha again.\n", encoding="utf-8")
+    (vault / "topics/d.md").write_text("# D\n\nAlphabetical order is not a mention.\n", encoding="utf-8")
+    for n in range(5):
+        (vault / f"topics/m{n}.md").write_text(f"# M{n}\n\nAnother note about Alpha here.\n", encoding="utf-8")
+    index = LinkIndex(vault)
+    index.rebuild(ArtifactMemoryStore(vault), "revision-9")
+    knowledge = _Knowledge(None, vault, link_projection=SimpleNamespace(index=index, stale=False))
+    test_app = FastAPI()
+    test_app.include_router(memory_router)
+    test_app.dependency_overrides[require_knowledge_runtime] = lambda: knowledge
+
+    with TestClient(test_app) as c:
+        body = c.get("/admin/memory/links", params={"path": "topics/alpha.md"}).json()
+
+    unlinked = body["unlinked"]
+    assert len(unlinked) == 4  # capped
+    sources = [m["source_path"] for m in unlinked]
+    assert "topics/alpha.md" not in sources  # self excluded
+    assert "topics/c.md" not in sources  # already wikilinked
+    assert "topics/d.md" not in sources  # word-boundary: "Alphabetical" is no mention
+    assert "topics/b.md" in sources
+    b_mention = next(m for m in unlinked if m["source_path"] == "topics/b.md")
+    assert "discussed Alpha at length" in b_mention["context"]
+    assert "\n" not in b_mention["context"]

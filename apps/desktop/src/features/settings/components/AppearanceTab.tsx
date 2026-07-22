@@ -7,7 +7,7 @@ import {
 } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import clsx from "clsx";
-import { ArrowUp, Check, Keyboard, Monitor, Moon, RotateCcw, Sun, type LucideIcon } from "lucide-react";
+import { ArrowUp, Check, Keyboard, Monitor, Moon, RotateCcw, Sun, type NtrpIcon } from "@/components/icons";
 import {
   DEFAULT_QUICK_CAPTURE_SHORTCUT,
   useStore,
@@ -31,7 +31,7 @@ const VARIANTS: { id: ThinkingAnimation; label: string; hint: string }[] = [
   { id: "send-orbit", label: "Send orbit", hint: "Spinner around the send button only" },
 ];
 
-const THEMES: { id: ThemeChoice; label: string; icon: LucideIcon }[] = [
+const THEMES: { id: ThemeChoice; label: string; icon: NtrpIcon }[] = [
   { id: "light", label: "Light", icon: Sun },
   { id: "dark", label: "Dark", icon: Moon },
   { id: "system", label: "System", icon: Monitor },

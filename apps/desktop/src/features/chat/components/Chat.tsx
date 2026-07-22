@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, type CSSProperties } from "react";
 import clsx from "clsx";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft } from "@/components/icons";
 import { useStore } from "@/stores";
 import { switchSession } from "@/actions/sessions";
 import { Messages } from "@/features/chat/components/Messages";

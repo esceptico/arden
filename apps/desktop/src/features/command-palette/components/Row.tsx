@@ -1,37 +1,29 @@
-import { ChevronRight } from "lucide-react";
+import { ChevronRight } from "@/components/icons";
 import clsx from "clsx";
+import { Command } from "cmdk";
 import { ICON } from "@/lib/icons";
-import { PickerRow } from "@/components/ui/PickerRow";
 import type { CommandEntry } from "@/features/command-palette/types";
 
 export function Row({
   entry,
   active,
-  activeRef,
   optionId,
-  onHover,
   onClick,
 }: {
   entry: CommandEntry;
   active: boolean;
-  activeRef?: React.RefObject<HTMLButtonElement | null>;
   optionId?: string;
-  onHover: () => void;
   onClick: () => void;
 }) {
   const Icon = entry.icon;
   return (
-    <li role="presentation">
-      <PickerRow
-        ref={activeRef}
-        active={active}
+      <Command.Item
+        value={entry.id}
+        keywords={entry.search.split(" ")}
         id={optionId}
-        role="option"
-        aria-selected={active}
-        onMouseMove={onHover}
         onMouseDown={(e) => e.preventDefault()}
-        onClick={onClick}
-        className="app-row flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-ink-soft"
+        onSelect={onClick}
+        className="app-row flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-ink-soft outline-none"
       >
         <span
           className={clsx(
@@ -56,7 +48,6 @@ export function Row({
             aria-hidden
           />
         )}
-      </PickerRow>
-    </li>
+      </Command.Item>
   );
 }

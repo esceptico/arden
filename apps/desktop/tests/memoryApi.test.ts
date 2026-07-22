@@ -279,7 +279,7 @@ test("apply serializes decisions and maps the committed event", async () => {
   });
 });
 
-test("retry serializes external review decisions without page content", async () => {
+test("retry serializes pending reconciliation decisions without page content", async () => {
   bridgeResponse({ event: rawEvent, revision: "sha256:result" });
 
   const applied = await retryPageEdit(config, {
@@ -385,6 +385,7 @@ test("links preserve resolution status, context, candidates, and pagination", as
     path: "topics/dex.md",
     revision: "ledger-7",
     stale: true,
+    unlinked: [],
     outgoing: [{
       sourcePath: "notes/source.md",
       target: "Dex#Plan",
@@ -455,6 +456,7 @@ test("notebook artifact list is camelCase metadata-only and detail owns content"
     editable: true,
     readonlyReason: null,
     updatedAt: "2026-07-12T10:00:00Z",
+    createdAt: null,
     labels: ["work"],
     source: null,
   });
@@ -481,6 +483,7 @@ test("notebook artifact list is camelCase metadata-only and detail owns content"
     editable: true,
     readonlyReason: null,
     updatedAt: "2026-07-12T10:00:00Z",
+    createdAt: null,
     labels: ["work"],
     source: null,
     timeline: [],

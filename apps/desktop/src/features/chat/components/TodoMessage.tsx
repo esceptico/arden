@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { CheckCircle2, Circle, CircleDot, ListChecks } from "lucide-react";
+import { CheckCircle2, Circle, CircleDot, ListChecks } from "@/components/icons";
 import clsx from "clsx";
 import type { TodoStatus } from "@/api/types";
 import { BlurSwap } from "@/components/ui/BlurSwap";

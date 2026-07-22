@@ -1,4 +1,4 @@
-import { Settings as SettingsIcon } from "lucide-react";
+import { Settings as SettingsIcon } from "@/components/icons";
 import { useStore } from "@/stores";
 import { type MCPServer, startMCPOAuthApi, toggleMCPServerApi } from "@/api/settings";
 import { useMutationState } from "@/lib/hooks";

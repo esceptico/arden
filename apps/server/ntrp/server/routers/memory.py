@@ -6,13 +6,17 @@ in the read/write contract; item detail returns empty edge arrays for one releas
 for compatibility.
 """
 
+import re
 from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
-from ntrp.memory.artifacts import ArtifactMemoryStore
+from ntrp.memory.artifacts import MACHINE_PAGE_DIRS, ArtifactMemoryStore
+from ntrp.memory.frontmatter import strip_frontmatter
+from ntrp.memory.journal import JournalConflictError
+from ntrp.memory.ledger import LedgerEntry
 from ntrp.memory.models import Record, SourceRef
 from ntrp.memory.page_edit_service import (
     PageEditService,
@@ -22,6 +26,7 @@ from ntrp.memory.page_edit_service import (
     StalePageRevisionError,
 )
 from ntrp.memory.page_events import PageEditDecision
+from ntrp.memory.pages import Page
 from ntrp.memory.reconciler import RecordOperation
 from ntrp.memory.scopes import MemoryScope, scope_for_write
 from ntrp.server.deps import require_knowledge_runtime
@@ -155,20 +160,31 @@ def artifact_summary_to_json(a) -> dict:
         "editable": a.editable,
         "readonly_reason": a.readonly_reason,
         "updated_at": a.updated_at,
+        "created_at": a.created_at,
         "labels": list(a.labels),
         "source": a.source,
     }
 
 
 def artifact_detail_to_json(a) -> dict:
+    timeline = tuple(getattr(a, "timeline", ()) or ())
+    active_ids = {entry.id for entry in Page(lines=list(timeline)).active_entries()}
     return {
         **artifact_summary_to_json(a),
         "content": a.content,
         "editable_content": a.raw_content if a.editable else None,
         "timeline": [
-            {"id": l.id, "text": l.text, "kind": l.kind, "date": l.date,
-             "src": l.src, "pinned": l.pinned, "superseded": l.superseded}
-            for l in (getattr(a, "timeline", ()) or ())
+            {
+                "id": entry.id,
+                "text": entry.text,
+                "kind": entry.kind,
+                "date": (entry.occurred_at or entry.meta.recorded_at)[:10],
+                "src": entry.meta.sources[0].kind if entry.meta.sources else "unknown",
+                "pinned": entry.pinned,
+                "superseded": entry.id not in active_ids,
+            }
+            for entry in timeline
+            if isinstance(entry, LedgerEntry) and entry.meta.operation == "record"
         ],
         "frontmatter": _json_safe(getattr(a, "frontmatter", {}) or {}),
     }
@@ -192,7 +208,10 @@ def list_artifacts(
     q: str | None = Query(default=None, max_length=200),
     artifacts: ArtifactMemoryStore = Depends(_artifact_store),
 ) -> dict:
-    return {"artifacts": [artifact_summary_to_json(a) for a in artifacts.list_artifacts(kind=kind, q=q)]}
+    return {
+        "artifacts": [artifact_summary_to_json(a) for a in artifacts.list_artifacts(kind=kind, q=q)],
+        "directories": artifacts.list_directories(),
+    }
 
 
 @router.post("/artifacts/rebuild")
@@ -245,6 +264,46 @@ async def prune_records(store=Depends(_record_store)) -> dict:
     return await store.prune()
 
 
+class NotebookCreateBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(min_length=1, max_length=1000)
+    kind: Literal["note", "folder"]
+
+
+@router.post("/notebook/create")
+async def create_notebook_entry(
+    body: NotebookCreateBody,
+    artifacts: ArtifactMemoryStore = Depends(_artifact_store),
+    service: PageEditService = Depends(_page_edit_service),
+) -> dict:
+    _reject_machine_page(body.path)
+    safe = Path(body.path)
+    if safe.is_absolute() or ".." in safe.parts:
+        raise HTTPException(status_code=422, detail="invalid memory page path")
+    if body.kind == "note":
+        if safe.suffix != ".md":
+            raise HTTPException(status_code=422, detail="memory notes must end with .md")
+        try:
+            await service.create_page(path=safe.as_posix(), actor="user:desktop")
+        except (FileExistsError, JournalConflictError) as exc:
+            raise HTTPException(status_code=409, detail="memory page already exists") from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=422, detail="invalid memory page path") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {"artifact": artifact_summary_to_json(artifacts.read_artifact(safe.as_posix()))}
+    if safe.suffix == ".md":
+        raise HTTPException(status_code=422, detail="memory folders must not end with .md")
+    try:
+        created = artifacts.create_directory(safe.as_posix())
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail="memory folder already exists") from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=422, detail="invalid memory folder path") from exc
+    return {"path": created}
+
+
 class PageEditPreviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -291,7 +350,7 @@ def _page_edit_decisions(
 
 def _reject_machine_page(path: str) -> None:
     parts = Path(path).parts
-    if parts and parts[0] in {"raw", "changelog", ".ntrp", ".index", ".maintenance"}:
+    if parts and parts[0] in MACHINE_PAGE_DIRS:
         raise HTTPException(status_code=403, detail="machine-only memory page")
 
 
@@ -411,12 +470,59 @@ def page_edit_history(
     }
 
 
+_WIKILINK_MD_RE = re.compile(r"\[\[([^\]#|]+)(?:#[^\]|]+)?(?:\|([^\]]+))?\]\]")
+_COMMENT_MD_RE = re.compile(r"<!--.*?-->", flags=re.DOTALL)
+_INLINE_LINK_MD_RE = re.compile(r"\[([^\]]+)\]\([^)]*\)")
+_MARKUP_CHARS_RE = re.compile(r"[`*_#>|]+")
+_MENTION_CONTEXT_WORDS = 15
+_MAX_UNLINKED_SOURCES = 4
+
+
+def _strip_page_markup(content: str) -> str:
+    body = strip_frontmatter(content)
+    body = _COMMENT_MD_RE.sub(" ", body)
+    body = _WIKILINK_MD_RE.sub(lambda m: m.group(2) or m.group(1), body)
+    body = _INLINE_LINK_MD_RE.sub(r"\1", body)
+    body = _MARKUP_CHARS_RE.sub(" ", body)
+    return " ".join(body.split())
+
+
+def _mention_excerpt(text: str, start: int, end: int) -> str:
+    before = text[:start].split()
+    after = text[end:].split()
+    words = [*before[-(_MENTION_CONTEXT_WORDS - 1) :], text[start:end], *after[:_MENTION_CONTEXT_WORDS]]
+    prefix = "…" if len(before) > _MENTION_CONTEXT_WORDS - 1 else ""
+    suffix = "…" if len(after) > _MENTION_CONTEXT_WORDS else ""
+    return f"{prefix}{' '.join(words)}{suffix}"
+
+
+def _unlinked_mentions(path: str, title: str, snapshot, artifacts: ArtifactMemoryStore) -> list[dict]:
+    pattern = re.compile(rf"(?<!\w){re.escape(title)}(?!\w)", flags=re.IGNORECASE)
+    linked_sources = {link.source_path for link in snapshot.links if link.resolved_path == path}
+    mentions: list[dict] = []
+    for source in snapshot.pages:
+        if source == path or source in linked_sources or Path(source).parts[0] in MACHINE_PAGE_DIRS:
+            continue
+        try:
+            text = _strip_page_markup(artifacts.read_resource_bytes(source).decode("utf-8"))
+        except (FileNotFoundError, UnicodeDecodeError):
+            continue
+        match = pattern.search(text)
+        if match is None:
+            continue
+        mentions.append({"source_path": source, "context": _mention_excerpt(text, match.start(), match.end())})
+        if len(mentions) == _MAX_UNLINKED_SOURCES:
+            break
+    return mentions
+
+
 @router.get("/links")
 def page_links(
     path: str = Query(..., min_length=1, max_length=1000),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     projection=Depends(_link_index_projection),
+    artifacts: ArtifactMemoryStore = Depends(_artifact_store),
 ) -> dict:
     _reject_machine_page(path)
     safe = Path(path)
@@ -427,12 +533,17 @@ def page_links(
         raise HTTPException(status_code=404, detail="memory page not found")
     outgoing = snapshot.outgoing(path)
     backlinks = snapshot.backlinks(path)
+    try:
+        title = artifacts.read_artifact(path).title
+    except FileNotFoundError:
+        title = safe.stem
     return {
         "path": path,
         "revision": snapshot.revision,
         "stale": projection.stale,
         "outgoing": [link.to_dict() for link in outgoing[offset : offset + limit]],
         "backlinks": [link.to_dict() for link in backlinks[offset : offset + limit]],
+        "unlinked": _unlinked_mentions(path, title, snapshot, artifacts),
         "total_outgoing": len(outgoing),
         "total_backlinks": len(backlinks),
         "limit": limit,

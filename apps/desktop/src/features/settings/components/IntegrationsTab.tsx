@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import clsx from "clsx";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw } from "@/components/icons";
 import {
   connectGoogleServiceApi,
   connectServiceApi,

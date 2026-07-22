@@ -3,8 +3,8 @@ import { AnimatePresence, motion } from "motion/react";
 import clsx from "clsx";
 import { EASE_OUT, MOTION } from "@/lib/tokens/motion";
 
-// Overlapping blur crossfade for spatial content; for in-place TEXT state
-// swaps (old and new must never coexist) use FieldSwap instead.
+// Overlapping blur crossfade for spatial content. Two-icon state changes use
+// IconSwap; in-place text states that must never coexist use FieldSwap.
 interface BlurSwapProps {
   /** Identity of the current content. A change triggers the crossfade. */
   swapKey: string;
@@ -13,13 +13,6 @@ interface BlurSwapProps {
   blur?: number;
   /** Crossfade duration in seconds; defaults to MOTION.check. */
   duration?: number;
-  /**
-   * When set, also scale from this value → 1, swapping the tween for the
-   * no-bounce icon-swap spring. Pass 0.25 for the contextual-icon-animation
-   * recipe (scale 0.25 → 1, opacity 0 → 1, blur 4px → 0). Omit for a plain
-   * opacity + blur crossfade (text, multi-char glyphs).
-   */
-  scaleFrom?: number;
   className?: string;
 }
 
@@ -37,19 +30,15 @@ export function BlurSwap({
   children,
   blur = 4,
   duration = MOTION.check,
-  scaleFrom,
   className,
 }: BlurSwapProps) {
-  const scaled = scaleFrom != null;
   const hidden = {
     opacity: 0,
     filter: `blur(${blur}px)`,
-    ...(scaled ? { scale: scaleFrom } : {}),
   };
   const shown = {
     opacity: 1,
     filter: "blur(0px)",
-    ...(scaled ? { scale: 1 } : {}),
   };
   return (
     <span className={clsx("inline-grid place-items-center", className)}>
@@ -60,9 +49,7 @@ export function BlurSwap({
           initial={hidden}
           animate={shown}
           exit={hidden}
-          // Icon swaps (scaleFrom set) ride the mandated no-bounce spring;
-          // plain glyph/text crossfades keep the soft tween.
-          transition={scaled ? { type: "spring", duration: 0.3, bounce: 0 } : { duration, ease: EASE_OUT }}
+          transition={{ duration, ease: EASE_OUT }}
         >
           {children}
         </motion.span>

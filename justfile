@@ -12,7 +12,7 @@ install:
 
 # Run the backend server.
 server:
-    cd apps/server && uv run ntrp-server serve
+    uv run --project apps/server ntrp-server serve
 
 # Run the desktop client.
 desktop:

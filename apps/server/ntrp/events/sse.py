@@ -96,6 +96,7 @@ class EventType(StrEnum):
     SESSION_UPDATED = "session_updated"
     SESSION_CREATED = "session_created"
     SESSION_ACTIVITY = "session_activity"
+    COMMAND_COMPLETED = "command_completed"
 
 
 # Token-level delta events are ephemeral transport: their cumulative text is
@@ -223,6 +224,13 @@ class RunFinishedEvent(SSEEvent):
     # checks it against `max_messages` for the message-pressure arc. 0 when
     # unavailable (cancelled runs etc.).
     message_count: int = 0
+
+
+@dataclass(frozen=True)
+class CommandCompletedEvent(SSEEvent):
+    type: EventType = field(default=EventType.COMMAND_COMPLETED, init=False)
+    run_id: str = ""
+    outcome: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -654,6 +662,7 @@ class TodoUpdatedEvent(SSEEvent):
 _EVENT_CLASSES = {
     EventType.RUN_STARTED.value: RunStartedEvent,
     EventType.RUN_FINISHED.value: RunFinishedEvent,
+    EventType.COMMAND_COMPLETED.value: CommandCompletedEvent,
     EventType.RUN_ERROR.value: RunErrorEvent,
     EventType.TEXT_MESSAGE_START.value: TextMessageStartEvent,
     EventType.TEXT_MESSAGE_CONTENT.value: TextMessageContentEvent,

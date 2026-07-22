@@ -1,5 +1,5 @@
 import { motion } from "motion/react";
-import { Check, Pencil, Target, X } from "lucide-react";
+import { Check, Pencil, Target, X } from "@/components/icons";
 import { acceptGoalProposal, cancelGoalProposal, editGoalProposal } from "@/actions/goals";
 import { ICON } from "@/lib/icons";
 import { RISE_IN, RISE_SETTLED } from "@/lib/tokens/motion";

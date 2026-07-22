@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { ArrowUpRight, ChevronDown, Folder, Inbox, Pin, Plus, Settings } from "lucide-react";
+import { ArrowUpRight, ChevronDown, Folder, Inbox, Pin, Plus, Settings } from "@/components/icons";
 import clsx from "clsx";
 import { MOTION, EASE_EMPHASIZED, EASE_OUT } from "@/lib/tokens/motion";
 import { useStore } from "@/stores";

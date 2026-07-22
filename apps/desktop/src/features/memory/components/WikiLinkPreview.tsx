@@ -164,7 +164,7 @@ export function WikiLinkPreview({
         <div data-memory-link-preview-surface className="grid gap-1.5 p-3" onMouseEnter={cancelHide} onMouseLeave={scheduleHide}>
           <strong className="text-sm font-semibold text-ink">{preview.detail?.title ?? summariesByPath.get(preview.path)?.title ?? preview.path}</strong>
           {preview.loading ? <span className="text-xs text-muted">Loading preview…</span>
-            : preview.error ? <span role="alert" className="text-xs text-danger">{preview.error}</span>
+            : preview.error ? <span role="alert" className="text-xs text-bad">{preview.error}</span>
               : <p className="line-clamp-4 text-xs leading-relaxed text-muted">{previewParagraph(preview.detail?.content ?? "")}</p>}
         </div>
       )}

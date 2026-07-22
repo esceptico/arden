@@ -288,22 +288,26 @@ class DailyProjector:
             lines.append("")
         return ("\n".join(lines).rstrip() + "\n").encode("utf-8")
 
-    @staticmethod
-    def _event_line(event: DailyTimelineEvent) -> str:
-        evidence = ""
-        if event.sources:
-            refs = ", ".join(DailyProjector._source_text(source) for source in event.sources)
-            evidence = f" _(sources: {refs})_"
-        return (
-            f"- `{event.occurred_at}` [{event.time_precision}] "
-            f"^{event.id} **{event.action}** {event.text}{evidence}"
-        )
+    def _event_line(self, event: DailyTimelineEvent) -> str:
+        text = event.text
+        cause = text.rfind(" (because of ^")
+        if cause >= 0 and text.endswith(")"):
+            text = text[:cause]
 
-    @staticmethod
-    def _source_text(source: SourceRef) -> str:
-        timestamp = source.occurred_at or source.captured_at
-        suffix = f" @ {timestamp} [{source.time_precision}]" if timestamp else f" [{source.time_precision}]"
-        return f"{source.kind}:{source.ref}{suffix}"
+        if event.action == "page_edit":
+            text = f"Edited `{text}`"
+        elif event.action == "synthesis_merge":
+            text = f"Updated `{text}`"
+        elif event.action == "update":
+            text = f"Updated: {text}"
+        elif event.action == "retract":
+            text = f"Removed: {text}"
+
+        if event.utc_instant is None:
+            return f"- {text}"
+        local = event.utc_instant.astimezone(self._zone)
+        time = local.strftime("%H:%M:%S" if event.time_precision in {"second", "millisecond"} else "%H:%M")
+        return f"- {time} — {text}"
 
     def _write_projection(
         self,

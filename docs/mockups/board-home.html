@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Board — Mission Control</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..700&amp;family=Geist+Mono:wght@400..600&amp;display=swap" rel="stylesheet">
+<script src="./board-icons.js?v=20260719-2"></script>
+<script src="./board-motion.js?v=20260722-42"></script>
+<link rel="stylesheet" href="./board-home.css?v=20260722-10">
+</head>
+<body data-page-enter>
+<div id="app">
+  <div class="dp-traffic traffic" aria-hidden="true"><i class="dp-traffic-light"></i><i class="dp-traffic-light"></i><i class="dp-traffic-light"></i></div>
+  <button class="dp-shell-toggle dp-shell-toggle-left sidebar-toggle" id="sidebar-toggle" aria-label="Hide sidebar"><svg aria-hidden="true"><use href="#dp-panel-left-close"/></svg></button>
+
+  <aside class="rail dp-sidebar" aria-label="Workspace sidebar" data-page-enter-item="chrome">
+    <nav class="rail-nav" aria-label="App">
+      <a class="nav-row on" href="./board-home.html" aria-current="page" data-context-actions="open:Open|new-view:Open in new view|copy-link:Copy link"><svg><use href="#dp-home"/></svg><span>Mission Control</span></a>
+      <a class="nav-row" href="./board-chat.html" data-context-actions="open:Open|new-view:Open in new view|copy-link:Copy link"><svg><use href="#dp-chat"/></svg><span>Chat</span></a>
+      <a class="nav-row" href="./board-automations.html" data-context-actions="open:Open|new-view:Open in new view|copy-link:Copy link"><svg><use href="#dp-zap"/></svg><span>Automations</span><span class="nav-count">3</span></a>
+      <a class="nav-row" href="./board-memory.html" data-context-actions="open:Open|new-view:Open in new view|copy-link:Copy link"><svg><use href="#dp-brain"/></svg><span>Memory</span></a>
+    </nav>
+    <div class="area-bar"><span>Areas</span><button class="dp-icon-button" aria-label="Manage areas"><svg><use href="#dp-sliders"/></svg></button></div>
+    <div class="area-list">
+      <a class="area-row" href="./board-area-room.html" data-context-actions="open:Open area|new-view:Open in new view|copy-link:Copy link"><span>O-1A evidence</span><small class="warn">needs you</small></a>
+      <a class="area-row" href="./board-area-room.html" data-context-actions="open:Open area|new-view:Open in new view|copy-link:Copy link"><span>Market launch</span><small class="live">2 running</small></a>
+      <a class="area-row" href="./board-area-room.html" data-context-actions="open:Open area|new-view:Open in new view|copy-link:Copy link"><span>Product</span><small>quiet</small></a>
+      <a class="area-row" href="./board-area-room.html" data-context-actions="open:Open area|new-view:Open in new view|copy-link:Copy link"><span>Health</span><small>updated</small></a>
+    </div>
+    <nav class="rail-bottom" aria-label="Settings">
+      <a class="nav-row" href="./board-settings.html"><svg><use href="#dp-settings"/></svg><span>Settings</span></a>
+      <button class="theme-toggle dp-icon-button" aria-label="Toggle theme"><svg><use href="#dp-sun"/></svg></button>
+    </nav>
+    <button class="dp-sidebar-resizer rail-resize" aria-label="Resize sidebar"></button>
+  </aside>
+
+  <main class="workspace">
+    <div class="page">
+      <header class="answer" data-page-enter-item>
+        <h1 class="answer-line" data-answer aria-live="polite">&nbsp;</h1>
+        <p class="answer-sub" data-answer-sub>&nbsp;</p>
+      </header>
+
+      <form class="capture" data-region="universal-capture" data-page-enter-item>
+        <input aria-label="Ask, search, or start a chat" placeholder="Ask, search, or start a chat…" autocomplete="off">
+        <span class="capture-note" data-capture-note aria-live="polite"></span>
+        <kbd>⌘K</kbd>
+      </form>
+
+      <section class="deck-region" data-region="deck" aria-label="Needs you" data-page-enter-item>
+        <p class="capacity" data-capacity hidden>More than a usual day — still one at a time.</p>
+        <div class="deck-slot">
+          <div class="deck" data-deck aria-live="polite"></div>
+          <div class="deck-chrome" data-deck-chrome>
+            <span class="deck-pos" data-deck-pos></span>
+            <span class="deck-hints">
+              <button type="button" class="deck-hint" data-undo hidden><kbd>Z</kbd>undo</button>
+              <button type="button" class="deck-hint" data-not-today>not today</button>
+            </span>
+          </div>
+          <div class="zero" data-zero hidden>
+            <span class="zero-status">All requests handled</span>
+          </div>
+        </div>
+        <div class="rest" data-rest aria-label="Waiting behind this one"></div>
+      </section>
+
+      <section class="strips" data-region="ambient" aria-label="Working without you" data-page-enter-item>
+        <div class="strip" data-strip="working">
+          <button type="button" class="strip-head" aria-expanded="false">
+            <span class="strip-line" data-line-working>&nbsp;</span>
+            <svg class="strip-chev"><use href="#dp-chevron-down"/></svg>
+          </button>
+          <div class="strip-body"><div class="strip-rows" data-rows-working></div></div>
+        </div>
+        <div class="strip" data-strip="scheduled">
+          <button type="button" class="strip-head" aria-expanded="false">
+            <span class="strip-line" data-line-scheduled>&nbsp;</span>
+            <svg class="strip-chev"><use href="#dp-chevron-down"/></svg>
+          </button>
+          <div class="strip-body"><div class="strip-rows" data-rows-scheduled></div></div>
+        </div>
+        <div class="strip" data-strip="done">
+          <button type="button" class="strip-head" aria-expanded="false">
+            <span class="strip-line" data-line-done>&nbsp;</span>
+            <svg class="strip-chev"><use href="#dp-chevron-down"/></svg>
+          </button>
+          <div class="strip-body"><div class="strip-rows" data-rows-done></div></div>
+        </div>
+        <div class="strip" data-strip="aside">
+          <button type="button" class="strip-head" aria-expanded="false">
+            <span class="strip-line" data-line-aside>&nbsp;</span>
+            <svg class="strip-chev"><use href="#dp-chevron-down"/></svg>
+          </button>
+          <div class="strip-body"><div class="strip-rows" data-rows-aside></div></div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <div class="plate">
+    <button class="lab-toggle dp-demo-toggle" type="button" aria-expanded="false">Demo</button>
+    <div class="lab-panel dp-demo-panel">
+      <button type="button" data-scene-button="morning" class="on">morning</button>
+      <button type="button" data-scene-button="heavy">heavy day</button>
+      <button type="button" data-scene-button="clear">all clear</button>
+      <button type="button" data-scene-button="quiet">quiet</button>
+      <button type="button" data-demo="complete-run">a run lands</button>
+      <button type="button" data-demo="new-ask">new ask arrives</button>
+      <button type="button" data-demo="stale-run">a run times out</button>
+      <button type="button" data-demo="reset">reset</button>
+    </div>
+  </div>
+</div>
+<script src="./board-sonner.js?v=20260722-1"></script>
+<script src="./board-home.js?v=20260722-40"></script>
+<details class="dp-review-nav"><summary>Mockups</summary><nav aria-label="Mockup pages"><a href="./board-home.html" aria-current="page">Home</a><a href="./board-chat.html">Chat</a><a href="./board-automations.html">Automations</a><a href="./board-memory.html">Memory</a><a href="./board-settings.html">Settings</a><a href="./board-area-room.html">Area Room</a><a href="./board-system-overlays.html">Overlays</a></nav></details>
+</body>
+</html>

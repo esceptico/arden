@@ -156,9 +156,9 @@ async def run_dream(
         cross-domain insight isn't dropped just because neither subject has a page yet.
         Returns None for a superseded record (a tombstone is not live evidence)."""
         found = store._find(rid)
-        if not found or found[1].superseded:
+        if not found or rid not in {entry.id for entry in store._active_ledger_entries()}:
             return None
-        return found[1].entity or found[0].stem
+        return found[1].entity[0] if found[1].entity else found[0].stem
 
     written = 0
     today = now_iso()

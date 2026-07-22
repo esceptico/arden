@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "motion/react";
-import { Maximize2, Minimize2, Minus, Plus, RotateCcw } from "lucide-react";
+import { Maximize2, Minimize2, Minus, Plus, RotateCcw } from "@/components/icons";
 import clsx from "clsx";
 import { getMermaid, invalidateMermaidTheme } from "@/lib/mermaidTheme";
 import {
@@ -15,7 +15,7 @@ import {
 import { useEscapeKey, useTimeoutFlag } from "@/lib/hooks";
 import { copyText } from "@/lib/clipboard";
 import { ICON } from "@/lib/icons";
-import { BlurSwap } from "@/components/ui/BlurSwap";
+import { IconSwap } from "@/components/ui/IconSwap";
 import { CopyGlyph } from "@/components/ui/CopyGlyph";
 import { IconButton } from "@/components/ui/IconButton";
 
@@ -291,13 +291,11 @@ function PanelInner({
             label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
             onClick={onToggleFullscreen}
           >
-            <BlurSwap swapKey={fullscreen ? "min" : "max"} blur={3}>
-              {fullscreen ? (
-                <Minimize2 size={ICON.SM} strokeWidth={2} />
-              ) : (
-                <Maximize2 size={ICON.SM} strokeWidth={2} />
-              )}
-            </BlurSwap>
+            <IconSwap
+              state={fullscreen ? "b" : "a"}
+              iconA={<Maximize2 size={ICON.SM} strokeWidth={2} />}
+              iconB={<Minimize2 size={ICON.SM} strokeWidth={2} />}
+            />
           </ToolbarButton>
         </div>
       </header>

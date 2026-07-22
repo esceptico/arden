@@ -17,11 +17,14 @@ Skills are user-facing commands that add new functionality to ntrp. They're dist
 
 ## Skill locations
 
-Skills are discovered from three locations (in order):
+Skills are discovered from six locations (in order):
 
 1. `apps/server/skills/` — builtin skills when developing from source; packaged as `skills/` in installed builds
-2. `.skills/` — project-level skills (per-directory)
-3. `~/.ntrp/skills/` — global user skills
+2. `agent/skills/` — filesystem-agent skills
+3. `.agents/skills/` — project skills shared with agent clients
+4. `.skills/` — ntrp project-level skills (per-directory)
+5. `~/.ntrp/skills/` — global user skills
+6. `~/.agents/skills/` — global skills shared with other agent clients
 
 ## Installing skills
 
@@ -52,7 +55,7 @@ my-skill/
 
 The `SKILL.md` tells the agent what the skill does and how to execute it. The agent follows these instructions when the user invokes `/my-skill`.
 
-Restart the server after creating a skill manually so the registry rescans builtin skills, `.skills/`, and `~/.ntrp/skills/`. Skills installed through the API are reloaded automatically.
+Restart the server after creating a skill manually so the registry rescans builtin skills, `agent/skills/`, `.agents/skills/`, `.skills/`, `~/.ntrp/skills/`, and `~/.agents/skills/`. Skills installed through the API are reloaded automatically.
 
 ## Governance
 

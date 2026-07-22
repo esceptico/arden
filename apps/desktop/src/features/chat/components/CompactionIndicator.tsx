@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "motion/react";
-import { Loader2 } from "lucide-react";
+import { Loader2 } from "@/components/icons";
 import { useStore } from "@/stores";
 import { MOTION, EASE_OUT } from "@/lib/tokens/motion";
 import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/Marker";

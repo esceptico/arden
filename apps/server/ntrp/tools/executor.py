@@ -38,7 +38,12 @@ class ToolExecutor:
             else ToolRegistry(middlewares=tool_middlewares, tool_overrides=tool_overrides)
         )
         for integration in ALL_INTEGRATIONS:
-            self._register_tools(integration.tools, source=integration.id, conflict="error")
+            self._register_tools(
+                integration.tools,
+                source=integration.id,
+                conflict="error",
+                command_tool_names=integration.command_tool_names,
+            )
 
         self._register_tools(discover_user_tools(), source="user", conflict="skip")
 
@@ -63,14 +68,26 @@ class ToolExecutor:
     def tool_services(self) -> dict[str, Any]:
         return self._get_services()
 
-    def _register_tools(self, tools: Mapping[str, Tool], *, source: str, conflict: str) -> None:
+    def _register_tools(
+        self,
+        tools: Mapping[str, Tool],
+        *,
+        source: str,
+        conflict: str,
+        command_tool_names: frozenset[str] = frozenset(),
+    ) -> None:
         for name, tool in tools.items():
             if name in self.registry:
                 if conflict == "skip":
                     _logger.warning("%s tool %r skipped — conflicts with existing tool", source, name)
                     continue
                 raise ValueError(f"duplicate tool name from {source}: {name}")
-            self.registry.register(name, tool, source=source)
+            self.registry.register(
+                name,
+                tool,
+                source=source,
+                command_eligible=name in command_tool_names,
+            )
             if not source.startswith("_"):
                 _logger.info("Loaded %s tool: %s", source, name)
 
@@ -98,6 +115,7 @@ class ToolExecutor:
         actions: frozenset[ToolAction] | None = None,
         extra_names: frozenset[str] = frozenset(),
         scope: tuple[str, ...] | None = None,
+        command_eligible: bool | None = None,
     ) -> list[dict]:
         return self.registry.get_schemas(
             capabilities=frozenset(self._get_services()),
@@ -105,6 +123,7 @@ class ToolExecutor:
             actions=actions,
             extra_names=extra_names,
             scope=scope,
+            command_eligible=command_eligible,
         )
 
     def get_tool_metadata(self) -> list[dict]:

@@ -2,20 +2,20 @@ import {
   createContext,
   useCallback,
   useContext,
-  useEffect,
-  useLayoutEffect,
-  useRef,
+  useId,
   type ReactNode,
 } from "react";
 import clsx from "clsx";
+import { motion } from "motion/react";
+import { SPRING_LAYOUT } from "@/lib/tokens/motion";
 
 // The one tabs primitive:
 //   "underline" — sliding 2px bar under the active tab (modal header tabs).
-//   "segmented" — transitions.dev capsule: tinted track + elevated pill that
-//                 slides between segments; items get size/color styling.
+//   "segmented" — tinted track + shared-layout pill spanning the active item.
+//   "expanding" — equal hit targets; active icon + label get a natural-width pill.
 //   "plain"     — no animated indicator; the active state is the item's own
 //                 static tint (the app's tint-only vertical menus).
-type Variant = "underline" | "plain" | "segmented";
+type Variant = "underline" | "plain" | "segmented" | "expanding";
 type Orientation = "horizontal" | "vertical";
 type Size = "sm" | "md" | "lg";
 
@@ -28,10 +28,12 @@ const ITEM_SIZE: Record<Size, string> = {
 
 interface TabsContextValue {
   value: string;
-  onChange: (value: string) => void;
+  select: (value: string) => void;
   orientation: Orientation;
   variant: Variant;
   size: Size;
+  indicatorLayoutId: string;
+  indicatorClassName?: string;
 }
 
 const TabsContext = createContext<TabsContextValue | null>(null);
@@ -42,15 +44,9 @@ function useTabsContext(): TabsContextValue {
   return ctx;
 }
 
-/**
- * transitions.dev "tabs sliding": one persistent indicator element per
- * tablist. JS writes the active tab's measured offsets/size inline and
- * `.t-tabs-indicator`'s CSS transition owns the tween, so the indicator
- * slides between the previous and next measured positions. Offsets — not
- * getBoundingClientRect — so a parent's open/close transform never skews the
- * measurement. Reduced motion is the stylesheet's prefers-reduced-motion
- * guard.
- */
+/** Motion's shared-layout tabs pattern: each active tab mounts the same
+ * layoutId. Motion transfers one pill between targets without manual width or
+ * glyph measurements. */
 export function Tabs({
   value,
   onChange,
@@ -74,60 +70,28 @@ export function Tabs({
   className?: string;
   children: ReactNode;
 }) {
-  const listRef = useRef<HTMLDivElement | null>(null);
-  const indicatorRef = useRef<HTMLSpanElement | null>(null);
-
-  const moveTo = useCallback((animate: boolean) => {
-    const el = indicatorRef.current;
-    if (!el) return;
-    const tab = listRef.current?.querySelector<HTMLElement>('[role="tab"][data-active]');
-    const write = () => {
-      if (!tab) {
-        el.style.width = "0px";
-        el.style.height = "0px";
-        return;
-      }
-      const underline = el.dataset.tabIndicator === "underline";
-      // Underline reproduces the old static geometry: 2px bar, 1px below the
-      // tab's bottom edge (-bottom-px).
-      const y = underline ? tab.offsetTop + tab.offsetHeight - 1 : tab.offsetTop;
-      el.style.transform = `translate(${tab.offsetLeft}px, ${y}px)`;
-      el.style.width = `${tab.offsetWidth}px`;
-      el.style.height = underline ? "2px" : `${tab.offsetHeight}px`;
-    };
-    // A fresh element — first paint, or React recreated the span and dropped
-    // our inline styles — must never tween from the stylesheet's 0×0
-    // defaults (reads as the pill growing out of the track corner).
-    const fresh = !el.style.width || el.style.width === "0px";
-    if (animate && !fresh) {
-      write();
-      return;
-    }
-    // Snap: suspend the transition, write, reflow, restore.
-    const prev = el.style.transition;
-    el.style.transition = "none";
-    write();
-    void el.offsetWidth;
-    el.style.transition = prev;
-  }, []);
-
-  // No dep array on purpose: labels resize without `value` changing (count
-  // suffixes), and a re-measure that lands on identical values is a no-op.
-  useLayoutEffect(() => {
-    moveTo(true);
-  });
-
-  useEffect(() => {
-    const onResize = () => moveTo(false);
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, [moveTo]);
-
-  const segmented = variant === "segmented";
+  const indicatorLayoutId = `tab-indicator-${useId().replace(/:/g, "")}`;
+  const segmented = variant === "segmented" || variant === "expanding";
+  const select = useCallback(
+    (nextValue: string) => {
+      if (nextValue === value) return;
+      onChange(nextValue);
+    },
+    [onChange, value],
+  );
   return (
-    <TabsContext.Provider value={{ value, onChange, orientation, variant, size }}>
+    <TabsContext.Provider
+      value={{
+        value,
+        select,
+        orientation,
+        variant,
+        size,
+        indicatorLayoutId,
+        indicatorClassName,
+      }}
+    >
       <div
-        ref={listRef}
         role="tablist"
         aria-label={label}
         aria-orientation={orientation}
@@ -139,19 +103,6 @@ export function Tabs({
           className,
         )}
       >
-        {variant !== "plain" && (
-          <span
-            ref={indicatorRef}
-            aria-hidden="true"
-            data-tab-indicator={variant}
-            className={clsx(
-              "t-tabs-indicator",
-              segmented &&
-                (indicatorClassName ?? "rounded-full bg-surface-3 shadow-[var(--shadow-2)]"),
-              variant === "underline" && "rounded-full bg-ink",
-            )}
-          />
-        )}
         {children}
       </div>
     </TabsContext.Provider>
@@ -199,11 +150,32 @@ export function Tab({
     const target = tabs[next];
     target.focus();
     const nextValue = target.getAttribute("data-tab-value");
-    if (nextValue !== null) ctx.onChange(nextValue);
+    if (nextValue !== null) ctx.select(nextValue);
   };
 
+  const indicator = active && ctx.variant !== "plain" ? (
+    <motion.span
+      layoutId={ctx.indicatorLayoutId}
+      aria-hidden="true"
+      data-tab-indicator={ctx.variant}
+      transition={SPRING_LAYOUT}
+      className={clsx(
+        "absolute pointer-events-none",
+        ctx.variant === "underline" && "inset-x-0 -bottom-px h-0.5 rounded-full bg-ink",
+        ctx.variant === "segmented" &&
+          (ctx.indicatorClassName ??
+            "inset-0 rounded-full bg-surface-3 shadow-[var(--shadow-2)]"),
+        ctx.variant === "expanding" &&
+          (ctx.indicatorClassName ??
+            "inset-0 rounded-full bg-surface-3 shadow-[var(--shadow-2)]"),
+      )}
+    />
+  ) : null;
+
   return (
-    <button
+    <motion.button
+      layout={ctx.variant === "expanding"}
+      transition={SPRING_LAYOUT}
       type="button"
       role="tab"
       id={id}
@@ -212,22 +184,38 @@ export function Tab({
       tabIndex={active ? 0 : -1}
       data-active={active ? "true" : undefined}
       data-tab-value={value}
-      onClick={() => ctx.onChange(value)}
+      onClick={() => ctx.select(value)}
       onKeyDown={onKeyDown}
       className={clsx(
         "group relative",
-        ctx.variant === "segmented" &&
+        (ctx.variant === "segmented" || ctx.variant === "expanding") &&
           clsx(
             "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-full font-medium",
             "text-muted hover:text-ink data-[active]:text-ink",
             "[transition:color_var(--tabs-dur)_var(--tabs-ease)]",
             "outline-none focus-visible:ring-2 focus-visible:ring-accent",
-            ITEM_SIZE[ctx.size],
+            ctx.variant === "expanding"
+              ? "h-7 min-w-7 flex-1 px-0 data-[active]:flex-none"
+              : ITEM_SIZE[ctx.size],
           ),
         className,
       )}
     >
-      {children}
-    </button>
+      {ctx.variant === "expanding" ? (
+        <motion.span
+          layout
+          transition={SPRING_LAYOUT}
+          className="relative inline-flex h-7 items-center justify-center gap-1.5 px-2.5"
+        >
+          {indicator}
+          <span className="relative z-10 inline-flex items-center gap-1.5">{children}</span>
+        </motion.span>
+      ) : (
+        <>
+          {indicator}
+          <span className="relative z-10">{children}</span>
+        </>
+      )}
+    </motion.button>
   );
 }

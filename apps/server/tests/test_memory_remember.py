@@ -300,6 +300,38 @@ async def test_remember_includes_triggering_user_message_evidence(store: RecordS
     ]
 
 
+async def test_remember_normalizes_triggering_message_timestamp_precision(store: RecordStore):
+    class Reconciler:
+        sources = ()
+
+        async def reconcile_direct_memory(self, **kwargs):
+            self.sources = kwargs["sources"]
+            return (RecordOperation.noop(),)
+
+    class Sessions:
+        async def list_messages(self, session_id, limit):
+            return {
+                "messages": [
+                    {
+                        "message_id": "user-message-1",
+                        "seq": 7,
+                        "role": "user",
+                        "created_at": "2026-07-15T12:51:30.427616+00:00",
+                    }
+                ]
+            }
+
+    reconciler = Reconciler()
+    execution = _execution(store, reconciler)
+    execution.ctx.services["session"] = Sessions()
+
+    await remember(execution, RememberInput(text="the user prefers tea"))
+
+    source = reconciler.sources[1]
+    assert source.occurred_at == "2026-07-15T12:51:30.427+00:00"
+    assert source.time_precision == "millisecond"
+
+
 async def test_file_store_direct_remember_commits_complement_with_complete_evidence(tmp_path: Path):
     store, reconciler, execution, conn = await _ledger_dependencies(
         tmp_path,

@@ -2,11 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import clsx from "clsx";
-import { CalendarClock, ChevronDown, Clock, MessageSquare } from "lucide-react";
+import { CalendarClock, ChevronDown, Clock, MessageSquare } from "@/components/icons";
 import { EASE_OUT, SPRING_POPOVER, MOTION } from "@/lib/tokens/motion";
 import { ICON } from "@/lib/icons";
 import { useReanchor } from "@/lib/hooks";
-import { BlurSwap } from "@/components/ui/BlurSwap";
+import { IconSwap } from "@/components/ui/IconSwap";
 import { Button } from "@/components/ui/Button";
 import { Chip } from "@/components/ui/Chip";
 import { Select } from "@/components/ui/Select";
@@ -137,13 +137,11 @@ export function ScheduleChip({
         size="md"
         active={open}
         leading={
-          <BlurSwap swapKey={schedule.kind === "message" ? "message" : "time"}>
-            {schedule.kind === "message" ? (
-              <MessageSquare size={ICON.XS} strokeWidth={2} />
-            ) : (
-              <Clock size={ICON.XS} strokeWidth={2} />
-            )}
-          </BlurSwap>
+          <IconSwap
+            state={schedule.kind === "message" ? "b" : "a"}
+            iconA={<Clock size={ICON.XS} strokeWidth={2} />}
+            iconB={<MessageSquare size={ICON.XS} strokeWidth={2} />}
+          />
         }
         trailing={<ChevronDown size={ICON.XS} strokeWidth={2} className="opacity-60" />}
         onClick={() => (open ? setOpen(false) : openPopover())}
@@ -317,13 +315,11 @@ export function ScheduleChip({
                   className="flex-1 min-w-0 flex items-center gap-1.5 text-xs text-muted"
                   title={scheduleLabel(staged)}
                 >
-                  <BlurSwap swapKey={staged.kind === "message" ? "message" : "time"}>
-                    {staged.kind === "message" ? (
-                      <MessageSquare size={ICON.XS} strokeWidth={2} className="shrink-0 text-faint" />
-                    ) : (
-                      <CalendarClock size={ICON.XS} strokeWidth={2} className="shrink-0 text-faint" />
-                    )}
-                  </BlurSwap>
+                  <IconSwap
+                    state={staged.kind === "message" ? "b" : "a"}
+                    iconA={<CalendarClock size={ICON.XS} strokeWidth={2} className="shrink-0 text-faint" />}
+                    iconB={<MessageSquare size={ICON.XS} strokeWidth={2} className="shrink-0 text-faint" />}
+                  />
                   <span className="truncate">{scheduleLabel(staged)}</span>
                 </div>
                 <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>

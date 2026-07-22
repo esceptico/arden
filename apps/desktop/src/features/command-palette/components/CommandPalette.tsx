@@ -6,6 +6,7 @@ import { useFocusTrap } from "@/lib/hooks";
 import { SPRING_POPOVER } from "@/lib/tokens/motion";
 import { PaletteBody } from "@/features/command-palette/components/PaletteBody";
 import type { Crumb } from "@/features/command-palette/types";
+import { runCommandSidecar } from "@/actions/commandSidecar";
 
 export function CommandPalette() {
   const open = useStore((s) => s.paletteOpen);
@@ -78,6 +79,7 @@ export function CommandPalette() {
           crumbs={crumbs}
           setCrumbs={setCrumbs}
           onClose={close}
+          onAgentSubmit={(command) => void runCommandSidecar(command)}
           morph={morphReady}
         />
       </motion.div>

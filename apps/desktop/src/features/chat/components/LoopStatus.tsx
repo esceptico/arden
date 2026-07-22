@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Repeat2, X } from "lucide-react";
+import { Repeat2, X } from "@/components/icons";
 import { useStore, type ServerLoop } from "@/stores";
 import { refreshLoops, stopLoop } from "@/actions/loops";
 import { ICON } from "@/lib/icons";

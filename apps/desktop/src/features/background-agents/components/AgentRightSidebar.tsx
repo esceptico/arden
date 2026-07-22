@@ -1,6 +1,6 @@
 import { useMemo, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { ArrowRight, Bot, MoreHorizontal, X } from "lucide-react";
+import { ArrowRight, Bot, MoreHorizontal, X } from "@/components/icons";
 import { isInternalAutomation, isIterationLoop } from "@/lib/automationFilters";
 import {
   DURATION_RIGHT_PANEL_HIDE,
@@ -18,7 +18,7 @@ import { ExpandableWorkflowCard } from "@/components/ui/WorkflowDetail";
 import { ScrollFadeTop } from "@/components/ui/ScrollBlur";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Tab, Tabs } from "@/components/ui/Tabs";
-import { BlurSwap } from "@/components/ui/BlurSwap";
+import { IconSwap } from "@/components/ui/IconSwap";
 import { StatusDot } from "@/components/ui/StatusDot";
 import { Collapse } from "@/components/ui/Collapse";
 import {
@@ -183,13 +183,11 @@ export function AgentRightSidebar({ sourcesPanel }: { sourcesPanel: ReactNode })
         className="right-sidebar-toggle inline-flex items-center gap-1.5 h-[22px] px-1 rounded-md text-muted hover:bg-surface-soft hover:text-ink transition-[background-color,color,scale] duration-row ease-out active:scale-[0.96]"
       >
         {collapsed && activeCount > 0 && <StatusDot status="running" pulse />}
-        <BlurSwap swapKey={collapsed ? "open" : "close"} scaleFrom={0.25}>
-          {collapsed ? (
-            <MoreHorizontal size={ICON.MD} strokeWidth={2} />
-          ) : (
-            <ArrowRight size={ICON.MD} strokeWidth={2} />
-          )}
-        </BlurSwap>
+        <IconSwap
+          state={collapsed ? "b" : "a"}
+          iconA={<ArrowRight size={ICON.MD} strokeWidth={2} />}
+          iconB={<MoreHorizontal size={ICON.MD} strokeWidth={2} />}
+        />
       </button>
 
       {/* Panel — always rendered (preserves internal state). Asymmetric

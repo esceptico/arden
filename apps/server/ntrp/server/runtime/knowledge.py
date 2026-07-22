@@ -334,12 +334,10 @@ class KnowledgeRuntime:
                 for change in changes:
                     if isinstance(change, ObservedFileChange):
                         revision = change.result_revision
-                        review_required = False
                         if change.origin == "external" and self._page_edit_service is not None:
                             event = await self._page_edit_service.ingest_external(change)
                             if event is not None:
                                 revision = event.result_revision
-                                review_required = event.reconciliation == "needs_review"
                         self._vault_index.schedule()
                         link_index = getattr(self, "_link_index", None)
                         if link_index is not None:
@@ -347,7 +345,7 @@ class KnowledgeRuntime:
                         await on_change(
                             [change.path],
                             revision=revision,
-                            review_required=review_required,
+                            review_required=False,
                         )
                     else:
                         plain_paths.append(change)
@@ -376,8 +374,6 @@ class KnowledgeRuntime:
     async def connect(self, stores: Stores) -> None:
         await self._init_search()
         await self._init_memory(stores)
-        if self.search_index is not None:
-            stores.sessions.store.attach_search_index(self.search_index)
         if self.memory_curator is not None:
             self.memory_curator.start_sweep()
         # No boot artifact refresh: files are canonical, there is no projection.
@@ -385,12 +381,7 @@ class KnowledgeRuntime:
     async def reload_config(self, config: Config, stores: Stores | None) -> None:
         self.config = config
         await self._sync_embedding()
-        # Re-wire the live transcript store to the (possibly new/None) index so
-        # toggling embedding at runtime enables/disables hybrid search + indexing
-        # without a restart. attach_search_index is idempotent and clears on None.
-        if stores is not None:
-            stores.sessions.store.attach_search_index(self.search_index)
-        # Same re-wire for the record store (the curator shares it).
+        # Re-wire the record store (the curator shares it).
         if self._record_store is not None:
             self._record_store.attach_search_index(self.search_index)
 
@@ -488,13 +479,11 @@ class KnowledgeRuntime:
         if not hasattr(self, "_vault_index"):
             self._vault_index = VaultIndexProjection(self.config.memory_artifacts_dir)
 
+        from ntrp.memory.health import initialize_empty_vault, validate_vault
         from ntrp.memory.journal import VaultJournal
 
+        initialize_empty_vault(self.config.memory_artifacts_dir)
         VaultJournal(self.config.memory_artifacts_dir).recover()
-
-        from ntrp.memory.migrate_ledger_v2 import migrate_vault_to_v2, validate_vault
-
-        migrate_vault_to_v2(self.config.memory_artifacts_dir)
         health = validate_vault(self.config.memory_artifacts_dir)
         if not health.healthy:
             raise RuntimeError(f"memory vault validation failed: {health.first_error or 'unknown vault error'}")
@@ -554,13 +543,6 @@ class KnowledgeRuntime:
             _logger.warning("memory enabled but no memory_model; curator disabled")
 
         await self._record_store.open()
-        await self._migrate_legacy_if_needed()
-        VaultJournal(self.config.memory_artifacts_dir).recover()
-        migrate_vault_to_v2(self.config.memory_artifacts_dir)
-        health = validate_vault(self.config.memory_artifacts_dir)
-        if not health.healthy:
-            raise RuntimeError(f"memory vault validation failed: {health.first_error or 'unknown vault error'}")
-        await self._record_store.open()
         from ntrp.memory.page_edit_service import PageEditService
 
         self._page_edit_service = PageEditService(
@@ -616,41 +598,6 @@ class KnowledgeRuntime:
             self._link_index.schedule()
         if self._daily_projection is not None:
             self._daily_projection.schedule()
-
-    async def _migrate_legacy_if_needed(self) -> None:
-        """One-time boot migration: if the file store is empty but the legacy
-        SQLite pool still has records, convert them to pages. Backs up the db and
-        any existing projection dir first; idempotent (skips once pages exist)."""
-        if await self._record_store.count_active() > 0:
-            return
-        db_path = self.config.memory_db_path
-        if not db_path.exists():
-            return
-
-        from ntrp.memory.records import RecordStore
-
-        legacy = RecordStore(db_path=db_path)
-        await legacy.open()
-        try:
-            if await legacy.count_active() == 0:
-                return  # nothing to migrate
-
-            import shutil
-            from datetime import UTC, datetime
-
-            from ntrp.memory.migrate_to_files import migrate
-
-            root = self.config.memory_artifacts_dir
-            stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-            shutil.copy2(db_path, db_path.parent / f"{db_path.name}.premigrate-{stamp}.bak")
-            if root.exists():
-                shutil.copytree(root, root.parent / f"{root.name}.bak-{stamp}")
-                shutil.rmtree(root)
-            result = await migrate(legacy, root)
-            _logger.info("auto-migrated legacy memory to files on boot", **result)
-        finally:
-            await legacy.close()
-        await self._record_store.open()  # reload the freshly-written pages
 
     def _memory_reasoning_effort(self, model_id: str | None) -> str | None:
         """Effort for memory's structured calls: the user's configured effort if set,

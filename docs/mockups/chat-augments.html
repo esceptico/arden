@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Chat — Augments</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..700&family=Geist+Mono:wght@400..600&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   AUGMENTED DEFAULT CHAT
+   The familiar chat stays: user bubble, agent prose, activity
+   trace, floating composer. Each augmentation is a toggle in the
+   header — flip them independently against the baseline.
+
+     ledger — activity tree collapses to one quiet mono line
+     ruler  — a faint time gutter appears in the left margin
+     brief  — a pinned "so far" capsule sits above the transcript
+   ============================================================ */
+:root{
+  color-scheme:light dark;
+  --paper:#fff;--line:#ececec;--line-strong:#dedede;
+  --ink:#171717;--ink-soft:#3d3d3d;--muted:#666;--faint:#767676;
+  --panel:#f8f8f6;--panel-soft:#efefec;
+  --hov:color-mix(in oklab,var(--ink) 4%,transparent);
+  --sel:color-mix(in oklab,var(--ink) 8%,transparent);
+  --accent:#4f46e5;
+  --shadow-color:rgb(0 0 0/.06);
+  --e2:0 0 0 1px var(--shadow-color),0 1px 1px -.5px var(--shadow-color),0 3px 3px -1.5px var(--shadow-color),0 6px 6px -3px var(--shadow-color);
+  --e3:var(--e2),0 12px 12px -6px var(--shadow-color);
+  --sans:"Geist",-apple-system,sans-serif;--mono:"Geist Mono",ui-monospace,monospace;
+  --ease:cubic-bezier(.22,1,.36,1);
+}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --paper:#191919;--line:#262626;--line-strong:#303030;
+  --ink:#ededed;--ink-soft:#c8c8c8;--muted:#9c9c9c;--faint:#8a8a8a;
+  --panel:#1e1e1e;--panel-soft:#262626;--accent:#818cf8;
+  --shadow-color:rgb(0 0 0/.35);
+  --e2:inset 0 1px 0 rgb(255 255 255/.05),inset 0 0 0 1px rgb(255 255 255/.07),0 3px 3px -1.5px var(--shadow-color),0 6px 6px -3px var(--shadow-color);
+  --e3:inset 0 1px 0 rgb(255 255 255/.05),inset 0 0 0 1px rgb(255 255 255/.07),0 6px 6px -3px var(--shadow-color),0 12px 12px -6px var(--shadow-color);
+}}
+:root[data-theme="dark"]{color-scheme:dark;
+  --paper:#191919;--line:#262626;--line-strong:#303030;
+  --ink:#ededed;--ink-soft:#c8c8c8;--muted:#9c9c9c;--faint:#8a8a8a;
+  --panel:#1e1e1e;--panel-soft:#262626;--accent:#818cf8;
+  --shadow-color:rgb(0 0 0/.35);
+  --e2:inset 0 1px 0 rgb(255 255 255/.05),inset 0 0 0 1px rgb(255 255 255/.07),0 3px 3px -1.5px var(--shadow-color),0 6px 6px -3px var(--shadow-color);
+  --e3:inset 0 1px 0 rgb(255 255 255/.05),inset 0 0 0 1px rgb(255 255 255/.07),0 6px 6px -3px var(--shadow-color),0 12px 12px -6px var(--shadow-color);
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{font-family:var(--sans);font-size:14px;background:var(--paper);color:var(--ink);-webkit-font-smoothing:antialiased}
+button,textarea{font:inherit;border:0;background:none;color:inherit;padding:0}
+button{cursor:default;text-align:left}
+button:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+.frame{height:100%;display:flex;flex-direction:column}
+
+/* Header: title + augment toggles. */
+.head{flex:none;height:52px;display:flex;align-items:center;gap:8px;padding:0 20px;border-bottom:1px solid var(--line)}
+.head h1{margin:0;font-size:13px;font-weight:610;letter-spacing:-.01em}
+.head time{font:500 10.5px/1 var(--mono);color:var(--faint)}
+.augs{margin-left:auto;display:flex;align-items:center;gap:4px}
+.augs .lbl{font:500 10px/1 var(--mono);color:var(--faint);margin-right:4px;letter-spacing:.05em}
+.aug{height:24px;padding:0 10px;border-radius:999px;font:530 11.5px var(--sans);color:var(--muted);
+  box-shadow:inset 0 0 0 1px var(--line-strong);transition:all .15s var(--ease)}
+.aug:hover{color:var(--ink);background:var(--hov)}
+.aug.on{background:var(--ink);color:var(--paper);box-shadow:none}
+.theme{margin-left:10px;font:500 10.5px/1 var(--mono);color:var(--faint)}
+.theme:hover{color:var(--ink)}
+
+.scroll{flex:1;overflow-y:auto}
+.lane{max-width:680px;margin:0 auto;padding:28px 28px 40px}
+
+/* ---------- AUGMENT: brief ---------- */
+/* A pinned capsule above the transcript: what this session has
+   settled so far + what's waiting on you. The chat's compiled
+   state, one glance, always current. */
+.brief{display:none;position:sticky;top:12px;z-index:5;margin-bottom:26px;padding:11px 14px;
+  border-radius:10px;background:var(--panel);box-shadow:var(--e2)}
+body.aug-brief .brief{display:block}
+.brief-row{display:flex;align-items:baseline;gap:8px}
+.brief-row b{font-size:12px;font-weight:610}
+.brief-row span{font:500 10px/1 var(--mono);color:var(--faint);margin-left:auto}
+.brief p{margin:5px 0 0;font-size:12.5px;line-height:1.5;color:var(--muted)}
+.brief .waiting{color:var(--ink);font-weight:560}
+
+/* ---------- AUGMENT: ruler ---------- */
+/* Timestamps live in the left margin, set against a faint dotted
+   rail — the transcript becomes lightly instrumented without a
+   single pixel changing inside the flow. */
+.block{position:relative}
+body.aug-ruler .lane{padding-left:96px}
+.block::before{content:attr(data-t);position:absolute;left:-68px;top:4px;width:44px;
+  display:none;text-align:right;font:500 10px/1 var(--mono);color:var(--faint);
+  font-variant-numeric:tabular-nums}
+.block::after{content:"";position:absolute;left:-18px;top:0;bottom:-26px;width:1px;display:none;
+  background-image:linear-gradient(to bottom,var(--line-strong) 1px,transparent 1px);background-size:1px 5px}
+.block[data-t]::before{display:none}
+body.aug-ruler .block[data-t]::before{display:block}
+body.aug-ruler .block::after{display:block}
+body.aug-ruler .block:last-child::after{bottom:0}
+
+/* ---------- Default chat grammar ---------- */
+.block{margin-bottom:26px}
+.user-row{display:flex;justify-content:flex-end}
+.user-bubble{max-width:520px;padding:10px 13px;border-radius:12px;background:var(--panel);box-shadow:var(--e3);
+  font-size:14px;line-height:1.5;text-wrap:pretty}
+
+.agent{max-width:620px;font-size:14px;line-height:1.7;color:var(--ink-soft)}
+.agent p{margin:0 0 13px;text-wrap:pretty}
+.agent p:last-child{margin-bottom:0}
+.agent strong{color:var(--ink);font-weight:600}
+.agent ul{margin:0 0 13px;padding-left:19px}
+.agent li{margin:4px 0}
+.agent li::marker{color:var(--faint)}
+.agent code{font:500 12.5px var(--mono);background:var(--panel-soft);padding:1px 5px;border-radius:4px;color:var(--ink)}
+
+/* Activity trace — DEFAULT: the app's step tree. */
+.trace{max-width:620px}
+.trace-head{display:flex;align-items:center;gap:7px;height:22px;font-size:12px;color:var(--faint)}
+.trace-head:hover{color:var(--muted)}
+.steps{display:flex;flex-direction:column;margin-top:2px}
+.step{display:flex;gap:10px;padding:5px 0}
+.step-gutter{width:16px;flex:none;display:flex;flex-direction:column;align-items:center}
+.step-dot{width:5px;height:5px;border-radius:50%;background:var(--line-strong);margin-top:6px;flex:none}
+.thread{flex:1;width:1px;margin-top:4px;background:var(--line)}
+.step:last-child .thread{display:none}
+.step-body{min-width:0;flex:1}
+.step-verb{font-size:13px;font-weight:530;line-height:1.3;color:var(--ink)}
+.step-detail{margin-top:2px;font-size:12px;line-height:1.4;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.step-suffix{flex:none;font:500 10.5px/1 var(--mono);color:var(--faint);padding-top:3px;font-variant-numeric:tabular-nums}
+
+/* Activity trace — AUGMENT: ledger. One quiet mono line,
+   expandable to a compact time/verb/result table. */
+.work{display:none;max-width:620px}
+body.aug-ledger .trace{display:none}
+body.aug-ledger .work{display:block}
+.work-line{display:flex;align-items:center;gap:8px;height:24px;margin-left:-8px;padding:0 8px;border-radius:6px;
+  font:500 11.5px/1 var(--mono);color:var(--faint);transition:all .15s var(--ease)}
+.work-line:hover{color:var(--muted);background:var(--hov)}
+.work-line .tick{width:10px;height:1px;background:currentColor;flex:none}
+.work-detail{display:none;margin:6px 0 0 2px;padding-left:16px;border-left:1px solid var(--line)}
+.work.open .work-detail{display:block}
+.work-row{display:flex;align-items:baseline;gap:10px;padding:3px 0;font:500 11.5px/1.5 var(--mono);color:var(--muted)}
+.work-row .t{flex:none;width:44px;color:var(--faint)}
+.work-row .r{margin-left:auto;flex:none;color:var(--faint)}
+.pulse{animation:breathe 2s var(--ease) infinite}
+@keyframes breathe{0%,100%{opacity:.45}50%{opacity:1}}
+
+/* Approval card — unchanged across augments. */
+.ask{max-width:620px;margin-top:14px;padding:13px 15px;border-radius:10px;background:var(--panel);box-shadow:var(--e2)}
+.ask b{display:block;font-size:13px;font-weight:600}
+.ask>p{margin:3px 0 0;font-size:12px;line-height:1.5;color:var(--muted)}
+.ask .cmd{margin:10px 0 0;font:400 12.5px/1.6 var(--sans);color:var(--ink-soft);background:var(--paper);
+  padding:9px 11px;border-radius:7px;box-shadow:inset 0 0 0 1px var(--line)}
+.ask-actions{display:flex;gap:6px;margin-top:11px}
+.ask-actions button{height:26px;padding:0 11px;border-radius:6px;font-size:12px;font-weight:530;
+  color:var(--muted);box-shadow:inset 0 0 0 1px var(--line-strong);transition:all .15s var(--ease)}
+.ask-actions button:hover{color:var(--ink);background:var(--hov)}
+.ask-actions .go{background:var(--ink);color:var(--paper);box-shadow:none}
+
+/* Composer — the default floating desk object, untouched. */
+.foot{flex:none;padding:0 28px 14px}
+.composer{max-width:680px;margin:0 auto;padding:11px 12px 9px;border-radius:14px;background:var(--panel);box-shadow:var(--e3)}
+.composer textarea{width:100%;height:44px;resize:none;outline:none;background:none;color:var(--ink);
+  font:400 14px/1.5 var(--sans);padding:0 3px}
+.composer textarea::placeholder{color:var(--faint)}
+.composer-row{display:flex;align-items:center;gap:8px}
+.composer-row .model{font:500 10.5px/1 var(--mono);color:var(--faint);margin-left:auto}
+.composer-row .model:hover{color:var(--ink)}
+.send{width:28px;height:28px;border-radius:50%;background:var(--ink);color:var(--paper);
+  display:grid;place-items:center;font-size:13px}
+</style>
+</head>
+<body class="aug-ledger">
+<div class="frame">
+
+  <header class="head">
+    <h1>Week triage</h1>
+    <time>thu 09:41</time>
+    <div class="augs">
+      <span class="lbl">AUGMENTS</span>
+      <button class="aug on" data-aug="ledger">ledger</button>
+      <button class="aug" data-aug="ruler">ruler</button>
+      <button class="aug" data-aug="brief">brief</button>
+      <button class="theme" id="theme">theme</button>
+    </div>
+  </header>
+
+  <div class="scroll"><main class="lane">
+
+    <div class="brief">
+      <div class="brief-row"><b>So far</b><span>updated 09:44</span></div>
+      <p>3 things need you: Anna's report, Thursday's agenda, Sergey's answer. 26 threads held for archive. <span class="waiting">Waiting on you — send the reply to Anna.</span></p>
+    </div>
+
+    <div class="block" data-t="09:41">
+      <div class="user-row"><div class="user-bubble">What's on my plate this week? Check calendar and mail, and cross-check with what I promised people.</div></div>
+    </div>
+
+    <div class="block" data-t="09:41">
+      <!-- default trace -->
+      <div class="trace">
+        <button class="trace-head">Worked for 11s · 6 calls ⌄</button>
+        <div class="steps">
+          <div class="step"><div class="step-gutter"><span class="step-dot"></span><span class="thread"></span></div>
+            <div class="step-body"><div class="step-verb">Reading calendar and mail</div>
+            <div class="step-detail">calendar.list · email.search unread OR flagged · memory.recall</div></div>
+            <span class="step-suffix">3 calls</span></div>
+          <div class="step"><div class="step-gutter"><span class="step-dot"></span><span class="thread"></span></div>
+            <div class="step-body"><div class="step-verb">Scout read the long threads</div>
+            <div class="step-detail">8 threads, summarized commitments</div></div>
+            <span class="step-suffix">8s</span></div>
+          <div class="step"><div class="step-gutter"><span class="step-dot"></span><span class="thread"></span></div>
+            <div class="step-body"><div class="step-verb">Cross-checking promises</div>
+            <div class="step-detail">email.thread anna, sergey</div></div>
+            <span class="step-suffix">2 calls</span></div>
+        </div>
+      </div>
+      <!-- ledger augment -->
+      <div class="work">
+        <button class="work-line" onclick="this.parentElement.classList.toggle('open')">
+          <span class="tick"></span><span>read calendar, mail, memory — 6 calls · 1 scout · 11s</span>
+        </button>
+        <div class="work-detail">
+          <div class="work-row"><span class="t">09:41</span><span>calendar.list</span><span class="r">14 events</span></div>
+          <div class="work-row"><span class="t">09:41</span><span>email.search unread|flagged</span><span class="r">31 threads</span></div>
+          <div class="work-row"><span class="t">09:41</span><span>memory.recall commitments</span><span class="r">4 facts</span></div>
+          <div class="work-row"><span class="t">09:41</span><span>↳ scout · 8 long threads</span><span class="r">8s</span></div>
+          <div class="work-row"><span class="t">09:42</span><span>email.thread anna, sergey</span><span class="r">ok</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="block" data-t="09:42">
+      <div class="agent">
+        <p>Three things actually need you this week; the rest is noise I can hold.</p>
+        <ul>
+          <li><strong>The Q3 report to Anna</strong> — you told her "end of last week". Oldest open loop; she nudged again yesterday.</li>
+          <li><strong>Thursday's design review</strong> — 6 attendees, no agenda yet. You own it.</li>
+          <li><strong>Sergey's contract question</strong> — a two-line answer, and he's been blocked on you since Monday.</li>
+        </ul>
+        <p>Calendar is quiet otherwise: 14 events, only the review needs prep. Of 31 unread threads, 26 are newsletters or FYI — I can archive them. Your standing note says <code>report &gt; meetings</code> when they collide.</p>
+      </div>
+    </div>
+
+    <div class="block" data-t="09:44">
+      <div class="user-row"><div class="user-bubble">Draft a reply to Anna — honest about the delay, report lands Wednesday.</div></div>
+    </div>
+
+    <div class="block" data-t="09:44">
+      <div class="trace">
+        <button class="trace-head">Working · reading the thread ⌄</button>
+        <div class="steps">
+          <div class="step"><div class="step-gutter"><span class="step-dot"></span></div>
+            <div class="step-body"><div class="step-verb">Matching your tone</div>
+            <div class="step-detail">email.thread anna · your last 3 replies</div></div>
+            <span class="step-suffix">2 calls</span></div>
+        </div>
+      </div>
+      <div class="work">
+        <button class="work-line"><span class="tick"></span><span class="pulse">drafting — read thread, matching your last 3 replies</span></button>
+      </div>
+    </div>
+
+    <div class="block" data-t="09:44">
+      <div class="agent"><p>Draft's ready below — four sentences, matched to how you usually write to her.</p></div>
+      <div class="ask">
+        <b>Send mail to Anna Kovaleva?</b>
+        <p>Replies in-thread to "Q3 report?" · your work account</p>
+        <div class="cmd">Anna — the report slipped, that's on me. It lands Wednesday with the retention numbers you asked about. If Wednesday breaks anything on your side, tell me and I'll send the raw tables today.</div>
+        <div class="ask-actions">
+          <button class="go">Send</button><button>Edit</button><button>Skip</button>
+        </div>
+      </div>
+    </div>
+
+  </main></div>
+
+  <footer class="foot"><div class="composer">
+    <textarea placeholder="Message the agent…"></textarea>
+    <div class="composer-row">
+      <button class="model">sonnet-5 · high</button>
+      <button class="send">↑</button>
+    </div>
+  </div></footer>
+
+</div>
+<script>
+if(location.hash){
+  document.body.className='';
+  location.hash.slice(1).split(',').forEach(a=>{
+    document.body.classList.add('aug-'+a);
+    const b=document.querySelector(`[data-aug="${a}"]`);if(b)b.classList.add('on');
+  });
+  document.querySelectorAll('.aug').forEach(b=>{if(!location.hash.includes(b.dataset.aug))b.classList.remove('on')});
+}
+document.querySelectorAll('.aug').forEach(b=>b.addEventListener('click',()=>{
+  b.classList.toggle('on');
+  document.body.classList.toggle('aug-'+b.dataset.aug,b.classList.contains('on'));
+}));
+document.getElementById('theme').addEventListener('click',()=>{
+  const r=document.documentElement;r.dataset.theme=r.dataset.theme==='dark'?'light':'dark';
+});
+</script>
+</body>
+</html>

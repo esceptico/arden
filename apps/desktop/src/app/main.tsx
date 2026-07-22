@@ -4,6 +4,7 @@ import "@fontsource-variable/geist";
 import "@/styles.css";
 import { App } from "@/app/App";
 import { QuickCapture } from "@/app/QuickCapture";
+import { IconContext } from "@/components/icons";
 
 const root = document.querySelector<HTMLDivElement>("#app");
 if (!root) throw new Error("Missing #app");
@@ -20,6 +21,8 @@ if (isQuickCapture) document.body.classList.add("quick-capture-mode");
 
 createRoot(root).render(
   <StrictMode>
-    {isQuickCapture ? <QuickCapture /> : <App />}
+    <IconContext.Provider value={{ color: "currentColor", strokeWidth: 1.5 }}>
+      {isQuickCapture ? <QuickCapture /> : <App />}
+    </IconContext.Provider>
   </StrictMode>,
 );

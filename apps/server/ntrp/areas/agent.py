@@ -141,10 +141,50 @@ def area_agent_instructions(area: Area) -> str:
 
 
 def render_work_context(snapshot: AreaWorkSnapshot) -> str:
+    outcome_keys = {row.outcome_id: row.stable_key for row in snapshot.outcomes}
+    work_keys = {row.item_id: row.stable_key for row in snapshot.work_items}
+    recent_evidence = []
+    for row in snapshot.events[:10]:
+        if row.item_id in work_keys:
+            target_type, target_key = "work", work_keys[row.item_id]
+        elif row.outcome_id in outcome_keys:
+            target_type, target_key = "outcome", outcome_keys[row.outcome_id]
+        else:
+            target_type, target_key = "area", None
+        recent_evidence.append({
+            "target_type": target_type,
+            "target_key": target_key,
+            "event_type": row.event_type,
+            "summary": row.summary,
+            "source_refs": row.source_refs,
+            "created_at": row.created_at,
+        })
     payload = {
-        "outcomes": [row.model_dump(mode="json") for row in snapshot.outcomes],
-        "work_items": [row.model_dump(mode="json") for row in snapshot.work_items],
-        "recent_evidence": [row.model_dump(mode="json") for row in snapshot.events[:10]],
+        "outcomes": [{
+            "key": row.stable_key,
+            "title": row.title,
+            "success_criteria": row.success_criteria,
+            "status": row.status,
+            "priority": row.priority,
+            "source": row.source,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+            "completed_at": row.completed_at,
+        } for row in snapshot.outcomes],
+        "work_items": [{
+            "key": row.stable_key,
+            "outcome_key": outcome_keys.get(row.outcome_id),
+            "kind": row.kind,
+            "text": row.text,
+            "status": row.status,
+            "owner": row.owner,
+            "due_at": row.due_at,
+            "next_attempt_at": row.next_attempt_at,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+            "completed_at": row.completed_at,
+        } for row in snapshot.work_items],
+        "recent_evidence": recent_evidence,
     }
     return "CURRENT AREA WORK (canonical structured state):\n" + json.dumps(payload, ensure_ascii=False)
 

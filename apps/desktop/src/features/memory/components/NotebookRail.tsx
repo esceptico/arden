@@ -1,247 +1,519 @@
-import { ChevronRight, Database, FileText, RefreshCw, Search } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import {
+  ArrowUpDown,
+  ChevronDown,
+  FilePlus2,
+  FileText,
+  FolderPlus,
+  Layers,
+  NotebookText,
+  Pin,
+  Search,
+} from "@/components/icons";
 import clsx from "clsx";
-import type { RefObject } from "react";
 import { Empty } from "@/components/ui/EmptyState";
 import { ListError, ListSkeleton } from "@/components/ui/ListColumn";
-import { ScrollFadeBottom } from "@/components/ui/ScrollBlur";
 import { GhostBtn } from "@/features/memory/components/shared";
-import { FlatRow, TreeSearch } from "@/features/memory/components/MemoryFileTree";
 import type { MemoryArtifactSummary } from "@/features/memory/lib/notebookTypes";
-import type { NotebookRailEntry, NotebookRailModel } from "@/features/memory/lib/notebookIndex";
+import {
+  bucketOf,
+  collectNotes,
+  countNotes,
+  findDir,
+  parentDir,
+  prettyDate,
+  sortNotes,
+  stem,
+  type SortKey,
+  type SortOrder,
+  type WorkspaceDir,
+} from "@/features/memory/lib/workspaceTree";
 
-function descriptionFor(artifact: MemoryArtifactSummary): string | null {
-  return artifact.summary ?? artifact.snippet;
-}
+const COLLAPSED_KEY = "ntrp.desktop.memory.rail.collapsed";
+const PINS_KEY = "ntrp.desktop.memory.pins";
 
-function NoteRow({
-  artifact,
-  description,
-  selected,
-  disabled,
-  onSelect,
-}: {
-  artifact: MemoryArtifactSummary;
-  description: string;
-  selected: boolean;
-  disabled: boolean;
-  onSelect: (path: string) => void;
-}) {
-  const showDescription = description.trim().length > 0 && description.trim() !== artifact.title.trim();
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      data-memory-entry={artifact.path}
-      onClick={() => onSelect(artifact.path)}
-      className="app-row group w-full rounded-[10px] px-2.5 py-2 text-left disabled:opacity-50"
-      data-active={selected}
-      aria-current={selected ? "page" : undefined}
-    >
-      <span className={clsx("block text-sm", selected ? "font-medium text-ink" : "text-ink-soft group-hover:text-ink")}>
-        {artifact.title}
-      </span>
-      {showDescription && <span className="mt-0.5 block line-clamp-2 text-xs leading-[1.35] text-muted">{description}</span>}
-    </button>
-  );
-}
-
-function RailEntry({
-  entry,
-  depth,
-  selectedPath,
-  disabled,
-  onSelect,
-}: {
-  entry: NotebookRailEntry;
-  depth: number;
-  selectedPath: string | null;
-  disabled: boolean;
-  onSelect: (path: string) => void;
-}) {
-  if (entry.kind === "note") {
-    return (
-      <NoteRow
-        artifact={entry.artifact}
-        description={entry.description}
-        selected={selectedPath === entry.path}
-        disabled={disabled}
-        onSelect={onSelect}
-      />
-    );
+function loadStringSet(key: string, fallback: string[]): Set<string> {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return new Set(fallback);
+    const parsed: unknown = JSON.parse(raw);
+    return new Set(Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : fallback);
+  } catch {
+    return new Set(fallback);
   }
-  const id = `memory-directory-${entry.path.replace(/[^a-z0-9]+/gi, "-")}`;
-  return (
-    <section
-      data-memory-entry={entry.path}
-      data-memory-directory={entry.path}
-      aria-labelledby={id}
-      className={clsx(depth > 0 && "ml-2 border-l border-line-soft/60 pl-2")}
-    >
-      <div className="px-2 pb-1.5 pt-1">
-        <h2 id={id} className="text-xs font-semibold text-ink-soft">{entry.title}</h2>
-        <p className="mt-0.5 text-2xs leading-[1.35] text-muted">{entry.description}</p>
-      </div>
-      {entry.children.length > 0 && (
-        <div className="flex flex-col gap-1">
-          {entry.children.map((child) => (
-            <RailEntry key={`${child.kind}:${child.path}`} entry={child} depth={depth + 1} selectedPath={selectedPath} disabled={disabled} onSelect={onSelect} />
-          ))}
-        </div>
-      )}
-    </section>
-  );
 }
+
+function persistStringSet(key: string, value: Set<string>): void {
+  try {
+    localStorage.setItem(key, JSON.stringify([...value]));
+  } catch {
+    /* localStorage unavailable — non-fatal */
+  }
+}
+
+interface RcMenuState {
+  x: number;
+  y: number;
+  path: string;
+}
+
+interface CreateState {
+  kind: "note" | "dir";
+  value: string;
+}
+
+const SORT_LABELS: Record<SortKey, string> = {
+  name: "Name",
+  modified: "Time modified",
+  created: "Time created",
+};
 
 export function NotebookRail({
-  model,
-  searchResults,
+  tree,
+  allNotes,
   selectedPath,
-  query,
   loading,
-  searchLoading,
   error,
-  searchError,
-  indexErrors,
-  indexBlocked,
   rebuilding,
-  recordsOpen,
   navigationDisabled,
-  recordsTriggerRef,
-  onQueryChange,
+  nbMode,
+  createdAt,
+  onToggleNbMode,
   onSelect,
+  onOpenInNewTab,
+  onOpenSwitcher,
+  onCreate,
   onRetry,
-  onRetryIndex,
   onRebuild,
-  onToggleRecords,
 }: {
-  model: NotebookRailModel;
-  searchResults: MemoryArtifactSummary[] | null;
+  tree: WorkspaceDir;
+  allNotes: MemoryArtifactSummary[];
   selectedPath: string | null;
-  query: string;
   loading: boolean;
-  searchLoading: boolean;
   error: string | null;
-  searchError: string | null;
-  indexErrors: string[];
-  indexBlocked: boolean;
   rebuilding: boolean;
-  recordsOpen: boolean;
   navigationDisabled: boolean;
-  recordsTriggerRef: RefObject<HTMLButtonElement | null>;
-  onQueryChange: (value: string) => void;
+  nbMode: boolean;
+  createdAt: (artifact: MemoryArtifactSummary) => string;
+  onToggleNbMode: () => void;
   onSelect: (path: string) => void;
+  onOpenInNewTab: (path: string) => void;
+  onOpenSwitcher: () => void;
+  onCreate: (kind: "note" | "dir", path: string) => void;
   onRetry: () => void;
-  onRetryIndex: () => void;
   onRebuild: () => void;
-  onToggleRecords: () => void;
 }) {
-  const searchActive = query.trim().length > 0;
-  const empty = model.entries.length === 0 && model.files.length === 0;
-  const indexAlert = indexErrors.length > 0 ? (
-    <ListError
-      title="Couldn't load memory index"
-      message={indexErrors.join("\n")}
-      onRetry={onRetryIndex}
-    />
-  ) : null;
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => loadStringSet(COLLAPSED_KEY, []));
+  const [pins, setPins] = useState<Set<string>>(() => loadStringSet(PINS_KEY, ["me.md"]));
+  const [sortKey, setSortKey] = useState<SortKey>("name");
+  const [sortAsc, setSortAsc] = useState(true);
+  const [sortOverrides, setSortOverrides] = useState<Record<string, SortOrder>>({});
+  const [sortMenuOpen, setSortMenuOpen] = useState(false);
+  const [create, setCreate] = useState<CreateState | null>(null);
+  const [rcMenu, setRcMenu] = useState<RcMenuState | null>(null);
+  const [listDir, setListDir] = useState("");
+  const [nbDescendants, setNbDescendants] = useState(true);
+  const [pinsSectionClosed, setPinsSectionClosed] = useState(false);
+  const createInputRef = useRef<HTMLInputElement>(null);
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const now = useMemo(() => new Date(), []);
+
+  const notesByPath = useMemo(() => new Map(allNotes.map((artifact) => [artifact.path, artifact])), [allNotes]);
+  const empty = tree.dirs.length === 0 && tree.files.length === 0;
+
+  const activeSort = (scope: string | null): SortOrder =>
+    (scope != null && sortOverrides[scope]) || { key: sortKey, asc: sortAsc };
+
+  const toggleDir = (key: string) => {
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      persistStringSet(COLLAPSED_KEY, next);
+      return next;
+    });
+  };
+
+  const togglePin = (path: string) => {
+    setPins((current) => {
+      const next = new Set(current);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      persistStringSet(PINS_KEY, next);
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    if (!selectedPath) return;
+    setCollapsed((current) => {
+      const ancestors = selectedPath.split("/").slice(0, -1)
+        .map((_, index, parts) => `${parts.slice(0, index + 1).join("/")}/`);
+      if (!ancestors.some((ancestor) => current.has(ancestor))) return current;
+      const next = new Set(current);
+      for (const ancestor of ancestors) next.delete(ancestor);
+      persistStringSet(COLLAPSED_KEY, next);
+      return next;
+    });
+    const frame = requestAnimationFrame(() => {
+      scrollerRef.current
+        ?.querySelector<HTMLElement>(`[data-memory-entry="${CSS.escape(selectedPath)}"]`)
+        ?.scrollIntoView({ block: "nearest" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [selectedPath]);
+
+  useEffect(() => {
+    if (!sortMenuOpen && !rcMenu) return;
+    const close = () => {
+      setSortMenuOpen(false);
+      setRcMenu(null);
+    };
+    window.addEventListener("pointerdown", close);
+    return () => window.removeEventListener("pointerdown", close);
+  }, [rcMenu, sortMenuOpen]);
+
+  useEffect(() => {
+    if (create) createInputRef.current?.focus();
+  }, [create?.kind, create != null]);
+
+  const openCreate = (kind: "note" | "dir") => {
+    const dir = selectedPath?.includes("/") ? `${parentDir(selectedPath)}/` : "";
+    setCreate({ kind, value: dir });
+  };
+
+  const submitCreate = () => {
+    const value = create?.value.trim();
+    if (!create || !value || value.endsWith("/")) return;
+    onCreate(create.kind, create.kind === "note" && !value.endsWith(".md") ? `${value}.md` : value);
+    setCreate(null);
+  };
+
+  const applySortKey = (key: SortKey) => {
+    const scope = nbMode ? (listDir || "root") : null;
+    const current = activeSort(scope);
+    const next: SortOrder = { key, asc: current.key === key ? !current.asc : true };
+    if (scope != null) setSortOverrides((overrides) => ({ ...overrides, [scope]: next }));
+    else {
+      setSortKey(next.key);
+      setSortAsc(next.asc);
+    }
+  };
+
+  const onRowContextMenu = (event: React.MouseEvent, path: string) => {
+    event.preventDefault();
+    setRcMenu({ x: event.clientX, y: event.clientY, path });
+  };
+
+  const pinButton = (path: string) => (
+    <span
+      role="button"
+      tabIndex={-1}
+      aria-label={pins.has(path) ? "Unpin" : "Pin"}
+      title={pins.has(path) ? "Unpin" : "Pin"}
+      className={clsx("mw-pin-btn", pins.has(path) && "on")}
+      onClick={(event) => {
+        event.stopPropagation();
+        togglePin(path);
+      }}
+    >
+      <Pin size={12} aria-hidden />
+    </span>
+  );
+
+  const fileRow = (artifact: MemoryArtifactSummary, spacer: boolean) => (
+    <button
+      key={artifact.path}
+      type="button"
+      disabled={navigationDisabled}
+      data-memory-entry={artifact.path}
+      aria-current={selectedPath === artifact.path ? "page" : undefined}
+      className={clsx("mw-tree-row", selectedPath === artifact.path && "active")}
+      onClick={() => onSelect(artifact.path)}
+      onContextMenu={(event) => onRowContextMenu(event, artifact.path)}
+    >
+      {spacer && <span className="mw-spacer" />}
+      <span className="mw-label">{stem(artifact.path)}</span>
+      {pinButton(artifact.path)}
+    </button>
+  );
+
+  const folderNode = (dir: WorkspaceDir): React.ReactNode => (
+    <div key={dir.path} className={clsx("mw-tree-folder", collapsed.has(dir.path) && "closed")} data-memory-directory={dir.path}>
+      <div className="mw-tree-row folder">
+        <button type="button" className="mw-chev-btn" aria-label={collapsed.has(dir.path) ? `Expand ${dir.name}` : `Collapse ${dir.name}`} onClick={() => toggleDir(dir.path)}>
+          <ChevronDown className="mw-chev" size={12} aria-hidden />
+        </button>
+        <button type="button" className="mw-folder-label" onClick={() => toggleDir(dir.path)}>{dir.name}</button>
+      </div>
+      <div className="mw-tree-kids">
+        {dir.dirs.map(folderNode)}
+        {sortNotes(dir.files, activeSort(null), createdAt).map((artifact) => fileRow(artifact, true))}
+      </div>
+    </div>
+  );
+
+  const pinnedRows = [...pins].filter((path) => notesByPath.has(path));
+
+  const treeView = (
+    <div ref={scrollerRef} className="mw-tree" data-memory-tree>
+      {pinnedRows.length > 0 && (
+        <div className="mw-tree-pins">
+          {pinnedRows.map((path) => fileRow(notesByPath.get(path)!, true))}
+        </div>
+      )}
+      {tree.dirs.map(folderNode)}
+      {sortNotes(tree.files, activeSort(null), createdAt).map((artifact) => fileRow(artifact, true))}
+    </div>
+  );
+
+  const nbFolderNode = (dir: WorkspaceDir): React.ReactNode => (
+    <div key={dir.path} className={clsx("mw-tree-folder", collapsed.has(dir.path) && "closed")}>
+      <div className={clsx("mw-tree-row", "folder", listDir === dir.path && "active")}>
+        <button type="button" className="mw-chev-btn" aria-label={collapsed.has(dir.path) ? `Expand ${dir.name}` : `Collapse ${dir.name}`} onClick={() => toggleDir(dir.path)}>
+          <ChevronDown className="mw-chev" size={12} aria-hidden />
+        </button>
+        <button type="button" className="mw-folder-label" onClick={() => setListDir(dir.path)}>{dir.name}</button>
+        <span className="mw-nb-count">
+          {dir.files.length}
+          {countNotes(dir) !== dir.files.length ? ` ▾ ${countNotes(dir)}` : ""}
+        </span>
+      </div>
+      <div className="mw-tree-kids">{dir.dirs.map(nbFolderNode)}</div>
+    </div>
+  );
+
+  const nbList = () => {
+    const scope = listDir || "root";
+    const override = sortOverrides[scope];
+    const order: SortOrder = override ?? (sortKey === "name" ? { key: "modified", asc: false } : { key: sortKey, asc: sortAsc });
+    const node = findDir(tree, listDir);
+    const base = node
+      ? nbDescendants
+        ? listDir === ""
+          ? allNotes.filter((artifact) => artifact.path !== "index.md")
+          : collectNotes(node)
+        : node.files
+      : [];
+    const field = (artifact: MemoryArtifactSummary) =>
+      order.key === "created" ? createdAt(artifact) : artifact.updatedAt ?? "";
+    const files = [...base].sort((a, b) => {
+      const cmp = order.key === "name"
+        ? stem(a.path).localeCompare(stem(b.path))
+        : field(a).localeCompare(field(b)) || stem(a.path).localeCompare(stem(b.path));
+      return order.asc ? cmp : -cmp;
+    });
+    const effectiveKey = order.key === "name" ? "modified" : order.key;
+    const when = (artifact: MemoryArtifactSummary) =>
+      effectiveKey === "created" ? createdAt(artifact) : artifact.updatedAt ?? "";
+    const row = (artifact: MemoryArtifactSummary) => {
+      const dir = parentDir(artifact.path);
+      const showParent = dir && `${dir}/` !== listDir;
+      const snippet = artifact.snippet?.trim()
+        || (artifact.recordCount ? `${artifact.recordCount} records` : "No content yet.");
+      return (
+        <button
+          key={artifact.path}
+          type="button"
+          disabled={navigationDisabled}
+          data-memory-entry={artifact.path}
+          className={clsx("mw-nnl-row", selectedPath === artifact.path && "active")}
+          onClick={() => onSelect(artifact.path)}
+          onContextMenu={(event) => onRowContextMenu(event, artifact.path)}
+        >
+          <span className="mw-nnl-title">{stem(artifact.path)}</span>
+          <span className="mw-nnl-snippet">{snippet}</span>
+          <span className="mw-nnl-when">
+            {prettyDate(when(artifact))}
+            {showParent ? <> · <span className="mw-nnl-parent">{dir}</span></> : null}
+          </span>
+        </button>
+      );
+    };
+    const pinnedHere = files.filter((artifact) => pins.has(artifact.path));
+    const rest = files.filter((artifact) => !pins.has(artifact.path));
+    let lastBucket: string | null = null;
+    return (
+      <div className="mw-nb-list" data-memory-nb-list>
+        <div className="mw-nnl-head">
+          <h2>{listDir ? listDir.replace(/\/$/, "") : "Memory"}</h2>
+          <span className="mw-nb-count">{files.length}</span>
+          <button
+            type="button"
+            className={clsx("mw-icon-btn", nbDescendants && "on")}
+            aria-pressed={nbDescendants}
+            title="Show notes from subfolders"
+            onClick={() => setNbDescendants((value) => !value)}
+          >
+            <Layers size={13.5} aria-hidden />
+          </button>
+        </div>
+        {pinnedHere.length > 0 && (
+          <>
+            <h3 className="mw-nnl-bucket">Pinned</h3>
+            {pinnedHere.map(row)}
+          </>
+        )}
+        {rest.length > 0
+          ? rest.map((artifact) => {
+              const bucket = order.key === "name" ? null : bucketOf(when(artifact), now);
+              const head = bucket && bucket !== lastBucket
+                ? <h3 key={`bucket:${bucket}`} className="mw-nnl-bucket">{bucket}</h3>
+                : null;
+              if (bucket) lastBucket = bucket;
+              return [head, row(artifact)];
+            })
+          : <p className="mw-ctx-empty" style={{ padding: 8 }}>Empty folder.</p>}
+      </div>
+    );
+  };
+
+  const nbView = (
+    <div ref={scrollerRef} className="mw-tree as-nb" data-memory-tree>
+      <div className="mw-nb-nav">
+        <div className={clsx("mw-nb-section", pinsSectionClosed && "closed")}>
+          <button type="button" className="mw-nb-section-head" onClick={() => setPinsSectionClosed((value) => !value)}>
+            <Pin size={13} aria-hidden />
+            Pinned
+            <ChevronDown className="mw-chev" size={10} aria-hidden />
+          </button>
+          <div className="mw-nb-section-rows">
+            {pinnedRows.length > 0
+              ? pinnedRows.map((path) => fileRow(notesByPath.get(path)!, false))
+              : <p className="mw-ctx-empty" style={{ padding: "2px 26px" }}>Nothing pinned.</p>}
+          </div>
+        </div>
+        <div className="mw-nb-root">
+          <div className={clsx("mw-tree-row", "folder", listDir === "" && "active")}>
+            <span className="mw-spacer" style={{ width: 24 }} />
+            <button type="button" className="mw-folder-label" onClick={() => setListDir("")}>Memory</button>
+            <span className="mw-nb-count">{tree.files.length}</span>
+          </div>
+        </div>
+        {tree.dirs.map(nbFolderNode)}
+      </div>
+      {nbList()}
+    </div>
+  );
+
+  const sortScope = nbMode ? (listDir || "root") : null;
+  const sortState = activeSort(sortScope);
 
   return (
     <>
-      <TreeSearch value={query} onChange={onQueryChange} placeholder="Search memory notes…" />
-      <div className="flex-1 min-h-0 overflow-y-auto scroll-thin px-3 py-3">
-        <ScrollFadeBottom />
-        {indexAlert}
-        {searchActive ? (
-          searchLoading && searchResults == null ? (
-            <ListSkeleton />
-          ) : searchError ? (
-            <ListError title="Couldn't search memory notes" message={searchError} />
-          ) : searchResults?.length ? (
-            <section aria-labelledby="memory-search-results">
-              <h2 id="memory-search-results" className="px-2 pb-1 text-2xs font-semibold uppercase tracking-[0.08em] text-faint">
-                Results
-              </h2>
-              <div className="flex flex-col gap-1">
-                {searchResults.map((artifact) => (
-                  <NoteRow
-                    key={artifact.path}
-                    artifact={artifact}
-                    description={descriptionFor(artifact) ?? ""}
-                    selected={selectedPath === artifact.path}
-                    disabled={navigationDisabled}
-                    onSelect={onSelect}
-                  />
-                ))}
+      <div className="mw-rail-top">
+        <button type="button" className="mw-rail-search" onClick={onOpenSwitcher} aria-label="Search notes">
+          <Search size={13} aria-hidden />
+          Search notes…
+        </button>
+        <div className="mw-rail-tools">
+          <button type="button" className={clsx("mw-icon-btn", nbMode && "on")} aria-pressed={nbMode} title="Notebook view" onClick={onToggleNbMode}>
+            <NotebookText size={13.5} aria-hidden />
+          </button>
+          <button type="button" className="mw-icon-btn" title="New note" onClick={() => openCreate("note")}>
+            <FilePlus2 size={13.5} aria-hidden />
+          </button>
+          <button type="button" className="mw-icon-btn" title="New folder" onClick={() => openCreate("dir")}>
+            <FolderPlus size={13.5} aria-hidden />
+          </button>
+          <button
+            type="button"
+            className="mw-icon-btn"
+            title="Sort"
+            aria-expanded={sortMenuOpen}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={() => setSortMenuOpen((open) => !open)}
+          >
+            <ArrowUpDown size={13.5} aria-hidden />
+          </button>
+          {sortMenuOpen && (
+            <div className="mw-sort-menu" role="menu" onPointerDown={(event) => event.stopPropagation()}>
+              <div className="mw-sort-scope">
+                {sortScope != null ? `This folder — ${sortScope === "root" ? "Memory" : sortScope}` : "All folders"}
               </div>
-            </section>
-          ) : (
-            <Empty
-              icon={Search}
-              hint={<>No memory notes match “{query.trim()}”.</>}
-              action={<GhostBtn onClick={() => onQueryChange("")}>Clear search</GhostBtn>}
-            >
-              No matches
-            </Empty>
-          )
-        ) : loading && empty ? (
-          <ListSkeleton />
-        ) : error ? (
-          <ListError title="Couldn't load memory notes" message={error} onRetry={onRetry} />
-        ) : indexBlocked ? (
-          null
-        ) : empty ? (
+              {(Object.keys(SORT_LABELS) as SortKey[]).map((key) => (
+                <button key={key} type="button" role="menuitem" className={clsx(sortState.key === key && "on")} onClick={() => applySortKey(key)}>
+                  {SORT_LABELS[key]}
+                  <span className="dir">{sortState.key === key ? (sortState.asc ? "↑" : "↓") : ""}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+      {create && (
+        <div className="mw-tree-create">
+          <input
+            ref={createInputRef}
+            value={create.value}
+            placeholder={create.kind === "note" ? "path/note-name" : "path/folder-name"}
+            aria-label={create.kind === "note" ? "New note path" : "New folder path"}
+            onChange={(event) => setCreate({ ...create, value: event.currentTarget.value })}
+            onBlur={() => setCreate(null)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") submitCreate();
+              else if (event.key === "Escape") setCreate(null);
+            }}
+          />
+        </div>
+      )}
+      {loading && empty ? (
+        <div className="mw-tree"><ListSkeleton /></div>
+      ) : error ? (
+        <div className="mw-tree"><ListError title="Couldn't load memory notes" message={error} onRetry={onRetry} /></div>
+      ) : empty ? (
+        <div className="mw-tree">
           <Empty
             icon={FileText}
-            hint="Memory pages appear here after they are described by an index."
-            action={<GhostBtn onClick={onRebuild} disabled={rebuilding}>{rebuilding ? "Reloading…" : "Reload"}</GhostBtn>}
+            hint="Memory pages appear here once the vault has notes."
+            action={<GhostBtn onClick={onRebuild} disabled={rebuilding}>{rebuilding ? "Refreshing…" : "Refresh"}</GhostBtn>}
           >
             No memory notes yet
           </Empty>
-        ) : (
-          <div className="flex flex-col gap-4">
-            {model.entries.map((entry) => (
-              <RailEntry key={`${entry.kind}:${entry.path}`} entry={entry} depth={0} selectedPath={selectedPath} disabled={navigationDisabled} onSelect={onSelect} />
-            ))}
-            {model.files.length > 0 && (
-              <details data-memory-files className="group/files rounded-[10px] bg-surface-soft/35 px-2 py-1.5">
-                <summary className="flex cursor-pointer list-none items-center gap-1.5 rounded px-1 py-1 text-xs font-medium text-muted hover:text-ink-soft">
-                  <ChevronRight className="h-3 w-3 transition-transform duration-check group-open/files:rotate-90" />
-                  Files
-                  <span className="ml-auto tabular-nums text-faint">{model.files.length}</span>
-                </summary>
-                <div className="mt-1 flex flex-col gap-1 pb-1">
-                  {model.files.map((artifact) => (
-                    <FlatRow key={artifact.path} a={artifact} active={selectedPath === artifact.path} disabled={navigationDisabled} onSelect={onSelect} />
-                  ))}
-                </div>
-              </details>
-            )}
-          </div>
-        )}
-      </div>
-      <div className="flex items-center gap-1 border-t border-line-soft px-3 py-2">
-        <button
-          ref={recordsTriggerRef}
-          type="button"
-          disabled={navigationDisabled}
-          aria-label="Open raw records diagnostic"
-          aria-pressed={recordsOpen}
-          onClick={onToggleRecords}
-          className="flex h-7 items-center gap-1.5 rounded-[8px] px-2 text-xs text-muted hover:bg-surface-soft hover:text-ink-soft disabled:opacity-50"
+        </div>
+      ) : nbMode ? nbView : treeView}
+      {rcMenu && createPortal(
+        <div
+          className="mw-rc-menu"
+          role="menu"
+          style={{ left: Math.min(rcMenu.x, window.innerWidth - 180), top: Math.min(rcMenu.y, window.innerHeight - 140) }}
+          onPointerDown={(event) => event.stopPropagation()}
         >
-          <Database className="h-3.5 w-3.5" />
-          Raw records
-        </button>
-        <button
-          type="button"
-          onClick={onRebuild}
-          disabled={rebuilding}
-          aria-label="Reload memory notes"
-          className="ml-auto grid size-7 place-items-center rounded-[8px] text-faint hover:bg-surface-soft hover:text-ink disabled:opacity-50"
-        >
-          <RefreshCw className={clsx("h-3.5 w-3.5", rebuilding && "animate-spin")} />
-        </button>
-      </div>
+          <div className="mw-rc-path">{rcMenu.path}</div>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              void navigator.clipboard?.writeText(rcMenu.path);
+              setRcMenu(null);
+            }}
+          >
+            Copy path
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              togglePin(rcMenu.path);
+              setRcMenu(null);
+            }}
+          >
+            {pins.has(rcMenu.path) ? "Unpin" : "Pin"}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              onOpenInNewTab(rcMenu.path);
+              setRcMenu(null);
+            }}
+          >
+            Open in new tab
+          </button>
+        </div>,
+        document.body,
+      )}
     </>
   );
 }

@@ -1,4 +1,4 @@
-import { Database, Pin } from "lucide-react";
+import { Database, Pin } from "@/components/icons";
 import { TabPanels } from "@/components/ui/TabPanels";
 import { DetailPlaceholder } from "@/components/ui/EmptyState";
 import { DetailShell } from "@/components/ui/DetailShell";
@@ -44,7 +44,7 @@ export function RecordDetailPane({
             disabled={pinningId === record.id}
             title={record.pinned ? "Drop from the always-on Profile block" : "Always keep this record in context"}
           >
-            <Pin className="h-3.5 w-3.5" fill={record.pinned ? "currentColor" : "none"} strokeWidth={2} />
+            <Pin className="h-3.5 w-3.5" />
             {record.pinned ? "Pinned" : "Pin"}
           </GhostBtn>
         </div>

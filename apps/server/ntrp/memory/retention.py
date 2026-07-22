@@ -74,7 +74,7 @@ async def run_retention(store) -> RetentionReport:
                 continue
             dreamer = any(source.kind == "dreamer" for source in entry.meta.sources)
             ttl = _DREAMER_TTL if dreamer else _TTL.get(entry.kind, _DEFAULT_TTL)
-            recorded_date = entry.meta.recorded_at[:10]
+            recorded_date = (entry.occurred_at or entry.meta.recorded_at)[:10]
             if not _is_stale(recorded_date, ttl, today):
                 continue
             path = store._loc.get(entry.id)

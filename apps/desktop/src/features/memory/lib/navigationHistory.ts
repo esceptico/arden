@@ -22,6 +22,13 @@ export class NavigationHistory {
   get canForward() { return this.cursor >= 0 && this.cursor < this.entries.length - 1; }
   get current() { return this.cursor < 0 ? null : this.entries[this.cursor] ?? null; }
 
+  /** Read-only snapshot of visited locations, most-recent-first. Does not
+   *  mutate the cursor or entries — for surfaces (like the quick switcher)
+   *  that want recency ordering without touching back/forward state. */
+  locations(): readonly NavigationLocation[] {
+    return [...this.entries].reverse();
+  }
+
   push(location: NavigationLocation) {
     const current = this.current;
     if (current && sameDestination(current, location)) return current;

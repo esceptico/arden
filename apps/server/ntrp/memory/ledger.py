@@ -18,10 +18,6 @@ _LINE_RE = re.compile(
     r"^- (?P<occurred>\S+) \^(?P<id>[\w-]+) \[(?P<kind>[\w-]+)\]"
     r"(?P<tags>(?: \[(?:pin|imp:\d+|ent:[a-z0-9-]+)\])*) (?P<text>.*)$"
 )
-_LEGACY_RE = re.compile(
-    r"^- (?P<date>\d{4}-\d{2}-\d{2}) \^(?P<id>[\w-]+) \[(?P<kind>[\w-]+)\]"
-    r"(?P<tags>(?: \[(?:pin|imp:\d+|superseded|ent:[a-z0-9-]+)\])*) (?P<body>.*)$"
-)
 _RFC3339_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _AUTHORITATIVE_FIELDS = frozenset({"id", "text", "kind", "occurred_at", "pinned", "imp", "entity"})
@@ -173,58 +169,12 @@ def _parse_v2(readable: str, metadata: str) -> LedgerEntry:
     )
 
 
-def _parse_legacy(raw: str) -> LedgerEntry:
-    match = _LEGACY_RE.fullmatch(raw.rstrip("\r\n"))
-    if match is None:
-        raise ValueError("invalid legacy ledger line")
-    body = match["body"]
-    prefix = re.fullmatch(r"\(src:(?P<src>[^)]*)\) (?P<text>.*)", body)
-    suffix = re.fullmatch(r"(?P<text>.*) \(src:(?P<src>[^)]*)\)", body)
-    source_match = prefix or suffix
-    source_kind = source_match["src"] if source_match else "unknown"
-    text = source_match["text"] if source_match else body
-    pinned, imp, entity, superseded = _parse_tags(match["tags"])
-    date = match["date"]
-    _validate_rfc3339(date, allow_date=True)
-    try:
-        kind = Kind(match["kind"])
-    except ValueError as exc:
-        raise ValueError(f"invalid ledger kind: {match['kind']!r}") from exc
-    source = SourceRef(
-        kind=source_kind,
-        ref=match["id"],
-        captured_at=None,
-        occurred_at=date,
-        time_precision="day",
-    )
-    return LedgerEntry(
-        id=match["id"],
-        text=text,
-        kind=kind,
-        occurred_at=date,
-        pinned=pinned,
-        imp=imp,
-        entity=entity,
-        meta=LedgerMeta(
-            recorded_at=date,
-            sequence=0,
-            time_precision="day",
-            scope_kind="user",
-            scope_key=None,
-            sources=(source,),
-            operation="retract" if superseded else "record",
-        ),
-    )
-
-
 def parse_ledger_entry(raw: str) -> LedgerEntry:
-    """Parse one v2 two-line entry or one legacy readable line."""
+    """Parse one schema-v2 two-line entry."""
     lines = raw.rstrip("\r\n").splitlines()
     if len(lines) == 2:
         return _parse_v2(lines[0], lines[1])
-    if len(lines) == 1:
-        return _parse_legacy(lines[0])
-    raise ValueError("ledger entry must contain one readable line and at most one metadata line")
+    raise ValueError("schema-v2 ledger entry must contain a readable line and metadata line")
 
 
 def render_ledger_entry(entry: LedgerEntry) -> str:

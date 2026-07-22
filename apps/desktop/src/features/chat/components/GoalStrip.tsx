@@ -1,8 +1,8 @@
-import { CheckCircle2, Pause, Play, Target } from "lucide-react";
+import { CheckCircle2, Pause, Play, Target } from "@/components/icons";
 import { clearGoal, updateGoal } from "@/actions/goals";
 import { useStore } from "@/stores";
 import { ICON } from "@/lib/icons";
-import { BlurSwap } from "@/components/ui/BlurSwap";
+import { IconSwap } from "@/components/ui/IconSwap";
 import { Badge } from "@/components/ui/Badge";
 import { Chip } from "@/components/ui/Chip";
 import { IconButton } from "@/components/ui/IconButton";
@@ -60,9 +60,11 @@ export function GoalStatusBar() {
               title={paused ? "Resume goal" : "Pause goal"}
               aria-label={paused ? "Resume goal" : "Pause goal"}
             >
-              <BlurSwap swapKey={paused ? "play" : "pause"}>
-                {paused ? <Play size={ICON.SM} /> : <Pause size={ICON.SM} />}
-              </BlurSwap>
+              <IconSwap
+                state={paused ? "b" : "a"}
+                iconA={<Pause size={ICON.SM} />}
+                iconB={<Play size={ICON.SM} />}
+              />
             </IconButton>
           )}
           {!complete && (

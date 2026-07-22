@@ -45,6 +45,21 @@ export function valueFromPosition(
 
 const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
 
+const MARKER_FADE_DISTANCE = 8;
+const MARKER_TEXT_GAP = 2;
+
+/** Fade the narrow marker before it crosses either protected text lane. */
+export function sliderMarkerOpacity(
+  position: number,
+  labelEnd: number,
+  valueStart: number,
+  fadeDistance = MARKER_FADE_DISTANCE,
+): number {
+  if (position <= labelEnd || position >= valueStart) return 0;
+  if (fadeDistance <= 0) return 1;
+  return clamp(Math.min(position - labelEnd, valueStart - position) / fadeDistance, 0, 1);
+}
+
 interface SliderProps {
   value: number;
   onChange: (value: number) => void;
@@ -421,6 +436,16 @@ export function RangeSlider({
 // ─── Comfortable (pips / scrubber discrete selector) ────────────────────────
 
 const PIP_SIZE = 5;
+const PIP_PADDING = 12;
+const PIP_CENTER_INSET = PIP_PADDING + PIP_SIZE / 2;
+const MARKER_WIDTH = 2;
+const SPRING_SLIDER = { type: "spring", stiffness: 640, damping: 42, mass: 0.7 } as const;
+
+/** Exact center shared by a discrete dot, fill edge, and marker. */
+export function sliderPipStopCenter(progress: number, width: number): number {
+  const p = clamp(progress, 0, 1);
+  return PIP_CENTER_INSET + p * Math.max(0, width - PIP_CENTER_INSET * 2);
+}
 
 interface SliderComfortableProps {
   value: number;
@@ -462,8 +487,10 @@ export function SliderComfortable({
   ref,
 }: SliderComfortableProps) {
   const reduced = !!useReducedMotion();
-  const fast = useMemo(() => (reduced ? { duration: 0 } : SPRING_TAP), [reduced]);
+  const fast = useMemo(() => (reduced ? { duration: 0 } : SPRING_SLIDER), [reduced]);
   const containerRef = useRef<HTMLDivElement>(null);
+  const labelRef = useRef<HTMLSpanElement>(null);
+  const valueRef = useRef<HTMLSpanElement>(null);
   const dragging = useRef(false);
   const handleDragging = useRef(false);
   const [isHovered, setIsHovered] = useState(false);
@@ -509,35 +536,76 @@ export function SliderComfortable({
   const fillPercent = useMotionValue(
     max === min ? 0 : Math.max(0, Math.min(1, (value - min) / (max - min))),
   );
-  // Small offset at min so the handle line stays visible against the left edge.
-  const zeroTarget = variant === "pips" ? 8 : 17;
+  const controlWidth = useMotionValue(0);
+  const labelEnd = useMotionValue(0);
+  const valueStart = useMotionValue(Number.POSITIVE_INFINITY);
+  // Scrubbers need a small offset at min so the handle stays inside the edge.
+  // Pips use their exact stop-center geometry and need no correction.
+  const zeroTarget = variant === "pips" ? 0 : 17;
   const zeroOffset = useMotionValue(value === min ? zeroTarget : 0);
 
-  // Functional-form transforms (auto-track the motion values read via `.get()`);
-  // Motion 12's array-input form doesn't apply reliably to `style` here.
-  const fillWidthStyle = useTransform(() => `${fillPercent.get() * 100}%`);
-  const handleLeftStyle = useTransform(
-    () => `calc(${fillPercent.get() * 100}% - 8px + ${zeroOffset.get()}px)`,
-  );
-  const handleLineLeftStyle = useTransform(
-    () => `calc(${fillPercent.get() * 100}% - 9px + ${zeroOffset.get()}px)`,
-  );
-  // Pips: offset by the px-3 padding so the fill edge meets the active pip center.
-  const pipsFillWidthStyle = useTransform(() => {
+  // Functional-form transforms auto-track the motion values read via `.get()`.
+  // Visible travel stays on compositor-friendly transform/clip-path properties.
+  const fillClipStyle = useTransform(() => {
     const p = fillPercent.get();
-    const zo = zeroOffset.get();
-    return `calc(${p * 100}% + ${20 - 20 * p - zo * 2.5}px)`;
+    return `inset(0 ${100 - p * 100}% 0 0)`;
   });
-  const pipsHandleLineLeftStyle = useTransform(() => {
+  const handleTranslateStyle = useTransform(() => {
+    const x = fillPercent.get() * controlWidth.get() - 8 + zeroOffset.get();
+    return `translateX(${x}px)`;
+  });
+  // Pips, fill, and marker share one exact stop-center coordinate.
+  const pipsFillClipStyle = useTransform(() => {
     const p = fillPercent.get();
-    return `calc(${p * 100}% + ${11 - 24 * p}px)`;
+    const centerOffset = PIP_CENTER_INSET * (1 - 2 * p);
+    return `inset(0 calc(${(1 - p) * 100}% - ${centerOffset}px) 0 0)`;
   });
-  const pipsMaskStyle = useTransform(() => {
+  const markerTranslateStyle = useTransform(() => {
     const p = fillPercent.get();
-    const zo = zeroOffset.get();
-    const offset = 20 - 20 * p - zo * 2.5;
-    return `linear-gradient(to right, transparent calc(${p * 100}% + ${offset}px), black calc(${p * 100}% + ${offset + 2}px))`;
+    const width = controlWidth.get();
+    const x =
+      variant === "pips"
+        ? sliderPipStopCenter(p, width) - MARKER_WIDTH / 2
+        : p * width - 9 + zeroOffset.get();
+    return `translateX(${x}px)`;
   });
+  const markerOpacityStyle = useTransform(() => {
+    const width = controlWidth.get();
+    if (width <= 0) return 1;
+    const p = fillPercent.get();
+    const markerX =
+      variant === "pips"
+        ? sliderPipStopCenter(p, width) - MARKER_WIDTH / 2
+        : p * width - 9 + zeroOffset.get();
+    return sliderMarkerOpacity(markerX, labelEnd.get(), valueStart.get());
+  });
+
+  const measureProtectedLanes = useCallback(() => {
+    const control = containerRef.current;
+    if (!control) return;
+    const controlRect = control.getBoundingClientRect();
+    if (controlRect.width <= 0) return;
+    controlWidth.set(controlRect.width);
+
+    const labelRect = labelRef.current?.getBoundingClientRect();
+    const valueRect = valueRef.current?.getBoundingClientRect();
+    labelEnd.set(labelRect ? labelRect.right - controlRect.left + MARKER_TEXT_GAP : 0);
+    valueStart.set(
+      valueRect
+        ? valueRect.left - controlRect.left - MARKER_TEXT_GAP
+        : controlRect.width,
+    );
+  }, [controlWidth, labelEnd, valueStart]);
+
+  useLayoutEffect(() => {
+    measureProtectedLanes();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measureProtectedLanes);
+    if (containerRef.current) observer.observe(containerRef.current);
+    if (labelRef.current) observer.observe(labelRef.current);
+    if (valueRef.current) observer.observe(valueRef.current);
+    return () => observer.disconnect();
+  }, [editing, label, measureProtectedLanes, value]);
 
   const computeHoverPreview = useCallback(
     (clientX: number) => {
@@ -623,11 +691,12 @@ export function SliderComfortable({
       if (!dragging.current) return;
       const next = valueFromX(e.clientX);
       onChange(next);
-      if (variant === "scrubber") fillPercent.jump(toPercent(next));
-      else animate(fillPercent, toPercent(next), fast);
-      animate(zeroOffset, next === min ? zeroTarget : 0, fast);
+      // Direct manipulation tracks the pointer exactly; springs are reserved
+      // for click/programmatic travel where they clarify the state change.
+      fillPercent.jump(toPercent(next));
+      zeroOffset.jump(next === min ? zeroTarget : 0);
     },
-    [valueFromX, onChange, variant, fillPercent, zeroOffset, zeroTarget, min, max, fast],
+    [valueFromX, onChange, fillPercent, zeroOffset, zeroTarget, min, max],
   );
 
   const onPointerUp = useCallback(() => {
@@ -647,10 +716,10 @@ export function SliderComfortable({
       const next = valueFromX(e.clientX);
       onChange(next);
       fillPercent.jump(toPercent(next));
-      animate(zeroOffset, next === min ? zeroTarget : 0, fast);
+      zeroOffset.jump(next === min ? zeroTarget : 0);
       e.currentTarget.setPointerCapture(e.pointerId);
     },
-    [disabled, valueFromX, onChange, fillPercent, zeroOffset, zeroTarget, min, max, fast],
+    [disabled, valueFromX, onChange, fillPercent, zeroOffset, zeroTarget, min, max],
   );
 
   const onResizeMove = useCallback(
@@ -659,9 +728,9 @@ export function SliderComfortable({
       const next = valueFromX(e.clientX);
       onChange(next);
       fillPercent.jump(toPercent(next));
-      animate(zeroOffset, next === min ? zeroTarget : 0, fast);
+      zeroOffset.jump(next === min ? zeroTarget : 0);
     },
-    [valueFromX, onChange, fillPercent, zeroOffset, zeroTarget, min, max, fast],
+    [valueFromX, onChange, fillPercent, zeroOffset, zeroTarget, min, max],
   );
 
   const onResizeUp = useCallback(() => {
@@ -699,12 +768,20 @@ export function SliderComfortable({
     }
     e.preventDefault();
     const clamped = Math.max(min, Math.min(max, next));
-    if (clamped !== value) onChange(clamped);
+    if (clamped !== value) {
+      // Keyboard changes should feel immediate, not animated.
+      fillPercent.jump(toPercent(clamped));
+      zeroOffset.jump(clamped === min ? zeroTarget : 0);
+      onChange(clamped);
+    }
   };
 
   const isActive = isHovered || isFocused;
   const valueLabel = formatValue(value);
   const valueMinWidth = `${String(formatValue(max)).length}ch`;
+  const hoverPreviewClip = hoverPreview
+    ? `inset(0 calc(100% - ${hoverPreview.left + hoverPreview.width}px) 0 ${hoverPreview.left}px)`
+    : "inset(0 100% 0 0)";
   const lineColor = isFocused
     ? "var(--color-ink)"
     : isHovered
@@ -806,10 +883,14 @@ export function SliderComfortable({
         {hoverPreview && showHoverTooltip && !isPressed && (
           <motion.div
             key="hover-tooltip"
-            className="absolute -translate-x-1/2 pointer-events-none z-20"
-            initial={{ opacity: 0, y: 4 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 4, transition: { duration: 0.1 } }}
+            className="absolute pointer-events-none z-20"
+            initial={{ opacity: 0, transform: "translate(-50%, 4px)" }}
+            animate={{ opacity: 1, transform: "translate(-50%, 0px)" }}
+            exit={{
+              opacity: 0,
+              transform: "translate(-50%, 4px)",
+              transition: { duration: 0.1 },
+            }}
             transition={fast}
             style={{ left: hoverPreview.cursorX, top: -30 }}
           >
@@ -840,7 +921,7 @@ export function SliderComfortable({
         }}
         onBlur={() => setIsFocused(false)}
         className={clsx(
-          "relative w-full h-8 select-none touch-none rounded-md border border-line bg-surface overflow-hidden outline-none focus-ring-accent",
+          "relative w-full h-8 select-none touch-none rounded-md border border-line bg-surface overflow-hidden outline-none focus-visible:border-ink/25",
           variant === "scrubber" ? "flex items-center gap-3 px-4 cursor-ew-resize" : "cursor-ew-resize",
         )}
         onPointerDown={onPointerDown}
@@ -849,23 +930,21 @@ export function SliderComfortable({
       >
         {/* Hover preview band — z-3 */}
         <motion.div
-          className="absolute inset-y-0 pointer-events-none z-[3]"
+          className="absolute inset-0 pointer-events-none z-[3]"
           initial={false}
           animate={{ opacity: hoverPreview && !isPressed ? 1 : 0 }}
           transition={{ opacity: { duration: 0.15 } }}
           style={{
-            left: hoverPreview ? hoverPreview.left : 0,
-            width: hoverPreview ? hoverPreview.width : 0,
+            clipPath: hoverPreviewClip,
             backgroundColor: "color-mix(in srgb, var(--color-accent) 40%, transparent)",
           }}
         />
 
         {variant === "pips" && (
           <>
-            {/* Pips — z-1, masked so the filled side is hidden */}
-            <motion.div
+            {/* Only future stops remain visible; the marker owns current state. */}
+            <div
               className="absolute inset-0 flex justify-between items-center px-3 pointer-events-none z-[1]"
-              style={{ WebkitMaskImage: pipsMaskStyle, maskImage: pipsMaskStyle }}
             >
               {pipSteps.map((pipValue) => (
                 <div
@@ -873,19 +952,16 @@ export function SliderComfortable({
                   className="relative flex items-center justify-center"
                   style={{ width: PIP_SIZE, height: PIP_SIZE }}
                 >
-                  <motion.div
-                    className="rounded-full"
-                    initial={false}
-                    animate={{
-                      backgroundColor: pipValue === value ? "var(--color-ink)" : "var(--color-muted)",
-                      opacity: pipValue === value ? 1 : 0.3,
-                    }}
-                    transition={fast}
-                    style={{ width: PIP_SIZE, height: PIP_SIZE }}
+                  <div
+                    className={clsx(
+                      "rounded-full transition-opacity duration-100 motion-reduce:transition-none",
+                      pipValue > value ? "opacity-30" : "opacity-0",
+                    )}
+                    style={{ width: PIP_SIZE, height: PIP_SIZE, backgroundColor: "var(--color-muted)" }}
                   />
                 </div>
               ))}
-            </motion.div>
+            </div>
 
             {/* Label + value occlusion — z-2 (paints the control bg over pips behind text) */}
             <div className="absolute inset-0 flex items-center px-2 z-[2] pointer-events-none" aria-hidden>
@@ -902,23 +978,31 @@ export function SliderComfortable({
 
             {/* Fill — z-3 */}
             <motion.div
-              className="absolute left-0 top-0 bottom-0 pointer-events-none z-[3]"
-              style={{ width: pipsFillWidthStyle, backgroundColor: "color-mix(in srgb, var(--color-accent) 18%, transparent)" }}
+              className="absolute inset-0 pointer-events-none z-[3]"
+              style={{ clipPath: pipsFillClipStyle, backgroundColor: "color-mix(in srgb, var(--color-accent) 18%, transparent)" }}
             />
 
             {/* Handle line — z-3 */}
             <motion.div
-              className="absolute rounded-full pointer-events-none z-[3]"
-              initial={false}
-              animate={{ top: isActive ? 7 : 8, bottom: isActive ? 7 : 8, backgroundColor: lineColor }}
-              transition={fast}
-              style={{ left: pipsHandleLineLeftStyle, width: 2 }}
-            />
+              className="absolute left-0 top-2 bottom-2 pointer-events-none z-[3]"
+              style={{ width: MARKER_WIDTH, opacity: markerOpacityStyle, transform: markerTranslateStyle }}
+            >
+              <motion.div
+                className="h-full w-full origin-center rounded-full"
+                initial={false}
+                animate={{
+                  transform: isActive ? "scaleY(1.125)" : "scaleY(1)",
+                  backgroundColor: lineColor,
+                }}
+                transition={fast}
+              />
+            </motion.div>
 
             {/* Label + value text — z-4 */}
             <div className="absolute inset-0 flex items-center px-2 z-[4] pointer-events-none">
               {label && (
                 <motion.span
+                  ref={labelRef}
                   className="px-2 text-[13px]"
                   initial={false}
                   animate={{ color: textColor(isActive) }}
@@ -928,6 +1012,7 @@ export function SliderComfortable({
                 </motion.span>
               )}
               <motion.span
+                ref={valueRef}
                 className="ml-auto px-2 text-[13px] tabular-nums"
                 initial={false}
                 animate={{ color: textColor(isActive) }}
@@ -944,19 +1029,27 @@ export function SliderComfortable({
           <>
             {/* Fill */}
             <motion.div
-              className="absolute left-0 top-0 bottom-0 pointer-events-none"
-              style={{ width: fillWidthStyle, backgroundColor: "color-mix(in srgb, var(--color-accent) 18%, transparent)" }}
+              className="absolute inset-0 pointer-events-none"
+              style={{ clipPath: fillClipStyle, backgroundColor: "color-mix(in srgb, var(--color-accent) 18%, transparent)" }}
             />
             {/* Handle line */}
             <motion.div
-              className="absolute rounded-full pointer-events-none z-10"
-              initial={false}
-              animate={{ top: isActive ? 7 : 8, bottom: isActive ? 7 : 8, backgroundColor: lineColor }}
-              transition={fast}
-              style={{ left: handleLineLeftStyle, width: 2 }}
-            />
+              className="absolute left-0 top-2 bottom-2 pointer-events-none z-10"
+              style={{ width: MARKER_WIDTH, opacity: markerOpacityStyle, transform: markerTranslateStyle }}
+            >
+              <motion.div
+                className="h-full w-full origin-center rounded-full"
+                initial={false}
+                animate={{
+                  transform: isActive ? "scaleY(1.125)" : "scaleY(1)",
+                  backgroundColor: lineColor,
+                }}
+                transition={fast}
+              />
+            </motion.div>
             {label && (
               <motion.span
+                ref={labelRef}
                 className="shrink-0 text-[13px] z-10"
                 initial={false}
                 animate={{ color: textColor(isActive) }}
@@ -967,6 +1060,7 @@ export function SliderComfortable({
             )}
             <div className="flex-1" />
             <motion.span
+              ref={valueRef}
               className="shrink-0 text-[13px] tabular-nums text-right z-10"
               initial={false}
               animate={{ color: textColor(isActive) }}
@@ -977,8 +1071,8 @@ export function SliderComfortable({
             </motion.span>
             {/* Resize handle */}
             <motion.div
-              className="absolute top-0 bottom-0 w-2 cursor-ew-resize z-20"
-              style={{ left: handleLeftStyle }}
+              className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize z-20"
+              style={{ transform: handleTranslateStyle }}
               onPointerDown={onResizeDown}
               onPointerMove={onResizeMove}
               onPointerUp={onResizeUp}

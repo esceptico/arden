@@ -2,11 +2,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import pytest
-
 from ntrp.memory.artifacts import ArtifactMemoryStore
 from ntrp.memory.file_store import FilePageStore
-from ntrp.memory.migrate_ledger_v2 import validate_vault
+from ntrp.memory.health import initialize_empty_vault, validate_vault
+from ntrp.memory.models import now_iso, source_time
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -16,6 +15,23 @@ def _write_raw(root: Path, rel: str, body: str) -> None:
     path = root / "raw" / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(body, encoding="utf-8")
+
+
+def test_canonical_now_uses_exact_millisecond_precision() -> None:
+    value = now_iso()
+
+    assert len(value.split(".", 1)[1].split("+", 1)[0]) == 3
+
+
+def test_source_time_derives_canonical_precision() -> None:
+    assert source_time(None) == (None, "unknown")
+    assert source_time("2026-07-12") == ("2026-07-12", "day")
+    assert source_time("2026-07-12T10:00:00Z") == ("2026-07-12T10:00:00+00:00", "second")
+    assert source_time("2026-07-12T10:00:00.1Z") == ("2026-07-12T10:00:00.100+00:00", "millisecond")
+    assert source_time("2026-07-12T10:00:00.123456+00:00") == (
+        "2026-07-12T10:00:00.123+00:00",
+        "millisecond",
+    )
 
 
 def _entry(
@@ -54,13 +70,10 @@ def test_health_reports_every_ledger_safety_field(tmp_path: Path) -> None:
         + "- 2026-07-12T10:23:41Z ^bad [fact] Bad.\n  <!-- ntrp:meta {not-json} -->\n",
     )
     (tmp_path / ".ntrp" / "journal" / "interrupted").mkdir(parents=True)
-    (tmp_path / ".ntrp" / "maintenance" / "migration-v2" / "partial").mkdir(parents=True)
 
     health = validate_vault(tmp_path)
 
     assert health.schema_version == 2
-    assert health.last_migration is None
-    assert health.backup_path is None
     assert health.duplicate_ids == ("dup",)
     assert health.invalid_relationship_targets == ("raw/me.md: dup -> missing",)
     assert health.malformed_metadata == ("raw/topics/bad.md: record bad: invalid schema-v2 metadata JSON",)
@@ -69,10 +82,7 @@ def test_health_reports_every_ledger_safety_field(tmp_path: Path) -> None:
     assert health.timestamp_precision_violations == (
         "raw/me.md: dup: day precision requires a date-only occurred_at",
     )
-    assert health.interrupted_journals == (
-        ".ntrp/journal/interrupted",
-        ".ntrp/maintenance/migration-v2/partial",
-    )
+    assert health.interrupted_journals == (".ntrp/journal/interrupted",)
     assert health.healthy is False
 
 
@@ -157,7 +167,7 @@ def test_health_rejects_symlinked_raw_root(tmp_path: Path) -> None:
     assert not validate_vault(tmp_path).healthy
 
 
-def test_health_preserves_mixed_schema_versions_and_rejects_bad_status(tmp_path: Path) -> None:
+def test_health_preserves_mixed_schema_versions(tmp_path: Path) -> None:
     _write_raw(tmp_path, "two.md", "<!-- ntrp:records schema=2 page=two.md -->\n")
     _write_raw(tmp_path, "three.md", "<!-- ntrp:records schema=3 page=three.md -->\n")
     health = validate_vault(tmp_path)
@@ -165,20 +175,10 @@ def test_health_preserves_mixed_schema_versions_and_rejects_bad_status(tmp_path:
     assert not health.healthy
     assert health.first_error == "unsupported schema versions: [2, 3]"
 
-    status = tmp_path / ".ntrp/maintenance/migration-v2.json"
-    status.parent.mkdir(parents=True)
-    status.write_text("{bad", encoding="utf-8")
-    health = validate_vault(tmp_path)
-    assert health.malformed_metadata[0].startswith(".ntrp/maintenance/migration-v2.json:")
+def test_empty_vault_initializes_without_migration_state(tmp_path: Path) -> None:
+    initialize_empty_vault(tmp_path)
 
-
-@pytest.mark.parametrize("payload", ["[]", '"text"', "42", "null"])
-def test_health_rejects_non_object_migration_status_json(tmp_path: Path, payload: str) -> None:
-    status = tmp_path / ".ntrp/maintenance/migration-v2.json"
-    status.parent.mkdir(parents=True)
-    status.write_text(payload, encoding="utf-8")
-    health = validate_vault(tmp_path)
-    assert not health.healthy
-    assert health.malformed_metadata == (
-        ".ntrp/maintenance/migration-v2.json: migration status must be a JSON object",
-    )
+    assert validate_vault(tmp_path).healthy
+    assert (tmp_path / "raw").is_dir()
+    assert (tmp_path / ".ntrp").is_dir()
+    assert not (tmp_path / ".ntrp/maintenance/migration-v2.json").exists()

@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import clsx from "clsx";
-import { ChevronDown, Code2 } from "lucide-react";
+import { ChevronDown, Code2 } from "@/components/icons";
 import { ICON } from "@/lib/icons";
 import { DISSOLVE_OUT, EASE_OUT, MOTION, RISE_IN, RISE_SETTLED } from "@/lib/tokens/motion";
 import { useTimeTicker, useTimeoutFlag } from "@/lib/hooks";

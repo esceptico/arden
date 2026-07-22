@@ -10,8 +10,8 @@ import {
   Sparkles,
   Target,
   Trash2,
-  type LucideIcon,
-} from "lucide-react";
+  type NtrpIcon,
+} from "@/components/icons";
 import clsx from "clsx";
 import { motion } from "motion/react";
 import { DURATION_POPOVER, EASE_DECELERATE } from "@/lib/tokens/motion";
@@ -21,7 +21,7 @@ import { filterCommands, useCommandList, type CommandEntry } from "@/features/ch
 import { PickerRow } from "@/components/ui/PickerRow";
 import { Caption } from "@/components/ui/Caption";
 
-const BUILTIN_ICONS: Record<string, LucideIcon> = {
+const BUILTIN_ICONS: Record<string, NtrpIcon> = {
   help: HelpCircle,
   clear: Trash2,
   compact: Layers,
@@ -32,7 +32,7 @@ const BUILTIN_ICONS: Record<string, LucideIcon> = {
   goal: Target,
 };
 
-function iconFor(entry: CommandEntry): LucideIcon {
+function iconFor(entry: CommandEntry): NtrpIcon {
   if (entry.kind === "builtin") return BUILTIN_ICONS[entry.name] ?? HelpCircle;
   return Sparkles;
 }

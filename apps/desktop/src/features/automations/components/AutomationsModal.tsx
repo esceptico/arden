@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CalendarClock, Plus, X } from "lucide-react";
+import { CalendarClock, Plus, X } from "@/components/icons";
 import { useStore } from "@/stores";
 import { fetchAutomations, fetchAutomationSuggestions } from "@/actions/automations";
 import type { CreateAutomationPayload } from "@/api/types";
@@ -23,6 +23,8 @@ export function AutomationsModal() {
   const close = useStore((s) => s.closeAutomations);
   const origin = useStore((s) => s.modalOrigin);
   const allAutomations = useStore((s) => s.automations);
+  const targetId = useStore((s) => s.automationTargetId);
+  const clearTarget = useStore((s) => s.clearAutomationTarget);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<CreateAutomationPayload | null | false>(false);
@@ -50,6 +52,13 @@ export function AutomationsModal() {
     () => automations?.find((a) => a.task_id === selectedId) ?? null,
     [automations, selectedId],
   );
+
+  useEffect(() => {
+    if (!open || !targetId || !automations?.some((automation) => automation.task_id === targetId)) return;
+    setDraft(false);
+    setSelectedId(targetId);
+    clearTarget();
+  }, [automations, clearTarget, open, targetId]);
 
   // Default selection: first of the user's own, else first of anything.
   useEffect(() => {

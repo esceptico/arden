@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Desk &amp; Paper — Chat</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..700&amp;family=Geist+Mono:wght@400..600&amp;display=swap" rel="stylesheet">
+<script src="./board-icons.js?v=20260719-2"></script>
+<script src="./board-motion.js?v=20260722-42"></script>
+  <link rel="stylesheet" href="./board-chat.css?v=20260722-19">
+</head>
+<body data-scene="settled" class="peek-open" data-page-enter>
+<div id="app">
+  <div class="dp-traffic traffic" aria-hidden="true"><i class="dp-traffic-light light"></i><i class="dp-traffic-light light"></i><i class="dp-traffic-light light"></i></div>
+  <button class="dp-shell-toggle dp-shell-toggle-left shell-toggle sidebar-toggle" id="sidebar-toggle" aria-label="Hide sidebar"><svg aria-hidden="true"><use href="#dp-panel-left-close"/></svg></button>
+
+  <aside class="rail dp-sidebar" aria-label="Chats sidebar" data-page-enter-item="chrome">
+    <nav class="rail-nav dp-row-stack" aria-label="App">
+      <a class="nav-row" href="./board-home.html"><svg><use href="#dp-home"/></svg><span>Home</span></a>
+      <a class="nav-row" href="./board-automations.html"><svg><use href="#dp-zap"/></svg><span>Automations</span></a>
+      <a class="nav-row" href="./board-memory.html"><svg><use href="#dp-brain"/></svg><span>Memory</span></a>
+    </nav>
+    <div class="area-bar"><span>Areas</span><button class="area-filter dp-icon-button" aria-label="Filter and group sessions"><svg><use href="#dp-sliders"/></svg></button></div>
+    <div class="session-list">
+      <section class="session-group dp-row-stack">
+        <button class="group-head"><svg><use href="#dp-folder"/></svg><span>Market launch</span><svg><use href="#dp-chevron-down"/></svg></button>
+        <a class="session on status-live" href="./board-chat.html#main" data-session="main" data-context-actions="open:Open chat|rename:Rename|copy-link:Copy link|-|archive!:Archive"><span class="session-title">Launch research brief</span><span class="session-time">live</span></a>
+        <a class="session status-live" href="./board-chat.html#workflow" data-session="workflow" data-context-actions="open:Open chat|rename:Rename|copy-link:Copy link|-|archive!:Archive"><span class="session-title">Competitor dataset</span><span class="session-time">live</span></a>
+        <a class="session status-review" href="./board-chat.html#approval" data-session="approval" data-context-actions="open:Open chat|rename:Rename|copy-link:Copy link|-|archive!:Archive"><span class="session-title">Publish release notes</span><span class="session-time">review</span></a>
+      </section>
+      <section class="session-group dp-row-stack">
+        <button class="group-head"><svg><use href="#dp-folder"/></svg><span>Product</span><svg><use href="#dp-chevron-down"/></svg></button>
+        <a class="session status-done" href="./board-chat.html" data-context-actions="open:Open chat|rename:Rename|copy-link:Copy link|-|archive!:Archive"><span class="session-title">Memory indexing audit</span><span class="session-time">done</span></a>
+        <a class="session" href="./board-chat.html" data-context-actions="open:Open chat|rename:Rename|copy-link:Copy link|-|archive!:Archive"><span class="session-title">Provider migration plan</span><span class="session-time">Tue</span></a>
+      </section>
+      <section class="session-group dp-row-stack">
+        <button class="group-head"><svg><use href="#dp-inbox"/></svg><span>Inbox</span><svg><use href="#dp-chevron-down"/></svg></button>
+        <a class="session" href="./board-chat.html" data-context-actions="open:Open chat|rename:Rename|copy-link:Copy link|-|archive!:Archive"><span class="session-title">O-1A evidence map</span><span class="session-time">Mon</span></a>
+      </section>
+    </div>
+    <nav class="rail-bottom" aria-label="Settings">
+      <a class="nav-row" href="./board-settings.html"><svg><use href="#dp-settings"/></svg><span>Settings</span></a>
+      <button class="theme-toggle dp-icon-button" aria-label="Toggle theme"><svg><use href="#dp-sun"/></svg></button>
+    </nav>
+    <button class="dp-sidebar-resizer rail-resize" aria-label="Resize sidebar" title="Drag to resize"></button>
+  </aside>
+
+  <nav class="inspector-toolbar" aria-label="Conversation details">
+    <button class="dp-shell-toggle dp-shell-toggle-right shell-toggle" id="inspector-toggle" aria-label="Show details" aria-pressed="true" aria-hidden="true" title="Show details" inert><svg><use href="#dp-panel-left-close"/></svg></button>
+  </nav>
+
+  <main class="workspace">
+    <header class="chat-head" data-page-enter-item><div class="chat-head-inner">
+      <button class="chat-title-parent"><svg><use href="#dp-arrow-left"/></svg><span>Launch research brief</span></button><span class="header-divider chat-title-parent">/</span>
+      <div class="chat-title" id="chat-title">Launch research brief</div>
+    </div></header>
+    <div class="edge-blur top" aria-hidden="true" data-scrolled="false"></div>
+    <div class="edge-blur bottom" aria-hidden="true"></div>
+    <div class="chat-scroll" data-page-enter-item data-page-skeleton><div class="chat-lane">
+      <section class="scene on" data-scene="settled">
+        <div class="turn">
+          <div class="user-row"><div class="user-bubble">Compare the launch signals, identify the two strongest segments, and save a concise brief with evidence.</div></div>
+          <div class="user-meta"><time>1:43 AM</time><button class="dp-icon-button" aria-label="Copy message" title="Copy message"><svg><use href="#dp-copy"/></svg></button><button class="dp-icon-button" aria-label="Edit and resend" title="Edit and resend"><svg><use href="#dp-edit"/></svg></button></div>
+          <div class="trace"><button class="trace-head" aria-expanded="true"><svg><use href="#dp-terminal"/></svg><span>Worked</span><span class="count">12 calls · 38s</span><svg class="chev"><use href="#dp-chevron-down"/></svg></button><div class="steps">
+            <button class="step"><span class="step-gutter"><svg><use href="#dp-globe"/></svg><i class="thread"></i></span><span class="step-body"><span class="step-verb"><span>Researched 7 sources</span></span><span class="step-detail">market reports and launch notes</span></span></button>
+            <button class="step"><span class="step-gutter"><span class="agent-chip"><svg><use href="#dp-robot"/></svg></span><i class="thread"></i></span><span class="step-body"><span class="step-verb"><span>Market analyst</span><span class="step-suffix">18s · 6.2k · $0.03</span></span><span class="step-detail">developer-led teams show the clearest intent</span></span></button>
+            <button class="step last"><span class="step-gutter"><span class="agent-chip"><svg><use href="#dp-robot"/></svg></span></span><span class="step-body"><span class="step-verb"><span>Operations analyst</span><span class="step-suffix">16s · 4.8k · $0.02</span></span><span class="step-detail">slower conversion, retains on durable artifacts</span></span></button>
+          </div></div>
+          <article class="assistant typeset typeset-notes"><h2>Two segments are carrying the launch</h2><p>Developer-led teams show the clearest intent: evaluation cycles are shorter, adoption is bottom-up, and the strongest evidence clusters around workflow automation rather than generic chat.</p><p>Operations teams are the second credible segment. They convert more slowly, but retain when the product produces durable artifacts and makes approvals explicit. I would lead with the developer segment and keep operations as the expansion narrative.</p>
+            <button class="artifact"><i class="artifact-mark"><svg><use href="#dp-file"/></svg></i><span><strong>Launch research brief</strong><small>Saved to Memory · 7 sources</small></span><svg class="chev"><use href="#dp-chevron-down"/></svg></button>
+            <div class="answer-footer">
+              <div class="response-actions" aria-label="Response actions">
+                <button class="source-footer-action" data-peek="sources"><svg><use href="#dp-sources"/></svg><span>7 sources</span></button>
+                <button class="response-action dp-icon-button" data-response-action="copy" aria-label="Copy response" title="Copy"><svg><use href="#dp-copy"/></svg></button>
+                <button class="response-action dp-icon-button" data-response-action="branch" aria-label="Branch from this message" title="Branch from this message"><svg><use href="#dp-git-branch"/></svg></button>
+                <time datetime="2026-07-19T01:44:00">1:44 AM</time>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="scene" data-scene="live">
+        <div class="turn">
+          <div class="user-row"><div class="user-bubble">Compare the competitor dataset, delegate the counter-evidence review, and produce a sourced position.</div></div>
+          <div class="trace"><button class="trace-head" aria-expanded="true"><svg><use href="#dp-terminal"/></svg><span class="dp-running-text run-status t-text-swap" role="status">Working</span><span class="count"><span class="t-spin-counter" data-live-call-count="8" data-value="8" aria-label="8">8</span> calls</span><svg class="chev"><use href="#dp-chevron-down"/></svg></button><div class="steps rolling" data-live-tool-tail role="log" aria-live="polite" aria-label="Latest tool calls">
+            <button class="step"><span class="step-gutter"><svg><use href="#dp-globe"/></svg><i class="thread"></i></span><span class="step-body"><span class="step-verb"><span>Researched competitor signals</span><span class="step-suffix">7 sources</span></span><span class="step-detail">positioning, retention, and buyer authority</span></span></button>
+            <button class="step"><span class="step-gutter"><span class="agent-chip"><svg><use href="#dp-robot"/></svg></span><i class="thread"></i></span><span class="step-body"><span class="step-verb"><span>Market scan</span><span class="step-suffix">18s · 6.2k</span></span><span class="step-detail">developer-led teams still show the clearest intent</span></span></button>
+            <button class="step live last" data-peek="activity"><span class="step-gutter"><span class="agent-chip"><svg><use href="#dp-robot"/></svg></span><i class="thread"></i></span><span class="step-body"><span class="step-verb"><span class="shimmer">Challenge findings</span><span class="step-suffix"><span class="state">live</span>9s</span></span><span class="step-detail progress">testing the strongest claim against counter-evidence</span></span></button>
+          </div></div>
+          <article class="assistant typeset typeset-notes live-draft"><p>The developer-led segment is holding. I’m separating durable account evidence from early-adopter enthusiasm before writing the final position.</p></article>
+        </div>
+      </section>
+
+      <section class="scene" data-scene="approval">
+        <div class="turn">
+          <div class="user-row"><div class="user-bubble">Publish the final launch brief to the shared workspace and notify the release channel.</div></div>
+          <section class="inline-approval" aria-label="Approval required">
+            <div class="inline-approval-head"><svg><use href="#dp-warning"/></svg><b>Approval required</b><span>external write</span></div>
+            <div class="inline-approval-copy"><b>Publish the launch brief and notify #release</b><p>Creates a shared page and sends one external message.</p></div>
+            <div class="inline-command">notion.create_page · “Launch research brief” <span>→</span> slack.send_message · #release</div>
+            <div class="inline-approval-actions"><button class="dp-button small-btn" data-approval-action="deny"><span class="approval-action-label t-text-swap">Deny</span></button><button class="dp-button small-btn primary" data-approval-action="allow"><span class="approval-action-label t-text-swap">Allow once</span></button></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="scene" data-scene="child">
+        <div class="turn">
+          <div class="user-row"><div class="user-bubble">Challenge the developer-segment conclusion. Look for evidence we are over-weighting early adopters.</div></div>
+          <div class="trace collapsed"><button class="trace-head" aria-expanded="false"><svg><use href="#dp-terminal"/></svg><span>Worked</span><span class="count">5 calls · 19s</span><svg class="chev"><use href="#dp-chevron-down"/></svg></button><div class="steps">
+            <div class="step last"><span class="step-gutter"><svg><use href="#dp-globe"/></svg></span><span class="step-body"><span class="step-verb"><span>Checked counter-signals</span></span><span class="step-detail">retention, buyer role, expansion</span></span></div>
+          </div></div>
+          <article class="assistant typeset typeset-notes"><h2>The conclusion holds, with one caveat</h2><p>Early adopters are over-represented in the qualitative evidence, but the shorter evaluation cycle appears in account data too. The risk is not false intent; it is mistaking developer enthusiasm for budget authority.</p><p>I would keep the segment first, but rewrite the claim around team-led adoption and name the economic buyer separately.</p><div class="answer-footer not-typeset"><div class="response-actions" aria-label="Response actions"><button class="source-footer-action" data-peek="sources"><svg><use href="#dp-sources"/></svg><span>4 sources</span></button><button class="response-action dp-icon-button" data-response-action="copy" aria-label="Copy response" title="Copy"><svg><use href="#dp-copy"/></svg></button><button class="response-action dp-icon-button" data-response-action="branch" aria-label="Branch from this message" title="Branch from this message"><svg><use href="#dp-git-branch"/></svg></button><time datetime="2026-07-19T01:51:00">1:51 AM</time></div></div></article>
+        </div>
+      </section>
+
+      <section class="scene" data-scene="edges">
+        <div class="turn">
+          <div class="user-row"><div class="user-bubble">Continue the analysis and show every non-happy-path state we need to support.</div></div>
+          <div class="status-separator"><svg><use href="#dp-clock"/></svg>Conversation compacted · 18 earlier turns preserved</div>
+          <div class="trace"><button class="trace-head" aria-expanded="true"><svg><use href="#dp-terminal"/></svg><span>Backgrounded</span><span class="count">12 calls</span><svg class="chev"><use href="#dp-chevron-down"/></svg></button><div class="steps">
+            <button class="step live" data-peek="activity"><span class="step-gutter"><span class="agent-chip"><svg><use href="#dp-robot"/></svg></span><i class="thread"></i></span><span class="step-body"><span class="step-verb"><span class="shimmer">Evidence crawler</span><span class="step-suffix"><span class="state">live</span>12m</span></span><span class="step-detail progress">detached · review when complete</span></span></button>
+            <div class="step last"><span class="step-gutter"><svg><use href="#dp-stop-circle"/></svg></span><span class="step-body"><span class="step-verb"><span>Prior run stopped</span></span><span class="step-detail">completed work preserved</span></span></div>
+          </div></div>
+          <button class="input-card" data-focus-composer><svg><use href="#dp-robot"/></svg><div><b>Input needed</b><p>Should the report optimize for the launch team or the executive review?</p></div><svg class="chev"><use href="#dp-chevron-down"/></svg></button>
+          <div class="error-card"><svg><use href="#dp-warning"/></svg><div><b>One source could not be read</b><p>Continuing with six sources; the rest of the run is intact.</p></div></div>
+          <button class="artifact"><i class="artifact-mark"><svg><use href="#dp-file"/></svg></i><span><strong>Interactive market map</strong><small>HTML widget · input enabled · frozen after submit</small></span><svg class="chev"><use href="#dp-chevron-down"/></svg></button>
+        </div>
+      </section>
+    </div></div>
+    <nav class="conversation-rail" aria-label="Conversation outline" hidden><div class="conversation-rail-band"><div class="conversation-rail-label" aria-hidden="true"></div></div></nav>
+    <div class="bottom-stack" data-page-enter-item><div class="bottom-inner">
+      <div class="message-queue" id="message-queue" role="list" aria-label="Queued messages" aria-live="polite"></div>
+      <form class="composer"><textarea id="composer-input" placeholder="Ask or steer the agent…"></textarea><div class="composer-toolbar">
+        <button type="button" class="dp-button tool-btn icon" aria-label="Attach image"><svg><use href="#dp-attach"/></svg></button>
+        <button type="button" class="dp-button tool-btn mode"><svg><use href="#dp-shield-slash"/></svg><span class="label">Auto</span></button>
+        <span class="toolbar-spacer"></span>
+        <span class="budget-wrap">
+          <button type="button" class="budget-trigger" aria-label="Context budget" aria-expanded="false" aria-controls="context-budget-popover">
+            <svg class="budget-dial" width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+              <circle class="budget-track" cx="9" cy="9" r="7.4"/>
+              <circle class="budget-track" cx="9" cy="9" r="4"/>
+              <circle class="budget-meter token" cx="9" cy="9" r="7.4" pathLength="100"/>
+              <circle class="budget-meter message" cx="9" cy="9" r="4" pathLength="100"/>
+            </svg>
+            <span>$0.065</span>
+          </button>
+          <span class="budget-popover dp-popover" id="context-budget-popover" role="dialog" aria-label="Context budget details" aria-hidden="true" inert>
+            <span class="budget-popover-head"><b>Context budget</b><span>claude-opus-4.6</span></span>
+            <span class="budget-row"><span>Tokens</span><span>62k / 160k <em>· 39%</em></span></span>
+            <span class="budget-row"><span>Messages</span><span>28 / 100 <em>· 28%</em></span></span>
+            <span class="budget-totals"><span>Session spend</span><b>$0.065</b><span>Total tokens</span><b>87k</b></span>
+            <small>Auto-compacts at 128k tokens or when messages hit 100%.</small>
+          </span>
+        </span>
+        <div class="model-config-wrap">
+          <button type="button" class="dp-button tool-btn model-config-trigger" aria-haspopup="menu" aria-expanded="false"><span class="model-current t-text-swap">claude-opus-4.6</span><span class="effort-current t-text-swap">Off</span><svg><use href="#dp-chevron-down"/></svg></button>
+          <div class="model-config-menu dp-popover" role="menu" aria-label="Model configuration" aria-hidden="true" inert>
+            <div class="model-config-option" data-model-row="claude-opus-4.6"><button class="model-choice" type="button" data-model="claude-opus-4.6" role="menuitemradio" aria-checked="true"><span>claude-opus-4.6</span></button><button class="model-effort-trigger" type="button" data-model-effort="claude-opus-4.6" aria-haspopup="menu" aria-expanded="false"><span>Off</span><svg><use href="#dp-chevron-right"/></svg></button></div>
+            <div class="model-config-option" data-model-row="claude-sonnet-4.5"><button class="model-choice" type="button" data-model="claude-sonnet-4.5" role="menuitemradio" aria-checked="false"><span>claude-sonnet-4.5</span></button><button class="model-effort-trigger" type="button" data-model-effort="claude-sonnet-4.5" aria-haspopup="menu" aria-expanded="false"><span>High</span><svg><use href="#dp-chevron-right"/></svg></button></div>
+            <div class="model-config-option" data-model-row="gpt-5.4"><button class="model-choice" type="button" data-model="gpt-5.4" role="menuitemradio" aria-checked="false"><span>gpt-5.4</span></button><button class="model-effort-trigger" type="button" data-model-effort="gpt-5.4" aria-haspopup="menu" aria-expanded="false"><span>Medium</span><svg><use href="#dp-chevron-right"/></svg></button></div>
+            <div class="model-config-option" data-model-row="gemini-3.1-pro"><button class="model-choice" type="button" data-model="gemini-3.1-pro" role="menuitemradio" aria-checked="false"><span>gemini-3.1-pro</span></button><button class="model-effort-trigger" type="button" data-model-effort="gemini-3.1-pro" aria-haspopup="menu" aria-expanded="false"><span>High</span><svg><use href="#dp-chevron-right"/></svg></button></div>
+          </div>
+          <div class="model-effort-menu dp-popover" role="menu" aria-label="Reasoning effort" aria-hidden="true" inert>
+            <button type="button" data-effort="Off" role="menuitemradio" aria-checked="true"><span>Off</span><svg><use href="#dp-check"/></svg></button>
+            <button type="button" data-effort="Low" role="menuitemradio" aria-checked="false"><span>Low</span><svg><use href="#dp-check"/></svg></button>
+            <button type="button" data-effort="Medium" role="menuitemradio" aria-checked="false"><span>Medium</span><svg><use href="#dp-check"/></svg></button>
+            <button type="button" data-effort="High" role="menuitemradio" aria-checked="false"><span>High</span><svg><use href="#dp-check"/></svg></button>
+          </div>
+        </div>
+        <button type="submit" class="send-btn" aria-label="Send"><svg aria-hidden="true"><use href="#dp-arrow-up"/></svg></button>
+      </div></form>
+    </div></div>
+  </main>
+
+  <aside class="dp-floating-surface dp-peek peek show" aria-label="Conversation details" data-tab="activity">
+    <div class="dp-peek-header"><div class="dp-peek-tabs dp-tabs" data-tabs-variant="line" role="tablist" aria-label="Detail sections"><span class="dp-peek-tab-indicator" aria-hidden="true"></span><button type="button" class="dp-peek-tab dp-tab on" id="inspector-tab-activity" role="tab" data-tab-value="activity" aria-controls="inspector-main inspector-child" aria-selected="true" tabindex="0">Activity</button><button type="button" class="dp-peek-tab dp-tab" id="inspector-tab-sources" role="tab" data-tab-value="sources" aria-controls="inspector-main inspector-child" aria-selected="false" tabindex="-1">Sources</button></div><div class="dp-peek-actions"><button id="inspector-dock" class="dp-peek-action dp-icon-button" aria-label="Dock details as sidebar" aria-pressed="false" title="Dock as sidebar"><svg aria-hidden="true"><use href="#dp-arrows-out"/></svg></button><button id="inspector-close" class="dp-peek-action dp-icon-button" aria-label="Close details" title="Close details"><svg><use href="#dp-close"/></svg></button></div></div>
+    <div class="inspector-document dp-peek-body" data-tab-panels id="inspector-main" data-context="main" role="tabpanel" aria-labelledby="inspector-tab-activity" tabindex="-1">
+      <section class="dp-peek-section run-summary-section"><div class="t-skel run-summary-reveal is-revealed" data-run-summary-reveal><div class="t-skel-skeleton" aria-hidden="true"><div class="run-summary run-summary-skeleton"><i></i><i></i><i></i></div></div><div class="t-skel-content"><div class="run-summary"><div class="run-line"><b class="shimmer">Evidence review</b><time>24s</time></div><div class="run-sub">2 of 3 phases complete · validating the countercase before drafting.</div><div class="run-bar"><span></span></div></div></div></div></section>
+      <section class="dp-peek-section activity-only" id="inspector-activity-main"><div class="dp-peek-section-head">Agents <span>3</span></div><div class="dp-peek-list">
+        <button class="dp-peek-row"><svg><use href="#dp-robot"/></svg><span><b>Market scan</b><small>completed · 6.2k tokens</small></span><span>18s</span></button>
+        <button class="dp-peek-row"><svg><use href="#dp-robot"/></svg><span><b>Workspace evidence</b><small>completed · 4.8k tokens</small></span><span>16s</span></button>
+        <button class="dp-peek-row"><svg><use href="#dp-robot"/></svg><span><b>Countercase reviewer</b><small>running · testing buyer authority</small></span><span>9s</span></button>
+      </div></section>
+      <section class="dp-peek-section activity-only" id="inspector-work-main"><div class="dp-peek-section-head">Workflows <span>3</span></div><div class="dp-peek-list">
+        <button class="dp-peek-row"><svg><use href="#dp-check"/></svg><span><b>Collect external signals</b><small>7 sources grouped</small></span><span>done</span></button>
+        <button class="dp-peek-row"><svg><use href="#dp-check"/></svg><span><b>Mine workspace evidence</b><small>12 interviews inspected</small></span><span>done</span></button>
+        <button class="dp-peek-row"><svg><use href="#dp-activity"/></svg><span><b>Challenge findings</b><small>countercase in progress</small></span><span>live</span></button>
+      </div></section>
+      <section class="dp-peek-section sources-only" id="inspector-sources-main"><div class="dp-peek-section-head">Sources <span>7</span></div>
+      <section class="source-group"><div class="source-group-title"><svg><use href="#dp-globe"/></svg>Web <span class="phase-count">4</span></div><div class="source-call"><button class="source-link">OpenAI · Agent workflows and review queues</button><button class="source-link">GitHub · Managing and steering agent sessions</button><button class="source-link">Notion · Research sources and saved reports</button><button class="source-link">Market report · Developer automation 2026</button></div></section>
+      <section class="source-group"><div class="source-group-title"><svg><use href="#dp-files"/></svg>Workspace <span class="phase-count">3</span></div><div class="source-call"><button class="source-link">Launch interviews · 12 records</button><button class="source-link">Pricing experiment notes</button><button class="source-link">Retention cohort summary</button></div></section>
+      </section>
+    </div>
+    <div class="inspector-document dp-peek-body" data-tab-panels id="inspector-child" data-context="child" role="tabpanel" aria-labelledby="inspector-tab-activity" tabindex="-1" hidden>
+      <section class="dp-peek-section activity-only"><div class="run-summary"><div class="run-line"><b>Countercase review</b><time>19s</time></div><div class="run-sub">Finished · checked retention, buyer role, and expansion signals.</div></div></section>
+      <section class="dp-peek-section activity-only" id="inspector-activity-child"><div class="dp-peek-section-head">Work <span>3 checks</span></div><div class="dp-peek-list">
+        <button class="dp-peek-row"><svg><use href="#dp-check"/></svg><span><b>Compare retention</b><small>account cohorts inspected</small></span><span>done</span></button>
+        <button class="dp-peek-row"><svg><use href="#dp-check"/></svg><span><b>Identify the buyer</b><small>authority separated from enthusiasm</small></span><span>done</span></button>
+        <button class="dp-peek-row"><svg><use href="#dp-check"/></svg><span><b>Test expansion</b><small>team adoption remains credible</small></span><span>done</span></button>
+      </div></section>
+      <section class="dp-peek-section sources-only" id="inspector-sources-child"><div class="dp-peek-section-head">Sources <span>4</span></div>
+      <section class="source-group"><div class="source-group-title"><svg><use href="#dp-files"/></svg>Evidence <span class="phase-count">4</span></div><div class="source-call"><button class="source-link">Retention cohort summary</button><button class="source-link">Buyer-role interviews · 8 records</button><button class="source-link">Expansion accounts · Q2</button><button class="source-link">Early-adopter review notes</button></div></section>
+      </section>
+    </div>
+  </aside>
+
+</div>
+
+<div class="plate" aria-label="Mockup scenes">
+  <button class="lab-toggle dp-demo-toggle" aria-expanded="false">Demo</button>
+  <div class="lab-panel dp-demo-panel">
+    <button class="on" data-scene-button="settled">Settled</button><button data-scene-button="live">Live</button><button type="button" data-queue-demo>Queue</button><button data-scene-button="approval">Approval</button><button data-scene-button="child">Child agent</button><button data-scene-button="edges">Edge states</button><button id="peek-toggle" class="on">Peek</button><button id="compact-toggle" class="wide">Hide sidebar</button>
+  </div>
+</div>
+
+<script src="./board-sonner.js?v=20260722-1"></script>
+  <script src="./board-chat.js?v=20260722-35"></script>
+<details class="dp-review-nav"><summary>Mockups</summary><nav aria-label="Mockup pages"><a href="./board-home.html">Home</a><a href="./board-chat.html" aria-current="page">Chat</a><a href="./board-automations.html">Automations</a><a href="./board-memory.html">Memory</a><a href="./board-settings.html">Settings</a><a href="./board-area-room.html">Area Room</a><a href="./board-system-overlays.html">Overlays</a></nav></details>
+</body>
+</html>

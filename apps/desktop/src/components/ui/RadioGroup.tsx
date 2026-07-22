@@ -10,7 +10,7 @@ import {
 } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 import clsx from "clsx";
-import { Check } from "lucide-react";
+import { Check } from "@/components/icons";
 import { useItemRects, useRegisterItem } from "@/hooks/useItemRects";
 import { SPRING_LAYOUT, SPRING_TAP, SPRING_SNAP, EXIT_FAST, MOTION } from "@/lib/tokens/motion";
 

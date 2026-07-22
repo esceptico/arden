@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { ArrowRight, Bot } from "lucide-react";
+import { ArrowRight, Bot } from "@/components/icons";
 import clsx from "clsx";
 import { useStore, type ActivityItem } from "@/stores";
 import { activityItemStatus, friendlyAgentLabel, isAgent } from "@/lib/agent";

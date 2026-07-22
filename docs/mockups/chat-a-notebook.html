@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Chat A — Notebook</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..700&family=Geist+Mono:wght@400..600&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   CONCEPT A — NOTEBOOK
+   The transcript is a document. No bubbles, no cards, no chrome
+   in the flow. Your turns are margin-marked; the agent writes
+   prose. Machinery collapses to one quiet line per work block.
+   The composer is part of the page, not a floating desk object.
+   ============================================================ */
+:root{
+  color-scheme:light dark;
+  --paper:#fff;--line:#ececec;--line-strong:#dedede;
+  --ink:#171717;--ink-soft:#3d3d3d;--muted:#666;--faint:#767676;
+  --wash:#f7f7f5;
+  --hov:color-mix(in oklab,var(--ink) 4%,transparent);
+  --accent:#4f46e5;
+  --sans:"Geist",-apple-system,sans-serif;--mono:"Geist Mono",ui-monospace,monospace;
+  --ease:cubic-bezier(.22,1,.36,1);
+}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --paper:#191919;--line:#262626;--line-strong:#303030;
+  --ink:#ededed;--ink-soft:#c8c8c8;--muted:#9c9c9c;--faint:#8a8a8a;
+  --wash:#1e1e1e;--accent:#818cf8;
+}}
+:root[data-theme="dark"]{color-scheme:dark;
+  --paper:#191919;--line:#262626;--line-strong:#303030;
+  --ink:#ededed;--ink-soft:#c8c8c8;--muted:#9c9c9c;--faint:#8a8a8a;
+  --wash:#1e1e1e;--accent:#818cf8;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{font-family:var(--sans);font-size:14px;background:var(--paper);color:var(--ink);-webkit-font-smoothing:antialiased}
+button{font:inherit;border:0;background:none;color:inherit;cursor:default;padding:0}
+button:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+.frame{height:100%;display:flex;flex-direction:column}
+
+/* Header: session title only, set like a running head. */
+.head{flex:none;height:52px;display:flex;align-items:baseline;gap:10px;
+  padding:20px 0 0;max-width:640px;width:100%;margin:0 auto;padding-inline:32px}
+.head h1{margin:0;font-size:14px;font-weight:600;letter-spacing:-.01em}
+.head time{font:500 10.5px/1 var(--mono);color:var(--faint)}
+.head .theme{margin-left:auto;font:500 10.5px/1 var(--mono);color:var(--faint)}
+.head .theme:hover{color:var(--ink)}
+
+.scroll{flex:1;overflow-y:auto}
+.page{max-width:640px;margin:0 auto;padding:36px 32px 48px}
+
+/* — Turn grammar — */
+/* User turn: no bubble. A hairline tick in the left margin plus
+   slightly heavier ink. Reads as "a note I wrote in my own book". */
+.you{position:relative;margin:44px 0 20px;font-size:14px;line-height:1.55;
+  font-weight:560;letter-spacing:-.004em;text-wrap:pretty}
+.turn:first-child .you{margin-top:0}
+.you::before{content:"";position:absolute;left:-32px;top:.35em;width:14px;height:1.5px;
+  background:var(--ink);opacity:.85}
+.you .stamp{margin-left:8px;font:500 10.5px/1 var(--mono);font-weight:500;color:var(--faint);letter-spacing:0}
+
+/* Agent prose: plain reading text. */
+.agent{font-size:14px;line-height:1.7;color:var(--ink-soft)}
+.agent p{margin:0 0 13px;text-wrap:pretty}
+.agent p:last-child{margin-bottom:0}
+.agent strong{color:var(--ink);font-weight:600}
+.agent ul{margin:0 0 13px;padding-left:19px}
+.agent li{margin:4px 0}
+.agent li::marker{color:var(--faint)}
+.agent code{font:500 12.5px var(--mono);background:var(--wash);padding:1px 5px;border-radius:4px;color:var(--ink)}
+
+/* Machinery: one quiet mono line. Expands in place. */
+.work{margin:16px 0}
+.work-line{display:flex;align-items:center;gap:8px;height:24px;margin-left:-8px;padding:0 8px;
+  border-radius:6px;font:500 11.5px/1 var(--mono);color:var(--faint);text-align:left;
+  transition:color .15s var(--ease),background .15s var(--ease)}
+.work-line:hover{color:var(--muted);background:var(--hov)}
+.work-line .tick{width:10px;height:1px;background:currentColor;flex:none}
+.work-line .chev{flex:none;width:8px;height:8px;position:relative;opacity:.7}
+.work-line .chev::before{content:"";position:absolute;inset:1px 2px;border-right:1.25px solid currentColor;border-bottom:1.25px solid currentColor;transform:rotate(45deg) translateY(-2px);transition:transform .2s var(--ease)}
+.work.open .work-line .chev::before{transform:rotate(45deg) translateY(0) rotate(180deg);}
+.work-detail{display:none;margin:6px 0 0 2px;padding-left:16px;border-left:1px solid var(--line)}
+.work.open .work-detail{display:block}
+.work-row{display:flex;align-items:baseline;gap:10px;padding:3px 0;font:500 11.5px/1.5 var(--mono);color:var(--muted)}
+.work-row .t{flex:none;width:44px;color:var(--faint)}
+.work-row .v{color:var(--ink-soft)}
+.work-row .r{margin-left:auto;flex:none;color:var(--faint)}
+.work-row.sub .v{color:var(--muted)}
+
+/* Live turn: the work line itself breathes, nothing else moves. */
+.work.live .work-line{color:var(--muted)}
+.work.live .pulse{display:inline-block;animation:breathe 2s var(--ease) infinite}
+@keyframes breathe{0%,100%{opacity:.45}50%{opacity:1}}
+
+/* Attention ask: the ONE thing allowed to interrupt prose. Still
+   typographic — an indented block with a heavier hairline. */
+.ask{margin:20px 0;padding:12px 0 12px 16px;border-left:2px solid var(--ink)}
+.ask b{display:block;font-size:13px;font-weight:600}
+.ask p{margin:4px 0 0;font-size:12.5px;line-height:1.5;color:var(--muted)}
+.ask .cmd{margin:9px 0 0;font:500 11.5px/1.6 var(--mono);color:var(--ink-soft);background:var(--wash);
+  padding:8px 10px;border-radius:6px;white-space:pre;overflow-x:auto}
+.ask-actions{display:flex;gap:6px;margin-top:10px}
+.ask-actions button{height:26px;padding:0 11px;border-radius:6px;font-size:12px;font-weight:530;
+  color:var(--muted);box-shadow:inset 0 0 0 1px var(--line-strong);transition:all .15s var(--ease)}
+.ask-actions button:hover{color:var(--ink);background:var(--hov)}
+.ask-actions .go{background:var(--ink);color:var(--paper);box-shadow:none}
+.ask-actions .go:hover{background:var(--ink);color:var(--paper);opacity:.9}
+
+/* Composer: flush with the page, a rule above it. Part of the
+   document — you're writing the next line of the notebook. */
+.foot{flex:none}
+.composer{max-width:640px;margin:0 auto;padding:0 32px}
+.composer-inner{border-top:1px solid var(--line-strong);padding:14px 0 18px}
+.composer textarea{width:100%;border:0;outline:none;resize:none;background:none;color:var(--ink);
+  font:400 14px/1.55 var(--sans);height:42px;padding:0}
+.composer textarea::placeholder{color:var(--faint)}
+.composer-row{display:flex;align-items:center;gap:12px;margin-top:2px}
+.composer-row .hint{font:500 10.5px/1 var(--mono);color:var(--faint)}
+.composer-row .model{margin-left:auto;font:500 10.5px/1 var(--mono);color:var(--faint)}
+.composer-row .model:hover{color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="frame">
+  <header class="head">
+    <h1>Week triage</h1>
+    <time>thu 09:41</time>
+    <button class="theme" onclick="const r=document.documentElement;r.dataset.theme=r.dataset.theme==='dark'?'light':'dark'">theme</button>
+  </header>
+
+  <div class="scroll"><main class="page">
+
+    <section class="turn">
+      <p class="you">What's on my plate this week? Check calendar and mail, and cross-check with what I promised people.<span class="stamp">09:41</span></p>
+
+      <div class="work open">
+        <button class="work-line" onclick="this.parentElement.classList.toggle('open')">
+          <span class="tick"></span><span>read calendar, mail, memory — 6 calls · 11s</span><span class="chev"></span>
+        </button>
+        <div class="work-detail">
+          <div class="work-row"><span class="t">09:41</span><span class="v">calendar.list</span><span class="r">wk 29 · 14 events</span></div>
+          <div class="work-row"><span class="t">09:41</span><span class="v">email.search unread OR flagged</span><span class="r">31 threads</span></div>
+          <div class="work-row"><span class="t">09:41</span><span class="v">memory.recall "commitments"</span><span class="r">4 facts</span></div>
+          <div class="work-row sub"><span class="t">09:41</span><span class="v">↳ scout: read 8 long threads</span><span class="r">8s</span></div>
+          <div class="work-row"><span class="t">09:42</span><span class="v">email.thread ×2</span><span class="r">anna, sergey</span></div>
+        </div>
+      </div>
+
+      <div class="agent">
+        <p>Three things actually need you this week; the rest is noise I can hold.</p>
+        <ul>
+          <li><strong>The Q3 report to Anna</strong> — you told her "end of last week". It's now the oldest open loop and she nudged again yesterday.</li>
+          <li><strong>Thursday's design review</strong> — 6 attendees, no agenda yet. You own it.</li>
+          <li><strong>Sergey's contract question</strong> — two-line answer, he's blocked on you since Monday.</li>
+        </ul>
+        <p>Calendar is quiet otherwise: 14 events but only the review needs prep. Of 31 unread threads, 26 are newsletters or FYI — I can archive them. Nothing in memory contradicts this; your standing note says <code>report &gt; meetings</code> when they collide.</p>
+      </div>
+    </section>
+
+    <section class="turn">
+      <p class="you">Draft a reply to Anna — honest about the delay, report lands Wednesday.<span class="stamp">09:44</span></p>
+
+      <div class="work live">
+        <button class="work-line" onclick="this.parentElement.classList.toggle('open')">
+          <span class="tick"></span><span class="pulse">drafting — read thread, checking your last three replies for tone</span>
+        </button>
+      </div>
+
+      <div class="agent">
+        <p>Draft's ready below. I kept it to four sentences — your replies to her are usually short and plain, so I matched that.</p>
+      </div>
+
+      <div class="ask">
+        <b>Send mail to Anna Kovaleva?</b>
+        <p>Replies in-thread to "Q3 report?" · your work account</p>
+        <div class="cmd">Anna — the report slipped, that's on me. It lands Wednesday
+with the retention numbers you asked about. If Wednesday
+breaks anything on your side, tell me and I'll send the
+raw tables today.</div>
+        <div class="ask-actions">
+          <button class="go">Send</button>
+          <button>Edit</button>
+          <button>Skip</button>
+        </div>
+      </div>
+    </section>
+
+  </main></div>
+
+  <footer class="foot"><div class="composer"><div class="composer-inner">
+    <textarea placeholder="Write the next line…"></textarea>
+    <div class="composer-row">
+      <span class="hint">⏎ send · ⇧⏎ newline</span>
+      <button class="model">sonnet-5 · high</button>
+    </div>
+  </div></div></footer>
+</div>
+</body>
+</html>

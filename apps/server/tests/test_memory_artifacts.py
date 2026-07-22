@@ -12,6 +12,8 @@ from ntrp.memory.artifacts import (
     ArtifactMemoryStore,
     _redact_changelog,
 )
+from ntrp.memory.ledger import LedgerEntry, LedgerMeta, render_ledger_entry
+from ntrp.memory.models import Kind, SourceRef
 from ntrp.memory.page_events import page_revision
 
 if TYPE_CHECKING:
@@ -35,7 +37,6 @@ async def test_changelog_redactor_preserves_meaningful_identifiers():
         "normalized_similarity 0.6998057188013818. Artifacts included "
         "stage1_v3_delta_noact_calib_200_metrics.jsonl and train_tiny_oracle_delta_calib.py. "
         "The stage-3-from-bridge-nl-400 dashed slug is also meaningful. "
-        "Legacy unquoted [technical id] placeholder damage should read as a technical identifier. "
         "Sensitive values remain hidden: run_id=run_secret123456 span_id=span_secret123456 "
         "area:proj_secret123456 abcdef1234567890abcdef1234567890 /Users/me/src/private/file.py",
         max_chars=2000,
@@ -53,10 +54,8 @@ async def test_changelog_redactor_preserves_meaningful_identifiers():
         "0.7880833141408634",
         "1.3262231744255655",
         "0.6998057188013818",
-        "Legacy unquoted technical identifier placeholder damage",
     ):
         assert token in content
-    assert "[technical id]" not in content
     for sensitive in (
         "run_secret123456",
         "span_secret123456",
@@ -66,53 +65,6 @@ async def test_changelog_redactor_preserves_meaningful_identifiers():
     ):
         assert sensitive not in content
 
-
-async def test_source_ref_repr_debug_fragment_is_migrated_and_stripped_from_changelog(tmp_path: Path):
-    root = tmp_path / "artifacts"
-    root.mkdir()
-    raw = (
-        "# Changelog\n\n"
-        "- 2025-01-01T00:00:00+00:00 — remembered summary "
-        "source_ref=SourceRef(kind='chat_turn', ref='session-secret:toolu_secret123456', "
-        "captured_at='2025-01-01T00:00:00Z', scope_kind='session') trailing prose\n"
-    )
-    (root / "changelog.md").write_text(raw, encoding="utf-8")
-
-    store = ArtifactMemoryStore(root)
-    store.append_event("test event")  # triggers legacy-changelog migration + sanitize
-    artifact = store.read_artifact("changelog/2025/2025-01.md")
-
-    assert not (root / "changelog.md").exists()
-    # The legacy line is contentless audit noise → dropped on render; either way
-    # no raw provenance reprs/secrets survive into the changelog.
-    for raw_token in ("SourceRef", "session-secret", "toolu_secret123456", "captured_at", "scope_kind", "source_ref"):
-        assert raw_token not in artifact.content
-
-
-async def test_changelog_migration_sanitizes_existing_content(tmp_path: Path):
-    root = tmp_path / "artifacts"
-    root.mkdir()
-    (root / "changelog.md").write_text(
-        "# Changelog\n\n"
-        "- 2025-01-01T00:00:00+00:00 — pinned record abcdef1234567890abcdef1234567890 "
-        "scope=area:proj_readsecret123 /Users/me/src/ntrp run_id=run_readsecret123456\n",
-        encoding="utf-8",
-    )
-
-    store = ArtifactMemoryStore(root)
-    store.append_event("test event")  # triggers legacy-changelog migration + sanitize
-    artifact = store.read_artifact("changelog/2025/2025-01.md")
-
-    # Contentless secret-laden legacy line → dropped on render; no secrets survive.
-    for raw_token in (
-        "abcdef1234567890abcdef1234567890",
-        "scope=",
-        "area:proj_readsecret123",
-        "/Users/me",
-        "run_readsecret",
-    ):
-        assert raw_token not in artifact.content
-    assert (root / "changelog" / "2025" / "2025-01.md").read_text(encoding="utf-8") == artifact.content
 
 
 async def test_changelog_append_uses_monthly_file_after_missing_final_newline(tmp_path: Path):
@@ -153,15 +105,6 @@ async def test_existing_fifo_generated_artifact_write_fails_safe(tmp_path: Path)
         ArtifactMemoryStore(root).append_event("remembered fact memory")
 
 
-async def test_existing_fifo_changelog_append_fails_safe(tmp_path: Path):
-    root = tmp_path / "artifacts"
-    root.mkdir()
-    _mkfifo_or_skip(root / "changelog.md")
-
-    with pytest.raises(FileNotFoundError):
-        ArtifactMemoryStore(root).append_event("remembered fact memory")
-
-
 # Removed test_failed_record_read_preserves_existing_generated_artifacts: it tested
 # that the deleted export_from_records projection tolerated a record-read failure and
 # preserved prior generated artifacts. Without export there is no record read, so there
@@ -187,36 +130,6 @@ async def test_artifact_root_under_symlinked_parent_is_allowed(tmp_path: Path):
     assert "ntrp keeps artifacts under memory" in monthly
 
 
-async def test_existing_changelog_is_sanitized_on_rebuild_without_reconstruction(tmp_path: Path):
-    root = tmp_path / "artifacts"
-    root.mkdir()
-    raw_event = (
-        "- 2024-01-02T03:04:05+00:00 — added fact record "
-        "abcdef1234567890abcdef1234567890 scope=area:proj_forbidden123456 "
-        "source_ref=chat_turn:session path=/Users/escept1co/src/ntrp "
-        "run_id=run_forbidden123456 span_id=span_forbidden123456 tool_id=toolu_forbidden123456 "
-        "hash=abcdef1234567890abcdef1234567890\n"
-    )
-    (root / "changelog.md").write_text("# Changelog\n\n" + raw_event, encoding="utf-8")
-
-    ArtifactMemoryStore(root).append_event("test event")  # triggers migration + sanitize
-
-    content = (root / "changelog" / "2024" / "2024-01.md").read_text(encoding="utf-8")
-    # Contentless secret-laden legacy line → dropped on render; no secrets survive.
-    for raw in (
-        "abcdef1234567890abcdef1234567890",
-        "scope=",
-        "area:proj_forbidden123456",
-        "source_ref",
-        "/Users/escept1co/src/ntrp",
-        "run_forbidden123456",
-        "span_forbidden123456",
-        "toolu_forbidden123456",
-    ):
-        assert raw not in content
-    assert not (root / "changelog.md").exists()
-
-
 async def test_broken_symlink_nested_artifact_write_fails_safe(tmp_path: Path):
     # append_event writes nested changelog files; if a path component (here the
     # `changelog/` dir) is a symlink to a missing target, the safe-write primitive
@@ -231,19 +144,6 @@ async def test_broken_symlink_nested_artifact_write_fails_safe(tmp_path: Path):
         ArtifactMemoryStore(root).append_event("Regina drives the entity page")
 
     assert not (outside / "owned-dir").exists()
-
-
-async def test_broken_symlink_changelog_append_fails_safe(tmp_path: Path):
-    root = tmp_path / "artifacts"
-    outside = tmp_path / "outside"
-    root.mkdir()
-    outside.mkdir()
-    _symlink_or_skip(root / "changelog.md", outside / "owned.md")
-
-    with pytest.raises(FileNotFoundError):
-        ArtifactMemoryStore(root).append_event("remembered fact memory")
-
-    assert not (outside / "owned.md").exists()
 
 
 async def test_read_and_list_skip_symlinked_nested_artifacts(tmp_path: Path):
@@ -278,6 +178,36 @@ async def test_read_and_list_open_arbitrary_markdown_and_text_paths(tmp_path: Pa
         "research/models/results.txt",
     }
     assert artifacts.read_artifact(".research/.hidden.md").title == "Hidden note"
+
+
+async def test_record_list_page_renders_active_schema_v2_entries(tmp_path: Path):
+    root = tmp_path / "artifacts"
+    (root / "raw").mkdir(parents=True)
+    (root / "directives.md").write_text("", encoding="utf-8")
+    entry = LedgerEntry(
+        id="rule",
+        text="Keep answers concise.",
+        kind=Kind.DIRECTIVE,
+        occurred_at="2026-07-13",
+        meta=LedgerMeta(
+            recorded_at="2026-07-13T09:00:00+04:00",
+            sequence=1,
+            time_precision="day",
+            scope_kind="user",
+            scope_key=None,
+            sources=(SourceRef("user", "chat"),),
+        ),
+    )
+    (root / "raw" / "directives.md").write_text(
+        "<!-- ntrp:records schema=2 page=directives.md -->\n"
+        f"{render_ledger_entry(entry)}\n",
+        encoding="utf-8",
+    )
+
+    artifact = ArtifactMemoryStore(root).read_artifact("directives.md")
+
+    assert artifact.content == "- Keep answers concise."
+    assert artifact.timeline == (entry,)
 
 
 async def test_artifact_summaries_are_stable_and_revisions_hash_exact_bytes(tmp_path: Path):

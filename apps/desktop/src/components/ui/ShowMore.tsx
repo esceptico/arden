@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { motion } from "motion/react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown } from "@/components/icons";
 import clsx from "clsx";
 import { EASE_EMPHASIZED, MOTION } from "@/lib/tokens/motion";
 

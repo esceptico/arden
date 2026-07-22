@@ -11,6 +11,9 @@ import { ICON } from "@/lib/icons";
 
 function actionLabel(connection: PendingConnection): string {
   if (connection.action === "enable") return "Enable";
+  if (connection.action === "oauth" && ["gmail", "calendar", "google_drive"].includes(connection.integrationId)) {
+    return "Add account";
+  }
   return connection.source === "recovery" ? "Reconnect" : "Connect";
 }
 

@@ -63,6 +63,10 @@ import {
 } from "@/stores/areas-domain";
 import { appendMemoryVaultChange } from "@/stores/memory-vault-domain";
 import {
+  createCommandSidecarState,
+  reduceCommandEvent,
+} from "@/features/command-sidecar/domain";
+import {
   createTriageDomainState,
   reduceTriageSeen,
   reduceTriageProposal,
@@ -261,6 +265,7 @@ export const useStore = create<State & Actions>((set) => ({
   automations: null,
   automationSuggestions: null,
   automationsOpen: false,
+  automationTargetId: null,
   automationStream: createAutomationStreamDomainState(),
   archivedSessions: null,
   compacting: false,
@@ -270,6 +275,7 @@ export const useStore = create<State & Actions>((set) => ({
   sourceTurnId: null,
   sourceRefsRevision: 0,
   paletteOpen: false,
+  commandSidecar: createCommandSidecarState(),
   pendingApprovals: [],
   pendingConnections: [],
   reviewingApprovalToolId: null,
@@ -800,8 +806,14 @@ export const useStore = create<State & Actions>((set) => ({
   setServerModels: (serverModels) => set({ serverModels }),
   setAutomations: (automations) => set({ automations }),
   setAutomationSuggestions: (automationSuggestions) => set({ automationSuggestions }),
-  openAutomations: (origin) => set({ automationsOpen: true, modalOrigin: origin ?? null }),
-  closeAutomations: () => set({ automationsOpen: false }),
+  openAutomations: (origin, taskId) =>
+    set({
+      automationsOpen: true,
+      automationTargetId: taskId ?? null,
+      modalOrigin: origin ?? null,
+    }),
+  closeAutomations: () => set({ automationsOpen: false, automationTargetId: null }),
+  clearAutomationTarget: () => set({ automationTargetId: null }),
   automationStreamConnecting: () =>
     set((s) => ({
       automationStream: reduceAutomationStreamConnecting(s.automationStream),
@@ -868,6 +880,53 @@ export const useStore = create<State & Actions>((set) => ({
   openPalette: () => set({ paletteOpen: true }),
   closePalette: () => set({ paletteOpen: false }),
   togglePalette: () => set((s) => ({ paletteOpen: !s.paletteOpen })),
+  beginCommandSidecar: (query, clientId) =>
+    set({
+      commandSidecar: {
+        ...createCommandSidecarState(),
+        open: true,
+        query,
+        clientId,
+        status: "starting",
+      },
+    }),
+  attachCommandRun: (clientId, runId, sessionId) =>
+    set((s) =>
+      s.commandSidecar.clientId === clientId
+        ? {
+            commandSidecar: {
+              ...s.commandSidecar,
+              runId,
+              sessionId,
+              status: "running",
+            },
+          }
+        : {},
+    ),
+  applyCommandEvent: (event) =>
+    set((s) => ({ commandSidecar: reduceCommandEvent(s.commandSidecar, event) })),
+  failCommandSidecar: (clientId, error) =>
+    set((s) =>
+      s.commandSidecar.clientId === clientId
+        ? { commandSidecar: { ...s.commandSidecar, status: "failed", error } }
+        : {},
+    ),
+  closeCommandSidecar: () =>
+    set((s) => ({ commandSidecar: { ...s.commandSidecar, open: false } })),
+  clearCommandApproval: (toolId) =>
+    set((s) => ({
+      commandSidecar: {
+        ...s.commandSidecar,
+        approval: s.commandSidecar.approval?.toolId === toolId ? null : s.commandSidecar.approval,
+      },
+    })),
+  clearCommandConnection: (toolId) =>
+    set((s) => ({
+      commandSidecar: {
+        ...s.commandSidecar,
+        connection: s.commandSidecar.connection?.toolId === toolId ? null : s.commandSidecar.connection,
+      },
+    })),
   setPref: (key, value) =>
     set((s) => {
       const next = { ...s.prefs, [key]: value };

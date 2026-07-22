@@ -5,6 +5,22 @@ from ntrp.logging import get_logger
 _logger = get_logger(__name__)
 
 
+def _gemini_daily_quota_exhausted(exc: BaseException) -> bool:
+    details = getattr(exc, "details", None)
+    if not isinstance(details, dict):
+        return False
+    error = details.get("error", details)
+    if not isinstance(error, dict):
+        return False
+    for detail in error.get("details", []):
+        if not isinstance(detail, dict):
+            continue
+        for violation in detail.get("violations", []):
+            if isinstance(violation, dict) and "PerDay" in str(violation.get("quotaId", "")):
+                return True
+    return False
+
+
 def _is_retryable(exc: BaseException) -> bool:
     from anthropic import APIStatusError as AnthropicError
     from google.genai.errors import APIError as GeminiError
@@ -14,6 +30,8 @@ def _is_retryable(exc: BaseException) -> bool:
         return exc.status_code in {408, 409, 429} or exc.status_code >= 500
 
     if isinstance(exc, GeminiError):
+        if _gemini_daily_quota_exhausted(exc):
+            return False
         return exc.code in {408, 429} or exc.code >= 500
 
     return False

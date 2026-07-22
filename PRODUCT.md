@@ -23,7 +23,7 @@ Generic Electron-chat-app look. Heavy borders and full-height colored status rai
 ## Design Principles
 
 - **The tool disappears.** Earned familiarity over novelty; standard affordances for standard tasks.
-- **Restraint carries identity.** One accent (Geist blue), tonal surfaces not borders, status via the small dot/pip not structural chrome.
+- **Restraint carries identity.** One accent (Geist blue), tonal surfaces not borders, and compact status words/icons rather than structural chrome.
 - **Motion conveys state, never decorates.** 150–250ms, compositor-only, reduced-motion honored.
 - **Density with air between groups.** Dense rows, readable 14px, breathing room between clusters — not shrunk fonts.
 - **Every interactive surface owns its full state set.** default/hover/focus/active/disabled/loading/error, designed empty states.

@@ -790,20 +790,6 @@ def test_prepare_records_targets_artifacts_and_hashes_without_replacing_targets(
     assert all(len(row["sha256"]) == 64 for row in manifest["files"])
 
 
-def test_migration_commit_atomically_allows_only_its_status_file(tmp_path: Path) -> None:
-    (tmp_path / "me.md").write_bytes(b"old")
-    journal = VaultJournal(tmp_path)
-
-    journal.commit_migration(
-        {Path("me.md"): b"new", Path(".ntrp/maintenance/migration-v2.json"): b'{"schema_version":2}\n'}
-    )
-
-    assert (tmp_path / "me.md").read_bytes() == b"new"
-    assert (tmp_path / ".ntrp/maintenance/migration-v2.json").is_file()
-    with pytest.raises(ValueError, match="metadata directory"):
-        journal.commit_migration({Path(".ntrp/maintenance/other.json"): b"bad"})
-
-
 def test_creating_target_ancestors_fsyncs_each_new_directory_parent(tmp_path: Path, monkeypatch) -> None:
     journal = VaultJournal(tmp_path)
     synced: list[Path] = []

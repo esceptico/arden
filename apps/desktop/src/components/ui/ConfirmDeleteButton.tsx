@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "motion/react";
 import clsx from "clsx";
-import { Check, Loader2, Trash2 } from "lucide-react";
+import { Check, Loader2, Trash2 } from "@/components/icons";
 import { RollingToken } from "@/components/ui/RollingToken";
 
 type State = "idle" | "counting" | "done";

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import clsx from "clsx";
-import { ChevronDown, Loader2 } from "lucide-react";
+import { ChevronDown, Loader2 } from "@/components/icons";
 import { useStickToBottom } from "use-stick-to-bottom";
 import { useShallow } from "zustand/react/shallow";
 import { useStore } from "@/stores";

@@ -1,4 +1,4 @@
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft } from "@/components/icons";
 import { switchSession } from "@/actions/sessions";
 import { ICON } from "@/lib/icons";
 

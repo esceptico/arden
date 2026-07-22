@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { SlidersHorizontal } from "lucide-react";
+import { SlidersHorizontal } from "@/components/icons";
 import clsx from "clsx";
 import { useStore } from "@/stores";
 import type { SidebarGroupBy } from "@/stores/types";

@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "motion/react";
-import { Check, CircleDashed } from "lucide-react";
+import { Check, CircleDashed } from "@/components/icons";
 import type { AreaBriefItem, AreasBrief } from "@/api/areas";
 import { useStore } from "@/stores";
 import { FocusRow } from "@/features/home/components/FocusRow";

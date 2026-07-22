@@ -1,77 +1,87 @@
 import { useEffect, useRef } from "react";
-import { Button } from "@/components/ui/Button";
-import { Textarea } from "@/components/ui/Textarea";
+import { splitFrontmatter } from "@/features/memory/lib/format";
+import { stem } from "@/features/memory/lib/workspaceTree";
 
+/** Markdown-source editor for a memory page — the draft's in-page editor:
+ *  same page container, filename title, autosized body-only textarea
+ *  (frontmatter is held back and reattached on change). Cmd/Ctrl+S (bound
+ *  in ArtifactMemoryView) sends the draft to the review flow; Esc closes. */
 export function MemoryEditor({
   path,
-  title,
-  baseRevision,
   baseContent,
   value,
   saving,
   error,
   onChange,
-  onSave,
   onClose,
 }: {
   path: string;
-  title: string;
-  baseRevision: string;
   baseContent: string;
   value: string;
   saving: boolean;
   error: string | null;
   onChange: (value: string) => void;
-  onSave: () => void;
   onClose: () => void;
 }) {
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const sourceRef = useRef<HTMLTextAreaElement>(null);
+  const { frontmatter, body } = splitFrontmatter(value);
   const dirty = value !== baseContent;
   const hintId = `memory-editor-hint-${path.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
 
+  const autosize = () => {
+    const textarea = sourceRef.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    textarea.style.height = `${textarea.scrollHeight}px`;
+  };
+
   useEffect(() => {
-    textareaRef.current?.focus();
-  }, [path, baseRevision]);
+    autosize();
+    sourceRef.current?.focus();
+    sourceRef.current?.setSelectionRange(0, 0);
+    // Reclaim only from body — if another surface owns focus, stealing it is
+    // worse. Two stages: an exiting peer can hold focus through its whole
+    // ~250ms teardown before the blur-to-body lands.
+    const reclaim = () => {
+      if (document.activeElement === document.body) sourceRef.current?.focus();
+    };
+    const retries = [window.setTimeout(reclaim, 240), window.setTimeout(reclaim, 460)];
+    return () => retries.forEach((timer) => window.clearTimeout(timer));
+  }, []);
 
   return (
-    <section
+    <article
       data-memory-editor
-      data-theme-ready="true"
-      data-responsive="true"
+      data-memory-editor-mode="source"
       aria-label={`Edit ${path}`}
-      className="flex h-full min-h-0 min-w-0 flex-col bg-bg-main"
+      className="mw-scroller scroll-thin h-full"
     >
-      <p role="status" aria-live="polite" className="sr-only">Editing Markdown source for {path}</p>
-      <header className="flex min-w-0 flex-wrap items-center gap-2 border-b border-line-soft bg-surface px-4 py-3 sm:gap-3">
-        <div className="min-w-0 flex-1 basis-48">
-          <h1 className="truncate text-lg font-semibold text-ink">{title}</h1>
-          <p className="truncate font-mono text-2xs text-faint">{path} · rev {baseRevision.slice(0, 12)}</p>
-        </div>
-        <span role="status" className="ml-auto text-xs text-muted">
-          {dirty ? "Unsaved draft" : "No changes"}
-        </span>
-        <Button variant="secondary" size="sm" aria-label="Close editor and keep draft" onClick={onClose}>
-          Close
-        </Button>
-        <Button size="sm" aria-label="Review memory edit" disabled={!dirty || saving} onClick={onSave}>
-          {saving ? "Preparing…" : "Review"}
-        </Button>
-      </header>
-      <div className="flex min-h-0 flex-1 flex-col p-4 sm:p-6">
-        <p id={hintId} className="mb-2 text-xs text-faint">
-          Markdown source. Press Cmd/Ctrl+S to review; closing keeps this revision-specific draft.
-        </p>
-        <Textarea
-          ref={textareaRef}
-          value={value}
-          onChange={(event) => onChange(event.currentTarget.value)}
+      <p role="status" aria-live="polite" className="sr-only">
+        {saving ? `Reviewing ${path}` : dirty ? `Editing ${path} — unsaved draft` : `Editing ${path}`}
+      </p>
+      <p id={hintId} className="sr-only">Press Cmd/Ctrl+S to review changes and Escape to close the editor.</p>
+      <div className="mw-page">
+        <h1 className="mw-note-title">{stem(path)}</h1>
+        <textarea
+          ref={sourceRef}
+          className="mw-editor-textarea"
+          value={body}
+          spellCheck
           aria-label={`Markdown source for ${path}`}
           aria-describedby={hintId}
-          spellCheck
-          className="min-h-0 min-w-0 flex-1 resize-none overflow-auto whitespace-pre font-mono text-sm leading-6"
+          onChange={(event) => {
+            onChange(frontmatter + event.currentTarget.value);
+            autosize();
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== "Escape") return;
+            event.preventDefault();
+            event.stopPropagation();
+            onClose();
+          }}
         />
-        {error && <p role="alert" className="mt-2 text-xs text-bad">{error}</p>}
+        {error && <p role="alert" className="mt-4 text-xs text-bad">{error}</p>}
       </div>
-    </section>
+    </article>
   );
 }

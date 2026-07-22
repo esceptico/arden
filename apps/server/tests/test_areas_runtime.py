@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -5,7 +6,7 @@ import pytest
 
 from ntrp.areas.agent import AreaCustodianReport, render_work_context
 from ntrp.areas.asks import AskStore
-from ntrp.areas.work_models import AreaOutcome, AreaWorkItem, AreaWorkSnapshot
+from ntrp.areas.work_models import AreaOutcome, AreaWorkEvent, AreaWorkItem, AreaWorkSnapshot
 from ntrp.server.runtime.automation import AutomationRuntime
 
 
@@ -48,7 +49,7 @@ async def test_work_report_commits_before_asks(tmp_path: Path) -> None:
     assert runtime.area_asks.list("area_health") == []
 
 
-def test_work_context_exposes_current_outcome_action_and_blocker() -> None:
+def test_work_context_uses_report_keys_instead_of_internal_ids() -> None:
     common = {
         "area_id": "area_health",
         "created_at": "2026-07-10T00:00:00+00:00",
@@ -75,10 +76,25 @@ def test_work_context_exposes_current_outcome_action_and_blocker() -> None:
                 due_at=None, next_attempt_at=None, **common,
             ),
         ],
+        events=[AreaWorkEvent(
+            event_id=7, area_id="area_health", outcome_id=None,
+            item_id="work:area_health:book-labs", run_ref="run:r1",
+            event_type="progress", summary="Found an available appointment",
+            source_refs=["session:s1"], created_at="2026-07-10T01:00:00+00:00",
+        )],
     )
 
     text = render_work_context(snapshot)
+    payload = json.loads(text.split("\n", 1)[1])
 
-    assert "Lab values normalized" in text
-    assert "Book the follow-up panel" in text
-    assert "Need the user's preferred lab" in text
+    assert payload["outcomes"][0]["key"] == "labs-normal"
+    assert payload["work_items"][0]["key"] == "book-labs"
+    assert payload["work_items"][0]["outcome_key"] == "labs-normal"
+    assert payload["recent_evidence"][0]["target_type"] == "work"
+    assert payload["recent_evidence"][0]["target_key"] == "book-labs"
+    assert "area_id" not in text
+    assert "item_id" not in text
+    assert "outcome_id" not in text
+    assert "stable_key" not in text
+    assert "work:area_health" not in text
+    assert "outcome:area_health" not in text

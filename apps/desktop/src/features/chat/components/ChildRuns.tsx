@@ -1,4 +1,4 @@
-import { ArrowRight } from "lucide-react";
+import { ArrowRight } from "@/components/icons";
 import { useStore, type ActivityItem } from "@/stores";
 import { ICON } from "@/lib/icons";
 import { Caption } from "@/components/ui/Caption";

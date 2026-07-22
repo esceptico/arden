@@ -476,8 +476,8 @@ async def test_mixed_roles_persist_one_exact_source_per_turn(tmp_path: Path):
     for record in await records.list():
         assert [(source.ref, source.role) for source in record.sources] == [("m0", "user"), ("m1", "assistant")]
         assert [source.occurred_at for source in record.sources] == [
-            "2026-07-12T10:00:00Z",
-            "2026-07-12T10:00:01Z",
+            "2026-07-12T10:00:00+00:00",
+            "2026-07-12T10:00:01+00:00",
         ]
         assert all(source.time_precision == "second" for source in record.sources)
         assert all(source.captured_at is not None for source in record.sources)
@@ -673,7 +673,7 @@ async def test_update_op_uses_v2_successor_for_labels_and_evidence(tmp_path: Pat
     correction = SourceRef("curator", "s1", captured_at="2026-07-12T10:01:00Z")
 
     updated = await curator._apply_op(
-        {"op": "UPDATE", "id": entry.id, "text": "the user lives in Munich", "labels": ["Munich"]},
+            {"op": "UPDATE", "id": entry.id, "text": "the user lives in Munich", "meta_labels": ["Munich"]},
         "s1",
         correction,
     )
@@ -749,7 +749,7 @@ async def test_noop_op_does_not_mutate_existing(tmp_path: Path):
     await records.close()
 
 
-async def test_batch_source_precision_inference_preserves_timestamp_text():
+async def test_batch_source_precision_normalizes_fractional_timestamps_to_milliseconds():
     turns = [
         {**_turn(0, "user", "seconds"), "created_at": "2026-07-12T10:00:00Z"},
         {**_turn(1, "assistant", "milliseconds"), "created_at": "2026-07-12T10:00:00.123Z"},
@@ -758,8 +758,12 @@ async def test_batch_source_precision_inference_preserves_timestamp_text():
 
     sources = Curator._batch_sources("s1", turns, MemoryScope("user"))
 
-    assert [source.occurred_at for source in sources] == [turn["created_at"] for turn in turns]
-    assert [source.time_precision for source in sources] == ["second", "millisecond", "unknown"]
+    assert [source.occurred_at for source in sources] == [
+        "2026-07-12T10:00:00+00:00",
+        "2026-07-12T10:00:00.123+00:00",
+        "2026-07-12T10:00:00.123+00:00",
+    ]
+    assert [source.time_precision for source in sources] == ["second", "millisecond", "millisecond"]
 
 
 # --- worthiness gate: narrative / dev-chatter is not minted -------------------
@@ -820,7 +824,7 @@ async def test_legacy_note_action_kinds_are_dropped(tmp_path: Path):
 
 async def test_add_op_sets_labels(tmp_path: Path):
     llm = StubLLM(
-        _ops_json([{"op": "ADD", "text": "the user uses Linux", "kind": "fact", "labels": ["Linux", "tools"]}])
+        _ops_json([{"op": "ADD", "text": "the user uses Linux", "kind": "fact", "meta_labels": ["Linux", "tools"]}])
     )
     sessions = StubSessions({"s1": [_turn(0, "user", "I run Linux")]})
     curator, records = _make_curator(tmp_path, llm, sessions)
@@ -840,7 +844,7 @@ async def test_add_op_labels_sanitized_and_capped(tmp_path: Path):
                 {
                     "op": "ADD",
                     "text": "the user uses Linux",
-                    "labels": ["Linux", " Linux ", "", 7, "a", "b", "c"],
+                    "meta_labels": ["Linux", " Linux ", "", 7, "a", "b", "c"],
                 }
             ]
         )
@@ -863,7 +867,7 @@ async def test_update_op_replaces_labels_when_provided(tmp_path: Path):
     await records.set_labels(existing.id, ["Berlin", "places"])
 
     llm = StubLLM(
-        _ops_json([{"op": "UPDATE", "id": existing.id, "text": "the user lives in Munich", "labels": ["Munich"]}])
+        _ops_json([{"op": "UPDATE", "id": existing.id, "text": "the user lives in Munich", "meta_labels": ["Munich"]}])
     )
     sessions = StubSessions({"s1": [_turn(0, "user", "I moved to Munich")]})
     curator2 = Curator(
@@ -913,7 +917,7 @@ async def test_supersede_op_successor_takes_op_labels(tmp_path: Path):
     await records.set_labels(old.id, ["Acme", "work"])
 
     llm = StubLLM(
-        _ops_json([{"op": "SUPERSEDE", "id": old.id, "text": "the user works at Globex", "labels": ["Globex", "work"]}])
+        _ops_json([{"op": "SUPERSEDE", "id": old.id, "text": "the user works at Globex", "meta_labels": ["Globex", "work"]}])
     )
     sessions = StubSessions({"s1": [_turn(0, "user", "I switched jobs to Globex")]})
     curator2 = Curator(

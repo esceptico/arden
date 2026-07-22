@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowUp, Camera, Check, ChevronDown, Plus, Sparkles } from "lucide-react";
+import { ArrowUp, Camera, Check, ChevronDown, Plus, Sparkles } from "@/components/icons";
 import { AnimatePresence, motion, MotionConfig } from "motion/react";
 import clsx from "clsx";
 import { Tooltip } from "@/components/ui/Tooltip";

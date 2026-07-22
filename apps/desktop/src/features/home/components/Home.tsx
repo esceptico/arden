@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { motion } from "motion/react";
-import { Settings, Sparkles } from "lucide-react";
+import { Settings, Sparkles } from "@/components/icons";
 import type { AreaSummary, AreasBrief } from "@/api/areas";
 import type { Automation } from "@/api/types";
 import { useStore } from "@/stores";

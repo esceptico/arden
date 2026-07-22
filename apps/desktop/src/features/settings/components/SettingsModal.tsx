@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Archive, Boxes, Brain, Cable, Database, KeyRound, Palette, Plug, Sparkles, Wrench, X, type LucideIcon } from "lucide-react";
+import { Archive, Boxes, Brain, Cable, Database, KeyRound, Palette, Plug, Sparkles, Wrench, X, type NtrpIcon } from "@/components/icons";
 import { useStore } from "@/stores";
 import type { SettingsTabId } from "@/stores/types";
 import { saveAndReconnect, fetchServerConfig } from "@/actions/server";
@@ -26,7 +26,7 @@ type TabId = SettingsTabId;
 interface Tab {
   id: TabId;
   label: string;
-  icon: LucideIcon;
+  icon: NtrpIcon;
 }
 
 const TABS: Tab[] = [

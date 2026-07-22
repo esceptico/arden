@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { Box } from "lucide-react";
+import { Box } from "@/components/icons";
 import { useShallow } from "zustand/react/shallow";
 import { selectSentUserMessages, useStore } from "@/stores";
 import { viewSkill } from "@/actions/skills";

@@ -21,7 +21,7 @@ import {
   Square,
   Sun,
   Zap,
-} from "lucide-react";
+} from "@/components/icons";
 import { useStore } from "@/stores";
 import { loadHistory } from "@/actions/history";
 import { archiveSession, branchAtMessage, createArea, goToNewSessionHome, renameSession, switchSession } from "@/actions/sessions";

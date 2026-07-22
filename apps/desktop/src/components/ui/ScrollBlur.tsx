@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
-import BlurEffect from "react-progressive-blur";
+import { ProgressiveBlur } from "@/components/ui/ProgressiveBlur";
 
 /**
  * Progressive blur for scroll panes without a transformed surface-panel
@@ -28,10 +28,9 @@ export function ScrollBlurTop({ scrollerRef }: { scrollerRef: RefObject<HTMLElem
       className="scroll-progressive-blur-top"
       data-scrolled={scrolled ? "true" : "false"}
     >
-      <BlurEffect
+      <ProgressiveBlur
         className="scroll-progressive-blur-layer"
-        intensity={72}
-        position="top"
+        direction="top"
       />
     </div>
   );

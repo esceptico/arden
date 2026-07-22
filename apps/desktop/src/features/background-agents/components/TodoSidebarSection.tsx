@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import clsx from "clsx";
-import { CheckCircle2, Circle, CircleDot, Plus, X } from "lucide-react";
+import { CheckCircle2, Circle, CircleDot, Plus, X } from "@/components/icons";
 import type { TodoStatus } from "@/api/types";
 import { EASE_OUT, MOTION } from "@/lib/tokens/motion";
 import { ICON } from "@/lib/icons";

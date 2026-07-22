@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/Button";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { ASK_KIND } from "@/lib/areaKind";
 import { RISE_IN, RISE_SETTLED, ROW_EXIT, SPRING_ROW_ENTRY, MOTION, EASE_OUT } from "@/lib/tokens/motion";
-import { X } from "lucide-react";
+import { X } from "@/components/icons";
 
 /** Agent asks read as "headline — elaboration"; split on the first em-dash
  *  so the card can render the mock's title/description hierarchy. Asks

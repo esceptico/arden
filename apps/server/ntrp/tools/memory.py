@@ -33,7 +33,7 @@ from ntrp.config import get_config
 from ntrp.logging import get_logger
 from ntrp.memory.artifacts import ARTIFACT_DIR_KINDS, ROOT_ARTIFACTS, ArtifactMemoryStore
 from ntrp.memory.frontmatter import parse_frontmatter
-from ntrp.memory.models import SourceRef
+from ntrp.memory.models import SourceRef, source_time
 from ntrp.memory.reconciler import RecordOperation, validate_operations
 from ntrp.memory.scopes import MemoryScope, apply_scope_to_source, scope_for_write, scopes_for_read
 from ntrp.tools.core import ToolResult, tool
@@ -88,14 +88,20 @@ class MemoryTreeInput(BaseModel):
 
 
 class MemoryReadInput(BaseModel):
-    path: str = Field(description="Relative Markdown/text path, directory, title, file stem, or [[wikilink]] under memory.")
+    path: str = Field(
+        description="Relative Markdown/text path, directory, title, file stem, or [[wikilink]] under memory."
+    )
     offset: int = Field(default=1, ge=1, description="1-based line number to start reading.")
     limit: int = Field(default=500, ge=1, le=2000, description="Maximum lines to return.")
 
 
 class MemorySearchInput(BaseModel):
-    query: str = Field(min_length=1, max_length=500, description="Text to search in artifact filenames, titles, snippets, and content.")
-    path: str = Field(default="", description="Optional relative directory, Markdown, or text path under the memory root.")
+    query: str = Field(
+        min_length=1, max_length=500, description="Text to search in artifact filenames, titles, snippets, and content."
+    )
+    path: str = Field(
+        default="", description="Optional relative directory, Markdown, or text path under the memory root."
+    )
     limit: int = Field(default=100, ge=1, le=500, description="Maximum matches to return.")
 
 
@@ -103,13 +109,21 @@ class MemoryPatchInput(BaseModel):
     path: str = Field(description="Relative .md artifact path under the memory artifact root.")
     old_text: str = Field(min_length=1, description="Exact existing text block to replace. Must match once.")
     new_text: str = Field(description="Replacement text.")
-    force_generated: bool = Field(default=False, description="Explicitly allow editing a generated read-only artifact after approval.")
+    force_generated: bool = Field(
+        default=False, description="Explicitly allow editing a generated read-only artifact after approval."
+    )
     expected_sha256: str = Field(description="SHA-256 returned by memory_read for the artifact being edited.")
 
 
 class MemoryWriteInput(BaseModel):
-    path: str = Field(description="Relative .md path under the memory root, e.g. feeds/pr-queue.md. Creates the page or replaces its whole content (update-in-place).")
-    content: str = Field(min_length=1, max_length=40_000, description="Full markdown content for the page (a compact briefing, not an append log).")
+    path: str = Field(
+        description="Relative .md path under the memory root, e.g. feeds/pr-queue.md. Creates the page or replaces its whole content (update-in-place)."
+    )
+    content: str = Field(
+        min_length=1,
+        max_length=40_000,
+        description="Full markdown content for the page (a compact briefing, not an append log).",
+    )
     expected_sha256: str = Field(
         description="SHA-256 returned by memory_read, or the literal 'absent' when creating a new page."
     )
@@ -527,7 +541,13 @@ def _memory_search_sync(args: MemorySearchInput) -> ToolResult:
             read = store.read_artifact(artifact.path)
         except (FileNotFoundError, OSError):
             continue
-        haystack_fields = [read.path, read.title, read.kind, getattr(read, "directory", ""), _artifact_snippet(read, read.content) or ""]
+        haystack_fields = [
+            read.path,
+            read.title,
+            read.kind,
+            getattr(read, "directory", ""),
+            _artifact_snippet(read, read.content) or "",
+        ]
         if any(needle in str(field).lower() for field in haystack_fields):
             matches.append({"path": read.path, "line": 1, "snippet": (read.title or read.path)[:300]})
             if len(matches) >= args.limit:
@@ -574,7 +594,11 @@ def _approve_memory_patch_sync(args: MemoryPatchInput) -> ApprovalInfo | None:
     if preview is None:
         return None
     rel, before, after, artifact = preview
-    description = f"Force edit generated memory artifact {rel}" if args.force_generated and _artifact_generated(artifact) else f"Edit memory artifact {rel}"
+    description = (
+        f"Force edit generated memory artifact {rel}"
+        if args.force_generated and _artifact_generated(artifact)
+        else f"Edit memory artifact {rel}"
+    )
     return ApprovalInfo(
         description=description,
         preview=args.new_text[:500],
@@ -788,14 +812,15 @@ async def _direct_sources(
         None,
     )
     if triggering is not None:
+        occurred_at, precision = source_time(triggering.get("created_at"))
         sources.append(
             SourceRef(
                 kind="chat_message",
                 ref=triggering["message_id"],
                 scope_kind=scope.kind,
                 scope_key=scope.key,
-                occurred_at=triggering.get("created_at"),
-                time_precision="unknown",
+                occurred_at=occurred_at,
+                time_precision=precision,
                 role="user",
                 extra={"session_id": session_id, "seq": triggering.get("seq")},
             )
@@ -1002,9 +1027,7 @@ async def recall(execution: ToolExecution, args: RecallInput) -> ToolResult:
         return _unavailable()
 
     session_id = getattr(getattr(execution.ctx, "session_state", None), "session_id", None) or execution.ctx.session_id
-    visible = [
-        (s.kind, s.key) for s in scopes_for_read(project=execution.ctx.area, session_id=session_id)
-    ]
+    visible = [(s.kind, s.key) for s in scopes_for_read(project=execution.ctx.area, session_id=session_id)]
     # Topical recall by default: facts + source pointers. Directives and lessons are
     # standing rules already in the resident context every turn — including them here
     # let high-salience rules bury the topical facts a query is actually asking for
@@ -1036,7 +1059,6 @@ def _entity_brief_nudge(query: str) -> str | None:
     return None
 
 
-
 _MEMORY_FS_DESCRIPTION = (
     "The memory wiki is plain markdown: me.md (profile), directives.md, topics/<slug>.md "
     "(one page per subject — people, products, projects), feeds/ (automation-owned "
@@ -1049,26 +1071,32 @@ memory_tree_tool = tool(
     display_name="MemoryTree",
     description="Browse the memory artifact filesystem tree. " + _MEMORY_FS_DESCRIPTION,
     input_model=MemoryTreeInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({MEMORY_RECORDS_SERVICE})),
+    policy=ToolPolicy(
+        action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({MEMORY_RECORDS_SERVICE})
+    ),
     execute=memory_tree,
 )
 
 memory_read_tool = tool(
     display_name="MemoryRead",
     description=(
-        "Read a safe relative .md memory artifact with line offsets and its SHA-256 revision. "
-        + _MEMORY_FS_DESCRIPTION
+        "Read a safe relative .md memory artifact with line offsets and its SHA-256 revision. " + _MEMORY_FS_DESCRIPTION
     ),
     input_model=MemoryReadInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({MEMORY_RECORDS_SERVICE})),
+    policy=ToolPolicy(
+        action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({MEMORY_RECORDS_SERVICE})
+    ),
     execute=memory_read,
 )
 
 memory_search_tool = tool(
     display_name="MemorySearch",
-    description="Search safe memory artifact filenames, titles, snippets, and markdown content. " + _MEMORY_FS_DESCRIPTION,
+    description="Search safe memory artifact filenames, titles, snippets, and markdown content. "
+    + _MEMORY_FS_DESCRIPTION,
     input_model=MemorySearchInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({MEMORY_RECORDS_SERVICE})),
+    policy=ToolPolicy(
+        action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({MEMORY_RECORDS_SERVICE})
+    ),
     execute=memory_search,
 )
 
@@ -1076,11 +1104,15 @@ memory_patch_tool = tool(
     display_name="MemoryPatch",
     description=(
         "Patch a unique exact text block using the sha256 from memory_read. Requires approval; "
-        "refuses generated artifacts unless force_generated is explicit. "
-        + _MEMORY_FS_DESCRIPTION
+        "refuses generated artifacts unless force_generated is explicit. " + _MEMORY_FS_DESCRIPTION
     ),
     input_model=MemoryPatchInput,
-    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, requires_approval=True, permissions=frozenset({MEMORY_RECORDS_SERVICE})),
+    policy=ToolPolicy(
+        action=ToolAction.WRITE,
+        scope=ToolScope.INTERNAL,
+        requires_approval=True,
+        permissions=frozenset({MEMORY_RECORDS_SERVICE}),
+    ),
     approval=approve_memory_patch,
     execute=memory_patch,
 )
@@ -1092,11 +1124,15 @@ memory_write_tool = tool(
         "owned by an automation). Replaces the entire page — write the full current "
         "briefing, never an appended log. Pass memory_read's sha256 when replacing, or "
         "expected_sha256='absent' when creating. Refuses generated reports and record-backed "
-        "pages (those compile from records; use remember/memory_patch). Requires approval. "
-        + _MEMORY_FS_DESCRIPTION
+        "pages (those compile from records; use remember/memory_patch). Requires approval. " + _MEMORY_FS_DESCRIPTION
     ),
     input_model=MemoryWriteInput,
-    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, requires_approval=True, permissions=frozenset({MEMORY_RECORDS_SERVICE})),
+    policy=ToolPolicy(
+        action=ToolAction.WRITE,
+        scope=ToolScope.INTERNAL,
+        requires_approval=True,
+        permissions=frozenset({MEMORY_RECORDS_SERVICE}),
+    ),
     approval=approve_memory_write,
     execute=memory_write,
 )

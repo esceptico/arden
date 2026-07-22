@@ -117,12 +117,18 @@ interface MemoryLink {
   sourceRevision: string;
 }
 
+interface UnlinkedMention {
+  sourcePath: string;
+  context: string;
+}
+
 interface PageLinks {
   path: string;
   revision: string;
   stale: boolean;
   outgoing: MemoryLink[];
   backlinks: MemoryLink[];
+  unlinked: UnlinkedMention[];
   totalOutgoing: number;
   totalBacklinks: number;
   limit: number;
@@ -163,6 +169,7 @@ export interface MemoryArtifactSummary {
   editable: boolean;
   readonlyReason: string | null;
   updatedAt: string | null;
+  createdAt: string | null;
   labels: string[];
   source: string | null;
 }
@@ -177,6 +184,7 @@ export interface MemoryArtifactDetail extends Omit<MemoryArtifactSummary, "revis
 
 export interface MemoryArtifactSummariesResponse {
   artifacts: MemoryArtifactSummary[];
+  directories: string[];
 }
 
 export interface MemoryArtifactDetailResponse {
@@ -197,6 +205,7 @@ interface MemoryArtifactTransport {
   editable: boolean;
   readonly_reason: string | null;
   updated_at: string | null;
+  created_at?: string | null;
   labels: string[];
   source: string | null;
   timeline: MemoryTimelineEntry[];
@@ -208,6 +217,7 @@ interface MemoryArtifactTransport {
 
 interface MemoryArtifactsTransport {
   artifacts: MemoryArtifactTransport[];
+  directories?: string[];
 }
 
 interface RawScope {
@@ -331,6 +341,7 @@ function mapArtifactSummary(raw: MemoryArtifactTransport): MemoryArtifactSummary
     editable: raw.editable,
     readonlyReason: raw.readonly_reason,
     updatedAt: raw.updated_at,
+    createdAt: raw.created_at ?? null,
     labels: raw.labels,
     source: raw.source,
   };
@@ -354,6 +365,7 @@ function mapArtifactDetail(raw: MemoryArtifactTransport): MemoryArtifactDetail {
     editable: summary.editable,
     readonlyReason: summary.readonlyReason,
     updatedAt: summary.updatedAt,
+    createdAt: summary.createdAt,
     labels: summary.labels,
     source: summary.source,
     content: raw.content,
@@ -525,7 +537,10 @@ export function listMemoryArtifactSummaries(
     config,
     `/admin/memory/artifacts${queryString({ kind: params.kind, q: params.q })}`,
     { signal: options.signal },
-  ).then((response) => ({ artifacts: response.artifacts.map(mapArtifactSummary) }));
+  ).then((response) => ({
+    artifacts: response.artifacts.map(mapArtifactSummary),
+    directories: response.directories ?? [],
+  }));
 }
 
 function canonicalArtifactPath(path: string): string {
@@ -566,7 +581,10 @@ export function rebuildMemoryArtifactSummaries(
     method: "POST",
     signal: options.signal,
   })
-    .then((response) => ({ artifacts: response.artifacts.map(mapArtifactSummary) }));
+    .then((response) => ({
+      artifacts: response.artifacts.map(mapArtifactSummary),
+      directories: response.directories ?? [],
+    }));
 }
 
 export interface PreviewPageEditInput {
@@ -688,6 +706,7 @@ export async function getPageLinks(
     stale: boolean;
     outgoing: RawLink[];
     backlinks: RawLink[];
+    unlinked?: { source_path: string; context: string }[];
     total_outgoing: number;
     total_backlinks: number;
     limit: number;
@@ -702,9 +721,28 @@ export async function getPageLinks(
     stale: response.stale,
     outgoing: response.outgoing.map(mapLink),
     backlinks: response.backlinks.map(mapLink),
+    unlinked: (response.unlinked ?? []).map((mention) => ({
+      sourcePath: mention.source_path,
+      context: mention.context,
+    })),
     totalOutgoing: response.total_outgoing,
     totalBacklinks: response.total_backlinks,
     limit: response.limit,
     offset: response.offset,
   }));
+}
+
+export async function createMemoryNode(
+  config: AppConfig,
+  params: { path: string; kind: "note" | "folder" },
+): Promise<{ artifact: MemoryArtifactSummary | null; path: string }> {
+  const response = await apiWithConfig<{ artifact?: MemoryArtifactTransport; path?: string }>(
+    config,
+    "/admin/memory/notebook/create",
+    { method: "POST", body: JSON.stringify({ path: canonicalArtifactPath(params.path), kind: params.kind }) },
+  );
+  return {
+    artifact: response.artifact ? mapArtifactSummary(response.artifact) : null,
+    path: response.artifact?.path ?? response.path ?? params.path,
+  };
 }

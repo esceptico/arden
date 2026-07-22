@@ -1,8 +1,8 @@
-import { Loader2, Plus } from "lucide-react";
+import { Loader2, Plus } from "@/components/icons";
 import { type CustomModelSummary, type ModelProvider } from "@/api/settings";
 import { canSaveCustomModelDraft, type CustomModelDraft } from "@/features/settings/lib/customModelDraft";
 import { ICON } from "@/lib/icons";
-import { BlurSwap } from "@/components/ui/BlurSwap";
+import { IconSwap } from "@/components/ui/IconSwap";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { NumberField } from "@/features/settings/components/Field";
@@ -111,13 +111,11 @@ export function CustomModelsPanel({
             autoComplete="off"
           />
           <Button onClick={onCreate} disabled={!canSaveCustomModelDraft(draft) || creating}>
-            <BlurSwap swapKey={creating ? "loading" : "add"} blur={3}>
-              {creating ? (
-                <Loader2 size={ICON.MD} strokeWidth={2} className="animate-spin" />
-              ) : (
-                <Plus size={ICON.MD} strokeWidth={2} />
-              )}
-            </BlurSwap>
+            <IconSwap
+              state={creating ? "b" : "a"}
+              iconA={<Plus size={ICON.MD} strokeWidth={2} />}
+              iconB={<Loader2 size={ICON.MD} strokeWidth={2} className="animate-spin" />}
+            />
             Add
           </Button>
         </div>

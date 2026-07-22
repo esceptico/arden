@@ -14,6 +14,8 @@ import type {
 } from "@/stores/workflow-domain";
 import type { SessionViewState } from "@/stores/session-view";
 import type { AreasDomainState } from "@/stores/areas-domain";
+import type { CommandSidecarState } from "@/features/command-sidecar/domain";
+import type { ServerEvent } from "@/api/events";
 
 export type { SessionViewState } from "@/stores/session-view";
 
@@ -413,6 +415,7 @@ export interface State {
   automations: Automation[] | null;
   automationSuggestions: AutomationSuggestion[] | null;
   automationsOpen: boolean;
+  automationTargetId: string | null;
   automationStream: AutomationStreamDomainState;
   archivedSessions: ArchivedSession[] | null;
   compacting: boolean;
@@ -423,6 +426,7 @@ export interface State {
   /** Monotonic invalidation key for per-turn source derivation. */
   sourceRefsRevision: number;
   paletteOpen: boolean;
+  commandSidecar: CommandSidecarState;
   /** Tool approvals waiting on the user. Lives outside `messages` so the
    *  approval UI can render as its own surface (sticky banner above the
    *  composer) without interleaving with the agent's narrative trace. */
@@ -575,8 +579,9 @@ export interface Actions {
   setServerModels: (models: ModelsResponse | null) => void;
   setAutomations: (automations: Automation[] | null) => void;
   setAutomationSuggestions: (suggestions: AutomationSuggestion[] | null) => void;
-  openAutomations: (origin?: { x: number; y: number } | null) => void;
+  openAutomations: (origin?: { x: number; y: number } | null, taskId?: string | null) => void;
   closeAutomations: () => void;
+  clearAutomationTarget: () => void;
   automationStreamConnecting: () => void;
   automationStreamConnected: () => void;
   automationStreamStale: () => void;
@@ -635,6 +640,13 @@ export interface Actions {
   openPalette: () => void;
   closePalette: () => void;
   togglePalette: () => void;
+  beginCommandSidecar: (query: string, clientId: string) => void;
+  attachCommandRun: (clientId: string, runId: string, sessionId: string) => void;
+  applyCommandEvent: (event: ServerEvent) => void;
+  failCommandSidecar: (clientId: string, error: string) => void;
+  closeCommandSidecar: () => void;
+  clearCommandApproval: (toolId: string) => void;
+  clearCommandConnection: (toolId: string) => void;
   setPref: <K extends keyof Prefs>(key: K, value: Prefs[K]) => void;
   toggleSidebar: () => void;
   areasOverviewLoaded: (overview: import("@/api/areas").AreasOverview) => void;

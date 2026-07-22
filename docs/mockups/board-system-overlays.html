@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Board — System and overlays</title>
+  <script src="./board-icons.js"></script>
+  <script src="./board-motion.js?v=20260722-42"></script>
+  <link rel="stylesheet" href="./board-system.css?v=20260722-31">
+  <link rel="stylesheet" href="./board-system-overlays.css?v=20260722-10">
+</head>
+<body data-page-enter>
+  <main class="system-room" id="system-room" data-page-enter-item>
+    <h1>System surfaces</h1>
+    <p>Blocking work stacks above the room. Transient feedback stays brief, and every surface returns focus to the control that opened it.</p>
+    <section class="room-card" tabindex="0" data-context-label="Market launch" data-context-actions="copy-link:Copy link|open:Open area"><strong>Market launch</strong><span>Research brief ready for review · 7 sources</span></section>
+    <button class="dp-button" type="button" data-open="command-palette">Open command palette</button>
+  </main>
+
+  <div class="dp-scrim" id="system-scrim" data-open="false" aria-hidden="true"></div>
+
+  <section class="system-overlay command-palette" cmdk-root data-surface="command-palette" role="dialog" aria-modal="true" aria-label="Command palette" aria-hidden="true" hidden inert>
+    <div class="command-search dp-search-shell dp-search-shell-command"><input cmdk-input type="search" role="combobox" aria-label="Search chats or run a command" aria-controls="command-list" aria-expanded="true" autocomplete="off" placeholder="Search chats or run a command"></div>
+    <div class="command-results state-panel" cmdk-list id="command-list" role="listbox" data-panel="default">
+      <div class="command-group" cmdk-group>
+        <div cmdk-group-heading>Suggested</div>
+        <div cmdk-group-items>
+          <a class="command-row" cmdk-item id="command-new-chat" href="./board-chat.html" role="option" data-selected data-value="new chat conversation"><svg aria-hidden="true"><use href="#dp-edit"/></svg><span>New chat</span><kbd class="command-shortcut">⌘N</kbd></a>
+          <a class="command-row" cmdk-item id="command-open-folder" href="./board-area-room.html" role="option" data-value="open folder area"><svg aria-hidden="true"><use href="#dp-folder"/></svg><span>Open folder</span><kbd class="command-shortcut">⌘O</kbd></a>
+          <a class="command-row" cmdk-item id="command-search-files" href="./board-memory.html" role="option" data-value="search files memory"><svg aria-hidden="true"><use href="#dp-search"/></svg><span>Search files</span><kbd class="command-shortcut">⌘P</kbd></a>
+        </div>
+      </div>
+      <div class="command-group" cmdk-group>
+        <div cmdk-group-heading>Settings</div>
+        <div cmdk-group-items>
+          <a class="command-row" cmdk-item id="command-general" href="./board-settings.html" role="option" data-value="settings general"><svg aria-hidden="true"><use href="#dp-settings"/></svg><span>General</span></a>
+          <a class="command-row" cmdk-item id="command-appearance" href="./board-settings.html?view=appearance" role="option" data-value="settings appearance theme"><svg aria-hidden="true"><use href="#dp-appearance"/></svg><span>Appearance</span></a>
+          <a class="command-row" cmdk-item id="command-models" href="./board-settings.html?view=models" role="option" data-value="settings models"><svg aria-hidden="true"><use href="#dp-agent"/></svg><span>Models</span></a>
+          <a class="command-row" cmdk-item id="command-agent" href="./board-settings.html?view=agent" role="option" data-value="settings agent"><svg aria-hidden="true"><use href="#dp-brain"/></svg><span>Agent</span></a>
+          <a class="command-row" cmdk-item id="command-context" href="./board-settings.html?view=context" role="option" data-value="settings context"><svg aria-hidden="true"><use href="#dp-context"/></svg><span>Context</span></a>
+          <a class="command-row" cmdk-item id="command-providers" href="./board-settings.html?view=providers" role="option" data-value="settings providers"><svg aria-hidden="true"><use href="#dp-providers"/></svg><span>Providers</span></a>
+          <a class="command-row" cmdk-item id="command-integrations" href="./board-settings.html?view=integrations" role="option" data-value="settings integrations connections"><svg aria-hidden="true"><use href="#dp-integrations"/></svg><span>Integrations</span></a>
+          <a class="command-row" cmdk-item id="command-tools" href="./board-settings.html?view=tools" role="option" data-value="settings tools"><svg aria-hidden="true"><use href="#dp-tools"/></svg><span>Tools</span></a>
+          <a class="command-row" cmdk-item id="command-mcp" href="./board-settings.html?view=mcp" role="option" data-value="settings mcp servers"><svg aria-hidden="true"><use href="#dp-mcp"/></svg><span>MCP servers</span></a>
+        </div>
+      </div>
+      <div class="dp-empty-state command-empty" cmdk-empty hidden><strong>No results</strong><span>Try another chat, command, or setting.</span></div>
+    </div>
+    <div class="loading-stack state-panel" data-panel="loading" aria-busy="true" hidden><i class="dp-skeleton"></i><i class="dp-skeleton"></i><i class="dp-skeleton"></i></div>
+    <div class="dp-empty-state state-panel" data-panel="empty" hidden><strong>No commands found</strong><span>Try a shorter name or open an Area directly.</span></div>
+    <div class="dp-error-state state-panel" data-panel="error" hidden><strong>Commands unavailable</strong><span>Reconnect to reload server actions.</span><input class="dp-field" aria-label="Failed command query" aria-invalid="true" value="server actions"><button class="dp-button">Retry</button></div>
+    <div class="command-results state-panel" data-panel="long" hidden><button class="command-row" cmdk-item data-selected><svg><use href="#dp-file"/></svg><span>Open an-extremely-long-unbroken-resource-identifier-that-must-never-escape-the-viewport-or-cover-the-selected-action</span><small>File</small></button></div>
+    <footer class="command-agent-hint"><span>Enter opens the selected result</span><kbd>⌘ Enter asks the navigation helper</kbd></footer>
+  </section>
+
+  <section class="command-helper" data-surface="command-helper" role="dialog" aria-modal="false" aria-labelledby="command-helper-title" aria-hidden="true" hidden inert>
+    <header class="command-helper-head">
+      <span class="command-helper-mark"><svg aria-hidden="true"><use href="#dp-agent"/></svg></span>
+      <strong id="command-helper-title">Navigation helper</strong>
+      <button class="dp-icon-button" type="button" data-helper-close aria-label="Close navigation helper"><svg aria-hidden="true"><use href="#dp-close"/></svg></button>
+    </header>
+    <div class="command-helper-thread">
+      <div class="helper-panel" data-helper-panel="running">
+        <p class="helper-user">Open automations</p>
+        <div class="helper-assistant"><p>Finding the right destination…</p><button class="helper-activity" type="button" data-helper-activity aria-expanded="false"><span>Worked 2 steps</span><svg aria-hidden="true"><use href="#dp-chevron-down"/></svg></button><div class="helper-steps" data-helper-steps hidden><span>Matched Automations</span><span>Resolved Inbox brief</span></div></div>
+      </div>
+      <div class="helper-panel" data-helper-panel="approval" hidden>
+        <p class="helper-user">Open automations and pause Inbox brief</p>
+        <div class="helper-assistant"><p>I can open Automations now. Pausing Inbox brief needs approval.</p><div class="helper-actions"><button class="dp-button primary" type="button">Approve</button><button class="dp-button quiet" type="button">Deny</button></div></div>
+      </div>
+      <div class="helper-panel" data-helper-panel="choice" hidden>
+        <p class="helper-user">Open the brief</p>
+        <div class="helper-assistant"><p>I found two briefs. Which one should I open?</p><div class="helper-replies"><button type="button" data-helper-complete>Inbox brief <span>Automation</span></button><button type="button" data-helper-complete>Launch research brief <span>Chat</span></button></div></div>
+      </div>
+      <div class="helper-panel" data-helper-panel="done" hidden>
+        <p class="helper-user">Open automations</p>
+        <div class="helper-assistant"><p>Opened Automations.</p><a class="helper-destination" href="./board-automations.html"><svg aria-hidden="true"><use href="#dp-chat"/></svg><span>Automations · Inbox brief</span><b>›</b></a></div>
+      </div>
+    </div>
+    <footer class="command-helper-foot">
+      <div class="helper-run-meta"><span class="helper-status dp-running-text t-text-swap" data-helper-status role="status">Running</span></div>
+      <form class="helper-composer"><input type="text" aria-label="Reply to navigation helper" placeholder="Reply or steer…" autocomplete="off"><button class="dp-icon-button" type="submit" data-helper-action data-mode="stop" aria-label="Stop navigation helper"><svg aria-hidden="true"><use href="#dp-stop"/></svg></button></form>
+    </footer>
+  </section>
+
+  <section class="system-overlay quick-capture" data-surface="quick-capture" role="dialog" aria-modal="true" aria-labelledby="capture-title" aria-hidden="true" hidden inert>
+    <header class="system-overlay-head dp-sheet-header"><strong id="capture-title">Quick capture</strong><button class="dp-icon-button" data-close aria-label="Close quick capture"><svg><use href="#dp-close"/></svg></button></header>
+    <div class="system-overlay-body dp-sheet-body capture-composer"><textarea class="dp-field" aria-label="Capture message" placeholder="What needs attention?"></textarea><div class="capture-meta"><span>Inbox · new chat</span><span>⌘ Enter to send</span></div></div>
+    <footer class="system-overlay-foot dp-sheet-footer"><button class="dp-button quiet" data-close>Cancel</button><button class="dp-button primary">Send</button></footer>
+  </section>
+
+  <section class="system-overlay dp-sheet review-sheet" data-surface="approval-review" role="dialog" aria-modal="true" aria-labelledby="approval-title" aria-hidden="true" hidden inert>
+    <header class="system-overlay-head dp-sheet-header"><strong id="approval-title">Review file changes</strong><span class="dp-status" data-tone="warning">Awaiting approval</span><button class="dp-icon-button" data-close aria-label="Close review"><svg><use href="#dp-close"/></svg></button></header>
+    <div class="system-overlay-body dp-sheet-body"><div class="review-summary"><div><strong>Update launch brief</strong><p>Writes one file. No external message is sent.</p></div><button class="dp-button" data-stacked="tool-viewer">Inspect tool call</button></div><div class="diff" aria-label="Proposed diff"><span class="diff-line remove">- Focus every segment equally.</span><span class="diff-line add">+ Prioritize developer-led teams.</span><span class="diff-line add">+ Keep operations teams as the retention countercase.</span></div></div>
+    <footer class="system-overlay-foot dp-sheet-footer"><button class="dp-button quiet">Deny</button><button class="dp-button primary">Approve changes</button></footer>
+  </section>
+
+  <section class="system-overlay dp-sheet viewer-sheet" data-surface="tool-viewer" role="dialog" aria-modal="true" aria-labelledby="tool-title" aria-hidden="true" hidden inert>
+    <header class="system-overlay-head dp-sheet-header"><strong id="tool-title">Tool call</strong><span class="dp-status" data-tone="success">Completed</span><button class="dp-icon-button" data-close aria-label="Close tool viewer"><svg><use href="#dp-close"/></svg></button></header>
+    <div class="system-overlay-body dp-sheet-body tool-log"><div><strong>memory.write</strong><p>Raw request and result stay inspectable without competing with the answer.</p></div><pre class="tool-call">{"path":"areas/market-launch/brief.md","mode":"update"}</pre><pre class="tool-call">Saved 2 changed lines · source references preserved.</pre></div>
+  </section>
+
+  <section class="system-overlay dp-sheet viewer-sheet" data-surface="markdown-viewer" role="dialog" aria-modal="true" aria-labelledby="markdown-title" aria-hidden="true" hidden inert>
+    <header class="system-overlay-head dp-sheet-header"><strong id="markdown-title">launch-brief.md</strong><button class="dp-icon-button" data-close aria-label="Close Markdown viewer"><svg><use href="#dp-close"/></svg></button></header>
+    <article class="system-overlay-body dp-sheet-body viewer-copy typeset typeset-notes"><h2>Two segments are carrying the launch</h2><p>Developer-led teams show the clearest intent. Operations teams remain the stronger retention countercase.</p><ul><li>Short evaluation cycles</li><li>Durable artifact use</li><li>Reviewable evidence</li></ul></article>
+  </section>
+
+  <section class="system-overlay dp-sheet viewer-sheet" data-surface="mermaid-viewer" role="dialog" aria-modal="true" aria-labelledby="mermaid-title" aria-hidden="true" hidden inert>
+    <header class="system-overlay-head dp-sheet-header"><strong id="mermaid-title">Workflow diagram</strong><button class="dp-icon-button" data-close aria-label="Close Mermaid viewer"><svg><use href="#dp-close"/></svg></button></header>
+    <div class="system-overlay-body dp-sheet-body mermaid-stage" role="img" aria-label="Collect evidence, review countercase, then save brief"><svg viewBox="0 0 600 180"><rect x="20" y="55" width="150" height="70" rx="12"/><rect x="225" y="55" width="150" height="70" rx="12"/><rect x="430" y="55" width="150" height="70" rx="12"/><path d="M170 90H225M375 90H430"/><text x="52" y="94">Collect evidence</text><text x="252" y="94">Review countercase</text><text x="475" y="94">Save brief</text></svg></div>
+  </section>
+
+  <span class="dp-tooltip" data-surface="system-tooltip" role="tooltip">Escape closes the top surface</span>
+  <nav class="plate-controls" aria-label="System surface demos" data-page-enter-item>
+    <button data-open="command-palette" aria-pressed="true">Command</button><button data-open="command-helper" aria-pressed="false">Helper</button><button data-open="quick-capture" aria-pressed="false">Capture</button><button data-open="approval-review" aria-pressed="false">Approval</button><button data-open="tool-viewer" aria-pressed="false">Tool</button><button data-open="markdown-viewer" aria-pressed="false">Markdown</button><button data-open="mermaid-viewer" aria-pressed="false">Mermaid</button><button data-toast aria-pressed="false">Toast</button>
+  </nav>
+  <nav class="command-state-controls" aria-label="Command palette states">
+    <button data-state="default" data-command-state="default" aria-pressed="true">Default</button><button data-state="loading" data-command-state="loading" aria-pressed="false">Loading</button><button data-state="empty" data-command-state="empty" aria-pressed="false">Empty</button><button data-state="error" data-command-state="error" aria-pressed="false">Error</button><button data-state="long" data-command-state="long" aria-pressed="false">Long</button>
+  </nav>
+  <nav class="helper-state-controls" aria-label="Navigation helper states">
+    <button data-helper-state="running" aria-pressed="true">Running</button><button data-helper-state="approval" aria-pressed="false">Approval</button><button data-helper-state="choice" aria-pressed="false">Needs input</button><button data-helper-state="done" aria-pressed="false">Completed</button>
+  </nav>
+  <script src="./board-sonner.js?v=20260722-1"></script>
+  <script src="./board-system-overlays.js?v=20260722-9"></script>
+  <details class="dp-review-nav"><summary>Mockups</summary><nav aria-label="Mockup pages"><a href="./board-home.html">Home</a><a href="./board-chat.html">Chat</a><a href="./board-automations.html">Automations</a><a href="./board-memory.html">Memory</a><a href="./board-settings.html">Settings</a><a href="./board-area-room.html">Area Room</a><a href="./board-system-overlays.html" aria-current="page">Overlays</a></nav></details>
+</body>
+</html>

@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Board — Market launch</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..700&amp;family=Geist+Mono:wght@400..600&amp;display=swap" rel="stylesheet">
+  <script src="./board-icons.js?v=20260719-2"></script>
+  <script src="./board-motion.js?v=20260722-42"></script>
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <link rel="stylesheet" href="./board-area-room.css?v=20260722-11">
+</head>
+<body data-page-enter>
+<div id="app">
+  <div class="dp-traffic traffic" aria-hidden="true"><i class="dp-traffic-light"></i><i class="dp-traffic-light"></i><i class="dp-traffic-light"></i></div>
+  <button class="dp-shell-toggle dp-shell-toggle-left sidebar-toggle" id="sidebar-toggle" type="button" aria-label="Hide sidebar"><svg aria-hidden="true"><use href="#dp-panel-left-close"/></svg></button>
+  <a class="dp-shell-toggle dp-shell-back" href="./board-home.html" aria-label="Back to Home"><svg aria-hidden="true"><use href="#dp-arrow-left"/></svg></a>
+  <button class="dp-shell-toggle dp-shell-toggle-right" id="inspector-toggle" type="button" aria-label="Show Area details" aria-controls="area-inspector" aria-expanded="false" title="Show Area details"><svg aria-hidden="true"><use href="#dp-panel-right"/></svg></button>
+
+  <aside class="rail dp-sidebar" aria-label="Workspace sidebar" data-page-enter-item="chrome">
+    <nav class="rail-nav" aria-label="App">
+      <a class="nav-row" href="./board-home.html"><svg><use href="#dp-home"/></svg><span>Mission Control</span></a>
+      <a class="nav-row" href="./board-chat.html"><svg><use href="#dp-chat"/></svg><span>Chat</span></a>
+      <a class="nav-row" href="./board-automations.html"><svg><use href="#dp-zap"/></svg><span>Automations</span><span class="nav-count">3</span></a>
+      <a class="nav-row" href="./board-memory.html"><svg><use href="#dp-brain"/></svg><span>Memory</span></a>
+    </nav>
+    <div class="area-bar"><span>Areas</span><button class="dp-icon-button" type="button" aria-label="Manage areas"><svg><use href="#dp-sliders"/></svg></button></div>
+    <div class="area-list">
+      <a class="area-row" href="./board-area-room.html" data-context-actions="open:Open area|copy-link:Copy link|set-aside:Set aside"><span>O-1A evidence</span><small class="warn">needs you</small></a>
+      <a class="area-row on" href="./board-area-room.html" aria-current="page" data-context-actions="open:Open area|copy-link:Copy link|set-aside:Set aside"><span>Market launch</span><small class="live">2 running</small></a>
+      <a class="area-row" href="./board-area-room.html" data-context-actions="open:Open area|copy-link:Copy link|set-aside:Set aside"><span>Product</span><small>quiet</small></a>
+      <a class="area-row" href="./board-area-room.html" data-context-actions="open:Open area|copy-link:Copy link|set-aside:Set aside"><span>Health</span><small>updated</small></a>
+    </div>
+    <nav class="rail-bottom" aria-label="Settings">
+      <a class="nav-row" href="./board-settings.html"><svg><use href="#dp-settings"/></svg><span>Settings</span></a>
+      <button class="theme-toggle dp-icon-button" type="button" aria-label="Toggle theme"><svg><use href="#dp-sun"/></svg></button>
+    </nav>
+    <button class="dp-sidebar-resizer rail-resize" type="button" aria-label="Resize sidebar"></button>
+  </aside>
+
+  <main class="workspace area-room">
+    <div class="page">
+      <header class="answer" data-page-enter-item>
+        <h1 class="answer-line">Market launch</h1>
+        <p class="answer-sub" data-region="agent-presence"><b>2 agents running</b> · checked 4m ago</p>
+      </header>
+
+      <section class="deck-region" data-region="area-asks" aria-label="Needs you" data-page-enter-item>
+        <div class="deck-slot">
+          <article class="deck-card" data-request-card>
+            <p class="card-eyebrow"><span class="t-text-swap" data-request-kind>Question</span><time class="t-text-swap" data-request-age>waiting 52m</time></p>
+            <h2 class="card-title"><span class="t-text-swap" data-request-title>Choose the launch brief audience</span></h2>
+            <p class="card-reason"><span class="t-text-swap" data-request-reason>Developer-led teams show stronger intent; operations teams retain longer. Which signal should lead the first release?</span></p>
+            <div class="card-verbs"><button class="dp-button primary verb" type="button"><span class="verb-key">1</span><span class="t-text-swap" data-request-primary>Review</span></button><button class="dp-button quiet verb" type="button"><span class="verb-key">2</span><span class="t-text-swap" data-request-secondary>Later</span></button></div>
+          </article>
+          <div class="deck-chrome"><span class="deck-pos"><span class="t-text-swap" data-request-position>1 of 3</span></span></div>
+        </div>
+        <div class="rest" data-request-rest aria-label="Other requests">
+          <button type="button" class="rest-row" data-request-id="publish"><b>Publish the evidence brief</b><small>approval · 18m</small></button>
+          <button type="button" class="rest-row" data-request-id="notion"><b>Reconnect Notion</b><small>sign-in · 31m</small></button>
+        </div>
+      </section>
+
+      <div class="room-scroll" tabindex="0" aria-label="Area work and history" data-page-enter-item>
+        <section class="room-section" data-region="area-work" aria-labelledby="work-title">
+          <header class="section-line"><h2>Current outcome</h2><span>1 of 3 complete</span></header>
+          <h3 class="work-title" id="work-title">Move from evidence to release</h3>
+          <p class="section-copy">Audience choice unlocks proof review, then publishing.</p>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <aside class="area-inspector dp-floating-surface dp-peek" id="area-inspector" data-region="area-inspector" aria-label="Area details" aria-hidden="true" inert hidden>
+    <div class="dp-peek-header"><div class="dp-peek-tabs dp-tabs" data-tabs-variant="line" role="tablist" aria-label="Area detail sections"><span class="dp-peek-tab-indicator" aria-hidden="true"></span><button class="dp-peek-tab dp-tab on" type="button" role="tab" data-tab-value="activity" aria-selected="true" tabindex="0">Activity</button><button class="dp-peek-tab dp-tab" type="button" role="tab" data-tab-value="sources" aria-selected="false" tabindex="-1">Sources</button></div><div class="dp-peek-actions"><button class="dp-peek-action dp-icon-button" id="inspector-close" type="button" aria-label="Close Area details"><svg><use href="#dp-close"/></svg></button></div></div>
+    <div class="inspector-body dp-peek-body" data-tab-panels>
+      <section data-tab-panel="activity">
+        <section class="inspector-group dp-peek-section" data-inspector-group="approvals"><header class="dp-peek-section-head">Approval <span>1</span></header><button class="dp-peek-row" type="button"><svg><use href="#dp-check"/></svg><span><b>Update launch brief</b><small>Awaiting approval · writes one file</small></span><span>review</span></button></section>
+        <section class="inspector-group dp-peek-section" data-inspector-group="todos"><header class="dp-peek-section-head">Todo <span>1</span></header><button class="dp-peek-row" type="button"><svg><use href="#dp-list-bullets"/></svg><span><b>Confirm pricing proof</b><small>Awaiting input · assigned to you</small></span><span>today</span></button></section>
+        <section class="inspector-group dp-peek-section" data-inspector-group="agents"><header class="dp-peek-section-head">Agents <span>5</span></header><div class="session-path"><button type="button" data-parent-session>Launch research brief</button><span>/</span><button type="button" data-child-session>Countercase reviewer</button></div><div class="dp-peek-row"><svg><use href="#dp-robot"/></svg><span><b>Evidence collector</b><small>Running · grouping records</small></span><span>4m</span></div><div class="dp-peek-row"><svg><use href="#dp-check"/></svg><span><b>Market scan</b><small>Completed · 7 sources retained</small></span><span>18m</span></div><div class="dp-peek-row"><svg><use href="#dp-stop"/></svg><span><b>Old survey</b><small>Cancelled · stopped by parent</small></span><span>1h</span></div><div class="dp-peek-row"><svg><use href="#dp-warning"/></svg><span><b>Notion writer</b><small>Interrupted · auth required</small></span><span>4m</span></div><div class="dp-peek-row"><svg><use href="#dp-refresh"/></svg><span><b>Pricing cache</b><small>Stale · refresh available</small></span><span>2h</span></div></section>
+        <section class="inspector-group dp-peek-section" data-inspector-group="workflows"><header class="dp-peek-section-head">Workflows <span>1</span></header><div class="dp-peek-row"><svg><use href="#dp-activity"/></svg><span><b>Launch evidence review</b><small>Running · 2 of 3 phases complete</small></span><span>live</span></div></section>
+        <section class="inspector-group dp-peek-section" data-inspector-group="automations"><header class="dp-peek-section-head">Automations <span>1</span></header><div class="dp-peek-row"><svg><use href="#dp-zap"/></svg><span><b>Publish release notes</b><small>Failed · Notion permission revoked</small></span><span>retry</span></div></section>
+      </section>
+      <section data-tab-panel="sources" hidden><section class="inspector-group dp-peek-section"><header class="dp-peek-section-head">Sources <span>7</span></header><div class="dp-peek-row"><svg><use href="#dp-files"/></svg><span><b>Launch interviews</b><small>Memory · 4 records</small></span><span>18m</span></div><div class="dp-peek-row"><svg><use href="#dp-files"/></svg><span><b>Retention cohorts</b><small>Drive · 2 sheets</small></span><span>1h</span></div></section><section class="inspector-group dp-peek-section"><header class="dp-peek-section-head">Provenance <span>latest</span></header><dl class="source-detail"><div><dt>provider</dt><dd>Google Drive</dd></div><div><dt>action</dt><dd>search</dd></div><div><dt>call</dt><dd>drive.search · 4m</dd></div></dl></section></section>
+    </div>
+  </aside>
+</div>
+<script src="./board-sonner.js?v=20260722-1"></script>
+<script src="./board-area-room.js?v=20260722-12"></script>
+<details class="dp-review-nav"><summary>Mockups</summary><nav aria-label="Mockup pages"><a href="./board-home.html">Home</a><a href="./board-chat.html">Chat</a><a href="./board-automations.html">Automations</a><a href="./board-memory.html">Memory</a><a href="./board-settings.html">Settings</a><a href="./board-area-room.html" aria-current="page">Area Room</a><a href="./board-system-overlays.html">Overlays</a></nav></details>
+</body>
+</html>

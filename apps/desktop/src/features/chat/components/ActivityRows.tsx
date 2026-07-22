@@ -16,7 +16,7 @@ import {
   History,
   Image,
   ListChecks,
-  type LucideIcon,
+  type NtrpIcon,
   Mail,
   MessageSquare,
   PenLine,
@@ -24,7 +24,7 @@ import {
   Square,
   Terminal,
   Wrench,
-} from "lucide-react";
+} from "@/components/icons";
 import clsx from "clsx";
 import type { ActivityItem } from "@/stores";
 import { activityItemStatus, isAgent } from "@/lib/agent";
@@ -46,7 +46,7 @@ type RowProps = {
   last?: boolean;
 };
 
-const ICON_BY_KEY: Record<StepIconKey, LucideIcon> = {
+const ICON_BY_KEY: Record<StepIconKey, NtrpIcon> = {
   search: Search,
   globe: Globe,
   folder: FolderOpen,

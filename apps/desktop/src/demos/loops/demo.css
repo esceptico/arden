@@ -1,0 +1,30 @@
+:root {
+  color-scheme: dark;
+  background: #07080a;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #app {
+  width: 100%;
+  min-width: 320px;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  min-height: 100vh;
+  overflow: auto;
+  background: #07080a;
+}
+
+.loop-demo {
+  display: grid;
+  min-height: 100svh;
+  padding: 12px;
+  place-items: center;
+}
+
+.loop-demo .automation-radial {
+  width: min(calc(100vw - 24px), calc(115.4158svh - 28px), 1138px);
+}

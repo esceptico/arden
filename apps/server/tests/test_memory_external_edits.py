@@ -11,7 +11,7 @@ from ntrp.memory.artifacts import ArtifactMemoryStore
 from ntrp.memory.file_store import FilePageStore, ObservedFileChange
 from ntrp.memory.models import SourceRef
 from ntrp.memory.page_edit_service import PageEditService, StalePageRevisionError
-from ntrp.memory.page_events import PageEditDecision, page_revision, unified_patch
+from ntrp.memory.page_events import page_revision, unified_patch
 from ntrp.memory.reconciler import RecordOperation
 from ntrp.server.runtime.knowledge import KnowledgeRuntime
 
@@ -24,8 +24,10 @@ pytestmark = pytest.mark.asyncio
 class Reconciler:
     def __init__(self, *answers) -> None:
         self.answers = list(answers)
+        self.calls = 0
 
     async def __call__(self, _analysis):
+        self.calls += 1
         return self.answers.pop(0)
 
 
@@ -76,7 +78,29 @@ async def test_external_edit_has_exact_durable_base_and_advances_only_after_even
     await store.close()
 
 
-async def test_external_deletion_ask_is_review_only_and_never_restores_file(tmp_path: Path):
+async def test_external_edit_is_accepted_without_memory_reconciliation(tmp_path: Path):
+    vault = tmp_path / "memory"
+    store, page = await _store(vault)
+    record = await store.add("Original.", kind="fact", source_ref=SourceRef("user", "test"))
+    await store.refresh_from_disk()
+    page.write_bytes(b"# A\n\nTrusted external edit.\n")
+    change = next(change for change in await store.refresh_from_disk() if isinstance(change, ObservedFileChange))
+    reconciler = Reconciler((RecordOperation.ask("Forget the matching memory?", record.id),))
+    service = PageEditService(vault, store, reconciler=reconciler)
+
+    event = await service.ingest_external(change)
+
+    assert event is not None
+    assert event.reconciliation == "applied"
+    assert event.operations == ()
+    assert event.review_operations == ()
+    assert event.questions == ()
+    assert reconciler.calls == 0
+    assert await store.get(record.id) is not None
+    await store.close()
+
+
+async def test_external_deletion_is_accepted_without_changing_records(tmp_path: Path):
     vault = tmp_path / "memory"
     store, page = await _store(vault)
     record = await store.add("Original.", kind="fact", source_ref=SourceRef("user", "test"))
@@ -84,29 +108,21 @@ async def test_external_deletion_ask_is_review_only_and_never_restores_file(tmp_
     before = page.read_bytes()
     page.unlink()
     change = next(change for change in await store.refresh_from_disk() if isinstance(change, ObservedFileChange))
-    answer = (RecordOperation.ask("Forget the matching memory?", record.id),)
-    service = PageEditService(vault, store, reconciler=Reconciler(answer))
+    reconciler = Reconciler((RecordOperation.ask("Forget the matching memory?", record.id),))
+    service = PageEditService(vault, store, reconciler=reconciler)
 
     event = await service.ingest_external(change)
 
     assert event is not None
     assert event.origin == "external"
-    assert event.reconciliation == "needs_review"
+    assert event.reconciliation == "applied"
     assert event.patch == unified_patch(before, b"")
-    assert event.questions and event.review_operations[0].op == "ASK"
+    assert event.questions == ()
+    assert event.review_operations == ()
+    assert reconciler.calls == 0
     assert not page.exists()
     assert "topics/a.md" not in _observed(vault)["pages"]
-
-    resolved = await service.retry(
-        event.id,
-        decisions={
-            "operation:0": PageEditDecision(choice="Forget memory", target_ids=(record.id,))
-        },
-    )
-
-    assert resolved.reconciliation == "applied"
-    assert resolved.reconciles_event_id == event.id
-    assert await store.get(record.id) is None
+    assert await store.get(record.id) is not None
     assert not page.exists()
     await store.close()
 
@@ -721,7 +737,7 @@ async def test_runtime_publishes_first_page_before_second_ingest_failure(tmp_pat
         calls += 1
         if calls == 2:
             raise RuntimeError("page two failed")
-        return SimpleNamespace(result_revision=change.result_revision, reconciliation="applied")
+        return SimpleNamespace(result_revision=change.result_revision, reconciliation="needs_review")
 
     runtime._page_edit_service = SimpleNamespace(ingest_external=ingest)
     published = []

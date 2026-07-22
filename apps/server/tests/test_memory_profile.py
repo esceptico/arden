@@ -4,6 +4,7 @@ Areas directives + durable user facts + pins from the flat pool into the
 system-prompt block that rides every turn. Hermetic: a tmp memory.db, FTS-only.
 """
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -140,13 +141,11 @@ async def test_playbook_is_salience_ranked_not_recency_ranked(tmp_path: Path):
     await store.set_pinned(keeper.id, False)  # ensure normal path
     # score the keeper high; bury it under many newer low-imp filler lessons
     for path, line in [store._find(keeper.id)]:
-        line.imp = 9
-        store._persist(path)
+        store._replace_ledger_entry(path, replace(line, imp=9))
     for i in range(80):
-        r = await store.add(f"filler lesson {i} " + "y" * 30, kind="lesson", source_ref=SourceRef("curator", ""))
-        found = store._find(r.id)
-        found[1].imp = 1
-        store._persist(found[0])
+            r = await store.add(f"filler lesson {i} " + "y" * 30, kind="lesson", source_ref=SourceRef("curator", ""))
+            found = store._find(r.id)
+            store._replace_ledger_entry(found[0], replace(found[1], imp=1))
 
     block = await resident_profile(store)
 

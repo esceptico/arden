@@ -1,4 +1,5 @@
-import { CalendarDays, FileSpreadsheet, Mail } from "lucide-react";
+import { FileSpreadsheet } from "lucide-react";
+import { CalendarDays, Mail } from "@/components/icons";
 import type { GoogleAccountSummary, GoogleIntegrationId } from "@/api/settings";
 import type { GoogleConnectionSummary } from "@/features/settings/lib/integrationConnection";
 import { Badge, type BadgeTone } from "@/components/ui/Badge";

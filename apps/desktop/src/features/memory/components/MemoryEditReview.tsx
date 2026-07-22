@@ -25,7 +25,7 @@ export function MemoryEditReview({
   onCancel,
   onRebase,
 }: {
-  kind: "preview" | "conflict" | "external";
+  kind: "preview" | "conflict";
   reviewId: string;
   path: string;
   baseContent: string;
@@ -102,28 +102,22 @@ export function MemoryEditReview({
     );
   }
 
-  const external = kind === "external";
   return (
     <section
       ref={containerRef}
       data-memory-edit-review
       data-reduced-motion-ready="true"
       data-long-content-ready="true"
-      aria-label={external ? `Resolve external memory effects for ${path}` : `Review memory edit for ${path}`}
+      aria-label={`Review memory edit for ${path}`}
       tabIndex={-1}
       className="flex h-full min-h-0 min-w-0 flex-col bg-bg-main p-3 outline-none sm:p-4"
     >
       <p role="status" aria-live="polite" className="sr-only">
-        {external ? `Resolving external memory effects for ${path}, event ${reviewId}` : `Reviewing changes to ${path}, review ${reviewId}`}
+        {`Reviewing changes to ${path}, review ${reviewId}`}
       </p>
       {analysisPending && (
         <div role="status" className="mb-3 rounded-lg bg-warn-soft px-3 py-2 text-xs text-ink-soft">
           Memory analysis is unavailable. Saving now records this edit as pending for later reconciliation.
-        </div>
-      )}
-      {external && (
-        <div role="status" className="mb-3 rounded-lg bg-warn-soft px-3 py-2 text-xs text-ink-soft">
-          The page is already current. Resolve only the proposed memory effects.
         </div>
       )}
       <div className="min-h-0 min-w-0 flex-1">
@@ -135,10 +129,10 @@ export function MemoryEditReview({
           onDecision={onDecision}
           onApply={onApply}
           onCancel={onCancel}
-          applyLabel={external ? "Resolve memory effects" : analysisPending ? "Save as pending" : "Apply changes"}
+          applyLabel={analysisPending ? "Save as pending" : "Apply changes"}
           applyDisabled={pending}
           interactionDisabled={pending}
-          cancelLabel={external ? "Not now" : "Back to edit"}
+          cancelLabel="Back to edit"
           layout={stacked ? "stacked" : "split"}
         />
       </div>

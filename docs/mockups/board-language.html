@@ -1,0 +1,598 @@
+<meta charset="utf-8">
+<title>Desk &amp; Paper — the consolidated language</title>
+<style>
+:root{
+  --bg:#fafafa; --card:#ffffff; --well:#f4f4f2; --line:#ebebeb; --line-strong:#e0e0e0;
+  --ink:#171717; --ink-soft:#3d3d3d; --muted:#6e6e6e; --faint:#767676;
+  --accent:#0070f3; --accent-ink:#0059c8;
+  --panel:#f8f8f6; --panel-soft:#efefec;
+  --sel:color-mix(in oklab, var(--ink) 7%, transparent);
+  --hov:color-mix(in oklab, var(--ink) 4%, transparent);
+  /* the app's FF ladder verbatim: ring + doubling drops @6% (styles.css --shadow-N) */
+  --shc:rgb(0 0 0 / 0.06);
+  --sh1:0 0 0 1px var(--shc);
+  --sh4:0 0 0 1px var(--shc), 0 1px 1px -0.5px var(--shc), 0 3px 3px -1.5px var(--shc), 0 6px 6px -3px var(--shc);
+  --sh5:0 0 0 1px var(--shc), 0 1px 1px -0.5px var(--shc), 0 3px 3px -1.5px var(--shc), 0 6px 6px -3px var(--shc), 0 12px 12px -6px var(--shc);
+  --sh6:0 0 0 1px var(--shc), 0 1px 1px -0.5px var(--shc), 0 3px 3px -1.5px var(--shc), 0 6px 6px -3px var(--shc), 0 12px 12px -6px var(--shc), 0 24px 24px -12px var(--shc);
+  --inkline:rgba(0,0,0,.12); --inkline-soft:rgba(0,0,0,.06);
+  --mono:ui-monospace,"SF Mono",Menlo,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  --smooth-out:cubic-bezier(0.22, 1, 0.36, 1);
+}
+@media (prefers-color-scheme: dark){:root{
+  --bg:#0f0f0f; --card:#191919; --well:#151515; --line:#262626; --line-strong:#303030;
+  --ink:#ededed; --ink-soft:#c8c8c8; --muted:#9a9a9a; --faint:#8a8a8a;
+  --accent:#3291ff; --accent-ink:#5ca8ff;
+  --panel:#1e1e1e; --panel-soft:#262626;
+  --shc:rgb(0 0 0 / 0.35);
+  --sh1:inset 0 0 0 1px rgba(255,255,255,.07);
+  --sh4:inset 0 1px 0 0 rgba(255,255,255,.05), inset 0 0 0 1px rgba(255,255,255,.07), 0 1px 1px -0.5px var(--shc), 0 3px 3px -1.5px var(--shc), 0 6px 6px -3px var(--shc);
+  --sh5:inset 0 1px 0 0 rgba(255,255,255,.05), inset 0 0 0 1px rgba(255,255,255,.07), 0 3px 3px -1.5px var(--shc), 0 6px 6px -3px var(--shc), 0 12px 12px -6px var(--shc);
+  --sh6:inset 0 1px 0 0 rgba(255,255,255,.06), inset 0 0 0 1px rgba(255,255,255,.08), 0 6px 6px -3px var(--shc), 0 12px 12px -6px var(--shc), 0 24px 24px -12px var(--shc);
+  --inkline:rgba(255,255,255,.16); --inkline-soft:rgba(255,255,255,.08);
+}}
+:root[data-theme="dark"]{
+  --bg:#0f0f0f; --card:#191919; --well:#151515; --line:#262626; --line-strong:#303030;
+  --ink:#ededed; --ink-soft:#c8c8c8; --muted:#9a9a9a; --faint:#8a8a8a;
+  --accent:#3291ff; --accent-ink:#5ca8ff;
+  --panel:#1e1e1e; --panel-soft:#262626;
+  --shc:rgb(0 0 0 / 0.35);
+  --sh1:inset 0 0 0 1px rgba(255,255,255,.07);
+  --sh4:inset 0 1px 0 0 rgba(255,255,255,.05), inset 0 0 0 1px rgba(255,255,255,.07), 0 1px 1px -0.5px var(--shc), 0 3px 3px -1.5px var(--shc), 0 6px 6px -3px var(--shc);
+  --sh5:inset 0 1px 0 0 rgba(255,255,255,.05), inset 0 0 0 1px rgba(255,255,255,.07), 0 3px 3px -1.5px var(--shc), 0 6px 6px -3px var(--shc), 0 12px 12px -6px var(--shc);
+  --sh6:inset 0 1px 0 0 rgba(255,255,255,.06), inset 0 0 0 1px rgba(255,255,255,.08), 0 6px 6px -3px var(--shc), 0 12px 12px -6px var(--shc), 0 24px 24px -12px var(--shc);
+  --inkline:rgba(255,255,255,.16); --inkline-soft:rgba(255,255,255,.08);
+}
+:root[data-theme="light"]{
+  --bg:#fafafa; --card:#ffffff; --well:#f4f4f2; --line:#ebebeb; --line-strong:#e0e0e0;
+  --ink:#171717; --ink-soft:#3d3d3d; --muted:#6e6e6e; --faint:#767676;
+  --accent:#0070f3; --accent-ink:#0059c8;
+  --panel:#f8f8f6; --panel-soft:#efefec;
+  --shc:rgb(0 0 0 / 0.06);
+  --sh1:0 0 0 1px var(--shc);
+  --sh4:0 0 0 1px var(--shc), 0 1px 1px -0.5px var(--shc), 0 3px 3px -1.5px var(--shc), 0 6px 6px -3px var(--shc);
+  --sh5:0 0 0 1px var(--shc), 0 1px 1px -0.5px var(--shc), 0 3px 3px -1.5px var(--shc), 0 6px 6px -3px var(--shc), 0 12px 12px -6px var(--shc);
+  --sh6:0 0 0 1px var(--shc), 0 1px 1px -0.5px var(--shc), 0 3px 3px -1.5px var(--shc), 0 6px 6px -3px var(--shc), 0 12px 12px -6px var(--shc), 0 24px 24px -12px var(--shc);
+  --inkline:rgba(0,0,0,.12); --inkline-soft:rgba(0,0,0,.06);
+}
+*{box-sizing:border-box;}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);margin:0;-webkit-font-smoothing:antialiased;}
+.page{max-width:980px;margin:0 auto;padding:72px 32px 96px;}
+.eyebrow{font:500 11px/1 var(--mono);letter-spacing:.12em;color:var(--faint);margin:0 0 20px;}
+h1{font-size:28px;font-weight:600;letter-spacing:-0.02em;margin:0 0 14px;text-wrap:balance;}
+.lede{font-size:15px;line-height:1.65;color:var(--ink-soft);max-width:66ch;margin:0;}
+.lede em{font-style:normal;color:var(--ink);font-weight:500;}
+section{margin-top:64px;}
+.sect-head{display:flex;align-items:baseline;gap:14px;border-bottom:var(--border-width) solid var(--line);padding-bottom:12px;margin-bottom:16px;}
+.sect-head .k{font:500 11px/1 var(--mono);letter-spacing:.1em;color:var(--accent);flex:none;}
+.sect-head h2{font-size:16px;font-weight:600;margin:0;letter-spacing:-0.01em;}
+.sect-head .note{margin-left:auto;font-size:12.5px;color:var(--faint);text-align:right;}
+p{font-size:14px;line-height:1.65;color:var(--ink-soft);margin:0 0 12px;max-width:72ch;}
+p b, li b{color:var(--ink);font-weight:600;}
+code{font:12px var(--mono);color:var(--ink);background:var(--well);border-radius:4px;padding:1px 5px;}
+.spec{margin-top:16px;background:var(--well);border:var(--border-width) solid var(--line);border-radius:12px;padding:24px;}
+.spec-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:22px;align-items:start;}
+.cap{font:500 10px/1.5 var(--mono);letter-spacing:.06em;color:var(--faint);margin-top:12px;}
+.cap b{color:var(--muted);font-weight:500;}
+.ln{height:5px;border-radius:2.5px;background:var(--inkline);}
+.lns{background:var(--inkline-soft);}
+.row-lab{font:500 10.5px/1 var(--mono);letter-spacing:.06em;color:var(--faint);}
+
+/* 01 materials */
+.mat-paper{background:var(--card);border:var(--border-width) solid var(--line);border-radius:0;padding:20px;}
+.mat-paper .mp-crumb{font:500 9.5px/1 var(--mono);letter-spacing:.08em;color:var(--muted);margin-bottom:12px;}
+.mat-paper .mp-t{font-size:15px;font-weight:600;margin-bottom:8px;}
+.mat-paper .mp-p{font-size:12px;line-height:1.6;color:var(--ink-soft);}
+.mat-paper .mp-p a{color:var(--accent-ink);text-decoration:none;border-bottom:var(--border-width) solid color-mix(in oklab, var(--accent) 32%, transparent);}
+.mat-paper .mp-hr{border-top:var(--border-width) solid var(--line);margin-top:14px;padding-top:8px;font-size:11px;font-weight:600;}
+.mat-desk{background:var(--panel);border-radius:16px;box-shadow:var(--sh4);padding:14px 12px;}
+.mat-desk .seg{display:flex;background:var(--panel-soft);border-radius:999px;padding:3px;margin-bottom:10px;}
+.mat-desk .seg span{flex:1;display:flex;align-items:center;justify-content:center;gap:4px;text-align:center;font-size:10.5px;font-weight:500;color:var(--muted);padding:5px 0;border-radius:999px;}
+.mat-desk .seg span.on{background:var(--card);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.08);}
+.mat-desk .seg svg{width:11px;height:11px;fill:none;}.mat-desk .seg span:not(.on) svg{opacity:.6}.mat-desk .seg span:not(.on) b{display:none}.mat-desk .seg b{font:inherit}
+.mat-desk .drow{display:flex;align-items:center;font-size:11.5px;color:var(--ink-soft);height:24px;padding:0 8px;border-radius:6px;}
+.mat-desk .drow.on{background:var(--sel);color:var(--ink);font-weight:500;}
+.ramp div{font-size:13.5px;line-height:2;display:flex;align-items:baseline;gap:10px;}
+.ramp .hex{font:10px var(--mono);color:var(--faint);margin-left:auto;}
+.fillrow{display:flex;align-items:center;height:30px;padding:0 10px;border-radius:6px;font-size:12px;color:var(--ink-soft);background:var(--card);border:var(--border-width) solid var(--line);}
+.fillrow+.fillrow{margin-top:6px;}
+.fillrow.h{background:color-mix(in oklab, var(--ink) 4%, var(--card));}
+.fillrow.s{background:color-mix(in oklab, var(--ink) 7%, var(--card));color:var(--ink);font-weight:500;}
+.fillrow .fr-l{margin-left:auto;font:9.5px var(--mono);color:var(--faint);}
+.radset{display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;}
+.radset .r{background:var(--card);box-shadow:var(--sh4);}
+
+/* 02 stack */
+.stage{position:relative;background:var(--card);border:var(--border-width) solid var(--line);border-radius:10px;overflow:hidden;}
+.mini-rail{position:absolute;background:var(--panel);border-radius:10px;box-shadow:var(--sh4);}
+.mini-orn{position:absolute;display:flex;gap:3px;background:var(--panel);border-radius:999px;box-shadow:var(--sh4);padding:4px 7px;}
+.mini-orn i{width:9px;height:9px;border-radius:50%;background:var(--inkline);}
+.mini-peek{position:absolute;background:var(--card);border-radius:12px;box-shadow:var(--sh5);overflow:hidden;}
+.mini-peek .ph{background:var(--panel);border-bottom:var(--border-width) solid var(--line);height:18px;}
+.ladder{display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;}
+.ladder .lchip{width:120px;}
+.ladder .lbox{height:72px;border-radius:12px;background:var(--card);}
+.rulegrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:22px;}
+
+/* 03 motion */
+.mo-stage{position:relative;height:230px;background:var(--card);border:var(--border-width) solid var(--line);border-radius:10px;overflow:hidden;}
+.mo-orn{position:absolute;top:14px;right:150px;display:flex;gap:3px;background:var(--panel);border-radius:999px;box-shadow:var(--sh4);padding:5px 8px;transition:transform .25s var(--smooth-out);}
+.mo-orn i{width:10px;height:10px;border-radius:50%;background:var(--inkline);}
+.mo-stage.open .mo-orn{transform:translateX(-64px);}
+.mo-peek{position:absolute;top:44px;right:16px;bottom:20px;width:150px;background:var(--card);border-radius:12px;box-shadow:var(--sh5);overflow:hidden;
+  opacity:0;transform:translateX(28px);visibility:hidden;
+  transition:transform .45s cubic-bezier(.22,1,.36,1), opacity .3s ease-out, visibility 0s .16s;}
+.mo-stage.open .mo-peek{opacity:1;transform:translateX(0);visibility:visible;transition:transform .45s cubic-bezier(.22,1,.36,1), opacity .3s ease-out, visibility 0s 0s;}
+.mo-stage:not(.open) .mo-peek{transition:transform .16s cubic-bezier(.23,1,.32,1), opacity .16s cubic-bezier(.23,1,.32,1), visibility 0s .16s;transform:translateX(16px);}
+.mo-peek .ph{background:var(--panel);border-bottom:var(--border-width) solid var(--line);height:20px;}
+.disc-rows .dr{display:flex;flex-direction:column;gap:5px;padding:9px 0;border-bottom:var(--border-width) solid var(--line);
+  opacity:0;transform:translateY(6px);filter:blur(3px);
+  transition:opacity .3s ease-out, transform .35s cubic-bezier(.22,1,.36,1), filter .3s ease-out;}
+.disc.open .dr{opacity:1;transform:none;filter:blur(0);}
+.disc.open .dr:nth-child(2){transition-delay:.03s;}
+.disc.open .dr:nth-child(3){transition-delay:.06s;}
+.disc.open .dr:nth-child(4){transition-delay:.09s;}
+.disc.reset .dr{transition:none!important;}
+.fog-scroll{position:absolute;inset:0;overflow:auto;padding:18px 20px;}
+.fog-veil{position:absolute;left:0;right:0;pointer-events:none;backdrop-filter:blur(5px);-webkit-backdrop-filter:blur(5px);}
+.fog-veil.t{top:0;height:44px;-webkit-mask-image:linear-gradient(to top,transparent,black 75%);mask-image:linear-gradient(to top,transparent,black 75%);}
+.fog-veil.b{bottom:0;height:52px;-webkit-mask-image:linear-gradient(to bottom,transparent,black 75%);mask-image:linear-gradient(to bottom,transparent,black 75%);}
+.rd-stage .mini-rail,.rd-stage .mini-orn{transition:opacity .3s ease-out, filter .3s ease-out;}
+.rd-stage.rd .mini-rail,.rd-stage.rd .mini-orn{opacity:.4;filter:blur(2px);}
+.replay{font:500 10.5px var(--mono);letter-spacing:.05em;color:var(--muted);background:var(--card);border:var(--border-width) solid var(--line-strong);border-radius:999px;padding:6px 12px;cursor:pointer;}
+.replay:hover{color:var(--ink);}
+.replay:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+
+/* 04 laws */
+.stat{display:flex;align-items:center;font-size:12.5px;color:var(--ink-soft);height:26px;}
+.stat+.stat{border-top:var(--border-width) solid var(--line);}
+.stat .sl{margin-left:auto;font:500 10.5px var(--mono);letter-spacing:.03em;}
+.focus-demo{display:inline-block;font-size:12px;font-weight:500;color:var(--ink);background:var(--card);border:var(--border-width) solid var(--line-strong);border-radius:8px;padding:7px 14px;outline:2px solid var(--accent);outline-offset:2px;}
+
+/* 05 open */
+.sw-btn{display:flex;align-items:center;gap:8px;font:500 11px var(--mono);color:var(--muted);background:var(--card);border:var(--border-width) solid var(--line-strong);border-radius:999px;padding:6px 12px 6px 7px;cursor:pointer;}
+.sw-btn i{width:16px;height:16px;border-radius:50%;display:inline-block;}
+.sw-btn.on{border-color:var(--accent);color:var(--ink);}
+.darkchip{background:#0f0f0f;border-radius:12px;padding:18px;}
+.darkchip .dc1{background:#1e1e1e;border-radius:10px;box-shadow:inset 0 1px 0 0 rgba(255,255,255,.05), inset 0 0 0 1px rgba(255,255,255,.07), 0 6px 6px -3px rgba(0,0,0,.35);padding:10px;margin-bottom:10px;}
+.darkchip .dc2{background:#252525;border-radius:10px;box-shadow:inset 0 1px 0 0 rgba(255,255,255,.06), inset 0 0 0 1px rgba(255,255,255,.08), 0 12px 12px -6px rgba(0,0,0,.4);padding:10px;margin-left:26px;}
+.darkchip .ln{background:rgba(255,255,255,.16);}
+.darkchip .lns{background:rgba(255,255,255,.08);}
+
+/* 06 map */
+.map-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:22px;}
+.map-stage{position:relative;height:150px;background:var(--card);border:var(--border-width) solid var(--line);border-radius:10px;overflow:hidden;}
+.mf{position:absolute;background:var(--panel);border-radius:8px;box-shadow:var(--sh4);}
+.ml{position:absolute;background:var(--card);border-radius:8px;box-shadow:var(--sh5);}
+.ml .ph{background:var(--panel);border-bottom:var(--border-width) solid var(--line);height:12px;border-radius:8px 8px 0 0;}
+.legend{display:flex;gap:18px;flex-wrap:wrap;margin-bottom:18px;}
+.legend span{display:inline-flex;align-items:center;gap:7px;font:500 10.5px var(--mono);color:var(--muted);}
+.legend i{width:16px;height:12px;border-radius:3px;display:inline-block;}
+.foot{margin-top:48px;font:12px var(--mono);color:var(--faint);line-height:2;}
+.foot a{color:var(--muted);text-decoration:none;border-bottom:var(--border-width) solid var(--line-strong);}
+@media (prefers-reduced-motion: reduce){.mo-orn,.mo-peek,.disc-rows .dr{transition:none!important;}}
+@media (max-width:640px){.page{padding:48px 20px 72px;}.sect-head .note{display:none;}}
+</style>
+
+<svg aria-hidden="true" width="0" height="0" style="position:absolute"><defs>
+  <!-- Hugeicons Stroke Rounded, generated from @hugeicons/core-free-icons. -->
+  <symbol id="p-folder" viewBox="0 0 24 24" fill="none"><path d="M8 7H16.75C18.8567 7 19.91 7 20.6667 7.50559C20.9943 7.72447 21.2755 8.00572 21.4944 8.33329C22 9.08996 22 10.1433 22 12.25C22 15.7612 22 17.5167 21.1573 18.7779C20.7926 19.3238 20.3238 19.7926 19.7779 20.1573C18.5167 21 16.7612 21 13.25 21H12C7.28595 21 4.92893 21 3.46447 19.5355C2 18.0711 2 15.714 2 11V7.94427C2 6.1278 2 5.21956 2.38032 4.53806C2.65142 4.05227 3.05227 3.65142 3.53806 3.38032C4.21956 3 5.1278 3 6.94427 3C8.10802 3 8.6899 3 9.19926 3.19101C10.3622 3.62712 10.8418 4.68358 11.3666 5.73313L12 7" stroke="currentColor" stroke-linecap="round" stroke-width="1.5"/></symbol>
+  <symbol id="p-notebook" viewBox="0 0 24 24" fill="none"><path d="M22 14V10C22 6.22876 22 4.34315 20.8284 3.17157C19.6569 2 17.7712 2 14 2H12C8.22876 2 6.34315 2 5.17157 3.17157C4 4.34315 4 6.22876 4 10V14C4 17.7712 4 19.6569 5.17157 20.8284C6.34315 22 8.22876 22 12 22H14C17.7712 22 19.6569 22 20.8284 20.8284C22 19.6569 22 17.7712 22 14Z" stroke="currentColor" stroke-width="1.5"/><path d="M11.7857 10H15.2143C16.2918 10 16.8305 10 17.1653 9.70711C17.5 9.41421 17.5 8.94281 17.5 8C17.5 7.05719 17.5 6.58579 17.1653 6.29289C16.8305 6 16.2918 6 15.2143 6H11.7857C10.7082 6 10.1695 6 9.83474 6.29289C9.5 6.58579 9.5 7.05719 9.5 8C9.5 8.94281 9.5 9.41421 9.83474 9.70711C10.1695 10 10.7082 10 11.7857 10Z" stroke="currentColor" stroke-width="1.5"/><path d="M5 6L2 6M5 12H2M5 18H2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"/></symbol>
+  <symbol id="p-facts" viewBox="0 0 24 24" fill="none"><path d="M11 6L21 6" stroke="currentColor" stroke-linecap="round" stroke-width="1.5"/><path d="M11 12L21 12" stroke="currentColor" stroke-linecap="round" stroke-width="1.5"/><path d="M11 18L21 18" stroke="currentColor" stroke-linecap="round" stroke-width="1.5"/><path d="M3 7.39286C3 7.39286 4 8.04466 4.5 9C4.5 9 6 5.25 8 4" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"/><path d="M3 18.3929C3 18.3929 4 19.0447 4.5 20C4.5 20 6 16.25 8 15" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"/></symbol>
+</defs></svg>
+
+<div class="page">
+  <p class="eyebrow">NTRP · DESIGN DIRECTION · CONSOLIDATION — 2026-07-16 · EVERY POINT RENDERED</p>
+  <h1>Desk &amp; Paper — the consolidated language</h1>
+  <p class="lede">One sentence: <em>the content is the room; the interface is furniture that floats above it.</em> The base plane of every surface is a reading room — flat, quiet, edge-to-edge. Everything operational is desk material floating over it in a strict stack, with depth from <em>the app's existing shadow ladder</em>, recede, and motion — never glass. Each claim below is rendered with the real tokens.</p>
+
+  <!-- ============ 01 ============ -->
+  <section>
+    <div class="sect-head"><span class="k">01</span><h2>Two materials</h2><span class="note">everything is one of these — no third material</span></div>
+    <p><b>Paper</b> is what you read and produce; it IS the window: white, radius 0, hairline rules. <b>Desk</b> is what you operate: warm-tinted panels that float. The only warmth in the system lives in desk fills — the text ramp is identical on both.</p>
+    <div class="spec"><div class="spec-grid">
+      <div>
+        <div class="mat-paper">
+          <div class="mp-crumb">pages / <span style="color:var(--ink-soft)">marathon training</span></div>
+          <div class="mp-t">marathon training</div>
+          <div class="mp-p">Coach notes from <a href="#" onclick="return false">Ana Ferreira</a>: keep long-run pace 60–75s slower than goal pace…</div>
+          <div class="mp-hr">Links <span style="float:right;font:10px var(--mono);color:var(--muted);font-weight:500">2 · 3 mentions</span></div>
+        </div>
+        <div class="cap"><b>PAPER</b> · #ffffff · radius 0 · hairlines #ececec · no shadow — it is the ground, not an object</div>
+      </div>
+      <div>
+        <div class="mat-desk">
+          <div class="seg"><span class="on"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#p-folder"/></svg><b>Files</b></span><span><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#p-notebook"/></svg><b>Notebook</b></span><span><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#p-facts"/></svg><b>Facts</b></span></div>
+          <div class="drow on">marathon training</div>
+          <div class="drow">health</div>
+          <div class="drow">me</div>
+        </div>
+        <div class="cap"><b>DESK</b> · panel #f8f8f6 / soft #efefec · radius 16 · shadow-4 · capsule for control clusters</div>
+      </div>
+      <div>
+        <div class="ramp">
+          <div style="color:var(--ink);font-weight:600">Ink — titles, primary<span class="hex">#171717</span></div>
+          <div style="color:var(--ink-soft)">Ink-soft — prose<span class="hex">#3d3d3d</span></div>
+          <div style="color:var(--muted)">Muted — captions, counts<span class="hex">#6e6e6e</span></div>
+          <div style="color:var(--faint)">Faint — labels, chrome<span class="hex">#8f8f8f</span></div>
+        </div>
+        <div class="cap"><b>ONE TEXT RAMP</b> · app tokens verbatim, on paper and desk alike — warmth never enters text</div>
+      </div>
+      <div>
+        <div>
+          <div class="fillrow">resting row<span class="fr-l">transparent</span></div>
+          <div class="fillrow h">hovered row<span class="fr-l">ink 4%</span></div>
+          <div class="fillrow s">selected row<span class="fr-l">ink 7%</span></div>
+        </div>
+        <div class="cap"><b>INK-DERIVED FILLS</b> · theme-proof by construction · the fill alone carries selection — accent lives in links and focus rings, never in fills or markers</div>
+      </div>
+    </div>
+    <div style="margin-top:22px" class="radset">
+      <div><div class="r" style="width:74px;height:52px;border-radius:0;box-shadow:none;border:var(--border-width) solid var(--line)"></div><div class="cap">0 · the room — window edge, not an object</div></div>
+      <div><div class="r" style="width:74px;height:52px;border-radius:8px"></div><div class="cap">8 · house radius</div></div>
+      <div><div class="r" style="width:74px;height:52px;border-radius:16px;padding:8px"><div style="height:100%;border-radius:8px;background:var(--panel-soft)"></div></div><div class="cap">16 · outer = 8 + 8px inset</div></div>
+      <div><div class="r" style="width:74px;height:30px;border-radius:999px"></div><div class="cap">capsule · control cluster</div></div>
+    </div>
+    <div class="cap" style="margin-top:8px"><b>ONE RADIUS SYSTEM, CONCENTRIC</b> · radius is a global profile, never a per-component preference. The plate compares capsule clusters (<code>999</code>) with softened rectangles (<code>10 cluster / 7 inset / 6 icon / 4 row / 3 tag / 2 mark</code>); large shells move coherently from <code>16</code> to <code>12</code>. Selection rows, badges, and inline diff marks also step down with the profile. In both profiles, a container and its inset child stay parallel. Choose one profile for the whole app after comparison.</div>
+    <div class="cap" style="margin-top:8px"><b>ONE ICON VOCABULARY · PHOSPHOR REGULAR</b> · <code>14px</code> dense utility, <code>16px</code> navigation and controls, <code>20–24px</code> feature emphasis. Icons inherit <code>currentColor</code>; Fill is state, never decoration. Provider and product marks keep their official logos.</div>
+    </div>
+  </section>
+
+  <!-- ============ 02 ============ -->
+  <section>
+    <div class="sect-head"><span class="k">02</span><h2>The stack</h2><span class="note">five tiers · elevation = the existing shadow ladder, verbatim</span></div>
+    <p>Depth is carried by the FF ladder already shipped in <code>styles.css</code> — the ring + doubling drops you know from chat. The direction adds no new shadows; it assigns <b>one ladder tier per stack tier</b>: furniture <code>--shadow-4</code>, peek <code>--shadow-5</code> (pop), sheet <code>--shadow-6</code>.</p>
+    <div class="spec">
+      <div class="stage" style="height:250px">
+        <div style="position:absolute;left:110px;right:190px;top:26px">
+          <div class="ln" style="width:36%"></div>
+          <div class="lns ln" style="width:82%;margin-top:12px"></div>
+          <div class="lns ln" style="width:74%;margin-top:8px"></div>
+          <div class="lns ln" style="width:78%;margin-top:8px"></div>
+          <div class="lns ln" style="width:46%;margin-top:8px"></div>
+          <div style="border-top:var(--border-width) solid var(--line);margin-top:16px;padding-top:10px"><div class="ln" style="width:20%"></div></div>
+          <div class="lns ln" style="width:60%;margin-top:8px"></div>
+        </div>
+        <div class="mini-rail" style="left:14px;top:14px;bottom:14px;width:74px">
+          <div style="background:var(--panel-soft);border-radius:999px;height:12px;margin:8px 7px"></div>
+          <div style="background:var(--sel);border-radius:4px;height:10px;margin:10px 7px 0"></div>
+          <div class="lns ln" style="height:4px;margin:8px 9px 0"></div>
+          <div class="lns ln" style="height:4px;margin:6px 9px 0"></div>
+        </div>
+        <div class="mini-orn" style="top:14px;right:196px"><i></i><i></i><i></i></div>
+        <div class="mini-peek" style="top:44px;right:14px;bottom:22px;width:168px">
+          <div class="ph"></div>
+          <div style="padding:10px"><div class="ln" style="width:52%"></div><div class="lns ln" style="width:80%;margin-top:8px"></div><div class="lns ln" style="width:66%;margin-top:6px"></div></div>
+        </div>
+      </div>
+      <div class="cap"><b>THE SCENE</b> · room (tier 0, flat) · floating rail + open-page TABS + ornament (tier 1, shadow-4 — peer controls share the rail's first control centerline; a panel edge is never a control baseline) · peek as a small card ON the page (tier 2, shadow-5, starts 12px below the control band · right 20 · bottom 48 · w 392) — ground never recedes under a parallel layer</div>
+
+      <div class="ladder" style="margin-top:26px">
+        <div class="lchip"><div class="lbox" style="border-radius:0;box-shadow:none;border:var(--border-width) solid var(--line)"></div><div class="cap"><b>0 · ROOM</b><br>no shadow — the ground</div></div>
+        <div class="lchip"><div class="lbox" style="background:var(--panel);box-shadow:var(--sh4)"></div><div class="cap"><b>1 · FURNITURE</b><br>--shadow-4 · rail, ornament</div></div>
+        <div class="lchip"><div class="lbox" style="box-shadow:var(--sh5)"></div><div class="cap"><b>2 · PEEK</b><br>--shadow-5 (pop) · no scrim</div></div>
+        <div class="lchip"><div class="lbox" style="box-shadow:var(--sh6)"></div><div class="cap"><b>3 · SHEET</b><br>--shadow-6 + scrim · room recedes</div></div>
+        <div class="lchip"><div class="lbox" style="box-shadow:var(--sh6)"></div><div class="cap"><b>4 · AMBIENT</b><br>palette, toasts</div></div>
+      </div>
+
+      <div class="rulegrid" style="margin-top:26px">
+        <div>
+          <div class="stage" style="height:120px">
+            <div style="position:absolute;left:16px;bottom:14px;width:58px;height:20px;border-radius:6px;background:var(--panel);box-shadow:var(--sh4)"></div>
+            <div style="position:absolute;left:30px;bottom:44px;width:130px;height:52px;border-radius:10px;background:var(--card);box-shadow:var(--sh5)"><div style="padding:8px"><div class="ln" style="width:50%"></div><div class="lns ln" style="width:75%;margin-top:7px"></div></div></div>
+            <div style="position:absolute;left:34px;bottom:34px;width:1px;height:12px;border-left:1px dashed var(--faint)"></div>
+          </div>
+          <div class="cap"><b>ORIGIN RULE</b> · every layer rises from its trigger and exits the way it entered</div>
+        </div>
+        <div>
+          <div class="stage" style="height:120px">
+            <div style="position:absolute;left:14px;top:46px;width:64px;height:52px;border-radius:8px;background:var(--panel);box-shadow:var(--sh4)"></div>
+            <div style="position:absolute;left:66px;top:30px;width:64px;height:52px;border-radius:8px;background:var(--card);box-shadow:var(--sh5)"></div>
+            <div style="position:absolute;left:118px;top:14px;width:64px;height:52px;border-radius:8px;background:var(--card);box-shadow:var(--sh6)"></div>
+            <div style="position:absolute;left:176px;top:40px;width:64px;height:52px;border-radius:8px;border:1px dashed var(--line-strong)"></div>
+            <div style="position:absolute;left:200px;top:58px;font:600 13px var(--mono);color:var(--faint)">✕</div>
+          </div>
+          <div class="cap"><b>BUDGET RULE</b> · max three layers above the room; a fourth means one collapses first</div>
+        </div>
+        <div>
+          <div class="stage" style="height:120px">
+            <div style="position:absolute;left:64px;right:16px;top:20px"><div class="ln" style="width:40%"></div><div class="lns ln" style="width:78%;margin-top:9px"></div><div class="lns ln" style="width:64%;margin-top:7px"></div><div class="lns ln" style="width:70%;margin-top:7px"></div></div>
+            <div class="mini-rail" style="left:12px;top:12px;bottom:12px;width:40px;opacity:.4"></div>
+          </div>
+          <div class="cap"><b>READING MODE — PARKED 2026-07-16</b> · designed (furniture ~40% + blur 2px, room holds full contrast) but not in v1; the spatial grammar ships first</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 03 ============ -->
+  <section>
+    <div class="sect-head"><span class="k">03</span><h2>Motion</h2><span class="note">approved — spring in, tween out · press the buttons</span></div>
+    <p>
+      Layers enter on springs (peek: <code>210/26</code>, ~450ms settle) and leave on crisp tweens (160ms). Content rises through small blur (<code>RISE_IN</code>: y 6→0, blur 3→0, 30ms stagger); layer slides stay sharp.
+      <b>The native shell is invariant:</b> traffic lights remain fixed at <code>x18 / y18</code>; the global sidebar toggle remains fixed at <code>x84 / y14</code>. The sidebar is furniture, not window chrome: showing slides it in for 300ms, hiding dissolves it with a 48px left drift and 6px blur for 400ms, and the workspace reclaims the same lane concurrently. <code>⌘B</code> always preserves this motion.
+      <b>Axis follows the controller:</b> horizontally ordered tabs swap their content plane by 8px with 2px softening on the same <code>210/26</code> entrance spring as the peek; vertical <code>RISE_IN</code> is reserved for row arrival and disclosure. Keyboard commands that open or close spatial layers preserve their motion: <code>⌘S</code> raises the review sheet through a shorter 24px, snappier <code>360/32 · mass .75</code> spring, while <code>Escape</code> lowers the sheet or dismisses the peek. Inline wiki links use a neutral version of the peek spring.
+      <b>Peek names roll like an odometer:</b> the old name exits in 160ms and the new name enters vertically on the 210/26 spring with <code>1.4px</code> motion blur sharpening over 260ms; the roll runs only when the peek object changes.
+      <b>Type has exactly six roles:</b> display <code>24</code>, section <code>18</code>, reading <code>15/1.65</code>, body <code>13/1.55</code>, control <code>12/500</code>, and metadata <code>10.5 Mono</code>. Action labels—including peek names and relationship tabs—use Geist, never Mono; Mono is reserved for counts, dates, breadcrumbs, status, and diffs. Directory and file rows are both <code>13px</code>; hierarchy comes from indentation, chevrons, color, and weight—not type size.
+      <b>The desktop composition has one center:</b> the sidebar defaults to <code>288px</code>, resizes from <code>220–400px</code>, and owns a <code>32px</code> separation lane. The remaining workspace centers a <code>760px</code> page shell with <code>28px</code> inner gutters, producing a <code>704px</code> reading measure. Hiding or resizing the sidebar changes the available room; it never changes the page’s maximum width or creates a second alignment axis.
+      <b>Sidebar modes preserve identity:</b> every mode keeps its icon. The active mode expands to icon + label while inactive labels move out: <code>[icon + label] [icon] [icon]</code>. Selection transfers horizontally in 220ms through one shared layout surface; the active tab takes its content width while the remaining icon tabs divide the available rail. The pill is therefore ordinary layout—icon, <code>6px</code> gap, label, and <code>10px</code> end padding—not glyph measurement or hand-tuned offsets. Labels cross a restrained <code>2px</code> blur and enter after the icon clears, while inactive icons settle at <code>60%</code> opacity. Press-scale is deliberately absent. Hidden labels remain available through tooltips and accessibility names.
+      <b>Open-page tabs never shrink or wrap:</b> the cluster measures the lane between page title and instruments, scrolls on the horizontal axis only with directional edge masks, keeps the active tab visible, and exposes every open page through a <code>+N</code> menu counting fully offscreen tabs. Vertical overflow is locked even when selection shadows extend beyond a tab’s box, so the 36px capsule cannot drift by a pixel. The count tracks the live scroll-lane width throughout instrument expansion and collapse, never the previous settled layout. The mask affects only the scroll lane—never the <code>+N</code> control—and uses transparency rather than a paper-colored overlay.
+      Active page tabs and peek relationship tabs reuse the instrument bar’s selected-control surface and shadow as one shared moving indicator. The indicator translates and resizes beneath stable labels in 220ms; individual tabs change only content color, so selected backgrounds never crossfade or double. The page-tab scrollport reserves a 4px bleed so that shared shadow never terminates at an overflow edge. Every page tab reserves a stable close slot: × stays visible on the active tab, appears on hover or focus for inactive tabs, and <code>Delete</code> closes the focused tab. Its 18px circular hover surface is inset 5px inside the 28px tab, making it concentric with the pill’s end cap.
+      <b>Active page is one state:</b> tab, breadcrumb, page content, and Files selection update atomically. Pointer switching enters horizontally toward the selected tab; keyboard closing skips motion. Closing the active tab selects its nearest neighbor. Closing the final tab produces a quiet “No page open” workspace, hides page instruments, and clears Files selection; choosing a Files row recreates and activates its tab.
+      <b>Model and reasoning are separate controls:</b> model selection uses one searchable, provider-grouped combobox; reasoning is an adjacent single-choice menu. In settings they occupy invariant <code>180px + 88px</code> columns, so labels never resize the row; the composer version stays content-sized. Reasoning never occupies the model results, and neither control nests a submenu. Both popovers grow from their own trigger and close after selection.
+      Pressable tabs and instruments compress to <code>.98</code> over 120ms; the smaller tab-close target uses <code>.97</code>. Hover feedback exists only for fine pointers.
+      <b>A tier-3 diff is a focus-plane switch:</b> the room, desk, and any open tier-2 peek recede, dim, and defocus together in 180ms; the sheet keeps its independent entrance spring. The peek stays logically open and resumes unchanged when the diff closes; opening the diff never performs a separate peek action.
+      <b>The instrument ornament compacts into a 36px launcher:</b> it stays expanded while the inner content lane has at least <code>520px</code> of room and compacts automatically below that threshold. A manual expansion is temporary and survives only until the next resize. Geometry commits immediately; a separate right-anchored, layout-isolated surface performs the 260ms width morph. Its radius and shadow remain physically stable instead of being distorted by scale. Content follows the same curve through a matching right-anchored clip; opacity drops only after the clip closes. The chevron becomes an ellipsis. Tab-lane geometry never animates. Compacting never closes or changes the peek. Executable motion values live in <code>board-motion.js</code>; static color, type, spacing, container, breakpoint, and radius tokens live in the NTRP Desktop Paper file. Demos below are CSS approximations — the real springs live in the plate.
+    </p>
+    <div class="spec"><div class="spec-grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr))">
+      <div>
+        <div class="mo-stage" id="mo1">
+          <div style="position:absolute;left:20px;right:180px;top:52px">
+            <div class="ln" style="width:44%"></div>
+            <div class="lns ln" style="width:84%;margin-top:10px"></div>
+            <div class="lns ln" style="width:70%;margin-top:8px"></div>
+            <div class="lns ln" style="width:76%;margin-top:8px"></div>
+          </div>
+          <div class="mo-orn"><i></i><i></i><i></i></div>
+          <div class="mo-peek"><div class="ph"></div><div style="padding:10px"><div class="ln" style="width:54%"></div><div class="lns ln" style="width:82%;margin-top:8px"></div><div class="lns ln" style="width:66%;margin-top:6px"></div></div></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:12px">
+          <button class="replay" data-mo1>toggle peek</button>
+          <span class="cap" style="margin:0"><b>PEEK</b> spring in · tween out — ornament yields 250ms</span>
+        </div>
+      </div>
+      <div>
+        <div class="mo-stage" style="height:230px;padding:18px 20px">
+          <div style="display:flex;align-items:center;gap:8px;border-bottom:var(--border-width) solid var(--line);padding-bottom:9px">
+            <span style="font-size:12.5px;font-weight:600">Links</span><span style="margin-left:auto;font:10px var(--mono);color:var(--muted)">2 · 3 mentions</span>
+          </div>
+          <div class="disc open" id="disc"><div class="disc-rows">
+            <div class="dr"><div class="ln" style="width:34%"></div><div class="lns ln" style="width:20%"></div></div>
+            <div class="dr"><div class="ln" style="width:26%"></div><div class="lns ln" style="width:18%"></div></div>
+            <div class="dr"><div class="ln" style="width:42%"></div><div class="lns ln" style="width:76%"></div></div>
+            <div class="dr" style="border-bottom:none"><div class="ln" style="width:38%"></div><div class="lns ln" style="width:68%"></div></div>
+          </div></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:12px">
+          <button class="replay" data-disc>replay stagger</button>
+          <span class="cap" style="margin:0"><b>RISE_IN</b> y6→0 · blur 3→0 · stagger 30ms</span>
+        </div>
+      </div>
+    </div>
+    <div class="spec-grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr));margin-top:22px">
+      <div>
+        <div class="mo-stage" style="height:230px">
+          <div class="fog-scroll">
+            <div class="ln" style="width:42%"></div>
+            <div class="lns ln" style="width:84%;margin-top:12px"></div>
+            <div class="lns ln" style="width:76%;margin-top:9px"></div>
+            <div class="lns ln" style="width:80%;margin-top:9px"></div>
+            <div class="lns ln" style="width:64%;margin-top:9px"></div>
+            <div class="lns ln" style="width:82%;margin-top:9px"></div>
+            <div class="lns ln" style="width:70%;margin-top:9px"></div>
+            <div class="ln" style="width:30%;margin-top:16px"></div>
+            <div class="lns ln" style="width:78%;margin-top:10px"></div>
+            <div class="lns ln" style="width:72%;margin-top:9px"></div>
+            <div class="lns ln" style="width:80%;margin-top:9px"></div>
+            <div class="lns ln" style="width:58%;margin-top:9px"></div>
+            <div class="lns ln" style="width:74%;margin-top:9px"></div>
+            <div class="lns ln" style="width:68%;margin-top:9px"></div>
+            <div class="lns ln" style="width:76%;margin-top:9px"></div>
+            <div class="lns ln" style="width:44%;margin-top:9px"></div>
+          </div>
+          <div class="fog-veil t"></div>
+          <div class="fog-veil b"></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:12px">
+          <span class="cap" style="margin:0"><b>FOG AT THE EDGE</b> · scroll it — content defocuses out of view (progressive blur veil), never hard-clips</span>
+        </div>
+      </div>
+      <div>
+        <div class="mo-stage rd-stage" id="rdstage" style="height:230px">
+          <div style="position:absolute;left:78px;right:20px;top:28px">
+            <div class="ln" style="width:44%"></div>
+            <div class="lns ln" style="width:84%;margin-top:10px"></div>
+            <div class="lns ln" style="width:70%;margin-top:8px"></div>
+            <div class="lns ln" style="width:76%;margin-top:8px"></div>
+            <div class="lns ln" style="width:52%;margin-top:8px"></div>
+          </div>
+          <div class="mini-rail" style="left:14px;top:14px;bottom:14px;width:50px">
+            <div style="background:var(--panel-soft);border-radius:999px;height:10px;margin:7px 6px"></div>
+            <div style="background:var(--sel);border-radius:4px;height:9px;margin:9px 6px 0"></div>
+            <div class="lns ln" style="height:4px;margin:7px 8px 0"></div>
+          </div>
+          <div class="mini-orn" style="top:14px;right:20px;position:absolute"><i></i><i></i><i></i></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:12px">
+          <button class="replay" data-rd>toggle reading</button>
+          <span class="cap" style="margin:0"><b>READING DEFOCUS</b> · furniture dims to ~40% AND blurs 2px, ramped 300ms — out of attention = out of focus</span>
+        </div>
+      </div>
+      <div>
+        <div class="mo-stage" style="height:230px">
+          <div style="position:absolute;left:20px;right:150px;top:24px;opacity:.6">
+            <div class="ln" style="width:38%"></div>
+            <div class="lns ln" style="width:74%;margin-top:10px"></div>
+            <div class="lns ln" style="width:60%;margin-top:8px"></div>
+          </div>
+          <div style="position:absolute;right:14px;bottom:14px;display:flex;flex-direction:column;align-items:flex-end;gap:9px;width:230px">
+            <div style="width:210px;background:var(--panel);border-radius:12px;box-shadow:var(--sh5);padding:9px 11px;opacity:.45;transform:scale(.94);transform-origin:bottom right">
+              <div class="ln" style="width:44%;height:4px"></div>
+            </div>
+            <div style="width:210px;background:var(--panel);border-radius:12px;box-shadow:var(--sh5);padding:9px 11px;opacity:.72;transform:scale(.97);transform-origin:bottom right">
+              <div class="ln" style="width:52%;height:4px"></div><div class="lns ln" style="width:78%;height:4px;margin-top:6px"></div>
+            </div>
+            <div style="width:210px;background:var(--panel);border-radius:12px;box-shadow:var(--sh6);padding:10px 11px">
+              <div style="display:flex;align-items:baseline;gap:8px"><span style="font-size:10.5px;font-weight:600">Backup failed</span><span style="margin-left:auto;font:500 8.5px var(--mono);color:#c94f3d">failed</span></div>
+              <div class="lns ln" style="width:84%;height:4px;margin-top:7px"></div>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:12px">
+          <span class="cap" style="margin:0"><b>TIER 4 · NOTIFICATIONS</b> · desk material, status WORDS; newest lands bottom-right on RISE_IN, older recede up (dim + scale — the stack grammar), max 3, self-dismiss on a crisp tween. A notification <b>center</b> is deliberately absent — asks live on Home. <b>Implementation: sonner</b>, restyled to these tokens (its icons replaced by the status word; keep <code>pushToast</code> as the app-facing API)</span>
+        </div>
+      </div>
+    </div>
+    <p style="margin:18px 0 0;font-size:13px"><b>Gradual blur is the boundary material</b> (the fog-of-war thesis, design-language.md): attention has soft edges. Scroll edges defocus progressively instead of clipping; out-of-attention layers defocus — reading mode dims + blurs the furniture 2px, and the room under a blocking sheet dims, scales .98 and defocuses 2px. Blur is gradual in <b>space</b> (a ramped field — never a frosted pane; panels are not glass) and in <b>time</b> (ramps ≥150ms, never snaps or arrives pre-applied).</p>
+    <p style="margin:12px 0 0;font-size:13px"><b>Engineering law (bitten twice):</b> commit the resting state inline <em>before</em> <code>animate()</code>; completion callbacks are rAF-driven and freeze in hidden tabs. Reduced motion: cross-fade, no scale, no travel; retain short color and opacity feedback.</p>
+    </div>
+  </section>
+
+  <!-- ============ 04 ============ -->
+  <section>
+    <div class="sect-head"><span class="k">04</span><h2>Unchanged laws</h2><span class="note">the direction extends design-language.md, it doesn't replace it</span></div>
+    <div class="spec"><div class="spec-grid">
+      <div>
+        <div class="mat-paper" style="border-radius:8px">
+          <div class="mp-t" style="font-size:13px">Reads perfectly in ink alone</div>
+          <div class="mp-p">Hierarchy comes from weight, size and the ramp — <span style="border-bottom:var(--border-width) solid var(--line-strong)">links survive as underlines</span>; selection is a tonal fill.</div>
+        </div>
+        <div class="cap"><b>MONOCHROME FIRST</b> · every surface must work with zero accent; accent is opt-in garnish</div>
+      </div>
+      <div>
+        <div style="background:var(--card);border:var(--border-width) solid var(--line);border-radius:8px;padding:6px 16px">
+          <div class="stat">gmail sync<span class="sl" style="color:var(--faint)">synced · 2m</span></div>
+          <div class="stat">calendar watcher<span class="sl" style="color:#c9822e">pending…</span></div>
+          <div class="stat">vault backup<span class="sl" style="color:#c94f3d">failed — retry</span></div>
+        </div>
+        <div class="cap"><b>STATUS = WORDS</b> · status ink on the word itself; healthy stays quiet (faint) — no dots, no rails, no row tints</div>
+      </div>
+      <div>
+        <div style="background:var(--card);border:var(--border-width) solid var(--line);border-radius:8px;padding:16px;display:flex;gap:14px;align-items:center">
+          <span class="focus-demo">Focused control</span>
+          <span style="font-size:12px;color:var(--muted)">13px body · 15px prose · ~75ch</span>
+        </div>
+        <div class="cap"><b>FOCUS RING</b> concentric with the control · <b>DENSITY = SPACING</b>, never shrunk fonts</div>
+      </div>
+    </div>
+    <p style="margin:18px 0 0;font-size:13px">Also carried over unchanged: <b>FF controls</b> (switches, sliders, radio groups — they are desk furniture and stay verbatim), <b>skeleton loading</b> that resolves through a blur crossfade (never spinners in content), the <b>traveling proximity highlight</b> for list hover (one element that slides, never per-row flips), and <b>the control is the confirmation</b> — toasts only for effects that land elsewhere on screen.</p>
+    </div>
+  </section>
+
+  <!-- ============ 05 ============ -->
+  <section>
+    <div class="sect-head"><span class="k">05</span><h2>Resolved rules and validation backlog</h2><span class="note">the contract is settled; remaining work is coverage</span></div>
+    <div class="spec"><div class="spec-grid">
+      <div>
+        <div style="display:flex;gap:10px">
+          <button class="sw-btn" data-acc="blue"><i style="background:#0070f3"></i>blue #0070f3</button>
+          <button class="sw-btn" data-acc="indigo"><i style="background:#7c7bff"></i>indigo #7c7bff</button>
+        </div>
+        <div style="margin-top:12px" class="fillrow s">the selected row<span class="fr-l"><a href="#" onclick="return false" style="color:var(--accent-ink);text-decoration:none">a wiki link</a> · <span style="color:var(--accent)">focus ring</span></span></div>
+        <div class="cap"><b>ONE SEMANTIC ACCENT</b> · click to repaint this whole page — user palettes change the token, never the hierarchy</div>
+      </div>
+      <div>
+        <div class="darkchip">
+          <div class="dc1"><div class="ln" style="width:40%"></div><div class="lns ln" style="width:70%;margin-top:7px"></div></div>
+          <div class="dc2"><div class="ln" style="width:50%"></div><div class="lns ln" style="width:64%;margin-top:7px"></div></div>
+        </div>
+        <div class="cap"><b>DARK MAPPING</b> · the shared surface ladder climbs additively; compact inset highlights and rings replace light-mode drops</div>
+      </div>
+      <div>
+        <div class="stage" style="height:130px">
+          <div style="position:absolute;inset:0;background:color-mix(in oklab, var(--ink) 5%, transparent)"></div>
+          <div style="position:absolute;left:24px;right:24px;top:12px;opacity:.55;transform:scale(.97)"><div class="ln" style="width:36%"></div><div class="lns ln" style="width:70%;margin-top:8px"></div></div>
+          <div style="position:absolute;left:34px;right:34px;top:52px;bottom:0;border-radius:12px 12px 0 0;background:var(--card);box-shadow:var(--sh6)"><div style="padding:10px 12px"><div class="ln" style="width:40%"></div><div class="lns ln" style="width:72%;margin-top:8px"></div></div></div>
+          <div style="position:absolute;left:48px;right:48px;top:40px;height:14px;border-radius:10px 10px 0 0;background:var(--panel);box-shadow:var(--sh5);opacity:.75"></div>
+        </div>
+        <div class="cap"><b>TIER-3 SHEET + STACK</b> · recede, inert background, focus transfer, and top-down dismissal are canonical; the system-overlay pressure plate remains to be completed</div>
+      </div>
+    </div>
+    <div class="open-q" style="margin-top:22px"><b>Native window shell — settled.</b> On macOS, Electron owns the hidden-inset titlebar and traffic lights at <code>x18 / y18 / ⌀14</code>. The global sidebar toggle is fixed at <code>x84 / y14 / 22×22</code>, sharing the lights’ <code>y25</code> centerline; sidebar content begins after a 22px drag spacer. <code>⌘B</code> toggles the panel everywhere. Show slides in for 300ms; hide drifts 48px left while fading and blurring 6px for 400ms. The workspace reclaims the lane on the same curve. Traffic lights never move with the sidebar.</div>
+    </div>
+  </section>
+
+  <!-- ============ 06 ============ -->
+  <section>
+    <div class="sect-head"><span class="k">06</span><h2>Application map — the Paper atlas</h2><span class="note">proposed tiers per column · each gets validated like memory was</span></div>
+    <div class="spec">
+      <div class="legend">
+        <span><i style="background:var(--card);border:var(--border-width) solid var(--line)"></i>room (tier 0)</span>
+        <span><i style="background:var(--panel);box-shadow:var(--sh4)"></i>furniture (tier 1)</span>
+        <span><i style="background:var(--card);box-shadow:var(--sh5)"></i>layer (tier 2–3)</span>
+      </div>
+      <div class="map-grid">
+        <div>
+          <div class="map-stage">
+            <div style="position:absolute;left:66px;right:110px;top:18px"><div class="ln" style="width:44%"></div><div class="lns ln" style="width:80%;margin-top:8px"></div><div class="lns ln" style="width:68%;margin-top:6px"></div><div style="border-top:var(--border-width) solid var(--line);margin-top:12px;padding-top:8px"><div class="ln" style="width:24%"></div></div></div>
+            <div class="mf" style="left:10px;top:10px;bottom:10px;width:44px"></div>
+            <div class="mini-orn" style="top:10px;right:118px;position:absolute"><i></i><i></i></div>
+            <div class="ml" style="top:32px;right:10px;bottom:12px;width:96px"><div class="ph"></div></div>
+          </div>
+          <div class="cap"><b>MEMORY ✓ plated</b> · page = room · rail + ornament · wiki peek (2) · edit review (3)</div>
+        </div>
+        <div>
+          <div class="map-stage">
+            <div style="position:absolute;left:66px;right:16px;top:14px"><div class="lns ln" style="width:60%"></div><div class="lns ln" style="width:74%;margin-top:7px"></div><div class="ln" style="width:40%;margin-top:10px"></div><div class="lns ln" style="width:70%;margin-top:7px"></div></div>
+            <div class="mf" style="left:10px;top:10px;bottom:10px;width:44px"></div>
+            <div class="mf" style="left:66px;right:16px;bottom:10px;height:26px;border-radius:10px"></div>
+          </div>
+          <div class="cap"><b>CHAT — validate first</b> · transcript = room · sidebar → floating rail · composer stays docked · viewers (2) · approvals (3)</div>
+        </div>
+        <div>
+          <div class="map-stage">
+            <div style="position:absolute;left:66px;right:120px;top:16px"><div class="ln" style="width:50%"></div><div class="lns ln" style="width:76%;margin-top:8px"></div><div class="lns ln" style="width:60%;margin-top:6px"></div><div class="lns ln" style="width:66%;margin-top:6px"></div></div>
+            <div class="mf" style="left:10px;top:10px;bottom:10px;width:44px"></div>
+            <div class="ml" style="top:24px;right:12px;width:100px;height:74px"><div class="ph"></div></div>
+          </div>
+          <div class="cap"><b>HOME</b> · brief + area rooms = room · area-controls popover (2) · ask-cards inline</div>
+        </div>
+        <div>
+          <div class="map-stage">
+            <div style="position:absolute;left:112px;right:16px;top:16px"><div class="ln" style="width:42%"></div><div class="lns ln" style="width:70%;margin-top:8px"></div><div style="display:flex;gap:3px;margin-top:12px"><i style="width:2px;height:12px;background:var(--inkline)"></i><i style="width:2px;height:8px;background:var(--inkline-soft)"></i><i style="width:2px;height:14px;background:var(--inkline)"></i><i style="width:2px;height:9px;background:var(--inkline-soft)"></i><i style="width:2px;height:11px;background:var(--inkline)"></i></div></div>
+            <div class="mf" style="left:10px;top:10px;bottom:10px;width:88px"></div>
+          </div>
+          <div class="cap"><b>AUTOMATIONS</b> · detail + RunRuler = room · list → floating rail · loop detail (3)</div>
+        </div>
+        <div>
+          <div class="map-stage">
+            <div style="position:absolute;left:112px;right:16px;top:16px"><div class="ln" style="width:36%"></div><div class="lns ln" style="width:64%;margin-top:9px"></div><div class="lns ln" style="width:58%;margin-top:7px"></div></div>
+            <div class="mf" style="left:10px;top:10px;bottom:10px;width:88px"></div>
+            <div class="ml" style="left:130px;top:52px;width:120px;height:76px"><div class="ph"></div></div>
+          </div>
+          <div class="cap"><b>SETTINGS</b> · content = room · nav → floating rail · setup assistants → stacked sheets (3)</div>
+        </div>
+        <div>
+          <div class="map-stage">
+            <div style="position:absolute;left:16px;right:16px;top:14px;opacity:.5"><div class="lns ln" style="width:70%"></div><div class="lns ln" style="width:56%;margin-top:7px"></div></div>
+            <div class="ml" style="left:50%;top:34px;transform:translateX(-50%);width:150px;height:80px"><div class="ph"></div><div style="padding:8px"><div class="lns ln" style="width:78%"></div><div class="lns ln" style="width:62%;margin-top:6px"></div></div></div>
+          </div>
+          <div class="cap"><b>SYSTEM &amp; OVERLAYS</b> · palette + toasts (4) · md/mermaid viewers (2–3) · quick capture = own window, desk material</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <p class="foot">
+    plate → <code>docs/mockups/board-memory.html</code> (real springs; knobs: accent · peek · reading mode) &nbsp;·&nbsp; references → <a href="https://claude.ai/code/artifact/2dabbaff-9b11-4862-9e9a-79ebb6772b7b">Layered, not glassy</a> &nbsp;·&nbsp; canonical contract → <a href="../../DESIGN.md"><code>DESIGN.md</code></a> &nbsp;·&nbsp; shadows → <code>board-surfaces.css --shadow-N</code>
+  </p>
+</div>
+
+<script>
+document.querySelector("[data-mo1]").addEventListener("click", () => {
+  document.getElementById("mo1").classList.toggle("open");
+});
+function replayDisc(){
+  const d = document.getElementById("disc");
+  // reset to the hidden state WITHOUT transitions, reflow, then stagger in —
+  // remove/re-add alone only drops ~5% opacity before reversing (invisible)
+  d.classList.add("reset");
+  d.classList.remove("open");
+  void d.offsetHeight;
+  d.classList.remove("reset");
+  requestAnimationFrame(() => d.classList.add("open"));
+}
+document.querySelector("[data-disc]").addEventListener("click", replayDisc);
+setTimeout(replayDisc, 800);
+document.querySelector("[data-rd]").addEventListener("click", () => {
+  document.getElementById("rdstage").classList.toggle("rd");
+});
+const ACC = { blue: ["#0070f3", "#0059c8"], indigo: ["#7c7bff", "#5b5ae0"] };
+document.querySelectorAll("[data-acc]").forEach(b => b.addEventListener("click", () => {
+  const [a, ai] = ACC[b.dataset.acc];
+  document.documentElement.style.setProperty("--accent", a);
+  document.documentElement.style.setProperty("--accent-ink", ai);
+  document.querySelectorAll("[data-acc]").forEach(x => x.classList.toggle("on", x === b));
+}));
+setTimeout(() => document.getElementById("mo1").classList.add("open"), 500);
+</script>

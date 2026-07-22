@@ -1,6 +1,6 @@
 import { memo } from "react";
 import clsx from "clsx";
-import { Library } from "lucide-react";
+import { Library } from "@/components/icons";
 import { useStore } from "@/stores";
 import { Markdown } from "@/components/ui/Markdown";
 import { useSmoothStreamedContent } from "@/features/chat/hooks/useSmoothStream";

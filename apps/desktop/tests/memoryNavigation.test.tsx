@@ -18,7 +18,8 @@ const roots = new Set<Root>();
 const summary = (path: string, title: string, revision = `sha256:${path}`): MemoryArtifactSummary => ({
   path, title, kind: "topic", type: "file", directory: path.includes("/") ? path.split("/")[0]! : "",
   scope: { kind: "user", key: null }, snippet: null, summary: null, revision, recordCount: 0,
-  generated: false, editable: true, readonlyReason: null, updatedAt: "2026-07-13T08:00:00Z", labels: [], source: null,
+  generated: false, editable: true, readonlyReason: null, updatedAt: "2026-07-13T08:00:00Z",
+  createdAt: null, labels: [], source: null,
 });
 
 const detail = (item: MemoryArtifactSummary, content: string): MemoryArtifactDetail => ({
@@ -39,7 +40,14 @@ function response(data: unknown) {
   return { ok: true, status: 200, statusText: "OK", contentType: "application/json", data, text: "" };
 }
 
-function setup() {
+function setup(lastPath?: string) {
+  // Inspector now defaults open (persisted); most of these tests exercise
+  // navigation history/link resolution, so seed it closed to keep prior
+  // request counts. Tests that specifically want the inspector open re-seed
+  // and click the toggle themselves. Seeding lastPath drives the initial
+  // selection (it beats the index.md fallback).
+  localStorage.setItem("ntrp.desktop.memory.inspectorOpen", "false");
+  if (lastPath) localStorage.setItem("ntrp.desktop.memory.lastPath", lastPath);
   const app = document.createElement("div");
   app.id = "app";
   const host = document.createElement("div");
@@ -66,6 +74,13 @@ afterEach(async () => {
   window.ntrpDesktop = originalDesktop;
   useStore.setState({ memoryVaultVersion: originalVaultVersion });
   document.body.replaceChildren();
+  for (const key of [
+    "ntrp.desktop.memory.inspectorOpen",
+    "ntrp.desktop.memory.lastPath",
+    "ntrp.desktop.memory.pins",
+    "ntrp.desktop.memory.rail.collapsed",
+    "ntrp.desktop.memory.ctxPane",
+  ]) localStorage.removeItem(key);
 });
 
 test("navigation history is bounded, restores locations, and truncates forward branches", () => {
@@ -300,13 +315,13 @@ test("notebook history shortcuts restore pages and ignore focused editors", asyn
     if (request.path.startsWith("/admin/memory/page-edits/history")) return response({ events: [], total: 0, limit: 100, next_before_sequence: null });
     const path = decodeURIComponent(request.path.replace("/admin/memory/artifacts/", ""));
     const item = rows.find((row) => row.path === path)!;
-    const content = path === "index.md" ? "<!-- ntrp:index:start -->\n- a.md <!-- ntrp:path=a.md -->\n- b.md <!-- ntrp:path=b.md -->\n<!-- ntrp:index:end -->" : path === "a.md" ? "[[Bee|B first]] · [[Bee|B second]] · `b.md` · `b.md` · [[#Details|Details]]\n\n## Details\n\nMore." : "B body";
+    const content = path === "index.md" ? "Index body" : path === "a.md" ? "[[Bee|B first]] · [[Bee|B second]] · `b.md` · `b.md` · [[#Details|Details]]\n\n## Details\n\nMore." : "B body";
     return response({ artifact: rawArtifact(item, content) });
   } } } as Window["ntrpDesktop"];
-  const { host, root } = setup();
+  const { host, root } = setup("a.md");
   await act(async () => root.render(<ArtifactMemoryView config={config} />));
   await settle(350);
-  expect(host.querySelector("h1")?.textContent).toBe("A");
+  expect(host.querySelector("h1")?.textContent).toBe("a");
   expect(host.querySelector<HTMLButtonElement>('button[aria-label="Back in memory history"]')?.disabled).toBe(true);
   expect(requests.some((path) => path.startsWith("/admin/memory/page-edits/history"))).toBe(false);
   let inlinePaths = Array.from(host.querySelectorAll<HTMLAnchorElement>('[data-memory-inline-path="b.md"]'));
@@ -342,28 +357,31 @@ test("notebook history shortcuts restore pages and ignore focused editors", asyn
   await act(async () => beeLinks[1]!.click());
   await settle(250);
   expect(requests.some((path) => path === "/admin/memory/artifacts/b.md")).toBe(true);
-  expect(host.querySelector("h1")?.textContent).toBe("B");
+  expect(host.querySelector("h1")?.textContent).toBe("b");
   const back = host.querySelector<HTMLButtonElement>('button[aria-label="Back in memory history"]')!;
   const forward = host.querySelector<HTMLButtonElement>('button[aria-label="Forward in memory history"]')!;
   expect(back.disabled).toBe(false);
   expect(forward.disabled).toBe(true);
   await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "[", metaKey: true, bubbles: true })));
   await settle(250);
-  expect(host.querySelector("h1")?.textContent).toBe("A");
+  expect(host.querySelector("h1")?.textContent).toBe("a");
   expect(back.disabled).toBe(false);
   expect(forward.disabled).toBe(false);
 
-  const input = host.querySelector<HTMLInputElement>('input[aria-label="Search memory notes…"]')!;
-  input.focus();
+  // The rail has no search input any more — the create-note input is the
+  // editable field that must swallow the history shortcuts.
+  await act(async () => host.querySelector<HTMLButtonElement>('button[title="New note"]')?.click());
+  const input = host.querySelector<HTMLInputElement>('input[aria-label="New note path"]')!;
+  await act(async () => input.focus());
   await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "]", metaKey: true, bubbles: true })));
   await settle(250);
-  expect(host.querySelector("h1")?.textContent).toBe("A");
-  input.blur();
+  expect(host.querySelector("h1")?.textContent).toBe("a");
+  await act(async () => input.blur());
   await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "]", ctrlKey: true, bubbles: true })));
   await settle(250);
-  expect(host.querySelector("h1")?.textContent).toBe("B");
+  expect(host.querySelector("h1")?.textContent).toBe("b");
   expect(requests.some((path) => path.startsWith("/admin/memory/page-edits/history"))).toBe(false);
-  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Open memory trust inspector"]')?.click());
+  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Open links and provenance"]')?.click());
   await settle(30);
   expect(requests.some((path) => path.startsWith("/admin/memory/page-edits/history"))).toBe(true);
 });
@@ -390,18 +408,18 @@ test("a delayed link snapshot cannot resolve the next page or overwrite a later 
     const path = decodeURIComponent(request.path.replace("/admin/memory/artifacts/", ""));
     const item = rows.find((row) => row.path === path)!;
     const content = path === "index.md"
-      ? "<!-- ntrp:index:start -->\n- a.md <!-- ntrp:path=a.md -->\n- b.md <!-- ntrp:path=b.md -->\n<!-- ntrp:index:end -->"
+      ? "Index body"
       : path === "a.md" || path === "b.md" ? "[[Shared]]" : `${item.title} body`;
     return response({ artifact: rawArtifact(item, content) });
   } } } as Window["ntrpDesktop"];
-  const { host, root } = setup();
+  const { host, root } = setup("a.md");
   await act(async () => root.render(<ArtifactMemoryView config={config} />));
   await settle(350);
   expect(host.querySelector<HTMLAnchorElement>('[data-wikilink="Shared"]')?.classList.contains("wikilink--unresolved")).toBe(false);
 
   await act(async () => host.querySelector<HTMLButtonElement>('[data-memory-entry="b.md"]')?.click());
   await settle(250);
-  expect(host.querySelector("h1")?.textContent).toBe("B");
+  expect(host.querySelector("h1")?.textContent).toBe("b");
   expect(host.querySelector<HTMLAnchorElement>('[data-wikilink="Shared"]')?.classList.contains("wikilink--unresolved")).toBe(true);
 
   await act(async () => host.querySelector<HTMLButtonElement>('[data-memory-entry="a.md"]')?.click());
@@ -409,17 +427,18 @@ test("a delayed link snapshot cannot resolve the next page or overwrite a later 
   releaseB?.();
   await settle(100);
   const current = host.querySelector<HTMLAnchorElement>('[data-wikilink="Shared"]')!;
-  expect(host.querySelector("h1")?.textContent).toBe("A");
+  expect(host.querySelector("h1")?.textContent).toBe("a");
   expect(current.classList.contains("wikilink--unresolved")).toBe(false);
   await act(async () => current.click());
   await settle(250);
-  expect(host.querySelector("h1")?.textContent).toBe("X");
+  expect(host.querySelector("h1")?.textContent).toBe("x");
 });
 
-test("trust inspector loads shared link pages and older event cursors", async () => {
+test("opening the inspector fetches full-page links and history once and pane switches stay local", async () => {
   const index = summary("index.md", "Index");
   const note = summary("note.md", "Note");
-  const rows = [index, note];
+  const roadmap = summary("roadmap.md", "Roadmap");
+  const rows = [index, note, roadmap];
   const requests: string[] = [];
   const rawEvent = (id: string, sequence: number, actor: string) => ({
     event_type: "PAGE_EDIT", id, occurred_at: `2026-07-13T08:20:3${sequence}.123+04:00`, sequence,
@@ -431,36 +450,53 @@ test("trust inspector loads shared link pages and older event cursors", async ()
     requests.push(request.path);
     if (request.path === "/admin/memory/artifacts") return response({ artifacts: rows.map((item) => rawArtifact(item)) });
     if (request.path.startsWith("/admin/memory/links")) {
-      const offset = Number(new URL(`http://x${request.path}`).searchParams.get("offset") ?? 0);
-      const outgoing = [{ source_path: "note.md", target: offset ? "Older" : "Current", display: offset ? "Older" : "Current", heading: null, context: offset ? "older outgoing context" : "current outgoing context", line: offset ? 101 : 1, column: 1, status: "unresolved", resolved_path: null, candidates: [], source_revision: "ledger:1" }];
-      return response({ path: "note.md", revision: "ledger:1", stale: false, outgoing, backlinks: [], total_outgoing: 101, total_backlinks: 0, limit: 100, offset });
+      const outgoing = [{ source_path: "note.md", target: "Roadmap", display: "Roadmap", heading: null, context: "See [[Roadmap]]", line: 1, column: 1, status: "resolved", resolved_path: "roadmap.md", candidates: ["roadmap.md"], source_revision: "ledger:1" }];
+      const backlinks = [{ source_path: "roadmap.md", target: "Note", display: "Note", heading: null, context: "worked on [[Note]]", line: 2, column: 1, status: "resolved", resolved_path: "note.md", candidates: ["note.md"], source_revision: "ledger:1" }];
+      const unlinked = [{ source_path: "index.md", context: "note mentioned plainly" }];
+      return response({ path: "note.md", revision: "ledger:1", stale: false, outgoing, backlinks, unlinked, total_outgoing: 1, total_backlinks: 1, limit: 100, offset: 0 });
     }
     if (request.path.startsWith("/admin/memory/page-edits/history")) {
-      const before = new URL(`http://x${request.path}`).searchParams.get("before_sequence");
-      return response({ events: [before ? rawEvent("older", 4, "agent:older") : rawEvent("latest", 5, "user:latest")], total: 2, limit: 100, next_before_sequence: before ? null : 5 });
+      return response({ events: [rawEvent("latest", 5, "user:latest"), rawEvent("older", 4, "agent:older")], total: 2, limit: 100, next_before_sequence: null });
     }
     const path = decodeURIComponent(request.path.replace("/admin/memory/artifacts/", ""));
-    if (path === "index.md") return response({ artifact: rawArtifact(index, "<!-- ntrp:index:start -->\n- note.md <!-- ntrp:path=note.md -->\n<!-- ntrp:index:end -->") });
-    return response({ artifact: rawArtifact(note, "Note body") });
+    if (path === "index.md") return response({ artifact: rawArtifact(index, "Index body") });
+    return response({ artifact: rawArtifact(path === "roadmap.md" ? roadmap : note, "Note body") });
   } } } as Window["ntrpDesktop"];
-  const { host, root } = setup();
+  const { host, root } = setup("note.md");
   await act(async () => root.render(<ArtifactMemoryView config={config} />));
   await settle(300);
-  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Open memory trust inspector"]')?.click());
+  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Open links and provenance"]')?.click());
   await settle(100);
-  expect(host.textContent).toContain("current outgoing context");
-  expect(host.textContent).toContain("user:latest");
 
-  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Load more memory links"]')?.click());
-  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Load older page events"]')?.click());
-  await settle(100);
-  expect(requests.some((path) => path.includes("/admin/memory/links?") && path.includes("offset=100"))).toBe(true);
-  expect(requests.some((path) => path.includes("before_sequence=5"))).toBe(true);
-  expect(host.textContent).toContain("older outgoing context");
-  expect(host.textContent).toContain("agent:older");
+  // Exactly one full-page fetch per endpoint — offset 0, limit 100.
+  const linkRequests = requests.filter((path) => path.startsWith("/admin/memory/links"));
+  expect(linkRequests).toHaveLength(1);
+  expect(linkRequests[0]).toContain("limit=100");
+  expect(linkRequests[0]).toContain("offset=0");
+  const historyRequests = requests.filter((path) => path.startsWith("/admin/memory/page-edits/history"));
+  expect(historyRequests).toHaveLength(1);
+  expect(historyRequests[0]).toContain("limit=100");
+
+  // Links pane: outgoing rows, linked mentions with cleaned excerpts, and
+  // unlinked mentions from the server's unlinked field.
+  const aside = host.querySelector<HTMLElement>('aside[aria-label="Links and provenance"]')!;
+  expect(aside.textContent).toContain("Linked mentions");
+  expect(aside.textContent).toContain("worked on Note");
+  expect(aside.textContent).not.toContain("[[Note]]");
+  expect(aside.querySelector("mark")?.textContent).toBe("Note");
+  expect(aside.textContent).toContain("Unlinked mentions");
+  expect(aside.textContent).toContain("note mentioned plainly");
+
+  // Switching panes is local state — no refetch.
+  const requestCount = requests.length;
+  await act(async () => aside.querySelector<HTMLButtonElement>('button[aria-label="Activity"]')?.click());
+  await settle(50);
+  expect(aside.textContent).toContain("user:latest");
+  expect(aside.textContent).toContain("agent:older");
+  expect(requests.length).toBe(requestCount);
 });
 
-test("stale links can refresh and a drifted load-more response restarts from offset zero", async () => {
+test("stale links stay unresolved and a vault change refetches the snapshot from offset zero", async () => {
   const index = summary("index.md", "Index");
   const note = summary("note.md", "Note");
   const target = summary("target.md", "Target");
@@ -473,39 +509,32 @@ test("stale links can refresh and a drifted load-more response restarts from off
       const offset = Number(new URL(`http://x${request.path}`).searchParams.get("offset") ?? 0);
       offsets.push(offset);
       linkRead += 1;
-      const state = linkRead === 1
-        ? { revision: "ledger:stale", stale: true, context: "stale base" }
-        : linkRead === 2
-          ? { revision: "ledger:one", stale: false, context: "fresh base one" }
-          : linkRead === 3
-            ? { revision: "ledger:two", stale: false, context: "offset tail must be discarded" }
-            : { revision: "ledger:two", stale: false, context: "fresh base two" };
-      const outgoing = [{ source_path: "note.md", target: "Target", display: "Target", heading: null, context: state.context, line: offset + 1, column: 1, status: "resolved", resolved_path: "target.md", candidates: ["target.md"], source_revision: state.revision }];
-      return response({ path: "note.md", revision: state.revision, stale: state.stale, outgoing, backlinks: [], total_outgoing: 101, total_backlinks: 0, limit: 100, offset });
+      const stale = linkRead === 1;
+      const outgoing = [{ source_path: "note.md", target: "Target", display: "Target", heading: null, context: "See [[Target]]", line: 1, column: 1, status: "resolved", resolved_path: "target.md", candidates: ["target.md"], source_revision: stale ? "ledger:stale" : "ledger:fresh" }];
+      return response({ path: "note.md", revision: stale ? "ledger:stale" : "ledger:fresh", stale, outgoing, backlinks: [], total_outgoing: 1, total_backlinks: 0, limit: 100, offset });
     }
     if (request.path.startsWith("/admin/memory/page-edits/history")) return response({ events: [], total: 0, limit: 100, next_before_sequence: null });
     const path = decodeURIComponent(request.path.replace("/admin/memory/artifacts/", ""));
-    if (path === "index.md") return response({ artifact: rawArtifact(index, "<!-- ntrp:index:start -->\n- note.md <!-- ntrp:path=note.md -->\n- target.md <!-- ntrp:path=target.md -->\n<!-- ntrp:index:end -->") });
+    if (path === "index.md") return response({ artifact: rawArtifact(index, "Index body") });
     return response({ artifact: rawArtifact(path === "note.md" ? note : target, path === "note.md" ? "[[Target]]" : "Target body") });
   } } } as Window["ntrpDesktop"];
-  const { host, root } = setup();
+  const { host, root } = setup("note.md");
   await act(async () => root.render(<ArtifactMemoryView config={config} />));
   await settle(350);
+  // A stale snapshot renders the wikilink but never resolves it.
   expect(host.querySelector<HTMLAnchorElement>('[data-wikilink="Target"]')?.classList.contains("wikilink--unresolved")).toBe(true);
-  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Open memory trust inspector"]')?.click());
-  await settle(50);
-  expect(host.textContent).toContain("stale base");
-  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Refresh memory links"]')?.click());
-  await settle(100);
-  expect(offsets).toEqual([0, 0]);
-  expect(host.textContent).toContain("fresh base one");
-  expect(host.querySelector<HTMLAnchorElement>('[data-wikilink="Target"]')?.classList.contains("wikilink--unresolved")).toBe(false);
+  expect(offsets).toEqual([0]);
 
-  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Load more memory links"]')?.click());
-  await settle(150);
-  expect(offsets).toEqual([0, 0, 100, 0]);
-  expect(host.textContent).toContain("fresh base two");
-  expect(host.textContent).not.toContain("offset tail must be discarded");
+  // A vault change invalidates and refetches — always a full page from
+  // offset zero, never a cursor continuation.
+  await act(async () => useStore.setState((state) => ({ memoryVaultVersion: state.memoryVaultVersion + 1 })));
+  await settle(250);
+  expect(offsets).toEqual([0, 0]);
+  const link = host.querySelector<HTMLAnchorElement>('[data-wikilink="Target"]')!;
+  expect(link.classList.contains("wikilink--unresolved")).toBe(false);
+  await act(async () => link.click());
+  await settle(250);
+  expect(host.querySelector("h1")?.textContent).toBe("target");
 });
 
 test("vault revision refresh invalidates the selected detail cache", async () => {
@@ -517,11 +546,11 @@ test("vault revision refresh invalidates the selected detail cache", async () =>
     if (request.path.startsWith("/admin/memory/links")) return response({ path: "note.md", revision: "ledger:1", stale: false, outgoing: [], backlinks: [], total_outgoing: 0, total_backlinks: 0, limit: 100, offset: 0 });
     if (request.path.startsWith("/admin/memory/page-edits/history")) return response({ events: [], total: 0, limit: 100, next_before_sequence: null });
     const path = decodeURIComponent(request.path.replace("/admin/memory/artifacts/", ""));
-    if (path === "index.md") return response({ artifact: rawArtifact(index, "<!-- ntrp:index:start -->\n- note.md <!-- ntrp:path=note.md -->\n<!-- ntrp:index:end -->") });
+    if (path === "index.md") return response({ artifact: rawArtifact(index, "Index body") });
     detailReads += 1;
     return response({ artifact: rawArtifact(note, `version ${detailReads}`) });
   } } } as Window["ntrpDesktop"];
-  const { host, root } = setup();
+  const { host, root } = setup("note.md");
   await act(async () => root.render(<ArtifactMemoryView config={config} />));
   await settle(250);
   expect(host.textContent).toContain("version 1");

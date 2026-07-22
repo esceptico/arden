@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft } from "@/components/icons";
 import { useStore } from "@/stores";
 import { type MCPServer, type MCPServerConfigPayload, type MCPTransport, addMCPServerApi, removeMCPServerApi, startMCPOAuthApi, updateMCPServerApi } from "@/api/settings";
 import { useMutationState } from "@/lib/hooks";

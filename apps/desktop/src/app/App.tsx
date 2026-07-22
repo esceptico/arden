@@ -7,6 +7,7 @@ import { Chat } from "@/features/chat/components/Chat";
 import { Home } from "@/features/home/components/Home";
 import { AreaRoom } from "@/features/areas/components/AreaRoom";
 import { CommandPalette } from "@/features/command-palette/components/CommandPalette";
+import { CommandPeek } from "@/features/command-sidecar/CommandPeek";
 import { MarkdownViewer } from "@/components/ui/MarkdownViewer";
 import { ApprovalReviewModal } from "@/features/chat/components/ApprovalReviewModal";
 import { SidebarResizeHandle } from "@/features/sessions/components/SidebarResizeHandle";
@@ -36,8 +37,8 @@ const SettingsModal = lazy(() =>
 const AutomationsModal = lazy(() =>
   import("@/features/automations/components/AutomationsModal").then((m) => ({ default: m.AutomationsModal })),
 );
-const MemoryModal = lazy(() =>
-  import("@/features/memory/components/MemoryModal").then((m) => ({ default: m.MemoryModal })),
+const MemorySurface = lazy(() =>
+  import("@/features/memory/components/MemorySurface").then((m) => ({ default: m.MemorySurface })),
 );
 const ToolViewer = lazy(() =>
   import("@/features/chat/components/ToolViewer").then((m) => ({ default: m.ToolViewer })),
@@ -91,6 +92,7 @@ export function App() {
   // made a freshly opened session flash Home while history loaded.
   const showHome = useStore((s) => s.currentSessionId === null);
   const openAreaKey = useStore((s) => s.areas.openAreaKey);
+  const memoryOpen = useStore((s) => s.memoryOpen);
 
   // Publish dock widths as CSS vars so the chat shell can stay flush with
   // both sidebars as they resize. Drag handles update these imperatively
@@ -268,15 +270,25 @@ export function App() {
         )}
       </ErrorBoundary>
       <AgentRightSidebar sourcesPanel={<SourcesPanel />} />
+      {/* Memory is a full-window takeover (Obsidian-style vault view): ONE
+          left column — its own rail — layered over the app shell and its
+          fixed sidebar toggles, so no chrome doubles up or overlaps. */}
+      <AnimatePresence>
+        {memoryOpen && (
+          <Suspense key="memory" fallback={null}>
+            <MemorySurface />
+          </Suspense>
+        )}
+      </AnimatePresence>
       <ErrorBoundary>
         <Suspense fallback={null}>
           <SettingsModal />
           <AutomationsModal />
-          <MemoryModal />
           <ToolViewer />
         </Suspense>
       </ErrorBoundary>
       <CommandPalette />
+      <CommandPeek />
       <MarkdownViewer />
       <ApprovalReviewModal />
       <Toaster />

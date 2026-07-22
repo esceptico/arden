@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 
 from ntrp.database import connect as db_connect
 from ntrp.logging import get_logger
-from ntrp.memory.models import Kind, Record, SourceRef, now_iso
+from ntrp.memory.models import Kind, Record, SourceRef, now_iso, source_time
 from ntrp.memory.reconciler import RecordOperation, validate_operations
 from ntrp.memory.records import RecordStore
 from ntrp.memory.scopes import USER_SCOPE, MemoryScope, apply_scope_to_source, scope_for_write
@@ -64,15 +64,6 @@ ALLOWED_KINDS = {"directive", "fact", "source", "lesson"}
 # A backfill subject equal to one of these is the USER, not an external entity — skip it
 # (the user is me.md, not a topic page). The prompt also handles the user's actual name.
 _SELF_REFERENCES = {"me", "i", "self", "user", "the user", "myself", "you"}
-# Legacy/alias kinds that map onto a writable kind. Narrative kinds ("note",
-# "action", "summary") are intentionally absent: junk/narrative is SKIPPED at
-# write time, not coerced into a record.
-LEGACY_KIND_MAP = {
-    "preference": "fact",
-    "project_fact": "fact",
-    "feedback": "source",
-    "changelog": "source",
-}
 BAD_TEXT_PATTERNS = ("project-proj_", "source=curator:", "facts/project-", "summaries/project-", "sources/index.md")
 
 # consolidate.run_once() is a heavy FTS+LLM sweep over the record pool. Running
@@ -685,11 +676,7 @@ class Curator:
         captured_at = now_iso()
         sources: list[SourceRef] = []
         for turn in turns:
-            occurred_at = turn.get("created_at")
-            precision = "unknown"
-            if isinstance(occurred_at, str):
-                fraction = re.search(r"\.(\d+)(?:Z|[+-]\d{2}:\d{2})$", occurred_at)
-                precision = "millisecond" if fraction and len(fraction.group(1)) == 3 else "second" if fraction is None else "unknown"
+            occurred_at, precision = source_time(turn.get("created_at"))
             sources.append(
                 SourceRef(
                     kind="chat_message",
@@ -955,8 +942,7 @@ class Curator:
         raw = str(raw_value).strip().lower()
         if raw in ALLOWED_KINDS:
             return raw
-        mapped = LEGACY_KIND_MAP.get(raw)
-        return mapped if mapped in ALLOWED_KINDS else None
+        return None
 
     @staticmethod
     def _op_text(op: dict) -> str | None:
@@ -978,8 +964,7 @@ class Curator:
         """Return (meta_labels, entity_labels) sanitized, or (None, None) when
         both fields are absent — None means 'keep existing' on UPDATE.
 
-        Accepts the new split format (entity_labels / meta_labels) and falls back
-        to the legacy flat `labels` field (all treated as meta) for compatibility.
+        Accepts the split entity_labels / meta_labels format.
         """
         def _clean(raw) -> list[str] | None:
             if not isinstance(raw, list):
@@ -993,12 +978,7 @@ class Curator:
         meta = _clean(op.get("meta_labels"))
         entity = _clean(op.get("entity_labels"))
 
-        # Legacy flat `labels` field: treat all as meta if new fields absent
-        if meta is None and entity is None:
-            legacy = _clean(op.get("labels"))
-            return legacy, None
-
-        return meta or [], entity or []
+        return (meta or [], entity or []) if meta is not None or entity is not None else (None, None)
 
     @classmethod
     def _select_batch(cls, rows: list[dict], watermark: int) -> tuple[list[dict], int]:

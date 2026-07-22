@@ -1,9 +1,11 @@
 """Transcript full-text search — FTS5 index, triggers, backfill, and the
 store.search_messages query (ranking, pagination, time + session scope)."""
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import numpy as np
 import pytest
 import pytest_asyncio
 
@@ -37,6 +39,48 @@ async def _seed(
 ):
     msgs = [{"role": "user" if i % 2 == 0 else "assistant", "content": t} for i, t in enumerate(texts)]
     await store.save_session(_state(session_id, name=name, area_id=area_id), msgs)
+
+
+class _RecordingEmbedder:
+    def __init__(self, calls: list[str]) -> None:
+        self.calls = calls
+
+    async def embed_one(self, text: str):
+        self.calls.append("embed")
+        return np.ones(8, dtype=np.float32)
+
+
+class _RecordingVectorStore:
+    async def vector_search(self, embedding, *, sources, limit):
+        return []
+
+
+class _RecordingSearchIndex:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.embedder = _RecordingEmbedder(self.calls)
+        self.store = _RecordingVectorStore()
+
+    async def upsert(self, **kwargs):
+        self.calls.append("upsert")
+        return True
+
+    async def delete(self, source: str, source_id: str):
+        self.calls.append("delete")
+        return True
+
+
+@pytest.mark.asyncio
+async def test_transcript_persistence_and_search_never_use_embeddings(store: SessionStore):
+    index = _RecordingSearchIndex()
+    store._search_index = index
+
+    await _seed(store, "s1", ["how do I deploy with kubernetes", "use kubectl apply"])
+    await asyncio.sleep(0)
+    result = await store.search_messages("kubernetes")
+
+    assert len(result["hits"]) == 1
+    assert index.calls == []
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown } from "@/components/icons";
 import clsx from "clsx";
 import { useShallow } from "zustand/react/shallow";
 import { useStore } from "@/stores";

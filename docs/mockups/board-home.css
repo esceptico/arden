@@ -1,0 +1,178 @@
+@import "./board-system.css?v=20260722-31";
+@import "./board-app-rail.css?v=20260722-5";
+@import "./board-attention.css?v=20260722-4";
+
+html, body { overflow: hidden; }
+
+/* room — one lane, fits the viewport, never scrolls */
+.workspace {
+  position: absolute; inset: 0; overflow: hidden; overscroll-behavior: contain;
+  padding-left: calc(var(--sidebar-width) + var(--sidebar-gap));
+  transition: opacity var(--motion-feedback) var(--ease-out);
+}
+body.rail-hidden .workspace { padding-left: 0; }
+/* top-anchored flow — content stacks from the top; empty room only ever comes AFTER the last line */
+.page {
+  height: 100%; max-width: var(--content-max-width); margin: 0 auto;
+  padding: 56px var(--content-gutter) 16px;
+  display: flex; flex-direction: column; align-items: stretch; min-height: 0;
+}
+.page > * { min-width: 0; }
+
+.answer-line .t-spin-counter { color: inherit; }
+
+/* the front door — quiet ring at rest; material appears only under the hand (focus) */
+.capture {
+  flex: none; height: 42px; margin-top: 20px; display: flex; align-items: center; gap: var(--space-2-5); padding: 0 13px 0 16px;
+  border-radius: var(--r-control); background: var(--paper); box-shadow: inset 0 0 0 1px var(--line-strong);
+  transition: box-shadow var(--motion-focus) var(--ease-out), background var(--motion-focus) var(--ease-out);
+}
+.capture:focus-within { background: var(--card); box-shadow: var(--shadow-3), 0 0 0 var(--border-width) color-mix(in oklab, var(--accent) 40%, transparent); }
+.capture input { min-width: 0; flex: 1; border: 0; outline: 0; color: var(--ink); background: transparent; font-size: var(--text-md); }
+.capture input::placeholder { color: var(--faint); }
+.capture-note { flex: none; font: 500 var(--text-meta)/1 var(--mono); color: var(--muted); white-space: nowrap; }
+.capture kbd { flex: none; font: 500 var(--text-xs)/1 var(--mono); color: var(--faint); }
+
+/* ---- the queue head — the ask is content, not furniture: open on the room, no box ---- */
+.deck-region { margin-top: clamp(24px, 5vh, 48px); }
+.capacity { margin: 0 0 12px; padding: 0 2px; font-size: var(--text-xs); color: var(--faint); }
+
+.deck-slot { position: relative; display: grid; }
+.deck { grid-area: 1 / 1; position: relative; display: grid; }
+.deck-card {
+  grid-area: 1 / 1; position: relative; z-index: var(--z-raised); min-width: 0;
+  display: flex; flex-direction: column;
+}
+.deck-card[data-depth="gone"] { z-index: var(--z-base); pointer-events: none; }
+
+.card-title {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.card-reason {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.card-then { margin: 6px 0 0; font-size: var(--text-sm); line-height: 1.5; color: var(--faint);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* the verb slot — verbs, an inline reply, or snooze presets swap in the same fixed slot */
+.card-foot { margin-top: 18px; display: grid; }
+.card-foot > * {
+  grid-area: 1 / 1;
+  transition: opacity var(--motion-feedback) var(--ease-out), transform var(--motion-dissolve) var(--ease-out), visibility 0s;
+}
+.card-foot > [data-io-hidden] {
+  opacity: 0; pointer-events: none; visibility: hidden; transform: translateY(3px);
+  transition: opacity var(--motion-feedback) var(--ease-out), transform var(--motion-dissolve) var(--ease-out), visibility 0s var(--motion-feedback);
+}
+
+/* overlapping text crossfade — the ghost of the old line fades over the new one */
+.verb.committed { color: var(--accent-ink); }
+.verb.primary.committed { color: var(--paper); background: var(--accent); }
+
+.card-io { display: flex; align-items: center; gap: var(--space-2); }
+.card-io input {
+  min-width: 0; flex: 1; height: var(--control-size-large); padding: 0 12px; border: 0; outline: 0;
+  border-radius: var(--r-control); color: var(--ink); background: var(--paper);
+  box-shadow: inset 0 0 0 1px var(--line-strong); font-size: var(--text-sm);
+  transition: box-shadow var(--motion-focus) var(--ease-out);
+}
+.card-io input:focus { box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 3px color-mix(in oklab, var(--accent) 13%, transparent); }
+.card-io .io-hint { flex: none; font: 500 var(--text-meta)/1 var(--mono); color: var(--faint); }
+
+.card-snooze { display: flex; align-items: center; gap: var(--space-2); }
+.card-snooze .snooze-title { flex: none; font-size: var(--text-xs); color: var(--faint); margin-right: 2px; }
+
+.deck-hints { display: flex; align-items: center; gap: var(--space-1); }
+.deck-hint {
+  display: inline-flex; align-items: center; gap: var(--space-1); padding: 4px 7px; border-radius: var(--r-tag);
+  font: 500 var(--text-2xs)/1 var(--sans); color: var(--faint);
+  transition: color var(--motion-feedback) var(--ease-out), background var(--motion-feedback) var(--ease-out);
+}
+.deck-hint:hover { color: var(--ink); background: var(--state-hover-bg); }
+.deck-hint kbd { padding: 1px 4px; border-radius: var(--r-mark); background: var(--panel-soft); font: 560 var(--text-meta)/1 var(--mono); }
+
+/* ---- cleared attention — compact confirmation beside the existing undo ---- */
+.deck-slot:has(.zero:not([hidden])) { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+.deck-slot:has(.zero:not([hidden])) .deck,
+.deck-slot:has(.zero:not([hidden])) .zero { grid-area: 1 / 1; }
+.deck-slot:has(.zero:not([hidden])) > [data-deck-chrome] { grid-area: 1 / 2; width: auto; min-height: 44px; margin: 0; padding: 0 2px; }
+.zero { grid-area: 1 / 1; min-height: 44px; padding: 0 2px; display: flex; align-items: center; color: var(--muted); font-size: var(--text-sm); }
+.zero-status { font-weight: 560; }
+
+/* ---- ambient strips — the dark cockpit: aggregate the normal, itemize on demand ---- */
+.strips { position: relative; z-index: var(--z-sticky); margin-top: clamp(18px, 3.5vh, 34px); padding: 5px 2px 0; background: var(--paper); border-top: var(--border-width) solid var(--edge); }
+.strip-head {
+  width: 100%; min-height: 32px; display: flex; align-items: center; gap: var(--space-2); padding: 0 8px;
+  border-radius: var(--r-row); text-align: left;
+  transition: background var(--motion-feedback) var(--ease-out);
+}
+.strip-head:hover { background: var(--state-hover-bg); }
+.strip-line { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--text-sm); color: var(--muted); font-variant-numeric: tabular-nums; }
+.strip-line b { color: var(--ink-soft); font-weight: 570; }
+.strip-line .live { color: var(--accent-ink); }
+/* chevron is always present — hover only deepens its tint (nothing appears on hover) */
+.strip-chev { width: 12px; height: 12px; flex: none; color: var(--faint); opacity: .45;
+  transition: opacity var(--motion-feedback) var(--ease-out), rotate var(--motion-dissolve) var(--ease-out); }
+.strip-head:hover .strip-chev, .strip-head[aria-expanded="true"] .strip-chev { opacity: 1; }
+.strip-head[aria-expanded="true"] .strip-chev { rotate: 180deg; }
+.strip.still .strip-head { pointer-events: none; }
+.strip.still .strip-chev { display: none; }
+
+/* expansion overlays the room — it never reflows the deck or sibling strips */
+.strip { position: relative; }
+.strip-body {
+  position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); z-index: var(--z-popover);
+  padding: 6px; border-radius: var(--surface-radius); background: var(--card); box-shadow: var(--shadow-mid);
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transform: translateY(5px) scale(.99); transform-origin: 50% 100%;
+  filter: blur(var(--popover-blur));
+  transition:
+    opacity var(--motion-popover) var(--ease-out),
+    transform var(--motion-popover) var(--ease-out),
+    filter var(--motion-popover) var(--ease-out),
+    visibility 0s var(--motion-popover);
+}
+.strip.open .strip-body {
+  opacity: 1; visibility: visible; pointer-events: auto;
+  transform: none; filter: none; transition-delay: 0s;
+}
+.strip-rows { overflow: hidden; border-radius: var(--r-row); }
+.frow {
+  width: 100%; display: flex; flex-direction: column; gap: var(--space-0-5); padding: 7px 10px;
+  text-align: left; transition: background var(--motion-feedback) var(--ease-out), transform var(--motion-press) var(--ease-out);
+}
+.frow:not(:disabled):active { transform: scale(var(--press-scale-subtle)); }
+.frow + .frow { border-top: var(--border-width) solid color-mix(in oklab, var(--line) 62%, transparent); }
+.frow:hover { background: var(--state-hover-bg); }
+.frow-eyebrow { display: flex; align-items: center; gap: var(--space-1-5);
+  font: 500 var(--text-meta)/1 var(--mono); color: var(--faint); font-variant-numeric: tabular-nums; }
+.frow-eyebrow time { margin-left: auto; }
+.frow-eyebrow .frow-name { color: var(--ink-soft); font: 560 var(--text-sm)/1 var(--sans); }
+.frow-glyph { width: 13px; height: 13px; flex: none; color: var(--muted); }
+.frow-glyph svg { width: 100%; height: 100%; }
+.frow-glyph.ok { color: var(--success); }
+.frow-line { font-size: var(--text-xs); line-height: 1.4; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.frow.returned .frow-line { color: var(--ink-soft); }
+
+/* demo plate */
+.plate { position: fixed; left: 16px; bottom: 76px; z-index: var(--z-demo); display: none; }
+body.demo-mode .plate { display: block; }
+
+
+@media (max-width: 46.25rem) {
+  .workspace { padding-left: 0; }
+  .page { padding-top: var(--home-compact-top-inset); }
+}
+
+/* two compression tiers — mild first, then dense; no gap between them and the default */
+@media (max-height: 53rem) {
+  .page { padding-top: 46px; padding-bottom: 10px; }
+  .strip-head { min-height: 28px; }
+}
+
+@media (max-height: 47rem) {
+  .card-reason { -webkit-line-clamp: 1; }
+  .card-foot { margin-top: 14px; }
+  .strip-head { min-height: 26px; }
+  .strip-body { max-height: 40vh; overflow: auto; }
+}

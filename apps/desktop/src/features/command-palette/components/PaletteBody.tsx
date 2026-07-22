@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { Search } from "lucide-react";
+import { Command } from "cmdk";
+import { Search } from "@/components/icons";
 import { ICON } from "@/lib/icons";
-import { useListNav } from "@/lib/hooks";
 import { EASE_EMPHASIZED, MOTION } from "@/lib/tokens/motion";
 import { Breadcrumbs } from "@/features/command-palette/components/Breadcrumbs";
 import { Row } from "@/features/command-palette/components/Row";
@@ -23,6 +23,7 @@ export function PaletteBody({
   crumbs,
   setCrumbs,
   onClose,
+  onAgentSubmit,
   morph = false,
 }: {
   query: string;
@@ -32,11 +33,11 @@ export function PaletteBody({
   crumbs: Crumb[];
   setCrumbs: React.Dispatch<React.SetStateAction<Crumb[]>>;
   onClose: () => void;
+  onAgentSubmit: (query: string) => void;
   morph?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const activeRowRef = useRef<HTMLButtonElement>(null);
   const rootEntries = useEntries();
 
   // Resolve the active view by following the crumb path from root.
@@ -116,20 +117,8 @@ export function PaletteBody({
     }
   }
 
-  const nav = useListNav(
-    filtered.length,
-    (i) => {
-      const entry = filtered[i];
-      if (entry) activate(entry);
-    },
-    { index, setIndex },
-  );
-  const safe = nav.index;
-
-  // Keep the highlighted row in view while arrow-navigating.
-  useLayoutEffect(() => {
-    activeRowRef.current?.scrollIntoView({ block: "nearest" });
-  }, [safe]);
+  const safe = filtered.length === 0 ? 0 : Math.min(Math.max(index, 0), filtered.length - 1);
+  const selectedValue = filtered[safe]?.id ?? "";
 
   const grouped = useMemo(() => groupBySection(filtered), [filtered]);
 
@@ -145,7 +134,17 @@ export function PaletteBody({
   }, [depth]);
 
   return (
-    <>
+    <Command
+      value={selectedValue}
+      onValueChange={(value) => {
+        const nextIndex = filtered.findIndex((entry) => entry.id === value);
+        if (nextIndex >= 0) setIndex(nextIndex);
+      }}
+      shouldFilter={false}
+      loop
+      className="contents"
+      label="Command palette"
+    >
       <motion.div layout={morph} className="relative px-4 pt-3 pb-2.5">
         <Search
           size={ICON.MD}
@@ -154,50 +153,42 @@ export function PaletteBody({
         />
         <div className="flex items-center gap-1.5 pl-6">
           <Breadcrumbs crumbs={crumbs} onJump={popTo} />
-          <input
+          <Command.Input
             ref={inputRef}
-            type="text"
-            role="combobox"
-            aria-expanded
-            aria-controls={LIST_ID}
-            aria-autocomplete="list"
-            aria-activedescendant={filtered[safe] ? optionId(filtered[safe].id) : undefined}
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onValueChange={setQuery}
             onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                const command = query.trim();
+                if (!command) return;
+                e.preventDefault();
+                onAgentSubmit(command);
+                onClose();
+                return;
+              }
               if (e.key === "Backspace" && query.length === 0 && crumbs.length > 0) {
                 e.preventDefault();
                 popCrumb();
                 return;
               }
-              if (filtered.length === 0) return;
-              nav.onKeyDown(e);
             }}
             placeholder={view.placeholder}
             spellCheck={false}
             className="flex-1 min-w-0 h-8 bg-transparent text-md text-ink placeholder:text-muted outline-none"
           />
+          {query.trim() && (
+            <span className="shrink-0 text-2xs text-faint" aria-hidden>
+              ⌘↵ ask agent
+            </span>
+          )}
         </div>
       </motion.div>
 
-      {/* Scroll viewport is unchanged — keyboard nav, scrollIntoView, and
-          ScrollBlur (which reads parentElement) all keep seeing this div as
-          the scroller. The height MORPH happens on the panel itself (see
-          CommandPalette.tsx `layout`): as the page content below changes
-          height, the panel's box animates to match. Inside, page content is
-          swapped directionally via AnimatePresence (mode="wait" so the two
-          pages never overlap inside the scroll area). Pushing into a sub-view
-          enters from the right (+1), popping back from the left (-1) — the
-          shared SLIDE_PAGE_VARIANTS so palette pages and tab panels stay on
-          one literal. overflow-x-hidden keeps the x-slide from spawning a
-          horizontal scrollbar. */}
-      <motion.div
+      {/* cmdk owns list semantics and selection; ntrp keeps its ranked filter
+          and nested-view direction. */}
+      <Command.List
         ref={listRef}
-        layout={morph}
-        layoutScroll
-        role="listbox"
         id={LIST_ID}
-        aria-label="Results"
         className="overflow-y-auto overflow-x-hidden scroll-thin pb-2"
       >
         <ScrollFadeTop />
@@ -212,19 +203,20 @@ export function PaletteBody({
             transition={{ duration: MOTION.palette, ease: EASE_EMPHASIZED }}
           >
             {filtered.length === 0 ? (
-              <div className="grid place-items-center min-h-[120px] text-sm italic text-muted">
+              <Command.Empty className="grid place-items-center min-h-[120px] text-sm italic text-muted">
                 Nothing matches.
-              </div>
+              </Command.Empty>
             ) : (
               grouped.map(({ section, items }) => (
-                <div key={section} role="presentation">
-                  <div
-                    aria-hidden
-                    className="px-4 pt-3 pb-1 text-2xs font-medium uppercase tracking-[0.10em] text-faint"
-                  >
-                    {SECTION_LABEL[section]}
-                  </div>
-                  <ul role="group" aria-label={SECTION_LABEL[section]} className="m-0 px-1.5 list-none">
+                <Command.Group
+                  key={section}
+                  heading={
+                    <span className="block px-2.5 pt-3 pb-1 text-2xs font-medium uppercase tracking-[0.10em] text-faint">
+                      {SECTION_LABEL[section]}
+                    </span>
+                  }
+                  className="px-1.5"
+                >
                     {items.map((entry) => {
                       const isActive = entry === filtered[safe];
                       return (
@@ -232,20 +224,17 @@ export function PaletteBody({
                           key={entry.id}
                           entry={entry}
                           active={isActive}
-                          activeRef={isActive ? activeRowRef : undefined}
                           optionId={optionId(entry.id)}
-                          onHover={() => setIndex(filtered.indexOf(entry))}
                           onClick={() => activate(entry)}
                         />
                       );
                     })}
-                  </ul>
-                </div>
+                </Command.Group>
               ))
             )}
           </motion.div>
         </AnimatePresence>
-      </motion.div>
-    </>
+      </Command.List>
+    </Command>
   );
 }

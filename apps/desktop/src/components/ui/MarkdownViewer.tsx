@@ -1,4 +1,4 @@
-import { ExternalLink } from "lucide-react";
+import { ExternalLink } from "@/components/icons";
 import { useStore } from "@/stores";
 import { Markdown } from "@/components/ui/Markdown";
 import { PageModal } from "@/components/ui/PageModal";

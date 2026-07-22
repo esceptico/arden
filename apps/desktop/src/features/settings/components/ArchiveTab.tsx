@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { ArchiveRestore, Trash2 } from "lucide-react";
+import { ArchiveRestore, Trash2 } from "@/components/icons";
 import clsx from "clsx";
 import { useStore } from "@/stores";
 import { EASE_OUT, MOTION, ROW_EXIT, SPRING_LAYOUT } from "@/lib/tokens/motion";

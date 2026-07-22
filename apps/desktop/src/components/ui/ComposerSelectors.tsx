@@ -1,16 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
-import { AnimatePresence, motion } from "motion/react";
-import { Check, ChevronDown } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Combobox } from "@base-ui/react/combobox";
+import { Menu } from "@base-ui/react/menu";
+import { Check, ChevronDown, Search } from "@/components/icons";
 import clsx from "clsx";
 import { useStore } from "@/stores";
 import { updateServerConfig, fetchServerConfig } from "@/actions/server";
 import { updateSessionModelAction, refreshSessions } from "@/actions/sessions";
 import type { ModelGroup } from "@/api/types";
 import { ICON } from "@/lib/icons";
-import { DURATION_POPOVER, EASE_DECELERATE, EASE_OUT, MOTION } from "@/lib/tokens/motion";
-import { useReanchor } from "@/lib/hooks";
-import { Caption } from "@/components/ui/Caption";
 
 const PROVIDER_LABELS: Record<string, string> = {
   anthropic: "Anthropic",
@@ -34,7 +31,6 @@ export function ModelReasoningPicker({
   efforts,
   groups,
   disabled = false,
-  modelReasoningEfforts = {},
   placement = "above-right",
   onSelectModel,
   onSelectEffort,
@@ -45,186 +41,208 @@ export function ModelReasoningPicker({
   efforts: string[];
   groups: ModelGroup[];
   disabled?: boolean;
-  modelReasoningEfforts?: Record<string, string>;
   placement?: "above-right" | "below-left";
   onSelectModel: (model: string) => void;
   onSelectEffort: (effort: string | null) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [modelOpen, setModelOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const popoverRef = useRef<HTMLDivElement>(null);
-  // Anchor the portaled popover off the trigger's bounding rect.
-  // `above-right` floats the popover above the chip with its right edge
-  // aligned to the chip's right edge (default for the composer
-  // toolbar). `below-left` is a future-proofing escape hatch.
-  const [coords, setCoords] = useState<{
-    bottom?: number;
-    top?: number;
-    left?: number;
-    right?: number;
-  } | null>(null);
-
-  useReanchor(open, () => {
-    const t = triggerRef.current;
-    if (!t) return;
-    const r = t.getBoundingClientRect();
-    if (placement === "above-right") {
-      setCoords({ bottom: window.innerHeight - r.top + 6, right: window.innerWidth - r.right });
-    } else {
-      setCoords({ top: r.bottom + 6, left: r.left });
-    }
-  });
-
-  // Outside-click closes the picker. The portaled popover lives outside
-  // `wrapRef` so we have to check both the trigger and the popover refs;
-  // clicks anywhere else dismiss.
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (triggerRef.current?.contains(target)) return;
-      if (popoverRef.current?.contains(target)) return;
-      setOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [open]);
-
-  const filteredGroups = useMemo(() => {
-    if (!query.trim()) return groups;
-    const q = query.toLowerCase();
-    return groups
-      .map((g) => ({ ...g, models: g.models.filter((m) => m.toLowerCase().includes(q)) }))
-      .filter((g) => g.models.length > 0);
-  }, [groups, query]);
+  const groupedModels = useMemo(
+    () =>
+      groups.map((group) => ({
+        value: PROVIDER_LABELS[group.provider] ?? group.provider,
+        items: group.models,
+      })),
+    [groups],
+  );
+  const side = placement === "above-right" ? "top" : "bottom";
+  const align = placement === "above-right" ? "end" : "start";
+  const uniformControls = placement === "below-left";
 
   return (
-    <div ref={wrapRef} className="relative">
-      <button
-        ref={triggerRef}
-        type="button"
-        onClick={() => setOpen((v) => !v)}
+    <div
+      className={clsx(
+        "min-w-0 items-center",
+        uniformControls
+          ? "grid w-[276px] grid-cols-[180px_88px] gap-2"
+          : "inline-flex gap-1",
+      )}
+    >
+      <Combobox.Root
+        items={groupedModels}
+        value={currentModel}
+        inputValue={query}
+        open={modelOpen}
         disabled={disabled}
-        title={efforts.length > 0 ? `${currentModel} · thinking ${currentEffort ?? "off"}` : currentModel}
-        className={clsx(
-          "inline-flex items-center gap-1.5 h-7 pl-2.5 pr-2 rounded-full text-xs font-medium tracking-[-0.005em] transition-[background-color,color,scale] duration-check ease-out active:scale-[0.97] select-none max-w-[260px]",
-          open
-            ? "bg-surface-soft text-ink"
-            : "text-muted hover:bg-surface-soft hover:text-ink",
-          disabled && "opacity-60",
-        )}
+        autoHighlight
+        onOpenChange={(open) => {
+          setModelOpen(open);
+          if (!open) setQuery("");
+        }}
+        onInputValueChange={setQuery}
+        onValueChange={(model) => {
+          if (model && model !== currentModel) onSelectModel(model);
+          setQuery("");
+        }}
       >
-        <span className="composer-model-label truncate font-mono text-xs text-ink-soft">
-          {buttonLabel ?? shortModelLabel(currentModel)}
-        </span>
-        {efforts.length > 0 && (
-          <>
-            <span className="composer-effort-separator text-whisper">·</span>
-            <span className="text-muted">{currentEffort ?? "off"}</span>
-          </>
-        )}
-        <ChevronDown size={ICON.SM} strokeWidth={2} className="shrink-0 opacity-70" />
-      </button>
-
-      {createPortal(
-        <AnimatePresence>
-          {open && coords && (
-        <motion.div
-          ref={popoverRef}
-          initial={{ opacity: 0, y: 4, scale: 0.98 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, scale: 0.98, transition: { duration: MOTION.fast, ease: EASE_OUT } }}
-          transition={{ duration: DURATION_POPOVER, ease: EASE_DECELERATE }}
-          style={{
-            position: "fixed",
-            ...coords,
-            zIndex: 60,
-            transformOrigin: placement === "above-right" ? "bottom right" : "top left",
-          }}
-          className="surface-panel surface-popover w-[300px] overflow-hidden"
+        <Combobox.Trigger
+          aria-label="Choose model"
+          title={currentModel}
+          className={clsx(
+            "group inline-flex h-7 min-w-0 max-w-[220px] items-center gap-1.5 rounded-full pl-2.5 pr-2 text-xs font-medium tracking-[-0.005em] text-muted outline-none select-none",
+            "transition-[background-color,color,scale,box-shadow] duration-check ease-out active:scale-[0.97] hover:bg-surface-soft hover:text-ink data-popup-open:bg-surface-soft data-popup-open:text-ink focus-visible:shadow-[0_0_0_3px_var(--color-accent-soft)]",
+            uniformControls && "w-full max-w-none justify-between",
+            disabled && "opacity-60",
+          )}
         >
-          {efforts.length > 0 && (
-            <div className="grid gap-1 px-3 pt-2.5 pb-2 border-b border-line-soft">
-              <Caption as="div">Reasoning effort</Caption>
-              <div className="flex flex-wrap gap-1">
-                <EffortPill
-                  label="off"
-                  active={currentEffort === null}
-                  onClick={() => onSelectEffort(null)}
-                />
-                {efforts.map((eff) => (
-                  <EffortPill
-                    key={eff}
-                    label={eff}
-                    active={currentEffort === eff}
-                    onClick={() => onSelectEffort(eff)}
-                  />
-                ))}
-              </div>
-            </div>
-          )}
-          <div className="grid">
-            <input
-              type="text"
-              placeholder="Search models…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              className="w-full h-8 px-3 border-0 border-b border-line-soft bg-transparent text-sm text-ink outline-none placeholder:text-muted"
-              autoFocus
+          <span className="composer-model-label min-w-0 truncate font-mono text-xs text-ink-soft">
+            {buttonLabel ?? shortModelLabel(currentModel)}
+          </span>
+          <Combobox.Icon className="shrink-0 text-faint">
+            <ChevronDown
+              size={ICON.SM}
+              strokeWidth={2}
+              className="transition-transform duration-check ease-out group-data-[popup-open]:rotate-180"
             />
-            <div className="relative max-h-[260px] overflow-y-auto scroll-thin py-1">
-              {filteredGroups.length === 0 && (
-                <div className="px-3 py-2 text-sm text-muted italic">No matches.</div>
+          </Combobox.Icon>
+        </Combobox.Trigger>
+
+        <Combobox.Portal>
+          <Combobox.Positioner side={side} align={align} sideOffset={6} className="z-[var(--z-popover)] outline-none">
+            <Combobox.Popup
+              aria-label="Choose model"
+              className={clsx(
+                "surface-panel surface-popover w-[320px] max-w-[var(--available-width)] origin-[var(--transform-origin)] overflow-hidden outline-none transition-[transform,opacity] duration-palette ease-out data-starting-style:scale-[0.98] data-starting-style:opacity-0 data-ending-style:scale-[0.98] data-ending-style:opacity-0",
+                side === "top"
+                  ? "data-starting-style:translate-y-1"
+                  : "data-starting-style:-translate-y-1",
               )}
-              {filteredGroups.map((g) => (
-                <div key={g.provider}>
-                  {groups.length > 1 && (
-                    <Caption as="div" className="px-3 pt-2 pb-1 select-none">
-                      {PROVIDER_LABELS[g.provider] ?? g.provider}
-                    </Caption>
-                  )}
-                  {g.models.map((m) => {
-                    const isCurrent = m === currentModel;
-                    const savedEffort = modelReasoningEfforts[m];
-                    return (
-                      <button
-                        key={m}
-                        type="button"
-                        onClick={() => {
-                          if (m !== currentModel) onSelectModel(m);
-                          setQuery("");
-                        }}
-                        data-active={isCurrent ? "true" : undefined}
-                        className="app-row w-full flex items-center gap-2 px-3 py-1.5 text-left text-sm font-mono text-ink-soft hover:bg-fill-hover focus-visible:bg-fill-hover"
-                      >
-                        <span className="grid place-items-center w-3 h-3 shrink-0">
-                          {isCurrent && <Check size={ICON.SM} strokeWidth={2.4} className="text-accent" />}
-                        </span>
-                        <span className="min-w-0 flex-1 truncate">{m}</span>
-                        {savedEffort && (
-                          <span className="shrink-0 text-xs font-sans text-muted">
-                            {savedEffort}
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              ))}
-            </div>
-          </div>
-        </motion.div>
-          )}
-        </AnimatePresence>,
-        document.body
+            >
+              <div className="mx-2 mt-2 mb-1 flex h-8 items-center gap-2 rounded-full bg-surface-soft px-2.5 text-faint transition-[background-color,box-shadow] duration-check ease-out focus-within:bg-surface-sunken focus-within:shadow-[0_0_0_2px_var(--color-accent-soft)]">
+                <Search size={ICON.SM} className="shrink-0" aria-hidden="true" />
+                <Combobox.Input
+                  placeholder="Search models…"
+                  className="min-w-0 flex-1 border-0 bg-transparent text-sm text-ink outline-none placeholder:text-muted"
+                />
+              </div>
+              <Combobox.Empty className="px-3 py-3 text-sm text-muted italic">
+                No matches.
+              </Combobox.Empty>
+              <Combobox.List className="relative max-h-[260px] overflow-y-auto scroll-thin p-1 outline-none data-empty:p-0">
+                {(group: { value: string; items: string[] }) => (
+                  <Combobox.Group key={group.value} items={group.items} className="pb-1 last:pb-0">
+                    {groups.length > 1 && (
+                      <Combobox.GroupLabel className="px-2.5 pb-1 pt-2 font-mono text-[11px] font-medium uppercase tracking-[0.06em] text-faint select-none">
+                        {group.value}
+                      </Combobox.GroupLabel>
+                    )}
+                    <Combobox.Collection>
+                      {(model: string) => (
+                        <Combobox.Item
+                          key={model}
+                          value={model}
+                          className="relative flex min-h-8 cursor-default items-center gap-2 rounded-md py-1.5 pl-2 pr-8 font-mono text-sm text-ink-soft outline-none select-none data-highlighted:bg-fill-hover data-highlighted:text-ink data-selected:bg-fill-selected data-selected:text-ink"
+                        >
+                          <span className="min-w-0 flex-1 truncate">{model}</span>
+                          <Combobox.ItemIndicator className="absolute right-2 grid size-4 place-items-center text-ink">
+                            <Check size={ICON.SM} strokeWidth={2.4} />
+                          </Combobox.ItemIndicator>
+                        </Combobox.Item>
+                      )}
+                    </Combobox.Collection>
+                  </Combobox.Group>
+                )}
+              </Combobox.List>
+            </Combobox.Popup>
+          </Combobox.Positioner>
+        </Combobox.Portal>
+      </Combobox.Root>
+
+      {efforts.length > 0 && (
+        <ReasoningMenu
+          currentEffort={currentEffort}
+          efforts={efforts}
+          disabled={disabled}
+          side={side}
+          align={align}
+          uniform={uniformControls}
+          onSelect={onSelectEffort}
+        />
       )}
     </div>
   );
 }
 
-/** Combined model + reasoning chip used at the right edge of the composer. */
+function ReasoningMenu({
+  currentEffort,
+  efforts,
+  disabled,
+  side,
+  align,
+  uniform,
+  onSelect,
+}: {
+  currentEffort: string | null;
+  efforts: string[];
+  disabled: boolean;
+  side: "top" | "bottom";
+  align: "start" | "end";
+  uniform: boolean;
+  onSelect: (effort: string | null) => void;
+}) {
+  const value = currentEffort ?? "off";
+
+  return (
+    <Menu.Root>
+      <Menu.Trigger
+        disabled={disabled}
+        aria-label={`Reasoning effort: ${value}`}
+        title={`Reasoning effort: ${value}`}
+        className={clsx(
+          "inline-flex h-7 shrink-0 items-center gap-1 rounded-full px-2 text-xs font-medium capitalize tracking-[-0.005em] text-muted outline-none select-none",
+          "transition-[background-color,color,scale,box-shadow] duration-check ease-out active:scale-[0.97] hover:bg-surface-soft hover:text-ink data-popup-open:bg-surface-soft data-popup-open:text-ink focus-visible:shadow-[0_0_0_3px_var(--color-accent-soft)]",
+          uniform && "w-full justify-between",
+          disabled && "opacity-60",
+        )}
+      >
+        {value}
+        <ChevronDown size={ICON.SM} strokeWidth={2} className="text-faint" />
+      </Menu.Trigger>
+      <Menu.Portal>
+        <Menu.Positioner side={side} align={align} sideOffset={6} className="z-[var(--z-popover)] outline-none">
+          <Menu.Popup
+            className={clsx(
+              "surface-panel surface-popover min-w-32 origin-[var(--transform-origin)] p-1 outline-none transition-[transform,opacity] duration-palette ease-out data-starting-style:scale-[0.98] data-starting-style:opacity-0 data-ending-style:scale-[0.98] data-ending-style:opacity-0",
+              side === "top"
+                ? "data-starting-style:translate-y-1"
+                : "data-starting-style:-translate-y-1",
+            )}
+          >
+            <Menu.RadioGroup
+              value={value}
+              onValueChange={(next) => onSelect(next === "off" ? null : next)}
+            >
+              {["off", ...efforts].map((effort) => (
+                <Menu.RadioItem
+                  key={effort}
+                  value={effort}
+                  className="relative flex min-h-8 cursor-default items-center rounded-md py-1.5 pl-2 pr-8 text-sm capitalize text-ink-soft outline-none select-none data-highlighted:bg-fill-hover data-highlighted:text-ink"
+                >
+                  {effort}
+                  <Menu.RadioItemIndicator className="absolute right-2 grid size-4 place-items-center text-ink">
+                    <Check size={ICON.SM} strokeWidth={2.4} />
+                  </Menu.RadioItemIndicator>
+                </Menu.RadioItem>
+              ))}
+            </Menu.RadioGroup>
+          </Menu.Popup>
+        </Menu.Positioner>
+      </Menu.Portal>
+    </Menu.Root>
+  );
+}
+
+/** Adjacent model combobox + reasoning menu used at the right edge of the composer. */
 export function ModelReasoningChip() {
   const cfg = useStore((s) => s.serverConfig);
   const models = useStore((s) => s.serverModels);
@@ -282,37 +300,11 @@ export function ModelReasoningChip() {
       efforts={efforts}
       groups={groups}
       disabled={busy || !models || !currentSessionId}
-      modelReasoningEfforts={modelReasoningEfforts}
       placement="above-right"
       onSelectModel={(model) => void selectModel(model)}
       onSelectEffort={(effort) =>
         void apply({ reasoning_model: currentModel, reasoning_effort: effort })
       }
     />
-  );
-}
-
-function EffortPill({
-  label,
-  active,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={clsx(
-        "h-6 px-2 rounded-full text-xs font-medium tracking-[-0.005em] transition-[background-color,color,scale] duration-check ease-out select-none capitalize active:scale-[0.97]",
-        active
-          ? "bg-accent-soft text-accent-strong"
-          : "text-muted hover:bg-surface-soft hover:text-ink",
-      )}
-    >
-      {label}
-    </button>
   );
 }

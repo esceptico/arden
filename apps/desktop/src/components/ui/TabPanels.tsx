@@ -38,7 +38,7 @@ export function TabPanels({
   children: ReactNode;
 }) {
   return (
-    <AnimatePresence mode="wait" custom={direction} initial={false}>
+    <AnimatePresence mode="popLayout" custom={direction} initial={false}>
       <motion.div
         key={value}
         custom={direction}

@@ -1,5 +1,5 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
-import { Calendar, List, Text } from "lucide-react";
+import { Calendar, List, Text } from "@/components/icons";
 import { Button } from "@/components/ui/Button";
 import { Pill } from "@/components/ui/Pill";
 
@@ -65,15 +65,14 @@ export function Properties({ frontmatter }: { frontmatter?: Record<string, FmVal
   );
   if (entries.length === 0) return null;
   return (
-    <div className="mb-5">
-      <div className="mb-2.5 text-sm font-medium text-ink">Properties</div>
-      <dl className="flex flex-col gap-2">
+    <div>
+      <dl className="flex flex-col gap-1.5">
         {entries.map(([key, value]) => {
           const isList = Array.isArray(value);
           const isDate = !isList && _DATE_KEYS.has(key) && typeof value === "string" && /^\d{4}-\d{2}-\d{2}/.test(value);
           const Icon = isList ? List : isDate ? Calendar : Text;
           return (
-            <div key={key} className="grid grid-cols-[110px_minmax(0,1fr)] items-start gap-2 text-sm">
+            <div key={key} className="grid grid-cols-[96px_minmax(0,1fr)] items-start gap-2 text-xs">
               <dt className="flex items-center gap-1.5 pt-0.5 text-muted">
                 <Icon className="h-3.5 w-3.5 shrink-0 text-faint" strokeWidth={2} />
                 <span className="truncate">{humanizeKey(key)}</span>

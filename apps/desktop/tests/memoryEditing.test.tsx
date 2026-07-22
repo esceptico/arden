@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import type { AppConfig } from "@/api/core";
 import { ArtifactMemoryView } from "@/features/memory/components/ArtifactMemoryView";
 import { clearDrafts, draftKey, getDraft, setDraft } from "@/features/memory/lib/draftStore";
+import { splitFrontmatter } from "@/features/memory/lib/format";
 import { useStore } from "@/stores";
 
 const config: AppConfig = { serverUrl: "http://localhost:6877", apiKey: "test-key" };
@@ -67,28 +68,6 @@ function rawEvent(overrides: Record<string, unknown> = {}) {
     analysis: null, reconciles_event_id: null, review_operations: [], questions: [], review_event_id: null,
     observation_id: null, source_canonical_revision: null, ...overrides,
   };
-}
-
-function externalReview(id: string, revision: string, question: string, sequence: number, path = "topics/a.md") {
-  return rawEvent({
-    id,
-    sequence,
-    path,
-    actor: "external:filesystem",
-    origin: "external",
-    reconciliation: "needs_review",
-    result_revision: revision,
-    review_operations: [{ op: "ASK", question, target_ids: [`record-${id}`] }],
-    questions: [{ id: "operation:0", operation_index: 0, question }],
-    analysis: {
-      path,
-      before: ["Old source bytes."],
-      after: [`External ${revision}.`],
-      changed_before: ["Old source bytes."],
-      changed_after: [`External ${revision}.`],
-      patch: "patch",
-    },
-  });
 }
 
 function deferred<T = void>() {
@@ -198,6 +177,12 @@ function installBridge(options: {
 }
 
 function setup() {
+  // Inspector now defaults open (persisted); these tests exercise editing
+  // and review flows, so seed it closed to keep prior request counts.
+  localStorage.setItem("ntrp.desktop.memory.inspectorOpen", "false");
+  // Initial selection prefers the persisted last path (then index.md); pin it
+  // to the note under test so the workspace opens on topics/a.md.
+  localStorage.setItem("ntrp.desktop.memory.lastPath", "topics/a.md");
   const host = document.createElement("div");
   host.style.height = "800px";
   document.body.append(host);
@@ -228,13 +213,6 @@ async function changeDraft(textarea: HTMLTextAreaElement, value: string) {
   });
 }
 
-async function changeInput(input: HTMLInputElement, value: string) {
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, value);
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-}
-
 afterEach(async () => {
   for (const root of roots) await act(async () => root.unmount());
   roots.clear();
@@ -242,22 +220,43 @@ afterEach(async () => {
   window.ntrpDesktop = originalDesktop;
   useStore.setState({ memoryVaultVersion: originalVaultVersion, memoryVaultChanges: [] });
   document.body.replaceChildren();
+  // happy-dom localStorage is shared across test files in one bun invocation.
+  localStorage.removeItem("ntrp.desktop.memory.inspectorOpen");
+  localStorage.removeItem("ntrp.desktop.memory.lastPath");
 });
 
-test("Cmd+E edits exact source bytes and Cmd+S sends an exact non-mutating preview", async () => {
+test("Cmd+E edits the page body and Cmd+S previews the exact recomposed source bytes", async () => {
   const bridge = installBridge();
+  // Frontmatter is withheld from the textarea but must round-trip byte-exactly
+  // into the preview payload.
+  const bytes = "---\ntitle: A\n---\n# A\n\nOld source bytes.\n";
+  bridge.update(note("note-r1", { editable_content: bytes }));
   const { host } = await renderView();
-  await shortcut("e");
+  const edit = host.querySelector<HTMLButtonElement>('button[aria-label="Edit memory note"]')!;
+  edit.focus();
+  await shortcut("e", edit);
+  expect(host.querySelector('[data-memory-editor-mode="source"]')).not.toBeNull();
   const textarea = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Markdown source for topics/a.md"]')!;
+  expect(textarea.value).toBe(splitFrontmatter(bytes).body);
   expect(textarea.value).toBe("# A\n\nOld source bytes.\n");
   await changeDraft(textarea, "# A\n\nDraft source bytes.\n");
-  expect(host.textContent).toContain("Unsaved draft");
+  expect(host.textContent).toContain("unsaved draft");
   await shortcut("s", textarea);
 
   const preview = bridge.requests.find((request) => request.path.endsWith("/preview"));
-  expect(preview?.body).toEqual({ path: "topics/a.md", base_revision: "note-r1", content: "# A\n\nDraft source bytes.\n", actor: "user:desktop" });
+  expect(preview?.body).toEqual({ path: "topics/a.md", base_revision: "note-r1", content: "---\ntitle: A\n---\n# A\n\nDraft source bytes.\n", actor: "user:desktop" });
   expect(host.querySelector('[data-diff-review]')).not.toBeNull();
   expect(bridge.requests.some((request) => request.path.endsWith("/apply"))).toBe(false);
+});
+
+test("the edit button opens the Markdown source editor over the exact page body", async () => {
+  installBridge();
+  const { host } = await renderView();
+  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Edit memory note"]')?.click());
+  await settle(200);
+  expect(host.querySelector('[data-memory-editor-mode="source"]')).not.toBeNull();
+  expect(host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Markdown source for topics/a.md"]')?.value)
+    .toBe(splitFrontmatter("# A\n\nOld source bytes.\n").body);
 });
 
 test("a preview response is discarded when the draft changes in flight", async () => {
@@ -306,18 +305,24 @@ test("read-only pages explain their boundary and never enter edit mode", async (
   const { host } = await renderView();
   await shortcut("e");
   expect(host.querySelector("textarea")).toBeNull();
-  expect(host.textContent).toContain("Engine-owned page");
+  // The boundary explanation now lives on the disabled edit toggle's tooltip.
+  const edit = host.querySelector<HTMLButtonElement>('button[aria-label="Edit memory note"]')!;
+  expect(edit.disabled).toBe(true);
+  expect(edit.title).toBe("Engine-owned page");
 });
 
 test("edit shortcuts do not hijack unrelated focused controls", async () => {
   installBridge();
   const { host } = await renderView();
-  const search = host.querySelector<HTMLInputElement>('input[aria-label="Search memory notes…"]')!;
-  search.focus();
-  await shortcut("e", search);
+  // The rail's create-note input is the focused text control under test
+  // (the old rail search input is now a quick-switcher button).
+  await act(async () => host.querySelector<HTMLButtonElement>('button[title="New note"]')?.click());
+  const createInput = host.querySelector<HTMLInputElement>('input[aria-label="New note path"]')!;
+  createInput.focus();
+  await shortcut("e", createInput);
   expect(host.querySelector("textarea")).toBeNull();
-  expect(document.activeElement).toBe(search);
-  await shortcut("s", search);
+  expect(document.activeElement).toBe(createInput);
+  await shortcut("s", createInput);
   expect(host.querySelector('[data-memory-edit-review]')).toBeNull();
 });
 
@@ -486,60 +491,22 @@ test("SSE refreshes a clean page but preserves a dirty draft and opens conflict"
   expect(host.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
 });
 
-test("external review resolves only memory decisions and never reapplies page bytes", async () => {
-  useStore.setState({ memoryVaultVersion: 0 });
-  const external = rawEvent({
-    id: "external-1", actor: "external:filesystem", origin: "external", reconciliation: "needs_review",
-    result_revision: "note-r2", review_operations: [{ op: "ASK", question: "Forget the old memory?", target_ids: ["record-old"] }],
-    questions: [{ id: "external-1:review-operation:0", operation_index: 0, question: "Forget the old memory?" }],
-    analysis: { path: "topics/a.md", before: ["Old source bytes."], after: ["External source bytes."], changed_before: ["Old source bytes."], changed_after: ["External source bytes."], patch: "patch" },
-  });
-  const bridge = installBridge({ event: external });
+
+test("review-required SSE refreshes the page without opening external review", async () => {
+  useStore.setState({ memoryVaultVersion: 0, memoryVaultChanges: [] });
+  const bridge = installBridge();
   bridge.update(note("note-r2", { content: "Rendered external update", editable_content: "# A\n\nExternal source bytes.\n" }));
   const { host } = await renderView();
   await act(async () => useStore.getState().memoryVaultChanged({
-    paths: ["topics/a.md"], revision: "note-r2", reviewRequired: true, seq: 93,
+    paths: ["topics/a.md"], revision: "note-r2", reviewRequired: true, seq: 92,
   }));
   await settle(280);
-  expect(host.querySelector<HTMLButtonElement>('button[aria-label="Resolve memory effects"]')?.disabled).toBe(true);
-  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Forget memory"]')?.click());
-  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Resolve memory effects"]')?.click());
-  await settle();
-  expect(bridge.requests.find((request) => request.path.endsWith("/retry"))?.body).toEqual({
-    event_id: "external-1",
-    decisions: { "external-1:review-operation:0": { choice: "forget_memory", target_ids: ["record-old"] } },
-  });
-  expect(bridge.requests.filter((request) => request.path.endsWith("/preview") || request.path.endsWith("/apply"))).toHaveLength(0);
-});
 
-test("dirty review-required SSE prioritizes conflict and queues external decisions", async () => {
-  useStore.setState({ memoryVaultVersion: 0, memoryVaultChanges: [] });
-  const external = rawEvent({
-    id: "external-dirty", actor: "external:filesystem", origin: "external", reconciliation: "needs_review",
-    result_revision: "note-r2", review_operations: [{ op: "ASK", question: "Forget it?", target_ids: ["record-old"] }],
-    questions: [{ id: "operation:0", operation_index: 0, question: "Forget it?" }],
-    analysis: { path: "topics/a.md", before: ["Old source bytes."], after: ["External source bytes."], changed_before: ["Old source bytes."], changed_after: ["External source bytes."], patch: "patch" },
-  });
-  const bridge = installBridge({ event: external });
-  const { host } = await renderView();
-  await shortcut("e");
-  const draft = "# A\n\nMy concurrent draft.\n";
-  await changeDraft(host.querySelector<HTMLTextAreaElement>("textarea")!, draft);
-  bridge.update(note("note-r2", { content: "Rendered external", editable_content: "# A\n\nExternal source bytes.\n" }));
-  await act(async () => useStore.getState().memoryVaultChanged({
-    paths: ["topics/a.md"], revision: "note-r2", reviewRequired: true, seq: 94,
-  }));
-  await settle(320);
-
-  expect(host.querySelector('[aria-label="Three-way conflict for topics/a.md"]')).not.toBeNull();
   expect(host.querySelector('[aria-label="Resolve external memory effects for topics/a.md"]')).toBeNull();
-  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Back to draft"]')?.click());
-  expect(host.querySelector('[aria-label="Resolve external memory effects for topics/a.md"]')).not.toBeNull();
-  await act(async () => Array.from(host.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent === "Not now")?.click());
-  expect(host.querySelector('[aria-label="Three-way conflict for topics/a.md"]')).not.toBeNull();
-  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Back to draft"]')?.click());
-  expect(host.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
+  expect(host.textContent).toContain("Rendered external update");
+  expect(bridge.requests.some((request) => request.path.includes("/history"))).toBe(false);
 });
+
 
 test("SSE for an unrelated path does not refresh or interrupt the selected draft", async () => {
   useStore.setState({ memoryVaultVersion: 0, memoryVaultChanges: [] });
@@ -576,164 +543,6 @@ test("an unrelated latest SSE frame cannot hide an earlier selected-path change"
   expect(host.textContent).toContain("Selected event reached the note");
 });
 
-test("multiple external review events remain FIFO and resolving one preserves the next", async () => {
-  useStore.setState({ memoryVaultVersion: 0, memoryVaultChanges: [] });
-  const first = externalReview("external-first", "note-r2", "First external decision?", 20);
-  const second = externalReview("external-second", "note-r3", "Second external decision?", 21);
-  const retried: string[] = [];
-  const bridge = installBridge({
-    events: [second, first],
-    onRetry: (body) => {
-      retried.push(String(body.event_id));
-      return ok({
-        event: rawEvent({ id: `resolved-${body.event_id}`, reconciles_event_id: body.event_id, result_revision: body.event_id === "external-first" ? "note-r2" : "note-r3" }),
-        revision: body.event_id === "external-first" ? "note-r2" : "note-r3",
-      });
-    },
-  });
-  bridge.update(note("note-r3", { content: "Latest external", editable_content: "# A\n\nLatest external.\n" }));
-  const { host } = await renderView();
-  await act(async () => {
-    useStore.getState().memoryVaultChanged({ paths: ["topics/a.md"], revision: "note-r2", reviewRequired: true, seq: 511 });
-    useStore.getState().memoryVaultChanged({ paths: ["topics/a.md"], revision: "note-r3", reviewRequired: true, seq: 512 });
-  });
-  await settle(340);
-  expect(host.textContent).toContain("First external decision?");
-  expect(host.textContent).not.toContain("Second external decision?");
-
-  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Note only"]')?.click());
-  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Resolve memory effects"]')?.click());
-  await settle();
-  expect(retried).toEqual(["external-first"]);
-  expect(host.textContent).toContain("Second external decision?");
-});
-
-test("Not now pauses the FIFO head until real path navigation", async () => {
-  useStore.setState({ memoryVaultVersion: 0, memoryVaultChanges: [] });
-  const first = externalReview("paused-first", "note-r2", "Paused first decision?", 22);
-  const second = externalReview("paused-second", "note-r3", "Paused second decision?", 23);
-  const bridge = installBridge({ events: [second, first], secondNote: noteB() });
-  bridge.update(note("note-r3", { content: "Latest external", editable_content: "# A\n\nLatest external.\n" }));
-  const { host } = await renderView();
-  await act(async () => {
-    useStore.getState().memoryVaultChanged({ paths: ["topics/a.md"], revision: "note-r2", reviewRequired: true, seq: 513 });
-    useStore.getState().memoryVaultChanged({ paths: ["topics/a.md"], revision: "note-r3", reviewRequired: true, seq: 514 });
-  });
-  await settle(340);
-  expect(host.textContent).toContain("Paused first decision?");
-
-  await act(async () => Array.from(host.querySelectorAll<HTMLButtonElement>("button"))
-    .find((button) => button.textContent === "Not now")?.click());
-  await settle();
-  expect(host.textContent).not.toContain("Paused first decision?");
-  expect(host.textContent).not.toContain("Paused second decision?");
-
-  await shortcut("e");
-  const textarea = host.querySelector<HTMLTextAreaElement>("textarea")!;
-  expect(textarea).not.toBeNull();
-  expect(host.textContent).not.toContain("Paused first decision?");
-  await shortcut("e", textarea);
-  expect(host.textContent).not.toContain("Paused first decision?");
-  expect(host.textContent).not.toContain("Paused second decision?");
-
-  await act(async () => host.querySelector<HTMLButtonElement>('[data-memory-entry="topics/b.md"]')?.click());
-  await settle(80);
-  await act(async () => host.querySelector<HTMLButtonElement>('[data-memory-entry="topics/a.md"]')?.click());
-  await settle(100);
-  expect(host.textContent).toContain("Paused first decision?");
-  expect(host.textContent).not.toContain("Paused second decision?");
-});
-
-test("same-path history requests drain in sequence instead of racing", async () => {
-  useStore.setState({ memoryVaultVersion: 0, memoryVaultChanges: [] });
-  const firstGate = deferred();
-  const first = externalReview("history-first", "note-r2", "History first?", 30);
-  const second = externalReview("history-second", "note-r3", "History second?", 31);
-  let historyCalls = 0;
-  const bridge = installBridge({ onHistory: async (call) => {
-    historyCalls = call;
-    if (call === 1) {
-      await firstGate.promise;
-      return ok({ events: [first], total: 1, limit: 100, next_before_sequence: null });
-    }
-    return ok({ events: [second], total: 1, limit: 100, next_before_sequence: null });
-  } });
-  bridge.update(note("note-r3", { content: "Latest external", editable_content: "# A\n\nLatest external.\n" }));
-  await renderView();
-  await act(async () => useStore.getState().memoryVaultChanged({
-    paths: ["topics/a.md"], revision: "note-r2", reviewRequired: true, seq: 521,
-  }));
-  await settle(30);
-  await act(async () => useStore.getState().memoryVaultChanged({
-    paths: ["topics/a.md"], revision: "note-r3", reviewRequired: true, seq: 522,
-  }));
-  await settle(30);
-  expect(historyCalls).toBe(1);
-  await act(async () => firstGate.resolve());
-  await settle(160);
-  expect(historyCalls).toBe(2);
-});
-
-test("an in-flight A review survives switching to B and returns only on A", async () => {
-  useStore.setState({ memoryVaultVersion: 0, memoryVaultChanges: [] });
-  const historyGate = deferred();
-  const eventA = externalReview("switch-a", "note-r2", "Review A after returning?", 60);
-  const bridge = installBridge({
-    secondNote: noteB(),
-    onHistory: async (_call, path) => {
-      if (path === "topics/a.md") await historyGate.promise;
-      return ok({ events: path === "topics/a.md" ? [eventA] : [], total: path === "topics/a.md" ? 1 : 0, limit: 100, next_before_sequence: null });
-    },
-  });
-  bridge.update(note("note-r2", { content: "A externally changed", editable_content: "# A\n\nA externally changed.\n" }));
-  const { host } = await renderView();
-  await act(async () => useStore.getState().memoryVaultChanged({
-    paths: ["topics/a.md"], revision: "note-r2", reviewRequired: true, seq: 601,
-  }));
-  await settle(40);
-  await act(async () => host.querySelector<HTMLButtonElement>('[data-memory-entry="topics/b.md"]')?.click());
-  await settle(40);
-  await act(async () => historyGate.resolve());
-  await settle(240);
-
-  expect(host.querySelector('[aria-label="Resolve external memory effects for topics/a.md"]')).toBeNull();
-  expect(host.textContent).toContain("Rendered B prose");
-  await act(async () => host.querySelector<HTMLButtonElement>('[data-memory-entry="topics/a.md"]')?.click());
-  await settle(120);
-  expect(host.textContent).toContain("Review A after returning?");
-});
-
-test("external reviews stay path-scoped and exact across A-B-A navigation", async () => {
-  useStore.setState({ memoryVaultVersion: 0, memoryVaultChanges: [] });
-  const eventA = externalReview("scope-a", "note-r2", "Exact A review?", 70);
-  const eventB = externalReview("scope-b", "note-b-r2", "Exact B review?", 71, "topics/b.md");
-  const bridge = installBridge({
-    secondNote: noteB("note-b-r2", { content: "B externally changed", editable_content: "# B\n\nB externally changed.\n" }),
-    onHistory: (_call, path) => ok({
-      events: path === "topics/a.md" ? [eventA] : path === "topics/b.md" ? [eventB] : [],
-      total: 1,
-      limit: 100,
-      next_before_sequence: null,
-    }),
-  });
-  bridge.update(note("note-r2", { content: "A externally changed", editable_content: "# A\n\nA externally changed.\n" }));
-  const { host } = await renderView();
-  await act(async () => useStore.getState().memoryVaultChanged({ paths: ["topics/a.md"], revision: "note-r2", reviewRequired: true, seq: 611 }));
-  await settle(220);
-  expect(host.textContent).toContain("Exact A review?");
-
-  await act(async () => host.querySelector<HTMLButtonElement>('[data-memory-entry="topics/b.md"]')?.click());
-  await settle(100);
-  expect(host.textContent).not.toContain("Exact A review?");
-  await act(async () => useStore.getState().memoryVaultChanged({ paths: ["topics/b.md"], revision: "note-b-r2", reviewRequired: true, seq: 612 }));
-  await settle(220);
-  expect(host.textContent).toContain("Exact B review?");
-
-  await act(async () => host.querySelector<HTMLButtonElement>('[data-memory-entry="topics/a.md"]')?.click());
-  await settle(100);
-  expect(host.textContent).toContain("Exact A review?");
-  expect(bridge.requests.filter((request) => request.path.endsWith("/retry"))).toHaveLength(0);
-});
 
 test("apply centrally locks navigation and still commits its exact draft", async () => {
   const applyGate = deferred();
@@ -791,7 +600,7 @@ test("a committed apply after unmount only compare-clears and never reloads", as
   expect(bridge.requests.filter((request) => request.path === "/admin/memory/artifacts")).toHaveLength(readsBeforeCommit);
 });
 
-test("an initial summary result cannot launch index reads after unmount", async () => {
+test("an initial summary result cannot launch note reads after unmount", async () => {
   const listGate = deferred<BridgeResponse>();
   const bridge = installBridge({ onList: () => listGate.promise });
   const view = setup();
@@ -799,142 +608,38 @@ test("an initial summary result cannot launch index reads after unmount", async 
   await settle(20);
   await act(async () => view.root.unmount());
   roots.delete(view.root);
-  const indexReads = bridge.requests.filter((request) => request.path === "/admin/memory/artifacts/index.md").length;
+  const requestsBefore = bridge.requests.length;
   await act(async () => listGate.resolve(ok({ artifacts: [index, note()] })));
   await settle(80);
-  expect(bridge.requests.filter((request) => request.path === "/admin/memory/artifacts/index.md")).toHaveLength(indexReads);
+  expect(bridge.requests).toHaveLength(requestsBefore);
 });
 
-test("a search result cannot launch index reads after unmount", async () => {
-  const searchGate = deferred<BridgeResponse>();
-  const bridge = installBridge({
-    onList: (query) => query ? searchGate.promise : ok({ artifacts: [index, note()] }),
-  });
-  const view = await renderView();
-  await changeInput(view.host.querySelector<HTMLInputElement>('input[aria-label="Search memory notes…"]')!, "changed");
-  await settle(220);
-  expect(bridge.requests.some((request) => request.path.includes("q=changed"))).toBe(true);
-  await act(async () => view.root.unmount());
-  roots.delete(view.root);
-  const indexReads = bridge.requests.filter((request) => request.path === "/admin/memory/artifacts/index.md").length;
-  await act(async () => searchGate.resolve(ok({ artifacts: [index, note("search-r2")] })));
-  await settle(100);
-  expect(bridge.requests.filter((request) => request.path === "/admin/memory/artifacts/index.md")).toHaveLength(indexReads);
-});
-
-test("a rebuild result cannot launch index reads after unmount", async () => {
+test("a rebuild result cannot launch note reads after unmount", async () => {
   const rebuildGate = deferred<BridgeResponse>();
-  const bridge = installBridge({ onRebuild: () => rebuildGate.promise });
+  const bridge = installBridge({ onList: () => ok({ artifacts: [] }), onRebuild: () => rebuildGate.promise });
   const view = await renderView();
-  await act(async () => view.host.querySelector<HTMLButtonElement>('button[aria-label="Reload memory notes"]')?.click());
+  // Rebuild is reachable from the empty rail's Refresh action.
+  await act(async () => Array.from(view.host.querySelectorAll<HTMLButtonElement>("button"))
+    .find((button) => button.textContent?.trim() === "Refresh")?.click());
   await settle(20);
   expect(bridge.requests.some((request) => request.path === "/admin/memory/artifacts/rebuild")).toBe(true);
   await act(async () => view.root.unmount());
   roots.delete(view.root);
-  const indexReads = bridge.requests.filter((request) => request.path === "/admin/memory/artifacts/index.md").length;
+  const requestsBefore = bridge.requests.length;
   await act(async () => rebuildGate.resolve(ok({ artifacts: [index, note("rebuild-r2")] })));
   await settle(100);
-  expect(bridge.requests.filter((request) => request.path === "/admin/memory/artifacts/index.md")).toHaveLength(indexReads);
+  expect(bridge.requests).toHaveLength(requestsBefore);
 });
 
-test("consecutive same-path reviews refocus and announce their exact event ids", async () => {
-  useStore.setState({ memoryVaultVersion: 0, memoryVaultChanges: [] });
-  const first = externalReview("announce-first", "note-r2", "First announced review?", 80);
-  const second = externalReview("announce-second", "note-r3", "Second announced review?", 81);
-  const bridge = installBridge({ events: [second, first] });
-  bridge.update(note("note-r3", { content: "Latest A", editable_content: "# A\n\nLatest A.\n" }));
-  const { host } = await renderView();
-  await act(async () => {
-    useStore.getState().memoryVaultChanged({ paths: ["topics/a.md"], revision: "note-r2", reviewRequired: true, seq: 621 });
-    useStore.getState().memoryVaultChanged({ paths: ["topics/a.md"], revision: "note-r3", reviewRequired: true, seq: 622 });
-  });
-  await settle(300);
-  let review = host.querySelector<HTMLElement>('[data-memory-edit-review]')!;
-  expect(review.querySelector('[role="status"]')?.textContent).toContain("announce-first");
-  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Note only"]')?.click());
-  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Resolve memory effects"]')?.click());
-  await settle(100);
 
-  review = host.querySelector<HTMLElement>('[data-memory-edit-review]')!;
-  expect(review.textContent).toContain("Second announced review?");
-  expect(review.querySelector('[role="status"]')?.textContent).toContain("announce-second");
-  expect(document.activeElement).toBe(review);
-  expect(host.querySelector<HTMLButtonElement>('[aria-label="Back in memory history"]')?.title ?? "").not.toContain("⌘");
-});
-
-test("local apply preserves an external review that arrives before its response", async () => {
-  useStore.setState({ memoryVaultVersion: 0, memoryVaultChanges: [] });
-  const applyGate = deferred();
-  const external = externalReview("during-apply", "note-r2", "Arrived during apply?", 40);
-  const bridge = installBridge({
-    onApply: async () => {
-      await applyGate.promise;
-      return ok({ event: rawEvent(), revision: "note-r2" });
-    },
-  });
-  const { host } = await renderView();
-  await shortcut("e");
-  await changeDraft(host.querySelector<HTMLTextAreaElement>("textarea")!, "# A\n\nLocal candidate.\n");
-  await shortcut("s", host.querySelector<HTMLTextAreaElement>("textarea")!);
-  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Note only"]')?.click());
-  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Apply changes"]')?.click());
-
-  bridge.setHistoryEvents([external]);
-  bridge.update(note("note-r2", { content: "External current", editable_content: "# A\n\nExternal current.\n" }));
-  await act(async () => useStore.getState().memoryVaultChanged({
-    paths: ["topics/a.md"], revision: "note-r2", reviewRequired: true, seq: 531,
-  }));
-  await settle(100);
-  await act(async () => applyGate.resolve());
-  await settle(300);
-  expect(host.textContent).toContain("Arrived during apply?");
-});
-
-test("external Resolve triggers a real inspector history refresh", async () => {
-  useStore.setState({ memoryVaultVersion: 0, memoryVaultChanges: [] });
-  const external = externalReview("inspector-review", "note-r2", "Inspector decision?", 50);
-  let resolved = false;
-  const bridge = installBridge({
-    events: [external],
-    onHistory: () => ok({
-      events: resolved ? [rawEvent({ id: "inspector-resolved", reconciles_event_id: "inspector-review", result_revision: "note-r2" }), external] : [external],
-      total: resolved ? 2 : 1,
-      limit: 100,
-      next_before_sequence: null,
-    }),
-    onRetry: (body) => {
-      resolved = true;
-      return ok({ event: rawEvent({ id: "inspector-resolved", reconciles_event_id: body.event_id, result_revision: "note-r2" }), revision: "note-r2" });
-    },
-  });
-  bridge.update(note("note-r2", { content: "External current", editable_content: "# A\n\nExternal current.\n" }));
-  const { host } = await renderView();
-  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Open memory trust inspector"]')?.click());
-  await settle();
-  await act(async () => useStore.getState().memoryVaultChanged({
-    paths: ["topics/a.md"], revision: "note-r2", reviewRequired: true, seq: 541,
-  }));
-  await settle(300);
-  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Note only"]')?.click());
-  const beforeResolve = bridge.requests.filter((request) => request.path.startsWith("/admin/memory/page-edits/history")).length;
-  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Resolve memory effects"]')?.click());
-  await settle(200);
-
-  const historyRequests = bridge.requests.filter((request) => request.path.startsWith("/admin/memory/page-edits/history"));
-  expect(historyRequests.length).toBeGreaterThan(beforeResolve);
-});
-
-test("editor and review expose keyboard, theme, responsive, reduced-motion, and long-content evidence", async () => {
+test("editor and review expose keyboard, responsive, reduced-motion, and long-content evidence", async () => {
   installBridge();
-  document.documentElement.classList.add("dark");
   const { host } = await renderView();
   await shortcut("e");
   const textarea = host.querySelector<HTMLTextAreaElement>("textarea")!;
   expect(document.activeElement === textarea).toBe(true);
   await changeDraft(textarea, Array.from({ length: 320 }, (_, line) => `line ${line}`).join("\n"));
   const editor = host.querySelector<HTMLElement>('[data-memory-editor]')!;
-  expect(editor.getAttribute("data-theme-ready")).toBe("true");
-  expect(editor.querySelector("header")?.className).toContain("flex-wrap");
   expect(editor.textContent).toContain("Cmd/Ctrl+S");
   expect(editor.textContent).not.toContain("⌘");
   expect(textarea.getAttribute("aria-describedby")).not.toBeNull();
@@ -947,8 +652,8 @@ test("editor and review expose keyboard, theme, responsive, reduced-motion, and 
   expect(review.querySelector('[data-diff-review] > header')?.className).toContain("flex-wrap");
   expect(review.querySelector('[data-diff-review] > footer')?.className).toContain("flex-wrap");
   await act(async () => Array.from(review.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent === "Back to edit")?.click());
+  await settle(300); // focus reclaim window
   expect(document.activeElement === host.querySelector("textarea")).toBe(true);
-  document.documentElement.classList.remove("dark");
 });
 
 test("focus moves to conflict and returns to the restored note after apply", async () => {
@@ -975,4 +680,17 @@ test("draft identity is exact path plus base revision", () => {
   expect(draftKey("topics/a.md", "r1")).not.toBe(draftKey("topics/a.md", "r2"));
   expect(getDraft("topics/a.md", "r1")).toBe("first");
   expect(getDraft("topics/a.md", "r2")).toBe("second");
+});
+
+test("draft store evicts the oldest entry once past 50 and recency survives a get", () => {
+  for (let index = 0; index < 50; index += 1) {
+    setDraft("topics/a.md", `r${index}`, `draft-${index}`);
+  }
+  // Touch r0 so it is no longer the least-recently-used entry.
+  expect(getDraft("topics/a.md", "r0")).toBe("draft-0");
+  setDraft("topics/a.md", "r50", "draft-50");
+  // r1 was the least-recently-used entry after touching r0, so it is evicted.
+  expect(getDraft("topics/a.md", "r1")).toBeNull();
+  expect(getDraft("topics/a.md", "r0")).toBe("draft-0");
+  expect(getDraft("topics/a.md", "r50")).toBe("draft-50");
 });

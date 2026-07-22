@@ -9,7 +9,7 @@ import {
   Link2,
   Mail,
   MessageSquare,
-} from "lucide-react";
+} from "@/components/icons";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ICON } from "@/lib/icons";
 import { sourceInspectorSelection } from "@/features/sources/lib/sourceInspector";

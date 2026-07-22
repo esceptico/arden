@@ -23,8 +23,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from ntrp.memory.frontmatter import QuotedStr, dump_frontmatter, parse_frontmatter, strip_frontmatter
-from ntrp.memory.page_events import page_revision
-from ntrp.memory.pages import parse_line as _parse_line
+from ntrp.memory.page_events import page_revision, parse_page_edit_events
+from ntrp.memory.pages import Page, parse_raw
 
 _logger = logging.getLogger(__name__)
 
@@ -44,8 +44,6 @@ ARTIFACT_DIR_KINDS: dict[str, str] = {
     "facts": "fact",
     "context": "topic",
     "topics": "topic",  # unified subject folder (people/products/projects/topics)
-    "entities": "topic",  # legacy — folded into topics/ (kept so leftovers still read)
-    "projects": "topic",  # legacy — folded into topics/
     "references": "source",
     "feeds": "source",  # automation-owned briefings (feeds/<slug>.md) — whole-page rewritten per run
     "insights": "topic",  # cross-domain dream outputs (OKF insights/)
@@ -55,6 +53,7 @@ ARTIFACT_DIR_KINDS: dict[str, str] = {
 ARTIFACT_DIR_ORDER = {name: i for i, name in enumerate(ARTIFACT_DIR_KINDS)}
 _OPEN_RESOURCE_SUFFIXES = {".md", ".txt"}
 _ENGINE_RESOURCE_DIRS = {"raw", ".ntrp", ".index", ".maintenance"}
+MACHINE_PAGE_DIRS = _ENGINE_RESOURCE_DIRS | {"changelog"}
 _PAGE_EDIT_INTERNAL_PREFIXES = (
     Path("raw/events"),
     Path(".ntrp/maintenance/page-edit-previews"),
@@ -86,7 +85,6 @@ _CHANGELOG_HEADER_TEMPLATE = (
     "Atomic monthly memory mutation log for {month}. "
     "Markdown is generated from DB mutations and append events; do not edit it as canonical memory.\n"
 )
-_LEGACY_CHANGELOG_RE = re.compile(r"^-\s+(\d{4})-(\d{2})")
 _CHANGELOG_MONTH_RE = re.compile(r"^changelog/(\d{4})/(\d{4}-\d{2})\.md$")
 _CHANGELOG_YEAR_RE = re.compile(r"^changelog/(\d{4})\.md$")
 _SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -148,7 +146,6 @@ _OPERATIONAL_ID_RE = re.compile(
     r"|\b[CDG][A-Z0-9]{8,}\b"
     r"|\bp\d{10,}\b"
 )
-_LEGACY_UNQUOTED_TECH_PLACEHOLDER_RE = re.compile(r"(?<!`)\[technical id\](?!`)")
 _FILE_TOKEN_RE = re.compile(
     r"(?<!\w)[A-Za-z0-9_.@+-]+\.(?:py|ts|tsx|rs|md|jsonl?|ya?ml|toml|log|sh|sql|html|css|tar|pdf|docx?)(?!\w)"
 )
@@ -171,6 +168,11 @@ def _slug(text: str | None, *, fallback: str) -> str:
 
 def now_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _stat_created_at(st: os.stat_result) -> str:
+    created = getattr(st, "st_birthtime", None) or st.st_ctime
+    return datetime.fromtimestamp(created, UTC).isoformat()
 
 
 def _trim_at_word_boundary(text: str, max_chars: int) -> str:
@@ -206,7 +208,6 @@ def _redact_changelog(text: str, *, max_chars: int) -> str:
     visible = _SOURCE_REF_RE.sub(" ", visible)
     visible = _DEBUG_KV_RE.sub(" ", visible)
     visible = _URL_RE.sub("[link]", visible)
-    visible = _LEGACY_UNQUOTED_TECH_PLACEHOLDER_RE.sub("technical identifier", visible)
     visible = _LOCAL_PATH_RE.sub("[path]", visible)
     visible = _REPO_PATH_RE.sub("[path]", visible)
     visible = _UUID_RE.sub("[id]", visible)
@@ -250,7 +251,7 @@ def _record_count_for_artifact(rel: str, kind: str, content: str, timeline: tupl
     if rel.endswith("/index.md"):
         return None
     if timeline is not None:  # canonical page: count active timeline atoms (raw/ sidecar)
-        return sum(1 for ln in timeline if not ln.superseded)
+        return len(Page(lines=list(timeline)).active_entries())
     fm, body = parse_frontmatter(content)
     if "record_count" in fm:
         value = fm["record_count"]
@@ -351,21 +352,8 @@ def _title_from_content(content: str, fallback: str) -> str:
     return fallback
 
 
-_CHANGELOG_LINE_DATE_RE = re.compile(r"^-\s+\d{4}-\d{2}-(\d{2})T(\d{2}:\d{2})\S*\s*$")
-
-
-def _compact_changelog_prefix(prefix: str) -> str:
-    """Trim a legacy full-ISO line prefix to day + time — the year-month is
-    already the file name, and microseconds/offset are noise. No-op if already
-    compact or not a dated prefix."""
-    m = _CHANGELOG_LINE_DATE_RE.match(prefix)
-    return f"- {m.group(1)} {m.group(2)}" if m else prefix
-
-
 # Going-forward events carry real change text ("Learned: …" / "Remembered: …").
-# Legacy lines are normalized on render: maintenance + contentless generics are
-# dropped; the old "curator updated N record(s) … transcript:" wrapper is folded
-# into a plain "Learned: …".
+# Contentless audit noise is dropped and curator updates are rendered concisely.
 _CHANGELOG_CURATOR_PREFIX_RE = re.compile(
     r"^curator updated \d+ memory record\(s\) from chat transcript:\s*", flags=re.IGNORECASE
 )
@@ -385,13 +373,10 @@ def _normalize_changelog_text(text: str) -> str | None:
     return _CHANGELOG_CURATOR_PREFIX_RE.sub("Learned: ", text).strip() or None
 _EVENT_FLAT_RE = re.compile(r"^-\s+(\d{2})\s+(\d{2}:\d{2})\s+—\s+(.*)$")
 _EVENT_GROUPED_RE = re.compile(r"^-\s+(\d{2}:\d{2})\s+—\s+(.*)$")
-_EVENT_LEGACY_FULL_RE = re.compile(r"^-\s+\d{4}-\d{2}-(\d{2})T(\d{2}:\d{2})\S*\s+—\s+(.*)$")
 
 
 def _render_changelog_month(content: str, *, year: int, month_num: int, month_label: str) -> str:
-    """Group a monthly changelog into readable day sections (## Weekday, Mon D),
-    dropping legacy contentless noise. Robust to flat `- DD HH:MM — …`,
-    already-grouped `## day` + `- HH:MM — …`, and legacy full-ISO lines."""
+    """Group a monthly changelog into readable day sections."""
     events: list[tuple[str, str, str]] = []  # (day, time, text), file order
     current_day: str | None = None
     for line in content.splitlines():
@@ -402,15 +387,12 @@ def _render_changelog_month(content: str, *, year: int, month_num: int, month_la
             continue
         if not (line.startswith("- ") and " — " in line):
             continue
-        flat, legacy, grouped = (
+        flat, grouped = (
             _EVENT_FLAT_RE.match(line),
-            _EVENT_LEGACY_FULL_RE.match(line),
             _EVENT_GROUPED_RE.match(line),
         )
         if flat:
             day, time, text = flat.group(1), flat.group(2), flat.group(3)
-        elif legacy:
-            day, time, text = legacy.group(1), legacy.group(2), legacy.group(3)
         elif grouped and current_day:
             day, time, text = current_day, grouped.group(1), grouped.group(2)
         else:
@@ -438,10 +420,7 @@ def _render_changelog_month(content: str, *, year: int, month_num: int, month_la
     return "\n".join(out) + "\n"
 
 
-def _sanitize_changelog_content(content: str, *, compact_dates: bool = False) -> str:
-    # compact_dates only when the content is already routed into a monthly file
-    # (the year-month is the filename) — NOT during legacy migration, where the
-    # full line date is still needed to route each line to the right month.
+def _sanitize_changelog_content(content: str) -> str:
     if not content:
         return content
     out: list[str] = []
@@ -452,8 +431,6 @@ def _sanitize_changelog_content(content: str, *, compact_dates: bool = False) ->
         if line.startswith("- "):
             if " — " in line:
                 prefix, payload = line.split(" — ", 1)
-                if compact_dates:
-                    prefix = _compact_changelog_prefix(prefix)
                 out.append(f"{prefix} — {_safe_log(payload) or '[redacted]'}")
             else:
                 out.append(f"- {_safe_log(line[2:]) or '[redacted]'}")
@@ -485,6 +462,7 @@ class MemoryArtifact:
     revision: str
     record_count: int | None
     updated_at: str | None
+    created_at: str | None = None
     type: str = "file"
     directory: str = "memory"
     generated: bool = True
@@ -506,7 +484,7 @@ class ArtifactMemoryStore:
 
     def vault_health(self):
         """Return the exact ledger safety report used by the startup gate."""
-        from ntrp.memory.migrate_ledger_v2 import validate_vault
+        from ntrp.memory.health import validate_vault
 
         return validate_vault(self.root)
 
@@ -546,7 +524,6 @@ class ArtifactMemoryStore:
 
     def append_event(self, event: str) -> None:
         self.ensure_dirs()
-        self._migrate_legacy_changelog()
         now = datetime.now(UTC)
         rel = self._changelog_month_rel(now)
         path = self._safe_path(rel)
@@ -567,34 +544,6 @@ class ArtifactMemoryStore:
             self._sanitize_changelog_file(path, ensure_trailing_newline=True)
             return
         self._write_text_no_symlink(path, _CHANGELOG_HEADER_TEMPLATE.format(month=month))
-
-    def _migrate_legacy_changelog(self) -> None:
-        path = self.root / "changelog.md"
-        if not path.exists() and not path.is_symlink():
-            return
-        try:
-            st = path.lstat()
-        except FileNotFoundError:
-            return
-        if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
-            raise FileNotFoundError("changelog.md")
-        content = self._read_text_no_symlink(path)
-        sanitized = _sanitize_changelog_content(content)
-        fallback = datetime.now(UTC)
-        for line in sanitized.splitlines():
-            if not line.startswith("- "):
-                continue
-            match = _LEGACY_CHANGELOG_RE.match(line)
-            year = match.group(1) if match else fallback.strftime("%Y")
-            month = f"{year}-{match.group(2)}" if match else fallback.strftime("%Y-%m")
-            target = self._safe_path(f"changelog/{year}/{month}.md")
-            self._ensure_month_changelog(target, month)
-            existing = self._read_text_no_symlink(target)
-            if line not in existing.splitlines():
-                if existing and not existing.endswith("\n"):
-                    self._append_text_no_symlink(target, "\n")
-                self._append_text_no_symlink(target, f"{line}\n")
-        path.unlink()
 
     def _monthly_changelog_paths(self) -> list[Path]:
         changelog_dir = self.root / "changelog"
@@ -720,9 +669,68 @@ class ArtifactMemoryStore:
             raw_content=exact_text,
         )
 
+    def page_created_map(self) -> dict[str, str]:
+        """Earliest page-edit event time per page, one pass over raw/events/."""
+        earliest: dict[str, str] = {}
+        occurred_by_path: dict[str, datetime] = {}
+        for rel in self.page_edit_event_resources():
+            for event in parse_page_edit_events(self.read_resource_bytes(rel, page_edit_internal=True)):
+                occurred = datetime.fromisoformat(event.occurred_at.replace("Z", "+00:00"))
+                if event.path not in occurred_by_path or occurred < occurred_by_path[event.path]:
+                    occurred_by_path[event.path] = occurred
+                    earliest[event.path] = event.occurred_at
+        return earliest
+
+    def list_directories(self) -> list[str]:
+        """Every directory that may hold pages (trailing "/"), empty ones included;
+        machine-only areas (raw/, changelog/, dot-dirs) are excluded like the page
+        read paths."""
+        self.ensure_dirs()
+        out: list[str] = []
+
+        def walk(directory: Path) -> None:
+            try:
+                children = sorted(directory.iterdir(), key=lambda p: p.name)
+            except OSError:
+                return
+            for child in children:
+                try:
+                    child_st = child.lstat()
+                except FileNotFoundError:
+                    continue
+                if stat.S_ISLNK(child_st.st_mode) or not stat.S_ISDIR(child_st.st_mode):
+                    continue
+                rel = child.relative_to(self.root)
+                if rel.parts[0] in MACHINE_PAGE_DIRS or child.name in _ENGINE_RESOURCE_DIRS:
+                    continue
+                out.append(rel.as_posix() + "/")
+                walk(child)
+
+        walk(self.root)
+        return out
+
+    def create_directory(self, rel: str) -> str:
+        safe = Path(rel)
+        if safe.is_absolute() or not safe.parts or any(part in {"", ".", ".."} for part in safe.parts):
+            raise FileNotFoundError(rel)
+        if any(part in MACHINE_PAGE_DIRS for part in safe.parts):
+            raise FileNotFoundError(rel)
+        self.ensure_dirs()
+        target = self._safe_path(safe.as_posix())
+        try:
+            target.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            raise FileExistsError(rel)
+        parent_fd, _leaf = self._open_anchored_parent(safe / "_", create_parents=True)
+        os.close(parent_fd)
+        return safe.as_posix() + "/"
+
     def list_artifacts(self, *, kind: str | None = None, q: str | None = None) -> list[MemoryArtifact]:
         self.ensure_dirs()
         query = (q or "").strip().lower()
+        created_map = self.page_created_map()
         artifacts: list[MemoryArtifact] = []
         for path in self._iter_artifact_files():
             rel = path.relative_to(self.root).as_posix()
@@ -752,6 +760,7 @@ class ArtifactMemoryStore:
                     content="",
                     record_count=_record_count_for_artifact(rel, artifact_kind, content, self._load_timeline(rel)),
                     updated_at=datetime.fromtimestamp(st.st_mtime, UTC).isoformat(),
+                    created_at=created_map.get(rel) or _stat_created_at(st),
                     type="file",
                     directory=_artifact_directory(rel),
                     generated=generated,
@@ -800,7 +809,7 @@ class ArtifactMemoryStore:
                     # "synthesis pending" note that will never resolve. Dream insights
                     # carry a machine cite tail `(because of ^id1, ^id2)` — provenance
                     # for the engine, noise for the reader; strip it from the view.
-                    active = [ln for ln in timeline if not ln.superseded]
+                    active = Page(lines=list(timeline)).active_entries()
                     prose = "\n".join(f"- {_BECAUSE_OF_RE.sub('', ln.text).rstrip()}" for ln in active) or "_No entries yet._"
                 else:
                     prose = "_No synthesized summary yet — synthesis pass pending._"
@@ -820,6 +829,7 @@ class ArtifactMemoryStore:
             content=body,
             record_count=_record_count_for_artifact(rel_posix, kind, content, timeline or None),
             updated_at=datetime.fromtimestamp(st.st_mtime, UTC).isoformat(),
+            created_at=self.page_created_map().get(rel_posix) or _stat_created_at(st),
             type="file",
             directory=_artifact_directory(rel_posix),
             generated=generated,
@@ -1098,7 +1108,7 @@ class ArtifactMemoryStore:
             text = self._read_text_no_symlink(path)
         except (FileNotFoundError, OSError):
             return None
-        return tuple(ln for ln in (_parse_line(r) for r in strip_frontmatter(text).splitlines()) if ln is not None)
+        return tuple(parse_raw(text)[1])
 
     def _artifact_sort_key(self, rel: str) -> tuple[int, int, str]:
         if rel in ROOT_ARTIFACTS:
@@ -1330,7 +1340,7 @@ class ArtifactMemoryStore:
                 content, year=int(month_match.group(1)), month_num=int(label.split("-")[1]), month_label=label
             )
         else:
-            sanitized = _sanitize_changelog_content(content, compact_dates=True)
+            sanitized = _sanitize_changelog_content(content)
         if ensure_trailing_newline and sanitized and not sanitized.endswith("\n"):
             sanitized += "\n"
         if sanitized != content:

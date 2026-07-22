@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import clsx from "clsx";
-import { Settings2 } from "lucide-react";
+import { Settings2 } from "@/components/icons";
 import type { AreaAgentStatus, AreaDetail } from "@/api/areas";
 import { updateAreaSettings } from "@/actions/areas";
 import { useStore } from "@/stores";

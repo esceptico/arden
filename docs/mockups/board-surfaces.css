@@ -1,0 +1,76 @@
+:root {
+  --surface-1: light-dark(#FAFAFA, #171717);
+  --surface-2: light-dark(#FCFCFC, #1E1E1E);
+  --surface-3: light-dark(#FFFFFF, #252525);
+  --surface-4: light-dark(#FFFFFF, #2C2C2C);
+  --surface-5: light-dark(#FFFFFF, #333333);
+  --surface-6: light-dark(#FFFFFF, #3A3A3A);
+  --surface-7: light-dark(#FFFFFF, #414141);
+  --surface-8: light-dark(#FFFFFF, #484848);
+  --surface-muted: light-dark(#F4F4F5, #1E1E1E);
+  --demo-surface: #1D1B19;
+  --demo-ink: #FFFFFF;
+  --demo-muted: #CAC7C2;
+  --demo-hover: rgb(255 255 255 / 10%);
+
+  --shadow-color: rgb(0 0 0 / .06);
+  --shadow-light-1: 0 0 0 1px var(--shadow-color);
+  --shadow-light-2: 0 0 0 1px var(--shadow-color), 0 1px 1px -.5px var(--shadow-color);
+  --shadow-light-3: 0 0 0 1px var(--shadow-color), 0 1px 1px -.5px var(--shadow-color), 0 3px 3px -1.5px var(--shadow-color);
+  --shadow-light-4: 0 0 0 1px var(--shadow-color), 0 1px 1px -.5px var(--shadow-color), 0 3px 3px -1.5px var(--shadow-color), 0 6px 6px -3px var(--shadow-color);
+  --shadow-light-5: 0 0 0 1px var(--shadow-color), 0 1px 1px -.5px var(--shadow-color), 0 3px 3px -1.5px var(--shadow-color), 0 6px 6px -3px var(--shadow-color), 0 12px 12px -6px var(--shadow-color);
+  --shadow-light-6: 0 0 0 1px var(--shadow-color), 0 1px 1px -.5px var(--shadow-color), 0 3px 3px -1.5px var(--shadow-color), 0 6px 6px -3px var(--shadow-color), 0 12px 12px -6px var(--shadow-color), 0 24px 24px -12px var(--shadow-color);
+  --shadow-light-7: 0 0 0 1px var(--shadow-color), 0 1px 1px -.5px var(--shadow-color), 0 3px 3px -1.5px var(--shadow-color), 0 6px 6px -3px var(--shadow-color), 0 12px 12px -6px var(--shadow-color), 0 24px 24px -12px var(--shadow-color), 0 48px 48px -24px var(--shadow-color);
+  --shadow-light-8: 0 0 0 1px var(--shadow-color), 0 1px 1px -.5px var(--shadow-color), 0 3px 3px -1.5px var(--shadow-color), 0 6px 6px -3px var(--shadow-color), 0 12px 12px -6px var(--shadow-color), 0 24px 24px -12px var(--shadow-color), 0 48px 48px -24px var(--shadow-color), 0 96px 96px -48px var(--shadow-color);
+
+  --dm-hi-base: rgb(255 255 255 / .01);
+  --dm-hi-mid: rgb(255 255 255 / .02);
+  --dm-hi-high: rgb(255 255 255 / .04);
+  --dm-hi-peak: rgb(255 255 255 / .06);
+  --dm-ring-base: rgb(255 255 255 / .02);
+  --dm-ring-mid: rgb(255 255 255 / .04);
+  --dm-ring-high: rgb(255 255 255 / .06);
+  --dm-drop: rgb(0 0 0 / .18);
+  --shadow-dark-1: inset 0 0 0 1px var(--dm-ring-base);
+  --shadow-dark-2: inset 0 1px 0 0 var(--dm-hi-base), inset 0 0 0 1px var(--dm-ring-base), 0 1px 1px -.5px var(--dm-drop);
+  --shadow-dark-3: inset 0 1px 0 0 var(--dm-hi-mid), inset 0 0 0 1px var(--dm-ring-base), 0 0 0 1px rgb(0 0 0 / .12), 0 1px 1px -.5px var(--dm-drop), 0 3px 3px -1.5px var(--dm-drop);
+  --shadow-dark-4: inset 0 1px 0 0 var(--dm-hi-mid), inset 0 0 0 1px var(--dm-ring-mid), 0 0 0 1px rgb(0 0 0 / .14), 0 1px 1px -.5px var(--dm-drop), 0 3px 3px -1.5px var(--dm-drop), 0 6px 6px -3px var(--dm-drop);
+  --shadow-dark-5: inset 0 1px 0 0 var(--dm-hi-high), inset 0 0 0 1px var(--dm-ring-mid), 0 0 0 1px rgb(0 0 0 / .16), 0 1px 1px -.5px var(--dm-drop), 0 3px 3px -1.5px var(--dm-drop), 0 6px 6px -3px var(--dm-drop), 0 12px 12px -6px var(--dm-drop);
+  --shadow-dark-6: inset 0 1px 0 0 var(--dm-hi-high), inset 0 0 0 1px var(--dm-ring-high), 0 0 0 1px rgb(0 0 0 / .18), 0 1px 1px -.5px var(--dm-drop), 0 3px 3px -1.5px var(--dm-drop), 0 6px 6px -3px var(--dm-drop), 0 12px 12px -6px var(--dm-drop), 0 24px 24px -12px var(--dm-drop);
+  --shadow-dark-7: inset 0 1px 0 0 var(--dm-hi-peak), inset 0 0 0 1px var(--dm-ring-high), 0 0 0 1px rgb(0 0 0 / .20), 0 1px 1px -.5px var(--dm-drop), 0 3px 3px -1.5px var(--dm-drop), 0 6px 6px -3px var(--dm-drop), 0 12px 12px -6px var(--dm-drop), 0 24px 24px -12px var(--dm-drop), 0 48px 48px -24px var(--dm-drop);
+  --shadow-dark-8: inset 0 1px 0 0 var(--dm-hi-peak), inset 0 0 0 1px var(--dm-ring-high), 0 0 0 1px rgb(0 0 0 / .22), 0 1px 1px -.5px var(--dm-drop), 0 3px 3px -1.5px var(--dm-drop), 0 6px 6px -3px var(--dm-drop), 0 12px 12px -6px var(--dm-drop), 0 24px 24px -12px var(--dm-drop), 0 48px 48px -24px var(--dm-drop), 0 96px 96px -48px var(--dm-drop);
+
+  --shadow-1: var(--shadow-light-1);
+  --shadow-2: var(--shadow-light-2);
+  --shadow-3: var(--shadow-light-3);
+  --shadow-4: var(--shadow-light-4);
+  --shadow-5: var(--shadow-light-5);
+  --shadow-6: var(--shadow-light-6);
+  --shadow-7: var(--shadow-light-7);
+  --shadow-8: var(--shadow-light-8);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --shadow-1: var(--shadow-dark-1);
+  --shadow-2: var(--shadow-dark-2);
+  --shadow-3: var(--shadow-dark-3);
+  --shadow-4: var(--shadow-dark-4);
+  --shadow-5: var(--shadow-dark-5);
+  --shadow-6: var(--shadow-dark-6);
+  --shadow-7: var(--shadow-dark-7);
+  --shadow-8: var(--shadow-dark-8);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --shadow-1: var(--shadow-dark-1);
+    --shadow-2: var(--shadow-dark-2);
+    --shadow-3: var(--shadow-dark-3);
+    --shadow-4: var(--shadow-dark-4);
+    --shadow-5: var(--shadow-dark-5);
+    --shadow-6: var(--shadow-dark-6);
+    --shadow-7: var(--shadow-dark-7);
+    --shadow-8: var(--shadow-dark-8);
+  }
+}

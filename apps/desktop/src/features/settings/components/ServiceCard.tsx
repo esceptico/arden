@@ -1,5 +1,5 @@
 import { AnimatePresence } from "motion/react";
-import { CheckCircle2, KeyRound, MessageCircle, RefreshCw } from "lucide-react";
+import { CheckCircle2, KeyRound, MessageCircle, RefreshCw } from "@/components/icons";
 import { type ServiceConnection } from "@/api/settings";
 import {
   serviceActionLabel,

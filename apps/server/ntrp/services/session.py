@@ -170,7 +170,11 @@ class SessionService:
         rows the user might not be viewing. Ordinary chat streaming stays off
         this global bus because the user is already watching it over the
         per-session stream."""
-        if session_state.session_type not in {"channel", "agent"} or not messages:
+        if (
+            session_state.session_type not in {"channel", "agent"}
+            or session_state.agent_type == "command_sidecar"
+            or not messages
+        ):
             return
         await self._publish(SessionActivityEvent(session=session_row(session_state, len(messages))))
 

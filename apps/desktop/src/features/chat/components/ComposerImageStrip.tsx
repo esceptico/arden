@@ -1,5 +1,5 @@
 import { motion } from "motion/react";
-import { X } from "lucide-react";
+import { X } from "@/components/icons";
 import { type ImageBlock } from "@/stores";
 import { ICON } from "@/lib/icons";
 import { RISE_IN, RISE_SETTLED } from "@/lib/tokens/motion";

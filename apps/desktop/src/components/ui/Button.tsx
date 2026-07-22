@@ -4,7 +4,7 @@ import {
   type ReactNode,
 } from "react";
 import clsx from "clsx";
-import { type LucideIcon } from "lucide-react";
+import { type NtrpIcon } from "@/components/icons";
 
 /**
  * Text button primitive — sibling to {@link IconButton}. Collapses the
@@ -26,8 +26,8 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;
   /** sm = h-7 (dense toolbars/rows), md = h-8 (default, forms/modals). */
   size?: ButtonSize;
-  leadingIcon?: LucideIcon;
-  trailingIcon?: LucideIcon;
+  leadingIcon?: NtrpIcon;
+  trailingIcon?: NtrpIcon;
   /** Force the pressed/engaged look — e.g. while this button's menu is open. */
   active?: boolean;
   children?: ReactNode;

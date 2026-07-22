@@ -38,34 +38,16 @@ const summaries = [
   { ...base, path: ".ntrp/maintenance/state.md", directory: ".ntrp/maintenance", title: "State", summary: "Machine state." },
 ];
 
-function managed(rows: Array<[string, string]>) {
-  return [
-    "<!-- ntrp:index:start -->",
-    ...rows.map(([path, description]) => `- ${path} — ${description} <!-- ntrp:path=${encodeURIComponent(path)} -->`),
-    "<!-- ntrp:index:end -->",
-  ].join("\n");
-}
-
 function detail(path: string) {
   const item = summaries.find((artifact) => artifact.path === path)!;
-  const indexContent = path === "index.md"
-    ? managed([
-        ["me.md", "Identity, preferences, and durable context."],
-        ["topics/", "Current topics and decisions."],
-        ["research/", "Research notes and experiments."],
-        ["daily/", "Chronological memory activity."],
-      ])
-    : path === "topics/index.md"
-      ? managed([["dex.md", "Current work and decisions about Dex."]])
-      : path === "research/README.md"
-        ? managed([["latency.md", "Observed latency behavior."]])
-        : path === "daily/README.md"
-          ? managed([["2026-07-13.md", "2026-07-13"]])
-        : null;
   return {
     ...item,
     revision: `sha256:${path}`,
-    content: indexContent ?? (path === "me.md" ? "I build personal tools.\n\nSee [[topics/dex|Dex]]." : item.summary),
+    content: path === "me.md"
+      ? "# Me\n\nI build personal tools.\n\nSee [[topics/dex|Dex]]."
+      : path === "index.md"
+        ? "Start here."
+        : item.summary ?? "",
     editable_content: `# ${item.title}\n\n${item.summary}\n`,
     timeline: path === "me.md" ? [{
       id: "record-me", text: "I build personal tools.", kind: "fact", date: "2026-07-12",
@@ -75,7 +57,7 @@ function detail(path: string) {
   };
 }
 
-function installBridge(options: { list?: typeof summaries; failList?: string; delayList?: boolean } = {}) {
+function installBridge(options: { list?: typeof summaries; directories?: string[]; failList?: string; delayList?: boolean } = {}) {
   const requests: string[] = [];
   let resolveList: (() => void) | null = null;
   const listGate = new Promise<void>((resolve) => { resolveList = resolve; });
@@ -88,11 +70,8 @@ function installBridge(options: { list?: typeof summaries; failList?: string; de
           if (options.failList) {
             return { ok: false, status: 500, statusText: "Error", contentType: "application/json", data: { detail: options.failList }, text: "" };
           }
-          const source = options.list ?? summaries;
-          const artifacts = request.path.includes("?q=")
-            ? source.filter((artifact) => artifact.path === "topics/dex.md")
-            : source;
-          return { ok: true, status: 200, statusText: "OK", contentType: "application/json", data: { artifacts }, text: "" };
+          const artifacts = options.list ?? summaries;
+          return { ok: true, status: 200, statusText: "OK", contentType: "application/json", data: { artifacts, directories: options.directories ?? [] }, text: "" };
         }
         if (request.path.startsWith("/admin/memory/items")) {
           return {
@@ -121,6 +100,9 @@ function installBridge(options: { list?: typeof summaries; failList?: string; de
             data: { path, revision: "ledger:1", stale: false, outgoing, backlinks: [], total_outgoing: outgoing.length, total_backlinks: 0, limit: 100, offset: 0 }, text: "",
           };
         }
+        if (request.path.startsWith("/admin/memory/page-edits/history")) {
+          return { ok: true, status: 200, statusText: "OK", contentType: "application/json", data: { events: [], total: 0, limit: 100, next_before_sequence: null }, text: "" };
+        }
         const path = decodeURIComponent(request.path.replace("/admin/memory/artifacts/", ""));
         return { ok: true, status: 200, statusText: "OK", contentType: "application/json", data: { artifact: detail(path) }, text: "" };
       },
@@ -130,9 +112,15 @@ function installBridge(options: { list?: typeof summaries; failList?: string; de
 }
 
 function setupDom(): { host: HTMLElement; root: Root } {
+  // Inspector defaults open (persisted); seed closed to keep request counts
+  // scoped to the tree/note flows these tests exercise.
+  localStorage.setItem("ntrp.desktop.memory.inspectorOpen", "false");
+  const app = document.createElement("div");
+  app.id = "app";
   const host = document.createElement("div");
   host.style.height = "800px";
-  document.body.append(host);
+  app.append(host);
+  document.body.append(app);
   const root = createRoot(host);
   mountedRoots.add(root);
   return { host, root };
@@ -154,10 +142,16 @@ afterEach(async () => {
   mountedRoots.clear();
   window.ntrpDesktop = originalDesktop;
   document.body.replaceChildren();
+  for (const key of [
+    "ntrp.desktop.memory.inspectorOpen",
+    "ntrp.desktop.memory.lastPath",
+    "ntrp.desktop.memory.pins",
+    "ntrp.desktop.memory.rail.collapsed",
+  ]) localStorage.removeItem(key);
 });
 
-test("memory opens as a meaning-first notebook, not a database inspector", async () => {
-  const bridge = installBridge();
+test("memory opens as a filesystem notebook with a plain tree, tabs, and stems", async () => {
+  const bridge = installBridge({ directories: ["archive"] });
   const { host, root } = setupDom();
   await act(async () => root.render(<ArtifactMemoryView config={config} />));
   await settle(250);
@@ -166,66 +160,103 @@ test("memory opens as a meaning-first notebook, not a database inspector", async
   const workspace = host.querySelector<HTMLElement>('[data-memory-zone="workspace"]');
   const inspector = host.querySelector<HTMLElement>('[data-memory-zone="inspector"]');
   expect(rail?.getAttribute("aria-label")).toBe("Memory notebook");
-  expect(workspace?.getAttribute("aria-label")).toBe("Memory note");
+  expect(workspace?.querySelector("main")?.getAttribute("aria-label")).toBe("Memory note");
   expect(inspector).not.toBeNull();
   const layout = host.querySelector<HTMLElement>('[data-memory-layout="notebook"]');
-  expect(layout?.className).toContain("max-[640px]:grid-cols-[180px_minmax(0,1fr)_0px]");
-  expect(layout?.className).toContain("max-[900px]:grid-cols-[200px_minmax(0,1fr)_0px]");
+  expect(layout?.classList.contains("memory-ws")).toBe(true);
 
-  expect(host.querySelector('button[role="tab"]')).toBeNull();
-  expect(host.textContent).not.toContain("FilesRecords");
-  expect(rail?.textContent).toContain("Topics");
-  expect(rail?.textContent).toContain("Current work and decisions about Dex.");
-  expect(rail?.textContent).toContain("Research notes and experiments.");
-  expect(rail?.textContent).toContain("Chronological memory activity.");
-  const dailyRow = rail?.querySelector<HTMLButtonElement>('[data-memory-entry="daily/2026-07-13.md"]');
-  expect(dailyRow?.textContent).toBe("2026-07-13");
+  // Top strip: history buttons plus document tabs labeled with path stems.
+  expect(host.querySelector('button[aria-label="Back in memory history"]')).not.toBeNull();
+  const tablist = host.querySelector<HTMLElement>('[role="tablist"][aria-label="Open notes"]');
+  expect(tablist).not.toBeNull();
+  expect(tablist?.querySelector('[role="tab"]')?.textContent).toContain("index");
+  expect(tablist?.querySelector('button[aria-label="New tab"]')).not.toBeNull();
+
+  // The rail is a plain filesystem tree: folder nodes from paths (plus empty
+  // directories the server lists), rows labeled with filename stems.
+  expect(rail?.querySelector('[data-memory-directory="topics/"]')).not.toBeNull();
+  expect(rail?.querySelector('[data-memory-directory="research/"]')).not.toBeNull();
+  expect(rail?.querySelector('[data-memory-directory="daily/"]')).not.toBeNull();
+  expect(rail?.querySelector('[data-memory-directory="archive/"]')).not.toBeNull();
+  const dexRow = rail?.querySelector<HTMLButtonElement>('[data-memory-entry="topics/dex.md"]');
+  expect(dexRow?.textContent).toBe("dex");
+  expect(rail?.querySelector<HTMLButtonElement>('[data-memory-entry="daily/2026-07-13.md"]')?.textContent).toBe("2026-07-13");
+  expect(rail?.querySelector('[data-memory-entry="scratch.md"]')?.textContent).toBe("scratch");
   expect(rail?.textContent).not.toContain("topics/dex.md");
-  expect(rail?.textContent).not.toContain("raw/events/1.md");
-  expect(rail?.textContent).not.toContain("Machine health report");
+  // Reserved machine paths never surface as tree rows.
+  expect(rail?.querySelector('[data-memory-entry="raw/events/1.md"]')).toBeNull();
+  expect(rail?.querySelector('[data-memory-entry=".ntrp/maintenance/state.md"]')).toBeNull();
+  expect(rail?.querySelector('[data-memory-entry="health.md"]')).toBeNull();
 
-  const files = host.querySelector<HTMLDetailsElement>('details[data-memory-files]');
-  expect(files?.open).toBe(false);
-  await act(async () => files?.querySelector("summary")?.click());
-  expect(files?.open).toBe(true);
-  expect(Array.from(files?.querySelectorAll("button") ?? []).some((button) => button.textContent?.includes("Scratch"))).toBe(true);
+  // Pinned cluster at the top of the tree — me.md is pinned by default.
+  expect(rail?.querySelector('.mw-tree-pins [data-memory-entry="me.md"]')).not.toBeNull();
 
-  const openRecords = host.querySelector<HTMLButtonElement>('button[aria-label="Open raw records diagnostic"]');
-  expect(openRecords).not.toBeNull();
-
-  const title = workspace?.querySelector("h1");
-  const prose = workspace?.querySelector(".md");
-  const metadata = workspace?.querySelector('[data-memory-note-metadata]');
-  expect(title?.textContent).toBe("Me");
-  expect(prose?.textContent).toContain("I build personal tools.");
-  expect(title?.compareDocumentPosition(prose!) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
-  expect(prose?.compareDocumentPosition(metadata!) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
-  expect(workspace?.querySelector<HTMLDetailsElement>('details[data-memory-properties]')?.open).toBe(false);
-  const evidence = Array.from(workspace?.querySelectorAll("details") ?? [])
-    .find((item) => item.querySelector("summary")?.textContent?.includes("Evidence"));
-  expect(evidence?.open).toBe(false);
-
+  // The tree never fetches index documents to build itself; the only detail
+  // read so far is the selected note.
+  const detailReads = bridge.requests.filter((path) => path.startsWith("/admin/memory/artifacts/"));
   expect(bridge.requests[0]).toBe("/admin/memory/artifacts");
+  expect(detailReads).toEqual(["/admin/memory/artifacts/index.md"]);
+
+  // Folder label clicks only collapse/expand — they never navigate.
+  const topicsFolder = rail!.querySelector<HTMLElement>('[data-memory-directory="topics/"]')!;
+  const topicsLabel = Array.from(topicsFolder.querySelectorAll<HTMLButtonElement>("button"))
+    .find((button) => button.classList.contains("mw-folder-label"))!;
+  expect(topicsLabel.textContent).toBe("topics");
+  await act(async () => topicsLabel.click());
+  expect(topicsFolder.classList.contains("closed")).toBe(true);
+  expect(host.querySelector('[data-memory-zone="workspace"] h1')?.textContent).toBe("index");
+  await act(async () => topicsFolder.querySelector<HTMLButtonElement>('button[aria-label="Expand topics"]')?.click());
+  expect(topicsFolder.classList.contains("closed")).toBe(false);
+
+  // Right-clicking a row opens a context menu portaled to the body.
+  await act(async () => dexRow!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+  const menu = document.body.querySelector<HTMLElement>(".mw-rc-menu");
+  expect(menu).not.toBeNull();
+  const items = Array.from(menu!.querySelectorAll('[role="menuitem"]')).map((item) => item.textContent);
+  expect(items).toEqual(["Copy path", "Pin", "Open in new tab"]);
+  await act(async () => Array.from(menu!.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'))
+    .find((item) => item.textContent === "Open in new tab")?.click());
+  await settle(250);
+  expect(host.querySelector('[data-memory-zone="workspace"] h1')?.textContent).toBe("dex");
+  const tabs = Array.from(tablist!.querySelectorAll('[role="tab"]')).map((tab) => tab.textContent);
+  expect(tabs).toHaveLength(2);
+  expect(tabs[1]).toContain("dex");
+
+  // The note surface: h1 is the filename stem, frontmatter renders as a
+  // Properties section, and body leading H1s stay in the prose.
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-memory-entry="me.md"]')?.click());
+  await settle(250);
+  const noteTitle = workspace?.querySelector("h1");
+  expect(noteTitle?.textContent).toBe("me");
+  expect(workspace?.textContent).toContain("Properties");
+  expect(workspace?.textContent).toContain("personal");
+  const prose = workspace?.querySelector(".mw-prose");
+  expect(prose?.textContent).toContain("I build personal tools.");
+  expect(prose?.querySelector("h1")?.textContent).toBe("Me");
+  const records = Array.from(workspace?.querySelectorAll("button") ?? [])
+    .find((button) => button.textContent?.includes("Records"));
+  expect(records?.textContent).toContain("1");
   expect(bridge.requests).toContain("/admin/memory/artifacts/me.md");
 
+  // Wiki links resolve through the links index and navigate in place.
   const dexLink = workspace?.querySelector<HTMLAnchorElement>('[data-wikilink="topics/dex"]');
   await act(async () => dexLink?.click());
   await settle(250);
-  expect(workspace?.querySelector("h1")?.textContent).toBe("Dex");
+  expect(workspace?.querySelector("h1")?.textContent).toBe("dex");
   expect(bridge.requests).toContain("/admin/memory/artifacts/topics/dex.md");
 
-  const search = rail?.querySelector<HTMLInputElement>('input[aria-label="Search memory notes…"]');
-  await act(async () => {
-    if (!search) return;
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(search, "decisions");
-    search.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-  await settle(220);
-  expect(rail?.querySelector("#memory-search-results")?.textContent).toBe("Results");
-  expect(rail?.textContent).toContain("Dex");
-  expect(rail?.textContent).not.toContain("Identity, preferences, and durable context.");
-  await act(async () => rail?.querySelector<HTMLButtonElement>('button[aria-label="Clear search"]')?.click());
+  // No rail search input — the search affordance opens the quick switcher.
+  expect(rail?.querySelector("input")).toBeNull();
+  await act(async () => rail?.querySelector<HTMLButtonElement>('button[aria-label="Search notes"]')?.click());
+  await settle();
+  expect(document.querySelector('[aria-label="Quick switcher"]')).not.toBeNull();
+  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  await settle();
+  expect(document.querySelector('[aria-label="Quick switcher"]')).toBeNull();
 
+  // Raw records stay one diagnostic away.
+  const openRecords = host.querySelector<HTMLButtonElement>('button[aria-label="Open raw records diagnostic"]');
+  expect(openRecords).not.toBeNull();
   await act(async () => openRecords?.click());
   await settle();
   expect(host.querySelector('section[aria-label="Raw records diagnostic"]')).not.toBeNull();
@@ -263,14 +294,35 @@ test("loading, error, and empty states keep the notebook zones stable", async ()
   await unmountRoot(emptyDom.root);
 });
 
-test("default selection follows notebook meaning instead of transport order", async () => {
+test("default selection restores the last path, falls back to index.md, then the first navigable note", async () => {
   const byPath = (path: string) => summaries.find((artifact) => artifact.path === path)!;
-  installBridge({ list: [byPath("scratch.md"), byPath("topics/dex.md"), byPath("me.md"), byPath("index.md"), byPath("topics/index.md")] });
-  const { host, root } = setupDom();
-  await act(async () => root.render(<ArtifactMemoryView config={config} />));
+  const shuffled = [byPath("scratch.md"), byPath("topics/dex.md"), byPath("me.md"), byPath("index.md"), byPath("topics/index.md")];
+
+  // index.md wins regardless of transport order.
+  installBridge({ list: shuffled });
+  const indexDom = setupDom();
+  await act(async () => indexDom.root.render(<ArtifactMemoryView config={config} />));
   await settle(250);
+  expect(indexDom.host.querySelector('[data-memory-zone="workspace"] h1')?.textContent).toBe("index");
+  await unmountRoot(indexDom.root);
+  document.body.replaceChildren();
 
-  expect(host.querySelector('[data-memory-zone="workspace"] h1')?.textContent).toBe("Me");
+  // A remembered last path beats index.md when it still exists.
+  localStorage.setItem("ntrp.desktop.memory.lastPath", "me.md");
+  installBridge({ list: shuffled });
+  const lastPathDom = setupDom();
+  await act(async () => lastPathDom.root.render(<ArtifactMemoryView config={config} />));
+  await settle(250);
+  expect(lastPathDom.host.querySelector('[data-memory-zone="workspace"] h1')?.textContent).toBe("me");
+  await unmountRoot(lastPathDom.root);
+  document.body.replaceChildren();
 
-  await unmountRoot(root);
+  // Without index.md or a remembered path, the first navigable note wins.
+  localStorage.removeItem("ntrp.desktop.memory.lastPath");
+  installBridge({ list: [byPath("scratch.md"), byPath("topics/dex.md"), byPath("me.md")] });
+  const fallbackDom = setupDom();
+  await act(async () => fallbackDom.root.render(<ArtifactMemoryView config={config} />));
+  await settle(250);
+  expect(fallbackDom.host.querySelector('[data-memory-zone="workspace"] h1')?.textContent).toBe("scratch");
+  await unmountRoot(fallbackDom.root);
 });

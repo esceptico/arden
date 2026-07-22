@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { ChevronRight, Square, Workflow as WorkflowIcon } from "lucide-react";
+import { ChevronRight, Stop, Workflow as WorkflowIcon } from "@/components/icons";
 import { ICON } from "@/lib/icons";
 import { useTimeTicker } from "@/lib/hooks";
 import { formatDuration } from "@/lib/agentRun";
@@ -215,7 +215,7 @@ export function WorkflowProgressCard({
             }}
             className="grid place-items-center w-5 h-5 shrink-0 rounded text-faint transition-[background-color,color,scale] duration-check ease-out hover:bg-bad-soft hover:text-bad active:scale-[0.97]"
           >
-            <Square size={ICON.XS} strokeWidth={2} fill="currentColor" />
+            <Stop size={ICON.XS} />
           </button>
         )}
         <ChevronRight

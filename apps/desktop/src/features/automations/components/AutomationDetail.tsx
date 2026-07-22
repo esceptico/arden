@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence } from "motion/react";
-import { Play, Radio, TriangleAlert, X } from "lucide-react";
+import { Play, Radio, TriangleAlert, X } from "@/components/icons";
 import clsx from "clsx";
 import { useStore } from "@/stores";
 import type { Automation, AutomationRun, CreateAutomationPayload } from "@/api/types";
@@ -575,7 +575,6 @@ function AutomationModelPicker({
       currentEffort={currentEffort}
       efforts={efforts}
       groups={groups}
-      modelReasoningEfforts={modelReasoningEfforts}
       onSelectModel={(m) => onChange(m === DEFAULT_MODEL_LABEL ? null : m)}
       onSelectEffort={(effort) => {
         if (!model) return;

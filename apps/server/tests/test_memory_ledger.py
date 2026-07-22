@@ -18,13 +18,6 @@ def test_v2_entry_round_trips_all_evidence_and_unknown_metadata():
     assert parse_ledger_entry(render_ledger_entry(entry)) == entry
 
 
-def test_date_only_legacy_line_keeps_day_precision():
-    entry = parse_ledger_entry("- 2025-01-03 ^old [fact] Legacy fact (src:curator)")
-    assert entry.occurred_at == "2025-01-03"
-    assert entry.meta.time_precision == "day"
-    assert entry.meta.sources[0].captured_at is None
-
-
 @pytest.mark.parametrize("field", ["id", "text", "kind", "occurred_at", "pinned", "imp", "entity"])
 def test_v2_metadata_rejects_duplicate_authoritative_fields(field: str):
     raw = (
@@ -114,7 +107,6 @@ def test_v2_timestamps_require_seconds(raw: str):
 @pytest.mark.parametrize(
     "raw",
     [
-        "- 2025-02-30 ^old [fact] Impossible legacy date (src:curator)",
         (
             "- 2025-02-30 ^rec-1 [fact] Impossible v2 date.\n"
             '  <!-- ntrp:meta {"recorded_at":"2026-07-12T10:23:42Z","sequence":1,'

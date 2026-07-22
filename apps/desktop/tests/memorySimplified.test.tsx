@@ -1,113 +1,86 @@
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { isNotebookResourcePath } from "@/features/memory/lib/notebookIndex";
 import {
-  buildNotebookRailModel,
-  isNotebookPage,
-  parseManagedIndex,
-  selectIndexDocuments,
-} from "@/features/memory/lib/notebookIndex";
+  bucketOf,
+  buildWorkspaceTree,
+  collectNotes,
+  countNotes,
+  findDir,
+  prettyDate,
+  sortNotes,
+  stem,
+} from "@/features/memory/lib/workspaceTree";
 import type { MemoryArtifactSummary } from "@/features/memory/lib/notebookTypes";
 
-test("memory modal uses the directory-first artifact browser instead of pane tabs", () => {
-  const modal = readFileSync(new URL("../src/features/memory/components/MemoryModal.tsx", import.meta.url), "utf8");
-  const pane = readFileSync(new URL("../src/features/memory/components/MemoryPane.tsx", import.meta.url), "utf8");
+function summary(path: string, extra: Partial<MemoryArtifactSummary> = {}): MemoryArtifactSummary {
+  return {
+    path,
+    title: stem(path),
+    kind: "topic",
+    type: "file",
+    directory: path.split("/").slice(0, -1).join("/"),
+    scope: { kind: "user", key: null },
+    snippet: null,
+    summary: null,
+    revision: "sha256:1",
+    recordCount: 0,
+    generated: false,
+    editable: true,
+    readonlyReason: null,
+    updatedAt: "2026-07-10T08:00:00Z",
+    createdAt: "2026-03-01T08:00:00Z",
+    labels: [],
+    source: null,
+    ...extra,
+  };
+}
 
-  expect(modal).toContain("<MemoryPane />");
-  expect(modal).not.toContain("MEMORY_TABS");
-  expect(modal).not.toContain("<Tabs");
-  expect(pane).toContain("ArtifactMemoryView");
-  expect(pane).not.toContain("GraphView");
-  expect(pane).not.toContain("LensesView");
-});
-
-test("managed rows use their encoded identity when labels and descriptions contain em dashes", () => {
-  const content = [
-    "<!-- ntrp:index:start -->",
-    "- a — b.md — Decision — with context <!-- ntrp:path=a%20%E2%80%94%20b.md -->",
-    "<!-- ntrp:index:end -->",
-  ].join("\n");
-
-  expect(parseManagedIndex("index.md", content)).toEqual([{
-    path: "a — b.md",
-    description: "Decision — with context",
-    directory: false,
-  }]);
-});
-
-test("notebook hierarchy keeps described directories semantic and machine pages hidden", () => {
-  const artifact = (path: string, title: string, summary: string): MemoryArtifactSummary => ({
-    path, title, summary, kind: "topic", type: "file", directory: path.includes("/") ? path.split("/")[0]! : "",
-    scope: { kind: "user", key: null }, snippet: null, revision: `rev:${path}`, recordCount: 0,
-    generated: false, editable: true, readonlyReason: null, updatedAt: null, labels: [], source: null,
-  });
+test("machine-only paths never reach the workspace tree", () => {
   const artifacts = [
-    artifact("me.md", "Me", "Personal context"),
-    artifact("topics/index.md", "Topics", "Current topics"),
-    artifact("topics/dex.md", "Dex", "Dex decisions"),
-    artifact("research/README.md", "Research", "Experiments and findings"),
-    artifact("research/index.md", "Research index", "Older generated index description"),
-    artifact("research/result.md", "Result", "Latest result"),
-    artifact("research/sub/README.md", "Focused research", "One focused investigation"),
-    artifact("research/sub/deep-result.md", "Deep result", "Nested finding"),
-    artifact("research/empty/README.md", "Empty research", "No notes yet"),
-    artifact("scratch.md", "Scratch", "Unsorted"),
-    artifact("health.md", "Health", "Machine report"),
-    artifact("raw/events.md", "Events", "Machine events"),
-    artifact("research/raw/event.md", "Nested event", "Machine event"),
-    artifact("research/.ntrp/state.md", "Nested state", "Machine state"),
-    artifact("research/.maintenance/candidate.md", "Candidate", "Machine candidate"),
-    artifact("research/health.md", "Nested health", "Machine health"),
-    artifact("research/AGENTS.md", "Nested agents", "Machine instructions"),
-    artifact("facts/index.md", "Fact index", "Generated fact index"),
-    artifact("archive/index.md", "Archive", "Older but useful notes"),
-    artifact("archive/note.md", "Archived note", "A retained note"),
+    summary("index.md"),
+    summary("topics/dex.md"),
+    summary("raw/topics/dex.md"),
+    summary("raw/events/2026-07-01.md"),
+    summary("changelog/2026-07.md"),
+    summary("health.md"),
   ];
+  const tree = buildWorkspaceTree(artifacts);
+  expect(collectNotes(tree).map((artifact) => artifact.path)).toEqual(["index.md", "topics/dex.md"]);
+  expect(isNotebookResourcePath("raw/topics/dex.md")).toBe(false);
+  expect(isNotebookResourcePath("health.md")).toBe(false);
+});
 
-  artifacts.push(artifact("index.md", "Index", "Root index"));
-  const managed = (rows: Array<[string, string]>) => [
-    "<!-- ntrp:index:start -->",
-    ...rows.map(([path, description]) => `- ${path} — ${description} <!-- ntrp:path=${encodeURIComponent(path)} -->`),
-    "<!-- ntrp:index:end -->",
-  ].join("\n");
-  const documents = new Map([
-    ["index.md", managed([
-      ["me.md", "Personal context"],
-      ["topics/", "Current topics"],
-      ["archive/", "Older but useful notes"],
-      ["research/", "Experiments and findings"],
-    ])],
-    ["topics/index.md", managed([["dex.md", "Dex decisions"]])],
-    ["research/README.md", managed([
-      ["result.md", "Latest result"],
-      ["sub/", "One focused investigation"],
-      ["empty/", "No notes yet"],
-      ["health.md", "Legitimate nested health"],
-      ["AGENTS.md", "Legitimate nested instructions"],
-    ])],
-    ["research/sub/README.md", managed([["deep-result.md", "Nested finding"]])],
-    ["research/empty/README.md", managed([])],
-    ["archive/index.md", managed([["note.md", "A retained note"]])],
-  ]);
+test("tree mirrors the directory structure with empty directories included", () => {
+  const artifacts = [summary("index.md"), summary("topics/dex.md"), summary("topics/nested/deep.md")];
+  const tree = buildWorkspaceTree(artifacts, ["topics/archive/", "inbox/"]);
+  expect(tree.dirs.map((dir) => dir.name)).toEqual(["inbox", "topics"]);
+  const topics = findDir(tree, "topics/");
+  expect(topics?.dirs.map((dir) => dir.name)).toEqual(["archive", "nested"]);
+  expect(topics?.files.map((artifact) => artifact.path)).toEqual(["topics/dex.md"]);
+  expect(countNotes(tree)).toBe(3);
+  expect(findDir(tree, "topics/archive/")?.files).toEqual([]);
+});
 
-  const hierarchy = buildNotebookRailModel(artifacts, documents);
-  expect(hierarchy.entries.map((entry) => entry.kind === "note" ? entry.path : entry.path)).toEqual([
-    "me.md", "topics", "archive", "research",
-  ]);
-  const research = hierarchy.entries.find((entry) => entry.kind === "directory" && entry.path === "research");
-  expect(research?.kind).toBe("directory");
-  if (research?.kind !== "directory") throw new Error("research directory missing");
-  expect(research.description).toBe("Experiments and findings");
-  expect(research.children.map((entry) => entry.path)).toEqual([
-    "research/result.md", "research/sub", "research/empty", "research/health.md", "research/AGENTS.md",
-  ]);
-  expect(hierarchy.files.map((item) => item.title)).toEqual(["Scratch"]);
-  expect(selectIndexDocuments(artifacts).map((item) => item.path)).not.toContain("research/index.md");
-  expect(artifacts.filter(isNotebookPage).map((item) => item.title)).not.toContain("Health");
-  expect(artifacts.filter(isNotebookPage).map((item) => item.title)).not.toContain("Events");
-  expect(artifacts.filter(isNotebookPage).map((item) => item.title)).not.toContain("Nested event");
-  expect(artifacts.filter(isNotebookPage).map((item) => item.title)).not.toContain("Nested state");
-  expect(artifacts.filter(isNotebookPage).map((item) => item.title)).not.toContain("Candidate");
-  expect(artifacts.filter(isNotebookPage).map((item) => item.title)).toContain("Nested health");
-  expect(artifacts.filter(isNotebookPage).map((item) => item.title)).toContain("Nested agents");
-  expect(artifacts.filter(isNotebookPage).map((item) => item.title)).not.toContain("Fact index");
+test("sortNotes pins index.md first and honors key + direction", () => {
+  const a = summary("topics/alpha.md", { updatedAt: "2026-07-01T00:00:00Z" });
+  const b = summary("topics/beta.md", { updatedAt: "2026-07-12T00:00:00Z" });
+  const index = summary("index.md", { updatedAt: "2026-01-01T00:00:00Z" });
+  const created = (artifact: MemoryArtifactSummary) => artifact.createdAt ?? "";
+  expect(sortNotes([b, index, a], { key: "name", asc: true }, created).map((x) => x.path))
+    .toEqual(["index.md", "topics/alpha.md", "topics/beta.md"]);
+  expect(sortNotes([a, index, b], { key: "modified", asc: false }, created).map((x) => x.path))
+    .toEqual(["index.md", "topics/beta.md", "topics/alpha.md"]);
+});
+
+test("stems, buckets, and pretty dates match the draft semantics", () => {
+  expect(stem("topics/nexus.md")).toBe("nexus");
+  expect(stem("me.md")).toBe("me");
+  const now = new Date("2026-07-14T12:00:00Z");
+  expect(bucketOf("2026-07-14T09:00:00Z", now)).toBe("Today");
+  expect(bucketOf("2026-07-13T09:00:00Z", now)).toBe("Yesterday");
+  expect(bucketOf("2026-07-08T09:00:00Z", now)).toBe("This week");
+  expect(bucketOf("2026-06-20T09:00:00Z", now)).toBe("This month");
+  expect(bucketOf("2026-01-01T09:00:00Z", now)).toBe("Earlier");
+  expect(bucketOf(null, now)).toBe("Undated");
+  expect(prettyDate("2026-07-13T08:00:00Z")).toBe("Jul 13, 2026");
 });

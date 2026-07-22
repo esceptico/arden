@@ -14,7 +14,7 @@ def _build(config: Config) -> MultiCalendarSource | None:
     if not config.integration_enabled("calendar"):
         return None
     store = google_account_store()
-    token_paths = [store.token_path(account) for account in store.accounts_for("calendar")]
+    token_paths = [store.token_path(account, "calendar") for account in store.accounts_for("calendar")]
     if not token_paths:
         return None
     source = MultiCalendarSource(token_paths=token_paths, days_back=7, days_ahead=30)
@@ -30,6 +30,12 @@ CALENDAR = Integration(
         "edit_calendar_event": edit_calendar_event_tool,
         "delete_calendar_event": delete_calendar_event_tool,
     },
+    command_tool_names=frozenset({
+        "calendar",
+        "create_calendar_event",
+        "edit_calendar_event",
+        "delete_calendar_event",
+    }),
     build=_build,
     connection=IntegrationConnectionSpec(
         connection_id="calendar",

@@ -16,7 +16,7 @@ def _credential(scopes: list[str]) -> str:
     )
 
 
-def test_store_binds_services_without_duplicating_credential(tmp_path):
+def test_store_keeps_separate_credentials_for_each_service(tmp_path):
     store = GoogleAccountStore(tmp_path)
     first = store.upsert_authorization(
         email="user@example.com",
@@ -33,8 +33,54 @@ def test_store_binds_services_without_duplicating_credential(tmp_path):
     )
 
     assert second.services == frozenset({"gmail", "calendar"})
-    assert len(list((tmp_path / "google_tokens").glob("*.json"))) == 1
-    assert store.token_path(second).read_text() == _credential(["gmail.readonly", "calendar"])
+    assert len(list((tmp_path / "google_tokens").glob("*.json"))) == 2
+    assert store.token_path(second, "gmail").read_text() == _credential(["gmail.readonly"])
+    assert store.token_path(second, "calendar").read_text() == _credential(["gmail.readonly", "calendar"])
+
+
+def test_authorizing_drive_for_an_existing_email_keeps_service_tokens_isolated(tmp_path):
+    store = GoogleAccountStore(tmp_path)
+    gmail_token = _credential(["gmail.readonly", "gmail.send"])
+    drive_token = _credential(["drive.file", "spreadsheets"])
+    account = store.upsert_authorization(
+        email="user@example.com",
+        credential_json=gmail_token,
+        scopes=("gmail.readonly", "gmail.send"),
+        service="gmail",
+    )
+
+    updated = store.upsert_authorization(
+        email="user@example.com",
+        credential_json=drive_token,
+        scopes=("drive.file", "spreadsheets"),
+        service="google_drive",
+    )
+
+    assert updated.id == account.id
+    assert store.token_path(updated, "gmail").read_text() == gmail_token
+    assert store.token_path(updated, "google_drive").read_text() == drive_token
+
+
+def test_version_one_account_uses_its_existing_token_for_each_bound_service(tmp_path):
+    token_path = tmp_path / "google_tokens" / "acct-1.json"
+    token_path.parent.mkdir()
+    token_path.write_text("legacy-token")
+    (tmp_path / "google_accounts.json").write_text(json.dumps({
+        "version": 1,
+        "accounts": [{
+            "id": "acct-1",
+            "email": "user@example.com",
+            "token_file": "google_tokens/acct-1.json",
+            "scopes": ["gmail.readonly", "calendar"],
+            "services": ["gmail", "calendar"],
+        }],
+    }))
+    store = GoogleAccountStore(tmp_path)
+
+    [account] = store.list_accounts()
+
+    assert store.token_path(account, "gmail") == token_path
+    assert store.token_path(account, "calendar") == token_path
 
 
 def test_disconnect_removes_only_local_service_binding(tmp_path):
@@ -112,4 +158,5 @@ def test_legacy_migration_never_overwrites_newer_canonical_authorization(tmp_pat
     [updated] = store.list_accounts()
     assert updated.scopes == tuple(expanded_scopes)
     assert updated.services == frozenset({"gmail", "google_drive"})
-    assert store.token_path(updated).read_text() == expanded_token
+    assert store.token_path(updated, "gmail").read_text() == _credential(legacy_scopes)
+    assert store.token_path(updated, "google_drive").read_text() == expanded_token

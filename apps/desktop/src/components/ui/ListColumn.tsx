@@ -1,5 +1,5 @@
 import type { ComponentType, ReactNode } from "react";
-import { AlertCircle } from "lucide-react";
+import { AlertCircle } from "@/components/icons";
 import { ICON } from "@/lib/icons";
 import { Button } from "@/components/ui/Button";
 import { Empty } from "@/components/ui/EmptyState";

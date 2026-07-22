@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { CornerDownLeft, MessageSquareText } from "lucide-react";
+import { CornerDownLeft, MessageSquareText } from "@/components/icons";
 import { AnimatePresence, motion } from "motion/react";
 import { useStore, type ApprovalState } from "@/stores";
 import { respondToAllApprovals, respondToApproval } from "@/actions/approvals";

@@ -1,4 +1,4 @@
-import { ChevronDown, SquareTerminal } from "lucide-react";
+import { ChevronDown, SquareTerminal } from "@/components/icons";
 import clsx from "clsx";
 import { useStore, type ActivityLabel } from "@/stores";
 import { RollingToken } from "@/components/ui/RollingToken";

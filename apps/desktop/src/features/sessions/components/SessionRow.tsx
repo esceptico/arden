@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Archive, MoreHorizontal } from "lucide-react";
+import { Archive, MoreHorizontal } from "@/components/icons";
 import { renameSession, switchSession } from "@/actions/sessions";
 import { ICON } from "@/lib/icons";
 import { formatRelativePast } from "@/lib/format";

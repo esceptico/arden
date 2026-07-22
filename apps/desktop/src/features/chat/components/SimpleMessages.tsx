@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { Terminal } from "lucide-react";
+import { Terminal } from "@/components/icons";
 import clsx from "clsx";
 import { ICON } from "@/lib/icons";
 import { Marker, MarkerContent } from "@/components/ui/Marker";

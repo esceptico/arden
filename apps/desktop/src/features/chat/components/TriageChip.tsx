@@ -1,4 +1,4 @@
-import { X } from "lucide-react";
+import { X } from "@/components/icons";
 import { useStore } from "@/stores";
 import { acceptTriage, dismissTriage } from "@/actions/triage";
 import { ICON } from "@/lib/icons";

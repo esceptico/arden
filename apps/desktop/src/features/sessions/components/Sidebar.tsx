@@ -1,4 +1,4 @@
-import { Brain, House, Settings as SettingsIcon, Zap } from "lucide-react";
+import { Brain, House, Settings as SettingsIcon, Zap } from "@/components/icons";
 import { originFromEvent } from "@/lib/tokens/motion";
 import { useStore } from "@/stores";
 import { goToNewSessionHome } from "@/actions/sessions";

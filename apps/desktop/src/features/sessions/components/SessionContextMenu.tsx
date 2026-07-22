@@ -1,4 +1,4 @@
-import { Archive, FolderInput, Pencil, Pin, PinOff, Sparkles } from "lucide-react";
+import { Archive, FolderInput, Pencil, Pin, PinOff, Sparkles } from "@/components/icons";
 import type { Area } from "@/api/types";
 import { ICON } from "@/lib/icons";
 import { MenuItem } from "@/components/ui/MenuItem";

@@ -21,19 +21,29 @@ class ToolRegistry:
     ):
         self._tools: dict[str, Tool] = {}
         self._sources: dict[str, str] = {}
+        self._command_eligible: dict[str, bool] = {}
         self._middlewares = tuple(middlewares)
         self._tool_overrides = _normalize_overrides(tool_overrides)
 
-    def register(self, name: str, tool: Tool, *, source: str = "unknown") -> None:
+    def register(
+        self,
+        name: str,
+        tool: Tool,
+        *,
+        source: str = "unknown",
+        command_eligible: bool = False,
+    ) -> None:
         if name in self._tools:
             raise ValueError(f"duplicate tool name: {name}")
         self._tools[name] = tool
         self._sources[name] = source
+        self._command_eligible[name] = command_eligible
 
     def copy_with(self, extra_tools: dict[str, Tool]) -> Self:
         registry = ToolRegistry(middlewares=self._middlewares, tool_overrides=self._tool_overrides)
         registry._tools = dict(self._tools)
         registry._sources = dict(self._sources)
+        registry._command_eligible = dict(self._command_eligible)
         for name, tool in extra_tools.items():
             registry.register(name, tool)
         return registry
@@ -86,6 +96,7 @@ class ToolRegistry:
         actions: frozenset[ToolAction] | None = None,
         extra_names: frozenset[str] = frozenset(),
         scope: tuple[str, ...] | None = None,
+        command_eligible: bool | None = None,
     ) -> list[dict]:
         schemas = []
         for name, tool in self._tools.items():
@@ -95,6 +106,8 @@ class ToolRegistry:
             # selection (including extra_names) so no path widens a run past
             # its author's allowlist.
             if scope is not None and not matches_scope(scope, name):
+                continue
+            if command_eligible is not None and self._command_eligible.get(name, False) != command_eligible:
                 continue
             tool = self._effective_tool(name, tool)
             if names is not None and name not in names:
@@ -116,6 +129,7 @@ class ToolRegistry:
             effective = self._effective_tool(name, tool)
             item = effective.get_metadata(name)
             item["source"] = self._sources.get(name)
+            item["command_eligible"] = self._command_eligible.get(name, False)
             if override := self._tool_overrides.get(name):
                 item["override"] = override.value
             metadata.append(item)
