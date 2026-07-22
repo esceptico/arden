@@ -78,7 +78,7 @@ test("the attention block uses Mission Control's focused queue", () => {
   expect(html).toContain('class="deck-pos"');
   expect(html).toContain('class="t-text-swap" data-request-position>1 of 3');
   expect(html).toContain('class="rest" data-request-rest');
-  expect(attentionCss).toMatch(/\.rest-row\s*\{[^}]*border-radius:\s*var\(--r-row\)/);
+  expect(attentionCss).toMatch(/\.rest-row,\s*\.strip-head\s*\{[^}]*border-radius:\s*var\(--r-row\)/s);
   expect(homeCss).not.toMatch(/\.rest-row\s*\{/);
   expect(css).not.toMatch(/\.deck-card\s*\{[^}]*padding:\s*0 8px 20px/);
 });
@@ -86,9 +86,9 @@ test("the attention block uses Mission Control's focused queue", () => {
 test("focused and peer requests share one horizontal content rail", () => {
   expect(attentionCss).toMatch(/\.deck-card\s*\{[^}]*padding:\s*0 2px/);
   expect(attentionCss).toMatch(/\.deck-chrome\s*\{[^}]*padding:\s*0 2px/);
-  expect(attentionCss).toMatch(/\.rest-row\s*\{[^}]*width:\s*calc\(100% \+ var\(--space-5\)\)/);
-  expect(attentionCss).toMatch(/\.rest-row\s*\{[^}]*margin-inline:\s*calc\(var\(--space-2-5\) \* -1\)/);
-  expect(attentionCss).toMatch(/\.rest-row\s*\{[^}]*padding:\s*0 var\(--space-3\)/);
+  expect(attentionCss).toMatch(/\.rest-row,\s*\.strip-head\s*\{[^}]*width:\s*calc\(100% \+ var\(--space-5\)\)/s);
+  expect(attentionCss).toMatch(/\.rest-row,\s*\.strip-head\s*\{[^}]*margin-inline:\s*calc\(var\(--space-2-5\) \* -1\)/s);
+  expect(attentionCss).toMatch(/\.rest-row,\s*\.strip-head\s*\{[^}]*padding-inline:\s*var\(--space-3\)/s);
 });
 
 test("peer requests change focus without leaving the attention collection", () => {

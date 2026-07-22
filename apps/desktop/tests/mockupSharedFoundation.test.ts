@@ -221,13 +221,19 @@ test("workspace app rails have one styling authority", () => {
 
 test("Home and Area Room share one attention composition", () => {
   for (const [name, source] of Object.entries({ Home: homeCss, "Area Room": areaCss })) {
-    expect(source, `${name} must import the shared attention composition`).toContain('board-attention.css?v=20260722-5');
+    expect(source, `${name} must import the shared attention composition`).toContain('board-attention.css?v=20260722-6');
   }
   for (const selector of ["answer-line", "answer-sub", "card-eyebrow", "card-title", "card-reason", "verb-key", "deck-chrome", "deck-pos", "rest-row"]) {
     expect(attentionCss).toContain(`.${selector}`);
     expect(homeCss).not.toMatch(new RegExp(`\\.${selector}\\s*\\{[^}]*(?:font|margin|color:)`));
     expect(areaCss).not.toMatch(new RegExp(`\\.${selector}\\s*\\{[^}]*(?:font|margin|color:)`));
   }
+});
+
+test("Home attention rows share one content and interaction rail", () => {
+  expect(attentionCss).toMatch(/\.rest-row,\s*\.strip-head\s*\{[^}]*width:\s*calc\(100% \+ var\(--space-5\)\)[^}]*margin-inline:\s*calc\(var\(--space-2-5\) \* -1\)[^}]*padding-inline:\s*var\(--space-3\)/s);
+  expect(homeCss).toMatch(/\.strips\s*\{[^}]*padding:\s*5px 0 0/s);
+  expect(homeCss).not.toMatch(/\.strip-head\s*\{[^}]*padding:/s);
 });
 
 test("all primary pages consume the canonical primitive matrix", () => {

@@ -27,12 +27,15 @@
 }
 .deck-pos { color: var(--faint); font: 500 var(--text-meta)/1 var(--mono); font-variant-numeric: tabular-nums; }
 .rest { margin-top: 10px; display: grid; gap: var(--interactive-row-gap); }
-.rest-row {
+.rest-row,
+.strip-head {
   width: calc(100% + var(--space-5));
-  min-height: 38px;
   margin-inline: calc(var(--space-2-5) * -1);
-  padding: 0 var(--space-3);
+  padding-inline: var(--space-3);
   border-radius: var(--r-row);
+}
+.rest-row {
+  min-height: 38px;
   display: flex;
   align-items: center;
   gap: var(--space-3);

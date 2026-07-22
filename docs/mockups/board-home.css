@@ -1,6 +1,6 @@
 @import "./board-system.css?v=20260722-31";
 @import "./board-app-rail.css?v=20260722-5";
-@import "./board-attention.css?v=20260722-5";
+@import "./board-attention.css?v=20260722-6";
 
 html, body { overflow: hidden; }
 
@@ -98,10 +98,9 @@ body.rail-hidden .workspace { padding-left: 0; }
 .zero-status { font-weight: 560; }
 
 /* ---- ambient strips — the dark cockpit: aggregate the normal, itemize on demand ---- */
-.strips { position: relative; z-index: var(--z-sticky); margin-top: clamp(18px, 3.5vh, 34px); padding: 5px 2px 0; background: var(--paper); border-top: var(--border-width) solid var(--edge); }
+.strips { position: relative; z-index: var(--z-sticky); margin-top: clamp(18px, 3.5vh, 34px); padding: 5px 0 0; background: var(--paper); border-top: var(--border-width) solid var(--edge); }
 .strip-head {
-  width: 100%; min-height: 32px; display: flex; align-items: center; gap: var(--space-2); padding: 0 8px;
-  border-radius: var(--r-row); text-align: left;
+  min-height: 32px; display: flex; align-items: center; gap: var(--space-2); text-align: left;
   transition: background var(--motion-feedback) var(--ease-out);
 }
 .strip-head:hover { background: var(--state-hover-bg); }
