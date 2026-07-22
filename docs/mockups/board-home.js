@@ -129,7 +129,7 @@
     zeroShown: false,
   };
 
-  const fmtWait = min => min < 1 ? "just now" : min < 60 ? `waiting ${min}m` : min < 60 * 24 ? `waiting ${Math.round(min / 60)}h` : `waiting ${Math.round(min / (60 * 24))} days`;
+  const fmtWait = min => min < 1 ? "waiting for you · now" : min < 60 ? `waiting for you · ${min}m` : min < 60 * 24 ? `waiting for you · ${Math.round(min / 60)}h` : `waiting for you · ${Math.round(min / (60 * 24))}d`;
   const fmtAge = min => min < 1 ? "now" : min < 60 ? `${min}m` : min < 60 * 24 ? `${Math.round(min / 60)}h` : `${Math.round(min / (60 * 24))}d`;
   function el(html) {
     const template = document.createElement("template");

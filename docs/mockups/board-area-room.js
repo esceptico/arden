@@ -82,7 +82,7 @@
     if (activeIndex < 0 || !requestCard || !requestRest) return;
     const active = AREA_REQUESTS[activeIndex];
     setRequestText("[data-request-kind]", active.kind, animate);
-    setRequestText("[data-request-age]", `waiting ${active.age}`, animate);
+    setRequestText("[data-request-age]", `waiting for you · ${active.age}`, animate);
     setRequestText("[data-request-title]", active.title, animate);
     setRequestText("[data-request-reason]", active.reason, animate);
     setRequestText("[data-request-primary]", active.primary, animate);

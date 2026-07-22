@@ -4,8 +4,8 @@
 .answer-sub b { color: var(--ink-soft); font-weight: 560; }
 
 .deck-card { padding: 0 2px; }
-.card-eyebrow { margin: 0; display: flex; align-items: baseline; gap: var(--space-1-5); color: var(--faint); font-size: var(--text-xs); }
-.card-eyebrow time { margin-left: auto; flex: none; font: 500 var(--text-xs)/1 var(--mono); font-variant-numeric: tabular-nums; }
+.card-eyebrow { margin: 0; display: flex; align-items: baseline; gap: var(--space-1-5); color: var(--faint); font: 500 var(--text-xs)/1.25 var(--sans); }
+.card-eyebrow time { margin-left: auto; flex: none; font: inherit; font-variant-numeric: tabular-nums; }
 .card-title { margin: 9px 0 0; font-size: var(--text-2xl); line-height: 1.3; font-weight: 620; letter-spacing: -.018em; text-wrap: balance; }
 .card-reason { margin: 7px 0 0; max-width: 58ch; color: var(--muted); font-size: var(--text-sm); line-height: 1.5; text-wrap: pretty; }
 .card-verbs { display: flex; align-items: center; gap: var(--space-1-5); }

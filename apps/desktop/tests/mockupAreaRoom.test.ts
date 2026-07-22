@@ -55,6 +55,7 @@ test("Area Room speaks Home's visual language", () => {
 });
 
 test("attention reads as one open list instead of stacked cards and accordions", () => {
+  expect(js).toContain("waiting for you ·");
   const asks = html.match(/<section class="deck-region"[\s\S]*?<\/section>/)?.[0] || "";
   expect(asks).not.toMatch(/dp-card|dp-chevron|dp-angle|Awaiting approval/);
   expect(css).toMatch(/\.deck-card\s*\{[^}]*background:\s*transparent[^}]*border:\s*0/);
