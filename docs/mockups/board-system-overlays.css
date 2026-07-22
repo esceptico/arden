@@ -1,4 +1,4 @@
-@import "./board-system.css?v=20260722-32";
+@import "./board-system.css?v=20260722-33";
 
 html, body { overflow: hidden; }
 .system-room { min-height: 100%; padding: 6.5rem max(var(--content-gutter), calc((100vw - var(--content-max-width)) / 2)); }

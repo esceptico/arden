@@ -1628,11 +1628,49 @@
     replay: replaySkeleton,
   });
 
+  function collectPageSkeletonRects(target) {
+    const targetRect = target.getBoundingClientRect();
+    const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
+    const rects = [];
+    let node = walker.nextNode();
+    while (node && rects.length < 96) {
+      const parent = node.parentElement;
+      const text = node.textContent?.trim();
+      if (parent && text && !parent.closest(".dp-page-skeleton, [hidden]")) {
+        const style = getComputedStyle(parent);
+        if (style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity) !== 0) {
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          Array.from(range.getClientRects()).forEach(rect => {
+            const x = rect.left - targetRect.left + target.scrollLeft;
+            const y = rect.top - targetRect.top + target.scrollTop;
+            const width = Math.min(rect.width, target.clientWidth - x);
+            const height = Math.max(4, Math.min(12, rect.height * .55));
+            if (width > 3 && x < target.clientWidth && y + rect.height > 0 && y < target.clientHeight) {
+              rects.push({ x, y: y + (rect.height - height) / 2, width, height });
+            }
+          });
+          range.detach();
+        }
+      }
+      node = walker.nextNode();
+    }
+    return rects;
+  }
+
   function createPageSkeleton(target) {
     const skeleton = document.createElement("div");
     skeleton.className = "dp-page-skeleton";
     skeleton.setAttribute("aria-hidden", "true");
-    skeleton.innerHTML = Array.from({ length: 5 }, () => '<i class="dp-page-skeleton-line"></i>').join("");
+    collectPageSkeletonRects(target).forEach(rect => {
+      const line = document.createElement("i");
+      line.className = "dp-page-skeleton-line";
+      line.style.setProperty("--dp-skeleton-x", `${rect.x}px`);
+      line.style.setProperty("--dp-skeleton-y", `${rect.y}px`);
+      line.style.setProperty("--dp-skeleton-width", `${rect.width}px`);
+      line.style.setProperty("--dp-skeleton-height", `${rect.height}px`);
+      skeleton.append(line);
+    });
     target.append(skeleton);
     return skeleton;
   }

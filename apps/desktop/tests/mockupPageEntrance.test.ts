@@ -27,10 +27,10 @@ test("every primary mockup uses the shared page entrance contract", () => {
     expect(page, `${name} must opt into page entrance`).toContain("data-page-enter");
     expect(page, `${name} must mark major entrance blocks`).toContain("data-page-enter-item");
     expect(page, `${name} must use the current shared motion asset`).toContain(
-      'board-motion.js?v=20260722-42',
+      'board-motion.js?v=20260722-43',
     );
     expect(page + (localStyles.get(name) || ""), `${name} must use the current shared component asset`).toContain(
-      'board-system.css?v=20260722-32',
+      'board-system.css?v=20260722-33',
     );
   }
 });
@@ -63,13 +63,22 @@ test("page entrance motion is shared, restrained, and reduced-motion safe", () =
   expect(motion).toContain("motion.pageEntrance.bind(document)");
 });
 
-test("the skeleton overlay is shared and never animates layout", () => {
+test("the skeleton overlay mirrors rendered content geometry without perpetual motion", () => {
   expect(system).toContain(".dp-page-skeleton {");
   expect(system).toContain("pointer-events: none;");
-  expect(system).toContain("@keyframes dp-page-skeleton-pulse");
-  expect(system).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*\.dp-page-skeleton-line[\s\S]*animation:\s*none/);
+  expect(system).toMatch(/\.dp-page-skeleton-line\s*\{[^}]*position:\s*absolute/s);
+  expect(system).toContain("left: var(--dp-skeleton-x);");
+  expect(system).toContain("top: var(--dp-skeleton-y);");
+  expect(system).toContain("width: var(--dp-skeleton-width);");
+  expect(system).toContain("height: var(--dp-skeleton-height);");
+  expect(system).not.toContain("@keyframes dp-page-skeleton-pulse");
 
   const entrance = motion.match(/function bindPageEntrance[\s\S]*?const pageEntrance = Object\.freeze/)?.[0] || "";
+  expect(motion).toContain("function collectPageSkeletonRects");
+  expect(motion).toContain("NodeFilter.SHOW_TEXT");
+  expect(motion).toContain("range.getClientRects()");
+  expect(motion).not.toContain("Array.from({ length: 5 }");
+  expect(motion).toContain('line.style.setProperty("--dp-skeleton-x"');
   expect(entrance).toContain('const plainItems = items.filter(element => !element.matches("[data-page-skeleton]"))');
   expect(entrance).toContain("const skeletonContent = skeletonTargets.flatMap");
   expect(entrance).not.toMatch(/\b(?:width|height|top|right|bottom|left|margin|padding):/);

@@ -1,4 +1,4 @@
-@import "./board-system.css?v=20260722-32";
+@import "./board-system.css?v=20260722-33";
 
 html, body { overflow: hidden; }
 #app { position: fixed; inset: 0; overflow: hidden; }
