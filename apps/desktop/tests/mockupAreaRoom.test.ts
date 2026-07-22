@@ -86,7 +86,9 @@ test("the attention block uses Mission Control's focused queue", () => {
 test("focused and peer requests share one horizontal content rail", () => {
   expect(attentionCss).toMatch(/\.deck-card\s*\{[^}]*padding:\s*0 2px/);
   expect(attentionCss).toMatch(/\.deck-chrome\s*\{[^}]*padding:\s*0 2px/);
-  expect(attentionCss).toMatch(/\.rest-row\s*\{[^}]*padding:\s*0 2px/);
+  expect(attentionCss).toMatch(/\.rest-row\s*\{[^}]*width:\s*calc\(100% \+ var\(--space-5\)\)/);
+  expect(attentionCss).toMatch(/\.rest-row\s*\{[^}]*margin-inline:\s*calc\(var\(--space-2-5\) \* -1\)/);
+  expect(attentionCss).toMatch(/\.rest-row\s*\{[^}]*padding:\s*0 var\(--space-3\)/);
 });
 
 test("peer requests change focus without leaving the attention collection", () => {

@@ -221,7 +221,7 @@ test("workspace app rails have one styling authority", () => {
 
 test("Home and Area Room share one attention composition", () => {
   for (const [name, source] of Object.entries({ Home: homeCss, "Area Room": areaCss })) {
-    expect(source, `${name} must import the shared attention composition`).toContain('board-attention.css?v=20260722-4');
+    expect(source, `${name} must import the shared attention composition`).toContain('board-attention.css?v=20260722-5');
   }
   for (const selector of ["answer-line", "answer-sub", "card-eyebrow", "card-title", "card-reason", "verb-key", "deck-chrome", "deck-pos", "rest-row"]) {
     expect(attentionCss).toContain(`.${selector}`);

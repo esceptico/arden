@@ -28,9 +28,10 @@
 .deck-pos { color: var(--faint); font: 500 var(--text-meta)/1 var(--mono); font-variant-numeric: tabular-nums; }
 .rest { margin-top: 10px; display: grid; gap: var(--interactive-row-gap); }
 .rest-row {
-  width: 100%;
+  width: calc(100% + var(--space-5));
   min-height: 38px;
-  padding: 0 2px;
+  margin-inline: calc(var(--space-2-5) * -1);
+  padding: 0 var(--space-3);
   border-radius: var(--r-row);
   display: flex;
   align-items: center;
