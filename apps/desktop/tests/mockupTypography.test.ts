@@ -93,7 +93,9 @@ test("Interactive row stacks use one shared physical gap", () => {
   expect(chatHtml).toContain('class="rail-nav dp-row-stack"');
   expect(chatHtml.match(/class="session-group dp-row-stack"/g)?.length).toBe(3);
   expect(memoryHtml).not.toMatch(/class="tree-nest depth-[12] dp-row-stack"/);
-  expect(memoryHtml).toMatch(/\.trow::after\s*\{[^}]*inset-block:calc\(var\(--interactive-row-gap\)\/2\);/s);
+  expect(memoryHtml).toMatch(/\.fold,\.trow\s*\{[^}]*height:27px;[^}]*border-radius:var\(--r-row\);/s);
+  expect(memoryHtml).not.toMatch(/\.(?:fold|trow)::after/);
+  expect(memoryHtml).not.toContain(".tree>.tree-group+.tree-group{margin-top:10px;}");
 });
 
 test("Chat shell toggles share computed chrome geometry", () => {
