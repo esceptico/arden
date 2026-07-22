@@ -8,7 +8,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..700&family=Geist+Mono:wght@400..500&display=swap" rel="stylesheet">
 <script src="./board-icons.js?v=20260719-2"></script>
 <script src="./board-motion.js?v=20260722-42"></script>
-<link rel="stylesheet" href="./board-system.css?v=20260722-31">
+<link rel="stylesheet" href="./board-system.css?v=20260722-32">
 <style>
 :root{
   /* composition: mirror chat — one centered 760px lane with 28px content gutters */
@@ -307,7 +307,7 @@ body.rail-resizing .sheet-scroll{transition:none;}
   </div>
 </nav>
 
-<button class="dp-shell-toggle dp-shell-toggle-left sidebar-shell-toggle" id="sidebar-shell-toggle" aria-label="Hide sidebar" aria-expanded="true" title="Hide sidebar (⌘B)"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#dp-panel-left-close"/></svg></button>
+<button class="dp-shell-toggle dp-shell-toggle-left sidebar-shell-toggle" id="sidebar-shell-toggle" aria-label="Hide sidebar" aria-keyshortcuts="Meta+B" aria-expanded="true" title="Hide sidebar"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#dp-panel-left-close"/></svg></button>
 <a class="dp-shell-toggle dp-shell-back" href="./board-home.html" aria-label="Back to Home"><svg aria-hidden="true"><use href="#dp-arrow-left"/></svg></a>
 
 <!-- TIER 1 · desk: open-page tabs -->
@@ -557,8 +557,18 @@ function setEditing(on,{statusText}={}){
   oEdit.classList.toggle("on", on);
   document.querySelectorAll(".sheet .prose p, .sheet h1").forEach(el => el.contentEditable = on ? "true" : "false");
   if (sigState){
-    const nextStatus=statusText??(on?"editing — ⌘S to review · esc to stop":(PAGE_DATA[activePage]?.edited||"edited 2d ago"));
-    MOTION.textSwap.swap(sigState,nextStatus);
+    if (on && statusText == null) {
+      sigState.replaceChildren(
+        document.createTextNode("editing — "),
+        MOTION.keyboard.group(["⌘", "S"], { ariaLabel: "Command S" }),
+        document.createTextNode(" to review · "),
+        MOTION.keyboard.key("Esc"),
+        document.createTextNode(" to stop"),
+      );
+    } else {
+      const nextStatus=statusText??(PAGE_DATA[activePage]?.edited||"edited 2d ago");
+      MOTION.textSwap.swap(sigState,nextStatus);
+    }
     sigState.style.color = on ? "#c9822e" : "";
   }
 }
@@ -1032,7 +1042,7 @@ function setRailHidden(next, { instant = false } = {}){
   if (next === railHidden) return;
   railHidden = next;
   MOTION.sidebar.sync({ className: "rail-hidden", hidden: railHidden, sidebar: rail, dependents: [sheetScroll], instant });
-  MOTION.shellToggle.sync(sidebarToggle, { expanded: !railHidden, expandedIcon: "#dp-panel-left-close", collapsedIcon: "#dp-panel-left-open", hideTitle: "Hide sidebar (⌘B)", showTitle: "Show sidebar (⌘B)", animate: !instant });
+  MOTION.shellToggle.sync(sidebarToggle, { expanded: !railHidden, expandedIcon: "#dp-panel-left-close", collapsedIcon: "#dp-panel-left-open", hideTitle: "Hide sidebar", showTitle: "Show sidebar", animate: !instant });
   ornamentFitOverride = false;
   layoutChrome();
 }

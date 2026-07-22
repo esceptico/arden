@@ -257,6 +257,38 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   outline: var(--border-width) solid color-mix(in oklab, var(--accent) 58%, transparent);
   outline-offset: 2px;
 }
+
+/* shadcn/Base UI Kbd: every rendered keyboard input consumes this primitive. */
+.dp-kbd {
+  width: fit-content;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  padding-inline: var(--space-1);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  border-radius: var(--r-mark);
+  color: var(--muted);
+  background: var(--panel-soft);
+  font: 500 .75rem/1 var(--sans);
+  white-space: nowrap;
+  user-select: none;
+  pointer-events: none;
+}
+.dp-kbd svg { width: .75rem; height: .75rem; }
+.dp-kbd-group {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.dp-tooltip .dp-kbd {
+  color: var(--paper);
+  background: color-mix(in srgb, var(--paper) 20%, transparent);
+}
+[data-theme="dark"] .dp-tooltip .dp-kbd {
+  background: color-mix(in srgb, var(--paper) 10%, transparent);
+}
 svg { display: block; fill: none; }
 [hidden] { display: none !important; }
 [inert] { pointer-events: none; }
@@ -294,7 +326,7 @@ svg { display: block; fill: none; }
 .dp-review-guide-toggle { min-height: var(--control-size); padding: 0 .5rem; display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); border: 0; border-radius: var(--r-row); color: var(--muted); background: transparent; font: inherit; text-align: left; cursor: pointer; }
 .dp-review-guide-toggle:hover { color: var(--ink); background: var(--state-hover-bg); }
 .dp-review-guide-toggle[aria-pressed="true"] { color: var(--ink); background: var(--state-selected-bg); }
-.dp-review-guide-toggle kbd { color: var(--faint); font: inherit; }
+.dp-review-guide-toggle .dp-kbd { color: var(--faint); }
 .dp-review-nav :is(summary, a, button):focus-visible { outline: var(--border-width) solid color-mix(in oklab, var(--accent) 58%, transparent); outline-offset: 2px; }
 
 /* Review-only alignment overlay. It never participates in product layout or input. */
@@ -603,7 +635,6 @@ body.dp-guides-on { cursor: crosshair; }
   font-size: var(--text-control);
 }
 .dp-search-shell > input::placeholder { color: var(--faint); }
-.dp-search-shell > kbd,
 .dp-search-trailing { color: var(--faint); font: 500 var(--text-meta)/1 var(--mono); white-space: nowrap; }
 
 .dp-switch {

@@ -11,7 +11,7 @@
     />
     <script src="./board-icons.js?v=20260719-2"></script>
     <script src="./board-motion.js?v=20260722-42"></script>
-    <link rel="stylesheet" href="./board-system.css?v=20260722-31" />
+    <link rel="stylesheet" href="./board-system.css?v=20260722-32" />
     <style>
       @property --fill-x {
         syntax: "<length>";
@@ -46,13 +46,8 @@
         top: 50px;
         bottom: 12px;
       }
-      .rail-title span {
+      .rail-title .dp-kbd-group {
         margin-left: auto;
-        padding: 4px 6px;
-        border-radius: var(--r-tag);
-        background: var(--panel-soft);
-        font: 500 var(--text-meta)/1 var(--mono);
-        color: var(--faint);
       }
       .nav-meta {
         display: flex;
@@ -1309,7 +1304,7 @@
         class="dp-sidebar-resizer rail-resizer"
         aria-label="Resize sidebar"
       ></div>
-      <div class="rail-title dp-sidebar-header">Settings <span>⌘,</span></div>
+      <div class="rail-title dp-sidebar-header">Settings <kbd class="dp-kbd-group" data-slot="kbd-group" aria-label="Command comma"><kbd class="dp-kbd" data-slot="kbd">⌘</kbd><kbd class="dp-kbd" data-slot="kbd">,</kbd></kbd></div>
       <nav class="nav dp-sidebar-nav" aria-label="Settings">
         <div class="nav-highlight dp-sidebar-nav-highlight"></div>
         <div class="nav-group dp-sidebar-group">
@@ -1544,10 +1539,7 @@
       <div class="section section-search">
         <div class="searchbar dp-search-shell">
           <svg><use href="#dp-search" /></svg
-          ><input placeholder="Search tools" aria-label="Search tools" /><kbd
-            class="dp-search-trailing"
-            >47 tools</kbd
-          >
+          ><input placeholder="Search tools" aria-label="Search tools" /><span class="dp-search-trailing">47 tools</span>
         </div>
       </div>
       <section class="section">
@@ -1650,7 +1642,7 @@
           ><input
             placeholder="Search archived sessions"
             aria-label="Search archived sessions"
-          /><kbd class="dp-search-trailing">12 items</kbd>
+          /><span class="dp-search-trailing">12 items</span>
         </div>
       </div>
       <section class="section">
@@ -2352,10 +2344,10 @@
               <div class="setting-title">Quick capture shortcut</div>
               <div class="setting-hint">
                 Global hotkey to summon the floating composer from anywhere.
-                Enter creates a new session and sends the message.
+                <kbd class="dp-kbd" data-slot="kbd">Enter</kbd> creates a new session and sends the message.
               </div>
             </div>
-            <div class="control"><button class="btn">⌘⇧Space</button></div>
+            <div class="control"><button class="btn"><kbd class="dp-kbd-group" data-slot="kbd-group" aria-label="Command Shift Space"><kbd class="dp-kbd" data-slot="kbd">⌘</kbd><kbd class="dp-kbd" data-slot="kbd">⇧</kbd><kbd class="dp-kbd" data-slot="kbd">Space</kbd></kbd></button></div>
           </div>
         </div>
       </section>

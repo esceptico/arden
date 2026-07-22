@@ -6,7 +6,7 @@
   <title>Board — System and overlays</title>
   <script src="./board-icons.js"></script>
   <script src="./board-motion.js?v=20260722-42"></script>
-  <link rel="stylesheet" href="./board-system.css?v=20260722-31">
+  <link rel="stylesheet" href="./board-system.css?v=20260722-32">
   <link rel="stylesheet" href="./board-system-overlays.css?v=20260722-10">
 </head>
 <body data-page-enter>
@@ -25,9 +25,9 @@
       <div class="command-group" cmdk-group>
         <div cmdk-group-heading>Suggested</div>
         <div cmdk-group-items>
-          <a class="command-row" cmdk-item id="command-new-chat" href="./board-chat.html" role="option" data-selected data-value="new chat conversation"><svg aria-hidden="true"><use href="#dp-edit"/></svg><span>New chat</span><kbd class="command-shortcut">⌘N</kbd></a>
-          <a class="command-row" cmdk-item id="command-open-folder" href="./board-area-room.html" role="option" data-value="open folder area"><svg aria-hidden="true"><use href="#dp-folder"/></svg><span>Open folder</span><kbd class="command-shortcut">⌘O</kbd></a>
-          <a class="command-row" cmdk-item id="command-search-files" href="./board-memory.html" role="option" data-value="search files memory"><svg aria-hidden="true"><use href="#dp-search"/></svg><span>Search files</span><kbd class="command-shortcut">⌘P</kbd></a>
+          <a class="command-row" cmdk-item id="command-new-chat" href="./board-chat.html" role="option" data-selected data-value="new chat conversation"><svg aria-hidden="true"><use href="#dp-edit"/></svg><span>New chat</span><kbd class="dp-kbd-group" data-slot="kbd-group" aria-label="Command N"><kbd class="dp-kbd" data-slot="kbd">⌘</kbd><kbd class="dp-kbd" data-slot="kbd">N</kbd></kbd></a>
+          <a class="command-row" cmdk-item id="command-open-folder" href="./board-area-room.html" role="option" data-value="open folder area"><svg aria-hidden="true"><use href="#dp-folder"/></svg><span>Open folder</span><kbd class="dp-kbd-group" data-slot="kbd-group" aria-label="Command O"><kbd class="dp-kbd" data-slot="kbd">⌘</kbd><kbd class="dp-kbd" data-slot="kbd">O</kbd></kbd></a>
+          <a class="command-row" cmdk-item id="command-search-files" href="./board-memory.html" role="option" data-value="search files memory"><svg aria-hidden="true"><use href="#dp-search"/></svg><span>Search files</span><kbd class="dp-kbd-group" data-slot="kbd-group" aria-label="Command P"><kbd class="dp-kbd" data-slot="kbd">⌘</kbd><kbd class="dp-kbd" data-slot="kbd">P</kbd></kbd></a>
         </div>
       </div>
       <div class="command-group" cmdk-group>
@@ -50,7 +50,7 @@
     <div class="dp-empty-state state-panel" data-panel="empty" hidden><strong>No commands found</strong><span>Try a shorter name or open an Area directly.</span></div>
     <div class="dp-error-state state-panel" data-panel="error" hidden><strong>Commands unavailable</strong><span>Reconnect to reload server actions.</span><input class="dp-field" aria-label="Failed command query" aria-invalid="true" value="server actions"><button class="dp-button">Retry</button></div>
     <div class="command-results state-panel" data-panel="long" hidden><button class="command-row" cmdk-item data-selected><svg><use href="#dp-file"/></svg><span>Open an-extremely-long-unbroken-resource-identifier-that-must-never-escape-the-viewport-or-cover-the-selected-action</span><small>File</small></button></div>
-    <footer class="command-agent-hint"><span>Enter opens the selected result</span><kbd>⌘ Enter asks the navigation helper</kbd></footer>
+    <footer class="command-agent-hint"><span><kbd class="dp-kbd" data-slot="kbd">Enter</kbd> opens the selected result</span><span><kbd class="dp-kbd-group" data-slot="kbd-group" aria-label="Command Enter"><kbd class="dp-kbd" data-slot="kbd">⌘</kbd><kbd class="dp-kbd" data-slot="kbd">Enter</kbd></kbd> asks the navigation helper</span></footer>
   </section>
 
   <section class="command-helper" data-surface="command-helper" role="dialog" aria-modal="false" aria-labelledby="command-helper-title" aria-hidden="true" hidden inert>
@@ -85,7 +85,7 @@
 
   <section class="system-overlay quick-capture" data-surface="quick-capture" role="dialog" aria-modal="true" aria-labelledby="capture-title" aria-hidden="true" hidden inert>
     <header class="system-overlay-head dp-sheet-header"><strong id="capture-title">Quick capture</strong><button class="dp-icon-button" data-close aria-label="Close quick capture"><svg><use href="#dp-close"/></svg></button></header>
-    <div class="system-overlay-body dp-sheet-body capture-composer"><textarea class="dp-field" aria-label="Capture message" placeholder="What needs attention?"></textarea><div class="capture-meta"><span>Inbox · new chat</span><span>⌘ Enter to send</span></div></div>
+    <div class="system-overlay-body dp-sheet-body capture-composer"><textarea class="dp-field" aria-label="Capture message" placeholder="What needs attention?"></textarea><div class="capture-meta"><span>Inbox · new chat</span><span><kbd class="dp-kbd-group" data-slot="kbd-group" aria-label="Command Enter"><kbd class="dp-kbd" data-slot="kbd">⌘</kbd><kbd class="dp-kbd" data-slot="kbd">Enter</kbd></kbd> to send</span></div></div>
     <footer class="system-overlay-foot dp-sheet-footer"><button class="dp-button quiet" data-close>Cancel</button><button class="dp-button primary">Send</button></footer>
   </section>
 
@@ -110,7 +110,7 @@
     <div class="system-overlay-body dp-sheet-body mermaid-stage" role="img" aria-label="Collect evidence, review countercase, then save brief"><svg viewBox="0 0 600 180"><rect x="20" y="55" width="150" height="70" rx="12"/><rect x="225" y="55" width="150" height="70" rx="12"/><rect x="430" y="55" width="150" height="70" rx="12"/><path d="M170 90H225M375 90H430"/><text x="52" y="94">Collect evidence</text><text x="252" y="94">Review countercase</text><text x="475" y="94">Save brief</text></svg></div>
   </section>
 
-  <span class="dp-tooltip" data-surface="system-tooltip" role="tooltip">Escape closes the top surface</span>
+  <span class="dp-tooltip" data-surface="system-tooltip" role="tooltip"><kbd class="dp-kbd" data-slot="kbd">Esc</kbd><span>closes the top surface</span></span>
   <nav class="plate-controls" aria-label="System surface demos" data-page-enter-item>
     <button data-open="command-palette" aria-pressed="true">Command</button><button data-open="command-helper" aria-pressed="false">Helper</button><button data-open="quick-capture" aria-pressed="false">Capture</button><button data-open="approval-review" aria-pressed="false">Approval</button><button data-open="tool-viewer" aria-pressed="false">Tool</button><button data-open="markdown-viewer" aria-pressed="false">Markdown</button><button data-open="mermaid-viewer" aria-pressed="false">Mermaid</button><button data-toast aria-pressed="false">Toast</button>
   </nav>

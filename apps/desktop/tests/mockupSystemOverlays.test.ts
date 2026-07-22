@@ -93,7 +93,9 @@ test("the command palette follows the grouped cmdk interaction contract", () => 
   expect(html).toContain('data-command-state="default"');
   expect(html).not.toContain('class="state-bar"');
   expect(css).toContain("[cmdk-item][data-selected]");
-  expect(css).toContain(".command-shortcut");
+  expect(html).toContain('data-slot="kbd-group"');
+  expect(html).toContain('data-slot="kbd"');
+  expect(css).not.toContain(".command-shortcut");
   expect(css).toContain("overflow: visible");
   expect(css).toContain("calc(50% - 20.625rem)");
   expect(css).toContain("border-radius: calc(var(--r-shell) * 1.25)");

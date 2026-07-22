@@ -270,6 +270,57 @@ test("all composed searches use one shared shell", () => {
   expect(settingsCss).not.toMatch(/\.(?:searchbar|model-search-wrap)\{[^}]*background:/);
 });
 
+test("every rendered keyboard shortcut uses the shared Kbd primitives", () => {
+  expect(system).toContain(".dp-kbd {");
+  expect(system).toContain(".dp-kbd-group {");
+
+  const activeMarkup = new Map([
+    ["Home", home],
+    ["Chat", chatHtml],
+    ["Automations", automationsHtml],
+    ["Memory", memory],
+    ["Settings", settings],
+    ["Area Room", areaHtml],
+    ["Overlays", overlaysHtml],
+  ]);
+  for (const [name, source] of activeMarkup) {
+    for (const match of source.matchAll(/<kbd\b[^>]*>/g)) {
+      const isGroup = match[0].includes('data-slot="kbd-group"');
+      expect(match[0], `${name} Kbd must consume the shared class`).toContain(isGroup ? "dp-kbd-group" : "dp-kbd");
+      expect(match[0], `${name} Kbd must expose the shared slot`).toContain(isGroup ? 'data-slot="kbd-group"' : 'data-slot="kbd"');
+    }
+  }
+
+  expect(system).toContain("width: fit-content;");
+  expect(system).toContain("min-width: 1.25rem;");
+  expect(system).toContain("height: 1.25rem;");
+  expect(system).toContain("border-radius: var(--r-mark);");
+  expect(system).toContain("font: 500 .75rem/1 var(--sans);");
+
+  expect(home).toContain('class="dp-kbd-group" data-slot="kbd-group"');
+  expect(automationsHtml).toContain('class="dp-kbd-group dp-search-trailing" data-slot="kbd-group"');
+  expect(settings).toContain('class="dp-kbd-group" data-slot="kbd-group"');
+  expect(overlaysHtml).toContain('class="dp-kbd-group" data-slot="kbd-group"');
+  expect(motion).toContain("function createKbd(");
+  expect(motion).toContain("function createKbdGroup(");
+  expect(motion).toContain("const keyboard = Object.freeze({ key: createKbd, group: createKbdGroup });");
+  expect(motion).toContain('const shortcut = keyboard.key("G")');
+  expect(memory).toContain('MOTION.keyboard.group(["⌘", "S"]');
+
+  for (const [name, source] of activeStyleSources) {
+    expect(source, `${name} must not style raw kbd elements`).not.toMatch(/(?:^|[\s>+~,])kbd\s*(?:[,.:{]|$)/m);
+    expect(source, `${name} must not define a local shortcut primitive`).not.toMatch(/\.command-shortcut\s*\{/);
+  }
+
+  expect(settings).not.toContain("<kbd\n            class=\"dp-search-trailing\"");
+  expect(settings).not.toContain('<kbd class="dp-search-trailing">12 items</kbd>');
+  expect(settings).not.toContain('<button class="btn">⌘⇧Space</button>');
+  expect(settings).not.toContain("Enter creates a new session");
+  expect(memory).not.toContain("⌘S to review · esc to stop");
+  expect(overlaysHtml).not.toContain("⌘ Enter to send");
+  expect(overlaysHtml).not.toContain("<kbd>⌘ Enter asks the navigation helper</kbd>");
+});
+
 test("Board uses the canonical Fluid Functionalism surface ladder", () => {
   expect(system).toMatch(/^@import "\.\/typeset\.css";\n@import "\.\/board-surfaces\.css(?:\?v=\d{8}-\d+)?";/);
   for (let level = 1; level <= 8; level += 1) {

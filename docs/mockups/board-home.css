@@ -1,4 +1,4 @@
-@import "./board-system.css?v=20260722-31";
+@import "./board-system.css?v=20260722-32";
 @import "./board-app-rail.css?v=20260722-5";
 @import "./board-attention.css?v=20260722-8";
 
@@ -31,7 +31,7 @@ body.rail-hidden .workspace { padding-left: 0; }
 .capture input { min-width: 0; flex: 1; border: 0; outline: 0; color: var(--ink); background: transparent; font-size: var(--text-md); }
 .capture input::placeholder { color: var(--faint); }
 .capture-note { flex: none; font: 500 var(--text-meta)/1 var(--mono); color: var(--muted); white-space: nowrap; }
-.capture kbd { flex: none; font: 500 var(--text-xs)/1 var(--mono); color: var(--faint); }
+.capture .dp-kbd-group { flex: none; }
 
 /* ---- the queue head — the ask is content, not furniture: open on the room, no box ---- */
 .deck-region { margin-top: clamp(24px, 5vh, 48px); }
@@ -87,7 +87,6 @@ body.rail-hidden .workspace { padding-left: 0; }
   transition: color var(--motion-feedback) var(--ease-out), background var(--motion-feedback) var(--ease-out);
 }
 .deck-hint:hover { color: var(--ink); background: var(--state-hover-bg); }
-.deck-hint kbd { padding: 1px 4px; border-radius: var(--r-mark); background: var(--panel-soft); font: 560 var(--text-meta)/1 var(--mono); }
 
 /* ---- cleared attention — compact confirmation beside the existing undo ---- */
 .deck-slot:has(.zero:not([hidden])) { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }

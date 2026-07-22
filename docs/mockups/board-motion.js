@@ -1748,6 +1748,26 @@
     mount: mountProgressiveBlur,
   });
 
+  function createKbd(value, options = {}) {
+    const element = document.createElement("kbd");
+    element.className = "dp-kbd";
+    element.dataset.slot = "kbd";
+    element.textContent = value;
+    if (options.ariaLabel) element.setAttribute("aria-label", options.ariaLabel);
+    return element;
+  }
+
+  function createKbdGroup(values, options = {}) {
+    const group = document.createElement("kbd");
+    group.className = ["dp-kbd-group", options.className].filter(Boolean).join(" ");
+    group.dataset.slot = "kbd-group";
+    if (options.ariaLabel) group.setAttribute("aria-label", options.ariaLabel);
+    group.append(...values.map(value => createKbd(value)));
+    return group;
+  }
+
+  const keyboard = Object.freeze({ key: createKbd, group: createKbdGroup });
+
   const motion = Object.freeze({
     duration,
     surface,
@@ -1788,6 +1808,7 @@
     skeletonReveal,
     pageEntrance,
     progressiveBlur,
+    keyboard,
     distance,
     blur,
     scale,
@@ -2105,8 +2126,7 @@
     guideToggle.type = "button";
     guideToggle.className = "dp-review-guide-toggle";
     guideToggle.textContent = "Inspect layout";
-    const shortcut = document.createElement("kbd");
-    shortcut.textContent = "G";
+    const shortcut = keyboard.key("G");
     guideToggle.append(shortcut);
     root.querySelector(".dp-review-nav nav")?.append(guideToggle);
 

@@ -30,7 +30,7 @@ test("every primary mockup uses the shared page entrance contract", () => {
       'board-motion.js?v=20260722-42',
     );
     expect(page + (localStyles.get(name) || ""), `${name} must use the current shared component asset`).toContain(
-      'board-system.css?v=20260722-31',
+      'board-system.css?v=20260722-32',
     );
   }
 });
