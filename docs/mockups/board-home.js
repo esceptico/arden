@@ -276,7 +276,7 @@
     const row = el(`
       <button type="button" class="rest-row" data-id="${id}">
         <b>${ask.title}</b>
-        <small>${ask.kind} · ${ask.area} · ${fmtAge(ask.waitedMin)}</small>
+        <small class="rest-meta"><span>${ask.kind}</span><span class="rest-meta-separator">·</span><span>${ask.area}</span><span class="rest-meta-separator">·</span><span>${fmtAge(ask.waitedMin)}</span></small>
       </button>`);
     row.addEventListener("click", () => promoteTo(id));
     return row;

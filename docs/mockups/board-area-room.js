@@ -55,7 +55,16 @@
     const title = document.createElement("b");
     title.textContent = request.title;
     const meta = document.createElement("small");
-    meta.textContent = `${request.kind.toLowerCase()} · ${request.age}`;
+    meta.className = "rest-meta";
+    meta.dataset.columns = "2";
+    const kind = document.createElement("span");
+    kind.textContent = request.kind.toLowerCase();
+    const separator = document.createElement("span");
+    separator.className = "rest-meta-separator";
+    separator.textContent = "·";
+    const age = document.createElement("span");
+    age.textContent = request.age;
+    meta.append(kind, separator, age);
     row.append(title, meta);
     row.addEventListener("click", () => renderRequestQueue(request.id));
     return row;

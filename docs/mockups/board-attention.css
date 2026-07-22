@@ -47,7 +47,22 @@
 .rest-row:hover { background: var(--state-hover-bg); }
 .rest-row:not(:disabled):active { transform: scale(var(--press-scale-subtle)); }
 .rest-row b { min-width: 0; overflow: hidden; color: var(--ink-soft); font-size: var(--text-sm); font-weight: 560; text-overflow: ellipsis; white-space: nowrap; }
-.rest-row small { flex: none; margin-left: auto; color: var(--faint); font: 500 var(--text-2xs)/1 var(--mono); font-variant-numeric: tabular-nums; }
+.rest-meta {
+  --rest-meta-columns: 8ch 1ch minmax(12ch, 16ch) 1ch 4ch;
+  flex: none;
+  margin-left: auto;
+  display: grid;
+  grid-template-columns: var(--rest-meta-columns);
+  column-gap: var(--space-1);
+  align-items: baseline;
+  color: var(--faint);
+  font: 500 var(--text-2xs)/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.rest-meta[data-columns="2"] { --rest-meta-columns: minmax(8ch, 12ch) 1ch 4ch; }
+.rest-meta span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rest-meta-separator { text-align: center; }
+.rest-meta span:last-child { text-align: right; }
 .rest-more { padding: 5px 10px 0; color: var(--faint); font-size: var(--text-2xs); font-variant-numeric: tabular-nums; }
 
 @media (max-height: 47rem) {

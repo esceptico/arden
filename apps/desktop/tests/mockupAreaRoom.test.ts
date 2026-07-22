@@ -92,11 +92,19 @@ test("focused and peer requests share one horizontal content rail", () => {
 });
 
 test("peer requests change focus without leaving the attention collection", () => {
-  expect(html).toMatch(/class="rest-row"[^>]*data-request-id="publish"[\s\S]*?Publish the evidence brief[\s\S]*?approval · 18m/);
-  expect(html).toMatch(/class="rest-row"[^>]*data-request-id="notion"[\s\S]*?Reconnect Notion[\s\S]*?sign-in · 31m/);
+  expect(html).toMatch(/class="rest-row"[^>]*data-request-id="publish"[\s\S]*?Publish the evidence brief[\s\S]*?<span>approval<\/span><span class="rest-meta-separator">·<\/span><span>18m<\/span>/);
+  expect(html).toMatch(/class="rest-row"[^>]*data-request-id="notion"[\s\S]*?Reconnect Notion[\s\S]*?<span>sign-in<\/span><span class="rest-meta-separator">·<\/span><span>31m<\/span>/);
   expect(js).toContain("const AREA_REQUESTS");
   expect(js).toContain("renderRequestQueue");
   expect(js).not.toMatch(/triggers:\s*\[[^\]]*queueSummary/);
+});
+
+test("peer request metadata uses the shared compact column contract", () => {
+  expect(html).toContain('class="rest-meta" data-columns="2"');
+  expect(js).toContain('meta.className = "rest-meta"');
+  expect(js).toContain('meta.dataset.columns = "2"');
+  expect(js).toContain('separator.className = "rest-meta-separator"');
+  expect(attentionCss).toMatch(/\.rest-meta\[data-columns="2"\]\s*\{[^}]*--rest-meta-columns:/s);
 });
 
 test("focused request content uses the shared transitions.dev text swap", () => {

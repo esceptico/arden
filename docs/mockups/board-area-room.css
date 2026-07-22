@@ -1,6 +1,6 @@
 @import "./board-system.css?v=20260722-32";
 @import "./board-app-rail.css?v=20260722-5";
-@import "./board-attention.css?v=20260722-8";
+@import "./board-attention.css?v=20260722-9";
 
 html, body { overflow: hidden; }
 .workspace { position: absolute; inset: 0; overflow: hidden; padding-left: calc(var(--sidebar-width) + var(--sidebar-gap)); transition: opacity var(--motion-feedback) var(--ease-out); }

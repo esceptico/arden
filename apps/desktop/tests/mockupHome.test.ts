@@ -8,6 +8,7 @@ const html = read("board-home.html");
 const css = read("board-home.css");
 const js = read("board-home.js");
 const system = read("board-system.css");
+const attention = read("board-attention.css");
 
 test("Mission Control uses the shared Board foundation", () => {
   expect(existsSync(url("board-home.html"))).toBe(true);
@@ -47,6 +48,16 @@ test("the attention deck is backed by real ask semantics and reversible handling
   expect(html).not.toContain('data-not-today');
   expect(js).not.toContain("notTodayEl");
   expect(html).toContain('data-undo');
+});
+
+test("peer request metadata uses stable semantic columns", () => {
+  expect(js).toContain('class="rest-meta"');
+  expect(js).toContain('<span>${ask.kind}</span>');
+  expect(js).toContain('<span>${ask.area}</span>');
+  expect(js).toContain('<span>${fmtAge(ask.waitedMin)}</span>');
+  expect(attention).toMatch(/\.rest-meta\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*var\(--rest-meta-columns\)/s);
+  expect(js).toContain('<span class="rest-meta-separator">·</span>');
+  expect(attention).toMatch(/\.rest-meta-separator\s*\{[^}]*text-align:\s*center/s);
 });
 
 test("the cleared attention state is a compact confirmation with adjacent undo", () => {
