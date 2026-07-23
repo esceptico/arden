@@ -45,8 +45,7 @@ export function IntegrationsTab() {
   const googleEnabled = useMemo(() => {
     const value = (id: GoogleIntegrationId) => {
       const enabled = serverConfig?.integrations[id]?.enabled;
-      if (typeof enabled === "boolean") return enabled;
-      return id === "google_drive" ? false : (serverConfig?.google_enabled ?? false);
+      return typeof enabled === "boolean" ? enabled : false;
     };
     return { gmail: value("gmail"), calendar: value("calendar"), google_drive: value("google_drive") };
   }, [serverConfig]);

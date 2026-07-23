@@ -185,7 +185,6 @@ _PARKABLE = (_ME, _REFERENCES)  # generic pages whose records may promote to an 
 class CanonicalFileRole(StrEnum):
     USER_PAGE = "user_page"
     EVENT = "event"
-    PROJECTION = "projection"
 
 
 @dataclass(frozen=True)
@@ -220,10 +219,6 @@ def _norm(text: str) -> str:
     return " ".join(text.split())
 
 
-def _iso(date: str) -> str:
-    return f"{date}T00:00:00+00:00" if date else now_iso()
-
-
 class FilePageStore:
     def __init__(
         self,
@@ -249,11 +244,6 @@ class FilePageStore:
     @property
     def canonical_revision(self) -> str:
         return self._journal.canonical_revision
-
-    def vault_health(self):
-        from arden.memory.health import validate_vault
-
-        return validate_vault(self._root)
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -437,9 +427,6 @@ class FilePageStore:
             if artifact_is_editable(rel.as_posix(), text):
                 pages[rel.as_posix()] = content
         return pages
-
-    def _observed_path(self, rel: Path) -> Path:
-        return self._root.joinpath(*rel.parts)
 
     def _write_observed_file(self, rel: Path, content: bytes) -> None:
         from arden.memory.artifacts import ArtifactMemoryStore
@@ -1183,41 +1170,6 @@ class FilePageStore:
             self._reconcile_entity(slug)
         now = {s for s in slugs if self._entity_path(s) in self._pages}
         return {"entities": len(slugs), "promoted": len(now - existed), "demoted": len(existed - now)}
-
-    def _heal_structural_pages(self) -> None:
-        """Repair page identity contamination, normalize structural titles, and keep
-        Obsidian wikilinks resolvable. Idempotent: a `scope_key` belongs only to a
-        project page, so strip it from any non-project page (a project-scoped directive
-        used to stamp it onto the global directives.md); give the fixed root pages
-        canonical, properly-cased titles; and ensure each page's human title is in its
-        `aliases` so prose `[[Title]]` links resolve to the dash-slug filename in
-        Obsidian (preserving any aliases the user added in the vault)."""
-        for path, page in self._pages.items():
-            rel = path.relative_to(self._root)
-            changed = False
-            # scope_key belongs only on a topics/ subject page; strip it elsewhere (a
-            # project-scoped directive used to stamp it onto the global directives.md).
-            if rel.parts[0] != _ENTITIES and page.frontmatter.pop("scope_key", None) is not None:
-                changed = True
-            want = _STRUCTURAL_TITLES.get(rel.name) if len(rel.parts) == 1 else None
-            if want and page.frontmatter.get("title") != want:
-                page.frontmatter["title"] = want
-                changed = True
-            title = page.frontmatter.get("title")
-            if title:
-                aliases = page.frontmatter.get("aliases") or []
-                if isinstance(aliases, str):
-                    aliases = [aliases]
-                needs_alias = title.lower() != rel.stem  # Obsidian's case-insensitive match would miss
-                if needs_alias and title not in aliases:
-                    page.frontmatter["aliases"] = [*aliases, title]
-                    changed = True
-                elif not needs_alias and aliases == [title]:
-                    # redundant auto-alias (e.g. "Dex" on dex.md) — Obsidian resolves it already; drop the noise
-                    del page.frontmatter["aliases"]
-                    changed = True
-            if changed:
-                self._persist(path)
 
     def _write_conventions(self) -> None:
         """AGENTS.md (OKF conventions) — how this memory dir is shaped, so any agent

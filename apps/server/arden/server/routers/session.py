@@ -692,12 +692,10 @@ async def branch_session(
 ):
     name = req.name if req else None
     up_to_id = req.up_to_message_id if req else None
-    from_end = req.from_end_index if req else None
     state = await svc.branch(
         session_id,
         name=name,
         up_to_message_id=up_to_id,
-        from_end_index=from_end,
     )
     if not state:
         raise HTTPException(status_code=404, detail="Session not found")

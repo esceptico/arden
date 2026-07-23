@@ -70,9 +70,6 @@ class NotifierService:
                 )
             )
 
-    def list_names(self) -> list[str]:
-        return list(self._notifiers.keys())
-
     def list_summary(self) -> list[dict[str, str]]:
         return [{"name": name, "type": n.channel} for name, n in self._notifiers.items()]
 

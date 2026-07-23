@@ -50,24 +50,6 @@ def test_schema_v2_raw_page_round_trips_through_page_codec():
     assert render_raw(page) == raw
 
 
-def test_pre_arden_vault_markers_remain_readable_and_render_as_arden():
-    raw = (
-        "<!-- ntrp:records schema=2 page=me.md -->\n"
-        "- 2026-07-12 ^rec-1 [fact] Existing memory.\n"
-        '  <!-- ntrp:meta {"recorded_at":"2026-07-12T10:23:42Z","sequence":1,'
-        '"time_precision":"day","scope":{"kind":"user"},"sources":[]} -->\n'
-    )
-
-    page = merge_split(parse_page(""), raw)
-
-    assert page.lines[0].id == "rec-1"
-    page.records_header = "<!-- arden:records schema=2 page=me.md -->"
-    rendered = render_raw(page)
-    assert "<!-- arden:records" in rendered
-    assert "<!-- arden:meta" in rendered
-    assert "ntrp" not in rendered
-
-
 def test_v2_preserves_multiple_sources_and_nested_unknown_metadata_without_inventing_capture_time():
     raw = (
         "- 2026-07-12T14:23:41+04:00 ^rec-1 [fact] Evidence survives.\n"

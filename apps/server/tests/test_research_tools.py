@@ -70,7 +70,7 @@ async def test_research_offers_scratchpad_and_returns_artifact_manifest(session_
     async def spawn_fn(ctx, task, **kwargs):
         captured.update(kwargs)
         scope = kwargs["research_scope_id"]
-        await session_store.put_research_artifact(scope_id=scope, path="inv.md", content="big inventory")
+        await research_artifacts_module.write_scope_artifact(scope, "inv.md", "big inventory")
         assert ctx.ledger is not None
         ctx.ledger.add_workspace_evidence(
             research_module.CuratedEvidence(claim="important finding", source="inv.md", importance="high"),
@@ -109,7 +109,7 @@ async def test_research_offers_scratchpad_and_returns_artifact_manifest(session_
         "research-fun-panda:_provenance.json",
         "research-fun-panda:inv.md",
     }
-    persisted = await session_store.get_research_artifact(scope_id="research-fun-panda", path="_provenance.json")
+    persisted = await research_artifacts_module._get_fs_artifact("research-fun-panda", "_provenance.json")
     assert persisted is not None
     assert json.loads(persisted)["workspace"]["evidence"][0]["claim"] == "important finding"
 

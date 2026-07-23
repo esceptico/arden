@@ -118,7 +118,6 @@ export interface ServerConfig {
   embedding_model: string;
   web_search: "auto" | "exa" | "ddgs" | "none";
   web_search_provider: string;
-  google_enabled: boolean;
   max_depth: number;
   reasoning_effort: string | null;
   reasoning_efforts: string[];

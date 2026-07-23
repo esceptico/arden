@@ -11,7 +11,6 @@ from arden.integrations.base import IntegrationConnectionError, IntegrationOpera
 from arden.integrations.google_auth.auth import (
     SCOPES_CALENDAR,
     get_google_credentials,
-    has_scope,
 )
 from arden.logging import get_logger
 from arden.search.types import RawItem
@@ -104,14 +103,8 @@ class GoogleCalendar:
 
         self._service = None
         self._creds = None
-        self._events_cache: dict[str, dict] = {}
         self._email_address: str | None = None
         self.auth_error: str | None = None
-
-    def _has_calendar_scope(self) -> bool:
-        if self._creds and self._creds.scopes:
-            return has_scope(self._creds, SCOPES_CALENDAR[0])
-        return False
 
     def _get_credentials(self):
         if self._creds is None or not self._creds.valid:

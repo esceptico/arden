@@ -65,7 +65,7 @@ import { appendMemoryVaultChange } from "@/stores/memory-vault-domain";
 import {
   createCommandSidecarState,
   reduceCommandEvent,
-} from "@/features/command-sidecar/domain";
+} from "@/stores/command-sidecar-domain";
 import {
   createTriageDomainState,
   reduceTriageSeen,

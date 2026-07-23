@@ -105,32 +105,7 @@ BUILTINS = [
     ),
 ]
 
-_CURRENT_BUILTIN_IDS = {spec.task_id for spec in BUILTINS}
-# Handlers we seed today, plus retired ones whose registration is gone — both
-# must be swept so previously-seeded automations don't dangle on a missing
-# handler. (pattern_finder/skill_inducer died with the claims+lens pipeline;
-# integration_sync died with the observation ingest — feeds replaced it;
-# slice_suggester_daily was renamed to area_suggester_daily in the areas rename.)
-_RETIRED_HANDLERS = {
-    "pattern_finder_daily",
-    "skill_inducer_daily",
-    "memory_publish",
-    "integration_sync",
-    "slice_suggester_daily",
-}
-_KNOWLEDGE_HANDLERS = {spec.handler for spec in BUILTINS} | _RETIRED_HANDLERS
-
-
 async def seed_builtins(store: AutomationStore) -> None:
-    for automation in await store.list_all():
-        if (
-            automation.builtin
-            and automation.handler in _KNOWLEDGE_HANDLERS
-            and automation.task_id not in _CURRENT_BUILTIN_IDS
-        ):
-            await store.delete(automation.task_id)
-            _logger.info("Removed stale builtin automation: %s", automation.task_id)
-
     for spec in BUILTINS:
         existing = await store.get(spec.task_id)
         if existing:

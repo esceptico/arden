@@ -1,7 +1,6 @@
 import ast
 import json
 import textwrap
-import traceback
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -17,36 +16,6 @@ _WRAPPER_OFFSET = 1
 
 def _normalize(script: str) -> str:
     return script.strip() or "return None"
-
-
-def _exception_messages(exc: BaseException) -> list[str]:
-    # Unwrap TaskGroup ExceptionGroups (e.g. a spawn-cap WorkflowSpawnLimit raised
-    # inside parallel/pipeline) so the real leaf message surfaces instead of the
-    # bare "N sub-exceptions" summary.
-    if isinstance(exc, BaseExceptionGroup):
-        out: list[str] = []
-        for sub in exc.exceptions:
-            out += _exception_messages(sub)
-        return out
-    return traceback.format_exception_only(type(exc), exc)
-
-
-def format_script_traceback(exc: BaseException, script: str) -> str:
-    """Traceback trimmed to the model's own script frames, so a failing dynamic
-    workflow points at the line the model wrote rather than arden internals. Source
-    text is rendered from `script` directly (no linecache — a shared key would let
-    concurrent workflows clobber each other's registration)."""
-    src_lines = _normalize(script).splitlines()
-    frames = [f for f in traceback.extract_tb(exc.__traceback__) if f.filename == _SCRIPT_FILENAME]
-    parts: list[str] = []
-    if frames:
-        parts.append("Traceback (most recent call last):\n")
-        for f in frames:
-            parts.append(f'  File "{f.filename}", line {f.lineno}, in {f.name}\n')
-            if f.lineno and 1 <= f.lineno <= len(src_lines):
-                parts.append(f"    {src_lines[f.lineno - 1].strip()}\n")
-    parts += _exception_messages(exc)
-    return "".join(parts)
 
 
 async def run_script(orchestra: Orchestra, script: str, args: dict) -> Any:

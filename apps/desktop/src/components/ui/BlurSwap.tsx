@@ -4,7 +4,7 @@ import clsx from "clsx";
 import { EASE_OUT, MOTION } from "@/lib/tokens/motion";
 
 // Overlapping blur crossfade for spatial content. Two-icon state changes use
-// IconSwap; in-place text states that must never coexist use FieldSwap.
+// IconSwap.
 interface BlurSwapProps {
   /** Identity of the current content. A change triggers the crossfade. */
   swapKey: string;

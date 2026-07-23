@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { CommandPeek } from "@/features/command-sidecar/CommandPeek";
-import { createCommandSidecarState } from "@/features/command-sidecar/domain";
+import { createCommandSidecarState } from "@/stores/command-sidecar-domain";
 import { setState } from "@/stores";
 
 let root: Root | null = null;

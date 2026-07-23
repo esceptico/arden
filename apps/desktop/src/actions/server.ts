@@ -1,4 +1,4 @@
-import { type AppConfig, loadInitialConfig, saveConfig, validateConnection } from "@/api/core";
+import { type AppConfig, saveConfig, validateConnection } from "@/api/core";
 import { type ServerConfigPatch, getServerConfig, getServerModels, patchServerConfig } from "@/api/settings";
 import { getState } from "@/stores";
 import { refresh } from "@/actions/bootstrap";
@@ -39,5 +39,3 @@ export async function saveAndReconnect(next: AppConfig): Promise<void> {
     s.setConnectionSaving(false);
   }
 }
-
-export { loadInitialConfig };

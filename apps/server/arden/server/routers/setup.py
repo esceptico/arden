@@ -144,7 +144,9 @@ async def setup_status(runtime: Runtime = Depends(get_runtime)):
     mcp_servers = await list_mcp_servers(runtime)
     return {
         "google": {
-            "enabled": bool(getattr(runtime.config, "google", False)),
+            "enabled": any(
+                runtime.config.integration_enabled(service) for service in ("gmail", "calendar", "google_drive")
+            ),
             "credentials": google_credentials_status(),
             "accounts": _gmail_accounts(),
             "google_accounts": _google_accounts(),

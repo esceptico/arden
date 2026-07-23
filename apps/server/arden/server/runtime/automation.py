@@ -8,7 +8,6 @@ from arden.agent_surface.schedules import compile_schedules_to_automations
 from arden.areas.agent import AreaCustodianReport, custodian_contract, record_area_run
 from arden.areas.asks import AskStore
 from arden.areas.custodian import CustodianStore
-from arden.areas.migrate import migrate_state_files
 from arden.areas.models import Area, areas_from_records
 from arden.areas.suggester import AreaSuggester, AreaSuggestionStore
 from arden.automation.builtins import seed_builtins
@@ -73,9 +72,6 @@ class AutomationRuntime:
         self.get_integration_clients = get_integration_clients
         self.cheap_model = cheap_model
         self.build_operator_deps = build_operator_deps
-        # 2026-07-10 areas rename: fold slices-*.json state files forward
-        # before the stores read them.
-        migrate_state_files(config.arden_dir)
         self.area_asks = AskStore(config.arden_dir / AREAS_STATE_FILE)
         self.custodians = CustodianStore(config.arden_dir / AREAS_AGENT_STATE_FILE)
         self.get_notifiers = get_notifiers

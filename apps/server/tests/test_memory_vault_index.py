@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import threading
-from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import quote
 
 import pytest
@@ -12,6 +12,9 @@ from arden.memory.artifacts import ArtifactMemoryStore
 from arden.memory.file_store import FilePageStore
 from arden.memory.models import SourceRef
 from arden.memory.vault_index import INDEX_END, INDEX_START, VaultIndexer
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 @pytest.fixture
@@ -59,39 +62,6 @@ def test_daily_directory_has_a_useful_default_description(vault: Path):
 
     assert "daily/ — Chronological memory activity." in _managed(vault / "index.md")
     assert "daily/" not in report.missing_descriptions
-
-
-def test_render_updates_is_side_effect_free_and_apply_preserves_user_prose(vault: Path):
-    _write(vault / "notes.md", "# Notes\n")
-    _write(vault / "index.md", f"My intro\n\n{INDEX_START}\nold\n{INDEX_END}\nFooter")
-    indexer = VaultIndexer(vault)
-
-    updates = indexer.render_updates()
-
-    assert _managed(vault / "index.md").strip() == "old"
-    assert Path("index.md") in updates
-    indexer.apply()
-    rendered = (vault / "index.md").read_text(encoding="utf-8")
-    assert rendered.startswith("My intro")
-    assert rendered.endswith("Footer")
-    assert "notes.md — Notes" in _managed(vault / "index.md")
-
-
-def test_pre_arden_index_markers_are_upgraded_without_losing_prose(vault: Path):
-    _write(vault / "notes.md", "# Notes\n")
-    _write(
-        vault / "index.md",
-        "Intro\n\n<!-- ntrp:index:start -->\n"
-        "- notes.md — Curated <!-- ntrp:path=notes.md -->\n"
-        "<!-- ntrp:index:end -->\nFooter",
-    )
-
-    VaultIndexer(vault).apply()
-
-    rendered = (vault / "index.md").read_text(encoding="utf-8")
-    assert rendered.startswith("Intro") and rendered.endswith("Footer")
-    assert "notes.md — Curated" in _managed(vault / "index.md")
-    assert "ntrp" not in rendered
 
 
 def test_discovery_rejects_symlinks_engine_namespaces_health_and_special_files(vault: Path):

@@ -72,25 +72,6 @@ def test_revision_hashes_bytes_and_exact_unified_patch():
     assert unified_patch(base, result) == ("--- a/page\n+++ b/page\n@@ -1,3 +1,3 @@\n # A\n \n-Old.\n+New.\n")
 
 
-def test_pre_arden_page_event_marker_remains_readable():
-    event = PageEditEvent(
-        id="event-1",
-        occurred_at="2026-07-12T10:23:42.000Z",
-        sequence=1,
-        actor="user",
-        origin="desktop",
-        path="me.md",
-        base_revision="before",
-        result_revision="after",
-        patch="",
-        operations=(),
-        reconciliation="applied",
-    )
-    legacy = render_page_edit_event(event).replace("arden:page-edit-event", "ntrp:page-edit-event")
-
-    assert parse_page_edit_events(legacy) == (event,)
-
-
 def test_unified_patch_marks_both_files_without_final_newline():
     assert unified_patch(b"Old", b"New") == (
         "--- a/page\n+++ b/page\n@@ -1 +1 @@\n-Old\n\\ No newline at end of file\n+New\n\\ No newline at end of file\n"

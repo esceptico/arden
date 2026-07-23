@@ -79,19 +79,6 @@ type WikiLinkNode = {
   children: Text[];
 };
 
-/** Mirror of the server's `_slug` (memory/artifacts.py): lowercase, collapse
- *  runs of non-[A-Za-z0-9._-] to "-", strip leading/trailing .-_ , cap 60. */
-export function wikiSlug(s: string): string {
-  const base = s
-    .trim()
-    .replace(/[^A-Za-z0-9._-]+/g, "-")
-    .replace(/^[.\-_]+|[.\-_]+$/g, "")
-    .toLowerCase()
-    .slice(0, 60)
-    .replace(/^[.\-_]+|[.\-_]+$/g, "");
-  return base || "entity";
-}
-
 export type WikiLinkHandlers = {
   /** Navigate to the target subject page. */
   onNavigate: (target: string) => void;

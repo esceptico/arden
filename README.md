@@ -39,9 +39,9 @@ just check        # backend tests + desktop typecheck
 
 ## Layout
 
-- `apps/server`: FastAPI backend, agent runtime, memory, slices, tools, integrations.
+- `apps/server`: FastAPI backend, agent runtime, memory, areas, tools, integrations.
 - `apps/desktop`: Electron client.
-- `docs`: Mintlify docs and internal notes.
+- `docs`: Public documentation and redesign mockups.
 
 ## License
 

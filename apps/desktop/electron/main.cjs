@@ -1,7 +1,6 @@
 const { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, nativeTheme, safeStorage, screen, session, shell } = require("electron");
 const crypto = require("node:crypto");
 const { execFile } = require("node:child_process");
-const fsSync = require("node:fs");
 const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
@@ -12,10 +11,9 @@ const { parseApiResponseBody } = require("./api-response.cjs");
 // promise where it's used. CJS can't `require` ESM or top-level await.
 const sseFrameParserModule = import("./sse-frame-parser.js");
 
-const devServerUrl = process.env.ARDEN_DESKTOP_DEV_SERVER_URL ?? process.env.NTRP_DESKTOP_DEV_SERVER_URL;
+const devServerUrl = process.env.ARDEN_DESKTOP_DEV_SERVER_URL;
 const isDev = Boolean(devServerUrl);
 const configFileName = "config.json";
-const legacyUserDataNames = ["ntrp", "ntrp-desktop"];
 
 // App icon. macOS dev: dock picks up the PNG via app.dock.setIcon below
 // (Electron's dock.setIcon is more reliable with a high-res PNG than an
@@ -35,32 +33,6 @@ const eventStreams = new Map();
 
 function configPath() {
   return path.join(app.getPath("userData"), configFileName);
-}
-
-function migrateLegacyUserData() {
-  const current = app.getPath("userData");
-  const appData = app.getPath("appData");
-  const entries = [configFileName, "Local Storage"];
-  try {
-    fsSync.mkdirSync(current, { recursive: true });
-  } catch {
-    return;
-  }
-
-  for (const name of legacyUserDataNames) {
-    const legacy = path.join(appData, name);
-    if (path.resolve(legacy) === path.resolve(current) || !fsSync.existsSync(legacy)) continue;
-    for (const entry of entries) {
-      const source = path.join(legacy, entry);
-      const target = path.join(current, entry);
-      if (!fsSync.existsSync(source) || fsSync.existsSync(target)) continue;
-      try {
-        fsSync.cpSync(source, target, { recursive: true, force: false, errorOnExist: false });
-      } catch {
-        // A locked legacy profile must not prevent Arden from launching.
-      }
-    }
-  }
 }
 
 function rendererIndexPath() {
@@ -571,8 +543,6 @@ function dismissQuickWindow() {
   if (!quickWindow || quickWindow.isDestroyed() || !quickWindow.isVisible()) return;
   quickWindow.hide();
 }
-
-migrateLegacyUserData();
 
 app.whenReady().then(() => {
   // macOS shows the bundle icon for packaged apps; in `electron .` dev

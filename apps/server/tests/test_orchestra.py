@@ -4,7 +4,7 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from arden.agent import RunBudget
-from arden.orchestra.dynamic import format_script_traceback, run_script
+from arden.orchestra.dynamic import run_script
 from arden.orchestra.engine import (
     Orchestra,
     TokenBudget,
@@ -340,46 +340,6 @@ async def test_spawn_cap_aborts_parallel_instead_of_silent_none(monkeypatch):
     flat = list(exc.exceptions) if isinstance(exc, BaseExceptionGroup) else [exc]
     assert any(isinstance(e, WorkflowSpawnLimit) for e in flat)
     assert o.spawn_count == 2
-
-
-async def test_run_script_runtime_error_points_at_script_line():
-    ctx, _ = _ctx_with(["x"])
-    o = Orchestra.for_ctx(ctx)
-    script = "a = 1\nb = 2\nraise ValueError('boom')\nreturn a"
-    with pytest.raises(ValueError) as ei:
-        await run_script(o, script, {})
-    tb = format_script_traceback(ei.value, script)
-    assert "<workflow-script>" in tb
-    assert "line 3" in tb  # the raise is on the model's line 3, not 4
-    assert "raise ValueError('boom')" in tb  # source rendered from the passed script
-
-
-async def test_format_script_traceback_renders_the_passed_script_not_shared_state():
-    # Source comes from the script argument, not a process-global linecache, so
-    # concurrent workflows can't clobber each other's traceback source.
-    ctx, _ = _ctx_with(["x"])
-    o = Orchestra.for_ctx(ctx)
-    with pytest.raises(ValueError) as ea:
-        await run_script(o, "raise ValueError('A')", {})
-    with pytest.raises(ValueError) as eb:
-        await run_script(o, "x = 1\nraise ValueError('B')", {})
-    tb_a = format_script_traceback(ea.value, "raise ValueError('A')")
-    tb_b = format_script_traceback(eb.value, "x = 1\nraise ValueError('B')")
-    assert "raise ValueError('A')" in tb_a and "line 1" in tb_a
-    assert "raise ValueError('B')" in tb_b and "line 2" in tb_b
-
-
-async def test_spawn_cap_traceback_surfaces_runaway_message(monkeypatch):
-    # When the cap fires inside parallel(), the TaskGroup wraps it in an
-    # ExceptionGroup — the leaf runaway-guard message must still surface.
-    monkeypatch.setattr("arden.orchestra.engine._MAX_WORKFLOW_SPAWNS", 1)
-    ctx, _ = _ctx_with(["ok"])
-    o = Orchestra.for_ctx(ctx)
-    script = "return await parallel([agent('a'), agent('b'), agent('c')])"
-    with pytest.raises(BaseException) as ei:
-        await run_script(o, script, {})
-    tb = format_script_traceback(ei.value, script)
-    assert "runaway guard" in tb
 
 
 def test_token_budget_view_reads_live():

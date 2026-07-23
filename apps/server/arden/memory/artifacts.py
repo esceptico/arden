@@ -22,8 +22,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from arden.memory.brand_markers import has_managed_index
 from arden.memory.frontmatter import QuotedStr, dump_frontmatter, parse_frontmatter, strip_frontmatter
+from arden.memory.markers import has_managed_index
 from arden.memory.page_events import page_revision, parse_page_edit_events
 from arden.memory.pages import Page, parse_raw
 
@@ -227,16 +227,6 @@ def _redact_changelog(text: str, *, max_chars: int) -> str:
 
 def _safe_log(event: str) -> str:
     return _redact_changelog(event, max_chars=MAX_LOG_CHARS)
-
-
-def summarize_changelog_text(items: list[str], *, max_items: int = 3) -> str:
-    snippets = [_redact_changelog(item, max_chars=180) for item in items if _redact_changelog(item, max_chars=180)][
-        :max_items
-    ]
-    if not snippets:
-        return "details redacted"
-    suffix = "" if len(items) <= max_items else f"; +{len(items) - max_items} more"
-    return "; ".join(snippets) + suffix
 
 
 def _artifact_record_count(kind: str, content: str) -> int:
@@ -479,12 +469,6 @@ class ArtifactMemoryStore:
         self.root = root
         self.project_names = project_names or self._load_project_names()
         self._scope_keys_by_rel: dict[str, str] = {}
-
-    def vault_health(self):
-        """Return the exact ledger safety report used by the startup gate."""
-        from arden.memory.health import validate_vault
-
-        return validate_vault(self.root)
 
     def _load_project_names(self) -> dict[str, str]:
         db_path = self.root.parent / "sessions.db"
@@ -1165,15 +1149,6 @@ class ArtifactMemoryStore:
                 if self._allowed_artifact_rel(rel):
                     out.append(child)
         return out
-
-    def _unlink_regular_artifact(self, rel: str) -> None:
-        try:
-            path = self._safe_path(rel)
-            st = path.lstat()
-        except FileNotFoundError:
-            return
-        if stat.S_ISREG(st.st_mode) and not stat.S_ISLNK(st.st_mode):
-            path.unlink(missing_ok=True)
 
     def _remove_markdown_tree(self, directory: Path) -> None:
         try:

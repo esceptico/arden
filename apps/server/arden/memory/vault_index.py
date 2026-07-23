@@ -7,15 +7,11 @@ import re
 import stat
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
 from urllib.parse import quote, unquote
 from uuid import uuid4
 
-from arden.memory.brand_markers import INDEX_END, INDEX_MARKER_PAIRS, INDEX_START, PATH_RE
 from arden.memory.frontmatter import parse_frontmatter
-
-if TYPE_CHECKING:
-    from collections.abc import Mapping
+from arden.memory.markers import INDEX_END, INDEX_MARKER_PAIRS, INDEX_START, PATH_RE
 
 NEEDS_DESCRIPTION = "Needs description"
 
@@ -55,10 +51,6 @@ class VaultIndexer:
     def root_entries(self) -> tuple[IndexEntry, ...]:
         files, directories = self._resources()
         return self._children(Path("."), files, directories)
-
-    def render_updates(self) -> Mapping[Path, bytes]:
-        updates, _errors = self._render_plan()
-        return updates
 
     def _render_plan(self) -> tuple[dict[Path, bytes], tuple[str, ...]]:
         files, discovered_directories = self._resources()

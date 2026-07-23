@@ -178,7 +178,7 @@ export async function validateConnection(config: AppConfig): Promise<HealthCheck
   return health;
 }
 
-function loadLegacyConfig(): AppConfig {
+function loadBrowserConfig(): AppConfig {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (!raw) return { ...DEFAULT_CONFIG };
   try {
@@ -190,17 +190,8 @@ function loadLegacyConfig(): AppConfig {
 
 export async function loadInitialConfig(): Promise<AppConfig> {
   const desktopConfig = window.ardenDesktop?.config;
-  if (!desktopConfig) return loadLegacyConfig();
-
-  const config = await desktopConfig.get();
-  if (config.apiKey || localStorage.getItem(STORAGE_KEY) === null) return normalizeConfig(config);
-
-  const legacy = loadLegacyConfig();
-  if (legacy.apiKey || legacy.serverUrl !== DEFAULT_CONFIG.serverUrl) {
-    localStorage.removeItem(STORAGE_KEY);
-    return desktopConfig.set(legacy);
-  }
-  return normalizeConfig(config);
+  if (!desktopConfig) return loadBrowserConfig();
+  return normalizeConfig(await desktopConfig.get());
 }
 
 export async function saveConfig(config: AppConfig): Promise<AppConfig> {

@@ -304,11 +304,6 @@ export async function disconnectServiceApi(config: AppConfig, serviceId: string)
   await apiWithConfig(config, `/services/${encodeURIComponent(serviceId)}`, { method: "DELETE" });
 }
 
-export async function listGmailAccountsApi(config: AppConfig): Promise<GmailAccount[]> {
-  const r = await apiWithConfig<{ accounts: GmailAccount[] }>(config, "/gmail/accounts");
-  return r.accounts;
-}
-
 export async function listGoogleAccountsApi(config: AppConfig): Promise<GoogleAccountSummary[]> {
   const response = await apiWithConfig<{ accounts: GoogleAccountSummary[] }>(config, "/google/accounts");
   return response.accounts;
@@ -363,16 +358,6 @@ export async function preflightGoogleSetupApi(
   });
 }
 
-export async function addGmailAccountApi(
-  config: AppConfig,
-  serviceChoice: GoogleServiceChoice = "all",
-): Promise<{ email: string | null; status: string; token_file?: string; scopes?: string[] }> {
-  return apiWithConfig<{ email: string | null; status: string; token_file?: string; scopes?: string[] }>(config, "/gmail/add", {
-    method: "POST",
-    body: JSON.stringify({ service_choice: serviceChoice }),
-  });
-}
-
 export async function verifySlackTokenApi(
   config: AppConfig,
   serviceId: "slack_bot_token" | "slack_user_token",
@@ -382,17 +367,6 @@ export async function verifySlackTokenApi(
     method: "POST",
     body: JSON.stringify({ service_id: serviceId, api_key: apiKey }),
   });
-}
-
-export async function removeGmailAccountApi(
-  config: AppConfig,
-  tokenFile: string,
-): Promise<{ email: string | null; status: string }> {
-  return apiWithConfig<{ email: string | null; status: string }>(
-    config,
-    `/gmail/${encodeURIComponent(tokenFile)}`,
-    { method: "DELETE" },
-  );
 }
 
 export async function createCustomModelApi(

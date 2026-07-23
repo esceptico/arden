@@ -14,7 +14,7 @@ import type {
 } from "@/stores/workflow-domain";
 import type { SessionViewState } from "@/stores/session-view";
 import type { AreasDomainState } from "@/stores/areas-domain";
-import type { CommandSidecarState } from "@/features/command-sidecar/domain";
+import type { CommandSidecarState } from "@/stores/command-sidecar-domain";
 import type { ServerEvent } from "@/api/events";
 
 export type { SessionViewState } from "@/stores/session-view";

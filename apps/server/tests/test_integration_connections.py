@@ -17,7 +17,7 @@ def _connection() -> IntegrationConnectionSpec:
         connection_id="example",
         capability="Read example records",
         action="settings",
-        enabled=lambda config: config.google,
+        enabled=lambda config: config.integration_enabled("example"),
         configured=lambda config: bool(config.openai_api_key),
     )
 
@@ -33,7 +33,9 @@ def _integration(build) -> Integration:
 
 def test_registry_reports_connected_connection():
     registry = IntegrationRegistry([_integration(lambda _config: object())])
-    registry.sync(Config(_env_file=None, memory=False, google=True, openai_api_key="configured"))
+    registry.sync(
+        Config(_env_file=None, memory=False, integration_states={"example": True}, openai_api_key="configured")
+    )
 
     descriptor = registry.get_connection("example")
 
@@ -47,12 +49,14 @@ def test_registry_distinguishes_disabled_and_not_configured_connections():
     integration = _integration(lambda _config: None)
     registry = IntegrationRegistry([integration])
 
-    registry.sync(Config(_env_file=None, memory=False, google=False, openai_api_key="configured"))
+    registry.sync(
+        Config(_env_file=None, memory=False, integration_states={"example": False}, openai_api_key="configured")
+    )
     disabled = registry.get_connection("example")
     assert disabled is not None
     assert disabled.state == "disabled"
 
-    registry.sync(Config(_env_file=None, memory=False, google=True, openai_api_key=None))
+    registry.sync(Config(_env_file=None, memory=False, integration_states={"example": True}, openai_api_key=None))
     unconfigured = registry.get_connection("example")
     assert unconfigured is not None
     assert unconfigured.state == "not_configured"
@@ -60,7 +64,7 @@ def test_registry_distinguishes_disabled_and_not_configured_connections():
 
 def test_registry_prioritizes_setup_when_disabled_integration_has_no_credentials():
     registry = IntegrationRegistry([_integration(lambda _config: None)])
-    registry.sync(Config(_env_file=None, memory=False, google=False, openai_api_key=None))
+    registry.sync(Config(_env_file=None, memory=False, integration_states={"example": False}, openai_api_key=None))
 
     descriptor = registry.get_connection("example")
 
@@ -79,7 +83,9 @@ def test_registry_preserves_typed_connection_build_failure():
         )
 
     registry = IntegrationRegistry([_integration(build)])
-    registry.sync(Config(_env_file=None, memory=False, google=True, openai_api_key="configured"))
+    registry.sync(
+        Config(_env_file=None, memory=False, integration_states={"example": True}, openai_api_key="configured")
+    )
 
     descriptor = registry.get_connection("example")
 
@@ -93,7 +99,9 @@ def test_registry_reports_untyped_build_failure_as_degraded():
         raise RuntimeError("provider unavailable")
 
     registry = IntegrationRegistry([_integration(build)])
-    registry.sync(Config(_env_file=None, memory=False, google=True, openai_api_key="configured"))
+    registry.sync(
+        Config(_env_file=None, memory=False, integration_states={"example": True}, openai_api_key="configured")
+    )
 
     descriptor = registry.get_connection("example")
 
@@ -119,7 +127,9 @@ def test_registered_native_integrations_declare_connection_capabilities():
 def test_descriptor_lists_registered_tool_names():
     integration = replace(_integration(lambda _config: None), tools={})
     registry = IntegrationRegistry([integration])
-    registry.sync(Config(_env_file=None, memory=False, google=True, openai_api_key="configured"))
+    registry.sync(
+        Config(_env_file=None, memory=False, integration_states={"example": True}, openai_api_key="configured")
+    )
 
     descriptor = registry.get_connection("example")
 

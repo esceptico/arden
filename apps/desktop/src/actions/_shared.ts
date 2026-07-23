@@ -5,25 +5,6 @@ export function truncatePrompt(prompt: string, max = 80): string {
   return single.length > max ? single.slice(0, max - 1) + "…" : single;
 }
 
-export function formatCall(name: string, argsJson: string): string {
-  try {
-    const parsed = JSON.parse(argsJson || "{}");
-    if (parsed && typeof parsed === "object") {
-      const entries = Object.entries(parsed as Record<string, unknown>);
-      if (entries.length === 0) return `${name}()`;
-      const parts = entries.map(([k, v]) => {
-        const val = typeof v === "string" ? `"${v}"` : JSON.stringify(v);
-        return `${k}=${val}`;
-      });
-      const full = `${name}(${parts.join(", ")})`;
-      return full.length > 120 ? `${full.slice(0, 117)}…` : full;
-    }
-  } catch {
-    /* fall through */
-  }
-  return name;
-}
-
 export function appendStatus(content: string): void {
   getState().appendMessage({
     id: crypto.randomUUID(),

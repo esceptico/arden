@@ -7,7 +7,6 @@ from arden.integrations.base import (
     ToolProviderStatus,
 )
 from arden.logging import get_logger
-from arden.tools.core import Tool
 
 _logger = get_logger(__name__)
 
@@ -58,9 +57,6 @@ class IntegrationRegistry:
     def get_client(self, id: str) -> object | None:
         return self._clients.get(id)
 
-    def get_integration(self, id: str) -> Integration | None:
-        return self._integrations.get(id)
-
     def get_connection(self, id: str) -> IntegrationConnectionDescriptor | None:
         integration = self._integrations.get(id)
         spec = integration.connection if integration else None
@@ -104,17 +100,6 @@ class IntegrationRegistry:
             for id in self._integrations
             if not id.startswith("_") and (descriptor := self.get_connection(id)) is not None
         ]
-
-    def active_tools(self) -> list[Tool]:
-        """Tools from integrations whose client built successfully, or which have no build."""
-        out: list[Tool] = []
-        for id, integration in self._integrations.items():
-            if integration.build is None or id in self._clients:
-                out.extend(integration.tools.values())
-        return out
-
-    def notifier_classes(self) -> dict[str, type]:
-        return {i.id: i.notifier_class for i in self._integrations.values() if i.notifier_class is not None}
 
     def service_fields(self) -> dict[str, list]:
         return {i.id: list(i.service_fields) for i in self._integrations.values() if i.service_fields}

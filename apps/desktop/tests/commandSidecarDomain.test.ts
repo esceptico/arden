@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   createCommandSidecarState,
   reduceCommandEvent,
-} from "@/features/command-sidecar/domain";
+} from "@/stores/command-sidecar-domain";
 
 describe("command sidecar event projection", () => {
   test("projects tool activity and a validated destination", () => {

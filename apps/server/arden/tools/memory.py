@@ -272,7 +272,6 @@ def _preferred_artifact_match(paths: list[str], slug: str) -> str | None:
         return next(iter(unique))
     for candidate in (
         f"topics/{slug}.md",
-        f"entities/{slug}.md",  # legacy fallback (pre-unification leftovers)
         f"projects/{slug}.md",
         f"context/integrations/{slug}.md",
     ):
@@ -990,16 +989,11 @@ async def forget(execution: ToolExecution, args: ForgetInput) -> ToolResult:
     records = tuple(await store.list(limit=None, scopes=None))
     operations = validate_operations([RecordOperation.retract(record.id)], records, sources)
 
-    if hasattr(store, "apply_operations"):
-        store.apply_operations(
-            operations,
-            sources,
-            batch_key=f"direct-forget:{session_id}:{execution.tool_id}",
-        )
-    else:
-        # Test-only legacy SQLite compatibility. Runtime memory is the schema-v2
-        # FilePageStore above, which journals the evidenced RETRACT operation.
-        await store.delete(record.id)
+    store.apply_operations(
+        operations,
+        sources,
+        batch_key=f"direct-forget:{session_id}:{execution.tool_id}",
+    )
 
     deleted = _candidate_data(record)
     return ToolResult(

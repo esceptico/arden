@@ -11,17 +11,6 @@ export interface ChildAgentResult {
   result_ref?: string | null;
 }
 
-export async function listBackgroundTasksApi(
-  config: AppConfig,
-  sessionId: string,
-): Promise<BackgroundTaskSummary[]> {
-  const r = await apiWithConfig<{ tasks: BackgroundTaskSummary[] }>(
-    config,
-    `/chat/background-tasks?session_id=${encodeURIComponent(sessionId)}`,
-  );
-  return r.tasks;
-}
-
 export async function listChildAgentsApi(
   config: AppConfig,
   sessionId: string,
@@ -45,18 +34,6 @@ export async function getChildAgentResultApi(
   return apiWithConfig<ChildAgentResult>(
     config,
     `/chat/child-agents/${encodeURIComponent(childRunId)}/result?${query.toString()}`,
-  );
-}
-
-export async function cancelBackgroundTaskApi(
-  config: AppConfig,
-  sessionId: string,
-  taskId: string,
-): Promise<void> {
-  await apiWithConfig(
-    config,
-    `/chat/background-tasks/${encodeURIComponent(taskId)}/cancel?session_id=${encodeURIComponent(sessionId)}`,
-    { method: "POST" },
   );
 }
 

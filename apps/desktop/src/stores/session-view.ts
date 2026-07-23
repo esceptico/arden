@@ -143,27 +143,6 @@ export function reduceHistoryLoadFailed(
   };
 }
 
-export function reduceReplayGapDetected(
-  state: SessionViewState,
-  sessionId: string,
-): SessionViewState {
-  return {
-    ...state,
-    currentSessionId: sessionId,
-    historyPhase: "replay-gap",
-    cachePreviewRestoredFor: null,
-    canonicalHistoryRequired: true,
-    historyLoadedFor: null,
-    historyReloadingFor: null,
-    historyHasMoreBefore: false,
-    historyHasMoreAfter: false,
-    historyBeforeCursor: null,
-    historyAfterCursor: null,
-    historyLoadingBefore: false,
-    historyLoadingAfter: false,
-  };
-}
-
 export function reduceHistoryPageLoading(
   state: SessionViewState,
   direction: "before" | "after",

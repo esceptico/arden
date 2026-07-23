@@ -113,7 +113,6 @@ def test_run_registry_status_reports_active_runs_only():
     assert status["observed_at"] == now.isoformat()
     assert status["total_retained"] == 2
     assert status["active_count"] == 1
-    assert registry.active_run_count == 1
     assert status["active_runs"][0]["run_id"] == active.run_id
     assert status["active_runs"][0]["pending_injections"] == 1
     assert status["background_task_sessions"] == []

@@ -1,6 +1,5 @@
 from arden.integrations.google_auth.accounts import GoogleAccount, GoogleAccountStore, GoogleService
 from arden.integrations.google_auth.auth import (
-    add_gmail_account,
     authorize_google_service,
     discover_calendar_tokens,
     discover_gmail_tokens,
@@ -17,7 +16,6 @@ __all__ = [
     "GoogleAccountStore",
     "GoogleService",
     "authorize_google_service",
-    "add_gmail_account",
     "discover_calendar_tokens",
     "discover_gmail_tokens",
     "get_google_credentials",

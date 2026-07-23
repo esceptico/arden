@@ -2,13 +2,13 @@ import hashlib
 import hmac
 import json
 import secrets
+from pathlib import Path
 
-from arden.brand_migration import resolve_data_dir
 from arden.logging import get_logger
 
 _logger = get_logger(__name__)
 
-ARDEN_DIR = resolve_data_dir()
+ARDEN_DIR = Path.home() / ".arden"
 
 
 def load_user_settings() -> dict:

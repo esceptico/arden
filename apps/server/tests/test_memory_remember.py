@@ -14,7 +14,6 @@ from pathlib import Path
 import pytest
 
 import arden.database as database
-import arden.tools.memory as memory_tools
 from arden.context.models import SessionState
 from arden.context.store import SessionStore
 from arden.memory.curator import Curator
@@ -423,40 +422,6 @@ async def test_file_store_direct_contradiction_and_forget_preserve_history_and_e
         await conn.close()
 
 
-async def test_memory_tools_return_after_committed_mutation_when_artifact_sync_fails(
-    store: RecordStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    artifacts_dir = tmp_path / "artifacts"
-    outside = tmp_path / "outside"
-    artifacts_dir.mkdir()
-    outside.mkdir()
-    _symlink_or_skip(artifacts_dir / "changelog.md", outside / "missing.md")
-    monkeypatch.setattr(
-        memory_tools,
-        "get_config",
-        lambda: types.SimpleNamespace(memory_db_path=store._db_path, memory_artifacts_dir=artifacts_dir),
-    )
-    execution = _execution(
-        store,
-        _reconciler(
-            tmp_path,
-            store,
-            {"op": "ADD", "text": "artifact sync failures should not mask writes", "kind": "fact"},
-        ),
-    )
-
-    remembered = await remember(execution, RememberInput(text="artifact sync failures should not mask writes"))
-
-    assert remembered.preview == "Remembered"
-    assert await store.search("artifact sync failures")
-
-    forgotten = await _forget_by_query(execution, "artifact sync failures")
-
-    assert forgotten.preview == "Forgotten"
-    assert "artifact sync failures should not mask writes" in forgotten.content
-    assert await store.search("artifact sync failures") == []
-
-
 # --- recall -------------------------------------------------------------------
 
 
@@ -478,16 +443,6 @@ async def test_recall_no_matches(store: RecordStore):
 
 
 # --- forget -------------------------------------------------------------------
-
-
-async def test_forget_deletes_exact_versioned_ref(store: RecordStore):
-    execution = _execution(store)
-    await store.add("the user dislikes coffee")
-
-    result = await _forget_by_query(execution, "coffee")
-    assert result.preview == "Forgotten"
-    assert "coffee" in result.content.lower()
-    assert await store.search("coffee") == []
 
 
 async def test_forget_validates_retract_with_tool_evidence():

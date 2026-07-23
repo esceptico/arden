@@ -3,13 +3,6 @@ from datetime import timedelta
 # --- Content Truncation Limits ---
 
 EMBEDDING_TEXT_LIMIT = 8000  # for embedder input only — see embedder.py
-DIFF_PREVIEW_LINES = 20
-
-
-# --- Default Pagination ---
-
-DEFAULT_READ_LINES = 500
-DEFAULT_LIST_LIMIT = 50
 
 
 # --- Agent Limits ---
@@ -41,7 +34,6 @@ BASH_MAX_OUTPUT_CHARS = 1_000_000
 # Hard cap on render_html widget payloads (schema-enforced, no truncation logic).
 RENDER_HTML_MAX_CHARS = 150_000
 
-RESEARCH_TIMEOUT = None
 # Per-subagent wall-time guard. A spawned agent that hangs or loops (e.g. emitting
 # many tool calls per LLM step, which the per-step iteration cap doesn't catch) is
 # bounded here regardless. 30 min is generous for deep research while still
@@ -127,13 +119,6 @@ RAW_TOOL_RESULT_DATA_KEY = "_raw_tool_result"
 
 EMAIL_SUBJECT_TRUNCATE = 40
 EMAIL_FROM_TRUNCATE = 30
-SNIPPET_TRUNCATE = 120
-
-
-# --- Knowledge ---
-
-KNOWLEDGE_REFLECTION_EVERY_N_TURNS = 10
-OBSERVATION_HISTORY_LIMIT = 10  # max history entries kept per observation
 
 
 # --- Search & Retrieval ---
@@ -147,31 +132,21 @@ SUMMARY_MAX_TOKENS = 1500
 
 # --- Automation ---
 
-FRIDAY_WEEKDAY = 4
 DAYS_IN_WEEK = 7
 SCHEDULER_POLL_INTERVAL = 60  # seconds; safety-net poll. Real fire timing is
 # event-driven: `handle_run_completed` fires session-bound loops the moment the
 # target session goes idle, and `_start_run` advances `next_run_at` before the
 # task body so the UI countdown ticks during long runs. This poll is the
 # fallback for non-session-bound automations and post-crash reconciliation.
-SCHEDULER_STOP_TIMEOUT = 5
 SCHEDULER_DEDUP_TTL = 86400  # 24 hours
 SCHEDULER_EVENT_MAX_RETRIES = 5
 SCHEDULER_EVENT_RETRY_BASE_SECONDS = 30
 SCHEDULER_EVENT_RETRY_MAX_SECONDS = 1800
 
-# Builtin knowledge automations
-BUILTIN_KNOWLEDGE_REFLECTION_ID = "builtin:knowledge-reflection"
-BUILTIN_KNOWLEDGE_REFLECTION_SWEEP_ID = "builtin:knowledge-reflection-sweep"
-BUILTIN_KNOWLEDGE_PROFILE_REFRESH_ID = "builtin:knowledge-profile-refresh"
-BUILTIN_KNOWLEDGE_RETENTION_ID = "builtin:knowledge-retention"
-BUILTIN_KNOWLEDGE_HEALTH_ID = "builtin:knowledge-health"
 BUILTIN_AUTOMATION_SUGGESTER_DAILY_ID = "builtin-automation-suggester-daily"
 AUTOMATION_SUGGESTER_DAILY_AT = "07:00"
 BUILTIN_MEMORY_CONSOLIDATE_ID = "builtin-memory-consolidate"
 MEMORY_CONSOLIDATE_AT = "03:00"
-BUILTIN_MEMORY_PUBLISH_ID = "builtin-memory-publish"
-MEMORY_PUBLISH_AT = "03:30"
 # Cross-domain DREAM: nightly reflection that authors cited cross-topic insights.
 BUILTIN_MEMORY_DREAM_ID = "builtin-memory-dream"
 MEMORY_DREAM_AT = "04:00"
@@ -196,14 +171,6 @@ MEMORY_RETENTION_TTL_PROVISIONAL_DAYS = 90  # machine-authored dream insights (p
 # single stray label can't spawn a dead-end one-fact topic page.
 MEMORY_MIN_ENTITY_RECORDS = 2
 MAX_AUTOMATION_SUGGESTIONS = 6
-DEFAULT_KNOWLEDGE_REFLECTION_IDLE_MINUTES = 5
-DEFAULT_KNOWLEDGE_REFLECTION_SWEEP_IDLE_MINUTES = 5
-DEFAULT_KNOWLEDGE_REFLECTION_SWEEP_COOLDOWN_MINUTES = 30
-DEFAULT_KNOWLEDGE_PROFILE_REFRESH_IDLE_MINUTES = 15
-DEFAULT_KNOWLEDGE_PROFILE_REFRESH_COOLDOWN_MINUTES = 2 * 60
-DEFAULT_KNOWLEDGE_RETENTION_COOLDOWN_MINUTES = 24 * 60
-DEFAULT_KNOWLEDGE_HEALTH_COOLDOWN_MINUTES = 24 * 60
-
 # --- Monitor ---
 
 MONITOR_POLL_INTERVAL = 300  # 5 minutes
@@ -222,7 +189,6 @@ assert AUTOMATION_EVENT_APPROACHING_DEFAULT_LEAD_MINUTES <= MONITOR_EVENT_APPROA
 
 # --- Areas ---
 
-LEGACY_AREAS_FILE = "slices.json"  # under the ~/.arden dir
 AREAS_STATE_FILE = "areas-state.json"
 AREAS_SUGGESTIONS_FILE = "areas-suggestions.json"
 AREAS_AGENT_STATE_FILE = "areas-agent-state.json"

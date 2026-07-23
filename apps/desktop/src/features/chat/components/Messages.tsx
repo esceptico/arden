@@ -24,8 +24,7 @@ import { ICON } from "@/lib/icons";
 // stiffness + high damping so scroll trails the latest content gently
 // instead of snapping or overshooting. Units are use-stick-to-bottom-
 // normalized, not framer-motion's, so it lives here rather than with the
-// SPRING_* tokens. Spec: docs/internal/apple-design-intel.md and
-// https://github.com/StonkDog/use-stick-to-bottom.
+// shared SPRING_* tokens. See https://github.com/StonkDog/use-stick-to-bottom.
 const SPRING_SCROLL_RIVER = { damping: 0.92, stiffness: 0.025, mass: 1.5 };
 
 // Parent (Chat) remounts this component on session change via key={sessionId}

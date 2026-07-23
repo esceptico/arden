@@ -434,10 +434,6 @@ WHERE task_id = ?
 
 _SQL_CLEAR_ALL_RUNNING = "UPDATE scheduled_tasks SET running_since = NULL WHERE running_since IS NOT NULL"
 
-_SQL_UPDATE_NAME = "UPDATE scheduled_tasks SET name = ? WHERE task_id = ?"
-
-_SQL_UPDATE_DESCRIPTION = "UPDATE scheduled_tasks SET description = ? WHERE task_id = ?"
-
 _SQL_CLAIM_EVENT = """
 INSERT OR IGNORE INTO automation_event_dedupe (task_id, event_key, seen_at)
 VALUES (?, ?, ?)
@@ -1150,14 +1146,6 @@ class AutomationStore:
         # no longer swallow exceptions, the ordering bug is loud.
         await self.conn.executescript(_SCHEMA)
         await _migrate(self.conn)
-        # Pre-Areas Custodians used slice:{slug}. Keep this migration beside
-        # the automation tables it owns; SessionStore repairs channel origins.
-        await self.conn.execute(
-            "UPDATE scheduled_tasks SET task_id = 'area:' || substr(task_id, 7) WHERE task_id LIKE 'slice:%'"
-        )
-        await self.conn.execute(
-            "UPDATE automation_runs SET task_id = 'area:' || substr(task_id, 7) WHERE task_id LIKE 'slice:%'"
-        )
         await _set_schema_version(self.conn, CURRENT_SCHEMA_VERSION)
         await self.conn.commit()
 
@@ -1194,12 +1182,6 @@ class AutomationStore:
                 automation.output_schema,
             ),
         )
-        await self.conn.commit()
-
-    async def rewrite_task_id(self, old: str, new: str) -> None:
-        """Migration helper: rename a task across every task_id-keyed table."""
-        for table in ("scheduled_tasks", "automation_runs", "automation_event_dedupe", "automation_event_queue"):
-            await self.conn.execute(f"UPDATE {table} SET task_id = ? WHERE task_id = ?", (new, old))
         await self.conn.commit()
 
     async def get(self, task_id: str) -> Automation | None:
@@ -1439,19 +1421,6 @@ class AutomationStore:
         clipped = result if result is None or len(result) <= 4000 else result[:4000] + "…"
         await self.conn.execute(_SQL_SET_LAST_RESULT, (clipped, task_id))
         await self.conn.commit()
-
-    async def update_name(self, task_id: str, name: str) -> None:
-        await self.conn.execute(_SQL_UPDATE_NAME, (name, task_id))
-        await self.conn.commit()
-
-    async def update_description(self, task_id: str, description: str) -> None:
-        await self.conn.execute(_SQL_UPDATE_DESCRIPTION, (description, task_id))
-        await self.conn.commit()
-
-    async def claim_event(self, task_id: str, event_key: str, seen_at: datetime) -> bool:
-        cursor = await self.conn.execute(_SQL_CLAIM_EVENT, (task_id, event_key, seen_at.isoformat()))
-        await self.conn.commit()
-        return cursor.rowcount > 0
 
     async def claim_and_enqueue_event(
         self,

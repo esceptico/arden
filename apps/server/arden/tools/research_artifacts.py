@@ -4,8 +4,7 @@ A bounded artifact store so deep-research subagents can offload bulk (long
 source inventories, draft tables, working notes) out of context and re-read
 specific parts on demand. Artifacts are written under
 ``~/.arden/artifacts/research/<scope>/`` (or ``ARDEN_DIR``) with strict relative
-paths, plus a small ``manifest.json``. The old session-store DB is still mirrored
-for compatibility and used as a fallback when reading/listing older artifacts.
+paths, plus a small ``manifest.json``.
 """
 
 from __future__ import annotations
@@ -63,14 +62,6 @@ class ReadResearchArtifactInput(BaseModel):
 
 class ListResearchArtifactsInput(BaseModel):
     pass
-
-
-def _resolve_store(execution: ToolExecution):
-    store = execution.ctx.services.get("store")
-    if store is not None:
-        return store
-    svc = execution.ctx.services.get("session")
-    return getattr(svc, "store", None) if svc else None
 
 
 def _scope(execution: ToolExecution) -> str:
@@ -200,24 +191,12 @@ def _list_fs_artifacts_sync(scope_id: str) -> list[dict]:
     return rows
 
 
-async def list_scope_artifacts(scope_id: str, store=None) -> list[dict]:
-    """List filesystem artifacts, merging legacy DB artifacts as fallback."""
-    fs_rows = await asyncio.to_thread(_list_fs_artifacts_sync, scope_id)
-    by_path = {row["path"]: row for row in fs_rows}
-    if store is not None:
-        for row in await store.list_research_artifacts(scope_id=scope_id):
-            if row["path"] not in by_path:
-                by_path[row["path"]] = {
-                    "path": row["path"],
-                    "byte_len": row["byte_len"],
-                    "updated_at": row.get("updated_at"),
-                    "preview": row.get("preview", ""),
-                    "scope_id": scope_id,
-                    "artifact_dir": str(artifact_scope_dir(scope_id)),
-                    "fs_path": None,
-                    "legacy_store": True,
-                }
-    return list(by_path.values())
+async def list_scope_artifacts(scope_id: str) -> list[dict]:
+    return await asyncio.to_thread(_list_fs_artifacts_sync, scope_id)
+
+
+async def write_scope_artifact(scope_id: str, rel_path: str, content: str) -> Path:
+    return await _put_fs_artifact(scope_id, rel_path, content)
 
 
 async def _get_fs_artifact(scope_id: str, rel_path: str) -> str | None:
@@ -270,8 +249,7 @@ async def write_research_artifact(execution: ToolExecution, args: WriteResearchA
             recovery_action="Split the content across multiple bounded artifacts.",
         )
     scope = _scope(execution)
-    store = _resolve_store(execution)
-    existing = await list_scope_artifacts(scope, store=store)
+    existing = await list_scope_artifacts(scope)
     if args.path not in {a["path"] for a in existing} and len(existing) >= MAX_ARTIFACTS_PER_SCOPE:
         return ToolResult.failure(
             code="limit_exceeded",
@@ -279,9 +257,7 @@ async def write_research_artifact(execution: ToolExecution, args: WriteResearchA
             preview="Too many",
             recovery_action="Append to or overwrite an existing artifact instead.",
         )
-    fs_path = await _put_fs_artifact(scope, args.path, args.content)
-    if store is not None:
-        await store.put_research_artifact(scope_id=scope, path=args.path, content=args.content)
+    fs_path = await write_scope_artifact(scope, args.path, args.content)
     return ToolResult(
         content=f"Wrote research artifact {args.path} ({len(args.content)} chars) at {fs_path}.",
         preview=f"Wrote {args.path}",
@@ -293,12 +269,9 @@ async def append_research_artifact(execution: ToolExecution, args: AppendResearc
     if err := _validate_path(args.path):
         return _invalid(err)
     scope = _scope(execution)
-    store = _resolve_store(execution)
     existing = await _get_fs_artifact(scope, args.path)
-    if existing is None and store is not None:
-        existing = await store.get_research_artifact(scope_id=scope, path=args.path)
     if existing is None:
-        listed = await list_scope_artifacts(scope, store=store)
+        listed = await list_scope_artifacts(scope)
         if len(listed) >= MAX_ARTIFACTS_PER_SCOPE:
             return ToolResult.failure(
                 code="limit_exceeded",
@@ -316,8 +289,6 @@ async def append_research_artifact(execution: ToolExecution, args: AppendResearc
             recovery_action="Start another artifact or replace this one with a compact summary.",
         )
     fs_path = await _put_fs_artifact(scope, args.path, content)
-    if store is not None:
-        await store.put_research_artifact(scope_id=scope, path=args.path, content=content)
     return ToolResult(
         content=f"Appended to {args.path} ({new_len} bytes total) at {fs_path}.",
         preview=f"Appended {args.path}",
@@ -329,10 +300,7 @@ async def read_research_artifact(execution: ToolExecution, args: ReadResearchArt
     if err := _validate_path(args.path):
         return _invalid(err)
     scope = _scope(execution)
-    store = _resolve_store(execution)
     content = await _get_fs_artifact(scope, args.path)
-    if content is None and store is not None:
-        content = await store.get_research_artifact(scope_id=scope, path=args.path)
     if content is None:
         return ToolResult.failure(
             code="not_found",
@@ -355,7 +323,7 @@ async def read_research_artifact(execution: ToolExecution, args: ReadResearchArt
 
 async def list_research_artifacts(execution: ToolExecution, args: ListResearchArtifactsInput) -> ToolResult:
     scope = _scope(execution)
-    artifacts = await list_scope_artifacts(scope, store=_resolve_store(execution))
+    artifacts = await list_scope_artifacts(scope)
     if not artifacts:
         return ToolResult(content=f"No research artifacts in scope {scope} yet.", preview="0 artifacts")
     artifact_dir = artifact_scope_dir(scope)

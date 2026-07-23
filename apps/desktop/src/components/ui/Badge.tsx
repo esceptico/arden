@@ -10,12 +10,8 @@ interface BadgeProps {
   size?: "sm" | "md";
   shape?: "pill" | "rounded";
   /** Surface treatment. `filled` (default) = tone fill. `outline` =
-   *  transparent bg + tone border only. `ghost` = tone text only, no chrome.
-   *  When unset, the legacy `outline` boolean still adds a border on top of
-   *  the fill (back-compat — distinct from `variant="outline"`). */
+   *  transparent bg + tone border only. `ghost` = tone text only, no chrome. */
   variant?: BadgeVariant;
-  /** @deprecated Border on top of the fill. Prefer `variant`. */
-  outline?: boolean;
   leading?: ReactNode;
   className?: string;
   style?: CSSProperties;
@@ -59,21 +55,18 @@ export function Badge({
   size = "sm",
   shape = "pill",
   variant,
-  outline = false,
   leading,
   className,
   style,
   title,
   ref,
 }: BadgeProps) {
-  // `variant` wins when given; otherwise fall back to the legacy `outline`
-  // boolean (filled + border) so existing callers render identically.
   const surface =
     variant === "outline"
       ? ["border", toneBorder[tone], toneText[tone]]
       : variant === "ghost"
         ? toneText[tone]
-        : [toneFill[tone], outline && ["border", toneBorder[tone]]];
+        : toneFill[tone];
   return (
     <span
       ref={ref}

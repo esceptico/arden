@@ -130,13 +130,6 @@ export function reduceBackgroundAgentUpsert(
   };
 }
 
-export function reduceBackgroundAgentOpenItems(
-  state: BackgroundAgentsDomainState,
-  openItemIds: Set<string>,
-): BackgroundAgentsDomainState {
-  return { ...state, openItemIds: new Set(openItemIds) };
-}
-
 function isEquivalentBackgroundAgent(
   prev: BackgroundAgent,
   next: BackgroundAgent,

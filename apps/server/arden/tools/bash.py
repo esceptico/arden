@@ -1,5 +1,4 @@
 import asyncio
-import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,58 +9,6 @@ from arden.constants import BASH_MAX_OUTPUT_CHARS, BASH_TIMEOUT
 from arden.tools.core import ToolResult, tool
 from arden.tools.core.context import ToolExecution
 from arden.tools.core.types import ApprovalInfo, ToolAction, ToolPolicy, ToolScope
-
-SAFE_COMMANDS = frozenset(
-    {
-        "ls",
-        "cat",
-        "head",
-        "tail",
-        "wc",
-        "file",
-        "stat",
-        "du",
-        "df",
-        "find",
-        "locate",
-        "which",
-        "whereis",
-        "type",
-        "grep",
-        "awk",
-        "sed",
-        "cut",
-        "sort",
-        "uniq",
-        "tr",
-        "diff",
-        "pwd",
-        "whoami",
-        "hostname",
-        "uname",
-        "date",
-        "uptime",
-        "env",
-        "printenv",
-        "git status",
-        "git log",
-        "git diff",
-        "git branch",
-        "git show",
-        "git remote",
-        "git tag",
-        "git stash list",
-        "npm list",
-        "pip list",
-        "pip show",
-        "curl",
-        "wget",
-        "ping",
-        "host",
-        "dig",
-        "nslookup",
-    }
-)
 
 BLOCKED_PATTERNS = frozenset(
     {
@@ -95,25 +42,6 @@ USE bash FOR:
 Every Bash command requires interactive approval and cannot run in a headless
 auto-approved session. The small denylist is defense-in-depth, not the
 security boundary."""
-
-
-def is_safe_command(command: str) -> bool:
-    try:
-        parts = shlex.split(command)
-    except ValueError:
-        return False
-    if not parts:
-        return False
-    base_cmd = parts[0]
-    if base_cmd in SAFE_COMMANDS:
-        return True
-    if len(parts) >= 2:
-        cmd_with_arg = f"{base_cmd} {parts[1]}"
-        if cmd_with_arg in SAFE_COMMANDS:
-            return True
-    if command.endswith("--version") or " --version" in command:
-        return True
-    return False
 
 
 def is_blocked_command(command: str) -> bool:

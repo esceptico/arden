@@ -223,19 +223,6 @@ CREATE INDEX IF NOT EXISTS idx_tool_results_session_created
 CREATE INDEX IF NOT EXISTS idx_tool_results_tool_call
     ON tool_results(tool_call_id);
 
-CREATE TABLE IF NOT EXISTS research_artifacts (
-    scope_id TEXT NOT NULL,
-    path TEXT NOT NULL,
-    content TEXT NOT NULL,
-    byte_len INTEGER NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    PRIMARY KEY (scope_id, path)
-);
-
-CREATE INDEX IF NOT EXISTS idx_research_artifacts_scope
-    ON research_artifacts(scope_id, updated_at);
-
 CREATE TABLE IF NOT EXISTS tool_approvals (
     run_id TEXT NOT NULL,
     session_id TEXT NOT NULL,
@@ -699,7 +686,6 @@ class SessionStore:
         }
 
     async def init_schema(self) -> None:
-        await self._pre_migrate_areas_rename()
         await self._pre_migrate_tool_results_schema()
         await self.conn.executescript(SCHEMA)
         for col in (
@@ -763,33 +749,6 @@ class SessionStore:
         await self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_chat_idempotency_expires ON chat_idempotency_keys(expires_at)"
         )
-        await self.conn.commit()
-
-    async def _pre_migrate_areas_rename(self) -> None:
-        """projects/slices -> areas rename (2026-07-10). RENAME TO/COLUMN
-        rewrites dependent FK references and indexes in SQLite, so the old
-        `projects` table with data becomes `areas` in place."""
-        tables = {
-            row["name"]
-            for row in await self.conn.execute_fetchall("SELECT name FROM sqlite_master WHERE type = 'table'")
-        }
-        if "projects" in tables and "areas" not in tables:
-            await self.conn.execute("ALTER TABLE projects RENAME TO areas")
-            await self.conn.execute("ALTER TABLE areas RENAME COLUMN project_id TO area_id")
-        if "sessions" in tables:
-            cols = {row["name"] for row in await self.conn.execute_fetchall("PRAGMA table_info(sessions)")}
-            if "project_id" in cols and "area_id" not in cols:
-                await self.conn.execute("ALTER TABLE sessions RENAME COLUMN project_id TO area_id")
-        # Channel origins belong to session storage. Automation-owned tables
-        # are re-keyed by AutomationStore.init_schema.
-        if "sessions" in tables:
-            await self.conn.execute(
-                "UPDATE sessions SET origin_automation_id = 'area:' || substr(origin_automation_id, 7) "
-                "WHERE origin_automation_id LIKE 'slice:%'"
-            )
-        # The renamed indexes are recreated under their new names by SCHEMA.
-        await self.conn.execute("DROP INDEX IF EXISTS idx_projects_archived_updated")
-        await self.conn.execute("DROP INDEX IF EXISTS idx_sessions_project_activity")
         await self.conn.commit()
 
     async def _pre_migrate_tool_results_schema(self) -> None:
@@ -2007,52 +1966,6 @@ class SessionStore:
             ),
         )
         await self.conn.commit()
-
-    async def put_research_artifact(self, *, scope_id: str, path: str, content: str) -> None:
-        now = datetime.now(UTC).isoformat()
-        await self.conn.execute(
-            """
-            INSERT INTO research_artifacts (scope_id, path, content, byte_len, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(scope_id, path) DO UPDATE SET
-                content = excluded.content,
-                byte_len = excluded.byte_len,
-                updated_at = excluded.updated_at
-            """,
-            (scope_id, path, content, len(content.encode("utf-8")), now, now),
-        )
-        await self.conn.commit()
-
-    async def append_research_artifact(self, *, scope_id: str, path: str, content: str) -> None:
-        existing = await self.get_research_artifact(scope_id=scope_id, path=path) or ""
-        await self.put_research_artifact(scope_id=scope_id, path=path, content=existing + content)
-
-    async def get_research_artifact(self, *, scope_id: str, path: str) -> str | None:
-        rows = await self.read_conn.execute_fetchall(
-            "SELECT content FROM research_artifacts WHERE scope_id = ? AND path = ?",
-            (scope_id, path),
-        )
-        return rows[0]["content"] if rows else None
-
-    async def list_research_artifacts(self, *, scope_id: str) -> list[dict]:
-        rows = await self.read_conn.execute_fetchall(
-            """
-            SELECT path, byte_len, updated_at, substr(content, 1, 120) AS preview
-            FROM research_artifacts
-            WHERE scope_id = ?
-            ORDER BY updated_at ASC
-            """,
-            (scope_id,),
-        )
-        return [
-            {
-                "path": row["path"],
-                "byte_len": row["byte_len"],
-                "updated_at": row["updated_at"],
-                "preview": row["preview"],
-            }
-            for row in rows
-        ]
 
     async def list_tool_calls(self, *, run_id: str) -> list[dict]:
         rows = await self.read_conn.execute_fetchall(
@@ -3374,11 +3287,6 @@ class SessionStore:
         rows = await self.read_conn.execute_fetchall(SQL_GET_LATEST)
         return rows[0]["session_id"] if rows else None
 
-    async def get_latest_session(self) -> SessionData | None:
-        if not (session_id := await self.get_latest_id()):
-            return None
-        return await self.load_session(session_id)
-
     async def list_sessions(
         self,
         limit: int = 20,
@@ -3447,22 +3355,6 @@ class SessionStore:
 
     async def update_session_area(self, session_id: str, area_id: str | None) -> bool:
         return await self._update(SQL_UPDATE_SESSION_AREA, (area_id, session_id))
-
-    async def list_area_tagged_sessions(self) -> list[dict]:
-        """Migration-only raw read of the retired slice_key column (physical
-        name on pre-rename databases; fresh databases never have it)."""
-        cols = {row["name"] for row in await self.read_conn.execute_fetchall("PRAGMA table_info(sessions)")}
-        if "slice_key" not in cols:
-            return []
-        rows = await self.read_conn.execute_fetchall(
-            "SELECT session_id, slice_key AS area_key, area_id FROM sessions WHERE slice_key IS NOT NULL"
-        )
-        return [dict(r) for r in rows]
-
-    async def rewrite_origin_automation_id(self, old: str, new: str) -> bool:
-        return await self._update(
-            "UPDATE sessions SET origin_automation_id = ? WHERE origin_automation_id = ?", (new, old)
-        )
 
     async def update_session_chat_model(self, session_id: str, chat_model: str | None) -> bool:
         return await self._update(SQL_UPDATE_SESSION_CHAT_MODEL, (chat_model, session_id))

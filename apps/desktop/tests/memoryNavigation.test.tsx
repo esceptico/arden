@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import type { AppConfig } from "@/api/core";
 import { ArtifactMemoryView } from "@/features/memory/components/ArtifactMemoryView";
 import { WikiLinkPreview } from "@/features/memory/components/WikiLinkPreview";
-import { ArtifactCache, RevisionCache } from "@/features/memory/lib/artifactCache";
+import { ArtifactCache } from "@/features/memory/lib/artifactCache";
 import { NavigationHistory } from "@/features/memory/lib/navigationHistory";
 import { resolveWikiTarget } from "@/features/memory/lib/wikiResolution";
 import type { MemoryArtifactDetail, MemoryArtifactSummary, PageLinks } from "@/features/memory/lib/notebookTypes";
@@ -128,17 +128,6 @@ test("artifact cache bounds revision aliases and removes aliases for evicted det
   expect(cache.get("a.md", "listed-a")).toBeNull();
   expect(cache.get("a.md", "server-a")).toBeNull();
   expect(cache.get("c.md", "listed-c")?.content).toBe("C");
-});
-
-test("revision cache bounds index bodies and replaces obsolete revisions per path", () => {
-  const cache = new RevisionCache<string>(2);
-  cache.set("index.md", "r1", "old index");
-  cache.set("index.md", "r2", "current index");
-  expect(cache.get("index.md", "r1")).toBeNull();
-  cache.set("a/README.md", "r1", "A");
-  cache.set("b/README.md", "r1", "B");
-  expect(cache.size).toBe(2);
-  expect(cache.get("index.md", "r2")).toBeNull();
 });
 
 test("wikilink resolution follows the server result including aliases, headings, and ambiguity", () => {

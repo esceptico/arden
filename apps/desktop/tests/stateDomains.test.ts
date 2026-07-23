@@ -15,7 +15,6 @@ import {
 } from "@/stores/automation-domain";
 import {
   createBackgroundAgentsDomainState,
-  reduceBackgroundAgentOpenItems,
   reduceBackgroundAgentUpsert,
   reduceBackgroundAgentsForSession,
   reduceBackgroundAgentsRefreshFailed,
@@ -277,17 +276,4 @@ test("background agent domain preserves unchanged snapshot row identity", () => 
   );
 
   expect(unchangedReady).toBe(ready);
-});
-
-test("background agent open item reducer clones caller Set", () => {
-  const openItemIds = new Set(["session-1:bg-1"]);
-  const state = reduceBackgroundAgentOpenItems(
-    createBackgroundAgentsDomainState(),
-    openItemIds,
-  );
-
-  openItemIds.add("session-1:bg-2");
-
-  expect(state.openItemIds.has("session-1:bg-1")).toBe(true);
-  expect(state.openItemIds.has("session-1:bg-2")).toBe(false);
 });

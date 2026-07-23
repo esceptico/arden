@@ -645,12 +645,10 @@ async def list_items(
     offset: int = Query(default=0, ge=0),
     q: str | None = Query(default=None, max_length=200),
     store=Depends(_record_store),
-    # scope filters are visibility metadata; subject/valid_at remain accepted for older clients
+    # Scope filters are visibility metadata.
     scope_kind: str | None = None,
     scope_key: str | None = None,
     kind: str | None = None,
-    subject: str | None = None,
-    valid_at: str | None = None,
 ) -> dict:
     include_superseded = status == "superseded"
     scopes = [(scope_kind, scope_key)] if scope_kind is not None else None

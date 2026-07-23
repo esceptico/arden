@@ -179,8 +179,6 @@ class UpdateSessionGoalRequest(BaseModel):
 
 
 OutboxEventId = Annotated[int, Field(gt=0)]
-FactId = Annotated[int, Field(gt=0)]
-ObservationId = Annotated[int, Field(gt=0)]
 
 
 class ReplayOutboxRequest(BaseModel):
@@ -461,13 +459,7 @@ class UpdateSessionModelRequest(BaseModel):
 
 class BranchRequest(BaseModel):
     name: str | None = None
-    # Preferred: branch up to and including the message with this client_id.
-    # The desktop client persists the same id it used during streaming, so
-    # this works without any position math.
     up_to_message_id: str | None = None
-    # Legacy: 0-based index counted from the end of the message list. Kept
-    # so older session data without persisted ids can still be branched.
-    from_end_index: int | None = None
 
 
 class SetSessionAutoRequest(BaseModel):
@@ -500,7 +492,6 @@ class RevertRequest(BaseModel):
 
 
 class IntegrationToggles(BaseModel):
-    google: bool | None = None
     gmail: bool | None = None
     calendar: bool | None = None
     google_drive: bool | None = None
@@ -531,54 +522,6 @@ class UpdateEmbeddingRequest(BaseModel):
 
 class UpdateDirectivesRequest(BaseModel):
     content: str
-
-
-# --- Memory data ---
-
-
-class UpdateFactRequest(BaseModel):
-    text: str = Field(..., min_length=1, max_length=10000)
-
-
-class SupersedeFactRequest(BaseModel):
-    text: str = Field(..., min_length=1, max_length=10000)
-
-
-class MemoryRecallInspectRequest(BaseModel):
-    query: str = Field(..., min_length=1, max_length=2000)
-    limit: int = Field(default=5, ge=1, le=20)
-
-
-class MemoryRepairEmbeddingsRequest(BaseModel):
-    apply: bool = False
-    limit: int = Field(default=100, ge=1, le=500)
-
-
-class UpdateObservationRequest(BaseModel):
-    summary: str = Field(..., min_length=1, max_length=10000)
-
-
-class MemoryPruneDryRunRequest(BaseModel):
-    older_than_days: int = Field(default=30, ge=1, le=3650)
-    max_sources: int = Field(default=5, ge=0, le=1000)
-    limit: int = Field(default=100, ge=1, le=1000)
-
-
-class MemoryPruneApplyRequest(BaseModel):
-    observation_ids: list[ObservationId] = Field(default_factory=list, max_length=1000)
-    all_matching: bool = False
-    older_than_days: int = Field(default=30, ge=1, le=3650)
-    max_sources: int = Field(default=5, ge=0, le=1000)
-
-
-# --- Memory UI ---
-
-
-class RememberBody(BaseModel):
-    """Manual user-authored memory write (e.g. desktop 'pin to memory')."""
-
-    fact: str = Field(..., min_length=1, max_length=20_000)
-    area_id: str | None = None
 
 
 # --- Automations / notifiers ---

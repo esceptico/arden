@@ -60,7 +60,7 @@ async def test_runtime_research_runner_areas_internal_ledger_notes(monkeypatch):
         execution.ctx.ledger.add_note(
             FactNote(
                 claim="Dex should call arden as a research oracle.",
-                source="docs/internal/mcp.md",
+                source="docs/integrations/mcp.mdx",
                 quote="consultation oracle",
             )
         )
@@ -108,7 +108,7 @@ async def test_runtime_research_runner_areas_internal_ledger_notes(monkeypatch):
     assert [e.model_dump() for e in result.evidence] == [
         {
             "claim": "Dex should call arden as a research oracle.",
-            "source": "docs/internal/mcp.md",
+            "source": "docs/integrations/mcp.mdx",
             "quote": "consultation oracle",
         }
     ]

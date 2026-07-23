@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from arden.memory.artifacts import ArtifactMemoryStore
-from arden.memory.file_store import FilePageStore
 from arden.memory.health import initialize_empty_vault, validate_vault
 from arden.memory.models import now_iso, source_time
 
@@ -104,29 +102,6 @@ def test_valid_unknown_occurrence_is_healthy(tmp_path: Path) -> None:
     )
 
     assert validate_vault(tmp_path).healthy
-
-
-def test_artifact_store_exposes_exact_vault_health(tmp_path: Path) -> None:
-    _write_raw(
-        tmp_path,
-        "me.md",
-        "<!-- arden:records schema=2 page=me.md -->\n" + _entry("one"),
-    )
-
-    assert ArtifactMemoryStore(tmp_path).vault_health() == validate_vault(tmp_path)
-
-
-def test_file_store_exposes_invalid_v2_health_without_serving_reads(tmp_path: Path) -> None:
-    (tmp_path / "me.md").write_text("# Me\n", encoding="utf-8")
-    _write_raw(
-        tmp_path,
-        "me.md",
-        "<!-- arden:records schema=2 page=me.md -->\n- 2026-07-12T10:23:41Z ^bad [fact] Bad.\n",
-    )
-
-    health = FilePageStore(tmp_path).vault_health()
-
-    assert health.malformed_metadata == ("raw/me.md: record bad: schema-v2 record is missing its metadata comment",)
 
 
 def test_missing_evidence_blocks_an_otherwise_valid_vault(tmp_path: Path) -> None:

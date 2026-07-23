@@ -641,24 +641,6 @@ export function applyPageEdit(
   }).then((response) => ({ event: mapEvent(response.event), revision: response.revision }));
 }
 
-export interface RetryPageEditInput {
-  eventId: string;
-  decisions: Record<string, PageEditDecision>;
-}
-
-export function retryPageEdit(
-  config: AppConfig,
-  input: RetryPageEditInput,
-): Promise<{ event: PageEditEvent; revision: string }> {
-  return apiWithConfig<{ event: RawEvent; revision: string }>(config, "/admin/memory/page-edits/retry", {
-    method: "PUT",
-    body: JSON.stringify({
-      event_id: input.eventId,
-      decisions: serializePageEditDecisions(input.decisions),
-    }),
-  }).then((response) => ({ event: mapEvent(response.event), revision: response.revision }));
-}
-
 export interface PageHistoryParams {
   path?: string;
   limit?: number;

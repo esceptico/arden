@@ -117,7 +117,7 @@ def test_setup_status_flattens_google_slack_mcp_shapes(monkeypatch):
 
     runtime = SimpleNamespace(
         config=SimpleNamespace(
-            google=True,
+            integration_enabled=lambda service: service in {"gmail", "calendar"},
             slack_bot_token="xoxb-secret",
             slack_user_token=None,
             mcp_servers={"linear": {"transport": "http", "url": "https://example.test/mcp"}},

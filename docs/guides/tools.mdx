@@ -211,13 +211,13 @@ An automation can carry a **tool scope**: an allowlist of tool-name patterns tha
 "tool_scope": ["memory_*", "recall", "web_search"]
 ```
 
-This is how [slice agents](/guides/slices) stay observe-only. They get the read and memory-write tools they need and nothing that acts on the outside world, regardless of other flags. A scope of `null` (the default) is unrestricted.
+This is how [area agents](/guides/areas) stay observe-only. They get the read and memory-write tools they need and nothing that acts on the outside world, regardless of other flags. A scope of `null` (the default) is unrestricted.
 
 ## Structured output
 
 An agent run can return a validated object instead of just prose. Pass a schema, and after the normal tool loop finishes, the run spends one extra constrained step producing an object that matches it. The text and the structured result come back separately.
 
-Automations reference a named schema (`output_schema`), resolved on the server. This is the mechanism behind a slice agent's one-ask nomination: rather than parsing free-form text for an ask, the run returns `{ ask: {...} | null }` as a guaranteed-shaped object.
+Automations reference a named schema (`output_schema`), resolved on the server. This is the mechanism behind an area agent's one-ask nomination: rather than parsing free-form text for an ask, the run returns `{ ask: {...} | null }` as a guaranteed-shaped object.
 
 ## User-defined tools
 

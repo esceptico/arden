@@ -63,9 +63,7 @@ function snippet(text: string, max = 160): string {
   return "";
 }
 
-/** Legacy single-line fallback used when the preview isn't structured
- *  (i.e. no `Key: value` rows). Keeps the old compact rendering for tools
- *  like bash that just pass a one-liner. */
+/** Compact single-line rendering for unstructured tool previews. */
 function approvalSnippet(approval: ApprovalState): string {
   if (approval.preview) return snippet(approval.preview);
   if (approval.diff) return snippet(approval.diff);

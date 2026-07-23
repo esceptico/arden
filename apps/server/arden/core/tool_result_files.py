@@ -61,8 +61,7 @@ def persist_result(session_id: str, tool_call_id: str, content: str) -> Path:
 
 
 def find_result_file(tool_call_id: str) -> Path | None:
-    """Locate an offloaded result by id without knowing its session (ids are
-    globally unique). Matches both session-scoped and legacy flat layouts."""
+    """Locate an offloaded result by globally unique id."""
     if not RESULTS_BASE.exists():
         return None
     return next(RESULTS_BASE.glob(f"**/{tool_call_id}.txt"), None)

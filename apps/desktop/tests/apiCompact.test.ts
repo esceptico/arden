@@ -4,7 +4,6 @@ import { apiWithConfig, compactSessionApi } from "@/api/core";
 import { archiveAreaApi, listAreasApi } from "@/api/sessions";
 import { runBuiltinCommand } from "@/actions/builtins";
 import { getState, setState } from "@/stores/index";
-import { searchMemory } from "@/api/memoryItems";
 
 const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
 const originalFetch = globalThis.fetch;
@@ -168,43 +167,6 @@ test("desktop API bridge rejects when the renderer timeout elapses", async () =>
 
   expect(error).toBeInstanceOf(Error);
   expect((error as Error).message).toBe("Request timed out for GET /slow");
-});
-
-test("memory search routes through the desktop bridge like other memory calls", async () => {
-  // The renderer fetch bypass (commit 5789e07f) broke lens search in packaged
-  // builds (file:// origin / non-localhost serverUrl hit the CSP/CORS wall).
-  // Search must use the bridge — a main-process fetch with no CSP/CORS — like
-  // every other memory call.
-  const calls: string[] = [];
-  (globalThis as typeof globalThis & { window?: unknown }).window = {
-    ardenDesktop: {
-      api: {
-        request: async (_config: unknown, req: { path: string }) => {
-          calls.push(req.path);
-          return {
-            ok: true,
-            status: 200,
-            statusText: "OK",
-            contentType: "application/json",
-            data: { mode: "fts", degraded: false, items: [] },
-            text: "",
-          };
-        },
-      },
-    },
-  };
-  globalThis.fetch = async () => {
-    throw new Error("renderer fetch must not be used when the bridge is available");
-  };
-
-  const result = await searchMemory(
-    { serverUrl: "http://localhost:6877", apiKey: "test-key" },
-    { q: "kevin", mode: "fts", limit: 12 },
-  );
-
-  expect(result).toEqual({ mode: "fts", degraded: false, items: [] });
-  expect(calls[0]).toContain("/admin/memory/search?");
-  expect(calls[0]).toContain("q=kevin");
 });
 
 test("compact command does not reload or claim success when compaction is below threshold", async () => {

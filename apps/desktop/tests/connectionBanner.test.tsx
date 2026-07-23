@@ -121,7 +121,6 @@ test("Google connection runs OAuth, enables Google, then resolves", async () => 
     embedding_model: "text-embedding-3-small",
     web_search: "auto",
     web_search_provider: "none",
-    google_enabled: true,
     max_depth: 8,
     reasoning_effort: null,
     reasoning_efforts: ["low"],

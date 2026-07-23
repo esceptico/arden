@@ -30,8 +30,7 @@ _logger = get_logger(__name__)
 
 # Builtin daily memory maintenance phases. When multiple phases are overdue
 # after sleep/offline time, catch them up in this order on the same boot.
-_CATCH_UP_PHASE_ORDER = ("memory_consolidate", "memory_publish")
-_CATCH_UP_HANDLERS = set(_CATCH_UP_PHASE_ORDER)
+_CATCH_UP_HANDLERS = {"memory_consolidate"}
 _CATCH_UP_CADENCE = timedelta(hours=24)
 
 
@@ -46,10 +45,6 @@ PostDispatcher = Callable[[Automation, str | dict | None], Awaitable[str | None]
 the agent fresh (no session history), then post the result back into the
 target session as an assistant message. `context` is the triggering event's
 rendered context (None for non-event runs)."""
-
-# Back-compat alias — older code (and external callers) may still import
-# `LoopDispatcher`. New code should reach for `IterationDispatcher`.
-LoopDispatcher = IterationDispatcher
 
 # Manual "run now" rides the context dict under this key. It is transport,
 # not content: every prompt/handler consumer must split it back out via
@@ -123,9 +118,6 @@ class Scheduler:
 
     def set_iteration_dispatcher(self, dispatcher: IterationDispatcher) -> None:
         self._iteration_dispatcher = dispatcher
-
-    # Back-compat alias for callers that still use the old name.
-    set_loop_dispatcher = set_iteration_dispatcher
 
     def set_post_dispatcher(self, dispatcher: PostDispatcher) -> None:
         self._post_dispatcher = dispatcher
@@ -316,35 +308,6 @@ class Scheduler:
         last = automation.last_run_at
         return last is None or last < due_at
 
-    @staticmethod
-    def _catch_up_phase_index(handler: str | None) -> int | None:
-        if handler is None:
-            return None
-        try:
-            return _CATCH_UP_PHASE_ORDER.index(handler)
-        except ValueError:
-            return None
-
-    def _should_defer_ordered_catch_up(
-        self,
-        automation: Automation,
-        due: list[Automation],
-        running_handlers: set[str],
-        now: datetime,
-    ) -> bool:
-        phase_index = self._catch_up_phase_index(automation.handler)
-        if phase_index is None or phase_index == 0:
-            return False
-        if not self._should_catch_up_missed(automation, now):
-            return False
-        earlier = set(_CATCH_UP_PHASE_ORDER[:phase_index])
-        due_handlers = {
-            auto.handler
-            for auto in due
-            if auto.task_id != automation.task_id and auto.handler and self._should_catch_up_missed(auto, now)
-        }
-        return any(handler in earlier for handler in due_handlers | running_handlers)
-
     async def _loop(self) -> None:
         while True:
             try:
@@ -390,10 +353,7 @@ class Scheduler:
         await self._release_untracked_running()
         now = datetime.now(UTC)
         due = await self.store.list_due(now)
-        running_handlers = {auto.handler for auto in await self.store.list_running() if auto.handler}
         for automation in due:
-            if self._should_defer_ordered_catch_up(automation, due, running_handlers, now):
-                continue
             if self._is_session_bound(automation) and not self._loop_can_fire(automation):
                 # Session-bound automation is due but the target session has
                 # an active run. Skip without claiming — next_run_at stays
@@ -402,8 +362,6 @@ class Scheduler:
                 # handle_run_completed).
                 continue
             await self._start_run(automation)
-            if automation.handler:
-                running_handlers.add(automation.handler)
         await self._drain_event_backlog()
         await self._evaluate_idle_triggers(now)
 

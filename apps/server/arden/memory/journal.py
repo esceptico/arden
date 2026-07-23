@@ -963,5 +963,5 @@ class VaultJournal:
     def _valid_hash(value: object) -> bool:
         return isinstance(value, str) and len(value) == 64 and set(value) <= _HEX
 
-    def _checkpoint(self, point: str) -> None:
+    def _checkpoint(self, _point: str) -> None:
         """Test-only failure boundary; production commits leave this as a no-op."""

@@ -21,7 +21,7 @@ from arden.integrations.base import Integration
 from arden.tool_call_metadata import DISPLAY_TITLE_ARG
 from arden.tools.automation import loop_done_tool, schedule_wakeup_tool
 from arden.tools.background import cancel_background_task_tool
-from arden.tools.bash import bash_tool, execute_bash, is_blocked_command, is_safe_command
+from arden.tools.bash import bash_tool, execute_bash, is_blocked_command
 from arden.tools.core import EmptyInput, Tool, ToolCall, ToolNext, tool
 from arden.tools.core.context import (
     ApprovalControls,
@@ -387,15 +387,6 @@ def _register_tools(registry: ToolRegistry, tools: dict[str, Tool]) -> None:
 
 
 # --- Bash safety checks ---
-
-
-def test_safe_commands():
-    assert is_safe_command("ls")
-    assert is_safe_command("git status")
-    assert is_safe_command("cat file.txt")
-    assert is_safe_command("python --version")
-    assert not is_safe_command("rm -rf /")
-    assert not is_safe_command("sudo reboot")
 
 
 def test_blocked_commands():

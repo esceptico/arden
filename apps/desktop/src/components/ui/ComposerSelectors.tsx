@@ -260,9 +260,8 @@ export function ModelReasoningChip() {
   if (!cfg) return null;
   if (!Object.prototype.hasOwnProperty.call(cfg, "model_reasoning_efforts")) return null;
 
-  // Per-chat model: the active session's override, falling back to the
-  // global default (also what new chats inherit). Legacy sessions with no
-  // stored model resolve to the global default too.
+  // Per-chat model: the active session's override falls back to the global
+  // default, which is also what new chats inherit.
   const session = sessions.find((s) => s.session_id === currentSessionId);
   const currentModel = session?.chat_model ?? cfg.chat_model;
   const modelReasoningEfforts = cfg.model_reasoning_efforts;

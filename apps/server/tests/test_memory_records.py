@@ -816,26 +816,6 @@ async def test_caller_files_without_roles_are_rejected_before_ledger_mutation(tm
     await store.close()
 
 
-async def test_projection_role_is_rejected_before_ledger_mutation(tmp_path: Path):
-    vault = tmp_path / "memory"
-    original = _ledger_entry("original", "Original", sequence=1)
-    store = await _file_store(vault, [original])
-    revision = store.canonical_revision
-    successor = _ledger_entry("projection", "Projection", sequence=2, supersedes=(original.id,))
-
-    with pytest.raises(ValueError, match="projection"):
-        store.append_entries(
-            (successor,),
-            files={Path("health.md"): b"# Generated health\n"},
-            file_roles={Path("health.md"): CanonicalFileRole.PROJECTION},
-        )
-
-    assert await store.get(successor.id) is None
-    assert store.canonical_revision == revision
-    assert not (vault / "health.md").exists()
-    await store.close()
-
-
 async def test_append_entries_stages_every_touched_page_and_caller_file_in_one_commit(tmp_path: Path, monkeypatch):
     vault = tmp_path / "memory"
     first = _ledger_entry("first", "First", sequence=1)

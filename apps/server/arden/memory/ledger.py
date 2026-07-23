@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Literal
 
-from arden.memory.brand_markers import META_RE
+from arden.memory.markers import META_RE
 from arden.memory.models import Kind, SourceRef, TimePrecision
 
 if TYPE_CHECKING:

@@ -16,12 +16,6 @@ def serialize_embedding(embedding: np.ndarray | list[float] | None) -> bytes | N
     return arr.tobytes()
 
 
-def deserialize_embedding(data: bytes | None) -> np.ndarray | None:
-    if data is None:
-        return None
-    return np.frombuffer(data, dtype=np.float32).copy()
-
-
 async def connect(db_path: Path, *, vec: bool = False, readonly: bool = False) -> aiosqlite.Connection:
     conn = aiosqlite.connect(db_path, isolation_level=None if readonly else "")
     # aiosqlite (0.22) spawns a non-daemon worker thread that blocks on its op

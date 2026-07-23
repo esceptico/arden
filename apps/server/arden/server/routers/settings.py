@@ -67,7 +67,7 @@ def _config_response(rt: Runtime) -> dict:
 
     # Umbrella + memory (not direct integrations)
     integrations["google"] = {
-        "enabled": config.google,
+        "enabled": any(config.integration_enabled(service) for service in ("gmail", "calendar", "google_drive")),
         "connected": any(
             integration_id in rt.integrations.clients for integration_id in ("gmail", "calendar", "google_drive")
         ),
@@ -115,7 +115,6 @@ def _config_response(rt: Runtime) -> dict:
         "embedding_model": config.embedding_model,
         "web_search": config.web_search,
         "web_search_provider": web_provider,
-        "google_enabled": config.google,
         "max_depth": config.max_depth,
         "reasoning_effort": reasoning_effort,
         "reasoning_efforts": reasoning_efforts,
@@ -157,7 +156,6 @@ def _validate_reasoning_patch(fields: dict, config) -> None:
             else:
                 per_model[target_model] = effort
         fields["model_reasoning_efforts"] = per_model
-        fields["reasoning_effort"] = None  # clear legacy global storage
         return
 
 
@@ -196,16 +194,12 @@ async def update_config(
 ):
     fields = req.model_dump(exclude_unset=True, mode="json")
     if toggles := fields.pop("integrations", None):
-        legacy_google = toggles.pop("google", None)
         memory = toggles.pop("memory", None)
         states = dict(runtime.config.integration_states)
-        if legacy_google is not None:
-            fields["google"] = legacy_google
-            states.update({"gmail": legacy_google, "calendar": legacy_google})
         for integration_id, enabled in toggles.items():
             if enabled is not None:
                 states[integration_id] = enabled
-        if toggles or legacy_google is not None:
+        if toggles:
             fields["integration_states"] = states
         if memory is not None:
             fields["memory"] = memory

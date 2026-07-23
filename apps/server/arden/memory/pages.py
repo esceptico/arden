@@ -23,8 +23,8 @@ import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from arden.memory.brand_markers import META_PREFIXES, RECORDS_V2_RE
 from arden.memory.ledger import LedgerEntry, parse_ledger_entry, render_ledger_entry
+from arden.memory.markers import META_PREFIXES, RECORDS_V2_RE
 
 # Engine bookkeeping — rendered into the raw sidecar, never the visible page.
 # prose_cites is the page's grounding: the record ids its prose was verified

@@ -6,7 +6,6 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from arden.brand_migration import migrate_legacy_data_dir, promote_legacy_environment
 from arden.constants import (
     AGENT_MAX_COST,
     AGENT_MAX_DEPTH,
@@ -86,11 +85,9 @@ PERSIST_KEYS = frozenset(
         "memory",
         "memory_timezone",
         "consolidation_interval",
-        "google",
         "integration_states",
         "gmail_days",
         "max_depth",
-        "reasoning_effort",
         "model_reasoning_efforts",
         "compression_threshold",
         "max_messages",
@@ -147,8 +144,7 @@ class Config(BaseSettings):
     memory_timezone: str = Field(default_factory=lambda: _local_timezone_name())
     consolidation_interval: int = 30
 
-    # Google (Gmail + Calendar)
-    google: bool = False
+    # Integrations
     integration_states: dict[str, bool] = Field(default_factory=dict)
     gmail_days: int = 30
 
@@ -174,9 +170,6 @@ class Config(BaseSettings):
     agent_max_wall_time_seconds: float | None = AGENT_MAX_WALL_TIME_SECONDS
     agent_max_cost: float | None = AGENT_MAX_COST
     agent_max_output_tokens: int | None = AGENT_MAX_OUTPUT_TOKENS
-    # Legacy global setting. New writes use model_reasoning_efforts so each
-    # chat model keeps its own thinking level.
-    reasoning_effort: str | None = None
     model_reasoning_efforts: dict[str, str] = Field(default_factory=dict)
     deferred_tools: bool = True
     approval_timeout_seconds: int = 300
@@ -200,7 +193,6 @@ class Config(BaseSettings):
     def _resolve_model_defaults(self) -> Self:
         self._resolve_chat_model()
         self._fill_model_fallbacks()
-        self._migrate_legacy_reasoning_effort()
         self._resolve_embedding_model()
         return self
 
@@ -225,14 +217,6 @@ class Config(BaseSettings):
             self.research_model = self.chat_model
         if not self.workflow_model and self.chat_model:
             self.workflow_model = self.chat_model
-
-    def _migrate_legacy_reasoning_effort(self) -> None:
-        if not self.reasoning_effort or not self.chat_model or self.model_reasoning_efforts:
-            return
-        effort = self.reasoning_effort
-        if effort in get_models()[self.chat_model].reasoning_efforts:
-            object.__setattr__(self, "model_reasoning_efforts", {self.chat_model: effort})
-        object.__setattr__(self, "reasoning_effort", None)
 
     def _resolve_embedding_model(self) -> None:
         if self.embedding_model or "embedding_model" in self.model_fields_set:
@@ -307,11 +291,7 @@ class Config(BaseSettings):
         return EmbeddingConfig(model=model.id, dim=model.dim)
 
     def integration_enabled(self, integration_id: str) -> bool:
-        if integration_id in self.integration_states:
-            return self.integration_states[integration_id]
-        if integration_id in {"gmail", "calendar"}:
-            return self.google
-        return False
+        return self.integration_states.get(integration_id, False)
 
     def reasoning_effort_for(self, model_id: str | None) -> str | None:
         if not model_id:
@@ -345,23 +325,9 @@ class Config(BaseSettings):
 # --- Config loading ---
 
 
-def _migrate_legacy_settings(settings: dict) -> None:
-    if "sources" in settings:
-        for key in ("gmail", "calendar", "google", "memory"):
-            if key in settings["sources"]:
-                settings.setdefault(key, settings["sources"][key])
-    if "gmail" in settings or "calendar" in settings:
-        settings.setdefault("google", settings.pop("gmail", False) or settings.pop("calendar", False))
-    if "explore_model" in settings:
-        settings.setdefault("research_model", settings.pop("explore_model"))
-
-
 def get_config() -> Config:
-    promote_legacy_environment()
-    migrate_legacy_data_dir(ARDEN_DIR)
     load_custom_models(ARDEN_DIR)
     settings = load_user_settings()
-    _migrate_legacy_settings(settings)
 
     overrides = {k: settings[k] for k in PERSIST_KEYS if k in settings}
     if "api_key_hash" in settings:
@@ -377,18 +343,9 @@ def get_config() -> Config:
         if getattr(config, field) is None and provider_id in settings.get("provider_keys", {}):
             setattr(config, field, settings["provider_keys"][provider_id])
 
-    # service_keys are keyed by Config attr name (e.g. "slack_bot_token").
-    # Legacy keys ("slack", "slack-user", "telegram", "exa") are migrated to
-    # their Config attr names on read.
-    _LEGACY_SERVICE_ID_MAP = {
-        "slack": "slack_bot_token",
-        "slack-user": "slack_user_token",
-        "telegram": "telegram_bot_token",
-        "exa": "exa_api_key",
-    }
+    # service_keys are keyed by Config attribute name.
     stored_keys = settings.get("service_keys", {})
-    for stored_id, api_key in stored_keys.items():
-        attr = _LEGACY_SERVICE_ID_MAP.get(stored_id, stored_id)
+    for attr, api_key in stored_keys.items():
         if hasattr(config, attr) and getattr(config, attr) is None:
             setattr(config, attr, api_key)
 

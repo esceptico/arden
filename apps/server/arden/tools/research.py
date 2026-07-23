@@ -22,7 +22,7 @@ from arden.core.isolation import IsolationLevel
 from arden.core.prompts import RESEARCH_PROMPTS, current_date_formatted, env
 from arden.logging import get_logger
 from arden.tools.core import ToolResult, tool
-from arden.tools.core.context import ToolContext, ToolExecution
+from arden.tools.core.context import ToolExecution
 from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
 from arden.tools.research_artifacts import (
     append_research_artifact_tool,
@@ -31,6 +31,7 @@ from arden.tools.research_artifacts import (
     list_scope_artifacts,
     read_research_artifact_tool,
     write_research_artifact_tool,
+    write_scope_artifact,
 )
 
 _logger = get_logger(__name__)
@@ -321,18 +322,16 @@ async def research(execution: ToolExecution, args: ResearchInput) -> ToolResult:
             "child_tool_call_ids": list(spawn.tool_call_ids),
         },
     }
-    store = _research_store(ctx)
-    if store is not None:
-        workspace_path = "_provenance.json"
-        await store.put_research_artifact(
-            scope_id=research_scope_id,
-            path=workspace_path,
-            content=json.dumps({**provenance, "workspace": workspace}, ensure_ascii=False, sort_keys=True),
-        )
-        provenance["workspace_ref"] = f"{research_scope_id}:{workspace_path}"
+    workspace_path = "_provenance.json"
+    await write_scope_artifact(
+        research_scope_id,
+        workspace_path,
+        json.dumps({**provenance, "workspace": workspace}, ensure_ascii=False, sort_keys=True),
+    )
+    provenance["workspace_ref"] = f"{research_scope_id}:{workspace_path}"
     data["provenance"] = provenance
 
-    artifacts = await _list_scope_artifacts(ctx, research_scope_id)
+    artifacts = await _list_scope_artifacts(research_scope_id)
     if artifacts:
         data["artifacts"] = artifacts
     artifact_refs = (
@@ -353,17 +352,8 @@ async def research(execution: ToolExecution, args: ResearchInput) -> ToolResult:
     )
 
 
-def _research_store(ctx: ToolContext):
-    store = ctx.services.get("store")
-    if store is not None:
-        return store
-    svc = ctx.services.get("session")
-    return getattr(svc, "store", None) if svc else None
-
-
-async def _list_scope_artifacts(ctx: ToolContext, scope_id: str) -> list[dict]:
-    store = _research_store(ctx)
-    rows = await list_scope_artifacts(scope_id, store=store)
+async def _list_scope_artifacts(scope_id: str) -> list[dict]:
+    rows = await list_scope_artifacts(scope_id)
     return [
         {
             "path": r["path"],

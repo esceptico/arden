@@ -20,10 +20,6 @@ wheels/
 .superpowers/
 .worktrees/
 .arden-tmp/
-# Pre-Arden local scratch/build output retained only for upgrade cleanup.
-.ntrp-tmp/
-apps/ios/ntrp/
-apps/server/ntrp/
 docs/internal/sandbox/
 data/
 backups/

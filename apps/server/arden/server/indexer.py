@@ -75,10 +75,6 @@ class Indexer:
     def error(self) -> str | None:
         return self._error
 
-    @property
-    def running(self) -> bool:
-        return self._running
-
     def start(self, source: object | None) -> None:
         if self._running:
             return

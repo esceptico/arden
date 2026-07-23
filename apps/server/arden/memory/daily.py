@@ -77,7 +77,7 @@ def daily_candidate_rel(local_date: date, revision: str, timezone: str) -> Path:
     )
 
 
-def _instant(value: str, precision: TimePrecision, zone: ZoneInfo) -> datetime:
+def _instant(value: str) -> datetime:
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     if parsed.tzinfo is None:
         raise ValueError(f"daily event timestamp requires an explicit offset: {value!r}")
@@ -122,7 +122,7 @@ class DailyProjector:
             instant = (
                 None
                 if entry.meta.time_precision == "day"
-                else _instant(occurred_at, entry.meta.time_precision, self._zone)
+                else _instant(occurred_at)
             )
             event_date = date.fromisoformat(occurred_at) if instant is None else instant.astimezone(self._zone).date()
             if event_date != local_date:
@@ -142,7 +142,7 @@ class DailyProjector:
         for page_event in self._page_events():
             if page_event.event_type == "SYNTHESIS_MERGE" and Path(page_event.path).parts[:1] == ("daily",):
                 continue
-            instant = _instant(page_event.occurred_at, "millisecond", self._zone)
+            instant = _instant(page_event.occurred_at)
             if instant.astimezone(self._zone).date() != local_date:
                 continue
             sources: list[SourceRef] = []
@@ -171,11 +171,11 @@ class DailyProjector:
             if entry.meta.time_precision == "day":
                 dates.add(date.fromisoformat(occurred_at))
             else:
-                dates.add(_instant(occurred_at, entry.meta.time_precision, self._zone).astimezone(self._zone).date())
+                dates.add(_instant(occurred_at).astimezone(self._zone).date())
         for page_event in self._page_events():
             if page_event.event_type == "SYNTHESIS_MERGE" and Path(page_event.path).parts[:1] == ("daily",):
                 continue
-            dates.add(_instant(page_event.occurred_at, "millisecond", self._zone).astimezone(self._zone).date())
+            dates.add(_instant(page_event.occurred_at).astimezone(self._zone).date())
         return tuple(sorted(dates))
 
     def render(self, local_date: date, revision: str) -> DailyProjection:

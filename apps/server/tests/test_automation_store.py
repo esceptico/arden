@@ -100,17 +100,6 @@ async def test_run_history_records_start_then_finish(automation_store: Automatio
     assert runs[0]["ended_at"] is not None
 
 
-async def test_init_rekeys_legacy_slice_custodian_rows(automation_store: AutomationStore):
-    await automation_store.save(_automation("slice:health"))
-    await automation_store.record_run_start("slice:health", datetime(2026, 1, 1, tzinfo=UTC))
-
-    await automation_store.init_schema()
-
-    assert await automation_store.get("slice:health") is None
-    assert await automation_store.get("area:health") is not None
-    assert len(await automation_store.list_runs("area:health")) == 1
-
-
 async def test_run_history_newest_first_and_limited(automation_store: AutomationStore):
     base = datetime(2026, 1, 1, tzinfo=UTC)
     for i in range(5):
@@ -685,40 +674,6 @@ async def test_seed_builtins_schedules_suggester_job(automation_store: Automatio
     assert suggester is not None
     assert suggester.enabled is True
     assert suggester.next_run_at is not None
-
-
-@pytest.mark.asyncio
-async def test_seed_builtins_removes_retired_pipeline_jobs(automation_store: AutomationStore):
-    from arden.automation.builtins import seed_builtins
-
-    # A pattern_finder builtin seeded by an older version must be garbage-collected
-    # now that its handler registration is gone (claims+lens pipeline removed).
-    retired = _automation(
-        "builtin:pattern-finder-daily",
-        name="Pattern Finder Daily",
-        handler="pattern_finder_daily",
-        builtin=True,
-        enabled=True,
-        next_run_at=None,
-    )
-    await automation_store.save(retired)
-
-    # The pre-rename slice suggester (superseded by builtin-area-suggester)
-    # must be swept too — it dangles on the unregistered slice_suggester_daily.
-    legacy_slice = _automation(
-        "builtin-slice-suggester",
-        name="Slice Suggester",
-        handler="slice_suggester_daily",
-        builtin=True,
-        enabled=True,
-        next_run_at=None,
-    )
-    await automation_store.save(legacy_slice)
-
-    await seed_builtins(automation_store)
-
-    assert await automation_store.get("builtin:pattern-finder-daily") is None
-    assert await automation_store.get("builtin-slice-suggester") is None
 
 
 @pytest.mark.asyncio

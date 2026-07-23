@@ -1,6 +1,6 @@
 """LLM synthesis prompts for memory pages.
 
-Five prose-page synthesizers that replace the bullet-dump projection. Each
+Three prose-page synthesizers that replace the bullet-dump projection. Each
 receives a list of atomic RECORDS (id, text, kind, labels, pinned,
 last_confirmed_at) and synthesizes a grounded markdown page FROM them.
 
@@ -16,7 +16,6 @@ and keeps the verified id list in the page's raw sidecar (prose_cites).
   - PROFILE_SYSTEM     -> me.md
   - DOSSIER_SYSTEM     -> topics/<subject>.md  (one page per subject)
   - ACTIVE_WORK_SYSTEM -> active-work.md
-  - DAILY_SYSTEM       -> daily/<date>.md  (per-day activity log)
 
 Record kinds (arden.memory.models.Kind): directive | fact | source | changelog |
 lesson. Scopes are visibility metadata, not shown to the model.
@@ -32,7 +31,6 @@ from arden.memory.models import TRUST_DEFAULT, Record, source_trust
 # caller matches these exactly and skips the file rather than persisting a stub.
 INSUFFICIENT_DOSSIER = "_Insufficient records to synthesize a brief._"
 NO_ACTIVE_WORK = "_No active threads in the recent window._"
-NO_DAILY = "_No notable activity this day._"
 
 # A citation is only counted inside a well-formed parenthetical group —
 # `(record:3f2a1b9c)` or `(record:3f2a1b9c, record:7d1e0a44)` — the exact form the
@@ -242,7 +240,6 @@ def profile_user_message(
         "</known_subjects>"
     )
 
-
 # ===========================================================================
 # 2) DOSSIER_SYSTEM  ->  topics/<subject>.md  (one page per subject)
 # ===========================================================================
@@ -394,63 +391,4 @@ def active_work_user_message(
         "<records>\n"
         f"{format_records_block(merged, labels_by_id)}\n"
         "</records>"
-    )
-
-
-# ===========================================================================
-# 5) DAILY  ->  daily/<YYYY-MM-DD>.md (a dated activity log)
-# ===========================================================================
-
-DAILY_SYSTEM = "\n\n".join(
-    [
-        """\
-You write one day's page in a personal memory wiki: `daily/<date>.md`, a concise
-log of what the user actually did, decided, or learned on that date. Unlike the
-timeless pages, this one IS dated — it captures that day's activity so the user
-can later recall "what was I doing then".
-
-You are given the date and the records that entered memory on that date. Merge
-them into a tight narrative — combine related records into a single line, drop
-trivia, lead with what mattered. Output:
-
-```
-# <date>
-
-- One merged event per meaningful thread that day, past tense, citing the
-  record(s): `Shipped the entity-promotion fix and reconciled 19 pages to 7
-  (record:XXXXXXXX).` Two or three closely-related records become ONE line.
-```
-
-Rules:
-- This is a LOG of that day, so past tense and event-shaped ("Decided…",
-  "Shipped…", "Met with…", "Learned…") — not the timeless present the other
-  pages use.
-- Aggressively merge. A day is a handful of lines, not one per record. If five
-  records describe one work session, that's one line.
-- Cite every line with `(record:XXXXXXXX)`. Skip pure housekeeping.
-
-If the records describe nothing worth logging, output EXACTLY:
-
-"""
-        + NO_DAILY
-        + """
-
-and nothing else.""",
-        _GROUNDING,
-        _NO_SLOP,
-    ]
-)
-
-
-def daily_user_message(
-    day: str,
-    records: list[Record],
-    labels_by_id: dict[str, list[str]] | None = None,
-) -> str:
-    return (
-        f"Date: {day}\n\n"
-        "<records>\n"
-        f"{format_records_block(records, labels_by_id)}\n"
-        "</records>\n\n"
-        f"Write the log for {day}. Merge aggressively."
     )

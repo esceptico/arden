@@ -7,8 +7,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 from uuid import uuid4
 
-from coolname import generate_slug
-
 from arden.agent import Role, ToolOutcomeStatus, ToolResult
 from arden.agent.agent import RunBudget
 from arden.agent.ledger import SharedLedger
@@ -253,9 +251,6 @@ class BackgroundTaskRegistry:
     # spawn subtree (descendants run inside this session).
     _child_sessions: dict[str, str] = field(default_factory=dict)
     _delivered_completion_ids: set[str] = field(default_factory=set)
-
-    def generate_id(self) -> str:
-        return generate_slug(2)
 
     def _remove(self, task_id: str) -> None:
         self._tasks.pop(task_id, None)

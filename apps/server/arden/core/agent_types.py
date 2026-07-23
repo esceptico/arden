@@ -48,12 +48,6 @@ def register_agent_type(spec: AgentType) -> None:
     _REGISTRY[spec.name] = spec
 
 
-def get_agent_type(name: str | None) -> AgentType | None:
-    """None for an unknown/empty name — used where the name may just be a display
-    label (a workflow phase), not a registered type."""
-    return _REGISTRY.get(name) if name else None
-
-
 def resolve_agent_type(name: str) -> AgentType:
     """An explicitly-requested type that doesn't exist fails loudly with the valid
     set, so the authoring model self-corrects instead of reproducing a bad id."""

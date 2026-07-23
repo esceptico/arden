@@ -198,27 +198,17 @@ async def test_memory_read_resolves_titles_directories_and_wikilinks(store: Reco
     assert by_wikilink.data["path"] == "me.md"
 
     artifact_store = memory_tools.ArtifactMemoryStore(artifacts_dir)
-    artifact_store._write("entities/dex.md", "Dex", "topic", "entity", "dex", "# Dex\n\nEntity page.\n", 1)
-    artifact_store._write("projects/dex.md", "Dex", "topic", "project", "dex", "# Dex\n\nProject page.\n", 1)
-    duplicate_title = await memory_read(execution, MemoryReadInput(path="Dex", offset=1, limit=3))
-    assert not duplicate_title.is_error
-    assert duplicate_title.data["path"] == "topics/dex.md"  # unified topics/ wins over legacy
-
     artifact_store._write(
-        "entities/foo_bar.md", "Foo_bar", "topic", "entity", "foo_bar", "# Foo_bar\n\nEntity page.\n", 1
-    )
-    artifact_store._write(
-        "projects/foo_bar.md", "Foo_bar", "topic", "project", "foo_bar", "# Foo_bar\n\nProject page.\n", 1
+        "topics/foo_bar.md", "Foo_bar", "topic", "entity", "foo_bar", "# Foo_bar\n\nTopic page.\n", 1
     )
     underscore_title = await memory_read(execution, MemoryReadInput(path="Foo_bar", offset=1, limit=3))
     assert not underscore_title.is_error
-    assert underscore_title.data["path"] == "entities/foo_bar.md"
+    assert underscore_title.data["path"] == "topics/foo_bar.md"
 
-    artifact_store._write("entities/a.b.md", "A.B", "topic", "entity", "a.b", "# A.B\n\nEntity page.\n", 1)
-    artifact_store._write("projects/a.b.md", "A.B", "topic", "project", "a.b", "# A.B\n\nProject page.\n", 1)
+    artifact_store._write("topics/a.b.md", "A.B", "topic", "entity", "a.b", "# A.B\n\nTopic page.\n", 1)
     dotted_title = await memory_read(execution, MemoryReadInput(path="A.B", offset=1, limit=3))
     assert not dotted_title.is_error
-    assert dotted_title.data["path"] == "entities/a.b.md"
+    assert dotted_title.data["path"] == "topics/a.b.md"
 
 
 @pytest.mark.parametrize("bad_path", ["/tmp/me.md", "../me.md", ".secret/file.md", "README.png"])

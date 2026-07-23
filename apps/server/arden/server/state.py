@@ -272,10 +272,6 @@ class RunRegistry:
     def clear_session_active(self, session_id: str) -> None:
         self._active_by_session.pop(session_id, None)
 
-    @property
-    def active_run_count(self) -> int:
-        return len(self.list_active_runs())
-
     def list_active_runs(self) -> list[RunState]:
         return [run for run in self._runs.values() if run.status in (RunStatus.PENDING, RunStatus.RUNNING)]
 

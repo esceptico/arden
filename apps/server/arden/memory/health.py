@@ -7,8 +7,8 @@ import stat
 from dataclasses import dataclass
 from pathlib import Path
 
-from arden.memory.brand_markers import META_PREFIXES, RECORDS_VERSION_RE
 from arden.memory.ledger import LedgerEntry, parse_ledger_entry
+from arden.memory.markers import META_PREFIXES, RECORDS_VERSION_RE
 
 _READABLE_ID_RE = re.compile(r"^- \S+ \^(?P<id>[\w-]+) ")
 _VALID_SCOPES = frozenset({"global", "user", "area"})

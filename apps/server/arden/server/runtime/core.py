@@ -126,11 +126,6 @@ class Runtime:
         return self.automation.outbox_runtime if self.automation else None
 
     @property
-    def outbox_worker(self):
-        outbox_runtime = self.outbox_runtime
-        return outbox_runtime.worker if outbox_runtime else None
-
-    @property
     def tool_services(self) -> dict[str, object]:
         services: dict[str, object] = dict(self.integrations.clients)
         services["connections"] = self.connection_service
@@ -374,9 +369,6 @@ class Runtime:
         if not self.automation:
             return {"status": "disabled", "running_tasks": 0, "registered_handlers": []}
         return await self.automation.get_scheduler_status()
-
-    async def get_chat_runs_status(self) -> dict:
-        return self.run_registry.get_status()
 
     async def get_outbox_status(self) -> dict:
         if not self.automation:

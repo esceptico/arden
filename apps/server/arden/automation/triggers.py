@@ -28,8 +28,6 @@ DAY_KEYWORDS: dict[str, tuple[int, ...]] = {
     "daily": ALL_DAYS,
     "weekdays": WEEKDAY_SET,
 }
-VALID_DAY_SPECS = frozenset((*DAY_KEYWORDS.keys(), "weekly"))
-
 _INTERVAL_RE = re.compile(r"^(?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m?)?$")
 _TIME_RE = re.compile(r"^(\d{1,2}):(\d{2})$")
 

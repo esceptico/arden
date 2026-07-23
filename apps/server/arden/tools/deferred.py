@@ -212,21 +212,6 @@ def build_deferred_catalog(
     )
 
 
-def initial_loaded_tool_names(
-    registry: ToolRegistry, capabilities: frozenset[str], *, read_only: bool | None = None
-) -> set[str]:
-    names: set[str] = set()
-    for name, tool_obj in registry.tools.items():
-        if read_only is not None and (tool_obj.policy.action == ToolAction.READ) != read_only:
-            continue
-        if not tool_obj.policy.permissions.issubset(capabilities):
-            continue
-        if is_deferred_tool(name, registry):
-            continue
-        names.add(name)
-    return names
-
-
 def visible_tool_names(
     registry: ToolRegistry,
     capabilities: frozenset[str],

@@ -3037,6 +3037,37 @@ async def test_automation_event_stream_resumes_after_durable_cursor(monkeypatch)
     assert recorded == []
 
 
+@pytest.mark.asyncio
+async def test_startup_global_bus_resumes_before_producers_emit():
+    from types import SimpleNamespace
+
+    from arden.server.app import _create_bus_registry
+
+    recorded = []
+
+    class EventStore:
+        async def get_latest_session_event_seq(self, session_id):
+            assert session_id == "automation:events"
+            return 7
+
+        async def get_latest_session_checkpoint_seq(self, session_id):
+            assert session_id == "automation:events"
+            return 0
+
+        async def record_session_events(self, records):
+            recorded.extend(records)
+
+    runtime = SimpleNamespace(session_service=SimpleNamespace(store=EventStore()))
+    buses = await _create_bus_registry(runtime)
+    bus = buses.get_or_create("automation:events")
+
+    await bus.emit(ThinkingEvent(status="startup"))
+    await bus.drain_record_tasks()
+    await buses.close_all()
+
+    assert [record.seq for record in recorded] == [8]
+
+
 def test_foreground_child_suppression_drops_nested_text_keeps_tool_args():
     """The parent-stream filter (_SUPPRESSED_NESTED_SSE) must drop a sub-agent's
     token text — the firehose, already dropped client-side via !event.depth —

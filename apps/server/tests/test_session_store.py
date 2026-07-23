@@ -461,37 +461,6 @@ async def test_tool_call_round_trip(store: SessionStore):
 
 
 @pytest.mark.asyncio
-async def test_research_artifact_write_overwrite_get(store: SessionStore):
-    await store.put_research_artifact(scope_id="scope-1", path="notes.md", content="first")
-    assert await store.get_research_artifact(scope_id="scope-1", path="notes.md") == "first"
-
-    await store.put_research_artifact(scope_id="scope-1", path="notes.md", content="second")
-    assert await store.get_research_artifact(scope_id="scope-1", path="notes.md") == "second"
-
-    assert await store.get_research_artifact(scope_id="scope-1", path="missing.md") is None
-
-
-@pytest.mark.asyncio
-async def test_research_artifact_append_creates_and_concats(store: SessionStore):
-    await store.append_research_artifact(scope_id="scope-1", path="log.md", content="a\n")
-    await store.append_research_artifact(scope_id="scope-1", path="log.md", content="b\n")
-    assert await store.get_research_artifact(scope_id="scope-1", path="log.md") == "a\nb\n"
-
-
-@pytest.mark.asyncio
-async def test_research_artifact_list_is_scope_isolated(store: SessionStore):
-    await store.put_research_artifact(scope_id="scope-1", path="a.md", content="aaa")
-    await store.put_research_artifact(scope_id="scope-1", path="b.md", content="bbbbb")
-    await store.put_research_artifact(scope_id="scope-2", path="other.md", content="x")
-
-    listed = await store.list_research_artifacts(scope_id="scope-1")
-    paths = {row["path"] for row in listed}
-    assert paths == {"a.md", "b.md"}
-    by_path = {row["path"]: row for row in listed}
-    assert by_path["b.md"]["byte_len"] == 5
-
-
-@pytest.mark.asyncio
 async def test_tool_approval_request_to_approved(store: SessionStore):
     await store.record_tool_approval_requested(
         run_id="run-1",

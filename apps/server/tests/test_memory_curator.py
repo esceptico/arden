@@ -402,7 +402,6 @@ async def test_ask_keeps_watermark_retryable_and_does_not_commit(tmp_path: Path,
 
     assert await curator.curate_session("s1") is False
     assert await curator._read_watermark("s1") == -1
-    assert curator.pending_question("s1") == "Which tea do you mean?"
     assert commits == 0
     await curator.stop()
     await records.close()

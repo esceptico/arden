@@ -8,7 +8,6 @@ import {
   previewPageEdit,
   readMemoryArtifactDetail,
   rebuildMemoryArtifactSummaries,
-  retryPageEdit,
 } from "@/api/memoryArtifacts";
 
 const config: AppConfig = { serverUrl: "http://localhost:6877", apiKey: "test-key" };
@@ -277,26 +276,6 @@ test("apply serializes decisions and maps the committed event", async () => {
     question: "Forget this?",
     targetIds: ["rec-5"],
   });
-});
-
-test("retry serializes pending reconciliation decisions without page content", async () => {
-  bridgeResponse({ event: rawEvent, revision: "sha256:result" });
-
-  const applied = await retryPageEdit(config, {
-    eventId: "external-1",
-    decisions: { "question-1": { choice: "forget_memory", targetIds: ["rec-5"] } },
-  });
-
-  expect(lastRequest()).toEqual({
-    method: "PUT",
-    path: "/admin/memory/page-edits/retry",
-    body: {
-      event_id: "external-1",
-      decisions: { "question-1": { choice: "forget_memory", target_ids: ["rec-5"] } },
-    },
-  });
-  expect(applied.event.id).toBe("event-1");
-  expect(applied.revision).toBe("sha256:result");
 });
 
 test("event sources preserve roles, exact times, precision, hashes, scope, and extra fields", async () => {

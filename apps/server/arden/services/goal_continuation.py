@@ -1,23 +1,5 @@
 from html import escape as escape_xml
 
-from arden.agent import Role
-
-
-def is_goal_client_id(client_id: str | None) -> bool:
-    return bool(client_id and client_id.startswith("goal:"))
-
-
-def has_current_turn_tool_activity(messages: list[dict], input_message_index: int | None) -> bool:
-    if input_message_index is None:
-        return False
-    if input_message_index < 0 or input_message_index >= len(messages):
-        return False
-    current_turn = messages[input_message_index + 1 :]
-    return any(
-        message.get("role") == Role.TOOL or (message.get("role") == Role.ASSISTANT and bool(message.get("tool_calls")))
-        for message in current_turn
-    )
-
 
 def goal_continuation_prompt(goal: dict) -> str:
     objective = escape_xml(str(goal.get("objective") or ""))

@@ -1,5 +1,4 @@
-import { FileSpreadsheet } from "lucide-react";
-import { CalendarDays, Mail } from "@/components/icons";
+import { CalendarDays, FileText, Mail } from "@/components/icons";
 import type { GoogleAccountSummary, GoogleIntegrationId } from "@/api/settings";
 import type { GoogleConnectionSummary } from "@/features/settings/lib/integrationConnection";
 import { Badge, type BadgeTone } from "@/components/ui/Badge";
@@ -10,7 +9,7 @@ import { ICON } from "@/lib/icons";
 const META: Record<GoogleIntegrationId, { label: string; detail: string; Icon: typeof Mail }> = {
   gmail: { label: "Gmail", detail: "Read email; sending requires approval", Icon: Mail },
   calendar: { label: "Google Calendar", detail: "Read events; changes require approval", Icon: CalendarDays },
-  google_drive: { label: "Google Drive", detail: "Read Docs and Sheets; changes require approval", Icon: FileSpreadsheet },
+  google_drive: { label: "Google Drive", detail: "Read Docs and Sheets; changes require approval", Icon: FileText },
 };
 
 export function GoogleServiceCard({

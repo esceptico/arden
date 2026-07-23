@@ -24,7 +24,7 @@ Props live in each file (kept here as a map, not a spec, so it can't go stale).
 - **PageModal** — portal+scrim+panel modal shell (`origin`, `elevated`, `grid`, `header`). **AnchoredPopover** — cursor/trigger-anchored popover (`variant menu|popover`). **HoverPopover** / **Tooltip** — hover surfaces. **MenuItem** — one menu/popover row.
 
 ## Layout, lists, content
-- **SurfaceCard** — interactive card shell (stretched click-target). **ListColumn** / **DividedList** — list containers. **PaneShell** / **DetailShell** — pane scaffolds. **MetaGrid** — label/value grid. **SectionHeader** — section title + count. **Collapse** / **Tabs** + **TabPanels** / **ShowMore** / **PickerRow**.
+- **SurfaceCard** — interactive card shell (stretched click-target). **ListColumn** / **DividedList** — list containers. **DetailShell** — pane scaffolding. **MetaGrid** — label/value grid. **SectionHeader** — section title + count. **Collapse** / **Tabs** + **TabPanels** / **ShowMore** / **PickerRow**.
 - **Markdown** / **MarkdownViewer** / **Mermaid** — rendered content.
 - **DiffReview** — shared review shell. Memory edits pass complete before/after Markdown plus server operations; tool approvals use raw-only mode with a server-authored `rawPatch` and omit `operations`, so they never display or apply memory effects. Raw rendering is lazy-loaded, keyboard-accessible, wraps full-file comparisons, and preserves unified patches exactly. The server remains authoritative for every mutation.
 

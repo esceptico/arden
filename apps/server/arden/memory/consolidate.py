@@ -162,19 +162,6 @@ class Consolidate:
         report.pruned = (await self._records.prune())["records"]
         return report
 
-    @observed_trace("memory.labels", tags="memory")
-    async def lint_labels_once(self) -> ConsolidateReport:
-        """Standalone vocabulary pass: classify/rename labels (one LLM call) +
-        prune, WITHOUT the per-neighborhood merge sweep. Run on startup so a fresh
-        deploy classifies the cold-start label backlog into entity dossiers right
-        away instead of waiting for the daily consolidation."""
-        report = ConsolidateReport()
-        if self._llm is None or not self._model:
-            return report
-        await self._sync_label_hygiene(report, force=True)
-        report.pruned = (await self._records.prune())["records"]
-        return report
-
     # --- candidate selection (bounded) ------------------------------------
 
     async def _select_delta(self) -> list[Record]:

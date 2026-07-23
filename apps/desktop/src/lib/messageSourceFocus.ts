@@ -44,32 +44,3 @@ export function firstMessageIdInSourceFocus<T extends SourceIndexedMessage>(
   }
   return null;
 }
-
-export function resolveMessageSourceFocus<T extends SourceIndexedMessage>(
-  order: string[],
-  messages: Map<string, T>,
-  focus: MessageSourceFocus,
-  currentSessionId: string | null | undefined,
-): MessageSourceFocus {
-  if (currentSessionId !== focus.sessionId || !focus.messageStartId) return focus;
-
-  let start: number | undefined;
-  let end: number | undefined;
-  for (const id of order) {
-    const message = messages.get(id);
-    if (!message?.sourceMessageId || message.sourceIndex === undefined) continue;
-    if (message.sourceMessageId === focus.messageStartId) {
-      start = message.sourceIndex;
-    }
-    if (focus.messageEndId && message.sourceMessageId === focus.messageEndId) {
-      end = message.sourceIndex + 1;
-    }
-  }
-
-  if (start === undefined) return focus;
-  return {
-    ...focus,
-    messageStart: start,
-    messageEnd: end ?? start + 1,
-  };
-}

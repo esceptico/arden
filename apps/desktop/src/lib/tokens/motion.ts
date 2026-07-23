@@ -13,7 +13,6 @@
 // ─── Geist primary ease ─────────────────────────────────────
 
 /** Geist design-system primary easing — slight overshoot that "lands". */
-export const GEIST_EASE = [0.175, 0.885, 0.32, 1.1] as const;
 
 // ─── Springs ────────────────────────────────────────────────
 // Stiffness/damping pairs tuned to use case. Higher stiffness = faster

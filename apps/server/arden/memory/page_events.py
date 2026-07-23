@@ -11,7 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from arden.memory.brand_markers import PAGE_EDIT_EVENT_MARKER, PAGE_EDIT_EVENT_MARKERS
+from arden.memory.markers import PAGE_EDIT_EVENT_MARKER, PAGE_EDIT_EVENT_MARKERS
 from arden.memory.models import Kind, SourceRef
 from arden.memory.reconciler import RecordOperation
 from arden.memory.scopes import MemoryScope

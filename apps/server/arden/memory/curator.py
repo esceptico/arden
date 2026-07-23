@@ -260,9 +260,6 @@ class Curator:
         if self._sweep_task is None or self._sweep_task.done():
             self._sweep_task = asyncio.create_task(self._sweep_loop())
 
-    def pending_question(self, session_id: str) -> str | None:
-        return self._pending_questions.get(session_id)
-
     async def reconcile_direct_memory(
         self,
         *,
@@ -1058,11 +1055,6 @@ class Curator:
 
         content = message.get("content") if isinstance(message, dict) else message
         return "\n".join(p for p in walk(content) if p).strip()
-
-    @staticmethod
-    def _max_seq(rows, *, default: int) -> int:
-        seqs = [row["seq"] for row in rows if isinstance(row, dict) and row.get("seq") is not None]
-        return max(seqs, default=default)
 
     # -- watermark (the Dreamer's own meta table) ----------------------------
 

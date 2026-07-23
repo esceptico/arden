@@ -3,15 +3,10 @@ per-automation learnings loop. Hermetic: scripted fake LLM, real tmp FilePageSto
 
 from pathlib import Path
 
-import pytest
-
 from arden.memory.dreamer import run_dream
 from arden.memory.file_store import FilePageStore, load_conventions
 from arden.memory.maintenance import _path, append_learnings, read_learnings
 from arden.memory.models import TRUST_LEVEL, SourceRef
-
-pytestmark = pytest.mark.asyncio
-
 
 # -- A: operating manual ------------------------------------------------------
 

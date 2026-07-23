@@ -496,7 +496,7 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
    (e.g. filter clear buttons) don't lose their translate on press.
    `.sidebar button` selector beats Tailwind's `.transition-colors` on
    specificity (0,1,1 vs 0,1,0) so we don't need `!important`.
-   Spec: docs/internal/apple-design-intel.md "Tap / Active States". */
+   Shared active-state treatment for mouse and keyboard input. */
 .sidebar button:not(:disabled) {
   transition:
     scale var(--duration-check) var(--ease-out),
@@ -560,13 +560,6 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 :root {
   --tabs-dur: var(--duration-travel);
   --tabs-ease: var(--ease-smooth-out);
-  /* Lab-ported name for the same 150ms tier as --duration-check — read by
-     name (not as a Tailwind utility) from FieldSwap/ChargeButton's inline
-     styles via getComputedStyle, matching ~/src/interaction-lab's
-     --duration-quick so the tuned-value provenance stays legible. Declared
-     outside @theme: Tailwind v4 prunes @theme custom properties that no
-     utility class references, and nothing in CSS reads this one. */
-  --duration-quick: 150ms;
 }
 
 /* One icon-column template for every settings nav element — the tab rows

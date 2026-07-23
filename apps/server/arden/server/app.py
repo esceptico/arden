@@ -12,7 +12,6 @@ from pydantic import BaseModel
 from arden.agent import Role
 from arden.areas.agent import INTAKE_ADDENDUM, render_work_context
 from arden.areas.lifecycle import AreaLifecycleService, AreaPageService
-from arden.areas.migrate import migrate_legacy_areas
 from arden.areas.models import areas_from_records
 from arden.areas.paths import resolve_area_page
 from arden.areas.projection import area_automation_match
@@ -22,7 +21,6 @@ from arden.automation.models import Automation
 from arden.automation.output_schemas import resolve_output_schema
 from arden.automation.prompts import AUTOMATION_PROMPT, AUTOMATION_SUFFIX
 from arden.automation.scheduler import AUTOMATION_BUS_KEY, RunSkipped, split_manual_flag
-from arden.constants import LEGACY_AREAS_FILE
 from arden.core.tool_result_files import prune_offload_store
 from arden.events.sse import AreasChangedEvent, MemoryChangedEvent
 from arden.llm.openai_codex_catalog import refresh_codex_models
@@ -53,6 +51,16 @@ from arden.server.runtime import Runtime
 from arden.services.chat import resume_suspended_chat_run, submit_chat_message
 
 _logger = get_logger(__name__)
+
+
+async def _create_bus_registry(runtime: Runtime) -> BusRegistry:
+    event_store = runtime.session_service.store if runtime.session_service else None
+    bus_registry = BusRegistry(record_events=event_store.record_session_events if event_store else None)
+    # Producers start during Runtime.connect() and may emit onto the global bus
+    # before its HTTP stream is opened. Seed that bus from durable state now so
+    # a restart never reuses sequence numbers already present in session_events.
+    await prime_bus_cursor_from_store(bus_registry, AUTOMATION_BUS_KEY, event_store)
+    return bus_registry
 
 
 def _loop_target_id(automation: Automation) -> str | None:
@@ -102,9 +110,7 @@ async def lifespan(app: FastAPI):
         await asyncio.to_thread(prune_offload_store)
     except Exception:
         _logger.warning("tool-result store prune failed on startup; continuing", exc_info=True)
-    bus_registry = BusRegistry(
-        record_events=runtime.session_service.store.record_session_events if runtime.session_service else None,
-    )
+    bus_registry = await _create_bus_registry(runtime)
     runtime.scheduler.set_bus_registry(bus_registry)
 
     # Route session lifecycle events (SESSION_CREATED / SESSION_ACTIVITY)
@@ -117,17 +123,6 @@ async def lifespan(app: FastAPI):
             await bus_registry.get_or_create(AUTOMATION_BUS_KEY).emit(event)
 
         runtime.session_service.set_event_sink(_publish_session_event)
-
-        # areas unification: one-shot fold of areas.json into the
-        # areas table (capabilities + re-keyed asks/automations/sessions).
-        # No-op once the file has been renamed to .migrated.
-        await migrate_legacy_areas(
-            areas_file=runtime.config.arden_dir / LEGACY_AREAS_FILE,
-            session_service=runtime.session_service,
-            ask_store=runtime.automation.area_asks,
-            automation_store=runtime.stores.automations,
-            session_store=runtime.session_service.store,
-        )
 
     # Live memory vault: the store polls the memory dir for external edits
     # (Obsidian, feed automations, git) and fans each absorbed batch out on the

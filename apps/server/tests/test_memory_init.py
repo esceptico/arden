@@ -18,16 +18,12 @@ Proves:
 import json
 from pathlib import Path
 
-import pytest
-
 from arden.memory.consolidate import Consolidate
 from arden.memory.curator import Curator
 from arden.memory.init import run_memory_init
 from arden.memory.records import RecordStore
 from tests.conftest import completion_response
 from tests.test_memory_curator import StubSessions, _make_file_curator, _scope, _turn
-
-pytestmark = pytest.mark.asyncio
 
 
 class CuratorStubLLM:

@@ -7,11 +7,10 @@ from arden.llm.models import Model, Provider
 from arden.services.config import ConfigService
 
 
-def test_integration_enabled_prefers_service_state_over_legacy_google():
+def test_integration_enabled_uses_explicit_service_state():
     config = Config(
         _env_file=None,
         memory=False,
-        google=True,
         integration_states={"gmail": False, "calendar": True},
     )
 

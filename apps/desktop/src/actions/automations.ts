@@ -1,4 +1,4 @@
-import { createAutomationApi, deleteAutomationApi, dismissAutomationSuggestionApi, listAutomationSuggestionsApi, listAutomationsApi, refreshAutomationSuggestionsApi, runAutomationApi, toggleAutomationApi, updateAutomationApi } from "@/api/automations";
+import { createAutomationApi, deleteAutomationApi, dismissAutomationSuggestionApi, listAutomationSuggestionsApi, listAutomationsApi, runAutomationApi, toggleAutomationApi, updateAutomationApi } from "@/api/automations";
 import type { CreateAutomationPayload, UpdateAutomationPayload } from "@/api/types";
 import { getState } from "@/stores";
 
@@ -56,10 +56,4 @@ export async function dismissSuggestion(id: string): Promise<void> {
   const s = getState();
   s.setAutomationSuggestions((s.automationSuggestions ?? []).filter((sug) => sug.id !== id));
   await dismissAutomationSuggestionApi(s.config, id);
-}
-
-export async function refreshSuggestions(): Promise<void> {
-  const s = getState();
-  const suggestions = await refreshAutomationSuggestionsApi(s.config);
-  s.setAutomationSuggestions(suggestions);
 }

@@ -139,7 +139,7 @@ class RuntimeResearchRunnerContext:
         await self._runtime.connect()
         return RuntimeResearchRunner(self._runtime)
 
-    async def __aexit__(self, exc_type, exc, tb) -> None:
+    async def __aexit__(self, _exc_type, exc, _tb) -> None:
         if self._runtime is not None:
             await self._runtime.close()
 

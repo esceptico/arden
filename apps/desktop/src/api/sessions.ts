@@ -143,7 +143,7 @@ export async function permanentlyDeleteSessionApi(config: AppConfig, sessionId: 
 export async function branchSessionApi(
   config: AppConfig,
   sessionId: string,
-  payload: { name?: string; up_to_message_id?: string; from_end_index?: number },
+  payload: { name?: string; up_to_message_id?: string },
 ): Promise<{ session_id: string; name: string | null; started_at: string; last_activity: string; area_id?: string | null }> {
   return apiWithConfig(config, `/sessions/${encodeURIComponent(sessionId)}/branch`, {
     method: "POST",

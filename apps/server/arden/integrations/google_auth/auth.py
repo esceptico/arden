@@ -344,9 +344,3 @@ def add_google_account(service_choice: str = "all") -> dict:
         "token_file": token_path.name,
         "scopes": scopes,
     }
-
-
-def add_gmail_account() -> str:
-    """Compatibility wrapper for the legacy Gmail add flow."""
-    result = add_google_account("all")
-    return result.get("email") or ""
