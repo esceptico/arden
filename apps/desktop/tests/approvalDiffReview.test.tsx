@@ -3,19 +3,19 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { ApprovalReviewModal } from "@/features/chat/components/ApprovalReviewModal";
 import { setState } from "@/stores/index";
-import { clearApprovalFeedbackDraft, setApprovalFeedbackDraft } from "@/lib/approvalFeedbackDraft";
 
 let root: Root | null = null;
 
 afterEach(async () => {
-  setState({ pendingApprovals: [], reviewingApprovalToolId: null });
-  clearApprovalFeedbackDraft("tool-1");
-  if (root) await act(async () => root?.unmount());
+  await act(async () => {
+    setState({ pendingApprovals: [], reviewingApprovalToolId: null });
+    root?.unmount();
+  });
   root = null;
   document.body.replaceChildren();
 });
 
-test("approval file diffs reuse raw DiffReview without memory effects", async () => {
+test("approval file diffs use the compact mockup patch surface", async () => {
   const portal = document.createElement("div");
   portal.id = "app";
   document.body.append(portal);
@@ -33,17 +33,21 @@ test("approval file diffs reuse raw DiffReview without memory effects", async ()
       diff: "--- a/notes/a.md\n+++ b/notes/a.md\n@@ -1 +1 @@\n-old\n+new",
     }],
   });
-  setApprovalFeedbackDraft("tool-1", "use the API instead");
 
   await act(async () => root?.render(<ApprovalReviewModal />));
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 
-  const review = document.querySelector("[data-diff-review]");
+  const review = document.querySelector("[data-approval-diff]");
   expect(review).toBeTruthy();
-  expect(review?.getAttribute("data-layout")).toBe("stacked");
   expect(review?.textContent).toContain("--- a/notes/a.md");
   expect(review?.textContent).toContain("+new");
-  expect(document.querySelector("[data-memory-effects-scroll]")).toBeNull();
+  const sheet = document.querySelector<HTMLElement>('[role="dialog"]');
+  expect(sheet?.className).toContain("surface-bottom-sheet");
+  expect(sheet?.textContent).toContain("Review file changes");
+  expect(sheet?.textContent).toContain("Awaiting approval");
+  expect(sheet?.textContent).toContain("Deny");
+  expect(sheet?.textContent).toContain("Approve changes");
+  expect(review?.className).toContain("arden-code-well");
+  expect(review?.className).not.toContain("--r-row");
   expect(document.querySelector('[role="tablist"]')).toBeNull();
-  expect(document.querySelector<HTMLInputElement>('input[aria-label="Rejection reason"]')?.value).toBe("use the API instead");
 });

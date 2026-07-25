@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import clsx from "clsx";
-import { RefreshCw } from "@/components/icons";
 import { createCustomModelApi, connectModelProviderApi, deleteCustomModelApi, disconnectModelProviderApi, getOpenAICodexOAuthStatusApi, listModelProvidersApi, startOpenAICodexOAuthApi, type ModelProvider, type OpenAICodexOAuthStatus } from "@/api/settings";
 import { fetchServerConfig } from "@/actions/server";
 import { useStore } from "@/stores";
-import { ReadinessCard } from "@/features/settings/components/ReadinessCard";
-import { SettingsGroupSection } from "@/features/settings/components/SettingsGroupSection";
 import { ProviderRow } from "@/features/settings/components/ProviderRow";
 import { CustomModelsPanel } from "@/features/settings/components/CustomModelsPanel";
 import { SettingsTabSkeleton } from "@/features/settings/components/SettingsTabSkeleton";
+import {
+  SettingsDataSection,
+  SettingsPageAction,
+  SettingsSummary,
+} from "@/features/settings/components/SettingsPage";
 import { providerReadinessSummary } from "@/features/settings/lib/providerConnection";
 import {
   canSaveCustomModelDraft,
@@ -22,9 +23,8 @@ import {
   shouldShowLoadedSettingsContent,
 } from "@/features/settings/lib/settingsLoadState";
 import { SettingsConnectionHint, SettingsInlineError } from "@/features/settings/components/SettingsNotice";
+import { SettingsRefreshAction } from "@/features/settings/components/SettingsRefreshAction";
 import { DISSOLVE_OUT, EASE_OUT, MOTION, RISE_IN, RISE_SETTLED } from "@/lib/tokens/motion";
-import { ICON } from "@/lib/icons";
-import { Button } from "@/components/ui/Button";
 
 const PRIMARY_PROVIDERS = ["openai-codex", "openai", "anthropic", "google", "openrouter"];
 
@@ -197,10 +197,15 @@ export function ProvidersTab() {
         pending={pendingId === provider.id}
         codexStatus={provider.id === "openai-codex" ? codexStatus : null}
         customOpen={provider.id === "custom" ? customOpen : false}
-        onToggleCustom={() => setCustomOpen((value) => !value)}
+        onToggleCustom={() => {
+          setCustomOpen((value) => !value);
+          setEditingId(null);
+          setApiKey("");
+        }}
         onEdit={() => {
           setEditingId(provider.id);
           setApiKey("");
+          setCustomOpen(false);
         }}
         onCancel={() => {
           setEditingId(null);
@@ -238,16 +243,10 @@ export function ProvidersTab() {
   }
 
   return (
-    <div className="grid gap-4">
-      <div className="flex items-start justify-between gap-3">
-        <p className="m-0 text-sm text-muted leading-[1.45] max-w-[520px]">
-          Connect model providers here. Server connection and tool integrations stay separate.
-        </p>
-        <Button variant="secondary" onClick={() => void refresh()} disabled={loading}>
-          <RefreshCw size={ICON.SM} strokeWidth={2} className={clsx(loading && "animate-spin")} />
-          Refresh
-        </Button>
-      </div>
+    <>
+      <SettingsPageAction>
+        <SettingsRefreshAction label="Providers" loading={loading} onRefresh={refresh} />
+      </SettingsPageAction>
 
       {error && (
         <SettingsInlineError
@@ -256,38 +255,42 @@ export function ProvidersTab() {
         />
       )}
 
-      <div className="grid gap-3">
+      <div className="settings-provider-flow">
         {loading && providers.length === 0 ? (
           <SettingsTabSkeleton variant="cards" label="Loading providers…" />
         ) : !showContent ? (
           <SettingsConnectionHint />
         ) : (
           <>
-            <ReadinessCard
-              tone={readiness.ready ? "ok" : "warn"}
-              label={readiness.label}
+            <SettingsSummary
+              label={readiness.ready ? "Models ready" : readiness.label}
               detail={readiness.detail}
-              footnote={`${readiness.connectedProviderCount} connected · ${readiness.availableModelCount} available models`}
+              stats={[
+                {
+                  value: readiness.connectedProviderCount,
+                  label: "connected",
+                  tone: readiness.connectedProviderCount > 0 ? "ok" : "warn",
+                },
+                { value: readiness.availableModelCount, label: "models" },
+              ]}
             />
-            <SettingsGroupSection
+            <SettingsDataSection
               title="Ready providers"
               detail={`${connectedProviders.length} connected`}
               empty="No model providers are connected yet."
-              headerClassName="px-0.5"
             >
               {connectedProviders.map(renderProvider)}
-            </SettingsGroupSection>
-            <SettingsGroupSection
+            </SettingsDataSection>
+            <SettingsDataSection
               title="Set up more"
               detail={`${setupProviders.length} available`}
               empty="All configured providers are ready."
-              headerClassName="px-0.5"
             >
               {setupProviders.map(renderProvider)}
-            </SettingsGroupSection>
+            </SettingsDataSection>
           </>
         )}
       </div>
-    </div>
+    </>
   );
 }

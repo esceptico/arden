@@ -1,5 +1,4 @@
 import type { ReactNode } from "react";
-import { ScrollFadeTop } from "@/components/ui/ScrollBlur";
 
 export function DetailShell({
   header,
@@ -15,8 +14,7 @@ export function DetailShell({
   return (
     <div className="flex flex-col h-full">
       <div className="px-7 pt-6 pb-3">{header}</div>
-      <div className="flex-1 min-h-0 px-7 overflow-y-auto scroll-thin">
-        <ScrollFadeTop />
+      <div className="flex-1 min-h-0 px-7 overflow-y-auto scroll-thin scroll-fade">
         {body}
         <div className="mt-7 mb-6">{meta}</div>
       </div>

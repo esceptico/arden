@@ -1,0 +1,570 @@
+.mission-control {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  overscroll-behavior: contain;
+  background: var(--paper);
+}
+
+.mission-control__room {
+  width: min(100%, var(--content-max-width));
+  height: 100%;
+  min-height: 0;
+  margin: 0 auto;
+  padding: 3.5rem var(--content-gutter) var(--space-4);
+  display: flex;
+  flex-direction: column;
+}
+
+.mission-control__answer {
+  flex: none;
+  padding: .375rem var(--space-0-5) 0;
+}
+
+.mission-control__answer h1,
+.mission-control__connection h1 {
+  margin: 0;
+  color: var(--ink);
+  font: 620 var(--text-3xl)/1.2 var(--sans);
+  letter-spacing: -.021em;
+  text-wrap: balance;
+}
+
+/* The count carries the user's Appearance accent — the same ink as live
+   statuses and healthy summaries — so the headline's one variable reads
+   at a glance and follows the configured palette. */
+.mission-control__answer-count {
+  color: var(--accent-ink);
+}
+
+.mission-control__answer p,
+.mission-control__connection p {
+  max-width: 64ch;
+  margin: var(--space-2) 0 0;
+  color: var(--muted);
+  font: 460 var(--text-sm)/1.5 var(--sans);
+  font-variant-numeric: tabular-nums;
+}
+
+.mission-control__answer p b { color: var(--ink-soft); font-weight: 560; }
+
+.mission-control__capture {
+  flex: none;
+  margin-top: var(--space-5);
+}
+
+.mission-control__capture-field {
+  min-height: 2.625rem;
+  padding-inline: var(--space-4);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2-5);
+  border-radius: var(--r-control);
+  background: var(--paper);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+  transition:
+    background var(--motion-focus) var(--smooth-out),
+    box-shadow var(--motion-focus) var(--smooth-out);
+}
+
+.mission-control__capture-field:focus-within {
+  background: var(--card);
+  box-shadow: var(--shadow-3), 0 0 0 1px color-mix(in oklab, var(--accent) 40%, transparent);
+}
+
+.mission-control__capture input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  color: var(--ink);
+  background: transparent;
+  font: 460 var(--text-md)/normal var(--sans);
+}
+
+.mission-control__capture input::placeholder { color: var(--faint); }
+
+.mission-control__capture-shortcut {
+  display: inline-flex;
+  flex: none;
+  min-width: 3.625rem;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-1);
+}
+
+.mission-control__attention {
+  min-height: 0;
+  margin-top: clamp(1.5rem, 5vh, 3rem);
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+}
+
+.mission-control__deck { flex: none; }
+
+.mission-control__deck-slot {
+  position: relative;
+  display: grid;
+}
+
+.mission-control__deck-stack {
+  grid-area: 1 / 1;
+  position: relative;
+  display: grid;
+}
+
+.mission-control__deck-card-motion {
+  grid-area: 1 / 1;
+  min-width: 0;
+}
+
+.mission-control__capacity {
+  margin: 0 0 var(--space-3);
+  padding-inline: var(--space-0-5);
+  color: var(--faint);
+  font: 460 var(--text-xs)/1.4 var(--sans);
+}
+
+.mission-control__deck-chrome {
+  position: relative;
+  z-index: var(--z-sticky);
+  width: 100%;
+  min-height: 1.5rem;
+  margin-top: .875rem;
+  padding-inline: var(--space-0-5);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.mission-control__deck-chrome > span {
+  color: var(--faint);
+  font: 500 var(--text-meta)/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.mission-control__deck-slot:has(.mission-control__zero) {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.mission-control__deck-slot:has(.mission-control__zero) .mission-control__deck-stack,
+.mission-control__deck-slot:has(.mission-control__zero) .mission-control__zero {
+  grid-area: 1 / 1;
+}
+
+.mission-control__deck-slot:has(.mission-control__zero) > .mission-control__deck-chrome {
+  grid-area: 1 / 2;
+  width: auto;
+  min-height: 2.75rem;
+  margin: 0;
+  padding-inline: var(--space-0-5);
+}
+
+.mission-control__focus {
+  min-width: 0;
+  padding-inline: var(--space-0-5);
+}
+
+.mission-control__focus-context {
+  margin: 0;
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: var(--space-1-5);
+  color: var(--faint);
+  font: 500 var(--text-xs)/1.25 var(--sans);
+}
+
+.mission-control__focus-context button {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-soft);
+  font: inherit;
+  font-weight: 560;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color var(--motion-feedback) var(--smooth-out);
+}
+
+.mission-control__focus-context button:hover { color: var(--accent-ink); }
+
+.mission-control__focus-context time {
+  margin-left: auto;
+  flex: none;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.mission-control__focus h2 {
+  margin: .5625rem 0 0;
+  display: -webkit-box;
+  overflow-wrap: anywhere;
+  overflow: hidden;
+  color: var(--ink);
+  font: 620 var(--text-2xl)/1.3 var(--sans);
+  letter-spacing: -.018em;
+  text-wrap: balance;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.mission-control__focus-reason {
+  max-width: 58ch;
+  margin: .4375rem 0 0;
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--muted);
+  font: 400 var(--text-sm)/1.5 var(--sans);
+  text-wrap: pretty;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.mission-control__focus-next {
+  margin: var(--space-1-5) 0 0;
+  overflow: hidden;
+  color: var(--faint);
+  font: 400 var(--text-sm)/1.5 var(--sans);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mission-control__focus-foot {
+  margin-top: 1.125rem;
+  display: grid;
+}
+
+.mission-control__focus-actions,
+.mission-control__reply,
+.mission-control__snooze {
+  grid-area: 1 / 1;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1-5);
+  filter: blur(0);
+  transition:
+    opacity var(--motion-feedback) var(--smooth-out),
+    transform var(--motion-dissolve) var(--smooth-out),
+    filter var(--motion-feedback) var(--smooth-out),
+    visibility 0s;
+}
+
+.mission-control__focus-foot > [data-io-hidden] {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(3px);
+  filter: blur(var(--swap-blur));
+  transition:
+    opacity var(--motion-feedback) var(--smooth-out),
+    transform var(--motion-dissolve) var(--smooth-out),
+    filter var(--motion-feedback) var(--smooth-out),
+    visibility 0s var(--motion-feedback);
+}
+
+.mission-control__focus-actions .arden-button[data-variant="quiet"],
+.mission-control__snooze .arden-button[data-variant="quiet"] {
+  color: var(--ink-soft);
+  background: var(--surface-2);
+}
+
+.mission-control__verb-key {
+  margin-right: 7px;
+  opacity: .5;
+  font: 560 var(--text-xs)/1 var(--mono);
+}
+
+.mission-control__later {
+  min-height: var(--control-size-large);
+  padding-inline: var(--space-2);
+  color: var(--faint);
+  font: 500 var(--text-control)/1 var(--sans);
+  transition: color var(--motion-feedback) var(--smooth-out);
+}
+
+.mission-control__later:hover { color: var(--ink-soft); }
+
+.mission-control__reply { max-width: 34rem; }
+.mission-control__reply .arden-field { min-width: min(100%, 15rem); flex: 1; }
+.mission-control__reply-hint {
+  flex: none;
+  color: var(--faint);
+  font: 500 var(--text-meta)/1 var(--mono);
+  white-space: nowrap;
+}
+
+.mission-control__snooze > span {
+  margin-right: var(--space-1);
+  color: var(--faint);
+  font: 460 var(--text-xs)/1 var(--sans);
+}
+
+.mission-control__peers {
+  margin-top: var(--space-2-5);
+  display: grid;
+  gap: var(--interactive-row-gap);
+}
+
+.mission-control__peer {
+  width: calc(100% + var(--space-5));
+  min-height: var(--control-size);
+  margin-inline: calc(var(--space-2-5) * -1);
+  padding-inline: var(--space-3);
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-3);
+  border: 0;
+  text-align: left;
+}
+
+.mission-control__peer-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-soft);
+  font: 560 var(--text-sm)/1.25 var(--sans);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mission-control__peers > p {
+  margin: var(--space-1) 0 0;
+  padding-inline: var(--space-3);
+  color: var(--faint);
+  font: 500 var(--text-2xs)/1.35 var(--sans);
+  font-variant-numeric: tabular-nums;
+}
+
+.mission-control__zero {
+  min-height: 2.75rem;
+  margin: 0;
+  padding-inline: var(--space-0-5);
+  display: flex;
+  align-items: center;
+  color: var(--muted);
+  font: 560 var(--text-sm)/1.4 var(--sans);
+}
+
+.mission-control__ambient {
+  position: relative;
+  z-index: var(--z-sticky);
+  margin-top: clamp(1.125rem, 3.5vh, 2.125rem);
+  padding-top: .3125rem;
+  display: grid;
+  gap: var(--interactive-row-gap);
+  border-top: 1px solid var(--edge);
+  background: var(--paper);
+}
+
+.mission-control__ambient > .arden-section-label {
+  padding: .4375rem var(--space-0-5) var(--space-2);
+}
+
+.mission-control__strip-head {
+  width: calc(100% + var(--space-5));
+  min-height: var(--control-size);
+  margin-inline: calc(var(--space-2-5) * -1);
+  padding-inline: var(--space-3);
+  /* Fixed label column keeps every lane's preview on one left axis. */
+  display: grid;
+  grid-template-columns: 4.5rem minmax(0, 1fr) auto auto;
+  align-items: center;
+  column-gap: var(--space-2);
+  border: 0;
+  color: var(--muted);
+  font: 460 var(--text-sm)/1.35 var(--sans);
+  text-align: left;
+}
+
+.mission-control__strip-head strong {
+  color: var(--ink-soft);
+  font-weight: 570;
+}
+
+/* One-item lane preview: a faint question-word prefix ("next:") labels the
+   datum so the middle explains itself without prior knowledge. */
+.mission-control__strip-preview {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.mission-control__strip-preview > em {
+  color: var(--faint);
+  font-style: normal;
+}
+
+/* Rail-row idiom: the count anchors the right edge as tabular meta, exactly
+   like the sidebar's trailing counts. */
+.mission-control__strip-count {
+  flex: none;
+  color: var(--faint);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Unread delta — words in status ink, only while something is unseen. */
+.mission-control__strip-count[data-new] {
+  color: var(--accent-ink);
+  font-weight: 570;
+}
+
+.mission-control__strip-head:disabled { cursor: default; color: var(--faint); }
+.mission-control__strip-head:disabled strong { color: var(--muted); }
+
+.mission-control__strip-chevron {
+  width: .875rem;
+  height: .875rem;
+  flex: none;
+  color: var(--faint);
+  opacity: .55;
+  transition:
+    opacity var(--motion-feedback) var(--smooth-out),
+    transform var(--motion-dissolve) var(--smooth-out);
+}
+
+.mission-control__strip-head[aria-expanded="true"] .mission-control__strip-chevron {
+  opacity: 1;
+  transform: rotate(180deg);
+}
+
+/* Strip details float at click-depth in the shared peek geometry (the chat
+   inspector's), so the desk itself never grows and never scrolls. */
+.mission-control__ambient-peek {
+  top: 3.875rem;
+  right: var(--floating-edge, 1rem);
+  width: var(--peek-width);
+  max-height: calc(100vh - 4.625rem);
+  border-radius: var(--r-panel);
+  transform-origin: right center;
+}
+
+.mission-control__ambient-peek-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-2) var(--space-1) var(--space-3);
+}
+
+.mission-control__ambient-peek-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font: 460 var(--text-sm)/1.3 var(--sans);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mission-control__ambient-peek-title strong {
+  color: var(--ink);
+  font-weight: 570;
+}
+
+.mission-control__ambient-peek-list {
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  padding: 0 var(--space-2) var(--space-2);
+}
+
+.mission-control__ambient-row {
+  width: 100%;
+  min-width: 0;
+  flex: none;
+  padding: .4375rem var(--space-2-5);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-0-5) var(--space-3);
+  border: 0;
+  border-radius: var(--r-house);
+  text-align: left;
+}
+
+.mission-control__ambient-row-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-soft);
+  font: 560 var(--text-sm)/1.25 var(--sans);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mission-control__ambient-row-detail {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  color: var(--muted);
+  font: 460 var(--text-xs)/1.4 var(--sans);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mission-control__ambient-row-meta {
+  align-self: baseline;
+  color: var(--faint);
+  font: 500 var(--text-meta)/1.25 var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.mission-control__ambient-row-meta[data-tone="success"] { color: var(--success); }
+.mission-control__ambient-row-meta[data-tone="warning"] { color: var(--warning); }
+.mission-control__ambient-row-meta[data-tone="danger"] { color: var(--danger); }
+
+.mission-control--disconnected {
+  display: grid;
+  place-items: center;
+  padding: var(--content-gutter);
+}
+
+.mission-control__connection {
+  max-width: 26.25rem;
+  display: grid;
+  justify-items: center;
+  gap: var(--space-5);
+  text-align: center;
+}
+
+.mission-control__connection-mark {
+  width: 3rem;
+  height: 3rem;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-panel);
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+}
+
+.mission-control__connection .arden-button { margin-top: var(--space-1); }
+
+@media (max-width: 46.25rem) {
+  .mission-control__room { padding-top: var(--home-compact-top-inset); }
+}
+
+@media (max-height: 53rem) {
+  .mission-control__room { padding-top: 2.875rem; padding-bottom: var(--space-2-5); }
+}
+
+@media (max-height: 47rem) {
+  .mission-control__answer h1 { font-size: var(--text-2xl); }
+  .mission-control__answer p { margin-top: .3125rem; }
+  .mission-control__focus h2 { margin-top: var(--space-2); font-size: var(--text-xl); }
+  .mission-control__focus-reason { -webkit-line-clamp: 1; }
+  .mission-control__focus-foot { margin-top: .875rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mission-control__strip-chevron,
+  .mission-control__capture-field,
+  .mission-control__focus-context button,
+  .mission-control__later { transition-duration: 1ms; }
+}

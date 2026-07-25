@@ -17,3 +17,11 @@ def matches_scope(patterns: Sequence[str], name: str) -> bool:
         if pattern.endswith("*") and name.startswith(pattern[:-1]):
             return True
     return False
+
+
+def with_read_floor(patterns: Sequence[str], read_only_names: Sequence[str]) -> tuple[str, ...]:
+    """A user-authored allowlist grants tools ON TOP of the always-available
+    read-only floor. A scope bounds the dangerous surface, never the safe one —
+    an automation scoped to its one write tool must still be able to look
+    around (list sessions, read files) to execute its own prompt."""
+    return tuple(dict.fromkeys((*patterns, *read_only_names)))

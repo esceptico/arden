@@ -2,13 +2,21 @@ import { useLayoutEffect, useRef, useState, type ReactNode, type RefObject } fro
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "motion/react";
 import clsx from "clsx";
-import { DURATION_POPOVER, EASE_DECELERATE, EXIT_FAST } from "@/lib/tokens/motion";
+import {
+  EXIT_FAST,
+  MOTION,
+  POPOVER_ENTER_TRANSITION,
+  POSE_PORTALED_POPOVER_IN,
+  POSE_PORTALED_POPOVER_OUT,
+  POSE_PORTALED_POPOVER_VISIBLE,
+} from "@/lib/tokens/motion";
 import { useReanchor } from "@/lib/hooks";
+import { useHasBlockingOverlay, useOverlayLayer } from "@/lib/overlayStack";
 
 /** 120ms hover bridge — one value across the composer-toolbar popovers
  *  (BudgetDial, GoalStrip, LoopStatus) so the gap-crossing grace feels
  *  identical. */
-const HIDE_DELAY_MS = 120;
+const HIDE_DELAY_MS = MOTION.press * 1_000;
 
 interface TriggerBind {
   ref: RefObject<HTMLButtonElement | null>;
@@ -42,8 +50,8 @@ interface HoverPopoverProps {
 /**
  * Hover-anchored popover for composer-toolbar pills. Owns the shared
  * scaffolding: trigger-rect measurement (re-measured on resize/scroll),
- * hover bridge between trigger and panel, hide-delay timer, portal to
- * document.body, and the house popover entrance — rising from
+ * hover bridge between trigger and panel, hide-delay timer, portal to the
+ * app overlay root, and the house popover entrance — rising from
  * `transformOrigin: bottom <anchor>` above the trigger.
  */
 export function HoverPopover({
@@ -61,6 +69,7 @@ export function HoverPopover({
   const [coords, setCoords] = useState<{ bottom: number; left?: number; right?: number } | null>(
     null,
   );
+  const nested = useHasBlockingOverlay();
 
   const cancelHide = () => {
     if (hideTimerRef.current !== null) {
@@ -77,6 +86,7 @@ export function HoverPopover({
     hideTimerRef.current = window.setTimeout(() => setOpen(false), HIDE_DELAY_MS);
   };
   const toggle = () => setOpen((v) => !v);
+  useOverlayLayer(popoverRef, open && coords !== null, () => setOpen(false), false, false);
 
   // useLayoutEffect so coords are committed before the popover paints —
   // an open=true / coords-stale frame would render the popover at the
@@ -105,14 +115,7 @@ export function HoverPopover({
     return () => window.removeEventListener("mousedown", onClick);
   }, [open, dismissOnOutsideClick]);
 
-  useLayoutEffect(() => {
-    if (!open) return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [open]);
+  const root = document.querySelector("#app");
 
   return (
     <>
@@ -127,7 +130,7 @@ export function HoverPopover({
           onBlur: scheduleHide,
         },
       })}
-      {createPortal(
+      {root && createPortal(
         <AnimatePresence>
           {open && coords && (
             <motion.div
@@ -136,23 +139,24 @@ export function HoverPopover({
               aria-label={label}
               onMouseEnter={show}
               onMouseLeave={scheduleHide}
-              initial={{ opacity: 0, y: 4, scale: 0.98 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.98, transition: EXIT_FAST }}
-              transition={{ duration: DURATION_POPOVER, ease: EASE_DECELERATE }}
+              initial={POSE_PORTALED_POPOVER_IN}
+              animate={POSE_PORTALED_POPOVER_VISIBLE}
+              exit={{ ...POSE_PORTALED_POPOVER_OUT, transition: EXIT_FAST }}
+              transition={POPOVER_ENTER_TRANSITION}
               style={{
                 position: "fixed",
                 ...coords,
-                zIndex: "var(--z-popover)",
+                zIndex: nested ? "var(--z-nested)" : "var(--z-popover)",
                 transformOrigin: `bottom ${anchor}`,
               }}
+              data-overlay-depth={nested ? "nested" : "page"}
               className={clsx("surface-panel surface-popover", className)}
             >
               {children}
             </motion.div>
           )}
         </AnimatePresence>,
-        document.body,
+        root,
       )}
     </>
   );

@@ -4,10 +4,9 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
-from coolname import generate_slug
-
 from arden.agent import Usage
 from arden.agent.types.tools import normalize_source_refs
+from arden.core.ids import generate_run_id
 from arden.tools.core.context import ApprovalControls, BackgroundTaskRegistry
 
 if TYPE_CHECKING:
@@ -58,6 +57,10 @@ class RunState:
     pending_connection_descriptors: dict[str, "IntegrationConnectionDescriptor"] = field(default_factory=dict)
     task: asyncio.Task | None = None
     inject_queue: list[dict] = field(default_factory=list)
+    # Once an entry leaves inject_queue it may already be in the model's next
+    # turn while the durable ingestion ledger is still being written. Keep a
+    # small run-local receipt so DELETE cannot mislabel that race as cancelled.
+    _drained_injection_client_ids: set[str] = field(default_factory=set, init=False, repr=False)
     loaded_tools: set[str] = field(default_factory=set)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -152,11 +155,19 @@ class RunState:
                 return True
         return False
 
+    def injection_was_drained(self, client_id: str) -> bool:
+        return client_id in self._drained_injection_client_ids
+
     def drain_injections(self) -> list[dict]:
         if not self.inject_queue:
             return []
         batch = list(self.inject_queue)
         self.inject_queue.clear()
+        self._drained_injection_client_ids.update(
+            client_id
+            for entry in batch
+            if isinstance((client_id := entry.get("client_id")), str)
+        )
         self.updated_at = datetime.now(UTC)
         return batch
 
@@ -253,7 +264,7 @@ class RunRegistry:
         return cancelled
 
     def create_run(self, session_id: str, *, run_id: str | None = None) -> RunState:
-        run_id = run_id or generate_slug(2)
+        run_id = run_id or generate_run_id()
         if run_id in self._runs:
             raise ValueError(f"Run {run_id!r} already exists")
         run = RunState(run_id=run_id, session_id=session_id)
@@ -293,6 +304,24 @@ class RunRegistry:
         if run and run.accepting_injections and not run.cancelled and not run.backgrounded:
             return run
         return None
+
+    def sync_session_name(self, session_id: str, name: str) -> None:
+        """Keep a live run's in-memory state in step with a targeted rename.
+        save_session rewrites the whole row from that state at run end —
+        without this, renaming a chat that has a run in flight is silently
+        reverted when the run finishes."""
+        run = self.get_active_run(session_id)
+        if run and run.session_state:
+            run.session_state.name = name
+
+    def sync_session_chat_model(self, session_id: str, chat_model: str) -> None:
+        """Same stale-state race as sync_session_name, one column over: the
+        end-of-run save writes the run's pinned chat_model back. Only the
+        persisted pin is at stake — the in-flight run keeps the model it
+        already resolved."""
+        run = self.get_active_run(session_id)
+        if run and run.session_state:
+            run.session_state.chat_model = chat_model
 
     def lookup_otid(self, session_id: str, client_id: str) -> RunState | None:
         """Return the run_id a given (session_id, client_id) was last

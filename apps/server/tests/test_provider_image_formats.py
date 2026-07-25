@@ -1,10 +1,12 @@
 from arden.agent import Role
+from arden.integrations import ALL_INTEGRATIONS
 from arden.llm.anthropic import AnthropicClient
 from arden.llm.gemini import GeminiClient
 from arden.llm.openai import OpenAIClient
 from arden.llm.openai_codex import OpenAICodexClient
 from arden.llm.openai_responses import prepare_responses_request
-from arden.tools.core.base import TITLE_ARG
+from arden.tool_call_metadata import DISPLAY_TITLE_ARG
+from arden.tools.app_control import open_in_app_tool
 from arden.tools.core.registry import ToolRegistry
 from arden.tools.deferred import load_tools_tool
 
@@ -160,7 +162,11 @@ def test_deferred_loader_schema_formats_for_claude():
 
     assert request_model == "claude-sonnet-4-6"
     assert request["tools"][0]["name"] == "load_tools"
-    assert request["tools"][0]["input_schema"]["properties"].keys() == {TITLE_ARG, "group", "names"}
+    assert request["tools"][0]["input_schema"]["properties"].keys() == {
+        DISPLAY_TITLE_ARG,
+        "group",
+        "names",
+    }
     assert request["tool_choice"] == {"type": "auto"}
 
 
@@ -169,4 +175,33 @@ def test_deferred_loader_schema_formats_for_gemini():
     declaration = tools[0].function_declarations[0]
 
     assert declaration.name == "load_tools"
-    assert set(declaration.parameters.properties) == {TITLE_ARG, "group", "names"}
+    assert set(declaration.parameters.properties) == {DISPLAY_TITLE_ARG, "group", "names"}
+
+
+def test_every_tool_schema_converts_for_gemini():
+    """`types.Schema` rejects allOf, oneOf, const and discriminator, and
+    `_convert_tools` builds every declaration in one pass — a single unconvertible
+    tool aborts the whole request, not just its own declaration."""
+    client = GeminiClient(api_key="test")
+
+    for integration in ALL_INTEGRATIONS:
+        for name, tool in integration.tools.items():
+            client._convert_tools([tool.to_dict(name)])
+
+
+def test_gemini_folds_a_discriminated_union_into_any_of():
+    declaration = (
+        GeminiClient(api_key="test")
+        ._convert_tools([open_in_app_tool.to_dict("open_in_app")])[0]
+        .function_declarations[0]
+    )
+
+    destination = declaration.parameters.properties["destination"]
+    assert [member.properties["kind"].enum for member in destination.any_of] == [
+        ["home"],
+        ["session"],
+        ["settings"],
+        ["automation"],
+        ["memory"],
+        ["area"],
+    ]

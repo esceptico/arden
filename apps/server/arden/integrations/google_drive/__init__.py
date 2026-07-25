@@ -20,7 +20,6 @@ GOOGLE_DRIVE = Integration(
     id="google_drive",
     label="Google Drive",
     tools=DRIVE_TOOLS,
-    command_tool_names=frozenset(DRIVE_TOOLS),
     build=_build,
     connection=IntegrationConnectionSpec(
         connection_id="google_drive",

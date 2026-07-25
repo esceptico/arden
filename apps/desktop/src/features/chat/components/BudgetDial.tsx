@@ -85,16 +85,16 @@ export function BudgetDial() {
                 : "Context budget"
             }
             className={clsx(
-              "inline-flex items-center gap-1.5 h-7 px-2 rounded-full",
-              "text-xs text-muted hover:bg-surface-soft hover:text-ink transition-[background-color,color,scale] duration-check ease-out active:scale-[0.97]",
-              open && "bg-surface-soft text-ink",
+              "budget-trigger composer-toolbar-control inline-flex items-center gap-1.5 h-7 px-2 rounded-[var(--r-control)]",
+              "text-xs text-muted transition-[background-color,color,scale] duration-check ease-out active:scale-[0.97]",
+              open && "text-ink",
             )}
           >
             <svg
               width={SIZE}
               height={SIZE}
               viewBox={`0 0 ${SIZE} ${SIZE}`}
-              className={clsx("shrink-0", maxRatio >= 1 && "animate-pulse-soft")}
+              className={clsx("shrink-0", maxRatio >= 1 && "text-bad")}
               aria-hidden
             >
               <circle
@@ -225,7 +225,7 @@ function Row({
         <span className="flex items-center gap-1.5 text-muted">
           <span
             aria-hidden
-            className="inline-block w-1.5 h-1.5 rounded-full"
+            className="inline-block w-1.5 h-1.5 rounded-[var(--r-control)]"
             style={{ backgroundColor: color }}
           />
           {label}

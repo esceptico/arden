@@ -2,27 +2,23 @@ import {
   createContext,
   useCallback,
   useContext,
-  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
   type ReactNode,
+  type RefObject,
 } from "react";
+import { useReducedMotion } from "motion/react";
 import clsx from "clsx";
-import { motion } from "motion/react";
-import { SPRING_LAYOUT } from "@/lib/tokens/motion";
+import { TAB_INDICATOR_LINE_SIZE } from "@/lib/tokens/motion";
 
-// The one tabs primitive:
-//   "underline" — sliding 2px bar under the active tab (modal header tabs).
-//   "segmented" — tinted track + shared-layout pill spanning the active item.
-//   "expanding" — equal hit targets; active icon + label get a natural-width pill.
-//   "plain"     — no animated indicator; the active state is the item's own
-//                 static tint (the app's tint-only vertical menus).
-type Variant = "underline" | "plain" | "segmented" | "expanding";
+type Variant = "underline" | "plain" | "segmented" | "expanding" | "sidebar" | "surface";
 type Orientation = "horizontal" | "vertical";
 type Size = "sm" | "md" | "lg";
 
-// Literal class strings so Tailwind sees them.
 const ITEM_SIZE: Record<Size, string> = {
-  sm: "h-7 px-2.5 text-xs",
-  md: "h-[33px] px-3 text-[13px]",
+  sm: "",
+  md: "",
   lg: "h-10 px-3.5 text-sm",
 };
 
@@ -32,8 +28,13 @@ interface TabsContextValue {
   orientation: Orientation;
   variant: Variant;
   size: Size;
-  indicatorLayoutId: string;
-  indicatorClassName?: string;
+}
+
+interface TabIndicatorGeometry {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 const TabsContext = createContext<TabsContextValue | null>(null);
@@ -44,9 +45,131 @@ function useTabsContext(): TabsContextValue {
   return ctx;
 }
 
-/** Motion's shared-layout tabs pattern: each active tab mounts the same
- * layoutId. Motion transfers one pill between targets without manual width or
- * glyph measurements. */
+function sameGeometry(left: TabIndicatorGeometry | null, right: TabIndicatorGeometry): boolean {
+  return !!left
+    && left.x === right.x
+    && left.y === right.y
+    && left.width === right.width
+    && left.height === right.height;
+}
+
+function tabLineSize(container: HTMLElement): number {
+  const value = Number.parseFloat(getComputedStyle(container).getPropertyValue("--tab-line-size"));
+  return Number.isFinite(value) ? value : TAB_INDICATOR_LINE_SIZE;
+}
+
+function useTabIndicator(
+  listRef: RefObject<HTMLDivElement | null>,
+  value: string,
+  variant: Variant,
+): { geometry: TabIndicatorGeometry | null; ready: boolean } {
+  const [geometry, setGeometry] = useState<TabIndicatorGeometry | null>(null);
+  const [ready, setReady] = useState(false);
+  const hasMeasured = useRef(false);
+
+  useLayoutEffect(() => {
+    if (variant === "plain") {
+      hasMeasured.current = false;
+      setGeometry(null);
+      setReady(false);
+      return;
+    }
+
+    const container = listRef.current;
+    if (!container) return;
+    let frame: number | undefined;
+    const measure = () => {
+      const tabs = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+      const target = tabs.find((tab) => tab.dataset.tabValue === value);
+      if (!target || !container.getClientRects().length || !target.getClientRects().length) {
+        hasMeasured.current = false;
+        setGeometry(null);
+        setReady(false);
+        return;
+      }
+
+      const containerRect = container.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      const line = variant === "underline";
+      const height = line ? tabLineSize(container) : targetRect.height;
+      const next = {
+        x: targetRect.left - containerRect.left + container.scrollLeft,
+        y: line
+          ? container.scrollTop + containerRect.height - height
+          : targetRect.top - containerRect.top + container.scrollTop,
+        width: targetRect.width,
+        height,
+      };
+      setGeometry((current) => (sameGeometry(current, next) ? current : next));
+
+      if (hasMeasured.current) return;
+      hasMeasured.current = true;
+      frame = window.requestAnimationFrame(() => {
+        frame = undefined;
+        setReady(true);
+      });
+    };
+
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(container);
+    for (const tab of container.querySelectorAll<HTMLButtonElement>('[role="tab"]')) observer?.observe(tab);
+    window.addEventListener("resize", measure);
+
+    return () => {
+      if (frame !== undefined) {
+        window.cancelAnimationFrame(frame);
+        frame = undefined;
+        hasMeasured.current = false;
+      }
+      observer?.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [listRef, value, variant]);
+
+  return { geometry, ready };
+}
+
+function TabIndicator({
+  variant,
+  className,
+  geometry,
+  ready,
+  reducedMotion,
+}: {
+  variant: Exclude<Variant, "plain">;
+  className?: string;
+  geometry: TabIndicatorGeometry | null;
+  ready: boolean;
+  reducedMotion: boolean;
+}) {
+  return (
+    <span
+      aria-hidden="true"
+      data-tab-indicator={variant}
+      data-ready={ready ? "true" : undefined}
+      hidden={!geometry}
+      className={clsx(
+        "arden-tab-indicator",
+        variant === "underline" && "arden-tab-indicator--underline",
+        className,
+      )}
+      style={
+        geometry
+          ? {
+              width: `${geometry.width}px`,
+              height: `${geometry.height}px`,
+              transform: `translate(${geometry.x}px, ${geometry.y}px)`,
+              transition: variant === "sidebar" || !ready || reducedMotion ? "none" : undefined,
+            }
+          : { transition: "none" }
+      }
+    />
+  );
+}
+
+/** One canonical tab primitive. Geometry commits immediately; only the
+ * indicator's compositor transform travels between tabs. */
 export function Tabs({
   value,
   onChange,
@@ -56,22 +179,25 @@ export function Tabs({
   label,
   indicatorClassName,
   className,
+  listRef: externalListRef,
   children,
 }: {
   value: string;
   onChange: (value: string) => void;
   variant?: Variant;
   orientation?: Orientation;
-  /** Segment sizing for variant="segmented" items. */
   size?: Size;
-  /** Accessible name for the group — maps to aria-label on the tablist. */
   label?: string;
   indicatorClassName?: string;
   className?: string;
+  /** Exposes the tablist for overflow/ensure-visible controllers. */
+  listRef?: RefObject<HTMLDivElement | null>;
   children: ReactNode;
 }) {
-  const indicatorLayoutId = `tab-indicator-${useId().replace(/:/g, "")}`;
-  const segmented = variant === "segmented" || variant === "expanding";
+  const internalListRef = useRef<HTMLDivElement>(null);
+  const listRef = externalListRef ?? internalListRef;
+  const reducedMotion = useReducedMotion() ?? false;
+  const { geometry, ready } = useTabIndicator(listRef, value, variant);
   const select = useCallback(
     (nextValue: string) => {
       if (nextValue === value) return;
@@ -79,30 +205,34 @@ export function Tabs({
     },
     [onChange, value],
   );
+
   return (
-    <TabsContext.Provider
-      value={{
-        value,
-        select,
-        orientation,
-        variant,
-        size,
-        indicatorLayoutId,
-        indicatorClassName,
-      }}
-    >
+    <TabsContext.Provider value={{ value, select, orientation, variant, size }}>
       <div
+        ref={listRef}
         role="tablist"
         aria-label={label}
         aria-orientation={orientation}
+        data-tabs-variant={variant}
+        data-tabs-expanding={variant === "expanding" ? "true" : undefined}
         className={clsx(
           "relative flex",
           orientation === "vertical" && "flex-col",
-          segmented &&
-            "segmented-control inline-flex items-center gap-[3px] rounded-full p-[3px] bg-[color-mix(in_oklab,var(--color-ink)_6%,transparent)]",
+          variant === "segmented" && "arden-segmented segmented-control",
+          variant === "expanding" &&
+            "segmented-control inline-flex items-center gap-[3px] rounded-[var(--r-control)] p-[3px] bg-[color-mix(in_oklab,var(--color-ink)_6%,transparent)]",
           className,
         )}
       >
+        {variant !== "plain" && (
+          <TabIndicator
+            variant={variant}
+            className={indicatorClassName}
+            geometry={geometry}
+            ready={ready}
+            reducedMotion={reducedMotion}
+          />
+        )}
         {children}
       </div>
     </TabsContext.Provider>
@@ -113,109 +243,85 @@ export function Tab({
   value,
   id,
   "aria-label": ariaLabel,
+  controls,
+  disabled,
+  title,
   className,
   children,
 }: {
   value: string;
   id?: string;
-  /** Accessible name for icon-only tabs. */
   "aria-label"?: string;
+  controls?: string;
+  disabled?: boolean;
+  title?: string;
   className?: string;
   children?: ReactNode;
 }) {
   const ctx = useTabsContext();
   const active = ctx.value === value;
 
-  // APG tabs pattern: arrow keys (orientation-aware) + Home/End move between
-  // tabs with automatic activation; roving tabindex keeps only the selected
-  // tab in the Tab sequence.
-  const onKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {
+  const onKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
     const horizontal = ctx.orientation === "horizontal";
     const nextKey = horizontal ? "ArrowRight" : "ArrowDown";
     const prevKey = horizontal ? "ArrowLeft" : "ArrowUp";
-    if (![nextKey, prevKey, "Home", "End"].includes(e.key)) return;
-    const tablist = e.currentTarget.closest('[role="tablist"]');
+    if (![nextKey, prevKey, "Home", "End"].includes(event.key)) return;
+    const tablist = event.currentTarget.closest('[role="tablist"]');
     if (!tablist) return;
     const tabs = Array.from(
       tablist.querySelectorAll<HTMLButtonElement>('[role="tab"]:not([disabled])'),
     );
-    const idx = tabs.indexOf(e.currentTarget);
-    if (idx === -1) return;
-    e.preventDefault();
+    const index = tabs.indexOf(event.currentTarget);
+    if (index === -1) return;
+    event.preventDefault();
     const next =
-      e.key === "Home" ? 0
-      : e.key === "End" ? tabs.length - 1
-      : e.key === nextKey ? (idx + 1) % tabs.length
-      : (idx - 1 + tabs.length) % tabs.length;
+      event.key === "Home" ? 0
+      : event.key === "End" ? tabs.length - 1
+      : event.key === nextKey ? (index + 1) % tabs.length
+      : (index - 1 + tabs.length) % tabs.length;
     const target = tabs[next];
     target.focus();
     const nextValue = target.getAttribute("data-tab-value");
     if (nextValue !== null) ctx.select(nextValue);
   };
 
-  const indicator = active && ctx.variant !== "plain" ? (
-    <motion.span
-      layoutId={ctx.indicatorLayoutId}
-      aria-hidden="true"
-      data-tab-indicator={ctx.variant}
-      transition={SPRING_LAYOUT}
-      className={clsx(
-        "absolute pointer-events-none",
-        ctx.variant === "underline" && "inset-x-0 -bottom-px h-0.5 rounded-full bg-ink",
-        ctx.variant === "segmented" &&
-          (ctx.indicatorClassName ??
-            "inset-0 rounded-full bg-surface-3 shadow-[var(--shadow-2)]"),
-        ctx.variant === "expanding" &&
-          (ctx.indicatorClassName ??
-            "inset-0 rounded-full bg-surface-3 shadow-[var(--shadow-2)]"),
-      )}
-    />
-  ) : null;
-
   return (
-    <motion.button
-      layout={ctx.variant === "expanding"}
-      transition={SPRING_LAYOUT}
+    <button
       type="button"
       role="tab"
       id={id}
       aria-label={ariaLabel}
+      aria-controls={controls}
       aria-selected={active}
       tabIndex={active ? 0 : -1}
       data-active={active ? "true" : undefined}
       data-tab-value={value}
+      disabled={disabled}
+      title={title}
       onClick={() => ctx.select(value)}
       onKeyDown={onKeyDown}
       className={clsx(
-        "group relative",
+        "group relative z-[var(--z-raised)]",
         (ctx.variant === "segmented" || ctx.variant === "expanding") &&
           clsx(
-            "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-full font-medium",
+            "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-[calc(var(--r-control)-3px)] font-medium",
             "text-muted hover:text-ink data-[active]:text-ink",
             "[transition:color_var(--tabs-dur)_var(--tabs-ease)]",
             "outline-none focus-visible:ring-2 focus-visible:ring-accent",
             ctx.variant === "expanding"
               ? "h-7 min-w-7 flex-1 px-0 data-[active]:flex-none"
-              : ITEM_SIZE[ctx.size],
+              : clsx("arden-segmented-tab", ITEM_SIZE[ctx.size]),
           ),
         className,
       )}
     >
       {ctx.variant === "expanding" ? (
-        <motion.span
-          layout
-          transition={SPRING_LAYOUT}
-          className="relative inline-flex h-7 items-center justify-center gap-1.5 px-2.5"
-        >
-          {indicator}
-          <span className="relative z-10 inline-flex items-center gap-1.5">{children}</span>
-        </motion.span>
+        <span className="relative z-[var(--z-control-content)] inline-flex h-7 items-center justify-center gap-1.5 px-2.5">
+          {children}
+        </span>
       ) : (
-        <>
-          {indicator}
-          <span className="relative z-10">{children}</span>
-        </>
+        <span className="arden-tab-content relative z-[var(--z-control-content)]">{children}</span>
       )}
-    </motion.button>
+    </button>
   );
 }

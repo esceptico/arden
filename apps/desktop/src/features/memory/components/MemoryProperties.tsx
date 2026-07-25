@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import clsx from "clsx";
-import { Calendar, Hash, List, SquareCheck, Tag, Text, type ArdenIcon } from "@/components/icons";
+import { Calendar, ChevronDown, Hash, LeftToRightListBullet, SquareCheck, Tag, Text, X, type ArdenIcon } from "@/components/icons";
 
 export type MemoryFrontmatterValue = string | number | boolean | null | Array<string | number | boolean | null>;
 export type MemoryFrontmatter = Record<string, MemoryFrontmatterValue>;
@@ -12,7 +12,7 @@ type PropKind = "tags" | "list" | "checkbox" | "number" | "date" | "text";
 
 const PROP_ICONS: Record<PropKind, ArdenIcon> = {
   tags: Tag,
-  list: List,
+  list: LeftToRightListBullet,
   checkbox: SquareCheck,
   number: Hash,
   date: Calendar,
@@ -42,7 +42,7 @@ function PropIcon({ kind }: { kind: PropKind }) {
   const Icon = PROP_ICONS[kind];
   return (
     <span className="mw-prop-icon">
-      <Icon size={13.5} strokeWidth={1.7} aria-hidden />
+      <Icon size={13.5} aria-hidden />
     </span>
   );
 }
@@ -59,6 +59,7 @@ export function MemoryProperties({
 }) {
   const [edit, setEdit] = useState<{ key: string; mode: "edit" | "append" } | null>(null);
   const [adding, setAdding] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const addKeyRef = useRef<HTMLInputElement>(null);
   const addValueRef = useRef<HTMLInputElement>(null);
 
@@ -120,7 +121,7 @@ export function MemoryProperties({
               {String(item)}
               {editable && (
                 <button type="button" className="mw-prop-pill-x" aria-label="Remove" onClick={() => removeItem(key, i)}>
-                  ×
+                  <X size={10} aria-hidden />
                 </button>
               )}
             </span>
@@ -181,8 +182,17 @@ export function MemoryProperties({
   };
 
   return (
-    <section className="mw-props">
-      <h2 className="mw-props-head">Properties</h2>
+    <section className={clsx("mw-props", expanded && "open")} aria-label="Properties">
+      <button
+        type="button"
+        className="mw-props-head"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+      >
+        properties <span className="mw-props-count">{entries.length}</span>
+        <ChevronDown size={13} aria-hidden />
+      </button>
+      <div className="mw-props-body" hidden={!expanded}>
       {entries.map(([key, value]) => {
         const kind = propType(key, value);
         return (
@@ -221,6 +231,7 @@ export function MemoryProperties({
             + Add property
           </button>
         ))}
+      </div>
     </section>
   );
 }

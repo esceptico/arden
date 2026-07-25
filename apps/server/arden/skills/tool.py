@@ -38,6 +38,7 @@ async def use_skill(execution: ToolExecution, args: UseSkillInput) -> ToolResult
 
 use_skill_tool = tool(
     display_name="UseSkill",
+    display_description="Load instructions for a specialized skill.",
     description=USE_SKILL_DESCRIPTION,
     input_model=UseSkillInput,
     policy=ToolPolicy(
@@ -108,6 +109,7 @@ async def create_skill(execution: ToolExecution, args: CreateSkillInput) -> Tool
 
 create_skill_tool = tool(
     display_name="CreateSkill",
+    display_description="Create a reusable global skill.",
     description=CREATE_SKILL_DESCRIPTION,
     input_model=CreateSkillInput,
     policy=ToolPolicy(

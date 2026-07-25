@@ -25,6 +25,10 @@ beforeEach(() => {
 
 afterEach(() => {
   (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
+  // The stub bridge answers every GET with `{}`, so the refresh these actions
+  // trigger caches a bodyless AreaDetail. Drop it — the store is shared with
+  // every other suite in the process.
+  setState({ areas: { ...getState().areas, detailByKey: {}, detailPhaseByKey: {} } });
 });
 
 test("archiveArea removes the area view but preserves session membership for restore", async () => {
@@ -61,7 +65,7 @@ test("archiveArea removes the area view but preserves session membership for res
   ]);
 });
 
-test("replyToAsk targets the typed Custodian reply endpoint", async () => {
+test("replyToAsk targets the id-keyed ask reply endpoint", async () => {
   const requests: { path: string; method?: string; body?: string; timeout?: number }[] = [];
   (globalThis as typeof globalThis & { window?: unknown }).window = {
     ardenDesktop: {
@@ -81,11 +85,11 @@ test("replyToAsk targets the typed Custodian reply endpoint", async () => {
     },
   };
 
-  await replyToAsk("p1", "agent:p1:dose", "Use 5 mg.");
+  await replyToAsk("agent:p1:dose", "Use 5 mg.");
 
   expect(requests).toEqual([
     {
-      path: "/areas/p1/asks/agent%3Ap1%3Adose/reply",
+      path: "/asks/agent%3Ap1%3Adose/reply",
       method: "POST",
       body: JSON.stringify({ message: "Use 5 mg." }),
       timeout: 60_000,

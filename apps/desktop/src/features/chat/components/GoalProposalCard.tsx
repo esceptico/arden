@@ -13,9 +13,9 @@ export function GoalProposalCard({ objective }: { objective: string }) {
       animate={RISE_SETTLED}
       exit={SECTION_EXIT}
       transition={SECTION_ENTER}
-      className="max-w-[760px] mx-auto mb-2"
+      className="board-goal-proposal max-w-[760px] mx-auto mb-2"
     >
-      <div className="surface-panel surface-radius-md flex items-start gap-2 px-3 py-2">
+      <div className="board-goal-proposal__card surface-panel surface-radius-md flex items-start gap-2 px-3 py-2">
         <Target size={ICON.MD} strokeWidth={2} className="mt-0.5 shrink-0 text-accent" />
         <div className="min-w-0 flex-1">
           <div className="text-2xs font-medium text-muted">Proposed goal</div>

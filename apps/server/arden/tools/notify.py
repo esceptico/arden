@@ -128,6 +128,7 @@ async def notify(execution: ToolExecution, args: NotifyInput) -> ToolResult:
 
 notify_tool = tool(
     display_name="Notify",
+    display_description="Send a notification to the user.",
     description=NOTIFY_DESCRIPTION,
     input_model=NotifyInput,
     policy=ToolPolicy(

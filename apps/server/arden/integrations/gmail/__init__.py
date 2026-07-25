@@ -26,7 +26,6 @@ GMAIL = Integration(
         "send_email": send_email_tool,
         "reply_email": reply_email_tool,
     },
-    command_tool_names=frozenset({"emails", "read_email", "send_email", "reply_email"}),
     notifier_class=EmailNotifier,
     build=_build,
     connection=IntegrationConnectionSpec(

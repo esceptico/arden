@@ -3,8 +3,13 @@ from datetime import UTC, datetime
 
 import aiosqlite
 
-from arden.events.internal import RunCompleted
-from arden.outbox.events import OUTBOX_RUN_COMPLETED, run_completed_payload
+from arden.events.internal import RunCompleted, RunFailed
+from arden.outbox.events import (
+    OUTBOX_RUN_COMPLETED,
+    OUTBOX_RUN_FAILED,
+    run_completed_payload,
+    run_failed_payload,
+)
 from arden.outbox.models import OutboxEvent
 
 _SCHEMA = """
@@ -243,6 +248,15 @@ class OutboxStore:
             aggregate_id=event.run_id,
             payload=run_completed_payload(event),
             idempotency_key=f"{OUTBOX_RUN_COMPLETED}:{event.run_id}",
+        )
+
+    async def enqueue_run_failed(self, event: RunFailed) -> bool:
+        return await self.enqueue(
+            event_type=OUTBOX_RUN_FAILED,
+            aggregate_type="run",
+            aggregate_id=event.run_id,
+            payload=run_failed_payload(event),
+            idempotency_key=f"{OUTBOX_RUN_FAILED}:{event.run_id}",
         )
 
     async def claim_batch(self, *, worker_id: str, limit: int, now: datetime | None = None) -> list[OutboxEvent]:

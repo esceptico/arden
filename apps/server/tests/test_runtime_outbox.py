@@ -3,11 +3,13 @@ from datetime import UTC, datetime
 import pytest
 
 from arden.agent import Usage
-from arden.events.internal import RunCompleted
+from arden.events.internal import RunCompleted, RunFailed
 from arden.outbox import (
     OUTBOX_RUN_COMPLETED,
+    OUTBOX_RUN_FAILED,
     OutboxEvent,
     run_completed_payload,
+    run_failed_payload,
 )
 from arden.server.runtime.outbox import RuntimeOutbox
 
@@ -58,9 +60,13 @@ class _AutomationStore:
 class _Scheduler:
     def __init__(self):
         self.completed = []
+        self.failed = []
 
     async def handle_run_completed(self, event):
         self.completed.append(event)
+
+    async def handle_run_failed(self, event):
+        self.failed.append(event)
 
 
 class _Index:
@@ -114,6 +120,16 @@ async def test_runtime_outbox_routes_run_completed_to_scheduler():
     await runtime_outbox._on_run_completed(_event(OUTBOX_RUN_COMPLETED, payload))
 
     assert scheduler.completed[0].run_id == "run-1"
+
+
+@pytest.mark.asyncio
+async def test_runtime_outbox_routes_run_failed_to_scheduler():
+    runtime_outbox, _, _, scheduler = _runtime_outbox()
+    failed = RunFailed(run_id="run-1", session_id="sess-1", error="provider error")
+
+    await runtime_outbox._on_run_failed(_event(OUTBOX_RUN_FAILED, run_failed_payload(failed)))
+
+    assert scheduler.failed == [failed]
 
 
 @pytest.mark.asyncio

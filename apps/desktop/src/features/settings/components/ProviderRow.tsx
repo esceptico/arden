@@ -1,6 +1,6 @@
 import { type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { CheckCircle2, ExternalLink, KeyRound, Loader2 } from "@/components/icons";
+import { ExternalLink, Loader2 } from "@/components/icons";
 import { type ModelProvider, type OpenAICodexOAuthStatus } from "@/api/settings";
 import {
   providerActionLabel,
@@ -11,6 +11,7 @@ import { DISSOLVE_OUT, EASE_OUT, MOTION, RISE_IN, RISE_SETTLED } from "@/lib/tok
 import { ICON } from "@/lib/icons";
 import { BlurSwap } from "@/components/ui/BlurSwap";
 import { Button } from "@/components/ui/Button";
+import { Collapse } from "@/components/ui/Collapse";
 import { SecretConnectEditor } from "@/features/settings/components/SecretConnectEditor";
 
 function providerDescription(id: string): string {
@@ -29,6 +30,23 @@ function providerDescription(id: string): string {
       return "OpenAI-compatible local or hosted models.";
     default:
       return "Connect this model provider.";
+  }
+}
+
+function providerSetupLabel(id: string): string {
+  switch (id) {
+    case "openai":
+      return "GPT models and embeddings";
+    case "anthropic":
+      return "Claude models";
+    case "google":
+      return "Gemini chat and embeddings";
+    case "openrouter":
+      return "Routed third-party models";
+    case "custom":
+      return "OpenAI-compatible endpoints";
+    default:
+      return "Connect a provider";
   }
 }
 
@@ -68,6 +86,8 @@ export function ProviderRow({
   const actionLabel = isCustom ? (customOpen ? "Done" : "Manage") : pending ? "Working…" : providerActionLabel(provider);
   const readOnlyPrimary = provider.connected && provider.from_env;
   const connectionPill = providerConnectionPill(provider);
+  const showingEditor = editing && !provider.connected && !isOauth && !isCustom;
+  const hasDetail = showingEditor || codexStatus?.status === "pending" || !!codexStatus?.error || (isCustom && customOpen);
 
   function primaryAction() {
     if (isCustom) {
@@ -84,28 +104,25 @@ export function ProviderRow({
   }
 
   return (
-    <div className="rounded-[12px] border border-line-soft bg-surface overflow-hidden">
-      <div className="flex flex-wrap items-start gap-3 px-3.5 py-3">
-        <div className="min-w-[150px] flex-1 grid gap-1">
-          <div className="flex items-center gap-2 min-w-0">
-            <ProviderIcon connected={provider.connected} />
-            <div className="text-base font-medium text-ink truncate">{provider.name}</div>
+    <div className="settings-data-shell">
+      <div className="settings-data-row">
+        <div className="settings-data-row-main">
+          <div className="settings-data-row-title">
+            {provider.connected && <span className="settings-provider-status">Connected</span>}
+            <span className="truncate">{provider.name}</span>
           </div>
-          <div className="text-xs text-muted font-mono truncate">
+          <div className="settings-data-row-sub">
             {provider.connected
               ? `${providerModelCountLabel(provider)}${connectionPill ? ` · ${connectionPill}` : ""}`
-              : providerDescription(provider.id)}
+              : providerSetupLabel(provider.id)}
           </div>
-          {!provider.connected && (
-            <div className="text-xs text-muted font-mono truncate">
-              {providerModelCountLabel(provider)}
-            </div>
-          )}
         </div>
 
-        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+        <div className="settings-data-row-copy">{providerDescription(provider.id)}</div>
+
+        <div className="settings-data-row-end">
           {readOnlyPrimary ? (
-            <span className="inline-flex items-center h-8 px-3 rounded-md border border-line-soft bg-surface-soft text-sm font-medium text-muted">
+            <span className="btn arden-button" data-variant="secondary">
               {isCustom ? "Configured separately" : actionLabel}
             </span>
           ) : (
@@ -122,71 +139,72 @@ export function ProviderRow({
         </div>
       </div>
 
-      <AnimatePresence initial={false}>
-        {editing && !provider.connected && !isOauth && !isCustom && (
-          <SecretConnectEditor
-            motionKey="key-editor"
-            value={apiKey}
-            label="API key"
-            pending={pending}
-            spinner={<Loader2 size={ICON.MD} strokeWidth={2} className="animate-spin" />}
-            onChange={onKeyChange}
-            onConnect={onConnect}
-            onCancel={onCancel}
-          />
-        )}
-      </AnimatePresence>
+      <Collapse open={hasDetail} mode="height">
+        {/* Reveal gap + separator sit inside the measured content so the
+            height spring carries them; the row's own 12px bottom padding
+            completes the 20px gap above the rule. */}
+        <div className="pt-2">
+          <div className="settings-data-row-detail-body">
+            <AnimatePresence initial={false}>
+              {showingEditor && (
+                <SecretConnectEditor
+                  motionKey="key-editor"
+                  value={apiKey}
+                  label="API key"
+                  pending={pending}
+                  spinner={<Loader2 size={ICON.MD} className="animate-spin" />}
+                  onChange={onKeyChange}
+                  onConnect={onConnect}
+                  onCancel={onCancel}
+                />
+              )}
+            </AnimatePresence>
 
-      <AnimatePresence initial={false}>
-        {codexStatus?.status === "pending" && (
-          <motion.div
-            key="codex-pending"
-            initial={{ ...RISE_IN, y: -4 }}
-            animate={RISE_SETTLED}
-            exit={{ ...DISSOLVE_OUT, transition: { duration: MOTION.fast, ease: EASE_OUT } }}
-            transition={{ duration: MOTION.row, ease: EASE_OUT }}
-            className="flex items-center gap-2 px-3.5 py-2.5 bg-surface-soft/35 text-sm text-muted"
-          >
-            <Loader2 size={ICON.MD} strokeWidth={2} className="animate-spin" />
-            <span>Waiting for browser sign-in…</span>
-            {codexStatus.url && (
-              <a
-                href={codexStatus.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 text-info hover:underline underline-offset-2"
-              >
-                Open URL <ExternalLink size={ICON.XS} strokeWidth={2} />
-              </a>
-            )}
-          </motion.div>
-        )}
-      </AnimatePresence>
+            <AnimatePresence initial={false}>
+              {codexStatus?.status === "pending" && (
+                <motion.div
+                  key="codex-pending"
+                  initial={{ ...RISE_IN, y: -4 }}
+                  animate={RISE_SETTLED}
+                  exit={{ ...DISSOLVE_OUT, transition: { duration: MOTION.fast, ease: EASE_OUT } }}
+                  transition={{ duration: MOTION.row, ease: EASE_OUT }}
+                  className="flex items-center gap-2 px-3.5 py-2.5 bg-surface-soft/35 text-sm text-muted"
+                >
+                  <Loader2 size={ICON.MD} className="animate-spin" />
+                  <span>Waiting for browser sign-in…</span>
+                  {codexStatus.url && (
+                    <a
+                      href={codexStatus.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-info hover:underline underline-offset-2"
+                    >
+                      Open URL <ExternalLink size={ICON.XS} />
+                    </a>
+                  )}
+                </motion.div>
+              )}
+            </AnimatePresence>
 
-      <AnimatePresence initial={false}>
-        {codexStatus?.error && (
-          <motion.div
-            key="codex-error"
-            initial={{ ...RISE_IN, y: -4 }}
-            animate={RISE_SETTLED}
-            exit={{ ...DISSOLVE_OUT, transition: { duration: MOTION.fast, ease: EASE_OUT } }}
-            transition={{ duration: MOTION.row, ease: EASE_OUT }}
-            className="px-3.5 py-2.5 bg-bad-soft text-sm text-bad"
-          >
-            {codexStatus.error}
-          </motion.div>
-        )}
-      </AnimatePresence>
+            <AnimatePresence initial={false}>
+              {codexStatus?.error && (
+                <motion.div
+                  key="codex-error"
+                  initial={{ ...RISE_IN, y: -4 }}
+                  animate={RISE_SETTLED}
+                  exit={{ ...DISSOLVE_OUT, transition: { duration: MOTION.fast, ease: EASE_OUT } }}
+                  transition={{ duration: MOTION.row, ease: EASE_OUT }}
+                  className="px-3.5 py-2.5 bg-bad-soft text-sm text-bad"
+                >
+                  {codexStatus.error}
+                </motion.div>
+              )}
+            </AnimatePresence>
 
-      {children}
+            {children}
+          </div>
+        </div>
+      </Collapse>
     </div>
-  );
-}
-
-function ProviderIcon({ connected }: { connected: boolean }) {
-  return connected ? (
-    <CheckCircle2 size={ICON.MD} strokeWidth={2} className="text-ok shrink-0" />
-  ) : (
-    <KeyRound size={ICON.MD} strokeWidth={2} className="text-faint shrink-0" />
   );
 }

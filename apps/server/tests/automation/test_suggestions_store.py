@@ -24,6 +24,7 @@ def _suggestion(
     *,
     name: str | None = None,
     description: str | None = None,
+    prompt: str | None = None,
     triggers: list | None = None,
     rationale: str = "because it fits",
     category: str = "Status reports",
@@ -35,6 +36,7 @@ def _suggestion(
         id=suggestion_id,
         name=name or suggestion_id,
         description=description or f"{suggestion_id} description",
+        prompt=prompt or f"Run {suggestion_id}",
         triggers=triggers or [TimeTrigger(at="09:00", days="mon")],
         rationale=rationale,
         category=category,
@@ -52,6 +54,7 @@ async def test_migration_creates_suggestions_table(automation_store: AutomationS
         "id",
         "name",
         "description",
+        "prompt",
         "triggers",
         "rationale",
         "evidence",
@@ -187,6 +190,6 @@ async def test_list_excluded_signatures_returns_dismissed_and_accepted(automatio
     signatures = await automation_store.list_excluded_signatures()
 
     assert set(signatures) == {
-        "Dismissed one — user said no",
-        "Accepted one — user said yes",
+        "Dismissed one — Run dismissed-1",
+        "Accepted one — Run accepted-1",
     }

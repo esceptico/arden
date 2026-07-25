@@ -1,7 +1,10 @@
-"""Areas router — the single API surface for areas (the one container:
-chats file into an area; a page + standing agent are optional capabilities).
+"""Areas router — the API surface for areas (the one container: chats file
+into an area; a page + standing agent are optional capabilities).
 Detail/asks/suggestions ride app.state (AreaService is a plain constructor
-with injected callables); CRUD goes through the session service's store."""
+with injected callables); CRUD goes through the session service's store.
+
+Ask mutation lives on a sibling `/asks` router: ask ids are globally unique
+and an ask raised from a plain chat has no area to route through."""
 
 from pathlib import Path
 from typing import Literal
@@ -20,10 +23,11 @@ from arden.server.schemas import (
 )
 
 router = APIRouter(prefix="/areas", tags=["areas"])
+asks_router = APIRouter(prefix="/asks", tags=["asks"])
 
 
 class ResolveBody(BaseModel):
-    state: Literal["dismissed", "done", "snoozed"]
+    state: Literal["active", "dismissed", "done", "snoozed"]
     snoozed_until: str | None = None
     resolution: Literal["approved", "rejected", "dismissed", "acknowledged"] | None = None
 
@@ -250,42 +254,49 @@ async def update_area_autonomy(request: Request, area_id: str, body: AutonomyBod
     return area
 
 
-@router.post("/{area_id}/asks/{ask_id}/resolve")
-async def resolve_ask(request: Request, area_id: str, ask_id: str, body: ResolveBody):
-    existing = _svc(request).get_ask(area_id, ask_id)
-    if existing is None:
-        raise HTTPException(status_code=404, detail="Ask not found in this Area")
-    try:
-        ask = _svc(request).resolve_ask(ask_id, body.state, body.snoozed_until, body.resolution)
-    except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
-    await request.app.state.emit_areas_changed([ask["area_key"]])
-    # The user engaged — that's domain activity the custodian should absorb
-    # (an approved review unblocks it; a dismissal is steering).
-    await request.app.state.request_area_wake(area_id, f"user resolved ask '{ask['text'][:80]}' as {body.state}")
+@asks_router.post("/{ask_id}/resolve")
+async def resolve_ask(request: Request, ask_id: str, body: ResolveBody):
+    if _svc(request).get_ask(ask_id) is None:
+        raise HTTPException(status_code=404, detail="Ask not found")
+    ask = _svc(request).resolve_ask(ask_id, body.state, body.snoozed_until, body.resolution)
+    await request.app.state.emit_areas_changed([ask["area_key"]] if ask["area_key"] else [])
+    if ask["area_key"]:
+        # The user engaged — that's domain activity the custodian should absorb.
+        # Reopening is distinct from resolving, but it still restores a live ask
+        # the agent may need to reconsider.
+        activity = (
+            f"user reopened ask '{ask['text'][:80]}'"
+            if body.state == "active"
+            else f"user resolved ask '{ask['text'][:80]}' as {body.state}"
+        )
+        await request.app.state.request_area_wake(ask["area_key"], activity)
     return ask
 
 
-@router.post("/{area_id}/asks/{ask_id}/reply")
-async def reply_to_ask(request: Request, area_id: str, ask_id: str, body: ReplyBody):
-    ask = _svc(request).get_ask(area_id, ask_id)
+@asks_router.post("/{ask_id}/reply")
+async def reply_to_ask(request: Request, ask_id: str, body: ReplyBody):
+    ask = _svc(request).get_ask(ask_id)
     if ask is None:
         raise HTTPException(status_code=404, detail="Ask not found")
     runtime = request.app.state.runtime
-    automation = await runtime.stores.automations.get(f"area:{area_id}")
     dispatch = runtime.dispatch_session_message
-    if automation is None or not automation.thread_id or dispatch is None:
-        raise HTTPException(status_code=409, detail="Custodian channel unavailable")
-    message = f"REPLY TO ASK [{ask.id}]\n{body.message.strip()}"
-    await dispatch(
-        automation.thread_id,
-        message,
-        client_id=f"area-ask-reply:{ask.id}",
-        skip_approvals=False,
+    target = ask.reply_session_id
+    tool_scope = None
+    if target is None:
+        automation = await runtime.stores.automations.get(f"area:{ask.area_key}")
+        if automation is None or not automation.thread_id:
+            raise HTTPException(status_code=409, detail="Reply channel unavailable")
+        target = automation.thread_id
         # The reply turn runs under the same permission contract as the
         # custodian's own runs — the allowlist is dispatch-borne.
-        tool_scope=tuple(automation.tool_scope) if automation.tool_scope else None,
+        tool_scope = tuple(automation.tool_scope) if automation.tool_scope else None
+    await dispatch(
+        target,
+        f"REPLY TO ASK [{ask.id}]\n{body.message.strip()}",
+        client_id=f"area-ask-reply:{ask.id}",
+        skip_approvals=False,
+        tool_scope=tool_scope,
     )
     resolved = _svc(request).resolve_ask(ask.id, "done", None, "replied")
-    await request.app.state.emit_areas_changed([area_id])
+    await request.app.state.emit_areas_changed([ask.area_key] if ask.area_key else [])
     return resolved

@@ -2,20 +2,26 @@ import {
   useEffect,
   useRef,
   useState,
+  type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
-  type ReactNode,
 } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import clsx from "clsx";
-import { ArrowUp, Check, Keyboard, Monitor, Moon, RotateCcw, Sun, type ArdenIcon } from "@/components/icons";
+import { RotateCcw } from "@/components/icons";
 import {
   DEFAULT_QUICK_CAPTURE_SHORTCUT,
+  isThinkingAnimation,
+  isThinkingIntensity,
   useStore,
-  type ThemeChoice,
+  type CornerProfile,
   type ThinkingAnimation,
-  type ThinkingIntensity,
+  type ThemeChoice,
 } from "@/stores";
-import { eventToAccelerator, formatAccelerator } from "@/lib/accelerator";
+import {
+  eventToAccelerator,
+  formatAccelerator,
+  formatAcceleratorParts,
+} from "@/lib/accelerator";
 import { EASE_OUT, MOTION } from "@/lib/tokens/motion";
 import { ICON } from "@/lib/icons";
 import { BlurSwap } from "@/components/ui/BlurSwap";
@@ -23,134 +29,182 @@ import { IconButton } from "@/components/ui/IconButton";
 import { radioGroupKeyDown } from "@/components/ui/RadioGroup";
 import { Tab, Tabs } from "@/components/ui/Tabs";
 import { ACCENT_PALETTES, type AccentPalette } from "@/lib/palettes";
+import {
+  THINKING_INTENSITIES,
+  THINKING_TREATMENTS,
+} from "@/lib/thinkingIndicator";
+import {
+  SettingsSection,
+  SettingsSettingRow,
+  SettingsSurface,
+} from "@/features/settings/components/SettingsPage";
 
-const VARIANTS: { id: ThinkingAnimation; label: string; hint: string }[] = [
-  { id: "comet", label: "Comet", hint: "Single arc travels around the rim" },
-  { id: "breath", label: "Breath", hint: "Wide diffuse halo that breathes slowly" },
-  { id: "hue-cycle", label: "Border tint", hint: "Border color drifts toward accent — no motion" },
-  { id: "send-orbit", label: "Send orbit", hint: "Spinner around the send button only" },
+const THEMES: { id: ThemeChoice; label: string }[] = [
+  { id: "light", label: "Light" },
+  { id: "dark", label: "Dark" },
+  { id: "system", label: "System" },
 ];
 
-const THEMES: { id: ThemeChoice; label: string; icon: ArdenIcon }[] = [
-  { id: "light", label: "Light", icon: Sun },
-  { id: "dark", label: "Dark", icon: Moon },
-  { id: "system", label: "System", icon: Monitor },
-];
-
-const INTENSITIES: { id: ThinkingIntensity; label: string }[] = [
-  { id: "subtle", label: "Subtle" },
-  { id: "normal", label: "Normal" },
-  { id: "strong", label: "Strong" },
+const CORNER_PROFILES: { id: CornerProfile; label: string }[] = [
+  { id: "round", label: "Round" },
+  { id: "square", label: "Soft square" },
 ];
 
 export function AppearanceTab() {
-  const thinking = useStore((s) => s.prefs.thinkingAnimation);
-  const intensity = useStore((s) => s.prefs.thinkingIntensity);
   const theme = useStore((s) => s.prefs.theme);
   const accent = useStore((s) => s.prefs.accent);
+  const cornerProfile = useStore((s) => s.prefs.cornerProfile);
+  const thinkingAnimation = useStore((s) => s.prefs.thinkingAnimation);
+  const thinkingIntensity = useStore((s) => s.prefs.thinkingIntensity);
   const setPref = useStore((s) => s.setPref);
 
   const onAccentKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) =>
     radioGroupKeyDown(e, accent, (v) => setPref("accent", v));
-
-  // The variant cards are a bespoke preview-card grid (RadioGroup's row-list +
-  // radio dot don't fit), but the roving keyboard is the SHARED radioGroupKeyDown
-  // — not re-implemented here. The cards carry role="radio" + data-value.
-  const onVariantKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) =>
-    radioGroupKeyDown(e, thinking, (v) => setPref("thinkingAnimation", v as ThinkingAnimation));
+  const selectThinkingAnimation = (value: string) => {
+    if (isThinkingAnimation(value)) setPref("thinkingAnimation", value);
+  };
+  const selectThinkingIntensity = (value: string) => {
+    if (isThinkingIntensity(value)) setPref("thinkingIntensity", value);
+  };
 
   return (
-    <div className="grid gap-6">
-      <section className="surface-rail divide-y divide-line-soft/50">
-        <SettingRow
-          title="Mode"
-          hint="Light, Dark, or follow your system preference."
-          control={
-            <Tabs variant="segmented"
-              size="sm"
-              value={theme}
-              onChange={(v) => setPref("theme", v as ThemeChoice)}
-            >
-              {THEMES.map((t) => (
-                <Tab key={t.id} value={t.id}>
-                  <t.icon size={ICON.MD} strokeWidth={2} />
-                  {t.label}
-                </Tab>
-              ))}
-            </Tabs>
-          }
-        />
-      </section>
+    <>
+      <SettingsSection title="Interface" detail="local preference">
+        <SettingsSurface>
+          <SettingsSettingRow
+            title="Mode"
+            hint="Light, Dark, or follow your system preference."
+            control={
+              <Tabs variant="segmented"
+                size="sm"
+                value={theme}
+                onChange={(v) => setPref("theme", v as ThemeChoice)}
+              >
+                {THEMES.map((t) => (
+                  <Tab key={t.id} value={t.id}>
+                    {t.label}
+                  </Tab>
+                ))}
+              </Tabs>
+            }
+          />
+          <SettingsSettingRow
+            title="Corner profile"
+            hint="The shared radius language for controls, rows, and panels — capsules or softened rectangles."
+            control={
+              <Tabs variant="segmented"
+                size="sm"
+                value={cornerProfile}
+                onChange={(v) => setPref("cornerProfile", v as CornerProfile)}
+              >
+                {CORNER_PROFILES.map((p) => (
+                  <Tab key={p.id} value={p.id}>
+                    {p.label}
+                  </Tab>
+                ))}
+              </Tabs>
+            }
+          />
+          <SettingsSettingRow
+            title="Accent"
+            hint="The single hue for links, active states, and controls. Surfaces, text, status, and code stay neutral."
+            control={
+              <div
+                role="radiogroup"
+                aria-label="Accent palette"
+                onKeyDown={onAccentKeyDown}
+                className="settings-accent-swatches"
+              >
+                {ACCENT_PALETTES.map((p) => (
+                  <AccentSwatch
+                    key={p.id}
+                    palette={p}
+                    selected={accent === p.id}
+                    onSelect={() => setPref("accent", p.id)}
+                  />
+                ))}
+              </div>
+            }
+          />
 
-      <section className="surface-rail">
-        <div className="px-4 py-3.5">
-          <div className="text-base font-medium text-ink tracking-[-0.005em]">Accent</div>
-          <div className="text-sm text-muted mt-0.5 leading-snug">
-            The single hue for links, active states, and controls. Surfaces, text,
-            status, and code stay neutral.
-          </div>
-          <div
-            role="radiogroup"
-            aria-label="Accent palette"
-            onKeyDown={onAccentKeyDown}
-            className="mt-3.5 flex flex-wrap gap-2.5"
+          <SettingsSettingRow
+            title="Quick capture shortcut"
+            hint={
+              <>
+                Global hotkey to summon the floating composer from anywhere.{" "}
+                <kbd className="arden-kbd">Enter</kbd> creates a new session and sends the message.
+              </>
+            }
+            control={<ShortcutRecorder />}
+          />
+        </SettingsSurface>
+      </SettingsSection>
+
+      <SettingsSection title="Thinking indicator" detail={`${thinkingIntensity} intensity`}>
+        <SettingsSurface>
+          <SettingsSettingRow
+            title="Thinking indicator"
+            hint="Shown on the composer while the agent is running but has not yet streamed its first token."
+            control={
+              <Tabs
+                variant="segmented"
+                size="sm"
+                label="Thinking indicator intensity"
+                value={thinkingIntensity}
+                onChange={selectThinkingIntensity}
+              >
+                {THINKING_INTENSITIES.map((intensity) => (
+                  <Tab key={intensity.id} value={intensity.id}>
+                    {intensity.label}
+                  </Tab>
+                ))}
+              </Tabs>
+            }
+          />
+          <ThinkingTreatmentPicker
+            value={thinkingAnimation}
+            onChange={selectThinkingAnimation}
+          />
+        </SettingsSurface>
+      </SettingsSection>
+    </>
+  );
+}
+
+function ThinkingTreatmentPicker({
+  value,
+  onChange,
+}: {
+  value: ThinkingAnimation;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Thinking indicator treatment"
+      className="settings-thinking-preview-grid"
+      onKeyDown={(event) => radioGroupKeyDown(event, value, onChange)}
+    >
+      {THINKING_TREATMENTS.map((treatment) => {
+        const selected = value === treatment.id;
+        return (
+          <button
+            key={treatment.id}
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            data-value={treatment.id}
+            data-thinking-animation={treatment.id}
+            tabIndex={selected ? 0 : -1}
+            onClick={() => onChange(treatment.id)}
+            className={clsx("settings-thinking-card", selected && "is-selected")}
           >
-            {ACCENT_PALETTES.map((p) => (
-              <AccentSwatch
-                key={p.id}
-                palette={p}
-                selected={accent === p.id}
-                onSelect={() => setPref("accent", p.id)}
-              />
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <section className="surface-rail divide-y divide-line-soft/50">
-        <SettingRow
-          title="Quick capture shortcut"
-          hint="Global hotkey to summon the floating composer from anywhere. Enter creates a new session and sends the message."
-          control={<ShortcutRecorder />}
-        />
-      </section>
-
-      <section className="surface-rail divide-y divide-line-soft/50">
-        <SettingRow
-          title="Thinking indicator"
-          hint="Shown on the composer while the agent is running but has not yet streamed its first token."
-          control={
-            <Tabs variant="segmented"
-              size="sm"
-              value={intensity}
-              onChange={(v) => setPref("thinkingIntensity", v as ThinkingIntensity)}
-            >
-              {INTENSITIES.map((o) => (
-                <Tab key={o.id} value={o.id}>
-                  {o.label}
-                </Tab>
-              ))}
-            </Tabs>
-          }
-        />
-        <div
-          role="radiogroup"
-          aria-label="Thinking animation"
-          onKeyDown={onVariantKeyDown}
-          className="px-4 py-4 grid grid-cols-[repeat(auto-fit,minmax(190px,1fr))] gap-2"
-        >
-          {VARIANTS.map((v) => (
-            <VariantCard
-              key={v.id}
-              variant={v}
-              intensity={intensity}
-              selected={thinking === v.id}
-              onSelect={() => setPref("thinkingAnimation", v.id)}
-            />
-          ))}
-        </div>
-      </section>
-
+            <span aria-hidden className="settings-thinking-card__mark" />
+            <span className="settings-thinking-card__title">{treatment.label}</span>
+            <span className="settings-thinking-card__description">{treatment.description}</span>
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -235,15 +289,25 @@ function ShortcutRecorder() {
           type="button"
           onClick={() => setRecording((r) => !r)}
           className={clsx(
-            "inline-flex items-center gap-1.5 h-8 px-2.5 rounded-[8px] border text-sm font-medium tracking-[-0.005em] tabular-nums transition-[background-color,border-color,color,scale] duration-check ease-out active:scale-[0.97] min-w-[140px] justify-center",
-            recording
-              ? "border-accent bg-accent-soft text-accent-strong"
-              : "border-line-soft bg-surface text-ink-soft hover:bg-surface-soft/60",
+            "settings-shortcut-record",
+            recording && "is-recording",
           )}
         >
-          <Keyboard size={ICON.SM} strokeWidth={2} className="opacity-70" />
           <BlurSwap swapKey={recording ? "recording" : value || "disabled"} blur={2}>
-            {recording ? "Press chord…" : (value ? formatAccelerator(value) : "Disabled")}
+            {recording ? (
+              "Press chord…"
+            ) : value ? (
+              <span
+                className="settings-shortcut-keys"
+                aria-label={formatAccelerator(value)}
+              >
+                {formatAcceleratorParts(value).map((part, index) => (
+                  <kbd className="arden-kbd" key={`${part}-${index}`}>{part}</kbd>
+                ))}
+              </span>
+            ) : (
+              "Disabled"
+            )}
           </BlurSwap>
         </button>
         <AnimatePresence initial={false}>
@@ -263,7 +327,7 @@ function ShortcutRecorder() {
                 aria-label="Reset to default"
                 title="Reset to default"
               >
-                <RotateCcw size={ICON.SM} strokeWidth={2} />
+                <RotateCcw size={ICON.SM} />
               </IconButton>
             </motion.span>
           )}
@@ -276,29 +340,8 @@ function ShortcutRecorder() {
   );
 }
 
-function SettingRow({
-  title,
-  hint,
-  control,
-}: {
-  title: string;
-  hint: string;
-  control: ReactNode;
-}) {
-  return (
-    <div className="flex flex-col items-start gap-3 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
-      <div className="min-w-0">
-        <div className="text-base font-medium text-ink tracking-[-0.005em]">{title}</div>
-        <div className="text-sm text-muted mt-0.5 leading-snug">{hint}</div>
-      </div>
-      <div className="shrink-0 max-w-full">{control}</div>
-    </div>
-  );
-}
-
-/** One accent-palette swatch. Split diagonally into the palette's light and
- *  dark accents so it stays legible on either theme's surface; the selected
- *  check uses `mix-blend-difference` to invert against whatever it sits on. */
+/** One accent-palette swatch. The picker shows the active light-surface hue,
+ * matching the rest of the Settings paper rather than a second mini-theme. */
 function AccentSwatch({
   palette,
   selected,
@@ -319,94 +362,12 @@ function AccentSwatch({
       tabIndex={selected ? 0 : -1}
       onClick={onSelect}
       className={clsx(
-        "relative grid place-items-center w-9 h-9 rounded-full outline-none transition-[scale] duration-check ease-out active:scale-[0.9]",
-        "focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface",
-        selected
-          ? "ring-2 ring-ink ring-offset-2 ring-offset-surface"
-          : "ring-1 ring-inset ring-line-strong/40 hover:scale-[1.08]",
+        "settings-accent-swatch",
+        selected && "is-selected",
       )}
       style={{
-        background: `linear-gradient(135deg, ${palette.light.accent} 0 50%, ${palette.dark.accent} 50% 100%)`,
-      }}
-    >
-      {selected && (
-        <Check size={ICON.SM} strokeWidth={3} className="text-white mix-blend-difference" />
-      )}
-    </button>
-  );
-}
-
-/** Mini composer-shaped box that runs the variant continuously so the
- *  user can compare them side-by-side without leaving Settings. */
-/** Wraps a Preview with hover-driven animation gating. Animations only
- *  run when the variant is selected or its card is being hovered — five
- *  always-on Houdini / conic-gradient previews on every settings open
- *  was wasteful (each comet preview compositor-tickrates a registered
- *  custom property at 60fps). */
-function VariantCard({
-  variant,
-  intensity,
-  selected,
-  onSelect,
-}: {
-  variant: { id: ThinkingAnimation; label: string; hint: string };
-  intensity: ThinkingIntensity;
-  selected: boolean;
-  onSelect: () => void;
-}) {
-  const [hovered, setHovered] = useState(false);
-  return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={selected}
-      aria-label={variant.label}
-      data-value={variant.id}
-      tabIndex={selected ? 0 : -1}
-      onClick={onSelect}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      className={clsx(
-        "group flex flex-col gap-2 p-3 rounded-[10px] border text-left transition-[background-color,border-color,scale] duration-check ease-out active:scale-[0.985]",
-        selected
-          ? "border-line-strong bg-surface-soft/60"
-          : "border-line-soft bg-bg-main/30 hover:bg-surface-soft/40",
-      )}
-    >
-      <Preview variant={variant.id} intensity={intensity} animate={selected || hovered} />
-      <div className="grid gap-0.5">
-        <div className="text-sm font-medium text-ink tracking-[-0.005em]">
-          {variant.label}
-        </div>
-        <div className="text-xs text-faint leading-snug">{variant.hint}</div>
-      </div>
-    </button>
-  );
-}
-
-function Preview({
-  variant,
-  intensity,
-  animate,
-}: {
-  variant: ThinkingAnimation;
-  intensity: ThinkingIntensity;
-  animate: boolean;
-}) {
-  return (
-    <div
-      className="composer-card relative h-[44px] rounded-[10px] border border-line bg-surface flex items-center pl-3 pr-1.5"
-      data-thinking={animate ? "true" : undefined}
-      data-thinking-style={variant}
-      data-thinking-intensity={intensity}
-    >
-      <span className="text-xs text-faint flex-1">Ask anything…</span>
-      <span
-        data-send="true"
-        className="grid place-items-center w-6 h-6 rounded-full bg-ink text-on-ink shrink-0"
-      >
-        <ArrowUp size={ICON.SM} strokeWidth={2.4} />
-      </span>
-    </div>
+        "--settings-accent-swatch": palette.light.accent,
+      } as CSSProperties}
+    />
   );
 }

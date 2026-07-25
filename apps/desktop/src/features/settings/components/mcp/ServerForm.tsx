@@ -18,12 +18,16 @@ import { ToolsSection } from "@/features/settings/components/mcp/ToolsSection";
 export function ServerForm({
   mode,
   server,
+  setupReference,
   onClose,
   onSaved,
   onRemoved,
 }: {
   mode: "add" | "edit";
   server?: MCPServer;
+  /** Free-form context collected by the lightweight setup peek. It is not
+   * inferred into executable configuration fields. */
+  setupReference?: string;
   onClose: () => void;
   onSaved: () => Promise<void>;
   onRemoved?: () => Promise<void>;
@@ -121,6 +125,10 @@ export function ServerForm({
       <h3 className="m-0 text-lg font-semibold tracking-[-0.012em] text-ink">
         {mode === "add" ? "Connect to a custom MCP" : `Update ${server?.name} MCP`}
       </h3>
+
+      {mode === "add" && setupReference?.trim() && (
+        <div className="settings-scope-note">Setup reference: {setupReference.trim()}</div>
+      )}
 
       <div className="grid gap-3">
         <Input

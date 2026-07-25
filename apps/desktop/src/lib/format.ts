@@ -10,6 +10,12 @@ export function formatRelativePast(value: string): string {
   return `${Math.floor(days / 30)}mo`;
 }
 
+/** "6h ago" — for surfaces where a bare duration can't be told apart from
+ *  a future one (activity lists mixing past and scheduled entries). */
+export function formatRelativePastAgo(value: string): string {
+  return `${formatRelativePast(value)} ago`;
+}
+
 /** Compact relative-future label ("in 12m", "in 3h", "in 2d"). Clamps an
  *  already-due moment to "soon" — the scheduler fires on its next tick. */
 export function formatRelativeFuture(value: string): string {

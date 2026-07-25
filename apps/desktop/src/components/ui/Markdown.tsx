@@ -1,4 +1,11 @@
-import { Children, isValidElement, useContext, useMemo, type ReactNode } from "react";
+import {
+  Children,
+  createContext,
+  isValidElement,
+  useContext,
+  useMemo,
+  type ReactNode,
+} from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -6,6 +13,7 @@ import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import { CopyGlyph } from "@/components/ui/CopyGlyph";
+import { Globe02 } from "@/components/icons";
 import { copyText } from "@/lib/clipboard";
 import clsx from "clsx";
 import bash from "highlight.js/lib/languages/bash";
@@ -16,7 +24,12 @@ import typescript from "highlight.js/lib/languages/typescript";
 import { Mermaid } from "@/components/ui/Mermaid";
 import { ICON } from "@/lib/icons";
 import { useTimeoutFlag } from "@/lib/hooks";
-import { remarkProvenance, remarkWikiLink, WikiLinkContext } from "@/lib/wikilink";
+import {
+  parseMemoryArtifactHref,
+  remarkProvenance,
+  remarkWikiLink,
+  WikiLinkContext,
+} from "@/lib/wikilink";
 
 const HL_LANGUAGES = {
   json,
@@ -33,6 +46,13 @@ const HL_LANGUAGES = {
   shell: bash,
   zsh: bash,
 };
+
+const REMARK_MATH: [typeof remarkMath, { singleDollarTextMath: boolean }] = [
+  remarkMath,
+  { singleDollarTextMath: false },
+];
+
+const ExternalLinkFaviconContext = createContext(false);
 
 // rehype-highlight and rehype-katex both inject elements with classes;
 // rehype-sanitize runs last to strip anything we don't whitelist. The
@@ -87,25 +107,50 @@ export function Markdown({
   content,
   className,
   streaming = false,
+  typeset = false,
   provenance = false,
+  conversationAnchors = false,
+  externalLinkFavicons = false,
 }: {
   content: string;
   className?: string;
   streaming?: boolean;
+  /** Use the Board rich-text contract instead of the legacy fenced-code chrome. */
+  typeset?: boolean;
   /** Render memory-synthesizer source tags — `(from chat)`, `(inferred)` — as
    *  inline chips. Only the memory wiki view opts in; chat prose stays literal. */
   provenance?: boolean;
+  /** Opt chat prose into the explicit conversation-outline contract. */
+  conversationAnchors?: boolean;
+  /** Decorate completed assistant-response links with cached website icons. */
+  externalLinkFavicons?: boolean;
 }) {
+  const components = {
+    // The Chat mock uses the Board typeset pre directly: it has no language
+    // strip, registration ticks, or copy control. Other Markdown surfaces
+    // retain that richer utility chrome.
+    ...(streaming ? { pre: StreamingPreBlock } : typeset ? { pre: TypesetPreBlock } : { pre: PreBlock }),
+    a: Anchor,
+    code: InlineCode,
+    td: TableCell,
+    ...(conversationAnchors
+      ? { h2: RailHeading, p: RailParagraph }
+      : {}),
+  };
   return (
-    <div className={clsx("md", className)}>
-      <ReactMarkdown
-        // remark-math parses $...$ (inline) and $$...$$ (display) into
-        // math nodes; rehype-katex converts those into the spans/MathML
+    <div className={clsx("md", typeset && "typeset typeset-notes", className)}>
+      <ExternalLinkFaviconContext.Provider value={externalLinkFavicons && !streaming}>
+        <ReactMarkdown
+        // Single-dollar math is disabled because ordinary prose commonly
+        // contains multiple currency amounts. Display math remains `$$…$$`.
+        // rehype-katex converts those math nodes into the spans/MathML
         // KaTeX needs for rendering. The order matters — katex MUST run
         // before sanitize so its output exists when sanitize walks the
         // tree, but the sanitize schema is extended above to keep the
         // tags/classes/attributes katex emits.
-        remarkPlugins={provenance ? [remarkGfm, remarkMath, remarkWikiLink, remarkProvenance] : [remarkGfm, remarkMath, remarkWikiLink]}
+        remarkPlugins={provenance
+          ? [remarkGfm, REMARK_MATH, remarkWikiLink, remarkProvenance]
+          : [remarkGfm, REMARK_MATH, remarkWikiLink]}
         rehypePlugins={
           streaming
             ? [
@@ -122,16 +167,27 @@ export function Markdown({
                 [rehypeSanitize, sanitizeSchema],
               ]
         }
-        components={{ pre: streaming ? StreamingPreBlock : PreBlock, a: Anchor, code: InlineCode, td: TableCell }}
+        components={components}
       >
         {content}
-      </ReactMarkdown>
+        </ReactMarkdown>
+      </ExternalLinkFaviconContext.Provider>
     </div>
   );
 }
 
+function RailHeading(props: React.HTMLAttributes<HTMLHeadingElement>) {
+  return <h2 {...props} data-chat-rail-anchor />;
+}
+
+function RailParagraph(props: React.HTMLAttributes<HTMLParagraphElement>) {
+  return <p {...props} data-chat-rail-anchor />;
+}
+
 function Anchor({ href, children, ...rest }: React.AnchorHTMLAttributes<HTMLAnchorElement>) {
   const wiki = useContext(WikiLinkContext);
+  const showExternalFavicon = useContext(ExternalLinkFaviconContext);
+  const faviconUrl = showExternalFavicon ? externalFaviconUrl(href) : null;
   const prov = (rest as Record<string, unknown>)["data-prov"] as string | undefined;
   if (prov != null) {
     // Not a link at all — a provenance chip riding the anchor transport.
@@ -158,11 +214,58 @@ function Anchor({ href, children, ...rest }: React.AnchorHTMLAttributes<HTMLAnch
       </a>
     );
   }
+  const artifact = href ? parseMemoryArtifactHref(href) : null;
+  if (wiki && artifact && (wiki.existsInline ?? wiki.exists)(artifact.path)) {
+    return (
+      <a
+        href={href}
+        className={clsx("wikilink", rest.className)}
+        data-memory-path={artifact.path}
+        data-memory-anchor={artifact.anchor ?? undefined}
+        onClick={(event) => {
+          event.preventDefault();
+          if (wiki.onNavigateInline) wiki.onNavigateInline(artifact.path, artifact.anchor);
+          else wiki.onNavigate(artifact.path);
+        }}
+      >
+        {children}
+      </a>
+    );
+  }
   return (
-    <a href={href} target="_blank" rel="noopener noreferrer" {...rest}>
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      {...rest}
+      className={clsx(rest.className, faviconUrl && "external-link--favicon")}
+    >
+      {faviconUrl && (
+        <span className="external-link__icon" aria-hidden="true">
+          <Globe02 className="external-link__fallback" />
+          <img
+            className="external-link__favicon"
+            src={faviconUrl}
+            alt=""
+            decoding="async"
+            referrerPolicy="no-referrer"
+            onError={(event) => event.currentTarget.remove()}
+          />
+        </span>
+      )}
       {children}
     </a>
   );
+}
+
+function externalFaviconUrl(href: string | undefined): string | null {
+  if (!href) return null;
+  try {
+    const url = new URL(href);
+    return url.protocol === "https:" ? `${url.origin}/favicon.ico` : null;
+  } catch {
+    return null;
+  }
 }
 
 // Inline code that names an artifact path (`directives.md`, `entities/`,
@@ -179,7 +282,7 @@ function InlineCode({ className, children, ...rest }: React.HTMLAttributes<HTMLE
       <a
         href="#wikilink"
         className="wikilink"
-        data-memory-inline-path={target}
+        data-memory-path={target}
         onClick={(e) => {
           e.preventDefault();
           (wiki.onNavigateInline ?? wiki.onNavigate)(target);
@@ -208,16 +311,33 @@ function StreamingPreBlock({ children }: { children?: ReactNode }) {
   return <pre className="streaming-code">{children}</pre>;
 }
 
+function firstCodeChild(children: ReactNode) {
+  return Children.toArray(children).find(
+    (child): child is React.ReactElement<{ className?: string; children?: ReactNode }> =>
+      isValidElement<{ className?: string; children?: ReactNode }>(child),
+  );
+}
+
+/** Board typeset keeps code blocks visually bare, but Mermaid fences still
+ * need to reach the shared diagram renderer instead of becoming raw code. */
+function TypesetPreBlock({ children }: { children?: ReactNode }) {
+  const codeNode = firstCodeChild(children);
+  const className = codeNode?.props.className ?? "";
+  const lang = className.match(/(?:^|\s)language-(\S+)/)?.[1] ?? "";
+  const rawText = extractText(codeNode?.props.children);
+
+  if (lang === "mermaid" && rawText.trim()) return <Mermaid code={rawText} />;
+  return <pre>{children}</pre>;
+}
+
 /** Custom <pre> wrapper: pulls language + raw text from the inner <code>
  *  child and renders our header (language label + copy button) above the
  *  highlighted code. */
 function PreBlock({ children }: { children?: ReactNode }) {
-  // ReactMarkdown gives us a single <code> element child — extract its
-  // className (carries the language) and the raw text before highlighting.
-  const codeNode = Children.toArray(children).find(
-    (child): child is React.ReactElement<{ className?: string; children?: ReactNode }> =>
-      isValidElement(child) && (child as { type?: unknown }).type === "code",
-  );
+  // ReactMarkdown gives us a single code-renderer element child — extract its
+  // className (carries the language) and raw text before highlighting. Its
+  // React type is InlineCode, not the literal string "code".
+  const codeNode = firstCodeChild(children);
   const className = codeNode?.props.className ?? "";
   const lang = className.match(/(?:^|\s)language-(\S+)/)?.[1] ?? "";
   const rawText = useMemo(() => extractText(codeNode?.props.children), [codeNode]);

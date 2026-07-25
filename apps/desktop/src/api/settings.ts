@@ -450,6 +450,7 @@ export function parseServerConfig(data: unknown): ServerConfig {
   assertServerContract(isRecord(data), "Invalid /config response: expected an object");
   assertServerContract(typeof data.chat_model === "string", "Invalid /config response: missing chat_model");
   assertServerContract(typeof data.research_model === "string", "Invalid /config response: missing research_model");
+  assertServerContract(typeof data.workflow_model === "string", "Invalid /config response: missing workflow_model");
   assertServerContract(typeof data.memory_model === "string", "Invalid /config response: missing memory_model");
   assertServerContract(isStringArray(data.reasoning_efforts), "Invalid /config response: missing reasoning_efforts");
   assertServerContract(
@@ -475,10 +476,33 @@ export function parseServerConfig(data: unknown): ServerConfig {
 export function parseModelsResponse(data: unknown): ModelsResponse {
   assertServerContract(isRecord(data), "Invalid /models response: expected an object");
   assertServerContract(isStringArray(data.models), "Invalid /models response: missing models");
-  assertServerContract(Array.isArray(data.groups), "Invalid /models response: missing groups");
+  assertServerContract(
+    Array.isArray(data.groups)
+      && data.groups.every(
+        (group) =>
+          isRecord(group)
+          && typeof group.provider === "string"
+          && typeof group.label === "string"
+          && isStringArray(group.models),
+      ),
+    "Invalid /models response: invalid groups",
+  );
   assertServerContract(
     isStringArrayRecord(data.reasoning_efforts),
     "Invalid /models response: missing reasoning_efforts",
+  );
+  assertServerContract(typeof data.chat_model === "string", "Invalid /models response: missing chat_model");
+  assertServerContract(
+    typeof data.research_model === "string",
+    "Invalid /models response: missing research_model",
+  );
+  assertServerContract(
+    typeof data.workflow_model === "string",
+    "Invalid /models response: missing workflow_model",
+  );
+  assertServerContract(
+    typeof data.memory_model === "string",
+    "Invalid /models response: missing memory_model",
   );
   return data as unknown as ModelsResponse;
 }

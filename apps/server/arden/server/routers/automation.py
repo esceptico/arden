@@ -3,6 +3,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 
+from arden.automation.descriptions import AutomationDescriptionUnavailableError
 from arden.automation.models import Automation
 from arden.automation.service import AutomationService
 from arden.automation.suggestions import AutomationSuggestion
@@ -40,6 +41,8 @@ def _automation_to_dict(a: Automation, recent_statuses: list[str] | None = None)
         "task_id": a.task_id,
         "name": a.name,
         "description": a.description,
+        "description_source": a.description_source,
+        "prompt": a.prompt,
         "model": a.model,
         "triggers": [{"type": t.type, **t.params()} for t in a.triggers],
         "enabled": a.enabled,
@@ -66,6 +69,7 @@ async def create_automation(
     try:
         automation = await svc.create(
             name=request.name,
+            prompt=request.prompt,
             description=request.description,
             model=request.model,
             trigger_type=request.trigger_type,
@@ -84,6 +88,8 @@ async def create_automation(
             tool_scope=request.tool_scope,
             output_schema=request.output_schema,
         )
+    except AutomationDescriptionUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if request.from_suggestion_id:
@@ -103,6 +109,7 @@ def _suggestion_to_response(s: AutomationSuggestion) -> AutomationSuggestionResp
         id=s.id,
         name=s.name,
         description=s.description,
+        prompt=s.prompt,
         triggers=[{"type": t.type, **t.params()} for t in s.triggers],
         rationale=s.rationale,
         evidence=s.evidence,
@@ -240,6 +247,20 @@ async def get_automation(task_id: str, svc: AutomationService = Depends(require_
     return _automation_to_dict(automation, statuses.get(task_id, []))
 
 
+@router.post("/automations/{task_id}/description/generate")
+async def generate_automation_description(
+    task_id: str,
+    svc: AutomationService = Depends(require_automation_service),
+):
+    try:
+        automation = await svc.generate_description(task_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Automation not found")
+    except AutomationDescriptionUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    return _automation_to_dict(automation)
+
+
 @router.get("/automations/{task_id}/runs")
 async def list_automation_runs(
     task_id: str,
@@ -287,6 +308,7 @@ async def update_automation(
         automation = await svc.update(
             task_id,
             name=request.name,
+            prompt=request.prompt,
             description=request.description,
             model=request.model,
             trigger_type=request.trigger_type,
@@ -308,6 +330,8 @@ async def update_automation(
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="Automation not found")
+    except AutomationDescriptionUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return _automation_to_dict(automation)

@@ -150,6 +150,7 @@ export function RadioGroup({
       {selectedRect && (
         <motion.div
           aria-hidden
+          data-radio-highlight
           className={clsx(
             "pointer-events-none absolute bg-fill-selected",
             dense ? "rounded-md" : "rounded-lg",
@@ -169,7 +170,8 @@ export function RadioGroup({
         {focusRect && (
           <motion.div
             aria-hidden
-            className="pointer-events-none absolute z-20 rounded-lg ring-2 ring-accent"
+            data-radio-highlight
+            className="pointer-events-none absolute z-[var(--z-control-interaction)] rounded-lg ring-2 ring-accent"
             initial={false}
             animate={{
               left: focusRect.left - 2,
@@ -234,8 +236,9 @@ export function RadioGroupItem({
           onChange(value);
         }
       }}
+      data-radio-row
       className={clsx(
-        "group relative z-10 flex items-center outline-none",
+        "group relative z-[var(--z-control-content)] flex items-center outline-none",
         "hover:bg-fill-hover transition-colors duration-check ease-out",
         dense ? "gap-2 rounded-md px-2 py-[5px]" : "gap-2.5 rounded-lg px-3 py-2",
       )}
@@ -245,7 +248,7 @@ export function RadioGroupItem({
           <span
             aria-hidden
             className={clsx(
-              "absolute inset-0 rounded-full border-[1.5px] transition-colors duration-100",
+              "absolute inset-0 rounded-[var(--r-control)] border-[1.5px] transition-colors duration-indicator",
               isSelected ? "border-transparent" : "border-line group-hover:border-line-strong",
             )}
           />
@@ -263,7 +266,7 @@ export function RadioGroupItem({
               {indicator === "check" ? (
                 <Check size={13} strokeWidth={2.25} className="text-ink" />
               ) : (
-                <span className="h-[8px] w-[8px] rounded-full bg-accent" />
+                <span className="h-[8px] w-[8px] rounded-[var(--r-control)] bg-accent" />
               )}
             </motion.span>
           )}
@@ -274,7 +277,7 @@ export function RadioGroupItem({
         <span className="flex min-w-0 flex-col">
           <span
             className={clsx(
-              "text-[13px] leading-snug transition-colors duration-100",
+              "text-[13px] leading-snug transition-colors duration-indicator",
               isSelected ? "font-semibold text-ink" : "text-muted group-hover:text-ink",
             )}
           >

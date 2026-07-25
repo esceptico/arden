@@ -3,17 +3,19 @@ from pydantic import ValidationError
 
 from arden.constants import COMPRESSION_TOKEN_HEADROOM
 from arden.llm.models import (
-    get_embedding_models as get_embedding_models_fn,
-)
-from arden.llm.models import (
+    Provider,
     get_model,
     list_embedding_models,
-    list_models,
+    provider_label,
+)
+from arden.llm.models import (
+    get_embedding_models as get_embedding_models_fn,
 )
 from arden.llm.models import (
     get_models as get_models_fn,
 )
 from arden.server.deps import require_config_service
+from arden.server.routers.providers import connected_providers
 from arden.server.runtime import Runtime, get_runtime
 from arden.server.schemas import (
     AddCustomModelRequest,
@@ -166,18 +168,33 @@ async def get_config(runtime: Runtime = Depends(get_runtime)):
 
 @router.get("/models")
 async def get_models(runtime: Runtime = Depends(get_runtime)):
+    config = runtime.config
     all_models = get_models_fn()
+    connected = connected_providers(config)
+    active = {config.chat_model, config.research_model, config.workflow_model, config.memory_model}
+    # Pickers list connected providers only; an actively configured model stays
+    # visible even if its provider was disconnected, so the selection keeps its
+    # label until the user picks a reachable one.
+    visible = {
+        mid: m for mid, m in all_models.items() if m.provider in connected or mid in active
+    }
     groups: dict[str, list[str]] = {}
-    for mid, m in all_models.items():
+    for mid, m in visible.items():
         provider_key = m.provider.value
         groups.setdefault(provider_key, []).append(mid)
 
-    config = runtime.config
     return {
-        "models": list_models(),
-        "groups": [{"provider": p, "models": ms} for p, ms in groups.items()],
+        "models": list(visible),
+        "groups": [
+            {
+                "provider": provider_key,
+                "label": provider_label(Provider(provider_key)),
+                "models": model_ids,
+            }
+            for provider_key, model_ids in groups.items()
+        ],
         "reasoning_efforts": {
-            mid: list(model.reasoning_efforts) for mid, model in all_models.items() if model.reasoning_efforts
+            mid: list(model.reasoning_efforts) for mid, model in visible.items() if model.reasoning_efforts
         },
         "chat_model": config.chat_model,
         "research_model": config.research_model,

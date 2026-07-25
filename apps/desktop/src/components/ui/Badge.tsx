@@ -74,7 +74,7 @@ export function Badge({
       title={title}
       className={clsx(
         "inline-flex max-w-full shrink-0 justify-self-start items-center gap-1 font-medium tracking-[0.005em] whitespace-nowrap",
-        shape === "pill" ? "rounded-full" : "rounded-md",
+        shape === "pill" ? "rounded-[var(--r-control)]" : "rounded-md",
         sizeClass[size],
         surface,
         className,

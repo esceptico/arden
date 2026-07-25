@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useCallback, useEffect } from "react";
 import { useStore } from "@/stores";
 import { fetchAreasOverview } from "@/actions/areas";
 
@@ -10,12 +10,13 @@ import { fetchAreasOverview } from "@/actions/areas";
  *  `useAutomationEvents` (the hook that owns the automation SSE stream). */
 export function useAreasData() {
   const overview = useStore((s) => s.areas.overview);
-  const loading = useStore((s) => s.areas.loading);
+  const phase = useStore((s) => s.areas.overviewPhase);
   const connected = useStore((s) => s.connected);
+  const reload = useCallback(() => fetchAreasOverview(), []);
 
   useEffect(() => {
-    if (connected) void fetchAreasOverview();
-  }, [connected]);
+    if (connected) void reload();
+  }, [connected, reload]);
 
-  return { overview, loading };
+  return { overview, phase, reload };
 }

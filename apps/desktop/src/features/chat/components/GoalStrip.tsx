@@ -34,7 +34,7 @@ export function GoalStatusBar() {
             onClick={toggle}
             aria-label="Session goal"
             title={goal.objective}
-            className="max-w-[220px]"
+            className="composer-toolbar-control max-w-[220px]"
           >
             <span className="truncate">
               Goal · {goal.status.replace("_", " ")}

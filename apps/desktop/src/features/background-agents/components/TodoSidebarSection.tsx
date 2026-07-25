@@ -70,7 +70,16 @@ function TodoEditInput({
   );
 }
 
-export function TodoSidebarSection({ todo, sessionId }: { todo: TodoListState; sessionId: string | null }) {
+export function TodoSidebarSection({
+  todo,
+  sessionId,
+  label = "Tasks",
+}: {
+  todo: TodoListState;
+  sessionId: string | null;
+  /** Area Activity uses the mockup's concise group label. */
+  label?: string;
+}) {
   const { items, edited, add, edit, remove, cycle, reset } = useEditableTodo(sessionId, todo);
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -79,7 +88,7 @@ export function TodoSidebarSection({ todo, sessionId }: { todo: TodoListState; s
   return (
     <section>
       <div className="flex items-center justify-between gap-2 px-0.5 pt-0.5 pb-1.5">
-        <Caption tone="muted">Tasks</Caption>
+        <Caption tone="muted">{label}</Caption>
         <div className="flex items-center gap-1.5">
           {edited && (
             <Tooltip label="Reset to the agent's list">

@@ -36,7 +36,7 @@ interface SelectProps {
  *
  * Color language: the selected option carries a neutral ink overlay + ink text
  * (never an accent hue) and a trailing ink-coloured check; the focus ring is
- * accent-soft. Trigger matches `.input-field` so it sits with other controls.
+ * accent-soft. Trigger uses `.arden-field` so it sits with other controls.
  */
 export function Select({
   value,
@@ -140,9 +140,8 @@ export function Select({
         onClick={() => setOpen((v) => !v)}
         onKeyDown={onTriggerKeyDown}
         className={clsx(
-          "inline-flex h-8 items-center justify-between gap-2 rounded-md border bg-transparent px-2.5 text-base outline-none transition-[border-color,box-shadow] duration-palette ease-out",
-          "border-line hover:border-line-strong focus-visible:border-accent focus-visible:shadow-[0_0_0_3px_var(--color-accent-soft)]",
-          "disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-line",
+          "arden-field inline-flex items-center justify-between gap-2",
+          "disabled:cursor-not-allowed disabled:opacity-50",
           className,
         )}
       >
@@ -208,11 +207,10 @@ function SelectItem({
       tabIndex={tabbable ? 0 : -1}
       onClick={onSelect}
       className={clsx(
-        "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none",
-        "transition-[background-color,color,scale] duration-check ease-out active:scale-[0.98]",
+        "arden-row flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm outline-none",
         selected
-          ? "bg-fill-selected text-ink"
-          : "text-ink-soft hover:bg-fill-hover hover:text-ink focus-visible:bg-fill-hover focus-visible:text-ink",
+          ? "text-ink"
+          : "text-ink-soft focus-visible:bg-fill-hover focus-visible:text-ink",
       )}
     >
       <span className="flex min-w-0 flex-1 flex-col">

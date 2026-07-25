@@ -40,7 +40,7 @@ const overview = {
 test("overview load + ask resolve removes from focus", () => {
   let s = reduceOverviewLoaded(createAreasDomainState(), overview);
   expect(s.overview?.focus.length).toBe(1);
-  s = reduceAskResolved(s, "o-1a", "a1");
+  s = reduceAskResolved(s, "a1");
   expect(s.overview?.focus.length).toBe(0);
 });
 

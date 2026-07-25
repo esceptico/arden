@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { AppConfig } from "@/api/core";
 import { ArtifactMemoryView } from "@/features/memory/components/ArtifactMemoryView";
-import { MemoryInspector } from "@/features/memory/components/MemoryInspector";
+import { loadMemoryInspectorPane, MemoryInspector } from "@/features/memory/components/MemoryInspector";
 import type { MemoryArtifactDetail, PageEditEvent, PageEditHistory, PageLinks } from "@/features/memory/lib/notebookTypes";
 
 const roots = new Set<Root>();
@@ -22,6 +22,11 @@ function setup() {
 
 async function settle(delay = 0) {
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, delay)); });
+}
+
+/** TabPanels preserves the mock's sequential 160ms exit + 260ms enter. */
+async function settlePanelSwap() {
+  await settle(450);
 }
 
 function response(data: unknown) {
@@ -118,25 +123,22 @@ function inspectorElement(overrides: Partial<InspectorProps> = {}) {
       titleForPath={() => undefined}
       onNavigate={() => {}}
       onRetryLinks={() => {}}
-      scrollTargetRef={{ current: null }}
+      onClose={() => {}}
       {...overrides}
     />
   );
 }
 
-test("links pane lists outgoing links and mentions with cleaned excerpts, and navigates", async () => {
+test("links peek uses outgoing/incoming tabs and navigates context rows", async () => {
   const navigated: Array<{ path: string; anchor: string | null }> = [];
   const onNavigate = (path: string, anchor: string | null) => navigated.push({ path, anchor });
   const { host, root } = setup();
   await act(async () => root.render(inspectorElement({ onNavigate })));
 
-  // Toolbar: three panes, links selected by default.
-  expect(host.querySelector('button[aria-label="Links"]')?.getAttribute("aria-pressed")).toBe("true");
-  expect(host.querySelector('button[aria-label="Outline"]')?.getAttribute("aria-pressed")).toBe("false");
-  expect(host.querySelector('button[aria-label="Activity"]')?.getAttribute("aria-pressed")).toBe("false");
-
-  const headings = Array.from(host.querySelectorAll("h2")).map((heading) => heading.textContent);
-  expect(headings).toEqual(["Links", "Linked mentions", "Unlinked mentions"]);
+  expect(host.querySelector(".mw-ctx-label")?.textContent).toBe("links");
+  expect(host.querySelectorAll(".mw-ctx-label")).toHaveLength(1);
+  expect(host.querySelector('[role="tab"]')?.textContent).toContain("outgoing");
+  expect(host.querySelectorAll('[role="tab"]')).toHaveLength(2);
 
   // Outgoing links resolve to stems; a row click navigates to the anchor.
   const outgoing = Array.from(host.querySelectorAll<HTMLButtonElement>("button.mw-lk-row"));
@@ -145,12 +147,12 @@ test("links pane lists outgoing links and mentions with cleaned excerpts, and na
   await act(async () => outgoing[0]!.click());
   expect(navigated).toEqual([{ path: "roadmap.md", anchor: "Work" }]);
 
-  // Linked mentions group by source with markdown-stripped excerpts, at most
-  // two per source, the matched display text highlighted with <mark>.
+  await act(async () => host.querySelectorAll<HTMLButtonElement>('[role="tab"]')[1]!.click());
+  await settlePanelSwap();
   const groups = Array.from(host.querySelectorAll(".mw-bl-group"));
-  expect(groups).toHaveLength(2); // one backlink source + one unlinked source
+  expect(groups).toHaveLength(1);
   const mentions = groups[0]!;
-  expect(mentions.querySelector("button")?.textContent).toBe("2026-07-13");
+  expect(mentions.querySelector("button")?.textContent).toBe("2026-07-13 · mention");
   const excerpts = Array.from(mentions.querySelectorAll("p")).map((p) => p.textContent);
   expect(excerpts).toEqual(["Worked on Dex", "Shipped Dex review"]);
   expect(mentions.textContent).not.toContain("[[Dex]]");
@@ -162,18 +164,7 @@ test("links pane lists outgoing links and mentions with cleaned excerpts, and na
     { path: "daily/2026-07-13.md", anchor: null },
   ]);
 
-  // Unlinked mentions come from the server's unlinked field and highlight
-  // the page stem.
-  const unlinked = groups[1]!;
-  expect(unlinked.querySelector("button")?.textContent).toBe("scratch");
-  expect(unlinked.querySelector("p")?.textContent).toBe("dex mentioned in passing");
-  expect(unlinked.querySelector("mark")?.textContent).toBe("dex");
-  await act(async () => unlinked.querySelector<HTMLButtonElement>("button")!.click());
-  expect(navigated.at(-1)).toEqual({ path: "scratch.md", anchor: null });
-
-  // Counts are honest totals from the server.
-  const counts = Array.from(host.querySelectorAll(".mw-ctx-count")).map((count) => count.textContent);
-  expect(counts).toEqual(["1", "3", "1"]);
+  expect(host.querySelectorAll('[role="tab"]')[1]?.textContent).toContain("3");
 
   // No removed affordances resurface.
   expect(host.querySelector('button[aria-label="Load more memory links"]')).toBeNull();
@@ -188,12 +179,14 @@ test("links stay visible but never activatable while navigation is disabled", as
     navigationDisabled: true,
     onNavigate: (path) => navigated.push(path),
   })));
-  const buttons = [
-    host.querySelector<HTMLButtonElement>("button.mw-lk-row")!,
-    ...Array.from(host.querySelectorAll<HTMLButtonElement>("button.mw-bl-title")),
-  ];
-  expect(buttons.length).toBeGreaterThanOrEqual(3);
-  for (const button of buttons) {
+  const outgoing = host.querySelector<HTMLButtonElement>("button.mw-lk-row")!;
+  expect(outgoing.disabled).toBe(true);
+  await act(async () => outgoing.click());
+  await act(async () => host.querySelectorAll<HTMLButtonElement>('[role="tab"]')[1]!.click());
+  await settlePanelSwap();
+  const incoming = Array.from(host.querySelectorAll<HTMLButtonElement>("button.mw-bl-title"));
+  expect(incoming.length).toBeGreaterThanOrEqual(1);
+  for (const button of incoming) {
     expect(button.disabled).toBe(true);
     await act(async () => button.click());
   }
@@ -215,27 +208,52 @@ test("link and history errors stay independent and the retry refetches links", a
 
   // A history failure only degrades the Activity pane; links render fine.
   await act(async () => root.render(inspectorElement({ history: null, historyError: "History unavailable" })));
-  expect(host.textContent).toContain("Worked on Dex");
+  expect(host.textContent).toContain("Roadmap");
   expect(host.querySelector('[role="alert"]')).toBeNull();
-  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Activity"]')!.click());
+  await act(async () => root.render(inspectorElement({ history: null, historyError: "History unavailable", activePane: "activity" })));
+  await settlePanelSwap();
   expect(host.querySelector('[role="alert"]')?.textContent).toContain("History unavailable");
 });
 
-test("outline pane lists markdown headings outside code fences and persists the pane choice", async () => {
-  const { host, root } = setup();
-  await act(async () => root.render(inspectorElement()));
-  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Outline"]')!.click());
-  expect(host.querySelector('button[aria-label="Outline"]')?.getAttribute("aria-pressed")).toBe("true");
-  const rows = Array.from(host.querySelectorAll(".mw-outline-row")).map((row) => row.textContent);
-  expect(rows).toEqual(["Dex", "Work", "Sub"]);
-  expect(host.textContent).not.toContain("Not a heading");
-  expect(localStorage.getItem(CTX_PANE_KEY)).toBe("outline");
+test("legacy outline selection is retired to the links instrument", () => {
+  localStorage.setItem(CTX_PANE_KEY, "outline");
+  expect(loadMemoryInspectorPane()).toBe("links");
+});
 
-  // A fresh inspector instance restores the persisted pane.
-  const fresh = setup();
-  await act(async () => fresh.root.render(inspectorElement()));
-  expect(fresh.host.querySelector('button[aria-label="Outline"]')?.getAttribute("aria-pressed")).toBe("true");
-  expect(fresh.host.querySelectorAll(".mw-outline-row")).toHaveLength(3);
+test("records pane renders the selected page timeline inside the peek", async () => {
+  const recordsPage: MemoryArtifactDetail = {
+    ...page,
+    timeline: [
+      {
+        id: "record-1",
+        text: "Current durable fact.",
+        kind: "fact",
+        date: "2026-07-12",
+        src: "chat",
+        pinned: true,
+        superseded: false,
+      },
+      {
+        id: "record-2",
+        text: "Older superseded guidance.",
+        kind: "directive",
+        date: "2026-07-08",
+        src: "memory",
+        pinned: false,
+        superseded: true,
+      },
+    ],
+  };
+  const { host, root } = setup();
+  await act(async () => root.render(inspectorElement({
+    page: recordsPage,
+    activePane: "records",
+  })));
+
+  expect(host.querySelector(".mw-ctx-label")?.textContent).toBe("records");
+  expect(host.querySelectorAll(".mw-page-record")).toHaveLength(1);
+  expect(host.textContent).toContain("Current durable fact.");
+  expect(host.textContent).not.toContain("Older superseded guidance.");
 });
 
 test("activity pane previews eight events, expands to all, and opens an escapable diff overlay", async () => {
@@ -245,7 +263,8 @@ test("activity pane previews eight events, expands to all, and opens an escapabl
   };
   const { host, root } = setup();
   await act(async () => root.render(inspectorElement({ history: many })));
-  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Activity"]')!.click());
+  await act(async () => root.render(inspectorElement({ history: many, activePane: "activity" })));
+  await settlePanelSwap();
 
   // Newest first, capped at eight, with honest totals and patch stats.
   expect(host.textContent).toContain("user:latest");
@@ -257,18 +276,19 @@ test("activity pane previews eight events, expands to all, and opens an escapabl
   expect(host.querySelectorAll(".mw-rec")).toHaveLength(10);
   expect(host.textContent).toContain("Show fewer");
 
-  // A row click opens the diff overlay with unified/split views.
+  // A row click opens the mock's read-only tier-three review sheet.
   await act(async () => host.querySelector<HTMLButtonElement>(".mw-rec button")!.click());
   const dialog = document.querySelector<HTMLElement>('[role="dialog"][aria-label="Page edit diff"]');
   expect(dialog).not.toBeNull();
-  expect(dialog!.textContent).toContain(page.path);
+  expect(dialog!.textContent).toContain("user:latest / dex");
   expect(dialog!.textContent).toContain("-old line");
   expect(dialog!.textContent).toContain("+new line");
-  await act(async () => Array.from(dialog!.querySelectorAll<HTMLButtonElement>("button"))
-    .find((button) => button.textContent === "Split")!.click());
-  expect(dialog!.querySelector(".mw-dv-body")?.classList.contains("split-view")).toBe(true);
+  expect(dialog!.textContent).not.toContain("Split");
 
-  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  await act(async () => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  });
+  await settle(220);
   expect(document.querySelector('[role="dialog"][aria-label="Page edit diff"]')).toBeNull();
   expect(host.querySelectorAll(".mw-rec").length).toBeGreaterThan(0);
 });
@@ -277,15 +297,16 @@ test("links pane shows empty states when the page has no links or mentions", asy
   const empty: PageLinks = { ...links, outgoing: [], backlinks: [], unlinked: [], totalOutgoing: 0, totalBacklinks: 0 };
   const { host, root } = setup();
   await act(async () => root.render(inspectorElement({ links: empty })));
-  expect(host.textContent).toContain("No links on this page.");
-  expect(host.textContent).toContain("No backlinks yet.");
-  expect(host.textContent).toContain("None found.");
+  expect(host.textContent).toContain("No outgoing links.");
+  await act(async () => host.querySelectorAll<HTMLButtonElement>('[role="tab"]')[1]!.click());
+  await settlePanelSwap();
+  expect(host.textContent).toContain("No incoming links.");
 
   await act(async () => root.render(inspectorElement({ links: null, linksLoading: true })));
   expect(host.textContent).toContain("Loading…");
 });
 
-test("the notebook inspector defaults open with the links pane", async () => {
+test("the notebook inspector defaults closed and opens the links pane on demand", async () => {
   localStorage.removeItem(INSPECTOR_OPEN_KEY);
   localStorage.setItem("arden.desktop.memory.lastPath", "note.md");
   installViewBridge();
@@ -293,20 +314,24 @@ test("the notebook inspector defaults open with the links pane", async () => {
   await act(async () => root.render(<ArtifactMemoryView config={viewConfig} />));
   await settle(350);
   expect(host.querySelector("h1")?.textContent).toBe("note");
-  const aside = host.querySelector('aside[aria-label="Links and provenance"]');
+  expect(host.querySelector('aside[aria-label="Page peek"]')).toBeNull();
+  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Open links"]')?.click());
+  await settle(100);
+  const aside = host.querySelector('aside[aria-label="Page peek"]');
   expect(aside).not.toBeNull();
-  expect(aside?.querySelector('button[aria-label="Links"]')).not.toBeNull();
-  expect(aside?.textContent).toContain("Linked mentions");
-  expect(aside?.textContent).toContain("Unlinked mentions");
+  expect(aside?.querySelector('[role="tab"]')?.textContent).toContain("outgoing");
+  expect(aside?.querySelector('button[aria-label="Close peek"]')).not.toBeNull();
 });
 
-test("closing the inspector persists across a remount", async () => {
+test("closing an explicitly opened inspector persists across a remount", async () => {
   localStorage.removeItem(INSPECTOR_OPEN_KEY);
   installViewBridge();
   const { host, root } = setup();
   await act(async () => root.render(<ArtifactMemoryView config={viewConfig} />));
   await settle(350);
-  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Close links and provenance"]')?.click());
+  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Open links"]')?.click());
+  await settle(100);
+  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Close links"]')?.click());
   expect(localStorage.getItem(INSPECTOR_OPEN_KEY)).toBe("false");
   await act(async () => root.unmount());
   roots.delete(root);
@@ -315,6 +340,51 @@ test("closing the inspector persists across a remount", async () => {
   const remount = setup();
   await act(async () => remount.root.render(<ArtifactMemoryView config={viewConfig} />));
   await settle(350);
-  expect(remount.host.querySelector('[data-memory-layout="notebook"]')?.classList.contains("ctx-hidden")).toBe(true);
-  expect(remount.host.querySelector('aside[aria-label="Links and provenance"] button[aria-label="Links"]')).toBeNull();
+  expect(remount.host.querySelector('aside[aria-label="Page peek"]')).toBeNull();
+  expect(remount.host.querySelector('button[aria-label="Open links"]')).not.toBeNull();
+});
+
+test("the open inspector keeps its rendered shell while a new page detail loads", async () => {
+  localStorage.setItem(INSPECTOR_OPEN_KEY, "true");
+  localStorage.setItem("arden.desktop.memory.lastPath", "index.md");
+  const index = rawArtifact("index.md", "Index", "Index body");
+  const note = rawArtifact("note.md", "Note", "Note body");
+  let resolveNote: ((value: ReturnType<typeof response>) => void) | null = null;
+  const delayedNote = new Promise<ReturnType<typeof response>>((resolve) => {
+    resolveNote = resolve;
+  });
+  window.ardenDesktop = { api: { request: async (_config, request) => {
+    if (request.path === "/admin/memory/artifacts") return response({ artifacts: [index, note] });
+    if (request.path.startsWith("/admin/memory/links")) {
+      return response({ path: "index.md", revision: "ledger:1", stale: false, outgoing: [], backlinks: [], unlinked: [], total_outgoing: 0, total_backlinks: 0, limit: 100, offset: 0 });
+    }
+    if (request.path.startsWith("/admin/memory/page-edits/history")) {
+      return response({ events: [], total: 0, limit: 100, next_before_sequence: null });
+    }
+    if (request.path.endsWith("/note.md")) return delayedNote;
+    return response({ artifact: index });
+  } } } as Window["ardenDesktop"];
+
+  const { host, root } = setup();
+  await act(async () => root.render(<ArtifactMemoryView config={viewConfig} />));
+  await settle(350);
+
+  const toolbar = host.querySelector<HTMLElement>(".mw-ctx-toolbar")!;
+  expect(toolbar.isConnected).toBe(true);
+  await act(async () => {
+    host.querySelector<HTMLButtonElement>('button[data-memory-entry="note.md"]')!.click();
+  });
+  await settle(30);
+
+  expect(toolbar.isConnected).toBe(true);
+  expect(host.querySelector(".mw-ctx-toolbar")).toBe(toolbar);
+  expect(host.querySelector(".mw-ctx-loading")).toBeNull();
+  expect(host.querySelector('[data-peek-state="open"]')).not.toBeNull();
+
+  await act(async () => {
+    resolveNote?.(response({ artifact: note }));
+  });
+  await settle(350);
+  expect(host.querySelector(".mw-ctx-toolbar")).toBe(toolbar);
+  expect(host.querySelector("h1")?.textContent).toBe("note");
 });

@@ -2,9 +2,16 @@ import { create } from "zustand";
 import { DEFAULT_CONFIG } from "@/api/core";
 import { isActivityContinuationMessage } from "@/lib/messageVisibility";
 import { isLiveRunStatus } from "@/lib/runStatus";
+import { DEFAULT_SHELL_LAYOUT, toggledSidebarPrefs } from "@/lib/shellOwnership";
 import type { ActivityItem, State, Actions, UiMessage } from "@/stores/types";
 import { mergeSourceRefs } from "@/stores/sourceRefs";
-import { loadPrefs, loadSkipApprovals, persistPrefs, persistSkipApprovals } from "@/stores/prefs";
+import {
+  isValidPrefValue,
+  loadPrefs,
+  loadSkipApprovals,
+  persistPrefs,
+  persistSkipApprovals,
+} from "@/stores/prefs";
 import {
   blankSessionView,
   initialUsage,
@@ -53,7 +60,9 @@ import {
 import {
   createAreasDomainState,
   reduceOverviewLoaded,
+  reduceOverviewPhase,
   reduceDetailLoaded,
+  reduceDetailPhase,
   reduceAskResolved,
   reduceOpenArea,
   reduceRecordsLoaded,
@@ -62,10 +71,6 @@ import {
   type AreasDomainState,
 } from "@/stores/areas-domain";
 import { appendMemoryVaultChange } from "@/stores/memory-vault-domain";
-import {
-  createCommandSidecarState,
-  reduceCommandEvent,
-} from "@/stores/command-sidecar-domain";
 import {
   createTriageDomainState,
   reduceTriageSeen,
@@ -99,6 +104,7 @@ export type {
   BackgroundAgent,
   BackgroundAgentStatus,
   CachedSessionState,
+  CornerProfile,
   ImageBlock,
   MarkdownViewState,
   Prefs,
@@ -116,6 +122,12 @@ export type {
   TodoListState,
   TurnMeta,
   UiMessage,
+} from "@/stores/types";
+export {
+  isThinkingAnimation,
+  isThinkingIntensity,
+  THINKING_ANIMATION_IDS,
+  THINKING_INTENSITY_IDS,
 } from "@/stores/types";
 export type {
   AutomationStreamPhase,
@@ -263,9 +275,9 @@ export const useStore = create<State & Actions>((set) => ({
   serverConfig: null,
   serverModels: null,
   automations: null,
-  automationSuggestions: null,
   automationsOpen: false,
   automationTargetId: null,
+  automationTargetRun: null,
   automationStream: createAutomationStreamDomainState(),
   archivedSessions: null,
   compacting: false,
@@ -275,7 +287,6 @@ export const useStore = create<State & Actions>((set) => ({
   sourceTurnId: null,
   sourceRefsRevision: 0,
   paletteOpen: false,
-  commandSidecar: createCommandSidecarState(),
   pendingApprovals: [],
   pendingConnections: [],
   reviewingApprovalToolId: null,
@@ -293,6 +304,7 @@ export const useStore = create<State & Actions>((set) => ({
   pendingGoalProposal: null,
   toasts: [],
   prefs: loadPrefs(),
+  shellLayout: DEFAULT_SHELL_LAYOUT,
   areas: createAreasDomainState(),
   triage: createTriageDomainState(),
 
@@ -355,8 +367,8 @@ export const useStore = create<State & Actions>((set) => ({
     set((s) => {
       // Navigating to a chat session always closes the area room — a room
       // stays open across the *current* session but must not silently trail
-      // along underneath a session switch (e.g. clicking a session row in
-      // AreaActivity while a room is open).
+      // along underneath a session switch (e.g. opening an Area session from
+      // its Activity inspector while a room is open).
       const areas = s.areas.openAreaKey ? reduceOpenArea(s.areas, null) : s.areas;
       let unread = s.unreadDoneSessionIds;
       if (currentSessionId && unread.has(currentSessionId)) {
@@ -603,13 +615,17 @@ export const useStore = create<State & Actions>((set) => ({
       usage: { ...s.usage, lastPrompt, messageCount },
     })),
 
-  openSettings: (origin, tab) =>
+  openSettings: (tab) =>
     set((s) => ({
       settingsOpen: true,
+      automationsOpen: false,
+      automationTargetId: null,
+      automationTargetRun: null,
+      memoryOpen: false,
       settingsTab: tab ?? null,
       connectionDraft: { ...s.config },
       connectionError: null,
-      modalOrigin: origin ?? null,
+      modalOrigin: null,
     })),
   closeSettings: () =>
     set((s) => {
@@ -805,15 +821,17 @@ export const useStore = create<State & Actions>((set) => ({
   setServerConfig: (serverConfig) => set({ serverConfig }),
   setServerModels: (serverModels) => set({ serverModels }),
   setAutomations: (automations) => set({ automations }),
-  setAutomationSuggestions: (automationSuggestions) => set({ automationSuggestions }),
-  openAutomations: (origin, taskId) =>
+  openAutomations: (taskId, options) =>
     set({
       automationsOpen: true,
+      settingsOpen: false,
+      memoryOpen: false,
       automationTargetId: taskId ?? null,
-      modalOrigin: origin ?? null,
+      automationTargetRun: taskId ? options?.run ?? null : null,
+      modalOrigin: null,
     }),
-  closeAutomations: () => set({ automationsOpen: false, automationTargetId: null }),
-  clearAutomationTarget: () => set({ automationTargetId: null }),
+  closeAutomations: () => set({ automationsOpen: false, automationTargetId: null, automationTargetRun: null }),
+  clearAutomationTarget: () => set({ automationTargetId: null, automationTargetRun: null }),
   automationStreamConnecting: () =>
     set((s) => ({
       automationStream: reduceAutomationStreamConnecting(s.automationStream),
@@ -861,7 +879,14 @@ export const useStore = create<State & Actions>((set) => ({
     set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
   setArchivedSessions: (archivedSessions) => set({ archivedSessions }),
   setCompacting: (compacting) => set({ compacting }),
-  openMemory: (origin) => set({ memoryOpen: true, modalOrigin: origin ?? null }),
+  openMemory: () =>
+    set({
+      memoryOpen: true,
+      settingsOpen: false,
+      automationsOpen: false,
+      automationTargetId: null,
+      modalOrigin: null,
+    }),
   closeMemory: () => set({ memoryOpen: false }),
   setSourceFocus: (sourceFocus) => set({ sourceFocus }),
   setRightInspectorTab: (rightInspectorTab) =>
@@ -880,71 +905,36 @@ export const useStore = create<State & Actions>((set) => ({
   openPalette: () => set({ paletteOpen: true }),
   closePalette: () => set({ paletteOpen: false }),
   togglePalette: () => set((s) => ({ paletteOpen: !s.paletteOpen })),
-  beginCommandSidecar: (query, clientId) =>
-    set({
-      commandSidecar: {
-        ...createCommandSidecarState(),
-        open: true,
-        query,
-        clientId,
-        status: "starting",
-      },
-    }),
-  attachCommandRun: (clientId, runId, sessionId) =>
-    set((s) =>
-      s.commandSidecar.clientId === clientId
-        ? {
-            commandSidecar: {
-              ...s.commandSidecar,
-              runId,
-              sessionId,
-              status: "running",
-            },
-          }
-        : {},
-    ),
-  applyCommandEvent: (event) =>
-    set((s) => ({ commandSidecar: reduceCommandEvent(s.commandSidecar, event) })),
-  failCommandSidecar: (clientId, error) =>
-    set((s) =>
-      s.commandSidecar.clientId === clientId
-        ? { commandSidecar: { ...s.commandSidecar, status: "failed", error } }
-        : {},
-    ),
-  closeCommandSidecar: () =>
-    set((s) => ({ commandSidecar: { ...s.commandSidecar, open: false } })),
-  clearCommandApproval: (toolId) =>
-    set((s) => ({
-      commandSidecar: {
-        ...s.commandSidecar,
-        approval: s.commandSidecar.approval?.toolId === toolId ? null : s.commandSidecar.approval,
-      },
-    })),
-  clearCommandConnection: (toolId) =>
-    set((s) => ({
-      commandSidecar: {
-        ...s.commandSidecar,
-        connection: s.commandSidecar.connection?.toolId === toolId ? null : s.commandSidecar.connection,
-      },
-    })),
   setPref: (key, value) =>
     set((s) => {
+      if (!isValidPrefValue(key, value)) return {};
       const next = { ...s.prefs, [key]: value };
       persistPrefs(next);
       return { prefs: next };
     }),
+  setShellLayout: (shellLayout) =>
+    set((s) =>
+      s.shellLayout.compact === shellLayout.compact &&
+      s.shellLayout.workspace === shellLayout.workspace
+        ? {}
+        : { shellLayout },
+    ),
   toggleSidebar: () =>
     set((s) => {
-      const next = { ...s.prefs, sidebarHidden: !s.prefs.sidebarHidden };
+      const next = toggledSidebarPrefs(s.prefs);
       persistPrefs(next);
       return { prefs: next };
     }),
   areasOverviewLoaded: (overview) =>
     set((s) => ({ areas: reduceOverviewLoaded(s.areas, overview) })),
+  setAreasOverviewPhase: (phase) =>
+    set((s) => ({ areas: reduceOverviewPhase(s.areas, phase) })),
   areaDetailLoaded: (detail) =>
     set((s) => ({ areas: reduceDetailLoaded(s.areas, detail) })),
-  areaAskResolved: (key, askId) =>
-    set((s) => ({ areas: reduceAskResolved(s.areas, key, askId) })),
+  setAreaDetailPhase: (key, phase) =>
+    set((s) => ({ areas: reduceDetailPhase(s.areas, key, phase) })),
+  areaAskResolved: (askId) =>
+    set((s) => ({ areas: reduceAskResolved(s.areas, askId) })),
   openArea: (key) =>
     set((s) => ({ areas: reduceOpenArea(s.areas, key) })),
   markTriageSeen: (sessionId) =>

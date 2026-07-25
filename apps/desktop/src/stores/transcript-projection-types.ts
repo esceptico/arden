@@ -1,8 +1,5 @@
 import type { ServerEvent } from "@/api/events";
-import type { ActivityItem, QueuedMessage } from "@/stores/index";
-
-export type TranscriptProjectionEffect =
-  | { type: "resend_queued_messages"; messages: QueuedMessage[] };
+import type { ActivityItem } from "@/stores/index";
 
 export interface PendingToolCall {
   name: string;
@@ -28,7 +25,6 @@ export interface TranscriptProjectionState {
 
 export interface TranscriptProjectionResult {
   state: TranscriptProjectionState;
-  effect?: TranscriptProjectionEffect;
 }
 
 export interface TranscriptProjectionRuntime {

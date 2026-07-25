@@ -314,15 +314,13 @@ test("read-only pages explain their boundary and never enter edit mode", async (
 test("edit shortcuts do not hijack unrelated focused controls", async () => {
   installBridge();
   const { host } = await renderView();
-  // The rail's create-note input is the focused text control under test
-  // (the old rail search input is now a quick-switcher button).
-  await act(async () => host.querySelector<HTMLButtonElement>('button[title="New note"]')?.click());
-  const createInput = host.querySelector<HTMLInputElement>('input[aria-label="New note path"]')!;
-  createInput.focus();
-  await shortcut("e", createInput);
+  const unrelatedInput = document.createElement("input");
+  host.append(unrelatedInput);
+  unrelatedInput.focus();
+  await shortcut("e", unrelatedInput);
   expect(host.querySelector("textarea")).toBeNull();
-  expect(document.activeElement).toBe(createInput);
-  await shortcut("s", createInput);
+  expect(document.activeElement).toBe(unrelatedInput);
+  await shortcut("s", unrelatedInput);
   expect(host.querySelector('[data-memory-edit-review]')).toBeNull();
 });
 
@@ -456,6 +454,7 @@ test("409 opens a three-way conflict without changing draft bytes", async () => 
   expect(host.textContent).toContain("Current page");
   expect(host.textContent).toContain("Your draft");
   await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Continue with current page"]')?.click());
+  await settle(220);
   expect(host.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
   await shortcut("s", host.querySelector<HTMLTextAreaElement>("textarea")!);
   const previews = bridge.requests.filter((request) => request.path.endsWith("/preview"));
@@ -562,9 +561,9 @@ test("apply centrally locks navigation and still commits its exact draft", async
   await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Apply changes"]')?.click());
 
   const bRail = host.querySelector<HTMLButtonElement>('[data-memory-entry="topics/b.md"]')!;
-  const rawRecords = host.querySelector<HTMLButtonElement>('[aria-label="Open raw records diagnostic"]')!;
+  const factsMode = host.querySelector<HTMLButtonElement>('button[data-tab-value="facts"]')!;
   expect(bRail.disabled).toBe(true);
-  expect(rawRecords.disabled).toBe(true);
+  expect(factsMode.disabled).toBe(true);
   await act(async () => bRail.click());
   await shortcut("[");
   expect(host.querySelector('[aria-label="Review memory edit for topics/a.md"]')).not.toBeNull();
@@ -656,6 +655,54 @@ test("editor and review expose keyboard, responsive, reduced-motion, and long-co
   expect(document.activeElement === host.querySelector("textarea")).toBe(true);
 });
 
+test("activity diff uses the read-only tier-three review sheet above its source peek", async () => {
+  installBridge({ events: [rawEvent({
+    patch: "--- a/topics/a.md\n+++ b/topics/a.md\n@@ -1 +1 @@\n-old durable fact\n+new durable fact",
+  })] });
+  const view = setup();
+  // The real desktop portals the blocking diff into #app. That used to make
+  // the overlay stack dismiss the nonblocking peek which owned diff state.
+  view.host.id = "app";
+  const { host } = await renderView(view);
+
+  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Open activity"]')?.click());
+  await settle(500);
+  const activityRow = host.querySelector<HTMLButtonElement>(".mw-rec button");
+  expect(activityRow).not.toBeNull();
+
+  activityRow?.focus();
+  await act(async () => activityRow?.click());
+  await settle();
+  const dialog = host.querySelector<HTMLElement>('[role="dialog"][aria-label="Page edit diff"]');
+  const peek = host.querySelector<HTMLElement>('[aria-label="Page peek"]');
+  expect(dialog).not.toBeNull();
+  expect(dialog?.textContent).toContain("new durable fact");
+  expect(dialog?.textContent).toContain("2026-07-13 08:00 · user:desktop / a");
+  expect(dialog?.textContent).toContain("Close");
+  expect(dialog?.querySelector(".mw-dv-switch")).toBeNull();
+  expect(dialog?.querySelector(".mw-dv-foot")).not.toBeNull();
+  expect(peek).not.toBeNull();
+  expect(peek?.closest("[inert]")).not.toBeNull();
+
+  const closeDiff = () => Array.from(
+    host.querySelectorAll<HTMLButtonElement>('[role="dialog"][aria-label="Page edit diff"] button'),
+  ).find((button) => button.textContent === "Close")?.click();
+  await act(async () => closeDiff());
+  await settle(60);
+  // The active mock cancels and reverses an in-flight close. Reopening before
+  // the 180ms exit completes must not let the stale close timer win.
+  await act(async () => activityRow?.click());
+  await settle(300);
+  expect(host.querySelector('[role="dialog"][aria-label="Page edit diff"]')?.getAttribute("data-overlay-state")).toBe("open");
+
+  await act(async () => closeDiff());
+  await settle(300);
+  await settle();
+  expect(host.querySelector('[role="dialog"][aria-label="Page edit diff"]')).toBeNull();
+  expect(host.querySelector<HTMLElement>('[aria-label="Page peek"]')?.closest("[inert]")).toBeNull();
+  expect(document.activeElement === activityRow).toBe(true);
+});
+
 test("focus moves to conflict and returns to the restored note after apply", async () => {
   const conflictBridge = installBridge({ conflictPreview: true });
   const { host } = await renderView();
@@ -666,6 +713,7 @@ test("focus moves to conflict and returns to the restored note after apply", asy
   expect(document.activeElement === conflictReview).toBe(true);
   expect(conflictReview.querySelector("header")?.className).toContain("flex-wrap");
   await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Continue with current page"]')?.click());
+  await settle(220);
   await shortcut("s", host.querySelector<HTMLTextAreaElement>("textarea")!);
   await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Note only"]')?.click());
   await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Apply changes"]')?.click());

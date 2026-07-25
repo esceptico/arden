@@ -14,7 +14,6 @@ from arden.agent.llm.parsing import trailing_incomplete_tool_step
 from arden.agent.types.events import Result, ToolCompleted
 from arden.agent.types.tool_call import PendingToolCall
 from arden.areas.context import load_area_context
-from arden.commands.models import CommandOutcome
 from arden.config import get_config
 from arden.constants import CONVERSATION_GAP_THRESHOLD, LOOP_ITERATION_HISTORY_WINDOW
 from arden.context.models import AreaContext, SessionData, SessionState
@@ -30,9 +29,8 @@ from arden.core.factory import AgentConfig, create_agent
 from arden.core.naming import generate_conversation_name
 from arden.core.prompts import INIT_INSTRUCTION, build_system_blocks
 from arden.core.usage_tracker import UsageTracker
-from arden.events.internal import RunCompleted
+from arden.events.internal import RunCompleted, RunFailed
 from arden.events.sse import (
-    CommandCompletedEvent,
     CompactionFinishedEvent,
     CompactionStartedEvent,
     MessageIngestedEvent,
@@ -59,6 +57,7 @@ from arden.services.goal_continuation import (
 from arden.services.session import SessionService
 from arden.services.token_directive import parse_token_budget
 from arden.skills.registry import SkillRegistry
+from arden.tool_call_metadata import split_tool_arguments
 from arden.tools.connections import render_connection_catalog
 from arden.tools.core.context import ChildIOFactory, ChildIOParams, ChildSession, IOBridge
 from arden.tools.core.types import ToolAction
@@ -72,22 +71,6 @@ from arden.tools.executor import ToolExecutor
 _logger = get_logger(__name__)
 
 INIT_AUTO_APPROVE = {"remember", "forget"}
-
-
-def _command_completion_event(
-    session_state: SessionState,
-    run: RunState,
-) -> CommandCompletedEvent | None:
-    if session_state.agent_type != "command_sidecar":
-        return None
-    try:
-        outcome = CommandOutcome.model_validate(run.structured_output).model_dump(exclude_none=True)
-    except Exception:
-        outcome = CommandOutcome(
-            status="failed",
-            summary="The command did not return a valid result.",
-        ).model_dump(exclude_none=True)
-    return CommandCompletedEvent(run_id=run.run_id, outcome=outcome)
 
 
 async def _recover_durable_tool_calls(
@@ -141,7 +124,8 @@ async def _checkpoint_tool_step(
         policy = getattr(tool, "policy", None)
         action = getattr(getattr(policy, "action", None), "value", None) or str(getattr(policy, "action", "unknown"))
         scope = getattr(getattr(policy, "scope", None), "value", None) or str(getattr(policy, "scope", "internal"))
-        args_json = json.dumps(call.args, sort_keys=True, separators=(",", ":"))
+        _, behavior_args = split_tool_arguments(call.args)
+        args_json = json.dumps(behavior_args, sort_keys=True, separators=(",", ":"))
         await session_service.store.record_tool_call_created(
             run_id=run.run_id,
             session_id=run.session_id,
@@ -236,7 +220,14 @@ class ChatDeps:
     integration_errors: dict[str, str]
     connection_catalog: tuple[object, ...] = ()
     enqueue_run_completed: Callable[[RunCompleted], Awaitable[bool]] | None = None
-    dispatch_session_message: Callable[[str, str, str | None, bool | None], Awaitable[object]] | None = None
+    enqueue_run_failed: Callable[[RunFailed], Awaitable[bool]] | None = None
+    dispatch_session_message: (
+        Callable[
+            [str, str, str | None, bool | None, list[dict] | None],
+            Awaitable[object],
+        ]
+        | None
+    ) = None
     memory_curator: object | None = None
     memory_records: object | None = None
     skill_registry: SkillRegistry | None = None
@@ -261,7 +252,14 @@ class ChatContext:
     session_name_task: asyncio.Task[str] | None = None
     area_context: AreaContext | None = None
     enqueue_run_completed: Callable[[RunCompleted], Awaitable[bool]] | None = None
-    dispatch_session_message: Callable[[str, str, str | None, bool | None], Awaitable[object]] | None = None
+    enqueue_run_failed: Callable[[RunFailed], Awaitable[bool]] | None = None
+    dispatch_session_message: (
+        Callable[
+            [str, str, str | None, bool | None, list[dict] | None],
+            Awaitable[object],
+        ]
+        | None
+    ) = None
     memory_curator: object | None = None
     output_schema: type[BaseModel] | None = None
 
@@ -361,25 +359,6 @@ async def _record_run_status(
         await fn(run_id, status, **kwargs)
 
 
-async def _record_queued_message(
-    service: object | None,
-    *,
-    client_id: str,
-    session_id: str,
-    run_id: str,
-    message: dict,
-) -> None:
-    fn = getattr(service, "record_chat_queued_message", None)
-    if fn:
-        await fn(client_id=client_id, session_id=session_id, run_id=run_id, message=message)
-
-
-async def _mark_queued_message_ingested(service: object | None, client_id: str, *, ingested_seq: int | None) -> None:
-    fn = getattr(service, "mark_chat_queued_message_ingested", None)
-    if fn:
-        await fn(client_id, ingested_seq=ingested_seq)
-
-
 def expand_skill_command(message: str, registry: SkillRegistry) -> tuple[str, bool]:
     stripped = message.strip()
     if not stripped.startswith("/"):
@@ -423,7 +402,16 @@ async def _maybe_precompact_loop_history(
     except Exception:
         if emit:
             await emit(CompactionFinishedEvent(messages_before=before_count, messages_after=before_count))
-        raise
+        # Pre-run compaction is maintenance, not a precondition. A failed
+        # summarize must not kill the fire — the iteration trim still bounds
+        # what the agent sees, and raising here bricks the loop for good:
+        # every fire replays the same oversized history into the same error.
+        _logger.warning(
+            "Pre-run compaction failed for %s; firing uncompacted",
+            data.state.session_id,
+            exc_info=True,
+        )
+        return data
     if compacted is None:
         if emit:
             await emit(CompactionFinishedEvent(messages_before=before_count, messages_after=before_count))
@@ -481,6 +469,34 @@ def _retain_user_content(messages: list[dict]) -> list[dict]:
             msg = {**msg, "content": [b for b in msg["content"] if b.get("type") != "context"]}
         result.append(msg)
     return result
+
+
+def _close_interrupted_tool_step(messages: list[dict]) -> None:
+    """Close unfinished prior turns without re-executing their tools."""
+    repaired: list[dict] = []
+    for index, message in enumerate(messages):
+        repaired.append(message)
+        calls = message.get("tool_calls")
+        if message.get("role") != Role.ASSISTANT or not isinstance(calls, list):
+            continue
+        expected = [call.get("id") for call in calls if isinstance(call, dict) and isinstance(call.get("id"), str)]
+        completed: set[str] = set()
+        cursor = index + 1
+        while cursor < len(messages) and messages[cursor].get("role") == Role.TOOL:
+            tool_call_id = messages[cursor].get("tool_call_id")
+            if isinstance(tool_call_id, str):
+                completed.add(tool_call_id)
+            cursor += 1
+        for tool_call_id in expected:
+            if tool_call_id not in completed:
+                repaired.append(
+                    {
+                        "role": Role.TOOL,
+                        "tool_call_id": tool_call_id,
+                        "content": "Tool call was interrupted before completion.",
+                    }
+                )
+    messages[:] = repaired
 
 
 def _is_meta_client_id(client_id: str | None) -> bool:
@@ -552,6 +568,8 @@ async def _prepare_messages(
 
     if not append_user:
         return messages
+
+    _close_interrupted_tool_step(messages)
 
     ctx_blocks = list(context or [])
     if context_manifest is not None:
@@ -797,6 +815,7 @@ async def prepare_chat(
         session_name_task=session_name_task,
         area_context=area_context,
         enqueue_run_completed=deps.enqueue_run_completed,
+        enqueue_run_failed=deps.enqueue_run_failed,
         dispatch_session_message=deps.dispatch_session_message,
         memory_curator=deps.memory_curator,
         output_schema=output_schema,
@@ -872,6 +891,7 @@ async def _maybe_dispatch_goal_continuation(ctx: ChatContext, run: RunState, *, 
         goal_continuation_prompt(goal),
         client_id,
         True,
+        None,
     )
 
 
@@ -989,6 +1009,15 @@ async def _submit_chat_message_locked(
             request_hash=request_hash,
         )
         if not claimed:
+            if durable_idempotency.get("status") == RunStatus.CANCELLED.value:
+                # DELETE can arrive before the matching POST. The durable
+                # tombstone wins over the request body so this id can never
+                # recreate a queue entry later.
+                return {
+                    "run_id": durable_idempotency.get("run_id") or "",
+                    "session_id": session_id,
+                    "status": RunStatus.CANCELLED.value,
+                }
             if durable_idempotency["request_hash"] != request_hash:
                 raise ChatIdempotencyConflict(client_id)
             if durable_idempotency.get("run_id"):
@@ -1018,28 +1047,20 @@ async def _submit_chat_message_locked(
         queued = active_run.queue_injection(entry)
         if not queued:
             active_run = None
-        elif client_id and session_service:
-            try:
-                await _record_queued_message(
-                    session_service,
-                    client_id=client_id,
-                    session_id=session_id,
-                    run_id=active_run.run_id,
-                    message=entry,
-                )
-                await session_service.update_chat_idempotency_key(
-                    session_id=session_id,
-                    client_id=client_id,
-                    status="queued",
-                    run_id=active_run.run_id,
-                )
-            except BaseException:
+        elif entry.get("client_id") and session_service:
+            queued_client_id = str(entry["client_id"])
+            update_idempotency = getattr(session_service, "update_chat_idempotency_key", None)
+            if update_idempotency:
                 try:
-                    await session_service.mark_chat_queued_message_cancelled(client_id)
-                except Exception:
-                    _logger.warning("Failed to cancel queued chat message after enqueue failure", exc_info=True)
-                active_run.cancel_injection(client_id)
-                raise
+                    await update_idempotency(
+                        session_id=session_id,
+                        client_id=queued_client_id,
+                        status="queued",
+                        run_id=active_run.run_id,
+                    )
+                except BaseException:
+                    active_run.cancel_injection(queued_client_id)
+                    raise
         if active_run is not None:
             if loop_task_id and not active_run.loop_task_id:
                 active_run.loop_task_id = loop_task_id
@@ -1281,6 +1302,7 @@ async def _drain_backgrounded(
     bg_registry.on_result = _save_directly
 
     if injected := ctx.run.drain_injections():
+        await _emit_ingested_for_client_entries(injected, bus, ctx.run, ctx.session_service)
         messages.extend(injected)
 
     try:
@@ -1361,7 +1383,14 @@ async def _emit_ingested_for_client_entries(
         client_id = entry.get("client_id")
         if client_id:
             await bus.emit(MessageIngestedEvent(client_id=client_id, run_id=run.run_id))
-            await _mark_queued_message_ingested(session_service, client_id, ingested_seq=bus.next_seq - 1)
+            update_idempotency = getattr(session_service, "update_chat_idempotency_key", None)
+            if update_idempotency:
+                await update_idempotency(
+                    session_id=run.session_id,
+                    client_id=client_id,
+                    status="ingested",
+                    run_id=run.run_id,
+                )
 
 
 def _merge_background_messages(current: list[dict], background: list[dict]) -> list[dict]:
@@ -1398,7 +1427,11 @@ async def _handle_background_result(
     run: RunState,
     session_id: str,
     messages: list[dict],
-    dispatch_session_message: Callable[[str, str, str | None, bool | None], Awaitable[object]] | None,
+    dispatch_session_message: Callable[
+        [str, str, str | None, bool | None, list[dict] | None],
+        Awaitable[object],
+    ]
+    | None,
     run_finished: bool,
 ) -> None:
     if not run_finished and not run.cancelled:
@@ -1416,6 +1449,7 @@ async def _handle_background_result(
             content,
             client_id if isinstance(client_id, str) else None,
             True,
+            None,
         )
 
 
@@ -1650,17 +1684,6 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
             )
 
         async def _on_bg_result(messages: list[dict]) -> None:
-            if not run_finished and not run.cancelled:
-                for message in messages:
-                    client_id = message.get("client_id")
-                    if isinstance(client_id, str):
-                        await _record_queued_message(
-                            ctx.session_service,
-                            client_id=client_id,
-                            session_id=session_state.session_id,
-                            run_id=run.run_id,
-                            message=message,
-                        )
             await _handle_background_result(
                 run=run,
                 session_id=session_state.session_id,
@@ -1847,6 +1870,17 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
             await _update_run_client_idempotency(ctx.session_service, run, RunStatus.ERROR.value)
         except Exception:
             _logger.warning("Failed to update terminal error idempotency for run %s", run.run_id, exc_info=True)
+        if ctx.enqueue_run_failed:
+            try:
+                await ctx.enqueue_run_failed(
+                    RunFailed(
+                        run_id=run.run_id,
+                        session_id=session_state.session_id,
+                        error=safe_message,
+                    )
+                )
+            except Exception:
+                _logger.warning("Failed to enqueue run-failed side effect", exc_info=True)
 
     finally:
         if not run.backgrounded:
@@ -1854,9 +1888,6 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
                 run.close_injections()
                 run.usage = tracker.usage
                 run_finished = True
-                if session_state.agent_type == "command_sidecar":
-                    session_state.agent_status = "cancelled"
-                    await ctx.session_service.save(session_state, _persistable_messages(run))
             else:
                 pending_messages = run.close_injections()
                 if pending_messages:
@@ -1881,8 +1912,6 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
                         metadata["last_input_tokens"] = input_tokens
                     metadata["last_message_count"] = len(_persistable_messages(run))
                 try:
-                    if session_state.agent_type == "command_sidecar":
-                        session_state.agent_status = "failed" if run_failed else "completed"
                     if run.usage.total_tokens:
                         await ctx.session_service.update_goal(
                             session_state.session_id,
@@ -1912,9 +1941,6 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
                         source_refs=tuple(run.source_refs),
                         structured_output=run.structured_output,
                     )
-                    command_event = _command_completion_event(session_state, run)
-                    if command_event is not None:
-                        await bus.emit(command_event)
                     if run_finished_event is not None:
                         await bus.emit(run_finished_event)
                     if ctx.enqueue_run_completed:

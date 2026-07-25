@@ -30,10 +30,12 @@ class _FunctionTool(Tool):
         policy: ToolPolicy,
         input_model: type[BaseModel] = EmptyInput,
         display_name: str | None = None,
+        display_description: str | None = None,
         approval: ApprovalHandler | None = None,
         kind: str = "tool",
     ):
         self.display_name = display_name
+        self.display_description = display_description
         self.description = description
         self.input_model = input_model
         self.policy = policy
@@ -64,6 +66,7 @@ def tool(
     policy: ToolPolicy,
     input_model: type[BaseModel] = EmptyInput,
     display_name: str | None = None,
+    display_description: str | None = None,
     approval: ApprovalHandler | None = None,
     kind: str = "tool",
 ) -> Tool:
@@ -73,6 +76,7 @@ def tool(
         policy=policy,
         input_model=input_model,
         display_name=display_name,
+        display_description=display_description,
         approval=approval,
         kind=kind,
     )

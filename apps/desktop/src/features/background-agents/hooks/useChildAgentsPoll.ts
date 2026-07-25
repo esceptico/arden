@@ -1,22 +1,29 @@
 import { useEffect } from "react";
 import { refreshChildAgents } from "@/actions/childAgents";
 
-export function useChildAgentsPoll(sessionId: string | null): void {
+export function useChildAgentsPoll(sessionIds: readonly string[] | string | null): void {
   // Live BackgroundTaskEvents already keep the roster current for the session
-  // being viewed; this poll is the fallback for the cases events don't cover
-  // (agents spawned in the parent while a child is open, terminal status missed
-  // while disconnected). Reconnect resync lives in reloadAllCollections.
+  // being viewed; this poll is the fallback for missed terminal updates. Area
+  // Hub supplies its AreaDetail session set, so it never polls the unrelated
+  // current chat. Reconnect resync lives in reloadAllCollections.
+  const sessionKey = typeof sessionIds === "string"
+    ? sessionIds
+    : sessionIds?.join("\u0000") ?? "";
+
   useEffect(() => {
-    if (!sessionId) return;
+    const ids = sessionKey ? sessionKey.split("\u0000") : [];
+    if (ids.length === 0) return;
     const tick = () => {
-      if (document.visibilityState === "visible") void refreshChildAgents(sessionId);
+      if (document.visibilityState === "visible") {
+        for (const sessionId of ids) void refreshChildAgents(sessionId);
+      }
     };
-    void refreshChildAgents(sessionId);
+    for (const sessionId of ids) void refreshChildAgents(sessionId);
     const id = window.setInterval(tick, 5000);
     document.addEventListener("visibilitychange", tick);
     return () => {
       window.clearInterval(id);
       document.removeEventListener("visibilitychange", tick);
     };
-  }, [sessionId]);
+  }, [sessionKey]);
 }

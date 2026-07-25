@@ -1,6 +1,11 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import "@/generated/board-icons.js";
+// Execute the behavior engine itself (see its header). React components adapt runtime
+// state to this contract; they do not maintain a second timing/controller copy.
+import "@/lib/boardMotionEngine.js";
 import "@fontsource-variable/geist";
+import "@fontsource-variable/geist-mono";
 import "@/styles.css";
 import { App } from "@/app/App";
 import { QuickCapture } from "@/app/QuickCapture";
@@ -21,7 +26,7 @@ if (isQuickCapture) document.body.classList.add("quick-capture-mode");
 
 createRoot(root).render(
   <StrictMode>
-    <IconContext.Provider value={{ color: "currentColor", strokeWidth: 1.5 }}>
+    <IconContext.Provider value={{ color: "currentColor" }}>
       {isQuickCapture ? <QuickCapture /> : <App />}
     </IconContext.Provider>
   </StrictMode>,

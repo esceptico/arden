@@ -281,6 +281,7 @@ async def emails(execution: ToolExecution, args: EmailsInput) -> ToolResult:
 
 emails_tool = tool(
     display_name="Emails",
+    display_description="Browse and search Gmail messages.",
     description=EMAILS_DESCRIPTION,
     input_model=EmailsInput,
     policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"gmail"})),
@@ -289,6 +290,7 @@ emails_tool = tool(
 
 read_email_tool = tool(
     display_name="ReadEmail",
+    display_description="Read a Gmail message.",
     description=READ_EMAIL_DESCRIPTION,
     input_model=ReadEmailInput,
     policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"gmail"})),
@@ -297,6 +299,7 @@ read_email_tool = tool(
 
 send_email_tool = tool(
     display_name="SendEmail",
+    display_description="Send a Gmail message after approval.",
     description=SEND_EMAIL_DESCRIPTION,
     input_model=SendEmailInput,
     policy=ToolPolicy(
@@ -311,6 +314,7 @@ send_email_tool = tool(
 
 reply_email_tool = tool(
     display_name="ReplyEmail",
+    display_description="Reply in a Gmail thread after approval.",
     description=REPLY_EMAIL_DESCRIPTION,
     input_model=ReplyEmailInput,
     policy=ToolPolicy(

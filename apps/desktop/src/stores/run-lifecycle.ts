@@ -153,7 +153,6 @@ export function reduceRunStatus(
       thinkingRunId: null,
       thinkingStatus: null,
       pendingResume: null,
-      queuedMessages: [],
       stoppingRunId:
         terminalCurrentRun.runId && state.stoppingRunId === terminalCurrentRun.runId
           ? null
@@ -172,7 +171,6 @@ export function reduceRunStatus(
       thinkingRunId: null,
       thinkingStatus: null,
       pendingResume: null,
-      queuedMessages: [],
       stoppingRunId:
         backgroundedCurrentRun.runId && state.stoppingRunId === backgroundedCurrentRun.runId
           ? null
@@ -201,7 +199,6 @@ export function reduceRunStatus(
       thinkingRunId: null,
       thinkingStatus: null,
       pendingResume: null,
-      queuedMessages: [],
       stoppingRunId:
         state.stoppingRunId === state.currentRunId ? null : state.stoppingRunId,
       ...(terminalRunIds !== state.terminalRunIds ? { terminalRunIds } : {}),
@@ -231,7 +228,10 @@ export function reduceRunCompleted(
 
 export function reduceRunFailed(
   state: State,
-  input: { runId: string | null; sessionId?: string | null },
+  input: {
+    runId: string | null;
+    sessionId?: string | null;
+  },
 ): RunLifecyclePatch {
   return reduceTerminalRun(state, input, "failed");
 }
@@ -287,7 +287,9 @@ export function reduceQueuedMessageAdded(
   state: State,
   message: QueuedMessage,
 ): RunLifecyclePatch {
-  return { queuedMessages: [...state.queuedMessages, message] };
+  return state.queuedMessages.length >= 10
+    ? {}
+    : { queuedMessages: [...state.queuedMessages, message] };
 }
 
 export function reduceQueuedMessageStatus(
@@ -329,7 +331,7 @@ export function reduceQueuedMessagesPersisted(
 export function reduceCancellingQueuedMessagesReset(state: State): RunLifecyclePatch {
   return {
     queuedMessages: state.queuedMessages.map((message) =>
-      message.status === "cancelling" ? { ...message, status: "pending" } : message,
+      message.status === "sending" ? { ...message, status: "pending" } : message,
     ),
   };
 }
@@ -352,7 +354,11 @@ export function reduceRunStopCleared(
 
 function reduceTerminalRun(
   state: State,
-  input: { runId: string | null; sessionId?: string | null; clearApprovals?: boolean },
+  input: {
+    runId: string | null;
+    sessionId?: string | null;
+    clearApprovals?: boolean;
+  },
   _phase: "completed" | "failed",
 ): RunLifecyclePatch {
   return reduceForegroundInactiveRun(state, input, true);
@@ -451,7 +457,7 @@ function reduceForegroundInactiveRun(
     backgroundedRunSessionIds,
     unreadDoneSessionIds,
     pendingResume: null,
-    queuedMessages: [],
+    queuedMessages: state.queuedMessages,
     stoppingRunId:
       input.runId && state.stoppingRunId === input.runId ? null : state.stoppingRunId,
     ...(terminalRunIds !== state.terminalRunIds ? { terminalRunIds } : {}),

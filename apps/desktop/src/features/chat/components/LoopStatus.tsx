@@ -90,6 +90,7 @@ export function LoopStatusBar() {
             leading={<Repeat2 size={ICON.SM} strokeWidth={2} />}
             {...hoverProps}
             aria-label="Active loops"
+            className="composer-toolbar-control"
           >
             {loops.length === 1 ? (
               <>
@@ -168,7 +169,7 @@ function LoopDetailModal({ loop, onClose }: { loop: ServerLoop | null; onClose: 
             <X size={ICON.SM} strokeWidth={2} />
           </IconButton>
         </div>
-        <div className="scroll-thin overflow-y-auto px-5 py-4">
+        <div className="scroll-thin scroll-fade overflow-y-auto px-5 py-4">
           <Markdown content={loop.prompt} className="text-sm text-ink-soft" />
         </div>
         <div className="px-5 py-2 border-t border-line text-xs text-muted flex flex-wrap gap-x-3 gap-y-1">

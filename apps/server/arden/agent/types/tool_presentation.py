@@ -10,6 +10,9 @@ the stream's output shape.
 
 # Exact tool name → (icon, grouping noun). `noun` is the singular unit used for
 # collapsed runs ("Read 4 files"); None means a run shows "{label} · N".
+# A noun is only valid when one CALL is one unit (read_file → one file). Search
+# tools stay None: their would-be noun counts results, so a collapsed run of N
+# calls would miscount ("Searched 4 emails") or stutter ("Searched 4 searches").
 _BY_NAME: dict[str, tuple[str, str | None]] = {
     # System / files
     "read_file": ("file", "file"),
@@ -17,23 +20,23 @@ _BY_NAME: dict[str, tuple[str, str | None]] = {
     "edit_file": ("edit", "file"),
     "list_files": ("folder", None),
     "find_files": ("search", None),
-    "search_text": ("search", "match"),
+    "search_text": ("search", None),
     "bash": ("terminal", "command"),
     "current_time": ("clock", None),
     "render_html": ("image", None),
     "load_tools": ("wrench", None),
-    "tool_search": ("search", "tool"),
+    "tool_search": ("search", None),
     "notify": ("bell", None),
     "update_todos": ("list", None),
     # Web
-    "web_search": ("globe", "search"),
+    "web_search": ("globe", None),
     "web_fetch": ("globe", "page"),
     # Gmail
-    "emails": ("mail", "email"),
+    "emails": ("mail", None),
     "read_email": ("mail", "email"),
     "send_email": ("mail", None),
     # Slack
-    "slack_search": ("slack", "message"),
+    "slack_search": ("slack", None),
     "slack_channel": ("slack", None),
     "slack_channels": ("slack", None),
     "slack_dm": ("slack", None),
@@ -45,12 +48,12 @@ _BY_NAME: dict[str, tuple[str, str | None]] = {
     "slack_post_message": ("slack", None),
     "slack_post_blocks": ("slack", None),
     # Calendar
-    "calendar": ("calendar", "event"),
+    "calendar": ("calendar", None),
     "create_calendar_event": ("calendar", None),
     "edit_calendar_event": ("calendar", None),
     "delete_calendar_event": ("calendar", None),
     # Google Drive
-    "search_google_drive": ("search", "file"),
+    "search_google_drive": ("search", None),
     "read_google_doc": ("file", "document"),
     "read_google_sheet": ("table", "spreadsheet"),
     "create_google_doc": ("file-plus", None),
@@ -59,7 +62,7 @@ _BY_NAME: dict[str, tuple[str, str | None]] = {
     "update_google_sheet": ("table", None),
     "append_google_sheet_rows": ("table", None),
     # Memory
-    "memory_search": ("brain", "record"),
+    "memory_search": ("brain", None),
     "recall": ("brain", None),
     "remember": ("brain", None),
     "forget": ("brain", None),
@@ -67,7 +70,7 @@ _BY_NAME: dict[str, tuple[str, str | None]] = {
     "memory_patch": ("brain", None),
     "memory_tree": ("brain", None),
     # Sessions
-    "search_transcripts": ("history", "transcript"),
+    "search_transcripts": ("history", None),
     "read_session": ("history", None),
     "list_recent_sessions": ("history", None),
 }

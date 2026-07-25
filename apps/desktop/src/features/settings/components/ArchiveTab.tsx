@@ -11,7 +11,7 @@ import { formatRelativePast } from "@/lib/format";
 import { ICON } from "@/lib/icons";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { SearchInput } from "@/components/ui/SearchInput";
-import { EmptyNote } from "@/components/ui/EmptyState";
+import { SettingsSection, SettingsSurface } from "@/features/settings/components/SettingsPage";
 
 export function ArchiveTab() {
   const archived = useStore((s) => s.archivedSessions);
@@ -31,49 +31,48 @@ export function ArchiveTab() {
   const archivedCount = archived?.length ?? 0;
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-center justify-between gap-3">
-        <p className="m-0 text-sm text-muted leading-[1.5]">
-          {archivedCount > 0
-            ? `${archivedCount} archived session${archivedCount === 1 ? "" : "s"}. Restore one to bring it back, or delete it for good.`
-            : "Sessions you archive show up here."}
-        </p>
-        {archivedCount > 0 && (
+    <>
+      {archivedCount > 0 && (
+        <div className="settings-list-toolbar">
           <SearchInput
             value={query}
             onChange={setQuery}
-            placeholder="Search sessions…"
-            ariaLabel="Search sessions"
+            placeholder="Search archived sessions"
+            ariaLabel="Search archived sessions"
             showClear
-            className="w-[200px] shrink-0"
+            trailing={`${filtered?.length ?? archivedCount} items`}
+            className="settings-list-search"
           />
-        )}
-      </div>
-
-      {filtered === null ? (
-        <div className="flex flex-col gap-1" role="status" aria-label="Loading archived items…">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <Skeleton key={i} height={52} radius={10} />
-          ))}
         </div>
-      ) : filtered.length === 0 ? (
-        <EmptyNote>
-          {archived && archived.length > 0
-            ? "No matches."
-            : "Nothing here. Archived sessions will show up in this view."}
-        </EmptyNote>
-      ) : (
-        // Keyed by query so filter keystrokes swap the list instantly (no
-        // exits, no FLIP); restore/delete under a stable query still animates.
-        <ul key={query} className="flex flex-col gap-1">
-          <AnimatePresence mode="popLayout" initial={false}>
-            {filtered.map((s) => (
-              <ArchivedRow key={s.session_id} session={s} />
-            ))}
-          </AnimatePresence>
-        </ul>
       )}
-    </div>
+
+      <SettingsSection title="Sessions" detail="newest first">
+        {filtered === null ? (
+          <div className="flex flex-col gap-1" role="status" aria-label="Loading archived items…">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <Skeleton key={i} height={52} radius={10} />
+            ))}
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="settings-empty-note">
+            {archived && archived.length > 0
+              ? "No matches."
+              : "Nothing here. Archived sessions will show up in this view."}
+          </div>
+        ) : (
+          <SettingsSurface>
+            {/* Keyed by query so filter keystrokes swap the list instantly; restore/delete under a stable query still animates. */}
+            <ul key={query} className="settings-archive-list">
+              <AnimatePresence mode="popLayout" initial={false}>
+                {filtered.map((s) => (
+                  <ArchivedRow key={s.session_id} session={s} />
+                ))}
+              </AnimatePresence>
+            </ul>
+          </SettingsSurface>
+        )}
+      </SettingsSection>
+    </>
   );
 }
 
@@ -126,13 +125,13 @@ function ArchivedRow({
         if (confirmTimer.current) clearTimeout(confirmTimer.current);
         setConfirming(false);
       }}
-      className="app-row group flex items-center gap-3 px-3 py-2 rounded-[10px]"
+      className="settings-archive-row group"
     >
       <div className="min-w-0 flex-1">
-        <div className="text-base font-medium text-ink tracking-[-0.005em] truncate">
+        <div className="settings-archive-title">
           {session.name || "untitled"}
         </div>
-        <div className="text-xs text-faint tabular-nums">
+        <div className="settings-archive-meta">
           archived {formatRelativePast(session.archived_at)} ago · {session.message_count} msg
           {session.message_count === 1 ? "" : "s"}
         </div>
@@ -142,15 +141,15 @@ function ArchivedRow({
           </div>
         )}
       </div>
-      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+      <div className="settings-archive-actions">
         <RowAction
-          icon={<ArchiveRestore size={ICON.XS} strokeWidth={2} />}
+          icon={<ArchiveRestore size={ICON.XS} />}
           label="Restore"
           onClick={onRestore}
           busy={busyOp === "restore"}
         />
         <RowAction
-          icon={<Trash2 size={ICON.XS} strokeWidth={2} />}
+          icon={<Trash2 size={ICON.XS} />}
           label={confirming ? "Confirm delete" : "Delete"}
           onClick={onDelete}
           busy={busyOp === "delete"}
@@ -197,4 +196,3 @@ function RowAction({
     </button>
   );
 }
-

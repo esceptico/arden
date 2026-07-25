@@ -1,6 +1,18 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { AnimatePresence } from "motion/react";
-import { Play, Radio, TriangleAlert, X } from "@/components/icons";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ChevronDown,
+  Clock,
+  MoreHorizontal,
+  Activity01,
+  Radio,
+  ShieldOff,
+  AiMagic,
+  Check,
+  Stop,
+  Trash2,
+  TriangleAlert,
+  X,
+} from "@/components/icons";
 import clsx from "clsx";
 import { useStore } from "@/stores";
 import type { Automation, AutomationRun, CreateAutomationPayload } from "@/api/types";
@@ -8,117 +20,158 @@ import { listAutomationRunsApi } from "@/api/automations";
 import {
   createAutomation,
   deleteAutomation,
+  generateAutomationDescription,
   runAutomation,
   toggleAutomation,
   updateAutomation,
 } from "@/actions/automations";
-import { switchSession } from "@/actions/sessions";
-import { fetchServerConfig, updateServerConfig } from "@/actions/server";
-import { isChannelAutomation } from "@/lib/automationFilters";
-import { formatDuration, formatRelative } from "@/lib/agentRun";
-import { automationTrustLabel, automationTrustTone } from "@/features/automations/lib/automationTrust";
+import { formatDuration } from "@/lib/agentRun";
 import { TEMPLATES } from "@/features/automations/lib/templates";
 import {
   buildPayload,
   emptyForm,
   formFromAutomation,
   formFromPreset,
+  scheduleLabel,
   splitKeywords,
   type FormState,
+  type Schedule,
 } from "@/features/automations/lib/schedule";
-import { RunRuler, rulerRunsFrom, rulerSpanMs, spanLabel } from "@/features/automations/components/RunRuler";
-import { ModelReasoningPicker } from "@/components/ui/ComposerSelectors";
-import { ScheduleChip } from "@/features/automations/components/ScheduleChip";
-import { Badge } from "@/components/ui/Badge";
+import {
+  ModelMenuPicker,
+  availableModelChoices,
+  shortModelLabel,
+} from "@/components/ui/ModelPickers";
+import { ScheduleTriggerPeek } from "@/features/automations/components/ScheduleTriggerPeek";
+import { AnchoredPopover } from "@/components/ui/AnchoredPopover";
+import { ContextMenu, type ContextMenuEntry, type ContextMenuPosition } from "@/components/ui/ContextMenu";
 import { Button } from "@/components/ui/Button";
 import { Callout } from "@/components/ui/Callout";
-import { ConfirmDeleteButton } from "@/components/ui/ConfirmDeleteButton";
 import { IconButton } from "@/components/ui/IconButton";
-import { ShowMore } from "@/components/ui/ShowMore";
+import { MenuItem } from "@/components/ui/MenuItem";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { SwitchControl } from "@/components/ui/SwitchControl";
-import { Tooltip } from "@/components/ui/Tooltip";
+import { BlurSwap } from "@/components/ui/BlurSwap";
+import { DynamicIconSwap } from "@/components/ui/IconSwap";
+import { TabPanels } from "@/components/ui/TabPanels";
+import { DialogLayer } from "@/components/workspace/DialogLayer";
 import { ICON } from "@/lib/icons";
+import { useTimeoutFlag } from "@/lib/hooks";
+import { MOTION } from "@/lib/tokens/motion";
 
-function SectionLabel({
-  children,
-  aux,
-}: {
-  children: string;
-  aux?: string;
-}) {
-  return (
-    <div className="flex items-baseline justify-between mb-2 text-2xs font-medium uppercase tracking-[0.08em] text-faint">
-      <span>{children}</span>
-      {aux && <span className="normal-case tracking-normal font-normal">{aux}</span>}
-    </div>
-  );
+function cloneForm(form: FormState): FormState {
+  return { ...form, schedule: { ...form.schedule } };
 }
 
-function runStamp(iso: string): string {
-  const d = new Date(iso);
+/** The save boundary is the exact payload sent to the server, not a loose
+ * field comparison. This keeps future payload additions inside the same
+ * contract without inventing a parallel dirty-state shape. */
+function samePayload(left: FormState, right: FormState): boolean {
+  return JSON.stringify(buildPayload(left, { includeDescription: false }))
+    === JSON.stringify(buildPayload(right, { includeDescription: false }));
+}
+
+function runStampParts(iso: string): { day: string; time: string } {
+  const date = new Date(iso);
   const today = new Date();
-  const hm = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
-  if (d.toDateString() === today.toDateString()) return `today ${hm}`;
-  return `${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })} ${hm}`;
+  const time = date.toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  return {
+    day: date.toDateString() === today.toDateString()
+      ? "today"
+      : date.toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+    time,
+  };
+}
+
+function runStatusWord(run: AutomationRun): string {
+  const status = run.status.toLowerCase();
+  if (status === "running" || status === "pending") return "running";
+  if (status === "failed" || status === "error") return "failed";
+  if (status === "cancelled") return "cancelled";
+  if (status === "interrupted") return "interrupted";
+  return "completed";
 }
 
 function runSummary(run: AutomationRun): string {
-  if (run.status === "running") return "running…";
-  if (run.status === "failed") return `Failed — ${run.error ?? "no error recorded"}`;
-  // First line that reads as prose. Automation results often open with the
-  // spawned session's codename ("onyx-skua") — a single wordless token is a
-  // label, not a summary, so skip past it.
+  const status = runStatusWord(run);
+  if (status === "running") return "Run is in progress.";
+  if (status === "failed") return run.error ?? "The run failed without a recorded error.";
+  if (status === "cancelled") return "Run was cancelled.";
+  if (status === "interrupted") return "Run was interrupted.";
   const lines = (run.result ?? "")
     .split(/\r?\n/)
-    .map((l) => l.replace(/^#{1,6}\s+/, "").replace(/^[-*+>]\s+/, "").replace(/\*\*/g, "").trim())
+    .map((line) => line.replace(/^#{1,6}\s+/, "").replace(/^[-*+>]\s+/, "").replace(/\*\*/g, "").trim())
     .filter(Boolean);
-  const prose = lines.find((l) => l.includes(" ")) ?? lines[0];
-  return prose ?? "Completed — no output.";
+  return lines.find((line) => line.includes(" ")) ?? lines[0] ?? "Completed. No output.";
 }
 
 function runDuration(run: AutomationRun): string {
-  if (run.ended_at == null) return "…";
-  const ms = Date.parse(run.ended_at) - Date.parse(run.started_at);
-  // Sub-second runs are recorder artifacts, not measurements — don't print
-  // a fake "0s".
-  return Number.isFinite(ms) && ms >= 1000 ? formatDuration(ms) : "—";
+  if (!run.ended_at) return "in progress";
+  const milliseconds = Date.parse(run.ended_at) - Date.parse(run.started_at);
+  return Number.isFinite(milliseconds) && milliseconds >= 1000 ? formatDuration(milliseconds) : "not recorded";
 }
 
-/** Success / median-duration strip under the ruler — where an automation
- *  earns trust at a glance. Only counts finished runs. */
-function statsFor(runs: AutomationRun[], eventDriven: boolean) {
-  const done = runs.filter((r) => r.ended_at != null);
-  const ok = done.filter((r) => r.status !== "failed").length;
-  const durations = done
-    .map((r) => Date.parse(r.ended_at as string) - Date.parse(r.started_at))
-    // Sub-second runs are recorder artifacts — they'd drag the median to 0s.
-    .filter((ms) => Number.isFinite(ms) && ms >= 1000)
-    .sort((a, b) => a - b);
-  const median = durations.length
-    ? formatDuration(durations[Math.floor(durations.length / 2)])
-    : null;
-  return { total: done.length, ok, median, eventDriven };
+function groupLabel(automation: Automation | null): string {
+  if (!automation) return "automations / new";
+  if (automation.builtin || automation.handler?.startsWith("knowledge_")) return "automations / system";
+  if (automation.task_id.startsWith("area:")) return "automations / area agent";
+  return "automations / yours";
+}
+
+function SectionHeading({ children, meta }: { children: string; meta?: string }) {
+  return (
+    <header className="automation-detail__section-heading">
+      <h2>{children}</h2>
+      {meta && <span>{meta}</span>}
+    </header>
+  );
 }
 
 export type DetailSeed =
   | { kind: "existing"; automation: Automation }
   | { kind: "draft"; preset: CreateAutomationPayload | null };
 
+type BusyAction = "create" | "delete" | "run" | "save" | "toggle";
+
+interface RunContextMenuState extends ContextMenuPosition {
+  run: AutomationRun;
+  runTitle: string;
+}
+
 export function AutomationDetail({
   seed,
   onClose,
   onCreated,
+  onDiscardDraft,
+  onDeleted,
+  onDirtyChange,
+  onOpenRun,
+  onOpenTrigger,
+  onOpenChannel,
+  openLatestRun = false,
+  onLatestRunConsumed,
 }: {
   seed: DetailSeed;
   onClose: () => void;
   onCreated: () => void;
+  onDiscardDraft?: () => void;
+  onDeleted?: () => void;
+  onDirtyChange?: (dirty: boolean) => void;
+  onOpenRun?: (run: AutomationRun, runTitle: string) => void;
+  onOpenTrigger?: () => void;
+  onOpenChannel?: (sessionId: string) => void;
+  /** Deep-link intent from activity rows: show the latest result on arrival. */
+  openLatestRun?: boolean;
+  onLatestRunConsumed?: () => void;
 }) {
   const automation = seed.kind === "existing" ? seed.automation : null;
-  const builtin = !!automation?.builtin;
-  const config = useStore((s) => s.config);
-  const sessions = useStore((s) => s.sessions);
-  const setMarkdownView = useStore((s) => s.setViewingMarkdown);
+  const builtin = Boolean(automation?.builtin);
+  const config = useStore((state) => state.config);
+  const sessions = useStore((state) => state.sessions);
 
   const [form, setForm] = useState<FormState>(() =>
     automation
@@ -127,420 +180,598 @@ export function AutomationDetail({
         ? formFromPreset(seed.preset)
         : emptyForm(),
   );
+  const [savedForm, setSavedForm] = useState<FormState>(() => cloneForm(
+    automation
+      ? formFromAutomation(automation)
+      : seed.kind === "draft" && seed.preset
+        ? formFromPreset(seed.preset)
+        : emptyForm(),
+  ));
   const [runs, setRuns] = useState<AutomationRun[] | null>(null);
-  const [busy, setBusy] = useState<"run" | "save" | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [hoverRunId, setHoverRunId] = useState<number | null>(null);
+  const [runsError, setRunsError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<BusyAction | null>(null);
+  const [mutationError, setMutationError] = useState<string | null>(null);
+  const [saved, flashSaved] = useTimeoutFlag(1600);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [triggerDraft, setTriggerDraft] = useState<Schedule | null>(null);
+  const [runContextMenu, setRunContextMenu] = useState<RunContextMenuState | null>(null);
+  const [descriptionState, setDescriptionState] = useState<"idle" | "loading" | "ready" | "error">(
+    automation?.description ? "ready" : "idle",
+  );
+  const descriptionRequestTaskRef = useRef<string | null>(null);
+  const descriptionActiveTaskRef = useRef<string | null>(null);
+  const moreActionRef = useRef<HTMLButtonElement>(null);
 
   const taskId = automation?.task_id ?? null;
+  const dirty = useMemo(() => !samePayload(form, savedForm), [form, savedForm]);
+  const running = automation?.running_since != null;
+  const valid =
+    form.prompt.trim().length > 0 &&
+    (form.schedule.kind !== "message" || splitKeywords(form.schedule.channel).length > 0);
+  const unsafeAutoApprove =
+    form.schedule.kind === "message" &&
+    form.auto_approve &&
+    form.schedule.fromUser.trim().length === 0;
+  const channel = automation
+    ? sessions.find((session) => session.origin_automation_id === automation.task_id) ?? null
+    : null;
+  const ledger = (runs ?? []).slice(0, 5);
+  const ledgerKey = runs === null
+    ? "loading"
+    : runsError
+      ? `error:${runsError}`
+      : ledger.map((run) => `${run.id}:${run.status}:${run.ended_at ?? ""}`).join("|") || "empty";
+  const wasRunning = useRef(running);
+  const [runCompleted, setRunCompleted] = useState(false);
 
   useEffect(() => {
-    if (!taskId) return;
-    let cancelled = false;
-    setRuns(null);
-    listAutomationRunsApi(config, taskId, 30)
-      .then((r) => {
-        if (!cancelled) setRuns(r);
+    let timer: number | undefined;
+    if (running) {
+      setRunCompleted(false);
+    } else if (wasRunning.current) {
+      setRunCompleted(true);
+      timer = window.setTimeout(() => setRunCompleted(false), MOTION.acknowledge * 1000);
+    }
+    wasRunning.current = running;
+    return () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [running]);
+
+  const pauseLabel = busy === "toggle" ? "Updating" : automation?.enabled ? "Pause" : "Resume";
+  const runVisualState = runCompleted ? "completed" : running || busy === "run" ? "running" : "idle";
+  const runLabel = runVisualState === "completed"
+    ? "Completed"
+    : runVisualState === "running"
+      ? "Running"
+      : "Run now";
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
+
+  useEffect(() => {
+    setDescriptionState(automation?.description ? "ready" : "idle");
+  }, [automation?.description, taskId]);
+
+  useEffect(() => {
+    descriptionActiveTaskRef.current = taskId;
+    return () => {
+      if (descriptionActiveTaskRef.current === taskId) {
+        descriptionActiveTaskRef.current = null;
+      }
+    };
+  }, [taskId]);
+
+  useEffect(() => {
+    if (
+      !taskId
+      || seed.kind !== "existing"
+      || form.description
+      || descriptionRequestTaskRef.current === taskId
+    ) return;
+    descriptionRequestTaskRef.current = taskId;
+    setDescriptionState("loading");
+    void generateAutomationDescription(taskId)
+      .then((updated) => {
+        if (descriptionActiveTaskRef.current !== taskId) return;
+        setForm((current) => ({ ...current, description: updated.description }));
+        setSavedForm((current) => ({ ...current, description: updated.description }));
+        setDescriptionState(updated.description ? "ready" : "error");
       })
       .catch(() => {
-        if (!cancelled) setRuns([]);
+        if (descriptionActiveTaskRef.current === taskId) setDescriptionState("error");
       });
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [taskId, automation?.last_run_at, automation?.running_since]);
+  }, [form.description, seed.kind, taskId]);
 
-  // Field-level persistence: dials save immediately, text saves on blur.
-  // Everything funnels through the same full-form payload the old editor
-  // submitted, so the server sees one consistent shape.
-  const persist = async (next: FormState) => {
+  const loadRuns = useCallback(async () => {
     if (!taskId) return;
-    setError(null);
+    setRunsError(null);
     try {
-      await updateAutomation(taskId, buildPayload(next));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setRuns(await listAutomationRunsApi(config, taskId, 30));
+    } catch (error) {
+      setRuns([]);
+      setRunsError(error instanceof Error ? error.message : "Couldn't load recent runs.");
     }
-  };
-  const savedText = useRef({ name: form.name, prompt: form.prompt });
-  const blurSave = () => {
-    if (!taskId) return;
-    if (savedText.current.name === form.name && savedText.current.prompt === form.prompt) return;
-    savedText.current = { name: form.name, prompt: form.prompt };
-    void persist(form);
-  };
-  const setAndPersist = (patch: Partial<FormState>) => {
-    setForm((p) => {
-      const next = { ...p, ...patch };
-      void persist(next);
-      return next;
-    });
-  };
+  }, [config, taskId]);
 
-  const create = async () => {
-    if (busy) return;
+  useEffect(() => {
+    if (!taskId) {
+      setRuns(null);
+      setRunsError(null);
+      return;
+    }
+    void loadRuns();
+  }, [automation?.last_run_at, automation?.running_since, loadRuns, taskId]);
+
+  const save = async () => {
+    if (!taskId || busy || !valid || !dirty) return;
     setBusy("save");
-    setError(null);
+    setMutationError(null);
     try {
-      await createAutomation(buildPayload(form));
-      onCreated();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      const updated = await updateAutomation(
+        taskId,
+        buildPayload(form, { includeDescription: false }),
+      );
+      const nextForm = formFromAutomation(updated);
+      setForm(nextForm);
+      setSavedForm(cloneForm(nextForm));
+      setDescriptionState(updated.description ? "ready" : "error");
+      flashSaved();
+    } catch (error) {
+      setMutationError(error instanceof Error ? error.message : "Couldn't save changes.");
     } finally {
       setBusy(null);
     }
   };
 
-  const running = automation?.running_since != null;
-  const eventDriven = form.schedule.kind === "message" || form.schedule.kind === "event";
-  const channel = automation
-    ? (sessions.find((sx) => sx.origin_automation_id === automation.task_id) ?? null)
-    : null;
-  // The footer switch owns the auto-approve fact — only handler-specific
-  // trust labels (read-only / retention / learns context) earn a badge.
-  const rawTrust = automation ? automationTrustLabel(automation) : null;
-  const trustLabel = rawTrust === "auto-approve" ? null : rawTrust;
-  const rulerRuns = useMemo(() => (runs ? rulerRunsFrom(runs) : []), [runs]);
-  const stats = useMemo(() => (runs ? statsFor(runs, eventDriven) : null), [runs, eventDriven]);
-  const valid =
-    form.prompt.trim().length > 0 &&
-    (form.schedule.kind !== "message" || splitKeywords(form.schedule.channel).length > 0);
-  /** Message triggers act on untrusted external input. Without a sender gate,
-   *  anyone who can post to the channel can drive a full-tool unattended run. */
-  const unsafeAutoApprove =
-    form.schedule.kind === "message" &&
-    form.auto_approve &&
-    form.schedule.fromUser.trim().length === 0;
-
-  const openRun = (run: AutomationRun) => {
-    setMarkdownView({
-      title: form.name || "Automation",
-      subtitle: `run · ${runStamp(run.started_at)}`,
-      content:
-        run.status === "failed"
-          ? `**Failed** — ${run.error ?? "no error recorded"}`
-          : (run.result ?? "_No output._"),
-    });
+  const create = async () => {
+    if (busy || !valid) return;
+    setBusy("create");
+    setMutationError(null);
+    try {
+      await createAutomation(buildPayload(form));
+      onDirtyChange?.(false);
+      onCreated();
+    } catch (error) {
+      setMutationError(error instanceof Error ? error.message : "Couldn't create automation.");
+    } finally {
+      setBusy(null);
+    }
   };
 
-  const ledger = (runs ?? []).slice(0, 5);
+  const toggle = async () => {
+    if (!taskId || busy || dirty) return;
+    setBusy("toggle");
+    setMutationError(null);
+    try {
+      await toggleAutomation(taskId);
+    } catch (error) {
+      setMutationError(error instanceof Error ? error.message : "Couldn't update automation.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const run = async () => {
+    if (!taskId || busy || dirty || !automation?.enabled || running) return;
+    setBusy("run");
+    setMutationError(null);
+    try {
+      await runAutomation(taskId);
+    } catch (error) {
+      setMutationError(error instanceof Error ? error.message : "Couldn't start this run.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const remove = async () => {
+    if (!taskId || busy) return;
+    setBusy("delete");
+    setMutationError(null);
+    try {
+      await deleteAutomation(taskId);
+      setDeleteConfirmOpen(false);
+      onDirtyChange?.(false);
+      onDeleted?.();
+    } catch (error) {
+      setMutationError(error instanceof Error ? error.message : "Couldn't delete automation.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const updateForm = (patch: Partial<FormState>) => {
+    setMutationError(null);
+    setForm((current) => ({ ...current, ...patch }));
+  };
+
+  const openRunContextMenu = useCallback((run: AutomationRun, runTitle: string, position: ContextMenuPosition) => {
+    if (!onOpenRun) return;
+    setRunContextMenu({ run, runTitle, ...position });
+  }, [onOpenRun]);
+
+  const openRunResult = useCallback((run: AutomationRun, runTitle: string) => {
+    setTriggerDraft(null);
+    onOpenRun?.(run, runTitle);
+  }, [onOpenRun]);
+
+  /* Activity-row deep link: once runs land, surface the newest result
+   *  instead of stopping at the settings detail. */
+  useEffect(() => {
+    if (!openLatestRun || runs === null) return;
+    onLatestRunConsumed?.();
+    const run = runs[0];
+    if (!run) return;
+    const stamp = runStampParts(run.started_at);
+    openRunResult(run, `${stamp.day} ${stamp.time}`.trim());
+  }, [onLatestRunConsumed, openLatestRun, openRunResult, runs]);
+
+  const runContextEntries = useMemo<ContextMenuEntry[]>(() => {
+    if (!runContextMenu || !onOpenRun) return [];
+    return [{
+      id: "open-result",
+      label: "Open result",
+      onSelect: () => openRunResult(runContextMenu.run, runContextMenu.runTitle),
+    }];
+  }, [onOpenRun, openRunResult, runContextMenu]);
 
   return (
-    <div className="grid grid-rows-[minmax(0,1fr)_auto] min-h-0 h-full">
-      <div className="min-h-0 overflow-y-auto scroll-thin px-7 pt-5 pb-2">
-        {/* header */}
-        <div className="flex items-center gap-2.5">
+    <article className="automation-detail" aria-labelledby="automation-detail-title">
+      <header className="automation-detail__header">
+        <div className="automation-detail__identity">
+          <div className="automation-detail__crumb">{groupLabel(automation)}</div>
           <input
+            id="automation-detail-title"
             value={form.name}
-            onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
-            onBlur={blurSave}
+            onChange={(event) => updateForm({ name: event.target.value })}
             placeholder="Untitled automation"
             spellCheck={false}
             readOnly={builtin}
             autoFocus={seed.kind === "draft" && !seed.preset}
             aria-label="Automation name"
-            className="flex-1 min-w-0 h-8 bg-transparent border-0 text-xl font-semibold tracking-[-0.014em] text-ink outline-none placeholder:text-muted read-only:text-muted"
+            className="automation-detail__title"
           />
-          {running && <Badge tone="accent">running</Badge>}
-          {automation && isChannelAutomation(automation) && (
-            <Badge tone="neutral" leading={<Radio size={9} strokeWidth={2.2} />}>
-              channel
-            </Badge>
-          )}
-          {trustLabel && automation && (
-            <Badge tone={automationTrustTone(automation)}>{trustLabel}</Badge>
-          )}
-          {channel && (
-            <Tooltip label="Open channel">
-              <IconButton
-                tone="faint"
-                aria-label="Open channel"
-                onClick={() => {
-                  void switchSession(channel.session_id);
-                  onClose();
-                }}
-              >
-                <Radio size={ICON.MD} strokeWidth={2} />
-              </IconButton>
-            </Tooltip>
-          )}
-          {automation && !builtin && (
-            <ConfirmDeleteButton
-              label="Delete automation"
-              onConfirm={() => void deleteAutomation(automation.task_id)}
-            />
-          )}
-          <IconButton onClick={onClose} aria-label="Close">
-            <X size={ICON.SM} strokeWidth={2} />
-          </IconButton>
+          <p className="automation-detail__summary">
+            {form.description?.trim()
+              || (seed.kind === "draft"
+                ? "Define what should happen and when it should run."
+                : descriptionState === "loading"
+                  ? "Writing a short description…"
+                  : "Description unavailable.")}
+          </p>
         </div>
 
-        {/* the instrument */}
-        {automation && (
-          <div className="mt-5 rounded-[10px] bg-surface-sunken/70 px-[18px] pt-4 pb-3">
-            <div className="flex items-baseline justify-between mb-2.5">
-              <span className="text-2xs font-medium uppercase tracking-[0.08em] text-faint">
-                {eventDriven ? "Fires" : "Runs"} — {spanLabel(rulerSpanMs(rulerRuns))}
-              </span>
-              {rulerRuns.length > 0 && (
-                <span className="font-mono tabular-nums text-xs text-ink">
-                  {rulerRuns[rulerRuns.length - 1].label}
-                  <span className="text-faint">
-                    {" — "}
-                    {rulerRuns[rulerRuns.length - 1].ok ? "completed" : "failed"}
-                    {rulerRuns[rulerRuns.length - 1].duration
-                      ? ` in ${rulerRuns[rulerRuns.length - 1].duration}`
-                      : ""}
-                  </span>
-                </span>
-              )}
-            </div>
-            {runs === null ? (
-              <Skeleton height={64} radius={8} />
-            ) : (
-              <RunRuler
-                runs={rulerRuns}
-                nextRunAt={automation.enabled ? automation.next_run_at : null}
-                paused={!automation.enabled}
-                waitingLabel={eventDriven ? "waiting on next match" : "not scheduled"}
-                onHoverRun={setHoverRunId}
-                onOpenRun={openRun}
-              />
-            )}
-            {stats && stats.total > 0 && (
-              <div className="flex gap-5 mt-2.5 flex-wrap">
-                <span className="text-2xs text-faint">
-                  {stats.eventDriven ? "fires " : "success "}
-                  <span className="font-mono tabular-nums text-xs text-ink-soft">
-                    {stats.ok} / {stats.total}
-                  </span>
-                </span>
-                {stats.median && (
-                  <span className="text-2xs text-faint">
-                    median{" "}
-                    <span className="font-mono tabular-nums text-xs text-ink-soft">
-                      {stats.median}
-                    </span>
-                  </span>
-                )}
-                <span className="text-2xs text-faint">
-                  {automation.enabled
-                    ? automation.next_run_at
-                      ? <>next <span className="font-mono tabular-nums text-xs text-ink-soft">{formatRelative(automation.next_run_at)}</span></>
-                      : stats.eventDriven
-                        ? "waiting on next match"
-                        : "not scheduled"
-                    : "paused"}
-                </span>
-              </div>
-            )}
-          </div>
-        )}
+      </header>
 
-        {/* prompt — the textarea grows to its content (no inner scroll that
-            would swallow the wheel); ShowMore clamps long prompts behind a
-            fade + toggle instead. Drafts skip the clamp: writing wants the
-            full field. */}
-        <div className="mt-5">
-          <SectionLabel>Prompt</SectionLabel>
-          {(() => {
-            const field = (
-              <textarea
-                value={form.prompt}
-                onChange={(e) => setForm((p) => ({ ...p, prompt: e.target.value }))}
-                onBlur={blurSave}
-                placeholder="What should the agent do when this automation fires?"
-                spellCheck={false}
-                rows={seed.kind === "draft" ? 8 : 3}
-                readOnly={builtin}
-                className="w-full resize-none field-sizing-content bg-transparent border-0 text-md leading-[1.6] tracking-[-0.005em] text-ink outline-none placeholder:text-muted read-only:text-muted"
-              />
-            );
-            // Clamp budget: header + instrument + this + five ledger rows must
-            // fit the pane WITHOUT scrolling — the collapsed state is the
-            // overview, and an overview that scrolls isn't one.
-            return seed.kind === "draft" ? field : <ShowMore collapsedHeight={144}>{field}</ShowMore>;
-          })()}
+      <div className="automation-detail__scroll scroll-thin scroll-fade" data-page-enter-item data-page-skeleton>
+        <section className="automation-detail__section">
+          <SectionHeading>Instructions</SectionHeading>
+          <textarea
+            value={form.prompt}
+            onChange={(event) => updateForm({ prompt: event.target.value })}
+            placeholder="What should the agent do when this automation fires?"
+            spellCheck={false}
+            rows={seed.kind === "draft" ? 7 : 4}
+            readOnly={builtin}
+            className="automation-detail__prompt"
+          />
           {seed.kind === "draft" && !form.prompt.trim() && (
-            <div className="mt-4">
-              <SectionLabel>Start from a template</SectionLabel>
-              <div className="flex flex-wrap gap-1.5">
-                {TEMPLATES.map((t) => (
-                  <button
-                    key={t.id}
-                    type="button"
-                    onClick={() => setForm(formFromPreset(t.payload))}
-                    className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-[7px] bg-surface-soft text-sm text-ink-soft transition-colors duration-check hover:bg-fill-hover hover:text-ink"
+            <div className="automation-detail__templates">
+              <span>Start with a template</span>
+              <div>
+                {TEMPLATES.map((template) => (
+                  <Button
+                    key={template.id}
+                    variant="secondary"
+                    size="sm"
+                    leadingIcon={template.icon}
+                    onClick={() => {
+                      setMutationError(null);
+                      setForm(formFromPreset(template.payload));
+                    }}
                   >
-                    <t.icon size={13} strokeWidth={2} className="text-faint" />
-                    {t.name}
-                  </button>
+                    {template.name}
+                  </Button>
                 ))}
               </div>
             </div>
           )}
           {builtin && (
-            <p className="m-0 text-xs text-faint">
-              What this runs is code-owned; when it runs is yours — adjust the schedule, pause, or
-              run now.
+            <p className="automation-detail__read-only-note">
+              Instructions are code-owned. You can adjust the schedule, model, approval setting, pause state, or run it now.
             </p>
           )}
-        </div>
+        </section>
 
-        {/* recent runs ledger */}
-        {automation && ledger.length > 0 && (
-          <div className="mt-5">
-            <SectionLabel aux="click to open">Recent runs</SectionLabel>
-            {/* Subgrid: time and duration columns hug their widest content
-                (no fixed-width voids), yet stay aligned across rows. */}
-            <div className="grid grid-cols-[auto_auto_minmax(0,1fr)] gap-x-3 gap-y-px">
-              {ledger.map((run) => {
-                const failed = run.status === "failed";
-                return (
-                  <button
-                    key={run.id}
-                    type="button"
-                    onClick={() => openRun(run)}
-                    className={clsx(
-                      "grid grid-cols-subgrid col-span-3 items-center h-7 px-2 -mx-2 rounded-[6px] text-left",
-                      "transition-colors duration-check hover:bg-fill-hover",
-                      hoverRunId === run.id && "bg-fill-hover",
-                    )}
-                  >
-                    <span className="font-mono tabular-nums text-xs text-muted whitespace-nowrap">
-                      {runStamp(run.started_at)}
-                    </span>
-                    <span className="font-mono tabular-nums text-xs text-faint text-right">
-                      {runDuration(run)}
-                    </span>
-                    <span
-                      className={clsx(
-                        "text-sm truncate",
-                        failed ? "text-bad" : "text-ink-soft",
-                      )}
-                    >
-                      {runSummary(run)}
-                    </span>
-                  </button>
-                );
-              })}
+        <section className="automation-detail__section">
+          <SectionHeading meta={form.auto_approve ? "runs unattended" : "asks before writes"}>
+            Trigger & permissions
+          </SectionHeading>
+          <div className="automation-detail__control-list">
+            <button
+              type="button"
+              className="automation-detail__control-row automation-detail__control-row--button"
+              aria-haspopup="dialog"
+              aria-expanded={triggerDraft !== null}
+              data-trigger-peek-owner
+              onClick={() => {
+                onOpenTrigger?.();
+                setTriggerDraft((current) => current ?? { ...form.schedule });
+              }}
+            >
+              <span className="automation-detail__control-label">
+                <Clock size={ICON.SM} aria-hidden />
+                <span>
+                  <b>Trigger</b>
+                  <small>When this automation starts</small>
+                </span>
+              </span>
+              <span className="automation-detail__control-value" title={scheduleLabel(form.schedule)}>
+                {scheduleLabel(form.schedule)}
+              </span>
+              <ChevronDown className="automation-detail__row-chevron" size={12} aria-hidden />
+            </button>
+            <AutomationModelPicker
+              model={form.model}
+              onChange={(model) => updateForm({ model })}
+            />
+            <div className="automation-detail__control-row automation-detail__control-row--switch">
+              <span className="automation-detail__control-label">
+                <ShieldOff size={ICON.SM} aria-hidden />
+                <span>
+                  <b>Auto-Approve</b>
+                  <small>Run tools without pausing for approval</small>
+                </span>
+              </span>
+              <SwitchControl
+                size="sm"
+                checked={form.auto_approve}
+                onChange={(autoApprove) => updateForm({ auto_approve: autoApprove })}
+                aria-label="Auto-Approve"
+              />
             </div>
           </div>
+          {unsafeAutoApprove && (
+            <Callout tone="warn" icon={TriangleAlert} title="Add a sender gate" className="automation-detail__notice">
+              Anyone in this channel can start a full-tool unattended run while Auto-Approve is on.
+            </Callout>
+          )}
+        </section>
+
+        {automation && (
+          <section className="automation-detail__section">
+            <SectionHeading meta="open a result">Recent runs</SectionHeading>
+            <TabPanels value={ledgerKey} direction={-1} axis="y">
+              {runs === null ? (
+                <div className="automation-detail__run-skeletons" aria-label="Loading recent runs">
+                  {Array.from({ length: 3 }).map((_, index) => <Skeleton key={index} height={42} radius={8} />)}
+                </div>
+              ) : runsError ? (
+                <Callout
+                  tone="bad"
+                  title="Couldn't load recent runs"
+                  className="automation-detail__notice"
+                  action={<Button variant="quiet" size="sm" onClick={() => void loadRuns()}>Try again</Button>}
+                >
+                  {runsError}
+                </Callout>
+              ) : ledger.length === 0 ? (
+                <div className="automation-detail__runs-empty">No runs yet. The first result will appear here.</div>
+              ) : (
+                <div className="automation-detail__run-ledger">
+                  {ledger.map((run) => {
+                    const status = runStatusWord(run);
+                    const stamp = runStampParts(run.started_at);
+                    const runTitle = `${stamp.day} ${stamp.time}`.trim();
+                    return (
+                      <button
+                        key={run.id}
+                        type="button"
+                        className="automation-detail__run"
+                        data-status={status}
+                        data-run-peek-owner
+                        aria-label={`${stamp.day} ${stamp.time}: ${status}. ${runSummary(run)}`}
+                        onClick={() => openRunResult(run, runTitle)}
+                        onContextMenu={onOpenRun ? (event) => {
+                          event.preventDefault();
+                          openRunContextMenu(run, runTitle, {
+                            x: event.clientX,
+                            y: event.clientY,
+                            trigger: event.currentTarget,
+                            source: "pointer",
+                          });
+                        } : undefined}
+                        onKeyDown={onOpenRun ? (event) => {
+                          if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+                          event.preventDefault();
+                          const rect = event.currentTarget.getBoundingClientRect();
+                          openRunContextMenu(run, runTitle, {
+                            x: rect.left + 12,
+                            y: rect.bottom - 4,
+                            trigger: event.currentTarget,
+                            source: "keyboard",
+                          });
+                        } : undefined}
+                      >
+                        <i className="automation-detail__run-status" aria-hidden />
+                        <time dateTime={run.started_at}>{stamp.day}</time>
+                        <time dateTime={run.started_at}>{stamp.time}</time>
+                        <span className="automation-detail__run-summary">{runSummary(run)}</span>
+                        <span>{runDuration(run)}</span>
+                        <ChevronDown size={12} aria-hidden />
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </TabPanels>
+          </section>
         )}
 
-        <AnimatePresence initial={false}>
-          {unsafeAutoApprove && (
-            <Callout key="unsafe" tone="warn" icon={TriangleAlert} className="mt-4">
-              Auto-Approve is on with no <strong className="font-semibold">From user</strong> gate.
-              Anyone who can post to this channel can drive a full-tool, unattended run. Set a
-              sender, or turn Auto-Approve off.
-            </Callout>
-          )}
-          {error && (
-            <Callout key="save-error" tone="bad" title="Couldn't save" className="mt-4">
-              {error}
-            </Callout>
-          )}
-        </AnimatePresence>
+        {mutationError && (
+          <Callout tone="bad" title="Couldn't update automation" className="automation-detail__notice">
+            {mutationError}
+          </Callout>
+        )}
       </div>
 
-      {/* the dials */}
-      <footer className="flex items-center gap-2 px-4 py-2.5 bg-surface-soft/40">
-        <ScheduleChip
-          schedule={form.schedule}
-          onChange={(schedule) =>
-            seed.kind === "draft"
-              ? setForm((p) => ({ ...p, schedule }))
-              : setAndPersist({ schedule })
-          }
-        />
-        <AutomationModelPicker
-          model={form.model}
-          onChange={(model) =>
-            seed.kind === "draft" ? setForm((p) => ({ ...p, model })) : setAndPersist({ model })
-          }
-        />
-        <Tooltip label="Runs execute without asking for approval first.">
-          <div
-            className="inline-flex items-center gap-1.5 px-1 select-none"
-            onClick={(e) => {
-              if ((e.target as HTMLElement).closest("button")) return;
-              const next = !form.auto_approve;
-              seed.kind === "draft"
-                ? setForm((p) => ({ ...p, auto_approve: next }))
-                : setAndPersist({ auto_approve: next });
-            }}
-          >
-            <SwitchControl
-              size="sm"
-              checked={form.auto_approve}
-              onChange={(next) =>
-                seed.kind === "draft"
-                  ? setForm((p) => ({ ...p, auto_approve: next }))
-                  : setAndPersist({ auto_approve: next })
-              }
-              aria-label="Auto-Approve"
-            />
-            <span className="text-sm text-muted">Auto-Approve</span>
-          </div>
-        </Tooltip>
-        <div className="flex-1" />
+      <footer className="automation-detail__footer">
+        <span className={clsx("automation-detail__save-state", (dirty || saved || busy === "save") && "is-visible")} aria-live="polite">
+          {busy === "save" ? "Saving changes" : dirty ? "Unsaved changes" : saved ? "Saved" : ""}
+        </span>
+        <span className="automation-detail__footer-spacer" />
         {seed.kind === "draft" ? (
           <>
-            <Button variant="ghost" onClick={onCreated} disabled={busy === "save"}>
+            <Button variant="quiet" onClick={onDiscardDraft ?? onCreated} disabled={busy === "create"}>
               Cancel
             </Button>
-            <Button
-              variant="primary"
-              onClick={() => void create()}
-              disabled={!valid || busy === "save"}
-              className="min-w-[72px]"
-            >
-              {busy === "save" ? "Creating…" : "Create"}
+            <Button variant="primary" onClick={() => void create()} disabled={!valid || busy === "create"}>
+              {busy === "create" ? "Creating" : "Create"}
             </Button>
           </>
         ) : (
           <>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => automation && void toggleAutomation(automation.task_id)}
-          >
-            {automation?.enabled ? "Pause" : "Resume"}
-          </Button>
-          <Button
-            variant="primary"
-            size="sm"
-            leadingIcon={Play}
-            disabled={!automation?.enabled || running || busy === "run"}
-            onClick={async () => {
-              if (!taskId || busy) return;
-              setBusy("run");
-              try {
-                await runAutomation(taskId);
-              } finally {
-                setBusy(null);
-              }
-            }}
-          >
-            Run now
-          </Button>
+            <Button
+              variant="secondary"
+              size="md"
+              className="automation-detail__pause"
+              onClick={() => void toggle()}
+              disabled={Boolean(busy) || dirty}
+            >
+              <BlurSwap swapKey={pauseLabel}>{pauseLabel}</BlurSwap>
+            </Button>
+            {dirty && (
+              <Button variant="primary" size="sm" onClick={() => void save()} disabled={!valid || Boolean(busy)}>
+                {busy === "save" ? "Saving" : "Save changes"}
+              </Button>
+            )}
+            <Button
+              variant={dirty ? "secondary" : "primary"}
+              size="md"
+              disabled={!automation?.enabled || running || runCompleted || dirty || Boolean(busy)}
+              onClick={() => void run()}
+            >
+              <DynamicIconSwap swapKey={runVisualState}>
+                {runVisualState === "running"
+                  ? <Stop size={ICON.SM} />
+                  : runVisualState === "completed"
+                    ? <Check size={ICON.SM} />
+                    : <Activity01 size={ICON.SM} />}
+              </DynamicIconSwap>
+              <BlurSwap swapKey={runLabel}>{runLabel}</BlurSwap>
+            </Button>
+            <IconButton
+              ref={moreActionRef}
+              size="sm"
+              tone="faint"
+              active={moreOpen}
+              aria-label="More automation actions"
+              title="More automation actions"
+              onClick={() => setMoreOpen((open) => !open)}
+            >
+              <MoreHorizontal size={ICON.SM} />
+            </IconButton>
           </>
         )}
       </footer>
-    </div>
+
+      <ScheduleTriggerPeek
+        open={triggerDraft !== null}
+        schedule={triggerDraft ?? form.schedule}
+        onChange={setTriggerDraft}
+        onSave={(schedule) => {
+          updateForm({ schedule });
+          setTriggerDraft(null);
+        }}
+        onClose={() => setTriggerDraft(null)}
+      />
+
+      <ContextMenu
+        state={runContextMenu}
+        onClose={() => setRunContextMenu(null)}
+        entries={runContextEntries}
+        ariaLabel="Run actions"
+      />
+
+      {automation && (
+        <AnchoredPopover
+          open={moreOpen}
+          onClose={() => setMoreOpen(false)}
+          anchor={moreActionRef}
+          variant="menu"
+          ariaLabel="More automation actions"
+          className="automation-detail__more-menu"
+        >
+          {channel && onOpenChannel && (
+            <MenuItem
+              role="menuitem"
+              leading={<Radio size={14} />}
+              onClick={() => {
+                setMoreOpen(false);
+                onOpenChannel(channel.session_id);
+              }}
+            >
+              Open channel
+            </MenuItem>
+          )}
+          <MenuItem
+            role="menuitem"
+            leading={<X size={14} />}
+            onClick={() => {
+              setMoreOpen(false);
+              onClose();
+            }}
+          >
+            Close automations
+          </MenuItem>
+          {!builtin && (
+            <MenuItem
+              role="menuitem"
+              leading={<Trash2 size={14} />}
+              className="text-bad hover:!text-bad focus-visible:!text-bad"
+              disabled={busy === "delete"}
+              onClick={() => {
+                setMoreOpen(false);
+                setDeleteConfirmOpen(true);
+              }}
+            >
+              Delete automation
+            </MenuItem>
+          )}
+        </AnchoredPopover>
+      )}
+
+      <DialogLayer
+        open={deleteConfirmOpen}
+        alert
+        className="automation-delete-dialog"
+        labelledBy="delete-automation-title"
+        onClose={() => setDeleteConfirmOpen(false)}
+      >
+        <div className="automation-delete-dialog__panel">
+          <div>
+            <h2 id="delete-automation-title">Delete this automation?</h2>
+            <p>Its schedule and run history will no longer be available here.</p>
+          </div>
+          <footer>
+            <Button variant="quiet" onClick={() => setDeleteConfirmOpen(false)} disabled={busy === "delete"}>
+              Cancel
+            </Button>
+            <Button variant="danger" autoFocus onClick={() => void remove()} disabled={busy === "delete"}>
+              {busy === "delete" ? "Deleting" : "Delete"}
+            </Button>
+          </footer>
+        </div>
+      </DialogLayer>
+    </article>
   );
 }
 
-/** Model dial: the composer's picker over the server model list, with a
- *  leading "session default" pseudo-entry that maps to model=null.
- *
- *  Reasoning effort rides the same per-model config map the composer writes
- *  (`model_reasoning_efforts`) — automation runs resolve their effort from
- *  that map server-side (config.reasoning_effort_for), so there is no
- *  per-automation effort field to invent. The effort column only appears
- *  once a concrete model is chosen. */
 const DEFAULT_MODEL_LABEL = "session default";
 
 function AutomationModelPicker({
@@ -550,38 +781,41 @@ function AutomationModelPicker({
   model: string | null;
   onChange: (model: string | null) => void;
 }) {
-  const serverModels = useStore((s) => s.serverModels);
-  const cfg = useStore((s) => s.serverConfig);
-  const groups = useMemo(() => {
-    const real = serverModels
-      ? serverModels.groups.length > 0
-        ? serverModels.groups
-        : [{ provider: "models", models: serverModels.models }]
-      : [];
-    return [{ provider: "default", models: [DEFAULT_MODEL_LABEL] }, ...real];
-  }, [serverModels]);
-
-  const modelReasoningEfforts = cfg?.model_reasoning_efforts ?? {};
-  const efforts = model
-    ? (serverModels?.reasoning_efforts?.[model] ?? cfg?.reasoning_efforts ?? [])
-    : [];
-  const currentEffort = model
-    ? (modelReasoningEfforts[model] ?? cfg?.reasoning_effort ?? null)
-    : null;
+  const serverModels = useStore((state) => state.serverModels);
+  const availableModels = useMemo(
+    () => availableModelChoices(model, serverModels?.models),
+    [model, serverModels],
+  );
+  const options = [
+    { value: "", label: DEFAULT_MODEL_LABEL },
+    ...availableModels.map((choice) => ({ value: choice, label: shortModelLabel(choice) })),
+  ];
+  const displayValue = model ? shortModelLabel(model) : DEFAULT_MODEL_LABEL;
 
   return (
-    <ModelReasoningPicker
-      currentModel={model ?? DEFAULT_MODEL_LABEL}
-      currentEffort={currentEffort}
-      efforts={efforts}
-      groups={groups}
-      onSelectModel={(m) => onChange(m === DEFAULT_MODEL_LABEL ? null : m)}
-      onSelectEffort={(effort) => {
-        if (!model) return;
-        void updateServerConfig({ reasoning_model: model, reasoning_effort: effort }).catch(() =>
-          fetchServerConfig(),
-        );
-      }}
+    <ModelMenuPicker
+      value={model ?? ""}
+      options={options}
+      ariaLabel="Automation model"
+      popupClassName="automation-model-menu"
+      triggerClassName="automation-detail__control-row automation-detail__control-row--button automation-detail__model-trigger"
+      disabled={!serverModels}
+      onValueChange={(selected) => onChange(selected || null)}
+      trigger={(
+        <>
+          <span className="automation-detail__control-label">
+            <AiMagic size={ICON.SM} aria-hidden />
+            <span>
+              <b>Model</b>
+              <small>Uses the session default unless overridden</small>
+            </span>
+          </span>
+          <span className="automation-detail__control-value" title={model ?? DEFAULT_MODEL_LABEL}>
+            <BlurSwap swapKey={displayValue}>{displayValue}</BlurSwap>
+          </span>
+          <ChevronDown className="automation-detail__row-chevron" size={12} aria-hidden />
+        </>
+      )}
     />
   );
 }

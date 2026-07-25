@@ -42,7 +42,6 @@ class ToolExecutor:
                 integration.tools,
                 source=integration.id,
                 conflict="error",
-                command_tool_names=integration.command_tool_names,
             )
 
         self._register_tools(discover_user_tools(), source="user", conflict="skip")
@@ -74,7 +73,6 @@ class ToolExecutor:
         *,
         source: str,
         conflict: str,
-        command_tool_names: frozenset[str] = frozenset(),
     ) -> None:
         for name, tool in tools.items():
             if name in self.registry:
@@ -82,12 +80,7 @@ class ToolExecutor:
                     _logger.warning("%s tool %r skipped — conflicts with existing tool", source, name)
                     continue
                 raise ValueError(f"duplicate tool name from {source}: {name}")
-            self.registry.register(
-                name,
-                tool,
-                source=source,
-                command_eligible=name in command_tool_names,
-            )
+            self.registry.register(name, tool, source=source)
             if not source.startswith("_"):
                 _logger.info("Loaded %s tool: %s", source, name)
 
@@ -115,7 +108,6 @@ class ToolExecutor:
         actions: frozenset[ToolAction] | None = None,
         extra_names: frozenset[str] = frozenset(),
         scope: tuple[str, ...] | None = None,
-        command_eligible: bool | None = None,
     ) -> list[dict]:
         return self.registry.get_schemas(
             capabilities=frozenset(self._get_services()),
@@ -123,7 +115,6 @@ class ToolExecutor:
             actions=actions,
             extra_names=extra_names,
             scope=scope,
-            command_eligible=command_eligible,
         )
 
     def get_tool_metadata(self) -> list[dict]:

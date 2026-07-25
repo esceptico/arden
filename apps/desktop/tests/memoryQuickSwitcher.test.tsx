@@ -201,15 +201,14 @@ test("Escape closes only the switcher, memory view stays mounted", async () => {
   expect(host.querySelector("h1")?.textContent).toBe(initialTitle);
 });
 
-test("the rail search button opens the switcher", async () => {
+test("the mock rail has no legacy search button", async () => {
   installBridge();
   const { host, root } = setup();
   await act(async () => root.render(<ArtifactMemoryView config={config} />));
   await settle(260);
 
-  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Search notes"]')?.click());
-  await settle();
-  expect(document.querySelector('[aria-label="Quick switcher"]')).not.toBeNull();
+  expect(host.querySelector('button[aria-label="Search notes"]')).toBeNull();
+  expect(host.querySelector(".mw-rail-top")).toBeNull();
 });
 
 test("Cmd+O while editing does not open the switcher", async () => {

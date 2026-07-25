@@ -47,7 +47,9 @@ def _automation(
     return Automation(
         task_id=task_id,
         name=task_id,
-        description=f"{task_id} description",
+        description=None,
+        description_source=None,
+        prompt=f"Run {task_id}.",
         model=None,
         triggers=[TimeTrigger(at="09:00")],
         enabled=enabled,

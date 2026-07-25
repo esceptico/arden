@@ -4,7 +4,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { useStore, type ApprovalState } from "@/stores";
 import { respondToAllApprovals, respondToApproval } from "@/actions/approvals";
 import { ICON } from "@/lib/icons";
-import { EASE_OUT, MOTION, originFromEvent, SPRING_STACK } from "@/lib/tokens/motion";
+import { EASE_OUT, MOTION, originFromEvent } from "@/lib/tokens/motion";
 import { Collapse } from "@/components/ui/Collapse";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
@@ -164,21 +164,20 @@ export function ApprovalBanner() {
   if (approvals.length === 0) return null;
   // Hide the banner deck entirely while the Review modal is open. The
   // modal carries the same toolName + full preview/diff, so showing the
-  // banner stack behind it just creates a confusing double-surface (and
-  // historically clashed with the modal's z-index, since each banner
-  // card uses inline z-index up to 100 while the modal sits at z-50).
+  // banner stack behind it just creates a confusing double-surface. The
+  // shared overlay stack now owns their relative depth.
   if (reviewingId) return null;
 
   return (
-    <div className="px-7 pt-2 pb-3">
-      <div className="mx-auto max-w-[760px]">
+    <section className="board-approval-stack px-7 pt-2 pb-3" aria-label="Approval required">
+      <div className="board-approval-stack__lane mx-auto max-w-[760px]">
         {/* grid + grid-area="stack" makes every child share one cell —
             the container sizes to the largest child (the front card)
             and every card overlaps in the same space. Only the front
             is interactive; back cards are decorative slivers. Headroom
             for the slivers is constant so the front card doesn't jump
             when a second approval arrives or the stack drains. */}
-        <div className="grid pt-3.5" style={{ gridTemplateAreas: '"stack"' }}>
+        <div className="board-approval-stack__deck grid pt-3.5" style={{ gridTemplateAreas: '"stack"' }}>
           <AnimatePresence
             initial={false}
             custom={exitReason}
@@ -192,10 +191,8 @@ export function ApprovalBanner() {
                   key={approval.toolId}
                   style={{
                     gridArea: "stack",
-                    // Stack order only matters relative to siblings; high
-                    // absolute z-index just inflates the chat's stacking
-                    // context for no benefit.
-                    zIndex: 2 - index,
+                    // Stack order only matters relative to siblings.
+                    zIndex: index === 0 ? "var(--z-raised)" : "var(--z-base)",
                     pointerEvents: index === 0 ? "auto" : "none",
                   }}
                   variants={stackVariants}
@@ -203,7 +200,7 @@ export function ApprovalBanner() {
                   initial="initial"
                   animate="show"
                   exit="exit"
-                  transition={{ ...SPRING_STACK, opacity: { duration: MOTION.row, ease: EASE_OUT } }}
+                  transition={{ duration: MOTION.panel, ease: EASE_OUT }}
                 >
                   <ApprovalCard
                     approval={approval}
@@ -218,7 +215,7 @@ export function ApprovalBanner() {
           </AnimatePresence>
         </div>
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -270,7 +267,7 @@ function ApprovalCard({
   return (
     <div
       aria-hidden={!interactive || undefined}
-      className="surface-panel surface-radius-md overflow-hidden"
+      className="board-approval-card surface-panel surface-radius-md overflow-hidden"
     >
       <header className="px-4 pt-3 pb-2 flex items-baseline gap-2">
         <h3 className="m-0 text-md font-medium text-ink tracking-[-0.005em]">

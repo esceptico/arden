@@ -62,7 +62,8 @@ async def test_fail_latest_running_run_targets_one_task(automation_store: Automa
     await automation_store.record_run_start("loop-1", t0)
     await automation_store.record_run_start("loop-2", t0)
 
-    await automation_store.fail_latest_running_run("loop-1", t0 + timedelta(hours=3), "run never reported back")
+    assert await automation_store.fail_latest_running_run("loop-1", t0 + timedelta(hours=3), "run never reported back")
+    assert not await automation_store.fail_latest_running_run("loop-1", t0 + timedelta(hours=4), "late duplicate")
     assert (await automation_store.list_runs("loop-1"))[0]["status"] == "failed"
     assert (await automation_store.list_runs("loop-2"))[0]["status"] == "running"
 
@@ -162,7 +163,9 @@ def _automation(
     return Automation(
         task_id=task_id,
         name=name or task_id,
-        description=f"{task_id} description",
+        description=None,
+        description_source=None,
+        prompt=f"Run {task_id}.",
         model=None,
         triggers=[TimeTrigger(at="09:00")],
         enabled=enabled,
@@ -332,7 +335,9 @@ async def test_loop_fields_roundtrip(automation_store: AutomationStore):
     loop = Automation(
         task_id="loop-foo",
         name="Loop: check CI",
-        description="check CI",
+        description=None,
+        description_source=None,
+        prompt="Check CI.",
         model=None,
         triggers=[TimeTrigger(every="5m")],
         enabled=True,
@@ -357,6 +362,7 @@ async def test_loop_fields_roundtrip(automation_store: AutomationStore):
     assert loaded.max_iterations == 3
     assert loaded.iteration_count == 0
     assert loaded.stop_when == "when green"
+    assert loaded.prompt == "Check CI."
 
 
 @pytest.mark.asyncio
@@ -367,7 +373,9 @@ async def test_list_loops_by_session_filters_correctly(automation_store: Automat
         return Automation(
             task_id=task_id,
             name=task_id,
-            description="x",
+            description=None,
+            description_source=None,
+            prompt=f"Run {task_id}.",
             model=None,
             triggers=[TimeTrigger(every="5m")],
             enabled=True,
@@ -400,7 +408,9 @@ async def test_increment_iteration_advances_count(automation_store: AutomationSt
     loop = Automation(
         task_id="loop-iter",
         name="x",
-        description="x",
+        description=None,
+        description_source=None,
+        prompt="Run the loop iteration.",
         model=None,
         triggers=[TimeTrigger(every="5m")],
         enabled=True,
@@ -430,7 +440,9 @@ async def test_v5_fields_roundtrip(automation_store: AutomationStore):
     automation = Automation(
         task_id="post-mode-foo",
         name="Post offer update",
-        description="Posts to a channel",
+        description=None,
+        description_source=None,
+        prompt="Post the offer update to the channel.",
         model=None,
         triggers=[TimeTrigger(every="4h")],
         enabled=True,
@@ -674,6 +686,9 @@ async def test_seed_builtins_schedules_suggester_job(automation_store: Automatio
     assert suggester is not None
     assert suggester.enabled is True
     assert suggester.next_run_at is not None
+    assert suggester.description == "Draft relevant automation suggestions from current context."
+    assert suggester.description_source == "manual"
+    assert suggester.prompt == "Draft contextual automation suggestions from memory, chats, and actions."
 
 
 @pytest.mark.asyncio
@@ -707,14 +722,29 @@ async def test_seed_builtins_respects_user_cadence_and_pause(automation_store: A
 
     await seed_builtins(automation_store)
     seeded = await automation_store.get(BUILTIN_AUTOMATION_SUGGESTER_DAILY_ID)
-    edited = dc_replace(seeded, triggers=[TimeTrigger(at="21:30")], enabled=False)
-    await automation_store.update_metadata(edited)
+    last_run = datetime(2026, 6, 17, 9, tzinfo=UTC)
+    edited = dc_replace(
+        seeded,
+        triggers=[TimeTrigger(at="21:30")],
+        enabled=False,
+        description="A custom concise summary.",
+        description_source="manual",
+        prompt="Outdated builtin prompt.",
+        last_run_at=last_run,
+        last_result="Previous result.",
+    )
+    await automation_store.save(edited)
 
     await seed_builtins(automation_store)
 
     kept = await automation_store.get(BUILTIN_AUTOMATION_SUGGESTER_DAILY_ID)
     assert kept.enabled is False
     assert [(t.at.hour, t.at.minute) for t in kept.triggers] == [(21, 30)]
+    assert kept.description == "A custom concise summary."
+    assert kept.description_source == "manual"
+    assert kept.prompt == "Draft contextual automation suggestions from memory, chats, and actions."
+    assert kept.last_run_at == last_run
+    assert kept.last_result == "Previous result."
 
 
 @pytest.mark.asyncio

@@ -25,17 +25,20 @@ export async function updateServerConfig(patch: ServerConfigPatch): Promise<void
 
 export async function saveAndReconnect(next: AppConfig): Promise<void> {
   const s = getState();
+  let connected = false;
   s.setConnectionSaving(true);
   s.setConnectionError(null);
   try {
     await validateConnection(next);
     const saved = await saveConfig(next);
     s.setConfig(saved);
-    s.closeSettings();
     await refresh();
+    connected = getState().connected;
   } catch (error) {
     s.setConnectionError(error instanceof Error ? error.message : String(error));
   } finally {
-    s.setConnectionSaving(false);
+    const current = getState();
+    current.setConnectionSaving(false);
+    if (connected) current.closeSettings();
   }
 }

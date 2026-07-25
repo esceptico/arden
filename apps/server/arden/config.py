@@ -142,7 +142,7 @@ class Config(BaseSettings):
     # Memory
     memory: bool = True
     memory_timezone: str = Field(default_factory=lambda: _local_timezone_name())
-    consolidation_interval: int = 30
+    consolidation_interval: int = Field(default=30, ge=1, le=500)
 
     # Integrations
     integration_states: dict[str, bool] = Field(default_factory=dict)
@@ -164,7 +164,7 @@ class Config(BaseSettings):
     tool_overrides: dict[str, ToolOverrideDecision] = Field(default_factory=dict)
 
     # Agent
-    max_depth: int = Field(default=AGENT_MAX_DEPTH, gt=0)
+    max_depth: int = Field(default=AGENT_MAX_DEPTH, ge=1, le=16)
     agent_max_iterations: int | None = AGENT_MAX_ITERATIONS
     agent_max_tool_calls: int | None = AGENT_MAX_TOOL_CALLS
     agent_max_wall_time_seconds: float | None = AGENT_MAX_WALL_TIME_SECONDS
@@ -175,10 +175,10 @@ class Config(BaseSettings):
     approval_timeout_seconds: int = 300
 
     # Context compaction
-    compression_threshold: float = 0.8
-    max_messages: int = 120
-    compression_keep_ratio: float = 0.2
-    summary_max_tokens: int = 1500
+    compression_threshold: float = Field(default=0.8, ge=0.1, le=1)
+    max_messages: int = Field(default=120, ge=10, le=1000)
+    compression_keep_ratio: float = Field(default=0.2, ge=0, le=1)
+    summary_max_tokens: int = Field(default=1500, ge=256, le=8000)
 
     # Server
     host: str = "127.0.0.1"

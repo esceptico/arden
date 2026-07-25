@@ -260,6 +260,7 @@ _AREA_PERMISSION = frozenset({AREA_PAGES_SERVICE})
 
 area_page_read_tool = tool(
     display_name="AreaPageRead",
+    display_description="Read the current Area page.",
     description=(
         "Read the current Area's attached page and its SHA-256 revision. "
         "The path is fixed by the Area and cannot be overridden."
@@ -271,6 +272,7 @@ area_page_read_tool = tool(
 
 area_page_patch_tool = tool(
     display_name="AreaPagePatch",
+    display_description="Patch the current Area page.",
     description=(
         "Replace one exact block in the current Area's attached page using the sha256 from area_page_read. "
         "Cannot edit any other page."
@@ -282,6 +284,7 @@ area_page_patch_tool = tool(
 
 area_page_write_tool = tool(
     display_name="AreaPageWrite",
+    display_description="Replace the current Area page.",
     description=(
         "Replace the Markdown body of the current Area's attached page while preserving frontmatter. "
         "Pass the sha256 from area_page_read as expected_sha256."
@@ -293,6 +296,7 @@ area_page_write_tool = tool(
 
 area_run_automation_tool = tool(
     display_name="RunAreaAutomation",
+    display_description="Run an automation for this Area.",
     description="Run a child automation owned by the current Area. Cannot target the Custodian itself or another Area.",
     input_model=AreaAutomationRunInput,
     policy=ToolPolicy(action=ToolAction.EXECUTE, scope=ToolScope.INTERNAL, permissions=frozenset({"automation"})),

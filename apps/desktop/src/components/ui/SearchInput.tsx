@@ -1,4 +1,4 @@
-import type { Ref } from "react";
+import type { ReactNode, Ref } from "react";
 import { Loader2, Search, X } from "@/components/icons";
 import clsx from "clsx";
 import { ICON } from "@/lib/icons";
@@ -15,8 +15,13 @@ interface SearchInputProps {
   /** Render the X clear button when there's a value. Default true. */
   showClear?: boolean;
   inputRef?: Ref<HTMLInputElement>;
+  /** Optional muted label beside the clear control (for result counts, etc.). */
+  trailing?: ReactNode;
   /** Merged onto the wrapper div — callers control width (e.g. `flex-1`, `w-[200px]`). */
   className?: string;
+  /** Exact shared search role. `compact` is the 32px toolbar form; `command`
+   * removes furniture for a command-sheet field. */
+  size?: "default" | "compact" | "command";
 }
 
 export function SearchInput({
@@ -28,16 +33,18 @@ export function SearchInput({
   busy = false,
   showClear = true,
   inputRef,
+  trailing,
   className,
+  size = "default",
 }: SearchInputProps) {
   const Icon = busy ? Loader2 : Search;
+  const hasTrailing = trailing !== undefined && trailing !== null;
   return (
-    <div className={clsx("relative min-w-0", className)}>
+    <div className={clsx("arden-search-shell min-w-0", className)} data-size={size}>
       <Icon
-        size={ICON.XS}
-        strokeWidth={2}
+        size={ICON.MD}
         className={clsx(
-          "absolute left-2.5 top-1/2 -translate-y-1/2 text-faint pointer-events-none",
+          "pointer-events-none",
           busy && "animate-spin",
         )}
       />
@@ -48,19 +55,25 @@ export function SearchInput({
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         aria-label={ariaLabel}
+        aria-busy={busy || undefined}
         autoFocus={autoFocus}
         spellCheck={false}
-        className="w-full h-7 pl-7 pr-7 rounded-[10px] bg-surface-soft focus:bg-surface-sunken border border-transparent focus:border-line text-sm text-ink-soft placeholder:text-muted outline-none transition-[background-color,border-color]"
+        className="arden-search-input"
       />
-      {showClear && value && (
-        <button
-          type="button"
-          onClick={() => onChange("")}
-          aria-label="Clear search"
-          className="absolute right-1.5 top-1/2 grid size-4 -translate-y-1/2 place-items-center rounded text-faint hover:bg-surface-soft hover:text-ink"
-        >
-          <X size={ICON.XS} strokeWidth={2} />
-        </button>
+      {(hasTrailing || (showClear && value)) && (
+        <span className="arden-search-trailing">
+          {hasTrailing && <span>{trailing}</span>}
+          {showClear && value && (
+            <button
+              type="button"
+              onClick={() => onChange("")}
+              aria-label="Clear search"
+              className="arden-search-clear"
+            >
+              <X size={ICON.MD} />
+            </button>
+          )}
+        </span>
       )}
     </div>
   );

@@ -496,6 +496,7 @@ async def research_track_search(execution: ToolExecution, args: ResearchSearchIn
 
 research_tool = tool(
     display_name="Research",
+    display_description="Run a focused research agent.",
     description=RESEARCH_DESCRIPTION,
     input_model=ResearchInput,
     policy=ToolPolicy(action=ToolAction.EXECUTE, scope=ToolScope.INTERNAL),

@@ -27,6 +27,21 @@ export function goToNewSessionHome(): void {
   s.openArea(null);
 }
 
+/** Open the canonical Chat destination without manufacturing an empty thread.
+ * Reuse the selected or most-recent session; provision one only when there is
+ * no chat to open yet. */
+export async function goToChat(): Promise<void> {
+  const s = getState();
+  s.openArea(null);
+  if (s.currentSessionId) return;
+  const recent = s.sessions[0];
+  if (recent) {
+    await switchSession(recent.session_id);
+    return;
+  }
+  await createSession();
+}
+
 export async function createSession(areaId?: string | null): Promise<void> {
   const s = getState();
   const targetAreaId =
@@ -106,6 +121,15 @@ export async function renameSession(sessionId: string, name: string): Promise<vo
     s.sessions.map((sess) =>
       sess.session_id === sessionId ? { ...sess, name: trimmed } : sess,
     ),
+  );
+}
+
+export function toggleSessionPin(sessionId: string): void {
+  const s = getState();
+  const pinned = s.prefs.pinnedSessionIds;
+  s.setPref(
+    "pinnedSessionIds",
+    pinned.includes(sessionId) ? pinned.filter((id) => id !== sessionId) : [...pinned, sessionId],
   );
 }
 

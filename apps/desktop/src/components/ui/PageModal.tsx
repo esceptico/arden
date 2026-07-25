@@ -1,20 +1,24 @@
 import { useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { AnimatePresence, motion } from "motion/react";
+import { motion, useReducedMotion } from "motion/react";
 import { X } from "@/components/icons";
 import {
-  ENTRY_PANEL,
   EASE_DECELERATE,
-  EXIT_FAST,
   MOTION,
-  POSE_MODAL,
+  POSE_SHEET_IN,
+  POSE_SHEET_OUT,
+  POSE_SHEET_VISIBLE,
+  SHEET_ENTER_TRANSITION,
+  SHEET_EXIT_TRANSITION,
   modalOriginTransform,
 } from "@/lib/tokens/motion";
-import { useEscapeKey, useFocusTrap } from "@/lib/hooks";
+import { useFocusTrap } from "@/lib/hooks";
+import { useOverlayLayer } from "@/lib/overlayStack";
+import { useRetainedPresence } from "@/components/workspace/useRetainedPresence";
 import { IconButton } from "@/components/ui/IconButton";
 import { ICON } from "@/lib/icons";
 
-const BACKDROP_DURATION = MOTION.trace;
+const BACKDROP_DURATION = MOTION.focus;
 
 export interface PageModalHeader {
   /** Main title — usually a string but any node so callers can include
@@ -36,7 +40,7 @@ export interface PageModalProps {
    *  with non-standard headers (e.g. Settings' sidebar layout) omit this
    *  and compose their own header inside `children`. */
   header?: PageModalHeader;
-  /** Tailwind size class string for the panel — e.g.
+  /** Tailwind size class string for a centered panel — e.g.
    *  `"w-[min(960px,calc(100vw-80px))] h-[min(680px,calc(100vh-80px))]"`.
    *  Defaults to a 960×680 viewport-aware panel. */
   size?: string;
@@ -58,9 +62,14 @@ export interface PageModalProps {
   /** Viewport-space point the modal should "grow from" (the trigger button's
    *  center, via {@link originFromEvent} → store `modalOrigin`). When set, the
    *  panel animates in/out from that origin; when null it uses the neutral
-   *  POSE_MODAL rise. PageModal snapshots it at open time so the exit still
+ *  sheet rise. PageModal snapshots it at open time so the exit still
    *  knows the origin after the store has cleared it. */
   origin?: { x: number; y: number } | null;
+  /** Centered by default. Bottom sheets use the viewer/review contract:
+   *  16px viewport sides, max 960px, 82vh cap, and no lower corners. */
+  placement?: "center" | "bottom-sheet";
+  /** Fill the canonical bottom-sheet cap instead of sizing to content. */
+  bottomSheetFill?: boolean;
 }
 
 const DEFAULT_SIZE =
@@ -83,62 +92,98 @@ export function PageModal({
   ariaLabel,
   origin = null,
   elevated = false,
+  placement = "center",
+  bottomSheetFill = false,
 }: PageModalProps) {
-  useEscapeKey(onClose, open && !disableEscape);
   const panelRef = useRef<HTMLDivElement>(null);
-  useFocusTrap(panelRef, open);
+  const layerRef = useRef<HTMLDivElement>(null);
+  const reducedMotion = useReducedMotion() ?? false;
+  const present = useRetainedPresence(
+    open,
+    (reducedMotion ? MOTION.reduced : BACKDROP_DURATION) * 1_000,
+  );
+  // A closing sheet remains the active focus/inert boundary until its scrim
+  // finishes. Reopening reverses the same surface instead of briefly exposing
+  // the page below it.
+  useOverlayLayer(layerRef, present, onClose, disableEscape, true, true, true, open);
+  useFocusTrap(panelRef, present);
 
   // Snapshot the origin at open time — exit needs the point the modal grew
   // from even after the store has cleared `modalOrigin`.
   const originRef = useRef<{ x: number; y: number } | null>(null);
-  if (open && originRef.current === null && origin) originRef.current = origin;
-  if (!open && originRef.current !== null) originRef.current = null;
+  const wasOpenRef = useRef(false);
+  if (open && !wasOpenRef.current) originRef.current = origin;
+  if (!open && !present) originRef.current = null;
+  wasOpenRef.current = open;
   const originDelta = modalOriginTransform(originRef.current);
 
   const root = document.querySelector("#app");
   if (!root) return null;
 
   const dialogLabel = ariaLabel ?? (typeof header?.title === "string" ? header.title : undefined);
+  const bottomSheet = placement === "bottom-sheet";
 
   return createPortal(
-    <AnimatePresence>
-      {open && (
-        <motion.div
-          key="page-modal"
-          className={`modal-scrim absolute inset-0 grid place-items-center p-4 sm:p-8 ${
-            elevated ? "z-[var(--z-modal-top)]" : "z-[var(--z-modal)]"
-          }`}
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: BACKDROP_DURATION, ease: EASE_DECELERATE }}
-          onClick={onClose}
+      present && (
+        <div
+          ref={layerRef}
+          data-overlay-layer="modal"
+          data-overlay-state={open ? "open" : "closing"}
+          aria-hidden={open ? undefined : "true"}
+          inert={open ? undefined : true}
+          className="contents"
         >
+          <div
+            className={`fixed inset-0 grid pointer-events-none ${
+              bottomSheet
+                ? "page-modal-frame--bottom-sheet"
+                : "place-items-center p-4 sm:p-8"
+            } ${
+              elevated ? "z-[var(--z-modal-top)]" : "z-[var(--z-sheet)]"
+            }`}
+          >
           <motion.div
             ref={panelRef}
             role="dialog"
             aria-modal="true"
             aria-label={dialogLabel}
             tabIndex={-1}
-            className={`surface-panel surface-radius-lg ${size} grid ${grid} overflow-hidden focus:outline-none`}
+            className={`surface-panel surface-sheet surface-radius-lg ${
+              bottomSheet
+                ? `surface-bottom-sheet ${bottomSheetFill ? "surface-bottom-sheet--fill" : ""}`
+                : size
+            } grid ${grid} overflow-hidden focus:outline-none pointer-events-auto`}
             initial={
-              originDelta
-                ? { opacity: 0, scale: 0.94, x: originDelta.x, y: originDelta.y }
-                : POSE_MODAL
-            }
-            animate={{ opacity: 1, scale: 1, x: 0, y: 0 }}
-            exit={
               originDelta
                 ? {
                     opacity: 0,
                     scale: 0.94,
-                    x: originDelta.x * 0.6,
-                    y: originDelta.y * 0.6,
-                    transition: EXIT_FAST,
+                    x: originDelta.x,
+                    y: originDelta.y,
                   }
-                : { opacity: 0, scale: 0.98, transition: EXIT_FAST }
+                : POSE_SHEET_IN
             }
-            transition={ENTRY_PANEL}
+            animate={
+              open
+                ? originDelta
+                  ? { opacity: 1, scale: 1, x: 0, y: 0 }
+                  : POSE_SHEET_VISIBLE
+                : originDelta
+                  ? {
+                      opacity: 0,
+                      scale: 0.94,
+                      x: originDelta.x * 0.6,
+                      y: originDelta.y * 0.6,
+                    }
+                  : POSE_SHEET_OUT
+            }
+            transition={
+              reducedMotion
+                ? { duration: MOTION.reduced }
+                : open
+                  ? SHEET_ENTER_TRANSITION
+                  : SHEET_EXIT_TRANSITION
+            }
             onClick={(e) => e.stopPropagation()}
           >
             {header && (
@@ -160,7 +205,7 @@ export function PageModal({
                 <div className="flex items-center gap-1 shrink-0">
                   {header.actions}
                   <IconButton onClick={onClose} aria-label="Close">
-                    <X size={ICON.SM} strokeWidth={2} />
+                    <X size={ICON.SM} />
                   </IconButton>
                 </div>
               </header>
@@ -176,10 +221,9 @@ export function PageModal({
                 // off-screen. min 0 lets inner scroll/wrap engage.
                 className="min-h-0 min-w-0 grid grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)]"
                 initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
+                animate={{ opacity: open ? 1 : 0 }}
                 transition={{
-                  duration: MOTION.palette,
+                  duration: reducedMotion ? MOTION.reduced : MOTION.palette,
                   ease: EASE_DECELERATE,
                 }}
               >
@@ -189,9 +233,9 @@ export function PageModal({
               children
             )}
           </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>,
+          </div>
+        </div>
+      ),
     root,
   );
 }

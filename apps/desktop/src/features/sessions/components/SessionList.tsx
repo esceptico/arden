@@ -1,23 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { ArrowUpRight, ChevronDown, Folder, Inbox, Pin, Plus, Settings } from "@/components/icons";
-import clsx from "clsx";
+import { ChevronDown, Folder, Inbox, Pin } from "@/components/icons";
 import { MOTION, EASE_EMPHASIZED, EASE_OUT } from "@/lib/tokens/motion";
 import { useStore } from "@/stores";
-import { compactSessionApi } from "@/api/core";
 import type { SessionListItem } from "@/api/types";
-import { loadHistory } from "@/actions/history";
-import { archiveSession, createSession, moveSessionToArea } from "@/actions/sessions";
+import { archiveSession, switchSession } from "@/actions/sessions";
 import { ICON } from "@/lib/icons";
 import { useTimeTicker } from "@/lib/hooks";
-import { ScrollFadeBottom, ScrollFadeTop } from "@/components/ui/ScrollBlur";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { groupSessions, primarySidebarSessions } from "@/features/sessions/lib/areas";
 import { SessionRow } from "@/features/sessions/components/SessionRow";
 import { SessionContextMenu, type ContextMenuState } from "@/features/sessions/components/SessionContextMenu";
-import { AreaSettingsModal } from "@/features/sessions/components/AreaSettingsModal";
 import { SidebarFilters } from "@/features/sessions/components/SidebarFilters";
-import { RowAction } from "@/features/sessions/components/RowAction";
+import { WorkspaceRailSectionHeader } from "@/components/workspace/WorkspaceRail";
 
 // Rows shown per group before the "Show more" toggle reveals the rest, in
 // steps of REVEAL_STEP — a 40-chat group unfolds gradually instead of
@@ -44,11 +39,9 @@ export function SessionList() {
   const unreadOnly = useStore((s) => s.prefs.sidebarUnreadOnly);
   const channelsOnly = useStore((s) => s.prefs.sidebarChannelsOnly);
   const pinnedSessionIds = useStore((s) => s.prefs.pinnedSessionIds);
-  const setPref = useStore((s) => s.setPref);
 
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
-  const [editingAreaId, setEditingAreaId] = useState<string | null>(null);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   // Per-group count of rows revealed past MAX_VISIBLE (in REVEAL_STEP
   // increments); absent key = collapsed to the cap.
@@ -70,18 +63,7 @@ export function SessionList() {
       return next;
     });
 
-  // Every group opens as a room —
-  // the ↗ action is the sidebar's door into it.
-  const openArea = useStore((s) => s.openArea);
-
   const pinnedSet = useMemo(() => new Set(pinnedSessionIds), [pinnedSessionIds]);
-  const togglePin = (sessionId: string) => {
-    const current = useStore.getState().prefs.pinnedSessionIds;
-    const next = current.includes(sessionId)
-      ? current.filter((id) => id !== sessionId)
-      : [sessionId, ...current];
-    setPref("pinnedSessionIds", next);
-  };
 
   const chatSessions = useMemo(() => primarySidebarSessions(sessions), [sessions]);
   const activeSet = useMemo(
@@ -100,8 +82,6 @@ export function SessionList() {
       }),
     [areas, chatSessions, groupBy, unreadOnly, channelsOnly, pinnedSet, unreadDoneSessionIds, activeSet],
   );
-  const editingArea = areas.find((area) => area.area_id === editingAreaId) ?? null;
-
   // Drop reveal state for groups that no longer overflow, so a group that
   // shrinks below the cap and later grows back doesn't silently auto-expand.
   useEffect(() => {
@@ -164,28 +144,13 @@ export function SessionList() {
         backgroundedRunSessionIds.has(session.session_id)
       }
       unread={unreadDoneSessionIds.has(session.session_id)}
+      pinned={pinnedSet.has(session.session_id)}
       depth={0}
       tabbable={session.session_id === tabbableId}
       renaming={renamingId === session.session_id}
       onStartRename={() => setRenamingId(session.session_id)}
       onCancelRename={() => setRenamingId(null)}
-      onMenu={(pos) => setMenu({ sessionId: session.session_id, x: pos.x, y: pos.y })}
-      onArchive={async () => {
-        try {
-          await archiveSession(session.session_id);
-        } catch {
-          useStore.getState().pushToast({
-            id: `archive-fail:${session.session_id}`,
-            title: "Couldn’t archive session",
-            status: "failed",
-            target: { kind: "session", sessionId: session.session_id },
-          });
-        }
-      }}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        setMenu({ sessionId: session.session_id, x: e.clientX, y: e.clientY });
-      }}
+      onMenu={(position) => setMenu({ sessionId: session.session_id, ...position })}
     />
     </div>
   );
@@ -193,19 +158,13 @@ export function SessionList() {
   const hasFilter = unreadOnly || channelsOnly;
 
   return (
-    <div className="group/sessions flex flex-col flex-1 min-h-0">
-      {/* Zone label: the list is a named region (mirrors Home's AREAS
-          strip label), so the nav above doesn't bleed into the groups. */}
-      <div className="flex items-center justify-between pl-[18px] pr-2.5 pt-3 pb-1">
-        <span className="text-xs font-semibold tracking-wide text-faint uppercase select-none">
-          Areas
-        </span>
-        <SidebarFilters />
-      </div>
+    <div className="workspace-rail__sessions group/sessions flex flex-col flex-1 min-h-0">
+      <WorkspaceRailSectionHeader title="Areas" actions={<SidebarFilters />} />
 
-      <div className="flex-1 min-h-0 overflow-y-auto scroll-thin pb-3" onKeyDown={onListKeyDown}>
-        <ScrollFadeTop />
-        <ScrollFadeBottom />
+      <div
+        className="workspace-rail__session-list flex-1 min-h-0 overflow-y-auto scroll-thin scroll-fade"
+        onKeyDown={onListKeyDown}
+      >
         {grouped.length === 0 ? (
           <motion.div
             initial={{ opacity: 0, y: 4 }}
@@ -222,7 +181,7 @@ export function SessionList() {
             </EmptyState>
           </motion.div>
         ) : (
-          grouped.map((group, groupIndex) => {
+          grouped.map((group) => {
             const isCollapsed = collapsedGroups.has(group.key);
             const revealed = revealedCounts.get(group.key) ?? 0;
             const visibleCount = Math.min(group.sessions.length, MAX_VISIBLE + revealed);
@@ -232,56 +191,29 @@ export function SessionList() {
             return (
               /* Compact rows, air BETWEEN groups — the group gap is what
                  makes the zones scannable, not taller rows. */
-              <div key={group.key} className={clsx(groupIndex > 0 && "mt-0.5")}>
-                <div className="group/prow flex items-center gap-1 pr-[18px]">
-                  <button
-                    type="button"
-                    onClick={() => toggleGroup(group.key)}
-                    aria-expanded={!isCollapsed}
-                    className="flex-1 flex items-center gap-2 min-w-0 pl-[18px] py-1 text-base text-muted hover:text-ink transition-colors select-none"
-                  >
-                    {/* Fixed 16px glyph slot — the same rail the rows' icon
-                        column sits on, so header labels and chat titles share
-                        one text edge (Codex-style tree without extra indent). */}
-                    <span aria-hidden className="grid w-4 shrink-0 place-items-center text-faint">
-                      {group.pinned ? (
-                        <Pin size={ICON.MD} strokeWidth={2} />
-                      ) : group.key === "inbox" ? (
-                        <Inbox size={ICON.MD} strokeWidth={2} />
-                      ) : group.area ? (
-                        <Folder size={ICON.MD} strokeWidth={2} />
-                      ) : null}
-                    </span>
-                    <span className="min-w-0 truncate">{group.label}</span>
-                    <ChevronDown
-                      size={ICON.XS}
-                      strokeWidth={2.2}
-                      className={clsx(
-                        "shrink-0 text-faint opacity-0 group-hover/prow:opacity-100 transition-[opacity,transform] duration-row",
-                        isCollapsed && "-rotate-90",
-                      )}
-                    />
-                  </button>
-                  {group.area && (
-                    <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover/prow:opacity-100 focus-within:opacity-100 transition-opacity duration-row">
-                      <RowAction
-                        icon={<ArrowUpRight size={ICON.SM} strokeWidth={2} />}
-                        label={`Open the ${group.label} room`}
-                        onClick={() => openArea(group.area?.area_id ?? null)}
-                      />
-                      <RowAction
-                        icon={<Settings size={ICON.SM} strokeWidth={2} />}
-                        label={`Area settings — ${group.area.name}`}
-                        onClick={() => setEditingAreaId(group.area?.area_id ?? null)}
-                      />
-                      <RowAction
-                        icon={<Plus size={ICON.SM} strokeWidth={2} />}
-                        label={`New session in ${group.label}`}
-                        onClick={() => void createSession(group.area?.area_id ?? null)}
-                      />
-                    </div>
-                  )}
-                </div>
+              <div
+                key={group.key}
+                className="workspace-rail__group"
+              >
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(group.key)}
+                  aria-expanded={!isCollapsed}
+                  data-collapsed={isCollapsed ? "true" : undefined}
+                  className="workspace-rail__group-heading arden-row"
+                >
+                  <span aria-hidden>
+                    {group.pinned ? (
+                      <Pin size={ICON.MD} strokeWidth={2} />
+                    ) : group.key === "inbox" ? (
+                      <Inbox size={ICON.MD} strokeWidth={2} />
+                    ) : group.area ? (
+                      <Folder size={ICON.MD} strokeWidth={2} />
+                    ) : null}
+                  </span>
+                  <span>{group.label}</span>
+                  <ChevronDown size={ICON.XS} strokeWidth={2.2} />
+                </button>
                 <AnimatePresence initial={false}>
                   {!isCollapsed && (
                     <motion.div
@@ -295,7 +227,11 @@ export function SessionList() {
                           rail as the header glyph, so chat titles align with
                           the group name — hierarchy from the glyph, not a
                           second indent level. */}
-                      <div role="list" aria-label={group.label} className="px-2.5 flex flex-col gap-0">
+                      <div
+                        role="list"
+                        aria-label={group.label}
+                        className="workspace-rail__session-group px-2.5 flex flex-col gap-0"
+                      >
                         {head.map(renderRow)}
                         <AnimatePresence initial={false}>
                           {rest.length > 0 && (
@@ -322,13 +258,8 @@ export function SessionList() {
                                 ? `Show ${Math.min(REVEAL_STEP, remaining)} more session${remaining === 1 ? "" : "s"}`
                                 : "Show fewer sessions"
                             }
-                            className="app-row grid grid-cols-[16px_minmax(0,1fr)] items-center gap-2 w-full px-2 py-0.5 rounded-lg text-faint hover:text-ink transition-colors"
+                            className="workspace-rail__show-more arden-row app-row grid grid-cols-[16px_minmax(0,1fr)] items-center gap-2 w-full px-2 py-0.5 rounded-lg text-faint hover:text-ink transition-colors"
                           >
-                            {/* Empty icon column keeps the label in the title
-                                column, flush with the session names above.
-                                Words, not "…" — and long groups unfold
-                                REVEAL_STEP at a time instead of exploding. */}
-                            <span aria-hidden />
                             <span className="text-left text-base">
                               {remaining > 0 ? `Show ${Math.min(REVEAL_STEP, remaining)} more` : "Show less"}
                             </span>
@@ -347,35 +278,17 @@ export function SessionList() {
       <SessionContextMenu
         state={menu}
         onClose={closeMenu}
-        isPinned={menu ? pinnedSet.has(menu.sessionId) : false}
-        onTogglePin={() => {
+        onOpen={() => {
           if (!menu) return;
-          togglePin(menu.sessionId);
-          closeMenu();
+          void switchSession(menu.sessionId);
         }}
         onRename={() => {
           if (!menu) return;
           setRenamingId(menu.sessionId);
-          closeMenu();
-        }}
-        onCompact={async () => {
-          if (!menu) return;
-          const sessionId = menu.sessionId;
-          closeMenu();
-          const cfg = useStore.getState().config;
-          try {
-            const result = await compactSessionApi(cfg, sessionId);
-            if (result.status === "compacted" && useStore.getState().currentSessionId === sessionId) {
-              await loadHistory(sessionId);
-            }
-          } catch {
-            /* ignore */
-          }
         }}
         onArchive={async () => {
           if (!menu) return;
           const sessionId = menu.sessionId;
-          closeMenu();
           try {
             await archiveSession(sessionId);
           } catch {
@@ -387,19 +300,7 @@ export function SessionList() {
             });
           }
         }}
-        onMoveArea={async (areaId) => {
-          if (!menu) return;
-          const sessionId = menu.sessionId;
-          closeMenu();
-          try {
-            await moveSessionToArea(sessionId, areaId);
-          } catch {
-            /* ignore */
-          }
-        }}
-        areas={areas}
       />
-      <AreaSettingsModal area={editingArea} onClose={() => setEditingAreaId(null)} />
     </div>
   );
 }

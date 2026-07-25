@@ -161,6 +161,7 @@ async def send_to_agent(execution: ToolExecution, args: SendToAgentInput) -> Too
 
 background_tool = tool(
     display_name="Background",
+    display_description="Run a task in the background.",
     description=BACKGROUND_DESCRIPTION,
     input_model=BackgroundInput,
     policy=ToolPolicy(action=ToolAction.EXECUTE, scope=ToolScope.INTERNAL),
@@ -170,6 +171,7 @@ background_tool = tool(
 
 send_to_agent_tool = tool(
     display_name="Send to Agent",
+    display_description="Steer a running background agent.",
     description=(
         "Send a message to a RUNNING background agent you spawned — to steer it, add context, "
         "or correct course mid-run. Delivered at the agent's next step. Get IDs from "
@@ -199,6 +201,7 @@ get_background_result_tool = tool(
 
 list_background_tasks_tool = tool(
     display_name="List Background Tasks",
+    display_description="List running background tasks.",
     description=(
         "List currently running background tasks only. Finished task results are delivered automatically "
         "as hidden parent-conversation notifications — do not poll or inspect files for results."

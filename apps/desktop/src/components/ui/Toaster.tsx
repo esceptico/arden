@@ -1,85 +1,135 @@
 import { useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "motion/react";
-import { Check, Slash, X } from "@/components/icons";
 import { useStore } from "@/stores";
 import { switchSession } from "@/actions/sessions";
+import { applyAppDestination } from "@/actions/navigation";
+import { useHasBlockingOverlay } from "@/lib/overlayStack";
 import {
-  EASE_DECELERATE,
+  DISSOLVE_OUT,
+  EASE_OUT,
+  EXIT_ROW,
   MOTION,
+  RISE_IN,
+  RISE_SETTLED,
   SPRING_LAYOUT,
-  SPRING_TAP,
-  originFromEvent,
 } from "@/lib/tokens/motion";
-import { ICON } from "@/lib/icons";
-import type { Toast } from "@/lib/taskToast";
+import type { Toast, ToastStatus } from "@/lib/taskToast";
 
-const DISMISS_MS = 5000;
-const STATUS_ICON = { completed: Check, failed: X, cancelled: Slash } as const;
+const TOAST_TONE: Record<ToastStatus, string> = {
+  completed: "success",
+  failed: "danger",
+  cancelled: "warning",
+  info: "info",
+};
+
+/* The status slot reads as a word, not an enum: "info" is a severity, and an
+   agent's navigation offer is a suggestion the user can take or ignore. */
+const TOAST_STATUS_LABEL: Record<ToastStatus, string> = {
+  completed: "completed",
+  failed: "failed",
+  cancelled: "cancelled",
+  info: "suggested",
+};
 
 export function Toaster() {
   const toasts = useStore((s) => s.toasts);
-  return (
+  const blocked = useHasBlockingOverlay();
+  if (typeof document === "undefined") return null;
+  return createPortal(
     <div
       role="status"
       aria-live="polite"
-      className="fixed top-3 right-3 z-[var(--z-toast)] flex w-[min(360px,calc(100vw-24px))] flex-col gap-2 pointer-events-none"
+      data-toast-host=""
+      data-modal-blocked={blocked ? "true" : "false"}
+      className="fixed right-4 bottom-4 z-[var(--z-toast)] flex w-[min(340px,calc(100vw-32px))] flex-col gap-2.5 pointer-events-none"
     >
       <AnimatePresence initial={false}>
-        {toasts.map((toast) => (
-          <ToastCard key={toast.id} toast={toast} />
-        ))}
+        {toasts.slice(-3).map((toast) => <ToastCard key={toast.id} toast={toast} blocked={blocked} />)}
       </AnimatePresence>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
-function ToastCard({ toast }: { toast: Toast }) {
+function ToastCard({ toast, blocked }: { toast: Toast; blocked: boolean }) {
   const dismissToast = useStore((s) => s.dismissToast);
+  const pushToast = useStore((s) => s.pushToast);
   const openAutomations = useStore((s) => s.openAutomations);
-  const Icon = STATUS_ICON[toast.status];
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const armDismiss = () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    // A blocking overlay makes the card inert, so a lifetime spent behind one
+    // would drop the toast unread — hold it until the overlay closes.
+    if (blocked) return;
+    timerRef.current = setTimeout(
+      () => dismissToast(toast.id),
+      MOTION.toastLifetime * 1_000,
+    );
+  };
+
   useEffect(() => {
-    timerRef.current = setTimeout(() => dismissToast(toast.id), DISMISS_MS);
+    armDismiss();
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [toast.id, dismissToast]);
+  }, [toast.id, blocked, dismissToast]);
 
-  function onClick(e: React.MouseEvent<HTMLButtonElement>) {
+  /* Hovering holds the toast while it's being read; leaving re-arms the
+     full lifetime so there's always time to act after reading. */
+  function onMouseEnter() {
     if (timerRef.current) clearTimeout(timerRef.current);
-    if (toast.target.kind === "session") void switchSession(toast.target.sessionId);
-    else openAutomations(originFromEvent(e.currentTarget));
+  }
+
+  function onClick() {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    const target = toast.target;
+    if (target.kind === "session") void switchSession(target.sessionId);
+    else if (target.kind === "automation") openAutomations(target.taskId, { run: "latest" });
+    else {
+      const result = applyAppDestination(target.destination);
+      // The destination can go away between the offer and the click. Say why
+      // instead of letting the card vanish as if it had worked.
+      if (!result.ok) {
+        dismissToast(toast.id);
+        pushToast({
+          id: `${toast.id}:failed`,
+          title: toast.title,
+          detail: result.error,
+          status: "failed",
+          target,
+        });
+        return;
+      }
+    }
     dismissToast(toast.id);
   }
 
   return (
     <motion.button
-      type="button"
-      layout
-      onClick={onClick}
-      initial={{ opacity: 0, y: -8, scale: 0.97 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, y: -8, scale: 0.97 }}
-      whileTap={{ scale: 0.97 }}
+      layout="position"
+      initial={RISE_IN}
+      animate={RISE_SETTLED}
+      exit={{ ...DISSOLVE_OUT, transition: EXIT_ROW }}
       transition={{
+        duration: MOTION.popover,
+        ease: EASE_OUT,
         layout: SPRING_LAYOUT,
-        scale: SPRING_TAP,
-        duration: MOTION.panel,
-        ease: EASE_DECELERATE,
       }}
-      data-toast-status={toast.status}
-      className="surface-panel surface-radius-md pointer-events-auto flex w-full items-start gap-2.5 px-3.5 py-3 text-left"
+      type="button"
+      disabled={blocked}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={armDismiss}
+      onClick={onClick}
+      data-tone={TOAST_TONE[toast.status]}
+      className="arden-toast"
     >
-      <span className="mt-0.5 grid h-4 w-4 shrink-0 place-items-center text-ink-soft">
-        <Icon size={ICON.SM} strokeWidth={2} />
+      <span className="arden-toast__head">
+        <strong className="arden-toast__title">{toast.title}</strong>
+        <span className="arden-toast__status">{TOAST_STATUS_LABEL[toast.status]}</span>
       </span>
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-medium text-ink">{toast.title}</span>
-        {toast.detail && (
-          <span className="block truncate text-2xs text-muted">{toast.detail}</span>
-        )}
-      </span>
+      {toast.detail && <span className="arden-toast__description">{toast.detail}</span>}
     </motion.button>
   );
 }

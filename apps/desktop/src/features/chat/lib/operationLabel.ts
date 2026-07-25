@@ -41,8 +41,10 @@ interface ToolMeta {
 // Curated registry for the tools a user actually sees, keyed by the exact tool
 // name the server sends (apps/server/arden/integrations). Labels name the CORPUS
 // so "Searched email" / "Searched Slack" / "Searched the web" are unambiguous.
-// `noun` drives the grouped summary ("Read 4 files"). The long tail falls back
-// to a category icon (PREFIX_ICON) + the server display_name, humanized.
+// `noun` drives the grouped summary ("Read 4 files") and is only valid when one
+// CALL is one unit — search tools get none (their unit counts results, so a run
+// of N calls would miscount or stutter: "Searched 4 searches"). The long tail
+// falls back to a category icon (PREFIX_ICON) + the server display_name, humanized.
 const TOOL_META: Record<string, ToolMeta> = {
   // System / files
   read_file: { verb: "Read", icon: "file", noun: "file" },
@@ -50,26 +52,26 @@ const TOOL_META: Record<string, ToolMeta> = {
   edit_file: { verb: "Edited", icon: "edit", noun: "file" },
   list_files: { verb: "Listed files", icon: "folder" },
   find_files: { verb: "Found files", icon: "search" },
-  search_text: { verb: "Searched code", icon: "search", noun: "match" },
+  search_text: { verb: "Searched code", icon: "search" },
   bash: { verb: "Ran", icon: "terminal", noun: "command" },
   current_time: { verb: "Checked the time", icon: "clock" },
   render_html: { verb: "Rendered a view", icon: "image" },
   load_tools: { verb: "Loaded tools", icon: "wrench" },
-  tool_search: { verb: "Searched tools", icon: "search", noun: "tool" },
+  tool_search: { verb: "Searched tools", icon: "search" },
   notify: { verb: "Notified you", icon: "bell" },
   update_todos: { verb: "Updated the plan", icon: "list" },
 
   // Web
-  web_search: { verb: "Searched the web", icon: "globe", noun: "search" },
+  web_search: { verb: "Searched the web", icon: "globe" },
   web_fetch: { verb: "Fetched a page", icon: "globe", noun: "page" },
 
   // Gmail
-  emails: { verb: "Searched email", icon: "mail", noun: "email" },
+  emails: { verb: "Searched email", icon: "mail" },
   read_email: { verb: "Read an email", icon: "mail", noun: "email" },
   send_email: { verb: "Sent an email", icon: "mail" },
 
   // Slack
-  slack_search: { verb: "Searched Slack", icon: "slack", noun: "message" },
+  slack_search: { verb: "Searched Slack", icon: "slack" },
   slack_channel: { verb: "Read a Slack channel", icon: "slack" },
   slack_channels: { verb: "Listed Slack channels", icon: "slack" },
   slack_dm: { verb: "Read a Slack DM", icon: "slack" },
@@ -82,13 +84,13 @@ const TOOL_META: Record<string, ToolMeta> = {
   slack_post_blocks: { verb: "Posted to Slack", icon: "slack" },
 
   // Calendar
-  calendar: { verb: "Checked the calendar", icon: "calendar", noun: "event" },
+  calendar: { verb: "Checked the calendar", icon: "calendar" },
   create_calendar_event: { verb: "Created an event", icon: "calendar" },
   edit_calendar_event: { verb: "Edited an event", icon: "calendar" },
   delete_calendar_event: { verb: "Deleted an event", icon: "calendar" },
 
   // Memory
-  memory_search: { verb: "Searched memory", icon: "brain", noun: "record" },
+  memory_search: { verb: "Searched memory", icon: "brain" },
   recall: { verb: "Recalled memory", icon: "brain" },
   remember: { verb: "Saved to memory", icon: "brain" },
   forget: { verb: "Forgot a memory", icon: "brain" },
@@ -98,7 +100,7 @@ const TOOL_META: Record<string, ToolMeta> = {
   memory_rebuild: { verb: "Rebuilt memory", icon: "brain" },
 
   // Sessions
-  search_transcripts: { verb: "Searched transcripts", icon: "history", noun: "transcript" },
+  search_transcripts: { verb: "Searched transcripts", icon: "history" },
   read_session: { verb: "Read a session", icon: "history" },
   list_recent_sessions: { verb: "Listed sessions", icon: "history" },
 };
@@ -182,11 +184,10 @@ function asIconKey(s: string | undefined): StepIconKey | null {
   return s && ICON_KEYS.has(s) ? (s as StepIconKey) : null;
 }
 
-/** The model's optional per-call action title (e.g. "Searching for profiles"),
- *  emitted as a `title` pseudo-arg. The backend strips it before the tool runs;
- *  here it rides in the streamed args. Null when absent → caller falls back. */
+/** The model's optional per-call action title. Projection extracts the one
+ * canonical `_display_title` metadata argument before behavior args render. */
 export function callTitle(item: ActivityItem): string | null {
-  const t = parseArgs(item.args)?.title;
+  const t = item.displayTitle;
   return typeof t === "string" && t.trim() ? truncate(t) : null;
 }
 

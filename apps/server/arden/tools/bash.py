@@ -154,6 +154,7 @@ async def run_bash(execution: ToolExecution, args: BashInput) -> ToolResult:
 
 bash_tool = tool(
     display_name="Bash",
+    display_description="Run a shell command in the workspace.",
     description=BASH_DESCRIPTION,
     input_model=BashInput,
     policy=ToolPolicy(

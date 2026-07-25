@@ -73,7 +73,9 @@ async def test_automation_tool_scope_roundtrip(tmp_path):
         Automation(
             task_id="t1",
             name="slack only",
-            description="d",
+            description=None,
+            description_source=None,
+            prompt="Use the allowed Slack tools.",
             model=None,
             triggers=[trigger],
             enabled=True,
@@ -93,7 +95,9 @@ async def test_automation_tool_scope_roundtrip(tmp_path):
         Automation(
             task_id="t2",
             name="unrestricted",
-            description="d",
+            description=None,
+            description_source=None,
+            prompt="Run without a tool scope.",
             model=None,
             triggers=[trigger],
             enabled=True,
@@ -107,3 +111,57 @@ async def test_automation_tool_scope_roundtrip(tmp_path):
     )
     assert (await store.get("t2")).tool_scope is None
     await conn.close()
+
+
+def test_with_read_floor_grants_on_top_of_reads():
+    from arden.tools.core.scope import with_read_floor
+
+    # A user scope bounds the dangerous surface, never the safe one: the
+    # write grant rides on top of every read tool, deduped, order-stable.
+    floor = ("list_recent_sessions", "read_session", "read_file")
+    assert with_read_floor(("archive_session",), floor) == (
+        "archive_session",
+        "list_recent_sessions",
+        "read_session",
+        "read_file",
+    )
+    assert with_read_floor(("read_file", "bash"), floor) == (
+        "read_file",
+        "bash",
+        "list_recent_sessions",
+        "read_session",
+    )
+
+
+def test_registry_read_only_names_lists_only_read_tools():
+    from arden.tools.core.base import Tool
+    from arden.tools.core.registry import ToolRegistry
+    from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
+
+    def make(action):
+        class _T(Tool):
+            description = "t"
+            policy = ToolPolicy(action=action, scope=ToolScope.INTERNAL)
+
+            async def execute(self, execution, **kwargs):  # pragma: no cover
+                raise NotImplementedError
+
+            def to_dict(self, name):
+                return {"name": name}
+
+        return _T()
+
+    reg = ToolRegistry()
+    reg.register("slack_search", make(ToolAction.READ))
+    reg.register("read_file", make(ToolAction.READ))
+    reg.register("slack_post_message", make(ToolAction.WRITE))
+
+    assert set(reg.read_only_names()) == {"slack_search", "read_file"}
+
+
+def test_is_custodian_task_id_matches_only_bare_area_tasks():
+    from arden.areas.agent import is_custodian_task_id
+
+    assert is_custodian_task_id("area:ops")
+    assert not is_custodian_task_id("area:ops:digest")  # child automation
+    assert not is_custodian_task_id("congenial-caracal")

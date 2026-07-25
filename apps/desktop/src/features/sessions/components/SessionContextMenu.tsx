@@ -1,80 +1,34 @@
-import { Archive, FolderInput, Pencil, Pin, PinOff, Sparkles } from "@/components/icons";
-import type { Area } from "@/api/types";
-import { ICON } from "@/lib/icons";
-import { MenuItem } from "@/components/ui/MenuItem";
-import { AnchoredPopover } from "@/components/ui/AnchoredPopover";
+import {
+  ContextMenu,
+  type ContextMenuEntry,
+  type ContextMenuPosition,
+} from "@/components/ui/ContextMenu";
 
-export interface ContextMenuState {
+export interface ContextMenuState extends ContextMenuPosition {
   sessionId: string;
-  x: number;
-  y: number;
 }
 
+/** Board session actions with a real desktop route. Deep links are not yet a
+ * runtime contract, so the mock's Copy link action is deliberately absent. */
 export function SessionContextMenu({
   state,
   onClose,
+  onOpen,
   onRename,
-  onCompact,
   onArchive,
-  onMoveArea,
-  onTogglePin,
-  isPinned,
-  areas,
 }: {
   state: ContextMenuState | null;
   onClose: () => void;
+  onOpen: () => void;
   onRename: () => void;
-  onCompact: () => void;
   onArchive: () => void;
-  onMoveArea: (areaId: string | null) => void;
-  onTogglePin: () => void;
-  isPinned: boolean;
-  areas: Area[];
 }) {
-  return (
-    <AnchoredPopover
-      open={!!state}
-      onClose={onClose}
-      anchor={state ? { x: state.x, y: state.y } : { x: 0, y: 0 }}
-      variant="menu"
-      ariaLabel="Session actions"
-      closeOnScroll
-      className="w-[220px] py-1"
-    >
-      <ContextItem
-        icon={isPinned ? <PinOff size={ICON.MD} strokeWidth={2} /> : <Pin size={ICON.MD} strokeWidth={2} />}
-        label={isPinned ? "Unpin" : "Pin to top"}
-        onClick={onTogglePin}
-      />
-      <ContextItem icon={<Pencil size={ICON.MD} strokeWidth={2} />} label="Rename…" onClick={onRename} />
-      <ContextItem icon={<Sparkles size={ICON.MD} strokeWidth={2} />} label="Compact context" onClick={onCompact} />
-      <ContextItem icon={<Archive size={ICON.MD} strokeWidth={2} />} label="Archive" onClick={onArchive} />
-      <div className="my-1 h-px bg-line-soft" />
-      <ContextItem icon={<FolderInput size={ICON.MD} strokeWidth={2} />} label="Move to Inbox" onClick={() => onMoveArea(null)} />
-      {areas.map((area) => (
-        <ContextItem
-          key={area.area_id}
-          icon={<FolderInput size={ICON.MD} strokeWidth={2} />}
-          label={area.name}
-          onClick={() => onMoveArea(area.area_id)}
-        />
-      ))}
-    </AnchoredPopover>
-  );
-}
+  const entries: ContextMenuEntry[] = [
+    { id: "open", label: "Open chat", onSelect: onOpen },
+    { id: "rename", label: "Rename", onSelect: onRename },
+    { id: "divider", type: "separator" },
+    { id: "archive", label: "Archive", tone: "danger", onSelect: onArchive },
+  ];
 
-function ContextItem({
-  icon,
-  label,
-  onClick,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <MenuItem role="menuitem" tabIndex={-1} onClick={onClick} leading={<span className="text-faint">{icon}</span>}>
-      {label}
-    </MenuItem>
-  );
+  return <ContextMenu state={state} onClose={onClose} entries={entries} />;
 }

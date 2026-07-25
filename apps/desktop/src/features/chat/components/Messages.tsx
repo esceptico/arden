@@ -10,7 +10,7 @@ import { visibleMessageIds } from "@/lib/messageVisibility";
 import { messageSegments } from "@/lib/messageSegments";
 import { firstMessageIdInSourceFocus } from "@/lib/messageSourceFocus";
 import { loadNewerHistory, loadOlderHistory } from "@/actions/history";
-import { MOTION, EASE_EMPHASIZED, EASE_OUT } from "@/lib/tokens/motion";
+import { MOTION, EASE_EMPHASIZED, EASE_OUT, SPRING_SCROLL_RIVER } from "@/lib/tokens/motion";
 import { BlurSwap } from "@/components/ui/BlurSwap";
 import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/Marker";
 import { Message } from "@/features/chat/components/Message";
@@ -19,13 +19,6 @@ import { TurnGroup } from "@/features/chat/components/TurnGroup";
 import { ChatRail } from "@/features/chat/components/ChatRail";
 import { ScrollBlurTop } from "@/components/ui/ScrollBlur";
 import { ICON } from "@/lib/icons";
-
-// Streaming smooth-scroll spring, tuned for "river of text" feel — low
-// stiffness + high damping so scroll trails the latest content gently
-// instead of snapping or overshooting. Units are use-stick-to-bottom-
-// normalized, not framer-motion's, so it lives here rather than with the
-// shared SPRING_* tokens. See https://github.com/StonkDog/use-stick-to-bottom.
-const SPRING_SCROLL_RIVER = { damping: 0.92, stiffness: 0.025, mass: 1.5 };
 
 // Parent (Chat) remounts this component on session change via key={sessionId}
 // so each session starts fresh — no carryover scroll state.
@@ -183,13 +176,15 @@ export function Messages() {
   );
 
   return (
-    <div className="absolute inset-0 @container">
+    <div className="board-chat__messages absolute inset-0 @container">
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className="absolute inset-0 overflow-y-auto overflow-x-hidden scroll-messages px-0"
+        data-page-enter-item
+        data-page-skeleton
+        className="board-chat__scroll absolute inset-0 overflow-y-auto overflow-x-hidden px-0"
       >
-        <div ref={contentRef} className="messages-inner mx-auto max-w-[760px] min-w-0 px-7 flex flex-col gap-2">
+        <div ref={contentRef} className="board-chat__lane mx-auto max-w-[760px] min-w-0 px-7 flex flex-col gap-2">
           {/* Older-history paging feedback: the scroll-anchor restore keeps the
               viewport still while pages prepend, so without this row a top-of-
               scroll load is invisible until content pops in. */}
@@ -244,7 +239,7 @@ export function Messages() {
             aria-label={unreadCount > 0 ? `${unreadCount} new message${unreadCount === 1 ? "" : "s"} — jump to latest` : "Scroll to bottom"}
             style={{ bottom: "calc(var(--chat-bottom-h, 96px) + 12px)" }}
             className={clsx(
-              "surface-floating absolute left-1/2 -translate-x-1/2 z-20 inline-flex items-center justify-center h-8 overflow-hidden rounded-full border border-transparent transition-[background-color,color,scale] duration-check ease-out active:scale-[0.97]",
+              "board-chat__jump absolute left-1/2 -translate-x-1/2 z-[var(--z-sticky)] inline-flex items-center justify-center h-8 overflow-hidden transition-[background-color,color,scale] duration-check ease-out active:scale-[0.97]",
               unreadCount > 0
                 ? "pl-2.5 pr-3 bg-ink text-on-ink hover:bg-ink-soft"
                 : "w-8 bg-surface text-muted hover:text-ink hover:bg-surface-soft",
@@ -253,11 +248,11 @@ export function Messages() {
             <BlurSwap swapKey={unreadCount > 0 ? "unread" : "chevron"} blur={3}>
               {unreadCount > 0 ? (
                 <span className="inline-flex items-center gap-1.5 text-sm font-medium">
-                  <ChevronDown size={ICON.MD} strokeWidth={2} />
+                  <ChevronDown size={ICON.MD} />
                   <span className="tabular-nums">{unreadCount} new</span>
                 </span>
               ) : (
-                <ChevronDown size={ICON.MD} strokeWidth={2} />
+                <ChevronDown size={ICON.MD} />
               )}
             </BlurSwap>
           </motion.button>

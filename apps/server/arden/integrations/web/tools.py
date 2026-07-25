@@ -189,6 +189,7 @@ def _web_provider_failure(preview: str, *, safe_message: str = "The web provider
 
 web_search_tool = tool(
     display_name="WebSearch",
+    display_description="Search public web sources.",
     description=WEB_SEARCH_DESCRIPTION,
     input_model=WebSearchInput,
     policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"web"})),
@@ -197,6 +198,7 @@ web_search_tool = tool(
 
 web_fetch_tool = tool(
     display_name="WebFetch",
+    display_description="Fetch a web page as readable text.",
     description=WEB_FETCH_DESCRIPTION,
     input_model=WebFetchInput,
     policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"web"})),

@@ -154,7 +154,7 @@ test("terminal status poll clears optimistic current run and cannot be resurrect
   expect(staleStarted.terminalRunIds.has("run-1")).toBe(true);
 });
 
-test("terminal current run clears queued composer messages", () => {
+test("terminal current run preserves server-managed queued messages", () => {
   const running = lifecycleState({
     running: true,
     currentRunId: "run-1",
@@ -171,7 +171,31 @@ test("terminal current run clears queued composer messages", () => {
 
   const patch = reduceRunFailed(running, { runId: "run-1", sessionId: "session-1" });
 
-  expect(patch.queuedMessages).toEqual([]);
+  expect(patch.queuedMessages).toEqual(running.queuedMessages);
+});
+
+test("failed run retains queued messages until server ingestion", () => {
+  const queuedMessages = [
+    {
+      clientId: "queued-1",
+      text: "use mcp",
+      status: "pending" as const,
+      enqueuedAt: 1,
+    },
+  ];
+  const running = lifecycleState({
+    running: true,
+    currentRunId: "run-1",
+    activeRunSessionIds: new Set(["session-1"]),
+    queuedMessages,
+  });
+
+  const patch = reduceRunFailed(running, {
+    runId: "run-1",
+    sessionId: "session-1",
+  });
+
+  expect(patch.queuedMessages).toEqual(queuedMessages);
 });
 
 test("backgrounded status poll clears foreground UI without marking done", () => {

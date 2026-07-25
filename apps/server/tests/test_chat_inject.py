@@ -22,11 +22,22 @@ from arden.events.sse import (
 from arden.server.app import app
 from arden.server.bus import BusRegistry, SessionBus, StreamRecord
 from arden.server.deps import get_bus_registry, require_run_registry
-from arden.server.routers.chat import _effective_after_seq, _event_stream, cancel_subagent, submit_tool_result
+from arden.server.routers.chat import (
+    _effective_after_seq,
+    _event_stream,
+    cancel_inject,
+    cancel_subagent,
+    submit_tool_result,
+)
 from arden.server.runtime import get_runtime
 from arden.server.schemas import ChatRequest, ToolResultRequest
 from arden.server.state import RunRegistry, RunState, RunStatus
-from arden.services.chat import ChatDeps, _handle_background_result, expand_skill_command
+from arden.services.chat import (
+    ChatDeps,
+    _handle_background_result,
+    expand_skill_command,
+)
+from arden.services.session import SessionService
 from arden.skills.registry import SkillRegistry
 
 
@@ -1057,7 +1068,13 @@ async def test_background_result_after_parent_finished_dispatches_meta_run():
     run = RunState(run_id="cool-otter", session_id="sess-1")
     calls = []
 
-    async def dispatch(session_id: str, message: str, client_id: str | None, skip_approvals: bool | None):
+    async def dispatch(
+        session_id: str,
+        message: str,
+        client_id: str | None,
+        skip_approvals: bool | None,
+        images: list[dict] | None,
+    ):
         calls.append((session_id, message, client_id, skip_approvals))
 
     await _handle_background_result(
@@ -1091,7 +1108,13 @@ async def test_background_result_during_parent_run_queues_injection():
     run = RunState(run_id="cool-otter", session_id="sess-1")
     calls = []
 
-    async def dispatch(session_id: str, message: str, client_id: str | None, skip_approvals: bool | None):
+    async def dispatch(
+        session_id: str,
+        message: str,
+        client_id: str | None,
+        skip_approvals: bool | None,
+        images: list[dict] | None,
+    ):
         calls.append((session_id, message, client_id, skip_approvals))
 
     message = {
@@ -1118,7 +1141,13 @@ async def test_background_result_during_parent_run_dedups_by_client_id():
     run = RunState(run_id="cool-otter", session_id="sess-1")
     calls = []
 
-    async def dispatch(session_id: str, message: str, client_id: str | None, skip_approvals: bool | None):
+    async def dispatch(
+        session_id: str,
+        message: str,
+        client_id: str | None,
+        skip_approvals: bool | None,
+        images: list[dict] | None,
+    ):
         calls.append((session_id, message, client_id, skip_approvals))
 
     message = {
@@ -1188,6 +1217,98 @@ def test_delete_inject_returns_409_when_already_drained(client_with_active_run):
 def test_delete_inject_returns_404_when_no_active_run(client_no_active_run):
     resp = client_no_active_run.delete("/chat/inject/cid-x?session_id=sess-none")
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_cancel_before_enqueue_tombstone_prevents_later_queue(tmp_path):
+    import arden.database as database
+    from arden.services import chat as chat_service
+
+    conn = await database.connect(tmp_path / "sessions.db")
+    read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
+    store = SessionStore(conn, read_conn)
+    await store.init_schema()
+    service = SessionService(store)
+    state = SessionState(session_id="sess-1", started_at=datetime.now(UTC))
+    await service.save(state, [])
+    registry = RunRegistry()
+    run = registry.create_run("sess-1")
+    run.status = RunStatus.RUNNING
+    runtime = type("Runtime", (), {"session_service": service})()
+
+    try:
+        cancelled = await cancel_inject(
+            "cid-before-enqueue",
+            "sess-1",
+            run_registry=registry,
+            runtime=runtime,
+        )
+        result = await chat_service.submit_chat_message(
+            registry,
+            lambda: None,
+            BusRegistry(),
+            message="follow-up",
+            session_id="sess-1",
+            client_id="cid-before-enqueue",
+            session_service=service,
+        )
+
+        assert cancelled == {"status": "cancelled", "client_id": "cid-before-enqueue"}
+        assert result == {"run_id": run.run_id, "session_id": "sess-1", "status": "cancelled"}
+        assert run.inject_queue == []
+        assert await store.list_chat_queued_messages("sess-1", status="queued") == []
+    finally:
+        await read_conn.close()
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_ingested_queue_retry_does_not_return_stale_queued_status(tmp_path):
+    import arden.database as database
+    from arden.services import chat as chat_service
+    from arden.services.chat import _build_get_pending
+
+    conn = await database.connect(tmp_path / "sessions.db")
+    read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
+    store = SessionStore(conn, read_conn)
+    await store.init_schema()
+    service = SessionService(store)
+    state = SessionState(session_id="sess-1", started_at=datetime.now(UTC))
+    await service.save(state, [])
+    registry = RunRegistry()
+    run = registry.create_run("sess-1")
+    run.status = RunStatus.RUNNING
+    bus = SessionBus(session_id="sess-1")
+
+    try:
+        queued = await chat_service.submit_chat_message(
+            registry,
+            lambda: None,
+            BusRegistry(),
+            message="follow-up",
+            session_id="sess-1",
+            client_id="cid-ingested",
+            session_service=service,
+        )
+        assert queued["status"] == "queued"
+
+        await _build_get_pending(bus, run, service)()
+
+        retry = await chat_service.submit_chat_message(
+            registry,
+            lambda: None,
+            BusRegistry(),
+            message="follow-up",
+            session_id="sess-1",
+            client_id="cid-ingested",
+            session_service=service,
+        )
+
+        assert retry == {"run_id": run.run_id, "session_id": "sess-1", "status": "ingested"}
+        assert run.inject_queue == []
+    finally:
+        await read_conn.close()
+        await conn.close()
 
 
 def test_cancel_returns_404_for_unknown_run(client_no_active_run):
@@ -1270,7 +1391,7 @@ async def test_submit_message_after_cancel_starts_new_run(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_active_run_records_queued_message_in_ledger():
+async def test_active_run_keeps_steer_transient_in_memory():
     from arden.services import chat as chat_service
 
     class FakeSessionService:
@@ -1302,18 +1423,12 @@ async def test_active_run_records_queued_message_in_ledger():
     )
 
     assert result["run_id"] == run.run_id
-    assert session_service.queued == [
-        {
-            "client_id": "cid-ledger",
-            "session_id": "sess-1",
-            "run_id": run.run_id,
-            "message": {"role": "user", "content": "follow-up", "client_id": "cid-ledger"},
-        }
-    ]
+    assert run.pending_injection_count == 1
+    assert session_service.queued == []
 
 
 @pytest.mark.asyncio
-async def test_active_run_does_not_queue_message_when_ledger_write_fails():
+async def test_active_run_does_not_write_steer_to_queue_ledger():
     from arden.services import chat as chat_service
 
     class FakeSessionService:
@@ -1327,18 +1442,18 @@ async def test_active_run_does_not_queue_message_when_ledger_write_fails():
     run = registry.create_run("sess-1")
     run.status = RunStatus.RUNNING
 
-    with pytest.raises(RuntimeError, match="ledger down"):
-        await chat_service.submit_chat_message(
-            registry,
-            lambda: None,
-            BusRegistry(),
-            message="follow-up",
-            session_id="sess-1",
-            client_id="cid-ledger",
-            session_service=FakeSessionService(),
-        )
+    result = await chat_service.submit_chat_message(
+        registry,
+        lambda: None,
+        BusRegistry(),
+        message="follow-up",
+        session_id="sess-1",
+        client_id="cid-ledger",
+        session_service=FakeSessionService(),
+    )
 
-    assert run.pending_injection_count == 0
+    assert result["status"] == "queued"
+    assert run.pending_injection_count == 1
 
 
 @pytest.mark.asyncio
@@ -1379,7 +1494,7 @@ async def test_active_run_does_not_queue_message_when_idempotency_update_fails()
         )
 
     assert run.pending_injection_count == 0
-    assert session_service.cancelled == ["cid-ledger"]
+    assert session_service.cancelled == []
 
 
 @pytest.mark.asyncio

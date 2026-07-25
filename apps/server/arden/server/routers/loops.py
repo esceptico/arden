@@ -13,7 +13,7 @@ def _loop_to_dict(a: Automation) -> dict:
     return {
         "task_id": a.task_id,
         "session_id": a.thread_id,
-        "prompt": a.description,
+        "prompt": a.prompt,
         "every": every,
         "enabled": a.enabled,
         "iteration_count": a.iteration_count,
@@ -69,19 +69,20 @@ async def update_loop(
     if loop.kind != "loop":
         raise HTTPException(status_code=400, detail=f"{task_id} is not a loop")
 
-    name = description = None
+    name = prompt = None
     if request.prompt is not None:
         prompt = request.prompt.strip()
         if not prompt:
             raise HTTPException(status_code=400, detail="prompt cannot be empty")
         name = f"Loop: {prompt[:40]}"
-        description = prompt
+        # Loops do not need a summary surface; their API returns the
+        # executable instruction separately as `prompt`.
 
     try:
         updated = await svc.update(
             task_id,
             name=name,
-            description=description,
+            prompt=prompt,
             every=request.every,
             enabled=request.enabled,
             max_iterations=request.max_iterations,

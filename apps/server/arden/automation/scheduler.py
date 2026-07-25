@@ -17,7 +17,7 @@ from arden.constants import (
     SCHEDULER_EVENT_RETRY_MAX_SECONDS,
     SCHEDULER_POLL_INTERVAL,
 )
-from arden.events.internal import RunCompleted
+from arden.events.internal import RunCompleted, RunFailed
 from arden.events.sse import AutomationFinishedEvent, AutomationProgressEvent, SSEEvent
 from arden.events.triggers import EVENT_APPROACHING, EventApproaching, MessageReceived, TriggerEvent
 from arden.logging import get_logger
@@ -439,6 +439,20 @@ class Scheduler:
                 continue
             await self._start_run(auto)
 
+    async def handle_run_failed(self, event: RunFailed) -> None:
+        """Settle detached session-bound automations as soon as chat fails."""
+        now = datetime.now(UTC)
+        for auto in await self.store.list_session_bound_by_session(event.session_id):
+            if not auto.read_history:
+                continue
+            if not await self.store.fail_latest_running_run(auto.task_id, now, event.error):
+                continue
+            self._detached_task_ids.pop(auto.task_id, None)
+            await self.store.clear_running(auto.task_id)
+            await self.emit_automation_event(
+                AutomationFinishedEvent(task_id=auto.task_id, result=None),
+            )
+
         for auto in await self.store.list_by_trigger_type("count"):
             if auto.in_cooldown(now):
                 continue
@@ -625,7 +639,7 @@ class Scheduler:
         handler = self._handlers.get(automation.handler)
         if not handler:
             raise RuntimeError(f"No handler registered for '{automation.handler}'")
-        _logger.info("Executing internal automation %s: %s", automation.task_id, automation.description[:80])
+        _logger.info("Executing internal automation %s: %s", automation.task_id, automation.name)
         _, context = split_manual_flag(context)
         if isinstance(context, dict):
             ctx = context
@@ -645,9 +659,9 @@ class Scheduler:
     async def _run_agent(self, automation: Automation, context: str | dict | None = None) -> str | None:
         _, context = split_manual_flag(context)
         ctx_str = json.dumps(context) if isinstance(context, dict) else context
-        prompt = AUTOMATION_PROMPT.render(description=automation.description, context=ctx_str)
+        prompt = AUTOMATION_PROMPT.render(prompt=automation.prompt, context=ctx_str)
 
-        _logger.info("Executing automation %s: %s", automation.task_id, automation.description[:80])
+        _logger.info("Executing automation %s: %s", automation.task_id, automation.name)
         request = RunRequest(
             prompt=prompt,
             prompt_suffix=AUTOMATION_SUFFIX,
@@ -678,8 +692,8 @@ class Scheduler:
 
         Both modes honor aged_out / max_iterations / iteration_count.
         """
-        if not automation.description:
-            raise RuntimeError(f"Loop {automation.task_id} missing description")
+        if not automation.prompt:
+            raise RuntimeError(f"Automation {automation.task_id} missing prompt")
         # Aged-out check is mode-agnostic — disable before reaching for
         # a dispatcher.
         if automation.aged_out(datetime.now(UTC)):

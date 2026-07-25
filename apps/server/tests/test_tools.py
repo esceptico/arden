@@ -19,7 +19,7 @@ from arden.context.store import SessionStore
 from arden.core.tool_executor import ArdenToolExecutor
 from arden.integrations.base import Integration
 from arden.tool_call_metadata import DISPLAY_TITLE_ARG
-from arden.tools.automation import loop_done_tool, schedule_wakeup_tool
+from arden.tools.automation import create_automation_tool, loop_done_tool, schedule_wakeup_tool
 from arden.tools.background import cancel_background_task_tool
 from arden.tools.bash import bash_tool, execute_bash, is_blocked_command
 from arden.tools.core import EmptyInput, Tool, ToolCall, ToolNext, tool
@@ -141,6 +141,49 @@ def test_function_tool_metadata_exposes_policy():
         "open_world": None,
         "idempotent": None,
     }
+
+
+def test_tool_metadata_can_use_compact_display_copy_without_changing_agent_docs():
+    async def handler(execution, args):
+        return ToolResult(content="ok")
+
+    agent_description = (
+        "Create an automation with detailed trigger, scheduling, approval, model, "
+        "and execution guidance intended for the agent."
+    )
+    display_description = "Create a task that runs automatically on a schedule or event."
+    t = tool(
+        description=agent_description,
+        display_description=display_description,
+        execute=handler,
+        policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL),
+    )
+
+    assert t.get_metadata("create_automation")["description"] == display_description
+    assert t.to_dict("create_automation")["function"]["description"] == agent_description
+    registry = ToolRegistry(tool_overrides={"create_automation": ToolOverrideDecision.ASK})
+    registry.register("create_automation", t, source="_automation")
+    assert registry.get_metadata()[0]["description"] == display_description
+
+
+def test_create_automation_metadata_uses_compact_settings_copy():
+    assert create_automation_tool.get_metadata("create_automation")["description"] == (
+        "Create a task that runs automatically on a schedule or event."
+    )
+    assert create_automation_tool.to_dict("create_automation")["function"]["description"].startswith(
+        "Create an automation — a task the agent runs autonomously."
+    )
+
+
+def test_registered_tool_metadata_fits_compact_settings_rows():
+    metadata = ToolExecutor().get_tool_metadata()
+    oversized = {
+        item["name"]: item["description"]
+        for item in metadata
+        if item.get("source") not in {"mcp", "user"} and (len(item["description"]) > 100 or "\n" in item["description"])
+    }
+
+    assert oversized == {}
 
 
 def test_all_registered_tools_have_policy():
@@ -1316,7 +1359,11 @@ async def test_arden_tool_executor_audits_policy_enabled_calls(session_store: Se
     ctx.services["store"] = session_store
     executor = ArdenToolExecutor(ToolExecutor().with_registry(registry), ctx)
 
-    result = await executor.execute("echo", {"text": "hello"}, "call-1")
+    result = await executor.execute(
+        "echo",
+        {"text": "hello", DISPLAY_TITLE_ARG: "Echoing the message"},
+        "call-1",
+    )
     rows = await session_store.list_tool_calls(run_id="run-1")
 
     expected_hash = hashlib.sha256(

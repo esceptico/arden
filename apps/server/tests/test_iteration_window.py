@@ -19,6 +19,7 @@ from arden.server.bus import BusRegistry
 from arden.server.state import RunRegistry
 from arden.services.chat import (
     ChatDeps,
+    _close_interrupted_tool_step,
     _loop_task_id_from_client_id,
     _persistable_messages,
     _trim_for_loop_iteration,
@@ -35,6 +36,29 @@ def _make_history(n: int, *, with_system: bool = True) -> list[dict]:
         role = "user" if i % 2 == 0 else "assistant"
         msgs.append({"role": role, "content": f"msg-{i}"})
     return msgs
+
+
+def test_interrupted_tool_call_is_closed_before_a_later_turn():
+    messages = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "send_email", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "user", "content": "next run"},
+    ]
+
+    _close_interrupted_tool_step(messages)
+
+    assert [message["role"] for message in messages] == ["assistant", "tool", "user"]
+    assert messages[1]["tool_call_id"] == "call-1"
+    assert "interrupted" in messages[1]["content"]
 
 
 class _StubExecutor:
@@ -593,3 +617,53 @@ def test_trim_no_expansion_when_cut_lands_on_user(monkeypatch):
         {"role": "assistant", "content": "asst2"},
     ]
     assert prefix == [{"role": "assistant", "content": "asst1"}]
+
+
+@pytest.mark.asyncio
+async def test_loop_iteration_fires_uncompacted_when_precompaction_fails():
+    # Pre-run compaction is maintenance, not a precondition: if the summarize
+    # call blows up (e.g. its request exceeds the model window), the fire must
+    # proceed on the trimmed view — raising would brick the loop for good,
+    # replaying the same oversized history into the same error every hour.
+    class _ExplodingCompactor:
+        def should_compact(self, messages, model, last_input_tokens):
+            return True
+
+        async def maybe_compact(self, messages, model, last_input_tokens, *, rehydration_state=None):
+            raise RuntimeError("APIError: Your input exceeds the context window of this model.")
+
+    history = _make_history(60)
+    emitted = []
+
+    async def emit(event):
+        emitted.append(event)
+
+    svc = _StubSessionService(history, last_input_tokens=314_000)
+    deps = _make_deps_with_config(
+        svc,
+        AgentConfig(
+            model="gpt-5.2",
+            research_model=None,
+            max_depth=1,
+            deferred_tools=False,
+            compactor=_ExplodingCompactor(),
+        ),
+    )
+
+    client_id = "loop:loop-compact:4"
+    ctx = await prepare_chat(
+        deps,
+        message="iteration prompt",
+        skip_approvals=None,
+        session_id="sess-1",
+        client_id=client_id,
+        loop_task_id=_loop_task_id_from_client_id(client_id),
+        emit=emit,
+    )
+
+    assert [event.type.value for event in emitted] == ["compaction_started", "compaction_finished"]
+    assert emitted[-1].messages_before == len(history)
+    assert emitted[-1].messages_after == len(history)
+    # Nothing was rewritten on disk, and the fire still assembled a run.
+    assert svc.save_calls == []
+    assert ctx.run.messages[-1]["client_id"] == client_id

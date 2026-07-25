@@ -3,7 +3,7 @@ import clsx from "clsx";
 import { Tooltip } from "@/components/ui/Tooltip";
 
 type IconButtonSize = "xs" | "sm" | "md" | "lg";
-type IconButtonTone = "muted" | "faint" | "primary";
+type IconButtonTone = "muted" | "faint" | "primary" | "secondary";
 type IconButtonShape = "square" | "circle";
 
 interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -14,8 +14,10 @@ interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   /** Resting icon color. `muted` (default), quieter `faint`, or solid `primary`
    *  (ink slab — round send/accept buttons). */
   tone?: IconButtonTone;
-  /** Corner radius. `square` (default — `rounded-md`) or `circle`
-   *  (`rounded-full`, for solid round send/accept/dismiss buttons). */
+  /** Both currently render the same corner-profile-aware radius
+   *  (`--r-icon`) — kept as a separate axis from `tone` for callers that
+   *  want to reason about "circular action button" vs "toolbar icon"
+   *  semantically, even though they're visually identical today. */
   shape?: IconButtonShape;
   /** Hover resolves to destructive instead of ink. */
   danger?: boolean;
@@ -23,28 +25,6 @@ interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
    *  reason toggle, a filter trigger while its menu is open). */
   active?: boolean;
 }
-
-// Square radius scales with size; circle is always fully round.
-const SIZE: Record<IconButtonSize, string> = {
-  xs: "w-[22px] h-[22px]",
-  sm: "w-6 h-6",
-  md: "w-7 h-7",
-  lg: "w-8 h-8",
-};
-
-const SQUARE_RADIUS: Record<IconButtonSize, string> = {
-  xs: "rounded-[5px]",
-  sm: "rounded-md",
-  md: "rounded-md",
-  lg: "rounded-md",
-};
-
-const TONE: Record<IconButtonTone, string> = {
-  muted: "text-muted",
-  faint: "text-faint",
-  // Solid ink slab; opacity hover matches Button's `primary`.
-  primary: "bg-ink text-on-ink hover:opacity-90",
-};
 
 export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(
   function IconButton(
@@ -69,27 +49,20 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(
     const accessibleName =
       (rest["aria-label"] as string | undefined) ??
       (typeof title === "string" ? title : undefined);
-    // The solid `primary` tone owns its full hover (opacity), so the
-    // surface-soft fill + ink/bad text hover only apply to the flat tones.
-    const isPrimary = tone === "primary";
     const button = (
       <button
         ref={ref}
         type={type ?? "button"}
         aria-label={accessibleName}
         aria-pressed={active || undefined}
-        data-active={active || undefined}
+        data-active={active ? "true" : undefined}
+        data-size={size}
+        data-tone={tone}
+        data-shape={shape}
+        data-danger={danger ? "true" : undefined}
         className={clsx(
-          "grid place-items-center transition-[background-color,color,transform,scale] duration-check ease-out active:scale-[0.97]",
-          "disabled:opacity-[0.45] disabled:cursor-not-allowed",
-          TONE[tone],
-          !isPrimary && [
-            "hover:bg-surface-soft",
-            danger ? "hover:text-bad" : "hover:text-ink",
-            active && "bg-surface-soft text-ink",
-          ],
-          SIZE[size],
-          shape === "circle" ? "rounded-full" : SQUARE_RADIUS[size],
+          "arden-icon-button",
+          tone === "faint" && "text-faint",
           className,
         )}
         {...rest}

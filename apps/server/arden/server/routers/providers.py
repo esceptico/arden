@@ -4,7 +4,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import ValidationError
 
 from arden.config import PROVIDER_KEY_FIELDS
-from arden.llm.models import Provider, get_embedding_models_by_provider, get_models_by_provider
+from arden.llm.models import (
+    Provider,
+    get_embedding_models_by_provider,
+    get_models_by_provider,
+    provider_label,
+)
 from arden.llm.openai_codex_auth import clear_tokens, load_tokens, login_status, start_browser_login
 from arden.server.deps import require_config_service
 from arden.server.runtime import Runtime, get_runtime
@@ -16,12 +21,46 @@ router = APIRouter(tags=["providers"])
 
 
 PROVIDER_META = {
-    "anthropic": {"name": "Anthropic", "env_var": "ANTHROPIC_API_KEY", "provider": Provider.ANTHROPIC},
-    "openai": {"name": "OpenAI", "env_var": "OPENAI_API_KEY", "provider": Provider.OPENAI},
-    "openai-codex": {"name": "OpenAI Codex", "provider": Provider.OPENAI_CODEX, "auth_type": "oauth"},
-    "google": {"name": "Google", "env_var": "GEMINI_API_KEY", "provider": Provider.GOOGLE},
-    "openrouter": {"name": "OpenRouter", "env_var": "OPENROUTER_API_KEY", "provider": Provider.OPENROUTER},
+    "anthropic": {
+        "name": provider_label(Provider.ANTHROPIC),
+        "env_var": "ANTHROPIC_API_KEY",
+        "provider": Provider.ANTHROPIC,
+    },
+    "openai": {
+        "name": provider_label(Provider.OPENAI),
+        "env_var": "OPENAI_API_KEY",
+        "provider": Provider.OPENAI,
+    },
+    "openai-codex": {
+        "name": provider_label(Provider.OPENAI_CODEX),
+        "provider": Provider.OPENAI_CODEX,
+        "auth_type": "oauth",
+    },
+    "google": {
+        "name": provider_label(Provider.GOOGLE),
+        "env_var": "GEMINI_API_KEY",
+        "provider": Provider.GOOGLE,
+    },
+    "openrouter": {
+        "name": provider_label(Provider.OPENROUTER),
+        "env_var": "OPENROUTER_API_KEY",
+        "provider": Provider.OPENROUTER,
+    },
 }
+
+
+def connected_providers(config) -> set[Provider]:
+    """Providers the user can actually run models through right now."""
+    connected: set[Provider] = set()
+    for pid, meta in PROVIDER_META.items():
+        if meta.get("auth_type") == "oauth":
+            if load_tokens():
+                connected.add(meta["provider"])
+        elif getattr(config, PROVIDER_KEY_FIELDS[pid], None):
+            connected.add(meta["provider"])
+    if get_models_by_provider(Provider.CUSTOM):
+        connected.add(Provider.CUSTOM)
+    return connected
 
 
 @router.get("/providers")

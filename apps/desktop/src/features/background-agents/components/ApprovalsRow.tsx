@@ -1,18 +1,72 @@
 import { AnimatePresence, motion } from "motion/react";
 import { EASE_OUT, MOTION, originFromEvent, RISE_IN, RISE_SETTLED } from "@/lib/tokens/motion";
-import { useStore } from "@/stores";
-import { StatusDot } from "@/components/ui/StatusDot";
+import { respondToApproval } from "@/actions/approvals";
+import { Button } from "@/components/ui/Button";
+import { useStore, type ApprovalState } from "@/stores";
 
-// The single load-bearing "needs you" signal: a run is paused waiting on
-// an approval. One amber row that opens the review modal.
-export function ApprovalsRow() {
-  const count = useStore((s) => s.pendingApprovals.length);
-  const firstToolId = useStore((s) => s.pendingApprovals[0]?.toolId);
+type ApprovalRowProps = {
+  /** Supplying approvals makes the Area Hub's session boundary explicit. */
+  approvals?: readonly ApprovalState[];
+  variant?: "compact" | "hub";
+};
+
+function HubApprovalCard({
+  approval,
+  onReview,
+}: {
+  approval: ApprovalState;
+  onReview: (toolId: string, origin: { x: number; y: number } | null) => void;
+}) {
+  const detail = approval.preview?.trim()
+    || (approval.diff ? "Review the exact diff." : "Review this action before it runs.");
+
+  return (
+    <article className="board-hub-approval-card" aria-label={`Approval required: ${approval.toolName}`}>
+      <header>
+        <h3>{approval.toolName}</h3>
+        <span>Awaiting approval</span>
+      </header>
+      <p>{detail}</p>
+      <footer>
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => void respondToApproval(approval.toolId, false)}
+        >
+          Deny
+        </Button>
+        <Button
+          variant="primary"
+          size="sm"
+          onClick={(event) => onReview(approval.toolId, originFromEvent(event.currentTarget))}
+        >
+          Review
+        </Button>
+      </footer>
+    </article>
+  );
+}
+
+/** The load-bearing "needs you" signal: a run is paused waiting on approval.
+ * Chat keeps the compact row; the Area Hub gets the full review card. */
+export function ApprovalsRow({ approvals: scopedApprovals, variant = "compact" }: ApprovalRowProps) {
+  const pendingApprovals = useStore((s) => s.pendingApprovals);
   const review = useStore((s) => s.setReviewingApproval);
+  const approvals = scopedApprovals ?? pendingApprovals;
+  const first = approvals[0];
+
+  if (variant === "hub") {
+    if (approvals.length === 0) return null;
+    return <div className="board-hub-approval-list">
+      {approvals.map((approval) => (
+        <HubApprovalCard key={approval.toolId} approval={approval} onReview={review} />
+      ))}
+    </div>;
+  }
 
   return (
     <AnimatePresence initial={false}>
-      {count > 0 && firstToolId && (
+      {approvals.length > 0 && first && (
         <motion.div
           key="approvals"
           initial={{ ...RISE_IN, y: -4 }}
@@ -22,12 +76,11 @@ export function ApprovalsRow() {
         >
           <button
             type="button"
-            onClick={(e) => review(firstToolId, originFromEvent(e.currentTarget))}
+            onClick={(e) => review(first.toolId, originFromEvent(e.currentTarget))}
             className="flex w-full items-center gap-2 rounded-[8px] bg-warn/10 px-2.5 py-2 text-left transition-[background-color,scale] duration-row ease-out hover:bg-warn/15 active:scale-[0.985]"
           >
-            <StatusDot tone="warn" />
             <span className="flex-1 text-xs text-ink-soft">
-              {count} awaiting approval
+              {approvals.length} awaiting approval
             </span>
             <span className="shrink-0 text-2xs text-warn">Review →</span>
           </button>

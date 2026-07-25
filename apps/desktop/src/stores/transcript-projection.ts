@@ -2,8 +2,9 @@ import type { HistoryMessage } from "@/api/chat";
 import type { ServerEvent } from "@/api/events";
 import { SEMANTIC_KIND_AGENT } from "@/lib/agent";
 import { htmlWidgetFromHistory } from "@/lib/htmlWidget";
+import { projectToolCallArguments } from "@/lib/toolCallMetadata";
 import { childAgentFromToolResultData, type ToolResultData } from "@/stores/child-agent-metadata";
-import { getState, setState, type ActivityItem, type QueuedMessage, type UiMessage } from "@/stores/index";
+import { getState, setState, type ActivityItem, type UiMessage } from "@/stores/index";
 import { normalizeSourceRefs, sourceRefsFromToolResultData } from "@/stores/sourceRefs";
 import {
   reduceActiveActivityBackgrounded,
@@ -42,7 +43,6 @@ import {
 } from "@/stores/transcript-projection-helpers";
 import type {
   PendingToolCall,
-  TranscriptProjectionEffect,
   TranscriptProjectionResult,
   TranscriptProjectionRuntime,
   TranscriptProjectionState,
@@ -51,7 +51,6 @@ import type {
 export { isTodoToolName, newestHistoryActivityId } from "@/stores/transcript-projection-helpers";
 export type {
   PendingToolCall,
-  TranscriptProjectionEffect,
   TranscriptProjectionResult,
   TranscriptProjectionRuntime,
   TranscriptProjectionState,
@@ -104,8 +103,6 @@ export function applyChatEventToTranscript(
   const s = getState();
   const ts = event.timestamp ?? Date.now();
   const suppressEntryMotion = event.replay === true;
-  let effect: TranscriptProjectionEffect | undefined;
-
   switch (event.type) {
     case "RUN_STARTED":
       endActivity(s);
@@ -149,7 +146,6 @@ export function applyChatEventToTranscript(
       setState((state) =>
         reduceRunCompleted(state, { runId: event.run_id, sessionId: event.session_id }),
       );
-      s.resetCancellingQueuedMessages();
       break;
 
     case "token_usage":
@@ -164,7 +160,6 @@ export function applyChatEventToTranscript(
 
     case "run_cancelled":
       if (s.currentRunId && s.currentRunId !== event.run_id) break;
-      effect = runCancelledEffect(s.queuedMessages);
       endActivity(s, "Stopped");
       endTurn(s, ts);
       setActiveAssistantMessageId(context, null);
@@ -175,7 +170,6 @@ export function applyChatEventToTranscript(
           clearApprovals: true,
         }),
       );
-      s.clearQueuedMessages();
       break;
 
     case "run_backgrounded":
@@ -211,23 +205,14 @@ export function applyChatEventToTranscript(
       endTurn(s, ts);
       setActiveAssistantMessageId(context, null);
       setState((state) =>
-        reduceRunFailed(state, { runId: event.run_id, sessionId: event.session_id }),
+        reduceRunFailed(state, {
+          runId: event.run_id,
+          sessionId: event.session_id,
+        }),
       );
-      s.resetCancellingQueuedMessages();
       break;
 
     case "message_ingested": {
-      const queued = s.queuedMessages.find((q) => q.clientId === event.client_id);
-      if (!queued) break;
-      s.removeQueuedMessage(event.client_id);
-      s.appendMessage({
-        id: event.client_id,
-        role: "user",
-        content: queued.text,
-        turn: { startedAt: ts, endedAt: null, durationMs: null },
-        images: queued.images,
-        suppressEntryMotion,
-      });
       break;
     }
 
@@ -313,6 +298,7 @@ export function applyChatEventToTranscript(
       if (!pending) break;
       if (isTodoToolName(pending.name)) break;
       const argsBuffer = pending.argsBuffer + event.delta;
+      const projected = projectToolCallArguments(argsBuffer);
       const pendingToolCalls = new Map(context.state.pendingToolCalls);
       pendingToolCalls.set(event.tool_call_id, {
         ...pending,
@@ -320,8 +306,9 @@ export function applyChatEventToTranscript(
       });
       context.update({ ...context.state, pendingToolCalls });
       s.mergeActivityItem(event.tool_call_id, {
-        args: argsBuffer,
-        target: formatCallTarget(pending.name, argsBuffer || "{}", pending.displayName),
+        args: projected.args,
+        displayTitle: projected.displayTitle,
+        target: formatCallTarget(pending.name, projected.args || "{}", pending.displayName),
       });
       break;
     }
@@ -501,7 +488,7 @@ export function applyChatEventToTranscript(
       break;
   }
 
-  return { state: context.state, effect };
+  return { state: context.state };
 }
 
 export function rebuildTranscriptFromHistory(
@@ -615,7 +602,8 @@ export function rebuildTranscriptFromHistory(
       const activity = findActivity(activeActivityId);
       if (activity) {
         for (const toolCall of activityCalls) {
-          const args = toolCall.arguments || "";
+          const projected = projectToolCallArguments(toolCall.arguments || "");
+          const args = projected.args;
           const result = resultsById.get(toolCall.id);
           const resultContent = toolCall.result ?? result?.content;
           const childAgent = childAgentFromToolResultData(result?.data);
@@ -625,6 +613,7 @@ export function rebuildTranscriptFromHistory(
             id: toolCall.id,
             kind: toolCall.name,
             semanticKind: liftedKind(toolCall.kind),
+            displayTitle: projected.displayTitle,
             workflowId: workflowIdFromData(result?.data),
             target: formatCallTarget(toolCall.name, args || "{}", toolCall.display_name),
             args,
@@ -645,10 +634,4 @@ export function rebuildTranscriptFromHistory(
   }
 
   return items;
-}
-
-export function runCancelledEffect(queuedMessages: QueuedMessage[]): TranscriptProjectionEffect | undefined {
-  const messages = queuedMessages.filter((q) => q.status === "pending");
-  if (messages.length === 0) return undefined;
-  return { type: "resend_queued_messages", messages };
 }

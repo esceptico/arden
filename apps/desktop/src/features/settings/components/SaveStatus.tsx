@@ -36,12 +36,12 @@ export function SaveStatus({
           >
             {state === "saving" ? (
               <>
-                <Loader2 size={ICON.XS} strokeWidth={2} className="animate-spin" />
+                <Loader2 size={ICON.XS} className="animate-spin" />
                 Saving…
               </>
             ) : (
               <>
-                <Check size={ICON.XS} strokeWidth={2.5} className="text-ok" />
+                <Check size={ICON.XS} className="text-ok" />
                 Saved
               </>
             )}

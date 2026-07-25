@@ -112,8 +112,8 @@ export interface ServerConfig {
   compaction_token_limit: number;
   compaction_token_trigger: number;
   research_model: string;
-  /** Default model for workflow agents; optional until the server ships the key. */
-  workflow_model?: string;
+  /** Default model for workflow agents. */
+  workflow_model: string;
   memory_model: string;
   embedding_model: string;
   web_search: "auto" | "exa" | "ddgs" | "none";
@@ -134,6 +134,7 @@ export interface ServerConfig {
 
 export interface ModelGroup {
   provider: string;
+  label: string;
   models: string[];
 }
 
@@ -143,6 +144,7 @@ export interface ModelsResponse {
   reasoning_efforts: Record<string, string[]>;
   chat_model: string;
   research_model: string;
+  workflow_model: string;
   memory_model: string;
 }
 
@@ -185,7 +187,11 @@ export type AutomationKind = "automation" | "loop";
 export interface Automation {
   task_id: string;
   name: string;
-  description: string;
+  /** Concise user-facing sentence shown beneath the automation name. */
+  description: string | null;
+  description_source: "manual" | "generated" | null;
+  /** Full execution instructions. Never render this as descriptive copy. */
+  prompt: string;
   model: string | null;
   triggers: AutomationTrigger[];
   enabled: boolean;
@@ -205,6 +211,10 @@ export interface Automation {
   handler: string | null;
   builtin: boolean;
   cooldown_minutes: number | null;
+  /** Server-owned execution boundary. Preserved when duplicating a visible
+   * automation so a copy does not silently gain broader tool access. */
+  tool_scope?: string[] | null;
+  output_schema?: string | null;
   /** "automation" for standard scheduled tasks; "loop" for self-paced /loop
    *  and post-mode tasks. The composer already surfaces loops in a chip, so
    *  the desktop hides kind=loop from the main automation list. */
@@ -216,7 +226,9 @@ export interface Automation {
 
 export interface CreateAutomationPayload {
   name: string;
-  description: string;
+  prompt: string;
+  /** Omit to have Arden generate concise display copy. */
+  description?: string;
   model?: string | null;
   trigger_type?: AutomationTriggerType;
   at?: string;
@@ -231,8 +243,10 @@ export interface CreateAutomationPayload {
   end?: string;
   triggers?: AutomationTrigger[];
   cooldown_minutes?: number | null;
-  /** When set, the server marks the originating suggestion `accepted` on
-   *  successful create (see suggestionToPayload / AutomationSuggestion). */
+  tool_scope?: string[] | null;
+  output_schema?: string | null;
+  /** The server marks this contextual suggestion accepted after a successful
+   * create. It is draft provenance, not an editable automation field. */
   from_suggestion_id?: string;
 }
 
@@ -250,13 +264,15 @@ export interface AutomationRun {
   error: string | null;
 }
 
-/** Contextual, server-synthesized automation the user can accept in one
- *  click. Mirrors the `GET /automations/suggestions` response shape. */
+/** A server-generated candidate for the New menu. The suggester validates a
+ * time/event trigger before persisting, so its first trigger fully seeds the
+ * existing draft editor. */
 export interface AutomationSuggestion {
   id: string;
   name: string;
-  description: string;
-  triggers: AutomationTrigger[];
+  description: string | null;
+  prompt: string;
+  triggers: [AutomationTrigger & { type: "time" | "event" }, ...AutomationTrigger[]];
   rationale: string;
   evidence: string[];
   category: string;

@@ -201,6 +201,7 @@ Inline and user-authored Python workflows are disabled. """
 
 workflow_tool = tool(
     display_name="Workflow",
+    display_description="Run a built-in multi-agent workflow.",
     description=WORKFLOW_DESCRIPTION,
     input_model=WorkflowInput,
     policy=ToolPolicy(action=ToolAction.EXECUTE, scope=ToolScope.INTERNAL, permissions=frozenset({"skill_registry"})),

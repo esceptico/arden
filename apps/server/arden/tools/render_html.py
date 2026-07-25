@@ -55,6 +55,7 @@ async def render_html(execution: ToolExecution, args: RenderHtmlInput) -> ToolRe
 
 render_html_tool = tool(
     display_name="Render HTML",
+    display_description="Show a custom HTML widget in chat.",
     description=RENDER_HTML_DESCRIPTION,
     input_model=RenderHtmlInput,
     policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, offload=False),

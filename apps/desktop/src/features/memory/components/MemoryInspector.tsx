@@ -1,5 +1,8 @@
-import { useEffect, useMemo, useState, type ReactNode, type RefObject } from "react";
-import { Clock, Link2, List } from "@/components/icons";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Database, X } from "@/components/icons";
+import { BlurSwap } from "@/components/ui/BlurSwap";
+import { Tab, Tabs } from "@/components/ui/Tabs";
+import { TabPanels, useTabDirection } from "@/components/ui/TabPanels";
 import { MemoryDiffOverlay, patchStat } from "@/features/memory/components/MemoryDiffOverlay";
 import type {
   MemoryArtifactDetail,
@@ -9,18 +12,31 @@ import type {
   PageLinks,
 } from "@/features/memory/lib/notebookTypes";
 
-type CtxPane = "links" | "outline" | "activity";
+/** The three persistent page instruments. Outline is deliberately retired: the
+ * reading lane owns document navigation, while the peek owns page context. */
+export type MemoryInspectorPane = "links" | "records" | "activity";
 
 const PANE_STORAGE_KEY = "arden.desktop.memory.ctxPane";
-const PANES: Array<{ key: CtxPane; label: string; icon: typeof Link2 }> = [
-  { key: "links", label: "Links", icon: Link2 },
-  { key: "outline", label: "Outline", icon: List },
-  { key: "activity", label: "Activity", icon: Clock },
-];
+const PANE_ORDER: readonly MemoryInspectorPane[] = ["links", "records", "activity"];
+const LINK_DIRECTION_ORDER = ["outgoing", "incoming"] as const;
+type LinkDirection = (typeof LINK_DIRECTION_ORDER)[number];
+const ACTIVITY_PREVIEW = 8;
 
-function storedPane(): CtxPane {
-  const value = localStorage.getItem(PANE_STORAGE_KEY);
-  return value === "links" || value === "outline" || value === "activity" ? value : "links";
+export function loadMemoryInspectorPane(): MemoryInspectorPane {
+  try {
+    const value = localStorage.getItem(PANE_STORAGE_KEY);
+    return value === "links" || value === "records" || value === "activity" ? value : "links";
+  } catch {
+    return "links";
+  }
+}
+
+export function persistMemoryInspectorPane(value: MemoryInspectorPane): void {
+  try {
+    localStorage.setItem(PANE_STORAGE_KEY, value);
+  } catch {
+    /* localStorage unavailable — non-fatal */
+  }
 }
 
 function stem(path: string): string {
@@ -31,8 +47,8 @@ function parentDir(path: string): string {
   return path.includes("/") ? path.split("/").slice(0, -1).join("/") : "";
 }
 
-/** Wikilinks resolved to their display text, markdown markup stripped,
- *  collapsed to a single line — the excerpt form the draft renders. */
+/** Wikilinks resolved to their display text, markdown markup stripped, and
+ * collapsed to the one-line context shown in the incoming-links tab. */
 function cleanContext(context: string): string {
   return context
     .replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_match, target: string, display?: string) => display ?? target)
@@ -41,7 +57,6 @@ function cleanContext(context: string): string {
     .trim();
 }
 
-/** First case-insensitive occurrence of `needle` wrapped in <mark>. */
 function markFirst(text: string, needle: string): ReactNode {
   const trimmed = needle.trim();
   if (!trimmed) return text;
@@ -56,42 +71,6 @@ function markFirst(text: string, needle: string): ReactNode {
   );
 }
 
-type OutlineHeading = { text: string; level: number };
-
-/** Headings h1–h4 from raw markdown, skipping fenced code blocks. */
-function parseOutline(content: string): OutlineHeading[] {
-  const headings: OutlineHeading[] = [];
-  let fenced = false;
-  for (const line of content.split("\n")) {
-    if (/^\s*(```|~~~)/.test(line)) { fenced = !fenced; continue; }
-    if (fenced) continue;
-    const match = /^(#{1,4})\s+(.+?)\s*$/.exec(line);
-    if (match) headings.push({ level: match[1].length, text: match[2].replace(/[*_`[\]]/g, "") });
-  }
-  return headings;
-}
-
-function normalizeHeading(text: string): string {
-  return text.replace(/\s+/g, " ").trim().toLowerCase();
-}
-
-function noteScroller(container: HTMLElement | null): HTMLElement | null {
-  return container?.querySelector<HTMLElement>("[data-memory-note-scroll]") ?? null;
-}
-
-function headingNodes(scroller: HTMLElement, headings: OutlineHeading[]): Array<HTMLElement | null> {
-  const nodes = [...scroller.querySelectorAll<HTMLElement>("h1, h2, h3, h4")];
-  return headings.map((heading) =>
-    nodes.find((node) => normalizeHeading(node.textContent ?? "") === normalizeHeading(heading.text)) ?? null);
-}
-
-// Optional server field; typed locally until the /memory/links API lands it.
-type UnlinkedMention = { sourcePath: string; context: string };
-type PageLinksWithUnlinked = PageLinks & { unlinked?: UnlinkedMention[] };
-
-const OUTLINE_LEVEL_CLASS: Record<number, string> = { 1: "", 2: " l2", 3: " l3", 4: " l4" };
-const ACTIVITY_PREVIEW = 8;
-
 export function MemoryInspector({
   page,
   links,
@@ -104,7 +83,9 @@ export function MemoryInspector({
   titleForPath,
   onNavigate,
   onRetryLinks,
-  scrollTargetRef,
+  onClose,
+  onOpenDiff,
+  activePane = "links",
 }: {
   page: MemoryArtifactDetail;
   links: PageLinks | null;
@@ -117,23 +98,28 @@ export function MemoryInspector({
   titleForPath: (path: string) => string | undefined;
   onNavigate: (path: string, anchor: string | null) => void;
   onRetryLinks: () => void;
-  scrollTargetRef: RefObject<HTMLElement | null>;
+  onClose: () => void;
+  /** The workspace owns activity-diff lifetime so its blocking portal cannot
+   * dismiss and unmount this nonblocking peek in the same interaction. */
+  onOpenDiff?: (event: PageEditEvent, trigger: HTMLButtonElement) => void;
+  activePane?: MemoryInspectorPane;
 }) {
-  const [pane, setPane] = useState<CtxPane>(storedPane);
-  const [diffEvent, setDiffEvent] = useState<PageEditEvent | null>(null);
+  const pane = activePane;
+  const [linkDirection, setLinkDirection] = useState<LinkDirection>("outgoing");
+  // Isolated inspector stories still render the overlay locally. Production
+  // supplies `onOpenDiff`, keeping the modal above the peek lifecycle.
+  const [localDiffEvent, setLocalDiffEvent] = useState<PageEditEvent | null>(null);
+  const [localDiffOpen, setLocalDiffOpen] = useState(false);
   const [activityExpanded, setActivityExpanded] = useState(false);
-  const [activeHeading, setActiveHeading] = useState(0);
+  const paneDirection = useTabDirection(PANE_ORDER, pane);
+  const linkDirectionMotion = useTabDirection(LINK_DIRECTION_ORDER, linkDirection);
 
   useEffect(() => {
-    setDiffEvent(null);
+    setLinkDirection("outgoing");
+    setLocalDiffEvent(null);
+    setLocalDiffOpen(false);
     setActivityExpanded(false);
-    setActiveHeading(0);
   }, [page.path]);
-
-  const selectPane = (next: CtxPane) => {
-    setPane(next);
-    localStorage.setItem(PANE_STORAGE_KEY, next);
-  };
 
   const outgoing = useMemo(() => {
     const seen = new Set<string>();
@@ -157,216 +143,183 @@ export function MemoryInspector({
     return [...groups];
   }, [links]);
 
-  const unlinked = (links as PageLinksWithUnlinked | null)?.unlinked ?? [];
-
-  const headings = useMemo(() => parseOutline(page.content), [page.content]);
-
-  useEffect(() => {
-    if (pane !== "outline") return;
-    const scroller = noteScroller(scrollTargetRef.current);
-    if (!scroller || headings.length === 0) return;
-    const onScroll = () => {
-      const nodes = headingNodes(scroller, headings);
-      const top = scroller.getBoundingClientRect().top + 96;
-      let current = 0;
-      nodes.forEach((node, index) => {
-        if (node && node.getBoundingClientRect().top <= top) current = index;
-      });
-      setActiveHeading(current);
-    };
-    onScroll();
-    scroller.addEventListener("scroll", onScroll, { passive: true });
-    return () => scroller.removeEventListener("scroll", onScroll);
-  }, [pane, headings, scrollTargetRef, page.path]);
-
-  const jumpToHeading = (index: number) => {
-    const scroller = noteScroller(scrollTargetRef.current);
-    if (!scroller) return;
-    headingNodes(scroller, headings)[index]?.scrollIntoView({ block: "start" });
-  };
-
   const events = useMemo(() => {
     const list = [...(history?.events ?? [])];
     list.sort((a, b) => b.sequence - a.sequence);
     return list;
   }, [history]);
   const visibleEvents = activityExpanded ? events : events.slice(0, ACTIVITY_PREVIEW);
+  const records = page.timeline.filter((record) => !record.superseded);
+  const openDiff = (event: PageEditEvent, trigger: HTMLButtonElement) => {
+    if (onOpenDiff) {
+      onOpenDiff(event, trigger);
+      return;
+    }
+    setLocalDiffEvent(event);
+    setLocalDiffOpen(true);
+  };
 
-  const pageStem = stem(page.path);
-
-  return (
+  const linkBody = linkError ? (
     <>
-      <div className="mw-ctx-toolbar">
-        {PANES.map(({ key, label, icon: Icon }) => (
-          <button
-            key={key}
-            type="button"
-            className={pane === key ? "mw-icon-btn on" : "mw-icon-btn"}
-            aria-pressed={pane === key}
-            aria-label={label}
-            title={label}
-            onClick={() => selectPane(key)}
-          >
-            <Icon size={15} />
-          </button>
-        ))}
-      </div>
-
-      {pane === "links" && (
+      <p role="alert" className="mw-ctx-empty">{linkError}</p>
+      <button type="button" className="mw-recs-more" onClick={onRetryLinks}>Retry</button>
+    </>
+  ) : linksLoading && !links ? (
+    <p className="mw-ctx-empty">Loading…</p>
+  ) : (
+    <TabPanels value={linkDirection} direction={linkDirectionMotion} className="mw-ctx-link-content">
+      {linkDirection === "outgoing" ? (
         <div>
-          <div className="mw-ctx-pane-head">
-            <h2>Links</h2>
-            <span className="mw-ctx-count">{outgoing.length}</span>
-          </div>
-          {linkError ? (
-            <>
-              <p role="alert" className="mw-ctx-empty">{linkError}</p>
-              <button type="button" className="mw-recs-more" onClick={onRetryLinks}>Retry</button>
-            </>
-          ) : linksLoading && !links ? (
-            <p className="mw-ctx-empty">Loading…</p>
-          ) : (
-            <>
-              {outgoing.length === 0 && <p className="mw-ctx-empty">No links on this page.</p>}
-              {outgoing.map((link) => {
-                const path = link.resolvedPath;
-                const title = link.display || (path ? titleForPath(path) ?? stem(path) : link.target);
-                return (
-                  <button
-                    key={path ?? link.target}
-                    type="button"
-                    className="mw-lk-row"
-                    disabled={navigationDisabled || !path}
-                    onClick={() => path && onNavigate(path, link.heading)}
-                  >
-                    <span className="mw-lk-icon"><Link2 size={13} /></span>
-                    <span className="mw-lk-body">
-                      <span className="mw-lk-title">{title}</span>
-                      <span className="mw-lk-sub">{path ? parentDir(path) : "unresolved"}</span>
-                    </span>
-                  </button>
-                );
-              })}
-
-              <div className="mw-ctx-pane-head sub">
-                <h2>Linked mentions</h2>
-                <span className="mw-ctx-count">{links?.totalBacklinks ?? 0}</span>
-              </div>
-              {backlinkGroups.length === 0 && <p className="mw-ctx-empty">No backlinks yet.</p>}
-              {backlinkGroups.map(([sourcePath, group]) => (
-                <div key={sourcePath} className="mw-bl-group">
-                  <button
-                    type="button"
-                    className="mw-bl-title"
-                    disabled={navigationDisabled}
-                    title={sourcePath}
-                    onClick={() => onNavigate(sourcePath, null)}
-                  >
-                    {titleForPath(sourcePath) ?? stem(sourcePath)}
-                  </button>
-                  {group.slice(0, 2).map((link, index) => (
-                    <p key={`${link.line}:${link.column}:${index}`} className="mw-bl-excerpt">
-                      {markFirst(cleanContext(link.context), link.display)}
-                    </p>
-                  ))}
-                </div>
-              ))}
-
-              <div className="mw-ctx-pane-head sub">
-                <h2>Unlinked mentions</h2>
-                <span className="mw-ctx-count">{unlinked.length}</span>
-              </div>
-              {unlinked.length === 0 && <p className="mw-ctx-empty">None found.</p>}
-              {unlinked.map((mention, index) => (
-                <div key={`${mention.sourcePath}:${index}`} className="mw-bl-group">
-                  <button
-                    type="button"
-                    className="mw-bl-title"
-                    disabled={navigationDisabled}
-                    title={mention.sourcePath}
-                    onClick={() => onNavigate(mention.sourcePath, null)}
-                  >
-                    {titleForPath(mention.sourcePath) ?? stem(mention.sourcePath)}
-                  </button>
-                  <p className="mw-bl-excerpt">{markFirst(cleanContext(mention.context), pageStem)}</p>
-                </div>
-              ))}
-            </>
-          )}
+          {outgoing.length === 0 && <p className="mw-ctx-empty">No outgoing links.</p>}
+          {outgoing.map((link) => {
+            const path = link.resolvedPath;
+            const title = link.display || (path ? titleForPath(path) ?? stem(path) : link.target);
+            return (
+              <button
+                key={path ?? link.target}
+                type="button"
+                className="mw-lk-row"
+                disabled={navigationDisabled || !path}
+                onClick={() => path && onNavigate(path, link.heading)}
+              >
+                <span className="mw-lk-body">
+                  <span className="mw-lk-title">{title}</span>
+                  <span className="mw-lk-sub">{path ? parentDir(path) || "pages" : "unresolved"}</span>
+                </span>
+              </button>
+            );
+          })}
         </div>
-      )}
-
-      {pane === "outline" && (
+      ) : (
         <div>
-          <div className="mw-ctx-pane-head">
-            <h2>Outline</h2>
-            <span className="mw-ctx-count">{headings.length}</span>
-          </div>
-          {headings.length === 0 && <p className="mw-ctx-empty">No headings.</p>}
-          {headings.map((heading, index) => (
-            <button
-              key={`${heading.text}:${index}`}
-              type="button"
-              className={`mw-outline-row${OUTLINE_LEVEL_CLASS[heading.level]}${index === activeHeading ? " active" : ""}`}
-              onClick={() => jumpToHeading(index)}
-            >
-              {heading.text}
-            </button>
+          {backlinkGroups.length === 0 && <p className="mw-ctx-empty">No incoming links.</p>}
+          {backlinkGroups.map(([sourcePath, group]) => (
+            <div key={sourcePath} className="mw-bl-group">
+              <button
+                type="button"
+                className="mw-bl-title"
+                disabled={navigationDisabled}
+                title={sourcePath}
+                onClick={() => onNavigate(sourcePath, null)}
+              >
+                {titleForPath(sourcePath) ?? stem(sourcePath)} <span>· mention</span>
+              </button>
+              {group.slice(0, 2).map((link, index) => (
+                <p key={`${link.line}:${link.column}:${index}`} className="mw-bl-excerpt">
+                  {markFirst(cleanContext(link.context), link.display)}
+                </p>
+              ))}
+            </div>
           ))}
         </div>
       )}
+    </TabPanels>
+  );
 
-      {pane === "activity" && (
-        <div>
-          <div className="mw-ctx-pane-head">
-            <h2>Activity</h2>
-            <span className="mw-ctx-count">{history?.total ?? 0}</span>
-          </div>
-          {historyError ? (
-            <p role="alert" className="mw-ctx-empty">{historyError}</p>
-          ) : historyLoading && !history ? (
-            <p className="mw-ctx-empty">Loading…</p>
-          ) : events.length === 0 ? (
-            <p className="mw-ctx-empty">No edits recorded.</p>
-          ) : (
-            <>
-              <div className="mw-recs">
-                {visibleEvents.map((event, index) => {
-                  const at = event.occurredAt.slice(0, 16).replace("T", " ");
-                  return (
-                    <div key={event.id} className={index === 0 ? "mw-rec accent" : "mw-rec"}>
-                      <span className="dot" />
-                      <button
-                        type="button"
-                        title={`${at} — show diff`}
-                        onClick={() => setDiffEvent(event)}
-                      >
-                        <div className="when">
-                          <span>{at.slice(5)}</span>
-                          <span className="actor">{event.actor}</span>
-                          <span className="stat">{patchStat(event.patch)}</span>
-                        </div>
-                      </button>
-                    </div>
-                  );
-                })}
+  return (
+    <>
+      <div className="mw-ctx-toolbar arden-peek-rule-below">
+        <BlurSwap swapKey={pane} blur={1.4} className="mw-ctx-label">{pane}</BlurSwap>
+        {pane === "links" && (
+          <Tabs
+            value={linkDirection}
+            onChange={(value) => setLinkDirection(value as LinkDirection)}
+            variant="plain"
+            label="Link direction"
+            className="mw-ctx-tabs"
+          >
+            <Tab
+              value="outgoing"
+              className={linkDirection === "outgoing" ? "on" : undefined}
+            >
+              outgoing <span className="mw-tab-count">{outgoing.length}</span>
+            </Tab>
+            <Tab
+              value="incoming"
+              className={linkDirection === "incoming" ? "on" : undefined}
+            >
+              incoming <span className="mw-tab-count">{links?.totalBacklinks ?? 0}</span>
+            </Tab>
+          </Tabs>
+        )}
+        <button type="button" className="mw-icon-btn mw-ctx-close" onClick={onClose} aria-label="Close peek" title="Close peek">
+          <X size={15} aria-hidden />
+        </button>
+      </div>
+
+      <TabPanels value={pane} direction={paneDirection} className="mw-ctx-content scroll-fade">
+        {pane === "links" && linkBody}
+
+        {pane === "records" && (
+          <div>
+            {records.length === 0 ? (
+              <div className="mw-ctx-empty mw-page-records-empty">
+                <Database size={16} aria-hidden />
+                <span>No records on this page.</span>
               </div>
-              {events.length > ACTIVITY_PREVIEW && (
-                <button
-                  type="button"
-                  className="mw-recs-more"
-                  onClick={() => setActivityExpanded((expanded) => !expanded)}
-                >
-                  {activityExpanded ? "Show fewer" : `All ${history?.total ?? events.length} events ›`}
-                </button>
-              )}
-            </>
-          )}
-        </div>
-      )}
+            ) : (
+              <div className="mw-page-records">
+                {records.map((record) => (
+                  <article key={record.id} className="mw-page-record">
+                    <div className="mw-page-record__meta">
+                      <span>{record.date}</span>
+                      <span>·</span>
+                      <span>{record.kind}</span>
+                      {record.pinned && <span>pinned</span>}
+                    </div>
+                    <p>{record.text}</p>
+                  </article>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
-      {diffEvent && (
-        <MemoryDiffOverlay event={diffEvent} path={page.path} onClose={() => setDiffEvent(null)} />
+        {pane === "activity" && (
+          <div>
+            {historyError ? (
+              <p role="alert" className="mw-ctx-empty">{historyError}</p>
+            ) : historyLoading && !history ? (
+              <p className="mw-ctx-empty">Loading…</p>
+            ) : events.length === 0 ? (
+              <p className="mw-ctx-empty">No edits recorded.</p>
+            ) : (
+              <>
+                <div className="mw-recs">
+                  {visibleEvents.map((event) => {
+                    const at = event.occurredAt.slice(0, 16).replace("T", " ");
+                    return (
+                      <div key={event.id} className="mw-rec">
+                        <button type="button" title={`${at} — show diff`} onClick={(clickEvent) => openDiff(event, clickEvent.currentTarget)}>
+                          <div className="when">
+                            <span>{at.slice(5)}</span>
+                            <span className="actor">{event.actor}</span>
+                            <span className="stat">{patchStat(event.patch)}</span>
+                          </div>
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+                {events.length > ACTIVITY_PREVIEW && (
+                  <button type="button" className="mw-recs-more" onClick={() => setActivityExpanded((expanded) => !expanded)}>
+                    {activityExpanded ? "Show fewer" : `All ${history?.total ?? events.length} events ›`}
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </TabPanels>
+
+      {!onOpenDiff && localDiffEvent && (
+        <MemoryDiffOverlay
+          event={localDiffEvent}
+          path={page.path}
+          open={localDiffOpen}
+          onOpenChange={setLocalDiffOpen}
+          onExitComplete={() => setLocalDiffEvent(null)}
+        />
       )}
     </>
   );

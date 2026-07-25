@@ -32,6 +32,7 @@ function installRequestRecorder(data: unknown = {}) {
 const config = {
   chat_model: "gpt-5.2",
   research_model: "claude-opus-4-7",
+  workflow_model: "claude-opus-4-7",
   memory_model: "gpt-5.2",
   embedding_model: "text-embedding-3-small",
   web_search: "auto",
@@ -68,18 +69,31 @@ test("rejects config responses without server-owned compaction token triggers", 
 test("rejects stale model metadata before it enters state", () => {
   expect(() => parseModelsResponse({
     models: ["gpt-5.2"],
-    groups: [{ provider: "openai", models: ["gpt-5.2"] }],
+    groups: [{ provider: "openai", label: "OpenAI", models: ["gpt-5.2"] }],
   })).toThrow("reasoning_efforts");
+});
+
+test("requires server-owned provider labels in model groups", () => {
+  expect(() => parseModelsResponse({
+    models: ["gpt-5.2"],
+    groups: [{ provider: "openai", models: ["gpt-5.2"] }],
+    reasoning_efforts: {},
+    chat_model: "gpt-5.2",
+    research_model: "gpt-5.2",
+    workflow_model: "gpt-5.2",
+    memory_model: "gpt-5.2",
+  })).toThrow("invalid groups");
 });
 
 test("accepts current config and model metadata contracts", () => {
   expect(parseServerConfig(config)).toEqual(config);
   expect(parseModelsResponse({
     models: ["gpt-5.2"],
-    groups: [{ provider: "openai", models: ["gpt-5.2"] }],
+    groups: [{ provider: "openai", label: "OpenAI", models: ["gpt-5.2"] }],
     reasoning_efforts: { "gpt-5.2": ["low", "medium"] },
     chat_model: "gpt-5.2",
     research_model: "gpt-5.2",
+    workflow_model: "gpt-5.2",
     memory_model: "gpt-5.2",
   })).toMatchObject({ reasoning_efforts: { "gpt-5.2": ["low", "medium"] } });
 });

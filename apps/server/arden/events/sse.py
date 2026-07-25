@@ -96,7 +96,7 @@ class EventType(StrEnum):
     SESSION_UPDATED = "session_updated"
     SESSION_CREATED = "session_created"
     SESSION_ACTIVITY = "session_activity"
-    COMMAND_COMPLETED = "command_completed"
+    NAVIGATION_REQUESTED = "navigation_requested"
 
 
 # Token-level delta events are ephemeral transport: their cumulative text is
@@ -193,6 +193,20 @@ class AreasChangedEvent(SSEEvent):
 
 
 @dataclass(frozen=True)
+class NavigationRequestedEvent(SSEEvent):
+    """An agent asked the desktop to take the user somewhere in the app.
+
+    Rides the global automation bus, so the wire `session_id` is the bus key —
+    the requesting session travels as `origin_session_id` (same reason
+    SessionCreatedEvent nests its row under `session`)."""
+
+    type: EventType = field(default=EventType.NAVIGATION_REQUESTED, init=False)
+    origin_session_id: str = ""
+    destination: dict = field(default_factory=dict)
+    label: str = ""
+
+
+@dataclass(frozen=True)
 class SessionCreatedEvent(SSEEvent):
     type: EventType = field(default=EventType.SESSION_CREATED, init=False)
     # Full SessionListItem-shaped row so the client can render the new
@@ -224,13 +238,6 @@ class RunFinishedEvent(SSEEvent):
     # checks it against `max_messages` for the message-pressure arc. 0 when
     # unavailable (cancelled runs etc.).
     message_count: int = 0
-
-
-@dataclass(frozen=True)
-class CommandCompletedEvent(SSEEvent):
-    type: EventType = field(default=EventType.COMMAND_COMPLETED, init=False)
-    run_id: str = ""
-    outcome: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -662,7 +669,6 @@ class TodoUpdatedEvent(SSEEvent):
 _EVENT_CLASSES = {
     EventType.RUN_STARTED.value: RunStartedEvent,
     EventType.RUN_FINISHED.value: RunFinishedEvent,
-    EventType.COMMAND_COMPLETED.value: CommandCompletedEvent,
     EventType.RUN_ERROR.value: RunErrorEvent,
     EventType.TEXT_MESSAGE_START.value: TextMessageStartEvent,
     EventType.TEXT_MESSAGE_CONTENT.value: TextMessageContentEvent,
@@ -703,6 +709,7 @@ _EVENT_CLASSES = {
     EventType.SESSION_UPDATED.value: SessionUpdatedEvent,
     EventType.SESSION_CREATED.value: SessionCreatedEvent,
     EventType.SESSION_ACTIVITY.value: SessionActivityEvent,
+    EventType.NAVIGATION_REQUESTED.value: NavigationRequestedEvent,
 }
 
 
@@ -815,9 +822,11 @@ def agent_events_to_sse(event) -> tuple[SSEEvent, ...]:
                 ),
             )
         case ToolStarted():
-            title, args = split_tool_arguments(event.args)
-            description = title or _format_call(event.display_name or event.name, args)
-            args_json = json.dumps(args) if args else "{}"
+            title, behavior_args = split_tool_arguments(event.args)
+            description = title or _format_call(event.display_name or event.name, behavior_args)
+            # Preserve the canonical presentation argument for transcript
+            # projection. Execution strips it before any behavioral use.
+            args_json = json.dumps(event.args) if event.args else "{}"
             return (
                 ToolCallStartEvent(
                     tool_call_id=event.tool_id,

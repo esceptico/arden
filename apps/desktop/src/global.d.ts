@@ -1,5 +1,6 @@
 declare module "*.css";
 declare module "@fontsource-variable/geist";
+declare module "@fontsource-variable/geist-mono";
 
 /** What the quick-capture window submits and the main window receives. */
 interface QuickCapturePayload {

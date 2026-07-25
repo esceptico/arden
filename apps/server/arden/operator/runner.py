@@ -2,12 +2,12 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 
-from coolname import generate_slug
 from pydantic import BaseModel
 
 from arden.agent import Agent, Result, Role, Usage
 from arden.context.models import SessionState
 from arden.core.factory import AgentConfig, create_agent
+from arden.core.ids import generate_run_id
 from arden.core.prompts import build_system_prompt
 from arden.events.internal import RunCompleted
 from arden.events.sse import AutomationProgressEvent, ToolCallResultEvent, ToolCallStartEvent, agent_event_to_sse
@@ -68,7 +68,7 @@ class RunResult:
 
 
 async def _prepare(deps: OperatorDeps, request: RunRequest) -> tuple[Agent, list[dict], str, str]:
-    run_id = generate_slug(2)
+    run_id = generate_run_id()
     session_state = deps.create_session()
 
     memory_context = await resident_profile(deps.memory_records)

@@ -12,7 +12,7 @@ from arden.automation.scheduler import Scheduler
 from arden.automation.service import AutomationService
 from arden.automation.store import AutomationStore
 from arden.automation.triggers import MessageTrigger, TimeTrigger
-from arden.events.internal import RunCompleted
+from arden.events.internal import RunCompleted, RunFailed
 from arden.events.triggers import MessageReceived
 
 
@@ -54,7 +54,9 @@ def _loop(
     return Automation(
         task_id=task_id,
         name=f"Loop: {prompt[:40]}",
-        description=prompt,
+        description=None,
+        description_source=None,
+        prompt=prompt,
         model=None,
         triggers=[TimeTrigger(every=every)],
         enabled=True,
@@ -115,7 +117,7 @@ async def test_scheduler_dispatches_due_loop(store: AutomationStore):
 
     assert len(dispatched) == 1
     assert dispatched[0].task_id == "loop-1"
-    assert dispatched[0].description == "check CI"
+    assert dispatched[0].prompt == "check CI"
 
     reloaded = await store.get("loop-1")
     assert reloaded.iteration_count == 1
@@ -420,7 +422,7 @@ async def test_create_loop_via_service_stores_correctly(store: AutomationStore, 
 
     assert loop.kind == "loop"
     assert loop.thread_id == "sess-1"
-    assert loop.description == "watch CI"
+    assert loop.prompt == "watch CI"
     assert loop.max_iterations == 10
     assert loop.stop_when == "when green"
     assert loop.triggers[0].params()["every"] == "5m"
@@ -584,7 +586,9 @@ async def test_aged_out_loop_clears_next_run_at(store: AutomationStore):
     loop = Automation(
         task_id="loop-old",
         name="x",
-        description="x",
+        description=None,
+        description_source=None,
+        prompt="Check the current status.",
         model=None,
         triggers=[TimeTrigger(every="5m")],
         enabled=True,
@@ -617,7 +621,9 @@ async def test_aged_out_loop_disables_without_firing(store: AutomationStore):
     loop = Automation(
         task_id="loop-old",
         name="x",
-        description="x",
+        description=None,
+        description_source=None,
+        prompt="Check the current status.",
         model=None,
         triggers=[TimeTrigger(every="5m")],
         enabled=True,
@@ -830,7 +836,9 @@ async def _save_message_automation(
         Automation(
             task_id=task_id,
             name="watcher",
-            description="triage",
+            description="Triages matching messages.",
+            description_source="manual",
+            prompt="Triage matching messages.",
             model=None,
             triggers=[trigger],
             enabled=enabled,
@@ -926,7 +934,9 @@ async def test_post_mode_aged_out_disables_without_firing(store: AutomationStore
     loop = Automation(
         task_id="loop-old-post",
         name="x",
-        description="x",
+        description=None,
+        description_source=None,
+        prompt="Check the current status.",
         model=None,
         triggers=[TimeTrigger(every="5m")],
         enabled=True,
@@ -1086,7 +1096,9 @@ def test_loop_target_id_returns_none_when_unset():
     auto = Automation(
         task_id="t",
         name="x",
-        description="x",
+        description=None,
+        description_source=None,
+        prompt="Check the current status.",
         model=None,
         triggers=[TimeTrigger(every="5m")],
         enabled=True,
@@ -1122,7 +1134,8 @@ async def test_create_with_thread_id_routes_through_post_dispatcher(store: Autom
 
     auto = await svc.create(
         name="channel-watcher",
-        description="post into channel",
+        description="Posts updates into the channel.",
+        prompt="Post the current update into the channel.",
         trigger_type="time",
         every="5m",
         thread_id="sess-channel",
@@ -1131,8 +1144,7 @@ async def test_create_with_thread_id_routes_through_post_dispatcher(store: Autom
     assert auto is not None
     assert auto.kind == "automation"  # NOT "loop"
     assert auto.thread_id == "sess-channel"
-    # description is the authoritative prompt for session-bound automations.
-    assert auto.description == "post into channel"
+    assert auto.prompt == "Post the current update into the channel."
 
     # Force next_run_at into the past so _tick picks it up immediately.
     await store.set_next_run(auto.task_id, datetime.now(UTC) - timedelta(seconds=1))
@@ -1158,7 +1170,9 @@ async def test_handle_run_completed_fires_kind_automation_with_thread_id(
     auto = Automation(
         task_id="channel-auto",
         name="x",
-        description="post status",
+        description="Posts a status update.",
+        description_source="manual",
+        prompt="Post the current status update.",
         model=None,
         triggers=[TimeTrigger(every="5m")],
         enabled=True,
@@ -1204,7 +1218,8 @@ async def test_iteration_loop_with_only_thread_id_fires(store: AutomationStore, 
 
     auto = await svc.create(
         name="iter-thread-only",
-        description="iterate me",
+        description="Continues the session work.",
+        prompt="Continue the session work.",
         trigger_type="time",
         every="5m",
         thread_id="sess-new",
@@ -1298,6 +1313,25 @@ async def test_detached_run_settles_on_run_completed(store: AutomationStore):
     settled = await store.get(auto.task_id)
     assert settled.running_since is None
     assert settled.last_result == "two emails need replies"
+    assert auto.task_id not in sched._detached_task_ids
+
+
+@pytest.mark.asyncio
+async def test_detached_run_fails_immediately_on_chat_error(store: AutomationStore):
+    auto = _loop()
+    await store.save(auto)
+    assert await store.try_mark_running(auto.task_id, datetime.now(UTC))
+    sched, _ = _make_scheduler(store)
+    await sched._run_and_finalize(auto)
+
+    await sched.handle_run_failed(
+        RunFailed(run_id="run-1", session_id=auto.thread_id, error="provider rejected history")
+    )
+
+    runs = await store.list_runs(auto.task_id)
+    assert runs[0]["status"] == "failed"
+    assert runs[0]["error"] == "provider rejected history"
+    assert (await store.get(auto.task_id)).running_since is None
     assert auto.task_id not in sched._detached_task_ids
 
 

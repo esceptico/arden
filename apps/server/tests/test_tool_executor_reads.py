@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from arden.agent.ledger import SharedLedger
 from arden.context.models import SessionState
 from arden.core.tool_executor import ArdenToolExecutor
+from arden.tool_call_metadata import DISPLAY_TITLE_ARG
 from arden.tools.core import ToolResult, tool
 from arden.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.registry import ToolRegistry
@@ -58,9 +59,21 @@ async def test_arden_tool_executor_skips_duplicate_successful_read():
         skip_duplicate_reads=True,
     )
 
-    first = asyncio.create_task(executor.execute("search", {"query": "mcp"}, "call-1"))
+    first = asyncio.create_task(
+        executor.execute(
+            "search",
+            {"query": "mcp", DISPLAY_TITLE_ARG: "Searching MCP docs"},
+            "call-1",
+        )
+    )
     await first_started.wait()
-    second = asyncio.create_task(executor.execute("search", {"query": "mcp"}, "call-2"))
+    second = asyncio.create_task(
+        executor.execute(
+            "search",
+            {"query": "mcp", DISPLAY_TITLE_ARG: "Checking MCP references"},
+            "call-2",
+        )
+    )
     await asyncio.sleep(0)
 
     assert calls == 1

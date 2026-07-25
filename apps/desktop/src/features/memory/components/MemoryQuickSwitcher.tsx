@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { FileText } from "@/components/icons";
 import clsx from "clsx";
+import { useOverlayLayer } from "@/lib/overlayStack";
 import { useFocusTrap } from "@/lib/hooks";
 import type { MemoryArtifactSummary } from "@/features/memory/lib/notebookTypes";
 import { stem } from "@/features/memory/lib/workspaceTree";
@@ -94,6 +95,7 @@ export function MemoryQuickSwitcher({
   const inputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   useFocusTrap(panelRef, open);
+  useOverlayLayer(panelRef, open, onClose);
 
   const results = rankSwitcherMatches(artifacts, query, recentPaths);
   const safeHighlighted = Math.min(highlighted, Math.max(0, results.length - 1));
@@ -104,23 +106,14 @@ export function MemoryQuickSwitcher({
       ?.scrollIntoView({ block: "nearest" });
   }, [safeHighlighted]);
 
-  // Reset state on open; Escape closes only the switcher — capture phase so
-  // it runs before the hosting PageModal's own bubble-phase Escape handler,
-  // then stopPropagation keeps that handler from also firing.
+  // Reset state on open. Escape is owned by the shared overlay stack, so the
+  // topmost surface is the only one allowed to dismiss.
   useEffect(() => {
     if (!open) return;
     setQuery("");
     setHighlighted(0);
     requestAnimationFrame(() => inputRef.current?.focus());
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      event.stopPropagation();
-      onClose();
-    };
-    window.addEventListener("keydown", onKeyDown, true);
-    return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [open, onClose]);
+  }, [open]);
 
   const root = document.querySelector("#app");
   if (!root || !open) return null;
@@ -129,7 +122,7 @@ export function MemoryQuickSwitcher({
   // precedent as CommandPalette.
   return createPortal(
     <div
-      className="modal-scrim absolute inset-0 z-[var(--z-modal)] grid place-items-start justify-center pt-[14vh] p-8"
+      className="memory-switcher-scrim"
       onClick={onClose}
     >
       <div
@@ -138,10 +131,10 @@ export function MemoryQuickSwitcher({
         aria-modal="true"
         aria-label="Quick switcher"
         tabIndex={-1}
-        className="surface-panel surface-radius-md w-[min(560px,calc(100vw-80px))] max-h-[62vh] grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
+        className="memory-switcher"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="px-4 pt-3 pb-2.5 border-b border-line-soft">
+        <div className="memory-switcher__query">
           <input
             ref={inputRef}
             type="text"
@@ -168,17 +161,17 @@ export function MemoryQuickSwitcher({
             }}
             placeholder="Jump to note…"
             spellCheck={false}
-            className="w-full h-8 bg-transparent text-md text-ink placeholder:text-muted outline-none"
+            className="memory-switcher__input"
           />
         </div>
         <div
           role="listbox"
           id="memory-quick-switcher-listbox"
           aria-label="Notes"
-          className="overflow-y-auto overflow-x-hidden scroll-thin p-2"
+          className="memory-switcher__results scroll-fade"
         >
           {results.length === 0 ? (
-            <div className="grid place-items-center min-h-[80px] text-sm italic text-muted">
+            <div className="memory-switcher__empty">
               Nothing matches.
             </div>
           ) : (
@@ -194,15 +187,15 @@ export function MemoryQuickSwitcher({
                   onClick={() => onSelect(artifact.path)}
                   onMouseEnter={() => setHighlighted(index)}
                   title={artifact.path}
-                  className="app-row group flex w-full min-w-0 items-start gap-2 rounded-[10px] px-2.5 py-1.5 text-left"
+                  className="memory-switcher__row"
                   data-active={index === safeHighlighted}
                 >
-                  <FileText className={clsx("mt-px h-3.5 w-3.5 shrink-0", index === safeHighlighted ? "text-muted" : "text-faint")} />
-                  <span className="min-w-0 flex-1">
-                    <span className={clsx("block truncate text-sm", index === safeHighlighted ? "font-medium text-ink" : "text-ink-soft group-hover:text-ink")}>
+                  <FileText className={clsx("memory-switcher__row-icon", index === safeHighlighted && "active")} />
+                  <span className="memory-switcher__row-copy">
+                    <span className={clsx("memory-switcher__row-title", index === safeHighlighted && "active")}>
                       {stem(artifact.path)}
                     </span>
-                    {parent && <span className="block truncate text-2xs text-muted">{parent}</span>}
+                    {parent && <span className="memory-switcher__row-path">{parent}</span>}
                   </span>
                 </button>
               );

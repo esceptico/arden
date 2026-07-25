@@ -69,12 +69,12 @@ function SkillInlineToken({ skill }: { skill: SkillDescriptor }) {
 
 function GoalMessageBubble({ objective }: { objective: string }) {
   return (
-    <div className="surface-panel surface-radius-lg max-w-[75%] px-3.5 py-2 text-left">
+    <div className="board-user__bubble board-user__goal surface-panel text-left">
       <div className="mb-1 inline-flex items-center gap-1.5 text-2xs font-medium text-muted">
         <Target size={ICON.XS} strokeWidth={2} />
         <span>Goal</span>
       </div>
-      <div className="whitespace-pre-wrap break-words text-base leading-[1.5] text-ink">
+      <div className="whitespace-pre-wrap break-words text-ink">
         {objective}
       </div>
     </div>
@@ -99,41 +99,47 @@ export const UserMessage = memo(function UserMessage({ id }: { id: string }) {
   const visibleText = goalMatch ?? (skillMatch ? skillMatch.rest : message.content);
   const showBubble = visibleText.trim().length > 0 || Boolean(skillMatch);
   const images = message.images ?? [];
+  const hasContent = images.length > 0 || Boolean(goalMatch) || showBubble;
 
   return (
     <article
       className={clsx(
-        "group flex flex-col items-end transition-[background-color,box-shadow] duration-panel",
+        "board-user group flex flex-col items-end transition-[background-color,box-shadow] duration-panel",
         entryAnimation(message, "animate-fade-in"),
         sourceFocused && SOURCE_FOCUS_CLASS,
       )}
       data-id={id}
+      data-chat-rail-anchor
       data-source-focus={sourceFocused ? "true" : undefined}
       data-source-index={message.sourceIndex}
     >
-      {images.length > 0 && (
-        <div className="flex flex-wrap justify-end gap-1.5 max-w-[75%] mb-1.5">
-          {images.map((img, i) => (
-            <img
-              key={i}
-              src={`data:${img.media_type};base64,${img.data}`}
-              alt=""
-              className="rounded-lg max-h-[180px] max-w-[220px] object-cover outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10"
-            />
-          ))}
-        </div>
-      )}
-      {goalMatch ? (
-        <GoalMessageBubble objective={goalMatch} />
-      ) : showBubble && (
-        <div className="surface-panel surface-radius-lg max-w-[75%] px-3.5 py-2 text-ink text-base leading-[1.5] break-words text-left">
-          {skillMatch && (
-            <>
-              <SkillInlineToken skill={skillMatch.skill} />
-              {visibleText.trim().length > 0 ? " " : null}
-            </>
+      {hasContent && (
+        <div className="board-user__content flex max-w-full flex-col items-end">
+          {images.length > 0 && (
+            <div className="board-user__images flex max-w-[75%] flex-wrap justify-end gap-1.5">
+              {images.map((img, i) => (
+                <img
+                  key={i}
+                  src={`data:${img.media_type};base64,${img.data}`}
+                  alt=""
+                  className="max-h-[180px] max-w-[220px] rounded-lg object-cover outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10"
+                />
+              ))}
+            </div>
           )}
-          <span className="whitespace-pre-wrap">{visibleText}</span>
+          {goalMatch ? (
+            <GoalMessageBubble objective={goalMatch} />
+          ) : showBubble && (
+            <div className="board-user__bubble surface-panel text-left text-ink break-words">
+              {skillMatch && (
+                <>
+                  <SkillInlineToken skill={skillMatch.skill} />
+                  {visibleText.trim().length > 0 ? " " : null}
+                </>
+              )}
+              <span className="whitespace-pre-wrap">{visibleText}</span>
+            </div>
+          )}
         </div>
       )}
       <MessageActions id={id} role="user" />

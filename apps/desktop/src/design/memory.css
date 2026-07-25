@@ -1,0 +1,1456 @@
+/*
+ * Memory — Board reading room
+ *
+ * This feature consumes the shared Arden system rather than defining a second
+ * palette. The only custom properties here are persisted geometry values
+ * written by the existing resize handles.
+ */
+
+.memory-surface {
+  isolation: isolate;
+  color: var(--ink);
+  background: var(--paper);
+}
+
+.memory-surface .memory-ws {
+  --mw-rail-w: var(--sidebar-width);
+  --mw-ctx-w: var(--peek-width);
+  --mw-chrome-top: var(--memory-chrome-top);
+  --mw-peek-top: var(--memory-peek-top);
+  --mw-rail-edge: .5rem;
+  --mw-desk-height: calc(var(--control-size) + 6px);
+
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--ink);
+  background: var(--paper);
+}
+
+.memory-surface .memory-ws :focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--accent) 72%, transparent);
+  outline-offset: 2px;
+}
+
+/* ── Tier 1: rail ─────────────────────────────────────────────── */
+
+.memory-surface .mw-rail {
+  position: absolute;
+  inset: var(--mw-rail-edge) auto var(--mw-rail-edge) var(--mw-rail-edge);
+  z-index: var(--z-sticky);
+  width: var(--mw-rail-w);
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: var(--space-3) var(--space-2-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  overflow: hidden;
+  container-type: inline-size;
+  container-name: memory-rail;
+  border-radius: var(--r-shell);
+  background: var(--panel);
+  box-shadow: var(--shadow-2);
+  transition:
+    transform var(--motion-sidebar-hide) var(--motion-drawer-ease),
+    opacity var(--motion-sidebar-hide) var(--smooth-out),
+    filter var(--motion-sidebar-hide) var(--smooth-out);
+}
+
+/* The takeover is normally no-drag. These two desk surfaces deliberately
+ * restore native window drag while their controls remain interactive. */
+#app > .memory-surface :is(.mw-rail, .mw-tab-strip, .mw-instruments) { -webkit-app-region: drag; }
+#app > .memory-surface :is(.mw-rail, .mw-tab-strip, .mw-instruments) :is(button, input, [role="button"], [role="tab"], [role="separator"]) { -webkit-app-region: no-drag; }
+
+.memory-surface .mw-rail-drag {
+  height: 1.375rem;
+  flex: none;
+}
+
+.memory-surface .mw-rail [role="separator"] {
+  z-index: var(--z-popover);
+}
+
+.memory-surface .memory-ws.rail-hidden .mw-rail {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(calc(-1 * var(--motion-distance-sidebar-hide)));
+  filter: blur(var(--motion-blur-sidebar));
+}
+
+.memory-surface .mw-rail-segments {
+  position: relative;
+  min-height: var(--control-size-large);
+  padding: 3px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  /* r-control family, not r-shell — this is a control cluster (matches
+     .mw-instruments' r-cluster role), and its own children already derive
+     calc(var(--r-control) - 3px) from THIS value. Deriving it from r-shell
+     instead (an earlier attempt) made the outer shell smaller than its own
+     buttons — reverted. */
+  border-radius: var(--r-control);
+  background: var(--panel-soft);
+}
+
+.memory-surface .memory-notebook-rail-slot { display: contents; }
+.memory-surface .memory-notebook-rail-slot[hidden] { display: none; }
+
+.memory-surface .mw-rail-mode {
+  width: 100%;
+  min-height: 0;
+  display: flex;
+  flex: 1;
+}
+
+.memory-surface .mw-rail-segments button {
+  position: relative;
+  z-index: var(--z-raised);
+  min-width: 0;
+  height: var(--control-size);
+  padding: 1px var(--space-1-5);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  overflow: hidden;
+  /* .mw-rail-segments insets by 3px — subtract it to stay concentric. */
+  border-radius: calc(var(--r-control) - 3px);
+  color: var(--muted);
+  font-size: var(--text-control);
+  font-weight: 500;
+  white-space: nowrap;
+  transition:
+    color var(--tabs-dur) var(--tabs-ease),
+    transform var(--motion-press) var(--smooth-out);
+}
+
+.memory-surface .mw-rail-segments .arden-tab-content {
+  display: contents;
+}
+
+.memory-surface .mw-rail-segments .mw-rail-segment-label {
+  display: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.memory-surface .mw-rail-segments button.active,
+.memory-surface .mw-rail-segments button[aria-selected="true"] {
+  color: var(--ink);
+}
+
+.memory-surface .mw-rail-segments button:hover {
+  color: var(--ink-soft);
+}
+
+.memory-surface .mw-rail-segments button:active {
+  transform: scale(var(--press-scale));
+}
+
+@container memory-rail (min-width: 19rem) {
+  .memory-surface .mw-rail-segments .mw-rail-segment-label { display: inline; }
+}
+
+.memory-surface .mw-icon-btn {
+  width: var(--icon-button-size);
+  height: var(--icon-button-size);
+  padding: 0;
+  display: grid;
+  place-items: center;
+  flex: none;
+  border-radius: var(--r-icon);
+  color: var(--muted);
+  transition:
+    color var(--motion-feedback) var(--smooth-out),
+    background var(--motion-feedback) var(--smooth-out),
+    transform var(--motion-press) var(--smooth-out);
+}
+
+.memory-surface .mw-icon-btn:hover {
+  color: var(--ink);
+  background: var(--state-hover-bg);
+}
+
+.memory-surface .mw-icon-btn.on,
+.memory-surface .mw-icon-btn[aria-pressed="true"] {
+  color: var(--ink);
+  background: var(--state-selected-bg);
+}
+
+.memory-surface .mw-icon-btn:active { transform: scale(var(--press-scale)); }
+.memory-surface .mw-icon-btn:disabled { opacity: .45; pointer-events: none; }
+
+.memory-surface .mw-tree {
+  min-height: 0;
+  flex: 1;
+  padding: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+.memory-surface .mw-tree,
+.memory-surface .mw-tree-folder,
+.memory-surface .mw-tree-kids {
+  display: grid;
+  align-content: start;
+  gap: var(--interactive-row-gap);
+}
+
+.memory-surface .mw-tree-row {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  height: var(--interactive-row-height);
+  padding: 0 var(--space-2) 0 calc(var(--memory-tree-base-inset) + var(--memory-tree-indent-step));
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  border-radius: var(--r-row);
+  color: var(--ink-soft);
+  font-size: var(--text-body);
+  text-align: left;
+  white-space: nowrap;
+  transition:
+    color var(--motion-feedback) var(--smooth-out),
+    background var(--motion-feedback) var(--smooth-out),
+    transform var(--motion-press) var(--smooth-out);
+}
+
+.memory-surface .mw-fold {
+  position: relative;
+  z-index: var(--z-raised);
+  width: 100%;
+  height: var(--interactive-row-height);
+  padding: 0 var(--memory-tree-base-inset);
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  border-radius: var(--r-row);
+  color: var(--muted);
+  font-size: var(--text-body);
+  font-weight: 500;
+  text-align: left;
+  transition:
+    color var(--motion-feedback) var(--smooth-out),
+    background var(--motion-feedback) var(--smooth-out);
+}
+
+.memory-surface .mw-fold.subfold {
+  padding-left: calc(var(--memory-tree-base-inset) + var(--memory-tree-indent-step));
+}
+
+.memory-surface .mw-fold svg {
+  width: var(--icon-size);
+  height: var(--icon-size);
+  flex: none;
+  color: var(--faint);
+}
+
+.memory-surface .mw-fold:hover,
+.memory-surface .mw-tree-row:hover { color: var(--ink); background: var(--state-hover-bg); }
+.memory-surface .mw-tree-row.active,
+.memory-surface .mw-tree-row[aria-current="page"] { color: var(--ink); background: var(--state-selected-bg); }
+.memory-surface .mw-tree-row:active { transform: scale(var(--press-scale-subtle)); }
+
+.memory-surface .mw-tree-row .mw-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.memory-surface .mw-tree-row::before {
+  width: var(--memory-tree-twisty-size);
+  height: var(--memory-tree-twisty-size);
+  flex: none;
+  content: "";
+}
+
+.memory-surface .mw-tree-row.root {
+  padding-left: var(--memory-tree-base-inset);
+}
+
+.memory-surface .mw-fold .mw-chev {
+  transition: transform var(--motion-dissolve) var(--smooth-out);
+}
+
+.memory-surface .mw-tree-folder.closed > .mw-fold .mw-chev { transform: rotate(-90deg); }
+
+.memory-surface .mw-tree-kids {
+  position: relative;
+  margin-left: 0;
+  padding-left: 0;
+  border-left: 0;
+}
+
+.memory-surface .mw-tree-kids::before {
+  position: absolute;
+  top: 0;
+  bottom: var(--space-1-5);
+  width: 1px;
+  background: var(--edge);
+  content: "";
+  pointer-events: none;
+}
+
+.memory-surface .mw-tree-kids.depth-1::before {
+  left: calc(var(--memory-tree-base-inset) + var(--memory-tree-indent-step) * .5);
+}
+
+.memory-surface .mw-tree-kids.depth-2::before {
+  left: calc(var(--memory-tree-base-inset) + var(--memory-tree-indent-step) * 1.5);
+}
+
+.memory-surface .mw-tree-row.depth-2 {
+  padding-left: calc(var(--memory-tree-base-inset) + var(--memory-tree-indent-step) * 2);
+}
+
+.memory-surface .mw-tree-folder.closed > .mw-tree-kids { display: none; }
+
+.memory-surface .mw-rail-list {
+  min-height: 0;
+  flex: 1;
+  display: grid;
+  align-content: start;
+  gap: var(--interactive-row-gap);
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+.memory-surface .mw-rail-list-row {
+  width: 100%;
+  padding: 6px var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  border-radius: var(--r-row);
+  color: var(--ink-soft);
+  text-align: left;
+  transition:
+    color var(--motion-feedback) var(--smooth-out),
+    background var(--motion-feedback) var(--smooth-out),
+    transform var(--motion-press) var(--smooth-out);
+}
+
+.memory-surface .mw-rail-list-row:hover { color: var(--ink); background: var(--state-hover-bg); }
+.memory-surface .mw-rail-list-row.active,
+.memory-surface .mw-rail-list-row[aria-current="true"] { color: var(--ink); background: var(--state-selected-bg); }
+.memory-surface .mw-rail-list-row:active { transform: scale(var(--press-scale-subtle)); }
+
+.memory-surface .mw-rail-row-title {
+  overflow: hidden;
+  font-size: var(--text-body);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-surface .mw-rail-row-meta {
+  color: var(--faint);
+  font: 500 var(--text-meta)/var(--leading-meta) var(--mono);
+  letter-spacing: .02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.memory-surface .mw-rail-row-fact {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--text-control);
+  line-height: var(--leading-body);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+/* ── Tier 0: paper and desk ─────────────────────────────────── */
+
+.memory-surface .mw-doc {
+  --mw-content-inset: max(
+    var(--content-gutter),
+    calc((100% - var(--content-max-width)) / 2 + var(--content-gutter))
+  );
+  --memory-instrument-current-width: var(--memory-instrument-expanded-width, var(--instrument-min-expanded-width));
+
+  position: absolute;
+  inset: 0 0 0 calc(var(--mw-rail-w) + var(--sidebar-gap));
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--paper);
+  transition:
+    opacity var(--motion-focus) var(--smooth-out),
+    transform var(--motion-focus) var(--smooth-out),
+    filter var(--motion-focus) var(--smooth-out);
+}
+
+.memory-surface .memory-ws.rail-hidden .mw-doc { left: 0; }
+.memory-surface .memory-ws.instruments-collapsed .mw-doc {
+  --memory-instrument-current-width: var(--instrument-collapsed-width);
+}
+
+.memory-surface .mw-tab-strip {
+  position: absolute;
+  top: var(--mw-chrome-top);
+  left: var(--mw-content-inset);
+  z-index: var(--z-sticky);
+  height: var(--tab-bar-height);
+  padding: var(--tab-bar-padding);
+  display: flex;
+  align-items: center;
+  gap: var(--space-0-5);
+  border-radius: var(--r-cluster);
+  color: var(--muted);
+  background: var(--panel);
+  box-shadow: var(--shadow-2);
+}
+
+.memory-surface .mw-tab-strip > :is(button, [role="tab"]) { -webkit-app-region: no-drag; }
+
+.memory-surface .mw-doc-tabs {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  /* Hardcoded 4px, not --tab-bar-padding (3px) — the padding+negative-margin
+     pair still cancels out for layout regardless of the exact value, but
+     matching the token keeps every inset in this strip on one source. */
+  padding: var(--tab-bar-padding);
+  margin: calc(var(--tab-bar-padding) * -1);
+  display: flex;
+  gap: var(--space-0-5);
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  overscroll-behavior-y: none;
+  touch-action: pan-x;
+  scrollbar-width: none;
+  scroll-snap-type: x proximity;
+  scroll-padding-inline: 4px;
+}
+
+.memory-surface .mw-doc-tabs::-webkit-scrollbar { display: none; }
+
+.memory-surface .mw-tab-strip.edge-left .mw-doc-tabs {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 10px);
+  mask-image: linear-gradient(to right, transparent, #000 10px);
+}
+
+.memory-surface .mw-tab-strip.edge-right .mw-doc-tabs {
+  -webkit-mask-image: linear-gradient(to left, transparent, #000 10px);
+  mask-image: linear-gradient(to left, transparent, #000 10px);
+}
+
+.memory-surface .mw-tab-strip.edge-left.edge-right .mw-doc-tabs {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 10px, #000 calc(100% - 10px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 10px, #000 calc(100% - 10px), transparent);
+}
+
+.memory-surface .mw-doc-tab-slot {
+  position: relative;
+  z-index: var(--z-raised);
+  display: flex;
+  flex: none;
+  align-items: center;
+  white-space: nowrap;
+  scroll-snap-align: nearest;
+}
+
+.memory-surface .mw-doc-tab {
+  height: var(--tab-control-size);
+  /* Right side clears .mw-doc-tab-x (18px, positioned right: 5px) — was
+     reusing --tab-more-min-width (the OVERFLOW button's own width, an
+     unrelated token) which over-reserved space and read as a big gap
+     before the close icon on short titles. --icon-button-size actually
+     means "room for an icon-button-scale control", which this is. */
+  padding: 0 var(--icon-button-size) 0 .875rem;
+  display: flex;
+  align-items: center;
+  /* .mw-tab-strip insets by --tab-bar-padding — subtract it to stay concentric. */
+  border-radius: calc(var(--r-control) - var(--tab-bar-padding));
+  color: var(--muted);
+  font-size: var(--text-control);
+  font-weight: 500;
+}
+
+.memory-surface .mw-doc-tab:hover { color: var(--ink); }
+.memory-surface .mw-doc-tab.on { color: var(--ink); }
+
+.memory-surface .mw-doc-tab-x {
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  z-index: calc(var(--z-raised) + 1);
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Same tab-strip inset as .mw-doc-tab/.mw-tab-more — subtract it. */
+  border-radius: calc(var(--r-icon) - var(--tab-bar-padding));
+  color: var(--faint);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%);
+  transition: opacity var(--motion-press) var(--smooth-out), color var(--motion-feedback) var(--smooth-out), background var(--motion-feedback) var(--smooth-out), transform var(--motion-press) var(--smooth-out);
+}
+
+.memory-surface .mw-doc-tab-x svg {
+  width: var(--icon-size);
+  height: var(--icon-size);
+}
+
+.memory-surface .mw-doc-tab-x::after { content: ""; position: absolute; inset: -3px; }
+.memory-surface .mw-doc-tab.on + .mw-doc-tab-x,
+.memory-surface .mw-doc-tab-slot:hover .mw-doc-tab-x,
+.memory-surface .mw-doc-tab-slot:focus-within .mw-doc-tab-x { opacity: 1; pointer-events: auto; }
+.memory-surface .mw-doc-tab.on + .mw-doc-tab-x { color: var(--muted); }
+.memory-surface .mw-doc-tab-x:hover { color: var(--ink); background: var(--panel-soft); }
+.memory-surface .mw-doc-tab-x:active { transform: translateY(-50%) scale(var(--press-scale)); }
+
+.memory-surface .mw-tab-more {
+  min-width: var(--tab-more-min-width);
+  height: var(--tab-control-size);
+  padding: 0 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  /* .mw-tab-strip insets by --tab-bar-padding — subtract it to stay concentric. */
+  border-radius: calc(var(--r-control) - var(--tab-bar-padding));
+  color: var(--muted);
+  font: 500 var(--text-meta)/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+  transition:
+    color var(--motion-feedback) var(--smooth-out),
+    background var(--motion-feedback) var(--smooth-out),
+    transform var(--motion-press) var(--smooth-out);
+}
+
+.memory-surface .mw-tab-more:hover { color: var(--ink); background: var(--state-hover-bg); }
+.memory-surface .mw-tab-more:active { transform: scale(var(--press-scale)); }
+
+.mw-tab-menu {
+  width: 13.75rem;
+  max-height: min(22rem, calc(100vh - 2rem));
+  padding: var(--space-1-5);
+  overflow-y: auto;
+  border-radius: var(--r-house);
+  background: var(--card);
+  box-shadow: var(--shadow-3);
+}
+
+.mw-tab-menu .arden-context-menu__item {
+  padding: .4375rem .5625rem;
+  /* .mw-tab-menu is r-house (8px) with space-1-5 (6px) padding — this item
+     was reusing r-row (999px pill / 9px square), badly overshooting the
+     menu's own corner in EITHER mode, not just "square". */
+  border-radius: calc(var(--r-house) - var(--space-1-5));
+  color: var(--muted);
+  font-size: var(--text-control);
+  font-weight: 500;
+}
+
+.mw-tab-menu .arden-context-menu__item[data-active="true"] {
+  color: var(--ink);
+  background: var(--state-selected-bg);
+}
+
+.mw-tab-menu .arden-context-menu__item:not(:disabled):active {
+  transform: scale(var(--press-scale));
+}
+
+.memory-surface .mw-instruments {
+  position: absolute;
+  top: var(--mw-chrome-top);
+  right: var(--mw-content-inset);
+  z-index: var(--z-sticky);
+  width: var(--memory-instrument-current-width);
+  height: var(--mw-desk-height);
+  padding: var(--tab-bar-padding);
+  display: flex;
+  align-items: center;
+  gap: var(--space-0-5);
+  overflow: visible;
+  border-radius: var(--r-cluster);
+  color: var(--muted);
+  background: transparent;
+  box-shadow: none;
+  -webkit-app-region: drag;
+}
+
+.memory-surface .mw-instrument-surface {
+  position: absolute;
+  inset: 0 0 0 auto;
+  z-index: var(--z-base);
+  display: block;
+  width: 100%;
+  pointer-events: none;
+  border-radius: inherit;
+  background: var(--panel);
+  box-shadow: var(--shadow-2);
+}
+
+.memory-surface .mw-instrument-items {
+  position: absolute;
+  top: var(--tab-bar-padding);
+  right: calc(var(--control-size) + var(--tab-bar-padding) + var(--space-0-5));
+  z-index: var(--z-raised);
+  display: flex;
+  align-items: center;
+  gap: var(--space-0-5);
+  opacity: 1;
+  /* Negative inset, not inset(0) — buttons sit flush against every edge of
+     this box, so a zero-buffer clip chops the selected button's
+     box-shadow ring (it paints outside the border box on ALL sides, not
+     just at rounded corners) flat on whichever edge is flush: top/bottom
+     for every button, left/right for the first/last. -4px clears the ring
+     comfortably; only matters for the resting (non-collapsed) state, since
+     .collapsed below intentionally clips to animate the row away. */
+  clip-path: inset(-4px round calc(var(--r-control) - var(--tab-bar-padding)));
+  transition:
+    clip-path var(--motion-instrument) var(--motion-drawer-ease),
+    opacity var(--motion-instant) linear;
+}
+
+.memory-surface .mw-instruments.collapsed {
+  width: var(--instrument-collapsed-width);
+}
+
+.memory-surface .mw-instruments.collapsed .mw-instrument-items {
+  position: absolute;
+  right: calc(var(--control-size) + 5px);
+  width: max-content;
+  opacity: 0;
+  pointer-events: none;
+  clip-path: inset(0 0 0 100% round calc(var(--r-control) - var(--tab-bar-padding)));
+  transition:
+    clip-path var(--motion-instrument) var(--motion-drawer-ease),
+    opacity var(--motion-instant) linear var(--motion-instrument-hide-delay);
+}
+
+.memory-surface .mw-instrument {
+  position: relative;
+  z-index: var(--z-raised);
+  min-width: var(--control-size);
+  height: var(--control-size);
+  padding: 0 var(--space-2-5);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  /* Inset inside .mw-instruments by --tab-bar-padding — subtract it so the
+     selected-item background stays concentric with the outer capsule
+     instead of matching its radius outright (invisible in "round" mode's
+     999px pill, glaring once corner-profile is "square" and --r-control
+     drops to 9px). */
+  border-radius: calc(var(--r-control) - var(--tab-bar-padding));
+  color: var(--muted);
+  font-size: var(--text-control);
+  font-weight: 500;
+  white-space: nowrap;
+  transition:
+    color var(--motion-feedback) var(--smooth-out),
+    background var(--motion-feedback) var(--smooth-out),
+    transform var(--motion-press) var(--smooth-out);
+  -webkit-app-region: no-drag;
+}
+
+.memory-surface .mw-instruments svg {
+  width: var(--icon-size);
+  height: var(--icon-size);
+  flex: none;
+}
+
+.memory-surface .mw-instrument:hover { color: var(--ink); background: var(--panel-soft); }
+.memory-surface .mw-instrument:active { transform: scale(var(--press-scale)); }
+/* .oinst (links/records/activity) gets its selected fill from the sliding
+   .dp-tab-indicator now (see ArtifactMemoryView's sync effect) — color
+   only here, or the button's own flat background would double up behind
+   the indicator. .mw-instrument-edit isn't part of that group (a plain
+   toggle, not a tab selection) and keeps its own static fill. */
+.memory-surface .oinst.on { color: var(--ink); }
+.memory-surface .mw-instrument-edit.on {
+  color: var(--ink);
+  background: var(--control-selected-bg);
+  box-shadow: var(--control-selected-shadow);
+}
+.memory-surface .mw-instrument:disabled { opacity: .48; pointer-events: none; }
+.memory-surface .mw-instrument-icon { display: none; }
+.memory-surface .mw-instrument-count { color: var(--faint); font: 500 var(--text-meta)/1 var(--mono); font-variant-numeric: tabular-nums; }
+.memory-surface .mw-instrument-divider { width: 1px; height: 1rem; flex: none; background: var(--line); }
+.memory-surface .mw-instrument-edit,
+.memory-surface .mw-instrument-collapse { width: var(--control-size); padding: 0; }
+.memory-surface .mw-instrument-collapse {
+  position: absolute;
+  top: var(--tab-bar-padding);
+  right: var(--tab-bar-padding);
+  z-index: var(--z-raised);
+}
+.memory-surface .mw-instrument-collapse svg { transition: transform var(--motion-feedback) var(--smooth-out); }
+
+.memory-surface .mw-main { min-height: 0; }
+
+/* Closing the final tab is a real workspace state, not a forced fallback to
+   the first note. Match the mock's quiet Files invitation. */
+.memory-surface .mw-empty-workspace {
+  /* The mock keeps the empty copy on the same reading column as a page:
+   * sheet 110px + empty invitation 72px. Do not pin it to the document edge. */
+  box-sizing: border-box;
+  width: min(100%, var(--content-max-width));
+  min-height: 100%;
+  margin-inline: auto;
+  padding: calc(6.875rem + 4.5rem) var(--content-gutter) 8.75rem;
+  color: var(--ink-soft);
+}
+.memory-surface .mw-empty-workspace h1 {
+  margin: 0 0 1.125rem;
+  color: var(--ink);
+  font-size: var(--text-section);
+  font-weight: 600;
+  letter-spacing: -.015em;
+  text-wrap: balance;
+}
+.memory-surface .mw-empty-workspace p {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+}
+
+.memory-surface .mw-scroller {
+  min-height: 0;
+  flex: 1 1 0%;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+.memory-surface .mw-page {
+  width: min(100%, var(--content-max-width));
+  margin-inline: auto;
+  padding: 6.875rem var(--content-gutter) 8.75rem;
+}
+
+.memory-surface .mw-note-crumb {
+  margin: 0 0 var(--space-3);
+  color: var(--muted);
+  font: 500 var(--text-meta)/1 var(--mono);
+  letter-spacing: .07em;
+  text-transform: lowercase;
+}
+
+.memory-surface .mw-note-crumb b { color: var(--ink-soft); font-weight: 500; }
+
+.memory-surface .mw-note-title {
+  margin: 0 0 1.125rem;
+  color: var(--ink);
+  font-size: var(--text-display);
+  font-weight: 600;
+  letter-spacing: -.015em;
+  line-height: var(--leading-body);
+  text-wrap: balance;
+}
+
+.memory-surface .mw-props {
+  margin: -2px 0 var(--space-6);
+  padding-bottom: var(--space-2-5);
+  border-bottom: 1px solid var(--edge);
+}
+
+.memory-surface .mw-props-head {
+  margin-left: calc(var(--space-2) * -1);
+  padding: var(--space-0-5) var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  border-radius: var(--r-control);
+  color: var(--faint);
+  font-size: var(--text-xs);
+  text-align: left;
+  transition: color var(--motion-feedback) var(--smooth-out), background var(--motion-feedback) var(--smooth-out);
+}
+
+.memory-surface .mw-props-head:hover { color: var(--ink-soft); background: var(--state-hover-bg); }
+.memory-surface .mw-props-head svg { transition: transform var(--motion-dissolve) var(--smooth-out); }
+.memory-surface .mw-props.open .mw-props-head svg { transform: rotate(180deg); }
+.memory-surface .mw-props-count { color: var(--faint); font: 500 var(--text-meta)/1 var(--mono); font-variant-numeric: tabular-nums; }
+
+.memory-surface .mw-props-body {
+  margin-top: var(--space-2);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-0-5);
+}
+
+.memory-surface .mw-prop-row,
+.memory-surface .mw-prop-add-row {
+  min-height: 1.5rem;
+  display: grid;
+  grid-template-columns: 1rem 8.5rem minmax(0, 1fr);
+  align-items: center;
+  column-gap: var(--space-3);
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+}
+
+.memory-surface .mw-prop-icon { display: grid; place-items: center; color: var(--faint); }
+.memory-surface .mw-prop-key { overflow: hidden; color: var(--faint); text-overflow: ellipsis; white-space: nowrap; }
+.memory-surface .mw-prop-value { min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-1); color: var(--ink-soft); }
+.memory-surface .mw-prop-value .mono { color: var(--muted); font: 500 var(--text-xs)/1 var(--mono); }
+
+.memory-surface .mw-prop-pill {
+  min-height: 1.375rem;
+  padding: 0 var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  /* Not nested inside a further-rounded shell, so the concentric formula
+     doesn't strictly apply — but matched to .mw-instrument/.mw-doc-tab's
+     reduced radius anyway so every r-control pill in the page reads as
+     one consistent corner language once corner-profile is "square". */
+  border-radius: calc(var(--r-control) - var(--tab-bar-padding));
+  color: var(--muted);
+  background: var(--panel-soft);
+  font: 500 var(--text-meta)/1 var(--mono);
+  letter-spacing: .03em;
+}
+
+.memory-surface .mw-prop-pill-x,
+.memory-surface .mw-prop-pill-add,
+.memory-surface .mw-prop-editable,
+.memory-surface .mw-prop-add {
+  border-radius: calc(var(--r-control) - var(--tab-bar-padding));
+  color: inherit;
+  transition: color var(--motion-feedback) var(--smooth-out), background var(--motion-feedback) var(--smooth-out);
+}
+
+.memory-surface .mw-prop-pill-x:hover,
+.memory-surface .mw-prop-editable:hover,
+.memory-surface .mw-prop-add:hover { color: var(--ink); background: var(--state-hover-bg); }
+.memory-surface .mw-prop-pill-add { color: var(--faint); background: transparent; }
+.memory-surface .mw-prop-editable { margin-inline: calc(var(--space-1) * -1); padding: var(--space-1) var(--space-1); text-align: left; }
+.memory-surface .mw-prop-add { grid-column: 1 / -1; justify-self: start; padding: 0 var(--space-2); color: var(--faint); font-size: var(--text-xs); }
+
+.memory-surface .mw-prop-edit-input,
+.memory-surface .mw-prop-add-row input {
+  min-width: 0;
+  min-height: var(--control-size);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-house);
+  color: var(--ink);
+  background: var(--card);
+  outline: 0;
+  font: inherit;
+}
+
+.memory-surface .mw-prop-edit-input:focus-visible,
+.memory-surface .mw-prop-add-row input:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent) 14%, transparent); }
+.memory-surface .mw-prop-add-row input.value { width: 100%; }
+
+.memory-surface .mw-prop-check { width: .875rem; height: .875rem; display: inline-block; border: 1px solid var(--line-strong); border-radius: var(--r-mark); }
+.memory-surface .mw-prop-check.on { border-color: var(--accent); background: var(--accent); }
+
+.memory-surface .mw-prose {
+  margin-top: 0;
+  color: var(--ink-soft);
+  font-size: var(--text-reading);
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+
+.memory-surface .mw-prose :is(p, ul, ol, blockquote, pre, table) { margin: 0 0 var(--space-4); }
+.memory-surface .mw-prose :is(h1, h2, h3, h4) { color: var(--ink); letter-spacing: -.012em; }
+.memory-surface .mw-prose h1 { margin: var(--space-8) 0 var(--space-3); font-size: var(--text-2xl); line-height: 1.2; }
+.memory-surface .mw-prose h2 { margin: var(--space-8) 0 var(--space-2); font-size: var(--text-lg); line-height: 1.25; }
+.memory-surface .mw-prose h3 { margin: var(--space-6) 0 var(--space-2); font-size: var(--text-md); line-height: 1.3; }
+.memory-surface .mw-prose h4 { margin: var(--space-5) 0 var(--space-1); font-size: var(--text-sm); line-height: 1.35; }
+.memory-surface .mw-prose :is(ul, ol) { padding-left: var(--space-6); }
+.memory-surface .mw-prose li + li { margin-top: var(--space-1); }
+.memory-surface .mw-prose blockquote { padding-left: var(--space-3); border-left: 2px solid var(--line-strong); color: var(--muted); }
+.memory-surface .mw-prose :is(code, pre) { font-family: var(--mono); }
+.memory-surface .mw-prose code { padding: 1px var(--space-1); border-radius: var(--r-mark); color: var(--ink-soft); background: var(--panel-soft); font-size: .88em; }
+.memory-surface .mw-prose pre { padding: var(--space-3); overflow: auto; border-radius: var(--r-house); background: var(--panel-soft); }
+.memory-surface .mw-prose table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
+.memory-surface .mw-prose th { color: var(--ink-soft); font-weight: 600; text-align: left; }
+.memory-surface .mw-prose :is(th, td) { padding: var(--space-2); border-bottom: 1px solid var(--edge); }
+.memory-surface .mw-prose :is(a, [data-wikilink]) {
+  color: var(--accent-ink);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in oklab, var(--accent) 34%, transparent);
+  background: transparent;
+  transition:
+    color var(--motion-feedback) var(--smooth-out),
+    border-color var(--motion-feedback) var(--smooth-out);
+}
+
+.memory-surface .mw-prose :is(a, [data-wikilink]):focus-visible {
+  outline: 0;
+  border-bottom-color: var(--accent-ink);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .memory-surface .mw-prose :is(a, [data-wikilink]):hover {
+    color: var(--accent-ink);
+    border-bottom-color: var(--accent-ink);
+  }
+}
+
+.memory-surface .mw-krecs { margin-top: var(--space-8); padding-top: var(--space-4); border-top: 1px solid var(--edge); }
+.memory-surface .mw-krecs-head { min-height: var(--control-size); display: flex; align-items: center; gap: var(--space-1-5); color: var(--ink-soft); font-size: var(--text-sm); font-weight: 600; }
+.memory-surface .mw-krecs-head .n { color: var(--faint); font: 500 var(--text-meta)/1 var(--mono); }
+.memory-surface .mw-krecs-head .mw-chev { transition: transform var(--motion-dissolve) var(--smooth-out); }
+.memory-surface .mw-krecs.open .mw-krecs-head .mw-chev { transform: rotate(90deg); }
+.memory-surface .mw-krecs-body { margin-top: var(--space-2); }
+.memory-surface .mw-krec { padding: var(--space-3) 0; display: grid; grid-template-columns: 8.5rem minmax(0, 1fr); gap: var(--space-4); border-bottom: 1px solid var(--edge); }
+.memory-surface .mw-krec:last-child { border-bottom: 0; }
+.memory-surface .mw-krec .kmeta { color: var(--faint); font: 500 var(--text-meta)/var(--leading-meta) var(--mono); font-variant-numeric: tabular-nums; }
+.memory-surface .mw-krec .kmeta .kind { display: block; margin-top: var(--space-0-5); color: var(--muted); }
+.memory-surface .mw-krec .ktext { margin: 0; color: var(--ink-soft); font-size: var(--text-body); line-height: var(--leading-body); }
+
+.memory-surface .mw-editor-textarea {
+  width: 100%;
+  min-height: 22rem;
+  margin-top: var(--space-5);
+  padding: 0;
+  resize: none;
+  border: 0;
+  outline: 0;
+  color: var(--ink-soft);
+  background: transparent;
+  font: 450 var(--text-sm)/1.75 var(--mono);
+}
+
+.memory-find-bar {
+  position: absolute;
+  top: 4.25rem;
+  right: var(--space-4);
+  z-index: var(--z-raised);
+  min-height: var(--control-size-large);
+  padding: 0 var(--space-1) 0 var(--space-2-5);
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  border-radius: var(--r-control);
+  color: var(--faint);
+  background: var(--panel);
+  box-shadow: var(--shadow-3);
+}
+
+.memory-find-bar__input {
+  width: 10.5rem;
+  min-height: var(--control-size);
+  border: 0;
+  outline: 0;
+  color: var(--ink);
+  background: transparent;
+  font-size: var(--text-sm);
+}
+
+.memory-find-bar__input::placeholder { color: var(--faint); }
+.memory-find-bar__count { min-width: 3.5rem; color: var(--faint); font: 500 var(--text-meta)/1 var(--mono); text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ── Tier 2: nonblocking page peek ─────────────────────────── */
+
+.memory-surface .mw-context {
+  position: absolute;
+  top: var(--mw-peek-top);
+  right: 1rem;
+  bottom: 3rem;
+  z-index: var(--z-peek);
+  width: var(--mw-ctx-w);
+  min-width: 0;
+  margin: 0;
+  display: block;
+  overflow: visible;
+  color: var(--ink-soft);
+  transform-origin: right center;
+  will-change: opacity, transform;
+}
+
+.memory-surface .mw-context-plane {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  overscroll-behavior: contain;
+  border-radius: var(--r-panel);
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+  transition:
+    opacity var(--motion-focus) var(--smooth-out),
+    transform var(--motion-focus) var(--smooth-out),
+    filter var(--motion-focus) var(--smooth-out);
+}
+
+.memory-surface .mw-context [role="separator"] { z-index: var(--z-popover); }
+
+.memory-surface .mw-ctx-toolbar {
+  z-index: var(--z-raised);
+  height: var(--peek-header-size);
+  min-height: var(--peek-header-size);
+  flex: none;
+  padding: 10px 12px 10px 16px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: var(--panel);
+}
+
+.memory-surface .mw-ctx-content {
+  width: 100%;
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  padding: 28px 30px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+.memory-surface .mw-ctx-label {
+  margin-right: auto;
+  color: var(--ink-soft);
+  font-size: var(--text-control);
+  font-weight: 600;
+  line-height: 14px;
+}
+
+.memory-surface .mw-ctx-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-0-5);
+}
+.memory-surface .mw-ctx-tabs button {
+  padding: 5px 8px;
+  border-radius: var(--r-control);
+  color: var(--faint);
+  font-size: var(--text-control);
+  font-weight: 500;
+  line-height: 1;
+  transition: color var(--motion-feedback) var(--smooth-out), transform var(--motion-press) var(--smooth-out);
+}
+.memory-surface .mw-ctx-tabs button:hover,
+.memory-surface .mw-ctx-tabs button.on { color: var(--ink); }
+.memory-surface .mw-ctx-tabs button:active { transform: scale(var(--press-scale)); }
+.memory-surface .mw-ctx-tabs button .mw-tab-count {
+  margin-left: 4px;
+  color: var(--faint);
+  font: 500 var(--text-meta)/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.memory-surface .mw-ctx-tabs button.on .mw-tab-count { color: var(--muted); }
+.memory-surface .mw-ctx-close { margin-left: 2px; }
+
+.memory-surface .mw-ctx-empty { margin: 0; color: var(--muted); font-size: var(--text-body); line-height: var(--leading-body); }
+.memory-surface .mw-page-records-empty {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.memory-surface .mw-page-records {
+  display: grid;
+  gap: 13px;
+}
+.memory-surface .mw-page-record {
+  padding: 0;
+}
+.memory-surface .mw-page-record__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--faint);
+  font: 500 var(--text-meta)/var(--leading-meta) var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.memory-surface .mw-page-record__meta span:last-child:not(:nth-child(3)) {
+  margin-left: auto;
+  color: var(--muted);
+}
+.memory-surface .mw-page-record p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+  text-wrap: pretty;
+}
+
+.memory-surface .mw-lk-row,
+.memory-surface .mw-bl-title,
+.memory-surface .mw-rec > button {
+  width: 100%;
+  text-align: left;
+  transition: color var(--motion-feedback) var(--smooth-out), background var(--motion-feedback) var(--smooth-out), transform var(--motion-press) var(--smooth-out);
+}
+
+.memory-surface .mw-lk-row {
+  padding: 0;
+  display: block;
+  border-radius: 0;
+}
+.memory-surface .mw-lk-row + .mw-lk-row { margin-top: 13px; }
+.memory-surface .mw-lk-row:hover .mw-lk-title { color: var(--accent-ink); }
+.memory-surface .mw-lk-row:disabled { color: var(--faint); opacity: .64; }
+.memory-surface .mw-lk-body { min-width: 0; display: grid; gap: var(--space-0-5); }
+.memory-surface .mw-lk-title { overflow: hidden; color: var(--ink); font-size: var(--text-body); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.memory-surface .mw-lk-sub { overflow: hidden; color: var(--muted); font-size: var(--text-control); text-overflow: ellipsis; white-space: nowrap; }
+
+.memory-surface .mw-bl-group { padding: 0; }
+.memory-surface .mw-bl-group + .mw-bl-group { margin-top: 13px; }
+.memory-surface .mw-bl-title { padding: 0; color: var(--muted); font: 500 var(--text-meta)/var(--leading-meta) var(--mono); }
+.memory-surface .mw-bl-title span { color: var(--muted); }
+.memory-surface .mw-bl-title:hover { color: var(--accent-ink); }
+.memory-surface .mw-bl-excerpt { margin: 3px 0 0; display: -webkit-box; overflow: hidden; color: var(--muted); font-size: var(--text-body); line-height: var(--leading-body); -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.memory-surface .mw-bl-excerpt mark { padding: 0 2px; border-radius: var(--r-mark); color: inherit; background: color-mix(in oklab, var(--warning) 18%, transparent); }
+
+.memory-surface .mw-recs { padding: 0; }
+.memory-surface .mw-rec + .mw-rec { margin-top: 4px; }
+.memory-surface .mw-rec > button {
+  min-height: 0;
+  padding: 8px 10px;
+  border-radius: var(--r-row);
+}
+.memory-surface .mw-rec > button:hover { background: var(--state-hover-bg); }
+.memory-surface .mw-rec .when { display: flex; align-items: center; gap: var(--space-2); color: var(--faint); font: 500 var(--text-meta)/1 var(--mono); font-variant-numeric: tabular-nums; }
+.memory-surface .mw-rec .when .actor { min-width: 0; overflow: hidden; color: var(--muted); text-overflow: ellipsis; }
+.memory-surface .mw-rec .when .stat { margin-left: auto; color: var(--faint); }
+.memory-surface .mw-recs-more { margin: 24px 0 0; color: var(--muted); font-size: var(--text-control); }
+.memory-surface .mw-recs-more:hover { color: var(--ink); }
+
+/* Wiki hover previews are anchored popovers, never a third workspace column. */
+[data-memory-link-preview-surface] {
+  width: min(22rem, calc(100vw - var(--space-8)));
+  padding: var(--space-4);
+  display: grid;
+  gap: var(--space-2);
+  border-radius: var(--r-menu);
+  color: var(--ink-soft);
+  background: var(--card);
+  box-shadow: var(--shadow-5);
+}
+
+.memory-link-preview-markdown {
+  max-height: 8rem;
+  overflow: auto;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: var(--leading-body);
+}
+
+/* ── Tier 3: blocking review sheet ─────────────────────────── */
+
+.memory-surface .memory-focus-cache,
+.memory-surface .memory-focus-plane {
+  position: absolute;
+  inset: 0;
+}
+
+.memory-surface .memory-focus-cache {
+  transform-origin: center;
+  transition: transform var(--motion-focus) var(--smooth-out);
+}
+
+.memory-surface .memory-focus-plane {
+  transition: filter var(--motion-focus) var(--smooth-out);
+}
+
+.memory-surface .memory-ws.review-open .memory-focus-cache {
+  pointer-events: none;
+  will-change: transform;
+  transform: scale(.982);
+}
+
+.memory-surface .memory-ws.review-open .memory-focus-plane {
+  pointer-events: none;
+  filter: blur(2px);
+}
+
+/* The sheet stays mounted while these classes restore the room. The 180ms
+ * focus transition is shared by the sheet exit and the translucent scrim. */
+.memory-surface .memory-ws.review-open.review-closing .memory-focus-cache {
+  transform: none;
+}
+
+.memory-surface .memory-ws.review-open.review-closing .memory-focus-plane {
+  filter: none;
+}
+
+.memory-edit-review {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-sheet);
+}
+
+.memory-edit-review__scrim {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: color-mix(in oklab, var(--ink) 5%, transparent);
+}
+
+.memory-edit-review__sheet {
+  --memory-review-inline: 18px;
+  position: absolute;
+  left: calc(50% - 23.75rem);
+  bottom: 0;
+  z-index: 1;
+  width: 47.5rem;
+  max-height: 78%;
+  padding: 0;
+  overflow: hidden;
+  border-radius: var(--r-shell) var(--r-shell) 0 0;
+  background: var(--paper);
+  box-shadow: var(--shadow-6);
+}
+
+.memory-edit-review__header {
+  min-height: 3.25rem;
+  margin: 0;
+  padding: var(--space-3) var(--memory-review-inline);
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--edge);
+  background: var(--panel);
+}
+
+.memory-edit-review__crumb {
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font: 500 var(--text-meta)/1 var(--mono);
+  letter-spacing: .06em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-edit-review__body { min-height: 0; padding: var(--space-4) var(--memory-review-inline); overflow: auto; }
+.memory-edit-review__notice { margin: var(--space-3) var(--memory-review-inline) 0; padding: var(--space-2-5) var(--space-3); border-radius: var(--r-house); color: var(--ink-soft); background: color-mix(in oklab, var(--warning) 12%, transparent); font-size: var(--text-xs); line-height: var(--leading-body); }
+.memory-edit-review__error { margin: 0; padding: var(--space-2) var(--memory-review-inline) var(--space-3); color: var(--danger); font-size: var(--text-xs); }
+.memory-edit-review__conflict { min-height: 0; padding: var(--space-4) var(--memory-review-inline); }
+
+/* ── Nested diff dialog / quick switcher ────────────────────── */
+
+.memory-diff-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-sheet);
+  isolation: isolate;
+}
+.memory-diff-overlay[data-overlay-state="closing"] { pointer-events: none; }
+
+/* Direct port of board-memory's tier-three focus plane: #app contains tiers
+ * 0–2; the body-level diff sheet remains crisp outside that plane. */
+body.memory-diff-stage #app {
+  transition: transform var(--motion-focus) var(--smooth-out);
+}
+
+body.memory-diff-receded #app {
+  pointer-events: none;
+  transform: scale(.982);
+}
+
+.mw-dv-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  border: 0;
+  cursor: default;
+  background: color-mix(in oklab, var(--ink) 5%, transparent);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  opacity: 0;
+  transition: opacity var(--motion-focus) var(--smooth-out);
+}
+.memory-diff-overlay[data-overlay-state="open"] .mw-dv-scrim { opacity: 1; }
+.mw-dv-scrim:not(:disabled):active { transform: none; }
+
+.memory-diff-overlay .mw-dv {
+  position: fixed;
+  left: calc(50% - 23.75rem);
+  bottom: 0;
+  z-index: 2;
+  width: 47.5rem;
+  max-height: 78%;
+  display: none;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: var(--r-outer) var(--r-outer) 0 0;
+  color: var(--ink-soft);
+  background: var(--paper);
+  box-shadow: var(--shadow-6);
+  contain: layout paint style;
+  will-change: transform;
+}
+
+.memory-diff-overlay .mw-dv.show { display: flex; }
+
+.memory-diff-overlay .mw-dv-head {
+  padding: var(--space-3) 18px;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2-5);
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.memory-diff-overlay .mw-dv-title { min-width: 0; overflow: hidden; color: var(--muted); font: 500 var(--text-meta)/1 var(--mono); letter-spacing: .08em; text-overflow: ellipsis; white-space: nowrap; }
+.memory-diff-overlay .mw-dv-title b { color: var(--ink-soft); font-weight: 500; }
+.memory-diff-overlay .mw-dv-meta { min-width: 0; margin-left: auto; overflow: hidden; color: var(--faint); font: 500 var(--text-meta)/var(--leading-meta) var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.memory-diff-overlay .mw-dv-body {
+  min-height: 0;
+  flex: 1;
+  padding: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  contain: layout paint style;
+  will-change: scroll-position;
+  color: var(--ink-soft);
+  background: var(--paper);
+}
+.memory-diff-overlay .mw-dv-body > .dl {
+  width: max-content;
+  min-width: 100%;
+  display: grid;
+  grid-template-columns: 3rem 3rem 1.5rem max-content;
+  color: var(--ink-soft);
+  font: var(--text-control)/1.55 var(--mono);
+}
+.memory-diff-overlay .mw-dv-line-number {
+  padding: 3px 8px;
+  border-right: 1px solid color-mix(in oklab, var(--line) 80%, transparent);
+  color: var(--faint);
+  text-align: right;
+  user-select: none;
+}
+.memory-diff-overlay .mw-dv-marker {
+  padding: 3px 0;
+  color: var(--faint);
+  text-align: center;
+  user-select: none;
+}
+.memory-diff-overlay .mw-dv-code {
+  min-width: 0;
+  padding: 3px 12px 3px 4px;
+  color: inherit;
+  font: inherit;
+  white-space: pre;
+}
+.memory-diff-overlay .mw-dv-body .ctx { color: var(--muted); }
+.memory-diff-overlay .mw-dv-body .add { background: color-mix(in oklab, var(--success) 10%, var(--paper)); }
+.memory-diff-overlay .mw-dv-body .del { background: color-mix(in oklab, var(--danger) 8%, var(--paper)); }
+.memory-diff-overlay .mw-dv-body .add .mw-dv-line-number { background: color-mix(in oklab, var(--success) 14%, var(--paper)); }
+.memory-diff-overlay .mw-dv-body .del .mw-dv-line-number { background: color-mix(in oklab, var(--danger) 12%, var(--paper)); }
+.memory-diff-overlay .mw-dv-body .hunk {
+  color: var(--accent-ink);
+  background: color-mix(in oklab, var(--accent) 8%, var(--paper));
+}
+.memory-diff-overlay .mw-dv-word-add { border-radius: 2px; background: color-mix(in oklab, var(--success) 24%, transparent); }
+.memory-diff-overlay .mw-dv-word-del { border-radius: 2px; background: color-mix(in oklab, var(--danger) 20%, transparent); }
+.memory-diff-overlay .mw-dv-foot { padding: var(--space-3) 18px; display: flex; justify-content: flex-end; gap: var(--space-2); border-top: 1px solid var(--line); }
+
+.memory-switcher-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-nested);
+  padding: min(12vh, 6rem) var(--space-4) var(--space-4);
+  display: grid;
+  place-items: start center;
+}
+
+.memory-switcher-scrim {
+  z-index: var(--z-nested);
+  background: color-mix(in oklab, var(--ink) 7%, transparent);
+}
+
+.memory-switcher {
+  width: min(35rem, calc(100vw - var(--space-8)));
+  max-height: 62vh;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  border-radius: var(--r-panel);
+  background: var(--card);
+  box-shadow: var(--shadow-7);
+}
+
+.memory-switcher__query { padding: var(--space-3) var(--space-4) var(--space-2-5); border-bottom: 1px solid var(--edge); }
+.memory-switcher__input { width: 100%; min-height: var(--control-size); border: 0; outline: 0; color: var(--ink); background: transparent; font: 500 var(--text-md)/1 var(--sans); }
+.memory-switcher__input::placeholder { color: var(--muted); }
+.memory-switcher__results { padding: var(--space-2); overflow: auto; }
+.memory-switcher__empty { min-height: 5rem; display: grid; place-items: center; color: var(--muted); font-size: var(--text-sm); }
+.memory-switcher__row { width: 100%; min-width: 0; padding: var(--space-2) var(--space-2-5); display: flex; align-items: flex-start; gap: var(--space-2); border-radius: var(--r-house); color: var(--ink-soft); text-align: left; }
+.memory-switcher__row:hover,
+.memory-switcher__row[aria-selected="true"] { color: var(--ink); background: var(--state-selected-bg); }
+.memory-switcher__row-icon { width: .875rem; height: .875rem; margin-top: 1px; flex: none; color: var(--faint); }
+.memory-switcher__row-icon.active { color: var(--muted); }
+.memory-switcher__row-copy { min-width: 0; flex: 1; display: grid; gap: var(--space-0-5); }
+.memory-switcher__row-title { overflow: hidden; color: var(--ink-soft); font-size: var(--text-sm); font-weight: 540; text-overflow: ellipsis; white-space: nowrap; }
+.memory-switcher__row-title.active { color: var(--ink); }
+.memory-switcher__row-path { overflow: hidden; color: var(--faint); font-size: var(--text-2xs); text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Compact windows ────────────────────────────────────────── */
+
+@media (max-width: 740px) {
+  .memory-surface .mw-rail {
+    inset: var(--mw-rail-edge) auto var(--mw-rail-edge) var(--mw-rail-edge);
+    width: min(var(--mw-rail-w), calc(100vw - 1rem));
+    max-width: calc(100vw - 1rem);
+  }
+
+  .memory-surface .mw-doc { left: 0; }
+  .memory-surface .mw-tab-strip {
+    left: var(--memory-compact-chrome-left);
+    max-width: min(26rem, max(
+      var(--tab-overflow-min-width),
+      calc(
+        100% - var(--memory-compact-chrome-left) - var(--mw-content-inset) -
+        var(--memory-instrument-current-width) - var(--instrument-layout-gap)
+      )
+    ));
+  }
+  .memory-surface .mw-context {
+    right: 1rem;
+    bottom: 3rem;
+    width: min(var(--mw-ctx-w), calc(100vw - 2rem));
+  }
+  .memory-surface .mw-krec { grid-template-columns: 1fr; gap: var(--space-1); }
+  .memory-edit-review__sheet { left: 0; width: 100%; max-height: calc(100vh - var(--space-4)); }
+  .memory-diff-overlay .mw-dv-head { align-items: flex-start; flex-wrap: wrap; }
+  .memory-diff-overlay .mw-dv-meta { width: 100%; margin-left: 0; }
+}
+
+@media (max-width: 620px) {
+  .memory-surface .mw-instrument-icon { display: block; }
+  .memory-surface .mw-instrument > span:not(.mw-instrument-count):not(.t-icon-swap) { display: none; }
+  .memory-surface .mw-instrument-count { display: none; }
+  .memory-surface .mw-instrument { width: var(--control-size); padding: 0; }
+}
+
+@media (max-width: 520px) {
+  .memory-surface .mw-doc-tab { min-width: 4.25rem; }
+  .memory-surface .mw-edit-hint { display: none; }
+  .memory-surface .mw-page { padding-inline: var(--space-4); }
+  .memory-surface .mw-prop-row,
+  .memory-surface .mw-prop-add-row { grid-template-columns: 1rem 6rem minmax(0, 1fr); gap: var(--space-2); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .memory-surface .mw-rail,
+  .memory-surface .mw-doc,
+  .memory-surface .mw-context-plane,
+  .memory-surface .mw-instrument-items,
+  .memory-surface .mw-instrument-collapse svg,
+  .memory-surface .mw-edit-hint,
+  .memory-surface .mw-props-head svg { transition-duration: 1ms; }
+  .memory-surface .memory-focus-cache,
+  .memory-surface .memory-focus-plane { transition-duration: 1ms; }
+  body.memory-diff-receded #app { transform: none; }
+  .memory-surface .memory-ws.review-open .memory-focus-cache { transform: none; }
+  .memory-surface .memory-ws.review-open .memory-focus-plane { filter: none; }
+}

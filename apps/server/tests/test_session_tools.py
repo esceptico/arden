@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from arden.context.models import SessionState
+from arden.context.store import AREA_FILTER_UNSET
 from arden.tools.core.context import (
     BackgroundTaskRegistry,
     IOBridge,
@@ -18,9 +19,11 @@ from arden.tools.sessions import (
     CreateSessionInput,
     ListRecentSessionsInput,
     ReadSessionInput,
+    SearchTranscriptsInput,
     create_session,
     list_recent_sessions,
     read_session,
+    search_transcripts,
 )
 
 
@@ -48,7 +51,31 @@ class _StubSessionService:
         return {"hits": [], "has_more": False}
 
 
-def _make_execution(services: dict | None = None, *, area_id: str | None = None) -> ToolExecution:
+class _StubRun:
+    def __init__(self, session_id: str, run_id: str, approvals: int = 0, queued: int = 0):
+        self.session_id = session_id
+        self.run_id = run_id
+        self.pending_approvals = {f"tool-{i}": None for i in range(approvals)}
+        self.pending_injection_count = queued
+
+
+class _StubRunRegistry:
+    def __init__(self, runs: list[_StubRun] | None = None):
+        self._runs = runs or []
+
+    def list_active_runs(self) -> list[_StubRun]:
+        return list(self._runs)
+
+    def get_active_run(self, session_id: str) -> _StubRun | None:
+        return next((run for run in self._runs if run.session_id == session_id), None)
+
+
+def _make_execution(
+    services: dict | None = None,
+    *,
+    area_id: str | None = None,
+    run_registry: _StubRunRegistry | None = None,
+) -> ToolExecution:
     ctx = ToolContext(
         session_state=SessionState(session_id="cur", started_at=datetime.now(UTC), area_id=area_id),
         registry=ToolRegistry(),
@@ -56,6 +83,7 @@ def _make_execution(services: dict | None = None, *, area_id: str | None = None)
         io=IOBridge(),
         background_tasks=BackgroundTaskRegistry(session_id="cur"),
         services=services or {},
+        run_registry=run_registry,
     )
     return ToolExecution(tool_id="t1", tool_name="test", ctx=ctx)
 
@@ -79,6 +107,14 @@ async def test_list_recent_sessions_returns_formatted_list():
                 "last_activity": (now - timedelta(days=1)).isoformat(),
                 "message_count": 4,
             },
+            {
+                "session_id": "20260508_080000_000",
+                "name": "Email updates feed",
+                "session_type": "channel",
+                "started_at": (now - timedelta(days=2)).isoformat(),
+                "last_activity": (now - timedelta(days=2)).isoformat(),
+                "message_count": 300,
+            },
         ]
     )
     service._sessions.reverse()
@@ -92,6 +128,10 @@ async def test_list_recent_sessions_returns_formatted_list():
     assert "(untitled)" in result.content  # falls back when name is None
     assert "12 msgs" in result.content
     assert result.content.index("20260510_120000_000") < result.content.index("20260509_090000_000")
+    # Non-chat sessions carry a kind tag so callers can honor rules like
+    # "never archive channels" from the list alone; plain chats stay untagged.
+    assert "Email updates feed [channel]" in result.content
+    assert "Daily standup [" not in result.content
 
 
 @pytest.mark.asyncio
@@ -322,3 +362,155 @@ async def test_read_session_handles_structured_content_blocks():
     assert "Look at this image" in result.content
     assert "[image]" in result.content
     assert "[tool_use: bash]" in result.content
+
+
+# --- live run status + area scoping ---
+
+
+@pytest.mark.asyncio
+async def test_list_recent_sessions_renders_live_and_persisted_status():
+    now = datetime.now(UTC)
+    service = _StubSessionService(
+        sessions=[
+            {
+                "session_id": "live",
+                "name": "Live chat",
+                "last_activity": now.isoformat(),
+                "message_count": 3,
+                "agent_status": None,
+            },
+            {
+                "session_id": "waiting",
+                "name": "Blocked chat",
+                "last_activity": (now - timedelta(minutes=1)).isoformat(),
+                "message_count": 2,
+                "agent_status": None,
+            },
+            {
+                "session_id": "agent",
+                "name": "Agent run",
+                "last_activity": (now - timedelta(minutes=2)).isoformat(),
+                "message_count": 9,
+                "agent_status": "completed",
+            },
+        ]
+    )
+    registry = _StubRunRegistry(
+        [
+            _StubRun("live", "run-a"),
+            _StubRun("waiting", "run-b", approvals=1),
+        ]
+    )
+    execution = _make_execution(services={"session": service}, run_registry=registry)
+
+    result = await list_recent_sessions(execution, ListRecentSessionsInput())
+
+    lines = {line.split(" · ")[0]: line for line in result.content.splitlines()}
+    assert lines["- live"].endswith("· running")
+    assert lines["- waiting"].endswith("· needs approval")
+    assert lines["- agent"].endswith("· completed")
+
+
+@pytest.mark.asyncio
+async def test_list_recent_sessions_omits_status_when_run_registry_is_absent():
+    service = _StubSessionService(
+        sessions=[
+            {
+                "session_id": "s1",
+                "name": "Plain",
+                "last_activity": datetime.now(UTC).isoformat(),
+                "message_count": 1,
+                "agent_status": None,
+            }
+        ]
+    )
+    execution = _make_execution(services={"session": service})
+
+    result = await list_recent_sessions(execution, ListRecentSessionsInput())
+
+    assert result.content.strip().endswith("1 msgs")
+
+
+@pytest.mark.asyncio
+async def test_list_recent_sessions_inside_an_area_stays_in_that_area():
+    service = _StubSessionService(sessions=[])
+    execution = _make_execution(services={"session": service}, area_id="ops")
+
+    await list_recent_sessions(execution, ListRecentSessionsInput())
+
+    assert service.calls[-1] == ("list_sessions", {"area_id": "ops"})
+
+
+@pytest.mark.asyncio
+async def test_list_recent_sessions_in_a_plain_chat_sees_every_session():
+    service = _StubSessionService(sessions=[])
+    execution = _make_execution(services={"session": service})
+
+    await list_recent_sessions(execution, ListRecentSessionsInput())
+
+    assert service.calls[-1][1]["area_id"] is AREA_FILTER_UNSET
+
+
+@pytest.mark.asyncio
+async def test_an_area_caller_cannot_widen_any_read_beyond_its_area():
+    """The area boundary is not a parameter: an Area custodian's allowlist pins
+    tool names, so a widening argument would be a hole nothing else closes."""
+    service = _StubSessionService(
+        sessions=[],
+        messages={"s1": [{"seq": 0, "role": "user", "message": {"role": "user", "content": "hi"}}]},
+    )
+    execution = _make_execution(services={"session": service}, area_id="ops")
+
+    for model in (ListRecentSessionsInput, ReadSessionInput, SearchTranscriptsInput):
+        assert "scope" not in model.model_fields
+
+    await list_recent_sessions(execution, ListRecentSessionsInput())
+    await read_session(execution, ReadSessionInput(session_id="s1"))
+    await search_transcripts(execution, SearchTranscriptsInput(query="hi"))
+
+    assert [kwargs["area_id"] for _, kwargs in service.calls] == ["ops", "ops", "ops"]
+
+
+@pytest.mark.asyncio
+async def test_read_session_prefixes_a_run_status_header():
+    service = _StubSessionService(
+        sessions=[],
+        messages={"s1": [{"seq": 4, "role": "user", "message": {"role": "user", "content": "hi"}}]},
+    )
+    registry = _StubRunRegistry([_StubRun("s1", "run-x", approvals=2, queued=1)])
+    execution = _make_execution(services={"session": service}, run_registry=registry)
+
+    result = await read_session(execution, ReadSessionInput(session_id="s1"))
+
+    first = result.content.splitlines()[0]
+    assert first.startswith("[session s1] running")
+    assert "run run-x" in first
+    assert "2 approval(s) pending" in first
+    assert "1 message(s) queued" in first
+    assert result.content.splitlines()[1] == ""
+
+
+@pytest.mark.asyncio
+async def test_read_session_reports_idle_for_a_session_without_a_run():
+    service = _StubSessionService(
+        sessions=[],
+        messages={"s1": [{"seq": 0, "role": "user", "message": {"role": "user", "content": "hi"}}]},
+    )
+    execution = _make_execution(services={"session": service}, run_registry=_StubRunRegistry())
+
+    result = await read_session(execution, ReadSessionInput(session_id="s1"))
+
+    assert result.content.splitlines()[0] == "[session s1] idle"
+
+
+@pytest.mark.asyncio
+async def test_read_session_omits_the_header_without_a_run_registry():
+    service = _StubSessionService(
+        sessions=[],
+        messages={"s1": [{"seq": 0, "role": "user", "message": {"role": "user", "content": "hi"}}]},
+    )
+    execution = _make_execution(services={"session": service})
+
+    result = await read_session(execution, ReadSessionInput(session_id="s1"))
+
+    assert not result.content.startswith("[session")

@@ -12,8 +12,9 @@ function resolveDark(choice: ThemeChoice): boolean {
 
 function applyDarkMode(choice: ThemeChoice): void {
   const root = document.documentElement;
-  if (resolveDark(choice)) root.classList.add("dark");
-  else root.classList.remove("dark");
+  const dark = resolveDark(choice);
+  root.classList.toggle("dark", dark);
+  root.dataset.theme = dark ? "dark" : "light";
 }
 
 /** Effect that keeps the <html> `dark` class in sync with the user's

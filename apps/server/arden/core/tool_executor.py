@@ -18,6 +18,7 @@ from arden.constants import (
 from arden.core.raw_tool_results import persist_raw_tool_result
 from arden.core.tool_result_files import persist_result
 from arden.integrations.base import IntegrationConnectionError
+from arden.tool_call_metadata import split_tool_arguments
 from arden.tools.connections import ConnectionService
 from arden.tools.core.context import ToolContext, ToolExecution
 from arden.tools.core.types import ToolAction, ToolScope
@@ -103,6 +104,10 @@ class ArdenToolExecutor:
                 preview="Tool not loaded",
                 recovery_action=f"Load {name!r} with {loader}, then retry.",
             )
+
+        # Presentation metadata must not change execution, audit identity,
+        # connection recovery, or shared-read deduplication.
+        _, args = split_tool_arguments(args)
 
         store = self._audit_store() if tool.policy.audit else None
         if store:

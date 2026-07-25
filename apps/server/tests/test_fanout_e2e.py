@@ -67,7 +67,8 @@ async def test_watcher_fanout_dedup_cascade(store: AutomationStore, session_serv
     # ---- Step 1: create the watcher (parent) ----------------------------
     watcher = await svc.create(
         name="watcher",
-        description="scan offers",
+        description="Scans incoming offers.",
+        prompt="Scan incoming offers.",
         trigger_type="time",
         every="1h",
     )
@@ -94,7 +95,8 @@ async def test_watcher_fanout_dedup_cascade(store: AutomationStore, session_serv
 
         child = await svc.create(
             name=f"check {item}",
-            description=f"check {item} every 4h",
+            description=f"Checks {item} every four hours.",
+            prompt=f"Check {item} every four hours.",
             trigger_type="time",
             every="4h",
             thread_id=channel_state.session_id,
@@ -109,7 +111,7 @@ async def test_watcher_fanout_dedup_cascade(store: AutomationStore, session_serv
         assert child.kind == "automation"  # NOT "loop" — agent-tool path
         assert child.parent_automation_id == watcher.task_id
         assert child.read_history is False  # post mode
-        assert child.description == f"check {item} every 4h"
+        assert child.prompt == f"Check {item} every four hours."
         children_by_item[item] = child
 
     # ---- Step 3: verify 3 children + 3 channel sessions exist -----------
@@ -131,7 +133,8 @@ async def test_watcher_fanout_dedup_cascade(store: AutomationStore, session_serv
     for item in items:
         dup = await svc.create(
             name=f"check {item} (re-fire)",
-            description=f"check {item} (re-fire)",
+            description=f"Rechecks {item} after the watcher fires.",
+            prompt=f"Check {item} again after the watcher fires.",
             trigger_type="time",
             every="4h",
             thread_id="ignored",

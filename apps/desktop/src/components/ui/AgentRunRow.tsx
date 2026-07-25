@@ -14,13 +14,12 @@ import {
 import { ICON } from "@/lib/icons";
 import { EASE_OUT, MOTION } from "@/lib/tokens/motion";
 import {
+  agentRunStatusLabel,
   isActiveAgentStatus,
-  statusDotClass,
   type AgentRunStatus,
   type AgentRunView,
 } from "@/lib/agentRun";
 import { IconSwap } from "@/components/ui/IconSwap";
-import { StatusDot } from "@/components/ui/StatusDot";
 import { Collapse } from "@/components/ui/Collapse";
 import { ConfirmDeleteButton } from "@/components/ui/ConfirmDeleteButton";
 
@@ -174,23 +173,6 @@ function ActionButton({ action }: { action: AgentRunAction }) {
   );
 }
 
-// 4 micro-pips before the StatusDot, colored by the same statusDotClass the
-// dot uses — recent run outcomes at a glance, no separate color fn.
-function StatusSparkline({ statuses }: { statuses: AgentRunStatus[] }) {
-  if (statuses.length === 0) return null;
-  return (
-    <span className="inline-flex items-center gap-0.5">
-      {statuses.slice(0, 4).map((s, i) => (
-        <span
-          key={i}
-          aria-hidden
-          className={clsx("w-1 h-1 rounded-[1px]", statusDotClass(s).split(" ")[0])}
-        />
-      ))}
-    </span>
-  );
-}
-
 /** The shared agent body: leading glyph + name + meta line + the hover
  *  affordance lane (handoffs/actions) + status dot + elapsed + result line.
  *  Rendered borderless by AgentRunRow (sidebar hub) and inside a card shell by
@@ -315,8 +297,15 @@ export function AgentRunContent({
               (composing || confirmArmed) && "opacity-0",
             )}
           >
-            {run.recentStatuses && !paused && <StatusSparkline statuses={run.recentStatuses} />}
-            <StatusDot status={dotStatus} pulse={running} />
+            <span
+              className={clsx(
+                "arden-status",
+                dotStatus === "failed" && "text-bad",
+                dotStatus === "completed" && "text-ok",
+              )}
+            >
+              {agentRunStatusLabel(dotStatus)}
+            </span>
             {run.elapsedLabel && (
               <span className="text-2xs tabular-nums text-muted">{run.elapsedLabel}</span>
             )}

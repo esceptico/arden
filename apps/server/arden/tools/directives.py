@@ -96,6 +96,7 @@ async def set_directives(execution: ToolExecution, args: SetDirectivesInput) -> 
 
 get_directives_tool = tool(
     display_name="Get Directives",
+    display_description="Read persistent behavior directives.",
     description="Read the current persistent behavior directives and their revision before replacing them.",
     input_model=GetDirectivesInput,
     policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL),
@@ -105,6 +106,7 @@ get_directives_tool = tool(
 
 set_directives_tool = tool(
     display_name="Set Directives",
+    display_description="Replace persistent behavior directives.",
     description=DESCRIPTION,
     input_model=SetDirectivesInput,
     policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, requires_approval=True),

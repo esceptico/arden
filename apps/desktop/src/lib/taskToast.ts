@@ -1,10 +1,15 @@
+import type { AppDestination } from "@/api/navigation";
 import type { BackgroundAgent } from "@/stores/background-agent-domain";
 
-export type ToastStatus = "completed" | "failed" | "cancelled";
+/** Terminal states of a run. `isTerminalStatus` narrows to exactly these. */
+export type ToastTerminalStatus = "completed" | "failed" | "cancelled";
+/** `info` = an agent-raised offer (e.g. "Open the Ops area") — no run behind it. */
+export type ToastStatus = ToastTerminalStatus | "info";
 
 export type ToastTarget =
   | { kind: "session"; sessionId: string }
-  | { kind: "automation" };
+  | { kind: "automation"; taskId?: string }
+  | { kind: "destination"; destination: AppDestination };
 
 export interface Toast {
   id: string;
@@ -16,7 +21,7 @@ export interface Toast {
 
 /** Terminal states that warrant a toast. Deliberately excludes "interrupted"
  *  and "cancel_requested" — those are mid-cancel, not user-facing completions. */
-export function isTerminalStatus(status: string): status is ToastStatus {
+export function isTerminalStatus(status: string): status is ToastTerminalStatus {
   return status === "completed" || status === "failed" || status === "cancelled";
 }
 
@@ -52,6 +57,6 @@ export function automationToast(args: {
     title: args.name ?? "Scheduled task",
     detail: args.result ?? undefined,
     status: "completed",
-    target: { kind: "automation" },
+    target: { kind: "automation", taskId: args.taskId },
   };
 }

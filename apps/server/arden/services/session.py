@@ -170,13 +170,14 @@ class SessionService:
         rows the user might not be viewing. Ordinary chat streaming stays off
         this global bus because the user is already watching it over the
         per-session stream."""
-        if (
-            session_state.session_type not in {"channel", "agent"}
-            or session_state.agent_type == "command_sidecar"
-            or not messages
-        ):
+        if session_state.session_type not in {"channel", "agent"} or not messages:
             return
         await self._publish(SessionActivityEvent(session=session_row(session_state, len(messages))))
+
+    async def announce_row(self, session_state: SessionState, message_count: int) -> None:
+        """Push a sidebar row delta for a metadata change (rename) the client has
+        no other live signal for."""
+        await self._publish(SessionActivityEvent(session=session_row(session_state, message_count)))
 
     async def record_chat_run_started(self, run_id: str, session_id: str, metadata: dict | None = None) -> None:
         try:
@@ -248,9 +249,9 @@ class SessionService:
         run_id: str,
         message: dict,
         enqueued_seq: int | None = None,
-    ) -> None:
+    ) -> str:
         try:
-            await self.store.record_chat_queued_message(
+            return await self.store.record_chat_queued_message(
                 client_id=client_id,
                 session_id=session_id,
                 run_id=run_id,
@@ -259,6 +260,23 @@ class SessionService:
             )
         except Exception as e:
             _logger.warning("Failed to record queued chat message: %s", e)
+            raise
+
+    async def cancel_chat_queued_message(
+        self,
+        *,
+        session_id: str,
+        client_id: str,
+        run_id: str | None = None,
+    ) -> str:
+        try:
+            return await self.store.cancel_chat_queued_message(
+                session_id=session_id,
+                client_id=client_id,
+                run_id=run_id,
+            )
+        except Exception as e:
+            _logger.warning("Failed to cancel queued chat message: %s", e)
             raise
 
     async def mark_chat_queued_message_ingested(self, client_id: str, ingested_seq: int | None = None) -> None:
@@ -476,6 +494,9 @@ class SessionService:
 
     async def move_session_to_area(self, session_id: str, area_id: str | None) -> bool:
         return await self.store.update_session_area(session_id, area_id)
+
+    async def is_archived(self, session_id: str) -> bool:
+        return await self.store.is_session_archived(session_id)
 
     async def archive(self, session_id: str) -> bool:
         return await self.store.archive_session(session_id)

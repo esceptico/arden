@@ -35,3 +35,4 @@ apps/desktop/dist/
 
 # Local benchmark outputs
 benchmark-results/
+.codex/

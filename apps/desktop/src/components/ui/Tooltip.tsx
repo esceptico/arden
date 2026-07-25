@@ -1,6 +1,7 @@
 import {
   cloneElement,
   isValidElement,
+  useCallback,
   useEffect,
   useId,
   useLayoutEffect,
@@ -10,25 +11,22 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { AnimatePresence, motion } from "motion/react";
 import clsx from "clsx";
-import { DURATION_POPOVER, EASE_DECELERATE, EXIT_FAST } from "@/lib/tokens/motion";
+import { MOTION } from "@/lib/tokens/motion";
 import { calculateTooltipPlacement, type TooltipPlacement, type TooltipSide } from "@/components/ui/tooltipPlacement";
-import { useReanchor } from "@/lib/hooks";
 
 const GAP = 6;
 /** Min distance the tooltip should keep from the viewport edge before flipping
  *  to the opposite side. */
 const SAFE_MARGIN = 8;
-/** Open delay so the tip doesn't flash on every passing hover; hide is fast. */
-const OPEN_DELAY_MS = 350;
-const HIDE_DELAY_MS = 60;
+/** Canonical first-hover delay; keyboard focus bypasses it. */
+const OPEN_DELAY_MS = MOTION.tooltipDelay * 1_000;
 /** Once any tooltip has just been open, the next one within this window opens
  *  instantly — no delay, no entrance animation. Moving across a toolbar then
  *  feels immediate instead of re-paying the 350ms intent delay every hover
  *  (Emil Kowalski's "skip the delay on subsequent hovers"). */
-const INSTANT_GRACE_MS = 300;
-let lastTooltipClosedAt = 0;
+const INSTANT_GRACE_MS = MOTION.tooltipWarm * 1_000;
+let warmUntil = 0;
 
 interface TooltipProps {
   label: ReactNode;
@@ -40,18 +38,17 @@ interface TooltipProps {
 }
 
 /**
- * Passive hover/focus hint — the animated replacement for bare `title=""`.
+ * Passive hover/focus hint. It deliberately has no entrance transform:
+ * tooltips are spatial labels, not panels competing for attention.
  * Clones its child to attach listeners and a measuring ref in place (no
  * wrapper span). Shares HoverPopover's house entrance and portal/re-measure
  * scaffolding. Give the child its own aria-label; the tooltip is supplementary.
  */
-export function Tooltip({ label, children, side = "top", className }: TooltipProps) {
+export function Tooltip({ label, children, side = "bottom", className }: TooltipProps) {
   const triggerRef = useRef<HTMLElement>(null);
   const tipRef = useRef<HTMLDivElement>(null);
   const showTimer = useRef<number | null>(null);
-  const hideTimer = useRef<number | null>(null);
   const [open, setOpen] = useState(false);
-  const [instant, setInstant] = useState(false);
   const [placement, setPlacement] = useState<TooltipPlacement | null>(null);
   // Portal mounts client-side only — keeps the component SSR/renderToStaticMarkup
   // safe (createPortal + document.body aren't touched until after mount).
@@ -59,53 +56,32 @@ export function Tooltip({ label, children, side = "top", className }: TooltipPro
   useEffect(() => setMounted(true), []);
   const tipId = useId();
 
-  const clear = () => {
+  const clear = useCallback(() => {
     if (showTimer.current !== null) window.clearTimeout(showTimer.current);
-    if (hideTimer.current !== null) window.clearTimeout(hideTimer.current);
     showTimer.current = null;
-    hideTimer.current = null;
-  };
-  const show = () => {
+  }, []);
+  const show = useCallback(() => {
     clear();
     setPlacement(null);
-    if (Date.now() - lastTooltipClosedAt < INSTANT_GRACE_MS) {
-      setInstant(true);
+    if (performance.now() < warmUntil) {
       setOpen(true);
     } else {
-      setInstant(false);
       showTimer.current = window.setTimeout(() => setOpen(true), OPEN_DELAY_MS);
     }
-  };
-  const hide = () => {
+  }, [clear]);
+  const hide = useCallback(() => {
     clear();
-    hideTimer.current = window.setTimeout(() => {
-      setOpen(false);
-      lastTooltipClosedAt = Date.now();
-    }, HIDE_DELAY_MS);
-  };
-
+    setOpen(false);
+    if (open) warmUntil = performance.now() + INSTANT_GRACE_MS;
+  }, [clear, open]);
   // Cancel any pending show/hide on unmount — a stray hide timer would
   // otherwise fire later and stamp `lastTooltipClosedAt`, making the next
   // unrelated hover open with no delay.
-  useLayoutEffect(() => clear, []);
+  useLayoutEffect(() => clear, [clear]);
 
-  // Escape dismisses the tip without moving focus off the trigger.
   useLayoutEffect(() => {
     if (!open) return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        clear();
-        setOpen(false);
-        lastTooltipClosedAt = Date.now();
-      }
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [open]);
-
-  useReanchor(
-    open,
-    () => {
+    const reposition = () => {
       const t = triggerRef.current;
       const tooltip = tipRef.current?.getBoundingClientRect();
       if (!t || !tooltip) return;
@@ -119,30 +95,37 @@ export function Tooltip({ label, children, side = "top", className }: TooltipPro
           safeMargin: SAFE_MARGIN,
         }),
       );
-    },
-    tipRef,
-  );
-
-  const effSide = placement?.side ?? side;
-  const axis = effSide === "left" || effSide === "right" ? "x" : "y";
-  const sign = effSide === "top" || effSide === "left" ? 1 : -1;
-  const origin =
-    effSide === "top"
-      ? "bottom center"
-      : effSide === "bottom"
-        ? "top center"
-        : effSide === "left"
-          ? "center right"
-          : "center left";
+    };
+    const dismissOnScroll = () => hide();
+    reposition();
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", dismissOnScroll, true);
+    const observer = tipRef.current && typeof ResizeObserver !== "undefined"
+      ? new ResizeObserver(reposition)
+      : null;
+    if (tipRef.current) observer?.observe(tipRef.current);
+    return () => {
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", dismissOnScroll, true);
+      observer?.disconnect();
+    };
+  }, [hide, open, side]);
 
   // Merge our listeners + ref onto the child without a wrapper element.
   const childProps = children.props as Record<string, unknown>;
   const compose =
-    (orig: unknown, ours: () => void) =>
+    (orig: unknown, ours: (event: unknown) => void) =>
     (e: unknown) => {
       if (typeof orig === "function") (orig as (ev: unknown) => void)(e);
-      ours();
-    };
+      ours(e);
+  };
+  const showFromFocus = (event: unknown) => {
+    const trigger = (event as { currentTarget?: unknown }).currentTarget;
+    if (!(trigger instanceof HTMLElement) || !trigger.matches(":focus-visible")) return;
+    clear();
+    setPlacement(null);
+    setOpen(true);
+  };
   const setRef = (node: HTMLElement | null) => {
     triggerRef.current = node;
     const orig = (childProps as { ref?: unknown }).ref;
@@ -154,7 +137,7 @@ export function Tooltip({ label, children, side = "top", className }: TooltipPro
         ref: setRef,
         onMouseEnter: compose(childProps.onMouseEnter, show),
         onMouseLeave: compose(childProps.onMouseLeave, hide),
-        onFocus: compose(childProps.onFocus, show),
+        onFocus: compose(childProps.onFocus, showFromFocus),
         onBlur: compose(childProps.onBlur, hide),
         "aria-describedby": open ? tipId : childProps["aria-describedby"],
       })
@@ -165,35 +148,21 @@ export function Tooltip({ label, children, side = "top", className }: TooltipPro
       {trigger}
       {mounted &&
         createPortal(
-          <AnimatePresence>
-            {open && (
-              <motion.div
-                ref={tipRef}
-                id={tipId}
-                role="tooltip"
-                initial={{ opacity: 0, scale: 0.96, [axis]: sign * 3 }}
-                animate={{ opacity: 1, scale: 1, [axis]: 0 }}
-                exit={{ opacity: 0, scale: 0.96, transition: EXIT_FAST }}
-                transition={
-                  instant ? { duration: 0 } : { duration: DURATION_POPOVER, ease: EASE_DECELERATE }
-                }
-                style={{
-                  position: "fixed",
-                  top: placement?.top ?? 0,
-                  left: placement?.left ?? 0,
-                  visibility: placement ? undefined : "hidden",
-                  zIndex: "var(--z-tooltip)",
-                  transformOrigin: origin,
-                }}
-                className={clsx(
-                  "surface-panel surface-popover pointer-events-none max-w-[min(18rem,80vw)] px-2 py-1 text-xs leading-snug text-ink",
-                  className,
-                )}
-              >
-                {label}
-              </motion.div>
-            )}
-          </AnimatePresence>,
+          open ? (
+            <div
+              ref={tipRef}
+              id={tipId}
+              role="tooltip"
+              style={{
+                top: placement?.top ?? 0,
+                left: placement?.left ?? 0,
+                visibility: placement ? undefined : "hidden",
+              }}
+              className={clsx("arden-tooltip", className)}
+            >
+              {label}
+            </div>
+          ) : null,
           document.body,
         )}
     </>

@@ -27,6 +27,7 @@ from arden.core.model_context_budget import (
 )
 from arden.core.spawner import create_spawn_fn
 from arden.core.tool_executor import ArdenToolExecutor
+from arden.integrations.core import APP_CONTROL, SESSIONS
 from arden.tools.core import ToolAction, ToolPolicy, ToolResult, ToolScope, tool
 from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.registry import ToolRegistry
@@ -35,6 +36,7 @@ from arden.tools.deferred import (
     build_deferred_tools_prompt,
     build_deferred_tools_prompt_for_schemas,
     build_native_deferred_tools_prompt_for_schemas,
+    is_deferred_tool,
     load_tools_tool,
     tool_search_tool,
 )
@@ -1356,3 +1358,36 @@ async def test_spawned_agent_clamps_tool_tail_after_compaction(monkeypatch):
     assert huge_result not in tool_content
     assert compactor.seen_messages is not None
     assert huge_result not in str(compactor.seen_messages)
+
+
+@pytest.mark.asyncio
+async def test_app_control_loads_by_app_group():
+    registry = ToolRegistry()
+    registry.register("load_tools", load_tools_tool, source="_system")
+    for name, tool_obj in APP_CONTROL.tools.items():
+        registry.register(name, tool_obj, source=APP_CONTROL.id)
+    run = RunContext(run_id="run", deferred_tools_enabled=True)
+    ctx = ToolContext(
+        session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
+        registry=registry,
+        run=run,
+        io=IOBridge(),
+        services={"session": object(), "app_control": object()},
+    )
+
+    result = await registry.execute(
+        "load_tools",
+        ToolExecution(tool_id="call_app", tool_name="load_tools", ctx=ctx),
+        {"group": "app"},
+    )
+
+    assert not result.is_error
+    assert set(APP_CONTROL.tools) <= run.loaded_tools
+
+
+def test_session_read_tools_are_not_deferred():
+    registry = ToolRegistry()
+    for name, tool_obj in SESSIONS.tools.items():
+        registry.register(name, tool_obj, source=SESSIONS.id)
+
+    assert all(not is_deferred_tool(name, registry) for name in SESSIONS.tools)

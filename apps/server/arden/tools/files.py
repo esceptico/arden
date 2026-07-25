@@ -785,6 +785,7 @@ async def edit_file(execution: ToolExecution, args: EditFileInput) -> ToolResult
 
 read_file_tool = tool(
     display_name="ReadFile",
+    display_description="Read a file from the workspace.",
     description=READ_FILE_DESCRIPTION,
     input_model=ReadFileInput,
     policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL),
@@ -793,6 +794,7 @@ read_file_tool = tool(
 
 list_files_tool = tool(
     display_name="ListFiles",
+    display_description="List files in a directory.",
     description=LIST_FILES_DESCRIPTION,
     input_model=ListFilesInput,
     policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL),
@@ -801,6 +803,7 @@ list_files_tool = tool(
 
 find_files_tool = tool(
     display_name="FindFiles",
+    display_description="Find files by name or pattern.",
     description=FIND_FILES_DESCRIPTION,
     input_model=FindFilesInput,
     policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL),
@@ -809,6 +812,7 @@ find_files_tool = tool(
 
 search_text_tool = tool(
     display_name="SearchText",
+    display_description="Search text across local files.",
     description=SEARCH_TEXT_DESCRIPTION,
     input_model=SearchTextInput,
     policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL),
@@ -817,6 +821,7 @@ search_text_tool = tool(
 
 write_file_tool = tool(
     display_name="WriteFile",
+    display_description="Create or replace a file.",
     description=WRITE_FILE_DESCRIPTION,
     input_model=WriteFileInput,
     policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, requires_approval=True),
@@ -826,6 +831,7 @@ write_file_tool = tool(
 
 edit_file_tool = tool(
     display_name="EditFile",
+    display_description="Replace exact text in a file.",
     description=EDIT_FILE_DESCRIPTION,
     input_model=EditFileInput,
     policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, requires_approval=True),

@@ -1,11 +1,14 @@
 import { useMemo, type ReactNode } from "react";
-import { AnimatePresence, motion } from "motion/react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useStore, type ActivityItem } from "@/stores";
 import {
   MOTION,
   EASE_DECELERATE,
   EASE_OUT,
-  SPRING_TRACE_ROW,
+  TRACE_ROW_ENTER,
+  TRACE_ROW_EXIT,
+  TRACE_ROW_TRANSITION,
+  TRACE_ROW_VISIBLE,
   RISE_IN,
   RISE_SETTLED,
   DISSOLVE_OUT,
@@ -27,9 +30,11 @@ export { orderedTraceEntries, liftWorkflows } from "@/features/chat/lib/trace";
 export { ActivityHeader } from "@/features/chat/components/ActivityHeader";
 export { AgentUsageSuffix } from "@/features/chat/components/ActivityRows";
 
+const TRACE_ROW_REDUCED_TRANSITION = { duration: MOTION.reduced } as const;
+
 export function ActivityTrace({ children }: { children: ReactNode }) {
   return (
-    <div className="font-sans text-sm leading-[1.4] text-muted">{children}</div>
+    <div className="board-activity-trace font-sans text-sm leading-[1.4] text-muted">{children}</div>
   );
 }
 
@@ -54,7 +59,8 @@ export function ActivityTail({
   const rolling = max != null;
   const setViewingTool = useStore((s) => s.setViewingTool);
   const streamReplaying = useStore((s) => s.streamReplaying);
-  const suppressMotion = motionDisabled ?? streamReplaying;
+  const reducedMotion = useReducedMotion() ?? false;
+  const suppressMotion = Boolean(motionDisabled || streamReplaying || reducedMotion);
 
   const sessionId = useStore((s) => s.currentSessionId);
   const workflows = useWorkflows(sessionId);
@@ -71,68 +77,75 @@ export function ActivityTail({
   // would chase a height-spring's intermediate values over many frames —
   // visible as the "odd animation above the chat". Instead let the container
   // resize instantly as rows mount/unmount (one reflow per tool, not 30) and
-  // animate only per-row enter/exit + sibling reflow via FLIP transforms.
+  // animate only paint-layer properties plus sibling FLIP transforms. Every
+  // `layout="position"` below deliberately excludes size, so no container
+  // height animation competes with the scroll river.
   //
-  // `position: relative` is critical: `mode="popLayout"` sets exiting items
-  // to `position: absolute`. Without a positioned ancestor they snap to the
-  // scroll viewport at (0, 0) and pile up as ghosts at the top of the chat.
-  // `overflow: hidden` clips the exit slide so it doesn't leak above the row.
-  //
-  // Entry keys: cards key by workflowId; rows segments by position. Segments
-  // only shift when a new workflow card lands between them, so the remount
-  // that index-keying implies happens exactly at that boundary and nowhere
-  // else (appending rows to the last segment keeps its index).
+  // Entry keys: cards key by workflowId; row segments key by their first item
+  // so inserting a card between segments preserves the existing FLIP peers.
   if (rolling) {
     return (
-      <>
-        {entries.map((entry, i) =>
-          entry.kind === "workflow" ? (
-            <motion.div
-              key={`wf:${entry.workflow.workflowId}`}
-              className="mt-1 space-y-1"
-              initial={suppressMotion ? false : { opacity: 0, y: 8, filter: "blur(2px)" }}
-              animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-              transition={suppressMotion ? { duration: 0 } : SPRING_TRACE_ROW}
-            >
-              <ExpandableWorkflowCard workflow={entry.workflow} />
-            </motion.div>
-          ) : entry.kind === "html_widget" ? (
-            <motion.div
-              key={`hw:${entry.item.id}`}
-              className="mt-1 space-y-1"
-              initial={suppressMotion ? false : { opacity: 0, y: 8, filter: "blur(2px)" }}
-              animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-              transition={suppressMotion ? { duration: 0 } : SPRING_TRACE_ROW}
-            >
-              <HtmlWidgetCard item={entry.item} />
-            </motion.div>
-          ) : (
-            <div key={`rows:${i}`} className="relative overflow-hidden pl-1 mt-0.5">
-              <AnimatePresence mode="popLayout" initial={false}>
-                {buildRollingList(entry.items, max as number).map((item, idx, arr) => (
-                  <motion.div
-                    key={item.id}
-                    data-activity-motion-row="true"
-                    data-motion-suppressed={suppressMotion ? "true" : "false"}
-                    layout={suppressMotion ? false : "position"}
-                    initial={suppressMotion ? false : { opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={suppressMotion ? { opacity: 1, y: 0 } : { opacity: 0, y: -8 }}
-                    transition={suppressMotion ? { duration: 0 } : SPRING_TRACE_ROW}
-                    className="min-w-0"
-                  >
-                    <ItemButton
-                      item={item}
-                      onOpen={setViewingTool}
-                      last={idx === arr.length - 1}
-                    />
-                  </motion.div>
-                ))}
-              </AnimatePresence>
-            </div>
-          ),
-        )}
-      </>
+      <div className="board-trace__rolling relative">
+        <AnimatePresence initial={false} mode="popLayout">
+          {entries.map((entry) =>
+            entry.kind === "workflow" ? (
+              <motion.div
+                key={`wf:${entry.workflow.workflowId}`}
+                data-chat-rail-anchor
+                layout={suppressMotion ? false : "position"}
+                className="board-trace__artifact mt-1 space-y-1"
+                initial={suppressMotion ? false : TRACE_ROW_ENTER}
+                animate={TRACE_ROW_VISIBLE}
+                exit={suppressMotion ? { opacity: 0 } : TRACE_ROW_EXIT}
+                transition={suppressMotion ? TRACE_ROW_REDUCED_TRANSITION : TRACE_ROW_TRANSITION}
+              >
+                <ExpandableWorkflowCard workflow={entry.workflow} />
+              </motion.div>
+            ) : entry.kind === "html_widget" ? (
+              <motion.div
+                key={`hw:${entry.item.id}`}
+                data-chat-rail-anchor
+                layout={suppressMotion ? false : "position"}
+                className="board-trace__artifact mt-1 space-y-1"
+                initial={suppressMotion ? false : TRACE_ROW_ENTER}
+                animate={TRACE_ROW_VISIBLE}
+                exit={suppressMotion ? { opacity: 0 } : TRACE_ROW_EXIT}
+                transition={suppressMotion ? TRACE_ROW_REDUCED_TRANSITION : TRACE_ROW_TRANSITION}
+              >
+                <HtmlWidgetCard item={entry.item} />
+              </motion.div>
+            ) : (
+              <motion.div
+                key={`rows:${entry.items[0]?.id ?? "empty"}`}
+                layout={suppressMotion ? false : "position"}
+                className="board-trace__rows relative overflow-hidden mt-0.5"
+                transition={suppressMotion ? TRACE_ROW_REDUCED_TRANSITION : TRACE_ROW_TRANSITION}
+              >
+                <AnimatePresence initial={false} mode="popLayout">
+                  {buildRollingList(entry.items, max as number).map((item, idx, arr) => (
+                    <motion.div
+                      key={item.id}
+                      data-chat-rail-anchor
+                      layout={suppressMotion ? false : "position"}
+                      initial={suppressMotion ? false : TRACE_ROW_ENTER}
+                      animate={TRACE_ROW_VISIBLE}
+                      exit={suppressMotion ? { opacity: 0 } : TRACE_ROW_EXIT}
+                      transition={suppressMotion ? TRACE_ROW_REDUCED_TRANSITION : TRACE_ROW_TRANSITION}
+                      className="board-trace__row min-w-0"
+                    >
+                      <ItemButton
+                        item={item}
+                        onOpen={setViewingTool}
+                        last={idx === arr.length - 1}
+                      />
+                    </motion.div>
+                  ))}
+                </AnimatePresence>
+              </motion.div>
+            ),
+          )}
+        </AnimatePresence>
+      </div>
     );
   }
 
@@ -149,21 +162,21 @@ export function ActivityTail({
       {entries.map((entry, i) => {
         if (entry.kind === "workflow") {
           return (
-            <div key={`wf:${entry.workflow.workflowId}`} className="mt-1 space-y-1">
+            <div key={`wf:${entry.workflow.workflowId}`} data-chat-rail-anchor className="board-trace__artifact mt-1 space-y-1">
               <ExpandableWorkflowCard workflow={entry.workflow} />
             </div>
           );
         }
         if (entry.kind === "html_widget") {
           return (
-            <div key={`hw:${entry.item.id}`} className="mt-1 space-y-1">
+            <div key={`hw:${entry.item.id}`} data-chat-rail-anchor className="board-trace__artifact mt-1 space-y-1">
               <HtmlWidgetCard item={entry.item} />
             </div>
           );
         }
         const rows = groupConsecutiveCalls(buildStaticTree(entry.items));
         return (
-          <div key={`rows:${i}`} className="pl-1 mt-0.5">
+          <div key={`rows:${i}`} className="board-trace__rows mt-0.5">
             <AnimatePresence initial={false}>
               {!collapsed && (
                 <motion.div
@@ -182,7 +195,11 @@ export function ActivityTail({
                   }
                 >
                   {rows.map((row, idx) => (
-                    <div key={row.type === "group" ? `g:${row.key}` : row.item.id} className="min-w-0">
+                    <div
+                      key={row.type === "group" ? `g:${row.key}` : row.item.id}
+                      data-chat-rail-anchor
+                      className="board-trace__row min-w-0"
+                    >
                       {row.type === "group" ? (
                         <ToolGroupRow
                           items={row.items}

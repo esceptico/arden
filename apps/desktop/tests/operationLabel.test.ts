@@ -63,7 +63,10 @@ test("groupSummary pluralizes with the tool's noun, else falls back to a count",
     verb: "Read 3 files",
     iconKey: "file",
   });
-  expect(groupSummary([item({ kind: "web_search" }), item({ kind: "web_search" })]).verb).toBe("Searched 2 searches");
+  // Search tools have no noun — a run counts calls, not results, so the full
+  // corpus label carries the count ("Searched 4 searches" must never appear).
+  expect(groupSummary([item({ kind: "web_search" }), item({ kind: "web_search" })]).verb).toBe("Searched the web · 2");
+  expect(groupSummary([item({ kind: "emails" }), item({ kind: "emails" })]).verb).toBe("Searched email · 2");
   // No noun → "{label} · {n}".
   expect(groupSummary([item({ kind: "slack_dms" }), item({ kind: "slack_dms" })]).verb).toBe("Listed Slack DMs · 2");
 });
@@ -85,19 +88,31 @@ test("without backend hints, the client registry still drives icon + noun (histo
   );
 });
 
-test("the model's `title` pseudo-arg wins as the single-row label, and isn't shown as detail", () => {
+test("the projected display title wins as the single-row label", () => {
   const r = operationLabel(
-    item({ kind: "emails", args: '{"title":"Searching for the invoice","query":"acme invoice"}' }),
+    item({
+      kind: "emails",
+      displayTitle: "Searching for the invoice",
+      args: '{"query":"acme invoice"}',
+    }),
   );
   expect(r.verb).toBe("Searching for the invoice"); // model title beats "Searched email"
-  expect(r.detail).toBe("acme invoice"); // title excluded from detail; query shown
+  expect(r.detail).toBe("acme invoice");
+});
+
+test("a real tool title is behavior data, never display metadata", () => {
+  const r = operationLabel(
+    item({ kind: "emails", args: '{"title":"Quarterly report","query":"acme invoice"}' }),
+  );
+  expect(r.verb).toBe("Searched email");
+  expect(r.detail).toBe("acme invoice");
 });
 
 test("group summaries stay stable per-kind, ignoring per-call model titles", () => {
   const rows = [
-    item({ kind: "read_file", args: '{"title":"Reading the spec","path":"a.ts"}' }),
-    item({ kind: "read_file", args: '{"title":"Reading the impl","path":"b.ts"}' }),
-    item({ kind: "read_file", args: '{"title":"Reading the test","path":"c.ts"}' }),
+    item({ kind: "read_file", displayTitle: "Reading the spec", args: '{"path":"a.ts"}' }),
+    item({ kind: "read_file", displayTitle: "Reading the impl", args: '{"path":"b.ts"}' }),
+    item({ kind: "read_file", displayTitle: "Reading the test", args: '{"path":"c.ts"}' }),
   ];
   // The header is the stable kind summary, not any one call's title.
   expect(groupSummary(rows).verb).toBe("Read 3 files");

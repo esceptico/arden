@@ -6,8 +6,8 @@ import { useStore } from "@/stores";
 import { useMutationState } from "@/lib/hooks";
 import { SettingsConnectionHint, SettingsInlineError } from "@/features/settings/components/SettingsNotice";
 import { SaveStatus } from "@/features/settings/components/SaveStatus";
+import { SettingsSection } from "@/features/settings/components/SettingsPage";
 import { SettingsTabSkeleton } from "@/features/settings/components/SettingsTabSkeleton";
-import { SectionHeader } from "@/components/ui/SectionHeader";
 
 // Coalesce per-keystroke edits so typing "16" saves once (16), not 1 then 16.
 const SAVE_DEBOUNCE_MS = 500;
@@ -46,19 +46,22 @@ export function AgentTab({ serverConfig }: { serverConfig: ServerConfig | null }
   };
 
   return (
-    <div className="grid gap-5">
-      <SectionHeader label="Sub-agents" action={<SaveStatus busy={busy} saved={saved} />} />
-
-      <NumberField
-        label="Max sub-agent depth"
-        help="How deep Arden will spawn sub-agents before refusing to recurse further."
-        value={depth}
-        min={1}
-        max={16}
-        onChange={onChange}
-      />
-
+    <SettingsSection
+      title="Sub-agents"
+      detail="saved automatically"
+      action={<SaveStatus busy={busy} saved={saved} />}
+    >
+      <div className="settings-field-stack">
+        <NumberField
+          label="Max sub-agent depth"
+          help="How deep Arden will spawn sub-agents before refusing to recurse further."
+          value={depth}
+          min={1}
+          max={16}
+          onChange={onChange}
+        />
+      </div>
       {error && <SettingsInlineError title="Couldn't save" message={error} />}
-    </div>
+    </SettingsSection>
   );
 }

@@ -19,7 +19,7 @@ export function ComposerImageStrip({
       animate={RISE_SETTLED}
       exit={SECTION_EXIT}
       transition={SECTION_ENTER}
-      className="flex flex-wrap gap-2 px-3 pt-2"
+      className="board-composer__images flex flex-wrap gap-2 px-3 pt-2"
     >
       {images.map((img, i) => (
         <div key={i} className="relative">
@@ -32,7 +32,7 @@ export function ComposerImageStrip({
             type="button"
             onClick={() => onRemove(i)}
             aria-label="Remove image"
-            className="absolute -top-1.5 -right-1.5 grid place-items-center w-4 h-4 rounded-full bg-ink text-on-ink shadow-sm hover:opacity-90 transition-[opacity,scale] duration-check ease-out active:scale-[0.97]"
+            className="absolute -top-1.5 -right-1.5 grid place-items-center w-4 h-4 rounded-[var(--r-control)] bg-ink text-on-ink shadow-sm hover:opacity-90 transition-[opacity,scale] duration-check ease-out active:scale-[0.97]"
           >
             <X size={ICON.XS} strokeWidth={2.4} />
           </button>

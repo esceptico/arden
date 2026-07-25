@@ -14,7 +14,7 @@ export function AddBtn({ label, onClick }: { label: string; onClick: () => void 
 export function RemoveBtn({ onClick }: { onClick: () => void }) {
   return (
     <IconButton size="lg" tone="faint" onClick={onClick} aria-label="Remove">
-      <Trash2 size={ICON.SM} strokeWidth={2} />
+      <Trash2 size={ICON.SM} />
     </IconButton>
   );
 }

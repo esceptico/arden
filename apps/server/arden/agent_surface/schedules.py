@@ -1,5 +1,5 @@
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -46,22 +46,44 @@ async def compile_schedules_to_automations(
     for schedule in discover_schedules(root):
         trigger = _cron_to_trigger(schedule.cron)
         task_id = f"fs:{schedule.id}"
-        automation = Automation(
-            task_id=task_id,
-            name=schedule.id,
-            description=schedule.prompt,
-            model=None,
-            triggers=[trigger],
-            enabled=True,
-            created_at=now,
-            next_run_at=trigger.next_run(now),
-            last_run_at=None,
-            last_result=None,
-            running_since=None,
-            auto_approve=False,
-            handler=None,
-        )
-        await store.save(automation)
+        existing = await store.get(task_id)
+        if existing is None:
+            automation = Automation(
+                task_id=task_id,
+                name=schedule.id,
+                description=None,
+                description_source=None,
+                prompt=schedule.prompt,
+                model=None,
+                triggers=[trigger],
+                enabled=True,
+                created_at=now,
+                next_run_at=trigger.next_run(now),
+                last_run_at=None,
+                last_result=None,
+                running_since=None,
+                auto_approve=False,
+                handler=None,
+            )
+            await store.save(automation)
+        else:
+            # Schedule files own the executable instruction and cadence, but
+            # never clobber a generated or manually edited display summary.
+            trigger_changed = existing.triggers != [trigger]
+            next_run = (
+                trigger.next_run(now)
+                if trigger_changed or (existing.enabled and existing.next_run_at is None)
+                else existing.next_run_at
+            )
+            updated = replace(
+                existing,
+                name=schedule.id,
+                prompt=schedule.prompt,
+                triggers=[trigger],
+                next_run_at=next_run,
+            )
+            if updated != existing:
+                await store.update_metadata(updated)
         compiled.append(task_id)
     return compiled
 

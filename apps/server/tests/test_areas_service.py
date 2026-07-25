@@ -219,3 +219,46 @@ def test_overview_excludes_asks_for_non_active_areas(tmp_path: Path):
     )
 
     assert svc.overview()["focus"] == []
+
+
+def test_overview_includes_unfiled_asks(tmp_path: Path):
+    """An ask raised from a plain chat belongs to no area — it still reaches
+    Home, under its own lane title."""
+    svc = make_service(tmp_path)
+    svc._asks.upsert(
+        Ask(
+            id="tool:chat-1:overdue",
+            area_key=None,
+            text="Invoice #4021 is 12 days overdue",
+            kind="question",
+            source="agent_tool",
+            actions=[{"verb": "open_session", "ref": "chat-1"}],
+            state="active",
+            created_at="2026-07-06T10:00:00",
+            reply_session_id="chat-1",
+        )
+    )
+
+    needs_you = svc.overview()["brief"]["needs_you"]
+
+    unfiled = next(row for row in needs_you if row["id"] == "tool:chat-1:overdue")
+    assert unfiled["area_key"] is None
+    assert unfiled["area_title"] == "Chats"
+
+
+def test_unfiled_asks_never_appear_in_an_area_detail(tmp_path: Path):
+    svc = make_service(tmp_path)
+    svc._asks.upsert(
+        Ask(
+            id="tool:chat-1:overdue",
+            area_key=None,
+            text="Invoice #4021 is 12 days overdue",
+            kind="question",
+            source="agent_tool",
+            actions=[],
+            state="active",
+            created_at="2026-07-06T10:00:00",
+        )
+    )
+
+    assert [a["id"] for a in svc.detail("o-1a")["asks"]] == []

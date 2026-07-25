@@ -1,4 +1,5 @@
 import { isActivityContinuationMessage } from "@/lib/messageVisibility";
+import { projectToolCallArguments } from "@/lib/toolCallMetadata";
 import { getState, type ActivityItem, type TodoListState, type UiMessage } from "@/stores/index";
 import type { ChildAgentRef } from "@/stores/types";
 import { mergeSourceRefs } from "@/stores/sourceRefs";
@@ -239,13 +240,15 @@ export function activityInsertAnchor(context: ProjectionContext): string | null 
 }
 
 export function activityItemFromPending(id: string, pending: PendingToolCall): ActivityItem {
+  const projected = projectToolCallArguments(pending.argsBuffer);
   return {
     id,
     kind: pending.name,
     semanticKind: liftedKind(pending.semanticKind),
     displayName: pending.displayName,
-    target: formatCallTarget(pending.name, pending.argsBuffer || "{}", pending.displayName),
-    args: pending.argsBuffer,
+    displayTitle: projected.displayTitle,
+    target: formatCallTarget(pending.name, projected.args || "{}", pending.displayName),
+    args: projected.args,
     status: "ongoing",
     depth: pending.depth || undefined,
     parentToolId: pending.parentId ?? undefined,
@@ -256,9 +259,11 @@ export function activityItemFromPending(id: string, pending: PendingToolCall): A
 }
 
 export function activityPatchFromPending(pending: PendingToolCall): Partial<ActivityItem> {
+  const projected = projectToolCallArguments(pending.argsBuffer);
   const patch: Partial<ActivityItem> = {
-    target: formatCallTarget(pending.name, pending.argsBuffer || "{}", pending.displayName),
-    args: pending.argsBuffer,
+    target: formatCallTarget(pending.name, projected.args || "{}", pending.displayName),
+    args: projected.args,
+    displayTitle: projected.displayTitle,
     depth: pending.depth || undefined,
     parentToolId: pending.parentId ?? undefined,
   };
@@ -271,6 +276,7 @@ function activityPatchFromItem(item: ActivityItem): Partial<ActivityItem> {
   const patch: Partial<ActivityItem> = {
     target: item.target,
     args: item.args,
+    displayTitle: item.displayTitle,
     depth: item.depth,
     parentToolId: item.parentToolId,
     semanticKind: item.semanticKind,
@@ -420,7 +426,8 @@ function renderArgValue(value: unknown): string {
 export function formatCallTarget(name: string, argsJson: string, displayName?: string): string {
   const label = toolLabel(name, displayName);
   try {
-    const parsed = JSON.parse(argsJson || "{}");
+    const projected = projectToolCallArguments(argsJson);
+    const parsed = JSON.parse(projected.args || "{}");
     if (parsed && typeof parsed === "object") {
       const args = parsed as Record<string, unknown>;
       const entries = Object.entries(args);

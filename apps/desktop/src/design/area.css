@@ -1,0 +1,355 @@
+/*
+ * Area room
+ * ---------
+ * The room is deliberately spare: one decision in focus, then the active
+ * outcome. Activity, sources, agents, and controls live in the shared Area
+ * inspector so this surface does not become a second dashboard.
+ */
+
+.board-area {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  color: var(--ink);
+  background: var(--paper);
+}
+
+.board-area-page {
+  position: relative;
+  width: min(100%, var(--content-max-width));
+  height: 100%;
+  min-height: 0;
+  margin-inline: auto;
+  padding: 3.5rem var(--content-gutter) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  overflow-wrap: anywhere;
+}
+
+.board-area-header {
+  flex: none;
+  padding: var(--space-1-5) var(--space-0-5) 0;
+}
+
+.board-area-header h1 {
+  margin: 0;
+  color: var(--ink);
+  font: 620 var(--text-3xl)/1.2 var(--sans);
+  letter-spacing: -.021em;
+  text-wrap: balance;
+}
+
+.board-area-header p {
+  max-width: 64ch;
+  margin: var(--space-2) 0 0;
+  color: var(--muted);
+  font: 460 var(--text-sm)/1.5 var(--sans);
+  font-variant-numeric: tabular-nums;
+}
+
+.board-area-header p b {
+  color: var(--ink-soft);
+  font-weight: 560;
+}
+
+.board-area-stale {
+  flex: none;
+  margin-top: var(--space-3);
+}
+
+.board-area-needs {
+  flex: none;
+  margin-top: clamp(1.5rem, 5vh, 2.625rem);
+}
+
+/* Focused request deck --------------------------------------------------- */
+
+.board-area-deck { min-width: 0; }
+
+.board-area-deck__slot {
+  position: relative;
+  display: grid;
+  min-width: 0;
+}
+
+.board-area-deck__active {
+  position: relative;
+  z-index: var(--z-raised);
+}
+
+.board-area-deck__card {
+  min-width: 0;
+  padding: 0 var(--space-0-5) .375rem;
+  background: transparent;
+  border: 0;
+}
+
+.board-area-deck__eyebrow {
+  min-width: 0;
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1-5);
+  color: var(--faint);
+  font: 500 var(--text-xs)/1.25 var(--sans);
+}
+
+.board-area-deck__eyebrow > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.board-area-deck__eyebrow time {
+  flex: none;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.board-area-deck__age {
+  flex: none;
+  margin-left: auto;
+}
+
+.board-area-deck__card h2 {
+  margin: .5625rem 0 0;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font: 620 var(--text-2xl)/1.3 var(--sans);
+  letter-spacing: -.018em;
+  text-wrap: balance;
+}
+
+.board-area-deck__reason {
+  max-width: 58ch;
+  margin: .4375rem 0 0;
+  color: var(--muted);
+  font: 400 var(--text-sm)/1.5 var(--sans);
+  text-wrap: pretty;
+}
+
+.board-area-deck__actions {
+  margin-top: 1.125rem;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1-5);
+}
+
+.board-area-deck__actions .arden-button[data-variant="quiet"] {
+  color: var(--ink-soft);
+  background: var(--surface-2);
+}
+
+.board-area-deck__verb-key {
+  margin-right: 7px;
+  opacity: .5;
+  font: 560 var(--text-xs)/1 var(--mono);
+}
+
+.board-area-deck__chrome {
+  position: relative;
+  z-index: var(--z-sticky);
+  width: 100%;
+  min-height: 1.5rem;
+  margin-top: .875rem;
+  padding-inline: var(--space-0-5);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.board-area-deck__chrome > span {
+  color: var(--faint);
+  font: 500 var(--text-meta)/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.board-area-deck__rest {
+  margin-top: .625rem;
+  display: grid;
+  gap: var(--interactive-row-gap);
+}
+
+.board-area-deck__rest-row {
+  width: calc(100% + var(--space-5));
+  min-height: var(--control-size);
+  margin-inline: calc(var(--space-2-5) * -1);
+  padding-inline: var(--space-3);
+  padding-block: 1px;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-3);
+  border-radius: var(--r-row);
+  text-align: left;
+}
+
+.board-area-deck__rest-row:hover { background: var(--state-hover-bg); }
+.board-area-deck__rest-row:active { transform: scale(var(--press-scale-subtle)); }
+
+.board-area-deck__rest-row strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+  font-weight: 560;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.board-area-deck__zero {
+  min-height: 2.75rem;
+  margin: 0;
+  padding-inline: var(--space-0-5);
+  display: flex;
+  align-items: center;
+  color: var(--muted);
+  font: 560 var(--text-sm)/1.4 var(--sans);
+}
+
+/* The only scrolling body in the room. ---------------------------------- */
+
+.board-area-room-scroll {
+  min-height: 0;
+  flex: 1;
+  margin-top: .75rem;
+  padding: var(--space-2) var(--space-0-5) var(--space-8);
+  overflow: auto;
+  overscroll-behavior: contain;
+  border-top: 1px solid var(--edge);
+  scrollbar-width: none;
+}
+
+.board-area-room-scroll::-webkit-scrollbar { display: none; }
+
+.board-area-room-scroll:focus-visible {
+  outline: 1px solid color-mix(in oklab, var(--accent) 58%, transparent);
+  outline-offset: 2px;
+  border-radius: var(--r-panel);
+}
+
+.board-area-current-outcome > header {
+  min-height: 1.875rem;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.board-area-current-outcome > header h2 {
+  margin: 0;
+  color: var(--ink-soft);
+  font: 590 var(--text-sm)/1.2 var(--sans);
+}
+
+.board-area-current-outcome > header span {
+  margin-left: auto;
+  color: var(--faint);
+  font: 500 var(--text-2xs)/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.board-area-current-outcome h3 {
+  margin: .4375rem 0 0;
+  color: var(--ink-soft);
+  font: 580 var(--text-base)/1.4 var(--sans);
+}
+
+.board-area-current-outcome > p {
+  max-width: 65ch;
+  margin: var(--space-1) 0 0;
+  color: var(--muted);
+  font: 460 var(--text-sm)/1.45 var(--sans);
+  text-wrap: pretty;
+}
+
+/* A reply only appears after an explicit Review action. It is intentionally
+   absent from the steady room so it does not compete with the next request. */
+.board-area-reply {
+  position: absolute;
+  right: var(--content-gutter);
+  bottom: var(--space-4);
+  left: var(--content-gutter);
+  z-index: var(--z-sticky);
+}
+
+.board-area-reply__context {
+  width: max-content;
+  max-width: 100%;
+  margin: 0 0 var(--space-1-5) var(--space-2);
+  padding: var(--space-1-5) var(--space-2-5);
+  border-radius: var(--r-control);
+  color: var(--muted);
+  background: var(--surface-3);
+  box-shadow: var(--shadow-2);
+  font-size: var(--text-xs);
+}
+
+.board-area-reply__context button {
+  margin-left: var(--space-3);
+  color: var(--ink-soft);
+}
+
+.board-area-reply__field {
+  padding: var(--space-2);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-panel);
+  background: color-mix(in oklab, var(--paper) 96%, transparent);
+  box-shadow: var(--shadow-3);
+  backdrop-filter: blur(.875rem);
+  -webkit-backdrop-filter: blur(.875rem);
+}
+
+.board-area-reply__field .arden-field { min-width: 0; flex: 1; }
+
+.board-area--loading {
+  display: grid;
+  place-items: center;
+}
+
+.board-area-loading {
+  width: min(32rem, calc(100% - 2rem));
+  color: var(--faint);
+}
+
+@media (max-width: 46.25rem) {
+  .board-area-page { width: 100%; max-width: none; }
+}
+
+@media (max-width: 34rem) {
+  .board-area-page { padding-inline: .875rem; }
+  .board-area-header p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .board-area-deck__rest-row .arden-attention-meta {
+    --attention-meta-columns: minmax(7ch, 10ch) 1ch 3ch;
+  }
+  .board-area-reply { right: .875rem; left: .875rem; }
+}
+
+@media (max-height: 47rem) {
+  .board-area-header h1 { font-size: var(--text-2xl); }
+  .board-area-header p { margin-top: .3125rem; }
+  .board-area-deck__card h2 { margin-top: .5rem; font-size: var(--text-xl); }
+}
+
+@media (max-height: 42rem) {
+  .board-area-page { padding-top: 3rem; padding-bottom: var(--space-2); }
+  .board-area-needs { margin-top: var(--space-5); }
+  .board-area-deck__card h2 { font-size: var(--text-xl); }
+  .board-area-deck__reason {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 1;
+  }
+  .board-area-deck__actions { margin-top: var(--space-3); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .board-area * { scroll-behavior: auto !important; }
+}

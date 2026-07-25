@@ -2,10 +2,15 @@ import { useState } from "react";
 import { useStore } from "@/stores";
 import { updateServerConfig, fetchServerConfig } from "@/actions/server";
 import type { ModelGroup } from "@/api/types";
-import { ModelReasoningPicker } from "@/components/ui/ComposerSelectors";
+import { ModelReasoningPicker } from "@/components/ui/ModelPickers";
 import { useTimeoutFlag } from "@/lib/hooks";
 import { SettingsConnectionHint, SettingsInlineError } from "@/features/settings/components/SettingsNotice";
 import { SaveStatus } from "@/features/settings/components/SaveStatus";
+import {
+  SettingsSection,
+  SettingsSettingRow,
+  SettingsSurface,
+} from "@/features/settings/components/SettingsPage";
 import { SettingsTabSkeleton } from "@/features/settings/components/SettingsTabSkeleton";
 import { Button } from "@/components/ui/Button";
 
@@ -75,21 +80,16 @@ export function ModelsTab() {
 
   const groups: ModelGroup[] = models.groups.length > 0
     ? models.groups
-    : [{ provider: "all", models: models.models }];
+    : [{ provider: "all", label: "Models", models: models.models }];
 
   return (
-    <div className="grid gap-5">
-      <div className="rounded-[10px] border border-line-soft bg-surface-soft/45 px-3.5 py-3 text-sm leading-[1.45] text-muted">
-        Each chat keeps its own model — switch it from the composer. The default below applies to newly created chats. Research and memory models are for background work.
-      </div>
-
-      {(saving || saved) && (
-        <div className="flex justify-end">
-          <SaveStatus busy={!!saving} saved={saved} />
-        </div>
-      )}
-
-      <div className="grid divide-y divide-line-soft">
+    <>
+      <SettingsSection
+        title="Defaults"
+        detail="saved automatically"
+        action={(saving || saved) ? <SaveStatus busy={!!saving} saved={saved} /> : undefined}
+      >
+        <SettingsSurface>
         <Section
           title="Default chat (new chats)"
           description="Model new chats start on. Existing chats keep their own."
@@ -181,11 +181,12 @@ export function ModelsTab() {
             />
           );
         })}
-      </div>
+        </SettingsSurface>
+      </SettingsSection>
       {error && (
         <SettingsInlineError title="Couldn't update model" message={error} />
       )}
-    </div>
+    </>
   );
 }
 
@@ -215,23 +216,19 @@ function Section({
   const efforts = reasoningEfforts[current] ?? [];
 
   return (
-    <div className="grid gap-2.5 py-3">
-      <div className="grid gap-0.5">
-        <div className="text-base font-medium text-ink">{title}</div>
-        <div className="text-xs text-muted leading-[1.4]">{description}</div>
-      </div>
-
-      <ModelReasoningPicker
+    <SettingsSettingRow
+      title={title}
+      hint={description}
+      control={<ModelReasoningPicker
         buttonLabel={savingModel ? "Saving…" : undefined}
         currentModel={current}
         currentEffort={currentReasoning}
         efforts={efforts}
         groups={groups}
         disabled={savingModel || savingReasoning}
-        placement="below-left"
         onSelectModel={onSelect}
         onSelectEffort={onSetReasoning}
-      />
-    </div>
+      />}
+    />
   );
 }

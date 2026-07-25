@@ -2,26 +2,26 @@ import { useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
   ArrowUpRight,
+  AiChat02,
   Bell,
-  Bot,
-  Brain,
+  Brain01,
   CalendarDays,
   ChevronDown,
   Clock,
   Dot,
-  FileText,
+  File01,
   FilePlus2,
-  FolderOpen,
-  Globe,
+  Folder,
+  Globe02,
   History,
   Image,
-  ListChecks,
+  LeftToRightListBullet,
   type ArdenIcon,
   Mail,
   MessageSquare,
-  PenLine,
+  PencilEdit02,
   Search,
-  Square,
+  Stop,
   Terminal,
   Wrench,
 } from "@/components/icons";
@@ -32,12 +32,15 @@ import { switchSession } from "@/actions/sessions";
 import { cancelSubagent } from "@/actions/messages";
 import { ICON } from "@/lib/icons";
 import { Reveal } from "@/components/ui/Reveal";
-import { StatusDot } from "@/components/ui/StatusDot";
 import { ThinkingStep } from "@/components/ui/ThinkingStep";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { callTitle, groupSummary, operationLabel, type StepIconKey } from "@/features/chat/lib/operationLabel";
-import { agentRunFromActivityItem, isActiveAgentStatus } from "@/lib/agentRun";
-import { EASE_OUT, MOTION } from "@/lib/tokens/motion";
+import {
+  agentRunFromActivityItem,
+  agentRunStatusLabel,
+  isActiveAgentStatus,
+} from "@/lib/agentRun";
+import { EASE_OUT, MOTION, STAGGER } from "@/lib/tokens/motion";
 import { MAX_NEST_DEPTH, NEST_PX } from "@/features/chat/lib/trace";
 
 type RowProps = {
@@ -48,14 +51,14 @@ type RowProps = {
 
 const ICON_BY_KEY: Record<StepIconKey, ArdenIcon> = {
   search: Search,
-  globe: Globe,
-  folder: FolderOpen,
-  file: FileText,
-  edit: PenLine,
+  globe: Globe02,
+  folder: Folder,
+  file: File01,
+  edit: PencilEdit02,
   "file-plus": FilePlus2,
   terminal: Terminal,
-  brain: Brain,
-  list: ListChecks,
+  brain: Brain01,
+  list: LeftToRightListBullet,
   mail: Mail,
   slack: MessageSquare,
   calendar: CalendarDays,
@@ -74,7 +77,7 @@ const ICON_BY_KEY: Record<StepIconKey, ArdenIcon> = {
 // label-shimmer never masks it.
 function StepGlyph({ iconKey, errored }: { iconKey: StepIconKey; errored: boolean }) {
   const Icon = ICON_BY_KEY[iconKey];
-  return <Icon size={14} strokeWidth={1.5} className={errored ? "text-bad" : undefined} />;
+  return <Icon size={14} className={errored ? "text-bad" : undefined} />;
 }
 
 export function ItemButton({ item, onOpen, last }: RowProps) {
@@ -90,7 +93,7 @@ export function ItemButton({ item, onOpen, last }: RowProps) {
     <ThinkingStep
       node={<StepGlyph iconKey={iconKey} errored={errored} />}
       last={last}
-      className="rounded-lg px-2 py-1.5 transition-colors hover:bg-surface-soft/60"
+      className="board-trace-row rounded-lg px-0.5 py-1.5 transition-colors hover:bg-surface-soft/60"
       style={depth > 0 ? { paddingLeft: depth * NEST_PX } : undefined}
     >
       <button
@@ -102,7 +105,7 @@ export function ItemButton({ item, onOpen, last }: RowProps) {
         <span
           className={clsx(
             "truncate font-medium leading-tight",
-            errored ? "text-bad" : running ? "step-shimmer" : "text-ink",
+            errored ? "text-bad" : running ? "text-accent" : "text-ink",
           )}
         >
           {verb}
@@ -136,7 +139,7 @@ export function ToolGroupRow({
     <ThinkingStep
       node={<StepGlyph iconKey={iconKey} errored={errored} />}
       last={last}
-      className="rounded-lg px-2 py-1.5 transition-colors hover:bg-surface-soft/60"
+      className="board-trace-row rounded-lg px-0.5 py-1.5 transition-colors hover:bg-surface-soft/60"
       style={depth > 0 ? { paddingLeft: depth * NEST_PX } : undefined}
     >
       <button
@@ -148,7 +151,7 @@ export function ToolGroupRow({
         <span
           className={clsx(
             "truncate font-medium leading-tight",
-            errored ? "text-bad" : running ? "step-shimmer" : "text-ink",
+            errored ? "text-bad" : running ? "text-accent" : "text-ink",
           )}
         >
           {verb}
@@ -156,14 +159,13 @@ export function ToolGroupRow({
         </span>
         <ChevronDown
           size={ICON.XS}
-          strokeWidth={2}
           className={clsx("shrink-0 text-faint transition-transform duration-trace ease-out", open && "rotate-180")}
           aria-hidden
         />
       </button>
       <AnimatePresence initial={false}>
         {open && (
-          <Reveal key="children" className="mt-1 flex flex-col gap-0.5">
+          <Reveal key="children" className="board-trace-row__details mt-1 flex flex-col gap-0.5">
             {items.map((it, i) => {
               // Prefer the model's per-call title ("Read about.html"); else the
               // arg detail (the path/query). Each line cascades in (FF feel).
@@ -174,7 +176,7 @@ export function ToolGroupRow({
                   type="button"
                   initial={{ opacity: 0, y: 3, filter: "blur(2px)" }}
                   animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-                  transition={{ duration: MOTION.row, ease: EASE_OUT, delay: 0.03 * i }}
+                  transition={{ duration: MOTION.row, ease: EASE_OUT, delay: STAGGER.traceDetail * i }}
                   onClick={() => onOpen(it)}
                   title={`${it.target || it.kind} — click to inspect`}
                   className="truncate border-0 bg-transparent p-0 text-left text-sm leading-snug text-muted hover:text-ink-soft"
@@ -194,7 +196,7 @@ export function ToolGroupRow({
 // (clickable → open the child session) and inline tool-group agents alike. A Bot
 // glyph (accent while running, muted when settled) is the timeline node and
 // carries a stop-on-hover; the name + a faint inline progress/result line + the
-// StatusDot read as one coherent step.
+// visible state read as one coherent step.
 function AgentRow({
   item,
   depth,
@@ -215,7 +217,7 @@ function AgentRow({
   return (
     <ThinkingStep
       last={last}
-      className="group/agent rounded-lg px-2 py-1.5 transition-colors hover:bg-surface-soft/60"
+      className="board-trace-row group/agent rounded-lg px-0.5 py-1.5 transition-colors hover:bg-surface-soft/60"
       style={depth > 0 ? { paddingLeft: depth * NEST_PX } : undefined}
       node={
         <span className="relative grid h-4 w-4 place-items-center">
@@ -227,7 +229,7 @@ function AgentRow({
               canStop && "group-hover/agent:opacity-0",
             )}
           >
-            <Bot size={ICON.XS} strokeWidth={2} />
+            <AiChat02 size={ICON.XS} />
           </span>
           {canStop && (
             <Tooltip label="Stop subagent" side="right">
@@ -240,7 +242,7 @@ function AgentRow({
                 }}
                 className="absolute inset-0 grid place-items-center rounded-md border-0 p-0 m-0 bg-surface-soft text-faint opacity-0 pointer-events-none transition-[opacity,color] duration-row ease-out group-hover/agent:pointer-events-auto group-hover/agent:opacity-100 hover:text-bad focus-visible:pointer-events-auto focus-visible:opacity-100"
               >
-                <Square size={ICON.XS} strokeWidth={2} />
+                <Stop size={ICON.XS} />
               </button>
             </Tooltip>
           )}
@@ -267,7 +269,7 @@ function AgentRow({
           <span
             className={clsx(
               "truncate font-medium leading-tight group-hover/agent:text-ink transition-colors duration-row ease-out",
-              running ? "step-shimmer" : terminalBad ? "text-bad" : "text-ink",
+              running ? "text-muted" : terminalBad ? "text-bad" : "text-ink",
             )}
           >
             {run.name}
@@ -275,13 +277,14 @@ function AgentRow({
           {childSessionId && (
             <ArrowUpRight
               size={ICON.XS}
-              strokeWidth={2}
               className="shrink-0 text-faint opacity-0 transition-opacity duration-row ease-out group-hover/agent:opacity-100"
               aria-hidden
             />
           )}
         </button>
-        <StatusDot status={run.status} pulse={running} />
+        <span className={clsx("arden-status", terminalBad && "text-bad")}>
+          {agentRunStatusLabel(run.status)}
+        </span>
         {run.elapsedLabel && (
           <span className="shrink-0 text-2xs tabular-nums text-faint">{run.elapsedLabel}</span>
         )}

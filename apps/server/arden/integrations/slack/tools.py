@@ -451,6 +451,7 @@ async def slack_dm(execution: ToolExecution, args: SlackDmInput) -> ToolResult:
 
 slack_search_tool = tool(
     display_name="SlackSearch",
+    display_description="Search connected Slack messages.",
     description=SLACK_SEARCH_DESCRIPTION,
     input_model=SlackSearchInput,
     policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"slack"})),
@@ -467,6 +468,7 @@ slack_channel_tool = tool(
 
 slack_thread_tool = tool(
     display_name="SlackThread",
+    display_description="Read a Slack message thread.",
     description=SLACK_THREAD_DESCRIPTION,
     input_model=SlackThreadInput,
     policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"slack"})),
@@ -475,6 +477,7 @@ slack_thread_tool = tool(
 
 slack_channels_tool = tool(
     display_name="SlackChannels",
+    display_description="List accessible Slack channels.",
     description="List Slack channels you can access. Optional query filters by name substring.",
     input_model=SlackChannelsInput,
     policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"slack"})),
@@ -483,6 +486,7 @@ slack_channels_tool = tool(
 
 slack_post_message_tool = tool(
     display_name="SlackPostMessage",
+    display_description="Post a plain-text Slack message.",
     description=SLACK_POST_MESSAGE_DESCRIPTION,
     input_model=SlackPostMessageInput,
     policy=ToolPolicy(
@@ -497,6 +501,7 @@ slack_post_message_tool = tool(
 
 slack_post_blocks_tool = tool(
     display_name="SlackPostBlocks",
+    display_description="Post a formatted Slack message.",
     description=SLACK_POST_BLOCKS_DESCRIPTION,
     input_model=SlackPostBlocksInput,
     policy=ToolPolicy(
@@ -511,6 +516,7 @@ slack_post_blocks_tool = tool(
 
 slack_dms_tool = tool(
     display_name="SlackDMs",
+    display_description="List Slack direct-message conversations.",
     description="List open Slack direct messages (1-on-1). Shows peer name and DM channel id.",
     input_model=SlackDmsInput,
     policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"slack"})),
@@ -519,6 +525,7 @@ slack_dms_tool = tool(
 
 slack_dm_tool = tool(
     display_name="SlackDM",
+    display_description="Read a Slack direct-message conversation.",
     description=SLACK_DM_DESCRIPTION,
     input_model=SlackDmInput,
     policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"slack"})),
@@ -543,6 +550,7 @@ slack_user_tool = tool(
 
 slack_file_tool = tool(
     display_name="SlackFile",
+    display_description="Inspect a Slack image attachment.",
     description=SLACK_FILE_DESCRIPTION,
     input_model=SlackFileInput,
     policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"slack"})),

@@ -1,6 +1,8 @@
 import { apiWithConfig, type AppConfig } from "@/api/core";
 import type { Area } from "@/api/types";
 
+export type AreaAskState = "active" | "done" | "dismissed" | "snoozed";
+
 export interface AreaSummary {
   /** The area's id. */
   key: string;
@@ -14,7 +16,8 @@ export interface AreaSummary {
 
 export interface AreaAsk {
   id: string;
-  area_key: string;
+  /** null when the ask was raised from a plain chat with no area. */
+  area_key: string | null;
   text: string;
   /** Three-verb taxonomy: notify = FYI (expires quietly), question = the
    *  agent is blocked on the user's judgment, review = a proposed action
@@ -22,7 +25,7 @@ export interface AreaAsk {
   kind: "notify" | "question" | "review";
   source: string;
   actions: { verb: string; ref: string }[];
-  state: string;
+  state: AreaAskState;
   created_at: string;
   snoozed_until: string | null;
   provenance?: string | null;
@@ -32,6 +35,9 @@ export interface AreaAsk {
   stable_key?: string | null;
   resolution?: string | null;
   resolved_at?: string | null;
+  /** The session a reply is dispatched into; null means the ask belongs to an
+   *  Area custodian channel. */
+  reply_session_id?: string | null;
   area_title?: string;
 }
 
@@ -51,15 +57,6 @@ export interface AreaAgentStatus {
   running_since: string | null;
   availability: "ready" | "unavailable" | "error";
   last_error: string | null;
-}
-
-export interface AreaSuggestion {
-  id: string;
-  key: string;
-  title: string;
-  page_path: string;
-  rationale: string;
-  created_at: string;
 }
 
 export type AreaOutcomeStatus = "active" | "paused" | "completed" | "cancelled";
@@ -113,6 +110,31 @@ export interface AreaWorkSnapshot {
   events: AreaWorkEvent[];
 }
 
+/** The compact automation projection returned with an Area detail. It is
+ * deliberately not the global `Automation` shape: the Area API only returns
+ * the fields that actually belong to that Area. */
+export interface AreaAutomationRun {
+  id: number;
+  task_id: string;
+  started_at: string;
+  ended_at: string | null;
+  status: string;
+  result: string | null;
+  error: string | null;
+}
+
+export interface AreaAutomation {
+  name: string;
+  task_id: string;
+  thread_id: string | null;
+  enabled: boolean;
+  last_result: string | null;
+  last_run_at: string | null;
+  running_since: string | null;
+  next_run_at: string | null;
+  latest_run: AreaAutomationRun | null;
+}
+
 export interface AreaBriefItem {
   area_id: string;
   area_title: string;
@@ -135,7 +157,6 @@ export interface AreasBrief {
 export interface AreasOverview {
   areas: AreaSummary[];
   focus: AreaAsk[];
-  suggested?: AreaSuggestion[];
   brief: AreasBrief;
 }
 
@@ -153,7 +174,7 @@ export interface AreaDetail {
   agent: AreaAgentStatus | null;
   asks: AreaAsk[];
   sessions: { session_id: string; name: string }[];
-  automations: unknown[];
+  automations: AreaAutomation[];
   work: AreaWorkSnapshot;
 }
 
@@ -209,25 +230,24 @@ export async function updateAreaWorkItem(
 
 export async function resolveAsk(
   config: AppConfig,
-  key: string,
   askId: string,
-  state: string,
+  state: AreaAskState,
   snoozedUntil?: string,
   resolution?: string,
 ): Promise<AreaAsk> {
   const body: { state: string; snoozed_until?: string; resolution?: string } = { state };
   if (snoozedUntil) body.snoozed_until = snoozedUntil;
   if (resolution) body.resolution = resolution;
-  return apiWithConfig<AreaAsk>(config, `/areas/${encodeURIComponent(key)}/asks/${encodeURIComponent(askId)}/resolve`, {
+  return apiWithConfig<AreaAsk>(config, `/asks/${encodeURIComponent(askId)}/resolve`, {
     method: "POST",
     body: JSON.stringify(body),
   });
 }
 
-export async function replyToAsk(config: AppConfig, key: string, askId: string, message: string): Promise<AreaAsk> {
+export async function replyToAsk(config: AppConfig, askId: string, message: string): Promise<AreaAsk> {
   return apiWithConfig<AreaAsk>(
     config,
-    `/areas/${encodeURIComponent(key)}/asks/${encodeURIComponent(askId)}/reply`,
+    `/asks/${encodeURIComponent(askId)}/reply`,
     { method: "POST", body: JSON.stringify({ message }) },
   );
 }
@@ -243,18 +263,6 @@ export async function updateAreaAutonomy(
   return apiWithConfig(config, `/areas/${encodeURIComponent(key)}/autonomy`, {
     method: "PUT",
     body: JSON.stringify({ autonomy }),
-  });
-}
-
-/** Attach a page capability without implicitly delegating a Custodian. */
-export async function createArea(
-  config: AppConfig,
-  title: string,
-  pagePath: string,
-): Promise<Area> {
-  return apiWithConfig(config, "/areas", {
-    method: "POST",
-    body: JSON.stringify({ name: title, page_path: pagePath }),
   });
 }
 
@@ -282,10 +290,4 @@ export async function createAreaPage(config: AppConfig, key: string): Promise<Ar
 
 export async function detachAreaPage(config: AppConfig, key: string): Promise<Area> {
   return apiWithConfig(config, `/areas/${encodeURIComponent(key)}/page`, { method: "DELETE" });
-}
-
-export async function dismissAreaSuggestion(config: AppConfig, key: string): Promise<void> {
-  await apiWithConfig(config, `/areas/suggestions/${encodeURIComponent(key)}/dismiss`, {
-    method: "POST",
-  });
 }

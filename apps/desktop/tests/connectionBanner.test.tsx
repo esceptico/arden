@@ -117,6 +117,7 @@ test("Google connection runs OAuth, enables Google, then resolves", async () => 
   const serverConfig = {
     chat_model: "gpt-5.2",
     research_model: "gpt-5.2",
+    workflow_model: "gpt-5.2",
     memory_model: "gpt-5.2",
     embedding_model: "text-embedding-3-small",
     web_search: "auto",

@@ -101,7 +101,7 @@ export function MemoryFindBar({ scrollerRef }: { scrollerRef: RefObject<HTMLElem
     <div
       role="search"
       aria-label="Find in note"
-      className="absolute right-3.5 top-14 z-[1] flex items-center gap-1.5 rounded-lg bg-bg-main/90 py-1 pl-2.5 pr-1 shadow-md ring-1 ring-line-soft backdrop-blur"
+      className="memory-find-bar"
     >
       <input
         ref={inputRef}
@@ -124,19 +124,19 @@ export function MemoryFindBar({ scrollerRef }: { scrollerRef: RefObject<HTMLElem
             close();
           }
         }}
-        className="w-44 bg-transparent text-sm text-ink outline-none placeholder:text-faint"
+        className="memory-find-bar__input"
       />
-      <span className="font-mono text-2xs tabular-nums text-faint" aria-live="polite">
+      <span className="memory-find-bar__count" aria-live="polite">
         {total ? `${active + 1} of ${total}` : query.trim() ? "0 of 0" : ""}
       </span>
       <IconButton size="sm" tone="faint" aria-label="Previous match" disabled={!total} onClick={() => step(-1)}>
-        <ChevronUp size={ICON.XS} strokeWidth={2} />
+        <ChevronUp size={ICON.XS} />
       </IconButton>
       <IconButton size="sm" tone="faint" aria-label="Next match" disabled={!total} onClick={() => step(1)}>
-        <ChevronDown size={ICON.XS} strokeWidth={2} />
+        <ChevronDown size={ICON.XS} />
       </IconButton>
       <IconButton size="sm" tone="faint" aria-label="Close find" onClick={close}>
-        <X size={ICON.XS} strokeWidth={2} />
+        <X size={ICON.XS} />
       </IconButton>
     </div>
   );

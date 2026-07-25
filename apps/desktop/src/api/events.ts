@@ -1,6 +1,5 @@
 import type { HistoryImage } from "@/api/chat";
 import type { SessionGoal, TodoListItem } from "@/api/types";
-import type { CommandOutcome } from "@/api/commands";
 
 export type ToolOutcomeStatus = "succeeded" | "failed" | "denied" | "uncertain";
 
@@ -116,7 +115,6 @@ export type ServerEvent = CommonServerEventFields & (
   | { type: "RUN_ERROR"; run_id: string; message: string; code?: string; debug_id?: string | null; recoverable?: boolean }
   | { type: "token_usage"; run_id: string; usage: { prompt: number; completion: number; total?: number; cache_read?: number; cache_write?: number }; cost?: number; message_count?: number | null; scope?: "run" | "tool"; task_id?: string | null; child_run_id?: string | null; workflow_id?: string | null; phase?: string | null }
   | { type: "thinking"; status: string; run_id?: string | null }
-  | { type: "command_completed"; run_id: string; outcome: CommandOutcome }
 
   // ─── Text messages (Start / Content / End) ─────────────────────────
   | { type: "TEXT_MESSAGE_START"; message_id: string; role?: string; depth?: number }

@@ -39,7 +39,7 @@ export function SidebarFilters() {
         aria-expanded={open}
         title="Filter & group"
         className={clsx(
-          "grid place-items-center w-[26px] h-[22px] rounded-[5px] transition-colors",
+          "workspace-rail__filter grid place-items-center w-[26px] h-[22px] rounded-[5px] transition-colors",
           active || open
             ? "text-ink bg-surface-soft/80"
             : "text-faint hover:text-ink hover:bg-surface-soft/70",
@@ -51,7 +51,7 @@ export function SidebarFilters() {
         open={open}
         onClose={() => setOpen(false)}
         anchor={triggerRef}
-        className="w-[200px] py-1.5"
+        className="w-[200px] py-1"
       >
         <SectionLabel>Group by</SectionLabel>
         <RadioGroup

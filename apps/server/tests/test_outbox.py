@@ -6,12 +6,14 @@ import pytest_asyncio
 
 import arden.database as database
 from arden.agent import Usage
-from arden.events.internal import RunCompleted
+from arden.events.internal import RunCompleted, RunFailed
 from arden.outbox import (
     OUTBOX_RUN_COMPLETED,
+    OUTBOX_RUN_FAILED,
     OutboxStore,
     OutboxWorker,
     run_completed_from_payload,
+    run_failed_from_payload,
 )
 
 
@@ -55,6 +57,18 @@ async def test_enqueue_run_completed_is_idempotent_and_claims_payload(outbox_sto
 
     await outbox_store.mark_completed(claimed[0].id)
     assert await outbox_store.claim_batch(worker_id="test-worker", limit=10) == []
+
+
+@pytest.mark.asyncio
+async def test_enqueue_run_failed_is_idempotent_and_claims_payload(outbox_store: OutboxStore):
+    event = RunFailed(run_id="run-1", session_id="session-1", error="provider rejected history")
+
+    assert await outbox_store.enqueue_run_failed(event) is True
+    assert await outbox_store.enqueue_run_failed(event) is False
+
+    claimed = await outbox_store.claim_batch(worker_id="test-worker", limit=10)
+    assert claimed[0].event_type == OUTBOX_RUN_FAILED
+    assert run_failed_from_payload(claimed[0].payload) == event
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,7 @@ from pathlib import Path
 
 from arden.events.sse import (
     EventType,
+    NavigationRequestedEvent,
     RunBackgroundedEvent,
     RunCancelledEvent,
     RunErrorEvent,
@@ -69,6 +70,26 @@ def test_session_created_nests_session_under_bus_session_id():
     assert payload["session"]["session_id"] == "20260530_120000_001"
     assert payload["session"]["name"] == "scan offers"
     assert payload["seq"] == 7
+
+
+def test_navigation_requested_travels_with_its_origin_session():
+    # Same bus-clobber trap as SESSION_CREATED: the requesting session cannot
+    # ride in `session_id`, so it travels as `origin_session_id`.
+    bus_key = "automation:events"
+    event = NavigationRequestedEvent(
+        origin_session_id="20260530_120000_001",
+        destination={"kind": "area", "area_id": "ops"},
+        label="Open the Ops area",
+    )
+    record = StreamRecord(session_id=bus_key, seq=812, event=event)
+    payload = json.loads(stream_record_to_sse_string(bus_key, record).split("data: ", 1)[1].strip())
+
+    assert payload["type"] == "navigation_requested"
+    assert payload["session_id"] == "automation:events"
+    assert payload["origin_session_id"] == "20260530_120000_001"
+    assert payload["destination"] == {"kind": "area", "area_id": "ops"}
+    assert payload["label"] == "Open the Ops area"
+    assert payload["seq"] == 812
 
 
 def test_desktop_event_unions_cover_backend_event_types():

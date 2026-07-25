@@ -5,14 +5,15 @@ from pydantic import BaseModel
 
 from arden.agent import ToolResult
 from arden.tools.core.context import ToolExecution
-from arden.tools.core.schema import RESERVED_ARG_KEYS, TITLE_ARG, tool_parameters
+from arden.tools.core.schema import tool_parameters
 from arden.tools.core.types import ApprovalInfo, ToolPolicy
 
-__all__ = ["Tool", "ToolResult", "ApprovalInfo", "TITLE_ARG", "RESERVED_ARG_KEYS"]
+__all__ = ["Tool", "ToolResult", "ApprovalInfo"]
 
 
 class Tool(ABC):
     display_name: str | None = None
+    display_description: str | None = None
     description: str
     policy: ToolPolicy
     input_model: type[BaseModel] | None = None
@@ -45,7 +46,7 @@ class Tool(ABC):
         return {
             "name": name,
             "display_name": self.display_name or name.replace("_", " ").title(),
-            "description": self.description,
+            "description": self.display_description or self.description,
             "kind": self.kind,
             "policy": policy,
         }

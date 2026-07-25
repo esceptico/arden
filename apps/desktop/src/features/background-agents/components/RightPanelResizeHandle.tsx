@@ -61,9 +61,8 @@ export function RightPanelResizeHandle() {
       aria-label="Resize right sidebar"
       onMouseDown={onMouseDown}
       onDoubleClick={() => setPref("rightPanelWidth", RIGHT_PANEL_DEFAULT_WIDTH)}
-      className="absolute top-0 bottom-0 left-0 z-10 w-1 cursor-ew-resize group/resize"
-    >
-      <div className="absolute inset-y-0 left-0 w-px bg-transparent group-hover/resize:bg-accent/40 transition-colors" />
-    </div>
+      className="arden-resize-handle"
+      data-edge="start"
+    />
   );
 }

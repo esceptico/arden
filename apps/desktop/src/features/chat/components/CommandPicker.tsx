@@ -78,7 +78,7 @@ export function CommandPicker({
       transition={{ duration: DURATION_POPOVER, ease: EASE_DECELERATE }}
       style={{ transformOrigin: "bottom left" }}
     >
-      <div ref={containerRef} className="max-h-[320px] overflow-y-auto scroll-thin">
+      <div ref={containerRef} className="max-h-[320px] overflow-y-auto scroll-thin scroll-fade">
         {builtins.length > 0 && (
           <Section title="Commands" entries={builtins} startIndex={0} activeIndex={index} onSelect={onSelect} setIndex={setIndex} />
         )}

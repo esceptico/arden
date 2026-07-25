@@ -1,27 +1,42 @@
-import { Suspense, lazy, useEffect, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
-import { MOTION, EASE_EMPHASIZED, EASE_OUT, DURATION_RIGHT_PANEL_HIDE } from "@/lib/tokens/motion";
+import {
+  DURATION_RIGHT_PANEL_HIDE,
+  DISTANCE_RAIL_HIDE,
+  EASE_EMPHASIZED,
+  EASE_OUT,
+} from "@/lib/tokens/motion";
 import { IS_DESKTOP_MAC } from "@/lib/platform";
 import { Sidebar } from "@/features/sessions/components/Sidebar";
 import { Chat } from "@/features/chat/components/Chat";
 import { Home } from "@/features/home/components/Home";
 import { AreaRoom } from "@/features/areas/components/AreaRoom";
 import { CommandPalette } from "@/features/command-palette/components/CommandPalette";
-import { CommandPeek } from "@/features/command-sidecar/CommandPeek";
 import { MarkdownViewer } from "@/components/ui/MarkdownViewer";
 import { ApprovalReviewModal } from "@/features/chat/components/ApprovalReviewModal";
-import { SidebarResizeHandle } from "@/features/sessions/components/SidebarResizeHandle";
+import { SidebarResizeHandle } from "@/components/workspace/SidebarResizeHandle";
 import { SidebarToggle } from "@/components/ui/SidebarToggle";
+import { ShellBackButton } from "@/components/workspace/ShellBackButton";
+import { WorkspaceRouteHost } from "@/components/workspace/WorkspaceRouteHost";
+import { WorkspaceStage } from "@/components/workspace/WorkspaceStage";
 import { AgentRightSidebar } from "@/features/background-agents/components/AgentRightSidebar";
 import { SourcesPanel } from "@/features/sources/components/SourcesPanel";
 import { ErrorBoundary } from "@/app/ErrorBoundary";
 import { Toaster } from "@/components/ui/Toaster";
+import { ModalScrim } from "@/components/ui/ModalScrim";
+import { Inspect } from "@/features/inspect/components/Inspect";
 import { useStore } from "@/stores";
 import { useEvents } from "@/hooks/useEvents";
 import { useActiveRuns } from "@/features/background-agents/hooks/useActiveRuns";
 import { useAutomationEvents } from "@/features/automations/hooks/useAutomationEvents";
 import { useTaskResultToasts } from "@/hooks/useTaskResultToasts";
 import { useThemeEffect } from "@/lib/theme";
+import { useCornerProfileEffect } from "@/lib/cornerProfile";
+import {
+  COMPACT_SHELL_QUERY,
+  resolveEffectiveSidebarHidden,
+  type ShellLayout,
+} from "@/lib/shellOwnership";
 import { bootstrap, startServerConnectionPolling } from "@/actions/bootstrap";
 import { createSession, goToNewSessionHome, switchSession } from "@/actions/sessions";
 import { sendMessage } from "@/actions/messages";
@@ -44,9 +59,22 @@ const ToolViewer = lazy(() =>
   import("@/features/chat/components/ToolViewer").then((m) => ({ default: m.ToolViewer })),
 );
 
-// Short leftward drift on hide — gives the fade/blur a direction without
-// reading as a full slide-back (mirror of the right sidebar's drift).
-const SIDEBAR_HIDE_DRIFT = 48;
+function useMediaQuery(queryText: string): boolean {
+  const [matches, setMatches] = useState(() =>
+    typeof window.matchMedia === "function"
+      ? window.matchMedia(queryText).matches
+      : false,
+  );
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const query = window.matchMedia(queryText);
+    const sync = () => setMatches(query.matches);
+    sync();
+    query.addEventListener("change", sync);
+    return () => query.removeEventListener("change", sync);
+  }, [queryText]);
+  return matches;
+}
 
 function useHash(): string {
   const [hash, setHash] = useState(() => window.location.hash);
@@ -82,9 +110,11 @@ export function App() {
   const currentSessionId = useStore((s) => s.currentSessionId);
   const sidebarHidden = useStore((s) => s.prefs.sidebarHidden);
   const rightPanelCollapsed = useStore((s) => s.prefs.rightPanelCollapsed);
+  const rightPanelDocked = useStore((s) => s.prefs.rightPanelDocked);
   const sidebarWidth = useStore((s) => s.prefs.sidebarWidth);
   const rightPanelWidth = useStore((s) => s.prefs.rightPanelWidth);
   const toggleSidebar = useStore((s) => s.toggleSidebar);
+  const setShellLayout = useStore((s) => s.setShellLayout);
   const openSettings = useStore((s) => s.openSettings);
   // Home = no session selected, full stop. Since boot stopped auto-selecting
   // the latest session, an EMPTY-but-selected session is still a chat (its
@@ -92,7 +122,56 @@ export function App() {
   // made a freshly opened session flash Home while history loaded.
   const showHome = useStore((s) => s.currentSessionId === null);
   const openAreaKey = useStore((s) => s.areas.openAreaKey);
+  const openAreaDetail = useStore((s) =>
+    openAreaKey ? s.areas.detailByKey[openAreaKey] ?? null : null,
+  );
   const memoryOpen = useStore((s) => s.memoryOpen);
+  const settingsOpen = useStore((s) => s.settingsOpen);
+  const automationsOpen = useStore((s) => s.automationsOpen);
+  const workspaceKind: ShellLayout["workspace"] = openAreaKey
+    ? "area"
+    : showHome
+      ? "home"
+      : "chat";
+  const workspaceRouteKey = openAreaKey ? `area:${openAreaKey}` : workspaceKind;
+  const compactShell = useMediaQuery(COMPACT_SHELL_QUERY);
+  const [compactSidebarOpen, setCompactSidebarOpen] = useState(false);
+  const [settingsRailOpen, setSettingsRailOpen] = useState(() => !compactShell);
+  // Area detail is a floating peek in the mockup. Only a docked chat
+  // inspector may claim shell width and move the reading lane.
+  const workspaceRightDocked =
+    workspaceKind === "chat" && !rightPanelCollapsed && rightPanelDocked;
+  const shellLayout: ShellLayout = {
+    compact: compactShell,
+    workspace: workspaceKind,
+  };
+  // This is deliberately derived rather than persisted: closing/undocking
+  // the inspector or leaving the breakpoint restores the user's rail choice.
+  const effectiveSidebarHidden = resolveEffectiveSidebarHidden(
+    shellLayout,
+    { sidebarHidden },
+    compactSidebarOpen,
+  );
+  const toggleEffectiveSidebar = useCallback(() => {
+    if (settingsOpen) setSettingsRailOpen((visible) => !visible);
+    else if (compactShell) setCompactSidebarOpen((visible) => !visible);
+    else toggleSidebar();
+  }, [compactShell, settingsOpen, toggleSidebar]);
+
+  useEffect(() => {
+    setShellLayout({
+      compact: compactShell,
+      workspace: workspaceKind,
+    });
+  }, [compactShell, setShellLayout, workspaceKind]);
+  // Session identity dismisses the compact rail, but does not own the
+  // workspace route: switching chats must not replay the full page entrance.
+  useEffect(() => {
+    if (compactShell) setCompactSidebarOpen(false);
+  }, [compactShell, currentSessionId, openAreaKey]);
+  useEffect(() => {
+    if (settingsOpen) setSettingsRailOpen(!compactShell);
+  }, [compactShell, settingsOpen]);
 
   // Publish dock widths as CSS vars so the chat shell can stay flush with
   // both sidebars as they resize. Drag handles update these imperatively
@@ -105,6 +184,7 @@ export function App() {
   }, [rightPanelWidth]);
 
   useThemeEffect();
+  useCornerProfileEffect();
   useFullscreenClass();
 
   useEffect(() => {
@@ -120,8 +200,11 @@ export function App() {
       if (mod && !e.altKey) {
         const k = e.key.toLowerCase();
         if (k === "b" && !e.shiftKey) {
+          // Memory owns this advertised shortcut while its full-window rail is
+          // visible; toggling the covered app shell would leave state hidden.
+          if (memoryOpen) return;
           e.preventDefault();
-          toggleSidebar();
+          toggleEffectiveSidebar();
           return;
         }
         if (k === "n" && !e.shiftKey) {
@@ -161,7 +244,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [toggleSidebar, openSettings]);
+  }, [memoryOpen, openSettings, toggleEffectiveSidebar]);
 
   useEvents(hash === "#trace-demo" ? null : currentSessionId);
   useActiveRuns();
@@ -207,31 +290,25 @@ export function App() {
        this covers the JS-driven side (motion.div springs, layout anims,
        AnimatePresence). */
     <MotionConfig reducedMotion="user">
-      {/* Asymmetric motion mirroring the right sidebar: SHOW slides in from
-          the left edge (x: off-edge → 0); HIDE dissolves — a short leftward
-          drift + fade + blur on the faster EASE_OUT, kept off pointer/focus
-          while hidden. The chat's left-inset reflow (Chat.tsx) borrows the
-          same curve on hide so the fading panel and the expanding edge read
-          as one motion. */}
+      {/* The sidebar owns one symmetric, interruptible presentation layer:
+          -48px ↔ 0, opacity and defocus on the same 400ms contract. */}
       <motion.div
-        className="surface-panel surface-radius-md absolute top-2 left-2 bottom-2 z-30 w-[calc(var(--sidebar-width,272px)-16px)] overflow-hidden"
+        className="surface-panel surface-sidebar surface-radius-lg absolute top-2 left-2 bottom-2 z-[var(--z-shell)] w-[var(--sidebar-width,288px)] overflow-hidden"
         initial={false}
         animate={
-          sidebarHidden
-            ? { x: -SIDEBAR_HIDE_DRIFT, opacity: 0, filter: "blur(6px)" }
-            : { x: [-sidebarWidth, 0], opacity: 1, filter: "blur(0px)" }
+          effectiveSidebarHidden
+            ? { x: -DISTANCE_RAIL_HIDE, opacity: 0, filter: "blur(6px)" }
+            : { x: 0, opacity: 1, filter: "blur(0px)" }
         }
         transition={
-          sidebarHidden
-            ? { duration: DURATION_RIGHT_PANEL_HIDE, ease: EASE_OUT }
-            : {
-                x: { duration: MOTION.route, ease: EASE_EMPHASIZED },
-                opacity: { duration: 0 },
-                filter: { duration: 0 },
-              }
+          {
+            x: { duration: DURATION_RIGHT_PANEL_HIDE, ease: EASE_EMPHASIZED },
+            opacity: { duration: DURATION_RIGHT_PANEL_HIDE, ease: EASE_OUT },
+            filter: { duration: DURATION_RIGHT_PANEL_HIDE, ease: EASE_OUT },
+          }
         }
-        style={{ pointerEvents: sidebarHidden ? "none" : "auto" }}
-        aria-hidden={sidebarHidden}
+        style={{ pointerEvents: effectiveSidebarHidden ? "none" : "auto" }}
+        aria-hidden={effectiveSidebarHidden}
       >
         <Sidebar />
         <SidebarResizeHandle />
@@ -239,37 +316,46 @@ export function App() {
       {/* App-global sidebar toggle: fixed-viewport chrome (`.sidebar-toggle`),
           rendered once here so it is present on every screen — Chat, Home,
           and the area rooms — not only where Chat mounts. */}
-      <SidebarToggle />
-      <ErrorBoundary>
-        {openAreaKey || showHome ? (
-          /* Home/AreaRoom get the same pane geometry Chat's <main> claims
-             (flush with both sidebars) plus a scroll container — they are
-             full screens, not floating columns. */
-          <main
-            data-sidebar-hidden={sidebarHidden ? "true" : "false"}
-            data-right-open={rightPanelCollapsed ? "false" : "true"}
-            className="absolute top-0 right-0 bottom-0 left-[var(--sidebar-width,272px)] data-[sidebar-hidden=true]:left-0 data-[right-open=true]:right-[var(--right-panel-width,320px)] bg-bg overflow-hidden"
-          >
-            {/* Symmetric surface swap: the leaving surface dissolves while the
-                arriving one rises, so Home↔room reads as one spatial move rather
-                than a hard cut. Both surfaces are absolute inset-0 (their own
-                className) so enter/exit overlap by construction — popLayout is
-                NOT used because popping strips the exiting column's h-full
-                height reference, collapsing it and teleporting the room's
-                pinned composer to the top mid-dissolve. */}
-            <AnimatePresence initial={false}>
-              {openAreaKey ? (
-                <AreaRoom key={openAreaKey} areaKey={openAreaKey} />
-              ) : (
-                <Home key="home" />
-              )}
-            </AnimatePresence>
-          </main>
-        ) : (
-          <Chat />
+      <SidebarToggle
+        hidden={settingsOpen ? !settingsRailOpen : effectiveSidebarHidden}
+        onToggle={toggleEffectiveSidebar}
+      />
+      <AnimatePresence initial={false}>
+        {openAreaKey && !settingsOpen && !memoryOpen && !automationsOpen && (
+          <ShellBackButton key="area-back" onClick={goToNewSessionHome} />
         )}
+      </AnimatePresence>
+      <ErrorBoundary>
+        <main
+          data-workspace={workspaceKind}
+          data-sidebar-hidden={effectiveSidebarHidden ? "true" : "false"}
+          data-right-open={workspaceRightDocked ? "true" : "false"}
+          className="board-shell-content absolute inset-0 overflow-hidden bg-bg"
+        >
+          <WorkspaceStage
+            geometryKey={`${effectiveSidebarHidden}:${workspaceKind}:${workspaceRightDocked}:${rightPanelDocked}`}
+          >
+            <WorkspaceRouteHost routeKey={workspaceRouteKey}>
+              {workspaceKind === "area" && openAreaKey ? (
+                <AreaRoom areaKey={openAreaKey} />
+              ) : workspaceKind === "home" ? (
+                <Home />
+              ) : (
+                <Chat />
+              )}
+            </WorkspaceRouteHost>
+          </WorkspaceStage>
+        </main>
       </ErrorBoundary>
-      <AgentRightSidebar sourcesPanel={<SourcesPanel />} />
+      {(openAreaKey || !showHome) && (
+        <AgentRightSidebar
+          mode={openAreaKey ? "hub" : rightPanelDocked ? "docked" : "peek"}
+          allowDocking={!openAreaKey}
+          sourcesPanel={<SourcesPanel />}
+          areaScope={openAreaDetail}
+          compact={compactShell}
+        />
+      )}
       {/* Memory is a full-window takeover (Obsidian-style vault view): ONE
           left column — its own rail — layered over the app shell and its
           fixed sidebar toggles, so no chrome doubles up or overlaps. */}
@@ -282,16 +368,24 @@ export function App() {
       </AnimatePresence>
       <ErrorBoundary>
         <Suspense fallback={null}>
-          <SettingsModal />
+          <SettingsModal
+            railOpen={settingsRailOpen}
+            compact={compactShell}
+            onToggleRail={toggleEffectiveSidebar}
+            onNavigate={() => {
+              if (compactShell) setSettingsRailOpen(false);
+            }}
+          />
           <AutomationsModal />
           <ToolViewer />
         </Suspense>
       </ErrorBoundary>
       <CommandPalette />
-      <CommandPeek />
+      <ModalScrim />
       <MarkdownViewer />
       <ApprovalReviewModal />
       <Toaster />
+      {(import.meta as { env?: { DEV?: boolean } }).env?.DEV && <Inspect />}
     </MotionConfig>
   );
 }

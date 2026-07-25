@@ -1,13 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, Database, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Pencil, Plus, X } from "@/components/icons";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Clock, LeftToRightListBullet, Link01 } from "@/components/icons";
 import clsx from "clsx";
-import { motion, useReducedMotion } from "motion/react";
-import { EASE_EMPHASIZED, MOTION, RISE_IN, RISE_SETTLED } from "@/lib/tokens/motion";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import {
+  CONTENT_ENTER_TRANSITION,
+  CONTENT_EXIT_TRANSITION,
+  CONTENT_SWAP_VARIANTS,
+  MOTION,
+} from "@/lib/tokens/motion";
 import { useStore } from "@/stores";
 import { ApiError, type AppConfig } from "@/api/core";
 import type { WikiLinkHandlers } from "@/lib/wikilink";
 import {
-  createMemoryNode,
   getPageHistory,
   getPageLinks,
   applyPageEdit,
@@ -17,21 +21,25 @@ import {
   rebuildMemoryArtifactSummaries,
 } from "@/api/memoryArtifacts";
 import type { DiffReviewDecision, DiffReviewOperation } from "@/components/ui/diffReviewTypes";
-import { listMemoryItems, setRecordPinned, type MemoryItem, type MemoryKind } from "@/api/memoryItems";
-import { IconButton } from "@/components/ui/IconButton";
+import { listMemoryItems, type MemoryItem } from "@/api/memoryItems";
 import { IconSwap } from "@/components/ui/IconSwap";
-import { ICON } from "@/lib/icons";
-import { Select } from "@/components/ui/Select";
-import { TreeSearch } from "@/features/memory/components/MemoryFileTree";
-import { NotebookRail } from "@/features/memory/components/NotebookRail";
+import { ContextMenu, type ContextMenuEntry, type ContextMenuPosition } from "@/components/ui/ContextMenu";
+import { SidebarToggle } from "@/components/ui/SidebarToggle";
+import { PeekSurface } from "@/components/workspace/PeekSurface";
+import { NotebookRail, type MemoryRailMode } from "@/features/memory/components/NotebookRail";
 import { PaneResizeHandle } from "@/features/memory/components/PaneResizeHandle";
 import { MemoryNote } from "@/features/memory/components/MemoryNote";
-import { RecordDetailPane } from "@/features/memory/components/RecordDetailPane";
-import { RecordListPane } from "@/features/memory/components/RecordListPane";
-import { MemoryInspector } from "@/features/memory/components/MemoryInspector";
+import {
+  loadMemoryInspectorPane,
+  MemoryInspector,
+  persistMemoryInspectorPane,
+  type MemoryInspectorPane,
+} from "@/features/memory/components/MemoryInspector";
 import { MemoryEditor } from "@/features/memory/components/MemoryEditor";
 import { MemoryEditReview, type MemoryConflict } from "@/features/memory/components/MemoryEditReview";
+import { MemoryDiffOverlay } from "@/features/memory/components/MemoryDiffOverlay";
 import { MemoryQuickSwitcher } from "@/features/memory/components/MemoryQuickSwitcher";
+import { MemoryDocumentTabs } from "@/features/memory/components/MemoryDocumentTabs";
 import { WikiLinkPreview } from "@/features/memory/components/WikiLinkPreview";
 import { ArtifactCache } from "@/features/memory/lib/artifactCache";
 import { NavigationHistory, type NavigationLocation } from "@/features/memory/lib/navigationHistory";
@@ -39,14 +47,37 @@ import { isMissingArtifactError, resolveWikiTarget } from "@/features/memory/lib
 import { clearDraft, clearDraftIfMatches, draftKey, getDraft, setDraft } from "@/features/memory/lib/draftStore";
 import { isNotebookResourcePath } from "@/features/memory/lib/notebookIndex";
 import { serializeFrontmatter, splitFrontmatter } from "@/features/memory/lib/format";
+import { getBoardMotion } from "@/lib/boardMotion";
 import { buildWorkspaceTree, stem } from "@/features/memory/lib/workspaceTree";
+import { planMemoryTabClose, planMemoryTabOpen, type MemoryTabCloseAction } from "@/features/memory/lib/tabContext";
+import { copyText } from "@/lib/clipboard";
 import type { MemoryFrontmatter } from "@/features/memory/components/MemoryProperties";
-import type { MemoryArtifactDetail, MemoryArtifactSummary, MemoryOperation, PageEditHistory, PageEditPreview, PageLinks } from "@/features/memory/lib/notebookTypes";
+import type { MemoryArtifactDetail, MemoryArtifactSummary, MemoryOperation, PageEditEvent, PageEditHistory, PageEditPreview, PageLinks } from "@/features/memory/lib/notebookTypes";
 
 const RECORD_PAGE_SIZE = 100;
 const RAIL_WIDTH_KEY = "arden.desktop.memory.railWidth";
 const CTX_WIDTH_KEY = "arden.desktop.memory.ctxWidth";
 const LAST_PATH_KEY = "arden.desktop.memory.lastPath";
+const COMPACT_RAIL_QUERY = "(max-width: 740px)";
+const MEMORY_PAGE_SWAP_VARIANTS = {
+  enter: (direction: number) => ({
+    ...CONTENT_SWAP_VARIANTS.enter(direction),
+    transition: CONTENT_ENTER_TRANSITION,
+  }),
+  center: {
+    ...CONTENT_SWAP_VARIANTS.center,
+    transition: CONTENT_ENTER_TRANSITION,
+  },
+  exit: (direction: number) => ({
+    ...CONTENT_SWAP_VARIANTS.exit(direction),
+    transition: CONTENT_EXIT_TRANSITION,
+  }),
+} as const;
+
+interface MemoryTabContextMenuState extends ContextMenuPosition {
+  index: number;
+  path: string;
+}
 
 // Inspector open/closed is conceptually session state, not a Prefs field —
 // persisted separately to localStorage so the panel doesn't silently reset
@@ -55,9 +86,9 @@ const INSPECTOR_OPEN_KEY = "arden.desktop.memory.inspectorOpen";
 
 function loadInspectorOpen(): boolean {
   try {
-    return localStorage.getItem(INSPECTOR_OPEN_KEY) !== "false";
+    return localStorage.getItem(INSPECTOR_OPEN_KEY) === "true";
   } catch {
-    return true;
+    return false;
   }
 }
 
@@ -67,6 +98,11 @@ function persistInspectorOpen(value: boolean): void {
   } catch {
     /* localStorage unavailable — non-fatal */
   }
+}
+
+function loadCompactRail(): boolean {
+  return typeof window.matchMedia === "function"
+    && window.matchMedia(COMPACT_RAIL_QUERY).matches;
 }
 
 interface SummaryRequest {
@@ -179,13 +215,13 @@ function isInteractiveShortcutTarget(element: Element | null): boolean {
 
 function focusToken(element: HTMLElement, scroller: HTMLElement): string | null {
   const kind = element.dataset.wikilink != null ? "wikilink"
-    : element.dataset.memoryInlinePath != null ? "inline"
+    : element.dataset.memoryPath != null ? "inline"
       : null;
-  const target = kind === "wikilink" ? element.dataset.wikilink : element.dataset.memoryInlinePath;
+  const target = kind === "wikilink" ? element.dataset.wikilink : element.dataset.memoryPath;
   if (!kind || target == null) return null;
-  const attribute = kind === "wikilink" ? "data-wikilink" : "data-memory-inline-path";
+  const attribute = kind === "wikilink" ? "data-wikilink" : "data-memory-path";
   const matches = Array.from(scroller.querySelectorAll<HTMLElement>(`[${attribute}]`))
-    .filter((candidate) => (kind === "wikilink" ? candidate.dataset.wikilink : candidate.dataset.memoryInlinePath) === target);
+    .filter((candidate) => (kind === "wikilink" ? candidate.dataset.wikilink : candidate.dataset.memoryPath) === target);
   const occurrence = matches.indexOf(element);
   return occurrence < 0 ? null : JSON.stringify({ kind, target, occurrence } satisfies MemoryFocusToken);
 }
@@ -198,15 +234,14 @@ function restoreFocusToken(value: string, scroller: HTMLElement) {
     return;
   }
   if ((token.kind !== "wikilink" && token.kind !== "inline") || typeof token.target !== "string" || !Number.isInteger(token.occurrence) || token.occurrence < 0) return;
-  const attribute = token.kind === "wikilink" ? "data-wikilink" : "data-memory-inline-path";
+  const attribute = token.kind === "wikilink" ? "data-wikilink" : "data-memory-path";
   const matches = Array.from(scroller.querySelectorAll<HTMLElement>(`[${attribute}]`))
-    .filter((candidate) => (token.kind === "wikilink" ? candidate.dataset.wikilink : candidate.dataset.memoryInlinePath) === token.target);
+    .filter((candidate) => (token.kind === "wikilink" ? candidate.dataset.wikilink : candidate.dataset.memoryPath) === token.target);
   matches[token.occurrence]?.focus({ preventScroll: true });
 }
 
 export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const reduce = useReducedMotion();
-  const closeMemorySurface = useStore((s) => s.closeMemory);
   const [artifacts, setArtifacts] = useState<MemoryArtifactSummary[]>([]);
   const [directories, setDirectories] = useState<string[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -218,16 +253,12 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const [loading, setLoading] = useState(true);
   const [rebuilding, setRebuilding] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [recordsOpen, setRecordsOpen] = useState(false);
   const [records, setRecords] = useState<MemoryItem[]>([]);
-  const [recordsQuery, setRecordsQuery] = useState("");
   const [recordsError, setRecordsError] = useState<string | null>(null);
   const [recordsLoading, setRecordsLoading] = useState(false);
-  const [recordKind, setRecordKind] = useState<MemoryKind | "">("");
-  const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
-  const [pinningId, setPinningId] = useState<string | null>(null);
   const [recordsRefreshKey, setRecordsRefreshKey] = useState(0);
   const [inspectorOpen, setInspectorOpen] = useState(() => loadInspectorOpen());
+  const [inspectorPane, setInspectorPane] = useState<MemoryInspectorPane>(loadMemoryInspectorPane);
   const [pageLinks, setPageLinks] = useState<PageLinks | null>(null);
   const [pageHistory, setPageHistory] = useState<PageEditHistory | null>(null);
   const [linksLoading, setLinksLoading] = useState(false);
@@ -237,17 +268,24 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [historyVersion, setHistoryVersion] = useState(0);
   const [pageHistoryPath, setPageHistoryPath] = useState<string | null>(null);
+  const [diffEvent, setDiffEvent] = useState<PageEditEvent | null>(null);
+  const [diffClosing, setDiffClosing] = useState(false);
   const [editing, setEditing] = useState<EditingSession | null>(null);
   const [editReview, setEditReview] = useState<ReviewState | null>(null);
+  const [reviewClosing, setReviewClosing] = useState(false);
   const [editDecisions, setEditDecisions] = useState<Record<string, DiffReviewDecision>>({});
   const [editPending, setEditPending] = useState(false);
   const [reviewPending, setReviewPending] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
   const [switcherOpen, setSwitcherOpen] = useState(false);
-  const [railHidden, setRailHidden] = useState(false);
-  const [nbMode, setNbMode] = useState(false);
+  const [railHidden, setRailHidden] = useState(loadCompactRail);
+  const [instrumentsCollapsed, setInstrumentsCollapsed] = useState(false);
+  const [railMode, setRailMode] = useState<MemoryRailMode>("files");
   const [tabs, setTabs] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState(0);
+  const [workspaceEmpty, setWorkspaceEmpty] = useState(false);
+  const [tabContextMenu, setTabContextMenu] = useState<MemoryTabContextMenuState | null>(null);
+  const [contentDirection, setContentDirection] = useState(1);
 
   const summaryRequest = useRef<SummaryRequest | null>(null);
   const recordsRequestId = useRef(0);
@@ -256,15 +294,18 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const pendingRestore = useRef<NavigationLocation | null>(null);
   const linksRequestId = useRef(0);
   const historyRequestId = useRef(0);
+  const retainedInspectorDetail = useRef<MemoryArtifactDetail | null>(null);
   const artifactsRef = useRef<MemoryArtifactSummary[]>([]);
   const selectedMetaRef = useRef<MemoryArtifactSummary | null>(null);
-  const recordsTriggerRef = useRef<HTMLButtonElement>(null);
-  const recordsHeadingRef = useRef<HTMLHeadingElement>(null);
   const layoutRef = useRef<HTMLDivElement>(null);
+  const instrumentsCollapsedRef = useRef(instrumentsCollapsed);
+  const instrumentsCollapsedByFit = useRef(false);
+  const instrumentsFitOverride = useRef(false);
   const editingRef = useRef<EditingSession | null>(null);
   const editReviewRef = useRef<ReviewState | null>(null);
   const editRequestGeneration = useRef(0);
   const editPreviewController = useRef<AbortController | null>(null);
+  const reviewExitAction = useRef<(() => void) | null>(null);
   const reviewGeneration = useRef(0);
   const applyGeneration = useRef(0);
   const mutationPendingRef = useRef(false);
@@ -273,6 +314,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const memoryChangeDrainRunning = useRef(false);
   const memoryChangeDrainRequested = useRef(false);
   const memoryChangeDrainRef = useRef<(() => Promise<void>) | null>(null);
+  const diffReturnFocus = useRef<HTMLElement | null>(null);
   const restoreNoteFocus = useRef(false);
   const mountedRef = useRef(true);
   const disposeControllerRef = useRef(new AbortController());
@@ -280,6 +322,112 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   artifactsRef.current = artifacts;
   editingRef.current = editing;
   editReviewRef.current = editReview;
+  instrumentsCollapsedRef.current = instrumentsCollapsed;
+
+  useEffect(() => {
+    if (diffEvent || !diffReturnFocus.current) return;
+    const returnFocus = diffReturnFocus.current;
+    const timer = window.setTimeout(() => {
+      diffReturnFocus.current = null;
+      if (!returnFocus.isConnected || returnFocus.closest("[inert]")) return;
+      returnFocus.focus({ preventScroll: true });
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [diffEvent]);
+
+  useLayoutEffect(() => {
+    const root = layoutRef.current;
+    if (!root) return;
+
+    const syncInstrumentFit = () => {
+      const tabStrip = root.querySelector<HTMLElement>(".mw-tab-strip");
+      const instruments = root.querySelector<HTMLElement>(".mw-instruments");
+      const instrumentItems = root.querySelector<HTMLElement>(".mw-instrument-items");
+      const instrumentCollapse = root.querySelector<HTMLElement>(".mw-instrument-collapse");
+      if (!tabStrip || !instruments || !instrumentItems || !instrumentCollapse) return;
+
+      const rootFontSize = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+      const rootStyle = getComputedStyle(root);
+      const cssLength = (name: string) => {
+        const value = rootStyle.getPropertyValue(name).trim();
+        return value.endsWith("rem")
+          ? Number.parseFloat(value) * rootFontSize
+          : Number.parseFloat(value);
+      };
+      const measuredInstrumentWidth = Math.ceil(
+        instrumentItems.scrollWidth
+        + instrumentCollapse.offsetWidth
+        + cssLength("--tab-bar-gap")
+        // .mw-instruments' own left+right padding — was --instrument-inner-gap
+        // (a flat 8px, imprecise stand-in, same issue as the doc-tab strip's
+        // old --tab-strip-chrome). Content is right-anchored, so undersizing
+        // this clips the leftmost button; oversizing shows as left-side slack.
+        + cssLength("--tab-bar-padding") * 2,
+      );
+      if (Number.isFinite(measuredInstrumentWidth)) {
+        root.style.setProperty("--memory-instrument-expanded-width", `${measuredInstrumentWidth}px`);
+      }
+      const expandedRoomValue = getComputedStyle(root)
+        .getPropertyValue("--instrument-expanded-room")
+        .trim();
+      const expandedRoom = expandedRoomValue.endsWith("rem")
+        ? Number.parseFloat(expandedRoomValue) * rootFontSize
+        : Number.parseFloat(expandedRoomValue);
+      if (!Number.isFinite(expandedRoom)) return;
+
+      const shouldFitCollapse =
+        instruments.getBoundingClientRect().right - tabStrip.getBoundingClientRect().left < expandedRoom;
+      if (!shouldFitCollapse) instrumentsFitOverride.current = false;
+
+      if (
+        shouldFitCollapse &&
+        !instrumentsFitOverride.current &&
+        !instrumentsCollapsedRef.current
+      ) {
+        instrumentsCollapsedByFit.current = true;
+        instrumentsCollapsedRef.current = true;
+        setInstrumentsCollapsed(true);
+      } else if (
+        !shouldFitCollapse &&
+        instrumentsCollapsedRef.current &&
+        instrumentsCollapsedByFit.current
+      ) {
+        instrumentsCollapsedByFit.current = false;
+        instrumentsCollapsedRef.current = false;
+        setInstrumentsCollapsed(false);
+      }
+    };
+
+    syncInstrumentFit();
+    const resizeObserver =
+      typeof ResizeObserver === "function"
+        ? new ResizeObserver(syncInstrumentFit)
+        : null;
+    resizeObserver?.observe(root);
+    root.querySelectorAll<HTMLElement>(".mw-instrument-items, .mw-instrument-collapse")
+      .forEach((element) => resizeObserver?.observe(element));
+    window.addEventListener("resize", syncInstrumentFit);
+    return () => {
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", syncInstrumentFit);
+    };
+  }, [instrumentsCollapsed, tabs.length]);
+
+  // Sliding selection indicator for links/records/activity — same engine and
+  // motion as the sidebar Files/Notebook/Facts switch (MemoryDocumentTabs'
+  // sync via bindTabs; this reuses the lower-level sync() directly instead
+  // of bind(), since these three buttons keep their own onClick toggle-to-
+  // close behavior — bindTabs' select() has no "click active tab to
+  // deselect" concept. A falsy target hides the indicator (panel closed).
+  useLayoutEffect(() => {
+    const items = layoutRef.current?.querySelector<HTMLElement>(".mw-instrument-items");
+    const motion = getBoardMotion();
+    if (!items || !motion) return;
+    const active = inspectorOpen
+      ? items.querySelector<HTMLElement>(".oinst.on")
+      : null;
+    motion.tabs.sync(items, active, { animate: !reduce });
+  }, [inspectorOpen, inspectorPane, reduce]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -295,6 +443,12 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       editPreviewController.current?.abort();
     };
   }, []);
+
+  const openDiff = useCallback((event: PageEditEvent, trigger: HTMLElement) => {
+    if (!diffEvent) diffReturnFocus.current = trigger;
+    setDiffClosing(false);
+    setDiffEvent(event);
+  }, [diffEvent]);
 
   const beginSummaryRequest = useCallback((): SummaryRequest => {
     summaryRequest.current?.controller.abort();
@@ -349,7 +503,6 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
 
   const navigableArtifacts = useMemo(() => artifacts.filter((artifact) => isNotebookResourcePath(artifact.path)), [artifacts]);
   const workspaceTree = useMemo(() => buildWorkspaceTree(navigableArtifacts, directories), [directories, navigableArtifacts]);
-  const createdAtOf = useCallback((artifact: MemoryArtifactSummary) => artifact.createdAt ?? artifact.updatedAt ?? "", []);
   const selectedMeta = navigableArtifacts.find((artifact) => artifact.path === selected) ?? null;
   selectedMetaRef.current = selectedMeta;
 
@@ -366,22 +519,41 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     if (!layout) return;
     try {
       const rail = parseInt(localStorage.getItem(RAIL_WIDTH_KEY) ?? "", 10);
-      if (Number.isFinite(rail)) layout.style.setProperty("--mw-rail-w", `${Math.max(220, Math.min(720, rail))}px`);
+      if (Number.isFinite(rail)) layout.style.setProperty("--mw-rail-w", `${Math.max(220, Math.min(400, rail))}px`);
       const ctx = parseInt(localStorage.getItem(CTX_WIDTH_KEY) ?? "", 10);
       if (Number.isFinite(ctx)) layout.style.setProperty("--mw-ctx-w", `${Math.max(240, Math.min(480, ctx))}px`);
     } catch { /* non-fatal */ }
   }, []);
 
   useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const query = window.matchMedia(COMPACT_RAIL_QUERY);
+    const sync = (event: MediaQueryListEvent) => setRailHidden(event.matches);
+    query.addEventListener("change", sync);
+    return () => query.removeEventListener("change", sync);
+  }, []);
+
+  useLayoutEffect(() => {
     if (loading) return;
     if (mutationPendingRef.current) return;
+    if (workspaceEmpty && tabs.length === 0) {
+      if (selected !== null) setSelected(null);
+      return;
+    }
     if (selected && navigableArtifacts.some((artifact) => artifact.path === selected)) return;
     let stored: string | null = null;
     try {
       stored = localStorage.getItem(LAST_PATH_KEY);
     } catch { /* non-fatal */ }
     const restored = stored != null && navigableArtifacts.some((artifact) => artifact.path === stored) ? stored : null;
-    const fallback = restored
+    // The active tab is visible state. Keep it and the document selection
+    // together when a list refresh temporarily clears the selected path.
+    const activeTabPath = tabs[activeTab];
+    const tabFallback = activeTabPath != null && navigableArtifacts.some((artifact) => artifact.path === activeTabPath)
+      ? activeTabPath
+      : null;
+    const fallback = tabFallback
+      ?? restored
       ?? (navigableArtifacts.some((artifact) => artifact.path === "index.md") ? "index.md" : null)
       ?? navigableArtifacts[0]?.path
       ?? null;
@@ -390,20 +562,18 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       setHistoryVersion((version) => version + 1);
     }
     setSelected(fallback);
-  }, [loading, navigableArtifacts, reviewPending, selected]);
+  }, [activeTab, loading, navigableArtifacts, reviewPending, selected, tabs, workspaceEmpty]);
 
-  const closeRecords = useCallback(() => {
-    setRecordsOpen(false);
-    queueMicrotask(() => recordsTriggerRef.current?.focus());
+  const setInspectorVisibility = useCallback((open: boolean) => {
+    persistInspectorOpen(open);
+    setInspectorOpen(open);
   }, []);
 
-  const focusRailNote = useCallback((path: string) => {
-    queueMicrotask(() => {
-      const note = Array.from(layoutRef.current?.querySelectorAll<HTMLElement>("[data-memory-entry]") ?? [])
-        .find((entry) => entry.dataset.memoryEntry === path && entry.matches("button"));
-      note?.focus();
-    });
-  }, []);
+  const openInspectorPane = useCallback((pane: MemoryInspectorPane) => {
+    persistMemoryInspectorPane(pane);
+    setInspectorPane(pane);
+    setInspectorVisibility(true);
+  }, [setInspectorVisibility]);
 
   const currentLocation = useCallback((): NavigationLocation | null => {
     const path = selectedMeta?.path ?? selected;
@@ -424,10 +594,16 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     };
   }, [selected, selectedMeta?.path]);
 
-  const navigateTo = useCallback((path: string, anchor: string | null = null) => {
+  const navigateTo = useCallback((
+    path: string,
+    anchor: string | null = null,
+    direction = 1,
+  ) => {
     if (mutationPendingRef.current) return;
+    if (workspaceEmpty) setWorkspaceEmpty(false);
     const destination = navigationHistory.current.current;
-    if (destination?.path === path && destination.anchor === anchor) {
+    const currentPath = selectedMetaRef.current?.path ?? selected;
+    if (destination?.path === path && destination.anchor === anchor && currentPath === path) {
       if (anchor) {
         pendingRestore.current = destination;
         setHistoryVersion((version) => version + 1);
@@ -441,14 +617,13 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     pendingRestore.current = next;
     setHistoryVersion((version) => version + 1);
     setContentNotice(null);
+    setContentDirection(direction < 0 ? -1 : 1);
     setSelected(path);
-    if (recordsOpen) {
-      setRecordsOpen(false);
-      focusRailNote(path);
-    }
-  }, [currentLocation, focusRailNote, recordsOpen]);
+  }, [currentLocation, selected, workspaceEmpty]);
 
-  const selectFile = useCallback((path: string) => navigateTo(path), [navigateTo]);
+  const selectFile = useCallback((path: string, direction: number) => {
+    navigateTo(path, null, direction);
+  }, [navigateTo]);
 
   const moveHistory = useCallback((movement: "back" | "forward") => {
     if (mutationPendingRef.current) return;
@@ -459,6 +634,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     pendingRestore.current = location;
     setHistoryVersion((version) => version + 1);
     setContentNotice(null);
+    setContentDirection(movement === "back" ? -1 : 1);
     setSelected(location.path);
   }, [currentLocation]);
 
@@ -499,18 +675,6 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     }
     return paths;
   }, [historyVersion, selected, selectedMeta?.path]);
-
-  useEffect(() => {
-    if (!recordsOpen) return;
-    recordsHeadingRef.current?.focus();
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      closeRecords();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [closeRecords, recordsOpen]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -634,7 +798,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
           detailCache.current.invalidatePath(current.path);
           if (mountedRef.current) setContentRefreshKey((key) => key + 1);
           await load();
-          if (mountedRef.current && recordsOpen) setRecordsRefreshKey((key) => key + 1);
+          if (mountedRef.current && railMode === "facts") setRecordsRefreshKey((key) => key + 1);
         }
         processedMemoryChangeSeqs.current.add(next.seq);
       }
@@ -645,7 +809,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
         queueMicrotask(() => void memoryChangeDrainRef.current?.());
       }
     }
-  }, [load, recordsOpen]);
+  }, [load, railMode]);
   memoryChangeDrainRef.current = drainMemoryChanges;
 
   useEffect(() => {
@@ -673,8 +837,8 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       setContentRefreshKey((key) => key + 1);
     }
     void load();
-    if (recordsOpen) setRecordsRefreshKey((key) => key + 1);
-  }, [load, memoryVaultChanges, memoryVaultVersion, recordsOpen]);
+    if (railMode === "facts") setRecordsRefreshKey((key) => key + 1);
+  }, [load, memoryVaultChanges, memoryVaultVersion, railMode]);
 
   const selectedHasWikilinks = activeDetail != null
     && selectedMeta != null
@@ -738,9 +902,9 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       navigateTo(resolved.path, resolved.anchor);
     },
     existsInline: (target) => artifactPaths.has(target),
-    onNavigateInline: (target) => {
+    onNavigateInline: (target, anchor = null) => {
       if (!artifactPaths.has(target)) return;
-      navigateTo(target, null);
+      navigateTo(target, anchor);
     },
   }), [artifactPaths, currentPageLinks, navigateTo]);
 
@@ -750,23 +914,18 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   }, [config]);
 
   useEffect(() => {
-    if (!recordsOpen) return;
+    if (railMode !== "facts") return;
     const requestId = ++recordsRequestId.current;
     setRecordsLoading(true);
     setRecordsError(null);
     listMemoryItems(config, {
       limit: RECORD_PAGE_SIZE,
       offset: 0,
-      q: recordsQuery.trim() || undefined,
-      kind: recordKind || undefined,
       status: "active",
     })
       .then((response) => {
         if (recordsRequestId.current !== requestId) return;
         setRecords(response.items);
-        setSelectedRecordId((previous) => previous && response.items.some((item) => item.id === previous)
-          ? previous
-          : response.items[0]?.id ?? null);
       })
       .catch((reason) => {
         if (recordsRequestId.current === requestId) setRecordsError(reason instanceof Error ? reason.message : String(reason));
@@ -774,32 +933,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       .finally(() => {
         if (recordsRequestId.current === requestId) setRecordsLoading(false);
       });
-  }, [config, recordKind, recordsOpen, recordsQuery, recordsRefreshKey]);
-
-  const selectedRecord = records.find((record) => record.id === selectedRecordId) ?? records[0] ?? null;
-  const togglePinned = (record: MemoryItem) => {
-    const next = !record.pinned;
-    const requestId = recordsRequestId.current;
-    setPinningId(record.id);
-    setRecords((current) => current.map((item) => item.id === record.id ? { ...item, pinned: next } : item));
-    setRecordPinned(config, record.id, next)
-      .catch((reason) => {
-        // A refetch may have replaced the list mid-flight; rolling back a
-        // stale boolean onto fresh records would corrupt their pin state.
-        if (recordsRequestId.current === requestId) {
-          setRecords((current) => current.map((item) => item.id === record.id ? { ...item, pinned: record.pinned } : item));
-        }
-        // Toast, not recordsError: the list itself loaded fine, and the
-        // error slot replaces the whole list with a retry panel.
-        useStore.getState().pushToast({
-          id: `memory-pin-fail:${record.id}`,
-          title: reason instanceof Error ? reason.message : String(reason),
-          status: "failed",
-          target: { kind: "automation" },
-        });
-      })
-      .finally(() => setPinningId((current) => current === record.id ? null : current));
-  };
+  }, [config, railMode, recordsRefreshKey]);
 
   const closeEditor = () => {
     editRequestGeneration.current += 1;
@@ -830,6 +964,10 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const visibleDetail = activeDetail?.path === selectedMeta?.path && activeDetail?.revision === selectedMeta?.revision
     ? activeDetail
     : null;
+  if (visibleDetail) retainedInspectorDetail.current = visibleDetail;
+  const inspectorDetail = visibleDetail
+    ?? (selectedMeta ? retainedInspectorDetail.current : null);
+  const inspectorDetailIsCurrent = inspectorDetail?.path === selectedMeta?.path;
 
   const beginEditing = useCallback(() => {
     const detail = activeDetail;
@@ -848,65 +986,86 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     setEditError(null);
   }, [activeDetail]);
 
-  // Tabs — the draft's document tabs. The active tab mirrors the current
-  // selection; navigation through any channel lands in the active tab.
-  useEffect(() => {
+  // Every page-opening route shares the mock's append-or-activate contract.
+  // A selected path is therefore always represented exactly once in the strip.
+  useLayoutEffect(() => {
     const path = selectedMeta?.path ?? selected;
     if (!path) return;
-    setTabs((current) => {
-      if (current.length === 0) return [path];
-      if (current[activeTab] === path) return current;
-      const next = [...current];
-      next[activeTab] = path;
-      return next;
-    });
-  }, [activeTab, selected, selectedMeta?.path]);
+    const plan = planMemoryTabOpen(tabs, activeTab, path);
+    if (!plan.changed) return;
+    if (plan.tabs.length !== tabs.length) setTabs(plan.tabs);
+    if (plan.activeTab !== activeTab) setActiveTab(plan.activeTab);
+  }, [activeTab, selected, selectedMeta?.path, tabs]);
 
   const switchTab = useCallback((index: number) => {
     if (index === activeTab || mutationPendingRef.current) return;
     const target = tabs[index];
     if (!target) return;
+    const direction = index < activeTab ? -1 : 1;
     setActiveTab(index);
-    navigateTo(target);
+    navigateTo(target, null, direction);
   }, [activeTab, navigateTo, tabs]);
 
+  const closeTabs = useCallback((targetIndex: number, action: MemoryTabCloseAction) => {
+    if (mutationPendingRef.current) return;
+    const plan = planMemoryTabClose(tabs, activeTab, targetIndex, action);
+    if (!plan.changed) return;
+
+    if (plan.empty) {
+      setTabs([]);
+      setActiveTab(0);
+      setWorkspaceEmpty(true);
+      setSelected(null);
+      setInspectorVisibility(false);
+      return;
+    }
+
+    const nextPath = plan.tabs[plan.activeTab]!;
+    const currentPath = selectedMeta?.path ?? selected;
+    setTabs(plan.tabs);
+    setActiveTab(plan.activeTab);
+    if (nextPath !== currentPath) {
+      const direction = action === "close-tab"
+        ? plan.activeTab < activeTab ? -1 : 1
+        : targetIndex < activeTab ? -1 : 1;
+      navigateTo(nextPath, null, direction);
+    }
+  }, [activeTab, navigateTo, selected, selectedMeta?.path, setInspectorVisibility, tabs]);
+
   const closeTab = useCallback((index: number) => {
-    if (tabs.length === 1 || mutationPendingRef.current) return;
-    const next = tabs.filter((_, i) => i !== index);
-    let nextActive = activeTab;
-    if (nextActive >= next.length) nextActive = next.length - 1;
-    else if (index < nextActive) nextActive -= 1;
-    setTabs(next);
-    setActiveTab(nextActive);
-    if (next[nextActive] !== (selectedMeta?.path ?? selected)) navigateTo(next[nextActive]!);
-  }, [activeTab, navigateTo, selected, selectedMeta?.path, tabs]);
+    closeTabs(index, "close-tab");
+  }, [closeTabs]);
 
-  const addTab = useCallback(() => {
+  const openTabContextMenu = useCallback((
+    index: number,
+    path: string,
+    trigger: HTMLElement,
+    source: ContextMenuPosition["source"],
+    x: number,
+    y: number,
+  ) => {
     if (mutationPendingRef.current) return;
-    setTabs((current) => [...current, "index.md"]);
-    setActiveTab(tabs.length);
-    navigateTo("index.md");
-  }, [navigateTo, tabs.length]);
+    setTabContextMenu({ index, path, trigger, source, x, y });
+  }, []);
 
-  const openInNewTab = useCallback((path: string) => {
+  const tabContextEntries = useMemo<ContextMenuEntry[]>(() => {
+    if (!tabContextMenu) return [];
+    const { index, path } = tabContextMenu;
+    return [
+      { id: "open", label: "Open", onSelect: () => switchTab(index) },
+      { id: "copy-path", label: "Copy path", onSelect: () => void copyText(path) },
+      { id: "divider", type: "separator" },
+      { id: "close-tab", label: "Close tab", shortcut: "⌘W", onSelect: () => closeTabs(index, "close-tab") },
+      { id: "close-others", label: "Close other tabs", onSelect: () => closeTabs(index, "close-others") },
+      { id: "close-right", label: "Close tabs to the right", onSelect: () => closeTabs(index, "close-right") },
+      { id: "close-all", label: "Close all tabs", onSelect: () => closeTabs(index, "close-all") },
+    ];
+  }, [closeTabs, switchTab, tabContextMenu]);
+
+  const selectRailMode = useCallback((mode: MemoryRailMode) => {
     if (mutationPendingRef.current) return;
-    setTabs((current) => [...current, path]);
-    setActiveTab(tabs.length);
-    navigateTo(path);
-  }, [navigateTo, tabs.length]);
-
-  const toggleNbMode = useCallback(() => {
-    setNbMode((mode) => {
-      const next = !mode;
-      const layout = layoutRef.current;
-      if (layout) {
-        const current = parseInt(getComputedStyle(layout).getPropertyValue("--mw-rail-w"), 10);
-        if (next) layout.style.setProperty("--mw-rail-w", `${Math.max(Number.isFinite(current) ? current : 288, 516)}px`);
-        else layout.style.setProperty("--mw-rail-w", "288px");
-      }
-      setRailHidden(false);
-      return next;
-    });
+    setRailMode(mode);
+    setRailHidden(false);
   }, []);
 
   // Esc closes the editor (draft behavior) — capture phase so it wins over
@@ -927,43 +1086,13 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if ((!event.metaKey && !event.ctrlKey) || event.key !== "\\") return;
+      if ((!event.metaKey && !event.ctrlKey) || event.key.toLowerCase() !== "b") return;
       event.preventDefault();
       setRailHidden((hidden) => !hidden);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
-
-  const pendingCreateEdit = useRef<string | null>(null);
-  useEffect(() => {
-    if (!pendingCreateEdit.current || activeDetail?.path !== pendingCreateEdit.current) return;
-    pendingCreateEdit.current = null;
-    if (activeDetail.editable && activeDetail.editableContent != null) beginEditing();
-  }, [activeDetail, beginEditing]);
-
-  const createNode = useCallback((kind: "note" | "dir", path: string) => {
-    if (mutationPendingRef.current) return;
-    void createMemoryNode(config, { path, kind: kind === "dir" ? "folder" : "note" })
-      .then((result) => {
-        if (!mountedRef.current) return;
-        if (kind === "note") {
-          if (result.artifact) {
-            setArtifacts((current) => current.some((artifact) => artifact.path === result.path)
-              ? current
-              : [...current, result.artifact!]);
-          }
-          pendingCreateEdit.current = result.path;
-          navigateTo(result.path);
-        } else {
-          setDirectories((current) => current.includes(result.path) ? current : [...current, result.path]);
-        }
-        void load();
-      })
-      .catch((reason) => {
-        if (mountedRef.current) setEditError(reason instanceof Error ? reason.message : String(reason));
-      });
-  }, [config, load, navigateTo]);
 
   // Properties edits recompose the page source (new frontmatter + unchanged
   // body) and run it through the standard review flow — no editor session.
@@ -1054,50 +1183,78 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     return result;
   }, [editDecisions]);
 
+  /** Keep the blocking sheet mounted through its 180ms exit so the room,
+   * scrim, and sheet release as one visual transaction. */
+  const requestReviewExit = useCallback((afterExit: () => void) => {
+    if (!editReviewRef.current || reviewExitAction.current) return;
+    reviewExitAction.current = afterExit;
+    setReviewClosing(true);
+  }, []);
+
+  const finishReviewExit = useCallback(() => {
+    const afterExit = reviewExitAction.current;
+    reviewExitAction.current = null;
+    setReviewClosing(false);
+    afterExit?.();
+  }, []);
+
   const completeLocalSave = useCallback((revision: string, snapshot: EditSnapshot, activeReviewGeneration: number) => {
-    clearDraftIfMatches(snapshot.path, snapshot.baseRevision, snapshot.candidateContent);
-    if (!mountedRef.current || editReviewRef.current?.generation !== activeReviewGeneration) return;
-    detailCache.current.invalidatePath(snapshot.path);
-    setArtifacts((current) => current.map((artifact) => artifact.path === snapshot.path ? { ...artifact, revision } : artifact));
-    if (editingMatchesSnapshot(editingRef.current, snapshot)) setEditing(null);
-    setEditReview((current) => current?.generation === activeReviewGeneration ? null : current);
-    setEditDecisions({});
-    setEditError(null);
-    setContentNotice("Saved memory note.");
-    restoreNoteFocus.current = true;
-    setContentRefreshKey((key) => key + 1);
-    void load();
-  }, [load]);
+    const finish = () => {
+      clearDraftIfMatches(snapshot.path, snapshot.baseRevision, snapshot.candidateContent);
+      if (!mountedRef.current || editReviewRef.current?.generation !== activeReviewGeneration) return;
+      detailCache.current.invalidatePath(snapshot.path);
+      setArtifacts((current) => current.map((artifact) => artifact.path === snapshot.path ? { ...artifact, revision } : artifact));
+      if (editingMatchesSnapshot(editingRef.current, snapshot)) setEditing(null);
+      setEditReview((current) => current?.generation === activeReviewGeneration ? null : current);
+      setEditDecisions({});
+      setEditError(null);
+      setContentNotice("Saved memory note.");
+      restoreNoteFocus.current = true;
+      setContentRefreshKey((key) => key + 1);
+      void load();
+    };
+    // There is no sheet to animate after unmount; preserve the transactional
+    // draft-clear guarantee without scheduling a callback that cannot fire.
+    if (!mountedRef.current) {
+      finish();
+      return;
+    }
+    requestReviewExit(finish);
+  }, [load, requestReviewExit]);
 
   const returnFromEditReview = useCallback(() => {
     if (reviewPending) return;
-    setEditReview(null);
-    setEditDecisions({});
-    setEditError(null);
-  }, [reviewPending]);
+    requestReviewExit(() => {
+      setEditReview(null);
+      setEditDecisions({});
+      setEditError(null);
+    });
+  }, [requestReviewExit, reviewPending]);
 
   const rebaseConflict = useCallback(() => {
     if (!editing || editReview?.kind !== "conflict") return;
     const { currentRevision, currentContent } = editReview.conflict;
     const { snapshot } = editReview;
-    setDraft(snapshot.path, currentRevision, snapshot.candidateContent);
-    setEditing({
-      ...editing,
-      path: snapshot.path,
-      baseRevision: currentRevision,
-      baseContent: currentContent,
-      draftContent: snapshot.candidateContent,
+    requestReviewExit(() => {
+      setDraft(snapshot.path, currentRevision, snapshot.candidateContent);
+      setEditing({
+        ...editing,
+        path: snapshot.path,
+        baseRevision: currentRevision,
+        baseContent: currentContent,
+        draftContent: snapshot.candidateContent,
+      });
+      detailCache.current.invalidatePath(editing.path);
+      setActiveDetail(null);
+      setArtifacts((current) => current.map((artifact) => artifact.path === editing.path
+        ? { ...artifact, revision: currentRevision }
+        : artifact));
+      setContentRefreshKey((key) => key + 1);
+      setEditReview(null);
+      setEditDecisions({});
+      setEditError(null);
     });
-    detailCache.current.invalidatePath(editing.path);
-    setActiveDetail(null);
-    setArtifacts((current) => current.map((artifact) => artifact.path === editing.path
-      ? { ...artifact, revision: currentRevision }
-      : artifact));
-    setContentRefreshKey((key) => key + 1);
-    setEditReview(null);
-    setEditDecisions({});
-    setEditError(null);
-  }, [editReview, editing]);
+  }, [editReview, editing, requestReviewExit]);
 
   const applyEditReview = useCallback(async () => {
     const review = editReviewRef.current;
@@ -1218,263 +1375,231 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     <div
       ref={layoutRef}
       data-memory-layout="notebook"
-      className={clsx("memory-ws", railHidden && "rail-hidden", !inspectorOpen && "ctx-hidden", editing && !editReview && "note-editing")}
+      className={clsx(
+        "memory-ws",
+        railHidden && "rail-hidden",
+        instrumentsCollapsed && "instruments-collapsed",
+        editing && !editReview && "note-editing",
+        editReview && "review-open",
+        diffEvent && "diff-open",
+        reviewClosing && "review-closing",
+        diffClosing && "diff-closing",
+      )}
     >
-      {/* Fixed-viewport panel toggles — the main screen's .sidebar-toggle /
-          .right-sidebar-toggle chrome: pinned by the traffic lights while
-          the panels slide beneath them. */}
-      <IconButton
-        size="xs"
-        className="sidebar-toggle"
-        title={railHidden ? "Show sidebar (⌘\\)" : "Hide sidebar (⌘\\)"}
-        aria-label={railHidden ? "Show sidebar" : "Hide sidebar"}
-        onClick={() => setRailHidden((hidden) => !hidden)}
+      <div className="memory-focus-cache">
+      <div className="memory-focus-plane" inert={editReview || diffEvent ? true : undefined}>
+      {/* The rail toggle stays pinned by the traffic lights while the
+          floating rail moves beneath it. */}
+      <SidebarToggle
+        hidden={railHidden}
+        onToggle={() => setRailHidden((hidden) => !hidden)}
+      />
+      <nav
+        data-memory-zone="rail"
+        data-page-enter-item="chrome"
+        aria-label="Memory notebook"
+        className="mw-rail"
       >
-        <IconSwap
-          state={railHidden ? "b" : "a"}
-          iconA={<PanelLeftClose size={16} strokeWidth={2} />}
-          iconB={<PanelLeftOpen size={16} strokeWidth={2} />}
-        />
-      </IconButton>
-      <IconButton
-        size="xs"
-        className="right-sidebar-toggle"
-        title={inspectorOpen ? "Hide links and provenance" : "Show links and provenance"}
-        aria-label={inspectorOpen ? "Close links and provenance" : "Open links and provenance"}
-        aria-pressed={inspectorOpen}
-        onClick={() => setInspectorOpen((open) => {
-          const next = !open;
-          persistInspectorOpen(next);
-          return next;
-        })}
-      >
-        <IconSwap
-          state={inspectorOpen ? "b" : "a"}
-          iconA={<PanelRightOpen size={16} strokeWidth={2} />}
-          iconB={<PanelRightClose size={16} strokeWidth={2} />}
-        />
-      </IconButton>
-      <nav data-memory-zone="rail" aria-label="Memory notebook" className="mw-rail">
         <div className="mw-rail-drag" aria-hidden />
-        <PaneResizeHandle layoutRef={layoutRef} cssVar="--mw-rail-w" storageKey={RAIL_WIDTH_KEY} min={220} max={nbMode ? 720 : 400} defaultWidth={nbMode ? 516 : 288} edge="end" label="Resize memory rail" />
-        {recordsOpen ? (
-          <section aria-label="Raw records diagnostic" className="flex h-full min-h-0 flex-col">
-            <TreeSearch quiet value={recordsQuery} onChange={setRecordsQuery} placeholder="Search raw records…" />
-            {/* One section-head row, same voice as the notes tree: title,
-                kind filter, close — no second panel header. */}
-            <div className="flex items-center gap-1 pb-1 pl-4 pr-2 pt-2">
-              <h2 ref={recordsHeadingRef} tabIndex={-1} className="text-sm font-semibold text-ink outline-none select-none">Records</h2>
-              <Select
-                value={recordKind}
-                onChange={(value) => setRecordKind(value as MemoryKind | "")}
-                options={[
-                  { value: "", label: "All kinds" },
-                  { value: "fact", label: "Facts" },
-                  { value: "directive", label: "Rules" },
-                  { value: "source", label: "Sources" },
-                ]}
-                aria-label="Filter raw records by kind"
-                className="!h-6 !border-0 ml-auto !px-1.5 !text-xs hover:bg-surface-soft"
-              />
-              <IconButton size="sm" tone="faint" onClick={closeRecords} aria-label="Close raw records diagnostic">
-                <X size={ICON.XS} strokeWidth={2} />
-              </IconButton>
-            </div>
-            <RecordListPane
-              query={recordsQuery}
-              onQueryChange={setRecordsQuery}
-              records={records}
-              recordsLoading={recordsLoading}
-              recordsError={recordsError}
-              selectedRecordId={selectedRecordId}
-              pinningId={pinningId}
-              reduce={!!reduce}
-              onSelectRecord={setSelectedRecordId}
-              onTogglePinned={togglePinned}
-              onRetry={() => setRecordsRefreshKey((key) => key + 1)}
-            />
-          </section>
-        ) : (
+        <PaneResizeHandle layoutRef={layoutRef} cssVar="--mw-rail-w" storageKey={RAIL_WIDTH_KEY} min={220} max={400} defaultWidth={288} edge="end" label="Resize memory rail" />
         <NotebookRail
+          mode={railMode}
           tree={workspaceTree}
           allNotes={navigableArtifacts}
+          records={records}
           selectedPath={selectedMeta?.path ?? null}
           loading={loading}
           error={error}
           rebuilding={rebuilding}
+          recordsLoading={recordsLoading}
+          recordsError={recordsError}
           navigationDisabled={reviewPending}
-          nbMode={nbMode}
-          createdAt={createdAtOf}
-          onToggleNbMode={toggleNbMode}
+          onModeChange={selectRailMode}
           onSelect={selectFile}
-          onOpenInNewTab={openInNewTab}
-          onOpenSwitcher={() => setSwitcherOpen(true)}
-          onCreate={createNode}
           onRetry={() => void load()}
+          onRetryRecords={() => setRecordsRefreshKey((key) => key + 1)}
           onRebuild={rebuild}
         />
-        )}
       </nav>
 
       <div data-memory-zone="workspace" className="mw-doc">
-        <div className="mw-tab-strip">
-          <button type="button" className="mw-icon-btn" title="Back (⌘[)" aria-label="Back in memory history" disabled={reviewPending || !navigationHistory.current.canBack} onClick={() => moveHistory("back")}>
-            <ChevronLeft size={15} aria-hidden />
-          </button>
-          <button type="button" className="mw-icon-btn" title="Forward (⌘])" aria-label="Forward in memory history" disabled={reviewPending || !navigationHistory.current.canForward} onClick={() => moveHistory("forward")}>
-            <ChevronRight size={15} aria-hidden />
-          </button>
-          <div className="mw-doc-tabs" role="tablist" aria-label="Open notes">
-            {tabs.map((path, index) => (
-              <div
-                key={`${index}:${path}`}
-                role="tab"
-                aria-selected={index === activeTab}
-                tabIndex={0}
-                className={clsx("mw-doc-tab", index === activeTab && "active")}
-                onClick={() => switchTab(index)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") switchTab(index);
-                }}
-              >
-                <span className="mw-doc-tab-label">{stem(path)}</span>
-                <button
-                  type="button"
-                  className="mw-doc-tab-x"
-                  aria-label="Close tab"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    closeTab(index);
-                  }}
-                >
-                  ×
-                </button>
-              </div>
-            ))}
-            <button type="button" className="mw-icon-btn" style={{ width: 28, height: 28, marginLeft: 3 }} title="New tab" aria-label="New tab" onClick={addTab}>
-              <Plus size={14} aria-hidden />
+        {tabs.length > 0 && (
+          <MemoryDocumentTabs
+            paths={tabs}
+            activeIndex={activeTab}
+            disabled={reviewPending}
+            onSelect={switchTab}
+            onClose={closeTab}
+            onOpenContextMenu={openTabContextMenu}
+          />
+        )}
+
+        <ContextMenu
+          state={tabContextMenu}
+          onClose={() => setTabContextMenu(null)}
+          entries={tabContextEntries}
+        />
+
+        {!workspaceEmpty && (
+        <div className={clsx("ornament ready mw-instruments", instrumentsCollapsed && "collapsed")} data-page-enter-item="chrome" aria-label="Page instruments">
+          <span className="ornament-surface mw-instrument-surface" aria-hidden />
+          <div className="ornament-items mw-instrument-items" inert={instrumentsCollapsed || undefined}>
+            <button
+              type="button"
+              className={clsx("oinst mw-instrument", inspectorOpen && inspectorPane === "links" && "on")}
+              disabled={reviewPending}
+              title="Links"
+              aria-label={inspectorOpen && inspectorPane === "links" ? "Close links" : "Open links"}
+              aria-pressed={inspectorOpen && inspectorPane === "links"}
+              onClick={() => {
+                if (inspectorOpen && inspectorPane === "links") setInspectorVisibility(false);
+                else openInspectorPane("links");
+              }}
+            >
+              <Link01 className="mw-instrument-icon" size={15} aria-hidden />
+              <span>links</span>
+              <span className="oc mw-instrument-count">{currentPageLinks?.totalOutgoing ?? 0}</span>
+            </button>
+            <button
+              type="button"
+              className={clsx("oinst mw-instrument", inspectorOpen && inspectorPane === "records" && "on")}
+              disabled={reviewPending}
+              aria-label={inspectorOpen && inspectorPane === "records" ? "Close records" : "Open records"}
+              aria-pressed={inspectorOpen && inspectorPane === "records"}
+              title="Page records"
+              onClick={() => {
+                if (inspectorOpen && inspectorPane === "records") setInspectorVisibility(false);
+                else openInspectorPane("records");
+              }}
+            >
+              <LeftToRightListBullet className="mw-instrument-icon" size={15} aria-hidden />
+              <span>records</span>
+              <span className="oc mw-instrument-count">{visibleDetail?.recordCount ?? 0}</span>
+            </button>
+            <button
+              type="button"
+              className={clsx("oinst mw-instrument", inspectorOpen && inspectorPane === "activity" && "on")}
+              disabled={reviewPending}
+              aria-label={inspectorOpen && inspectorPane === "activity" ? "Close activity" : "Open activity"}
+              aria-pressed={inspectorOpen && inspectorPane === "activity"}
+              onClick={() => {
+                if (inspectorOpen && inspectorPane === "activity") setInspectorVisibility(false);
+                else openInspectorPane("activity");
+              }}
+            >
+              <Clock className="mw-instrument-icon" size={15} aria-hidden />
+              <span>activity</span>
+            </button>
+            <span className="odiv mw-instrument-divider" aria-hidden />
+            <button
+              type="button"
+              className={clsx("mw-instrument mw-instrument-edit", editing && !editReview && "on")}
+              title={!editing && visibleDetail && (!visibleDetail.editable || visibleDetail.editableContent == null)
+                ? visibleDetail.readonlyReason ?? "Read-only page"
+                : "Edit source (⌘E)"}
+              aria-label="Edit memory note"
+              aria-pressed={editing != null && !editReview}
+              disabled={!editing && (!visibleDetail?.editable || visibleDetail.editableContent == null)}
+              onClick={() => {
+                if (editing) closeEditor();
+                else beginEditing();
+              }}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <use href="#dp-edit" />
+              </svg>
             </button>
           </div>
-          <span className="mw-edit-hint" aria-hidden>⌘S review · Esc close</span>
           <button
             type="button"
-            className={clsx("mw-icon-btn", editing && !editReview && "on")}
-            title={!editing && visibleDetail && (!visibleDetail.editable || visibleDetail.editableContent == null)
-              ? visibleDetail.readonlyReason ?? "Read-only page"
-              : "Edit source (⌘E)"}
-            aria-label="Edit memory note"
-            aria-pressed={editing != null && !editReview}
-            disabled={!editing && (!visibleDetail?.editable || visibleDetail.editableContent == null)}
+            className="mw-instrument mw-instrument-collapse"
+            title={instrumentsCollapsed ? "Expand instruments" : "Compact instruments"}
+            aria-label={instrumentsCollapsed ? "Expand instruments" : "Compact instruments"}
+            aria-expanded={!instrumentsCollapsed}
             onClick={() => {
-              if (editing) closeEditor();
-              else beginEditing();
+              if (instrumentsCollapsed && instrumentsCollapsedByFit.current) {
+                instrumentsFitOverride.current = true;
+              } else if (!instrumentsCollapsed) {
+                instrumentsFitOverride.current = false;
+              }
+              instrumentsCollapsedByFit.current = false;
+              instrumentsCollapsedRef.current = !instrumentsCollapsed;
+              setInstrumentsCollapsed(!instrumentsCollapsed);
             }}
           >
-            <Pencil size={15} aria-hidden />
-          </button>
-          <button
-            ref={recordsTriggerRef}
-            type="button"
-            className={clsx("mw-icon-btn", recordsOpen && "on")}
-            disabled={reviewPending}
-            aria-label="Open raw records diagnostic"
-            aria-pressed={recordsOpen}
-            title="Raw records"
-            onClick={() => {
-              if (mutationPendingRef.current) return;
-              if (recordsOpen) closeRecords();
-              else setRecordsOpen(true);
-            }}
-          >
-            <Database size={15} aria-hidden />
-          </button>
-          <button type="button" className="mw-icon-btn" aria-label="Close memory" title="Close (Esc)" onClick={closeMemorySurface}>
-            <X size={15} aria-hidden />
+            <IconSwap
+              state={instrumentsCollapsed ? "b" : "a"}
+              iconA={<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#dp-arrow-right" /></svg>}
+              iconB={<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#dp-more" /></svg>}
+            />
           </button>
         </div>
-        <main aria-label={recordsOpen ? "Raw record" : editReview ? "Memory edit review" : editing ? "Memory editor" : "Memory note"} className="relative min-h-0 flex-1 overflow-hidden">
-
-        {/* Mode swap (note <-> editor <-> review <-> records detail): enter-only
-            rise-in on a keyed remount. Exit-based crossfades left exiting
-            panels alive holding focus (non-deterministic under happy-dom and
-            a real focus hazard) — the entrance alone carries the change. */}
-          <motion.div
-            key={recordsOpen ? "records" : editReview ? "review" : editing ? "editor" : "note"}
-            className="absolute inset-0 min-h-0"
-            initial={reduce ? false : RISE_IN}
-            animate={{ ...RISE_SETTLED, transitionEnd: { filter: "none" } }}
-            transition={{ duration: MOTION.panel, ease: EASE_EMPHASIZED }}
-          >
-            {recordsOpen ? (
-          <RecordDetailPane
-            record={selectedRecord}
-            direction={1}
-            pinningId={pinningId}
-            onTogglePinned={togglePinned}
-          />
-        ) : editReview && reviewPresentation ? (
-          <MemoryEditReview
-            kind={editReview.kind}
-            reviewId={editReview.kind === "preview" ? editReview.preview.id : `conflict:${editReview.conflict.currentRevision}`}
-            path={reviewPresentation.path}
-            baseContent={reviewPresentation.baseContent}
-            draftContent={reviewPresentation.draftContent}
-            operations={reviewPresentation.operations.map(diffOperation)}
-            decisions={editDecisions}
-            analysisPending={reviewPresentation.analysisPending}
-            conflict={editReview.kind === "conflict" ? editReview.conflict : undefined}
-            pending={reviewPending}
-            error={editError}
-            onDecision={(operationId, decision) => setEditDecisions((current) => ({ ...current, [operationId]: decision }))}
-            onApply={() => void applyEditReview()}
-            onCancel={returnFromEditReview}
-            onRebase={rebaseConflict}
-          />
-        ) : editing ? (
-          <MemoryEditor
-            path={editing.path}
-            baseContent={editing.baseContent}
-            value={editing.draftContent}
-            saving={editPending}
-            error={editError}
-            onClose={closeEditor}
-            onChange={(draftContent) => {
-              editRequestGeneration.current += 1;
-              editPreviewController.current?.abort();
-              setEditPending(false);
-              if (draftContent === editing.baseContent) clearDraft(editing.path, editing.baseRevision);
-              else setDraft(editing.path, editing.baseRevision, draftContent);
-              setEditing((current) => current ? { ...current, draftContent } : current);
-            }}
-          />
-        ) : (
-          <motion.div
-            key={selectedMeta?.path ?? "empty"}
-            className="h-full min-h-0"
-            initial={reduce ? false : { opacity: 0, filter: "blur(3px)" }}
-            animate={{ opacity: 1, filter: "blur(0px)", transitionEnd: { filter: "none" } }}
-            transition={{ duration: 0.19, ease: EASE_EMPHASIZED }}
-          >
-            <MemoryNote
-              summary={selectedMeta}
-              detail={visibleDetail}
-              listLoading={loading}
-              contentLoading={contentLoading}
-              contentNotice={contentNotice}
-              contentError={contentError}
-              wikiHandlers={wikiHandlers}
-              onFrontmatterChange={visibleDetail?.editable && visibleDetail.editableContent != null ? saveFrontmatter : undefined}
-              onRetry={() => {
-                if (selectedMeta) {
-                  detailCache.current.invalidatePath(selectedMeta.path);
-                }
-                setContentRefreshKey((key) => key + 1);
-              }}
-            />
-          </motion.div>
         )}
-          </motion.div>
-        {!recordsOpen && !editing && !editReview && (
+        <main
+          id="memory-note-panel"
+          aria-label={editing ? "Memory editor" : "Memory note"}
+          aria-labelledby={tabs.length > 0 ? `memory-note-tab-${activeTab}` : undefined}
+          className="mw-main relative min-h-0 flex-1 overflow-hidden"
+        >
+          {editing ? (
+            <div className="absolute inset-0 min-h-0">
+              <MemoryEditor
+                path={editing.path}
+                baseContent={editing.baseContent}
+                value={editing.draftContent}
+                saving={editPending}
+                error={editError}
+                onClose={closeEditor}
+                onChange={(draftContent) => {
+                  editRequestGeneration.current += 1;
+                  editPreviewController.current?.abort();
+                  setEditPending(false);
+                  if (draftContent === editing.baseContent) clearDraft(editing.path, editing.baseRevision);
+                  else setDraft(editing.path, editing.baseRevision, draftContent);
+                  setEditing((current) => current ? { ...current, draftContent } : current);
+                }}
+              />
+            </div>
+          ) : (
+            <AnimatePresence initial={false} mode="wait" custom={contentDirection}>
+              <motion.div
+                key={selectedMeta?.path ?? "empty"}
+                custom={contentDirection}
+                variants={MEMORY_PAGE_SWAP_VARIANTS}
+                className="absolute inset-0 min-h-0"
+                initial={reduce ? false : "enter"}
+                animate="center"
+                exit={reduce
+                  ? { opacity: 0, transition: { duration: MOTION.reduced } }
+                  : "exit"}
+              >
+              {workspaceEmpty ? (
+                <div className="mw-empty-workspace">
+                  <h1>No page open</h1>
+                  <p>Choose a page from Files to open it here.</p>
+                </div>
+              ) : (
+                <MemoryNote
+                  summary={selectedMeta}
+                  detail={visibleDetail}
+                  listLoading={loading}
+                  contentLoading={contentLoading}
+                  contentNotice={contentNotice}
+                  contentError={contentError}
+                  wikiHandlers={wikiHandlers}
+                  onFrontmatterChange={visibleDetail?.editable && visibleDetail.editableContent != null ? saveFrontmatter : undefined}
+                  onRetry={() => {
+                    if (selectedMeta) {
+                      detailCache.current.invalidatePath(selectedMeta.path);
+                    }
+                    setContentRefreshKey((key) => key + 1);
+                  }}
+                />
+              )}
+              </motion.div>
+            </AnimatePresence>
+          )}
+        {!workspaceEmpty && !editing && !editReview && (
           <WikiLinkPreview
             containerRef={layoutRef}
             links={currentPageLinks}
@@ -1486,27 +1611,41 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
         </main>
       </div>
 
-      <aside data-memory-zone="inspector" aria-label="Links and provenance" className="mw-context">
-        <PaneResizeHandle layoutRef={layoutRef} cssVar="--mw-ctx-w" storageKey={CTX_WIDTH_KEY} min={240} max={480} defaultWidth={296} edge="start" label="Resize context panel" />
-        {inspectorOpen && visibleDetail ? (
-          <MemoryInspector
-            page={visibleDetail}
-            links={currentPageLinks}
-            history={currentPageHistory}
-            linksLoading={linksLoading}
-            historyLoading={historyLoading}
-            linkError={linkError}
-            historyError={historyError}
-            navigationDisabled={reviewPending}
-            titleForPath={(path) => stem(path)}
-            onNavigate={navigateTo}
-            onRetryLinks={() => setLinksRefreshKey((key) => key + 1)}
-            scrollTargetRef={layoutRef}
-          />
-        ) : inspectorOpen ? (
-          <p className="mw-ctx-empty" style={{ paddingTop: 16 }}>Loading…</p>
-        ) : null}
-      </aside>
+      <div data-memory-zone="inspector">
+        <PeekSurface
+          open={inspectorOpen}
+          onClose={() => setInspectorVisibility(false)}
+          ariaLabel="Page peek"
+          layer="memory-context"
+          className="mw-context surface-peek"
+        >
+        <div className="mw-context-plane">
+          <PaneResizeHandle layoutRef={layoutRef} cssVar="--mw-ctx-w" storageKey={CTX_WIDTH_KEY} min={240} max={480} defaultWidth={296} edge="start" label="Resize context panel" />
+          {inspectorDetail ? (
+            <MemoryInspector
+              page={inspectorDetail}
+              links={currentPageLinks}
+              history={currentPageHistory}
+              linksLoading={linksLoading || !inspectorDetailIsCurrent}
+              historyLoading={historyLoading || !inspectorDetailIsCurrent}
+              linkError={inspectorDetailIsCurrent ? linkError : null}
+              historyError={inspectorDetailIsCurrent ? historyError : null}
+              navigationDisabled={reviewPending || !inspectorDetailIsCurrent}
+              titleForPath={(path) => stem(path)}
+              onNavigate={navigateTo}
+              onRetryLinks={() => setLinksRefreshKey((key) => key + 1)}
+              onOpenDiff={(event, trigger) => {
+                void openDiff(event, trigger);
+              }}
+              activePane={inspectorPane}
+              onClose={() => setInspectorVisibility(false)}
+            />
+          ) : (
+            <p className="mw-ctx-empty mw-ctx-loading">Loading…</p>
+          )}
+        </div>
+        </PeekSurface>
+      </div>
 
       <MemoryQuickSwitcher
         open={switcherOpen}
@@ -1518,6 +1657,43 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
           navigateTo(path, null);
         }}
       />
+      </div>
+      </div>
+
+      {diffEvent && (
+        <MemoryDiffOverlay
+          event={diffEvent}
+          path={diffEvent.path}
+          open={!diffClosing}
+          onOpenChange={(open) => setDiffClosing(!open)}
+          onExitComplete={() => {
+            setDiffEvent(null);
+            setDiffClosing(false);
+          }}
+        />
+      )}
+
+      {editReview && reviewPresentation && (
+        <MemoryEditReview
+          kind={editReview.kind}
+          reviewId={editReview.kind === "preview" ? editReview.preview.id : `conflict:${editReview.conflict.currentRevision}`}
+          path={reviewPresentation.path}
+          baseContent={reviewPresentation.baseContent}
+          draftContent={reviewPresentation.draftContent}
+          operations={reviewPresentation.operations.map(diffOperation)}
+          decisions={editDecisions}
+          analysisPending={reviewPresentation.analysisPending}
+          conflict={editReview.kind === "conflict" ? editReview.conflict : undefined}
+          pending={reviewPending}
+          error={editError}
+          closing={reviewClosing}
+          onExitComplete={finishReviewExit}
+          onDecision={(operationId, decision) => setEditDecisions((current) => ({ ...current, [operationId]: decision }))}
+          onApply={() => void applyEditReview()}
+          onCancel={returnFromEditReview}
+          onRebase={rebaseConflict}
+        />
+      )}
     </div>
   );
 }

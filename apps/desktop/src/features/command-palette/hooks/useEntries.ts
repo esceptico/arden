@@ -7,6 +7,7 @@ import {
   Eraser,
   FolderPlus,
   GitBranch,
+  House,
   MessageSquare,
   Monitor,
   Moon,
@@ -60,7 +61,7 @@ export function useEntries(): CommandEntry[] {
     entries.push({
       id: "suggested:new-session",
       section: "suggested",
-      label: "New session",
+      label: "New chat",
       icon: Pencil,
       shortcut: "⌘N",
       run: () => goToNewSessionHome(),
@@ -133,6 +134,14 @@ export function useEntries(): CommandEntry[] {
 
     // Navigation
     entries.push({
+      id: "open:home",
+      section: "open",
+      label: "Home",
+      icon: House,
+      run: () => goToNewSessionHome(),
+      search: "home mission control desk overview",
+    });
+    entries.push({
       id: "open:memory",
       section: "open",
       label: "Memory",
@@ -153,7 +162,7 @@ export function useEntries(): CommandEntry[] {
       section: "open",
       label: "Archived sessions",
       icon: Archive,
-      run: () => openSettings(null, "archive"),
+      run: () => openSettings("archive"),
       search: "archive archived",
     });
     entries.push({

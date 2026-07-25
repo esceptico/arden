@@ -21,7 +21,8 @@ SuggestionStatus = Literal["active", "dismissed", "accepted"]
 class AutomationSuggestion:
     id: str
     name: str
-    description: str
+    description: str | None
+    prompt: str
     triggers: list[Trigger]
     rationale: str
     category: str
@@ -43,6 +44,7 @@ class ScheduleDraft(BaseModel):
 
 class SuggestionDraft(BaseModel):
     name: str
+    description: str
     prompt: str
     schedule: ScheduleDraft
     rationale: str
@@ -92,7 +94,8 @@ class AutomationSuggester:
                 AutomationSuggestion(
                     id=str(uuid.uuid4()),
                     name=draft.name,
-                    description=draft.prompt,
+                    description=draft.description,
+                    prompt=draft.prompt,
                     triggers=triggers,
                     rationale=draft.rationale,
                     category=draft.category,
@@ -177,7 +180,7 @@ class AutomationSuggester:
         except Exception as e:
             _logger.debug("gather existing automations failed: %s", e)
             return ""
-        return "\n".join(f"- {a.name} — {a.description}" for a in automations)
+        return "\n".join(f"- {a.name} — {a.description or '(description pending)'}" for a in automations)
 
     async def _excluded_signatures(self) -> str:
         try:

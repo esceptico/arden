@@ -19,6 +19,7 @@ from arden.notifiers.base import NotifierContext
 from arden.notifiers.service import NotifierService
 from arden.observability import init_tracing, shutdown_tracing
 from arden.operator.runner import OperatorDeps
+from arden.server.app_control import AppControlService
 from arden.server.runtime.automation import AutomationRuntime
 from arden.server.runtime.config import RuntimeConfig
 from arden.server.runtime.knowledge import KnowledgeRuntime
@@ -53,8 +54,12 @@ class Runtime:
         self.skill_registry: SkillRegistry | None = None
         self.skill_service: SkillService | None = None
         self.notifier_service: NotifierService | None = None
-        self.dispatch_session_message: Callable[[str, str, str | None, bool | None], Awaitable[object]] | None = None
+        self.dispatch_session_message: Callable[
+            [str, str, str | None, bool | None, list[dict] | None],
+            Awaitable[object],
+        ] | None = None
         self.resume_suspended_chat_run: Callable[[str, str], Awaitable[object]] | None = None
+        self.app_control: AppControlService | None = None
 
         self._connected = False
         self._closing = False
@@ -141,6 +146,8 @@ class Runtime:
             # running inside a scheduled automation that needs cross-session
             # pattern detection.
             services["session"] = self.session_service
+        if self.app_control:
+            services["app_control"] = self.app_control
         if self.skill_registry:
             services["skill_registry"] = self.skill_registry
         if self.skill_service:
@@ -298,6 +305,7 @@ class Runtime:
             integration_errors=self.get_integration_errors(),
             connection_catalog=tuple(self.integrations.list_connections()),
             enqueue_run_completed=self.stores.outbox.enqueue_run_completed if self.stores else None,
+            enqueue_run_failed=self.stores.outbox.enqueue_run_failed if self.stores else None,
             dispatch_session_message=self.dispatch_session_message,
             memory_curator=self.memory_curator,
             memory_records=self.memory_records,

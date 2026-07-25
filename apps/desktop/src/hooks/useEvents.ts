@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import type { AppConfig } from "@/api/core";
 import type { ServerEvent } from "@/api/events";
 import { reloadAllCollections } from "@/actions/bootstrap";
+import { dispatchQueuedHead } from "@/actions/messages";
 import { loadHistory } from "@/actions/history";
-import { enqueueMessage } from "@/actions/messages";
 import { createSseFrameParser } from "@/../electron/sse-frame-parser.js";
 import { createAnimationFrameBatcher } from "@/lib/eventBatch";
 import { createStallWatchdog } from "@/lib/streamWatchdog";
@@ -227,9 +227,7 @@ export function useEvents(sessionId: string | null) {
     // delta. Both transports feed this single batcher.
     const batcher = createAnimationFrameBatcher<ServerEvent>((events) => {
       for (const event of events) {
-        void handleIncomingServerEvent(event, reloadHistory, {
-          resendQueuedMessage: (text, images) => enqueueMessage(text, images ?? []),
-        });
+        void handleIncomingServerEvent(event, reloadHistory, dispatchQueuedHead);
       }
     });
     const ingest = (event: ServerEvent) => {

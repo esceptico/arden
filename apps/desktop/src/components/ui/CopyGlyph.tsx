@@ -1,4 +1,4 @@
-import { Check, Copy } from "@/components/icons";
+import { Copy, Tick02 } from "@/components/icons";
 import { IconSwap } from "@/components/ui/IconSwap";
 
 /**
@@ -21,8 +21,8 @@ export function CopyGlyph({
   return (
     <IconSwap
       state={copied ? "b" : "a"}
-      iconA={<Copy size={size} strokeWidth={2} />}
-      iconB={<Check size={size} strokeWidth={2.4} className={checkClassName} />}
+      iconA={<Copy size={size} />}
+      iconB={<Tick02 size={size} className={checkClassName} />}
     />
   );
 }

@@ -10,7 +10,18 @@ from arden.tools.core.registry import ToolRegistry, tool_changes_state
 from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
 
 DEFERRED_SOURCES = frozenset(
-    {"gmail", "calendar", "google_drive", "slack", "_automation", "_background", "_notifications", "_directives", "mcp"}
+    {
+        "gmail",
+        "calendar",
+        "google_drive",
+        "slack",
+        "_automation",
+        "_background",
+        "_notifications",
+        "_directives",
+        "_app_control",
+        "mcp",
+    }
 )
 
 DEFERRED_TOOL_GROUP_BY_NAME = {
@@ -51,6 +62,11 @@ GROUP_ALIASES: dict[str, str] = {
     "files": "_file_actions",
     "file_actions": "_file_actions",
     "filesystem": "_file_actions",
+    "app": "_app_control",
+    "app_control": "_app_control",
+    "navigate": "_app_control",
+    "navigation": "_app_control",
+    "attention": "_app_control",
     "mcp": "mcp",
 }
 
@@ -64,6 +80,7 @@ GROUP_DESCRIPTIONS: dict[str, str] = {
     "_notifications": "Send a user-facing notification. Use when the user explicitly asks to be notified or an automation/background flow needs to alert them.",
     "_directives": "Update persistent behavior directives injected into the system prompt. Use when the user asks to change standing behavior, tone, or operating rules.",
     "_file_actions": "Write or edit local files. Use after inspecting files with read_file/list_files/find_files/search_text and deciding an exact file change is needed.",
+    "_app_control": "Drive the Arden app itself: send a prompt into another chat, rename or archive a chat, raise a needs-you item on the user's Home, or open a place in the UI. Use when the user asks you to act on another conversation, flag something for later, or take them somewhere in the app.",
     "mcp": "Connected MCP server tools. Use for external apps/servers not covered by core tools. Load by server, e.g. mcp:obsidian.",
 }
 
@@ -77,6 +94,7 @@ DEFERRED_GROUP_ORDER = (
     "_notifications",
     "_directives",
     "_file_actions",
+    "_app_control",
 )
 
 DEFERRED_GROUP_LABELS = {
@@ -87,6 +105,7 @@ DEFERRED_GROUP_LABELS = {
     "_notifications": "notifications",
     "_directives": "directives",
     "_file_actions": "files",
+    "_app_control": "app",
 }
 
 _env = Environment(trim_blocks=True, lstrip_blocks=True)
@@ -340,7 +359,7 @@ def append_deferred_tools_prompt(
 class LoadToolsInput(BaseModel):
     group: str | None = Field(
         default=None,
-        description="Deferred group to load, e.g. 'email', 'calendar', 'slack', 'automations', 'background', 'notifications', 'directives', 'files', or 'mcp:obsidian'.",
+        description="Deferred group to load, e.g. 'email', 'calendar', 'slack', 'automations', 'background', 'notifications', 'directives', 'files', 'app', or 'mcp:obsidian'.",
     )
     names: list[str] | None = Field(
         default=None,
@@ -388,7 +407,17 @@ def _names_for_group(
 
     names = catalog.by_group.get(normalized, [])
     if not names:
-        groups = ["email", "calendar", "slack", "automations", "background", "notifications", "directives", "files"]
+        groups = [
+            "email",
+            "calendar",
+            "slack",
+            "automations",
+            "background",
+            "notifications",
+            "directives",
+            "files",
+            "app",
+        ]
         groups.extend(f"mcp:{s}" for s in sorted(catalog.mcp_by_server))
         return [], "No deferred group {group!r}. Available groups: {groups}.".format(
             group=group,
@@ -558,12 +587,13 @@ async def tool_search(execution: ToolExecution, args: ToolSearchInput) -> ToolRe
 
 load_tools_tool = tool(
     display_name="Load Tools",
+    display_description="Load deferred tools for this chat.",
     description=(
         "Load deferred tool schemas into the current run by exact group or tool name. "
         "Use proactively when the user's request needs a deferred capability listed in the DEFERRED TOOLS prompt section. "
         "Loading tools does not execute them; it only makes them callable on the next model step. "
         "Examples: group='slack', group='email', group='calendar', group='automations', group='background', "
-        "group='notifications', group='directives', group='files', group='mcp:obsidian', "
+        "group='notifications', group='directives', group='files', group='app', group='mcp:obsidian', "
         "or names=['slack_search','slack_thread','slack_file']."
     ),
     input_model=LoadToolsInput,
@@ -573,6 +603,7 @@ load_tools_tool = tool(
 
 tool_search_tool = tool(
     display_name="Search Tools",
+    display_description="Find and load deferred tools.",
     description=(
         "Fetch full schemas for deferred tools so they can be called. "
         "MANDATORY PREREQUISITE: use this before calling any deferred tool listed in the DEFERRED TOOLS prompt. "

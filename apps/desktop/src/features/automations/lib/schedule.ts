@@ -53,25 +53,33 @@ export function channelsToInput(channels?: (string | { id: string; name: string 
 
 export interface FormState {
   name: string;
+  /** Concise display copy. Null means the server should generate it. */
+  description: string | null;
   prompt: string;
   schedule: Schedule;
   auto_approve: boolean;
   /** Explicit model override; null = the session default. */
   model: string | null;
-  /** Rides along from a "Suggested for you" preset so the create payload can
-   *  tell the server which suggestion to mark accepted. Editing fields never
-   *  clears it; an `edit` seed never sets it. */
+  /** Preserved from a real server suggestion until this draft is created. */
   from_suggestion_id?: string;
 }
 
 export function emptyForm(): FormState {
-  return { name: "", prompt: "", schedule: { ...DEFAULT_SCHEDULE }, auto_approve: false, model: null };
+  return {
+    name: "",
+    description: null,
+    prompt: "",
+    schedule: { ...DEFAULT_SCHEDULE },
+    auto_approve: false,
+    model: null,
+  };
 }
 
 export function formFromPreset(p: CreateAutomationPayload): FormState {
   const f = emptyForm();
   f.name = p.name ?? "";
-  f.prompt = p.description ?? "";
+  f.description = p.description?.trim() || null;
+  f.prompt = p.prompt ?? "";
   f.model = p.model ?? null;
   f.from_suggestion_id = p.from_suggestion_id;
   if (p.auto_approve) f.auto_approve = true;
@@ -110,7 +118,8 @@ export function formFromAutomation(a: Automation): FormState {
   const t = a.triggers[0];
   const f = emptyForm();
   f.name = a.name;
-  f.prompt = a.description;
+  f.description = a.description;
+  f.prompt = a.prompt;
   f.auto_approve = a.auto_approve;
   f.model = a.model;
   if (!t) return f;
@@ -144,13 +153,18 @@ export function formFromAutomation(a: Automation): FormState {
   return f;
 }
 
-export function buildPayload(f: FormState): CreateAutomationPayload {
+export function buildPayload(
+  f: FormState,
+  { includeDescription = true }: { includeDescription?: boolean } = {},
+): CreateAutomationPayload {
   const p: CreateAutomationPayload = {
     name: f.name.trim() || "Untitled automation",
-    description: f.prompt.trim(),
+    prompt: f.prompt.trim(),
     auto_approve: f.auto_approve,
     model: f.model,
   };
+  const description = f.description?.trim();
+  if (includeDescription && description) p.description = description;
   const s = f.schedule;
   if (s.kind === "at") {
     p.trigger_type = "time";

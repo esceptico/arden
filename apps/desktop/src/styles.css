@@ -2,322 +2,50 @@
 /* KaTeX styles for math rendering. Loaded once at app start; the
    bundled minified CSS is ~25KB gzip and ships its own font subsets. */
 @import "katex/dist/katex.min.css";
+@import "./design/tokens.css";
+@import "./design/foundation.css";
+@import "./design/scroll.css";
+@import "./design/shell.css";
+@import "./design/typeset.css";
+@import "./design/model-pickers.css";
+@import "./design/chat.css";
 
 /* The `dark:` variant matches our `:root.dark` toggle (set in lib/theme.ts).
    Lets components write `dark:bg-surface` / `dark:text-ink` inline without
    maintaining a parallel `.dark .foo` selector block. */
 @custom-variant dark (&:where(:root.dark, :root.dark *));
 
-/* ─── Theme tokens (Geist) ─────────────────────────────────── */
-@theme {
-  --font-sans: "Geist Variable", -apple-system, BlinkMacSystemFont,
-    "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", Menlo, Monaco, Consolas,
-    "Liberation Mono", "Courier New", monospace;
-
-  /* ─── Type scale ──────────────────────────────────────────
-     One place for every font-size in the app. Components use
-     semantic utilities (`text-xs`, `text-base`, `text-lg`, …);
-     changing one value here scales everything that consumes it.
-     Tier purpose:
-       2xs — uppercase section labels (bucket headers, captions)
-       xs  — tiny chrome: timestamps, hints, fine print
-       sm  — secondary body, descriptions, context-menu items
-       base — primary body, row labels (nav, sessions, list items)
-       md  — emphasized body, chat messages
-       lg  — h1, modal titles
-       xl, 2xl — display headings */
-  --text-2xs: 11px;
-  --text-xs: 12.5px;
-  --text-sm: 13px;
-  --text-base: 14px;
-  --text-md: 15px;
-  --text-lg: 16.5px;
-  --text-xl: 18px;
-  --text-2xl: 20px;
-  --text-3xl: 28px;
-
-  /* Geist design system color tokens. Static hex values — no runtime
-     ramp vars. Inside @theme so Tailwind v4 generates `bg-accent`,
-     `text-accent`, etc. as var() references. */
-  --color-bg: #ffffff;
-  --color-bg-main: #ffffff;
-  --color-surface: #fafafa;
-  --color-surface-soft: #f2f2f2;
-  --color-surface-sunken: #ebebeb;
-  --color-code-bg: #fafafa;
-
-  --color-line: #e6e6e6;
-  --color-line-soft: #ebebeb;
-  --color-line-strong: #d6d6d6;
-
-  --color-ink: #171717;
-  --color-ink-soft: #3d3d3d;
-  --color-on-ink: #f5f5f5;
-  --color-muted: #6e6e6e;
-  --color-faint: #8f8f8f;
-  --color-whisper: #c2c2c2;
-
-  --color-accent: #0070f3;
-  --color-accent-soft: rgba(0,112,243,0.1);
-  --color-accent-strong: #0060d1;
-
-  /* Row-list fills — THE hover/selected tint for every menu, select, and
-     option list (MenuItem, Select, model picker, RadioGroup, CheckboxGroup).
-     ink-mix so one declaration reads on any surface in both themes. */
-  --color-fill-hover: color-mix(in oklab, var(--color-ink) 5%, transparent);
-  --color-fill-selected: color-mix(in oklab, var(--color-ink) 7%, transparent);
-
-  --color-ok: #45a557;
-  --color-ok-soft: rgba(69,165,87,0.12);
-  --color-warn: #f5a623;
-  --color-warn-soft: rgba(245,166,35,0.1);
-  --color-bad: #e5484d;
-  --color-bad-soft: rgba(229,72,77,0.08);
-  --color-info: #0070f3;
-
-  /* --- Elevation ladder (Fluid Functionalism, 8 levels) ---
-     Ported verbatim from fluidfunctionalism.com/docs/surfaces (source of
-     truth). Surfaces (--surface-N) and the per-level shadow recipe
-     (--shadow-N) are defined per-theme in :root / :root.dark, because the
-     dark recipe is structurally different from light — not just a colour
-     flip:
-       light = hairline ring (0 0 0 1px @6%) + additive drop layers with
-               halving offsets (1/3/6/12/24/48/96px);
-       dark  = inset top highlight + inset ring + outer hairline + stacked
-               drops, opacities escalating per level (the --dm-* recipe).
-     Each surface pairs 1:1 with its shadow. arden decouples bg-tone from
-     shadow-tier per surface class (anchored chrome sits low with a deep
-     shadow; floating surfaces lift), and approximates FF's substrate
-     context via `.modal-scrim` descendant selectors. */
-  --color-surface-1: var(--surface-1);
-  --color-surface-2: var(--surface-2);
-  --color-surface-3: var(--surface-3);
-  --color-surface-4: var(--surface-4);
-  --color-surface-5: var(--surface-5);
-  --color-surface-6: var(--surface-6);
-  --color-surface-7: var(--surface-7);
-  --color-surface-8: var(--surface-8);
-
-  /* Semantic aliases — existing var(--shadow-sm|md|pop) / shadow-* utility
-     consumers map onto ladder tiers (--shadow-N live in :root/:root.dark). */
-  --shadow-sm: var(--shadow-2);
-  --shadow-md: var(--shadow-3);
-  --shadow-pop: var(--shadow-5);
-
-  /* Stacking scale (apply via z-[var(--z-*)]). panel < panel-overlay <
-     modal < modal-top < popover < toast < tooltip, so a menu/dropdown
-     always clears a modal (even a modal stacked over another modal) and
-     panel-affixed chrome (sidebar toggles) sits above its panel but
-     under the modal scrim. Local component stacking (z-10 and below)
-     stays inline. */
-  --z-raised: 10;
-  --z-sticky: 30;
-  --z-panel: 40;
-  --z-panel-overlay: 45;
-  --z-modal: 50;
-  --z-modal-top: 55;
-  --z-popover: 60;
-  --z-toast: 65;
-  --z-tooltip: 70;
-
-  --animate-roll-in: rollIn var(--duration-palette) var(--ease-out-soft);
-  --animate-fade-in: fadeIn var(--duration-trace) var(--ease-out-soft);
-  --animate-pulse-soft: pulseSoft 1.2s ease-in-out infinite;
-
-  /* Motion duration tokens — drive all transition-duration values through
-     these so timing stays consistent with the UI/UX intelligence doc.
-     Registered in Tailwind's --duration-* namespace so they're usable as
-     `duration-fast`, `duration-route`, etc. fast/check is the fastest
-     tier; route is reserved for full pane slides and is the slowest. */
-  --duration-fast: 150ms;
-  --duration-check: 150ms;
-  --duration-row: 150ms;
-  --duration-palette: 200ms;
-  --duration-trace: 200ms;
-  --duration-panel: 200ms;
-  --duration-route: 300ms;
-  --icon-swap-dur: 250ms;
-  --icon-swap-blur: 2px;
-  --icon-swap-start-scale: 0.25;
-  --icon-swap-ease: ease-in-out;
-  /* Traveling-indicator tier (transitions.dev) — was tabs-only (--tabs-dur);
-     promoted so TravelingHighlight can share it. --tabs-dur now aliases it. */
-  --duration-travel: 180ms;
-
-  --ease-emphasized: cubic-bezier(0.32, 0.72, 0, 1);
-  --ease-geist: cubic-bezier(0.175, 0.885, 0.32, 1.1);
-  --ease-out-soft: cubic-bezier(0.2, 0.8, 0.2, 1);
-  /* CSS mirrors of the remaining motion.ts eases — keep in sync. */
-  --ease-hover: cubic-bezier(0.16, 1, 0.3, 1);
-  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
-  --ease-decelerate: cubic-bezier(0.05, 0.7, 0.1, 1);
-  /* Springy back-out for physical toggles (switch knob). */
-  --ease-back-out: cubic-bezier(0.34, 1.56, 0.64, 1);
-  /* Smooth-out curve for traveling indicators/slides (design-language.md
-     "Ease roles"). Was tabs-only (--tabs-ease); promoted so
-     TravelingHighlight shares it. --tabs-ease now aliases it. */
-  --ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1);
-  /* Remap Tailwind's ease-out utility onto the house curve so the 24+
-     `ease-out` call sites speak the same dialect as EASE_OUT in motion.ts. */
-  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
-  /* Bare transition utilities (transition-colors etc.) inherit the token
-     scale instead of Tailwind's stock 150ms cubic-bezier(0.4,0,0.2,1) —
-     one timing language on adjacent controls. */
-  --default-transition-duration: var(--duration-row);
-  --default-transition-timing-function: var(--ease-out-soft);
-}
-
-@keyframes pulseSoft {
-  0%, 100% { opacity: 0.4; transform: scale(0.85); }
-  50% { opacity: 1; transform: scale(1); }
-}
 @keyframes fadeIn {
-  from { opacity: 0; transform: translateY(2px); filter: blur(2px); }
+  from {
+    opacity: 0;
+    transform: translateY(var(--motion-distance-subtle));
+    filter: blur(var(--motion-blur-subtle));
+  }
   to { opacity: 1; transform: translateY(0); filter: blur(0); }
 }
 @keyframes rollIn {
-  from { opacity: 0; transform: translateY(6px); filter: blur(3px); }
+  from {
+    opacity: 0;
+    transform: translateY(var(--motion-distance-entry));
+    filter: blur(var(--motion-blur-entry));
+  }
   to { opacity: 1; transform: translateY(0); filter: blur(0); }
 }
 
-/* ─── Status dot breathing light ─────────────────────────────
-   Soft pulsing glow on a small color dot, used for "this thing is
-   running" indicators. The dot itself stays put; its halo expands
-   and contracts via box-shadow alone. `currentColor` picks up the dot's tint
-   (accent/ok/bad) so the recipe works for any status hue. */
-@keyframes statusBreathe {
-  0%, 100% {
-    box-shadow: 0 0 0 0 currentColor, 0 0 3px 0 currentColor;
-    opacity: 0.85;
-  }
-  50% {
-    box-shadow: 0 0 6px 1px currentColor, 0 0 12px 2px currentColor;
-    opacity: 1;
-  }
-}
-.status-dot-breathe {
-  animation: statusBreathe 2s ease-in-out infinite;
-}
-
-/* ─── Phase glare ────────────────────────────────────────────
-   A bright streak sweeping a RUNNING workflow-phase segment so an
-   otherwise static progress bar reads as alive. Same compositor-only
-   overlay recipe as .skeleton::after (transform sweep, no repaints). */
-.phase-glare {
-  position: relative;
-  overflow: hidden;
-}
-.phase-glare::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(
-    90deg,
-    transparent 15%,
-    rgba(255, 255, 255, 0.55) 50%,
-    transparent 85%
-  );
-  transform: translateX(-100%);
-  animation: skeleton-shimmer 1.4s ease-in-out infinite;
-}
-:root.dark .phase-glare::after {
-  background: linear-gradient(
-    90deg,
-    transparent 15%,
-    rgba(255, 255, 255, 0.3) 50%,
-    transparent 85%
-  );
-}
-
 /* ─── Skeleton placeholder ───────────────────────────────────
-   Loading block. Use as `<div className="skeleton h-3 w-24" />`
-   while data is in-flight. The 1.4s sweep cadence matches Vercel-like
-   solid panel skeletons. */
+   Loading block. It stays quiet: the shared contract rejects decorative
+   shimmer beside readable content. State changes still use the canonical
+   skeleton reveal token where a surface owns that lifecycle. */
 .skeleton {
   background-color: var(--color-surface-soft);
   border-radius: 6px;
-  position: relative;
-  overflow: hidden;
-}
-.skeleton::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    rgba(255, 255, 255, 0.45) 50%,
-    transparent 100%
-  );
-  transform: translateX(-100%);
-  animation: skeleton-shimmer 1.4s ease-in-out infinite;
-}
-:root.dark .skeleton::after {
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    rgba(255, 255, 255, 0.06) 50%,
-    transparent 100%
-  );
-}
-@keyframes skeleton-shimmer {
-  to { transform: translateX(100%); }
 }
 
 /* ─── Base ─────────────────────────────────────────────────── */
 :root {
-  /* Geist light-mode semantic aliases (static). */
-  --color-bg: #ffffff;
-  --color-bg-main: #ffffff;
-  --color-surface: #fafafa;
-  --color-surface-soft: #f2f2f2;
-  --color-surface-sunken: #ebebeb;
-  --color-code-bg: #fafafa;
-  --color-line: #e6e6e6;
-  --color-line-soft: #ebebeb;
-  --color-line-strong: #d6d6d6;
-  --color-ink: #171717;
-  --color-ink-soft: #3d3d3d;
-  --color-on-ink: #f5f5f5;
-  --color-muted: #6e6e6e;
-  --color-faint: #8f8f8f;
-  --color-whisper: #c2c2c2;
-  --color-accent: #0070f3;
-  --color-accent-soft: rgba(0,112,243,0.1);
-  --color-accent-strong: #0060d1;
-
-  /* Elevation ladder — light (FF source of truth). 2 colour steps then
-     flat #FFFFFF; shadow carries elevation. Hairline ring + additive drop
-     layers with halving offsets. */
-  --surface-1: #fafafa;
-  --surface-2: #fcfcfc;
-  --surface-3: #ffffff;
-  --surface-4: #ffffff;
-  --surface-5: #ffffff;
-  --surface-6: #ffffff;
-  --surface-7: #ffffff;
-  --surface-8: #ffffff;
-  --shadow-color: rgb(0 0 0 / 0.06);
-  --shadow-1: 0 0 0 1px var(--shadow-color);
-  --shadow-2: 0 0 0 1px var(--shadow-color), 0 1px 1px -0.5px var(--shadow-color);
-  --shadow-3: 0 0 0 1px var(--shadow-color), 0 1px 1px -0.5px var(--shadow-color), 0 3px 3px -1.5px var(--shadow-color);
-  --shadow-4: 0 0 0 1px var(--shadow-color), 0 1px 1px -0.5px var(--shadow-color), 0 3px 3px -1.5px var(--shadow-color), 0 6px 6px -3px var(--shadow-color);
-  --shadow-5: 0 0 0 1px var(--shadow-color), 0 1px 1px -0.5px var(--shadow-color), 0 3px 3px -1.5px var(--shadow-color), 0 6px 6px -3px var(--shadow-color), 0 12px 12px -6px var(--shadow-color);
-  --shadow-6: 0 0 0 1px var(--shadow-color), 0 1px 1px -0.5px var(--shadow-color), 0 3px 3px -1.5px var(--shadow-color), 0 6px 6px -3px var(--shadow-color), 0 12px 12px -6px var(--shadow-color), 0 24px 24px -12px var(--shadow-color);
-  --shadow-7: 0 0 0 1px var(--shadow-color), 0 1px 1px -0.5px var(--shadow-color), 0 3px 3px -1.5px var(--shadow-color), 0 6px 6px -3px var(--shadow-color), 0 12px 12px -6px var(--shadow-color), 0 24px 24px -12px var(--shadow-color), 0 48px 48px -24px var(--shadow-color);
-  --shadow-8: 0 0 0 1px var(--shadow-color), 0 1px 1px -0.5px var(--shadow-color), 0 3px 3px -1.5px var(--shadow-color), 0 6px 6px -3px var(--shadow-color), 0 12px 12px -6px var(--shadow-color), 0 24px 24px -12px var(--shadow-color), 0 48px 48px -24px var(--shadow-color), 0 96px 96px -48px var(--shadow-color);
-
-  /* Focus ring — Geist: bg-gap + accent ring. */
-  --focus-ring: 0 0 0 2px #ffffff, 0 0 0 4px #006bff;
-
-  color-scheme: light;
   font-feature-settings: "ss01", "cv11";
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-}
-:root.dark {
-  color-scheme: dark;
 }
 
 /* Unified focus ring — keyboard-only via :focus-visible.
@@ -333,50 +61,16 @@ button:focus-visible,
   box-shadow: var(--focus-ring);
 }
 
-/* Standard text input — the h-8 bordered field used across Settings
-   (Field, Providers, Integrations). Owns its own focus treatment
-   (accent border + soft accent glow) rather than the global focus-ring;
-   see the note above. Layout/width stays with the consumer.
-
-   Background is transparent so the control sits IN its surface (coplanar,
-   delineated by the border) rather than as a recessed floor-toned well —
-   it reads correctly whether placed on the page, a panel, or a lifted
-   modal. (Real-world model: controls are set into the surface; panels
-   stack above it.) */
-.input-field {
-  height: 2rem;
-  padding-inline: 0.625rem;
-  border-radius: 6px;
-  border: 1px solid var(--color-line);
-  background: transparent;
-  color: var(--color-ink);
-  font-size: var(--text-base);
-  outline: none;
-  transition: border-color var(--duration-palette) var(--ease-out-soft),
-    box-shadow var(--duration-palette) var(--ease-out-soft);
-}
-.input-field::placeholder {
-  color: var(--color-faint);
-}
-.input-field:hover {
-  border-color: var(--color-line-strong);
-}
-.input-field:focus {
-  border-color: var(--color-accent);
-  box-shadow: 0 0 0 3px var(--color-accent-soft);
-}
-/* Compact variant — h-7, tighter radius/padding for grid-dense forms
-   (MCP server config). Inherits .input-field's hover + accent-focus
-   treatment so dense inputs match the rest of the app instead of a
-   bespoke faint-border focus. */
-.input-field-sm {
-  height: 1.75rem;
-  border-radius: 6px;
-  padding-inline: 0.5rem;
-}
-
 * {
   -electron-corner-smoothing: system-ui;
+}
+
+/* Corner-profile toggle (AppearanceTab, lib/cornerProfile.ts): cross-fades
+ * border-radius for one tick so Round <-> Soft square doesn't snap. */
+html.radius-transitioning *,
+html.radius-transitioning *::before,
+html.radius-transitioning *::after {
+  transition: border-radius 180ms ease-in-out !important;
 }
 
 html, body {
@@ -386,12 +80,13 @@ html, body {
 }
 
 body {
-  min-width: 920px;
-  min-height: 600px;
+  min-width: 320px;
+  min-height: 0;
   background: var(--color-bg);
   color: var(--color-ink);
   font-family: var(--font-sans);
   font-size: var(--text-base);
+  line-height: var(--leading-body);
   /* Avoid single-word orphan lines in wrapped body copy (progressive
      enhancement — ignored where unsupported). */
   text-wrap: pretty;
@@ -424,26 +119,14 @@ body.quick-capture-mode .quick-capture-card {
   -webkit-app-region: no-drag;
 }
 
-/* The visible "card" — solid surface, the only thing the user sees.
-   No outer frame: the BrowserWindow itself is fully transparent (no
-   vibrancy), and this card is what floats over the desktop. The shadow
-   below gives it the lifted-card feel; the hairline ring sharpens its
-   edge against busy wallpapers. */
+/* The separate native window uses the same L5 sheet material as the in-app
+   Quick capture overlay. The transparent window supplies only shadow room. */
 .quick-capture-card {
-  background: var(--color-surface);
-  box-shadow:
-    inset 0 0 0 0.5px color-mix(in oklab, var(--color-ink) 10%, transparent),
-    0 14px 38px -10px rgba(0, 0, 0, 0.32),
-    0 2px 8px -2px rgba(0, 0, 0, 0.18);
-  transition: box-shadow var(--duration-palette) var(--ease-out-soft);
+  background: var(--surface-5);
+  box-shadow: var(--shadow-5);
 }
 .quick-capture-card:focus-within {
-  /* Subtle accent ring on focus — signals "ready, type here" without
-     screaming for attention. */
-  box-shadow:
-    inset 0 0 0 1px color-mix(in oklab, var(--color-accent) 30%, transparent),
-    0 14px 38px -10px rgba(0, 0, 0, 0.36),
-    0 2px 8px -2px rgba(0, 0, 0, 0.2);
+  box-shadow: var(--shadow-5);
 }
 
 #app {
@@ -463,26 +146,33 @@ body.quick-capture-mode .quick-capture-card {
    `trafficLightPosition: { x: 18, y: 18 }`, light diameter = 14px, so
    light center y = 25. Button h=22, icon centered → button top = 14. */
 .sidebar-toggle,
+.shell-back,
 .right-sidebar-toggle {
   position: fixed;
   top: 14px;
-  z-index: var(--z-panel-overlay);
+  z-index: var(--z-shell-toggle);
   -webkit-app-region: no-drag;
 }
-/* Default (browser, or native fullscreen) — no traffic lights, so the toggle
-   sits on the sidebar's icon column: motion.div left-2 (8) + nav px-2.5 (10) +
-   row px-2 (8) + half the 16px icon col (8) = center 34; button is 22 wide, so
-   left = 34 − 11 = 23. This lines the toggle up vertically with the nav icons.
-   Only the native macOS shell, when NOT fullscreen, pushes it right to clear
-   the traffic-light cluster. */
-.sidebar-toggle      { left: 23px; }
-html[data-desktop="true"]:not([data-fullscreen="true"]) .sidebar-toggle { left: 84px; }
+/* Browser/fullscreen chrome starts on the sidebar icon column. Native macOS
+   resolves the same shared geometry against its traffic-light cluster, so
+   shell controls and the hidden-sidebar Chat title cannot drift apart. */
+html[data-desktop="true"]:not([data-fullscreen="true"]) {
+  --chrome-sidebar-toggle-resolved-left: var(--chrome-sidebar-toggle-left);
+}
+.sidebar-toggle { left: var(--chrome-sidebar-toggle-resolved-left); }
+.shell-back { left: var(--chrome-back-control-resolved-left); }
 .right-sidebar-toggle { right: 14px; }
+.right-sidebar-toggle[data-open="true"] {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
 .sidebar-toggle *,
+.shell-back *,
 .right-sidebar-toggle * { -webkit-app-region: no-drag; }
 
 
-::selection { background: rgba(0, 112, 243, 0.18); }
+::selection { background: color-mix(in oklab, var(--accent) 18%, transparent); }
 
 /* In-note find (CSS Custom Highlight API — no DOM mutation of the prose). */
 ::highlight(memory-find) { background-color: var(--color-warn-soft); }
@@ -491,36 +181,6 @@ html[data-desktop="true"]:not([data-fullscreen="true"]) .sidebar-toggle { left: 
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: 0.45; }
 
-/* Tap feedback — scoped to UI chrome (sidebar). Use the individual
-   `scale` property so buttons that already translate for positioning
-   (e.g. filter clear buttons) don't lose their translate on press.
-   `.sidebar button` selector beats Tailwind's `.transition-colors` on
-   specificity (0,1,1 vs 0,1,0) so we don't need `!important`.
-   Shared active-state treatment for mouse and keyboard input. */
-.sidebar button:not(:disabled) {
-  transition:
-    scale var(--duration-check) var(--ease-out),
-    background-color var(--duration-palette) ease,
-    color var(--duration-palette) ease,
-    border-color var(--duration-palette) ease,
-    box-shadow var(--duration-palette) ease,
-    opacity var(--duration-palette) ease;
-}
-.sidebar button:not(:disabled):active {
-  scale: 0.96;
-}
-
-/* ─── Drag regions ─────────────────────────────────────────── */
-.sidebar {
-  -webkit-app-region: drag;
-}
-.sidebar > *:not(.drag-spacer) { -webkit-app-region: no-drag; }
-.sidebar button,
-.sidebar input,
-.sidebar [role="button"] {
-  -webkit-app-region: no-drag;
-}
-
 /* Settings nav rail — a RAISED panel sitting ON the modal surface: one
    step ABOVE the L2 content plane (lighter tone) with a ring + small drop
    shadow, so it reads as resting on top of the surface, not carved into
@@ -528,23 +188,13 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
    doesn't read as a detached floating card. */
 .settings-sidebar-card {
   /* Concentric with the modal: 16px slab − 8px (m-2) inset = 8px. */
-  --surface-radius: 8px;
+  --surface-radius: var(--r-house);
   border-radius: var(--surface-radius);
   background: var(--color-surface-3);
   box-shadow: var(--shadow-2);
 }
 
-/* Modal header geometry — THE single source. `.modal-header` is the only place
-   a modal title bar's padding lives, so every modal (PageModal's standard header
-   + the hand-rolled Settings / Automation / Approval / ToolViewer headers) is
-   identical by construction. --modal-header-pt is the same top pad expressed as a
-   variable so the Settings sidebar title (top = pt − card m-2) and the content
-   scroll inset (--modal-header-h) derive from it — change the pad once and the
-   header, the title, and the inset all move together. None can drift. */
-:root {
-  --modal-header-pt: 18px;
-  --modal-header-h: calc(var(--modal-header-pt) + 40px);
-}
+/* Shared modal header geometry is tokenized in design/tokens.css. */
 .modal-header {
   /* top | inline (= px-5) | bottom (= pb-3) */
   padding: var(--modal-header-pt) 1.25rem 0.75rem;
@@ -553,13 +203,6 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
      button gets clipped by the panel's overflow-hidden. Every .modal-header
      inherits the guard, so per-modal min-w-0 isn't required. */
   min-width: 0;
-}
-
-/* Tabs use Motion shared-layout indicators. CSS still owns their text-color
-   feedback timing. */
-:root {
-  --tabs-dur: var(--duration-travel);
-  --tabs-ease: var(--ease-smooth-out);
 }
 
 /* One icon-column template for every settings nav element — the tab rows
@@ -573,14 +216,6 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
   padding-inline: 0.5rem;
 }
 
-.chat-header { -webkit-app-region: drag; }
-.chat-header > * { -webkit-app-region: no-drag; }
-
-/* Header is transparent chrome above the scrolling message list. */
-.chat-header {
-  background-color: transparent;
-}
-
 /* Native-app cursor: buttons get the arrow, not the web-link finger —
    Tailwind's preflight sets `button { cursor: pointer }`, which reads as
    "hyperlink" in a desktop app. Anything that genuinely wants the finger
@@ -590,29 +225,6 @@ button,
   cursor: default;
 }
 
-/* Chat-rail tick entrance — a turn that arrives after mount grows its slot
-   (height + sibling margin animate from 0, so the band never pops) while the
-   mark blur-ramps in. Turns present at mount render statically. */
-@keyframes chat-rail-tick-in {
-  from {
-    height: 0;
-    margin-top: 0;
-    opacity: 0;
-    filter: blur(3px);
-  }
-}
-.chat-rail-tick-in {
-  animation: chat-rail-tick-in var(--duration-panel) var(--ease-hover);
-}
-
-/* Mask-based scroll edge fade — content dissolves at the top instead of a
-   painted overlay (which bleeds past rounded panel corners). Toggled by
-   ScrollFadeTop via data-scroll-fade-top on the scroller. */
-[data-scroll-fade-top="true"] {
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 48px);
-          mask-image: linear-gradient(to bottom, transparent 0, #000 48px);
-}
-
 /* Scroll edge blur — pinned outside the scrolled content flow so short
    histories cannot leave the blur band stranded below the window top. */
 .scroll-progressive-blur-top {
@@ -620,7 +232,7 @@ button,
   top: 0;
   left: 0;
   right: 0;
-  z-index: 5;
+  z-index: var(--z-raised);
   height: 0;
   pointer-events: none;
   opacity: 0;
@@ -645,30 +257,16 @@ button,
   );
 }
 
-/* Bottom edge fade — toggled by ScrollFadeBottom, which only sets it while
-   the scroller overflows AND more content sits below, so the last row of a
-   short or fully-scrolled list is never softened. */
-[data-scroll-fade-bottom="true"] {
-  -webkit-mask-image: linear-gradient(to top, transparent 0, #000 24px);
-          mask-image: linear-gradient(to top, transparent 0, #000 24px);
-}
-/* Both edges active (session list mid-scroll). A single mask-image can't
-   stack two rules, so combine them here. */
-[data-scroll-fade-top="true"][data-scroll-fade-bottom="true"] {
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 48px, #000 calc(100% - 24px), transparent 100%);
-          mask-image: linear-gradient(to bottom, transparent 0, #000 48px, #000 calc(100% - 24px), transparent 100%);
-}
-
-/* Anything portaled above the main layout (modals, viewers) must
-   explicitly opt out of the drag region — the sidebar / chat-header
-   "drag" regions otherwise bleed through, and the OS swallows clicks
-   inside the modal as window-drag attempts. */
-#app > div.absolute.inset-0 { -webkit-app-region: no-drag; }
-#app > div.absolute.inset-0 * { -webkit-app-region: no-drag; }
+/* Anything portaled above the main layout must explicitly cancel the native
+   drag region. Overlay roots are now semantic layers rather than the retired
+   `div.absolute.inset-0` shell; without this, Electron swallows controls above
+   the draggable workspace rail as window-drag attempts. */
+#app > [data-overlay-layer] { -webkit-app-region: no-drag; }
+#app > [data-overlay-layer] * { -webkit-app-region: no-drag; }
 
 /* Canonical two-glyph transition. Both icons stay mounted in one grid cell;
    callers change only data-state so every copy, panel, and run control uses
-   the same 250ms opacity + blur + scale bridge. */
+   the same tokenized opacity + blur + scale bridge. */
 .t-icon-swap {
   position: relative;
   display: inline-grid;
@@ -698,11 +296,11 @@ button,
 }
 
 /* ─── Scrollbars ───────────────────────────────────────────────
-   Hidden app-wide. Scrolling still works (wheel / trackpad / keys);
-   the bar just isn't painted. The scroll-edge fade masks
-   ([data-scroll-fade-top] / [data-scroll-fade-bottom], toggled by
-   ScrollFadeTop/ScrollFadeBottom) carry the "there's more" cue in
-   its place. */
+   Native bars hidden app-wide. Scrolling still works (wheel / trackpad /
+   keys); the scroll policy in design/scroll.css paints in their place:
+   `scroll-fade` masks carry the "there's more" cue on every scroller, and
+   ScrollArea (components/ui/ScrollArea.tsx) draws the one scrollbar the app
+   owns. */
 * { scrollbar-width: none; }
 *::-webkit-scrollbar { width: 0; height: 0; display: none; }
 
@@ -712,30 +310,6 @@ button,
    it. `scroll-thin` is the shared marker class already applied to all such
    scrollers; this is its sole job. */
 .scroll-thin { overscroll-behavior: contain; }
-
-/* Messages list — both the header (top) and composer (bottom) are
-   absolute overlays. Padding clears them so content lands cleanly at
-   scroll=0; mask-image fades the thin gap below the floating composer
-   card so text doesn't peek in the lift between card and viewport edge. */
-.scroll-messages {
-  overscroll-behavior: contain;
-  padding-top: 88px;
-  /* Padding must clear the composer (`--chat-bottom-h`) AND the
-     bg-color fade above it (24px overshoot) AND leave a visible
-     breathing gap, so the last message reads crisply at max scroll
-     instead of dissolving into the fade as the user reaches the
-     bottom. composer-height + 40px = 24px fade + 16px gap. */
-  padding-bottom: calc(var(--chat-bottom-h, 96px) + 2.5rem);
-}
-
-.chat-bottom-fade {
-  background: linear-gradient(
-    to top,
-    var(--color-bg) 35%,
-    color-mix(in oklab, var(--color-bg) 60%, transparent) 70%,
-    transparent 100%
-  );
-}
 
 /* ─── Quiet rows ─────────────────────────────────────────────
    Restraint pass on list items, shared across the sidebar, the
@@ -749,10 +323,11 @@ button,
    session, keyboard-highlighted entry, etc.) or
    `aria-selected="true"` if the row already exposes it. */
 /* Session-row title fade: on hover the title's right edge dissolves under
-   the overlaid time + actions cluster. Mask (not a bg gradient) so it works
-   on any row background. */
+   the revealed time + pin + archive cluster. Mask (not a bg gradient) so it
+   works on any row background. */
 .session-row:hover .session-row-title,
 .session-row:focus-within .session-row-title {
+  text-overflow: clip;
   mask-image: linear-gradient(
     to right,
     #000 calc(100% - 6.25rem),
@@ -763,10 +338,10 @@ button,
 .app-row {
   position: relative;
   transition:
-    background-color var(--duration-check) ease-out,
-    box-shadow var(--duration-check) ease-out,
-    color var(--duration-check) ease-out,
-    scale var(--duration-check) ease-out;
+    background-color var(--duration-check) var(--ease-out),
+    box-shadow var(--duration-check) var(--ease-out),
+    color var(--duration-check) var(--ease-out),
+    scale var(--duration-check) var(--ease-out);
 }
 .app-row[data-picker-row="true"] {
   transition: none;
@@ -902,52 +477,8 @@ button.app-row:not(:disabled):active,
   border-radius: 0;
 }
 .md pre code { background: transparent; padding: 0; border-radius: 0; font-size: inherit; color: var(--color-ink); }
-.assistant-message[data-streaming="true"] .md pre.streaming-code {
-  border-color: color-mix(in oklab, var(--color-line-soft) 78%, var(--color-accent));
-}
-/* While streaming, plain greedy wrapping — the body's `text-wrap: pretty`
-   rebalances earlier lines on every appended word, making settled text
-   jitter. Pretty wrapping resumes when data-streaming clears. */
-.assistant-message[data-streaming="true"] .md {
-  text-wrap: wrap;
-}
-/* Sheen rides an absolutely-positioned overlay swept via transform —
-   compositor-only, same pattern as .skeleton::after — instead of
-   animating background-position across the whole pre (full-block
-   repaint per frame exactly while streaming relayout is busiest). */
-.assistant-message[data-streaming="true"] .md .code-block:has(pre.streaming-code)::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: linear-gradient(
-    90deg,
-    transparent 35%,
-    color-mix(in oklab, var(--color-accent) 5%, transparent) 50%,
-    transparent 65%
-  );
-  transform: translateX(-100%);
-  animation: streamingCodeSheen 2.4s ease-in-out infinite;
-}
-@keyframes streamingCodeSheen {
-  to { transform: translateX(100%); }
-}
 
 /* ─── Syntax highlighting (highlight.js classes) ───────────── */
-:root {
-  --hl-keyword: #6f42c1;
-  --hl-string: #4f8a3a;
-  --hl-number: #b85c1f;
-  --hl-literal: #b85c1f;
-  --hl-comment: #8a8780;
-  --hl-attr: #3d6e9c;
-  --hl-type: #9c4d18;
-  --hl-built-in: #9c4d18;
-  --hl-title: #1a1a1a;
-  --hl-tag: #b8442b;
-  --hl-meta: #8a8780;
-  --hl-symbol: #3d6e9c;
-}
 .hljs { color: var(--color-ink); background: transparent; }
 .hljs-comment, .hljs-quote, .hljs-meta { color: var(--hl-comment); font-style: italic; }
 .hljs-keyword, .hljs-selector-tag, .hljs-section, .hljs-doctag { color: var(--hl-keyword); font-weight: 500; }
@@ -969,19 +500,16 @@ button.app-row:not(:disabled):active,
 }
 .md a:hover { text-decoration-color: var(--color-info); }
 
-/* Obsidian-style internal links: accent-tinted, no underline, dotted on hover.
-   Unresolved (dangling) targets read muted, matching Obsidian's convention. */
+/* Internal-link geometry belongs to the consuming surface. Shared Markdown
+   supplies only semantic color and cursor behavior. */
 .md a.wikilink {
   color: var(--color-accent-strong);
   text-decoration: none;
   cursor: pointer;
-  border-radius: 3px;
-  transition: color var(--duration-check) var(--ease-out),
-    background-color var(--duration-check) var(--ease-out);
+  transition: color var(--duration-check) var(--ease-out);
 }
 .md a.wikilink:hover {
   color: var(--color-accent);
-  background-color: var(--color-accent-soft);
 }
 .md a.wikilink--unresolved {
   color: var(--color-muted);
@@ -992,7 +520,6 @@ button.app-row:not(:disabled):active,
 }
 .md a.wikilink--unresolved:hover {
   color: var(--color-muted);
-  background-color: transparent;
 }
 /* Provenance chips — the memory synthesizer's (from chat)/(inferred) source
    tags. Quiet by design: evidence metadata must never compete with the claim. */
@@ -1000,7 +527,7 @@ button.app-row:not(:disabled):active,
   display: inline-block;
   margin-left: 0.45em;
   padding: 0 0.5em;
-  border-radius: 999px;
+  border-radius: var(--r-control);
   background: var(--color-surface-sunken);
   font-size: 0.7em;
   line-height: 1.75;
@@ -1098,51 +625,26 @@ button.app-row:not(:disabled):active,
 
 /* The composer is a solid panel floating over the message scroll area.
    Surface treatment lives on `.surface-panel` (shared with the right
-   sidebar, command picker, etc.); `.composer-card` is the structural hook
-   used by the data-thinking variants below. */
+   sidebar, command picker, etc.). */
 
 /* ─── Surface framework ─────────────────────────────────────
    Shared solid panel material. These classes own material only, not layout.
 
    Wrapped in @layer components so Tailwind utilities (e.g. `absolute`,
-   `static`, `z-30`) can override anything declared here. Unlayered
+   `static`, named depth utilities) can override anything declared here. Unlayered
    rules beat layered rules regardless of specificity — we hit this
    when `position: relative` here silently overrode `.absolute` on
    the sidebars. */
 @layer components {
 .surface-panel {
-  --surface-radius: 16px;
-  --scroll-blur-bg: var(--color-surface-1);
+  --surface-radius: var(--r-panel);
+  --scroll-blur-bg: var(--color-surface-3);
 
   position: relative;
   isolation: isolate;
-  background: var(--color-surface-1);
+  background: var(--surface-3);
   border-radius: var(--surface-radius);
-  box-shadow: var(--shadow-5);
-  transition: box-shadow var(--duration-row) var(--ease-hover);
-}
-/* In-modal surface layering — the real-world model: the modal slab IS the
-   surface (L2, lifted off the dimmed scrim), nested panels/cards stack
-   ABOVE it (L3, raised), and controls (inputs/switches) stay at the floor
-   tone so they sit IN the surface (recessed wells). Anchored page rails/
-   sidebars (also .surface-panel) keep the floor. */
-.modal-scrim .surface-panel.surface-radius-md,
-.modal-scrim .surface-panel.surface-radius-lg {
-  background: var(--color-surface-2);
-}
-.modal-scrim .surface-card,
-.modal-scrim .surface-floating,
-.modal-scrim .surface-panel.surface-radius-sm {
-  background: var(--color-surface-3);
-}
-/* Menus/popovers opened inside a modal sit above its nested panels. */
-.modal-scrim .surface-popover {
-  background: var(--color-surface-4);
-}
-/* Small surfaces — list-item cards (.surface-radius-sm) inside
-   modals must NOT inherit the outer slab's modal-tier shadow. */
-.surface-panel.surface-radius-sm {
-  box-shadow: var(--shadow-2);
+  box-shadow: var(--shadow-3);
 }
 /* Tabs variant="segmented" — transitions.dev sliding tabs (capsule track +
    pill); colors live in the component (ink-derived track tint +
@@ -1154,39 +656,60 @@ button.app-row:not(:disabled):active,
   justify-self: start;
   align-self: start;
 }
-/* SwitchControl — boolean on/off switch sibling to SegmentedControl.
-   Variables resolved per color scheme; consumed via inline styles in
-   the component. */
+.arden-tab-indicator,
+.dp-tab-indicator {
+  position: absolute;
+  z-index: var(--z-base);
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  /* Inset inside .arden-segmented by --tab-bar-padding (the indicator's x/y
+     track the active tab's rect within the container, see Tabs.tsx
+     useTabIndicator) — subtract it so the pill stays concentric with the
+     segmented track's own corner instead of matching its radius outright. */
+  border-radius: calc(var(--r-control) - var(--tab-bar-padding));
+  background: var(--control-selected-bg);
+  box-shadow: var(--control-selected-shadow);
+  will-change: transform;
+  transition: transform var(--tabs-dur) var(--tabs-ease);
+}
+.arden-tab-indicator--underline {
+  border-radius: var(--r-pill);
+  background: var(--ink);
+  box-shadow: none;
+}
+.arden-tab-indicator[data-tab-indicator="sidebar"] {
+  transition: none;
+  will-change: auto;
+}
+/* SwitchControl — mirrors the canonical 32 × 18 mockup control.  Its visual
+   geometry stays small while ::before extends the pointer target to 24px. */
 .switch-control {
-  /* Light values: ink-derived alphas — white-on-light vanished on flat
-     panels. */
-  /* ON state uses the app accent (not a macOS-platform green) so the switch
-     shares the single-accent language of Slider/Radio/Checkbox/focus rings.
-     Theme-aware via var(--color-accent), so no dark override is needed. */
   --gs-on: var(--color-accent);
-  --gs-track-bg: rgba(20, 24, 28, 0.08);
-  --gs-track-border: rgba(20, 24, 28, 0.06);
-  --gs-track-shadow: inset 0 0 0 0.5px rgba(20, 24, 28, 0.10);
+  --gs-track-bg: #d8d8d4;
+  --gs-track-shadow: inset 0 0 0 1px rgb(0 0 0 / 6%);
   --gs-knob-bg: #ffffff;
-  --gs-knob-border: transparent;
-  --gs-knob-shadow:
-    0 1px 2px rgba(20, 24, 28, 0.14),
-    0 0 0 0.5px rgba(20, 24, 28, 0.05);
+  --gs-knob-shadow: 0 1px 3px rgb(0 0 0 / 18%);
   position: relative;
   display: inline-flex;
   align-items: center;
   flex-shrink: 0;
   padding: 0;
-  width: var(--gs-track-w);
-  height: var(--gs-track-h);
-  border: 1px solid var(--gs-track-border);
-  border-radius: 999px;
+  width: 2rem;
+  height: 1.125rem;
+  border: 0;
+  border-radius: var(--r-control);
   background: var(--gs-track-bg);
   box-shadow: var(--gs-track-shadow);
   cursor: pointer;
   appearance: none;
   -webkit-appearance: none;
-  transition: background var(--duration-panel) var(--ease-out-soft), border-color var(--duration-panel) var(--ease-out-soft), box-shadow var(--duration-panel) var(--ease-out-soft);
+  transition: background var(--motion-feedback) var(--smooth-out);
+}
+.switch-control::before {
+  content: "";
+  position: absolute;
+  inset: -0.25rem -0.1875rem;
 }
 .switch-control:disabled {
   cursor: not-allowed;
@@ -1194,20 +717,22 @@ button.app-row:not(:disabled):active,
 }
 .switch-control.switch-control-on {
   --gs-track-bg: var(--gs-on);
-  --gs-track-border: color-mix(in oklab, var(--gs-on) 88%, #000);
-  --gs-track-shadow: inset 0 0 0 0.5px color-mix(in oklab, var(--gs-on) 70%, #000);
 }
 .switch-control-knob {
   position: absolute;
-  border-radius: 999px;
+  z-index: var(--z-raised);
+  top: 0.125rem;
+  left: 0.125rem;
+  width: 0.875rem;
+  height: 0.875rem;
+  border-radius: var(--r-control);
   background: var(--gs-knob-bg);
-  border: 1px solid var(--gs-knob-border);
   box-shadow: var(--gs-knob-shadow);
   pointer-events: none;
-  /* Geometry (size, x/y) is motion-driven (FF-style morph + spring + drag);
-     only the themed fill/shadow transition here (dark-mode knob tint on flip). */
-  transition: background-color var(--duration-panel) var(--ease-out-soft),
-    box-shadow var(--duration-panel) var(--ease-out-soft);
+  transition: transform var(--motion-feedback) var(--smooth-out);
+}
+.switch-control.switch-control-on .switch-control-knob {
+  transform: translateX(0.875rem);
 }
 .switch-control:focus-visible {
   outline: none;
@@ -1216,476 +741,105 @@ button.app-row:not(:disabled):active,
     0 0 0 3px var(--color-accent-soft);
 }
 :root.dark .switch-control {
-  --gs-track-bg: rgba(255, 255, 255, 0.10);
-  --gs-track-border: rgba(255, 255, 255, 0.08);
-  --gs-track-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.08);
-  --gs-knob-bg: #f5f5f7;
-  --gs-knob-border: transparent;
-  --gs-knob-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.45),
-    0 0 0 0.5px rgba(0, 0, 0, 0.25);
+  --gs-track-bg: var(--panel-strong);
+  --gs-track-shadow: inset 0 0 0 1px var(--edge-strong);
+  --gs-knob-bg: var(--ink);
+  --gs-knob-shadow: 0 1px 3px rgb(0 0 0 / 48%);
 }
 :root.dark .switch-control.switch-control-on {
-  /* inherits --gs-on: var(--color-accent) from .switch-control */
   --gs-track-bg: var(--gs-on);
-  --gs-track-border: color-mix(in oklab, var(--gs-on) 80%, #000);
-  --gs-track-shadow: inset 0 0 0 0.5px color-mix(in oklab, var(--gs-on) 55%, #000);
-  --gs-knob-bg: #ffffff;
-  --gs-knob-border: transparent;
 }
-.surface-radius-sm { --surface-radius: 6px; }   /* controls, small cards */
-.surface-radius-md { --surface-radius: 12px; }  /* menus, modals, popovers */
-.surface-radius-lg { --surface-radius: 16px; }  /* fullscreen panels */
-.surface-radius-pill { --surface-radius: 9999px; }
+.surface-radius-md { --surface-radius: var(--r-panel); }  /* menus, modals, popovers */
+.surface-radius-lg { --surface-radius: var(--r-shell); }  /* fullscreen panels */
 
 /* ─── Tokenized surface utilities (Phase 3) ──────────────────
    Named handles for recurring inline patterns. Each one wraps the
    right combination of ring + shadow + radius tokens so consumers
    stop reaching for literal Tailwind classes. */
 
-/* Settings rails — outer panel containing rows of settings.
-   Replaces `rounded-[12px] border border-line-soft bg-bg-main/30
-   overflow-hidden` (consumers keep their own divide-y for content). */
-.surface-rail {
-  border-radius: 12px;
-  background: color-mix(in oklab, var(--color-bg-main) 30%, transparent);
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.04);
-  overflow: hidden;
+/* Depth is semantic: default floating furniture/card/popover is L3;
+   anchored sidebars are L2; sheets are L5; a popover above a live sheet is
+   L7. Consumers choose a role, not a raw shadow override. */
+.surface-sidebar {
+  background: var(--surface-2);
+  box-shadow: var(--shadow-2);
 }
-:root.dark .surface-rail {
-  background: var(--color-surface);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+.surface-sheet {
+  background: var(--surface-5);
+  box-shadow: var(--shadow-5);
 }
-
-/* Popover surfaces — floating menus / dropdowns.
-   Standalone: a solid popover panel.
-   Combined with `.surface-panel`: downshifts the modal-tier shadow to
-   the popover tier, closer to the content with a smaller spread. */
 .surface-popover:not(.surface-panel) {
-  border-radius: 12px;
-  background: var(--color-surface-3);
-  box-shadow: var(--shadow-4);
+  border-radius: var(--r-menu);
+  background: var(--surface-3);
+  box-shadow: var(--shadow-3);
 }
 .surface-panel.surface-popover {
-  --surface-radius: 12px;
-  background: var(--color-surface-3);
-  box-shadow: var(--shadow-4);
+  --surface-radius: var(--r-menu);
+  background: var(--surface-3);
+  box-shadow: var(--shadow-3);
 }
-/* Cards — resting state with subtle lift; hovering deepens the shadow. */
+.surface-popover[data-overlay-depth="nested"] {
+  background: var(--surface-7);
+  box-shadow: var(--shadow-7);
+}
+/* Cards and detached furniture share the same resting material. */
+.surface-card,
+.surface-floating {
+  --surface-radius: var(--r-panel);
+  border-radius: var(--surface-radius);
+  background: var(--surface-3);
+  box-shadow: var(--shadow-3);
+}
+/* Page peeks are solid L3 furniture. Motion owns opacity; material never
+   reveals the room beneath it. */
+.surface-peek {
+  --surface-radius: var(--r-panel);
+  border-radius: var(--surface-radius);
+  background: var(--surface-3);
+  box-shadow: var(--shadow-3);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
 .surface-card {
-  border-radius: 12px;
-  background: var(--color-surface-2);
-  box-shadow: var(--shadow-2);
   transition: box-shadow var(--duration-row) var(--ease-hover);
 }
 
 .surface-card:hover {
-  box-shadow: var(--shadow-3);
+  box-shadow: var(--shadow-4);
 }
 
 /* Press — shadow stays at the hover tier. */
 .surface-card:active,
 .surface-card[aria-pressed="true"] {
-  box-shadow: var(--shadow-3);
+  box-shadow: var(--shadow-4);
 }
 
-/* Floating card — resting elevation for detached content tiles. */
-.surface-floating {
-  border-radius: 12px;
-  background: var(--color-surface-2);
-  box-shadow: var(--shadow-3);
 }
-
-/* Accent focus ring helper — opt-in keyboard ring matching the input
-   accent treatment for non-input clickable surfaces. */
-.focus-ring-accent:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 3px var(--color-accent-soft);
-}
-}
-/* Composer focus state: strengthen the panel ring without changing layout.
-   Outer halo uses outline (not box-shadow spread) so it follows
-   the panel border-radius instead of a square spread footprint. */
-.composer-card.surface-panel {
-  --composer-focus-spread: 2px;
-}
-.composer-card.surface-panel:focus-within {
-  outline: var(--composer-focus-spread) solid var(--color-accent-soft);
-  outline-offset: 0;
-  box-shadow:
-    var(--shadow-pop),
-    inset 0 0 0 1px rgba(0, 0, 0, 0.10);
-}
-:root.dark .composer-card.surface-panel:focus-within {
-  box-shadow:
-    var(--shadow-pop),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.12);
-}
-/* Drop target for image drag-and-drop — accent ring while a file drag
-   hovers the composer. Same outline mechanism as focus-within so it
-   follows the panel radius; wins over focus when both apply. */
-.composer-card.surface-panel[data-drag-over="true"] {
-  outline: 1px solid var(--color-accent);
-  outline-offset: 0;
-}
-.composer-wrap {
-  container-type: inline-size;
-}
-@container (max-width: 520px) {
-  .composer-toolbar {
-    gap: 0.25rem;
-  }
-  .composer-chip-label,
-  .composer-loop-label,
-  .composer-model-label,
-  .composer-effort-separator {
-    display: none;
-  }
-}
-@container (max-width: 420px) {
-  .composer-toolbar {
-    padding-left: 0.375rem;
-    padding-right: 0.375rem;
-  }
-}
-
-/* Send acknowledgement — when the user submits, the composer's
-   surface briefly brightens. Single route-duration pulse, ease-out.
-   Body-fill flash (not edge) so it doesn't compete with the
-   thinking-rim's comet/breath/hue-cycle animations on the
-   perimeter — different visual axis, both can fire together
-   without overlapping. ::after with a top-down gradient that
-   briefly lifts the panel fill. */
-.composer-card.surface-panel[data-just-sent="true"]::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  pointer-events: none;
-  background: linear-gradient(
-    to bottom,
-    color-mix(in oklab, var(--color-ink) 10%, transparent),
-    color-mix(in oklab, var(--color-ink) 4%, transparent)
-  );
-  animation: composerJustSent var(--duration-route) ease-out forwards;
-}
-:root.dark .composer-card.surface-panel[data-just-sent="true"]::after {
-  background: linear-gradient(
-    to bottom,
-    color-mix(in oklab, white 10%, transparent),
-    color-mix(in oklab, white 4%, transparent)
-  );
-}
-@keyframes composerJustSent {
-  from { opacity: 1; }
-  to { opacity: 0; }
-}
-
-/* Modal scrim — dim and soften the background behind modal panels. */
+/* Modal scrim — quiet ink focus layer; sheets supply their own material. */
 .modal-scrim {
-  background-color: rgba(20, 24, 28, 0.10);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-}
-:root.dark .modal-scrim {
-  background-color: rgba(0, 0, 0, 0.32);
-}
-
-/* ─── Composer "thinking" indicators ────────────────────────
-   Active while the agent is running but has not yet streamed
-   its first token. Variants are picked via [data-thinking-style]
-   and share intensity tokens set per [data-thinking-intensity]:
-     --thinking-peak       — peak alpha for the visible arc/halo
-     --thinking-shoulder   — soft shoulder alpha (gradient ends)
-     --thinking-duration   — animation duration. */
-@property --snake-angle {
-  syntax: "<angle>";
-  initial-value: 0deg;
-  inherits: false;
-}
-
-.composer-card[data-thinking="true"] {
-  position: relative;
-  isolation: isolate;
-  /* Defaults match the "normal" intensity in case attr is missing.
-     Peak/shoulder are alpha % for the conic-gradient color stops; the
-     numbers were tuned upward after the original mix read too subtle
-     on the comet variant (1px rim, mostly-transparent arc). */
-  --thinking-peak: 78%;
-  --thinking-shoulder: 28%;
-  --thinking-duration: 2.6s;
-}
-.composer-card[data-thinking="true"][data-thinking-intensity="subtle"] {
-  --thinking-peak: 50%;
-  --thinking-shoulder: 16%;
-  --thinking-duration: 3.6s;
-}
-.composer-card[data-thinking="true"][data-thinking-intensity="normal"] {
-  --thinking-peak: 78%;
-  --thinking-shoulder: 28%;
-  --thinking-duration: 2.6s;
-}
-.composer-card[data-thinking="true"][data-thinking-intensity="strong"] {
-  --thinking-peak: 100%;
-  --thinking-shoulder: 45%;
-  --thinking-duration: 1.8s;
-}
-
-/* Variant: comet — single trailing arc travels around the rim.
-   140° visible arc with the peak at 340° (so the bright head is
-   followed by a long tail trailing 120° backward). Rotation via
-   Houdini --snake-angle interpolation — paint-tier per frame, but
-   the layer is tiny (~card-size) and modern GPUs handle it. The
-   real perf win for this animation is gating it via useInView when
-   modals occlude the composer (TODO). */
-.composer-card[data-thinking="true"][data-thinking-style="comet"]::before {
-  content: "";
-  position: absolute;
+  position: fixed;
+  z-index: var(--z-scrim);
   inset: 0;
-  border-radius: inherit;
-  /* Beat 1: graceful rim exit. When the rim transitions out via the
-     `data-thinking-leaving="true"` flag, opacity fades over panel-duration
-     instead of the element vanishing instantly when data-thinking
-     flips off. */
-  transition: opacity var(--duration-panel) ease-out;
-  /* Rim thickness — was 1px, bumped to 1.6 so the comet reads at a
-     glance without dominating the composer outline. */
-  padding: 1.6px;
-  /* The bright head holds across a small arc (340° → 350°) before
-     falling back into a shoulder, so it reads as a "head" rather than
-     a single instantaneous bright point. Tail now spans 200° (170° →
-     360°) for a more obvious comet shape. */
-  background: conic-gradient(
-    from var(--snake-angle),
-    transparent 0deg,
-    transparent 170deg,
-    color-mix(in oklab, var(--color-accent) var(--thinking-shoulder), transparent) 230deg,
-    color-mix(in oklab, var(--color-accent) var(--thinking-peak), transparent) 340deg,
-    color-mix(in oklab, var(--color-accent) var(--thinking-peak), transparent) 350deg,
-    color-mix(in oklab, var(--color-accent) var(--thinking-shoulder), transparent) 360deg
-  );
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  mask-composite: exclude;
-  animation: snakeRotate var(--thinking-duration) linear infinite;
-  pointer-events: none;
-}
-@keyframes snakeRotate {
-  to { --snake-angle: 360deg; }
-}
-/* Comet leaving: fade the rim opacity to 0 over the panel-duration hold. The
-   ::before above transitions opacity, so this just sets the target. */
-.composer-card[data-thinking="true"][data-thinking-leaving="true"][data-thinking-style="comet"]::before {
-  opacity: 0;
-}
-
-/* Variant: breath — wide diffuse halo, no rim.
-   The halo covers a *much* larger area than the rim arc, so it
-   uses a quartered alpha (--breath-peak) — the rim "55%" looks fine
-   on a 1px line but reads as a glow-bomb at the same value here. */
-/* The halo is pre-rendered as a static box-shadow on a ::before and only
-   its opacity loops — compositor-only, vs animating box-shadow on the
-   whole composer card (repaint per frame for the entire run). The card
-   keeps its own resting shadow untouched underneath. */
-.composer-card[data-thinking="true"][data-thinking-style="breath"] {
-  --breath-peak: calc(var(--thinking-peak) / 4);
-}
-.composer-card[data-thinking="true"][data-thinking-style="breath"]::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  pointer-events: none;
-  box-shadow: 0 0 24px 2px color-mix(in oklab, var(--color-accent) var(--breath-peak), transparent);
-  opacity: 0;
-  animation: composerBreath var(--thinking-duration) ease-in-out infinite;
-  transition: opacity var(--duration-panel) ease-out;
-}
-@keyframes composerBreath {
-  0%, 100% { opacity: 0; }
-  50% { opacity: 1; }
-}
-/* Breath leaving: stop the loop and fade the halo out over the
-   panel-duration hold instead of snapping off mid-cycle. */
-.composer-card[data-thinking="true"][data-thinking-leaving="true"][data-thinking-style="breath"]::before {
-  animation: none;
-  opacity: 0;
-}
-
-/* Variant: hue-cycle — no motion, border color drifts toward accent. */
-.composer-card[data-thinking="true"][data-thinking-style="hue-cycle"] {
-  animation: composerHue var(--thinking-duration) ease-in-out infinite;
-}
-@keyframes composerHue {
-  0%, 100% { border-color: var(--color-line); }
-  50% { border-color: color-mix(in oklab, var(--color-accent) var(--thinking-peak), var(--color-line)); }
-}
-/* Hue-cycle leaving: stop the animation, transition border-color
-   back to baseline over panel-duration. */
-.composer-card[data-thinking="true"][data-thinking-leaving="true"][data-thinking-style="hue-cycle"] {
-  animation: none;
-  transition: border-color var(--duration-panel) ease-out;
-}
-
-
-/* Variant: send-orbit — only the send button gets a small spinner. */
-.composer-card[data-thinking="true"][data-thinking-style="send-orbit"] [data-send="true"] {
-  position: relative;
-}
-.composer-card[data-thinking="true"][data-thinking-style="send-orbit"] [data-send="true"]::before {
-  content: "";
-  position: absolute;
-  inset: -3px;
-  border-radius: 50%;
-  border: 1.5px solid transparent;
-  border-top-color: color-mix(in oklab, var(--color-accent) var(--thinking-peak), transparent);
-  border-right-color: color-mix(in oklab, var(--color-accent) var(--thinking-shoulder), transparent);
-  animation: sendOrbit calc(var(--thinking-duration) * 0.45) linear infinite;
-  pointer-events: none;
-  transition: opacity var(--duration-panel) ease-out;
-}
-/* Send-orbit leaving: fade the spinner out over panel-duration. */
-.composer-card[data-thinking="true"][data-thinking-leaving="true"][data-thinking-style="send-orbit"] [data-send="true"]::before {
-  opacity: 0;
-}
-@keyframes sendOrbit {
-  to { transform: rotate(360deg); }
-}
-
-/* ─── Periodic shine on running tool lines + streaming reasoning ─
-   A narrow bright stripe glides left→right through the text, then
-   pauses briefly offscreen before another pass. Single direction,
-   short cycle, so it reads as a continuous "still working" rhythm
-   without feeling frantic or laggy.
-
-   Two background layers stacked: a static `--color-muted` base
-   covers the whole text width, and an 80px shine stripe rides on
-   top, only its position animated. `background-clip: text` clips
-   both layers to the text glyphs. Children inherit the gradient so
-   the shine reads as a continuous pass across the whole line.
-
-   Keyframe shape: hold offscreen-left for 40% of the cycle, then
-   sweep across the remaining 60%. Loop reset snaps from
-   offscreen-right back to offscreen-left — invisible. */
-@keyframes shineText {
-  0%, 40% { background-position: calc(-100% - var(--shine-width)) 0, 0 0; }
-  100%    { background-position: calc(100% + var(--shine-width)) 0, 0 0; }
-}
-
-.tool-line[data-state="running"],
-.reasoning-head[data-state="streaming"] {
-  --shine-width: 80px;
-  color: transparent;
-  /* Base layer matches the done-state color (--color-faint) so the
-     instant the shine animation stops, the underlying text already
-     reads at the final color. Otherwise the text jumps muted→faint
-     while `color: transparent` is mid-transitioning back to faint —
-     visible as a flicker. */
-  background-image:
-    linear-gradient(to right, transparent, var(--color-ink) 50%, transparent),
-    linear-gradient(var(--color-faint), var(--color-faint));
-  background-size: var(--shine-width) 100%, 100% 100%;
-  background-position: calc(-100% - var(--shine-width)) 0, 0 0;
-  background-repeat: no-repeat;
-  -webkit-background-clip: text;
-  background-clip: text;
-  animation: shineText 2.2s linear infinite;
-}
-
-.tool-line[data-state="running"] * {
-  color: transparent;
-  background: inherit;
-  -webkit-background-clip: text;
-  background-clip: text;
-}
-
-/* Beat 2/3: graceful shine exit. When the tool result arrives and
-   data-state flips off "running", the shine gradient snaps away
-   (background-image can't transition between gradients) — but a
-   color transition smoothly fades the text from `transparent` back
-   to its natural color (text-faint / text-muted / text-ink-soft).
-   That fade-in masks the gradient snap; the row reads as the shine
-   resolving into the final text rather than abruptly stopping. */
-.tool-line,
-.tool-line * {
-  transition: color var(--duration-panel) ease-out;
-}
-
-/* Reasoning head's icons (Brain, ChevronDown) stay muted instead of
-   getting masked into the gradient — they're chrome, not text. */
-.reasoning-head[data-state="streaming"] svg { color: var(--color-muted); }
-
-/* ─── Thinking-step active shimmer ─────────────────────────
-   The running step's LABEL shimmers (FF thinking-steps), not the
-   whole row — so the gutter icon / description / chips keep their
-   colour. Same shine stripe as the tool-line, scoped to one span.
-   Base layer = the label's resting colour (--color-ink) so when the
-   animation stops the text reads at its final colour with no
-   flicker. */
-.step-shimmer {
-  --shine-width: 80px;
-  color: transparent;
-  background-image:
-    linear-gradient(to right, transparent, var(--color-ink) 50%, transparent),
-    linear-gradient(var(--color-ink), var(--color-ink));
-  background-size: var(--shine-width) 100%, 100% 100%;
-  background-position: calc(-100% - var(--shine-width)) 0, 0 0;
-  background-repeat: no-repeat;
-  -webkit-background-clip: text;
-  background-clip: text;
-  animation: shineText 2.2s linear infinite;
-}
-
-/* ─── Depth recession on intermediate work ─────────────────
-   Tool lines and reasoning heads are scaffolding, not the
-   answer. Soft them down by 22% so user/assistant prose reads
-   as the foreground layer (Rauno: "blur signals non-interactive"
-   — we use opacity, same Z-axis effect at lower cost). Live
-   state (running/streaming) pulls them back to full attention,
-   and hover lifts them back so the user can read details. */
-.messages-inner .tool-line,
-.messages-inner .reasoning-head {
-  opacity: 0.78;
-  transition: opacity var(--duration-row) ease;
-}
-.messages-inner .tool-line[data-state="running"],
-.messages-inner .reasoning-head[data-state="streaming"],
-.messages-inner .tool-line:hover,
-.messages-inner .reasoning-head:hover {
-  opacity: 1;
-}
-
-/* ─── Approval-pending recession ───────────────────────────
-   When approval(s) are pending, slightly blur + desaturate the
-   message stream so the approval card reads as the only sharp
-   affordance (Rauno's Depth: blur signals non-interactive).
-   Tuned subtle — 0.6px keeps text readable; the recession is
-   felt more than seen. Composer is intentionally not blurred:
-   the user may still want to type a rejection reason. */
-main[data-has-approval="true"] .scroll-messages {
-  filter: blur(0.6px) saturate(0.96);
-  transition: filter var(--duration-panel) ease;
-}
-main[data-has-approval="false"] .scroll-messages {
-  transition: filter var(--duration-panel) ease;
+  border: 0;
+  padding: 0;
+  background: var(--modal-scrim-bg);
+  backdrop-filter: blur(var(--modal-scrim-blur));
+  -webkit-backdrop-filter: blur(var(--modal-scrim-blur));
+  -webkit-app-region: no-drag;
 }
 
 /* ─── Reduced motion ─────────────────────────────────────────
    Motion's <MotionConfig reducedMotion="user"> already handles the
    JS-driven side. This block neutralizes CSS-side transitions
-   and the few keyframe animations (status-dot-breathe,
-   composer-just-sent, thinking-rim). */
+   and the remaining keyframe animations. */
 @media (prefers-reduced-motion: reduce) {
   .t-icon-swap .t-icon { transition: none !important; }
   .surface-panel,
   .surface-card,
-  .app-row,
-  .sidebar button:not(:disabled) {
+  .app-row {
     transition: none !important;
   }
-  button.app-row:not(:disabled):active,
-  .sidebar button:not(:disabled):active {
+  button.app-row:not(:disabled):active {
     scale: 1;
   }
   /* Standard reduced-motion stripper: kill keyframe + transition
@@ -1698,135 +852,11 @@ main[data-has-approval="false"] .scroll-messages {
     transition-duration: 0.001ms !important;
     scroll-behavior: auto !important;
   }
-  /* Exempt indeterminate-wait spinners: a frozen spinner is an ambiguous
-     loading cue. Small-glyph rotation conveys state, not decoration —
-     conventionally allowed under reduced motion. */
-  .animate-spin {
-    animation-duration: 1s !important;
-    animation-iteration-count: infinite !important;
-  }
 }
-
-:root[data-stream-replaying="true"] .messages-inner *,
-:root[data-stream-replaying="true"] .messages-inner *::before,
-:root[data-stream-replaying="true"] .messages-inner *::after {
-  animation: none !important;
-  animation-duration: 0s !important;
-  animation-delay: 0ms !important;
-  transition-duration: 0s !important;
-  transition-delay: 0ms !important;
-}
-
-/* ─── Dark theme (Geist) ────────────────────────────────────
-   Applied when the <html> element has class `dark`. */
-:root.dark {
-    /* Page base sits one ladder step BELOW surface-1 (#171717), not at pure
-       black. #0a0a0a was a shadcn-style void that the chat reading pane and
-       every transparent well fell through to; #0f0f0f keeps the page-vs-panel
-       elevation step (panels lift off the canvas) while killing the "hard to
-       look at" pure darkness. FF itself rests the canvas AT surface-1; we keep
-       a step because our panels are surface-1, not surface-2. */
-    --color-bg: #0f0f0f;
-    --color-bg-main: #0f0f0f;
-    --color-surface: #1a1a1a;
-    /* Highlight tint — must read as a distinct step above the base surface so
-       hover states, chips, and nested cards are visible on dark panels.
-       (Previously #1a1a1a, identical to --color-surface, which made all of
-       them invisible.) */
-    --color-surface-soft: #242424;
-    --color-surface-sunken: #111111;
-    --color-code-bg: #1a1a1a;
-
-    --color-line: #2e2e2e;
-    /* Soft edge — bumped off #1a1a1a, which was identical to --color-surface /
-       --color-code-bg and made every `border border-line-soft` card edge
-       invisible in dark (the same defect already fixed for --color-surface-soft
-       above). Stays below --color-line so the soft<strong edge order holds. */
-    --color-line-soft: #262626;
-    --color-line-strong: #3a3a3a;
-
-    --color-ink: #ededed;
-    --color-ink-soft: #e0e0e0;
-    --color-on-ink: #0a0a0a;
-    --color-muted: #a0a0a0;
-    --color-faint: #7a7a7a;
-    --color-whisper: #474747;
-
-    --color-accent: #0070f3;
-    --color-accent-soft: rgba(0,112,243,0.15);
-    --color-accent-strong: #3291ff;
-
-    /* Elevation ladder — dark (FF source of truth). Additive white-opacity
-       ladder over #171717; per-level recipe = inset top highlight + inset
-       ring + outer hairline + stacked drops, opacities escalating. */
-    --surface-1: #171717;
-    --surface-2: #1e1e1e;
-    --surface-3: #252525;
-    --surface-4: #2c2c2c;
-    --surface-5: #333333;
-    --surface-6: #3a3a3a;
-    --surface-7: #414141;
-    --surface-8: #484848;
-
-    --dm-hi-base: rgba(255,255,255,0.01);
-    --dm-hi-mid: rgba(255,255,255,0.02);
-    --dm-hi-high: rgba(255,255,255,0.04);
-    --dm-hi-peak: rgba(255,255,255,0.06);
-    --dm-ring-base: rgba(255,255,255,0.02);
-    --dm-ring-mid: rgba(255,255,255,0.04);
-    --dm-ring-high: rgba(255,255,255,0.06);
-    --dm-drop: rgba(0,0,0,0.18);
-
-    --shadow-1: inset 0 0 0 1px var(--dm-ring-base);
-    --shadow-2: inset 0 1px 0 0 var(--dm-hi-base), inset 0 0 0 1px var(--dm-ring-base), 0 1px 1px -0.5px var(--dm-drop);
-    --shadow-3: inset 0 1px 0 0 var(--dm-hi-mid), inset 0 0 0 1px var(--dm-ring-base), 0 0 0 1px rgba(0,0,0,0.12), 0 1px 1px -0.5px var(--dm-drop), 0 3px 3px -1.5px var(--dm-drop);
-    --shadow-4: inset 0 1px 0 0 var(--dm-hi-mid), inset 0 0 0 1px var(--dm-ring-mid), 0 0 0 1px rgba(0,0,0,0.14), 0 1px 1px -0.5px var(--dm-drop), 0 3px 3px -1.5px var(--dm-drop), 0 6px 6px -3px var(--dm-drop);
-    --shadow-5: inset 0 1px 0 0 var(--dm-hi-high), inset 0 0 0 1px var(--dm-ring-mid), 0 0 0 1px rgba(0,0,0,0.16), 0 1px 1px -0.5px var(--dm-drop), 0 3px 3px -1.5px var(--dm-drop), 0 6px 6px -3px var(--dm-drop), 0 12px 12px -6px var(--dm-drop);
-    --shadow-6: inset 0 1px 0 0 var(--dm-hi-high), inset 0 0 0 1px var(--dm-ring-high), 0 0 0 1px rgba(0,0,0,0.18), 0 1px 1px -0.5px var(--dm-drop), 0 3px 3px -1.5px var(--dm-drop), 0 6px 6px -3px var(--dm-drop), 0 12px 12px -6px var(--dm-drop), 0 24px 24px -12px var(--dm-drop);
-    --shadow-7: inset 0 1px 0 0 var(--dm-hi-peak), inset 0 0 0 1px var(--dm-ring-high), 0 0 0 1px rgba(0,0,0,0.20), 0 1px 1px -0.5px var(--dm-drop), 0 3px 3px -1.5px var(--dm-drop), 0 6px 6px -3px var(--dm-drop), 0 12px 12px -6px var(--dm-drop), 0 24px 24px -12px var(--dm-drop), 0 48px 48px -24px var(--dm-drop);
-    --shadow-8: inset 0 1px 0 0 var(--dm-hi-peak), inset 0 0 0 1px var(--dm-ring-high), 0 0 0 1px rgba(0,0,0,0.22), 0 1px 1px -0.5px var(--dm-drop), 0 3px 3px -1.5px var(--dm-drop), 0 6px 6px -3px var(--dm-drop), 0 12px 12px -6px var(--dm-drop), 0 24px 24px -12px var(--dm-drop), 0 48px 48px -24px var(--dm-drop), 0 96px 96px -48px var(--dm-drop);
-
-    --color-ok: #4cc38a;
-    --color-ok-soft: rgba(76,195,138,0.15);
-    --color-warn: #f5a623;
-    --color-warn-soft: rgba(245,166,35,0.12);
-    --color-bad: #e5484d;
-    --color-bad-soft: rgba(229,72,77,0.12);
-    --color-info: #3291ff;
-
-    --focus-ring: 0 0 0 2px #0a0a0a, 0 0 0 4px #006bff;
-
-    --hl-keyword: #ce9178;
-    --hl-string: #afc463;
-    --hl-number: #e78a4d;
-    --hl-literal: #e78a4d;
-    --hl-comment: #6e6c69;
-    --hl-attr: #7daea3;
-    --hl-type: #d8a657;
-    --hl-built-in: #d8a657;
-    --hl-title: #ededed;
-    --hl-tag: #ea6962;
-    --hl-meta: #7c6f64;
-    --hl-symbol: #7daea3;
-}
-
-/* Selection */
-:root.dark ::selection { background: rgba(0, 112, 243, 0.28); }
-
-:root.dark .modal-error span { color: #e58075 !important; }
 
 :root.dark .md .code-block-copy:hover,
 :root.dark .md .code-block-copy:focus-visible { background-color: rgba(255, 255, 255, 0.06); }
 :root.dark .md .code-block-tick { opacity: 0.55; }
-
-/* Keep animated rims/halos behind actual composer controls. Without this,
-   the comet pseudo-element can create odd stacking behavior in Chromium that
-   makes small chips appear visually offset when the composer/settings preview
-   is animating. */
-.composer-card[data-thinking="true"] > * {
-  position: relative;
-  z-index: 1;
-}
 
 /* ─── Serif smart quotes (hanging punctuation) ─────────────────
    Rauno-style typographic detail: only the curly quote glyphs
@@ -1843,551 +873,108 @@ main[data-has-approval="false"] .scroll-messages {
   font-family: "MdQuoteSerif", var(--font-sans);
 }
 
-/* ─── Palette — Sage accent, greyscale status/syntax ──────────
-   One hue (Sage, from coolors) drives the accent (buttons' tint, links, active
-   states, slider fill, focus, selection); status + syntax stay
-   greyscale so only the accent carries hue. Swap the accent trio
-   below (light + dark) to rehue the whole app. Last in the cascade,
-   so it supersedes @theme / :root / :root.dark above.
-   Delete this block to restore the coloured Geist scheme. */
-:root {
-  /* Accent = Slate (the DEFAULT_ACCENT). This is only the pre-JS default;
-     at runtime `applyAccentPalette` (lib/palettes) injects the chosen
-     palette's accent from the `accent` pref — pick it in Settings › Appearance. */
-  --color-accent: #475569;
-  --color-accent-soft: rgba(71, 85, 105, 0.14);
-  --color-accent-strong: #334155;
-  --color-info: #475569;
-  --color-bad: #171717;  --color-bad-soft: rgba(23, 23, 23, 0.08);
-  --color-warn: #3d3d3d; --color-warn-soft: rgba(23, 23, 23, 0.08);
-  --color-ok: #525252;   --color-ok-soft: rgba(23, 23, 23, 0.08);
-  --hl-keyword: #171717; --hl-string: #3d3d3d; --hl-number: #6e6e6e; --hl-literal: #6e6e6e;
-  --hl-comment: #8f8f8f; --hl-attr: #3d3d3d; --hl-type: #171717; --hl-built-in: #171717;
-  --hl-title: #171717;   --hl-tag: #3d3d3d;   --hl-meta: #8f8f8f;  --hl-symbol: #3d3d3d;
+body.inspect-active {
+  cursor: crosshair;
 }
-:root.dark {
-  --color-accent: #94a3b8;
-  --color-accent-soft: rgba(148, 163, 184, 0.16);
-  --color-accent-strong: #cbd5e1;
-  --color-info: #94a3b8;
-  --color-bad: #ededed;  --color-bad-soft: rgba(237, 237, 237, 0.12);
-  --color-warn: #c4c4c4; --color-warn-soft: rgba(237, 237, 237, 0.12);
-  --color-ok: #a0a0a0;   --color-ok-soft: rgba(237, 237, 237, 0.12);
-  --hl-keyword: #ededed; --hl-string: #c4c4c4; --hl-number: #a0a0a0; --hl-literal: #a0a0a0;
-  --hl-comment: #7a7a7a; --hl-attr: #c4c4c4; --hl-type: #ededed; --hl-built-in: #ededed;
-  --hl-title: #ededed;   --hl-tag: #c4c4c4;   --hl-meta: #7a7a7a;  --hl-symbol: #c4c4c4;
-}
-::selection { background: rgba(71, 85, 105, 0.16); }
-:root.dark ::selection { background: rgba(148, 163, 184, 0.24); }
-:root.dark .modal-error span { color: #ededed !important; }
 
-/* ═══ Memory workspace — 1:1 port of the approved draft (plan 013).
-   docs/mockups/memory-workspace-draft.html is the spec; these classes
-   mirror its stylesheet with app tokens substituted. The window is the
-   background; rail + context are floating surface panels above it. ═══ */
-/* Tokens live on :root — the diff overlay and right-click menu portal to
-   document.body, outside the .memory-ws subtree. */
-:root {
-  --mw-panel: var(--surface-1);
-  --mw-panel-inner: #ffffff;
-  --mw-fill-hover: color-mix(in oklab, var(--color-ink) 5%, transparent);
-  --mw-fill-selected: color-mix(in oklab, var(--color-ink) 7%, transparent);
-  --mw-scrim: color-mix(in oklab, var(--color-ink) 12%, transparent);
-  --mw-mono: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
-  --mw-ease: cubic-bezier(0.32, 0.72, 0, 1);
-  --mw-ease-hover: cubic-bezier(0.16, 1, 0.3, 1);
-}
-:root.dark { --mw-panel-inner: #1e1e1e; --mw-scrim: rgba(0, 0, 0, 0.45); }
-.memory-ws {
-  --mw-rail-w: 288px;
-  --mw-ctx-w: 296px;
-  display: grid;
-  grid-template-columns: var(--mw-rail-w) minmax(0, 1fr) var(--mw-ctx-w);
-  height: 100%;
-  min-height: 0;
-  background: var(--color-bg);
-  transition: grid-template-columns 240ms var(--mw-ease);
-}
-.memory-ws.rail-hidden { --mw-rail-w: 0px !important; }
-.memory-ws.ctx-hidden { --mw-ctx-w: 0px !important; }
-
-/* Icon buttons — the draft's own 26px grid buttons. */
-.mw-icon-btn {
-  display: grid; place-items: center;
-  width: 26px; height: 26px; border-radius: 6px;
-  color: var(--color-faint);
-  flex: none;
-  transition: background 120ms var(--mw-ease-hover), color 120ms var(--mw-ease-hover), transform 160ms var(--mw-ease-hover);
-}
-.mw-icon-btn:hover { background: var(--mw-fill-hover); color: var(--color-ink); }
-.mw-icon-btn:active { transform: scale(0.94); }
-.mw-icon-btn:disabled { opacity: 0.35; pointer-events: none; }
-.mw-icon-btn.on, .mw-icon-btn[aria-pressed="true"] { background: var(--mw-fill-selected); color: var(--color-ink); }
-
-/* Window drag regions — the rail and the tab strip mirror the app
-   sidebar's recipe (.sidebar): the surface drags, every interactive child
-   opts out. On the native macOS shell (not fullscreen) the rail's top
-   clears the traffic lights via a drag spacer (app sidebar: 22px), and the
-   tab strip only needs the 84px light clearance when the rail is hidden
-   and the strip reaches the window edge. */
-/* Specificity must beat the modal-layer opt-out above
-   (`#app > div.absolute.inset-0 *`) — the memory takeover IS that layer. */
-#app > div.absolute.inset-0 :is(.mw-rail, .mw-tab-strip) { -webkit-app-region: drag; }
-#app > div.absolute.inset-0 :is(.mw-rail, .mw-tab-strip) :is(button, input, [role="button"], [role="tab"], [role="separator"]) { -webkit-app-region: no-drag; }
-/* 22px like the app sidebar's drag-spacer — unconditional, so the fixed
-   toggle (left 23 browser / 84 native) never sits on the search row. */
-.mw-rail-drag { height: 22px; flex: none; }
-/* Strip content clears the fixed toggles when a panel is hidden and the
-   strip reaches the window edge: toggle left 23/84 + 22px button + 8px. */
-.memory-ws.rail-hidden .mw-tab-strip { padding-left: 53px; }
-html[data-desktop="true"]:not([data-fullscreen="true"]) .memory-ws.rail-hidden .mw-tab-strip { padding-left: 114px; }
-.memory-ws.ctx-hidden .mw-tab-strip { padding-right: 44px; }
-/* Native shell: strip controls center on the traffic-light center line
-   (y = 25 — the .sidebar-toggle recipe: lights at y:18, ⌀14). The strip's
-   26px buttons center at height/2, so 50px puts them at 25. */
-html[data-desktop="true"]:not([data-fullscreen="true"]) .mw-tab-strip { height: 50px; }
-
-/* ── Rail — floating panel above the window ── */
-.mw-rail {
-  position: relative;
-  min-width: 0;
-  background: var(--mw-panel);
-  border-radius: 12px;
-  box-shadow: var(--shadow-5);
-  margin: 8px 0 8px 8px;
-  overflow: hidden;
-  display: flex; flex-direction: column; min-height: 0;
-}
-.memory-ws.rail-hidden .mw-rail { margin: 8px 0; box-shadow: none; }
-.memory-ws.rail-hidden .mw-rail > * { min-width: 0; }
-.mw-rail-top { padding: 10px 10px 2px; display: flex; align-items: center; gap: 2px; position: relative; }
-.mw-rail-search {
-  flex: 1; min-width: 0;
-  display: flex; align-items: center; gap: 7px;
-  padding: 5px 8px; border-radius: 7px;
-  color: var(--color-faint); font-size: 13px;
-  transition: background 120ms var(--mw-ease-hover), color 120ms var(--mw-ease-hover);
-}
-.mw-rail-search:hover { background: var(--mw-fill-hover); color: var(--color-muted); }
-.mw-rail-tools { display: flex; gap: 1px; }
-.mw-rail-tools .mw-icon-btn { width: 24px; height: 24px; }
-.mw-sort-menu {
-  position: absolute; right: 8px; top: 38px;
-  min-width: 148px;
-  padding: 5px;
-  background: var(--color-bg); border: 1px solid var(--color-line);
-  border-radius: 9px;
-  box-shadow: 0 0 0 1px rgba(0,0,0,0.02), 0 6px 18px rgba(0,0,0,0.09);
-  z-index: 20;
-  display: grid; gap: 1px;
-}
-.mw-sort-scope {
-  padding: 3px 9px 5px; font-family: var(--mw-mono); font-size: 10.5px; color: var(--color-faint);
-  border-bottom: 1px solid var(--color-line-soft); margin-bottom: 4px;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.mw-sort-menu button {
-  display: flex; justify-content: space-between; gap: 10px;
-  padding: 4px 9px; border-radius: 6px;
-  font-size: 12.5px; color: var(--color-ink-soft);
-}
-.mw-sort-menu button .dir { color: var(--color-faint); }
-.mw-sort-menu button:hover { background: var(--mw-fill-hover); color: var(--color-ink); }
-.mw-sort-menu button.on { background: var(--mw-fill-selected); color: var(--color-ink); font-weight: 500; }
-.mw-tree-create { padding: 4px 10px 0; }
-.mw-tree-create input {
-  width: 100%; padding: 4px 8px;
-  border: 1px solid var(--color-line); border-radius: 6px;
-  background: var(--color-bg); color: var(--color-ink);
-  font: inherit; font-size: 13px; outline: none;
-}
-.mw-tree-create input:focus { border-color: var(--color-accent); box-shadow: 0 0 0 2px var(--color-accent-soft); }
-
-/* ── File tree ── */
-.mw-tree { flex: 1; overflow-y: auto; padding: 6px 10px 8px; }
-.mw-tree-row {
-  position: relative;
-  display: flex; align-items: center; gap: 5px;
-  width: 100%; padding: 3.5px 7px; border-radius: 6px;
-  font-size: 14px; line-height: 20px; color: var(--color-ink-soft);
-  white-space: nowrap; overflow: hidden;
-  transition: background 120ms var(--mw-ease-hover), color 120ms var(--mw-ease-hover);
-}
-.mw-tree-row:hover { background: var(--mw-fill-hover); color: var(--color-ink); }
-.mw-tree-row.active { background: var(--mw-fill-selected); color: var(--color-ink); }
-.mw-tree-row.folder { padding: 0; gap: 0; }
-.mw-tree-row.folder .mw-chev-btn { display: grid; place-items: center; width: 24px; height: 27px; flex: none; border-radius: 5px; }
-.mw-tree-row.folder .mw-chev-btn:hover { background: var(--mw-fill-hover); }
-.mw-tree-row.folder .mw-folder-label {
-  flex: 1; min-width: 0; padding: 3.5px 7px 3.5px 0; text-align: left;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.mw-tree-row .mw-chev {
-  width: 12px; height: 12px; flex: none;
-  transition: transform 200ms var(--mw-ease);
-}
-.mw-tree-folder.closed > .mw-tree-row .mw-chev { transform: rotate(-90deg); }
-.mw-tree-row .mw-spacer { width: 12px; flex: none; }
-.mw-tree-row .mw-label { overflow: hidden; text-overflow: ellipsis; }
-.mw-tree-pins { display: grid; gap: 1px; margin-bottom: 16px; }
-.mw-pin-btn {
-  display: none; position: absolute; right: 5px; top: 50%;
-  transform: translateY(-50%);
-  width: 20px; height: 20px; border-radius: 5px;
-  place-items: center; color: var(--color-faint); cursor: pointer;
-}
-.mw-tree-row:hover .mw-pin-btn { display: grid; }
-.mw-pin-btn:hover { background: var(--mw-fill-hover); color: var(--color-ink); }
-.mw-pin-btn.on { display: grid; color: var(--color-muted); }
-.mw-pin-btn.on svg { fill: currentColor; }
-.mw-tree-kids {
-  margin-left: 12px; padding-left: 5px;
-  border-left: 1px solid var(--color-line-soft);
-  display: grid; gap: 1px;
-  overflow: hidden; interpolate-size: allow-keywords; height: auto;
-  transition: height 220ms var(--mw-ease), opacity 180ms var(--mw-ease);
-}
-.mw-tree-folder.closed > .mw-tree-kids { height: 0; opacity: 0; }
-
-/* ── Notebook Navigator dual-pane (grey nav | lighter list) ── */
-.mw-tree.as-nb { display: flex; flex-direction: row; padding: 0; }
-.mw-nb-nav { width: 224px; flex: none; overflow-y: auto; padding: 8px 8px 16px; }
-.mw-nb-list {
-  flex: 1; min-width: 0; overflow-y: auto;
-  background: var(--mw-panel-inner);
-  padding: 0 10px 16px;
-  border-left: 1px solid var(--color-line-soft);
-}
-.mw-nb-section { margin-bottom: 2px; }
-.mw-nb-section-head {
-  display: flex; align-items: center; gap: 6px;
-  width: 100%; padding: 3.5px 7px; border-radius: 6px;
-  font-size: 13.5px; color: var(--color-ink-soft);
-  transition: background 120ms var(--mw-ease-hover);
-}
-.mw-nb-section-head:hover { background: var(--mw-fill-hover); }
-.mw-nb-section-head .mw-chev { width: 10px; height: 10px; margin-left: auto; transition: transform 200ms var(--mw-ease); }
-.mw-nb-section.closed .mw-nb-section-head .mw-chev { transform: rotate(-90deg); }
-.mw-nb-section-rows {
-  overflow: hidden; height: auto; interpolate-size: allow-keywords;
-  transition: height 200ms var(--mw-ease), opacity 160ms var(--mw-ease);
-}
-.mw-nb-section.closed .mw-nb-section-rows { height: 0; opacity: 0; }
-.mw-nb-section-rows .mw-tree-row { padding-left: 26px; }
-.mw-nb-root { margin: 8px 0 1px; }
-.mw-nb-count { margin-left: auto; font-size: 11px; color: var(--color-whisper); font-variant-numeric: tabular-nums; flex: none; padding-left: 6px; }
-.mw-nnl-head {
-  position: sticky; top: 0; z-index: 1;
-  display: flex; align-items: center; gap: 8px;
-  padding: 10px 6px 8px;
-  background: var(--mw-panel-inner);
-}
-.mw-nnl-head .mw-icon-btn { width: 24px; height: 24px; margin-left: auto; }
-.mw-nnl-head h2 { margin: 0; font-size: 14px; font-weight: 600; color: var(--color-ink); }
-.mw-nnl-head .mw-nb-count { font-family: var(--mw-mono); font-size: 10.5px; }
-.mw-nnl-bucket { font-size: 13px; font-weight: 700; color: var(--color-ink); margin: 18px 6px 6px; }
-.mw-nnl-bucket:first-of-type { margin-top: 6px; }
-.mw-nnl-row {
-  display: block; width: 100%;
-  padding: 9px 12px; border-radius: 10px;
-  position: relative;
-  text-align: left;
-  transition: background 120ms var(--mw-ease-hover);
-}
-.mw-nnl-row:not(.active):hover { background: var(--mw-fill-hover); }
-.mw-nnl-row.active { background: var(--color-accent-soft); }
-.mw-nnl-row:not(.active):not(:last-child)::after {
-  content: ""; position: absolute; left: 12px; right: 12px; bottom: 0;
-  height: 1px; background: var(--color-line-soft);
-}
-.mw-nnl-title { display: block; font-size: 13.5px; font-weight: 600; color: var(--color-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.mw-nnl-snippet { display: -webkit-box; margin-top: 2px; font-size: 12.5px; line-height: 1.5; color: var(--color-muted); -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.mw-nnl-when { display: block; margin-top: 3px; font-size: 11px; color: var(--color-faint); font-variant-numeric: tabular-nums; }
-.mw-nnl-parent { color: var(--color-whisper); }
-
-/* ── Document column ── */
-.mw-doc { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.mw-tab-strip {
-  display: flex; align-items: center; gap: 4px;
-  height: 40px; flex: none;
-  padding: 0 8px;
-}
-.memory-ws.rail-hidden .mw-doc { padding-left: 10px; }
-.mw-doc-tabs {
-  flex: 1; min-width: 0;
-  display: flex; align-items: center; gap: 3px;
-  height: 100%;
-  padding: 5px 2px;
-  overflow-x: auto; scrollbar-width: none;
-}
-.mw-doc-tabs::-webkit-scrollbar { display: none; }
-.mw-doc-tab {
-  position: relative;
-  flex: 1 1 0; min-width: 72px; max-width: 220px;
-  display: flex; align-items: center; justify-content: center;
-  height: 100%;
-  padding: 0 26px;
-  border-radius: 8px;
-  font-size: 13px; font-weight: 500; color: var(--color-muted);
-  white-space: nowrap;
-  transition: background 120ms var(--mw-ease-hover), color 120ms var(--mw-ease-hover);
-}
-.mw-doc-tab:hover { color: var(--color-ink); background: var(--mw-fill-hover); }
-.mw-doc-tab.active { background: var(--mw-fill-selected); color: var(--color-ink); }
-.mw-doc-tab + .mw-doc-tab::before {
-  content: ""; position: absolute; left: -2px; top: 8px; bottom: 8px; width: 1px;
-  background: var(--color-line);
-}
-.mw-doc-tab.active::before, .mw-doc-tab.active + .mw-doc-tab::before { background: transparent; }
-.mw-doc-tab .mw-doc-tab-label { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.mw-doc-tab .mw-doc-tab-x {
-  position: absolute; right: 7px; top: 50%; transform: translateY(-50%);
-  display: grid; place-items: center;
-  width: 18px; height: 18px; border-radius: 5px;
-  color: var(--color-faint); font-size: 14px; line-height: 1;
-  opacity: 0; transition: opacity 120ms var(--mw-ease-hover), background 120ms var(--mw-ease-hover);
-}
-.mw-doc-tab:hover .mw-doc-tab-x, .mw-doc-tab.active .mw-doc-tab-x { opacity: 1; }
-.mw-doc-tab .mw-doc-tab-x:hover { background: var(--mw-fill-hover); color: var(--color-ink); }
-.mw-edit-hint {
-  margin-left: 6px; font-family: var(--mw-mono); font-size: 11px; color: var(--color-faint);
-  opacity: 0; transition: opacity 150ms var(--mw-ease-hover); white-space: nowrap;
-}
-.memory-ws.note-editing .mw-edit-hint { opacity: 1; }
-.mw-scroller { flex: 1; min-height: 0; overflow-y: auto; scroll-behavior: smooth; }
-.mw-page { max-width: 720px; margin: 0 auto; padding: 40px 40px 72px; }
-.mw-page.wide { max-width: 1080px; }
-.mw-note-title { margin: 0; font-size: 26px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.2; text-wrap: balance; }
-
-/* ── Properties = frontmatter, Obsidian-style ── */
-.mw-props { margin: 16px 0 0; padding-bottom: 18px; border-bottom: 1px solid var(--color-line-soft); }
-.mw-props-head { margin: 0 0 6px; font-size: 13px; font-weight: 600; color: var(--color-ink); }
-.mw-prop-row { display: flex; align-items: baseline; gap: 8px; padding: 3px 0; font-size: 13px; }
-.mw-prop-icon { flex: none; align-self: center; display: grid; place-items: center; width: 16px; color: var(--color-faint); }
-.mw-prop-key { flex: none; width: 104px; color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mw-prop-value { min-width: 0; color: var(--color-ink-soft); display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
-.mw-prop-value .mono { font-family: var(--mw-mono); font-size: 12px; font-variant-numeric: tabular-nums; }
-.mw-prop-pill {
-  display: inline-flex; align-items: center; gap: 3px;
-  padding: 1px 4px 1px 8px; border-radius: 999px;
-  background: var(--color-accent-soft); color: var(--color-accent);
-  font-size: 12px; font-weight: 500;
-}
-.mw-prop-pill-x { color: color-mix(in oklab, var(--color-accent) 55%, transparent); font-size: 13px; line-height: 1; padding: 0 3px; border-radius: 999px; }
-.mw-prop-pill-x:hover { color: var(--color-accent); }
-.mw-prop-check { width: 14px; height: 14px; border-radius: 4px; border: 1.5px solid var(--color-line-strong); display: inline-block; }
-.mw-prop-check.on { background: var(--color-accent); border-color: var(--color-accent); position: relative; }
-.mw-prop-check.on::after { content: ""; position: absolute; left: 4px; top: 1px; width: 4px; height: 8px; border: solid #fff; border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); }
-.mw-prop-editable { border-radius: 5px; padding: 1px 6px; margin: -1px -6px; text-align: left; transition: background 120ms var(--mw-ease-hover); color: inherit; }
-.mw-prop-editable:hover { background: var(--mw-fill-hover); }
-.mw-prop-pill-add { padding: 1px 8px; color: var(--color-faint); background: var(--color-surface-soft); }
-.mw-prop-pill-add:hover { color: var(--color-ink); background: var(--color-surface-sunken); }
-.mw-prop-edit-input {
-  padding: 2px 8px; border: 1px solid var(--color-accent); border-radius: 6px;
-  background: var(--color-bg); color: var(--color-ink);
-  font: inherit; font-size: 12.5px; outline: none;
-  box-shadow: 0 0 0 2px var(--color-accent-soft);
-  min-width: 160px;
-}
-.mw-prop-add { margin-top: 4px; padding: 2px 0; font-size: 12.5px; color: var(--color-faint); transition: color 120ms var(--mw-ease-hover); }
-.mw-prop-add:hover { color: var(--color-ink); }
-.mw-prop-add-row { display: flex; gap: 8px; align-items: center; padding: 3px 0; }
-.mw-prop-add-row input {
-  padding: 3px 8px; border: 1px solid var(--color-line); border-radius: 6px;
-  background: var(--color-bg); color: var(--color-ink);
-  font: inherit; font-size: 12.5px; outline: none;
-}
-.mw-prop-add-row input:focus { border-color: var(--color-accent); box-shadow: 0 0 0 2px var(--color-accent-soft); }
-.mw-prop-add-row input.key { width: 104px; }
-.mw-prop-add-row input.value { flex: 1; min-width: 0; }
-
-/* ── Knowledge records — the page's dated ledger ── */
-.mw-krecs { margin-top: 36px; }
-.mw-krecs-head {
-  display: flex; align-items: center; gap: 6px;
-  width: 100%; padding: 4px 0;
-  font-size: 13px; font-weight: 600; color: var(--color-ink);
-}
-.mw-krecs-head .n { font-weight: 400; color: var(--color-whisper); font-variant-numeric: tabular-nums; }
-.mw-krecs-head .mw-chev { width: 11px; height: 11px; transition: transform 200ms var(--mw-ease); }
-.mw-krecs.open .mw-krecs-head .mw-chev { transform: rotate(90deg); }
-.mw-krecs-body { margin-top: 10px; }
-.mw-krec {
-  display: grid; grid-template-columns: 108px minmax(0, 1fr);
-  column-gap: 18px; padding: 12px 0;
-  border-bottom: 1px solid var(--color-line-soft);
-}
-.mw-krec:last-child { border-bottom: 0; }
-.mw-krec .kmeta { font-family: var(--mw-mono); font-size: 11px; line-height: 1.7; color: var(--color-faint); font-variant-numeric: tabular-nums; }
-.mw-krec .kmeta .kind { display: block; color: var(--color-whisper); }
-.mw-krec .ktext { font-size: 14px; line-height: 1.6; color: var(--color-ink-soft); margin: 0; }
-.mw-krec .ktext code { font-family: var(--mw-mono); font-size: 12px; background: var(--color-surface-soft); padding: 1px 4px; border-radius: 4px; }
-
-/* ── Editor mode — markdown source, body only ── */
-.mw-editor-textarea {
-  display: block;
-  width: 100%; min-height: 320px;
-  margin-top: 22px;
-  border: 0; outline: none; resize: none; overflow: hidden;
-  background: transparent;
-  font-family: var(--mw-mono); font-size: 13px; line-height: 1.75;
-  color: var(--color-ink); padding: 0;
-}
-.mw-editor-textarea::placeholder { color: var(--color-faint); }
-
-/* ── Context panel — floating panel, sticky icon toolbar ── */
-.mw-context {
-  position: relative;
-  min-width: 0; min-height: 0;
-  overflow-y: auto; overflow-x: hidden;
-  background: var(--mw-panel);
-  padding: 0 16px 32px;
-  margin: 8px 8px 8px 0;
-  border-radius: 12px;
-  box-shadow: var(--shadow-5);
-}
-.memory-ws.ctx-hidden .mw-context { margin: 8px 0; padding-left: 0; padding-right: 0; box-shadow: none; }
-.mw-ctx-toolbar {
-  position: sticky; top: 0; z-index: 1;
-  display: flex; gap: 2px;
-  padding: 10px 2px 8px;
-  background: var(--mw-panel);
-  margin-bottom: 10px;
-}
-.mw-ctx-pane-head { display: flex; align-items: baseline; gap: 8px; padding: 2px 6px 8px; }
-.mw-ctx-pane-head.sub { margin-top: 22px; }
-.mw-ctx-pane-head h2 { margin: 0; font-size: 14px; font-weight: 600; color: var(--color-ink); }
-.mw-ctx-count { margin-left: auto; font-family: var(--mw-mono); font-size: 10.5px; color: var(--color-whisper); font-variant-numeric: tabular-nums; }
-.mw-ctx-empty { padding: 0 6px; font-size: 13px; color: var(--color-faint); }
-.mw-lk-row {
-  display: flex; gap: 8px; align-items: flex-start;
-  width: 100%; padding: 5px 6px; border-radius: 7px;
-  transition: background 120ms var(--mw-ease-hover);
-}
-.mw-lk-row:hover { background: var(--mw-fill-hover); }
-.mw-lk-row:disabled { opacity: 0.55; cursor: default; }
-.mw-lk-row:disabled:hover { background: none; }
-.mw-lk-icon { flex: none; padding-top: 2px; color: var(--color-faint); }
-.mw-lk-body { min-width: 0; display: grid; gap: 1px; }
-.mw-lk-title { font-size: 13.5px; font-weight: 500; color: var(--color-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
-.mw-lk-sub { font-size: 12px; color: var(--color-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
-.mw-bl-group { padding: 0 6px; }
-.mw-bl-group + .mw-bl-group { margin-top: 13px; }
-.mw-bl-title { display: block; font-size: 13px; font-weight: 500; color: var(--color-ink); width: 100%; text-align: left; transition: color 120ms var(--mw-ease-hover); }
-.mw-bl-title:hover { color: var(--color-accent); }
-.mw-bl-excerpt { margin: 3px 0 0; font-size: 13px; line-height: 1.5; color: var(--color-muted); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.mw-bl-excerpt mark { background: var(--color-warn-soft); color: var(--color-ink); border-radius: 2px; padding: 0 1px; }
-.mw-outline-row {
-  display: block; width: 100%;
-  padding: 3px 8px; border-radius: 6px;
-  font-size: 13px; color: var(--color-muted);
-  text-align: left;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  transition: background 120ms var(--mw-ease-hover), color 120ms var(--mw-ease-hover);
-}
-.mw-outline-row:hover { color: var(--color-ink); }
-.mw-outline-row.l2 { padding-left: 20px; }
-.mw-outline-row.l3 { padding-left: 32px; }
-.mw-outline-row.l4 { padding-left: 44px; }
-
-/* ── Activity — page-edit events on a dot spine ── */
-.mw-recs { position: relative; padding-left: 6px; }
-.mw-recs::before { content: ""; position: absolute; left: 8.5px; top: 8px; bottom: 8px; width: 1px; background: var(--color-line-soft); }
-.mw-rec { position: relative; padding: 0 6px 0 18px; }
-.mw-rec + .mw-rec { margin-top: 14px; }
-.mw-rec .dot {
-  position: absolute; left: 0; top: 4.5px;
-  width: 6px; height: 6px; border-radius: 50%;
-  background: var(--color-bg);
-  border: 1.5px solid var(--color-line-strong);
-}
-.mw-rec.accent .dot { border-color: var(--color-accent); background: var(--color-accent); }
-.mw-rec .when {
-  display: flex; align-items: baseline; gap: 8px; white-space: nowrap;
-  font-family: var(--mw-mono); font-size: 11px; color: var(--color-faint); font-variant-numeric: tabular-nums;
-}
-.mw-rec .when .actor { color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; }
-.mw-rec .when .stat { margin-left: auto; color: var(--color-whisper); }
-.mw-rec > button { display: block; width: 100%; border-radius: 5px; }
-.mw-recs-more { display: block; margin-top: 12px; padding: 2px 6px 2px 24px; font-size: 12.5px; color: var(--color-faint); transition: color 120ms var(--mw-ease-hover); }
-.mw-recs-more:hover { color: var(--color-ink); }
-
-/* ── Diff overlay — 840px dialog, Unified/Split ── */
-.mw-dv-scrim {
-  position: fixed; inset: 0;
-  background: var(--mw-scrim);
-  z-index: 52;
-}
-.mw-dv {
-  position: fixed; left: 50%; top: 50%;
-  width: min(840px, calc(100vw - 64px));
-  max-height: min(76vh, 820px);
-  display: flex; flex-direction: column;
-  transform: translate(-50%, -50%);
-  background: var(--color-bg);
-  border: 1px solid var(--color-line);
-  border-radius: 12px;
-  box-shadow: 0 0 0 1px rgba(0,0,0,0.02), 0 12px 32px rgba(0,0,0,0.10), 0 2px 8px rgba(0,0,0,0.05);
-  z-index: 53; overflow: hidden;
-}
-.mw-dv-head {
-  display: flex; align-items: center; gap: 10px;
-  padding: 10px 10px 10px 16px; flex: none;
-  border-bottom: 1px solid var(--color-line-soft);
-}
-.mw-dv-title { font-family: var(--mw-mono); font-size: 12px; color: var(--color-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mw-dv-meta { margin-left: auto; font-family: var(--mw-mono); font-size: 11px; color: var(--color-faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.mw-dv-body {
-  overflow-y: auto; padding: 12px 16px;
-  font-family: var(--mw-mono); font-size: 12.5px; line-height: 1.7;
-  color: var(--color-muted);
-  white-space: pre-wrap; overflow-wrap: anywhere;
-}
-.mw-dv-body span { padding: 0 3px; border-radius: 3px; }
-.mw-dv-body .add { color: #1a7f37; background: rgba(69,165,87,0.10); display: block; }
-.mw-dv-body .del { color: #cf222e; background: rgba(229,72,77,0.07); display: block; }
-:root.dark .mw-dv-body .add { color: #4cc38a; background: rgba(76,195,138,0.12); }
-:root.dark .mw-dv-body .del { color: #ff6369; background: rgba(229,72,77,0.12); }
-.mw-dv-switch { display: flex; gap: 2px; padding: 2px; border-radius: 7px; background: var(--color-surface-soft); }
-.mw-dv-switch button {
-  padding: 2px 9px; border-radius: 5px;
-  font-size: 11.5px; font-weight: 500; color: var(--color-muted);
-  transition: background 120ms var(--mw-ease-hover), color 120ms var(--mw-ease-hover);
-}
-.mw-dv-switch button:hover { color: var(--color-ink); }
-.mw-dv-switch button.on { background: var(--color-bg); color: var(--color-ink); box-shadow: 0 0 0 1px var(--color-line-soft); }
-.mw-dv-body.split-view { padding: 12px 0; }
-.mw-dv-split { display: grid; grid-template-columns: 1fr 1fr; }
-.mw-dv-split > span { min-width: 0; padding: 0 14px; border-radius: 0; }
-.mw-dv-split > span:nth-child(odd) { border-right: 1px solid var(--color-line-soft); }
-
-/* ── Right-click context menu ── */
-.mw-rc-menu {
+.inspect-overlay {
   position: fixed;
-  min-width: 168px; padding: 5px;
-  background: var(--color-bg); border: 1px solid var(--color-line);
-  border-radius: 10px;
-  box-shadow: 0 0 0 1px rgba(0,0,0,0.02), 0 8px 24px rgba(0,0,0,0.10);
-  z-index: 70;
-  display: grid; gap: 1px;
-}
-.mw-rc-menu button { padding: 5px 10px; border-radius: 6px; font-size: 13px; color: var(--color-ink-soft); text-align: left; }
-.mw-rc-menu button:hover { background: var(--mw-fill-hover); color: var(--color-ink); }
-.mw-rc-path {
-  padding: 3px 10px 6px; font-family: var(--mw-mono); font-size: 10.5px; color: var(--color-faint);
-  border-bottom: 1px solid var(--color-line-soft); margin-bottom: 3px;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  inset: 0;
+  z-index: var(--z-demo);
+  pointer-events: none;
 }
 
-/* Resize handles: the shared PaneResizeHandle separators; hidden with
-   their pane and excluded from the drag region. */
-.memory-ws.rail-hidden .mw-rail [role="separator"],
-.memory-ws.ctx-hidden .mw-context [role="separator"] { display: none; }
+.inspect-box {
+  position: fixed;
+  box-sizing: border-box;
+  border: 1.5px solid var(--inspect-color);
+  background: color-mix(in oklab, var(--inspect-color) 10%, transparent);
+}
 
-/* Prose inside the memory page — draft sizes layered over .md defaults. */
-.mw-prose { margin-top: 22px; font-size: 15px; line-height: 1.68; }
-.mw-prose .md :is(h1) { font-size: 24px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.2; margin: 30px 0 12px; }
-.mw-prose .md :is(h1):first-child { margin-top: 4px; }
-.mw-prose .md :is(h2) { font-size: 17px; font-weight: 600; letter-spacing: -0.012em; margin: 28px 0 9px; }
-.mw-prose .md :is(h3) { font-size: 15px; font-weight: 600; margin: 22px 0 7px; }
-.mw-prose .md :is(h4) { font-size: 13.5px; font-weight: 600; margin: 18px 0 6px; }
+/* Alignment lines spanning the viewport from each edge of the target, so a
+   pinned element can be checked against anything else on screen. */
+.inspect-guide {
+  position: fixed;
+  display: block;
+  opacity: 0.55;
+}
+
+.inspect-guide[data-axis="x"] {
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 1px dashed var(--inspect-color);
+}
+
+.inspect-guide[data-axis="y"] {
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 1px dashed var(--inspect-color);
+}
+
+.inspect-padding-strip {
+  position: fixed;
+  background: rgba(153, 255, 201, 0.28);
+  outline: 1px dashed rgba(83, 214, 145, 0.75);
+  outline-offset: -1px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.inspect-gap-strip {
+  position: fixed;
+  background: rgba(107, 151, 255, 0.14);
+  outline: 1px dashed rgba(107, 151, 255, 0.6);
+  outline-offset: -1px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.inspect-strip-label {
+  padding: 1px 3px;
+  border-radius: 3px;
+  background: rgba(15, 15, 15, 0.82);
+  color: #fff;
+  font: 600 9px/1 var(--mono);
+}
+
+.inspect-panel {
+  position: fixed;
+  width: 260px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(15, 15, 17, 0.94);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  color: #e7e7ea;
+  font: 500 11px/1.55 var(--mono);
+}
+
+.inspect-panel__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.inspect-panel__tag {
+  color: var(--inspect-color);
+  font-weight: 700;
+}
+
+.inspect-panel__pinned {
+  color: #9a9aa2;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.inspect-panel__row {
+  color: #c7c7cd;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

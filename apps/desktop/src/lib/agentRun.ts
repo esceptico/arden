@@ -99,19 +99,20 @@ export function isActiveAgentStatus(status: AgentRunStatus): boolean {
   return status === "running" || status === "cancel_requested";
 }
 
-// Both bg-* and text-* so the breathing-glow box-shadow (which uses
-// `currentColor`) tints to the same hue as the dot fill.
-export function statusDotClass(status: AgentRunStatus | "running"): string {
+export function agentRunStatusLabel(status: AgentRunStatus): string {
   switch (status) {
-    case "completed":
-      return "bg-ok text-ok";
-    case "failed":
-      return "bg-bad text-bad";
+    case "cancel_requested":
+      return "stopping";
     case "cancelled":
+      return "cancelled";
     case "interrupted":
-      return "bg-faint text-faint";
+      return "interrupted";
+    case "completed":
+      return "completed";
+    case "failed":
+      return "failed";
     default:
-      return "bg-accent text-accent"; // running, cancel_requested
+      return "running";
   }
 }
 
@@ -265,9 +266,8 @@ export function agentRunFromBackgroundAgent(
  *    - last run failed   → "failed"
  *    - last run ok       → "completed"
  *    - never run         → "interrupted" (muted/idle tone)
- *  The pause is carried separately on the `enabled` facet; the StatusDot
- *  for a paused automation is forced muted at render time (see
- *  agentRunFromAutomation). */
+ *  The pause is carried separately on the `enabled` facet; renderers state
+ *  pausedness independently from this run lifecycle. */
 export function resolveAutomationStatus(automation: Automation): AgentRunStatus {
   if (automation.running_since != null) return "running";
   if (automation.last_status === "failed") return "failed";

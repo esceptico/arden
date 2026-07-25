@@ -144,6 +144,7 @@ get_goal_tool = tool(
 
 complete_goal_tool = tool(
     display_name="Complete Goal",
+    display_description="Mark the current goal complete.",
     description=(
         "Mark the current session goal complete after the completion audit passes. "
         "This tool takes no input. Put evidence and verification in the visible assistant report after the tool succeeds."
@@ -154,6 +155,7 @@ complete_goal_tool = tool(
 
 block_goal_tool = tool(
     display_name="Block Goal",
+    display_description="Report that the current goal is blocked.",
     description=(
         "Report that the current session goal may be blocked on missing user/system input. "
         "The first two consecutive matching reports keep the goal active so automatic continuation can retry; "

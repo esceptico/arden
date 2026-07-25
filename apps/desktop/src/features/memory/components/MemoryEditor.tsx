@@ -61,6 +61,7 @@ export function MemoryEditor({
       </p>
       <p id={hintId} className="sr-only">Press Cmd/Ctrl+S to review changes and Escape to close the editor.</p>
       <div className="mw-page">
+        <p className="mw-note-crumb">{path.includes("/") ? path.split("/").slice(0, -1).join(" / ") : "memory"} / <b>{stem(path)}</b></p>
         <h1 className="mw-note-title">{stem(path)}</h1>
         <textarea
           ref={sourceRef}

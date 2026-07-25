@@ -37,8 +37,12 @@ export function primaryActionFor(
       if (!taskId) return null;
       return { label: "Retry", run: () => handlers.runAutomation(taskId) };
     }
-    case "open_page":
-      return { label: "Review", run: () => handlers.openArea(ask.area_key) };
+    case "open_page": {
+      // An `open_page` verb without an area has nowhere to go.
+      const areaKey = ask.area_key;
+      if (!areaKey) return null;
+      return { label: "Review", run: () => handlers.openArea(areaKey) };
+    }
     default:
       return null;
   }

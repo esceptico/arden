@@ -1,46 +1,37 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
-import {
-  ArrowUpDown,
-  ChevronDown,
-  FilePlus2,
-  FileText,
-  FolderPlus,
-  Layers,
-  NotebookText,
-  Pin,
-  Search,
-} from "@/components/icons";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { CheckList, ChevronDown, FileText, Folder, Notebook01 } from "@/components/icons";
 import clsx from "clsx";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { Empty } from "@/components/ui/EmptyState";
 import { ListError, ListSkeleton } from "@/components/ui/ListColumn";
+import { ContextMenu, type ContextMenuPosition } from "@/components/ui/ContextMenu";
+import { Tab, Tabs } from "@/components/ui/Tabs";
+import { copyText } from "@/lib/clipboard";
 import { GhostBtn } from "@/features/memory/components/shared";
-import type { MemoryArtifactSummary } from "@/features/memory/lib/notebookTypes";
 import {
-  bucketOf,
-  collectNotes,
-  countNotes,
-  findDir,
-  parentDir,
-  prettyDate,
-  sortNotes,
-  stem,
-  type SortKey,
-  type SortOrder,
-  type WorkspaceDir,
-} from "@/features/memory/lib/workspaceTree";
+  CONTENT_ENTER_TRANSITION,
+  CONTENT_EXIT_TRANSITION,
+  CONTENT_SWAP_VARIANTS,
+} from "@/lib/tokens/motion";
+import type { MemoryItem } from "@/api/memoryItems";
+import type { MemoryArtifactSummary } from "@/features/memory/lib/notebookTypes";
+import { prettyDate, sortNotes, stem, type WorkspaceDir } from "@/features/memory/lib/workspaceTree";
 
 const COLLAPSED_KEY = "arden.desktop.memory.rail.collapsed";
-const PINS_KEY = "arden.desktop.memory.pins";
+const RAIL_MODES = ["files", "notebook", "facts"] as const;
 
-function loadStringSet(key: string, fallback: string[]): Set<string> {
+export type MemoryRailMode = (typeof RAIL_MODES)[number];
+
+interface FileContextMenuState extends ContextMenuPosition {
+  path: string;
+}
+
+function loadStringSet(key: string): Set<string> {
   try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return new Set(fallback);
-    const parsed: unknown = JSON.parse(raw);
-    return new Set(Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : fallback);
+    const parsed: unknown = JSON.parse(localStorage.getItem(key) ?? "[]");
+    return new Set(Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string") : []);
   } catch {
-    return new Set(fallback);
+    return new Set();
   }
 }
 
@@ -52,101 +43,59 @@ function persistStringSet(key: string, value: Set<string>): void {
   }
 }
 
-interface RcMenuState {
-  x: number;
-  y: number;
-  path: string;
+function modeIndex(mode: MemoryRailMode): number {
+  return RAIL_MODES.indexOf(mode);
 }
-
-interface CreateState {
-  kind: "note" | "dir";
-  value: string;
-}
-
-const SORT_LABELS: Record<SortKey, string> = {
-  name: "Name",
-  modified: "Time modified",
-  created: "Time created",
-};
 
 export function NotebookRail({
+  mode,
   tree,
   allNotes,
+  records,
   selectedPath,
   loading,
   error,
   rebuilding,
+  recordsLoading,
+  recordsError,
   navigationDisabled,
-  nbMode,
-  createdAt,
-  onToggleNbMode,
+  onModeChange,
   onSelect,
-  onOpenInNewTab,
-  onOpenSwitcher,
-  onCreate,
   onRetry,
+  onRetryRecords,
   onRebuild,
 }: {
+  mode: MemoryRailMode;
   tree: WorkspaceDir;
   allNotes: MemoryArtifactSummary[];
+  records: MemoryItem[];
   selectedPath: string | null;
   loading: boolean;
   error: string | null;
   rebuilding: boolean;
+  recordsLoading: boolean;
+  recordsError: string | null;
   navigationDisabled: boolean;
-  nbMode: boolean;
-  createdAt: (artifact: MemoryArtifactSummary) => string;
-  onToggleNbMode: () => void;
-  onSelect: (path: string) => void;
-  onOpenInNewTab: (path: string) => void;
-  onOpenSwitcher: () => void;
-  onCreate: (kind: "note" | "dir", path: string) => void;
+  onModeChange: (mode: MemoryRailMode) => void;
+  onSelect: (path: string, direction: number) => void;
   onRetry: () => void;
+  onRetryRecords: () => void;
   onRebuild: () => void;
 }) {
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => loadStringSet(COLLAPSED_KEY, []));
-  const [pins, setPins] = useState<Set<string>>(() => loadStringSet(PINS_KEY, ["me.md"]));
-  const [sortKey, setSortKey] = useState<SortKey>("name");
-  const [sortAsc, setSortAsc] = useState(true);
-  const [sortOverrides, setSortOverrides] = useState<Record<string, SortOrder>>({});
-  const [sortMenuOpen, setSortMenuOpen] = useState(false);
-  const [create, setCreate] = useState<CreateState | null>(null);
-  const [rcMenu, setRcMenu] = useState<RcMenuState | null>(null);
-  const [listDir, setListDir] = useState("");
-  const [nbDescendants, setNbDescendants] = useState(true);
-  const [pinsSectionClosed, setPinsSectionClosed] = useState(false);
-  const createInputRef = useRef<HTMLInputElement>(null);
+  const reduce = useReducedMotion();
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => loadStringSet(COLLAPSED_KEY));
+  const [fileContextMenu, setFileContextMenu] = useState<FileContextMenuState | null>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
-  const now = useMemo(() => new Date(), []);
-
-  const notesByPath = useMemo(() => new Map(allNotes.map((artifact) => [artifact.path, artifact])), [allNotes]);
+  const previousModeRef = useRef(mode);
+  const direction = modeIndex(mode) > modeIndex(previousModeRef.current) ? 1 : -1;
   const empty = tree.dirs.length === 0 && tree.files.length === 0;
 
-  const activeSort = (scope: string | null): SortOrder =>
-    (scope != null && sortOverrides[scope]) || { key: sortKey, asc: sortAsc };
-
-  const toggleDir = (key: string) => {
-    setCollapsed((current) => {
-      const next = new Set(current);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      persistStringSet(COLLAPSED_KEY, next);
-      return next;
-    });
-  };
-
-  const togglePin = (path: string) => {
-    setPins((current) => {
-      const next = new Set(current);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      persistStringSet(PINS_KEY, next);
-      return next;
-    });
-  };
+  useEffect(() => {
+    previousModeRef.current = mode;
+  }, [mode]);
 
   useEffect(() => {
-    if (!selectedPath) return;
+    if (!selectedPath || mode !== "files") return;
     setCollapsed((current) => {
       const ancestors = selectedPath.split("/").slice(0, -1)
         .map((_, index, parts) => `${parts.slice(0, index + 1).join("/")}/`);
@@ -162,358 +111,229 @@ export function NotebookRail({
         ?.scrollIntoView({ block: "nearest" });
     });
     return () => cancelAnimationFrame(frame);
-  }, [selectedPath]);
+  }, [mode, selectedPath]);
 
-  useEffect(() => {
-    if (!sortMenuOpen && !rcMenu) return;
-    const close = () => {
-      setSortMenuOpen(false);
-      setRcMenu(null);
-    };
-    window.addEventListener("pointerdown", close);
-    return () => window.removeEventListener("pointerdown", close);
-  }, [rcMenu, sortMenuOpen]);
-
-  useEffect(() => {
-    if (create) createInputRef.current?.focus();
-  }, [create?.kind, create != null]);
-
-  const openCreate = (kind: "note" | "dir") => {
-    const dir = selectedPath?.includes("/") ? `${parentDir(selectedPath)}/` : "";
-    setCreate({ kind, value: dir });
-  };
-
-  const submitCreate = () => {
-    const value = create?.value.trim();
-    if (!create || !value || value.endsWith("/")) return;
-    onCreate(create.kind, create.kind === "note" && !value.endsWith(".md") ? `${value}.md` : value);
-    setCreate(null);
-  };
-
-  const applySortKey = (key: SortKey) => {
-    const scope = nbMode ? (listDir || "root") : null;
-    const current = activeSort(scope);
-    const next: SortOrder = { key, asc: current.key === key ? !current.asc : true };
-    if (scope != null) setSortOverrides((overrides) => ({ ...overrides, [scope]: next }));
-    else {
-      setSortKey(next.key);
-      setSortAsc(next.asc);
-    }
-  };
-
-  const onRowContextMenu = (event: React.MouseEvent, path: string) => {
-    event.preventDefault();
-    setRcMenu({ x: event.clientX, y: event.clientY, path });
-  };
-
-  const pinButton = (path: string) => (
-    <span
-      role="button"
-      tabIndex={-1}
-      aria-label={pins.has(path) ? "Unpin" : "Pin"}
-      title={pins.has(path) ? "Unpin" : "Pin"}
-      className={clsx("mw-pin-btn", pins.has(path) && "on")}
-      onClick={(event) => {
-        event.stopPropagation();
-        togglePin(path);
-      }}
-    >
-      <Pin size={12} aria-hidden />
-    </span>
-  );
-
-  const fileRow = (artifact: MemoryArtifactSummary, spacer: boolean) => (
-    <button
-      key={artifact.path}
-      type="button"
-      disabled={navigationDisabled}
-      data-memory-entry={artifact.path}
-      aria-current={selectedPath === artifact.path ? "page" : undefined}
-      className={clsx("mw-tree-row", selectedPath === artifact.path && "active")}
-      onClick={() => onSelect(artifact.path)}
-      onContextMenu={(event) => onRowContextMenu(event, artifact.path)}
-    >
-      {spacer && <span className="mw-spacer" />}
-      <span className="mw-label">{stem(artifact.path)}</span>
-      {pinButton(artifact.path)}
-    </button>
-  );
-
-  const folderNode = (dir: WorkspaceDir): React.ReactNode => (
-    <div key={dir.path} className={clsx("mw-tree-folder", collapsed.has(dir.path) && "closed")} data-memory-directory={dir.path}>
-      <div className="mw-tree-row folder">
-        <button type="button" className="mw-chev-btn" aria-label={collapsed.has(dir.path) ? `Expand ${dir.name}` : `Collapse ${dir.name}`} onClick={() => toggleDir(dir.path)}>
-          <ChevronDown className="mw-chev" size={12} aria-hidden />
-        </button>
-        <button type="button" className="mw-folder-label" onClick={() => toggleDir(dir.path)}>{dir.name}</button>
-      </div>
-      <div className="mw-tree-kids">
-        {dir.dirs.map(folderNode)}
-        {sortNotes(dir.files, activeSort(null), createdAt).map((artifact) => fileRow(artifact, true))}
-      </div>
-    </div>
-  );
-
-  const pinnedRows = [...pins].filter((path) => notesByPath.has(path));
-
-  const treeView = (
-    <div ref={scrollerRef} className="mw-tree" data-memory-tree>
-      {pinnedRows.length > 0 && (
-        <div className="mw-tree-pins">
-          {pinnedRows.map((path) => fileRow(notesByPath.get(path)!, true))}
-        </div>
-      )}
-      {tree.dirs.map(folderNode)}
-      {sortNotes(tree.files, activeSort(null), createdAt).map((artifact) => fileRow(artifact, true))}
-    </div>
-  );
-
-  const nbFolderNode = (dir: WorkspaceDir): React.ReactNode => (
-    <div key={dir.path} className={clsx("mw-tree-folder", collapsed.has(dir.path) && "closed")}>
-      <div className={clsx("mw-tree-row", "folder", listDir === dir.path && "active")}>
-        <button type="button" className="mw-chev-btn" aria-label={collapsed.has(dir.path) ? `Expand ${dir.name}` : `Collapse ${dir.name}`} onClick={() => toggleDir(dir.path)}>
-          <ChevronDown className="mw-chev" size={12} aria-hidden />
-        </button>
-        <button type="button" className="mw-folder-label" onClick={() => setListDir(dir.path)}>{dir.name}</button>
-        <span className="mw-nb-count">
-          {dir.files.length}
-          {countNotes(dir) !== dir.files.length ? ` ▾ ${countNotes(dir)}` : ""}
-        </span>
-      </div>
-      <div className="mw-tree-kids">{dir.dirs.map(nbFolderNode)}</div>
-    </div>
-  );
-
-  const nbList = () => {
-    const scope = listDir || "root";
-    const override = sortOverrides[scope];
-    const order: SortOrder = override ?? (sortKey === "name" ? { key: "modified", asc: false } : { key: sortKey, asc: sortAsc });
-    const node = findDir(tree, listDir);
-    const base = node
-      ? nbDescendants
-        ? listDir === ""
-          ? allNotes.filter((artifact) => artifact.path !== "index.md")
-          : collectNotes(node)
-        : node.files
-      : [];
-    const field = (artifact: MemoryArtifactSummary) =>
-      order.key === "created" ? createdAt(artifact) : artifact.updatedAt ?? "";
-    const files = [...base].sort((a, b) => {
-      const cmp = order.key === "name"
-        ? stem(a.path).localeCompare(stem(b.path))
-        : field(a).localeCompare(field(b)) || stem(a.path).localeCompare(stem(b.path));
-      return order.asc ? cmp : -cmp;
+  const toggleDir = (path: string) => {
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      persistStringSet(COLLAPSED_KEY, next);
+      return next;
     });
-    const effectiveKey = order.key === "name" ? "modified" : order.key;
-    const when = (artifact: MemoryArtifactSummary) =>
-      effectiveKey === "created" ? createdAt(artifact) : artifact.updatedAt ?? "";
-    const row = (artifact: MemoryArtifactSummary) => {
-      const dir = parentDir(artifact.path);
-      const showParent = dir && `${dir}/` !== listDir;
-      const snippet = artifact.snippet?.trim()
-        || (artifact.recordCount ? `${artifact.recordCount} records` : "No content yet.");
-      return (
+  };
+
+  const openFileContextMenu = useCallback((
+    path: string,
+    trigger: HTMLElement,
+    source: ContextMenuPosition["source"],
+    x: number,
+    y: number,
+  ) => {
+    if (navigationDisabled) return;
+    setFileContextMenu({ path, trigger, source, x, y });
+  }, [navigationDisabled]);
+
+  const selectPath = useCallback((path: string) => {
+    const rows = Array.from(
+      scrollerRef.current?.querySelectorAll<HTMLElement>("[data-memory-entry]") ?? [],
+    );
+    const currentIndex = rows.findIndex((row) => row.dataset.memoryEntry === selectedPath);
+    const nextIndex = rows.findIndex((row) => row.dataset.memoryEntry === path);
+    onSelect(path, currentIndex >= 0 && nextIndex < currentIndex ? -1 : 1);
+  }, [onSelect, selectedPath]);
+
+  const files = useMemo(() => {
+    const fileRow = (artifact: MemoryArtifactSummary, depth = 1) => (
+      <button
+        key={artifact.path}
+        type="button"
+        disabled={navigationDisabled}
+        data-memory-entry={artifact.path}
+        aria-current={selectedPath === artifact.path ? "page" : undefined}
+        className={clsx(
+          "mw-tree-row",
+          depth === 0 && "root",
+          depth === 2 && "depth-2",
+          selectedPath === artifact.path && "active",
+        )}
+        onClick={() => selectPath(artifact.path)}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          openFileContextMenu(artifact.path, event.currentTarget, "pointer", event.clientX, event.clientY);
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+          event.preventDefault();
+          const rect = event.currentTarget.getBoundingClientRect();
+          openFileContextMenu(artifact.path, event.currentTarget, "keyboard", rect.left + 12, rect.bottom - 4);
+        }}
+      >
+        <span className="mw-label">{stem(artifact.path)}</span>
+      </button>
+    );
+
+    const folder = (dir: WorkspaceDir, depth = 0): ReactNode => (
+      <div key={dir.path} className={clsx("mw-tree-folder", collapsed.has(dir.path) && "closed")} data-memory-directory={dir.path}>
+        <button
+          type="button"
+          className={clsx("mw-fold", depth > 0 && "subfold")}
+          aria-label={collapsed.has(dir.path) ? `Expand ${dir.name}` : `Collapse ${dir.name}`}
+          aria-expanded={!collapsed.has(dir.path)}
+          onClick={() => toggleDir(dir.path)}
+        >
+          <ChevronDown className="mw-chev" aria-hidden />
+          <span className="mw-label">{dir.name}</span>
+        </button>
+        <div className={clsx("mw-tree-kids", `depth-${Math.min(depth + 1, 2)}`)}>
+          {dir.dirs.map((child) => folder(child, depth + 1))}
+          {sortNotes(dir.files, { key: "name", asc: true }, (artifact) => artifact.createdAt ?? artifact.updatedAt ?? "").map((artifact) => fileRow(artifact, Math.min(depth + 1, 2)))}
+        </div>
+      </div>
+    );
+
+    return (
+      <div ref={scrollerRef} className="mw-tree scroll-fade" data-memory-tree>
+        {tree.dirs.map((dir) => folder(dir))}
+        {sortNotes(tree.files, { key: "name", asc: true }, (artifact) => artifact.createdAt ?? artifact.updatedAt ?? "").map((artifact) => fileRow(artifact, 0))}
+      </div>
+    );
+  }, [collapsed, navigationDisabled, openFileContextMenu, selectPath, selectedPath, tree]);
+
+  const notebookNotes = useMemo(() => [...allNotes].sort((left, right) => {
+    const updated = (right.updatedAt ?? right.createdAt ?? "").localeCompare(left.updatedAt ?? left.createdAt ?? "");
+    return updated || stem(left.path).localeCompare(stem(right.path));
+  }), [allNotes]);
+
+  const notebook = useMemo(() => (
+    <div ref={scrollerRef} className="mw-rail-list scroll-fade" data-memory-notebook-list>
+      {notebookNotes.map((artifact) => (
         <button
           key={artifact.path}
           type="button"
           disabled={navigationDisabled}
           data-memory-entry={artifact.path}
-          className={clsx("mw-nnl-row", selectedPath === artifact.path && "active")}
-          onClick={() => onSelect(artifact.path)}
-          onContextMenu={(event) => onRowContextMenu(event, artifact.path)}
+          className={clsx("mw-rail-list-row", selectedPath === artifact.path && "active")}
+          onClick={() => selectPath(artifact.path)}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            openFileContextMenu(artifact.path, event.currentTarget, "pointer", event.clientX, event.clientY);
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+            event.preventDefault();
+            const rect = event.currentTarget.getBoundingClientRect();
+            openFileContextMenu(artifact.path, event.currentTarget, "keyboard", rect.left + 12, rect.bottom - 4);
+          }}
         >
-          <span className="mw-nnl-title">{stem(artifact.path)}</span>
-          <span className="mw-nnl-snippet">{snippet}</span>
-          <span className="mw-nnl-when">
-            {prettyDate(when(artifact))}
-            {showParent ? <> · <span className="mw-nnl-parent">{dir}</span></> : null}
-          </span>
+          <span className="mw-rail-row-title">{stem(artifact.path)}</span>
+          <span className="mw-rail-row-meta">{prettyDate(artifact.updatedAt ?? artifact.createdAt)}</span>
         </button>
-      );
-    };
-    const pinnedHere = files.filter((artifact) => pins.has(artifact.path));
-    const rest = files.filter((artifact) => !pins.has(artifact.path));
-    let lastBucket: string | null = null;
-    return (
-      <div className="mw-nb-list" data-memory-nb-list>
-        <div className="mw-nnl-head">
-          <h2>{listDir ? listDir.replace(/\/$/, "") : "Memory"}</h2>
-          <span className="mw-nb-count">{files.length}</span>
-          <button
-            type="button"
-            className={clsx("mw-icon-btn", nbDescendants && "on")}
-            aria-pressed={nbDescendants}
-            title="Show notes from subfolders"
-            onClick={() => setNbDescendants((value) => !value)}
-          >
-            <Layers size={13.5} aria-hidden />
-          </button>
+      ))}
+    </div>
+  ), [navigationDisabled, notebookNotes, openFileContextMenu, selectPath, selectedPath]);
+
+  const facts = useMemo(() => {
+    if (recordsLoading && records.length === 0) return <div className="mw-tree"><ListSkeleton /></div>;
+    if (recordsError) return <div className="mw-tree"><ListError title="Couldn't load memory facts" message={recordsError} onRetry={onRetryRecords} /></div>;
+    if (records.length === 0) {
+      return (
+        <div className="mw-tree">
+          <Empty icon={CheckList} hint="Facts appear here as Arden learns durable context.">No facts yet</Empty>
         </div>
-        {pinnedHere.length > 0 && (
-          <>
-            <h3 className="mw-nnl-bucket">Pinned</h3>
-            {pinnedHere.map(row)}
-          </>
-        )}
-        {rest.length > 0
-          ? rest.map((artifact) => {
-              const bucket = order.key === "name" ? null : bucketOf(when(artifact), now);
-              const head = bucket && bucket !== lastBucket
-                ? <h3 key={`bucket:${bucket}`} className="mw-nnl-bucket">{bucket}</h3>
-                : null;
-              if (bucket) lastBucket = bucket;
-              return [head, row(artifact)];
-            })
-          : <p className="mw-ctx-empty" style={{ padding: 8 }}>Empty folder.</p>}
+      );
+    }
+    return (
+      <div ref={scrollerRef} className="mw-rail-list scroll-fade" data-memory-facts-list>
+        {records.map((record) => (
+          <button
+            key={record.id}
+            type="button"
+            disabled={navigationDisabled}
+            data-memory-fact={record.id}
+            className="mw-rail-list-row fact"
+          >
+            <span className="mw-rail-row-meta">{record.updated_at.slice(0, 10)}</span>
+            <span className="mw-rail-row-fact">{record.content}</span>
+          </button>
+        ))}
       </div>
     );
-  };
+  }, [navigationDisabled, onRetryRecords, records, recordsError, recordsLoading]);
 
-  const nbView = (
-    <div ref={scrollerRef} className="mw-tree as-nb" data-memory-tree>
-      <div className="mw-nb-nav">
-        <div className={clsx("mw-nb-section", pinsSectionClosed && "closed")}>
-          <button type="button" className="mw-nb-section-head" onClick={() => setPinsSectionClosed((value) => !value)}>
-            <Pin size={13} aria-hidden />
-            Pinned
-            <ChevronDown className="mw-chev" size={10} aria-hidden />
-          </button>
-          <div className="mw-nb-section-rows">
-            {pinnedRows.length > 0
-              ? pinnedRows.map((path) => fileRow(notesByPath.get(path)!, false))
-              : <p className="mw-ctx-empty" style={{ padding: "2px 26px" }}>Nothing pinned.</p>}
-          </div>
-        </div>
-        <div className="mw-nb-root">
-          <div className={clsx("mw-tree-row", "folder", listDir === "" && "active")}>
-            <span className="mw-spacer" style={{ width: 24 }} />
-            <button type="button" className="mw-folder-label" onClick={() => setListDir("")}>Memory</button>
-            <span className="mw-nb-count">{tree.files.length}</span>
-          </div>
-        </div>
-        {tree.dirs.map(nbFolderNode)}
-      </div>
-      {nbList()}
+  const notesState = loading && empty ? (
+    <div className="mw-tree"><ListSkeleton /></div>
+  ) : error ? (
+    <div className="mw-tree"><ListError title="Couldn't load memory notes" message={error} onRetry={onRetry} /></div>
+  ) : empty ? (
+    <div className="mw-tree">
+      <Empty
+        icon={FileText}
+        hint="Memory pages appear here once the vault has notes."
+        action={<GhostBtn onClick={onRebuild} disabled={rebuilding}>{rebuilding ? "Refreshing…" : "Refresh"}</GhostBtn>}
+      >
+        No memory notes yet
+      </Empty>
     </div>
-  );
-
-  const sortScope = nbMode ? (listDir || "root") : null;
-  const sortState = activeSort(sortScope);
+  ) : mode === "files" ? files : notebook;
 
   return (
-    <>
-      <div className="mw-rail-top">
-        <button type="button" className="mw-rail-search" onClick={onOpenSwitcher} aria-label="Search notes">
-          <Search size={13} aria-hidden />
-          Search notes…
-        </button>
-        <div className="mw-rail-tools">
-          <button type="button" className={clsx("mw-icon-btn", nbMode && "on")} aria-pressed={nbMode} title="Notebook view" onClick={onToggleNbMode}>
-            <NotebookText size={13.5} aria-hidden />
-          </button>
-          <button type="button" className="mw-icon-btn" title="New note" onClick={() => openCreate("note")}>
-            <FilePlus2 size={13.5} aria-hidden />
-          </button>
-          <button type="button" className="mw-icon-btn" title="New folder" onClick={() => openCreate("dir")}>
-            <FolderPlus size={13.5} aria-hidden />
-          </button>
-          <button
-            type="button"
-            className="mw-icon-btn"
-            title="Sort"
-            aria-expanded={sortMenuOpen}
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={() => setSortMenuOpen((open) => !open)}
-          >
-            <ArrowUpDown size={13.5} aria-hidden />
-          </button>
-          {sortMenuOpen && (
-            <div className="mw-sort-menu" role="menu" onPointerDown={(event) => event.stopPropagation()}>
-              <div className="mw-sort-scope">
-                {sortScope != null ? `This folder — ${sortScope === "root" ? "Memory" : sortScope}` : "All folders"}
-              </div>
-              {(Object.keys(SORT_LABELS) as SortKey[]).map((key) => (
-                <button key={key} type="button" role="menuitem" className={clsx(sortState.key === key && "on")} onClick={() => applySortKey(key)}>
-                  {SORT_LABELS[key]}
-                  <span className="dir">{sortState.key === key ? (sortState.asc ? "↑" : "↓") : ""}</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-      {create && (
-        <div className="mw-tree-create">
-          <input
-            ref={createInputRef}
-            value={create.value}
-            placeholder={create.kind === "note" ? "path/note-name" : "path/folder-name"}
-            aria-label={create.kind === "note" ? "New note path" : "New folder path"}
-            onChange={(event) => setCreate({ ...create, value: event.currentTarget.value })}
-            onBlur={() => setCreate(null)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") submitCreate();
-              else if (event.key === "Escape") setCreate(null);
-            }}
-          />
-        </div>
-      )}
-      {loading && empty ? (
-        <div className="mw-tree"><ListSkeleton /></div>
-      ) : error ? (
-        <div className="mw-tree"><ListError title="Couldn't load memory notes" message={error} onRetry={onRetry} /></div>
-      ) : empty ? (
-        <div className="mw-tree">
-          <Empty
-            icon={FileText}
-            hint="Memory pages appear here once the vault has notes."
-            action={<GhostBtn onClick={onRebuild} disabled={rebuilding}>{rebuilding ? "Refreshing…" : "Refresh"}</GhostBtn>}
-          >
-            No memory notes yet
-          </Empty>
-        </div>
-      ) : nbMode ? nbView : treeView}
-      {rcMenu && createPortal(
-        <div
-          className="mw-rc-menu"
-          role="menu"
-          style={{ left: Math.min(rcMenu.x, window.innerWidth - 180), top: Math.min(rcMenu.y, window.innerHeight - 140) }}
-          onPointerDown={(event) => event.stopPropagation()}
+    <div className="memory-notebook-rail-slot">
+      <Tabs
+        value={mode}
+        onChange={(value) => onModeChange(value as MemoryRailMode)}
+        variant="surface"
+        label="Memory view"
+        className="mw-rail-segments"
+        indicatorClassName="mw-rail-segment-indicator"
+      >
+        {RAIL_MODES.map((nextMode) => {
+          const icon = nextMode === "files" ? <Folder size={14} aria-hidden />
+            : nextMode === "notebook" ? <Notebook01 size={14} aria-hidden />
+              : <CheckList size={14} aria-hidden />;
+          return (
+            <Tab
+              key={nextMode}
+              value={nextMode}
+              disabled={navigationDisabled}
+              className={clsx(mode === nextMode && "active")}
+              title={nextMode[0]!.toUpperCase() + nextMode.slice(1)}
+            >
+              {icon}
+              <span className="mw-rail-segment-label">
+                {nextMode[0]!.toUpperCase() + nextMode.slice(1)}
+              </span>
+            </Tab>
+          );
+        })}
+      </Tabs>
+      <AnimatePresence initial={false} mode="wait" custom={direction}>
+        <motion.div
+          key={mode}
+          custom={direction}
+          className="mw-rail-mode"
+          initial={reduce ? false : CONTENT_SWAP_VARIANTS.enter(direction)}
+          animate={{
+            ...CONTENT_SWAP_VARIANTS.center,
+            transition: reduce ? { duration: 0 } : CONTENT_ENTER_TRANSITION,
+            transitionEnd: { filter: "none" },
+          }}
+          exit={reduce ? undefined : {
+            ...CONTENT_SWAP_VARIANTS.exit(direction),
+            transition: CONTENT_EXIT_TRANSITION,
+          }}
         >
-          <div className="mw-rc-path">{rcMenu.path}</div>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              void navigator.clipboard?.writeText(rcMenu.path);
-              setRcMenu(null);
-            }}
-          >
-            Copy path
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              togglePin(rcMenu.path);
-              setRcMenu(null);
-            }}
-          >
-            {pins.has(rcMenu.path) ? "Unpin" : "Pin"}
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              onOpenInNewTab(rcMenu.path);
-              setRcMenu(null);
-            }}
-          >
-            Open in new tab
-          </button>
-        </div>,
-        document.body,
-      )}
-    </>
+          {mode === "facts" ? facts : notesState}
+        </motion.div>
+      </AnimatePresence>
+      <ContextMenu
+        state={fileContextMenu}
+        onClose={() => setFileContextMenu(null)}
+        entries={fileContextMenu ? [
+          { id: "open", label: "Open", onSelect: () => selectPath(fileContextMenu.path) },
+          { id: "copy-path", label: "Copy path", onSelect: () => void copyText(fileContextMenu.path) },
+        ] : []}
+      />
+    </div>
   );
 }

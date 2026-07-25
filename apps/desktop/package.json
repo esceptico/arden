@@ -47,6 +47,7 @@
   "dependencies": {
     "@base-ui/react": "^1.6.0",
     "@fontsource-variable/geist": "^5.2.9",
+    "@fontsource-variable/geist-mono": "^5.3.0",
     "@hugeicons/core-free-icons": "^4.2.2",
     "@hugeicons/react": "^1.1.9",
     "@microsoft/fetch-event-source": "^2.0.1",

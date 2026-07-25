@@ -640,6 +640,23 @@ async def _file_store_pages(vault: Path, pages: dict[str, list[LedgerEntry]], *,
     return store
 
 
+async def test_health_report_supports_schema_v2_dreamer_entries(tmp_path: Path):
+    dream = _ledger_entry(
+        "dream",
+        "Cross-domain insight",
+        sequence=1,
+        sources=(SourceRef("dreamer", "2026-07-12"),),
+    )
+    store = await _file_store(tmp_path / "vault", [dream])
+
+    store._write_health()
+
+    health = (tmp_path / "vault" / "health.md").read_text(encoding="utf-8")
+    assert "1 active records" in health
+    assert "last dream: 2026-07-12T10:00:00Z" in health
+    await store.close()
+
+
 class _LedgerIndexStore:
     def __init__(self):
         self.ids: set[str] = set()

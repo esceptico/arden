@@ -395,18 +395,53 @@ async def cancel_inject(
     run_registry: RunRegistry = Depends(require_run_registry),
     runtime: Runtime = Depends(get_runtime),
 ):
-    active_run = run_registry.get_active_run(session_id)
-    if active_run is None:
-        raise HTTPException(status_code=404, detail="No active run")
-
-    if active_run.cancel_injection(client_id):
+    # Serialise cancellation with POST /chat/message. Without this, a DELETE
+    # could mark the in-memory entry cancelled while the POST's late durable
+    # write resurrects it as a ghost queue item.
+    async with run_registry.session_lock(session_id):
+        active_run = run_registry.get_active_run(session_id)
         session_service = getattr(runtime, "session_service", None)
-        mark_cancelled = getattr(session_service, "mark_chat_queued_message_cancelled", None)
-        if mark_cancelled:
-            await mark_cancelled(client_id)
-        return {"status": "cancelled", "client_id": client_id}
+        cancel_durable = getattr(session_service, "cancel_chat_queued_message", None)
 
-    raise HTTPException(status_code=409, detail="Already ingested")
+        if active_run is not None and active_run.cancel_injection(client_id):
+            if cancel_durable:
+                outcome = await cancel_durable(
+                    session_id=session_id,
+                    client_id=client_id,
+                    run_id=active_run.run_id,
+                )
+                if outcome == "ingested":
+                    raise HTTPException(status_code=409, detail="Already ingested")
+            else:
+                mark_cancelled = getattr(session_service, "mark_chat_queued_message_cancelled", None)
+                if mark_cancelled:
+                    await mark_cancelled(client_id)
+                update_idempotency = getattr(session_service, "update_chat_idempotency_key", None)
+                if update_idempotency:
+                    await update_idempotency(
+                        session_id=session_id,
+                        client_id=client_id,
+                        status=RunStatus.CANCELLED.value,
+                        run_id=active_run.run_id,
+                    )
+            return {"status": "cancelled", "client_id": client_id}
+
+        if active_run is not None and active_run.injection_was_drained(client_id):
+            raise HTTPException(status_code=409, detail="Already ingested")
+
+        if cancel_durable:
+            outcome = await cancel_durable(
+                session_id=session_id,
+                client_id=client_id,
+                run_id=active_run.run_id if active_run else None,
+            )
+            if outcome == "cancelled":
+                return {"status": "cancelled", "client_id": client_id}
+            raise HTTPException(status_code=409, detail="Already ingested")
+
+        if active_run is None:
+            raise HTTPException(status_code=404, detail="No active run")
+        raise HTTPException(status_code=409, detail="Already ingested")
 
 
 @router.post("/tools/result")

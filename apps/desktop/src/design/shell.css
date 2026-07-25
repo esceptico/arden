@@ -1,0 +1,482 @@
+/*
+ * Workspace shell primitives
+ * --------------------------
+ * The Board rail has one visual grammar: a floating 18rem shell, one 30px
+ * row height for every rail row (board-app-rail.css: nav-row AND area-row),
+ * and terse textual state. Feature components only provide content and
+ * behavior; this file owns their shared geometry, state, and motion.
+ */
+
+/* All primary workspaces occupy the same shell slot. At the pressure point,
+   rails stay available as overlay furniture instead of consuming the last
+   usable reading width. */
+.board-shell-content {
+  left: calc(var(--sidebar-width) + var(--sidebar-gap));
+  right: 0;
+}
+
+.board-shell-content[data-sidebar-hidden="true"] { left: 0; }
+
+.board-shell-content[data-workspace="chat"][data-right-open="true"] {
+  right: calc(var(--inspector-dock-width) + var(--sidebar-gap));
+}
+
+@media (max-width: 55rem) {
+  .board-shell-content,
+  .board-shell-content[data-sidebar-hidden="true"],
+  .board-shell-content[data-workspace][data-right-open="true"] {
+    left: 0;
+    right: 0;
+  }
+}
+
+.workspace-rail {
+  --workspace-rail-row-height: 1.875rem;
+  --workspace-rail-top-inset: 3rem;
+
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  flex-direction: column;
+  overflow: hidden;
+  padding: var(--workspace-rail-top-inset) var(--space-2) var(--space-2);
+  color: var(--ink-soft);
+  background: var(--panel);
+  -webkit-app-region: drag;
+}
+
+.workspace-rail__drag-region {
+  position: absolute;
+  inset: 0 0 auto;
+  height: var(--workspace-rail-top-inset);
+}
+
+.workspace-rail :is(button, input, [role="button"], [role="separator"]) {
+  -webkit-app-region: no-drag;
+}
+
+.workspace-rail__nav {
+  display: grid;
+  flex: none;
+  gap: var(--interactive-row-gap);
+}
+
+.workspace-rail .workspace-rail__nav-row {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  height: var(--workspace-rail-row-height);
+  grid-template-columns: var(--icon-size) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--interactive-row-inline-padding);
+  border-radius: var(--r-row);
+  color: var(--ink-soft);
+  font-size: var(--text-base);
+  line-height: 1;
+  text-align: left;
+}
+
+.workspace-rail .workspace-rail__nav-row svg {
+  width: var(--icon-size);
+  height: var(--icon-size);
+  color: var(--muted);
+}
+
+.workspace-rail .workspace-rail__nav-row:hover,
+.workspace-rail .workspace-rail__nav-row[data-active="true"] {
+  color: var(--ink);
+  background: var(--state-hover-bg);
+  box-shadow: none;
+}
+
+.workspace-rail .workspace-rail__nav-row[data-active="true"] {
+  background: var(--state-selected-bg);
+}
+
+.workspace-rail .workspace-rail__nav-row:focus-visible,
+.workspace-rail .workspace-rail__group-heading:focus-visible,
+.workspace-rail .workspace-rail__session:focus-visible,
+.workspace-rail .workspace-rail__show-more:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.workspace-rail__row-meta {
+  color: var(--faint);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.workspace-rail__sessions {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.chat-rail-title {
+  margin: .875rem var(--space-2) 1.5rem;
+  overflow: hidden;
+  color: var(--ink);
+  font: 620 var(--text-body)/1.2 var(--sans);
+  letter-spacing: -.006em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-area-list {
+  display: grid;
+  min-height: 0;
+  overflow-y: auto;
+  gap: var(--interactive-row-gap);
+  scrollbar-width: none;
+}
+
+.home-area-list::-webkit-scrollbar { display: none; }
+
+.home-area-list__row {
+  display: grid;
+  width: 100%;
+  min-height: var(--workspace-rail-row-height);
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding-inline: var(--interactive-row-inline-padding);
+  border-radius: var(--r-row);
+  color: var(--ink-soft);
+  font-size: var(--text-base);
+  text-align: left;
+}
+
+.home-area-list__row:hover,
+.home-area-list__row[data-active="true"] {
+  color: var(--ink);
+  background: var(--state-hover-bg);
+}
+
+.home-area-list__row[data-active="true"] { background: var(--state-selected-bg); }
+
+.home-area-list__row > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-area-list__row small {
+  color: var(--faint);
+  font: 520 var(--text-2xs)/1 var(--sans);
+  white-space: nowrap;
+}
+
+.home-area-list__row small[data-tone="warning"] { color: var(--warning); }
+.home-area-list__row small[data-tone="live"] { color: var(--accent-ink); }
+
+.workspace-rail__section-header {
+  display: flex;
+  height: 2rem;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: var(--space-2-5);
+  padding: 0 var(--space-1) 0 var(--interactive-row-inline-padding);
+}
+
+.workspace-rail__section-title {
+  margin: 0;
+  color: var(--muted);
+  font: 590 var(--text-xs)/1 var(--sans);
+}
+
+.workspace-rail__section-actions {
+  display: flex;
+  align-items: center;
+}
+
+.workspace-rail .workspace-rail__filter {
+  display: grid;
+  width: var(--icon-button-size);
+  height: var(--icon-button-size);
+  place-items: center;
+  border-radius: var(--r-icon);
+}
+
+.workspace-rail__session-list {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  padding-bottom: var(--space-4);
+  scrollbar-width: none;
+}
+
+.workspace-rail__session-list::-webkit-scrollbar {
+  display: none;
+}
+
+.workspace-rail__group + .workspace-rail__group {
+  margin-top: var(--space-0-5);
+}
+
+.workspace-rail .workspace-rail__group-heading {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  height: var(--workspace-rail-row-height);
+  grid-template-columns: var(--icon-size) minmax(0, 1fr) .75rem;
+  align-items: center;
+  gap: var(--space-2);
+  /* Same inline padding as nav rows — every sidebar icon shares ONE
+     centerline (the "Areas" label sits on the same axis). */
+  padding: 0 var(--interactive-row-inline-padding);
+  border-radius: var(--r-row);
+  color: var(--muted);
+  font-size: var(--text-base);
+  /* Headers separate from session rows by WEIGHT at full size (the mock's
+     source-group-title precedent) — never by shrinking the font. */
+  font-weight: 570;
+  line-height: 1;
+  text-align: left;
+}
+
+.workspace-rail .workspace-rail__group-heading:hover {
+  color: var(--ink);
+  background: var(--state-hover-bg);
+}
+
+.workspace-rail__group-heading > span:first-child {
+  display: grid;
+  width: var(--icon-size);
+  place-items: center;
+  color: var(--muted);
+}
+
+.workspace-rail__group-heading > span:nth-child(2) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-rail__group-heading > span:first-child svg {
+  width: var(--icon-size);
+  height: var(--icon-size);
+}
+
+.workspace-rail__group-heading > svg:last-child {
+  width: .75rem;
+  height: .75rem;
+  color: var(--faint);
+  opacity: 0;
+  transition:
+    opacity var(--motion-feedback) var(--smooth-out),
+    transform var(--motion-feedback) var(--smooth-out);
+}
+
+.workspace-rail__group-heading:hover > svg:last-child { opacity: 1; }
+.workspace-rail__group-heading[data-collapsed="true"] > svg:last-child { transform: rotate(-90deg); }
+
+.workspace-rail__session-group {
+  display: flex;
+  flex-direction: column;
+  /* Rows breathe with the rail's standard gap (board-app-rail.css rail-nav /
+     area-list) so adjacent hover fills never touch. */
+  gap: var(--interactive-row-gap);
+  padding: 0;
+}
+
+.workspace-rail .workspace-rail__session {
+  position: relative;
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  height: var(--workspace-rail-row-height);
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  /* Indent = row inline padding + the heading's icon column + its gap, so
+     session titles align with their group's label text. */
+  padding: 0 var(--interactive-row-inline-padding) 0 calc(var(--interactive-row-inline-padding) + var(--icon-size) + var(--space-2));
+  border-radius: var(--r-row);
+  color: var(--ink-soft);
+  font-size: var(--text-base);
+  line-height: 1;
+  text-align: left;
+}
+
+.workspace-rail .workspace-rail__session:hover,
+.workspace-rail .workspace-rail__session[data-active="true"] {
+  color: var(--ink);
+  background: var(--state-hover-bg);
+  box-shadow: none;
+}
+
+.workspace-rail .workspace-rail__session[data-active="true"] {
+  background: var(--state-selected-bg);
+}
+
+.workspace-rail .workspace-rail__session-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Right meta cluster — time + pin + archive — overlays the title's end so
+   the resting row is just the title (full width, ellipsized). Everything in
+   the cluster reveals on hover/focus, the title dissolving under it via the
+   .session-row-title fade (styles.css). Exception: live/done status is a
+   SIGNAL (streaming / unread), not a timestamp, and stays visible at rest. */
+/* Right-anchored so the ARCHIVE button's center lands on the rail's icon
+   column (the Areas filter / theme-toggle axis: rail pad + space-1 inset).
+   No flex gap — zero-width collapsed buttons would still contribute gaps and
+   push the resting status off axis; spacing rides on margins instead. */
+.workspace-rail__session-meta {
+  position: absolute;
+  inset: 0 var(--space-1) 0 auto;
+  display: flex;
+  align-items: center;
+}
+
+.workspace-rail__session .workspace-rail__status {
+  /* Resting live/done labels right-align with nav-row meta (the row's own
+     12px inline padding), not with the button axis. */
+  margin-right: var(--space-2);
+  opacity: 0;
+}
+
+.workspace-rail__session .workspace-rail__status[data-tone],
+.workspace-rail__session:hover .workspace-rail__status,
+.workspace-rail__session:focus-within .workspace-rail__status {
+  opacity: 1;
+}
+
+.workspace-rail .workspace-rail__session-action {
+  display: grid;
+  width: 0;
+  height: var(--icon-button-size);
+  margin-left: 0;
+  place-items: center;
+  overflow: hidden;
+  border-radius: var(--r-icon);
+  color: var(--faint);
+  opacity: 0;
+  transition:
+    width var(--motion-feedback) var(--smooth-out),
+    margin-left var(--motion-feedback) var(--smooth-out),
+    opacity var(--motion-feedback) var(--smooth-out),
+    color var(--motion-feedback) var(--smooth-out);
+}
+
+.workspace-rail__session:hover .workspace-rail__session-action,
+.workspace-rail__session:focus-within .workspace-rail__session-action {
+  width: var(--icon-button-size);
+  margin-left: var(--space-0-5);
+  opacity: 1;
+}
+
+.workspace-rail__session:hover .workspace-rail__session-action:first-of-type,
+.workspace-rail__session:focus-within .workspace-rail__session-action:first-of-type {
+  margin-left: 0;
+}
+
+/* No hover fill — the row already carries the hover wash; the icon itself
+   brightens instead. */
+.workspace-rail .workspace-rail__session-action:hover {
+  color: var(--ink);
+}
+
+.workspace-rail .workspace-rail__session-action[data-active="true"] {
+  color: var(--ink);
+}
+
+.workspace-rail__status {
+  min-width: 0;
+  color: var(--faint);
+  font: 520 var(--text-2xs)/1 var(--sans);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+  transition: opacity var(--motion-feedback) var(--smooth-out);
+}
+
+.workspace-rail__status[data-tone="live"] { color: var(--accent-ink); }
+.workspace-rail__status[data-tone="done"] { color: var(--success); }
+.workspace-rail__status[data-tone="warning"] { color: var(--warning); }
+.workspace-rail__status[data-tone="danger"] { color: var(--danger); }
+
+.workspace-rail .workspace-rail__session--rename {
+  grid-template-columns: minmax(0, 1fr);
+  color: var(--ink);
+  background: var(--state-selected-bg);
+}
+
+.workspace-rail .workspace-rail__show-more {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  height: var(--workspace-rail-row-height);
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+  padding: 0 var(--interactive-row-inline-padding) 0 calc(var(--interactive-row-inline-padding) + var(--icon-size) + var(--space-2));
+  border-radius: var(--r-row);
+  color: var(--faint);
+  font-size: var(--text-base);
+  text-align: left;
+}
+
+.workspace-rail .workspace-rail__show-more:hover {
+  color: var(--ink);
+  background: var(--state-hover-bg);
+}
+
+.workspace-rail__footer {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  margin-top: auto;
+  padding-top: .4375rem;
+  border-top: 1px solid var(--edge);
+}
+
+.workspace-rail__footer > div {
+  min-width: 0;
+  flex: 1;
+}
+
+/* Not scoped to .workspace-rail — ThemeToggle also renders inside
+   .automation-workspace__rail-footer, a different rail with the same
+   corner radius and (now) the same padding. Both need this rule. */
+.workspace-rail__theme-toggle {
+  display: grid;
+  /* Global token (not --workspace-rail-row-height, which is scoped inside
+     .workspace-rail and missing in .automation-workspace__rail's subtree).
+     Same size as every other rail icon button (the Areas filter), and the
+     space-1 margin lands its center on the filter's vertical axis. */
+  width: var(--icon-button-size);
+  height: var(--icon-button-size);
+  margin-right: var(--space-1);
+  place-items: center;
+  border-radius: var(--r-icon);
+  color: var(--muted);
+}
+
+.workspace-rail .workspace-rail__theme-toggle:hover {
+  color: var(--ink);
+  background: var(--state-hover-bg);
+}
+
+/* Geometry deltas on top of .arden-resize-handle: dodge the rail header and
+   footer, and sit above the peek layer. */
+.workspace-rail__resize-handle {
+  top: 4.5rem;
+  bottom: 3.625rem;
+  z-index: var(--z-peek);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-rail * {
+    transition-duration: 1ms;
+  }
+}

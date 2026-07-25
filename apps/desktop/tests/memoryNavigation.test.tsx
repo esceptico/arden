@@ -130,6 +130,37 @@ test("artifact cache bounds revision aliases and removes aliases for evicted det
   expect(cache.get("c.md", "listed-c")?.content).toBe("C");
 });
 
+test("a refreshed Memory entry hydrates its active tab and note together", async () => {
+  const index = summary("index.md", "Index");
+  const me = summary("me.md", "Me");
+  let rows: MemoryArtifactSummary[] = [index, me];
+  window.ardenDesktop = { api: { request: async (_config, request) => {
+    if (request.path === "/admin/memory/artifacts") return response({ artifacts: rows.map((item) => rawArtifact(item)) });
+    if (request.path.startsWith("/admin/memory/links")) return response({ path: "me.md", revision: "ledger:1", stale: false, outgoing: [], backlinks: [], total_outgoing: 0, total_backlinks: 0, limit: 100, offset: 0 });
+    if (request.path.startsWith("/admin/memory/page-edits/history")) return response({ events: [], total: 0, limit: 100, next_before_sequence: null });
+    const path = decodeURIComponent(request.path.replace("/admin/memory/artifacts/", ""));
+    const item = rows.find((row) => row.path === path)!;
+    return response({ artifact: rawArtifact(item, `${item.title} body`) });
+  } } } as Window["ardenDesktop"];
+
+  const { host, root } = setup("me.md");
+  await act(async () => root.render(<ArtifactMemoryView config={config} />));
+  await settle(300);
+  expect(host.querySelector("h1")?.textContent).toBe("me");
+  localStorage.removeItem("arden.desktop.memory.lastPath");
+
+  rows = [];
+  await act(async () => useStore.setState((state) => ({ memoryVaultVersion: state.memoryVaultVersion + 1 })));
+  await settle(160);
+  rows = [index, me];
+  await act(async () => useStore.setState((state) => ({ memoryVaultVersion: state.memoryVaultVersion + 1 })));
+  await settle(300);
+
+  expect(host.querySelector(".mw-doc-tab.active")?.textContent).toContain("me");
+  expect(host.querySelector("h1")?.textContent).toBe("me");
+  expect(host.textContent).not.toContain("Nothing selected");
+});
+
 test("wikilink resolution follows the server result including aliases, headings, and ambiguity", () => {
   const links = {
     path: "a.md", revision: "ledger:1", stale: false, backlinks: [], totalBacklinks: 0, totalOutgoing: 2, limit: 100, offset: 0,
@@ -168,7 +199,7 @@ test("preview delays hover and focus, bridges into the tooltip, and exposes its 
         cache={new ArtifactCache()}
         loadDetail={(path, signal) => new Promise((resolve) => {
           requests.push({ path, signal });
-          setTimeout(() => resolve(detail(path === alpha.path ? alpha : beta, `# ${path}\n\nFirst meaningful paragraph.`)), 20);
+          setTimeout(() => resolve(detail(path === alpha.path ? alpha : beta, `# ${path}\n\n- **First meaningful paragraph.**`)), 20);
         })}
       />
     </div>,
@@ -189,7 +220,8 @@ test("preview delays hover and focus, bridges into the tooltip, and exposes its 
   await settle(100);
   expect(document.querySelector('[role="tooltip"]')).not.toBeNull();
   await act(async () => alphaPreview.dispatchEvent(new MouseEvent("mouseleave", { bubbles: true })));
-  await settle(140);
+  // The hide delay is followed by the mock's 180ms portaled-popover exit.
+  await settleUntil(() => document.querySelector('[role="tooltip"]') === null);
   expect(document.querySelector('[role="tooltip"]')).toBeNull();
 
   await act(async () => betaLink!.dispatchEvent(new FocusEvent("focusin", { bubbles: true })));
@@ -197,11 +229,34 @@ test("preview delays hover and focus, bridges into the tooltip, and exposes its 
   expect(requests.filter((request) => request.path === "beta.md")).toHaveLength(0);
   await settleUntil(() => document.querySelector('[role="tooltip"]')?.textContent?.includes("First meaningful paragraph.") === true);
   expect(document.querySelector('[role="tooltip"]')?.textContent).toContain("First meaningful paragraph.");
+  expect(document.querySelector(".memory-link-preview-markdown li strong")?.textContent).toBe("First meaningful paragraph.");
 
   await act(async () => betaLink!.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
   await act(async () => betaLink!.dispatchEvent(new FocusEvent("focusin", { bubbles: true })));
   await settle();
   expect(requests.filter((request) => request.path === "beta.md")).toHaveLength(1);
+});
+
+test("preview resolves an exact Markdown artifact path without a wikilink ledger entry", async () => {
+  const topic = summary("topics/o-1a.md", "O-1A", "r1");
+  const containerRef = createRef<HTMLDivElement>();
+  const { host, root } = setup();
+  await act(async () => root.render(
+    <div ref={containerRef}>
+      <a href="topics/o-1a.md" data-memory-path="topics/o-1a.md">O-1A</a>
+      <WikiLinkPreview
+        containerRef={containerRef}
+        links={null}
+        summaries={[topic]}
+        cache={new ArtifactCache()}
+        loadDetail={async () => detail(topic, "# O-1A\n\nPreview body.")}
+      />
+    </div>,
+  ));
+  const link = host.querySelector<HTMLAnchorElement>("[data-memory-path]")!;
+  await act(async () => link.dispatchEvent(new FocusEvent("focusin", { bubbles: true })));
+  await settleUntil(() => document.querySelector('[role="tooltip"]')?.textContent?.includes("Preview body.") === true);
+  expect(document.querySelector('[role="tooltip"]')?.textContent).toContain("Preview body.");
 });
 
 test("preview clears with its link snapshot and revision mismatch is cached without refetch", async () => {
@@ -311,18 +366,18 @@ test("notebook history shortcuts restore pages and ignore focused editors", asyn
   await act(async () => root.render(<ArtifactMemoryView config={config} />));
   await settle(350);
   expect(host.querySelector("h1")?.textContent).toBe("a");
-  expect(host.querySelector<HTMLButtonElement>('button[aria-label="Back in memory history"]')?.disabled).toBe(true);
+  expect(host.querySelector('button[aria-label="Back in memory history"]')).toBeNull();
   expect(requests.some((path) => path.startsWith("/admin/memory/page-edits/history"))).toBe(false);
-  let inlinePaths = Array.from(host.querySelectorAll<HTMLAnchorElement>('[data-memory-inline-path="b.md"]'));
+  let inlinePaths = Array.from(host.querySelectorAll<HTMLAnchorElement>('[data-memory-path="b.md"]'));
   inlinePaths[1]!.focus();
   await act(async () => inlinePaths[1]!.click());
   await settle(250);
-  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Back in memory history"]')?.click());
+  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "[", metaKey: true, bubbles: true })));
   await settleUntil(() => {
-    const links = Array.from(host.querySelectorAll<HTMLAnchorElement>('[data-memory-inline-path="b.md"]'));
+    const links = Array.from(host.querySelectorAll<HTMLAnchorElement>('[data-memory-path="b.md"]'));
     return links.indexOf(document.activeElement as HTMLAnchorElement) === 1;
   });
-  inlinePaths = Array.from(host.querySelectorAll<HTMLAnchorElement>('[data-memory-inline-path="b.md"]'));
+  inlinePaths = Array.from(host.querySelectorAll<HTMLAnchorElement>('[data-memory-path="b.md"]'));
   expect(inlinePaths.indexOf(document.activeElement as HTMLAnchorElement)).toBe(1);
 
   const detailsLink = host.querySelector<HTMLAnchorElement>('[data-wikilink="#Details"]')!;
@@ -335,7 +390,7 @@ test("notebook history shortcuts restore pages and ignore focused editors", asyn
   beeLinks[1]!.focus();
   await act(async () => beeLinks[1]!.click());
   await settle(250);
-  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Back in memory history"]')?.click());
+  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "[", metaKey: true, bubbles: true })));
   await settleUntil(() => {
     const links = Array.from(host.querySelectorAll<HTMLAnchorElement>('[data-wikilink="Bee"]'));
     return links.indexOf(document.activeElement as HTMLAnchorElement) === 1;
@@ -347,30 +402,25 @@ test("notebook history shortcuts restore pages and ignore focused editors", asyn
   await settle(250);
   expect(requests.some((path) => path === "/admin/memory/artifacts/b.md")).toBe(true);
   expect(host.querySelector("h1")?.textContent).toBe("b");
-  const back = host.querySelector<HTMLButtonElement>('button[aria-label="Back in memory history"]')!;
-  const forward = host.querySelector<HTMLButtonElement>('button[aria-label="Forward in memory history"]')!;
-  expect(back.disabled).toBe(false);
-  expect(forward.disabled).toBe(true);
   await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "[", metaKey: true, bubbles: true })));
   await settle(250);
   expect(host.querySelector("h1")?.textContent).toBe("a");
-  expect(back.disabled).toBe(false);
-  expect(forward.disabled).toBe(false);
 
-  // The rail has no search input any more — the create-note input is the
-  // editable field that must swallow the history shortcuts.
-  await act(async () => host.querySelector<HTMLButtonElement>('button[title="New note"]')?.click());
-  const input = host.querySelector<HTMLInputElement>('input[aria-label="New note path"]')!;
+  // A focused quick-switcher input must swallow history shortcuts.
+  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "o", metaKey: true, bubbles: true })));
+  await settle();
+  const input = document.querySelector<HTMLInputElement>('[aria-label="Quick switcher"] input')!;
   await act(async () => input.focus());
   await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "]", metaKey: true, bubbles: true })));
   await settle(250);
   expect(host.querySelector("h1")?.textContent).toBe("a");
-  await act(async () => input.blur());
+  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  await settle();
   await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "]", ctrlKey: true, bubbles: true })));
   await settle(250);
   expect(host.querySelector("h1")?.textContent).toBe("b");
   expect(requests.some((path) => path.startsWith("/admin/memory/page-edits/history"))).toBe(false);
-  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Open links and provenance"]')?.click());
+  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Open links"]')?.click());
   await settle(30);
   expect(requests.some((path) => path.startsWith("/admin/memory/page-edits/history"))).toBe(true);
 });
@@ -454,7 +504,7 @@ test("opening the inspector fetches full-page links and history once and pane sw
   const { host, root } = setup("note.md");
   await act(async () => root.render(<ArtifactMemoryView config={config} />));
   await settle(300);
-  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Open links and provenance"]')?.click());
+  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Open links"]')?.click());
   await settle(100);
 
   // Exactly one full-page fetch per endpoint — offset 0, limit 100.
@@ -466,20 +516,20 @@ test("opening the inspector fetches full-page links and history once and pane sw
   expect(historyRequests).toHaveLength(1);
   expect(historyRequests[0]).toContain("limit=100");
 
-  // Links pane: outgoing rows, linked mentions with cleaned excerpts, and
-  // unlinked mentions from the server's unlinked field.
-  const aside = host.querySelector<HTMLElement>('aside[aria-label="Links and provenance"]')!;
-  expect(aside.textContent).toContain("Linked mentions");
+  // The mock keeps the links instrument compact: outgoing links are the
+  // default view; incoming mentions remain one local tab away.
+  const aside = host.querySelector<HTMLElement>('aside[aria-label="Page peek"]')!;
+  expect(aside.textContent).toContain("Roadmap");
+  await act(async () => aside.querySelectorAll<HTMLButtonElement>('[role="tab"]')[1]?.click());
+  await settleUntil(() => aside.textContent?.includes("worked on Note") === true);
   expect(aside.textContent).toContain("worked on Note");
   expect(aside.textContent).not.toContain("[[Note]]");
   expect(aside.querySelector("mark")?.textContent).toBe("Note");
-  expect(aside.textContent).toContain("Unlinked mentions");
-  expect(aside.textContent).toContain("note mentioned plainly");
 
   // Switching panes is local state — no refetch.
   const requestCount = requests.length;
-  await act(async () => aside.querySelector<HTMLButtonElement>('button[aria-label="Activity"]')?.click());
-  await settle(50);
+  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Open activity"]')?.click());
+  await settleUntil(() => aside.textContent?.includes("user:latest") === true);
   expect(aside.textContent).toContain("user:latest");
   expect(aside.textContent).toContain("agent:older");
   expect(requests.length).toBe(requestCount);

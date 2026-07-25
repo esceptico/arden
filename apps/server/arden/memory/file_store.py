@@ -1253,11 +1253,21 @@ class FilePageStore:
             except ValueError:
                 return None
 
+        def _record_date(line: Line | LedgerEntry) -> str:
+            if isinstance(line, LedgerEntry):
+                return line.occurred_at or line.meta.recorded_at
+            return line.date
+
+        def _is_dream(line: Line | LedgerEntry) -> bool:
+            if isinstance(line, LedgerEntry):
+                return any(source.kind == "dreamer" for source in line.meta.sources)
+            return line.src == "dreamer"
+
         records = [ln for pg in self._pages.values() for ln in pg.active_lines()]
         by_kind: dict[str, int] = {}
         for ln in records:
             by_kind[ln.kind] = by_kind.get(ln.kind, 0) + 1
-        last_dream = max((ln.date for ln in records if ln.src == "dreamer"), default=None)
+        last_dream = max((_record_date(ln) for ln in records if _is_dream(ln)), default=None)
         synthesized = [pg for pg in self._pages.values() if pg.frontmatter.get("generated_from_revision")]
         current_syntheses = sum(
             pg.frontmatter.get("generated_from_revision") == self.canonical_revision for pg in synthesized
@@ -1285,7 +1295,7 @@ class FilePageStore:
             if dead:
                 gaps.append(f"- Dangling grounding: `{rel}` cites {len(dead)} pruned record(s) — re-synthesis pending.")
             if path.parent.name == _ENTITIES:
-                newest = max((ln.date for ln in pg.active_lines()), default="")
+                newest = max((_record_date(ln) for ln in pg.active_lines()), default="")
                 a = _age(newest)
                 if a is not None and a > STALE_DAYS:
                     gaps.append(f"- Stale topic: `topics/{path.stem}.md` — no update in {a}d (since {newest}).")

@@ -85,6 +85,8 @@ class AutomationRuntime:
             scheduler=self.scheduler,
             session_service=stores.sessions,
             get_slack_client=self.get_slack_client,
+            get_cheap_llm=self.get_cheap_llm,
+            description_model=self.cheap_model,
         )
         self.outbox_runtime = RuntimeOutbox(
             outbox_store=stores.outbox,
@@ -416,6 +418,11 @@ class AutomationRuntime:
         total = hour * 60 + minute + index * 5
         return f"{total // 60 % 24:02d}:{total % 60:02d}"
 
+    @staticmethod
+    def _area_display_description(area_: Area) -> str:
+        """Canonical concise summary from the Automations mockup."""
+        return f"Keeps the {area_.title} area current and surfaces decisions that need you."
+
     async def _seed_area_automations(self) -> None:
         """Area agents are ordinary CHANNEL automations — created through
         AutomationService.create like everything else: an area-tagged channel
@@ -441,12 +448,14 @@ class AutomationRuntime:
         trigger = {"type": "time", "at": run_at, "days": "daily"}
         existing = await self.stores.automations.get(task_id)
         channel_name = f"{area_.title} agent"
+        display_description = self._area_display_description(area_)
         if existing is None:
             channel = await self.automation_service._provision_channel(channel_name, task_id, area_id=area_.key)
             await self.automation_service.create(
                 task_id=task_id,
                 name=channel_name,
-                description=contract.description,
+                description=display_description,
+                prompt=contract.description,
                 triggers=[trigger],
                 auto_approve=contract.auto_approve,
                 tool_scope=contract.tool_scope,
@@ -483,11 +492,15 @@ class AutomationRuntime:
         # out-of-band disable of the automation row heals on the next sync.
         desired_enabled = not paused
         stale_result = bool(existing.last_result and "without a report" in existing.last_result)
+        needs_display_description = existing.description is None
+        needs_description_source = needs_display_description or existing.description_source is None
         changed = (
             repaired
             or stale_result
             or existing.name != channel_name
-            or existing.description != contract.description
+            or existing.prompt != contract.description
+            or needs_display_description
+            or needs_description_source
             or existing.auto_approve != contract.auto_approve
             or existing.tool_scope != contract.tool_scope
             or existing.output_schema != "area_custodian"
@@ -498,12 +511,19 @@ class AutomationRuntime:
         if stale_result:
             existing.last_result = None
         existing.name = channel_name
-        existing.description = contract.description
+        # A generated/manual summary is user-facing product copy. Keep it
+        # across area syncs; only seed the mockup's concise copy for migrated
+        # rows that intentionally have none.
+        if needs_display_description:
+            existing.description = display_description
+        if needs_description_source:
+            existing.description_source = "manual"
+        existing.prompt = contract.description
         existing.auto_approve = contract.auto_approve
         existing.tool_scope = contract.tool_scope
         existing.output_schema = "area_custodian"
         existing.enabled = desired_enabled
-        await self.stores.automations.save(existing)
+        await self.stores.automations.update_metadata(existing)
 
     def _suggester_available(self) -> bool:
         return self.get_records() is not None and self.get_cheap_llm() is not None

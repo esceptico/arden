@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from arden.agent import Role
-from arden.areas.agent import INTAKE_ADDENDUM, render_work_context
+from arden.areas.agent import INTAKE_ADDENDUM, is_custodian_task_id, render_work_context
 from arden.areas.lifecycle import AreaLifecycleService, AreaPageService
 from arden.areas.models import areas_from_records
 from arden.areas.paths import resolve_area_page
@@ -27,12 +27,13 @@ from arden.llm.openai_codex_catalog import refresh_codex_models
 from arden.logging import get_logger
 from arden.memory.pages import parse_page
 from arden.operator.runner import RunRequest, run_agent, run_agent_streaming
+from arden.server.app_control import AppControlService
 from arden.server.bus import BusRegistry, prime_bus_cursor_from_store
 from arden.server.middleware import AuthMiddleware, TracingMiddleware
+from arden.server.routers.areas import asks_router
 from arden.server.routers.areas import router as areas_router
 from arden.server.routers.automation import router as automation_router
 from arden.server.routers.chat import router as chat_router
-from arden.server.routers.commands import router as commands_router
 from arden.server.routers.context import router as context_router
 from arden.server.routers.dev_runtime import router as dev_runtime_router
 from arden.server.routers.gmail import router as gmail_router
@@ -49,6 +50,7 @@ from arden.server.routers.setup import router as setup_router
 from arden.server.routers.skills import router as skills_router
 from arden.server.runtime import Runtime
 from arden.services.chat import resume_suspended_chat_run, submit_chat_message
+from arden.tools.core.scope import with_read_floor
 
 _logger = get_logger(__name__)
 
@@ -296,6 +298,7 @@ async def lifespan(app: FastAPI):
         message: str,
         client_id: str | None = None,
         skip_approvals: bool | None = False,
+        images: list[dict] | None = None,
         tool_scope: tuple[str, ...] | None = None,
         output_schema: type[BaseModel] | None = None,
     ) -> str | None:
@@ -307,12 +310,21 @@ async def lifespan(app: FastAPI):
             message=message,
             session_id=session_id,
             skip_approvals=skip_approvals,
+            images=images,
             client_id=client_id,
             session_service=runtime.session_service,
             tool_scope=tool_scope,
             output_schema=output_schema,
         )
         return result.get("run_id") if isinstance(result, dict) else None
+
+    def _automation_tool_scope(automation: Automation) -> tuple[str, ...] | None:
+        if not automation.tool_scope:
+            return None
+        # Custodian contracts are curated permission domains — no floor.
+        if is_custodian_task_id(automation.task_id):
+            return tuple(automation.tool_scope)
+        return with_read_floor(automation.tool_scope, runtime.executor.registry.read_only_names())
 
     async def _dispatch_iteration(automation: Automation, context: str | dict | None = None) -> str | None:
         # Iteration loops are autonomous: the user already approved the
@@ -324,14 +336,12 @@ async def lifespan(app: FastAPI):
         # When the run was triggered by an event (e.g. a Slack message),
         # `context` carries the rendered event block — fold it into the
         # turn via AUTOMATION_PROMPT, mirroring scheduler._run_agent. With
-        # no context the prompt collapses to the bare description, so
+        # no context the prompt collapses to the bare instructions, so
         # non-event iterations submit exactly what they did before.
         manual, context = split_manual_flag(context)
         ctx_str = json.dumps(context) if isinstance(context, dict) else context
-        # Custodian runs only: area:{id} exactly. Colon-suffixed children
-        # (area:{id}:{slug}) are ordinary automations — no cap, no intake.
         area_id = automation.task_id.removeprefix("area:")
-        if automation.task_id.startswith("area:") and ":" not in area_id:
+        if is_custodian_task_id(automation.task_id):
             record = await runtime.session_service.get_area(area_id)
             attention = (record or {}).get("attention") or "ambient"
             allowed, woken_by = runtime.automation.custodians.begin_run(area_id, attention=attention, manual=manual)
@@ -347,22 +357,27 @@ async def lifespan(app: FastAPI):
             if parts:
                 ctx_str = "\n\n".join(([ctx_str] if ctx_str else []) + parts)
         message = (
-            AUTOMATION_PROMPT.render(description=automation.description, context=ctx_str)
+            AUTOMATION_PROMPT.render(prompt=automation.prompt, context=ctx_str)
             if ctx_str
-            else automation.description
+            else automation.prompt
         )
         return await _dispatch_session_message(
             _loop_target_id(automation) or "",
             message,
             client_id=f"loop:{automation.task_id}:{automation.iteration_count + 1}",
             skip_approvals=automation.auto_approve,
-            tool_scope=tuple(automation.tool_scope) if automation.tool_scope else None,
+            tool_scope=_automation_tool_scope(automation),
             output_schema=resolve_output_schema(automation.output_schema),
         )
 
     runtime.scheduler.set_iteration_dispatcher(_dispatch_iteration)
     app.state.request_area_wake = runtime.automation.request_area_wake
     runtime.dispatch_session_message = _dispatch_session_message
+    runtime.app_control = AppControlService(
+        bus_registry=bus_registry,
+        dispatch_session_message=_dispatch_session_message,
+        asks=area_asks,
+    )
 
     async def _resume_suspended_chat_run(run_id: str, session_id: str) -> object:
         chat_model = await runtime.resolve_session_chat_model(session_id)
@@ -397,7 +412,7 @@ async def lifespan(app: FastAPI):
         async with _get_or_create_session_lock(session_write_locks, target_id):
             _, context = split_manual_flag(context)
             ctx_str = json.dumps(context) if isinstance(context, dict) else context
-            prompt = AUTOMATION_PROMPT.render(description=automation.description, context=ctx_str)
+            prompt = AUTOMATION_PROMPT.render(prompt=automation.prompt, context=ctx_str)
             request = RunRequest(
                 prompt=prompt,
                 prompt_suffix=AUTOMATION_SUFFIX,
@@ -406,7 +421,7 @@ async def lifespan(app: FastAPI):
                 model=automation.model,
                 skip_approvals=automation.auto_approve,
                 automation_id=automation.task_id,
-                tool_scope=tuple(automation.tool_scope) if automation.tool_scope else None,
+                tool_scope=_automation_tool_scope(automation),
                 output_schema=resolve_output_schema(automation.output_schema),
             )
 
@@ -518,7 +533,6 @@ app = FastAPI(
     version=version("arden"),
     lifespan=lifespan,
 )
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -536,7 +550,6 @@ app.include_router(gmail_router)
 app.include_router(google_router)
 app.include_router(automation_router)
 app.include_router(chat_router)
-app.include_router(commands_router)
 app.include_router(context_router)
 app.include_router(dev_runtime_router)
 app.include_router(ops_router)
@@ -550,3 +563,4 @@ app.include_router(mcp_router)
 app.include_router(loops_router)
 app.include_router(memory_router)
 app.include_router(areas_router)
+app.include_router(asks_router)

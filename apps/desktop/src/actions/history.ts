@@ -28,7 +28,6 @@ import {
   pendingApprovalsFromRuntime,
   pendingConnectionsFromRuntime,
   areaHistoryResponse,
-  queuedMessagesFromRuntime,
   runtimeView,
   type HistoryResponse,
 } from "@/stores/history-response";
@@ -195,7 +194,7 @@ function applyRuntimeSnapshot(sessionId: string, runtime: SessionRuntimeSnapshot
       ...lifecycle,
       pendingApprovals: pendingApprovalsFromRuntime(runtime, view.hasForegroundRun, state.skipApprovals),
       pendingConnections: pendingConnectionsFromRuntime(runtime, view.hasForegroundRun),
-      queuedMessages: queuedMessagesFromRuntime(runtime, view.hasForegroundRun),
+      queuedMessages: state.queuedMessages,
     };
   });
 }

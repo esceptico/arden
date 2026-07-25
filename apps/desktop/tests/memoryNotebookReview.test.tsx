@@ -89,13 +89,6 @@ async function settle(delay = 0) {
   });
 }
 
-async function typeInto(input: HTMLInputElement, value: string) {
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, value);
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-}
-
 afterEach(async () => {
   for (const root of mountedRoots) await act(async () => root.unmount());
   mountedRoots.clear();
@@ -194,41 +187,40 @@ test("rail mirrors the plain directory structure with filename stems and precise
   expect(requests.some((request) => request.path.endsWith("/lab/index.md"))).toBe(false);
 });
 
-test("stale server search cannot overwrite a newer query", async () => {
-  // Server-backed search now lives in the raw records diagnostic; the note
-  // switcher filters client-side.
+test("a stale Facts response cannot overwrite a newer rail entry", async () => {
   const index = artifact("index.md", "Index", null, { generated: true, editable: false });
-  let releaseAlpha: (() => void) | null = null;
-  const alphaGate = new Promise<void>((resolve) => { releaseAlpha = resolve; });
+  let releaseFirst: (() => void) | null = null;
+  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  let factsRequests = 0;
   installBridge(async (path) => {
     if (path === "/admin/memory/artifacts") return response({ artifacts: [index] });
     if (path.startsWith("/admin/memory/items")) {
-      const query = new URL(`http://local${path}`).searchParams.get("q");
-      if (query === "alpha") {
-        await alphaGate;
-        return response({ items: [rawRecord("record-alpha", "Old alpha result")], limit: 100 });
+      factsRequests += 1;
+      if (factsRequests === 1) {
+        await firstGate;
+        return response({ items: [rawRecord("record-old", "Old facts result")], limit: 100 });
       }
-      if (query === "beta") return response({ items: [rawRecord("record-beta", "Current beta result")], limit: 100 });
-      return response({ items: [], limit: 100 });
+      return response({ items: [rawRecord("record-new", "Current facts result")], limit: 100 });
     }
     return response({ artifact: detail(index) });
   });
   const { host, root } = setupDom();
   await act(async () => root.render(<ArtifactMemoryView config={config} />));
   await settle(220);
-  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Open raw records diagnostic"]')?.click());
+  const facts = host.querySelector<HTMLButtonElement>('button[data-tab-value="facts"]')!;
+  const notebook = host.querySelector<HTMLButtonElement>('button[data-tab-value="notebook"]')!;
+  await act(async () => facts.click());
   await settle(20);
-  const input = host.querySelector<HTMLInputElement>('input[aria-label="Search raw records…"]')!;
-  await typeInto(input, "alpha");
-  await settle(220);
-  await typeInto(input, "beta");
-  await settle(220);
-  releaseAlpha?.();
-  await settle();
+  await act(async () => notebook.click());
+  await settle(500);
+  await act(async () => facts.click());
+  await settle(500);
+  releaseFirst?.();
+  await settle(40);
 
   const railText = host.querySelector('[data-memory-zone="rail"]')?.textContent ?? "";
-  expect(railText).toContain("Current beta result");
-  expect(railText).not.toContain("Old alpha result");
+  expect(railText).toContain("Current facts result");
+  expect(railText).not.toContain("Old facts result");
 });
 
 test("vault change refetches selected timeline even when page revision is unchanged", async () => {
@@ -299,36 +291,6 @@ test("newer vault reload wins over an older rebuild response", async () => {
   expect(host.querySelector('[data-memory-entry="stale.md"]')).toBeNull();
 });
 
-test("raw diagnostic manages focus and Escape restores its trigger", async () => {
-  const index = artifact("index.md", "Index", null, { generated: true, editable: false });
-  const me = artifact("me.md", "Me");
-  installBridge((path) => {
-    if (path === "/admin/memory/artifacts") return response({ artifacts: [index, me] });
-    if (path.startsWith("/admin/memory/items")) return response({ items: [], limit: 100 });
-    const artifactPath = decodeURIComponent(path.replace("/admin/memory/artifacts/", ""));
-    return response({ artifact: detail(artifactPath === "me.md" ? me : index) });
-  });
-  const { host, root } = setupDom();
-  await act(async () => root.render(<ArtifactMemoryView config={config} />));
-  await settle(220);
-  const trigger = host.querySelector<HTMLButtonElement>('button[aria-label="Open raw records diagnostic"]')!;
-
-  await act(async () => trigger.click());
-  await settle();
-  const heading = host.querySelector<HTMLElement>('section[aria-label="Raw records diagnostic"] h2')!;
-  expect(document.activeElement === heading).toBe(true);
-  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Close raw records diagnostic"]')?.click());
-  await settle();
-  expect(document.activeElement === trigger).toBe(true);
-
-  await act(async () => trigger.click());
-  await settle();
-  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-  await settle();
-  expect(host.querySelector('section[aria-label="Raw records diagnostic"]')).toBeNull();
-  expect(document.activeElement === trigger).toBe(true);
-});
-
 test("list failure blocks the rail and retry recovers", async () => {
   const index = artifact("index.md", "Index", null, { generated: true, editable: false });
   const me = artifact("me.md", "Me");
@@ -354,40 +316,4 @@ test("list failure blocks the rail and retry recovers", async () => {
   await settle(220);
   expect(host.querySelector('[data-memory-entry="me.md"]')).not.toBeNull();
   expect(host.querySelector('[data-memory-zone="rail"] [role="alert"]')).toBeNull();
-});
-
-test("navigating from raw diagnostics focuses the selected note instead of the raw trigger", async () => {
-  const index = artifact("index.md", "Index", null, { generated: true, editable: false });
-  const first = artifact("first.md", "First");
-  const second = artifact("second.md", "Second");
-  installBridge((path) => {
-    if (path === "/admin/memory/artifacts") return response({ artifacts: [index, first, second] });
-    if (path.startsWith("/admin/memory/items")) return response({ items: [], limit: 100 });
-    const artifactPath = decodeURIComponent(path.replace("/admin/memory/artifacts/", ""));
-    const raw = artifactPath === "first.md" ? first : artifactPath === "second.md" ? second : index;
-    return response({ artifact: detail(raw) });
-  });
-  const { host, root } = setupDom();
-  await act(async () => root.render(<ArtifactMemoryView config={config} />));
-  await settle(220);
-  const trigger = host.querySelector<HTMLButtonElement>('button[aria-label="Open raw records diagnostic"]')!;
-  await act(async () => trigger.click());
-  await settle();
-
-  // Records replaces the notes view in the rail (Obsidian sidebar model), so
-  // navigation away happens through the quick switcher.
-  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "o", metaKey: true, bubbles: true })));
-  await settle(30);
-  const switcherInput = document.querySelector<HTMLInputElement>('input[placeholder="Jump to note…"]')!;
-  await act(async () => {
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
-    setter.call(switcherInput, "Second");
-    switcherInput.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-  await act(async () => switcherInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
-  await settle(60);
-  expect(host.querySelector('section[aria-label="Raw records diagnostic"]')).toBeNull();
-  const secondButton = host.querySelector<HTMLButtonElement>('[data-memory-entry="second.md"]')!;
-  expect(document.activeElement === secondButton).toBe(true);
-  expect(document.activeElement === trigger).toBe(false);
 });

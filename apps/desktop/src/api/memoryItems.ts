@@ -78,15 +78,3 @@ export function listMemoryItems(config: AppConfig, params: ListMemoryItemsParams
     })}`,
   );
 }
-
-// ── 2 — Get one item ────────────────────────────────────────────────────────
-// ── 2b — Pin / unpin a record ─────────────────────────────────────────────────
-export function setRecordPinned(config: AppConfig, recordId: string, pinned: boolean) {
-  return apiWithConfig<{ ok: boolean; pinned: boolean }>(
-    config,
-    `/admin/memory/record/${encodeURIComponent(recordId)}/pin`,
-    { method: "POST", body: JSON.stringify({ pinned }) },
-  );
-}
-
-// ── 3 — Search ──────────────────────────────────────────────────────────────

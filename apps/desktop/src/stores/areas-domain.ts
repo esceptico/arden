@@ -1,13 +1,16 @@
 import type { AreaDetail, AreasOverview } from "@/api/areas";
 import type { Area } from "@/api/types";
 
+export type AreasLoadPhase = "idle" | "loading" | "ready" | "error";
+
 export interface AreasDomainState {
   recordsById: Record<string, Area>;
   recordOrder: string[];
   overview: AreasOverview | null;
   detailByKey: Record<string, AreaDetail>;
+  detailPhaseByKey: Record<string, AreasLoadPhase>;
   openAreaKey: string | null;
-  loading: boolean;
+  overviewPhase: AreasLoadPhase;
 }
 
 export function createAreasDomainState(): AreasDomainState {
@@ -16,8 +19,9 @@ export function createAreasDomainState(): AreasDomainState {
     recordsById: {},
     recordOrder: [],
     detailByKey: {},
+    detailPhaseByKey: {},
     openAreaKey: null,
-    loading: false,
+    overviewPhase: "idle",
   };
 }
 
@@ -98,7 +102,7 @@ export function reduceOverviewLoaded(
   return {
     ...state,
     overview,
-    loading: false,
+    overviewPhase: "ready",
   };
 }
 
@@ -106,26 +110,46 @@ export function reduceDetailLoaded(state: AreasDomainState, detail: AreaDetail):
   return {
     ...state,
     detailByKey: { ...state.detailByKey, [detail.key]: detail },
-    loading: false,
+    detailPhaseByKey: { ...state.detailPhaseByKey, [detail.key]: "ready" },
   };
 }
 
-export function reduceAskResolved(state: AreasDomainState, key: string, askId: string): AreasDomainState {
+export function reduceOverviewPhase(
+  state: AreasDomainState,
+  phase: AreasLoadPhase,
+): AreasDomainState {
+  return { ...state, overviewPhase: phase };
+}
+
+export function reduceDetailPhase(
+  state: AreasDomainState,
+  key: string,
+  phase: AreasLoadPhase,
+): AreasDomainState {
+  return {
+    ...state,
+    detailPhaseByKey: { ...state.detailPhaseByKey, [key]: phase },
+  };
+}
+
+/** Ask ids are globally unique (the server keys them in one flat store), so a
+ *  resolution clears the ask wherever it is cached — no area key needed. */
+export function reduceAskResolved(state: AreasDomainState, askId: string): AreasDomainState {
   const overview = state.overview
     ? {
         ...state.overview,
-        focus: state.overview.focus.filter((a) => !(a.id === askId && a.area_key === key)),
+        focus: state.overview.focus.filter((a) => a.id !== askId),
       }
     : null;
 
-  const detail = state.detailByKey[key]
-    ? {
-        ...state.detailByKey[key],
-        asks: state.detailByKey[key].asks.filter((a) => a.id !== askId),
-      }
-    : undefined;
-
-  const detailByKey = detail ? { ...state.detailByKey, [key]: detail } : state.detailByKey;
+  const detailByKey = Object.fromEntries(
+    Object.entries(state.detailByKey).map(([key, detail]) => [
+      key,
+      detail.asks.some((a) => a.id === askId)
+        ? { ...detail, asks: detail.asks.filter((a) => a.id !== askId) }
+        : detail,
+    ]),
+  );
 
   return {
     ...state,
@@ -140,4 +164,3 @@ export function reduceOpenArea(state: AreasDomainState, key: string | null): Are
     openAreaKey: key,
   };
 }
-

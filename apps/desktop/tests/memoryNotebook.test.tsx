@@ -165,12 +165,13 @@ test("memory opens as a filesystem notebook with a plain tree, tabs, and stems",
   const layout = host.querySelector<HTMLElement>('[data-memory-layout="notebook"]');
   expect(layout?.classList.contains("memory-ws")).toBe(true);
 
-  // Top strip: history buttons plus document tabs labeled with path stems.
-  expect(host.querySelector('button[aria-label="Back in memory history"]')).not.toBeNull();
-  const tablist = host.querySelector<HTMLElement>('[role="tablist"][aria-label="Open notes"]');
+  // Top furniture mirrors the redesign: document tabs and page instruments
+  // are separate clusters on one desk band.
+  const tablist = host.querySelector<HTMLElement>('[role="tablist"][aria-label="Open pages"]');
   expect(tablist).not.toBeNull();
   expect(tablist?.querySelector('[role="tab"]')?.textContent).toContain("index");
-  expect(tablist?.querySelector('button[aria-label="New tab"]')).not.toBeNull();
+  expect(host.querySelector('[aria-label="Page instruments"]')).not.toBeNull();
+  expect(host.querySelector('button[aria-label="Open links"]')).not.toBeNull();
 
   // The rail is a plain filesystem tree: folder nodes from paths (plus empty
   // directories the server lists), rows labeled with filename stems.
@@ -188,8 +189,9 @@ test("memory opens as a filesystem notebook with a plain tree, tabs, and stems",
   expect(rail?.querySelector('[data-memory-entry=".arden/maintenance/state.md"]')).toBeNull();
   expect(rail?.querySelector('[data-memory-entry="health.md"]')).toBeNull();
 
-  // Pinned cluster at the top of the tree — me.md is pinned by default.
-  expect(rail?.querySelector('.mw-tree-pins [data-memory-entry="me.md"]')).not.toBeNull();
+  // The mock rail is intentionally bare: no pinned cluster or hidden toolbar.
+  expect(rail?.querySelector(".mw-tree-pins")).toBeNull();
+  expect(rail?.querySelector(".mw-rail-top")).toBeNull();
 
   // The tree never fetches index documents to build itself; the only detail
   // read so far is the selected note.
@@ -199,8 +201,7 @@ test("memory opens as a filesystem notebook with a plain tree, tabs, and stems",
 
   // Folder label clicks only collapse/expand — they never navigate.
   const topicsFolder = rail!.querySelector<HTMLElement>('[data-memory-directory="topics/"]')!;
-  const topicsLabel = Array.from(topicsFolder.querySelectorAll<HTMLButtonElement>("button"))
-    .find((button) => button.classList.contains("mw-folder-label"))!;
+  const topicsLabel = topicsFolder.querySelector<HTMLButtonElement>(".mw-fold")!;
   expect(topicsLabel.textContent).toBe("topics");
   await act(async () => topicsLabel.click());
   expect(topicsFolder.classList.contains("closed")).toBe(true);
@@ -208,19 +209,10 @@ test("memory opens as a filesystem notebook with a plain tree, tabs, and stems",
   await act(async () => topicsFolder.querySelector<HTMLButtonElement>('button[aria-label="Expand topics"]')?.click());
   expect(topicsFolder.classList.contains("closed")).toBe(false);
 
-  // Right-clicking a row opens a context menu portaled to the body.
-  await act(async () => dexRow!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
-  const menu = document.body.querySelector<HTMLElement>(".mw-rc-menu");
-  expect(menu).not.toBeNull();
-  const items = Array.from(menu!.querySelectorAll('[role="menuitem"]')).map((item) => item.textContent);
-  expect(items).toEqual(["Copy path", "Pin", "Open in new tab"]);
-  await act(async () => Array.from(menu!.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'))
-    .find((item) => item.textContent === "Open in new tab")?.click());
+  // File rows navigate directly; the rail has no legacy context-menu layer.
+  await act(async () => dexRow?.click());
   await settle(250);
   expect(host.querySelector('[data-memory-zone="workspace"] h1')?.textContent).toBe("dex");
-  const tabs = Array.from(tablist!.querySelectorAll('[role="tab"]')).map((tab) => tab.textContent);
-  expect(tabs).toHaveLength(2);
-  expect(tabs[1]).toContain("dex");
 
   // The note surface: h1 is the filename stem, frontmatter renders as a
   // Properties section, and body leading H1s stay in the prose.
@@ -228,7 +220,7 @@ test("memory opens as a filesystem notebook with a plain tree, tabs, and stems",
   await settle(250);
   const noteTitle = workspace?.querySelector("h1");
   expect(noteTitle?.textContent).toBe("me");
-  expect(workspace?.textContent).toContain("Properties");
+  expect(workspace?.textContent).toContain("properties");
   expect(workspace?.textContent).toContain("personal");
   const prose = workspace?.querySelector(".mw-prose");
   expect(prose?.textContent).toContain("I build personal tools.");
@@ -245,23 +237,94 @@ test("memory opens as a filesystem notebook with a plain tree, tabs, and stems",
   expect(workspace?.querySelector("h1")?.textContent).toBe("dex");
   expect(bridge.requests).toContain("/admin/memory/artifacts/topics/dex.md");
 
-  // No rail search input — the search affordance opens the quick switcher.
+  // The three mock modes share one compact rail and never replace it with a
+  // diagnostic toolbar.
   expect(rail?.querySelector("input")).toBeNull();
-  await act(async () => rail?.querySelector<HTMLButtonElement>('button[aria-label="Search notes"]')?.click());
-  await settle();
-  expect(document.querySelector('[aria-label="Quick switcher"]')).not.toBeNull();
-  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-  await settle();
-  expect(document.querySelector('[aria-label="Quick switcher"]')).toBeNull();
+  const modeTabs = Array.from(rail?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? []);
+  expect(modeTabs.map((tab) => tab.dataset.tabValue)).toEqual(["files", "notebook", "facts"]);
 
-  // Raw records stay one diagnostic away.
-  const openRecords = host.querySelector<HTMLButtonElement>('button[aria-label="Open raw records diagnostic"]');
-  expect(openRecords).not.toBeNull();
-  await act(async () => openRecords?.click());
-  await settle();
-  expect(host.querySelector('section[aria-label="Raw records diagnostic"]')).not.toBeNull();
-  expect(host.querySelector('button[aria-label="Close raw records diagnostic"]')).not.toBeNull();
-  expect(host.textContent).toContain("Raw diagnostic fact");
+  await act(async () => modeTabs.find((tab) => tab.dataset.tabValue === "notebook")?.click());
+  await settle(500);
+  expect(rail?.querySelector('[role="tab"][data-tab-value="notebook"]')?.getAttribute("aria-selected")).toBe("true");
+  expect(rail?.querySelector("[data-memory-notebook-list]")).not.toBeNull();
+  expect(rail?.querySelector('[data-memory-entry="me.md"]')?.textContent).toContain("me");
+
+  await act(async () => modeTabs.find((tab) => tab.dataset.tabValue === "facts")?.click());
+  await settle(500);
+  expect(rail?.querySelector('[role="tab"][data-tab-value="facts"]')?.getAttribute("aria-selected")).toBe("true");
+  const fact = rail?.querySelector<HTMLButtonElement>('[data-memory-fact="record-1"]');
+  expect(fact?.textContent).toContain("Raw diagnostic fact");
+  expect(host.querySelector('section[aria-label="Raw records diagnostic"]')).toBeNull();
+  await act(async () => fact?.click());
+  expect(workspace?.querySelector('main')?.getAttribute("aria-label")).toBe("Memory note");
+
+  await unmountRoot(root);
+});
+
+test("Memory document tabs append, dedupe, rove, close, and preserve focus semantics", async () => {
+  installBridge();
+  const { host, root } = setupDom();
+  await act(async () => root.render(<ArtifactMemoryView config={config} />));
+  await settle(250);
+
+  const openTabs = () => Array.from(
+    host.querySelectorAll<HTMLButtonElement>('[role="tablist"][aria-label="Open pages"] [role="tab"]'),
+  );
+  const labels = () => openTabs().map((tab) => tab.textContent);
+
+  expect(labels()).toEqual(["index"]);
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-memory-entry="topics/dex.md"]')?.click());
+  await settle(250);
+  expect(labels()).toEqual(["index", "dex"]);
+
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-memory-entry="me.md"]')?.click());
+  await settle(250);
+  expect(labels()).toEqual(["index", "dex", "me"]);
+  expect(openTabs().map((tab) => tab.tabIndex)).toEqual([-1, -1, 0]);
+
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-memory-entry="topics/dex.md"]')?.click());
+  await settle(250);
+  expect(labels()).toEqual(["index", "dex", "me"]);
+  expect(openTabs().map((tab) => tab.tabIndex)).toEqual([-1, 0, -1]);
+
+  const dexTab = openTabs()[1]!;
+  dexTab.focus();
+  await act(async () => dexTab.dispatchEvent(new KeyboardEvent("keydown", {
+    key: "ArrowRight",
+    bubbles: true,
+    cancelable: true,
+  })));
+  await settle(250);
+  const openPages = host.querySelector('[role="tablist"][aria-label="Open pages"]');
+  expect(openPages?.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("me");
+  expect(host.querySelector("h1")?.textContent).toBe("me");
+
+  const closeButtons = Array.from(host.querySelectorAll<HTMLButtonElement>(".mw-doc-tab-x"));
+  expect(closeButtons.map((button) => button.getAttribute("aria-label")))
+    .toEqual(["Close index", "Close dex", "Close me"]);
+  expect(closeButtons.map((button) => button.tabIndex)).toEqual([-1, -1, 0]);
+
+  const meTab = openTabs()[2]!;
+  meTab.focus();
+  await act(async () => meTab.dispatchEvent(new KeyboardEvent("keydown", {
+    key: "Delete",
+    bubbles: true,
+    cancelable: true,
+  })));
+  await settle(250);
+  expect(labels()).toEqual(["index", "dex"]);
+  expect(openPages?.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("dex");
+  expect(document.activeElement?.textContent).toBe("dex");
+
+  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", {
+    key: "w",
+    metaKey: true,
+    bubbles: true,
+    cancelable: true,
+  })));
+  await settle(250);
+  expect(labels()).toEqual(["index"]);
+  expect(openPages?.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("index");
 
   await unmountRoot(root);
 });
@@ -292,6 +355,28 @@ test("loading, error, and empty states keep the notebook zones stable", async ()
   expect(emptyDom.host.querySelector('[data-memory-zone="rail"]')?.textContent).toContain("No memory notes yet");
   expect(emptyDom.host.querySelector('[data-memory-zone="workspace"]')).not.toBeNull();
   await unmountRoot(emptyDom.root);
+});
+
+test("Cmd/Ctrl+B toggles Memory's own visible rail", async () => {
+  installBridge();
+  const { host, root } = setupDom();
+  await act(async () => root.render(<ArtifactMemoryView config={config} />));
+  await settle(250);
+
+  const layout = host.querySelector<HTMLElement>('[data-memory-layout="notebook"]')!;
+  expect(layout.classList.contains("rail-hidden")).toBe(false);
+
+  const commandB = new KeyboardEvent("keydown", { key: "b", metaKey: true, bubbles: true, cancelable: true });
+  await act(async () => window.dispatchEvent(commandB));
+  expect(commandB.defaultPrevented).toBe(true);
+  expect(layout.classList.contains("rail-hidden")).toBe(true);
+
+  const controlB = new KeyboardEvent("keydown", { key: "b", ctrlKey: true, bubbles: true, cancelable: true });
+  await act(async () => window.dispatchEvent(controlB));
+  expect(controlB.defaultPrevented).toBe(true);
+  expect(layout.classList.contains("rail-hidden")).toBe(false);
+
+  await unmountRoot(root);
 });
 
 test("default selection restores the last path, falls back to index.md, then the first navigable note", async () => {

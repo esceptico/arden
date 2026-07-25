@@ -1,51 +1,383 @@
+import { useEffect, useLayoutEffect, useRef, useState, type MutableRefObject } from "react";
 import { motion } from "motion/react";
 import type { AreaAsk } from "@/api/areas";
 import { useStore } from "@/stores";
 import { formatRelativePast } from "@/lib/format";
-import { ASK_KIND } from "@/lib/areaKind";
-import { RISE_IN, RISE_SETTLED, ROW_EXIT, SPRING_ROW_ENTRY, MOTION, EASE_OUT } from "@/lib/tokens/motion";
+import { ASK_KIND, splitAreaAsk } from "@/lib/areaKind";
+import { fetchAreasOverview, replyToAsk, resolveAsk } from "@/actions/areas";
+import { runAutomation } from "@/actions/automations";
+import { switchSession } from "@/actions/sessions";
+import { primaryActionFor } from "@/lib/askActions";
+import type { HomeDeckSlot } from "@/features/home/hooks/useHomeKeyboard";
+import {
+  TRACE_ROW_ENTER,
+  TRACE_ROW_EXIT,
+  TRACE_ROW_TRANSITION,
+  TRACE_ROW_VISIBLE,
+} from "@/lib/tokens/motion";
 
-/** A single focus-set row: an area's one ask, made legible and actionable
- *  by the row itself. The whole card opens the area — there's no per-row
- *  button, because for an agent ask "the button" only ever meant "open the
- *  area" (the kind was a label masquerading as an action). Genuinely
- *  distinct actions (retry a failed run, approve a pending tool) live on
- *  the ask card inside the room, one click away. Eyebrow = area title +
- *  severity dot + the kind as a text tag; the ask reads in full (two
- *  lines). Enters RISE_IN/SPRING_ROW_ENTRY, retires ROW_EXIT via the
- *  caller's AnimatePresence (keyed by ask.id). */
-export function FocusRow({ ask, areaTitle }: { ask: AreaAsk; areaTitle: string }) {
+const SNOOZE_OPTIONS = [
+  { label: "In an hour", delay: 60 * 60_000 },
+  { label: "Tonight", delay: 8 * 60 * 60_000 },
+  { label: "Tomorrow", delay: 24 * 60 * 60_000 },
+] as const;
+
+interface FocusRowProps {
+  ask: AreaAsk;
+  areaTitle: string;
+  expanded?: boolean;
+  onDeckDirection?: (direction: -1 | 0 | 1) => void;
+  onSnoozed?: (ask: AreaAsk, wakeLabel: string) => void;
+  onCommitted?: (ask: AreaAsk) => void;
+  keyboardActionsRef?: MutableRefObject<FocusRowKeyboardActions | null>;
+}
+
+export interface FocusRowKeyboardActions {
+  activateSlot: (slot: HomeDeckSlot) => void;
+  toggleSnooze: () => void;
+  closeFoot: () => boolean;
+  footMode: "actions" | "reply" | "snooze";
+}
+
+/** The head card keeps the ask actionable in-place; peer asks remain compact
+ * rows so the desk only asks for one decision at a time. */
+export function FocusRow({
+  ask,
+  areaTitle,
+  expanded = false,
+  onDeckDirection,
+  onSnoozed,
+  onCommitted,
+  keyboardActionsRef,
+}: FocusRowProps) {
   const openArea = useStore((s) => s.openArea);
+  const automations = useStore((s) => s.automations);
+  const pushToast = useStore((s) => s.pushToast);
   const kind = ASK_KIND[ask.kind];
   const age = formatRelativePast(ask.created_at);
+  const { title, detail } = splitAreaAsk(ask.text);
+  const [busy, setBusy] = useState(false);
+  const [replyOpen, setReplyOpen] = useState(false);
+  const [reply, setReply] = useState("");
+  const [snoozeOpen, setSnoozeOpen] = useState(false);
+  const replyRef = useRef<HTMLInputElement>(null);
+  const busyRef = useRef(false);
+  const footMode = replyOpen ? "reply" : snoozeOpen ? "snooze" : "actions";
+  const primaryAction = primaryActionFor(ask, automations, {
+    switchSession: (sessionId) => void switchSession(sessionId),
+    runAutomation: (taskId) => void runAutomation(taskId),
+    openArea,
+  });
+  /** An unfiled ask has no area room to open — fall back to its own action. */
+  const openContext = () => {
+    if (ask.area_key) openArea(ask.area_key);
+    else primaryAction?.run();
+  };
+
+  const mutate = async (run: () => Promise<void>, failureTitle: string): Promise<boolean> => {
+    if (busyRef.current) return false;
+    busyRef.current = true;
+    setBusy(true);
+    try {
+      await run();
+      await fetchAreasOverview();
+      return true;
+    } catch {
+      pushToast({
+        id: `mission-control-ask-failed:${ask.id}`,
+        title: failureTitle,
+        status: "failed",
+        target: { kind: "automation" },
+      });
+      return false;
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  };
+
+  const settle = async (state: "done" | "dismissed", resolution: string, failureTitle: string): Promise<boolean> => {
+    const succeeded = await mutate(
+      () => resolveAsk(ask.id, state, undefined, resolution),
+      failureTitle,
+    );
+    if (succeeded) onCommitted?.(ask);
+    return succeeded;
+  };
+
+  useEffect(() => {
+    if (!replyOpen) return;
+    setReply("");
+    const timer = window.setTimeout(() => replyRef.current?.focus(), 30);
+    return () => window.clearTimeout(timer);
+  }, [replyOpen]);
+
+  const sendReply = async () => {
+    const text = reply.trim();
+    if (!text) return;
+    onDeckDirection?.(1);
+    const succeeded = await mutate(() => replyToAsk(ask.id, text), "Couldn’t send the reply");
+    if (succeeded) {
+      setReply("");
+      onCommitted?.(ask);
+    }
+  };
+
+  const snooze = async (option: (typeof SNOOZE_OPTIONS)[number]) => {
+    onDeckDirection?.(0);
+    const succeeded = await mutate(
+      () => resolveAsk(ask.id, "snoozed", new Date(Date.now() + option.delay).toISOString()),
+      "Couldn’t set this aside",
+    );
+    if (succeeded) {
+      onSnoozed?.(ask, option.label.toLowerCase());
+      onCommitted?.(ask);
+    }
+  };
+
+  const openReply = () => {
+    if (busyRef.current) return;
+    setSnoozeOpen(false);
+    setReplyOpen(true);
+  };
+
+  const toggleSnooze = () => {
+    if (busyRef.current) return;
+    setReplyOpen(false);
+    setSnoozeOpen((open) => !open);
+  };
+
+  const closeFoot = (): boolean => {
+    if (!replyOpen && !snoozeOpen) return false;
+    setReplyOpen(false);
+    setSnoozeOpen(false);
+    return true;
+  };
+
+  const activateSlot = (slot: HomeDeckSlot) => {
+    if (busyRef.current) return;
+    if (snoozeOpen) {
+      const option = SNOOZE_OPTIONS[slot - 1];
+      if (option) void snooze(option);
+      return;
+    }
+    if (replyOpen) return;
+    if (slot === 3) {
+      toggleSnooze();
+      return;
+    }
+    if (slot === 2) {
+      if (ask.kind === "review") {
+        onDeckDirection?.(-1);
+        void settle("dismissed", "rejected", "Couldn’t reject");
+      } else if (primaryAction) {
+        primaryAction.run();
+      } else {
+        openContext();
+      }
+      return;
+    }
+    if (ask.kind === "review") {
+      onDeckDirection?.(1);
+      void settle("done", "approved", "Couldn’t approve");
+    } else if (ask.kind === "question") {
+      openReply();
+    } else {
+      onDeckDirection?.(1);
+      void settle("done", "acknowledged", "Couldn’t clear this");
+    }
+  };
+
+  useLayoutEffect(() => {
+    if (!expanded || !keyboardActionsRef) return;
+    const actions: FocusRowKeyboardActions = {
+      activateSlot,
+      toggleSnooze,
+      closeFoot,
+      footMode,
+    };
+    keyboardActionsRef.current = actions;
+    return () => {
+      if (keyboardActionsRef.current === actions) keyboardActionsRef.current = null;
+    };
+  }, [activateSlot, closeFoot, expanded, footMode, keyboardActionsRef, toggleSnooze]);
+
+  if (!expanded) {
+    return (
+      <motion.button
+        layout="position"
+        type="button"
+        data-area-id={ask.area_key ?? undefined}
+        onClick={openContext}
+        initial={TRACE_ROW_ENTER}
+        animate={TRACE_ROW_VISIBLE}
+        exit={TRACE_ROW_EXIT}
+        transition={TRACE_ROW_TRANSITION}
+        className="mission-control__peer arden-row"
+      >
+        <span className="mission-control__peer-title">{title}</span>
+        <span className="mission-control__peer-meta arden-attention-meta" data-columns="3">
+          <span>{kind.label.toLowerCase()}</span>
+          <span className="arden-attention-meta__separator" aria-hidden="true">·</span>
+          <span>{areaTitle}</span>
+          <span className="arden-attention-meta__separator" aria-hidden="true">·</span>
+          <time dateTime={ask.created_at}>{age} ago</time>
+        </span>
+      </motion.button>
+    );
+  }
 
   return (
-    <motion.button
-      layout
-      type="button"
-      onClick={() => openArea(ask.area_key)}
-      initial={RISE_IN}
-      animate={RISE_SETTLED}
-      exit={{ ...ROW_EXIT, transition: { duration: MOTION.row, ease: EASE_OUT } }}
-      transition={SPRING_ROW_ENTRY}
-      className="app-row group/row grid w-full min-w-0 gap-1 rounded-xl bg-surface-soft px-4 py-3 text-left focus-visible:shadow-[0_0_0_2px_var(--color-accent-soft)] focus-visible:outline-none"
+    <article
+      data-area-id={ask.area_key ?? undefined}
+      className="mission-control__focus"
     >
-      {/* Eyebrow reads left→right as identity · kind · freshness: the area
-          leads (what area), the kind qualifies (what's being asked), and the
-          right-aligned age gives the list a measured spine — the one number
-          that says whether this is fresh or has been sitting. */}
-      <div className="flex min-w-0 items-center gap-2">
-        <span className="min-w-0 truncate text-xs font-medium text-ink-soft group-hover/row:text-ink">
-          {areaTitle}
-        </span>
-        <span className="shrink-0 text-2xs font-medium uppercase tracking-wide text-faint">
-          {kind.label}
-        </span>
-        {age && <span className="ml-auto shrink-0 text-2xs text-whisper tabular-nums">{age}</span>}
-      </div>
-      <p className="m-0 min-w-0 text-sm leading-snug text-pretty text-ink line-clamp-2 [overflow-wrap:anywhere]">
-        {ask.text}
+      <p className="mission-control__focus-context">
+        <button type="button" onClick={openContext}>{areaTitle}</button>
+        <span aria-hidden>·</span>
+        <span>{kind.label.toLowerCase()}</span>
+        <time dateTime={ask.created_at}>{age} ago</time>
       </p>
-    </motion.button>
+      <h2>{title}</h2>
+      {(ask.why_now || detail) && <p className="mission-control__focus-reason">{ask.why_now ?? detail}</p>}
+      {ask.what_next && <p className="mission-control__focus-next">{ask.what_next}</p>}
+
+      <div className="mission-control__focus-foot">
+        <div
+          className="mission-control__focus-actions"
+          data-io-hidden={footMode === "actions" ? undefined : ""}
+          aria-hidden={footMode === "actions" ? undefined : true}
+          inert={footMode === "actions" ? undefined : true}
+        >
+          {ask.kind === "review" && (
+            <>
+              <button
+                type="button"
+                className="arden-button"
+                data-variant="primary"
+                disabled={busy}
+                onClick={() => activateSlot(1)}
+              >
+                <span className="mission-control__verb-key" aria-hidden>1</span>
+                Approve
+              </button>
+              <button
+                type="button"
+                className="arden-button"
+                data-variant="quiet"
+                data-tone="danger"
+                disabled={busy}
+                onClick={() => activateSlot(2)}
+              >
+                <span className="mission-control__verb-key" aria-hidden>2</span>
+                Reject
+              </button>
+            </>
+          )}
+          {ask.kind === "question" && (
+            <button
+              type="button"
+              className="arden-button"
+              data-variant="primary"
+              disabled={busy}
+              onClick={() => activateSlot(1)}
+            >
+              <span className="mission-control__verb-key" aria-hidden>1</span>
+              Answer
+            </button>
+          )}
+          {ask.kind === "notify" && (
+            <button
+              type="button"
+              className="arden-button"
+              data-variant="primary"
+              disabled={busy}
+              onClick={() => activateSlot(1)}
+            >
+              <span className="mission-control__verb-key" aria-hidden>1</span>
+              Got it
+            </button>
+          )}
+          <button
+            type="button"
+            className="arden-button"
+            data-variant="quiet"
+            disabled={busy}
+            onClick={() => {
+              if (ask.kind === "review") {
+                if (primaryAction) primaryAction.run();
+                else openContext();
+              } else {
+                activateSlot(2);
+              }
+            }}
+          >
+            {ask.kind !== "review" && <span className="mission-control__verb-key" aria-hidden>2</span>}
+            {primaryAction?.label ?? "Open area"}
+          </button>
+          <button
+            type="button"
+            className="mission-control__later arden-button"
+            data-variant="quiet"
+            disabled={busy}
+            aria-expanded={snoozeOpen}
+            onClick={toggleSnooze}
+          >
+            <span className="mission-control__verb-key" aria-hidden>3</span>
+            Later
+          </button>
+        </div>
+
+        <form
+          className="mission-control__reply"
+          data-io-hidden={footMode === "reply" ? undefined : ""}
+          aria-hidden={footMode === "reply" ? undefined : true}
+          inert={footMode === "reply" ? undefined : true}
+          onSubmit={(event) => {
+            event.preventDefault();
+            void sendReply();
+          }}
+        >
+          <input
+            ref={replyRef}
+            className="arden-field"
+            value={reply}
+            onChange={(event) => setReply(event.target.value)}
+            placeholder="Your answer"
+            aria-label="Reply to this request"
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                setReplyOpen(false);
+              }
+            }}
+          />
+          <span className="mission-control__reply-hint">↵ send · esc back</span>
+        </form>
+
+        <div
+          className="mission-control__snooze"
+          aria-label="Set aside until"
+          data-io-hidden={footMode === "snooze" ? undefined : ""}
+          aria-hidden={footMode === "snooze" ? undefined : true}
+          inert={footMode === "snooze" ? undefined : true}
+        >
+          <span>Back when?</span>
+          {SNOOZE_OPTIONS.map((option) => (
+            <button
+              key={option.label}
+              type="button"
+              className="arden-button"
+              data-variant="quiet"
+              disabled={busy}
+              onClick={() => void snooze(option)}
+            >
+              <span className="mission-control__verb-key" aria-hidden>{SNOOZE_OPTIONS.indexOf(option) + 1}</span>
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </article>
   );
 }

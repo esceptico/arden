@@ -11,11 +11,13 @@ export function Message({
   isFinal = true,
   sourceTurnId,
   sourceCount,
+  hideActivityHeader = false,
 }: {
   id: string;
   isFinal?: boolean;
   sourceTurnId?: string;
   sourceCount?: number;
+  hideActivityHeader?: boolean;
 }) {
   const role = useStore((s) => s.messages.get(id)?.role);
   if (!role) return null;
@@ -31,7 +33,7 @@ export function Message({
     );
     case "reasoning": return <ReasoningMessage id={id} />;
     case "tool": return <ToolMessage id={id} />;
-    case "activity": return <ActivityMessage id={id} />;
+    case "activity": return <ActivityMessage id={id} hideHeader={hideActivityHeader} />;
     case "todo": return <TodoMessage id={id} />;
     case "error": return <ErrorMessage id={id} />;
     case "status": return <StatusMessage id={id} />;

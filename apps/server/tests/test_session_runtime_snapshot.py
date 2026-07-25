@@ -76,7 +76,11 @@ async def test_history_includes_runtime_snapshot_for_active_session(session_serv
         client_id="queued-1",
         session_id="sess-runtime",
         run_id="run-1",
-        message={"role": "user", "content": "follow up", "client_id": "queued-1"},
+        message={
+            "role": "user",
+            "content": "follow up",
+            "client_id": "queued-1",
+        },
         enqueued_seq=13,
     )
 
@@ -89,7 +93,7 @@ async def test_history_includes_runtime_snapshot_for_active_session(session_serv
     assert result["runtime"]["checkpoint_seq"] == 12
     assert result["runtime"]["active_run"]["status"] == "running"
     assert result["runtime"]["pending_approvals"][0]["tool_id"] == "tool-1"
-    assert result["runtime"]["queued_messages"][0]["client_id"] == "queued-1"
+    assert result["runtime"]["queued_messages"] == []
 
 
 @pytest.mark.asyncio
@@ -170,7 +174,11 @@ async def test_history_runtime_snapshot_hides_stale_queue_rows(session_service: 
         client_id="queued-old",
         session_id="sess-stale-queue",
         run_id="run-old",
-        message={"role": "user", "content": "old queued", "client_id": "queued-old"},
+        message={
+            "role": "user",
+            "content": "old queued",
+            "client_id": "queued-old",
+        },
         enqueued_seq=5,
     )
     await session_service.store.record_chat_run_status("run-old", "interrupted", last_seq=6)
@@ -181,7 +189,11 @@ async def test_history_runtime_snapshot_hides_stale_queue_rows(session_service: 
         client_id="queued-new",
         session_id="sess-stale-queue",
         run_id="run-new",
-        message={"role": "user", "content": "new queued", "client_id": "queued-new"},
+        message={
+            "role": "user",
+            "content": "new queued",
+            "client_id": "queued-new",
+        },
         enqueued_seq=8,
     )
 
@@ -191,11 +203,13 @@ async def test_history_runtime_snapshot_hides_stale_queue_rows(session_service: 
     )
 
     assert result["runtime"]["active_run"]["run_id"] == "run-new"
-    assert [message["client_id"] for message in result["runtime"]["queued_messages"]] == ["queued-new"]
+    assert result["runtime"]["queued_messages"] == []
 
 
 @pytest.mark.asyncio
-async def test_history_runtime_snapshot_omits_retryable_queue_after_terminal_run(session_service: SessionService):
+async def test_history_runtime_snapshot_omits_retryable_queue_after_terminal_run(
+    session_service: SessionService,
+):
     state = _state("sess-terminal-queue")
     await session_service.save(state, [{"role": "user", "content": "hi", "client_id": "msg-1"}])
     await session_service.store.record_chat_run_started("run-1", "sess-terminal-queue")
@@ -203,7 +217,11 @@ async def test_history_runtime_snapshot_omits_retryable_queue_after_terminal_run
         client_id="queued-1",
         session_id="sess-terminal-queue",
         run_id="run-1",
-        message={"role": "user", "content": "retryable", "client_id": "queued-1"},
+        message={
+            "role": "user",
+            "content": "retryable",
+            "client_id": "queued-1",
+        },
         enqueued_seq=9,
     )
     await session_service.store.record_chat_run_status("run-1", "interrupted", last_seq=10)

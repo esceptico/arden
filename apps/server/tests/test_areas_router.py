@@ -22,6 +22,7 @@ from arden.areas.work_models import AreaWorkSnapshot
 from arden.areas.work_store import AreaWorkConflict
 from arden.memory.pages import parse_page
 from arden.server.app import app
+from arden.server.routers.areas import asks_router
 from arden.server.routers.areas import router as areas_router
 
 PAGE = "---\ntitle: O-1A\nupdated: 2026-07-05\n---\n# O-1A\n\n## Open loops\n- Find counsel.\n"
@@ -158,6 +159,7 @@ def client(tmp_path: Path):
 
     test_app = FastAPI()
     test_app.include_router(areas_router)
+    test_app.include_router(asks_router)
     suggestions = AreaSuggestionStore(tmp_path / "suggestions.json")
     suggestions.replace_suggestions(
         [
@@ -233,8 +235,8 @@ def test_routes_registered():
         "/areas/{area_id}/page",
         "/areas/{area_id}/restore",
         "/areas/{area_id}/autonomy",
-        "/areas/{area_id}/asks/{ask_id}/resolve",
-        "/areas/{area_id}/asks/{ask_id}/reply",
+        "/asks/{ask_id}/resolve",
+        "/asks/{ask_id}/reply",
         "/areas/{area_id}/outcomes",
         "/areas/{area_id}/outcomes/{key}",
         "/areas/{area_id}/work/{key}",
@@ -354,7 +356,7 @@ def test_plain_container_gets_a_bare_room(client):
 def test_resolve_ask_and_unknown_area_404(client):
     c, _, emitted, o1a, _ = client
     c.get("/areas/overview")  # seed the mechanical ask
-    res = c.post(f"/areas/{o1a}/asks/approval:r1:t1/resolve", json={"state": "dismissed"})
+    res = c.post("/asks/approval:r1:t1/resolve", json={"state": "dismissed"})
     assert res.status_code == 200
     assert res.json()["state"] == "dismissed"
     assert emitted == [[o1a]]
@@ -362,6 +364,24 @@ def test_resolve_ask_and_unknown_area_404(client):
     res = c.get("/areas/nope")
     assert res.status_code == 404
     assert o1a in res.json()["detail"]
+
+
+def test_resolve_ask_can_reopen_a_depth_one_undo(client):
+    c, _, emitted, o1a, _ = client
+    c.get("/areas/overview")  # seed the mechanical ask
+    dismissed = c.post("/asks/approval:r1:t1/resolve", json={"state": "dismissed"})
+    assert dismissed.status_code == 200
+    emitted.clear()
+
+    reopened = c.post("/asks/approval:r1:t1/resolve", json={"state": "active"})
+
+    assert reopened.status_code == 200
+    assert reopened.json()["state"] == "active"
+    assert reopened.json()["resolution"] is None
+    assert reopened.json()["resolved_at"] is None
+    assert emitted == [[o1a]]
+    overview = c.get("/areas/overview").json()
+    assert [ask["id"] for ask in overview["brief"]["needs_you"]] == ["approval:r1:t1"]
 
 
 def test_reply_posts_linked_message_to_custodian_channel(client):
@@ -380,7 +400,7 @@ def test_reply_posts_linked_message_to_custodian_channel(client):
         )
     )
 
-    res = c.post(f"/areas/{o1a}/asks/agent:{o1a}:dose/reply", json={"message": "Use 5 mg."})
+    res = c.post(f"/asks/agent:{o1a}:dose/reply", json={"message": "Use 5 mg."})
 
     assert res.status_code == 200
     assert res.json()["resolution"] == "replied"
@@ -391,20 +411,61 @@ def test_reply_posts_linked_message_to_custodian_channel(client):
     assert emitted == [[o1a]]
 
 
+def _unfiled_ask(ask_id: str = "tool:chat-1:overdue", kind: str = "question") -> Ask:
+    return Ask(
+        id=ask_id,
+        area_key=None,
+        text="Invoice #4021 is 12 days overdue",
+        kind=kind,
+        source="agent_tool",
+        actions=[{"verb": "open_session", "ref": "chat-1"}],
+        state="active",
+        created_at="2026-07-06T10:00:00",
+        stable_key="overdue",
+        reply_session_id="chat-1",
+    )
+
+
+def test_resolve_unfiled_ask_does_not_wake_a_custodian(client):
+    c, svc, emitted, _o1a, _ = client
+    svc._asks.upsert(_unfiled_ask())
+    emitted.clear()
+    c.app.state.wakes.clear()
+
+    res = c.post("/asks/tool:chat-1:overdue/resolve", json={"state": "done"})
+
+    assert res.status_code == 200
+    assert res.json()["state"] == "done"
+    assert emitted == [[]]
+    assert c.app.state.wakes == []
+
+
+def test_reply_to_unfiled_ask_dispatches_into_the_origin_session(client):
+    c, svc, emitted, _o1a, _ = client
+    svc._asks.upsert(_unfiled_ask())
+    emitted.clear()
+
+    res = c.post("/asks/tool:chat-1:overdue/reply", json={"message": "Chase it."})
+
+    assert res.status_code == 200
+    assert res.json()["resolution"] == "replied"
+    assert c.app.state.dispatched == [("chat-1", "REPLY TO ASK [tool:chat-1:overdue]\nChase it.", None)]
+    assert emitted == [[]]
+
+
 def test_resolve_unknown_ask_404(client):
-    c, _, _, o1a, _ = client
-    res = c.post(f"/areas/{o1a}/asks/missing/resolve", json={"state": "done"})
+    c, _, _, _o1a, _ = client
+    res = c.post("/asks/missing/resolve", json={"state": "done"})
     assert res.status_code == 404
 
 
-def test_resolve_ask_404s_when_ask_belongs_to_a_different_area(client):
-    """An ask id that resolves fine but belongs to another area than the
-    path segment must 404, not silently resolve + emit under the wrong
-    area."""
-    c, svc, emitted, o1a, _ = client
+def test_resolve_ask_emits_the_asks_own_area_key(client):
+    """Ask ids are globally unique, so the route carries no area segment —
+    the emitted key comes off the ask itself."""
+    c, svc, emitted, _o1a, _ = client
     res = c.post("/areas", json={"name": "Dex", "page_path": "topics/dex.md"})
     dex = res.json()["area_id"]
-    emitted.clear()  # the attach above legitimately emitted; the resolve below must NOT
+    emitted.clear()  # the attach above legitimately emitted
     svc._asks.upsert(
         Ask(
             id="agent:dex:1",
@@ -418,29 +479,23 @@ def test_resolve_ask_404s_when_ask_belongs_to_a_different_area(client):
         )
     )
 
-    res = c.post(f"/areas/{o1a}/asks/agent:dex:1/resolve", json={"state": "dismissed"})
-    assert res.status_code == 404
-    assert res.json()["detail"] == "Ask not found in this Area"
-    assert emitted == []
-
-    # sanity: resolving it under its real area still works and emits ask.area_key
-    res = c.post(f"/areas/{dex}/asks/agent:dex:1/resolve", json={"state": "dismissed"})
+    res = c.post("/asks/agent:dex:1/resolve", json={"state": "dismissed"})
     assert res.status_code == 200
     assert emitted == [[dex]]
 
 
 def test_resolve_rejects_bad_state(client):
-    c, _, emitted, o1a, _ = client
-    res = c.post(f"/areas/{o1a}/asks/approval:r1:t1/resolve", json={"state": "yolo"})
+    c, _, emitted, _o1a, _ = client
+    res = c.post("/asks/approval:r1:t1/resolve", json={"state": "yolo"})
     assert res.status_code == 422
     assert emitted == []
 
 
 def test_resolve_snoozed_carries_snoozed_until(client):
-    c, _, _, o1a, _ = client
+    c, _, _, _o1a, _ = client
     c.get("/areas/overview")  # seed the mechanical ask
     res = c.post(
-        f"/areas/{o1a}/asks/approval:r1:t1/resolve",
+        "/asks/approval:r1:t1/resolve",
         json={"state": "snoozed", "snoozed_until": "2099-01-01T00:00:00+00:00"},
     )
     assert res.status_code == 200

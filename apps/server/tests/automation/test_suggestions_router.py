@@ -37,7 +37,8 @@ def _suggestion(
     return AutomationSuggestion(
         id=suggestion_id,
         name=name or suggestion_id,
-        description=f"{suggestion_id} prompt",
+        description=f"{suggestion_id} summary",
+        prompt=f"{suggestion_id} prompt",
         triggers=triggers or [TimeTrigger(at="09:00", days="mon")],
         rationale=f"because {suggestion_id} fits",
         category="Status reports",
@@ -62,6 +63,8 @@ class _FakeAutomationService:
             task_id=self.next_task_id,
             name=kwargs["name"],
             description=kwargs["description"],
+            description_source="manual" if kwargs["description"] else "generated",
+            prompt=kwargs["prompt"],
             model=None,
             triggers=[TimeTrigger(at="09:00", days="mon")],
             enabled=True,
@@ -131,7 +134,7 @@ async def test_get_returns_active_suggestions(store, client):
 
     assert [s["name"] for s in suggestions] == ["Weekly digest", "Calendar prep"]
     first = suggestions[0]
-    assert set(first) == {"id", "name", "description", "triggers", "rationale", "evidence", "category", "icon"}
+    assert set(first) == {"id", "name", "description", "prompt", "triggers", "rationale", "evidence", "category", "icon"}
     assert first["id"] == "a"
     assert first["triggers"] == [{"type": "time", "at": "09:00", "days": "mon"}]
     assert first["icon"] == "GitPullRequest"
@@ -160,7 +163,8 @@ async def test_create_with_from_suggestion_id_marks_accepted(store, service, cli
         "/automations",
         json={
             "name": "Weekly digest",
-            "description": "Summarize merged PRs",
+            "description": "Summarizes merged pull requests.",
+            "prompt": "Summarize merged PRs.",
             "trigger_type": "time",
             "at": "09:00",
             "days": "mon",
@@ -187,7 +191,8 @@ async def test_create_without_from_suggestion_id_leaves_suggestions(store, clien
         "/automations",
         json={
             "name": "Standalone",
-            "description": "No suggestion link",
+            "description": "Runs a standalone task.",
+            "prompt": "No suggestion link.",
             "trigger_type": "time",
             "at": "09:00",
             "days": "mon",

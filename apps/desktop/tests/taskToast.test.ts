@@ -22,6 +22,8 @@ test("isTerminalStatus only matches completed/failed/cancelled", () => {
   expect(isTerminalStatus("cancelled")).toBe(true);
   expect(isTerminalStatus("running")).toBe(false);
   expect(isTerminalStatus("interrupted")).toBe(false);
+  // "info" is a toast tone, not a run state — it must never narrow.
+  expect(isTerminalStatus("info")).toBe(false);
 });
 
 test("backgroundAgentToast: terminal + not focused → session-targeted toast", () => {
@@ -51,7 +53,7 @@ test("automationToast: builds an automation-targeted toast", () => {
   expect(toast?.id).toBe("auto:a1");
   expect(toast?.title).toBe("Daily digest");
   expect(toast?.detail).toBe("3 items");
-  expect(toast?.target).toEqual({ kind: "automation" });
+  expect(toast?.target).toEqual({ kind: "automation", taskId: "a1" });
 });
 
 test("automationToast: falls back to a generic title; suppressed when modal open", () => {

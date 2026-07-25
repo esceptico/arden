@@ -14,9 +14,9 @@ test("copy glyph keeps both icons mounted and changes only swap state", () => {
   expect((copied.match(/class="t-icon"/g) ?? []).length).toBe(2);
 });
 
-test("static mockups expose the same icon-swap variables", () => {
+test("the board motion engine exposes the same icon-swap variables", () => {
   const source = readFileSync(
-    new URL("../../../docs/mockups/board-motion.js", import.meta.url),
+    new URL("../src/lib/boardMotionEngine.js", import.meta.url),
     "utf8",
   );
 

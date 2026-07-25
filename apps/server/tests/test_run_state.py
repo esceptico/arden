@@ -56,6 +56,8 @@ def test_run_state_owns_injection_queue_lifecycle():
 
     assert run.drain_injections() == [{"role": "user", "content": "second", "client_id": "cid-2"}]
     assert run.pending_injection_count == 0
+    assert run.injection_was_drained("cid-2") is True
+    assert run.injection_was_drained("cid-1") is False
     assert run.drain_injections() == []
 
 
@@ -334,3 +336,38 @@ def test_otid_scoped_per_session():
     registry.create_run("sess-2")
     registry.register_otid("sess-1", "cid-1", "run-A")
     assert registry.lookup_otid("sess-2", "cid-1") is None
+
+
+def _live_run_with_state(registry: RunRegistry, session_id: str, **state_over) -> RunState:
+    from arden.context.models import SessionState
+
+    run = registry.create_run(session_id)
+    run.status = RunStatus.RUNNING
+    run.session_state = SessionState(session_id=session_id, started_at=datetime.now(UTC), **state_over)
+    return run
+
+
+def test_sync_session_chat_model_reaches_a_live_runs_state():
+    # save_session rewrites the whole sessions row from the run's in-memory
+    # state at run end — a PUT /sessions/{id}/model landing mid-run must
+    # reach that state or the finished run reverts the pin.
+    registry = RunRegistry()
+    run = _live_run_with_state(registry, "sess-x", chat_model="gpt-5.2")
+
+    registry.sync_session_chat_model("sess-x", "claude-fable-5")
+
+    assert run.session_state.chat_model == "claude-fable-5"
+
+
+def test_sync_session_chat_model_leaves_settled_runs_alone():
+    registry = RunRegistry()
+    run = _live_run_with_state(registry, "sess-x", chat_model="gpt-5.2")
+    run.status = RunStatus.COMPLETED
+
+    registry.sync_session_chat_model("sess-x", "claude-fable-5")
+
+    assert run.session_state.chat_model == "gpt-5.2"
+
+
+def test_sync_session_chat_model_without_a_run_is_a_no_op():
+    RunRegistry().sync_session_chat_model("nobody-home", "claude-fable-5")

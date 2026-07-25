@@ -285,11 +285,17 @@ let registeredShortcut = null;
 
 const DEFAULT_QUICK_SHORTCUT = "CommandOrControl+Shift+Space";
 
-const QUICK_WIDTH = 668;
-/** Base height: composer card + shadow padding. The renderer requests a
- *  taller window via quick:resize while its chat picker is open. */
-const QUICK_BASE_HEIGHT = 100;
-const QUICK_MAX_HEIGHT = 420;
+// The visible sheet is 608px (the system-overlay contract); the transparent
+// window adds the renderer's 24px shadow gutters on both sides.
+const QUICK_WIDTH = 656;
+/** Base height: 48px header + 180px composer + 52px footer, plus the
+ * renderer's 8px top and 36px bottom shadow gutters. The renderer requests a
+ * taller window only while its destination picker is open. */
+const QUICK_BASE_HEIGHT = 324;
+const QUICK_MAX_HEIGHT = 560;
+const QUICK_VISIBLE_TOP_GUTTER = 8;
+const QUICK_COMPACT_WIDTH = 46.25 * 16;
+const QUICK_SHORT_HEIGHT = 38 * 16;
 
 /** Register the quick-capture global shortcut, replacing whatever was
  *  previously bound. Pass an empty string / nullish value to clear.
@@ -340,7 +346,6 @@ function createWindow({ show }) {
     backgroundColor: nativeTheme.shouldUseDarkColors ? "#100f0f" : "#ece9e0",
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 18, y: 18 },
-    vibrancy: "sidebar",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       nodeIntegration: false,
@@ -501,16 +506,23 @@ function showQuickWindow() {
 }
 
 function presentQuickWindow(win) {
-  // Horizontally centered on the display that currently owns the
-  // cursor; vertically in the lower third — near where the user's
-  // attention usually rests, clear of top-of-screen menus and tabs.
+  // Horizontally centered on the display that currently owns the cursor;
+  // the visible sheet starts at the system-overlay mock's 18vh anchor.
   // Reset to base size first: a prior summon may have grown the window
   // for the chat picker.
   const cursorPoint = screen.getCursorScreenPoint();
   const display = screen.getDisplayNearestPoint(cursorPoint);
   const { x: dx, y: dy, width: dw, height: dh } = display.workArea;
   const x = Math.round(dx + (dw - QUICK_WIDTH) / 2);
-  const y = Math.round(dy + dh * 0.64);
+  // Match the overlay's responsive top anchor. The renderer's transparent
+  // top shadow gutter is subtracted so the visible card—not its window—lands
+  // exactly on the anchor.
+  const visibleTop = dh <= QUICK_SHORT_HEIGHT
+    ? 2.5 * 16
+    : dw <= QUICK_COMPACT_WIDTH
+      ? 4.5 * 16
+      : dh * 0.18;
+  const y = Math.max(dy, Math.round(dy + visibleTop - QUICK_VISIBLE_TOP_GUTTER));
   win.setBounds({ x, y, width: QUICK_WIDTH, height: QUICK_BASE_HEIGHT });
   win.show();
   win.focus();

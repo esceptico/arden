@@ -47,14 +47,6 @@ export function normalizeConfig(config: Partial<AppConfig> | null | undefined): 
   };
 }
 
-export function hostFromUrl(value: string): string {
-  try {
-    return new URL(value).host || value;
-  } catch {
-    return value;
-  }
-}
-
 export function headersForConfig(config: AppConfig, json = false): HeadersInit {
   const out: Record<string, string> = {};
   if (json) out["Content-Type"] = "application/json";

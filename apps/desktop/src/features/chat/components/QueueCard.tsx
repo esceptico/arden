@@ -1,109 +1,276 @@
-import { Loader2, X } from "@/components/icons";
-import clsx from "clsx";
-import { AnimatePresence, motion } from "motion/react";
-import { cancelQueuedMessage } from "@/actions/messages";
+import { memo, useEffect, useRef, useState } from "react";
+import { AnimatePresence, motion, useAnimationControls } from "motion/react";
+import { ArrowTurnForward, ChevronDown, PencilEdit02, X } from "@/components/icons";
+import {
+  cancelQueuedMessage,
+  moveQueuedMessage,
+  promoteQueuedMessageToSteer,
+} from "@/actions/messages";
 import { useStore, type QueuedMessage } from "@/stores";
 import { ICON } from "@/lib/icons";
-import { EASE_EMPHASIZED, EASE_HOVER, EASE_OUT, DURATION_PANEL, DURATION_POPOVER, MOTION, ROW_EXIT } from "@/lib/tokens/motion";
-import { IconSwap } from "@/components/ui/IconSwap";
+import {
+  QUEUE_ITEM_HEIGHT_PX,
+  QUEUE_SPRING,
+  QUEUE_STACK_GAP_PX,
+  QUEUE_STACK_MAX_PEEKS,
+  QUEUE_STACK_PEEK_PX,
+  QUEUE_STACK_SCALE_STEP,
+} from "@/features/chat/lib/queue";
 
-const CARD_TRANSITION = { duration: DURATION_PANEL, ease: EASE_EMPHASIZED };
-const ROW_TRANSITION = { duration: DURATION_POPOVER, ease: EASE_EMPHASIZED };
+interface QueueCardProps {
+  onEdit: (message: QueuedMessage) => void;
+}
 
-/** Pending user messages submitted while the agent was running. Renders
- *  as a stack of cards peeking out from behind the composer — the
- *  composer covers the bottom of this card via negative margin so the
- *  visual reads as "next up in the queue".
- *
- *  Animation budget:
- *  - Card: rises out from behind the composer on first add, sinks back
- *    on last remove. `layout` smooths height as rows are added /
- *    removed mid-life.
- *  - Row: fade + slight rise on enter; popLayout pops the exiting row
- *    out of flow so it dissolves in place while neighbors FLIP up via
- *    their `layout` springs. */
-export function QueueCard() {
-  const queued = useStore((s) => s.queuedMessages);
+/** Direct port of Fluid Functionalism's queued-chat stack controller. */
+export const QueueCard = memo(function QueueCard({ onEdit }: QueueCardProps) {
+  const queued = useStore((state) => state.queuedMessages);
+  const stackCount = queued.length;
+  const collapsedStackHeight =
+    QUEUE_ITEM_HEIGHT_PX
+    + Math.min(Math.max(stackCount - 1, 0), QUEUE_STACK_MAX_PEEKS) * QUEUE_STACK_PEEK_PX;
+  const expandedStackHeight =
+    stackCount * QUEUE_ITEM_HEIGHT_PX
+    + Math.max(stackCount - 1, 0) * QUEUE_STACK_GAP_PX;
+  const stackRef = useRef<HTMLDivElement>(null);
+  const [stackHovered, setStackHovered] = useState(false);
+  const [pointerDownId, setPointerDownId] = useState<string | null>(null);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dragY, setDragY] = useState(0);
+  const dragStartYRef = useRef(0);
+  const queueLengthRef = useRef(stackCount);
+  queueLengthRef.current = stackCount;
+
+  const [isTouch, setIsTouch] = useState(false);
+  const [tapExpanded, setTapExpanded] = useState(false);
+  useEffect(() => {
+    const media = window.matchMedia?.("(hover: none)");
+    if (!media) return;
+    const update = () => setIsTouch(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+  useEffect(() => {
+    if (stackCount === 0) setTapExpanded(false);
+  }, [stackCount]);
+
+  const stackExpanded =
+    stackHovered || pointerDownId !== null || draggingId !== null || tapExpanded;
+  const slotY = (index: number) =>
+    -index * (QUEUE_ITEM_HEIGHT_PX + QUEUE_STACK_GAP_PX);
+
+  const stackBump = useAnimationControls();
+  const previousCountRef = useRef(stackCount);
+  useEffect(() => {
+    const previous = previousCountRef.current;
+    previousCountRef.current = stackCount;
+    if (stackCount > previous && previous > 0 && !stackExpanded) {
+      stackBump.set({ y: -7 });
+      void stackBump.start({
+        y: 0,
+        transition: { type: "spring", duration: 0.42, bounce: 0.5 },
+      });
+    }
+  }, [stackBump, stackCount, stackExpanded]);
+
+  useEffect(() => {
+    if (!pointerDownId) return;
+    let started = false;
+    const onMove = (event: PointerEvent) => {
+      const element = stackRef.current;
+      if (!element) return;
+      if (!started) {
+        if (Math.abs(event.clientY - dragStartYRef.current) < 4) return;
+        started = true;
+        setDraggingId(pointerDownId);
+      }
+      const rect = element.getBoundingClientRect();
+      const fromBottom = rect.bottom - event.clientY;
+      const slot = Math.max(
+        0,
+        Math.min(
+          queueLengthRef.current - 1,
+          Math.floor(fromBottom / (QUEUE_ITEM_HEIGHT_PX + QUEUE_STACK_GAP_PX)),
+        ),
+      );
+      moveQueuedMessage(pointerDownId, slot);
+      const minY =
+        -(queueLengthRef.current - 1) * (QUEUE_ITEM_HEIGHT_PX + QUEUE_STACK_GAP_PX);
+      setDragY(
+        Math.max(
+          minY,
+          Math.min(0, event.clientY - rect.bottom + QUEUE_ITEM_HEIGHT_PX / 2),
+        ),
+      );
+    };
+    const onUp = () => {
+      setPointerDownId(null);
+      setDraggingId(null);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+  }, [pointerDownId]);
+
   return (
-    <AnimatePresence initial={false}>
-      {queued.length > 0 && (
+    <AnimatePresence>
+      {stackCount > 0 && (
         <motion.div
-          key="queue-card"
-          layout
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: 12 }}
-          transition={CARD_TRANSITION}
-          className="queue-card surface-floating pointer-events-auto relative mx-4 -mb-3 rounded-t-[12px] rounded-b-[14px] border border-line border-b-0"
+          ref={stackRef}
+          className="board-queue-stack"
+          role="list"
+          aria-label="Queued messages"
+          initial={{ opacity: 0 }}
+          animate={{
+            opacity: 1,
+            height: stackExpanded ? expandedStackHeight : collapsedStackHeight,
+          }}
+          exit={{ opacity: 0 }}
+          transition={QUEUE_SPRING}
+          onMouseEnter={() => setStackHovered(true)}
+          onMouseLeave={() => setStackHovered(false)}
         >
-          <motion.div layout className="flex flex-col gap-1 px-3 pt-2 pb-5">
-            <AnimatePresence initial={false} mode="popLayout">
-              {queued.map((message) => (
-                <motion.div
-                  key={message.clientId}
-                  layout
-                  initial={{ opacity: 0, y: 6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ ...ROW_EXIT, transition: { duration: MOTION.row, ease: EASE_OUT } }}
-                  transition={ROW_TRANSITION}
-                >
-                  <QueueRow message={message} />
-                </motion.div>
-              ))}
+          <motion.div animate={stackBump} className="board-queue-stack__deck">
+            {isTouch && stackExpanded && (
+              <button
+                type="button"
+                className="board-queue-stack__gutter board-queue-stack__collapse"
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setTapExpanded(false);
+                }}
+                aria-label="Collapse queued messages"
+                title="Collapse queued messages"
+              >
+                <ChevronDown size={ICON.MD} strokeWidth={2} />
+              </button>
+            )}
+
+            <AnimatePresence initial={false}>
+              {queued.map((message, index) => {
+                const peek = Math.min(index, QUEUE_STACK_MAX_PEEKS);
+                const isDragging = draggingId === message.clientId;
+                const target = stackExpanded
+                  ? {
+                      y: isDragging ? dragY : slotY(index),
+                      scale: isDragging ? 1.03 : 1,
+                      opacity: 1,
+                    }
+                  : {
+                      y: -peek * QUEUE_STACK_PEEK_PX,
+                      scale: 1 - peek * QUEUE_STACK_SCALE_STEP,
+                      opacity: index <= QUEUE_STACK_MAX_PEEKS ? 1 : 0,
+                    };
+                const content =
+                  message.text
+                  || (message.images?.length
+                    ? `${message.images.length} attachment${message.images.length === 1 ? "" : "s"}`
+                    : "");
+
+                return (
+                  <motion.article
+                    key={message.clientId}
+                    role="listitem"
+                    className="board-queue-stack__item"
+                    data-status={message.status}
+                    onDoubleClick={() => onEdit(message)}
+                    onClick={() => {
+                      if (isTouch && !stackExpanded) setTapExpanded(true);
+                    }}
+                    onPointerDown={(event) => {
+                      if (!stackExpanded || event.button !== 0) return;
+                      dragStartYRef.current = event.clientY;
+                      setDragY(slotY(index));
+                      setPointerDownId(message.clientId);
+                    }}
+                    initial={{ opacity: 0, y: 14, scale: 0.96 }}
+                    animate={target}
+                    exit={{
+                      opacity: 0,
+                      scale: 0.9,
+                      transition: { duration: 0.12 },
+                    }}
+                    transition={isDragging ? { duration: 0 } : QUEUE_SPRING}
+                    style={{
+                      zIndex: isDragging ? 200 : 100 - index,
+                      cursor: stackExpanded ? "grab" : "default",
+                      touchAction: stackExpanded ? "none" : undefined,
+                      pointerEvents:
+                        stackExpanded || index <= QUEUE_STACK_MAX_PEEKS ? "auto" : "none",
+                    }}
+                    aria-label={`Queued message: ${content}`}
+                  >
+                    {message.images && message.images.length > 0 && (
+                      <span className="board-queue-stack__thumbnails" aria-hidden>
+                        {message.images.slice(0, 3).map((image, imageIndex) => (
+                          <img
+                            key={`${image.media_type}-${imageIndex}`}
+                            src={`data:${image.media_type};base64,${image.data}`}
+                            alt=""
+                          />
+                        ))}
+                        {message.images.length > 3 && (
+                          <span>+{message.images.length - 3}</span>
+                        )}
+                      </span>
+                    )}
+                    <strong className={message.status === "failed" ? "is-failed" : undefined}>
+                      {content}
+                    </strong>
+                    <span className="board-queue-stack__actions">
+                      <button
+                        type="button"
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void promoteQueuedMessageToSteer(message.clientId);
+                        }}
+                        disabled={message.status === "sending"}
+                        aria-label="Send queued message now"
+                        title="Send now"
+                      >
+                        <ArrowTurnForward size={ICON.SM} strokeWidth={2} />
+                      </button>
+                      <button
+                        type="button"
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onEdit(message);
+                        }}
+                        disabled={message.status === "sending"}
+                        aria-label="Edit queued message"
+                        title="Edit queued message"
+                      >
+                        <PencilEdit02 size={ICON.SM} />
+                      </button>
+                      <button
+                        type="button"
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          cancelQueuedMessage(message.clientId);
+                        }}
+                        disabled={message.status === "sending"}
+                        aria-label="Remove queued message"
+                        title="Remove from queue"
+                      >
+                        <X size={ICON.SM} strokeWidth={2.5} />
+                      </button>
+                    </span>
+                  </motion.article>
+                );
+              })}
             </AnimatePresence>
           </motion.div>
         </motion.div>
       )}
     </AnimatePresence>
   );
-}
-
-function QueueRow({ message }: { message: QueuedMessage }) {
-  const cancelling = message.status === "cancelling";
-  const failed = message.status === "failed";
-  const disabled = cancelling || message.status === "sent";
-  return (
-    <div className="group/queue-row flex items-center gap-2 min-w-0">
-      <motion.span
-        aria-hidden
-        animate={{
-          backgroundColor: failed
-            ? "var(--color-bad)"
-            : cancelling
-              ? "var(--color-faint)"
-              : "var(--color-accent)",
-        }}
-        transition={{ duration: MOTION.palette, ease: EASE_HOVER }}
-        className="shrink-0 w-1 h-1 rounded-full"
-      />
-      <span
-        className={clsx(
-          "min-w-0 flex-1 truncate text-sm tracking-[-0.005em] transition-colors",
-          cancelling ? "text-faint italic" : failed ? "text-bad" : "text-ink-soft",
-        )}
-        title={message.text}
-      >
-        {message.text || (message.images?.length ? `${message.images.length} image(s)` : "")}
-      </span>
-      {message.images && message.images.length > 0 && !cancelling && (
-        <span className="shrink-0 text-2xs text-faint tabular-nums">
-          +{message.images.length} img
-        </span>
-      )}
-      <button
-        type="button"
-        onClick={() => void cancelQueuedMessage(message.clientId)}
-        disabled={disabled}
-        title={cancelling ? "Cancelling…" : "Cancel"}
-        aria-label="Cancel queued message"
-        className="grid place-items-center w-5 h-5 shrink-0 rounded-md text-faint hover:text-ink hover:bg-surface-soft transition-[color,background-color,scale] duration-check ease-out active:scale-[0.97] disabled:opacity-[0.45] disabled:hover:bg-transparent disabled:hover:text-faint"
-      >
-        <IconSwap
-          state={cancelling ? "b" : "a"}
-          iconA={<X size={ICON.XS} strokeWidth={2} />}
-          iconB={<Loader2 size={ICON.XS} strokeWidth={2} className="animate-spin" />}
-        />
-      </button>
-    </div>
-  );
-}
+});

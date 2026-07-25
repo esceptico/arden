@@ -1063,6 +1063,7 @@ _MEMORY_FS_DESCRIPTION = (
 
 memory_tree_tool = tool(
     display_name="MemoryTree",
+    display_description="Browse memory pages.",
     description="Browse the memory artifact filesystem tree. " + _MEMORY_FS_DESCRIPTION,
     input_model=MemoryTreeInput,
     policy=ToolPolicy(
@@ -1073,6 +1074,7 @@ memory_tree_tool = tool(
 
 memory_read_tool = tool(
     display_name="MemoryRead",
+    display_description="Read a memory page.",
     description=(
         "Read a safe relative .md memory artifact with line offsets and its SHA-256 revision. " + _MEMORY_FS_DESCRIPTION
     ),
@@ -1085,6 +1087,7 @@ memory_read_tool = tool(
 
 memory_search_tool = tool(
     display_name="MemorySearch",
+    display_description="Search memory pages.",
     description="Search safe memory artifact filenames, titles, snippets, and markdown content. "
     + _MEMORY_FS_DESCRIPTION,
     input_model=MemorySearchInput,
@@ -1096,6 +1099,7 @@ memory_search_tool = tool(
 
 memory_patch_tool = tool(
     display_name="MemoryPatch",
+    display_description="Replace exact text in a memory page.",
     description=(
         "Patch a unique exact text block using the sha256 from memory_read. Requires approval; "
         "refuses generated artifacts unless force_generated is explicit. " + _MEMORY_FS_DESCRIPTION
@@ -1113,6 +1117,7 @@ memory_patch_tool = tool(
 
 memory_write_tool = tool(
     display_name="MemoryWrite",
+    display_description="Create or replace a memory page.",
     description=(
         "Create or update-in-place a whole memory page (e.g. a feeds/<slug>.md briefing "
         "owned by an automation). Replaces the entire page — write the full current "
@@ -1133,6 +1138,7 @@ memory_write_tool = tool(
 
 remember_tool = tool(
     display_name="Remember",
+    display_description="Save a long-term memory.",
     description=(
         "Durably remember a single self-contained statement about the user or "
         "their world. Use for stable preferences, decisions, and facts worth "
@@ -1151,6 +1157,7 @@ remember_tool = tool(
 
 search_memory_candidates_tool = tool(
     display_name="Search Memory Candidates",
+    display_description="Find removable long-term memories.",
     description=(
         "Find possible long-term memories to delete without changing anything. "
         "Returns exact memory_ref and version values required by forget."
@@ -1166,6 +1173,7 @@ search_memory_candidates_tool = tool(
 
 forget_tool = tool(
     display_name="Forget",
+    display_description="Delete a saved long-term memory.",
     description=(
         "Delete one exact long-term memory previously returned by search_memory_candidates. "
         "Requires its stable memory_ref and version and fails if the record changed."
@@ -1183,6 +1191,7 @@ forget_tool = tool(
 
 recall_tool = tool(
     display_name="Recall",
+    display_description="Search long-term memory.",
     description=(
         "Search long-term memory for records relevant to a natural-language "
         "query (hybrid lexical + semantic). Read-only; use it to look up what "

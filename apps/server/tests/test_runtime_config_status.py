@@ -6,7 +6,7 @@ from arden.llm.models import EmbeddingModel, Provider
 from arden.server.runtime.config import RuntimeConfig
 from arden.server.runtime.core import Runtime
 from arden.server.runtime.knowledge import KnowledgeRuntime
-from arden.server.schemas import UpdateConfigRequest
+from arden.server.schemas import AddCustomModelRequest, UpdateConfigRequest
 from arden.tools.memory import MEMORY_RECONCILER_SERVICE
 
 
@@ -45,6 +45,42 @@ def test_config_rejects_non_positive_max_depth():
 def test_update_config_request_rejects_non_positive_max_depth():
     with pytest.raises(ValidationError):
         UpdateConfigRequest(max_depth=0)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("max_depth", 17),
+        ("compression_threshold", 0.09),
+        ("max_messages", 1001),
+        ("compression_keep_ratio", 1.01),
+        ("summary_max_tokens", 8001),
+        ("consolidation_interval", 501),
+    ],
+)
+def test_config_and_patch_share_the_settings_slider_bounds(field, value):
+    with pytest.raises(ValidationError):
+        Config(memory=False, **{field: value})
+    with pytest.raises(ValidationError):
+        UpdateConfigRequest(**{field: value})
+
+
+def test_custom_model_request_rejects_output_larger_than_context():
+    with pytest.raises(ValidationError, match="must not exceed"):
+        AddCustomModelRequest(
+            model_id="local/qwen",
+            base_url="http://localhost:11434/v1",
+            context_window=4096,
+            max_output_tokens=8192,
+        )
+
+    request = AddCustomModelRequest(
+        model_id="local/qwen",
+        base_url="http://localhost:11434/v1",
+        context_window=8192,
+        max_output_tokens=4096,
+    )
+    assert request.max_output_tokens == 4096
 
 
 @pytest.mark.asyncio

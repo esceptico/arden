@@ -113,7 +113,6 @@ class Integration:
     label: str
     service_fields: list[IntegrationField] = field(default_factory=list)
     tools: dict[str, Tool] = field(default_factory=dict)
-    command_tool_names: frozenset[str] = frozenset()
     notifier_class: type["Notifier"] | None = None
     build: Callable[["Config"], object | None] | None = None
     connection: IntegrationConnectionSpec | None = None

@@ -17,8 +17,8 @@ interface ChipProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "child
 }
 
 const sizeClass: Record<ChipSize, string> = {
-  sm: "h-7 px-2.5 text-xs gap-1.5 rounded-full",
-  md: "h-8 px-2.5 text-sm gap-1.5 rounded-[8px]",
+  sm: "h-7 px-2.5 text-xs gap-1.5 rounded-[var(--r-control)]",
+  md: "h-8 px-2.5 text-sm gap-1.5 rounded-[var(--r-control)]",
 };
 
 function styleFor(variant: ChipVariant, tone: ChipTone, active: boolean): string {

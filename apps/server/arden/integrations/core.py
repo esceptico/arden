@@ -7,6 +7,13 @@ belong to an Integration, including the ones arden ships out of the box.
 
 from arden.integrations.base import Integration
 from arden.skills.tool import create_skill_tool, use_skill_tool
+from arden.tools.app_control import (
+    archive_session_tool,
+    open_in_app_tool,
+    rename_session_tool,
+    request_attention_tool,
+    send_to_session_tool,
+)
 from arden.tools.area import area_page_patch_tool, area_page_read_tool, area_page_write_tool, area_run_automation_tool
 from arden.tools.automation import (
     create_automation_tool,
@@ -83,7 +90,6 @@ SYSTEM = Integration(
         "load_tools": load_tools_tool,
         "tool_search": tool_search_tool,
     },
-    command_tool_names=frozenset({"current_time", "request_connection", "load_tools", "tool_search"}),
 )
 
 GOALS = Integration(
@@ -110,16 +116,6 @@ AUTOMATION = Integration(
         "schedule_wakeup": schedule_wakeup_tool,
         "loop_done": loop_done_tool,
     },
-    command_tool_names=frozenset(
-        {
-            "create_automation",
-            "list_automations",
-            "update_automation",
-            "delete_automation",
-            "get_automation_result",
-            "run_automation",
-        }
-    ),
 )
 
 BACKGROUND = Integration(
@@ -169,7 +165,20 @@ SESSIONS = Integration(
         "search_transcripts": search_transcripts_tool,
         "create_session": create_session_tool,
     },
-    command_tool_names=frozenset({"list_recent_sessions", "read_session", "search_transcripts"}),
+)
+
+# Separate from SESSIONS so the read tools stay always-loaded: DEFERRED_SOURCES
+# keys on the integration id, and `_sessions` must not be in it.
+APP_CONTROL = Integration(
+    id="_app_control",
+    label="App control",
+    tools={
+        "send_to_session": send_to_session_tool,
+        "rename_session": rename_session_tool,
+        "archive_session": archive_session_tool,
+        "request_attention": request_attention_tool,
+        "open_in_app": open_in_app_tool,
+    },
 )
 
 AREA = Integration(
@@ -181,14 +190,6 @@ AREA = Integration(
         "area_page_write": area_page_write_tool,
         "area_run_automation": area_run_automation_tool,
     },
-    command_tool_names=frozenset(
-        {
-            "area_page_read",
-            "area_page_patch",
-            "area_page_write",
-            "area_run_automation",
-        }
-    ),
 )
 
 # Memory record and artifact tools stay hidden until the knowledge runtime wires
@@ -211,19 +212,6 @@ MEMORY = Integration(
         "memory_patch": memory_patch_tool,
         "memory_write": memory_write_tool,
     },
-    command_tool_names=frozenset(
-        {
-            "remember",
-            "search_memory_candidates",
-            "forget",
-            "recall",
-            "memory_tree",
-            "memory_read",
-            "memory_search",
-            "memory_patch",
-            "memory_write",
-        }
-    ),
 )
 
 CORE_INTEGRATIONS = [
@@ -236,6 +224,7 @@ CORE_INTEGRATIONS = [
     TASK_TRACKING,
     SKILLS,
     SESSIONS,
+    APP_CONTROL,
     AREA,
     MEMORY,
 ]

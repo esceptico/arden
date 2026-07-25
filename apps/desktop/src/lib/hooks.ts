@@ -24,11 +24,25 @@ const FOCUSABLE_SELECTOR = [
  *  trapped container (so it can receive focus when it has no focusable child).
  *  WAI-ARIA APG dialog pattern. */
 export function useFocusTrap(ref: RefObject<HTMLElement | null>, active: boolean): void {
+  const restoreTarget = useRef<HTMLElement | null>(null);
+  const wasActive = useRef(false);
+
+  // Capture the origin before child passive effects autofocus an input. The
+  // trap itself stays passive so overlay-stack cleanup can release inertness
+  // before focus returns on its final unmount.
+  useLayoutEffect(() => {
+    if (active && !wasActive.current) {
+      const current = document.activeElement;
+      restoreTarget.current = current instanceof HTMLElement ? current : null;
+    }
+    wasActive.current = active;
+  }, [active]);
+
   useEffect(() => {
     if (!active) return;
     const node = ref.current;
     if (!node) return;
-    const restoreTo = document.activeElement as HTMLElement | null;
+    const restoreTo = restoreTarget.current;
 
     if (!node.contains(document.activeElement)) {
       const first = node.querySelector<HTMLElement>(FOCUSABLE_SELECTOR);
@@ -90,25 +104,6 @@ export function useTimeoutFlag(durationMs: number): readonly [boolean, () => voi
     }, durationMs);
   }, [durationMs]);
   return [flag, fire] as const;
-}
-
-/** Fire `onEscape` while `active` is true. Replaces the boilerplate
- *  useEffect + addEventListener("keydown") + Escape branch that every
- *  modal/popover/picker would otherwise hand-roll. The callback is held
- *  in a ref so callers don't need to memoize it. */
-export function useEscapeKey(onEscape: () => void, active = true): void {
-  const ref = useRef(onEscape);
-  useEffect(() => {
-    ref.current = onEscape;
-  }, [onEscape]);
-  useEffect(() => {
-    if (!active) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") ref.current();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [active]);
 }
 
 /**

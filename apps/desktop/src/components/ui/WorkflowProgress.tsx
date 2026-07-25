@@ -25,13 +25,6 @@ export const WORKFLOW_BADGE_TONE: Record<Workflow["status"], BadgeTone> = {
   cancelled: "neutral",
 };
 
-export function pipClass(status: WorkflowAgent["status"]): string {
-  if (status === "completed") return "bg-ok";
-  if (status === "failed") return "bg-bad";
-  if (status === "cancelled" || status === "interrupted") return "bg-faint";
-  return "bg-accent"; // running / cancel_requested
-}
-
 export function phaseSegmentClass(status: WorkflowPhaseStatus): string {
   if (status === "completed") return "bg-ok";
   if (status === "failed") return "bg-bad";
@@ -102,17 +95,13 @@ export function plural(n: number, word: string): string {
 
 export function PhaseSparkline({ agents }: { agents: WorkflowAgent[] }) {
   if (agents.length === 0) return null;
+  const settled = agents.filter((agent) => TERMINAL_AGENT.has(agent.status)).length;
   return (
-    <span className="flex items-center gap-[3px] shrink-0" aria-hidden>
-      {agents.map((agent) => (
-        <span
-          key={agent.taskId}
-          className={clsx(
-            "w-[5px] h-[5px] rounded-full transition-colors duration-trace ease-out",
-            pipClass(agent.status),
-          )}
-        />
-      ))}
+    <span
+      className="shrink-0 text-2xs tabular-nums text-faint"
+      aria-label={`${settled} of ${agents.length} agents settled`}
+    >
+      {settled}/{agents.length}
     </span>
   );
 }
@@ -242,9 +231,8 @@ export function WorkflowProgressCard({
                     )}
                     <span
                       className={clsx(
-                        "block h-[3px] w-full rounded-full transition-colors duration-trace ease-out",
+                        "block h-[3px] w-full rounded-[var(--r-control)] transition-colors duration-trace ease-out",
                         phaseSegmentClass(phase.status),
-                        phase.status === "running" && "phase-glare",
                       )}
                     />
                   </span>

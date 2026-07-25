@@ -43,6 +43,7 @@ test("final assistant source footer renders between Markdown and message actions
     const children = Array.from(host.querySelector("article")?.children ?? []);
     expect(children[0]?.classList.contains("md")).toBe(true);
     expect(children[1]?.getAttribute("data-source-footer")).toBe("true");
+    expect(children[1]?.hasAttribute("data-inspector-trigger")).toBe(true);
     expect(children[1]?.getAttribute("aria-label")).toBe("Open 2 sources for this turn");
     expect(children[2]?.querySelector('button[aria-label="Copy"]')).not.toBeNull();
   } finally {
@@ -157,10 +158,11 @@ test("browser-invalid stored URLs are non-clickable and retain Show call", () =>
   const markup = renderToStaticMarkup(<SourcesPanel />);
 
   expect(markup).not.toContain("<a");
-  expect(markup).toContain("Show call");
+  expect(markup).toContain('aria-label="Show tool call for Invalid URL"');
+  expect(markup).not.toContain(">Show call<");
 });
 
-test("groups unknown MCP calls and progressively reveals returned sources", async () => {
+test("renders the mockup provider-to-source hierarchy without invented disclosure levels", async () => {
   const teamSources: SourceRef[] = Array.from({ length: 7 }, (_, index) => ({
     provider: "mcp.crm",
     kind: "contact",
@@ -220,25 +222,9 @@ test("groups unknown MCP calls and progressively reveals returned sources", asyn
     await act(async () => root.render(<SourcesPanel />));
 
     expect(host.textContent).toContain("mcp.crm");
-    expect(host.textContent).toContain("Lookup contact");
-    expect(host.textContent).toContain("2 calls");
-    expect(host.textContent).toContain("8 sources");
+    expect(host.textContent).not.toContain("Lookup contact");
+    expect(host.textContent).not.toContain("2 calls");
     expect(host.textContent).toContain("Alice");
-    expect(host.textContent).not.toContain("Team 1");
-
-    const expandTeam = host.querySelector(
-      'button[aria-label="Expand source call query=team"]',
-    ) as HTMLButtonElement;
-    expect(expandTeam?.getAttribute("aria-expanded")).toBe("false");
-    await act(async () => expandTeam.click());
-
-    expect(host.textContent).toContain("Team 5");
-    expect(host.textContent).not.toContain("Team 6");
-    const showMore = Array.from(host.querySelectorAll("button")).find(
-      (button) => button.textContent?.trim() === "Show 2 more",
-    );
-    expect(showMore).toBeDefined();
-    await act(async () => showMore?.click());
     expect(host.textContent).toContain("Team 7");
 
     const showAliceCall = host.querySelector(

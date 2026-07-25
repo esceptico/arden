@@ -87,3 +87,7 @@ test("unknown verb returns null", () => {
   const action = primaryActionFor(ask("frobnicate", "whatever"), null, handlers);
   expect(action).toBeNull();
 });
+
+test("open_page without an area has nowhere to go", () => {
+  expect(primaryActionFor({ ...ask("open_page", "topics/o-1a.md"), area_key: null }, [], handlers)).toBeNull();
+});

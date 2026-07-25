@@ -1,6 +1,7 @@
 """Session store tests — real SQLite, round-trip persistence."""
 
 import json
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -300,6 +301,99 @@ async def test_chat_run_and_queued_message_ledger(store: SessionStore):
     assert queued[0]["status"] == "ingested"
     assert queued[0]["ingested_seq"] == 42
     assert queued[0]["ingested_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_ingesting_queued_message_advances_its_idempotency_receipt(store: SessionStore):
+    await store.claim_chat_idempotency_key(
+        session_id="sess-1",
+        client_id="cid-ingested",
+        request_hash="hash-ingested",
+    )
+    await store.update_chat_idempotency_key(
+        session_id="sess-1",
+        client_id="cid-ingested",
+        status="queued",
+        run_id="run-1",
+    )
+    await store.record_chat_queued_message(
+        client_id="cid-ingested",
+        session_id="sess-1",
+        run_id="run-1",
+        message={"role": "user", "content": "follow-up", "client_id": "cid-ingested"},
+    )
+
+    await store.mark_chat_queued_message_ingested("cid-ingested", ingested_seq=9)
+
+    receipt = await store.get_chat_idempotency_key("sess-1", "cid-ingested")
+    assert receipt is not None
+    assert receipt["status"] == "ingested"
+    assert receipt["run_id"] == "run-1"
+    assert receipt["expires_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_cancelled_queue_message_cannot_be_reopened_by_late_enqueue(store: SessionStore):
+    await store.claim_chat_idempotency_key(
+        session_id="sess-1",
+        client_id="cid-cancelled",
+        request_hash="hash-cancelled",
+    )
+    await store.update_chat_idempotency_key(
+        session_id="sess-1",
+        client_id="cid-cancelled",
+        status="queued",
+        run_id="run-1",
+    )
+    await store.record_chat_queued_message(
+        client_id="cid-cancelled",
+        session_id="sess-1",
+        run_id="run-1",
+        message={"role": "user", "content": "first", "client_id": "cid-cancelled"},
+    )
+
+    assert await store.cancel_chat_queued_message(
+        session_id="sess-1",
+        client_id="cid-cancelled",
+        run_id="run-1",
+    ) == "cancelled"
+    assert await store.record_chat_queued_message(
+        client_id="cid-cancelled",
+        session_id="sess-1",
+        run_id="run-1",
+        message={"role": "user", "content": "late", "client_id": "cid-cancelled"},
+    ) == "cancelled"
+
+    queued = await store.list_chat_queued_messages("sess-1")
+    receipt = await store.get_chat_idempotency_key("sess-1", "cid-cancelled")
+    assert queued[0]["status"] == "cancelled"
+    assert queued[0]["message"]["content"] == "first"
+    assert receipt is not None
+    assert receipt["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_cancelling_absent_queue_message_creates_terminal_tombstone(store: SessionStore):
+    assert await store.cancel_chat_queued_message(
+        session_id="sess-1",
+        client_id="cid-before-post",
+    ) == "cancelled"
+
+    claimed, receipt = await store.claim_chat_idempotency_key(
+        session_id="sess-1",
+        client_id="cid-before-post",
+        request_hash="hash-post",
+    )
+    assert claimed is False
+    assert receipt["status"] == "cancelled"
+    assert receipt["run_id"] is None
+    assert await store.record_chat_queued_message(
+        client_id="cid-before-post",
+        session_id="sess-1",
+        run_id="run-late",
+        message={"role": "user", "content": "late", "client_id": "cid-before-post"},
+    ) == "cancelled"
+    assert await store.list_chat_queued_messages("sess-1", status="queued") == []
 
 
 @pytest.mark.asyncio
@@ -1082,6 +1176,20 @@ async def test_starting_new_chat_run_interrupts_stale_foreground_runs(store: Ses
 
 
 @pytest.mark.asyncio
+async def test_chat_run_id_collision_never_reopens_historical_run(store: SessionStore):
+    await store.record_chat_run_started("same-run", "old-session")
+    await store.record_chat_run_status("same-run", "completed")
+
+    with pytest.raises(sqlite3.IntegrityError):
+        await store.record_chat_run_started("same-run", "new-session")
+
+    historical = await store.get_chat_run("same-run")
+    assert historical is not None
+    assert historical["session_id"] == "old-session"
+    assert historical["status"] == "completed"
+
+
+@pytest.mark.asyncio
 async def test_background_agent_run_lifecycle(store: SessionStore):
     await store.record_background_agent_started(
         task_id="bg-1",
@@ -1631,17 +1739,6 @@ async def test_list_sessions(store: SessionStore):
     sessions = await store.list_sessions(limit=10)
     assert len(sessions) == 3
     assert all("session_id" in s for s in sessions)
-
-
-@pytest.mark.asyncio
-async def test_command_sidecar_sessions_stay_out_of_user_lists(store: SessionStore):
-    command = _make_state("command-1", name="Command")
-    command.session_type = "agent"
-    command.agent_type = "command_sidecar"
-    command.agent_status = "running"
-    await store.save_session(command, [{"role": "user", "content": "open automations"}])
-
-    assert not any(row["session_id"] == "command-1" for row in await store.list_sessions(include_agents=True))
 
 
 @pytest.mark.asyncio

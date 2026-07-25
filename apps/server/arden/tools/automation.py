@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from difflib import get_close_matches
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -10,6 +11,7 @@ from arden.events.triggers import EVENT_APPROACHING
 from arden.tools.core import EmptyInput, ToolResult, tool
 from arden.tools.core.collections import format_timestamp
 from arden.tools.core.context import ToolExecution
+from arden.tools.core.scope import matches_scope
 from arden.tools.core.types import ApprovalInfo, ToolAction, ToolPolicy, ToolScope
 
 # --- Descriptions ---
@@ -111,7 +113,7 @@ def _format_automation_list(automations: list[Automation]) -> str:
         status = "enabled" if a.enabled else "disabled"
         next_run = format_timestamp(a.next_run_at) if a.next_run_at else "—"
         last_run = format_timestamp(a.last_run_at) if a.last_run_at else "never"
-        label = a.name or a.description[:60]
+        label = _automation_label(a)
         builtin_tag = " [builtin]" if a.builtin else ""
 
         lines.append(
@@ -122,12 +124,22 @@ def _format_automation_list(automations: list[Automation]) -> str:
     return "\n\n".join(lines)
 
 
+def _automation_label(automation: Automation) -> str:
+    """Never promote executable prompt text into a display label."""
+    return automation.name or automation.description or automation.task_id
+
+
 # --- Input Models ---
 
 
 class CreateAutomationInput(BaseModel):
     name: str = Field(description="Short human-readable label (e.g. 'morning briefing', 'pre-meeting prep')")
-    description: str = Field(description="What the agent should do (natural language task)")
+    prompt: str = Field(description="Full instructions the automation executes on each run.", min_length=1)
+    description: str | None = Field(
+        default=None,
+        max_length=220,
+        description="Optional concise display summary. Omit to generate one from the prompt.",
+    )
     model: str | None = Field(default=None, description="Optional agent model override for this automation.")
     trigger_type: Literal["time", "event", "message"] = Field(
         description="Trigger type: 'time' (scheduled or interval), 'event' (reacts to events like calendar_approaching), 'message' (reacts to a new Slack message in one or more channels)",
@@ -186,7 +198,9 @@ class CreateAutomationInput(BaseModel):
         min_length=1,
         max_length=200,
         description=(
-            "Explicit tool-name allowlist patterns (exact names or prefixes like 'slack_*'). Omit for read-only access."
+            "Tool-name allowlist patterns (exact names or prefixes like 'slack_*') granting tools ON TOP of the "
+            "always-available read-only toolset. List the write/action tools the prompt needs; read tools are "
+            "always there. Omit for read-only access."
         ),
     )
     thread_id: str | None = Field(
@@ -232,7 +246,8 @@ class CreateAutomationInput(BaseModel):
 class UpdateAutomationInput(BaseModel):
     task_id: str = Field(description="The automation ID to update")
     name: str | None = Field(default=None, description="New name")
-    description: str | None = Field(default=None, description="New task description")
+    description: str | None = Field(default=None, max_length=220, description="New concise display summary")
+    prompt: str | None = Field(default=None, description="New full execution instructions", min_length=1)
     model: str | None = Field(default=None, description="New model override")
     trigger_type: Literal["time", "event", "message"] | None = Field(
         default=None,
@@ -274,7 +289,10 @@ class UpdateAutomationInput(BaseModel):
         default=None,
         min_length=1,
         max_length=200,
-        description="Replace the explicit tool-name allowlist patterns for this automation.",
+        description=(
+            "Replace the tool-name allowlist patterns for this automation. Patterns grant tools on top of the "
+            "always-available read-only toolset — list the write/action tools the prompt needs."
+        ),
     )
     enabled: bool | None = Field(default=None, description="Enable or disable the automation")
 
@@ -351,7 +369,7 @@ async def approve_create_automation(execution: ToolExecution, args: CreateAutoma
         lines.append(f"Idempotency: {args.idempotency_scope} · key={key}")
     lines.append("")
     lines.append("Prompt:")
-    lines.append(args.description)
+    lines.append(args.prompt)
 
     return ApprovalInfo(
         description=f"Create automation: {args.name}",
@@ -360,8 +378,30 @@ async def approve_create_automation(execution: ToolExecution, args: CreateAutoma
     )
 
 
+def _tool_scope_error(execution: ToolExecution, patterns: list[str]) -> ToolResult | None:
+    """A scope pattern that matches no registered tool is a typo, not a grant.
+    Fail loudly with candidates instead of storing an allowlist that silently
+    strips the automation of the tool its author meant."""
+    names = tuple(execution.ctx.registry.tools)
+    bad = [p for p in patterns if not any(matches_scope((p,), name) for name in names)]
+    if not bad:
+        return None
+    hints = []
+    for pattern in bad:
+        close = get_close_matches(pattern.rstrip("*"), names, n=3, cutoff=0.5)
+        hints.append(f"'{pattern}'" + (f" (did you mean: {', '.join(close)}?)" if close else ""))
+    return ToolResult.failure(
+        code="invalid_arguments",
+        message=f"tool_scope patterns match no registered tool: {'; '.join(hints)}",
+        preview="Unknown tools in scope",
+        recovery_action="Use exact registered tool names or prefix patterns like 'slack_*', then retry.",
+    )
+
+
 async def create_automation(execution: ToolExecution, args: CreateAutomationInput) -> ToolResult:
     svc = execution.ctx.services["automation"]
+    if args.tool_scope and (scope_error := _tool_scope_error(execution, args.tool_scope)):
+        return scope_error
     try:
         parent_automation_id, parent_fire_at = await _resolve_parent_context(
             execution, args.parent_automation_id, args.idempotency_scope
@@ -387,6 +427,7 @@ async def create_automation(execution: ToolExecution, args: CreateAutomationInpu
     try:
         automation = await svc.create(
             name=args.name,
+            prompt=args.prompt,
             description=args.description,
             area_id=area.area_id if area is not None else None,
             trigger_type=args.trigger_type,
@@ -423,7 +464,7 @@ async def create_automation(execution: ToolExecution, args: CreateAutomationInpu
         )
 
     lines = [
-        f"Created automation: {automation.description}",
+        f"Created automation: {_automation_label(automation)}",
         f"ID: {automation.task_id}",
         f"Trigger: {_triggers_label(automation.triggers)}",
     ]
@@ -459,6 +500,7 @@ async def approve_update_automation(execution: ToolExecution, args: UpdateAutoma
     fields = {
         "name": args.name,
         "description": args.description,
+        "prompt": args.prompt,
         "enabled": args.enabled,
         "auto_approve": args.auto_approve,
         "tool_scope": args.tool_scope,
@@ -479,7 +521,7 @@ async def approve_update_automation(execution: ToolExecution, args: UpdateAutoma
         if value is not None:
             changes.append(f"{key}: {value}")
 
-    label = automation.name or automation.description[:60]
+    label = _automation_label(automation)
     return ApprovalInfo(
         description=f"Update: {label} ({args.task_id})",
         preview="\n".join(changes) if changes else "No changes",
@@ -488,6 +530,8 @@ async def approve_update_automation(execution: ToolExecution, args: UpdateAutoma
 
 
 async def update_automation(execution: ToolExecution, args: UpdateAutomationInput) -> ToolResult:
+    if args.tool_scope and (scope_error := _tool_scope_error(execution, args.tool_scope)):
+        return scope_error
     message_triggers: list[dict] | None = None
     if args.trigger_type == "message":
         message_trigger: dict = {"type": "message", "source": "slack", "channels": args.channels or []}
@@ -502,6 +546,7 @@ async def update_automation(execution: ToolExecution, args: UpdateAutomationInpu
             args.task_id,
             name=args.name,
             description=args.description,
+            prompt=args.prompt,
             model=args.model,
             trigger_type=args.trigger_type,
             triggers=message_triggers,
@@ -526,7 +571,7 @@ async def update_automation(execution: ToolExecution, args: UpdateAutomationInpu
             recovery_action="Call list_automations, inspect the current trigger, and retry with valid fields.",
         )
 
-    label = automation.name or automation.description[:60]
+    label = _automation_label(automation)
     lines = [
         f"Updated automation: {label}",
         f"ID: {automation.task_id}",
@@ -546,7 +591,7 @@ async def approve_delete_automation(execution: ToolExecution, args: DeleteAutoma
         return None
     return ApprovalInfo(
         description=f"Delete automation {args.task_id}",
-        preview=f"Name: {automation.name or '(unnamed)'}\nPrompt: {automation.description[:1_200]}",
+        preview=f"Name: {_automation_label(automation)}\nPrompt: {automation.prompt}",
         diff=f"- automation {args.task_id}",
     )
 
@@ -565,7 +610,7 @@ async def delete_automation(execution: ToolExecution, args: DeleteAutomationInpu
             recovery_action="Call list_automations and retry with a current automation ID.",
         )
 
-    return ToolResult(content=f"Deleted: {automation.description} ({args.task_id})", preview="Deleted")
+    return ToolResult(content=f"Deleted: {_automation_label(automation)} ({args.task_id})", preview="Deleted")
 
 
 async def get_automation_result(execution: ToolExecution, args: GetAutomationResultInput) -> ToolResult:
@@ -577,12 +622,12 @@ async def get_automation_result(execution: ToolExecution, args: GetAutomationRes
     if not automation.last_result:
         last_run = format_timestamp(automation.last_run_at) if automation.last_run_at else "never"
         return ToolResult(
-            content=f"No result yet for '{automation.description}' (last run: {last_run})",
+            content=f"No result yet for '{_automation_label(automation)}' (last run: {last_run})",
             preview="No result",
         )
 
     header = (
-        f"Automation: {automation.description}\n"
+        f"Automation: {_automation_label(automation)}\n"
         f"Last run: {format_timestamp(automation.last_run_at) if automation.last_run_at else '—'}\n"
         f"---\n"
     )
@@ -595,8 +640,8 @@ async def approve_run_automation(execution: ToolExecution, args: RunAutomationIn
     except KeyError:
         return None
     return ApprovalInfo(
-        description=f"Run now: {automation.name or automation.description[:60]}",
-        preview=f"Automation: {args.task_id}\nPrompt: {automation.description[:1_200]}",
+        description=f"Run now: {_automation_label(automation)}",
+        preview=f"Automation: {args.task_id}\nPrompt: {automation.prompt}",
         diff=None,
     )
 
@@ -623,6 +668,7 @@ async def run_automation(execution: ToolExecution, args: RunAutomationInput) -> 
 
 create_automation_tool = tool(
     display_name="CreateAutomation",
+    display_description="Create a task that runs automatically on a schedule or event.",
     description=CREATE_AUTOMATION_DESCRIPTION,
     input_model=CreateAutomationInput,
     policy=ToolPolicy(
@@ -637,6 +683,7 @@ create_automation_tool = tool(
 
 list_automations_tool = tool(
     display_name="ListAutomations",
+    display_description="List configured automations.",
     description=LIST_AUTOMATIONS_DESCRIPTION,
     policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({"automation"})),
     execute=list_automations,
@@ -644,6 +691,7 @@ list_automations_tool = tool(
 
 update_automation_tool = tool(
     display_name="UpdateAutomation",
+    display_description="Change an automation's trigger, model, permissions, or status.",
     description=UPDATE_AUTOMATION_DESCRIPTION,
     input_model=UpdateAutomationInput,
     policy=ToolPolicy(
@@ -658,6 +706,7 @@ update_automation_tool = tool(
 
 delete_automation_tool = tool(
     display_name="DeleteAutomation",
+    display_description="Delete an automation.",
     description=DELETE_AUTOMATION_DESCRIPTION,
     input_model=DeleteAutomationInput,
     policy=ToolPolicy(
@@ -680,6 +729,7 @@ get_automation_result_tool = tool(
 
 run_automation_tool = tool(
     display_name="RunAutomation",
+    display_description="Run an automation now.",
     description=RUN_AUTOMATION_DESCRIPTION,
     input_model=RunAutomationInput,
     policy=ToolPolicy(
@@ -779,6 +829,7 @@ async def approve_loop_done(_execution: ToolExecution, args: LoopDoneInput) -> A
 
 schedule_wakeup_tool = tool(
     display_name="ScheduleWakeup",
+    display_description="Schedule the current loop's next iteration.",
     description=SCHEDULE_WAKEUP_DESCRIPTION,
     input_model=ScheduleWakeupInput,
     policy=ToolPolicy(
@@ -793,6 +844,7 @@ schedule_wakeup_tool = tool(
 
 loop_done_tool = tool(
     display_name="LoopDone",
+    display_description="Stop the current loop after its goal has been reached.",
     description=LOOP_DONE_DESCRIPTION,
     input_model=LoopDoneInput,
     policy=ToolPolicy(
@@ -951,7 +1003,7 @@ async def create_loop(execution: ToolExecution, args: CreateLoopInput) -> ToolRe
     lines = [
         f"Created loop {loop.task_id}",
         f"Every: {args.every}",
-        f"Prompt: {loop.description}",
+        f"Prompt: {loop.prompt}",
     ]
     if loop.max_iterations:
         lines.append(f"Max iterations: {loop.max_iterations}")
@@ -968,6 +1020,7 @@ async def create_loop(execution: ToolExecution, args: CreateLoopInput) -> ToolRe
 
 create_loop_tool = tool(
     display_name="CreateLoop",
+    display_description="Create repeated work that stops when a condition is met.",
     description=CREATE_LOOP_DESCRIPTION,
     input_model=CreateLoopInput,
     policy=ToolPolicy(

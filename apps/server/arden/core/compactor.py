@@ -130,6 +130,29 @@ def _build_conversation_text(
     return "\n\n".join(text_parts)
 
 
+# Reserved for the summarize/merge system prompt when bounding the
+# summarizer's own input; ~3 chars/token keeps the estimate conservative.
+_SUMMARY_PROMPT_HEADROOM_TOKENS = 2000
+_CHARS_PER_TOKEN = 3
+_DROPPED_HISTORY_MARKER = "[oldest history omitted — it did not fit the summarizer's context window]"
+
+
+def _fit_for_summary(text: str, model: str, summary_max_tokens: int) -> str:
+    """Cap the summarizer's own input to the model's window.
+
+    The compactor exists to rescue oversized histories, so its summary
+    request must never itself exceed the window — an unbounded channel
+    transcript once 400'd the summarize call and bricked every fire of
+    the automation it was meant to save. The oldest text is dropped
+    first: the newest is what the next iterations need verbatim, and the
+    summary absorbs the loss."""
+    budget_tokens = get_model(model).max_context_tokens - summary_max_tokens - _SUMMARY_PROMPT_HEADROOM_TOKENS
+    budget_chars = max(4000, budget_tokens * _CHARS_PER_TOKEN)
+    if len(text) <= budget_chars:
+        return text
+    return f"{_DROPPED_HISTORY_MARKER}\n\n{text[-budget_chars:]}"
+
+
 def _build_summarize_request(
     conversation_text: str,
     model: str,
@@ -190,12 +213,16 @@ async def compact_summarize(
 
     if prior_summary:
         new_start = start + 1
-        new_conversation = _build_conversation_text(
-            messages,
-            new_start,
-            end,
-            skip_handoff=True,
-            include_tool_messages=include_tool_messages,
+        new_conversation = _fit_for_summary(
+            _build_conversation_text(
+                messages,
+                new_start,
+                end,
+                skip_handoff=True,
+                include_tool_messages=include_tool_messages,
+            ),
+            model,
+            summary_max_tokens,
         )
         request = _build_merge_request(
             prior_summary,
@@ -205,11 +232,15 @@ async def compact_summarize(
             prompt_context=prompt_context,
         )
     else:
-        conversation_text = _build_conversation_text(
-            messages,
-            start,
-            end,
-            include_tool_messages=include_tool_messages,
+        conversation_text = _fit_for_summary(
+            _build_conversation_text(
+                messages,
+                start,
+                end,
+                include_tool_messages=include_tool_messages,
+            ),
+            model,
+            summary_max_tokens,
         )
         request = _build_summarize_request(
             conversation_text,

@@ -36,10 +36,10 @@ def areas_from_records(areas: list[dict]) -> list[Area]:
 @dataclass
 class Ask:
     id: str
-    area_key: str
+    area_key: str | None  # None = raised from a plain chat, filed under no area
     text: str
     kind: AskKind
-    source: str  # "approval" | "run_failed" | "agent_output" | "open_loop" | "agent"
+    source: str  # "approval" | "run_failed" | "agent_output" | "open_loop" | "agent" | "agent_tool"
     actions: list[dict]  # [{"verb": "open_session", "ref": "<id>"}, ...]
     state: AskState
     created_at: str  # ISO
@@ -55,3 +55,6 @@ class Ask:
     stable_key: str | None = None
     resolution: str | None = None
     resolved_at: str | None = None
+    # The session a reply is dispatched into. None means the ask belongs to an
+    # Area custodian channel, which is resolved from the area's automation.
+    reply_session_id: str | None = None

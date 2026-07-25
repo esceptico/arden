@@ -204,6 +204,14 @@ class CustodianContract:
     auto_approve: bool = False
 
 
+def is_custodian_task_id(task_id: str) -> bool:
+    """Custodian runs are exactly `area:{id}`. Colon-suffixed children
+    (`area:{id}:{slug}`) are ordinary automations — no cap, no intake, and
+    user-scope semantics (read floor) instead of the curated contract."""
+    suffix = task_id.removeprefix("area:")
+    return task_id.startswith("area:") and ":" not in suffix
+
+
 def custodian_contract(area: Area) -> CustodianContract:
     """Return the complete runtime permission contract for an Area.
 

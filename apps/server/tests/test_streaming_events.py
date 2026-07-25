@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 from contextlib import suppress
 from datetime import UTC, datetime
@@ -55,6 +56,7 @@ from arden.services.chat import (
     _recover_durable_tool_calls,
     run_chat,
 )
+from arden.tool_call_metadata import DISPLAY_TITLE_ARG
 from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext
 from tests.helpers import make_executor, make_text_response
 
@@ -124,7 +126,16 @@ async def test_tool_step_checkpoint_saves_assistant_turn_before_call_intents():
         {
             "role": "assistant",
             "content": "",
-            "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "write", "arguments": '{"x":1}'}}],
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {
+                        "name": "write",
+                        "arguments": f'{{"{DISPLAY_TITLE_ARG}":"Writing the file","x":1}}',
+                    },
+                }
+            ],
         },
     ]
     executor = SimpleNamespace(
@@ -139,6 +150,8 @@ async def test_tool_step_checkpoint_saves_assistant_turn_before_call_intents():
 
     assert [kind for kind, _payload in operations] == ["saved", "created"]
     assert operations[1][1]["tool_call_id"] == "c1"
+    expected_args = json.dumps({"x": 1}, sort_keys=True, separators=(",", ":"))
+    assert operations[1][1]["args_hash"] == hashlib.sha256(expected_args.encode()).hexdigest()
 
 
 def test_tool_result_sse_exposes_source_refs_outside_result_content():

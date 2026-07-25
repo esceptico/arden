@@ -1,7 +1,7 @@
 import type { AppConfig } from "@/api/core";
 import type { ConnectionAction, ConnectionState, ToolOutcome } from "@/api/events";
 import type { ArchivedSession } from "@/api/sessions";
-import type { Automation, AutomationSuggestion, ModelsResponse, Area, ServerConfig, SessionGoal, SessionListItem, SkillDescriptor, TodoListItem } from "@/api/types";
+import type { Automation, ModelsResponse, Area, ServerConfig, SessionGoal, SessionListItem, SkillDescriptor, TodoListItem } from "@/api/types";
 import type { TransportDiagnosticsSnapshot } from "@/lib/transportDiagnostics";
 import type { MessageSourceFocus } from "@/lib/messageSourceFocus";
 import type { Toast } from "@/lib/taskToast";
@@ -14,8 +14,7 @@ import type {
 } from "@/stores/workflow-domain";
 import type { SessionViewState } from "@/stores/session-view";
 import type { AreasDomainState } from "@/stores/areas-domain";
-import type { CommandSidecarState } from "@/stores/command-sidecar-domain";
-import type { ServerEvent } from "@/api/events";
+import type { ShellLayout } from "@/lib/shellOwnership";
 
 export type { SessionViewState } from "@/stores/session-view";
 
@@ -58,24 +57,39 @@ export interface PendingGoalProposal {
   objective: string;
 }
 
-export type ThinkingAnimation =
-  | "comet"
-  | "breath"
-  | "hue-cycle"
-  | "send-orbit";
-
-export type ThinkingIntensity = "subtle" | "normal" | "strong";
-
 export type ThemeChoice = "light" | "dark" | "system";
+/** Global border-radius language: capsule controls, or softened rectangles. */
+export type CornerProfile = "round" | "square";
+/** Persisted IDs for the composer treatment shown before the first token.
+ * Keep this runtime registry as the authority for both saved preferences and
+ * the Appearance picker; a type alone cannot reject stale localStorage. */
+export const THINKING_ANIMATION_IDS = ["comet", "breath", "border", "orbit"] as const;
+export type ThinkingAnimation = (typeof THINKING_ANIMATION_IDS)[number];
+
+/** Persisted visual-strength IDs for the selected thinking treatment. */
+export const THINKING_INTENSITY_IDS = ["subtle", "normal", "strong"] as const;
+export type ThinkingIntensity = (typeof THINKING_INTENSITY_IDS)[number];
+
+export function isThinkingAnimation(value: unknown): value is ThinkingAnimation {
+  return typeof value === "string" && (THINKING_ANIMATION_IDS as readonly string[]).includes(value);
+}
+
+export function isThinkingIntensity(value: unknown): value is ThinkingIntensity {
+  return typeof value === "string" && (THINKING_INTENSITY_IDS as readonly string[]).includes(value);
+}
 
 export type SidebarGroupBy = "area" | "time" | "type" | "status";
 
 export interface Prefs {
-  thinkingAnimation: ThinkingAnimation;
-  thinkingIntensity: ThinkingIntensity;
   theme: ThemeChoice;
   /** Selected accent palette id (see `@/lib/palettes`). */
   accent: string;
+  /** Round (capsule) or square (softened rectangle) control/shell radius. */
+  cornerProfile: CornerProfile;
+  /** Composer treatment shown between run start and the first output token. */
+  thinkingAnimation: ThinkingAnimation;
+  /** Visual strength of the selected composer thinking treatment. */
+  thinkingIntensity: ThinkingIntensity;
   /** How the sidebar session list is grouped. */
   sidebarGroupBy: SidebarGroupBy;
   /** Sidebar filter: show only unread (finished, unseen) sessions. */
@@ -84,6 +98,9 @@ export interface Prefs {
   sidebarChannelsOnly: boolean;
   /** Session IDs pinned to the top of the sidebar, most-recent-pin first. */
   pinnedSessionIds: string[];
+  /** Newest-seen item timestamp per Home activity lane — the unread cursor
+   *  behind the strips' accent "N new" counts. */
+  ambientSeen: Record<string, string>;
   /** `${sessionId}:${workflowId}` keys hidden from the sidebar hub (capped FIFO). */
   dismissedWorkflows: string[];
   sidebarHidden: boolean;
@@ -91,6 +108,10 @@ export interface Prefs {
    *  area can reflow its right edge to dock the panel instead of floating
    *  over content. */
   rightPanelCollapsed: boolean;
+  /** Chat inspector presentation. Area rooms always use the docked hub. */
+  rightPanelDocked: boolean;
+  /** Area-room Agent Hub visibility, independent from Chat's inspector. */
+  areaHubCollapsed: boolean;
   /** Sidebar width in pixels. User-resizable via the right-edge drag
    *  handle. Clamped to [SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH] in the
    *  resize handler. Default matches the historic fixed width. */
@@ -105,15 +126,14 @@ export interface Prefs {
   quickCaptureShortcut: string;
 }
 
-/** A user message submitted while a run was already active. The server
- *  queues it into the active run's inject_queue and consumes it on the
- *  next agent step; until then it lives only on the client. */
-export type QueuedMessageStatus = "pending" | "cancelling" | "sent" | "failed";
+/** A desktop-owned fresh turn waiting behind the active run. */
+export type QueuedMessageStatus = "pending" | "sending" | "failed";
 
 export interface QueuedMessage {
   clientId: string;
   text: string;
   images?: ImageBlock[];
+  meta?: boolean;
   status: QueuedMessageStatus;
   enqueuedAt: number;
 }
@@ -186,6 +206,9 @@ export interface ActivityItem {
    *  surface for agents. */
   semanticKind?: string;
   displayName?: string;
+  /** Model-authored per-call label projected from the canonical
+   * `_display_title` metadata argument. Never inferred from behavior args. */
+  displayTitle?: string;
   // Additive UI rendering hints from the backend (tool_presentation): a
   // semantic icon key, a grouping noun, and the integration source/category.
   // Absent on history reload / uncategorized tools — the trace falls back to
@@ -331,8 +354,6 @@ export interface MarkdownViewState {
   title: string;
   subtitle?: string;
   content: string;
-  /** Optional filesystem path — surfaces an "open in OS" affordance. */
-  sourcePath?: string;
 }
 
 /** Which workflow is expanded/focused in the agent hub (right sidebar). Set by
@@ -413,9 +434,10 @@ export interface State {
   serverConfig: ServerConfig | null;
   serverModels: ModelsResponse | null;
   automations: Automation[] | null;
-  automationSuggestions: AutomationSuggestion[] | null;
   automationsOpen: boolean;
   automationTargetId: string | null;
+  /** Deep-link intent: open the target automation's latest run result. */
+  automationTargetRun: "latest" | null;
   automationStream: AutomationStreamDomainState;
   archivedSessions: ArchivedSession[] | null;
   compacting: boolean;
@@ -426,7 +448,6 @@ export interface State {
   /** Monotonic invalidation key for per-turn source derivation. */
   sourceRefsRevision: number;
   paletteOpen: boolean;
-  commandSidecar: CommandSidecarState;
   /** Tool approvals waiting on the user. Lives outside `messages` so the
    *  approval UI can render as its own surface (sticky banner above the
    *  composer) without interleaving with the agent's narrative trace. */
@@ -458,6 +479,8 @@ export interface State {
   pendingGoalProposal: PendingGoalProposal | null;
   toasts: Toast[];
   prefs: Prefs;
+  /** Runtime viewport/workspace facts for shell-only arbitration. */
+  shellLayout: ShellLayout;
   areas: AreasDomainState;
   triage: import("@/stores/triage-domain").TriageDomainState;
 }
@@ -524,7 +547,7 @@ export interface Actions {
    *  message count come from disk; cumulative cost/tokens start fresh
    *  for the session view (server doesn't persist running totals). */
   hydrateUsageSnapshot: (snapshot: { lastPrompt: number; messageCount: number }) => void;
-  openSettings: (origin?: { x: number; y: number } | null, tab?: SettingsTabId) => void;
+  openSettings: (tab?: SettingsTabId) => void;
   closeSettings: () => void;
   setConnectionDraft: (patch: Partial<AppConfig>) => void;
   setConnectionError: (error: string | null) => void;
@@ -578,8 +601,7 @@ export interface Actions {
   setServerConfig: (cfg: ServerConfig | null) => void;
   setServerModels: (models: ModelsResponse | null) => void;
   setAutomations: (automations: Automation[] | null) => void;
-  setAutomationSuggestions: (suggestions: AutomationSuggestion[] | null) => void;
-  openAutomations: (origin?: { x: number; y: number } | null, taskId?: string | null) => void;
+  openAutomations: (taskId?: string | null, options?: { run: "latest" }) => void;
   closeAutomations: () => void;
   clearAutomationTarget: () => void;
   automationStreamConnecting: () => void;
@@ -632,7 +654,7 @@ export interface Actions {
   setPendingGoalProposal: (proposal: PendingGoalProposal | null) => void;
   setArchivedSessions: (sessions: ArchivedSession[] | null) => void;
   setCompacting: (compacting: boolean) => void;
-  openMemory: (origin?: { x: number; y: number } | null) => void;
+  openMemory: () => void;
   closeMemory: () => void;
   setSourceFocus: (focus: MessageSourceFocus | null) => void;
   setRightInspectorTab: (tab: "activity" | "sources") => void;
@@ -640,18 +662,17 @@ export interface Actions {
   openPalette: () => void;
   closePalette: () => void;
   togglePalette: () => void;
-  beginCommandSidecar: (query: string, clientId: string) => void;
-  attachCommandRun: (clientId: string, runId: string, sessionId: string) => void;
-  applyCommandEvent: (event: ServerEvent) => void;
-  failCommandSidecar: (clientId: string, error: string) => void;
-  closeCommandSidecar: () => void;
-  clearCommandApproval: (toolId: string) => void;
-  clearCommandConnection: (toolId: string) => void;
   setPref: <K extends keyof Prefs>(key: K, value: Prefs[K]) => void;
+  setShellLayout: (layout: ShellLayout) => void;
   toggleSidebar: () => void;
   areasOverviewLoaded: (overview: import("@/api/areas").AreasOverview) => void;
+  setAreasOverviewPhase: (phase: import("@/stores/areas-domain").AreasLoadPhase) => void;
   areaDetailLoaded: (detail: import("@/api/areas").AreaDetail) => void;
-  areaAskResolved: (key: string, askId: string) => void;
+  setAreaDetailPhase: (
+    key: string,
+    phase: import("@/stores/areas-domain").AreasLoadPhase,
+  ) => void;
+  areaAskResolved: (askId: string) => void;
   openArea: (key: string | null) => void;
   markTriageSeen: (sessionId: string) => void;
   setTriageProposal: (sessionId: string, decision: import("@/api/sessions").TriageDecision) => void;

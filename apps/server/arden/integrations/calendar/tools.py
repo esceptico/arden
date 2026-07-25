@@ -384,6 +384,7 @@ async def delete_calendar_event(execution: ToolExecution, args: DeleteCalendarEv
 
 calendar_tool = tool(
     display_name="Calendar",
+    display_description="Browse and search calendar events.",
     description=CALENDAR_DESCRIPTION,
     input_model=CalendarInput,
     policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"calendar"})),
@@ -392,6 +393,7 @@ calendar_tool = tool(
 
 create_calendar_event_tool = tool(
     display_name="CreateEvent",
+    display_description="Create a calendar event after approval.",
     description=CREATE_CALENDAR_EVENT_DESCRIPTION,
     input_model=CreateCalendarEventInput,
     policy=ToolPolicy(
@@ -406,6 +408,7 @@ create_calendar_event_tool = tool(
 
 edit_calendar_event_tool = tool(
     display_name="EditEvent",
+    display_description="Edit a calendar event after approval.",
     description=EDIT_CALENDAR_EVENT_DESCRIPTION,
     input_model=EditCalendarEventInput,
     policy=ToolPolicy(
@@ -420,6 +423,7 @@ edit_calendar_event_tool = tool(
 
 delete_calendar_event_tool = tool(
     display_name="DeleteEvent",
+    display_description="Delete a calendar event after approval.",
     description=DELETE_CALENDAR_EVENT_DESCRIPTION,
     input_model=DeleteCalendarEventInput,
     policy=ToolPolicy(

@@ -29,9 +29,9 @@ export function TriageChip() {
 
   return (
     <Collapse open={show}>
-      <div className="flex justify-center pb-2">
+      <div className="board-triage-chip flex justify-center pb-2">
         {sessionId && (
-          <div className="inline-flex max-w-full items-center gap-1 rounded-full bg-surface-soft py-1 pr-1.5 pl-3 text-xs text-ink-soft">
+          <div className="board-triage-chip__card inline-flex max-w-full items-center gap-1 rounded-[var(--r-control)] bg-surface-soft py-1 pr-1.5 pl-3 text-xs text-ink-soft">
             <button
               type="button"
               onClick={() => void acceptTriage(sessionId)}
@@ -46,9 +46,9 @@ export function TriageChip() {
               type="button"
               onClick={() => dismissTriage(sessionId)}
               aria-label="Dismiss suggestion"
-              className="grid size-5 shrink-0 place-items-center rounded-full text-whisper transition-colors hover:bg-surface hover:text-ink-soft"
+              className="grid size-5 shrink-0 place-items-center rounded-[var(--r-control)] text-whisper transition-colors hover:bg-surface hover:text-ink-soft"
             >
-              <X size={ICON.XS} strokeWidth={2} />
+              <X size={ICON.XS} />
             </button>
           </div>
         )}

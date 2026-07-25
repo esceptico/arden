@@ -311,6 +311,7 @@ read_google_sheet_tool = tool(
 )
 create_google_doc_tool = tool(
     display_name="Create Google Doc",
+    display_description="Create an empty Google Doc.",
     description="Create an empty Google Doc. Use edit_google_doc in a separate operation to add content.",
     input_model=CreateGoogleDocInput,
     policy=_policy(ToolAction.WRITE, approval=True),
@@ -327,6 +328,7 @@ edit_google_doc_tool = tool(
 )
 create_google_sheet_tool = tool(
     display_name="Create Google Sheet",
+    display_description="Create an empty Google Sheet.",
     description="Create an empty Google Sheet. Use update_google_sheet in a separate operation to add values.",
     input_model=CreateGoogleSheetInput,
     policy=_policy(ToolAction.WRITE, approval=True),

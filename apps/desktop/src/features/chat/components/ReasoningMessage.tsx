@@ -1,6 +1,6 @@
 import { memo, useState } from "react";
 import { AnimatePresence } from "motion/react";
-import { Brain, ChevronDown } from "@/components/icons";
+import { Brain01, ChevronDown } from "@/components/icons";
 import clsx from "clsx";
 import { useStore } from "@/stores";
 import { Markdown } from "@/components/ui/Markdown";
@@ -29,7 +29,7 @@ export const ReasoningMessage = memo(function ReasoningMessage({ id }: { id: str
   return (
     <article
       className={clsx(
-        "grid grid-cols-[minmax(0,1fr)] min-w-0 transition-[background-color,box-shadow] duration-panel",
+        "board-reasoning grid grid-cols-[minmax(0,1fr)] min-w-0 transition-[background-color,box-shadow] duration-panel",
         entryAnimation(message, "animate-roll-in"),
         sourceFocused && SOURCE_FOCUS_CLASS,
       )}
@@ -40,14 +40,12 @@ export const ReasoningMessage = memo(function ReasoningMessage({ id }: { id: str
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
-        className="reasoning-head self-start inline-flex items-center gap-1.5 text-xs leading-[1.45] font-medium text-muted hover:text-ink-soft transition-colors select-none"
-        data-state={isStreaming ? "streaming" : "done"}
+        className={clsx("board-reasoning__head self-start inline-flex items-center gap-1.5 text-xs leading-[1.45] font-medium text-muted hover:text-ink-soft transition-colors select-none", isStreaming && "is-streaming")}
       >
-        <Brain size={ICON.XS} strokeWidth={2} />
+        <Brain01 size={ICON.XS} />
         <span>{message.title || "Reasoning"}</span>
         <ChevronDown
           size={ICON.XS}
-          strokeWidth={2}
           className={clsx("transition-transform duration-trace", expanded && "rotate-180")}
         />
       </button>
@@ -60,7 +58,7 @@ export const ReasoningMessage = memo(function ReasoningMessage({ id }: { id: str
           <Reveal key="body" className="min-w-0">
             <Markdown
               content={smoothContent}
-              className="mt-2 pl-3.5 border-l-2 border-line text-xs leading-[1.45] text-muted italic break-words"
+              className="board-reasoning__body mt-2 text-xs leading-[1.45] text-muted italic break-words"
             />
           </Reveal>
         )}

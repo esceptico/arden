@@ -1,13 +1,10 @@
 import { useRef, useState } from "react";
-import { motion } from "motion/react";
 import clsx from "clsx";
 import { ChevronRight, FileText } from "@/components/icons";
-import { EASE_EMPHASIZED, MOTION } from "@/lib/tokens/motion";
 import { Markdown } from "@/components/ui/Markdown";
 import { DetailPlaceholder } from "@/components/ui/EmptyState";
 import { ListError } from "@/components/ui/ListColumn";
 import { Skeleton } from "@/components/ui/Skeleton";
-import { ScrollFadeTop } from "@/components/ui/ScrollBlur";
 import { WikiLinkContext, type WikiLinkHandlers } from "@/lib/wikilink";
 import { MemoryFindBar } from "@/features/memory/components/MemoryFindBar";
 import { MemoryProperties, type MemoryFrontmatter } from "@/features/memory/components/MemoryProperties";
@@ -16,12 +13,14 @@ import type { MemoryArtifactDetail, MemoryArtifactSummary } from "@/features/mem
 
 const FRONTMATTER_RE = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/;
 const ENT_TAG_RE = /\s*\[ent:[^\]]+\]/g;
-// Markdown-table heuristic — the draft widens the page for tabular content.
-const TABLE_RE = /\n\|.*\|/;
-
 function filenameStem(path: string): string {
   const name = path.split("/").pop() ?? path;
   return name.replace(/\.md$/, "");
+}
+
+function noteTrail(path: string): string {
+  const parts = path.replace(/\.md$/, "").split("/");
+  return parts.length > 1 ? parts.slice(0, -1).join(" / ") : "memory";
 }
 
 // The page's dated record ledger, collapsed under the prose (draft's krecs).
@@ -36,7 +35,7 @@ function RecordsDisclosure({
   return (
     <section className={clsx("mw-krecs", open && "open")}>
       <button type="button" className="mw-krecs-head" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
-        <ChevronRight className="mw-chev" strokeWidth={2} aria-hidden />
+        <ChevronRight className="mw-chev" aria-hidden />
         Records <span className="n">{records.length}</span>
       </button>
       {open && (
@@ -105,9 +104,15 @@ export function MemoryNote({
       className="relative flex h-full min-h-0 flex-col outline-none"
     >
       <MemoryFindBar scrollerRef={scrollerRef} />
-      <div ref={scrollerRef} data-memory-note-scroll className="mw-scroller scroll-thin min-w-0">
-        <ScrollFadeTop />
-        <div className={clsx("mw-page", TABLE_RE.test(content) && "wide")}>
+      <div
+        ref={scrollerRef}
+        data-memory-note-scroll
+        data-page-enter-item
+        data-page-skeleton
+        className="mw-scroller scroll-thin scroll-fade min-w-0"
+      >
+        <div className="mw-page">
+          <p className="mw-note-crumb">{noteTrail(summary.path)} / <b>{filenameStem(summary.path)}</b></p>
           <h1 className="mw-note-title">{filenameStem(summary.path)}</h1>
           {detail && (
             <MemoryProperties
@@ -119,14 +124,7 @@ export function MemoryNote({
           {contentNotice && (
             <div className="mb-5 mt-5 rounded-[10px] bg-surface-soft px-3 py-2 text-sm text-muted">{contentNotice}</div>
           )}
-          {/* Fog-of-war reveal: the not-yet-resolved sharpens out of blur.
-              Enter-only (keyed remount) — exits would churn on fast paging. */}
-          <motion.div
-            key={contentError && !content ? "error" : contentLoading && !content ? "loading" : "ready"}
-            initial={{ opacity: 0, filter: "blur(3px)" }}
-            animate={{ opacity: 1, filter: "blur(0px)", transitionEnd: { filter: "none" } }}
-            transition={{ duration: MOTION.palette, ease: EASE_EMPHASIZED }}
-          >
+          <div>
             {contentError && !content ? (
               <ListError title="Couldn't load this note" message={contentError} onRetry={onRetry} />
             ) : contentLoading && !content ? (
@@ -150,7 +148,7 @@ export function MemoryNote({
                 )}
               </>
             )}
-          </motion.div>
+          </div>
         </div>
       </div>
     </article>

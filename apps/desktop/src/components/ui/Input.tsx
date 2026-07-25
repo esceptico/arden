@@ -7,7 +7,7 @@ import {
 import clsx from "clsx";
 
 /**
- * Text input primitive. Wraps the shared `.input-field` material (single
+ * Text input primitive. Wraps the shared `.arden-field` material (single
  * source of truth for input styling — transparent fill, line border,
  * accent focus ring) with the recurring label / help / error scaffold so
  * forms stop re-inlining the same `<label>` + `<input className="...">` +
@@ -38,11 +38,10 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
       aria-invalid={error ? true : undefined}
       aria-describedby={[describedBy, msgId].filter(Boolean).join(" ") || undefined}
       className={clsx(
-        "input-field w-full",
-        size === "sm" && "input-field-sm",
-        error && "border-bad focus:border-bad",
+        "arden-field",
         className,
       )}
+      data-size={size}
       {...rest}
     />
   );

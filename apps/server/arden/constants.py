@@ -206,6 +206,8 @@ AREA_ATTENTION_PRESETS = {
     "ambient": {"min_hours": 12.0, "max_hours": 24.0 * 7, "runs_per_day": 3},
     "dormant": {"min_hours": 24.0 * 3, "max_hours": 24.0 * 14, "runs_per_day": 1},
 }
+# Lane title for asks raised from a plain chat, which belongs to no area.
+UNFILED_ASK_TITLE = "Chats"
 AREA_QUIET_DECAY_FACTOR = 1.5  # applied after 2+ consecutive quiet runs
 AREA_ASK_IGNORED_DAYS = 7  # unanswered this long → attention steps down
 

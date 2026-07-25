@@ -1,9 +1,8 @@
 import { ChevronDown, SquareTerminal } from "@/components/icons";
-import clsx from "clsx";
 import { useStore, type ActivityLabel } from "@/stores";
+import { BlurSwap } from "@/components/ui/BlurSwap";
 import { RollingToken } from "@/components/ui/RollingToken";
-import { Marker, MarkerIcon } from "@/components/ui/Marker";
-import { ICON } from "@/lib/icons";
+import { formatTurnDuration } from "@/features/chat/lib/turnHeader";
 
 export function ActivityHeader({
   done,
@@ -11,77 +10,76 @@ export function ActivityHeader({
   count,
   activeCount = 0,
   backgrounded = false,
+  durationMs,
   motionDisabled,
   onToggle,
   expanded,
+  railAnchor = false,
+  railLabel,
 }: {
   done: boolean;
   label?: ActivityLabel;
   count: number;
   activeCount?: number;
   backgrounded?: boolean;
+  durationMs?: number | null;
   motionDisabled?: boolean;
   onToggle?: () => void;
   expanded?: boolean;
+  railAnchor?: boolean;
+  railLabel?: string;
 }) {
   const word = count === 1 ? "call" : "calls";
   const heading = backgrounded
     ? "Backgrounded"
     : label === "Stopped"
       ? "Stopped"
-      : activeCount > 0
-        ? "Running"
-        : done
-          ? "Executed"
-          : "Calling";
+      : done
+        ? "Worked"
+        : "Working";
   const interactive = !!onToggle;
   const streamReplaying = useStore((s) => s.streamReplaying);
   const suppressMotion = motionDisabled ?? streamReplaying;
 
   return (
-    <Marker
-      as="button"
+    <button
       type={interactive ? "button" : undefined}
       onClick={onToggle}
       disabled={!interactive}
       aria-expanded={interactive ? expanded : undefined}
-      className={clsx(
-        "h-[18px] leading-[1.4] text-faint!",
-        interactive
-          ? "transition-colors hover:text-muted! active:text-ink-soft!"
-          : "cursor-default!",
-      )}
+      data-chat-rail-anchor={railAnchor ? "" : undefined}
+      data-chat-rail-label={railLabel}
+      className="board-trace__toggle"
     >
-      <MarkerIcon>
-        <SquareTerminal strokeWidth={2} />
-      </MarkerIcon>
-      {/* Three odometer slots so the label flip ("Running" → "Done"),
-          the digit roll (5 → 6 as another tool starts), and the
-          singular/plural switch ("tool" / "tools") each animate
-          independently instead of the whole string snapping. */}
-      <span aria-live="polite" className="mr-1.5 inline-flex h-full items-center leading-none">
-        <RollingToken value={heading} motionDisabled={suppressMotion} />
+      <SquareTerminal aria-hidden />
+      <span aria-live="polite">
+        {suppressMotion
+          ? heading
+          : <BlurSwap swapKey={heading}>{heading}</BlurSwap>}
       </span>
-      <span className="inline-flex h-full items-center gap-1 leading-none">
+      <span aria-hidden>·</span>
+      <span className="board-trace__count">
         <RollingToken value={String(count)} mono motionDisabled={suppressMotion} />
         <RollingToken value={word} motionDisabled={suppressMotion} />
+        {durationMs != null && (
+          <>
+            <span aria-hidden>·</span>
+            <span>{formatTurnDuration(durationMs)}</span>
+          </>
+        )}
       </span>
       {activeCount > 0 && (
-        <span className="inline-flex h-full items-center gap-1.5 leading-none">
+        <span className="board-trace__count">
           <RollingToken value={String(activeCount)} mono motionDisabled={suppressMotion} />
           <span>active</span>
         </span>
       )}
       {interactive && (
         <ChevronDown
-          size={ICON.SM}
-          strokeWidth={2}
-          className={clsx(
-            "ml-1 self-center transition-transform duration-trace ease-out text-faint",
-            expanded && "rotate-180",
-          )}
+          aria-hidden
+          className="board-trace__chevron"
         />
       )}
-    </Marker>
+    </button>
   );
 }

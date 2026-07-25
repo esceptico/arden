@@ -1,16 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { AnimatePresence, motion } from "motion/react";
 import { Command } from "cmdk";
-import { Search } from "@/components/icons";
-import { ICON } from "@/lib/icons";
-import { EASE_EMPHASIZED, MOTION } from "@/lib/tokens/motion";
 import { Breadcrumbs } from "@/features/command-palette/components/Breadcrumbs";
 import { Row } from "@/features/command-palette/components/Row";
 import { filterEntries, groupBySection } from "@/features/command-palette/lib/filter";
 import { useEntries } from "@/features/command-palette/hooks/useEntries";
 import { SECTION_LABEL, type CommandEntry, type Crumb } from "@/features/command-palette/types";
-import { ScrollFadeTop } from "@/components/ui/ScrollBlur";
-import { SLIDE_PAGE_VARIANTS } from "@/components/ui/TabPanels";
 
 const LIST_ID = "command-palette-listbox";
 const optionId = (entryId: string) => `${LIST_ID}-opt-${entryId}`;
@@ -23,8 +17,6 @@ export function PaletteBody({
   crumbs,
   setCrumbs,
   onClose,
-  onAgentSubmit,
-  morph = false,
 }: {
   query: string;
   setQuery: (q: string) => void;
@@ -33,8 +25,6 @@ export function PaletteBody({
   crumbs: Crumb[];
   setCrumbs: React.Dispatch<React.SetStateAction<Crumb[]>>;
   onClose: () => void;
-  onAgentSubmit: (query: string) => void;
-  morph?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -45,7 +35,7 @@ export function PaletteBody({
   // disappeared), we collapse back to root rather than show a dead view.
   const { view, staleCrumbs } = useMemo(() => {
     let entries = rootEntries;
-    let placeholder = "Search commands, sessions, memory…";
+    let placeholder = "Search chats or run a command";
     for (let i = 0; i < crumbs.length; i++) {
       const crumb = crumbs[i];
       const folder = entries.find((e) => e.id === crumb.id && e.children);
@@ -122,17 +112,6 @@ export function PaletteBody({
 
   const grouped = useMemo(() => groupBySection(filtered), [filtered]);
 
-  // Page identity = the crumb path. Drives the AnimatePresence swap so each
-  // hierarchy level mounts as a fresh panel. `depth` alone would be ambiguous
-  // if two sibling sub-views ever shared a depth; the joined id chain is exact.
-  const pageKey = crumbs.length === 0 ? "root" : crumbs.map((c) => c.id).join("/");
-  const depth = crumbs.length;
-  const prevDepth = useRef(depth);
-  const direction = depth >= prevDepth.current ? 1 : -1;
-  useEffect(() => {
-    prevDepth.current = depth;
-  }, [depth]);
-
   return (
     <Command
       value={selectedValue}
@@ -145,27 +124,14 @@ export function PaletteBody({
       className="contents"
       label="Command palette"
     >
-      <motion.div layout={morph} className="relative px-4 pt-3 pb-2.5">
-        <Search
-          size={ICON.MD}
-          strokeWidth={2}
-          className="absolute left-4 top-[22px] text-faint pointer-events-none"
-        />
-        <div className="flex items-center gap-1.5 pl-6">
+      <div className="command-palette__search">
+        <div className="command-palette__search-inner">
           <Breadcrumbs crumbs={crumbs} onJump={popTo} />
           <Command.Input
             ref={inputRef}
             value={query}
             onValueChange={setQuery}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                const command = query.trim();
-                if (!command) return;
-                e.preventDefault();
-                onAgentSubmit(command);
-                onClose();
-                return;
-              }
               if (e.key === "Backspace" && query.length === 0 && crumbs.length > 0) {
                 e.preventDefault();
                 popCrumb();
@@ -174,36 +140,21 @@ export function PaletteBody({
             }}
             placeholder={view.placeholder}
             spellCheck={false}
-            className="flex-1 min-w-0 h-8 bg-transparent text-md text-ink placeholder:text-muted outline-none"
+            className="command-palette__input"
           />
-          {query.trim() && (
-            <span className="shrink-0 text-2xs text-faint" aria-hidden>
-              ⌘↵ ask agent
-            </span>
-          )}
         </div>
-      </motion.div>
+      </div>
 
       {/* cmdk owns list semantics and selection; Arden keeps its ranked filter
           and nested-view direction. */}
       <Command.List
         ref={listRef}
         id={LIST_ID}
-        className="overflow-y-auto overflow-x-hidden scroll-thin pb-2"
+        className="command-palette__results scroll-thin scroll-fade"
       >
-        <ScrollFadeTop />
-        <AnimatePresence mode="wait" custom={direction} initial={false}>
-          <motion.div
-            key={pageKey}
-            custom={direction}
-            variants={SLIDE_PAGE_VARIANTS}
-            initial="enter"
-            animate="center"
-            exit="exit"
-            transition={{ duration: MOTION.palette, ease: EASE_EMPHASIZED }}
-          >
+          <div>
             {filtered.length === 0 ? (
-              <Command.Empty className="grid place-items-center min-h-[120px] text-sm italic text-muted">
+              <Command.Empty className="command-palette__empty">
                 Nothing matches.
               </Command.Empty>
             ) : (
@@ -211,19 +162,17 @@ export function PaletteBody({
                 <Command.Group
                   key={section}
                   heading={
-                    <span className="block px-2.5 pt-3 pb-1 text-2xs font-medium uppercase tracking-[0.10em] text-faint">
+                    <span className="command-palette__heading">
                       {SECTION_LABEL[section]}
                     </span>
                   }
-                  className="px-1.5"
+                  className="command-palette__group"
                 >
                     {items.map((entry) => {
-                      const isActive = entry === filtered[safe];
                       return (
                         <Row
                           key={entry.id}
                           entry={entry}
-                          active={isActive}
                           optionId={optionId(entry.id)}
                           onClick={() => activate(entry)}
                         />
@@ -232,9 +181,11 @@ export function PaletteBody({
                 </Command.Group>
               ))
             )}
-          </motion.div>
-        </AnimatePresence>
+          </div>
       </Command.List>
+      <footer className="command-palette__footer">
+        <span><kbd className="arden-kbd">Enter</kbd> opens the selected result</span>
+      </footer>
     </Command>
   );
 }

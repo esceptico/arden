@@ -7,7 +7,7 @@ from arden.areas.asks import AskStore, nominate_focus
 from arden.areas.models import Area, Ask, AskState
 from arden.areas.projection import page_summary
 from arden.areas.work_models import AreaWorkSnapshot
-from arden.constants import AREA_ATTENTION_PRESETS
+from arden.constants import AREA_ATTENTION_PRESETS, UNFILED_ASK_TITLE
 from arden.memory.pages import Page
 
 
@@ -91,7 +91,7 @@ class AreaService:
     def overview(self) -> dict:
         areas = self._areas()
         active_keys = {area.key for area in areas}
-        all_asks = [ask for ask in self._asks.list() if ask.area_key in active_keys]
+        all_asks = [ask for ask in self._asks.list() if ask.area_key is None or ask.area_key in active_keys]
         focus = nominate_focus(all_asks)
         out = []
         for s in areas:
@@ -122,7 +122,13 @@ class AreaService:
                 "done": enrich(work_brief["done"]),
                 "in_progress": enrich(work_brief["in_progress"]),
                 "needs_you": [
-                    {**ask, "area_title": titles.get(ask["area_key"], ask["area_key"])} for ask in focus_rows
+                    {
+                        **ask,
+                        "area_title": titles.get(ask["area_key"], ask["area_key"])
+                        if ask["area_key"]
+                        else UNFILED_ASK_TITLE,
+                    }
+                    for ask in focus_rows
                 ],
             },
         }
@@ -136,10 +142,9 @@ class AreaService:
     ) -> dict:
         return asdict(self._asks.resolve(ask_id, state, snoozed_until, resolution))
 
-    def get_ask(self, area_id: str, ask_id: str) -> Ask | None:
+    def get_ask(self, ask_id: str) -> Ask | None:
         # Direct lookup, not list(): a snoozed ask must stay resolvable.
-        ask = self._asks.get(ask_id)
-        return ask if ask is not None and ask.area_key == area_id else None
+        return self._asks.get(ask_id)
 
     def detail(self, key: str) -> dict:
         areas = self._areas()

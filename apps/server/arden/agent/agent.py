@@ -715,7 +715,7 @@ class Agent:
             display_name="Search Tools" if call.name == "tool_search" else call.name,
             kind="tool",
             icon="search",
-            noun="tool",
+            noun=None,
             source="provider",
         )
 

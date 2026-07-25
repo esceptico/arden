@@ -66,6 +66,7 @@ async def update_todos(execution: ToolExecution, args: UpdateTodosInput) -> Tool
 
 update_todos_tool = tool(
     display_name="Update Todos",
+    display_description="Update the task todo list.",
     description=(
         "Update the visible todo list for complex work. Use it for multi-step tasks, explicit todo/list requests, "
         "or when requirements change. Keep the list current, keep exactly one item in_progress when actively working, "

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import clsx from "clsx";
+import { Check, Loader2 } from "@/components/icons";
 import { EASE_OUT, MOTION } from "@/lib/tokens/motion";
 
 type SaveState = "idle" | "saving" | "saved";
@@ -17,46 +18,9 @@ interface SaveButtonProps {
 
 const SAVED_HOLD_MS = 1500;
 
-/** A 3/4 arc that spins — reads as indeterminate progress. */
-function Spinner() {
-  return (
-    <motion.svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      animate={{ rotate: 360 }}
-      transition={{ repeat: Infinity, ease: "linear", duration: 0.7 }}
-    >
-      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="3" strokeOpacity="0.25" />
-      <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
-    </motion.svg>
-  );
-}
-
-/** Checkmark that draws itself in on mount. */
-function DrawCheck() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-      <motion.path
-        d="M5 13l4 4L19 7"
-        stroke="currentColor"
-        strokeWidth="3"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        initial={{ pathLength: 0 }}
-        animate={{ pathLength: 1 }}
-        transition={{ duration: 0.3, ease: EASE_OUT }}
-      />
-    </svg>
-  );
-}
-
 /**
- * Save with state morph: idle → saving (spinning arc) → saved (a checkmark
- * that draws itself in), then auto-reverts. The label slides up/in on each
- * transition rather than hard-cutting — the whole content block is one
- * `AnimatePresence` so icon + word move together.
+ * Save with state morph: idle → saving → saved, then auto-reverts. Icons
+ * come from the shared registry; icon + word move as one state label.
  */
 export function SaveButton({
   onSave,
@@ -117,8 +81,8 @@ export function SaveButton({
           exit={{ opacity: 0, y: -7 }}
           transition={{ duration: MOTION.fast, ease: EASE_OUT }}
         >
-          {state === "saving" && <Spinner />}
-          {state === "saved" && <DrawCheck />}
+          {state === "saving" && <Loader2 size={14} className="animate-spin" aria-hidden />}
+          {state === "saved" && <Check size={14} aria-hidden />}
           {label}
         </motion.span>
       </AnimatePresence>

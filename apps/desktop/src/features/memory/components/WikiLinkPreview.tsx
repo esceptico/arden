@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
 import { AnchoredPopover } from "@/components/ui/AnchoredPopover";
+import { Markdown } from "@/components/ui/Markdown";
 import { ArtifactCache } from "@/features/memory/lib/artifactCache";
 import { resolveWikiTarget } from "@/features/memory/lib/wikiResolution";
 import type { MemoryArtifactDetail, MemoryArtifactSummary, PageLinks } from "@/features/memory/lib/notebookTypes";
@@ -7,10 +8,10 @@ import type { MemoryArtifactDetail, MemoryArtifactSummary, PageLinks } from "@/f
 const INTENT_DELAY_MS = 300;
 const HIDE_DELAY_MS = 120;
 
-function previewParagraph(content: string) {
+function previewMarkdownBlock(content: string) {
   const withoutFrontmatter = content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "");
   const blocks = withoutFrontmatter.split(/\r?\n\s*\r?\n/).map((block) => block.trim());
-  return blocks.find((block) => block && !/^#{1,6}\s/.test(block))?.replace(/\s+/g, " ") ?? "No preview available.";
+  return blocks.find((block) => block && !/^#{1,6}\s/.test(block)) ?? "No preview available.";
 }
 
 interface PreviewState {
@@ -90,11 +91,16 @@ export function WikiLinkPreview({
       request.current = null;
     };
     const anchorFor = (target: EventTarget | null) =>
-      target instanceof Element ? target.closest<HTMLElement>("[data-wikilink]") : null;
+      target instanceof Element
+        ? target.closest<HTMLElement>("[data-wikilink], [data-memory-path]")
+        : null;
     const open = (element: HTMLElement) => {
-      const target = element.dataset.wikilink;
-      if (!target) return close();
-      const resolved = resolveWikiTarget(links, target);
+      const exactPath = element.dataset.memoryPath;
+      const resolved = exactPath && summariesByPath.has(exactPath)
+        ? { path: exactPath, anchor: element.dataset.memoryAnchor ?? null }
+        : element.dataset.wikilink
+          ? resolveWikiTarget(links, element.dataset.wikilink)
+          : null;
       if (!resolved) return close();
       cancelRequest();
       const revision = summariesByPath.get(resolved.path)?.revision ?? null;
@@ -165,7 +171,13 @@ export function WikiLinkPreview({
           <strong className="text-sm font-semibold text-ink">{preview.detail?.title ?? summariesByPath.get(preview.path)?.title ?? preview.path}</strong>
           {preview.loading ? <span className="text-xs text-muted">Loading preview…</span>
             : preview.error ? <span role="alert" className="text-xs text-bad">{preview.error}</span>
-              : <p className="line-clamp-4 text-xs leading-relaxed text-muted">{previewParagraph(preview.detail?.content ?? "")}</p>}
+              : (
+                <Markdown
+                  content={previewMarkdownBlock(preview.detail?.content ?? "")}
+                  className="memory-link-preview-markdown"
+                  typeset
+                />
+              )}
         </div>
       )}
     </AnchoredPopover>

@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { useStore } from "@/stores";
 import { refreshLoops } from "@/actions/loops";
-import { fetchAutomations, fetchAutomationSuggestions } from "@/actions/automations";
+import { fetchAutomations } from "@/actions/automations";
 import { fetchAreasOverview, fetchAreaDetail } from "@/actions/areas";
+import { applyAppDestination } from "@/actions/navigation";
 import { refreshAreas } from "@/actions/sessions";
 import type { AppConfig } from "@/api/core";
+import type { AppDestination } from "@/api/navigation";
 import type { SessionListItem } from "@/api/types";
 import { createStallWatchdog } from "@/lib/streamWatchdog";
 import { openSseStream } from "@/lib/sseTransport";
@@ -31,6 +33,7 @@ type AutomationEvent =
   | { type: "session_activity"; session: SessionListItem; seq?: number }
   | { type: "memory_changed"; paths: string[]; revision?: string | null; review_required?: boolean; seq?: number }
   | { type: "areas_changed"; keys: string[]; seq?: number }
+  | { type: "navigation_requested"; origin_session_id: string; destination: AppDestination; label: string; seq?: number }
   | { type: "stream_keepalive"; latest_seq: number; seq?: number }
   | { type: "stream_reset"; reason: string; seq?: number };
 
@@ -46,15 +49,6 @@ export function automationEventsUrl(serverUrl: string, afterSeq: number | undefi
   return url.toString();
 }
 
-export function reduceAutomationStreamCursor(
-  current: number | undefined,
-  event: Pick<AutomationEvent, "seq" | "type"> & { latest_seq?: number },
-): number | undefined {
-  const next = typeof event.latest_seq === "number" ? event.latest_seq : event.seq;
-  if (typeof next !== "number") return current;
-  return Math.max(current ?? 0, next);
-}
-
 export function memoryVaultChangeFromEvent(
   event: Extract<AutomationEvent, { type: "memory_changed" }>,
 ): MemoryVaultChange {
@@ -64,6 +58,25 @@ export function memoryVaultChangeFromEvent(
     reviewRequired: event.review_required ?? false,
     seq: event.seq ?? null,
   };
+}
+
+/** An agent asked the app to take the user somewhere. Only the session the
+ *  user is actually looking at may move the app under them; anything else
+ *  offers the move as a toast and waits for a click. */
+export function applyNavigationRequest(
+  event: Extract<AutomationEvent, { type: "navigation_requested" }>,
+): void {
+  const store = useStore.getState();
+  const active = event.origin_session_id === store.currentSessionId;
+  const result = active ? applyAppDestination(event.destination) : null;
+  if (result?.ok) return;
+  store.pushToast({
+    id: `nav:${event.origin_session_id}:${event.seq ?? Date.now()}`,
+    title: event.label,
+    detail: result ? result.error : undefined,
+    status: result ? "failed" : "info",
+    target: { kind: "destination", destination: event.destination },
+  });
 }
 
 /** Subscribe to `/automations/events` for the lifetime of the app. The
@@ -117,10 +130,6 @@ export function useAutomationEvents(): void {
         // A finished automation run may have written area asks/state —
         // refresh Home's focus set the same way areas_changed does.
         void fetchAreasOverview();
-      } else if (event.type === "automation_suggestions_updated") {
-        // The background suggester recomputed the active set — pull it so
-        // "Suggested for you" reflects the new drafts without a modal reopen.
-        void fetchAutomationSuggestions();
       } else if (event.type === "session_created") {
         // An automation just provisioned its channel session. Prepend it so the
         // sidebar row shows up live; the store dedupes an already-loaded id.
@@ -146,6 +155,8 @@ export function useAutomationEvents(): void {
         if (openKey && event.keys.includes(openKey)) {
           void fetchAreaDetail(openKey);
         }
+      } else if (event.type === "navigation_requested") {
+        applyNavigationRequest(event);
       } else if (event.type === "stream_reset") {
         void fetchAutomations();
         const sid = useStore.getState().currentSessionId;

@@ -6,10 +6,26 @@ from arden.events.sse import ToolCallStartEvent
 
 def test_known_tools_map_to_icon_and_noun():
     assert tool_presentation("read_file", "_system") == ("file", "file")
-    assert tool_presentation("emails", "gmail") == ("mail", "email")
-    assert tool_presentation("web_search", "web") == ("globe", "search")
-    assert tool_presentation("calendar", "calendar") == ("calendar", "event")
-    assert tool_presentation("search_transcripts", "_sessions") == ("history", "transcript")
+    assert tool_presentation("read_email", "gmail") == ("mail", "email")
+    assert tool_presentation("web_fetch", "web") == ("globe", "page")
+
+
+def test_search_tools_carry_no_grouping_noun():
+    # A search call's unit counts results, not calls — a collapsed run must
+    # show "{label} · N", never "Searched 4 searches" / "Searched 4 emails".
+    for name, source in [
+        ("web_search", "web"),
+        ("emails", "gmail"),
+        ("slack_search", "slack"),
+        ("calendar", "calendar"),
+        ("search_transcripts", "_sessions"),
+        ("memory_search", "_memory"),
+        ("search_text", "_system"),
+        ("tool_search", "_system"),
+        ("search_google_drive", "google_drive"),
+    ]:
+        _, noun = tool_presentation(name, source)
+        assert noun is None, name
 
 
 def test_unlisted_tools_fall_back_to_source_icon_then_none():

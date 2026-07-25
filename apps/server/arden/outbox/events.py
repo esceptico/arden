@@ -1,9 +1,10 @@
 from dataclasses import asdict
 
 from arden.agent import Usage
-from arden.events.internal import RunCompleted
+from arden.events.internal import RunCompleted, RunFailed
 
 OUTBOX_RUN_COMPLETED = "run.completed"
+OUTBOX_RUN_FAILED = "run.failed"
 
 
 def run_completed_payload(event: RunCompleted) -> dict:
@@ -33,4 +34,20 @@ def run_completed_from_payload(payload: dict) -> RunCompleted:
         result=payload.get("result"),
         source_refs=tuple(payload.get("source_refs") or ()),
         structured_output=payload.get("structured_output"),
+    )
+
+
+def run_failed_payload(event: RunFailed) -> dict:
+    return {
+        "run_id": event.run_id,
+        "session_id": event.session_id,
+        "error": event.error,
+    }
+
+
+def run_failed_from_payload(payload: dict) -> RunFailed:
+    return RunFailed(
+        run_id=payload["run_id"],
+        session_id=payload["session_id"],
+        error=payload["error"],
     )

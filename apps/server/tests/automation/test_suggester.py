@@ -50,6 +50,7 @@ class StubAutomations:
 def _valid_draft(name: str) -> SuggestionDraft:
     return SuggestionDraft(
         name=name,
+        description=f"Creates the {name} status report.",
         prompt=f"Run {name}",
         schedule=ScheduleDraft(trigger_type="time", at="09:00", days="mon"),
         rationale="fits the user",
@@ -63,6 +64,7 @@ def _invalid_draft() -> SuggestionDraft:
     # trigger_type='time' with neither `at` nor `every` → build_trigger raises ValueError.
     return SuggestionDraft(
         name="broken",
+        description="Creates an invalid test report.",
         prompt="Run broken",
         schedule=ScheduleDraft(trigger_type="time", days="mon"),
         rationale="should be dropped",

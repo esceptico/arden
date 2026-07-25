@@ -1,5 +1,4 @@
 import { useCallback, type RefObject } from "react";
-import clsx from "clsx";
 
 /** Drag-to-resize handle for the memory workspace panes, following the
  *  SidebarResizeHandle pattern: during drag the CSS variable is written
@@ -72,15 +71,8 @@ export function PaneResizeHandle({
       aria-label={label}
       onMouseDown={onMouseDown}
       onDoubleClick={reset}
-      className={clsx(
-        "absolute inset-y-0 z-10 w-1 cursor-ew-resize group/resize max-[900px]:hidden",
-        edge === "end" ? "right-0" : "left-0",
-      )}
-    >
-      <div className={clsx(
-        "absolute inset-y-0 w-px bg-transparent transition-colors group-hover/resize:bg-accent/40",
-        edge === "end" ? "right-0" : "left-0",
-      )} />
-    </div>
+      className="arden-resize-handle max-[900px]:hidden"
+      data-edge={edge}
+    />
   );
 }

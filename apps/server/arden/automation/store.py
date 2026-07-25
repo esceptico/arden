@@ -83,6 +83,8 @@ def _row_to_automation(row: dict) -> Automation:
         task_id=row["task_id"],
         name=row["name"],
         description=row["description"],
+        description_source=row["description_source"],
+        prompt=row["prompt"],
         model=row["model"],
         triggers=parse_triggers(row["triggers"]),
         enabled=bool(row["enabled"]),
@@ -119,6 +121,7 @@ def _row_to_suggestion(row: dict) -> AutomationSuggestion:
         id=row["id"],
         name=row["name"],
         description=row["description"],
+        prompt=row["prompt"],
         triggers=parse_triggers(row["triggers"]),
         rationale=row["rationale"],
         category=row["category"],
@@ -134,7 +137,9 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS scheduled_tasks (
     task_id TEXT PRIMARY KEY,
     name TEXT NOT NULL DEFAULT '',
-    description TEXT NOT NULL,
+    description TEXT,
+    description_source TEXT CHECK (description_source IN ('manual', 'generated') OR description_source IS NULL),
+    prompt TEXT NOT NULL,
     model TEXT,
     triggers TEXT NOT NULL,
     enabled INTEGER NOT NULL DEFAULT 1,
@@ -256,7 +261,7 @@ ON automation_idempotency_claims(parent_automation_id);
 """
 
 _COLUMNS = (
-    "task_id, name, description, model, triggers, enabled, "
+    "task_id, name, description, description_source, prompt, model, triggers, enabled, "
     "created_at, last_run_at, next_run_at, last_result, running_since, "
     "auto_approve, handler, builtin, cooldown_minutes, "
     "kind, max_iterations, iteration_count, stop_when, max_age_days, "
@@ -265,7 +270,7 @@ _COLUMNS = (
 
 _SQL_SAVE = f"""
 INSERT OR REPLACE INTO scheduled_tasks ({_COLUMNS})
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 _SQL_GET_BY_ID = f"SELECT {_COLUMNS} FROM scheduled_tasks WHERE task_id = ?"
@@ -392,7 +397,7 @@ _SQL_SET_AUTO_APPROVE = "UPDATE scheduled_tasks SET auto_approve = ? WHERE task_
 
 _SQL_UPDATE_METADATA = """
 UPDATE scheduled_tasks
-SET name = ?, description = ?, model = ?, triggers = ?,
+SET name = ?, description = ?, description_source = ?, prompt = ?, model = ?, triggers = ?,
     enabled = ?, next_run_at = ?, auto_approve = ?, handler = ?,
     cooldown_minutes = ?,
     max_iterations = ?, stop_when = ?,
@@ -591,14 +596,14 @@ FROM automation_event_dead_letter
 """
 
 _SUGGESTION_COLUMNS = (
-    "id, name, description, triggers, rationale, evidence, category, icon, status, created_at, source_automation_id"
+    "id, name, description, prompt, triggers, rationale, evidence, category, icon, status, created_at, source_automation_id"
 )
 
 _SQL_DELETE_ACTIVE_SUGGESTIONS = "DELETE FROM automation_suggestions WHERE status = 'active'"
 
 _SQL_INSERT_SUGGESTION = f"""
 INSERT INTO automation_suggestions ({_SUGGESTION_COLUMNS})
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 _SQL_LIST_ACTIVE_SUGGESTIONS = f"""
@@ -616,7 +621,7 @@ WHERE id = ?
 """
 
 _SQL_LIST_EXCLUDED_SIGNATURES = """
-SELECT name || ' — ' || description AS signature FROM automation_suggestions
+SELECT name || ' — ' || prompt AS signature FROM automation_suggestions
 WHERE status IN ('dismissed', 'accepted')
 """
 
@@ -665,7 +670,7 @@ CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run ON scheduled_tasks(next_
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_enabled ON scheduled_tasks(enabled);
 """
 
-CURRENT_SCHEMA_VERSION = 13
+CURRENT_SCHEMA_VERSION = 14
 
 _LOOP_COLUMNS: tuple[tuple[str, str], ...] = (
     ("kind", "TEXT NOT NULL DEFAULT 'automation'"),
@@ -790,6 +795,124 @@ async def _migrate_v12(conn: aiosqlite.Connection) -> None:
     existing = {row["name"] for row in rows}
     if "tool_scope" not in existing:
         await conn.execute("ALTER TABLE scheduled_tasks ADD COLUMN tool_scope TEXT")
+
+
+async def _migrate_v14(conn: aiosqlite.Connection) -> None:
+    """Split executable instructions from concise display copy.
+
+    Pre-v14 `description` contained the complete prompt. Preserve it verbatim
+    in `prompt`; deliberately leave the display description pending rather
+    than guessing or truncating it. The service exposes an explicit
+    on-demand generation endpoint for those rows.
+    """
+    rows = await conn.execute_fetchall("PRAGMA table_info(scheduled_tasks)")
+    existing = {row["name"] for row in rows}
+    if "prompt" not in existing or "description_source" not in existing:
+        await conn.executescript(
+            """
+            ALTER TABLE scheduled_tasks RENAME TO scheduled_tasks_v14_old;
+
+            CREATE TABLE scheduled_tasks (
+                task_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL DEFAULT '',
+                description TEXT,
+                description_source TEXT CHECK (description_source IN ('manual', 'generated') OR description_source IS NULL),
+                prompt TEXT NOT NULL,
+                model TEXT,
+                triggers TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                last_run_at TEXT,
+                next_run_at TEXT,
+                last_result TEXT,
+                running_since TEXT,
+                auto_approve INTEGER NOT NULL DEFAULT 0,
+                handler TEXT,
+                builtin INTEGER NOT NULL DEFAULT 0,
+                cooldown_minutes INTEGER,
+                kind TEXT NOT NULL DEFAULT 'automation',
+                max_iterations INTEGER,
+                iteration_count INTEGER NOT NULL DEFAULT 0,
+                stop_when TEXT,
+                max_age_days INTEGER,
+                thread_id TEXT,
+                read_history INTEGER NOT NULL DEFAULT 0,
+                parent_automation_id TEXT,
+                idempotency_key TEXT,
+                idempotency_scope TEXT,
+                tool_scope TEXT,
+                output_schema TEXT
+            );
+
+            INSERT INTO scheduled_tasks (
+                task_id, name, description, description_source, prompt, model,
+                triggers, enabled, created_at, last_run_at, next_run_at,
+                last_result, running_since, auto_approve, handler, builtin,
+                cooldown_minutes, kind, max_iterations, iteration_count,
+                stop_when, max_age_days, thread_id, read_history,
+                parent_automation_id, idempotency_key, idempotency_scope,
+                tool_scope, output_schema
+            )
+            SELECT
+                task_id, name, NULL, NULL, description, model,
+                triggers, enabled, created_at, last_run_at, next_run_at,
+                last_result, running_since, auto_approve, handler, builtin,
+                cooldown_minutes, kind, max_iterations, iteration_count,
+                stop_when, max_age_days, thread_id, read_history,
+                parent_automation_id, idempotency_key, idempotency_scope,
+                tool_scope, output_schema
+            FROM scheduled_tasks_v14_old;
+
+            DROP TABLE scheduled_tasks_v14_old;
+
+            CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run ON scheduled_tasks(next_run_at);
+            CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_enabled ON scheduled_tasks(enabled);
+            CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_parent ON scheduled_tasks(parent_automation_id);
+            CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_thread_kind ON scheduled_tasks(thread_id, kind);
+            CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_kind_thread ON scheduled_tasks(kind, thread_id);
+            CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_idempotency
+            ON scheduled_tasks(idempotency_scope, idempotency_key)
+            WHERE idempotency_key IS NOT NULL;
+            """
+        )
+
+    suggestion_rows = await conn.execute_fetchall("PRAGMA table_info(automation_suggestions)")
+    suggestion_columns = {row["name"] for row in suggestion_rows}
+    if suggestion_rows and "prompt" not in suggestion_columns:
+        await conn.executescript(
+            """
+            ALTER TABLE automation_suggestions RENAME TO automation_suggestions_v14_old;
+
+            CREATE TABLE automation_suggestions (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT,
+                prompt TEXT NOT NULL,
+                triggers TEXT NOT NULL,
+                rationale TEXT NOT NULL,
+                evidence TEXT,
+                category TEXT NOT NULL,
+                icon TEXT,
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at TEXT NOT NULL,
+                source_automation_id TEXT
+            );
+
+            INSERT INTO automation_suggestions (
+                id, name, description, prompt, triggers, rationale, evidence,
+                category, icon, status, created_at, source_automation_id
+            )
+            SELECT
+                id, name, NULL, description, triggers, rationale, evidence,
+                category, icon, status, created_at, source_automation_id
+            FROM automation_suggestions_v14_old;
+
+            DROP TABLE automation_suggestions_v14_old;
+
+            CREATE INDEX IF NOT EXISTS idx_suggestions_status
+            ON automation_suggestions(status, created_at);
+            """
+        )
 
 
 async def _migrate(conn: aiosqlite.Connection) -> None:
@@ -1098,7 +1221,8 @@ async def _migrate(conn: aiosqlite.Connection) -> None:
             CREATE TABLE IF NOT EXISTS automation_suggestions (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
-                description TEXT NOT NULL,
+                description TEXT,
+                prompt TEXT NOT NULL,
                 triggers TEXT NOT NULL,
                 rationale TEXT NOT NULL,
                 evidence TEXT,
@@ -1132,6 +1256,12 @@ async def _migrate(conn: aiosqlite.Connection) -> None:
         await conn.commit()
         _logger.info("Migrated automation store to v13 (output_schema)")
 
+    if version < 14:
+        await _migrate_v14(conn)
+        await _set_schema_version(conn, 14)
+        await conn.commit()
+        _logger.info("Migrated automation store to v14 (prompt and display-description split)")
+
 
 class AutomationStore:
     def __init__(self, conn: aiosqlite.Connection):
@@ -1156,6 +1286,8 @@ class AutomationStore:
                 automation.task_id,
                 automation.name,
                 automation.description,
+                automation.description_source,
+                automation.prompt,
                 automation.model,
                 _serialize_triggers(automation.triggers),
                 int(automation.enabled),
@@ -1292,9 +1424,10 @@ class AutomationStore:
         await self.conn.commit()
         return cursor.rowcount
 
-    async def fail_latest_running_run(self, task_id: str, ended_at: datetime, error: str) -> None:
-        await self.conn.execute(_SQL_FAIL_LATEST_RUNNING_RUN, (error, ended_at.isoformat(), task_id))
+    async def fail_latest_running_run(self, task_id: str, ended_at: datetime, error: str) -> bool:
+        cursor = await self.conn.execute(_SQL_FAIL_LATEST_RUNNING_RUN, (error, ended_at.isoformat(), task_id))
         await self.conn.commit()
+        return cursor.rowcount > 0
 
     async def recent_run_statuses(self, task_ids: list[str], per_task: int = 4) -> dict[str, list[str]]:
         """Newest-first run statuses per task (for the card's sparkline/pip).
@@ -1366,6 +1499,8 @@ class AutomationStore:
             (
                 automation.name,
                 automation.description,
+                automation.description_source,
+                automation.prompt,
                 automation.model,
                 _serialize_triggers(automation.triggers),
                 int(automation.enabled),
@@ -1546,6 +1681,8 @@ class AutomationStore:
                     automation.task_id,
                     automation.name,
                     automation.description,
+                    automation.description_source,
+                    automation.prompt,
                     automation.model,
                     _serialize_triggers(automation.triggers),
                     int(automation.enabled),
@@ -1724,6 +1861,7 @@ class AutomationStore:
                         item.id,
                         item.name,
                         item.description,
+                        item.prompt,
                         _serialize_triggers(item.triggers),
                         item.rationale,
                         json.dumps(item.evidence),

@@ -237,19 +237,24 @@ async def test_runtime_reconciles_permission_downgrades_in_place():
         handler=None,
         thread_id="thread-1",
         name="old",
-        description="old",
+        description="A custom area summary.",
+        description_source="manual",
+        prompt="old execution instructions",
         auto_approve=True,
         tool_scope=None,
         output_schema=None,
         enabled=True,
-        last_result=None,
+        last_result="A completed area report.",
+        last_run_at=object(),
+        next_run_at=object(),
+        running_since=None,
     )
 
     class Automations:
         async def get(self, task_id):
             return automation
 
-        async def save(self, value):
+        async def update_metadata(self, value):
             return None
 
     class Sessions:
@@ -263,8 +268,13 @@ async def test_runtime_reconciles_permission_downgrades_in_place():
 
     assert automation.tool_scope == OBSERVE_TOOL_SCOPE
     assert automation.auto_approve is False
-    assert "observe" in automation.description
+    assert automation.description == "A custom area summary."
+    assert automation.description_source == "manual"
+    assert "observe" in automation.prompt
     assert automation.output_schema == "area_custodian"
+    assert automation.last_result == "A completed area report."
+    assert automation.last_run_at is not None
+    assert automation.next_run_at is not None
 
 
 def test_custodian_report_is_the_registered_runtime_schema():

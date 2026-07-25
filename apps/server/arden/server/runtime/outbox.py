@@ -6,9 +6,11 @@ from arden.automation.store import AutomationStore
 from arden.logging import get_logger
 from arden.outbox import (
     OUTBOX_RUN_COMPLETED,
+    OUTBOX_RUN_FAILED,
     OutboxEvent,
     OutboxWorker,
     run_completed_from_payload,
+    run_failed_from_payload,
 )
 from arden.outbox.store import OutboxStore
 from arden.server.indexer import Indexer
@@ -44,6 +46,7 @@ class RuntimeOutbox:
 
     def _register_handlers(self) -> None:
         self.worker.register_handler(OUTBOX_RUN_COMPLETED, self._on_run_completed)
+        self.worker.register_handler(OUTBOX_RUN_FAILED, self._on_run_failed)
 
     async def _on_run_completed(self, event: OutboxEvent) -> None:
         run_completed = run_completed_from_payload(event.payload)
@@ -59,6 +62,9 @@ class RuntimeOutbox:
             except Exception:
                 _logger.warning("Area run-completed hook failed", exc_info=True)
         await self.scheduler.handle_run_completed(run_completed)
+
+    async def _on_run_failed(self, event: OutboxEvent) -> None:
+        await self.scheduler.handle_run_failed(run_failed_from_payload(event.payload))
 
     def _get_chat_connector(self):
         return self._get_chat_connector_fn()

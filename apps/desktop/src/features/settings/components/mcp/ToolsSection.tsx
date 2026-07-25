@@ -7,9 +7,8 @@ import { useMutationState } from "@/lib/hooks";
 import { SettingsInlineError } from "@/features/settings/components/SettingsNotice";
 import { SaveStatus } from "@/features/settings/components/SaveStatus";
 import { ToolPolicySelect } from "@/features/settings/components/ToolPolicySelect";
+import { SettingsSection, SettingsSurface } from "@/features/settings/components/SettingsPage";
 import { SwitchControl } from "@/components/ui/SwitchControl";
-import { DividedList } from "@/components/ui/DividedList";
-import { SectionHeader } from "@/components/ui/SectionHeader";
 
 export function ToolsSection({
   server,
@@ -54,49 +53,46 @@ export function ToolsSection({
   }
 
   return (
-    <div className="grid gap-2">
-      <SectionHeader
-        label="Tools"
-        count={server.tools.length}
-        action={<SaveStatus busy={busy} saved={saved} />}
-      />
-      <DividedList className="!rounded-md">
+    <SettingsSection
+      title="Tools"
+      detail={`${server.tools.length} tools`}
+      action={<SaveStatus busy={busy} saved={saved} />}
+    >
+      <SettingsSurface>
         {server.tools.map((t) => {
           const checked = enabledNames.has(t.name);
           return (
-            <li key={t.name} className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3 px-3 py-2">
-              <SwitchControl
-                size="sm"
-                checked={checked}
-                disabled={busy}
-                onChange={(next) => {
-                  const updated = new Set(enabledNames);
-                  if (next) updated.add(t.name);
-                  else updated.delete(t.name);
-                  commit(updated);
-                }}
-                aria-label={`Include ${t.name}`}
-                className="mt-[3px]"
-              />
-              <div className="min-w-0 flex-1">
-                <div className="text-sm font-medium text-ink tracking-[-0.005em] truncate">
-                  {t.name}
+            <div key={t.name} className="settings-data-row settings-tool-row">
+              <div className="settings-data-row-main">
+                <div className="settings-data-row-title">
+                  <SwitchControl
+                    size="sm"
+                    checked={checked}
+                    disabled={busy}
+                    onChange={(next) => {
+                      const updated = new Set(enabledNames);
+                      if (next) updated.add(t.name);
+                      else updated.delete(t.name);
+                      commit(updated);
+                    }}
+                    aria-label={`Include ${t.name}`}
+                  />
+                  <span className="truncate">{t.name}</span>
                 </div>
-                {t.description && (
-                  <div className="text-xs text-muted leading-snug line-clamp-2">
-                    {t.description}
-                  </div>
-                )}
+                <div className="settings-data-row-sub">{t.full_name}</div>
               </div>
-              <ToolPolicySelect
-                value={overrides[t.full_name] ?? baseDecision(t)}
-                onChange={(decision) => setToolDecision(t, decision)}
-              />
-            </li>
+              <div className="settings-data-row-copy">{t.description}</div>
+              <div className="settings-data-row-end">
+                <ToolPolicySelect
+                  value={overrides[t.full_name] ?? baseDecision(t)}
+                  onChange={(decision) => setToolDecision(t, decision)}
+                />
+              </div>
+            </div>
           );
         })}
-      </DividedList>
+      </SettingsSurface>
       {error && <SettingsInlineError title="Couldn't update tools" message={error} />}
-    </div>
+    </SettingsSection>
   );
 }

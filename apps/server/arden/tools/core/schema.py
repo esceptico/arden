@@ -2,9 +2,7 @@ from typing import Any
 
 from arden.tool_call_metadata import DISPLAY_TITLE_ARG, RESERVED_TOOL_ARGUMENTS
 
-TITLE_ARG = DISPLAY_TITLE_ARG
-RESERVED_ARG_KEYS = RESERVED_TOOL_ARGUMENTS
-TITLE_PROPERTY = {
+DISPLAY_TITLE_PROPERTY = {
     "type": "string",
     "description": (
         "Short UI action title — a 3-6 word present-continuous phrase naming what "
@@ -28,8 +26,14 @@ def _local_ref(root: dict[str, Any], ref: str) -> Any:
 
 
 def normalize_json_schema(schema: dict[str, Any]) -> dict[str, Any]:
-    """Inline local refs without discarding constraints or combinators."""
+    """Inline local refs without discarding constraints or combinators.
+
+    `discriminator` goes with `$defs`: its `mapping` values are `#/$defs/...`
+    pointers, which dangle once the definitions are inlined away. Each member of
+    a discriminated union already pins its own tag value, so nothing is lost.
+    """
     root = schema
+    dropped = {"$defs", "definitions", "discriminator"}
 
     def resolve(node: Any, stack: tuple[str, ...] = ()) -> Any:
         if isinstance(node, list):
@@ -45,7 +49,7 @@ def normalize_json_schema(schema: dict[str, Any]) -> dict[str, Any]:
             if siblings:
                 return {"allOf": [target, siblings]}
             return target
-        return {key: resolve(value, stack) for key, value in node.items() if key not in {"$defs", "definitions"}}
+        return {key: resolve(value, stack) for key, value in node.items() if key not in dropped}
 
     normalized = resolve(root)
     if not isinstance(normalized, dict):
@@ -56,11 +60,11 @@ def normalize_json_schema(schema: dict[str, Any]) -> dict[str, Any]:
 def tool_parameters(input_schema: dict[str, Any], *, tool_name: str) -> dict[str, Any]:
     parameters = normalize_json_schema(input_schema)
     properties = dict(parameters.get("properties") or {})
-    collisions = RESERVED_ARG_KEYS.intersection(properties)
+    collisions = RESERVED_TOOL_ARGUMENTS.intersection(properties)
     if collisions:
         names = ", ".join(sorted(collisions))
         raise ValueError(f"Tool {tool_name!r} schema uses reserved tool argument(s): {names}")
     parameters["type"] = parameters.get("type", "object")
-    parameters["properties"] = {TITLE_ARG: TITLE_PROPERTY, **properties}
+    parameters["properties"] = {DISPLAY_TITLE_ARG: DISPLAY_TITLE_PROPERTY, **properties}
     parameters.setdefault("required", [])
     return parameters

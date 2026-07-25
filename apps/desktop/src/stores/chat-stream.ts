@@ -1,9 +1,8 @@
 import type { AppConfig } from "@/api/core";
 import type { ServerEvent } from "@/api/events";
-import { getState, setState, type QueuedMessage } from "@/stores/index";
+import { getState, setState } from "@/stores/index";
 import {
   applyChatEventToTranscript,
-  type TranscriptProjectionEffect,
 } from "@/stores/transcript-projection";
 import { reduceRunThinking } from "@/stores/run-lifecycle";
 import { backgroundAgentKey, type BackgroundAgentUpsert } from "@/stores/background-agent-domain";
@@ -26,7 +25,6 @@ import {
   reduceStreamReconnecting,
 } from "@/stores/chat-stream-reducers";
 
-export { runCancelledEffect } from "@/stores/transcript-projection";
 export { REPLAY_MUTATION_HOLD_MS } from "@/stores/chat-stream-types";
 export type { ChatStreamState, TransportDiagnostics } from "@/stores/chat-stream-types";
 export {
@@ -44,22 +42,15 @@ import { REPLAY_MUTATION_HOLD_MS } from "@/stores/chat-stream-types";
 
 type ServerEventEffect =
   | { type: "replay_gap"; sessionId: string }
-  | TranscriptProjectionEffect;
+  | { type: "dispatch_queued_head"; sessionId: string };
 type HistoryReloader = (sessionId: string) => Promise<void>;
+type QueueDispatcher = (sessionId: string) => Promise<void> | void;
 type TaskLifecycleEvent = Extract<
   ServerEvent,
   { type: "task_started" | "task_progress" | "task_finished" }
 >;
 type TokenUsageEvent = Extract<ServerEvent, { type: "token_usage" }>;
-interface ServerEventCallbacks {
-  resendQueuedMessage?: (text: string, images: QueuedMessage["images"]) => void | Promise<void>;
-}
-
 let chatStreamState = createInitialChatStreamState();
-
-export function getChatStreamState(): ChatStreamState {
-  return chatStreamState;
-}
 
 function updateChatStreamState(next: ChatStreamState): ChatStreamState {
   chatStreamState = next;
@@ -163,7 +154,7 @@ export function reloadHistoryAfterReplayGap(
 export function handleIncomingServerEvent(
   event: ServerEvent,
   reload?: HistoryReloader,
-  callbacks: ServerEventCallbacks = {},
+  dispatchQueuedHead?: QueueDispatcher,
 ): Promise<void> | null {
   const sessionId = event.session_id ?? getState().currentSessionId;
   const activeSessionId = getState().currentSessionId;
@@ -177,7 +168,7 @@ export function handleIncomingServerEvent(
     return pendingReload.then(async (loaded) => {
       if (!loaded) return;
       if (getState().currentSessionId !== sessionId) return;
-      await handleIncomingServerEvent(event, reload, callbacks);
+      await handleIncomingServerEvent(event, reload, dispatchQueuedHead);
     });
   }
 
@@ -190,10 +181,8 @@ export function handleIncomingServerEvent(
     }
     return reloadHistoryAfterReplayGap(effect.sessionId, reload);
   }
-  if (effect.type === "resend_queued_messages") {
-    for (const message of effect.messages) {
-      void callbacks.resendQueuedMessage?.(message.text, message.images);
-    }
+  if (effect.type === "dispatch_queued_head") {
+    return Promise.resolve(dispatchQueuedHead?.(effect.sessionId));
   }
   return null;
 }
@@ -252,7 +241,19 @@ function applyServerEvent(event: ServerEvent): ServerEventEffect | undefined {
       },
     });
     updateChatStreamState({ ...chatStreamState, ...result.state });
-    return result.effect;
+    if (
+      !transcriptEvent.replay
+      && (
+        transcriptEvent.type === "RUN_FINISHED"
+        || transcriptEvent.type === "RUN_ERROR"
+        || transcriptEvent.type === "run_cancelled"
+      )
+      && getState().queuedMessages.some((message) => message.status !== "sending")
+    ) {
+      const sessionId = transcriptEvent.session_id ?? getState().currentSessionId;
+      if (sessionId) return { type: "dispatch_queued_head", sessionId };
+    }
+    return undefined;
   };
 
   switch (event.type) {

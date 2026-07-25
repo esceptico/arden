@@ -15,6 +15,7 @@ export function SecretConnectEditor({
   label,
   pending,
   motionKey,
+  active = true,
   spinner,
   paddingX = "px-3.5",
   onChange,
@@ -25,6 +26,7 @@ export function SecretConnectEditor({
   label: string;
   pending: boolean;
   motionKey: string;
+  active?: boolean;
   spinner: ReactNode;
   paddingX?: string;
   onChange: (value: string) => void;
@@ -46,7 +48,7 @@ export function SecretConnectEditor({
         onChange={(event) => onChange(event.target.value)}
         placeholder={label}
         aria-label={label}
-        autoFocus
+        autoFocus={active}
         spellCheck={false}
         autoComplete="off"
       />

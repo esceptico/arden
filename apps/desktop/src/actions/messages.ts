@@ -1,4 +1,4 @@
-import { cancelQueuedMessageApi, cancelRun, cancelSubagentApi } from "@/api/chat";
+import { cancelRun, cancelSubagentApi } from "@/api/chat";
 import { apiWithConfig } from "@/api/core";
 import { getState, setState, type ActivityItem, type ImageBlock } from "@/stores";
 import { messagesScroll } from "@/lib/messagesScroll";
@@ -15,6 +15,8 @@ import { createSession } from "@/actions/sessions";
 
 interface SendMessageOptions {
   meta?: boolean;
+  clientId?: string;
+  fromQueue?: boolean;
 }
 
 interface ChatMessageResponse {
@@ -27,9 +29,9 @@ export async function sendMessage(
   text: string,
   images: ImageBlock[] = [],
   options: SendMessageOptions = {},
-): Promise<void> {
+): Promise<boolean> {
   const trimmedText = text.trim();
-  if (!trimmedText && images.length === 0) return;
+  if (!trimmedText && images.length === 0) return false;
 
   // Home has no current session (the door, not a room — see Areas spec
   // Placement) — the FIRST message from its hero input is what actually
@@ -40,7 +42,7 @@ export async function sendMessage(
   }
 
   const s = getState();
-  if (!s.currentSessionId) return;
+  if (!s.currentSessionId) return false;
   const sendSessionId = s.currentSessionId;
 
   if (s.editingId) {
@@ -63,16 +65,16 @@ export async function sendMessage(
           content: error instanceof Error ? error.message : String(error),
         });
       }
-      return;
+      return false;
     }
-    if (getState().currentSessionId !== sendSessionId) return;
+    if (getState().currentSessionId !== sendSessionId) return false;
     s.truncateFrom(s.editingId);
     s.setEditingId(null);
   }
 
   // Use the same id locally and on the server so /session/revert can match
   // this user message back to its saved row when the user later edits it.
-  const userMessageId = crypto.randomUUID();
+  const userMessageId = options.clientId ?? crypto.randomUUID();
   if (!options.meta) {
     s.appendMessage({
       id: userMessageId,
@@ -101,23 +103,33 @@ export async function sendMessage(
     setState((state) =>
       reduceRunStarted(state, { runId: response.run_id, sessionId: sendSessionId }),
     );
+    return true;
   } catch (error) {
     setState((state) =>
       reduceRunFailed(state, { runId: null, sessionId: sendSessionId }),
     );
     if (getState().currentSessionId === sendSessionId) {
+      if (options.fromQueue && !options.meta) {
+        setState((state) => {
+          const messages = new Map(state.messages);
+          messages.delete(userMessageId);
+          return {
+            messages,
+            order: state.order.filter((id) => id !== userMessageId),
+          };
+        });
+      }
       s.appendMessage({
         id: crypto.randomUUID(),
         role: "error",
         content: error instanceof Error ? error.message : String(error),
       });
     }
+    return false;
   }
 }
 
-/** Submit a message while a run is in flight. Server queues it onto the
- *  active run's inject_queue; we render it as a "Queued" bubble above
- *  the composer until `message_ingested` arrives. */
+/** Queue a fresh turn behind the active run. */
 interface EnqueueMessageOptions {
   meta?: boolean;
 }
@@ -128,131 +140,99 @@ export async function enqueueMessage(
   options: EnqueueMessageOptions = {},
 ): Promise<void> {
   const s = getState();
+  const trimmed = text.trim();
+  if ((!trimmed && images.length === 0) || s.queuedMessages.length >= 10) return;
+  s.addQueuedMessage({
+    clientId: crypto.randomUUID(),
+    text: trimmed,
+    images: images.length > 0 ? images : undefined,
+    meta: options.meta,
+    status: "pending",
+    enqueuedAt: Date.now(),
+  });
+}
+
+/** Inject an instruction into the active run at its next model step. */
+export async function steerMessage(
+  text: string,
+  images: ImageBlock[] = [],
+  options: EnqueueMessageOptions = {},
+): Promise<void> {
+  const s = getState();
   if (!s.currentSessionId) return;
-  const sendSessionId = s.currentSessionId;
   const trimmed = text.trim();
   if (!trimmed && images.length === 0) return;
-
   const clientId = options.meta ? `goal:${Date.now()}` : crypto.randomUUID();
   if (!options.meta) {
-    s.addQueuedMessage({
-      clientId,
-      text: trimmed,
+    s.appendMessage({
+      id: clientId,
+      role: "user",
+      content: trimmed,
+      turn: { startedAt: Date.now(), endedAt: null, durationMs: null },
       images: images.length > 0 ? images : undefined,
-      status: "pending",
-      enqueuedAt: Date.now(),
     });
+    messagesScroll.scrollToBottom?.("smooth");
   }
-
   try {
-    const response = await apiWithConfig<ChatMessageResponse>(s.config, "/chat/message", {
+    await apiWithConfig<ChatMessageResponse>(s.config, "/chat/message", {
       method: "POST",
       body: JSON.stringify({
         message: trimmed,
-        session_id: sendSessionId,
+        session_id: s.currentSessionId,
         skip_approvals: s.skipApprovals,
         images: images.length > 0 ? images : undefined,
         client_id: clientId,
       }),
     });
-    setState((state) =>
-      reduceRunStarted(state, { runId: response.run_id, sessionId: sendSessionId }),
-    );
-    if (response.status !== "queued") {
-      promoteQueuedSubmitToStartedRun(sendSessionId, clientId, trimmed, images, options.meta);
-    }
   } catch (error) {
-    if (!options.meta) failQueuedSubmit(sendSessionId, clientId, error);
+    s.appendMessage({
+      id: crypto.randomUUID(),
+      role: "error",
+      content: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 
-function promoteQueuedSubmitToStartedRun(
-  sessionId: string,
-  clientId: string,
-  text: string,
-  images: ImageBlock[],
-  isMeta = false,
-): void {
-  setState((state) => {
-    if (state.currentSessionId !== sessionId) {
-      const cached = state.sessionCache.get(sessionId);
-      if (!cached) return {};
-      const sessionCache = new Map(state.sessionCache);
-      sessionCache.set(sessionId, {
-        ...cached,
-        queuedMessages: cached.queuedMessages.filter((message) => message.clientId !== clientId),
-      });
-      return { sessionCache };
-    }
-
-    const queuedMessages = state.queuedMessages.filter((message) => message.clientId !== clientId);
-    if (isMeta) return { queuedMessages };
-
-    const messages = new Map(state.messages);
-    const alreadyPresent = messages.has(clientId);
-    if (!alreadyPresent) {
-      messages.set(clientId, {
-        id: clientId,
-        role: "user",
-        content: text,
-        turn: { startedAt: Date.now(), endedAt: null, durationMs: null },
-        images: images.length > 0 ? images : undefined,
-      });
-    }
-    return {
-      queuedMessages,
-      messages,
-      order: alreadyPresent ? state.order : [...state.order, clientId],
-    };
-  });
-}
-
-function failQueuedSubmit(sessionId: string, clientId: string, error: unknown): void {
-  const message = error instanceof Error ? error.message : String(error);
-  setState((state) => {
-    if (state.currentSessionId !== sessionId) {
-      const cached = state.sessionCache.get(sessionId);
-      if (!cached) return {};
-      const sessionCache = new Map(state.sessionCache);
-      sessionCache.set(sessionId, {
-        ...cached,
-        queuedMessages: cached.queuedMessages.filter((item) => item.clientId !== clientId),
-      });
-      return { sessionCache };
-    }
-
-    const id = crypto.randomUUID();
-    const messages = new Map(state.messages);
-    messages.set(id, { id, role: "error", content: message });
-    return {
-      queuedMessages: state.queuedMessages.filter((item) => item.clientId !== clientId),
-      messages,
-      order: [...state.order, id],
-    };
-  });
-}
-
-/** Cancel a queued (not yet ingested) message. The server returns:
- *    cancelled         — removed; we drop the bubble
- *    already_ingested  — too late, the agent has it; the imminent
- *                        message_ingested event will absorb the bubble
- *    no_run            — no active run, drop the bubble */
-export async function cancelQueuedMessage(clientId: string): Promise<void> {
+/** Dispatch exactly one local FIFO item as a fresh turn. */
+export async function dispatchQueuedHead(sessionId: string): Promise<void> {
   const s = getState();
-  if (!s.currentSessionId) return;
-  s.setQueuedMessageStatus(clientId, "cancelling");
-  let result;
-  try {
-    result = await cancelQueuedMessageApi(s.config, s.currentSessionId, clientId);
-  } catch {
-    s.setQueuedMessageStatus(clientId, "pending");
-    return;
-  }
-  if (result === "cancelled" || result === "no_run") {
-    s.removeQueuedMessage(clientId);
-  } else {
-    s.setQueuedMessageStatus(clientId, "sent");
-  }
+  if (s.currentSessionId !== sessionId || s.running) return;
+  const head = s.queuedMessages[0];
+  if (!head || head.status === "sending") return;
+  s.setQueuedMessageStatus(head.clientId, "sending");
+  const accepted = await sendMessage(head.text, head.images ?? [], {
+    meta: head.meta,
+    clientId: head.clientId,
+    fromQueue: true,
+  });
+  const latest = getState();
+  if (accepted) latest.removeQueuedMessage(head.clientId);
+  else latest.setQueuedMessageStatus(head.clientId, "failed");
+}
+
+/** Cancel a desktop-owned queued turn immediately. */
+export function cancelQueuedMessage(clientId: string): void {
+  getState().removeQueuedMessage(clientId);
+}
+
+/** Reorder the desktop-local queue without involving the server. */
+export function moveQueuedMessage(clientId: string, toIndex: number): void {
+  const queued = getState().queuedMessages;
+  const fromIndex = queued.findIndex((message) => message.clientId === clientId);
+  if (fromIndex < 0 || toIndex < 0 || toIndex >= queued.length || fromIndex === toIndex) return;
+  const next = [...queued];
+  const [moved] = next.splice(fromIndex, 1);
+  next.splice(toIndex, 0, moved);
+  setState({ queuedMessages: next });
+}
+
+/** Remove a queued turn locally and inject it into the active run now. */
+export async function promoteQueuedMessageToSteer(clientId: string): Promise<void> {
+  const state = getState();
+  const message = state.queuedMessages.find((item) => item.clientId === clientId);
+  if (!message || !state.currentSessionId || message.status === "sending") return;
+  state.removeQueuedMessage(clientId);
+  await steerMessage(message.text, message.images ?? [], { meta: message.meta });
 }
 
 export async function stopRun(): Promise<void> {

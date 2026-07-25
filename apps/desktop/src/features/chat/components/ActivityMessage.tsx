@@ -11,10 +11,16 @@ import {
   useSourceFocused,
 } from "@/features/chat/lib/messageShared";
 
-export const ActivityMessage = memo(function ActivityMessage({ id }: { id: string }) {
+export const ActivityMessage = memo(function ActivityMessage({
+  id,
+  hideHeader = false,
+}: {
+  id: string;
+  hideHeader?: boolean;
+}) {
   const message = useMessage(id);
   const sourceFocused = useSourceFocused(id);
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(() => !message?.activity?.done);
   // Hooks must run unconditionally — keep them above the early return.
   const currentSessionId = useStore((s) => s.currentSessionId);
   const workflows = useWorkflows(currentSessionId);
@@ -27,7 +33,7 @@ export const ActivityMessage = memo(function ActivityMessage({ id }: { id: strin
   // just animate the container height — switching modes mid-collapse caused
   // the items to swap out (43 → 3) before the height finished shrinking,
   // producing a visible flicker.
-  const collapsed = done && !expanded;
+  const collapsed = hideHeader ? false : !expanded;
   const max = done ? undefined : 3;
   // Count over post-lift rows so the header matches what ActivityTail renders —
   // workflow and html-widget tool calls are lifted into cards, not counted
@@ -41,7 +47,7 @@ export const ActivityMessage = memo(function ActivityMessage({ id }: { id: strin
   return (
     <article
       className={clsx(
-        "grid grid-cols-[minmax(0,1fr)] transition-[background-color,box-shadow] duration-panel",
+        "board-activity-message grid grid-cols-[minmax(0,1fr)] transition-[background-color,box-shadow] duration-panel",
         entryAnimation(message, "animate-roll-in"),
         sourceFocused && SOURCE_FOCUS_CLASS,
       )}
@@ -50,7 +56,7 @@ export const ActivityMessage = memo(function ActivityMessage({ id }: { id: strin
       data-source-index={message.sourceIndex}
     >
       <ActivityTrace>
-        {!onlyCards && (
+        {!hideHeader && !onlyCards && (
           <ActivityHeader
             done={done}
             label={message.activity.label}
@@ -58,7 +64,7 @@ export const ActivityMessage = memo(function ActivityMessage({ id }: { id: strin
             activeCount={activeCount}
             backgrounded={!!message.activity.backgrounded}
             motionDisabled={message.suppressEntryMotion}
-            onToggle={done ? () => setExpanded((v) => !v) : undefined}
+            onToggle={() => setExpanded((v) => !v)}
             expanded={expanded}
           />
         )}

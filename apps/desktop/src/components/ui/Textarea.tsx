@@ -8,9 +8,9 @@ import clsx from "clsx";
 
 /**
  * Multiline text input primitive — sibling to {@link Input}. Wraps the shared
- * `.input-field` material (single source of truth for input chrome: transparent
+ * `.arden-field` material (single source of truth for input chrome: shared
  * fill, line border, accent focus ring) plus the optional label / help / error
- * scaffold, so forms stop re-deriving `<textarea className="input-field …">`.
+ * scaffold, so forms stop re-deriving textarea chrome.
  * Unlike Input it does not force `w-full` — callers control width/min-height via
  * `className`, matching how the raw textareas were laid out.
  */
@@ -36,7 +36,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(function 
       id={fieldId}
       aria-invalid={error ? true : undefined}
       aria-describedby={[describedBy, msgId].filter(Boolean).join(" ") || undefined}
-      className={clsx("input-field", error && "border-bad focus:border-bad", className)}
+      className={clsx("arden-field", className)}
       {...rest}
     />
   );

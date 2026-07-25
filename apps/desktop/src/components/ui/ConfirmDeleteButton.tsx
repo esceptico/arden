@@ -3,6 +3,7 @@ import { motion } from "motion/react";
 import clsx from "clsx";
 import { Check, Loader2, Trash2 } from "@/components/icons";
 import { RollingToken } from "@/components/ui/RollingToken";
+import { EASE_LINEAR } from "@/lib/tokens/motion";
 
 type State = "idle" | "counting" | "done";
 
@@ -125,7 +126,7 @@ export function ConfirmDeleteButton({
           className="absolute inset-0 origin-left bg-bad/15"
           initial={{ scaleX: 0 }}
           animate={{ scaleX: 1 }}
-          transition={{ duration: seconds, ease: "linear" }}
+          transition={{ duration: seconds, ease: EASE_LINEAR }}
         />
       )}
       <span className="relative inline-flex items-center gap-1 whitespace-nowrap">

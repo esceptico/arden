@@ -1,0 +1,195 @@
+/* ─── Scroll policy ──────────────────────────────────────────
+   Fluid-functionalism's scrollbar doctrine, centralized. Two pieces:
+
+   1. `.scroll-fade` / `.scroll-fade-x` — the baseline edge treatment
+      (FF's vendored shadcn utility). A mask dissolves content toward the
+      edges that have more to scroll; CSS scroll-driven animations keep the
+      true start/end edge crisp. Pure CSS — replaces the retired JS
+      ScrollFadeTop/ScrollFadeBottom observers.
+
+   2. `.arden-scrollbar` / `.arden-scrollbar__thumb` — the ScrollArea
+      (components/ui/ScrollArea.tsx) scrollbar. The thumb rests narrow and
+      low-contrast, widens + darkens on hover, and the whole bar fades out
+      when idle. Native bars stay hidden app-wide (styles.css); this is the
+      one scrollbar the app paints. */
+
+@property --sf-start {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 1;
+}
+@property --sf-end {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 1;
+}
+
+@keyframes sf-reveal-start {
+  from { --sf-start: 1; }
+  to { --sf-start: 0; }
+}
+@keyframes sf-reveal-end {
+  from { --sf-end: 0; }
+  to { --sf-end: 1; }
+}
+
+.scroll-fade,
+.scroll-fade-x {
+  /* House sizes: entering content gets a long dissolve, the trailing edge a
+     short one so the last row of a list is never softened into illegibility.
+     Surfaces override per-instance (`[--scroll-fade-size:24px]`). */
+  --scroll-fade-size: 48px;
+  --scroll-fade-size-end: 24px;
+}
+
+/* Static fallback: fade both edges. */
+.scroll-fade {
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--scroll-fade-size),
+    #000 calc(100% - var(--scroll-fade-size-end)),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--scroll-fade-size),
+    #000 calc(100% - var(--scroll-fade-size-end)),
+    transparent 100%
+  );
+}
+.scroll-fade-x {
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    #000 var(--scroll-fade-size),
+    #000 calc(100% - var(--scroll-fade-size-end)),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    #000 var(--scroll-fade-size),
+    #000 calc(100% - var(--scroll-fade-size-end)),
+    transparent 100%
+  );
+}
+
+/* Scroll-aware: the start/end edge stays solid until content sits past it. */
+@supports (animation-timeline: scroll()) {
+  .scroll-fade {
+    mask-image: linear-gradient(
+      to bottom,
+      rgb(0 0 0 / var(--sf-start)) 0,
+      #000 var(--scroll-fade-size),
+      #000 calc(100% - var(--scroll-fade-size-end)),
+      rgb(0 0 0 / var(--sf-end)) 100%
+    );
+    -webkit-mask-image: linear-gradient(
+      to bottom,
+      rgb(0 0 0 / var(--sf-start)) 0,
+      #000 var(--scroll-fade-size),
+      #000 calc(100% - var(--scroll-fade-size-end)),
+      rgb(0 0 0 / var(--sf-end)) 100%
+    );
+    animation: sf-reveal-start both linear, sf-reveal-end both linear;
+    animation-timeline: scroll(self), scroll(self);
+    animation-range-start: 0, calc(100% - var(--scroll-fade-size-end));
+    animation-range-end: var(--scroll-fade-size), 100%;
+  }
+  .scroll-fade-x {
+    mask-image: linear-gradient(
+      to right,
+      rgb(0 0 0 / var(--sf-start)) 0,
+      #000 var(--scroll-fade-size),
+      #000 calc(100% - var(--scroll-fade-size-end)),
+      rgb(0 0 0 / var(--sf-end)) 100%
+    );
+    -webkit-mask-image: linear-gradient(
+      to right,
+      rgb(0 0 0 / var(--sf-start)) 0,
+      #000 var(--scroll-fade-size),
+      #000 calc(100% - var(--scroll-fade-size-end)),
+      rgb(0 0 0 / var(--sf-end)) 100%
+    );
+    animation: sf-reveal-start both linear, sf-reveal-end both linear;
+    animation-timeline: scroll(self, inline), scroll(self, inline);
+    animation-range-start: 0, calc(100% - var(--scroll-fade-size-end));
+    animation-range-end: var(--scroll-fade-size), 100%;
+  }
+}
+
+/* ─── ScrollArea scrollbar ───────────────────────────────────
+   The 10px track is a comfortable hit target; the thumb inside rests narrow
+   and quiet, then widens + darkens on hover. Base UI keeps the bar mounted
+   while scrollable and exposes hover/scroll state as data attributes, so
+   visibility is a plain opacity transition: show immediately; on hide, wait
+   out the thumb's 160ms shrink before fading so it visibly narrows back
+   first instead of the fade masking it. */
+.arden-scrollbar {
+  position: absolute;
+  z-index: var(--z-raised);
+  display: flex;
+  touch-action: none;
+  user-select: none;
+  opacity: 0;
+  transition: opacity var(--motion-fast, .12s) var(--ease-out) .16s;
+}
+.arden-scrollbar[data-orientation="vertical"] {
+  top: 0;
+  right: 0;
+  height: 100%;
+  width: 10px;
+}
+.arden-scrollbar[data-orientation="horizontal"] {
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 10px;
+  flex-direction: column;
+}
+.arden-scrollbar[data-hovering],
+.arden-scrollbar[data-scrolling] {
+  opacity: 1;
+  transition-duration: .16s;
+  transition-delay: 0s;
+}
+
+.arden-scrollbar__thumb {
+  position: relative;
+  border-radius: var(--r-control);
+  /* Ink-relative overlay ramp (8 → 12 → 16%), the menu hover/active tint
+     direction one notch stronger — quiet on paper and panel alike. */
+  background: color-mix(in oklab, var(--ink) 8%, transparent);
+  transition:
+    background var(--motion-feedback) var(--smooth-out),
+    width .16s var(--smooth-out),
+    height .16s var(--smooth-out);
+}
+.arden-scrollbar:hover .arden-scrollbar__thumb {
+  background: color-mix(in oklab, var(--ink) 12%, transparent);
+}
+.arden-scrollbar__thumb:active {
+  background: color-mix(in oklab, var(--ink) 16%, transparent);
+}
+.arden-scrollbar[data-orientation="vertical"] .arden-scrollbar__thumb {
+  width: 4px;
+  height: var(--scroll-area-thumb-height);
+  margin: 4px auto;
+  /* Rest 2px off the pane edge; the full track stays flush so edge-throws
+     still land on the hit target. */
+  translate: -2px 0;
+}
+.arden-scrollbar[data-orientation="vertical"]:hover .arden-scrollbar__thumb {
+  width: 6px;
+}
+.arden-scrollbar[data-orientation="horizontal"] .arden-scrollbar__thumb {
+  height: 4px;
+  width: var(--scroll-area-thumb-width);
+  margin: auto 4px;
+  translate: 0 -2px;
+}
+.arden-scrollbar[data-orientation="horizontal"]:hover .arden-scrollbar__thumb {
+  height: 6px;
+}

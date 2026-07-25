@@ -27,8 +27,8 @@ test("applyAccentPalette injects one #arden-accent <style> carrying both theme a
   expect(el).not.toBeNull();
   expect(el!.tagName).toBe("STYLE");
   const ocean = ACCENT_PALETTES.find((p) => p.id === "ocean")!;
-  expect(el!.textContent).toContain(`--color-accent:${ocean.light.accent}`);
-  expect(el!.textContent).toContain(`--color-accent:${ocean.dark.accent}`);
+  expect(el!.textContent).toContain(`--accent:${ocean.light.accent}`);
+  expect(el!.textContent).toContain(`--accent:${ocean.dark.accent}`);
 });
 
 test("re-applying updates the same element instead of duplicating it", () => {
@@ -43,6 +43,6 @@ test("an unknown id falls back to the default palette", () => {
   applyAccentPalette("does-not-exist");
   const def = ACCENT_PALETTES.find((p) => p.id === DEFAULT_ACCENT)!;
   expect(document.getElementById("arden-accent")!.textContent).toContain(
-    `--color-accent:${def.light.accent}`,
+    `--accent:${def.light.accent}`,
   );
 });

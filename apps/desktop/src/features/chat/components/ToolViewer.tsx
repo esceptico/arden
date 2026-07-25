@@ -1,22 +1,34 @@
 import { useMemo } from "react";
-import { Bot, Square } from "@/components/icons";
+import { Square } from "@/components/icons";
 import { useShallow } from "zustand/react/shallow";
 import { useStore, type ActivityItem } from "@/stores";
-import { highlight } from "@/lib/highlight";
 import { activityItemStatus, friendlyAgentLabel, isAgent } from "@/lib/agent";
 import { IconButton } from "@/components/ui/IconButton";
-import { PageModal } from "@/components/ui/PageModal";
-import { ScrollFadeTop } from "@/components/ui/ScrollBlur";
+import { CodeWell } from "@/components/ui/CodeWell";
+import { SystemSheet } from "@/components/ui/SystemSheet";
 import { ICON } from "@/lib/icons";
 import { cancelSubagent } from "@/actions/messages";
 import { formatMaybeJson } from "@/features/chat/lib/toolViewer";
 import { AgentBody } from "@/features/chat/components/AgentBody";
 import { ChildRuns } from "@/features/chat/components/ChildRuns";
-import { Section } from "@/features/chat/components/ToolViewerSection";
+
+function ToolLogBlock({
+  label,
+  body,
+  placeholder,
+}: {
+  label: string;
+  body: string;
+  placeholder: string;
+}) {
+  const content = body.trim() ? body : placeholder;
+  return <CodeWell aria-label={label}>{content}</CodeWell>;
+}
 
 export function ToolViewer() {
   const item = useStore((s) => s.viewingTool);
   const close = useStore((s) => s.setViewingTool);
+  const stackedAboveReview = useStore((s) => !!s.reviewingApprovalToolId);
 
   // Re-read the live item from the store so a streaming result patches in
   // while the viewer is open. The selector returns a stable reference for
@@ -75,85 +87,76 @@ export function ToolViewer() {
 
   const input = useMemo(() => formatMaybeJson(live?.args), [live?.args]);
   const output = useMemo(() => formatMaybeJson(live?.result), [live?.result]);
-  const inputHtml = useMemo(
-    () => (input.lang ? highlight(input.body, input.lang) : ""),
-    [input.body, input.lang],
-  );
-  const outputHtml = useMemo(
-    () => (output.lang ? highlight(output.body, output.lang) : ""),
-    [output.body, output.lang],
-  );
 
   const open = !!(item && live);
   const canStopSubagent =
     !!live && isAgent(live) && live.taskStatus === "running" && !!live.runId && !live.cancelRequested;
+  const toolState = viewerState(live);
 
   return (
-    <PageModal
+    <SystemSheet
       open={open}
       onClose={() => close(null)}
-      size="w-[min(720px,calc(100vw-80px))] max-h-[calc(100vh-80px)]"
-      ariaLabel="Tool details"
-      header={{
-        title:
-          live && isAgent(live) ? (
-            <span className="flex min-w-0 items-center gap-2.5">
-              <span
-                aria-hidden
-                className="grid place-items-center w-[22px] h-[22px] rounded-md bg-accent-soft text-accent-strong shrink-0"
-              >
-                <Bot size={ICON.XS} strokeWidth={2} />
-              </span>
-              <span className="truncate">
-                {live.displayName ?? friendlyAgentLabel(live.kind)}
-              </span>
-            </span>
-          ) : (
-            live?.kind
-          ),
-        // Friendly name only (e.g. "list_issues (linear)") — NOT the full
-        // call signature. The args are already shown in the Input section
-        // below, so repeating them here as `label(arg=…, arg=…)` is redundant.
-        subtitle:
-          live && !isAgent(live) && live.displayName && live.displayName !== live.kind
-            ? live.displayName
-            : undefined,
-        actions:
-          canStopSubagent && live ? (
-            <IconButton
-              onClick={() => {
-                if (live.runId) void cancelSubagent(live.runId, live.id);
-              }}
-              aria-label="Stop subagent"
-              title="Stop subagent"
-            >
-              <Square size={ICON.SM} strokeWidth={2} />
-            </IconButton>
-          ) : undefined,
-      }}
+      title="Tool call"
+      ariaLabel="Tool call"
+      status={toolState.label}
+      statusTone={toolState.tone}
+      closeLabel="Close tool viewer"
+      elevated={stackedAboveReview}
+      headerAction={canStopSubagent && live ? (
+        <IconButton
+          onClick={() => {
+            if (live.runId) void cancelSubagent(live.runId, live.id);
+          }}
+          aria-label="Stop subagent"
+          title="Stop subagent"
+        >
+          <Square size={ICON.SM} />
+        </IconButton>
+      ) : undefined}
+      bodyClassName="grid grid-cols-[minmax(0,1fr)] gap-3"
     >
-      <div className="overflow-y-auto scroll-thin px-5 py-4 grid grid-cols-[minmax(0,1fr)] gap-4 min-w-0">
-        <ScrollFadeTop />
-        {live && isAgent(live) ? (
-          <AgentBody item={live} descendants={descendants} />
-        ) : (
-          <>
-            <Section
-              title="Input"
+      {live && (
+        <>
+          <div className="min-w-0">
+            <strong className="block truncate text-base font-semibold text-ink">
+              {isAgent(live) ? live.displayName ?? friendlyAgentLabel(live.kind) : live.kind}
+            </strong>
+            <p className="mt-1 text-base text-muted">
+              {isAgent(live)
+                ? "Activity and result stay inspectable without competing with the answer."
+                : "Raw request and result stay inspectable without competing with the answer."}
+            </p>
+          </div>
+          {isAgent(live) ? (
+            <AgentBody item={live} descendants={descendants} />
+          ) : (
+            <>
+            <ToolLogBlock
+              label="Tool input"
               body={input.body}
-              html={inputHtml}
               placeholder="No input arguments."
             />
-            <Section
-              title="Output"
+            <ToolLogBlock
+              label="Tool output"
               body={output.body}
-              html={outputHtml}
               placeholder={live && activityItemStatus(live) === "ongoing" ? "Waiting for result…" : "Empty result."}
             />
             {directChildren.length > 0 && <ChildRuns items={directChildren} />}
-          </>
-        )}
-      </div>
-    </PageModal>
+            </>
+          )}
+        </>
+      )}
+    </SystemSheet>
   );
+}
+
+function viewerState(item: ActivityItem | null): {
+  label: "Running" | "Completed" | "Failed" | "Cancelled";
+  tone: "neutral" | "success" | "warning" | "danger";
+} {
+  if (!item || activityItemStatus(item) === "ongoing") return { label: "Running", tone: "neutral" };
+  if (item.taskStatus === "failed") return { label: "Failed", tone: "danger" };
+  if (item.taskStatus === "cancelled") return { label: "Cancelled", tone: "warning" };
+  return { label: "Completed", tone: "success" };
 }

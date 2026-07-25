@@ -1,6 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import clsx from "clsx";
-import { RefreshCw } from "@/components/icons";
 import {
   connectGoogleServiceApi,
   connectServiceApi,
@@ -8,15 +6,13 @@ import {
   disconnectServiceApi,
   listGoogleAccountsApi,
   listServicesApi,
-  removeGoogleAccountApi,
   type GoogleAccountSummary,
   type GoogleIntegrationId,
   type ServiceConnection,
 } from "@/api/settings";
 import { fetchServerConfig, updateServerConfig } from "@/actions/server";
 import { useStore } from "@/stores";
-import { ReadinessCard } from "@/features/settings/components/ReadinessCard";
-import { GoogleCard } from "@/features/settings/components/GoogleCard";
+import { GoogleServiceCard } from "@/features/settings/components/GoogleServiceCard";
 import { ServiceCard } from "@/features/settings/components/ServiceCard";
 import { SettingsTabSkeleton } from "@/features/settings/components/SettingsTabSkeleton";
 import {
@@ -25,9 +21,12 @@ import {
   shouldShowLoadedSettingsContent,
 } from "@/features/settings/lib/settingsLoadState";
 import { SettingsConnectionHint, SettingsInlineError } from "@/features/settings/components/SettingsNotice";
-import { ICON } from "@/lib/icons";
-import { Button } from "@/components/ui/Button";
-import { SetupAssistant, type SetupAssistantKind } from "@/features/settings/components/setup/SetupAssistant";
+import { SettingsPageAction, SettingsSummary, SettingsSurface } from "@/features/settings/components/SettingsPage";
+import { SettingsRefreshAction } from "@/features/settings/components/SettingsRefreshAction";
+import { SetupAssistant } from "@/features/settings/components/setup/SetupAssistant";
+import { slackTokenPrefixValid } from "@/features/settings/lib/setupAssistant";
+
+const GOOGLE_INTEGRATIONS: GoogleIntegrationId[] = ["gmail", "calendar", "google_drive"];
 
 export function IntegrationsTab() {
   const config = useStore((s) => s.config);
@@ -38,9 +37,7 @@ export function IntegrationsTab() {
   const [error, setError] = useState<string | null>(null);
   const [loadedOnce, setLoadedOnce] = useState(false);
   const [pendingId, setPendingId] = useState<string | null>(null);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [serviceKey, setServiceKey] = useState("");
-  const [assistant, setAssistant] = useState<Extract<SetupAssistantKind, "google" | "slack"> | null>(null);
+  const [assistantOpen, setAssistantOpen] = useState(false);
 
   const googleEnabled = useMemo(() => {
     const value = (id: GoogleIntegrationId) => {
@@ -57,14 +54,14 @@ export function IntegrationsTab() {
     () => slackServices.filter((service) => service.connected),
     [slackServices],
   );
-  const setupSlackServices = useMemo(
-    () => slackServices.filter((service) => !service.connected),
-    [slackServices],
-  );
-  const readyGoogleCount = (["gmail", "calendar", "google_drive"] as GoogleIntegrationId[]).filter(
+  const readyGoogleCount = GOOGLE_INTEGRATIONS.filter(
     (id) => googleEnabled[id] && googleAccounts.some((account) => account.services.includes(id)),
   ).length;
   const readyToolsCount = readyGoogleCount + connectedSlackServices.length;
+  const connectedIntegrationCount = useMemo(
+    () => googleAccounts.filter((account) => account.services.length > 0).length + connectedSlackServices.length,
+    [connectedSlackServices.length, googleAccounts],
+  );
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -89,7 +86,7 @@ export function IntegrationsTab() {
   }, [refresh]);
 
   async function toggleGoogle(integrationId: GoogleIntegrationId, enabled: boolean) {
-    setPendingId(integrationId);
+    setPendingId(`${integrationId}:toggle`);
     setError(null);
     try {
       await updateServerConfig({ integrations: { [integrationId]: enabled } });
@@ -102,11 +99,13 @@ export function IntegrationsTab() {
     }
   }
 
-  async function connectGoogle(integrationId: GoogleIntegrationId, accountId?: string) {
-    setPendingId(`${integrationId}:connect${accountId ? `:${accountId}` : ""}`);
+  /** OAuth runs server-side and detects the account email automatically;
+   *  re-connecting an existing address merges into its account record. */
+  async function connectGoogle(integrationId: GoogleIntegrationId) {
+    setPendingId(`${integrationId}:connect`);
     setError(null);
     try {
-      await connectGoogleServiceApi(config, integrationId, accountId);
+      await connectGoogleServiceApi(config, integrationId);
       await updateServerConfig({ integrations: { [integrationId]: true } });
       await fetchServerConfig();
       await refresh();
@@ -130,41 +129,16 @@ export function IntegrationsTab() {
     }
   }
 
-  async function removeGoogleAccount(account: GoogleAccountSummary) {
-    setPendingId(`account:${account.id}`);
-    setError(null);
-    try {
-      await removeGoogleAccountApi(config, account.id);
-      await fetchServerConfig();
-      await refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setPendingId(null);
+  async function toggleSlack(enabled: boolean) {
+    if (enabled) {
+      setAssistantOpen(true);
+      return;
     }
-  }
-
-  async function connectService(service: ServiceConnection) {
-    if (!serviceKey.trim()) return;
-    setPendingId(service.id);
+    const disconnectable = connectedSlackServices.filter((service) => !service.from_env);
+    setPendingId("slack:toggle");
     setError(null);
     try {
-      await connectServiceApi(config, service.id, serviceKey.trim());
-      setEditingId(null);
-      setServiceKey("");
-      await refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setPendingId(null);
-    }
-  }
-
-  async function disconnectService(service: ServiceConnection) {
-    setPendingId(service.id);
-    setError(null);
-    try {
-      await disconnectServiceApi(config, service.id);
+      await Promise.all(disconnectable.map((service) => disconnectServiceApi(config, service.id)));
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -177,17 +151,31 @@ export function IntegrationsTab() {
   const showContent = shouldShowLoadedSettingsContent({ loading, error, hasData: hasLoadedData });
 
   return (
-    <div className="grid gap-5">
-      <div className="flex items-start justify-between gap-3">
-        <p className="m-0 text-sm text-muted leading-[1.45] max-w-[540px]">
-          Connect the data and action providers Arden can use as tools. Model providers stay in
-          Providers; MCP servers stay in MCP.
-        </p>
-        <Button variant="secondary" onClick={() => void refresh()} disabled={loading}>
-          <RefreshCw size={ICON.SM} strokeWidth={2} className={clsx(loading && "animate-spin")} />
-          Refresh
-        </Button>
-      </div>
+    <div className="settings-provider-flow">
+      <SetupAssistant
+        open={assistantOpen}
+        kind="slack"
+        onClose={() => setAssistantOpen(false)}
+        onDone={async () => {
+          setAssistantOpen(false);
+          await fetchServerConfig();
+          await refresh();
+        }}
+        onPrimary={async (_kind, value) => {
+          if (!value.trim()) throw new Error("A bot token is required.");
+          if (!slackTokenPrefixValid("slack_bot_token", value)) {
+            throw new Error("A Slack bot token must start with xoxb-.");
+          }
+          await connectServiceApi(config, "slack_bot_token", value.trim());
+          await fetchServerConfig();
+          await refresh();
+          setAssistantOpen(false);
+        }}
+      />
+
+      <SettingsPageAction>
+        <SettingsRefreshAction label="Integrations" loading={loading} onRefresh={refresh} />
+      </SettingsPageAction>
 
       {error && (
         <SettingsInlineError
@@ -202,55 +190,40 @@ export function IntegrationsTab() {
         <SettingsConnectionHint />
       ) : (
         <>
-          {assistant && (
-            <SetupAssistant
-              kind={assistant}
-              onClose={() => setAssistant(null)}
-              onDone={async () => {
-                setAssistant(null);
-                await fetchServerConfig();
-                await refresh();
-              }}
-            />
-          )}
-
-          <ReadinessCard
-            tone={readyToolsCount > 0 ? "ok" : "warn"}
+          <SettingsSummary
             label={readyToolsCount > 0 ? "Tools ready" : "Connect tools"}
             detail={`Google: ${readyGoogleCount || "none"} · Slack: ${connectedSlackServices.length || "none"}`}
-            footnote="Tool integrations are optional, but connected tools become available to the agent."
+            stats={[
+              {
+                value: connectedIntegrationCount,
+                label: "connections",
+                tone: connectedIntegrationCount > 0 ? "ok" : "warn",
+              },
+              { value: readyToolsCount, label: "services ready" },
+            ]}
           />
 
-          <GoogleCard
-            enabled={googleEnabled}
-            accounts={googleAccounts}
-            pendingId={pendingId}
-            onToggle={toggleGoogle}
-            onConnect={connectGoogle}
-            onDisconnect={disconnectGoogle}
-            onRemoveAccount={removeGoogleAccount}
-            onAssistant={() => setAssistant("google")}
-          />
-
-          <ServiceCard
-            connectedServices={connectedSlackServices}
-            setupServices={setupSlackServices}
-            editingId={editingId}
-            serviceKey={serviceKey}
-            pendingId={pendingId}
-            onEdit={(service) => {
-              setEditingId(service.id);
-              setServiceKey("");
-            }}
-            onCancel={() => {
-              setEditingId(null);
-              setServiceKey("");
-            }}
-            onKeyChange={setServiceKey}
-            onConnect={connectService}
-            onDisconnect={disconnectService}
-            onAssistant={() => setAssistant("slack")}
-          />
+          <SettingsSurface className="settings-integration-surface">
+            {GOOGLE_INTEGRATIONS.map((integrationId) => (
+              <GoogleServiceCard
+                key={integrationId}
+                integrationId={integrationId}
+                enabled={googleEnabled[integrationId]}
+                accounts={googleAccounts}
+                pendingId={pendingId}
+                onToggle={toggleGoogle}
+                onConnect={connectGoogle}
+                onDisconnect={disconnectGoogle}
+              />
+            ))}
+            <ServiceCard
+              services={slackServices}
+              pendingId={pendingId}
+              onToggle={toggleSlack}
+              onAssistant={() => setAssistantOpen(true)}
+              onManage={() => setAssistantOpen(true)}
+            />
+          </SettingsSurface>
         </>
       )}
     </div>

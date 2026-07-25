@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -11,6 +12,7 @@ function mount(): { el: HTMLElement; root: Root; restore: () => void } {
 }
 const click = (el: HTMLElement) =>
   el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
 
 test("SwitchControl renders role=switch with aria-checked + accessible name", () => {
   const on = renderToStaticMarkup(<SwitchControl checked onChange={() => {}} aria-label="Auto-Approve" />);
@@ -48,9 +50,19 @@ test("a disabled switch does not toggle on click", async () => {
   restore();
 });
 
-test("both sizes render a switch control", () => {
+test("all call-site sizes preserve the canonical switch geometry", () => {
   for (const size of ["sm", "md"] as const) {
     const html = renderToStaticMarkup(<SwitchControl size={size} checked={false} onChange={() => {}} aria-label={size} />);
     expect(html).toContain('role="switch"');
   }
+
+  const component = read("../src/components/ui/SwitchControl.tsx");
+  const css = read("../src/styles.css");
+  expect(component).not.toContain("onPointerMove");
+  expect(component).not.toContain("SPRING_LAYOUT");
+  expect(css).toMatch(/\.switch-control\s*\{[\s\S]*?width:\s*2rem;[\s\S]*?height:\s*1\.125rem;/);
+  expect(css).toMatch(/\.switch-control-knob\s*\{[\s\S]*?top:\s*0\.125rem;[\s\S]*?left:\s*0\.125rem;[\s\S]*?width:\s*0\.875rem;[\s\S]*?height:\s*0\.875rem;/);
+  expect(css).toContain("transform: translateX(0.875rem)");
+  expect(css).toContain("inset: -0.25rem -0.1875rem");
+  expect(css).toContain("transform var(--motion-feedback) var(--smooth-out)");
 });

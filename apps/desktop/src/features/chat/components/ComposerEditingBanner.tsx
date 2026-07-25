@@ -12,7 +12,7 @@ export function ComposerEditingBanner({ onCancel }: { onCancel: () => void }) {
       animate={RISE_SETTLED}
       exit={SECTION_EXIT}
       transition={SECTION_ENTER}
-      className="flex items-center gap-2 px-3 py-1.5 text-xs text-accent-strong bg-accent-soft/40 rounded-t-[14px]"
+      className="board-composer__editing flex items-center gap-2 px-3 py-1.5 text-xs text-accent-strong bg-accent-soft/40 rounded-t-[14px]"
     >
       <span>Editing previous message — pressing send will replace it.</span>
       <Button

@@ -1,18 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { ChevronDown } from "@/components/icons";
-import clsx from "clsx";
 import { useShallow } from "zustand/react/shallow";
 import { useStore } from "@/stores";
 import { Message } from "@/features/chat/components/Message";
+import { ActivityHeader } from "@/features/chat/components/ActivityHeader";
 import { turnLayout } from "@/features/chat/lib/turnLayout";
 import { turnHeaderLabel } from "@/features/chat/lib/turnHeader";
 import { turnHasActiveChildAgent } from "@/features/chat/lib/turnActiveAgents";
-import { SPRING_ROW_ENTRY } from "@/lib/tokens/motion";
-import { Collapse } from "@/components/ui/Collapse";
-import { Reveal } from "@/components/ui/Reveal";
-import { Marker, MarkerContent } from "@/components/ui/Marker";
-import { ICON } from "@/lib/icons";
+import {
+  BLUR,
+  DISTANCE,
+  EASE_ACCELERATE,
+  EASE_DISSOLVE,
+  MOTION,
+} from "@/lib/tokens/motion";
 import { sourceRefsForTurn } from "@/stores/sourceRefs";
 
 export function TurnGroup({
@@ -35,17 +36,18 @@ export function TurnGroup({
     useShallow((s) =>
       childIds.map((id) => {
         const message = s.messages.get(id);
-        return `${message?.role ?? ""}\t${message?.activity?.label ?? ""}`;
+        return `${message?.role ?? ""}\t${message?.activity?.label ?? ""}\t${message?.activity?.items.length ?? 0}`;
       }),
     ),
   );
   const childSummaries = useMemo(
     () =>
       childSummaryKeys.map((key) => {
-        const [role, activityLabel] = key.split("\t");
+        const [role, activityLabel, activityCount] = key.split("\t");
         return {
           role: role || null,
           activityLabel: activityLabel || null,
+          activityCount: Number(activityCount) || 0,
         };
       }),
     [childSummaryKeys],
@@ -96,91 +98,76 @@ export function TurnGroup({
   // turn timing). Show the time when we have it, plain "Worked" otherwise.
   const wasStopped = childSummaries.some((child) => child.activityLabel === "Stopped");
   const headerLabel = turnHeaderLabel(turn?.durationMs, wasStopped);
+  const activityCount = childSummaries.reduce(
+    (total, child) => total + (child.role === "activity" ? child.activityCount : 0),
+    0,
+  );
 
   const showInterim = !isDone || expanded;
-  // Stagger sibling reveals per Rauno's Depth essay ("Stagger sibling
-  // fades — Synchronous fade hides quantity; stagger by ~30–60ms").
-  //
-  // Variant `animate` is gated on `showInterim` so the stagger plays
-  // when the parent's collapse opens (Path A: user clicks "Worked for
-  // Xs" on a finished turn), not silently under a height:0 mask on
-  // initial mount. For live turns `showInterim` is true from the start,
-  // so the initial paint also plays the stagger if multiple workIds
-  // mount in the same render.
-  //
-  // Streaming arrivals (workIds added one-by-one over time) don't get
-  // motion stagger — parent is already at "visible" so new children
-  // inherit the steady state directly. Hydrated/replayed turns disable
-  // this initial stagger; live rows keep their per-article entry motion.
   const interimList = (
-    <motion.div
-      initial={motionDisabled ? false : "hidden"}
-      animate={showInterim ? "visible" : "hidden"}
-      variants={{
-        hidden: {},
-        visible: { transition: { staggerChildren: 0.045 } },
-      }}
-      className={clsx("flex flex-col gap-3.5", isDone && "pt-1.5")}
-    >
+    <div className="board-trace__list">
       {layout.workIds.map((id) => (
-        <motion.div
-          key={id}
-          variants={
-            motionDisabled
-              ? undefined
-              : {
-                  hidden: { opacity: 0, y: 4 },
-                  visible: { opacity: 1, y: 0 },
-                }
-          }
-          transition={motionDisabled ? { duration: 0 } : SPRING_ROW_ENTRY}
-        >
-          <Message id={id} isFinal={false} />
-        </motion.div>
+        <Message key={id} id={id} isFinal={false} hideActivityHeader />
       ))}
-    </motion.div>
+    </div>
   );
   const workBlock = hasWork ? (
-    <div className="flex flex-col">
-      <Collapse open={isDone}>
-        <Marker
-          as="button"
-          variant="border"
-          aria-expanded={expanded}
-          onClick={() => {
-            onManualResize?.();
-            setExpanded((v) => !v);
-          }}
-          className="transition-colors hover:text-ink-soft"
-        >
-          <MarkerContent>{headerLabel}</MarkerContent>
-          <ChevronDown
-            size={ICON.XS}
-            strokeWidth={2}
-            className={clsx("shrink-0 transition-transform duration-trace", expanded && "rotate-180")}
-          />
-        </Marker>
-      </Collapse>
+    <section className="board-trace" aria-label={headerLabel}>
+      <ActivityHeader
+        done
+        label={wasStopped ? "Stopped" : undefined}
+        count={activityCount}
+        durationMs={turn?.durationMs}
+        motionDisabled={motionDisabled}
+        expanded={expanded}
+        railAnchor
+        railLabel={headerLabel}
+        onToggle={() => {
+          onManualResize?.();
+          setExpanded((value) => !value);
+        }}
+      />
 
-      {/* No height tween here — the interim subtree is the heaviest in the
-          app, so the layout snaps once at the presence boundary and only the
-          content rises/dissolves on GPU props. */}
       {isDone ? (
         <AnimatePresence initial={false}>
           {showInterim && (
-            <Reveal key="interim">
+            <motion.div
+              key="interim"
+              className="board-trace__panel"
+              initial={motionDisabled
+                ? false
+                : { opacity: 0, filter: `blur(${BLUR.dissolve}px)`, y: -DISTANCE.dissolve }}
+              animate={{
+                opacity: 1,
+                filter: "blur(0px)",
+                y: 0,
+                transition: {
+                  duration: motionDisabled ? 0 : MOTION.dissolve,
+                  ease: EASE_DISSOLVE,
+                },
+              }}
+              exit={{
+                opacity: 0,
+                filter: `blur(${BLUR.dissolve}px)`,
+                y: -DISTANCE.dissolve,
+                transition: {
+                  duration: motionDisabled ? 0 : MOTION.dissolve * 0.46,
+                  ease: EASE_ACCELERATE,
+                },
+              }}
+            >
               {interimList}
-            </Reveal>
+            </motion.div>
           )}
         </AnimatePresence>
       ) : (
         interimList
       )}
-    </div>
+    </section>
   ) : null;
 
   return (
-    <div className="flex flex-col gap-1.5" data-turn-id={turnId}>
+    <section className="board-turn flex flex-col gap-1.5" data-turn-id={turnId}>
       {userId && <Message id={userId} />}
 
       {isDone && workBlock}
@@ -198,7 +185,7 @@ export function TurnGroup({
       })}
 
       {!isDone && workBlock}
-    </div>
+    </section>
   );
 }
 

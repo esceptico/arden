@@ -9,7 +9,6 @@ import {
   parentSessionIdOf,
   resolveAutomationStatus,
   resultSnippet,
-  statusDotClass,
 } from "@/lib/agentRun";
 import type { Automation } from "@/api/types";
 import type { ActivityItem, BackgroundAgent } from "@/stores/types";
@@ -79,17 +78,6 @@ describe("humanizeAgentType", () => {
     expect(humanizeAgentType("agent")).toBe("Agent");
     expect(humanizeAgentType("sub_agent")).toBe("Agent");
     expect(humanizeAgentType("sub-agent")).toBe("Agent");
-  });
-});
-
-describe("statusDotClass", () => {
-  it("colors the dot per status", () => {
-    expect(statusDotClass("completed")).toBe("bg-ok text-ok");
-    expect(statusDotClass("failed")).toBe("bg-bad text-bad");
-    expect(statusDotClass("cancelled")).toBe("bg-faint text-faint");
-    expect(statusDotClass("interrupted")).toBe("bg-faint text-faint");
-    expect(statusDotClass("running")).toBe("bg-accent text-accent");
-    expect(statusDotClass("cancel_requested")).toBe("bg-accent text-accent");
   });
 });
 

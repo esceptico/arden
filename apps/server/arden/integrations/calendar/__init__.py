@@ -30,14 +30,6 @@ CALENDAR = Integration(
         "edit_calendar_event": edit_calendar_event_tool,
         "delete_calendar_event": delete_calendar_event_tool,
     },
-    command_tool_names=frozenset(
-        {
-            "calendar",
-            "create_calendar_event",
-            "edit_calendar_event",
-            "delete_calendar_event",
-        }
-    ),
     build=_build,
     connection=IntegrationConnectionSpec(
         connection_id="calendar",

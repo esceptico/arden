@@ -4,8 +4,10 @@ import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
 from arden.agent import ToolResult, ToolStarted
+from arden.core.prompts import BASE_SYSTEM_PROMPT
 from arden.events.sse import ToolCallArgsEvent, ToolCallStartEvent, agent_events_to_sse
-from arden.tools.core.base import RESERVED_ARG_KEYS, TITLE_ARG, Tool
+from arden.tool_call_metadata import DISPLAY_TITLE_ARG, RESERVED_TOOL_ARGUMENTS
+from arden.tools.core.base import Tool
 from arden.tools.core.registry import ToolRegistry
 from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
 
@@ -39,7 +41,7 @@ class _TitleTool(Tool):
 
 
 class _CollisionIn(BaseModel):
-    display_title: str = Field(alias=TITLE_ARG)
+    display_title: str = Field(alias=DISPLAY_TITLE_ARG)
 
 
 class _CollisionTool(_TitleTool):
@@ -48,10 +50,11 @@ class _CollisionTool(_TitleTool):
 
 def test_title_is_injected_into_every_tool_schema_as_optional():
     params = _StrictTool().to_dict("readish")["function"]["parameters"]
-    assert TITLE_ARG in params["properties"]
-    assert TITLE_ARG not in params["required"]  # optional — never forces the model
+    assert DISPLAY_TITLE_ARG == "_display_title"
+    assert DISPLAY_TITLE_ARG in params["properties"]
+    assert DISPLAY_TITLE_ARG not in params["required"]  # optional — never forces the model
     # Injected first so it streams before the real args.
-    assert next(iter(params["properties"])) == TITLE_ARG
+    assert next(iter(params["properties"])) == DISPLAY_TITLE_ARG
 
 
 def test_title_is_stripped_before_execute_even_for_forbid_models():
@@ -59,20 +62,22 @@ def test_title_is_stripped_before_execute_even_for_forbid_models():
     reg.register("readish", _StrictTool(), source="_system")
     # The model emits display metadata alongside the real arg; an extra="forbid"
     # input model would raise if it reached the tool — the registry must strip it.
-    res = asyncio.run(reg.execute("readish", None, {TITLE_ARG: "Reading the doc", "path": "a.py"}))
+    res = asyncio.run(
+        reg.execute("readish", None, {DISPLAY_TITLE_ARG: "Reading the doc", "path": "a.py"})
+    )
     assert not res.is_error
     assert res.content == "ok:a.py"
 
 
-def test_reserved_keys_cover_title():
-    assert TITLE_ARG in RESERVED_ARG_KEYS
+def test_reserved_arguments_contain_only_the_canonical_display_title():
+    assert frozenset({DISPLAY_TITLE_ARG}) == RESERVED_TOOL_ARGUMENTS
 
 
 def test_real_title_argument_is_not_reserved_or_stripped():
     params = _TitleTool().to_dict("publish")["function"]["parameters"]
     assert params["properties"]["title"]["type"] == "string"
     assert "title" in params["required"]
-    assert TITLE_ARG != "title"
+    assert DISPLAY_TITLE_ARG != "title"
 
     reg = ToolRegistry()
     reg.register("publish", _TitleTool(), source="_system")
@@ -80,7 +85,7 @@ def test_real_title_argument_is_not_reserved_or_stripped():
         reg.execute(
             "publish",
             None,
-            {"title": "Quarterly report", TITLE_ARG: "Publishing the report"},
+            {"title": "Quarterly report", DISPLAY_TITLE_ARG: "Publishing the report"},
         )
     )
 
@@ -92,18 +97,23 @@ def test_tool_schema_rejects_reserved_display_metadata_collision():
         _CollisionTool().to_dict("collision")
 
 
-def test_display_title_is_projected_separately_from_real_arguments():
+def test_display_title_is_preserved_for_transcript_projection():
     events = agent_events_to_sse(
         ToolStarted(
             tool_id="call-1",
             name="readish",
             display_name="Readish",
-            args={TITLE_ARG: "Reading the doc", "path": "a.py"},
+            args={DISPLAY_TITLE_ARG: "Reading the doc", "path": "a.py"},
         )
     )
 
     started = next(event for event in events if isinstance(event, ToolCallStartEvent))
     args = next(event for event in events if isinstance(event, ToolCallArgsEvent))
     assert started.description == "Reading the doc"
-    assert TITLE_ARG not in args.delta
+    assert f'"{DISPLAY_TITLE_ARG}": "Reading the doc"' in args.delta
     assert '"path": "a.py"' in args.delta
+
+
+def test_system_prompt_uses_only_the_canonical_display_title_argument():
+    assert "optional `_display_title` arg" in BASE_SYSTEM_PROMPT
+    assert "optional `title` arg" not in BASE_SYSTEM_PROMPT

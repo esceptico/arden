@@ -2,13 +2,18 @@ import { expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { WorkBrief } from "@/features/home/components/WorkBrief";
+import { FocusRow } from "@/features/home/components/FocusRow";
 import type { AreasBrief } from "@/api/areas";
 import { getState, setState } from "@/stores";
 
 function setupDom(): { host: HTMLElement; root: Root; restore: () => void } {
   const host = document.createElement("div");
   document.body.append(host);
-  return { host, root: createRoot(host), restore: () => host.remove() };
+  return {
+    host,
+    root: createRoot(host),
+    restore: () => host.remove(),
+  };
 }
 
 const brief: AreasBrief = {
@@ -20,21 +25,36 @@ const brief: AreasBrief = {
   needs_you: [{
     id: "ask1", area_key: "finance", text: "Choose an accountant", kind: "question", source: "agent",
     actions: [], state: "active", created_at: "2026-07-10T00:00:00Z", snoozed_until: null,
+  }, {
+    id: "ask2", area_key: "travel", text: "Choose a flight", kind: "review", source: "agent",
+    actions: [], state: "active", created_at: "2026-07-11T00:00:00Z", snoozed_until: null,
   }],
 };
 
-test("WorkBrief renders finite sections in chief-of-staff order and routes rows", async () => {
+test("WorkBrief focuses one ask, keeps peers compact, and routes ambient work", async () => {
   setState({ areas: { ...getState().areas, openAreaKey: null } });
   const { host, root, restore } = setupDom();
   try {
     await act(async () => root.render(<WorkBrief brief={brief} />));
     const text = host.textContent ?? "";
-    expect(text.indexOf("Needs you")).toBeLessThan(text.indexOf("Agents on it"));
-    expect(text.indexOf("Agents on it")).toBeLessThan(text.indexOf("Done for you"));
-    expect(text).toContain("Labs normalized");
-    expect(text.match(/That’s it for today\./g)).toHaveLength(1);
+    expect(host.querySelector('[data-region="deck"]')).not.toBeNull();
+    expect(host.querySelector(".mission-control__deck-chrome [aria-label]")?.getAttribute("aria-label"))
+      .toBe("1 of 2");
+    expect(text).toContain("Choose an accountant");
+    expect(text).toContain("Choose a flight");
+    expect(text).toContain("Working");
+    expect(text).toContain("Scheduled");
+    expect(text).toContain("Done");
+    expect(text).toContain("Aside");
+    expect(text).not.toContain("That’s it for today.");
 
-    const row = host.querySelector('button[data-area-id="health"]') as HTMLButtonElement;
+    const working = host.querySelector('[data-kind="working"] > button') as HTMLButtonElement;
+    await act(async () => working.click());
+    const peek = document.body.querySelector(".mission-control__ambient-peek");
+    expect(working.getAttribute("aria-expanded")).toBe("true");
+    expect(peek?.textContent).toContain("Labs normalized");
+
+    const row = peek?.querySelector('button[data-area-id="health"]') as HTMLButtonElement;
     await act(async () => row.click());
     expect(getState().areas.openAreaKey).toBe("health");
   } finally {
@@ -43,14 +63,73 @@ test("WorkBrief renders finite sections in chief-of-staff order and routes rows"
   }
 });
 
-test("WorkBrief hides empty sections but always shows the end", async () => {
+test("lane counts carry unread deltas and opening the lane marks it seen", async () => {
+  setState({
+    areas: { ...getState().areas, openAreaKey: null },
+    prefs: {
+      ...getState().prefs,
+      ambientSeen: { working: "2026-07-01T00:00:00Z", scheduled: "2026-07-01T00:00:00Z", done: "2026-07-01T00:00:00Z", aside: "2026-07-01T00:00:00Z" },
+    },
+  });
+  const unreadBrief: AreasBrief = {
+    ...brief,
+    done: [{
+      area_id: "visa", area_title: "Visa", stable_key: "draft", text: "Drafted petition", type: "work",
+      completed_at: "2026-07-20T00:00:00Z",
+    }],
+  };
+  const { host, root, restore } = setupDom();
+  try {
+    await act(async () => root.render(<WorkBrief brief={unreadBrief} />));
+    const count = host.querySelector('[data-kind="done"] .mission-control__strip-count');
+    expect(count?.textContent).toBe("1 new");
+    expect(count?.hasAttribute("data-new")).toBe(true);
+
+    const doneHead = host.querySelector('[data-kind="done"] > button') as HTMLButtonElement;
+    await act(async () => doneHead.click());
+    expect(getState().prefs.ambientSeen.done).toBe("2026-07-20T00:00:00Z");
+
+    await act(async () => doneHead.click());
+    expect(host.querySelector('[data-kind="done"] .mission-control__strip-count')?.textContent).toBe("1");
+  } finally {
+    await act(async () => root.unmount());
+    restore();
+  }
+});
+
+test("WorkBrief keeps a compact all-clear state without a dashboard recap", async () => {
   const { host, root, restore } = setupDom();
   try {
     await act(async () => root.render(<WorkBrief brief={{ done: [], in_progress: [], needs_you: [] }} />));
-    expect(host.textContent).not.toContain("Done for you");
-    expect(host.textContent).not.toContain("Agents on it");
-    expect(host.textContent).not.toContain("Needs you");
-    expect(host.textContent?.match(/That’s it for today\./g)).toHaveLength(1);
+    expect(host.querySelector('[data-region="deck"]')?.getAttribute("aria-label")).toBe("Needs you");
+    expect(host.textContent).toContain("All requests handled");
+    expect(host.textContent).toContain("Agent activity");
+    expect(host.textContent).not.toContain("That’s it for today.");
+  } finally {
+    await act(async () => root.unmount());
+    restore();
+  }
+});
+
+test("focused question swaps its verbs for the inline reply slot", async () => {
+  const { host, root, restore } = setupDom();
+  try {
+    await act(async () => root.render(
+      <FocusRow
+        ask={brief.needs_you[0]}
+        areaTitle="Finance"
+        expanded
+      />,
+    ));
+
+    const answer = Array.from(host.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.includes("Answer"));
+    expect(answer?.textContent).toContain("1");
+
+    await act(async () => answer?.click());
+    expect(host.querySelector('[aria-label="Reply to this request"]')).not.toBeNull();
+    expect(host.textContent).toContain("↵ send · esc back");
+    expect(host.querySelector(".mission-control__focus-actions")?.hasAttribute("data-io-hidden")).toBe(true);
   } finally {
     await act(async () => root.unmount());
     restore();

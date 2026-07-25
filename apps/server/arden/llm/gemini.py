@@ -210,6 +210,20 @@ class GeminiClient(CompletionClient, EmbeddingClient):
         return schema
 
     def _clean_schema_recursive(self, schema: dict) -> None:
+        # `types.Schema` accepts a narrow JSON Schema dialect: anyOf and enum,
+        # but not allOf, oneOf, const or discriminator. Fold the three forms
+        # pydantic emits into the accepted ones before pruning keys — allOf is a
+        # `$ref` that carried sibling keys (an enum plus a description), oneOf a
+        # discriminated union, const a single-value Literal.
+        for member in schema.pop("allOf", None) or []:
+            if isinstance(member, dict):
+                for key, value in member.items():
+                    schema.setdefault(key, value)
+        if "oneOf" in schema:
+            schema["anyOf"] = schema.pop("oneOf")
+        if "const" in schema:
+            schema["enum"] = [schema.pop("const")]
+
         for key in (
             "default",
             "exclusiveMaximum",
@@ -218,6 +232,9 @@ class GeminiClient(CompletionClient, EmbeddingClient):
             "$schema",
             "$defs",
             "title",
+            # Every member of a discriminated union already pins its own tag
+            # value, so the annotation adds no constraint to carry over.
+            "discriminator",
         ):
             schema.pop(key, None)
 
@@ -232,10 +249,9 @@ class GeminiClient(CompletionClient, EmbeddingClient):
         if isinstance(schema.get("items"), dict):
             self._clean_schema_recursive(schema["items"])
 
-        for key in ("anyOf", "allOf", "oneOf"):
-            for item in schema.get(key) or []:
-                if isinstance(item, dict):
-                    self._clean_schema_recursive(item)
+        for item in schema.get("anyOf") or []:
+            if isinstance(item, dict):
+                self._clean_schema_recursive(item)
 
     # --- Response parsing ---
 

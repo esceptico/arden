@@ -274,7 +274,8 @@ async def test_list_claims_for_parent(store: AutomationStore):
 async def test_create_with_idempotency_key_returns_none_on_repeat(service: AutomationService):
     first = await service.create(
         name="watch-item-1",
-        description="poke item 1",
+        description="Pokes item 1.",
+        prompt="Poke item 1.",
         trigger_type="time",
         at="09:00",
         idempotency_key="item-1",
@@ -286,7 +287,8 @@ async def test_create_with_idempotency_key_returns_none_on_repeat(service: Autom
 
     second = await service.create(
         name="watch-item-1-again",
-        description="poke item 1 again",
+        description="Pokes item 1 again.",
+        prompt="Poke item 1 again.",
         trigger_type="time",
         at="09:00",
         idempotency_key="item-1",
@@ -302,7 +304,8 @@ async def test_create_run_scope_isolated_per_fire(service: AutomationService):
 
     a = await service.create(
         name="child-a",
-        description="x",
+        description="Runs the child task.",
+        prompt="Run the child task.",
         trigger_type="time",
         at="09:00",
         idempotency_key="item-1",
@@ -312,7 +315,8 @@ async def test_create_run_scope_isolated_per_fire(service: AutomationService):
     )
     dup = await service.create(
         name="child-a-dup",
-        description="x",
+        description="Runs the duplicate child task.",
+        prompt="Run the duplicate child task.",
         trigger_type="time",
         at="09:00",
         idempotency_key="item-1",
@@ -322,7 +326,8 @@ async def test_create_run_scope_isolated_per_fire(service: AutomationService):
     )
     b = await service.create(
         name="child-a-fire2",
-        description="x",
+        description="Runs the child task for the next fire.",
+        prompt="Run the child task for the next fire.",
         trigger_type="time",
         at="09:00",
         idempotency_key="item-1",
@@ -433,7 +438,8 @@ async def test_create_rolls_back_claim_on_save_failure(service: AutomationServic
     with pytest.raises(RuntimeError, match="simulated disk error"):
         await service.create(
             name="first-try",
-            description="x",
+            description="Tests a failing save.",
+            prompt="Test a failing save.",
             trigger_type="time",
             at="09:00",
             idempotency_key="item-99",
@@ -444,7 +450,8 @@ async def test_create_rolls_back_claim_on_save_failure(service: AutomationServic
     monkeypatch.setattr(store.conn, "execute", real_execute)
     retry = await service.create(
         name="second-try",
-        description="x",
+        description="Tests a retry after a failed save.",
+        prompt="Retry after the failed save.",
         trigger_type="time",
         at="09:00",
         idempotency_key="item-99",

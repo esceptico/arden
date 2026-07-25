@@ -115,7 +115,7 @@ def _queued_message_snapshot(row: dict) -> dict:
             for b in raw_content
             if isinstance(b, dict) and b.get("type") == "image" and b.get("media_type") and b.get("data")
         ]
-    status = "pending" if row.get("status") == "queued" else "failed"
+    status = "failed" if row.get("status") == "failed_retryable" else "pending"
     return {
         "client_id": row["client_id"],
         "text": text,
@@ -161,12 +161,6 @@ async def _session_runtime_snapshot(
         else []
     )
     queued_rows = []
-    if surfaced_run and run_status in ACTIVE_RUN_STATUSES:
-        queued_rows = [
-            row
-            for row in await svc.store.list_chat_queued_messages(session_id, status="queued")
-            if row.get("run_id") == surfaced_run["run_id"]
-        ]
 
     pending_approvals = [_approval_snapshot(row) for row in approval_rows]
     pending_connections = [_connection_snapshot(row) for row in connection_rows]
@@ -782,21 +776,29 @@ async def get_session_state_snapshot(
 
 @router.patch("/sessions/{session_id}")
 async def rename_session(
-    session_id: str, req: RenameSessionRequest, svc: SessionService = Depends(require_session_service)
+    session_id: str,
+    req: RenameSessionRequest,
+    svc: SessionService = Depends(require_session_service),
+    runs: RunRegistry = Depends(require_run_registry),
 ):
     updated = await svc.rename(session_id, req.name)
     if not updated:
         raise HTTPException(status_code=404, detail="Session not found")
+    runs.sync_session_name(session_id, req.name)
     return {"session_id": session_id, "name": req.name}
 
 
 @router.put("/sessions/{session_id}/model")
 async def update_session_model(
-    session_id: str, req: UpdateSessionModelRequest, svc: SessionService = Depends(require_session_service)
+    session_id: str,
+    req: UpdateSessionModelRequest,
+    svc: SessionService = Depends(require_session_service),
+    runs: RunRegistry = Depends(require_run_registry),
 ):
     updated = await svc.update_chat_model(session_id, req.chat_model)
     if not updated:
         raise HTTPException(status_code=404, detail="Session not found")
+    runs.sync_session_chat_model(session_id, req.chat_model)
     return {"session_id": session_id, "chat_model": req.chat_model}
 
 

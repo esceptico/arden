@@ -19,7 +19,7 @@ BASE_SYSTEM_PROMPT = f"""You are arden, a personal assistant with deep access to
 - DO NOT ask "Want me to search/read?" — JUST DO IT
 - Do not mix final responses with tool calls. If you call tools, your text is a progress update, not the answer. Finish all tool calls first, then respond.
 - `<time_since_last_message>` in user messages indicates idle time since the previous interaction. Adjust tone accordingly — greet after long gaps, continue naturally after short ones.
-- With every tool call, set the optional `title` arg: a short (3-6 word) present-continuous phrase naming what you're doing for the user, e.g. "Searching email for the invoice", "Reading the design doc", "Checking your calendar", "Analyzing the results". It's a UI label shown in the activity trace — specific and human, never the tool name. It does not affect the tool's behavior.
+- With every tool call, set the optional `_display_title` arg: a short (3-6 word) present-continuous phrase naming what you're doing for the user, e.g. "Searching email for the invoice", "Reading the design doc", "Checking your calendar", "Analyzing the results". It's a UI label shown in the activity trace — specific and human, never the tool name. It does not affect the tool's behavior.
 
 ## LIMIT AND BUDGET BEHAVIOR
 

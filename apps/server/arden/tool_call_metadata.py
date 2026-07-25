@@ -1,4 +1,4 @@
-DISPLAY_TITLE_ARG = "_arden_display_title"
+DISPLAY_TITLE_ARG = "_display_title"
 RESERVED_TOOL_ARGUMENTS = frozenset({DISPLAY_TITLE_ARG})
 
 

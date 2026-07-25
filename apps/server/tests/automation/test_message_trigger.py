@@ -83,7 +83,9 @@ async def _save_watcher(
         Automation(
             task_id=task_id,
             name="watcher",
-            description="triage",
+            description=None,
+            description_source=None,
+            prompt="Triage matching messages.",
             model=None,
             triggers=[trigger],
             enabled=enabled,
@@ -192,7 +194,9 @@ async def test_list_message_triggered_ignores_non_message_triggers(store: Automa
         Automation(
             task_id="time-only",
             name="time",
-            description="x",
+            description=None,
+            description_source=None,
+            prompt="Run the scheduled task.",
             model=None,
             triggers=[TimeTrigger(at="09:00")],
             enabled=True,

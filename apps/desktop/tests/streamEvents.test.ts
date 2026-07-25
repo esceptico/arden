@@ -19,6 +19,7 @@ import {
 } from "@/features/background-agents/components/AgentRightSidebar";
 import { childAgentTaskToBackgroundSnapshot } from "@/lib/agentRun";
 import { visibleMessageIds } from "@/lib/messageVisibility";
+import { operationLabel } from "@/features/chat/lib/operationLabel";
 import { getState, setState } from "@/stores/index";
 import { createBackgroundAgentsDomainState } from "@/stores/background-agent-domain";
 import type { HistoryMessage } from "@/api/chat";
@@ -87,6 +88,31 @@ test("live tool activity labels show all args after args arrive", () => {
   );
 });
 
+test("live tool activity extracts the canonical display title and hides metadata", () => {
+  handleServerEvent({ type: "RUN_STARTED", run_id: "run-title", session_id: "session-title" });
+  handleServerEvent({
+    type: "TOOL_CALL_START",
+    tool_call_id: "search-title",
+    tool_call_name: "search_text",
+    display_name: "SearchText",
+  });
+  handleServerEvent({
+    type: "TOOL_CALL_ARGS",
+    tool_call_id: "search-title",
+    delta: '{"_display_title":"Searching the event path","query":"ToolCallArgsEvent","path":"."}',
+  });
+  handleServerEvent({ type: "TOOL_CALL_END", tool_call_id: "search-title" });
+
+  const activity = getState().messages.get(getState().order[0])?.activity?.items[0];
+  expect(activity?.displayTitle).toBe("Searching the event path");
+  expect(activity?.args).toBe('{"query":"ToolCallArgsEvent","path":"."}');
+  expect(activity?.target).toBe('SearchText(query="ToolCallArgsEvent", path=".")');
+  expect(operationLabel(activity!)).toMatchObject({
+    verb: "Searching the event path",
+    detail: ".",
+  });
+});
+
 test("live goal meta run stays visually hidden", () => {
   handleServerEvent({
     type: "RUN_STARTED",
@@ -133,7 +159,7 @@ test("non-goal meta run stays visually hidden", () => {
   expect(state.order).toEqual(["meta-user-loop-run-1"]);
 });
 
-test("run backgrounded clears foreground run state", () => {
+test("run backgrounded clears foreground run state while preserving queued turns", () => {
   setState({
     currentSessionId: "session-1",
     running: true,
@@ -171,7 +197,14 @@ test("run backgrounded clears foreground run state", () => {
   expect(state.backgroundedRunSessionIds.has("session-1")).toBe(true);
   expect(state.pendingApprovals).toEqual([]);
   expect(state.reviewingApprovalToolId).toBeNull();
-  expect(state.queuedMessages).toEqual([]);
+  expect(state.queuedMessages).toEqual([
+    {
+      clientId: "queued-1",
+      text: "follow up",
+      status: "pending",
+      enqueuedAt: 1,
+    },
+  ]);
   expect(state.activeActivityId).toBeNull();
   expect(state.messages.get("activity-1")?.activity?.label).toBe("Backgrounded");
   expect(state.messages.get("activity-1")?.activity?.items[0]?.status).toBe("backgrounded");
@@ -551,7 +584,11 @@ test("rebuilds persisted transcript without replay animation marker", async () =
         role: "assistant",
         content: "checking",
         id: "assistant-1",
-        tool_calls: [{ id: "tool-1", name: "ReadFile", arguments: "{\"path\":\"a\"}" }],
+        tool_calls: [{
+          id: "tool-1",
+          name: "ReadFile",
+          arguments: '{"_display_title":"Reading the file","path":"a"}',
+        }],
       },
       { role: "tool", content: "ok", id: "tool-result-1", tool_call_id: "tool-1" },
     ];
@@ -584,6 +621,10 @@ test("rebuilds persisted transcript without replay animation marker", async () =
     expect(getState().order).toEqual(["user-1", "assistant-1", "assistant-1-activity"]);
     expect([...getState().messages.values()].every((message) => message.suppressEntryMotion)).toBe(true);
     expect(getState().messages.get("assistant-1-activity")?.activity?.items[0].result).toBe("ok");
+    expect(getState().messages.get("assistant-1-activity")?.activity?.items[0].displayTitle).toBe(
+      "Reading the file",
+    );
+    expect(getState().messages.get("assistant-1-activity")?.activity?.items[0].args).toBe('{"path":"a"}');
     expect(getState().messages.get("assistant-1-activity")?.activity?.items[0].target).toBe(
       'ReadFile(path="a")',
     );
@@ -2070,8 +2111,7 @@ test("stale run_cancelled does not clear a newer active run", () => {
   expect(getState().currentRunId).toBe("run-new");
 });
 
-test("run_cancelled resends pending queued messages through stream callback", () => {
-  const resent: Array<{ text: string; images: unknown[] }> = [];
+test("run_cancelled preserves pending server-managed queued messages", () => {
   setState({
     running: true,
     currentRunId: "run-cancel",
@@ -2092,23 +2132,94 @@ test("run_cancelled resends pending queued messages through stream callback", ()
     ],
   });
 
-  handleIncomingServerEvent(
-    { type: "run_cancelled", run_id: "run-cancel", timestamp: 3 },
-    undefined,
+  handleIncomingServerEvent({ type: "run_cancelled", run_id: "run-cancel", timestamp: 3 });
+
+  expect(getState().queuedMessages).toEqual([
     {
-      resendQueuedMessage: (text, images) => {
-        resent.push({ text, images: images ?? [] });
+      clientId: "queued-1",
+      text: "retry one",
+      images: [{ type: "input_image", image_url: "data:image/png;base64,a" }],
+      status: "pending",
+      enqueuedAt: 1,
+    },
+    {
+      clientId: "queued-2",
+      text: "skip failed",
+      status: "failed",
+      enqueuedAt: 2,
+    },
+  ]);
+});
+
+test("server ingestion events do not consume the desktop-owned queue", () => {
+  setState({
+    currentSessionId: "session-1",
+    running: true,
+    currentRunId: "run-error",
+    queuedMessages: [
+      {
+        clientId: "queued-1",
+        text: "carry this forward",
+        images: [{ type: "input_image", image_url: "data:image/png;base64,a" }],
+        status: "pending",
+        enqueuedAt: 1,
       },
+    ],
+  });
+
+  handleServerEvent({
+    type: "RUN_ERROR",
+    run_id: "run-error",
+    session_id: "session-1",
+    message: "The run failed",
+    timestamp: 2,
+  });
+
+  expect(getState().running).toBe(false);
+  expect(getState().queuedMessages).toHaveLength(1);
+
+  handleServerEvent({
+    type: "message_ingested",
+    run_id: "run-error",
+    client_id: "queued-1",
+    timestamp: 3,
+  });
+
+  const state = getState();
+  expect(state.queuedMessages).toHaveLength(1);
+  expect(state.messages.get("queued-1")).toBeUndefined();
+});
+
+test("a live terminal event dispatches exactly one local queue head", async () => {
+  setState({
+    currentSessionId: "session-1",
+    running: true,
+    currentRunId: "run-1",
+    queuedMessages: [
+      { clientId: "queued-1", text: "first", status: "pending", enqueuedAt: 1 },
+      { clientId: "queued-2", text: "second", status: "pending", enqueuedAt: 2 },
+    ],
+  });
+  const dispatched: string[] = [];
+
+  await handleIncomingServerEvent(
+    {
+      type: "RUN_FINISHED",
+      run_id: "run-1",
+      session_id: "session-1",
+      timestamp: 2,
+    },
+    undefined,
+    async (sessionId) => {
+      dispatched.push(sessionId);
     },
   );
 
-  expect(resent).toEqual([
-    {
-      text: "retry one",
-      images: [{ type: "input_image", image_url: "data:image/png;base64,a" }],
-    },
+  expect(dispatched).toEqual(["session-1"]);
+  expect(getState().queuedMessages.map((message) => message.clientId)).toEqual([
+    "queued-1",
+    "queued-2",
   ]);
-  expect(getState().queuedMessages).toEqual([]);
 });
 
 test("run_cancelled marks active activity stopped instead of executed", () => {

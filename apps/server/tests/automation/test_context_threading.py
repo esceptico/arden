@@ -41,7 +41,9 @@ def _session_bound(
     return Automation(
         task_id=task_id,
         name="watcher",
-        description="triage the bug",
+        description=None,
+        description_source=None,
+        prompt="Triage the bug.",
         model=None,
         triggers=[TimeTrigger(every="5m")],
         enabled=True,

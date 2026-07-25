@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { GitBranch, Pencil } from "@/components/icons";
+import { GitBranch, PencilEdit02 } from "@/components/icons";
 import clsx from "clsx";
 import { useStore } from "@/stores";
 import { CopyGlyph } from "@/components/ui/CopyGlyph";
@@ -67,40 +67,40 @@ export function MessageActions({ id, role }: { id: string; role: "user" | "assis
   return (
     <div
       className={clsx(
-        "flex items-center gap-1.5 h-6 mt-1 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity duration-row ease-out",
-        role === "user" && "justify-end",
+        "board-message-actions flex items-center gap-1",
+        role === "user" ? "board-message-actions--user justify-end" : "board-message-actions--assistant",
       )}
     >
       <IconButton
-        size="sm"
+        size="md"
         tone="faint"
         onClick={copy}
-        title="Copy"
+        title={role === "user" ? "Copy message" : "Copy"}
         className={clsx(copied && "!text-ok hover:!text-ok")}
       >
         <CopyGlyph copied={copied} size={ICON.SM} />
       </IconButton>
       {role === "assistant" && (
         <IconButton
-          size="sm"
+          size="md"
           tone="faint"
           onClick={() => void branch()}
           disabled={branching}
           title="Branch from this message"
         >
-          <GitBranch size={ICON.SM} strokeWidth={2} />
+          <GitBranch size={ICON.SM} />
         </IconButton>
       )}
       {role === "user" && (
-        <IconButton size="sm" tone="faint" onClick={edit} title="Edit and resend">
-          <Pencil size={ICON.SM} strokeWidth={2} />
+        <IconButton size="md" tone="faint" onClick={edit} title="Edit and resend">
+          <PencilEdit02 size={ICON.SM} />
         </IconButton>
       )}
       {timeLabel && (
         <span
           className={clsx(
-            "text-xs text-faint tracking-[-0.005em] select-none",
-            role === "user" ? "order-first mr-0.5" : "ml-0.5",
+            "text-faint tracking-[-0.005em] select-none",
+            role === "user" ? "order-first mr-0.5 text-2xs" : "ml-0.5 text-xs",
           )}
         >
           {timeLabel}

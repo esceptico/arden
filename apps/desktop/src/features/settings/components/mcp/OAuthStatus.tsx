@@ -2,7 +2,6 @@ import type { MCPServer } from "@/api/settings";
 import { BlurSwap } from "@/components/ui/BlurSwap";
 import { Button } from "@/components/ui/Button";
 import { LabeledField } from "@/components/ui/LabeledField";
-import { StatusDot } from "@/components/ui/StatusDot";
 
 function DetailRow({ label, value }: { label: string; value: string }) {
   return (
@@ -32,7 +31,6 @@ export function OAuthStatus({
       <div className="grid gap-2 rounded-md border border-line-soft bg-surface-soft px-3 py-2.5">
         <div className="flex items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2">
-            <StatusDot tone={server.connected ? "ok" : expired ? "bad" : "neutral"} />
             <span className="text-sm font-medium text-ink">OAuth · {status}</span>
           </div>
           <Button

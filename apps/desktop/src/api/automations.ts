@@ -45,6 +45,17 @@ export async function updateAutomationApi(
   });
 }
 
+export async function generateAutomationDescriptionApi(
+  config: AppConfig,
+  taskId: string,
+): Promise<Automation> {
+  return apiWithConfig<Automation>(
+    config,
+    `/automations/${encodeURIComponent(taskId)}/description/generate`,
+    { method: "POST" },
+  );
+}
+
 export async function toggleAutomationApi(
   config: AppConfig,
   taskId: string,
@@ -62,39 +73,36 @@ export async function deleteAutomationApi(config: AppConfig, taskId: string): Pr
   await apiWithConfig(config, `/automations/${encodeURIComponent(taskId)}`, { method: "DELETE" });
 }
 
-// ─── Automation suggestions ──────────────────────────────────────────
-
+/** Active suggestions are server-authored candidates, never client-side
+ * guesses. The New menu intentionally uses only the most relevant one. */
 export async function listAutomationSuggestionsApi(config: AppConfig): Promise<AutomationSuggestion[]> {
   const r = await apiWithConfig<{ suggestions: AutomationSuggestion[] }>(config, "/automations/suggestions");
   return r.suggestions;
 }
 
-export async function dismissAutomationSuggestionApi(config: AppConfig, id: string): Promise<void> {
-  await apiWithConfig(config, `/automations/suggestions/${encodeURIComponent(id)}/dismiss`, {
-    method: "POST",
-  });
-}
-
-export async function refreshAutomationSuggestionsApi(config: AppConfig): Promise<AutomationSuggestion[]> {
-  const r = await apiWithConfig<{ suggestions: AutomationSuggestion[] }>(config, "/automations/suggestions/refresh", {
-    method: "POST",
-  });
-  return r.suggestions;
-}
-
-/** Convert a suggestion into the editor's create payload. Flattens the
- *  first trigger into the schedule fields `formFromPreset` expects, so the
- *  existing automation editor hydrates unchanged. */
-export function suggestionToPayload(s: AutomationSuggestion): CreateAutomationPayload {
-  const trigger = s.triggers[0];
-  const schedule =
-    trigger.type === "event"
-      ? { trigger_type: "event" as const, event_type: trigger.event_type, lead_minutes: trigger.lead_minutes }
-      : { trigger_type: "time" as const, at: trigger.at, days: trigger.days, every: trigger.every };
+/** Flatten the validated first trigger into the existing draft-editor seed,
+ * retaining the server id so a successful Create consumes the suggestion. */
+export function suggestionToPayload(suggestion: AutomationSuggestion): CreateAutomationPayload {
+  const [trigger] = suggestion.triggers;
+  const schedule = trigger.type === "event"
+    ? {
+      trigger_type: "event" as const,
+      event_type: trigger.event_type,
+      lead_minutes: trigger.lead_minutes,
+    }
+    : {
+      trigger_type: "time" as const,
+      at: trigger.at,
+      days: trigger.days,
+      every: trigger.every,
+      start: trigger.start,
+      end: trigger.end,
+    };
   return {
-    name: s.name,
-    description: s.description,
-    from_suggestion_id: s.id,
+    name: suggestion.name,
+    prompt: suggestion.prompt,
+    ...(suggestion.description ? { description: suggestion.description } : {}),
+    from_suggestion_id: suggestion.id,
     ...schedule,
   };
 }

@@ -5,7 +5,9 @@ from arden.areas.asks import AskStore, nominate_focus
 from arden.areas.models import Ask
 
 
-def ask(id: str, area_key: str, kind: str, created: str = "2026-07-06T10:00:00", source: str = "open_loop") -> Ask:
+def ask(
+    id: str, area_key: str | None, kind: str, created: str = "2026-07-06T10:00:00", source: str = "open_loop"
+) -> Ask:
     return Ask(
         id=id, area_key=area_key, text=id, kind=kind, source=source, actions=[], state="active", created_at=created
     )
@@ -19,6 +21,20 @@ def test_store_upsert_resolve_roundtrip(tmp_path: Path):
     assert store.list("o-1a", include_resolved=True)[0].state == "dismissed"
     assert store.list("o-1a", include_resolved=True)[0].resolution == "rejected"
     assert store.list("o-1a", include_resolved=True)[0].resolved_at is not None
+
+
+def test_store_reopen_restores_an_active_ask_without_a_stale_resolution(tmp_path: Path):
+    store = AskStore(tmp_path / "state.json")
+    store.upsert(ask("a1", "o-1a", "review"))
+    store.resolve("a1", "dismissed", resolution="rejected")
+
+    reopened = store.resolve("a1", "active")
+
+    assert reopened.state == "active"
+    assert reopened.snoozed_until is None
+    assert reopened.resolution is None
+    assert reopened.resolved_at is None
+    assert [row.id for row in store.list("o-1a")] == ["a1"]
 
 
 def test_snoozed_asks_hidden_until_deadline(tmp_path: Path):
@@ -104,3 +120,18 @@ def test_reconcile_retires_snoozed_mechanical_asks(tmp_path: Path):
     store.reconcile("approval", [])  # underlying approval disappeared
 
     assert store.list("o-1a", include_resolved=True)[0].state == "done"  # no ghost after the snooze
+
+
+def test_nominate_focus_gives_unfiled_asks_their_own_lane():
+    """`None` is a dict key like any other: unfiled asks compete among
+    themselves, not against an area's."""
+    unfiled_new = ask("u2", None, "notify", created="2026-07-06T12:00:00")
+    ranked = nominate_focus(
+        [
+            ask("a1", "o-1a", "question"),
+            ask("u1", None, "notify"),
+            unfiled_new,
+        ]
+    )
+
+    assert [a.id for a in ranked] == ["a1", "u2"]

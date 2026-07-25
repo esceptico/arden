@@ -28,20 +28,18 @@ export const DEFAULT_ACCENT = "slate";
 const STYLE_ID = "arden-accent";
 const mix = (hex: string, pct: number) => `color-mix(in srgb, ${hex} ${pct}%, transparent)`;
 
-/** Inject the chosen palette as a <style> appended to <head> — last in the
- *  cascade, so it overrides the default accent tokens for both themes. */
+/** Inject the chosen palette into the canonical Board accent tokens. The
+ *  compatibility `--color-accent*` aliases resolve from these values. */
 export function applyAccentPalette(id: string): void {
   const p =
     ACCENT_PALETTES.find((x) => x.id === id) ??
     ACCENT_PALETTES.find((x) => x.id === DEFAULT_ACCENT) ??
     ACCENT_PALETTES[0];
   const css =
-    `:root{--color-accent:${p.light.accent};--color-accent-soft:${mix(p.light.accent, 13)};` +
-    `--color-accent-strong:${p.light.strong};--color-info:${p.light.accent};}` +
-    `:root.dark{--color-accent:${p.dark.accent};--color-accent-soft:${mix(p.dark.accent, 16)};` +
-    `--color-accent-strong:${p.dark.strong};--color-info:${p.dark.accent};}` +
-    `::selection{background:${mix(p.light.accent, 16)};}` +
-    `:root.dark ::selection{background:${mix(p.dark.accent, 24)};}`;
+    `:root:root{--accent:${p.light.accent};--accent-soft:${mix(p.light.accent, 13)};` +
+    `--accent-ink:${p.light.strong};}` +
+    `:root.dark:root{--accent:${p.dark.accent};--accent-soft:${mix(p.dark.accent, 16)};` +
+    `--accent-ink:${p.dark.strong};}`;
   let el = document.getElementById(STYLE_ID) as HTMLStyleElement | null;
   if (!el) {
     el = document.createElement("style");

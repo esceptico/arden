@@ -1,6 +1,6 @@
 import { memo } from "react";
 import clsx from "clsx";
-import { Library } from "@/components/icons";
+import { BookOpen01 } from "@/components/icons";
 import { useStore } from "@/stores";
 import { Markdown } from "@/components/ui/Markdown";
 import { useSmoothStreamedContent } from "@/features/chat/hooks/useSmoothStream";
@@ -40,11 +40,11 @@ export const AssistantMessage = memo(function AssistantMessage({
   return (
     <article
       className={clsx(
-        "assistant-message group grid grid-cols-[minmax(0,1fr)] gap-1.5 min-w-0 transition-[background-color,box-shadow] duration-panel",
+        "board-assistant group grid grid-cols-[minmax(0,1fr)] gap-1.5 min-w-0 transition-[background-color,box-shadow] duration-panel",
         entryAnimation(message, "animate-fade-in"),
+        isStreaming && "is-streaming",
         sourceFocused && SOURCE_FOCUS_CLASS,
       )}
-      data-streaming={isStreaming ? "true" : undefined}
       data-id={id}
       data-source-focus={sourceFocused ? "true" : undefined}
       data-source-index={message.sourceIndex}
@@ -52,7 +52,10 @@ export const AssistantMessage = memo(function AssistantMessage({
       <Markdown
         content={smoothContent}
         streaming={isStreaming}
-        className="text-base leading-[1.5] text-ink break-words"
+        externalLinkFavicons
+        typeset
+        conversationAnchors
+        className="board-assistant__prose text-base leading-[1.5] text-ink break-words"
       />
       {isFinal && sourceTurnId && sourceCount > 0 && (
         <button
@@ -60,9 +63,12 @@ export const AssistantMessage = memo(function AssistantMessage({
           onClick={() => openSourcesForTurn(sourceTurnId)}
           aria-label={`Open ${sourceCount} ${sourceCount === 1 ? "source" : "sources"} for this turn`}
           data-source-footer="true"
-          className="flex w-fit items-center gap-1.5 rounded-md px-1.5 py-1 text-xs font-medium text-muted transition-colors hover:bg-surface-soft hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          data-inspector-trigger
+          data-chat-rail-anchor
+          data-chat-rail-label={`${sourceCount} ${sourceCount === 1 ? "source" : "sources"}`}
+          className="board-assistant__sources arden-row flex w-fit items-center gap-1.5 px-1.5 py-1 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         >
-          <Library aria-hidden size={ICON.XS} strokeWidth={1.75} />
+          <BookOpen01 aria-hidden size={ICON.XS} />
           {sourceCount} {sourceCount === 1 ? "source" : "sources"}
         </button>
       )}

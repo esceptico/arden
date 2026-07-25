@@ -4,12 +4,12 @@ import socket
 
 import click
 import uvicorn
-from coolname import generate_slug
 from rich.console import Console
 
 from arden.agent import Role
 from arden.config import get_config
 from arden.core.factory import AgentConfig, create_agent
+from arden.core.ids import generate_run_id
 from arden.core.prompts import build_system_prompt
 from arden.events.internal import RunCompleted
 from arden.llm.models import supports_native_deferred_tools
@@ -254,7 +254,7 @@ async def _run_headless(prompt: str):
             native_deferred_tools=native_deferred_tools,
         )
 
-        run_id = generate_slug(2)
+        run_id = generate_run_id()
         session_state = runtime.session_service.create()
 
         agent = create_agent(

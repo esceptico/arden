@@ -5,6 +5,7 @@ from typing import Any
 
 from coolname import generate_slug
 
+from arden.automation.descriptions import AutomationDescriptionGenerator
 from arden.automation.models import Automation
 from arden.automation.output_schemas import resolve_output_schema
 from arden.automation.scheduler import Scheduler
@@ -95,6 +96,8 @@ class AutomationService:
         scheduler: Scheduler,
         session_service: SessionService,
         get_slack_client: Callable[[], SlackClient | None] | None = None,
+        get_cheap_llm: Callable[[], object | None] | None = None,
+        description_model: str | None = None,
     ):
         self.store = store
         self.scheduler = scheduler
@@ -103,6 +106,10 @@ class AutomationService:
         # (mirrors get_calendar_source wiring). Lets save-time message-trigger
         # resolution reach Slack without a new global; None until Slack connects.
         self._get_slack_client = get_slack_client
+        self._description_generator = AutomationDescriptionGenerator(
+            get_cheap_llm=get_cheap_llm or (lambda: None),
+            model=description_model,
+        )
 
     def _slack(self) -> SlackClient:
         client = self._get_slack_client() if self._get_slack_client else None
@@ -174,6 +181,42 @@ class AutomationService:
             area_id=area_id,
         )
 
+    @staticmethod
+    def _normalize_prompt(prompt: str) -> str:
+        normalized = prompt.strip()
+        if not normalized:
+            raise ValueError("prompt required")
+        return normalized
+
+    @staticmethod
+    def _normalize_description(description: str) -> str:
+        normalized = description.strip()
+        if not normalized:
+            raise ValueError("description cannot be empty")
+        if len(normalized) > 220:
+            raise ValueError("description must be at most 220 characters")
+        return normalized
+
+    async def _resolve_description(self, *, name: str, prompt: str, description: str | None) -> tuple[str, str]:
+        if description is not None:
+            return self._normalize_description(description), "manual"
+        return await self._description_generator.generate(name=name, prompt=prompt), "generated"
+
+    async def generate_description(self, task_id: str) -> Automation:
+        """Generate display copy for a migrated or generated automation.
+
+        Manual copy is deliberately stable; this endpoint is the explicit,
+        on-demand path for pending migrated rows rather than a startup sweep.
+        """
+        task = await self.get(task_id)
+        if task.description_source == "manual" and task.description:
+            return task
+        prompt = self._normalize_prompt(task.prompt)
+        description = await self._description_generator.generate(name=task.name, prompt=prompt)
+        updated = replace(task, description=description, description_source="generated", prompt=prompt)
+        await self.store.update_metadata(updated)
+        return updated
+
     @property
     def is_running(self) -> bool:
         return self.scheduler.is_running
@@ -209,6 +252,8 @@ class AutomationService:
         *,
         name: str | None,
         description: str | None,
+        description_source: str | None,
+        prompt: str | None,
         auto_approve: bool | None,
         enabled: bool | None,
         model: str | None,
@@ -224,6 +269,10 @@ class AutomationService:
             changes["name"] = name
         if description is not None:
             changes["description"] = description
+        if description_source is not None:
+            changes["description_source"] = description_source
+        if prompt is not None:
+            changes["prompt"] = prompt
         if auto_approve is not None:
             changes["auto_approve"] = auto_approve
         if enabled is not None:
@@ -283,6 +332,7 @@ class AutomationService:
         task_id: str,
         name: str | None = None,
         description: str | None = None,
+        prompt: str | None = None,
         trigger_type: str | None = None,
         at: str | None = None,
         days: str | None = None,
@@ -305,9 +355,23 @@ class AutomationService:
         output_schema: str | None = None,
     ) -> Automation:
         task = await self.get(task_id)
+        normalized_prompt = self._normalize_prompt(prompt) if prompt is not None else None
+        normalized_description: str | None = None
+        description_source: str | None = None
+        if description is not None:
+            normalized_description = self._normalize_description(description)
+            description_source = "manual"
+        elif normalized_prompt is not None and task.description_source != "manual":
+            normalized_description = await self._description_generator.generate(
+                name=name if name is not None else task.name,
+                prompt=normalized_prompt,
+            )
+            description_source = "generated"
         changes = self._build_metadata_changes(
             name=name,
-            description=description,
+            description=normalized_description,
+            description_source=description_source,
+            prompt=normalized_prompt,
             auto_approve=auto_approve,
             enabled=enabled,
             model=model,
@@ -360,7 +424,8 @@ class AutomationService:
     async def create(
         self,
         name: str,
-        description: str,
+        prompt: str,
+        description: str | None = None,
         trigger_type: str | None = None,
         at: str | None = None,
         days: str | None = None,
@@ -387,6 +452,12 @@ class AutomationService:
         output_schema: str | None = None,
         task_id: str | None = None,
     ) -> Automation | None:
+        prompt = self._normalize_prompt(prompt)
+        display_description, description_source = await self._resolve_description(
+            name=name,
+            prompt=prompt,
+            description=description,
+        )
         triggers = await self._resolve_message_triggers(triggers)
         parsed_triggers, next_run = _build_trigger_and_next_run(
             trigger_type=trigger_type,
@@ -427,7 +498,9 @@ class AutomationService:
         automation = Automation(
             task_id=task_id,
             name=name,
-            description=description,
+            description=display_description,
+            description_source=description_source,
+            prompt=prompt,
             model=_normalize_and_validate_model(model),
             triggers=parsed_triggers,
             enabled=True,
@@ -547,7 +620,9 @@ class AutomationService:
         automation = Automation(
             task_id=task_id,
             name=f"Loop: {prompt[:40]}",
-            description=prompt,
+            description=None,
+            description_source=None,
+            prompt=prompt,
             model=None,
             triggers=triggers,
             enabled=True,

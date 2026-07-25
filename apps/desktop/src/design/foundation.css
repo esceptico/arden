@@ -1,0 +1,917 @@
+/*
+ * Shared production primitives. Feature CSS may compose these classes but
+ * must not fork their colors, geometry, elevation, or motion.
+ */
+
+@property --slider-fill-x {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+@property --slider-marker-x {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
+button:not(:disabled):active { transform: scale(var(--press-scale)); }
+
+/* Settings range control. Shape, paint order, and movement mirror the
+   redesign mock; the invisible native input retains platform semantics. */
+:where(.arden-slider) {
+  position: relative;
+  width: 100%;
+  height: 2rem;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--r-control);
+  color: var(--muted);
+  background: var(--paper);
+  box-shadow: var(--shadow-2);
+  cursor: ew-resize;
+  touch-action: none;
+  user-select: none;
+  transition:
+    --slider-fill-x var(--motion-tab-shift) var(--smooth-out),
+    --slider-marker-x var(--motion-tab-shift) var(--smooth-out);
+}
+:where(.arden-slider.is-instant),
+:where(.arden-slider.is-dragging) {
+  transition: none;
+}
+:where(.arden-slider)::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--slider-fill-x);
+  background: color-mix(in oklab, var(--accent) 18%, transparent);
+  pointer-events: none;
+}
+:where(.arden-slider[data-variant="pips"])::before {
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--accent) 20%, var(--paper)),
+    color-mix(in oklab, var(--accent) 20%, var(--paper))
+  );
+}
+:where(.arden-slider)::after {
+  content: "";
+  position: absolute;
+  top: .5rem;
+  bottom: .5rem;
+  left: var(--slider-marker-x);
+  width: var(--range-marker-width);
+  border-radius: var(--range-marker-width);
+  background: color-mix(in oklab, var(--ink) 35%, transparent);
+  opacity: var(--slider-marker-opacity);
+  transform: scaleY(1);
+  transform-origin: center;
+  pointer-events: none;
+  transition:
+    opacity var(--motion-press) var(--smooth-out),
+    transform var(--motion-feedback) var(--smooth-out),
+    background var(--motion-feedback) var(--smooth-out);
+}
+:where(.arden-slider:hover)::after,
+:where(.arden-slider:focus-within)::after {
+  background: color-mix(in oklab, var(--ink) 55%, transparent);
+  transform: scaleY(1.125);
+}
+:where(.arden-slider:has(.arden-slider__range:focus-visible)),
+:where(.arden-slider:has(.arden-slider__number:focus-visible)) {
+  box-shadow:
+    var(--shadow-2),
+    inset 0 0 0 1px color-mix(in oklab, var(--ink) 16%, transparent);
+}
+:where(.arden-slider.is-disabled) {
+  opacity: .5;
+  pointer-events: none;
+}
+:where(.arden-slider__range) {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: ew-resize;
+}
+:where(.arden-slider__label),
+:where(.arden-slider__value) {
+  position: relative;
+  z-index: var(--z-raised);
+  padding: 0 .8125rem;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--text-control);
+  pointer-events: none;
+}
+:where(.arden-slider__value) {
+  min-width: 4.375rem;
+  margin-left: auto;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  pointer-events: auto;
+  cursor: text;
+}
+:where(.arden-slider__number) {
+  position: relative;
+  z-index: var(--z-raised);
+  width: 4.5rem;
+  height: var(--tab-control-size);
+  margin-left: auto;
+  padding: 0 .625rem;
+  border: 0;
+  outline: 0;
+  color: var(--ink);
+  background: transparent;
+  text-align: right;
+  font-size: var(--text-control);
+  font-variant-numeric: tabular-nums;
+  appearance: textfield;
+}
+:where(.arden-slider__number)::-webkit-inner-spin-button,
+:where(.arden-slider__number)::-webkit-outer-spin-button {
+  display: none;
+}
+:where(.arden-slider__pips) {
+  position: absolute;
+  z-index: var(--z-raised);
+  inset: 0 .75rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  pointer-events: none;
+}
+:where(.arden-slider__pip) {
+  width: .3125rem;
+  height: .3125rem;
+  border-radius: var(--r-circle);
+  background: var(--faint);
+  opacity: 0;
+  transition: opacity var(--motion-feedback) var(--smooth-out);
+}
+:where(.arden-slider__pip[data-visible="true"]) { opacity: .26; }
+
+/* Every menu-like stack breathes with the same --list-gap between rows
+   (fluid-functionalism's gap-0.5 convention). ONE rule owns it: dropdown and
+   context menus (their rows are direct panel children), the model picker's
+   grouped listbox, and its effort menu. New list surfaces join this selector
+   instead of hand-spacing rows. */
+.surface-popover[role="menu"],
+.model-picker__effort-menu,
+.model-picker__group {
+  display: flex;
+  flex-direction: column;
+  row-gap: var(--list-gap);
+}
+
+/* Structural wrappers (Base UI RadioGroup et al.) are layout-transparent so
+   their rows still land in the stack's gap. */
+.model-picker__effort-menu [role="group"] {
+  display: contents;
+}
+
+/* RadioGroup rows hosted inside a menu-tier popover (sidebar filters etc.)
+   trade their flat-surface 6/8px corners for the popover's concentric value,
+   so row fills, the traveling highlight, and the focus ring all nest into
+   the menu's own corner. */
+.surface-popover :is([data-radio-row], [data-radio-highlight]) {
+  border-radius: calc(var(--r-menu) - var(--space-1));
+}
+
+/* Board cursor menu. This is deliberately separate from generic popovers:
+   right-click placement uses an 8px edge and its compact rows have no icon
+   column or press-scale treatment. */
+.surface-panel.surface-popover.arden-context-menu {
+  width: max-content;
+  min-width: 10rem;
+  max-width: min(18rem, calc(100vw - 1rem));
+  max-height: calc(100vh - 1rem);
+  padding: var(--space-1);
+  overflow: auto;
+  border: var(--border-width) solid var(--edge);
+  /* Radius comes from surface-popover's --r-menu, so the menu tracks the
+     corner-profile preference like every other menu surface. */
+  color: var(--ink);
+  background: var(--surface-5);
+  box-shadow: var(--shadow-3);
+  transform-origin: top left;
+}
+.arden-context-menu__item {
+  width: 100%;
+  min-height: 1.75rem;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: .3125rem var(--space-2);
+  /* Concentric with the shell: menu radius minus the shell's space-1 inset. */
+  border-radius: calc(var(--r-menu) - var(--space-1));
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+  text-align: left;
+  outline: 0;
+  transition:
+    color var(--motion-feedback) var(--smooth-out),
+    background var(--motion-feedback) var(--smooth-out);
+}
+.arden-context-menu__item:is(:hover, :focus-visible) {
+  color: var(--ink);
+  background: var(--state-hover-bg);
+  box-shadow: none;
+}
+.arden-context-menu__item:not(:disabled):active { transform: none; }
+.arden-context-menu__item[data-tone="danger"] { color: var(--danger); }
+.arden-context-menu__item[data-tone="danger"]:is(:hover, :focus-visible) {
+  color: var(--danger);
+  background: color-mix(in oklab, var(--danger) 10%, transparent);
+}
+.arden-context-menu__separator {
+  height: var(--border-width);
+  margin: var(--space-1) calc(-1 * var(--space-1));
+  background: var(--edge);
+}
+.arden-context-menu__shortcut {
+  margin-left: auto;
+  padding-left: var(--space-3);
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+.arden-context-menu__shortcut .arden-kbd {
+  min-width: 1rem;
+  height: 1rem;
+  padding-inline: var(--space-0-5);
+  color: var(--faint);
+  font-size: .625rem;
+}
+
+/* Plain selectors, not :where() — Tailwind's own preflight resets
+   `button { background: none; color: inherit; ... }` as unlayered CSS, so a
+   zero-specificity :where() here always lost to it (background/color never
+   applied in ANY state: resting, hover, active, tone, disabled). Only
+   border-radius/width/height/etc — properties preflight doesn't touch —
+   were ever rendering correctly. */
+.arden-icon-button {
+  position: relative;
+  width: var(--icon-button-size);
+  height: var(--icon-button-size);
+  display: grid;
+  place-items: center;
+  flex: none;
+  padding: 0;
+  border-radius: var(--r-icon);
+  color: var(--muted);
+  transition:
+    background var(--motion-feedback) var(--smooth-out),
+    color var(--motion-feedback) var(--smooth-out),
+    transform var(--motion-press) var(--smooth-out);
+}
+.arden-icon-button[data-size="xs"] { width: 1.375rem; height: 1.375rem; }
+.arden-icon-button[data-size="sm"] { width: 1.5rem; height: 1.5rem; }
+.arden-icon-button[data-size="lg"] { width: 2rem; height: 2rem; }
+.arden-icon-button[data-tone="primary"] {
+  color: var(--paper);
+  background: var(--ink);
+}
+.arden-icon-button[data-tone="secondary"] {
+  color: var(--ink);
+  background: var(--surface-3);
+  box-shadow: var(--control-shadow);
+}
+.arden-icon-button[data-active="true"] {
+  color: var(--ink);
+  background: var(--state-selected-bg);
+}
+.arden-icon-button:hover { color: var(--ink); background: var(--state-hover-bg); }
+.arden-icon-button[data-tone="primary"]:hover { color: var(--paper); opacity: .9; background: var(--ink); }
+.arden-icon-button[data-tone="secondary"]:hover { color: var(--ink); background: var(--state-hover-bg); }
+.arden-icon-button[data-danger="true"]:hover { color: var(--danger); }
+.arden-icon-button:active { transform: scale(var(--press-scale)); }
+.arden-icon-button > svg,
+.arden-icon-button > .t-icon-swap,
+.arden-icon-button .t-icon {
+  width: var(--icon-size);
+  height: var(--icon-size);
+}
+
+/* Shell controls stay visually 22px (the xs IconButton role) while extending
+   their target by 5px in every direction. Keep this role on both rail and
+   inspector toggles so desktop chrome has one hit-area contract. */
+.shell-control { border-radius: var(--r-circle); }
+.shell-control::before {
+  content: "";
+  position: absolute;
+  inset: -.3125rem;
+  pointer-events: none;
+}
+
+/* Blocking viewer/review sheets share one bottom edge and cap. Keep the
+   geometry semantic: these constraints must survive a stale utility build. */
+.page-modal-frame--bottom-sheet {
+  align-items: end;
+  justify-items: center;
+}
+.surface-bottom-sheet {
+  width: min(60rem, calc(100vw - 2rem));
+  max-height: 82vh;
+  border-radius: var(--r-panel) var(--r-panel) 0 0;
+}
+.surface-bottom-sheet--fill { height: 82vh; }
+
+/* Multiline data is content, not an interactive row. It must never inherit
+   the row pill radius. */
+.arden-code-well {
+  min-width: 0;
+  max-width: 100%;
+  max-block-size: min(40vh, 24rem);
+  margin: 0;
+  overflow: auto;
+  border-radius: var(--r-house);
+  color: var(--ink-soft);
+  background: var(--surface-2);
+  font: var(--text-control) / 1.6 var(--mono);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.arden-code-well--padded { padding: var(--space-3); }
+.arden-code-well--diff { line-height: 1.65; }
+
+.arden-review-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border-radius: var(--r-house);
+  background: var(--surface-7);
+}
+.arden-review-summary[data-has-action="true"] {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+@media (max-width: 46.25rem) {
+  .surface-bottom-sheet {
+    width: calc(100vw - 1rem);
+  }
+  .arden-review-summary[data-has-action="true"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-height: 38rem) {
+  .surface-bottom-sheet {
+    max-height: calc(100vh - 1rem);
+  }
+  .surface-bottom-sheet--fill {
+    height: calc(100vh - 1rem);
+  }
+}
+
+/* The command sheet has its own top-centered geometry, separate from a
+   generic centered modal. It is a 660px L5 slab with the mock's 20px crown. */
+.surface-command-palette {
+  --surface-radius: calc(var(--r-shell) * 1.25);
+  position: absolute;
+  top: var(--command-palette-top);
+  left: max(1rem, calc(50% - var(--command-palette-width) / 2));
+  right: max(1rem, calc(50% - var(--command-palette-width) / 2));
+  max-height: min(var(--command-palette-max-height), 86vh);
+  overflow: hidden;
+  background: var(--surface-5);
+  box-shadow: var(--shadow-5);
+}
+
+/* The palette's search and ranked rows are a compact command-specific
+   composition. Keep its mock geometry here rather than letting generic
+   fields, list rows, or icon wrappers drift it. */
+.command-palette__search {
+  flex: none;
+  padding: .625rem var(--space-4) .25rem;
+}
+.command-palette__search-inner {
+  min-height: 2rem;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+.command-palette__input {
+  min-width: 0;
+  flex: 1;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  color: var(--ink);
+  background: transparent;
+  font: 450 var(--text-md) / 1.2 var(--sans);
+}
+.command-palette__input:focus-visible { outline: 0; }
+.command-palette__input::placeholder { color: var(--faint); }
+.command-palette__results {
+  min-height: 0;
+  padding: 0 var(--space-1-5) var(--space-2-5);
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+.command-palette__heading {
+  display: block;
+  padding: var(--space-2) var(--space-2-5) .1875rem;
+  color: var(--faint);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+.command-palette__group [cmdk-group-items] {
+  display: grid;
+  gap: var(--space-0-5);
+}
+.command-palette__row {
+  width: 100%;
+  min-height: var(--command-palette-row-size);
+  display: grid;
+  grid-template-columns: var(--icon-size) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-1-5);
+  border-radius: var(--r-control);
+  color: var(--ink-soft);
+  font-size: var(--text-base);
+  text-align: left;
+  outline: 0;
+  transition:
+    color var(--motion-feedback) var(--smooth-out),
+    background var(--motion-feedback) var(--smooth-out);
+}
+.command-palette__row:is(:hover, :focus-visible) {
+  color: var(--ink);
+  background: var(--state-hover-bg);
+}
+.command-palette__row[data-selected="true"] {
+  color: var(--ink);
+  background: var(--state-selected-bg);
+}
+.command-palette__row-icon {
+  width: var(--icon-size);
+  height: var(--icon-size);
+  justify-self: center;
+  color: var(--muted);
+}
+.command-palette__row-label {
+  min-width: 0;
+  overflow: hidden;
+  color: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.command-palette__row-trailing {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+.command-palette__row-hint,
+.command-palette__row-shortcut {
+  min-width: 0;
+  flex: none;
+  color: var(--faint);
+  font: 500 var(--text-meta) / 1 var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.command-palette__row-chevron {
+  flex: none;
+  color: var(--faint);
+}
+.command-palette__empty {
+  min-height: 7.5rem;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-style: italic;
+}
+
+.command-palette__footer {
+  min-height: 2.25rem;
+  padding: var(--space-1-5) var(--space-4) var(--space-2-5);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  color: var(--faint);
+  font-size: var(--text-meta);
+}
+
+.command-palette__footer > span,
+.arden-kbd-group {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.arden-kbd-group {
+  justify-content: flex-end;
+  line-height: 1;
+}
+@media (max-width: 46.25rem) {
+  .surface-command-palette { top: 4.5rem; left: .5rem; right: .5rem; }
+}
+@media (max-height: 38rem) {
+  .surface-command-palette { top: 2.5rem; max-height: calc(100vh - 5rem); }
+}
+
+/* Inset peek delimiter — the automations trigger peek's footer rule made
+   canonical: a 1px edge line inset to the content padding instead of a
+   full-bleed border. Headers rule below themselves; footers rule above. */
+.arden-peek-rule-below,
+.arden-peek-rule-above { position: relative; }
+
+.arden-peek-rule-below::after,
+.arden-peek-rule-above::before {
+  content: "";
+  position: absolute;
+  right: calc(var(--space-3) + var(--space-0-5));
+  left: calc(var(--space-3) + var(--space-0-5));
+  height: 1px;
+  background: var(--edge);
+}
+
+.arden-peek-rule-below::after { bottom: 0; }
+.arden-peek-rule-above::before { top: 0; }
+
+/* Drag-to-resize affordance — the workspace sidebar's handle made canonical:
+   a 10px hit strip with a centered 42px hint line that tints accent on hover.
+   Explicitly no-drag: desk surfaces (memory rail/instruments) restore native
+   window drag, and the strip must stay grabbable inside them in the frameless
+   Electron window. data-edge picks which pane edge the handle rides. */
+.arden-resize-handle {
+  position: absolute;
+  inset-block: 0;
+  z-index: var(--z-sticky);
+  width: var(--space-2-5);
+  cursor: ew-resize;
+  -webkit-app-region: no-drag;
+}
+
+.arden-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: calc(50% - 1.3125rem);
+  width: .0625rem;
+  height: 2.625rem;
+  background: transparent;
+  transition: background var(--motion-feedback) var(--ease);
+}
+
+.arden-resize-handle[data-edge="end"] { right: 0; }
+.arden-resize-handle[data-edge="end"]::after { right: calc(50% - .03125rem); }
+.arden-resize-handle[data-edge="start"] { left: 0; }
+.arden-resize-handle[data-edge="start"]::after { left: calc(50% - .03125rem); }
+
+.arden-resize-handle:hover::after {
+  background: color-mix(in oklab, var(--accent) 40%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .arden-resize-handle::after { transition-duration: 1ms; }
+}
+
+.arden-running-text {
+  color: transparent;
+  background: linear-gradient(90deg, var(--muted) 0 40%, var(--ink) 50%, var(--muted) 60% 100%) 100% 0 / 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: arden-running-text-shimmer var(--motion-shimmer) linear infinite;
+}
+@keyframes arden-running-text-shimmer { to { background-position: -100% 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .arden-running-text {
+    color: var(--muted);
+    background: none;
+    -webkit-text-fill-color: currentColor;
+    animation: none;
+  }
+}
+
+.arden-button {
+  min-height: var(--control-size-large);
+  padding: 0 .8125rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  border-radius: var(--r-control);
+  color: var(--ink);
+  background: var(--surface-3);
+  box-shadow: var(--shadow-2);
+  font-size: var(--text-control);
+  font-weight: 520;
+  white-space: nowrap;
+  transition:
+    background var(--motion-feedback) var(--smooth-out),
+    color var(--motion-feedback) var(--smooth-out),
+    transform var(--motion-press) var(--smooth-out);
+}
+.arden-button[data-size="sm"] { min-height: var(--control-size); padding-inline: .625rem; }
+.arden-button[data-leading="true"]:not([data-trailing="true"]) { padding-left: .625rem; }
+.arden-button[data-trailing="true"]:not([data-leading="true"]) { padding-right: .625rem; }
+.arden-button:hover { background: var(--state-hover-bg); }
+.arden-button:active { transform: scale(var(--press-scale)); }
+.arden-button[data-variant="primary"] { color: var(--paper); background: var(--ink); box-shadow: none; }
+.arden-button[data-variant="primary"]:hover { opacity: .9; background: var(--ink); }
+.arden-button[data-variant="ghost"] { color: var(--muted); background: transparent; box-shadow: none; }
+.arden-button[data-variant="quiet"] { color: var(--ink-soft); background: var(--surface-2); }
+.arden-button[data-variant="quiet"]:hover { color: var(--ink); }
+.arden-button[data-variant="danger"] { color: var(--danger); background: transparent; box-shadow: none; }
+.arden-button[data-variant="danger"]:hover { background: color-mix(in oklab, var(--danger) 10%, transparent); }
+.arden-button[data-active="true"] { color: var(--ink); background: var(--state-selected-bg); }
+.arden-button[aria-busy="true"] { color: var(--muted); }
+.arden-button:disabled,
+.arden-icon-button:disabled { cursor: not-allowed; opacity: .45; transform: none; }
+
+:is(button, input, textarea, select)[aria-busy="true"] { cursor: wait; }
+
+/* Plain selectors, not :where() — .arden-field renders on <button> too
+   (Select.tsx's combobox trigger), and Tailwind's unlayered `button {
+   background: none; color: inherit; }` preflight reset beats a
+   zero-specificity :where() regardless of source order. */
+.arden-field {
+  width: 100%;
+  min-height: var(--control-size-large);
+  padding: 0 .75rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-control);
+  color: var(--ink);
+  background: var(--surface-3);
+  outline: 0;
+  font-size: var(--text-control);
+  transition:
+    border-color var(--motion-focus) var(--smooth-out),
+    box-shadow var(--motion-focus) var(--smooth-out),
+    background var(--motion-feedback) var(--smooth-out);
+}
+.arden-field[data-size="sm"] { min-height: var(--control-size); padding-inline: .5rem; }
+.arden-field:hover { background: var(--surface-4); }
+.arden-field:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent) 14%, transparent);
+}
+.arden-field[aria-invalid="true"] { border-color: var(--danger); }
+textarea.arden-field {
+  padding-block: .625rem;
+  line-height: var(--leading-body);
+  resize: vertical;
+}
+
+/* Search is one material role: 30px field by default, with compact and
+   command forms expressed semantically instead of per-page utility stacks. */
+:where(.arden-search-shell) {
+  width: 100%;
+  min-height: var(--control-size-large);
+  display: grid;
+  grid-template-columns: var(--icon-size) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-control);
+  color: var(--faint);
+  background: var(--surface-4);
+  box-shadow: var(--shadow-2);
+  transition:
+    border-color var(--motion-focus) var(--smooth-out),
+    box-shadow var(--motion-focus) var(--smooth-out),
+    background var(--motion-feedback) var(--smooth-out);
+}
+:where(.arden-search-shell[data-size="compact"]) { min-height: 2rem; }
+:where(.arden-search-shell[data-size="command"]) {
+  min-height: 2rem;
+  grid-template-columns: minmax(0, 1fr);
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-none);
+  background: transparent;
+  box-shadow: none;
+}
+:where(.arden-search-shell:hover) { background: var(--surface-5); }
+:where(.arden-search-shell:focus-within) {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-2), 0 0 0 2px color-mix(in oklab, var(--accent) 14%, transparent);
+}
+:where(.arden-search-shell[data-size="command"]:is(:hover, :focus-within)) {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+:where(.arden-search-shell > svg) { width: var(--icon-size); height: var(--icon-size); flex: none; }
+.arden-search-shell > .arden-search-input {
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  box-shadow: none;
+  border-radius: 0;
+  color: var(--ink);
+  background: transparent;
+  font-size: var(--text-control);
+}
+.arden-search-shell > .arden-search-input:focus,
+.arden-search-shell > .arden-search-input:focus-visible {
+  border: 0;
+  outline: 0;
+  box-shadow: none;
+}
+.arden-search-shell > .arden-search-input::placeholder { color: var(--faint); }
+.arden-search-shell[data-size="command"] > .arden-search-input { font: 450 var(--text-lg)/1.2 var(--sans); }
+.arden-search-trailing {
+  justify-self: end;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-inline-start: var(--space-1);
+  color: var(--faint);
+  font: 500 var(--text-meta)/1 var(--mono);
+  white-space: nowrap;
+}
+.arden-search-clear {
+  width: var(--icon-size);
+  height: var(--icon-size);
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-tag);
+  color: inherit;
+}
+.arden-search-clear:hover { color: var(--ink); background: var(--state-hover-bg); }
+
+.arden-segmented {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--tab-bar-gap);
+  padding: var(--tab-bar-padding);
+  border-radius: var(--r-control);
+  background: var(--panel-soft);
+}
+.arden-segmented-tab {
+  position: relative;
+  z-index: var(--z-raised);
+  min-height: var(--tab-control-size);
+  padding-inline: var(--tab-inline-padding);
+  border-radius: var(--r-control);
+  color: var(--muted);
+  font-size: var(--text-control);
+  font-weight: 500;
+}
+.arden-segmented-tab[aria-selected="true"] { color: var(--ink); }
+
+.arden-tooltip {
+  position: fixed;
+  z-index: var(--z-tooltip);
+  max-width: 18rem;
+  padding: var(--space-1-5) var(--space-2);
+  border-radius: var(--r-tag);
+  color: var(--paper);
+  background: var(--ink);
+  font-size: var(--text-meta);
+  pointer-events: none;
+}
+
+.arden-toast {
+  width: min(21.25rem, calc(100vw - 2rem));
+  padding: var(--space-3) var(--space-4);
+  display: block;
+  border: 1px solid var(--edge);
+  border-radius: var(--r-shell);
+  color: var(--ink);
+  background: var(--surface-4);
+  box-shadow: var(--shadow-5);
+  text-align: left;
+  pointer-events: auto;
+}
+[data-toast-host][data-modal-blocked="true"] .arden-toast { pointer-events: none; }
+.arden-toast__head { display: flex; align-items: baseline; gap: var(--space-2-5); }
+
+/* Toast copy arrives from agents and errors at arbitrary length; the card
+   clamps instead of growing — the click-through target holds the full story. */
+.arden-toast__title {
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  font-size: var(--text-control);
+  font-weight: 620;
+}
+.arden-toast__status {
+  margin-left: auto;
+  color: var(--muted);
+  font: 500 var(--text-meta)/var(--leading-meta) var(--mono);
+}
+.arden-toast[data-tone="success"] .arden-toast__status { color: var(--success); }
+.arden-toast[data-tone="warning"] .arden-toast__status { color: var(--warning); }
+.arden-toast[data-tone="danger"] .arden-toast__status { color: var(--danger); }
+/* Same as the base colour above — declared so the tone mapping is complete
+   and cannot silently drift when a tone is added. */
+.arden-toast[data-tone="info"] .arden-toast__status { color: var(--muted); }
+.arden-toast__description {
+  margin: var(--space-0-5) 0 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--text-control);
+  line-height: 1.4;
+}
+
+.arden-kbd {
+  min-width: 1.25rem;
+  height: 1.25rem;
+  padding-inline: .25rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-mark);
+  color: var(--muted);
+  background: var(--surface-4);
+  font: 500 .75rem/1 var(--sans);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.arden-status {
+  color: var(--muted);
+  font: 500 var(--text-meta)/var(--leading-meta) var(--mono);
+}
+.arden-status[data-tone="success"] { color: var(--success); }
+.arden-status[data-tone="warning"] { color: var(--warning); }
+.arden-status[data-tone="danger"] { color: var(--danger); }
+
+.arden-section-label {
+  margin: 0;
+  color: var(--faint);
+  font: 570 var(--text-meta)/1 var(--sans);
+  letter-spacing: .07em;
+  text-transform: uppercase;
+}
+
+.arden-row {
+  min-width: 0;
+  border-radius: var(--r-row);
+  color: var(--ink-soft);
+  transition:
+    background var(--motion-feedback) var(--smooth-out),
+    color var(--motion-feedback) var(--smooth-out),
+    transform var(--motion-press) var(--smooth-out);
+}
+.arden-row:hover { color: var(--ink); background: var(--state-hover-bg); }
+.arden-row[aria-current="page"],
+.arden-row[aria-selected="true"],
+.arden-row[data-active="true"] {
+  color: var(--ink);
+  background: var(--state-selected-bg);
+}
+.arden-row:not(:disabled):active { transform: scale(var(--press-scale-subtle)); }
+
+/* Compact attention rows use semantic metadata columns rather than an inline
+   text blob. Home adds the Area column; Area Room uses the two-value variant. */
+.arden-attention-meta {
+  /* The time column fits the longest directional stamp ("15d ago") with a
+     glyph of slack — an exact ch fit tips into ellipsis on subpixel widths. */
+  --attention-meta-columns: 8ch 1ch minmax(12ch, 16ch) 1ch 8ch;
+  flex: none;
+  margin-left: auto;
+  display: grid;
+  grid-template-columns: var(--attention-meta-columns);
+  min-width: 0;
+  column-gap: var(--space-1);
+  align-items: baseline;
+  color: var(--faint);
+  font: 500 var(--text-2xs)/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.arden-attention-meta[data-columns="2"] {
+  --attention-meta-columns: minmax(8ch, 12ch) 1ch 4ch;
+}
+
+.arden-attention-meta > span,
+.arden-attention-meta > time {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.arden-attention-meta__separator { text-align: center; }
+.arden-attention-meta > time { text-align: right; }

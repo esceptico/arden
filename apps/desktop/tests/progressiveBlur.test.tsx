@@ -16,10 +16,10 @@ test("chat scroll blur renders the canonical eight masked layers", () => {
   expect(html).toContain("linear-gradient(0deg");
 });
 
-test("static mockups mount the same eight-layer progressive blur field", () => {
+test("the board motion engine mounts the same eight-layer progressive blur field", () => {
   const window = new Window();
   const source = readFileSync(
-    new URL("../../../docs/mockups/board-motion.js", import.meta.url),
+    new URL("../src/lib/boardMotionEngine.js", import.meta.url),
     "utf8",
   );
   const context = {

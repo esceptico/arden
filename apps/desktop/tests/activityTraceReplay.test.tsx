@@ -1,5 +1,6 @@
 import { beforeEach, expect, test } from "bun:test";
 import React from "react";
+import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ActivityHeader, ActivityTail, liftWorkflows, orderedTraceEntries } from "@/features/chat/components/ActivityTrace";
 import { WorkflowProgressCard } from "@/components/ui/WorkflowProgress";
@@ -7,6 +8,11 @@ import { activityTraceStats } from "@/lib/agent";
 import { turnHeaderLabel } from "@/features/chat/lib/turnHeader";
 import { setState } from "@/stores/index";
 import { type Workflow } from "@/stores/workflow-domain";
+
+const traceSource = readFileSync(
+  new URL("../src/features/chat/components/ActivityTrace.tsx", import.meta.url),
+  "utf8",
+);
 
 const items = [
   {
@@ -35,13 +41,22 @@ beforeEach(() => {
   });
 });
 
-test("replayed rolling activity rows keep the motion row path disabled", () => {
+test("rolling activity trace uses exact position-only row motion", () => {
   const html = renderToStaticMarkup(
     <ActivityTail items={items} max={3} motionDisabled />,
   );
 
-  expect(html).toContain('data-activity-motion-row="true"');
-  expect(html).toContain('data-motion-suppressed="true"');
+  expect(html).toContain('class="board-trace__row min-w-0"');
+  expect(traceSource).toContain("useReducedMotion");
+  expect(traceSource).toContain("Boolean(motionDisabled || streamReplaying || reducedMotion)");
+  expect(traceSource).toContain('className="board-trace__rolling relative"');
+  expect(traceSource).toContain('mode="popLayout"');
+  expect((traceSource.match(/layout=\{suppressMotion \? false : "position"\}/g) ?? [])).toHaveLength(4);
+  expect((traceSource.match(/initial=\{suppressMotion \? false : TRACE_ROW_ENTER\}/g) ?? [])).toHaveLength(3);
+  expect((traceSource.match(/exit=\{suppressMotion \? \{ opacity: 0 \} : TRACE_ROW_EXIT\}/g) ?? [])).toHaveLength(3);
+  expect(traceSource).toContain("TRACE_ROW_TRANSITION");
+  expect(traceSource).not.toContain('layout="size"');
+  expect(traceSource).not.toContain("layout={true}");
 });
 
 test("rolling activity renders orphaned child rows from restored tails", () => {
@@ -73,19 +88,19 @@ test("activity header shows active calls separately from total calls", () => {
     <ActivityHeader done={false} count={816} activeCount={1} />,
   );
 
-  expect(html).toContain("Running");
+  expect(html).toContain("Working");
   expect(html).toContain("816");
   expect(html).toContain("calls");
   expect(html).toContain("1");
   expect(html).toContain("active");
 });
 
-test("activity header keeps calling state while active run waits between tools", () => {
+test("activity header keeps working state while a run waits between tools", () => {
   const html = renderToStaticMarkup(
     <ActivityHeader done={false} count={3} activeCount={0} />,
   );
 
-  expect(html).toContain("Calling");
+  expect(html).toContain("Working");
   expect(html).not.toContain("Executed");
 });
 

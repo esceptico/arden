@@ -1,14 +1,16 @@
 import { Loader2, Plus } from "@/components/icons";
 import { type CustomModelSummary, type ModelProvider } from "@/api/settings";
-import { canSaveCustomModelDraft, type CustomModelDraft } from "@/features/settings/lib/customModelDraft";
+import {
+  canSaveCustomModelDraft,
+  CUSTOM_MODEL_MAX_CONTEXT_WINDOW,
+  customModelContextPatch,
+  type CustomModelDraft,
+} from "@/features/settings/lib/customModelDraft";
 import { ICON } from "@/lib/icons";
 import { IconSwap } from "@/components/ui/IconSwap";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
-import { NumberField } from "@/features/settings/components/Field";
 import { ConfirmDeleteButton } from "@/components/ui/ConfirmDeleteButton";
-
-const MAX_CONTEXT_WINDOW = 2_000_000;
 
 function customModels(provider: ModelProvider): CustomModelSummary[] {
   return provider.models.filter((model): model is CustomModelSummary => typeof model !== "string");
@@ -83,38 +85,49 @@ export function CustomModelsPanel({
             autoComplete="off"
           />
         </div>
-        <NumberField
+        <Input
           label="Context window"
-          suffix="tokens"
+          type="number"
+          inputMode="numeric"
           value={draft.context_window}
           min={1}
-          max={MAX_CONTEXT_WINDOW}
-          step={1024}
-          onChange={(n) => onDraftChange({ context_window: n })}
+          max={CUSTOM_MODEL_MAX_CONTEXT_WINDOW}
+          step={1}
+          onChange={(event) => {
+            if (Number.isFinite(event.currentTarget.valueAsNumber)) {
+              onDraftChange(customModelContextPatch(draft, event.currentTarget.valueAsNumber));
+            }
+          }}
         />
-        <NumberField
+        <Input
           label="Max output tokens"
-          suffix="tokens"
+          type="number"
+          inputMode="numeric"
           value={draft.max_output_tokens}
           min={1}
           max={draft.context_window}
-          step={256}
-          onChange={(n) => onDraftChange({ max_output_tokens: n })}
+          step={1}
+          onChange={(event) => {
+            if (Number.isFinite(event.currentTarget.valueAsNumber)) {
+              onDraftChange({ max_output_tokens: event.currentTarget.valueAsNumber });
+            }
+          }}
         />
-        <div className="grid grid-cols-[repeat(auto-fit,minmax(130px,1fr))] gap-2">
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
           <Input
             type="password"
             value={draft.api_key}
             onChange={(event) => onDraftChange({ api_key: event.target.value })}
             placeholder="API key (optional)"
+            aria-label="API key (optional)"
             spellCheck={false}
             autoComplete="off"
           />
           <Button onClick={onCreate} disabled={!canSaveCustomModelDraft(draft) || creating}>
             <IconSwap
               state={creating ? "b" : "a"}
-              iconA={<Plus size={ICON.MD} strokeWidth={2} />}
-              iconB={<Loader2 size={ICON.MD} strokeWidth={2} className="animate-spin" />}
+              iconA={<Plus size={ICON.MD} />}
+              iconB={<Loader2 size={ICON.MD} className="animate-spin" />}
             />
             Add
           </Button>

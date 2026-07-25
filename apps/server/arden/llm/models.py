@@ -38,6 +38,21 @@ class Provider(Enum):
     CUSTOM = "custom"
 
 
+PROVIDER_LABELS: dict[Provider, str] = {
+    Provider.ANTHROPIC: "Anthropic",
+    Provider.OPENAI: "OpenAI",
+    Provider.OPENAI_CODEX: "OpenAI Codex",
+    Provider.GOOGLE: "Google",
+    Provider.OPENROUTER: "OpenRouter",
+    Provider.CUSTOM: "Custom",
+}
+
+
+def provider_label(provider: Provider) -> str:
+    """Canonical user-facing provider name shared by every model surface."""
+    return PROVIDER_LABELS[provider]
+
+
 @dataclass(frozen=True)
 class Model:
     id: str
@@ -472,10 +487,6 @@ def supports_native_deferred_tools(model_id: str) -> bool:
 
 def get_embedding_model(model_id: str) -> EmbeddingModel:
     return _registry.get_embedding_model(model_id)
-
-
-def list_models() -> list[str]:
-    return list(_registry.get_models())
 
 
 def get_models() -> dict[str, Model]:

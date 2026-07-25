@@ -23,7 +23,6 @@ export async function viewSkill(name: string): Promise<void> {
       title: skill?.name ?? data.name,
       subtitle: data.path,
       content: data.content,
-      sourcePath: data.path,
     });
   } catch (error) {
     // Couldn't load via server. As a last resort, open externally if we

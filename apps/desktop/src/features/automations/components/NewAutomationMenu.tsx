@@ -1,38 +1,76 @@
-import { useMemo, type RefObject } from "react";
-import { useStore } from "@/stores";
-import type { CreateAutomationPayload } from "@/api/types";
+import type { RefObject } from "react";
+import type { AutomationSuggestion, AutomationTrigger, CreateAutomationPayload } from "@/api/types";
 import { suggestionToPayload } from "@/api/automations";
-import { formatTrigger } from "@/lib/agentRun";
 import { TEMPLATES } from "@/features/automations/lib/templates";
 import { AnchoredPopover } from "@/components/ui/AnchoredPopover";
 import { MenuItem } from "@/components/ui/MenuItem";
 
 function SectionLabel({ children }: { children: string }) {
   return (
-    <div className="px-2.5 pt-2 pb-1 text-2xs font-medium uppercase tracking-[0.08em] text-faint">
+    <div className="px-2.5 pt-2 pb-1 text-2xs font-[570] leading-none uppercase tracking-[.07em] text-faint">
       {children}
     </div>
   );
 }
 
-/** The "New" flow, demoted from a destination tab to a menu: personalized
- *  suggestions first (with the why), then templates, then scratch. Picking
- *  anything seeds a draft in the detail pane — nothing is created until the
- *  user hits Create there. */
+function cadenceForPayload(payload: Pick<CreateAutomationPayload, "every" | "trigger_type" | "days">): string {
+  if (payload.every) return `every ${payload.every}`;
+  if (payload.trigger_type === "event") return "on event";
+  if (payload.trigger_type === "message") return "on message";
+  return payload.days ?? "daily";
+}
+
+function cadenceForTrigger(trigger: AutomationTrigger): string {
+  if (trigger.type === "time") return trigger.every ? `every ${trigger.every}` : trigger.days ?? "daily";
+  if (trigger.type === "event") return "on event";
+  if (trigger.type === "message") return "on message";
+  return trigger.type;
+}
+
+function RichRow({
+  title,
+  description,
+  cadence,
+  onClick,
+}: {
+  title: string;
+  description: string;
+  cadence?: string;
+  onClick: () => void;
+}) {
+  return (
+    <MenuItem
+      rich
+      role="menuitem"
+      className="min-h-10 gap-3 rounded-[var(--r-row)] px-2.5 py-2 text-base active:scale-[var(--press-scale)]"
+      trailing={cadence ? <em className="ml-auto shrink-0 whitespace-nowrap font-mono text-[10.5px] font-medium leading-none not-italic text-faint">{cadence}</em> : null}
+      onClick={onClick}
+    >
+      <span className="grid min-w-0 gap-0.5">
+        <b className="block text-xs font-[560] leading-[1.55]">{title}</b>
+        <small className="block text-2xs leading-[1.35] text-faint">{description}</small>
+      </span>
+    </MenuItem>
+  );
+}
+
+/** The "New" flow is deliberately small: an explicit template choice or a
+ * blank draft. Nothing is created until the user confirms it in the detail
+ * workspace. */
 export function NewAutomationMenu({
   open,
   onClose,
   anchor,
   onPick,
+  suggestion = null,
 }: {
   open: boolean;
   onClose: () => void;
   anchor: RefObject<HTMLElement | null>;
   onPick: (preset: CreateAutomationPayload | null) => void;
+  /** The top active server suggestion, if the runtime has one. */
+  suggestion?: AutomationSuggestion | null;
 }) {
-  const suggestions = useStore((s) => s.automationSuggestions);
-  const top = useMemo(() => (suggestions ?? []).slice(0, 3), [suggestions]);
-
   const pick = (preset: CreateAutomationPayload | null) => {
     onPick(preset);
     onClose();
@@ -45,60 +83,34 @@ export function NewAutomationMenu({
       anchor={anchor}
       variant="menu"
       ariaLabel="New automation"
-      className="w-[320px] p-1.5"
+      className="w-[320px] max-w-[calc(100vw-2rem)] max-h-[calc(100vh-2rem)] overflow-auto !bg-[var(--surface-5)] p-[5px] !shadow-[var(--shadow-3)]"
     >
-      {top.length > 0 && (
+      {suggestion && (
         <>
           <SectionLabel>For you</SectionLabel>
-          {top.map((s) => (
-            <MenuItem
-              key={s.id}
-              role="menuitem"
-              className="rounded-[7px]"
-              onClick={() => pick(suggestionToPayload(s))}
-            >
-              <span className="grid gap-0.5 py-0.5 min-w-0">
-                <span className="flex items-baseline gap-2 min-w-0">
-                  <span className="truncate">{s.name}</span>
-                  <span className="ml-auto shrink-0 font-mono tabular-nums text-2xs text-faint">
-                    {s.triggers[0] ? formatTrigger(s.triggers[0]) : ""}
-                  </span>
-                </span>
-                <span className="text-xs text-muted leading-[1.45] line-clamp-2 whitespace-normal">
-                  {s.rationale}
-                </span>
-              </span>
-            </MenuItem>
-          ))}
-          <div className="h-1.5" />
+          <RichRow
+            title={suggestion.name}
+            description={suggestion.rationale}
+            cadence={cadenceForTrigger(suggestion.triggers[0])}
+            onClick={() => pick(suggestionToPayload(suggestion))}
+          />
         </>
       )}
       <SectionLabel>Templates</SectionLabel>
       {TEMPLATES.map((t) => (
-        <MenuItem
+        <RichRow
           key={t.id}
-          role="menuitem"
-          dense
-          className="rounded-[7px]"
-          leading={<t.icon size={13} strokeWidth={2} className="text-faint" />}
+          title={t.name}
+          description={t.blurb}
+          cadence={cadenceForPayload(t.payload)}
           onClick={() => pick(t.payload)}
-        >
-          <span className="flex items-baseline gap-2 min-w-0 w-full">
-            <span className="truncate">{t.name}</span>
-            <span className="ml-auto shrink-0 font-mono tabular-nums text-2xs text-faint">
-              {t.payload.every
-                ? `every ${t.payload.every}`
-                : t.payload.trigger_type === "message"
-                  ? "on message"
-                  : (t.payload.days ?? "daily")}
-            </span>
-          </span>
-        </MenuItem>
+        />
       ))}
-      <div className="h-1.5" />
-      <MenuItem role="menuitem" className="rounded-[7px] text-muted" onClick={() => pick(null)}>
-        Start from scratch…
-      </MenuItem>
+      <RichRow
+        title="Start from scratch"
+        description="Write instructions and choose a trigger."
+        onClick={() => pick(null)}
+      />
     </AnchoredPopover>
   );
 }

@@ -1,10 +1,5 @@
 import { expect, test } from "bun:test";
 import {
-  createDomainState,
-  reduceDomainState,
-  type RunPhase,
-} from "@/stores/domains";
-import {
   createAutomationStreamDomainState,
   reduceAutomationFinished,
   reduceAutomationProgress,
@@ -20,113 +15,6 @@ import {
   reduceBackgroundAgentsRefreshFailed,
   reduceBackgroundAgentsRefreshStarted,
 } from "@/stores/background-agent-domain";
-
-test("cached-preview cannot enable SSE rendering", () => {
-  const state = reduceDomainState(createDomainState(), {
-    type: "session.cachedPreview",
-    sessionId: "session-1",
-  });
-
-  const next = reduceDomainState(state, {
-    type: "chatStream.liveTailRequested",
-    sessionId: "session-1",
-  });
-
-  expect(next.sessionView.historyPhase).toBe("cached-preview");
-  expect(next.chatStream.sseRenderingEnabled).toBe(false);
-});
-
-test("loading-history blocks replayed live tail", () => {
-  const state = reduceDomainState(createDomainState(), {
-    type: "session.loadingHistory",
-    sessionId: "session-1",
-  });
-
-  const next = reduceDomainState(state, {
-    type: "chatStream.liveTailRequested",
-    sessionId: "session-1",
-    replayed: true,
-  });
-
-  expect(next.sessionView.historyPhase).toBe("loading-history");
-  expect(next.chatStream.replayedTailBlocked).toBe(true);
-  expect(next.chatStream.sseRenderingEnabled).toBe(false);
-});
-
-test("loading-history requires canonical history", () => {
-  const state = reduceDomainState(createDomainState(), {
-    type: "session.loadingHistory",
-    sessionId: "session-1",
-  });
-
-  expect(state.sessionView.historyPhase).toBe("loading-history");
-  expect(state.sessionView.canonicalHistoryRequired).toBe(true);
-});
-
-test("live-tail starts only after server history is loaded", () => {
-  const initial = createDomainState();
-
-  const beforeHistory = reduceDomainState(initial, {
-    type: "chatStream.liveTailRequested",
-    sessionId: "session-1",
-  });
-  expect(beforeHistory.sessionView.historyPhase).toBe("idle");
-  expect(beforeHistory.chatStream.sseRenderingEnabled).toBe(false);
-
-  const loaded = reduceDomainState(beforeHistory, {
-    type: "session.serverHistoryLoaded",
-    sessionId: "session-1",
-  });
-  const live = reduceDomainState(loaded, {
-    type: "chatStream.liveTailRequested",
-    sessionId: "session-1",
-  });
-
-  expect(live.sessionView.historyPhase).toBe("live-tail");
-  expect(live.chatStream.sseRenderingEnabled).toBe(true);
-});
-
-test("replay-gap forces canonical history reload", () => {
-  const loaded = reduceDomainState(createDomainState(), {
-    type: "session.serverHistoryLoaded",
-    sessionId: "session-1",
-  });
-  const live = reduceDomainState(loaded, {
-    type: "chatStream.liveTailRequested",
-    sessionId: "session-1",
-  });
-
-  const gap = reduceDomainState(live, {
-    type: "chatStream.replayGapDetected",
-    sessionId: "session-1",
-  });
-
-  expect(gap.sessionView.historyPhase).toBe("replay-gap");
-  expect(gap.sessionView.canonicalHistoryRequired).toBe(true);
-  expect(gap.chatStream.sseRenderingEnabled).toBe(false);
-});
-
-test("terminal run states clear active running state", () => {
-  const terminalPhases: RunPhase[] = ["completed", "failed", "cancelled"];
-
-  for (const phase of terminalPhases) {
-    const running = reduceDomainState(createDomainState(), {
-      type: "run.started",
-      runId: `run-${phase}`,
-      sessionId: "session-1",
-    });
-
-    const terminal = reduceDomainState(running, {
-      type: "run.terminal",
-      runId: `run-${phase}`,
-      phase,
-    });
-
-    expect(terminal.runLifecycle.phase).toBe(phase);
-    expect(terminal.runLifecycle.activeRunId).toBeNull();
-    expect(terminal.runLifecycle.activeSessionId).toBeNull();
-  }
-});
 
 test("automation domain areas stream phase and per-task status", () => {
   const connecting = reduceAutomationStreamConnecting(

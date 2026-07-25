@@ -1,8 +1,6 @@
 import { useEffect, useState } from "react";
-import { AnimatePresence, motion } from "motion/react";
 import { useStore } from "@/stores";
 import { type MCPServer, listMCPServersApi } from "@/api/settings";
-import { RISE_IN, RISE_SETTLED, DISSOLVE_OUT, MOTION, EASE_EMPHASIZED } from "@/lib/tokens/motion";
 import { TabPanels } from "@/components/ui/TabPanels";
 import { ServerForm } from "@/features/settings/components/mcp/ServerForm";
 import { ServerList } from "@/features/settings/components/mcp/ServerList";
@@ -16,6 +14,7 @@ export function MCPTab() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [view, setView] = useState<View>({ kind: "list" });
   const [assistantOpen, setAssistantOpen] = useState(false);
+  const [setupReference, setSetupReference] = useState("");
 
   async function refresh() {
     setLoadError(null);
@@ -44,31 +43,31 @@ export function MCPTab() {
       value={view.kind === "edit" ? `edit:${view.name}` : view.kind}
       direction={view.kind === "list" ? -1 : 1}
     >
-      <AnimatePresence>
-        {assistantOpen && (
-          <motion.div
-            initial={RISE_IN}
-            animate={RISE_SETTLED}
-            exit={DISSOLVE_OUT}
-            transition={{ duration: MOTION.panel, ease: EASE_EMPHASIZED }}
-          >
-            <SetupAssistant
-              kind="mcp"
-              onClose={() => setAssistantOpen(false)}
-              onDone={async () => {
-                setAssistantOpen(false);
-                await refresh();
-              }}
-            />
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <SetupAssistant
+        open={assistantOpen}
+        kind={assistantOpen ? "mcp" : null}
+        onClose={() => setAssistantOpen(false)}
+        onDone={async () => {
+          setAssistantOpen(false);
+          await refresh();
+        }}
+        onPrimary={(_kind, value) => {
+          setSetupReference(value.trim());
+          setAssistantOpen(false);
+          setView({ kind: "add" });
+        }}
+      />
       {view.kind === "add" ? (
         <ServerForm
           mode="add"
-          onClose={() => setView({ kind: "list" })}
+          setupReference={setupReference}
+          onClose={() => {
+            setSetupReference("");
+            setView({ kind: "list" });
+          }}
           onSaved={async () => {
             await refresh();
+            setSetupReference("");
             setView({ kind: "list" });
           }}
         />
@@ -89,7 +88,10 @@ export function MCPTab() {
         <ServerList
           servers={servers}
           loadError={loadError}
-          onAdd={() => setView({ kind: "add" })}
+          onAdd={() => {
+            setSetupReference("");
+            setView({ kind: "add" });
+          }}
           onEdit={(name) => setView({ kind: "edit", name })}
           onChanged={refresh}
           onAssistant={() => setAssistantOpen(true)}

@@ -7,6 +7,7 @@ import { createBackgroundAgentsDomainState } from "@/stores/background-agent-dom
 import type { ActivityItem } from "@/stores/types";
 
 afterEach(() => {
+  setState({ viewingTool: null, reviewingApprovalToolId: null });
   delete (globalThis.window as unknown as { ardenDesktop?: unknown }).ardenDesktop;
 });
 
@@ -216,6 +217,85 @@ test("agent inspector activity tree labels nested child agents with type and mod
     // De-id'd: humanized type + mode, no raw run id leaked into the label.
     expect(appEl.textContent).toContain("Research · detached");
     expect(appEl.textContent).not.toContain("child-run-2");
+  } finally {
+    await act(async () => root.unmount());
+    restore();
+  }
+});
+
+test("tool viewer uses the compact mockup log blocks", async () => {
+  const { appEl, root, restore } = setupDom();
+  const item: ActivityItem = {
+    id: "call-write",
+    kind: "memory.write",
+    target: "memory.write",
+    args: JSON.stringify({ path: "areas/market-launch/brief.md", mode: "update" }),
+    result: "Saved 2 changed lines · source references preserved.",
+    status: "executed",
+    taskStatus: "completed",
+  };
+
+  setState({
+    messages: new Map([["activity-1", {
+      id: "activity-1",
+      role: "activity",
+      content: "",
+      activity: { items: [item], label: "Called", done: true },
+    }]]),
+    order: ["activity-1"],
+    viewingTool: item,
+  });
+
+  try {
+    await act(async () => {
+      root.render(<ToolViewer />);
+    });
+
+    const dialog = appEl.querySelector<HTMLElement>('[role="dialog"]');
+    expect(dialog?.className).toContain("surface-bottom-sheet");
+    expect(dialog?.textContent).toContain("Tool call");
+    expect(dialog?.textContent).toContain("Completed");
+    expect(dialog?.querySelector('pre[aria-label="Tool input"]')?.className).toContain("arden-code-well");
+    expect(dialog?.querySelector('pre[aria-label="Tool input"]')?.className).not.toContain("--r-row");
+    expect(dialog?.querySelector('pre[aria-label="Tool output"]')?.textContent).toContain("Saved 2 changed lines");
+  } finally {
+    await act(async () => root.unmount());
+    restore();
+  }
+});
+
+test("tool viewer stacks above its approval review owner", async () => {
+  const { appEl, root, restore } = setupDom();
+  const item: ActivityItem = {
+    id: "call-review",
+    kind: "write_file",
+    target: "write_file",
+    args: "{}",
+    result: "Waiting for approval.",
+    status: "executed",
+    taskStatus: "completed",
+  };
+
+  setState({
+    messages: new Map([["activity-review", {
+      id: "activity-review",
+      role: "activity",
+      content: "",
+      activity: { items: [item], label: "Called", done: true },
+    }]]),
+    order: ["activity-review"],
+    viewingTool: item,
+    reviewingApprovalToolId: item.id,
+  });
+
+  try {
+    await act(async () => {
+      root.render(<ToolViewer />);
+    });
+
+    expect(appEl.querySelector('[role="dialog"]')?.parentElement?.className).toContain(
+      "z-[var(--z-modal-top)]",
+    );
   } finally {
     await act(async () => root.unmount());
     restore();

@@ -24,6 +24,7 @@ from arden.tools.automation import (
     loop_done,
     schedule_wakeup,
 )
+from arden.tools.core.base import Tool
 from arden.tools.core.context import (
     BackgroundTaskRegistry,
     IOBridge,
@@ -32,6 +33,7 @@ from arden.tools.core.context import (
     ToolExecution,
 )
 from arden.tools.core.registry import ToolRegistry
+from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
 
 
 @pytest_asyncio.fixture
@@ -52,7 +54,9 @@ async def store_and_svc(tmp_path: Path):
     loop = Automation(
         task_id="loop-1",
         name="x",
-        description="watch CI",
+        description=None,
+        description_source=None,
+        prompt="watch CI",
         model=None,
         triggers=[TimeTrigger(every="5m")],
         enabled=True,
@@ -72,10 +76,30 @@ async def store_and_svc(tmp_path: Path):
         await conn.close()
 
 
+class _FakeTool(Tool):
+    description = "t"
+    policy = ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL)
+
+    async def execute(self, execution, **kwargs):  # pragma: no cover
+        raise NotImplementedError
+
+    def to_dict(self, name):
+        return {"name": name}
+
+
+def _registry() -> ToolRegistry:
+    # tool_scope patterns are validated against registered names — mirror the
+    # runtime registry for the names these tests grant.
+    registry = ToolRegistry()
+    for name in ("slack_search", "slack_post_message", "gmail_search", "read_email", "archive_session"):
+        registry.register(name, _FakeTool())
+    return registry
+
+
 def _execution(svc: AutomationService, loop_task_id: str | None) -> ToolExecution:
     ctx = ToolContext(
         session_state=SessionState(session_id="sess-1", started_at=datetime.now(UTC)),
-        registry=ToolRegistry(),
+        registry=_registry(),
         run=RunContext(run_id="run-1", loop_task_id=loop_task_id),
         io=IOBridge(),
         services={"automation": svc},
@@ -148,6 +172,23 @@ def test_schedule_wakeup_input_enforces_min_delay():
         ScheduleWakeupInput(delay_seconds=59)
 
 
+def test_automation_display_description_is_bounded():
+    import pydantic
+
+    from arden.tools.automation import UpdateAutomationInput
+
+    with pytest.raises(pydantic.ValidationError):
+        CreateAutomationInput(
+            name="bounded",
+            prompt="Run the bounded automation.",
+            description="x" * 221,
+            trigger_type="time",
+            every="1h",
+        )
+    with pytest.raises(pydantic.ValidationError):
+        UpdateAutomationInput(task_id="bounded", description="x" * 221)
+
+
 # --- create_automation / create_loop tool wiring for channel-aware fields ---
 
 
@@ -158,7 +199,8 @@ async def test_create_automation_idempotency_claim_dedupes(store_and_svc):
 
     args = CreateAutomationInput(
         name="daily brief",
-        description="post the morning brief",
+        description="Posts the morning brief.",
+        prompt="Post the morning brief.",
         trigger_type="time",
         at="09:00",
     )
@@ -185,7 +227,8 @@ async def test_create_automation_passes_thread_id_and_read_history(store_and_svc
 
     args = CreateAutomationInput(
         name="thread automation",
-        description="post into a specific thread",
+        description="Posts into a specific thread.",
+        prompt="Post into a specific thread.",
         trigger_type="time",
         every="1h",
     )
@@ -214,7 +257,8 @@ async def test_approve_create_automation_shows_tool_scope(store_and_svc):
     execution = _execution(svc, loop_task_id=None)
     args = CreateAutomationInput(
         name="scoped sender",
-        description="post a reviewed update",
+        description="Posts a reviewed update.",
+        prompt="Post a reviewed update.",
         trigger_type="time",
         every="1h",
         auto_approve=True,
@@ -237,7 +281,8 @@ async def test_update_automation_changes_tool_scope(store_and_svc):
         execution,
         CreateAutomationInput(
             name="scope update",
-            description="read first",
+            description="Reads the source first.",
+            prompt="Read the source first.",
             trigger_type="time",
             every="1h",
         ),
@@ -283,7 +328,8 @@ async def test_create_automation_message_trigger_resolves_channels(tmp_path: Pat
     execution = _execution(svc, loop_task_id=None)
     args = CreateAutomationInput(
         name="bug watch",
-        description="triage bugs",
+        description="Triages bug reports.",
+        prompt="Triage bugs.",
         trigger_type="message",
         channels=["feel-good-inc", "eng-bugs"],
         from_user="sam",
@@ -324,7 +370,13 @@ async def test_update_automation_to_message_trigger_resolves_channels(tmp_path: 
     execution = _execution(svc, loop_task_id=None)
     await create_automation(
         execution,
-        CreateAutomationInput(name="watch", description="triage", trigger_type="time", every="1h"),
+        CreateAutomationInput(
+            name="watch",
+            description="Triages new items.",
+            prompt="Triage new items.",
+            trigger_type="time",
+            every="1h",
+        ),
     )
     task_id = next(a.task_id for a in await store.list_all())
 
@@ -349,7 +401,8 @@ async def test_create_automation_defaults_parent_from_loop_ctx(store_and_svc):
 
     args = CreateAutomationInput(
         name="child auto",
-        description="from loop",
+        description="Runs follow-up work from the loop.",
+        prompt="Run follow-up work from the loop.",
         trigger_type="time",
         every="2h",
     )
@@ -373,7 +426,7 @@ async def test_create_loop_infers_parent_from_loop_ctx(store_and_svc):
     assert not result.is_error
 
     rows = await store.list_all()
-    child = next(a for a in rows if a.description == "watch CI again")
+    child = next(a for a in rows if a.prompt == "watch CI again")
     assert child.parent_automation_id == "loop-1"
 
 
@@ -393,7 +446,7 @@ async def test_create_loop_explicit_parent_overrides_ctx(store_and_svc):
     assert not result.is_error
 
     rows = await store.list_all()
-    child = next(a for a in rows if a.description == "watch CI yet again")
+    child = next(a for a in rows if a.prompt == "watch CI yet again")
     assert child.parent_automation_id == "explicit-parent"
 
 
@@ -406,7 +459,8 @@ async def test_create_automation_run_scope_missing_parent_errors(store_and_svc):
 
     args = CreateAutomationInput(
         name="orphan",
-        description="should fail",
+        description="Tests a missing parent.",
+        prompt="This should fail because its parent is missing.",
         trigger_type="time",
         at="09:00",
         parent_automation_id="ghost",
@@ -450,7 +504,8 @@ async def test_approve_create_automation_flags_missing_parent(store_and_svc):
 
     args = CreateAutomationInput(
         name="orphan",
-        description="should warn",
+        description="Tests a missing parent warning.",
+        prompt="This should warn because its parent is missing.",
         trigger_type="time",
         at="09:00",
         parent_automation_id="ghost",
@@ -480,3 +535,78 @@ async def test_approve_create_loop_flags_missing_parent(store_and_svc):
     assert info is not None
     assert "ghost" in info.preview
     assert "missing" in info.preview.lower() or "will fail" in info.preview.lower()
+
+
+@pytest.mark.asyncio
+async def test_create_automation_rejects_unknown_tool_scope_names(store_and_svc):
+    # A typo'd scope pattern must fail loudly with candidates — storing it
+    # would silently strip the automation of the tool its author meant.
+    _, svc = store_and_svc
+    execution = _execution(svc, loop_task_id=None)
+
+    result = await create_automation(
+        execution,
+        CreateAutomationInput(
+            name="typo scope",
+            description="Archives chats.",
+            prompt="Archive old chats.",
+            trigger_type="time",
+            every="1d",
+            tool_scope=["archve_session"],
+        ),
+    )
+
+    assert result.is_error
+    assert result.outcome.error.code == "invalid_arguments"
+    assert "archve_session" in result.content
+    assert "archive_session" in result.content  # the suggestion
+
+
+@pytest.mark.asyncio
+async def test_create_automation_accepts_prefix_scope_patterns(store_and_svc):
+    store, svc = store_and_svc
+    execution = _execution(svc, loop_task_id=None)
+
+    result = await create_automation(
+        execution,
+        CreateAutomationInput(
+            name="prefix scope",
+            description="Posts to Slack.",
+            prompt="Post to Slack.",
+            trigger_type="time",
+            every="1d",
+            tool_scope=["slack_*"],
+        ),
+    )
+
+    assert not result.is_error
+    created = next(a for a in await store.list_all() if a.name == "prefix scope")
+    assert created.tool_scope == ["slack_*"]
+
+
+@pytest.mark.asyncio
+async def test_update_automation_rejects_unknown_tool_scope_names(store_and_svc):
+    from arden.tools.automation import UpdateAutomationInput, update_automation
+
+    store, svc = store_and_svc
+    execution = _execution(svc, loop_task_id=None)
+    await create_automation(
+        execution,
+        CreateAutomationInput(
+            name="scope guard",
+            description="Reads email.",
+            prompt="Read email.",
+            trigger_type="time",
+            every="1d",
+        ),
+    )
+    created = next(a for a in await store.list_all() if a.name == "scope guard")
+
+    result = await update_automation(
+        execution,
+        UpdateAutomationInput(task_id=created.task_id, tool_scope=["gmail_serch"]),
+    )
+
+    assert result.is_error
+    assert "gmail_search" in result.content
+    assert (await store.get(created.task_id)).tool_scope is None

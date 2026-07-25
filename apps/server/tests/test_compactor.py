@@ -7,14 +7,18 @@ import pytest
 
 import arden.constants as constants
 from arden.agent import Role
-from arden.constants import SESSION_HANDOFF_MARKER
+from arden.constants import SESSION_HANDOFF_MARKER, SUMMARY_MAX_TOKENS
 from arden.core.compactor import (
+    _CHARS_PER_TOKEN,
+    _DROPPED_HISTORY_MARKER,
+    _SUMMARY_PROMPT_HEADROOM_TOKENS,
     SummaryCompactor,
     _build_compacted_messages,
     compact_needed,
     compact_summarize,
     is_handoff_message,
 )
+from arden.llm.models import get_model
 
 
 def test_handoff_summary_tracks_raw_message_range():
@@ -257,3 +261,74 @@ async def test_compaction_timeouts_do_not_spawn_unbounded_threads(monkeypatch):
         if not [thread for thread in threading.enumerate() if thread.name.startswith("arden-compaction-llm")]:
             break
         await asyncio.sleep(0.01)
+
+
+@pytest.mark.asyncio
+async def test_compact_summarize_caps_its_own_request_to_the_model_window(monkeypatch):
+    # The compactor rescues oversized histories — its summary request must
+    # never itself exceed the window. A 30 MB channel transcript once 400'd
+    # the summarize call and bricked every fire of its automation.
+    captured = {}
+
+    class CapturingClient:
+        async def completion(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="summary"))],
+            )
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr("arden.core.compactor.create_completion_client", lambda _model: CapturingClient())
+
+    messages = [
+        {"role": Role.SYSTEM, "content": "system"},
+        *(
+            {"role": Role.USER if i % 2 == 0 else Role.ASSISTANT, "content": "x" * 400_000 + f" tail-{i}"}
+            for i in range(4)
+        ),
+        {"role": Role.ASSISTANT, "content": "kept tail"},
+    ]
+
+    await compact_summarize(messages, 1, 5, "gpt-5.2")
+
+    budget_chars = (
+        get_model("gpt-5.2").max_context_tokens - SUMMARY_MAX_TOKENS - _SUMMARY_PROMPT_HEADROOM_TOKENS
+    ) * _CHARS_PER_TOKEN
+    user_prompt = captured["messages"][1]["content"]
+    assert user_prompt.startswith(_DROPPED_HISTORY_MARKER)
+    assert len(user_prompt) <= budget_chars + len(_DROPPED_HISTORY_MARKER) + 2
+    # The newest end of the range survives verbatim; the oldest is what drops.
+    assert user_prompt.endswith("tail-3")
+    assert "tail-0" not in user_prompt
+
+
+@pytest.mark.asyncio
+async def test_compact_summarize_leaves_small_conversations_uncapped(monkeypatch):
+    captured = {}
+
+    class CapturingClient:
+        async def completion(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="summary"))],
+            )
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr("arden.core.compactor.create_completion_client", lambda _model: CapturingClient())
+
+    messages = [
+        {"role": Role.SYSTEM, "content": "system"},
+        {"role": Role.USER, "content": "short question"},
+        {"role": Role.ASSISTANT, "content": "short answer"},
+        {"role": Role.ASSISTANT, "content": "kept"},
+    ]
+
+    await compact_summarize(messages, 1, 3, "gpt-5.2")
+
+    user_prompt = captured["messages"][1]["content"]
+    assert _DROPPED_HISTORY_MARKER not in user_prompt
+    assert "short question" in user_prompt

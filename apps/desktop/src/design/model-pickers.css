@@ -1,0 +1,293 @@
+/* Shared model-selection grammar -----------------------------------------
+   Every picker reads the complete server catalog. Base UI owns semantics;
+   this file owns every model-picker material, metric, and motion state. */
+
+.model-picker__positioner {
+  z-index: var(--z-nested);
+  outline: 0;
+}
+
+.model-picker__popup-motion {
+  transform-origin: var(--transform-origin);
+  transition:
+    opacity var(--motion-popover) var(--ease-out),
+    transform var(--motion-popover) var(--ease-out),
+    filter var(--motion-popover) var(--ease-out);
+}
+
+.model-picker__popup-motion:is([data-starting-style], [data-ending-style]) {
+  opacity: 0;
+  filter: blur(var(--popover-blur));
+  transform:
+    translateY(var(--popover-offset))
+    scale(var(--popover-scale));
+}
+
+.model-picker__popup-motion[data-side="top"] {
+  --popover-offset: var(--popover-offset-above);
+}
+
+.model-picker__popup {
+  max-width: var(--available-width);
+  overflow: auto;
+  border-radius: var(--r-menu);
+  color: var(--ink);
+  background: var(--surface-5);
+  box-shadow: var(--shadow-3);
+  outline: 0;
+}
+
+/* Settings: exact two-field Board control. */
+.model-picker--field {
+  width: 276px;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 180px 88px;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.model-picker--field .model-picker__trigger {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px 0 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1-5);
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--r-control);
+  color: var(--ink);
+  background: var(--paper);
+  box-shadow: var(--shadow-2);
+  outline: 0;
+  font: 500 var(--text-control)/1 var(--mono);
+  text-align: left;
+  transition:
+    background var(--motion-feedback) var(--ease-out),
+    transform var(--motion-press) var(--ease-out),
+    box-shadow var(--motion-focus) var(--ease-out);
+}
+
+.model-picker--field .model-picker__trigger:hover {
+  background: var(--field-hover-bg);
+}
+
+.model-picker--field .model-picker__trigger:active {
+  transform: scale(var(--press-scale));
+}
+
+.model-picker--field .model-picker__trigger:focus-visible {
+  box-shadow:
+    var(--shadow-2),
+    0 0 0 2px color-mix(in oklab, var(--accent) 14%, transparent);
+}
+
+.model-picker--field .model-picker__effort-trigger {
+  color: var(--muted);
+}
+
+.model-picker__current-model,
+.model-picker__current-model > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-picker__current-model {
+  display: block;
+  flex: 1;
+}
+
+.model-picker__current-effort {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-picker__chevron {
+  width: var(--icon-size);
+  height: var(--icon-size);
+  flex: none;
+  color: var(--faint);
+  transition: transform var(--motion-feedback) var(--ease-out);
+}
+
+.model-picker__trigger[data-popup-open] .model-picker__chevron {
+  transform: rotate(180deg);
+}
+
+.model-picker__model-menu {
+  width: 300px;
+  max-height: 260px;
+  padding: 5px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.model-picker__effort-menu {
+  width: 116px;
+  max-height: var(--available-height);
+  padding: 5px;
+}
+
+.model-picker__search {
+  width: auto;
+  min-height: 32px;
+  margin: 6px 4px 4px;
+  padding: 0 12px;
+  display: grid;
+  grid-template-columns: var(--icon-size) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-2);
+  border: var(--border-width) solid var(--line-strong);
+  /* Menu-tier (matches .model-picker__popup's own r-menu), not control-tier
+     — a full pill here doesn't relate to the barely-rounded popup it sits in. */
+  border-radius: var(--r-menu);
+  color: var(--faint);
+  background: var(--surface-4);
+  box-shadow: var(--shadow-2);
+  transition:
+    border-color var(--motion-focus) var(--ease-out),
+    box-shadow var(--motion-focus) var(--ease-out),
+    background var(--motion-feedback) var(--ease-out);
+}
+
+.model-picker__search:hover { background: var(--surface-5); }
+
+.model-picker__search:focus-within {
+  border-color: var(--accent);
+  box-shadow:
+    var(--shadow-2),
+    0 0 0 2px color-mix(in oklab, var(--accent) 14%, transparent);
+}
+
+.model-picker__search > svg {
+  width: var(--icon-size);
+  height: var(--icon-size);
+}
+
+.model-picker__search input {
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  color: var(--ink);
+  background: transparent;
+  outline: 0;
+  font-size: var(--text-control);
+}
+
+.model-picker__search input::placeholder { color: var(--faint); }
+
+.model-picker__model-list {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  outline: 0;
+  scroll-padding-block: var(--space-1);
+  scrollbar-width: thin;
+  scrollbar-color: var(--edge-strong) transparent;
+}
+
+.model-picker__group { padding-bottom: var(--space-1); }
+.model-picker__group:last-child { padding-bottom: 0; }
+
+.model-picker__group-label,
+.model-picker__menu-label {
+  padding: 8px 10px 4px;
+  color: var(--faint);
+  font: 570 var(--text-meta)/1 var(--sans);
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+.model-picker__option {
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 10px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  /* The popup (r-menu) insets rows by its 5px padding — subtract it to stay
+     concentric with the popup's corner. */
+  border-radius: calc(var(--r-menu) - 5px);
+  color: var(--ink-soft);
+  outline: 0;
+  text-align: left;
+  user-select: none;
+}
+
+.model-picker__option:is(:hover, [data-highlighted], :focus-visible) {
+  background: var(--state-hover-bg);
+}
+
+.model-picker__option:is([aria-selected="true"], [aria-checked="true"]) {
+  color: var(--ink);
+  background: var(--state-selected-bg);
+}
+
+.model-picker__model-option {
+  font: 500 var(--text-control)/1.25 var(--mono);
+}
+
+.model-picker__effort-option,
+.model-picker__quick-option {
+  justify-content: space-between;
+  font: 500 var(--text-control)/1.25 var(--sans);
+}
+
+.model-picker__option > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-picker__check {
+  width: var(--icon-size);
+  height: var(--icon-size);
+  flex: none;
+  margin-left: auto;
+  color: var(--ink);
+}
+
+.model-picker__empty {
+  padding: 12px 10px;
+  color: var(--muted);
+  font-size: var(--text-control);
+  font-style: italic;
+}
+
+.model-picker__empty:empty { display: none; }
+
+.automation-model-menu {
+  width: min(320px, calc(100vw - 32px));
+}
+
+/* Chat uses the same searchable model combobox and adjacent effort menu. */
+.board-composer .model-picker--field {
+  flex: none;
+}
+
+@media (max-width: 31rem) {
+  .model-picker--field {
+    width: 100%;
+    grid-template-columns: minmax(0, 1fr) 88px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .model-picker__popup-motion,
+  .model-picker__trigger,
+  .model-picker__chevron {
+    transition-duration: 1ms;
+  }
+}

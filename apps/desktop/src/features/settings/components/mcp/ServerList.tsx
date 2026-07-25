@@ -2,12 +2,11 @@ import { Plus } from "@/components/icons";
 import type { MCPServer } from "@/api/settings";
 import { settingsErrorMessage } from "@/features/settings/lib/settingsLoadState";
 import { SettingsConnectionHint, SettingsInlineError } from "@/features/settings/components/SettingsNotice";
+import { SettingsSection, SettingsSurface } from "@/features/settings/components/SettingsPage";
 import { ICON } from "@/lib/icons";
-import { SectionHeader } from "@/components/ui/SectionHeader";
 import { Button } from "@/components/ui/Button";
-import { DividedList } from "@/components/ui/DividedList";
+import { IconButton } from "@/components/ui/IconButton";
 import { SettingsTabSkeleton } from "@/features/settings/components/SettingsTabSkeleton";
-import { EmptyNote } from "@/components/ui/EmptyState";
 import { ServerRow } from "@/features/settings/components/mcp/ServerRow";
 
 export function ServerList({
@@ -26,55 +25,57 @@ export function ServerList({
   onAssistant: () => void;
 }) {
   return (
-    <div className="grid gap-4">
-      <div>
-        <p className="m-0 text-sm text-muted leading-[1.45] max-w-[460px]">
-          Connect external tools and data sources via Model Context Protocol.
-        </p>
-      </div>
-
-      <div className="grid gap-2">
-        <SectionHeader
-          label="Servers"
-          action={
-            !loadError && (
-              <div className="flex flex-wrap gap-2">
-                <Button variant="secondary" size="sm" onClick={onAssistant}>
-                  Run setup assistant
-                </Button>
-                <Button size="sm" onClick={onAdd}>
-                  <Plus size={ICON.XS} strokeWidth={2.2} /> Add server
-                </Button>
-              </div>
-            )
-          }
-        />
-
-        {servers === null ? (
-          <SettingsTabSkeleton variant="cards" label="Loading MCP servers…" />
-        ) : loadError ? (
-          <div className="grid gap-3">
-            <SettingsInlineError
-              title="Couldn't load MCP servers"
-              message={settingsErrorMessage(loadError)}
-              action={
-                <Button variant="secondary" size="sm" onClick={() => void onChanged()}>
-                  Retry
-                </Button>
-              }
-            />
-            <SettingsConnectionHint />
+    <SettingsSection
+      title="Servers"
+      action={
+        !loadError && (
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" size="sm" onClick={onAssistant}>
+              Guided setup
+            </Button>
+            <IconButton
+              tone="primary"
+              shape="circle"
+              onClick={onAdd}
+              aria-label="Add MCP server"
+            >
+              <Plus size={ICON.XS} />
+            </IconButton>
           </div>
-        ) : servers.length === 0 ? (
-          <EmptyNote>No MCP servers yet.</EmptyNote>
-        ) : (
-          <DividedList className="min-w-0 overflow-hidden">
+        )
+      }
+    >
+      {servers === null ? (
+        <SettingsTabSkeleton variant="cards" label="Loading MCP servers…" />
+      ) : loadError ? (
+        <div className="grid gap-3">
+          <SettingsInlineError
+            title="Couldn't load MCP servers"
+            message={settingsErrorMessage(loadError)}
+            action={
+              <Button variant="secondary" size="sm" onClick={() => void onChanged()}>
+                Retry
+              </Button>
+            }
+          />
+          <SettingsConnectionHint />
+        </div>
+      ) : servers.length === 0 ? (
+        <div className="settings-mcp-empty">
+          <strong>No servers configured</strong>
+          <span>
+            Guided setup starts from a URL, package, or command. Add server opens every field directly.
+          </span>
+        </div>
+      ) : (
+        <SettingsSurface>
+          <ul className="m-0 min-w-0 list-none p-0">
             {servers.map((s) => (
               <ServerRow key={s.name} server={s} onEdit={() => onEdit(s.name)} onChanged={onChanged} />
             ))}
-          </DividedList>
-        )}
-      </div>
-    </div>
+          </ul>
+        </SettingsSurface>
+      )}
+    </SettingsSection>
   );
 }

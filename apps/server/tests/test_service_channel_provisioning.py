@@ -50,7 +50,8 @@ async def test_service_accepts_session_service(store: AutomationStore, session_s
 async def test_create_provisions_channel(service: AutomationService, session_service: SessionService):
     auto = await service.create(
         name="scan offers",
-        description="check the offers feed",
+        description="Checks the offers feed.",
+        prompt="Check the offers feed.",
         trigger_type="time",
         every="1h",
     )
@@ -58,8 +59,7 @@ async def test_create_provisions_channel(service: AutomationService, session_ser
     assert auto is not None
     assert auto.thread_id is not None
     assert auto.read_history is True
-    # description is the authoritative prompt for session-bound automations.
-    assert auto.description == "check the offers feed"
+    assert auto.prompt == "Check the offers feed."
 
     data = await session_service.load(auto.thread_id)
     assert data is not None
@@ -79,7 +79,8 @@ async def test_create_emits_session_created_on_automation_bus(store: AutomationS
 
     auto = await svc.create(
         name="scan offers",
-        description="check the offers feed",
+        description="Checks the offers feed.",
+        prompt="Check the offers feed.",
         trigger_type="time",
         every="1h",
     )
@@ -144,7 +145,8 @@ async def test_session_created_reaches_automation_event_stream(store: Automation
 
     auto = await svc.create(
         name="watch inbox",
-        description="check the inbox",
+        description="Checks the inbox.",
+        prompt="Check the inbox.",
         trigger_type="time",
         every="1h",
     )
@@ -174,7 +176,8 @@ async def test_create_with_explicit_thread_id_skips_channel(
 
     auto = await service.create(
         name="bound to chat",
-        description="run in the existing chat",
+        description="Runs in the existing chat.",
+        prompt="Run in the existing chat.",
         trigger_type="time",
         every="1h",
         thread_id=chat_state.session_id,

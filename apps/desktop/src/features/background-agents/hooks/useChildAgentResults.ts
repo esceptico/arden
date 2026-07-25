@@ -3,10 +3,14 @@ import { getChildAgentResultApi } from "@/api/agents";
 import { isActiveAgentStatus, resultSnippet } from "@/lib/agentRun";
 import { useStore, type BackgroundAgent } from "@/stores";
 
+export function childAgentResultKey(agent: Pick<BackgroundAgent, "sessionId" | "taskId">): string {
+  return `${agent.sessionId}:${agent.taskId}`;
+}
+
 // Lazily fetch a one-line result preview for each terminal agent, once.
 // Running agents have no durable result yet, so they're skipped.
 export function useChildAgentResults(
-  sessionId: string | null,
+  scopeKey: string,
   agents: BackgroundAgent[],
 ): Record<string, string> {
   const config = useStore((s) => s.config);
@@ -15,28 +19,28 @@ export function useChildAgentResults(
   const inflight = useRef<Set<string>>(new Set());
 
   // The panel mounts once and is reused across navigation, so reset the
-  // per-session caches when the roster session changes.
+  // cache when the hub's session scope changes.
   useEffect(() => {
     done.current = new Set();
     inflight.current = new Set();
     setSnippets({});
-  }, [sessionId]);
+  }, [scopeKey]);
 
   // Include resultRef so the effect re-fires when a durable result lands
   // after the agent went terminal (otherwise an empty first fetch never retries).
   const terminalKeys = agents
     .filter((agent) => !isActiveAgentStatus(agent.status))
-    .map((agent) => `${agent.taskId}:${agent.resultRef ?? ""}`)
+    .map((agent) => `${childAgentResultKey(agent)}:${agent.resultRef ?? ""}`)
     .join(",");
 
   useEffect(() => {
-    if (!sessionId) return;
+    if (!scopeKey) return;
     for (const agent of agents) {
       if (isActiveAgentStatus(agent.status)) continue;
-      const key = agent.taskId;
+      const key = childAgentResultKey(agent);
       if (done.current.has(key) || inflight.current.has(key)) continue;
       inflight.current.add(key);
-      void getChildAgentResultApi(config, sessionId, key)
+      void getChildAgentResultApi(config, agent.sessionId, agent.taskId)
         .then((result) => {
           const snippet = resultSnippet(result.result ?? undefined);
           // Keyed + idempotent, so it's safe to apply even if the roster
@@ -54,7 +58,7 @@ export function useChildAgentResults(
         });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, config, terminalKeys]);
+  }, [scopeKey, config, terminalKeys]);
 
   return snippets;
 }

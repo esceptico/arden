@@ -43,21 +43,6 @@ SLACK = Integration(
         "slack_post_message": slack_post_message_tool,
         "slack_post_blocks": slack_post_blocks_tool,
     },
-    command_tool_names=frozenset(
-        {
-            "slack_search",
-            "slack_channel",
-            "slack_thread",
-            "slack_channels",
-            "slack_dms",
-            "slack_dm",
-            "slack_users",
-            "slack_user",
-            "slack_file",
-            "slack_post_message",
-            "slack_post_blocks",
-        }
-    ),
     notifier_class=SlackNotifier,
     build=_build,
     connection=IntegrationConnectionSpec(

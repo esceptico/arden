@@ -15,11 +15,18 @@ interface MenuItemProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   leading?: ReactNode;
   /** Tighter vertical padding (py-1) for long option lists; default py-1.5. */
   dense?: boolean;
+  /** Board context-menu row: the compact 28px no-icon menu contract. */
+  context?: boolean;
+  /** A two-line / custom-content row. It removes the empty icon gutter and
+   * the single-line truncating wrapper while preserving the shared chassis. */
+  rich?: boolean;
+  /** Optional trailing affordance (for example a keyboard shortcut). */
+  trailing?: ReactNode;
   children: ReactNode;
 }
 
 export const MenuItem = forwardRef<HTMLButtonElement, MenuItemProps>(function MenuItem(
-  { leading, dense, type, className, children, ...rest },
+  { leading, dense, context = false, rich = false, trailing, type, className, children, ...rest },
   ref,
 ) {
   return (
@@ -27,16 +34,21 @@ export const MenuItem = forwardRef<HTMLButtonElement, MenuItemProps>(function Me
       ref={ref}
       type={type ?? "button"}
       className={clsx(
-        "w-full flex items-center gap-2 px-2.5 text-left text-sm text-ink-soft",
-        "hover:bg-fill-hover hover:text-ink focus-visible:bg-fill-hover focus-visible:text-ink focus-visible:outline-none",
-        "transition-[background-color,color,scale] duration-check ease-out active:scale-[0.98]",
-        dense ? "py-1" : "py-1.5",
+        context
+          ? "arden-context-menu__item"
+          : [
+            "w-full flex items-center gap-2 px-2.5 text-left text-sm text-ink-soft",
+            "hover:bg-fill-hover hover:text-ink focus-visible:bg-fill-hover focus-visible:text-ink focus-visible:outline-none",
+            "transition-[background-color,color,scale] duration-check ease-out active:scale-[0.98]",
+            dense ? "py-1" : "py-1.5",
+          ],
         className,
       )}
       {...rest}
     >
-      <span className="grid place-items-center w-3.5 h-3.5 shrink-0">{leading}</span>
-      <span className="truncate">{children}</span>
+      {leading != null || (!context && !rich) ? <span className="grid place-items-center w-3.5 h-3.5 shrink-0">{leading}</span> : null}
+      {rich ? children : <span className={clsx("truncate", context && "min-w-0 flex-1")}>{children}</span>}
+      {trailing}
     </button>
   );
 });

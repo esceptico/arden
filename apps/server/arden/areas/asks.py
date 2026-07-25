@@ -55,6 +55,11 @@ class AskStore:
         if state in {"done", "dismissed"}:
             ask.resolution = resolution or state
             ask.resolved_at = datetime.now(UTC).isoformat()
+        else:
+            # A snooze or explicit reopen returns the ask to its unresolved
+            # lifecycle. Do not leave an old decision receipt on a live ask.
+            ask.resolution = None
+            ask.resolved_at = None
         self._flush()
         return ask
 

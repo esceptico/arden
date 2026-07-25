@@ -48,7 +48,9 @@ def _automation(
     return Automation(
         task_id=task_id,
         name=task_id,
-        description=f"{task_id} description",
+        description=None,
+        description_source=None,
+        prompt=f"Run {task_id}.",
         model=None,
         triggers=[TimeTrigger(at="09:00")],
         enabled=True,
@@ -91,7 +93,9 @@ async def test_session_bound_classification():
     automation = Automation(
         task_id="agent2",
         name="agent2",
-        description="agent2 description",
+        description=None,
+        description_source=None,
+        prompt="Run agent2.",
         model=None,
         triggers=[TimeTrigger(at="09:00")],
         enabled=True,

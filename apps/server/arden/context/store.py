@@ -375,7 +375,6 @@ ON CONFLICT(session_id) DO UPDATE SET
 SQL_GET_LATEST = """
 SELECT session_id FROM sessions
 WHERE archived_at IS NULL
-  AND COALESCE(agent_type, '') != 'command_sidecar'
 ORDER BY last_activity DESC LIMIT 1
 """
 
@@ -386,7 +385,6 @@ SELECT session_id, started_at, last_activity, name,
        json_array_length(COALESCE(messages, '[]')) AS message_count
 FROM sessions
 WHERE archived_at IS NULL
-  AND COALESCE(agent_type, '') != 'command_sidecar'
 ORDER BY last_activity DESC
 LIMIT ? OFFSET ?
 """
@@ -399,7 +397,6 @@ SELECT session_id, started_at, last_activity, name,
 FROM sessions
 WHERE archived_at IS NULL
   AND COALESCE(session_type, 'chat') != 'agent'
-  AND COALESCE(agent_type, '') != 'command_sidecar'
 ORDER BY last_activity DESC
 LIMIT ? OFFSET ?
 """
@@ -436,6 +433,7 @@ SQL_UPDATE_NAME = "UPDATE sessions SET name = ? WHERE session_id = ?"
 SQL_UPDATE_NAME_IF_EMPTY = "UPDATE sessions SET name = ? WHERE session_id = ? AND (name IS NULL OR name = '')"
 SQL_UPDATE_SESSION_AREA = "UPDATE sessions SET area_id = ? WHERE session_id = ?"
 SQL_UPDATE_SESSION_CHAT_MODEL = "UPDATE sessions SET chat_model = ? WHERE session_id = ?"
+SQL_SELECT_ARCHIVED_AT = "SELECT archived_at FROM sessions WHERE session_id = ?"
 SQL_ARCHIVE = "UPDATE sessions SET archived_at = ? WHERE session_id = ? AND archived_at IS NULL"
 SQL_RESTORE = "UPDATE sessions SET archived_at = NULL WHERE session_id = ? AND archived_at IS NOT NULL"
 SQL_DELETE_ARCHIVED = "DELETE FROM sessions WHERE session_id = ? AND archived_at IS NOT NULL"
@@ -443,7 +441,11 @@ SQL_DELETE_ARCHIVED = "DELETE FROM sessions WHERE session_id = ? AND archived_at
 SQL_LOAD_SESSION_MESSAGES_COUNT = "SELECT 1 FROM session_messages WHERE session_id = ? LIMIT 1"
 SQL_LOAD_SESSION_MESSAGES_JSON = "SELECT messages FROM sessions WHERE session_id = ?"
 CHAT_IDEMPOTENCY_TTL_DAYS = 30
-CHAT_IDEMPOTENCY_TERMINAL_STATUSES = ("completed", "cancelled", "error", "failed", "interrupted")
+CHAT_IDEMPOTENCY_TERMINAL_STATUSES = ("completed", "cancelled", "error", "failed", "ingested", "interrupted")
+# A real request hash is a SHA-256 hex digest, so this can never collide with
+# one. It lets DELETE win even when it reaches the server before the matching
+# POST has claimed its idempotency key.
+CHAT_IDEMPOTENCY_CANCELLED_TOMBSTONE_HASH = "cancelled-before-submit"
 AREA_FILTER_UNSET = object()
 _AREA_PATCH_UNSET = object()
 
@@ -746,6 +748,7 @@ class SessionStore:
         await self._migrate_background_agent_events_schema()
         await self._migrate_chat_compactions_schema()
         await self._migrate_chat_runs_schema()
+        await self._migrate_drop_command_sidecar_sessions()
         await self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_chat_idempotency_expires ON chat_idempotency_keys(expires_at)"
         )
@@ -1251,6 +1254,14 @@ class SessionStore:
         if changed:
             await self.conn.commit()
 
+    async def _migrate_drop_command_sidecar_sessions(self) -> None:
+        # The command sidecar is gone; its hidden `command_*` scratch sessions
+        # were only ever out of the sidebar because of a WHERE clause that no
+        # longer exists.
+        cursor = await self.conn.execute("DELETE FROM sessions WHERE agent_type = 'command_sidecar'")
+        if cursor.rowcount:
+            await self.conn.commit()
+
     async def _migrate_tool_calls_schema(self) -> None:
         rows = await self.conn.execute_fetchall("PRAGMA table_info(tool_calls)")
         if not rows:
@@ -1664,41 +1675,35 @@ class SessionStore:
         metadata = dict(metadata or {})
         client_id = metadata.get("client_id") if isinstance(metadata.get("client_id"), str) else None
         metadata_json = await asyncio.to_thread(lambda: json.dumps(metadata))
-        await self.conn.execute(
-            """
-            UPDATE chat_runs
-            SET status = 'interrupted',
-                stop_reason = 'superseded',
-                error_code = 'run_superseded',
-                error_message = 'Run was superseded by a newer run in the same session.',
-                updated_at = ?,
-                ended_at = ?
-            WHERE session_id = ?
-              AND run_id != ?
-              AND status IN ('pending', 'running')
-            """,
-            (now, now, session_id, run_id),
-        )
-        await self.conn.execute(
-            """
-            INSERT INTO chat_runs (
-                run_id, session_id, status, started_at, updated_at, metadata_json, client_id
+        try:
+            await self.conn.execute(
+                """
+                INSERT INTO chat_runs (
+                    run_id, session_id, status, started_at, updated_at, metadata_json, client_id
+                )
+                VALUES (?, ?, 'pending', ?, ?, ?, ?)
+                """,
+                (run_id, session_id, now, now, metadata_json, client_id),
             )
-            VALUES (?, ?, 'pending', ?, ?, ?, ?)
-            ON CONFLICT(run_id) DO UPDATE SET
-                session_id = excluded.session_id,
-                status = excluded.status,
-                updated_at = excluded.updated_at,
-                ended_at = NULL,
-                stop_reason = NULL,
-                metadata_json = excluded.metadata_json,
-                client_id = excluded.client_id,
-                error_code = NULL,
-                error_message = NULL
-            """,
-            (run_id, session_id, now, now, metadata_json, client_id),
-        )
-        await self.conn.commit()
+            await self.conn.execute(
+                """
+                UPDATE chat_runs
+                SET status = 'interrupted',
+                    stop_reason = 'superseded',
+                    error_code = 'run_superseded',
+                    error_message = 'Run was superseded by a newer run in the same session.',
+                    updated_at = ?,
+                    ended_at = ?
+                WHERE session_id = ?
+                  AND run_id != ?
+                  AND status IN ('pending', 'running')
+                """,
+                (now, now, session_id, run_id),
+            )
+            await self.conn.commit()
+        except BaseException:
+            await self.conn.rollback()
+            raise
 
     async def prune_expired_chat_idempotency_keys(self, now: datetime | None = None) -> int:
         now_iso = (now or datetime.now(UTC)).isoformat()
@@ -1783,6 +1788,101 @@ class SessionStore:
         )
         await self.conn.commit()
         return await self.get_chat_idempotency_key(session_id, client_id)
+
+    async def _upsert_cancelled_chat_idempotency(
+        self,
+        *,
+        session_id: str,
+        client_id: str,
+        run_id: str | None,
+        now: str,
+        expires_at: str,
+    ) -> None:
+        """Durably make a client id terminal without replacing its request hash."""
+        await self.conn.execute(
+            """
+            INSERT INTO chat_idempotency_keys (
+                session_id, client_id, request_hash, run_id, status, created_at, updated_at, expires_at
+            )
+            VALUES (?, ?, ?, ?, 'cancelled', ?, ?, ?)
+            ON CONFLICT(session_id, client_id) DO UPDATE SET
+                status = 'cancelled',
+                run_id = COALESCE(chat_idempotency_keys.run_id, excluded.run_id),
+                updated_at = excluded.updated_at,
+                expires_at = excluded.expires_at
+            """,
+            (
+                session_id,
+                client_id,
+                CHAT_IDEMPOTENCY_CANCELLED_TOMBSTONE_HASH,
+                run_id,
+                now,
+                now,
+                expires_at,
+            ),
+        )
+
+    async def cancel_chat_queued_message(
+        self,
+        *,
+        session_id: str,
+        client_id: str,
+        run_id: str | None = None,
+    ) -> str:
+        """Cancel a queued message, or tombstone a client id before it queues.
+
+        Returns ``cancelled`` when the client may discard its optimistic queue
+        item and ``ingested`` once the agent has already consumed it.
+        """
+        now_dt = datetime.now(UTC)
+        now = now_dt.isoformat()
+        expires_at = (now_dt + timedelta(days=CHAT_IDEMPOTENCY_TTL_DAYS)).isoformat()
+        rows = await self.conn.execute_fetchall(
+            """
+            SELECT status, run_id FROM chat_queued_messages
+            WHERE session_id = ? AND client_id = ?
+            """,
+            (session_id, client_id),
+        )
+        if rows:
+            row = rows[0]
+            if row["status"] == "ingested":
+                return "ingested"
+            if row["status"] in {"queued", "failed_retryable", "cancelled"}:
+                if row["status"] != "cancelled":
+                    await self.conn.execute(
+                        """
+                        UPDATE chat_queued_messages
+                        SET status = 'cancelled', updated_at = ?
+                        WHERE session_id = ? AND client_id = ?
+                          AND status IN ('queued', 'failed_retryable')
+                        """,
+                        (now, session_id, client_id),
+                    )
+                await self._upsert_cancelled_chat_idempotency(
+                    session_id=session_id,
+                    client_id=client_id,
+                    run_id=row["run_id"],
+                    now=now,
+                    expires_at=expires_at,
+                )
+                await self.conn.commit()
+                return "cancelled"
+            return "ingested"
+
+        idempotency = await self.get_chat_idempotency_key(session_id, client_id)
+        if idempotency is not None:
+            return "cancelled" if idempotency["status"] == "cancelled" else "ingested"
+
+        await self._upsert_cancelled_chat_idempotency(
+            session_id=session_id,
+            client_id=client_id,
+            run_id=run_id,
+            now=now,
+            expires_at=expires_at,
+        )
+        await self.conn.commit()
+        return "cancelled"
 
     async def record_chat_run_status(
         self,
@@ -2791,7 +2891,7 @@ class SessionStore:
                 updated_at = ?
             WHERE status = 'queued'
               AND run_id IN (
-                SELECT run_id FROM chat_runs WHERE status = 'interrupted'
+                  SELECT run_id FROM chat_runs WHERE status = 'interrupted'
               )
             """,
             (now,),
@@ -2807,10 +2907,27 @@ class SessionStore:
         run_id: str,
         message: dict,
         enqueued_seq: int | None = None,
-    ) -> None:
+    ) -> str:
+        """Record a queue item without reopening a terminal client id.
+
+        A cancellation can arrive while an earlier enqueue request is waiting
+        on storage. Its tombstone must win; otherwise the late write recreates
+        an invisible, never-drained queue row.
+        """
+        terminal_receipt = await self.conn.execute_fetchall(
+            """
+            SELECT status FROM chat_idempotency_keys
+            WHERE session_id = ? AND client_id = ?
+              AND status IN ('cancelled', 'ingested')
+            """,
+            (session_id, client_id),
+        )
+        if terminal_receipt:
+            return str(terminal_receipt[0]["status"])
+
         now = datetime.now(UTC).isoformat()
         message_json = await asyncio.to_thread(lambda: json.dumps(message, default=str))
-        await self.conn.execute(
+        cursor = await self.conn.execute(
             """
             INSERT INTO chat_queued_messages (
                 client_id, session_id, run_id, status, message_json, enqueued_at, updated_at, enqueued_seq
@@ -2825,13 +2942,23 @@ class SessionStore:
                 enqueued_seq = excluded.enqueued_seq,
                 ingested_at = NULL,
                 ingested_seq = NULL
+            WHERE chat_queued_messages.status NOT IN ('cancelled', 'ingested')
             """,
             (client_id, session_id, run_id, message_json, now, now, enqueued_seq),
         )
         await self.conn.commit()
+        if cursor.rowcount > 0:
+            return "queued"
+        rows = await self.conn.execute_fetchall(
+            "SELECT status FROM chat_queued_messages WHERE client_id = ?",
+            (client_id,),
+        )
+        return str(rows[0]["status"]) if rows else "cancelled"
 
     async def mark_chat_queued_message_ingested(self, client_id: str, *, ingested_seq: int | None = None) -> None:
-        now = datetime.now(UTC).isoformat()
+        now_dt = datetime.now(UTC)
+        now = now_dt.isoformat()
+        expires_at = (now_dt + timedelta(days=CHAT_IDEMPOTENCY_TTL_DAYS)).isoformat()
         await self.conn.execute(
             """
             UPDATE chat_queued_messages
@@ -2839,6 +2966,21 @@ class SessionStore:
             WHERE client_id = ?
             """,
             (now, now, ingested_seq, client_id),
+        )
+        # The client id is a durable request receipt too. Leaving it at
+        # ``queued`` makes a retry render a ghost queue item after the agent
+        # has already consumed it.
+        await self.conn.execute(
+            """
+            UPDATE chat_idempotency_keys
+            SET status = 'ingested', updated_at = ?, expires_at = ?
+            WHERE client_id = ?
+              AND session_id = (
+                  SELECT session_id FROM chat_queued_messages WHERE client_id = ?
+              )
+              AND status != 'cancelled'
+            """,
+            (now, expires_at, client_id, client_id),
         )
         await self.conn.commit()
 
@@ -3307,7 +3449,6 @@ class SessionStore:
                 FROM sessions
                 WHERE archived_at IS NULL
                   AND area_id IS NULL
-                  AND COALESCE(agent_type, '') != 'command_sidecar'
                   AND (? OR COALESCE(session_type, 'chat') != 'agent')
                 ORDER BY last_activity DESC
                 LIMIT ? OFFSET ?
@@ -3324,7 +3465,6 @@ class SessionStore:
                 FROM sessions
                 WHERE archived_at IS NULL
                   AND area_id = ?
-                  AND COALESCE(agent_type, '') != 'command_sidecar'
                   AND (? OR COALESCE(session_type, 'chat') != 'agent')
                 ORDER BY last_activity DESC
                 LIMIT ? OFFSET ?
@@ -3361,6 +3501,12 @@ class SessionStore:
 
     async def update_session_name_if_empty(self, session_id: str, name: str) -> bool:
         return await self._update(SQL_UPDATE_NAME_IF_EMPTY, (name, session_id))
+
+    async def is_session_archived(self, session_id: str) -> bool:
+        """Archived state is deliberately absent from `SessionState`: nothing on
+        the run path may act on it. Callers that curate the sidebar ask here."""
+        rows = await self.read_conn.execute_fetchall(SQL_SELECT_ARCHIVED_AT, (session_id,))
+        return bool(rows) and rows[0]["archived_at"] is not None
 
     async def archive_session(self, session_id: str) -> bool:
         return await self._update(SQL_ARCHIVE, (datetime.now(UTC).isoformat(), session_id))

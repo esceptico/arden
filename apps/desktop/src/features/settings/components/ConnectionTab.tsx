@@ -1,8 +1,13 @@
-import { Field } from "@/features/settings/components/Field";
 import type { AppConfig } from "@/api/core";
 import { BlurSwap } from "@/components/ui/BlurSwap";
 import { Button } from "@/components/ui/Button";
+import { Input } from "@/components/ui/Input";
 import { SettingsInlineError } from "@/features/settings/components/SettingsNotice";
+import {
+  SettingsSection,
+  SettingsSettingRow,
+  SettingsSurface,
+} from "@/features/settings/components/SettingsPage";
 
 export function ConnectionTab({
   formRef,
@@ -20,37 +25,56 @@ export function ConnectionTab({
   onSubmit: (e: React.FormEvent) => void;
 }) {
   return (
-    <form ref={formRef} onSubmit={onSubmit} className="grid gap-4">
-      <p className="text-sm text-muted leading-[1.45] max-w-[440px]">
-        Server URL and API key. Stored locally; encrypted with safeStorage when available.
-      </p>
-
-      <Field
-        label="Server URL"
-        value={draft.serverUrl}
-        onChange={(v) => onUpdate({ serverUrl: v })}
-        placeholder="http://localhost:6877"
-        help="The address where your Arden server is running."
-      />
-
-      <Field
-        label="API key"
-        type="password"
-        value={draft.apiKey}
-        onChange={(v) => onUpdate({ apiKey: v })}
-        placeholder="arden_…"
-        help="From your server config. Used as a Bearer token."
-      />
-
-      {error && <SettingsInlineError title="Could not connect" message={error} />}
-
-      <div className="flex justify-end pt-1">
-        <Button type="submit" disabled={saving}>
-          <BlurSwap swapKey={saving ? "checking" : "save"} blur={2}>
-            {saving ? "Checking…" : "Save & reconnect"}
-          </BlurSwap>
-        </Button>
-      </div>
+    <form ref={formRef} onSubmit={onSubmit} className="grid gap-5">
+      <SettingsSection title="Server" detail="saved together">
+        <SettingsSurface>
+          <SettingsSettingRow
+            title="Server URL"
+            hint="The address where your Arden server is running."
+            control={
+              <div className="settings-control-wide">
+                <Input
+                  type="url"
+                  value={draft.serverUrl}
+                  onChange={(event) => onUpdate({ serverUrl: event.target.value })}
+                  placeholder="http://localhost:6877"
+                  aria-label="Server URL"
+                  spellCheck={false}
+                  autoComplete="off"
+                />
+              </div>
+            }
+          />
+          <SettingsSettingRow
+            title="API key"
+            hint="From your server config. Used as a Bearer token."
+            control={
+              <div className="settings-control-wide">
+                <Input
+                  type="password"
+                  value={draft.apiKey}
+                  onChange={(event) => onUpdate({ apiKey: event.target.value })}
+                  placeholder="arden_…"
+                  aria-label="API key"
+                  spellCheck={false}
+                  autoComplete="off"
+                />
+              </div>
+            }
+          />
+        </SettingsSurface>
+        <div className="settings-scope-note">
+          Save &amp; reconnect validates both fields as one connection.
+        </div>
+        {error && <SettingsInlineError title="Could not connect" message={error} />}
+        <div className="settings-section-actions">
+          <Button type="submit" disabled={saving}>
+            <BlurSwap swapKey={saving ? "checking" : "save"} blur={2}>
+              {saving ? "Checking…" : "Save & reconnect"}
+            </BlurSwap>
+          </Button>
+        </div>
+      </SettingsSection>
     </form>
   );
 }

@@ -88,9 +88,33 @@ export type WikiLinkHandlers = {
   /** Exact artifact-path navigation for inline code. Kept separate so
    * wikilink aliases remain server-resolved. */
   existsInline?: (target: string) => boolean;
-  onNavigateInline?: (target: string) => void;
+  onNavigateInline?: (target: string, anchor?: string | null) => void;
 };
 
 /** Resolution handlers for [[Subject]] clicks. Default undefined so wikilinks
  *  are inert styled text everywhere except the memory view. */
 export const WikiLinkContext = createContext<WikiLinkHandlers | undefined>(undefined);
+
+export interface MemoryArtifactHref {
+  path: string;
+  anchor: string | null;
+}
+
+/** Parse only explicit relative memory-artifact links. External URLs, protocol
+ * links, and same-page anchors remain normal Markdown links. */
+export function parseMemoryArtifactHref(href: string): MemoryArtifactHref | null {
+  if (!href || href.startsWith("#") || href.startsWith("//") || /^[a-z][a-z\d+.-]*:/i.test(href)) {
+    return null;
+  }
+  const [rawPath, rawAnchor] = href.split("#", 2);
+  let path: string;
+  let anchor: string | null;
+  try {
+    path = decodeURIComponent(rawPath).replace(/^\.\/+/, "").replace(/^\/+/, "");
+    anchor = rawAnchor ? decodeURIComponent(rawAnchor) : null;
+  } catch {
+    return null;
+  }
+  if (!path.endsWith(".md")) return null;
+  return { path, anchor };
+}

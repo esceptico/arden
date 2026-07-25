@@ -19,7 +19,6 @@ import type {
   ActivityItem,
   ApprovalState,
   CachedSessionState,
-  QueuedMessage,
   UiMessage,
 } from "@/stores/types";
 
@@ -136,20 +135,6 @@ export function pendingConnectionsFromRuntime(
   }));
 }
 
-export function queuedMessagesFromRuntime(
-  runtime: SessionRuntimeSnapshot | undefined,
-  hasForegroundRun: boolean,
-): QueuedMessage[] {
-  if (!runtime || !hasForegroundRun) return [];
-  return runtime.queued_messages.map((message) => ({
-    clientId: message.client_id,
-    text: message.text,
-    images: message.images,
-    status: message.status,
-    enqueuedAt: message.enqueued_at ? Date.parse(message.enqueued_at) : Date.now(),
-  }));
-}
-
 export function cachedSessionFromHistory(
   sessionId: string,
   history: HistoryResponse,
@@ -198,7 +183,7 @@ export function cachedSessionFromHistory(
     pendingApprovals: pendingApprovalsFromRuntime(runtime, view.hasForegroundRun, skipApprovals),
     pendingConnections: pendingConnectionsFromRuntime(runtime, view.hasForegroundRun),
     reviewingApprovalToolId: null,
-    queuedMessages: queuedMessagesFromRuntime(runtime, view.hasForegroundRun),
+    queuedMessages: base.queuedMessages,
   };
 }
 

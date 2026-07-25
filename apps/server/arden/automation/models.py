@@ -5,13 +5,14 @@ from typing import Literal
 from arden.automation.triggers import Trigger
 
 AutomationKind = Literal["automation", "loop"]
+AutomationDescriptionSource = Literal["manual", "generated"]
 
 
 @dataclass
 class Automation:
     task_id: str
     name: str
-    description: str
+    prompt: str
     model: str | None
     triggers: list[Trigger]
     enabled: bool
@@ -42,6 +43,11 @@ class Automation:
     parent_automation_id: str | None = None
     idempotency_key: str | None = None
     idempotency_scope: str | None = None
+    # Display copy and executable instructions are separate contracts. A
+    # migrated row may intentionally have no display description until the
+    # user asks the cheap model to generate one.
+    description: str | None = None
+    description_source: AutomationDescriptionSource | None = None
 
     def in_cooldown(self, now: datetime) -> bool:
         if not self.cooldown_minutes or not self.last_run_at:

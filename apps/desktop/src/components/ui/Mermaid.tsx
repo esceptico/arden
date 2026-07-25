@@ -1,23 +1,20 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { createPortal } from "react-dom";
-import { AnimatePresence, motion } from "motion/react";
-import { Maximize2, Minimize2, Minus, Plus, RotateCcw } from "@/components/icons";
+import { motion } from "motion/react";
+import { Maximize2, Minus, Plus, RotateCcw, X } from "@/components/icons";
 import clsx from "clsx";
 import { getMermaid, invalidateMermaidTheme } from "@/lib/mermaidTheme";
 import {
-  ENTRY_PANEL,
   EASE_DECELERATE,
   MOTION,
-  POSE_MODAL,
   RISE_IN,
   RISE_SETTLED,
 } from "@/lib/tokens/motion";
-import { useEscapeKey, useTimeoutFlag } from "@/lib/hooks";
+import { useTimeoutFlag } from "@/lib/hooks";
 import { copyText } from "@/lib/clipboard";
 import { ICON } from "@/lib/icons";
-import { IconSwap } from "@/components/ui/IconSwap";
 import { CopyGlyph } from "@/components/ui/CopyGlyph";
 import { IconButton } from "@/components/ui/IconButton";
+import { PageModal } from "@/components/ui/PageModal";
 
 const RENDER_DEBOUNCE_MS = 400;
 const MIN_ZOOM = 0.1;
@@ -83,9 +80,8 @@ export function Mermaid({ code }: { code: string }) {
     );
   }
   // One-shot mount entrance so the panel doesn't hard-cut in when the SVG
-  // resolves out of the "Rendering…" placeholder. The fullscreen portal
-  // renders outside this wrapper, so the settled filter/transform styles
-  // can't clip or contain it.
+  // resolves out of the "Rendering…" placeholder. The viewer sheet renders
+  // through the shared modal layer, outside this wrapper.
   return (
     <motion.div
       initial={{ ...RISE_IN, y: 8 }}
@@ -97,49 +93,26 @@ export function Mermaid({ code }: { code: string }) {
   );
 }
 
-/** Top-level panel: holds fullscreen state and either renders the inline
- *  panel or a fullscreen portal containing the same panel. Each variant
- *  remounts `PanelInner`, which re-runs fit-to-view for the new size. */
+/** Top-level panel: the inline diagram stays in flow; the expanded viewer
+ *  uses the shared bottom-sheet contract. Each variant remounts PanelInner
+ *  so fit-to-view reads the correct surface size. */
 function MermaidPanel({ svg, source }: { svg: string; source: string }) {
   const [fullscreen, setFullscreen] = useState(false);
   const toggle = () => setFullscreen((v) => !v);
-  const root = document.querySelector("#app");
 
-  // Inline panel is always mounted; the fullscreen overlay renders into a
-  // portal under AnimatePresence so closing fades + scales back down. The
-  // inline panel sits behind the opaque modal during the toggle, so the
-  // exit animation has something to land on without a flash.
   return (
     <>
       <PanelInner svg={svg} source={source} fullscreen={false} onToggleFullscreen={toggle} />
-      {root &&
-        createPortal(
-          <AnimatePresence>
-            {fullscreen && (
-              <motion.div
-                key="mermaid-fullscreen"
-                className="modal-scrim absolute inset-0 z-[var(--z-modal)] p-6"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: MOTION.trace, ease: EASE_DECELERATE }}
-                onClick={() => setFullscreen(false)}
-              >
-                <motion.div
-                  className="w-full h-full"
-                  initial={POSE_MODAL}
-                  animate={{ opacity: 1, scale: 1, y: 0 }}
-                  exit={POSE_MODAL}
-                  transition={ENTRY_PANEL}
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <PanelInner svg={svg} source={source} fullscreen onToggleFullscreen={toggle} />
-                </motion.div>
-              </motion.div>
-            )}
-          </AnimatePresence>,
-          root,
-        )}
+      <PageModal
+        open={fullscreen}
+        onClose={() => setFullscreen(false)}
+        placement="bottom-sheet"
+        bottomSheetFill
+        grid="grid-rows-[minmax(0,1fr)]"
+        ariaLabel="Diagram viewer"
+      >
+        <PanelInner svg={svg} source={source} fullscreen onToggleFullscreen={toggle} />
+      </PageModal>
     </>
   );
 }
@@ -249,62 +222,72 @@ function PanelInner({
     setView(computeFit(surface, natural));
   };
 
-  // Esc exits fullscreen.
-  useEscapeKey(onToggleFullscreen, fullscreen);
-
   return (
     <div
       className={clsx(
-        "grid grid-rows-[auto_1fr] my-[0.6em] h-[480px] border border-line-soft rounded-xl bg-code-bg overflow-hidden",
-        fullscreen && "surface-panel !m-0 !h-full !rounded-2xl !bg-surface",
+        "grid grid-rows-[auto_1fr] overflow-hidden",
+        fullscreen
+          ? "m-0 h-full bg-transparent"
+          : "my-[0.6em] h-[480px] border border-line-soft rounded-xl bg-code-bg",
       )}
     >
-      <header className="flex items-center justify-between gap-2 py-1.5 pl-3 pr-2.5 border-b border-line-soft bg-surface">
-        <div className="text-xs font-medium uppercase tracking-[0.08em] text-faint">Diagram</div>
-        <div className="flex items-center gap-0.5">
-          <ToolbarButton
-            label="Zoom out"
-            onClick={() => zoomBy(1 / ZOOM_STEP)}
-            disabled={view.zoom <= MIN_ZOOM + 1e-3}
-          >
-            <Minus size={ICON.SM} strokeWidth={2} />
-          </ToolbarButton>
-          <span className="w-11 text-center text-xs tabular-nums text-muted select-none">{Math.round(view.zoom * 100)}%</span>
-          <ToolbarButton
-            label="Zoom in"
-            onClick={() => zoomBy(ZOOM_STEP)}
-            disabled={view.zoom >= MAX_ZOOM - 1e-3}
-          >
-            <Plus size={ICON.SM} strokeWidth={2} />
-          </ToolbarButton>
-          <ToolbarButton label="Fit to view" onClick={fitToView}>
-            <RotateCcw size={ICON.XS} strokeWidth={2} />
-          </ToolbarButton>
-          <span className="w-px h-4 bg-line mx-1" />
-          <ToolbarButton
-            label={copied ? "Copied" : "Copy source"}
-            onClick={() => void onCopy()}
-          >
-            <CopyGlyph copied={copied} size={ICON.SM} checkClassName="text-ok" />
-          </ToolbarButton>
-          <ToolbarButton
-            label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
-            onClick={onToggleFullscreen}
-          >
-            <IconSwap
-              state={fullscreen ? "b" : "a"}
-              iconA={<Maximize2 size={ICON.SM} strokeWidth={2} />}
-              iconB={<Minimize2 size={ICON.SM} strokeWidth={2} />}
-            />
-          </ToolbarButton>
-        </div>
-      </header>
+      {fullscreen ? (
+        <header className="flex min-h-12 shrink-0 items-center gap-2 border-b border-line px-3 pl-4">
+          <strong className="text-base font-semibold text-ink">Workflow diagram</strong>
+          <div className="ml-auto shrink-0">
+            <IconButton
+              onClick={onToggleFullscreen}
+              aria-label="Close Mermaid viewer"
+              title="Close Mermaid viewer"
+            >
+              <X size={ICON.SM} />
+            </IconButton>
+          </div>
+        </header>
+      ) : (
+        <header className="flex items-center justify-between gap-2 py-1.5 pl-3 pr-2.5 border-b border-line-soft bg-surface">
+          <div className="text-xs font-medium uppercase tracking-[0.08em] text-faint">Diagram</div>
+          <div className="flex items-center gap-0.5">
+            <ToolbarButton
+              label="Zoom out"
+              onClick={() => zoomBy(1 / ZOOM_STEP)}
+              disabled={view.zoom <= MIN_ZOOM + 1e-3}
+            >
+              <Minus size={ICON.SM} strokeWidth={2} />
+            </ToolbarButton>
+            <span className="w-11 text-center text-xs tabular-nums text-muted select-none">{Math.round(view.zoom * 100)}%</span>
+            <ToolbarButton
+              label="Zoom in"
+              onClick={() => zoomBy(ZOOM_STEP)}
+              disabled={view.zoom >= MAX_ZOOM - 1e-3}
+            >
+              <Plus size={ICON.SM} strokeWidth={2} />
+            </ToolbarButton>
+            <ToolbarButton label="Fit to view" onClick={fitToView}>
+              <RotateCcw size={ICON.XS} strokeWidth={2} />
+            </ToolbarButton>
+            <span className="w-px h-4 bg-line mx-1" />
+            <ToolbarButton
+              label={copied ? "Copied" : "Copy source"}
+              onClick={() => void onCopy()}
+            >
+              <CopyGlyph copied={copied} size={ICON.SM} checkClassName="text-ok" />
+            </ToolbarButton>
+            <ToolbarButton label="Fullscreen" onClick={onToggleFullscreen}>
+              <Maximize2 size={ICON.SM} strokeWidth={2} />
+            </ToolbarButton>
+          </div>
+        </header>
+      )}
       <div
         ref={surfaceRef}
         className={clsx(
-          "relative overflow-hidden select-none touch-none bg-code-bg",
+          "relative overflow-hidden select-none touch-none",
+          fullscreen ? "bg-transparent" : "bg-code-bg",
           dragging ? "cursor-grabbing" : "cursor-grab",
         )}
+        role={fullscreen ? "img" : undefined}
+        aria-label={fullscreen ? "Workflow diagram" : undefined}
         onMouseDown={onMouseDown}
         onMouseMove={onMouseMove}
         onMouseUp={endDrag}

@@ -6,7 +6,6 @@ import { ICON } from "@/lib/icons";
 import { BlurSwap } from "@/components/ui/BlurSwap";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
-import { StatusDot } from "@/components/ui/StatusDot";
 import { SwitchControl } from "@/components/ui/SwitchControl";
 
 export function ServerRow({
@@ -36,34 +35,35 @@ export function ServerRow({
   const needsAuth = server.auth === "oauth" && !server.connected;
   const subtitleParts: string[] = [];
   subtitleParts.push(server.transport.toUpperCase());
-  if (server.connected) subtitleParts.push(`${server.tool_count} tool${server.tool_count === 1 ? "" : "s"}`);
-  else if (!server.enabled) subtitleParts.push("disabled");
+  if (!server.enabled) subtitleParts.push("disabled");
+  else if (server.connected) subtitleParts.push(`${server.tool_count} tool${server.tool_count === 1 ? "" : "s"}`);
   else if (needsAuth) subtitleParts.push(server.error ? "tokens expired" : "sign in needed");
   else if (server.error) subtitleParts.push("error");
   else subtitleParts.push("disconnected");
+  const state = !server.enabled
+    ? { label: "Disabled", tone: "neutral", detail: "This server is disabled." }
+    : server.connected
+      ? { label: "Ready", tone: "ok", detail: "Connected and enabled." }
+      : needsAuth
+        ? { label: "Auth required", tone: "warn", detail: "OAuth authentication is required before discovery." }
+        : server.error
+          ? { label: "Error", tone: "bad", detail: server.error }
+          : { label: "Offline", tone: "neutral", detail: "The server is not connected." };
+  const rowCopy = error ?? (server.error && !needsAuth ? server.error : state.detail);
 
   return (
-    <li className="flex min-w-0 items-center gap-2 px-3.5 py-2.5">
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <StatusDot tone={server.connected ? "ok" : server.error ? "bad" : "neutral"} />
-          <span className="text-base font-medium text-ink tracking-[-0.005em] truncate">
-            {server.name}
-          </span>
+    <li className="settings-data-row settings-mcp-row">
+      <div className="settings-data-row-main">
+        <div className="settings-data-row-title">
+          <span className="truncate">{server.name}</span>
+          <span className="settings-mcp-status" data-tone={state.tone}>{state.label}</span>
         </div>
-        <div className="mt-0.5 ml-3.5 text-xs text-muted tabular-nums">
-          {subtitleParts.join(" · ")}
-        </div>
-        {(error || (server.error && !needsAuth)) && (
-          <div
-            className="mt-1 ml-3.5 text-xs text-bad truncate"
-            title={error ?? server.error ?? ""}
-          >
-            {error ?? server.error}
-          </div>
-        )}
+        <div className="settings-data-row-sub">{subtitleParts.join(" · ")}</div>
       </div>
-      <div className="flex shrink-0 items-center gap-1">
+      <div className={error || state.tone === "bad" ? "settings-data-row-copy settings-mcp-error" : "settings-data-row-copy"}>
+        {rowCopy}
+      </div>
+      <div className="settings-data-row-end">
         {needsAuth && (
           <Button
             variant="secondary"
@@ -77,7 +77,7 @@ export function ServerRow({
           </Button>
         )}
         <IconButton onClick={onEdit} aria-label="Configure">
-          <SettingsIcon size={ICON.MD} strokeWidth={2} />
+          <SettingsIcon size={ICON.MD} />
         </IconButton>
         <SwitchControl
           size="sm"

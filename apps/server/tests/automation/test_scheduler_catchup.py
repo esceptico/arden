@@ -35,7 +35,9 @@ def _auto(**kw) -> Automation:
     base = {
         "task_id": "t",
         "name": "n",
-        "description": "d",
+        "description": "Runs daily memory maintenance.",
+        "description_source": "manual",
+        "prompt": "Run daily memory maintenance.",
         "model": None,
         "triggers": [TimeTrigger(at="03:00", days="daily")],
         "enabled": True,

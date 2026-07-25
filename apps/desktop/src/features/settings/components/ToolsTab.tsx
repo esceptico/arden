@@ -9,11 +9,9 @@ import { SettingsConnectionHint, SettingsInlineError } from "@/features/settings
 import { SaveStatus } from "@/features/settings/components/SaveStatus";
 import { SettingsTabSkeleton } from "@/features/settings/components/SettingsTabSkeleton";
 import { ToolPolicySelect } from "@/features/settings/components/ToolPolicySelect";
+import { SettingsSection, SettingsSurface } from "@/features/settings/components/SettingsPage";
 import { SearchInput } from "@/components/ui/SearchInput";
 import { Button } from "@/components/ui/Button";
-import { DividedList } from "@/components/ui/DividedList";
-import { SectionHeader } from "@/components/ui/SectionHeader";
-import { EmptyNote } from "@/components/ui/EmptyState";
 
 export function ToolsTab() {
   const config = useStore((s) => s.config);
@@ -40,17 +38,18 @@ export function ToolsTab() {
   }, []);
 
   const overrides = serverConfig?.tool_overrides ?? {};
+  const nonMcpTools = useMemo(() => (tools ?? []).filter((tool) => tool.source !== "mcp"), [tools]);
+
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    const list = (tools ?? []).filter((tool) => tool.source !== "mcp");
-    if (!needle) return list;
-    return list.filter((tool) =>
+    if (!needle) return nonMcpTools;
+    return nonMcpTools.filter((tool) =>
       [tool.name, tool.display_name, tool.description, tool.source ?? ""]
         .join(" ")
         .toLowerCase()
         .includes(needle),
     );
-  }, [query, tools]);
+  }, [nonMcpTools, query]);
 
   const groups = useMemo(() => {
     const out = new Map<string, ToolMetadata[]>();
@@ -83,7 +82,7 @@ export function ToolsTab() {
 
   if (loadError) {
     return (
-      <div className="grid gap-3">
+      <div className="grid gap-[30px]">
         <SettingsInlineError
           title="Couldn't load tools"
           message={settingsErrorMessage(loadError)}
@@ -99,67 +98,64 @@ export function ToolsTab() {
   }
 
   return (
-    <div className="grid gap-4">
-      <div className="flex items-center justify-between gap-3">
-        <p className="m-0 text-sm text-muted leading-[1.45] max-w-[520px]">
-          Override tool approval behavior. Denied tools are hidden from the agent and blocked at execution.
-        </p>
-        <div className="flex items-center gap-2.5">
-          <SaveStatus busy={busy} saved={saved} />
-          <SearchInput
-            value={query}
-            onChange={setQuery}
-            placeholder="Search tools"
-            className="w-[220px]"
-          />
-        </div>
+    <div className="grid gap-[30px]">
+      <div className="settings-list-toolbar">
+        <SearchInput
+          value={query}
+          onChange={setQuery}
+          placeholder="Search tools"
+          trailing={formatToolCount(filtered.length)}
+          className="settings-list-search"
+        />
+        <SaveStatus busy={busy} saved={saved} className="settings-list-save-status" />
       </div>
 
       {error && <SettingsInlineError title="Couldn't save tool override" message={error} />}
 
       <div className="grid gap-3">
         {groups.length === 0 && (
-          <EmptyNote>
+          <div className="settings-empty-note">
             {query.trim() ? `No tools match "${query.trim()}".` : "No tools available."}
-          </EmptyNote>
+          </div>
         )}
         {groups.map(([source, items]) => (
-          <section key={source} className="grid gap-2">
-            <SectionHeader label={formatSource(source)} count={items.length} />
-            <DividedList>
+          <SettingsSection key={source} title={formatSource(source)} detail={formatToolCount(items.length)}>
+            <SettingsSurface>
               {items.map((tool) => {
                 const current = overrides[tool.name] ?? baseDecision(tool);
                 return (
-                  <li key={tool.name} className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 px-3 py-2.5">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="text-sm font-medium text-ink truncate">{tool.display_name}</span>
-                        <span className="text-2xs uppercase tracking-[0.06em] text-faint shrink-0">
-                          {tool.policy.action}
-                        </span>
+                  <div key={tool.name} className="settings-data-row settings-tool-row">
+                    <div className="settings-data-row-main">
+                      <div className="settings-data-row-title">
+                        <span className="truncate">{tool.display_name}</span>
                       </div>
-                      <div className="mt-0.5 text-xs text-muted font-mono truncate">{tool.name}</div>
-                      {tool.description && (
-                        <div className="mt-1 text-xs text-muted leading-snug line-clamp-2">
-                          {tool.description}
-                        </div>
-                      )}
+                      <div className="settings-data-row-sub">{tool.name} · {tool.policy.action}</div>
                     </div>
-                    <ToolPolicySelect
-                      value={current}
-                      onChange={(decision) => setOverride(tool, decision)}
-                    />
-                  </li>
+                    <div className="settings-data-row-copy">{tool.description}</div>
+                    <div className="settings-data-row-end">
+                      <ToolPolicySelect
+                        value={current}
+                        onChange={(decision) => setOverride(tool, decision)}
+                      />
+                    </div>
+                  </div>
                 );
               })}
-            </DividedList>
-          </section>
+            </SettingsSurface>
+          </SettingsSection>
         ))}
       </div>
     </div>
   );
 }
 
+function formatToolCount(count: number): string {
+  return `${count} ${count === 1 ? "tool" : "tools"}`;
+}
+
 function formatSource(source: string): string {
-  return source.replace(/^_+/, "").replaceAll("_", " ");
+  const normalized = source.replace(/^_+/, "");
+  if (normalized === "builtin" || normalized === "built_in") return "Built in";
+  const label = normalized.replaceAll("_", " ");
+  return label ? `${label[0].toUpperCase()}${label.slice(1)}` : "Unknown";
 }

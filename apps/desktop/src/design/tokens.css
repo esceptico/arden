@@ -1,0 +1,679 @@
+@import "./base.css";
+
+/*
+ * Arden desktop tokens
+ * --------------------
+ * base.css (a ported copy of the Board mockup foundation) above is
+ * canonical. This file is only the production adapter: Tailwind names,
+ * compatibility aliases, and temporary fallbacks for production-only roles.
+ */
+
+/* Fontsource exposes the same mockup fonts under variable-family names.
+ * Resolve that packaging difference here so every mockup typography token
+ * uses the bundled faces instead of silently falling back to system fonts. */
+:root {
+  --sans: "Geist Variable", "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono: "Geist Mono Variable", "Geist Mono", ui-monospace, monospace;
+}
+
+/* Tailwind v4 utility bridge. Values resolve from the same Board tokens used
+ * by authored CSS, so utilities cannot fork the theme. */
+@theme inline {
+  --font-sans: var(--sans);
+  --font-mono: var(--mono);
+
+  --text-2xs: 11px;
+  --text-xs: 12.5px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-md: 15px;
+  --text-lg: 16.5px;
+  --text-xl: 18px;
+  --text-2xl: 20px;
+  --text-3xl: 28px;
+
+  --color-bg: var(--paper);
+  --color-bg-main: var(--paper);
+  --color-surface: var(--surface-1);
+  --color-surface-soft: var(--panel-soft);
+  --color-surface-sunken: var(--sunken);
+  --color-code-bg: var(--surface-2);
+  --color-line: var(--line);
+  --color-line-soft: var(--edge);
+  --color-line-strong: var(--line-strong);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-on-ink: var(--paper);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-whisper: var(--whisper);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-strong: var(--accent-ink);
+  --color-ok: var(--success);
+  --color-ok-soft: color-mix(in oklab, var(--success) 12%, transparent);
+  --color-warn: var(--warning);
+  --color-warn-soft: color-mix(in oklab, var(--warning) 11%, transparent);
+  --color-bad: var(--danger);
+  --color-bad-soft: color-mix(in oklab, var(--danger) 10%, transparent);
+  --color-info: var(--accent-ink);
+  --color-fill-hover: var(--state-hover-bg);
+  --color-fill-selected: var(--state-selected-bg);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-surface-4: var(--surface-4);
+  --color-surface-5: var(--surface-5);
+  --color-surface-6: var(--surface-6);
+  --color-surface-7: var(--surface-7);
+  --color-surface-8: var(--surface-8);
+
+  --shadow-sm: var(--shadow-2);
+  --shadow-md: var(--shadow-3);
+  --shadow-pop: var(--shadow-5);
+
+  --z-below: -1;
+  --z-base: 0;
+  --z-raised: 1;
+  --z-sticky: 10;
+  --z-shell: 20;
+  --z-shell-rail: 30;
+  --z-peek: 40;
+  --z-shell-toggle: 45;
+  --z-panel: 30;
+  --z-panel-overlay: 45;
+  --z-scrim: 50;
+  --z-modal: 50;
+  --z-sheet: 60;
+  --z-modal-top: 70;
+  --z-popover: 30;
+  --z-nested: 70;
+  --z-toast: 80;
+  --z-tooltip: 90;
+  --z-demo: 100;
+
+  /* Component-internal paint order. These names stay below application
+     overlay roles and are only for elements sharing one control context. */
+  --z-control-pips: 1;
+  --z-control-occlusion: 2;
+  --z-control-fill: 3;
+  --z-control-content: 4;
+  --z-control-interaction: 5;
+
+  --animate-roll-in: rollIn var(--motion-popover) var(--smooth-out);
+  --animate-fade-in: fadeIn var(--motion-dissolve) var(--smooth-out);
+  --duration-indicator: var(--motion-indicator);
+  --duration-fast: var(--motion-press);
+  --duration-check: var(--motion-feedback);
+  --duration-row: var(--motion-feedback);
+  --duration-palette: var(--motion-popover);
+  --duration-trace: var(--motion-dissolve);
+  --duration-panel: var(--motion-dissolve);
+  --duration-route: var(--motion-page-enter);
+  --duration-travel: var(--motion-tabs-slide);
+  --ease-emphasized: cubic-bezier(.32, .72, 0, 1);
+  --ease-out-soft: var(--smooth-out);
+  --ease-hover: var(--smooth-out);
+  --ease-standard: cubic-bezier(.2, 0, 0, 1);
+  --ease-decelerate: cubic-bezier(.05, .7, .1, 1);
+  --ease-smooth-out: var(--smooth-out);
+  --ease-out: var(--smooth-out);
+  --default-transition-duration: var(--motion-feedback);
+  --default-transition-timing-function: var(--smooth-out);
+}
+
+/* Keep the old mirror as a fallback while consumers move to Board names.
+ * Unlayered declarations from board-system.css always win the cascade, so a
+ * mockup token change reaches production without a second manual edit. */
+@layer legacy-board-fallback {
+:root:root {
+  color-scheme: light;
+
+  /* Raw surface ladder. */
+  --surface-1: #fafafa;
+  --surface-2: #fcfcfc;
+  --surface-3: #ffffff;
+  --surface-4: #ffffff;
+  --surface-5: #ffffff;
+  --surface-6: #ffffff;
+  --surface-7: #ffffff;
+  --surface-8: #ffffff;
+  --surface-muted: #f4f4f5;
+
+  --shadow-color: rgb(0 0 0 / 6%);
+  --shadow-1: 0 0 0 1px var(--shadow-color);
+  --shadow-2: 0 0 0 1px var(--shadow-color), 0 1px 1px -.5px var(--shadow-color);
+  --shadow-3: 0 0 0 1px var(--shadow-color), 0 1px 1px -.5px var(--shadow-color), 0 3px 3px -1.5px var(--shadow-color);
+  --shadow-4: 0 0 0 1px var(--shadow-color), 0 1px 1px -.5px var(--shadow-color), 0 3px 3px -1.5px var(--shadow-color), 0 6px 6px -3px var(--shadow-color);
+  --shadow-5: 0 0 0 1px var(--shadow-color), 0 1px 1px -.5px var(--shadow-color), 0 3px 3px -1.5px var(--shadow-color), 0 6px 6px -3px var(--shadow-color), 0 12px 12px -6px var(--shadow-color);
+  --shadow-6: 0 0 0 1px var(--shadow-color), 0 1px 1px -.5px var(--shadow-color), 0 3px 3px -1.5px var(--shadow-color), 0 6px 6px -3px var(--shadow-color), 0 12px 12px -6px var(--shadow-color), 0 24px 24px -12px var(--shadow-color);
+  --shadow-7: 0 0 0 1px var(--shadow-color), 0 1px 1px -.5px var(--shadow-color), 0 3px 3px -1.5px var(--shadow-color), 0 6px 6px -3px var(--shadow-color), 0 12px 12px -6px var(--shadow-color), 0 24px 24px -12px var(--shadow-color), 0 48px 48px -24px var(--shadow-color);
+  --shadow-8: 0 0 0 1px var(--shadow-color), 0 1px 1px -.5px var(--shadow-color), 0 3px 3px -1.5px var(--shadow-color), 0 6px 6px -3px var(--shadow-color), 0 12px 12px -6px var(--shadow-color), 0 24px 24px -12px var(--shadow-color), 0 48px 48px -24px var(--shadow-color), 0 96px 96px -48px var(--shadow-color);
+
+  /* Semantic surfaces and ink. */
+  --paper: var(--surface-1);
+  --panel: var(--surface-2);
+  --card: var(--surface-3);
+  --panel-soft: var(--surface-muted);
+  --panel-strong: var(--surface-4);
+  --sunken: #ebebeb;
+  --line: #ececec;
+  --line-strong: #dededb;
+  --edge: rgb(0 0 0 / 8%);
+  --edge-strong: rgb(0 0 0 / 12%);
+  --ink: #171717;
+  --ink-soft: #3f3f3f;
+  --muted: #676767;
+  --faint: #6b6b6b;
+  --whisper: #929292;
+  --accent: #5b55ee;
+  --accent-ink: #4a45d0;
+  --accent-soft: color-mix(in oklab, var(--accent) 12%, transparent);
+  --success: #2f7d48;
+  --warning: #8f6110;
+  --danger: #b04b4b;
+  --state-hover-bg: rgb(0 0 0 / 4%);
+  --state-selected-bg: rgb(0 0 0 / 7%);
+  --control-shadow: var(--shadow-2);
+  --control-selected-bg: var(--surface-4);
+  --control-selected-shadow: var(--shadow-3);
+  --composer-shadow: var(--shadow-3);
+  --selected-shadow: var(--shadow-2);
+  --shadow-low: var(--shadow-2);
+  --shadow-mid: var(--shadow-3);
+  --shadow-float: var(--shadow-5);
+  --hl-keyword: #171717;
+  --hl-string: #3d3d3d;
+  --hl-number: #6e6e6e;
+  --hl-literal: #6e6e6e;
+  --hl-comment: #8f8f8f;
+  --hl-attr: #3d3d3d;
+  --hl-type: #171717;
+  --hl-built-in: #171717;
+  --hl-title: #171717;
+  --hl-tag: #3d3d3d;
+  --hl-meta: #8f8f8f;
+  --hl-symbol: #3d3d3d;
+
+  /* Compatibility aliases used by Tailwind utilities and surviving clients. */
+  --color-bg: var(--paper);
+  --color-bg-main: var(--paper);
+  --color-surface: var(--surface-1);
+  --color-surface-soft: var(--panel-soft);
+  --color-surface-sunken: var(--sunken);
+  --color-code-bg: var(--surface-2);
+  --color-line: var(--line);
+  --color-line-soft: var(--edge);
+  --color-line-strong: var(--line-strong);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-on-ink: var(--paper);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-whisper: var(--whisper);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-strong: var(--accent-ink);
+  --color-ok: var(--success);
+  --color-ok-soft: color-mix(in oklab, var(--success) 12%, transparent);
+  --color-warn: var(--warning);
+  --color-warn-soft: color-mix(in oklab, var(--warning) 11%, transparent);
+  --color-bad: var(--danger);
+  --color-bad-soft: color-mix(in oklab, var(--danger) 10%, transparent);
+  --color-info: var(--accent-ink);
+  --color-fill-hover: var(--state-hover-bg);
+  --color-fill-selected: var(--state-selected-bg);
+
+  /* Typography. */
+  --sans: "Geist Variable", "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono: "Geist Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --font-sans: var(--sans);
+  --font-mono: var(--mono);
+  --text-2xs: 11px;
+  --text-xs: 12.5px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-md: 15px;
+  --text-lg: 16.5px;
+  --text-xl: 18px;
+  --text-2xl: 20px;
+  --text-3xl: 28px;
+  --text-display: 24px;
+  --text-section: var(--text-xl);
+  --text-reading: var(--text-md);
+  --text-body: var(--text-sm);
+  --text-control: 12px;
+  --text-meta: 10.5px;
+  --leading-reading: 1.65;
+  --leading-body: 1.55;
+  --leading-meta: 1.4;
+  --border-width: 1px;
+  --swatch-shadow: inset 0 0 0 1px rgb(0 0 0 / 12%);
+
+  /* Spacing and geometry. */
+  --space-0-5: .125rem;
+  --space-1: .25rem;
+  --space-1-5: .375rem;
+  --space-2: .5rem;
+  --space-2-5: .625rem;
+  --space-3: .75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  /* Breathing room between rows of any menu-like stack (dropdowns, context
+     menus, pickers) — fluid-functionalism's uniform gap-0.5 list convention.
+     Applied centrally in foundation.css; never hand-space menu rows. */
+  --list-gap: 2px;
+  --icon-size: 1rem;
+  --icon-button-size: 1.75rem;
+  --control-size: 1.75rem;
+  --control-size-compact: 1.625rem;
+  --control-size-large: 1.875rem;
+  --tab-control-size: var(--control-size);
+  --tab-active-gap: var(--space-1-5);
+  --tab-inline-padding: var(--space-2-5);
+  --tab-bar-gap: var(--space-0-5);
+  --tab-bar-padding: .1875rem;
+  --tab-bar-height: calc(var(--tab-control-size) + var(--tab-bar-padding) * 2);
+  --tab-line-size: .125rem;
+  --tab-triplet-width: calc(var(--tab-control-size) * 3 + var(--tab-bar-gap) * 2 + var(--tab-bar-padding) * 2);
+  --tab-more-min-width: 2rem;
+  --interactive-row-height: 1.6875rem;
+  --interactive-row-gap: var(--space-1);
+  --interactive-row-inline-padding: var(--space-3);
+  --modal-header-pt: 1.125rem;
+  --modal-header-h: calc(var(--modal-header-pt) + 2.5rem);
+  --sidebar-width: 18rem;
+  --sidebar-min-width: 15rem;
+  --sidebar-max-width: 24.25rem;
+  --sidebar-edge: .5rem;
+  --sidebar-gap: clamp(1.5rem, 2.5vw, 2rem);
+  --shell-control-size: 1.375rem;
+  --chrome-light-size: .875rem;
+  --chrome-light-top: 1.125rem;
+  --chrome-light-left: 1.125rem;
+  --chrome-light-gap: var(--space-1-5);
+  --chrome-control-gap: var(--space-3);
+  --chrome-control-inset: calc(var(--chrome-light-top) + (var(--chrome-light-size) - var(--shell-control-size)) / 2);
+  --chrome-sidebar-toggle-left: calc(var(--chrome-light-left) + var(--chrome-light-size) * 3 + var(--chrome-light-gap) * 2 + var(--chrome-control-gap));
+  --chrome-back-control-left: calc(var(--chrome-sidebar-toggle-left) + var(--shell-control-size) + var(--chrome-control-gap));
+  --chrome-sidebar-toggle-fallback-left: 1.4375rem;
+  --chrome-sidebar-toggle-resolved-left: var(--chrome-sidebar-toggle-fallback-left);
+  --chrome-back-control-resolved-left: calc(var(--chrome-sidebar-toggle-resolved-left) + var(--shell-control-size) + var(--chrome-control-gap));
+  --chrome-chat-title-inset: calc(var(--chrome-back-control-resolved-left) + var(--space-2-5));
+  --content-max-width: 47.5rem;
+  --content-gutter: clamp(1rem, 2.5vw, 1.75rem);
+  /* Automations is a full-window master-detail instrument. These geometry
+     roles are shared by the rail, detail, and compact presentation rather
+     than being restated in its feature stylesheet. */
+  --automation-detail-max-width: var(--content-max-width);
+  --automation-window-gutter: clamp(1rem, 2.5vw, 2rem);
+  --automation-footer-size: 3.375rem;
+  --automation-row-size: 2.75rem;
+  --automation-ledger-row-size: 2.5rem;
+  --automation-content-inset: .125rem;
+  --automation-schedule-row-size: 2rem;
+  --automation-schedule-token-size: 1.5rem;
+  --automation-schedule-tape-size: 5rem;
+  --automation-schedule-day-size: 1.5rem;
+  --automation-pause-control-width: 4.5rem;
+  --command-palette-width: 38.5rem;
+  --command-palette-max-height: 31.25rem;
+  --command-palette-top: 11vh;
+  --command-palette-row-size: 2rem;
+  --modal-scrim-bg: color-mix(in oklab, var(--ink) 9%, transparent);
+  --modal-scrim-blur: 2px;
+  --instrument-collapsed-width: calc(var(--control-size) + var(--tab-bar-padding) * 2);
+  --instrument-min-expanded-width: 16.75rem;
+  --instrument-expanded-room: 32.5rem;
+  --instrument-tab-clearance: 9rem;
+  --instrument-layout-gap: var(--space-4);
+  --tab-overflow-min-width: 8rem;
+  --tab-strip-chrome: .5rem;
+  --memory-chrome-top: 3.375rem;
+  --memory-peek-top: 6.375rem;
+  --memory-compact-chrome-left: 7.375rem;
+  --memory-tree-base-inset: .375rem;
+  --memory-tree-indent-step: 1rem;
+  --memory-tree-twisty-size: 1rem;
+  --range-edge-inset: .90625rem;
+  --range-marker-width: .125rem;
+  --range-text-clearance: .25rem;
+  --range-opacity-distance: .5rem;
+  --range-drag-threshold: .1875rem;
+  --home-compact-top-inset: 5.75rem;
+  --peek-width: clamp(21.25rem, 27vw, 24.5rem);
+  --peek-header-size: 2.75rem;
+  --setup-sheet-top: 6.375rem;
+  --setup-sheet-bottom: 2.125rem;
+  --setup-sheet-width: 26.25rem;
+  --surface-blur: 1.125rem;
+  --popover-offset: .3125rem;
+  --popover-offset-above: calc(-1 * var(--popover-offset));
+  --popover-blur: .125rem;
+  --popover-scale: .985;
+  --inspector-dock-width: 20.75rem;
+  --floating-edge: 1rem;
+  --conversation-rail-base-width: .75rem;
+  --conversation-rail-active-scale: 1.5;
+  --conversation-rail-hover-width: 2rem;
+  --conversation-rail-hover-scale: 2.6666667;
+  --conversation-rail-band-width: 20rem;
+  --conversation-rail-inline-offset: -.75rem;
+  --conversation-rail-block-inset: 16%;
+  --conversation-rail-inline-padding: .5rem;
+  --conversation-rail-pointer-lead: .5rem;
+  --conversation-rail-read-line: 6rem;
+  --conversation-rail-bottom-threshold: .5rem;
+  --conversation-rail-label-blur: .125rem;
+  --conversation-rail-label-offset: 2.75rem;
+  --conversation-rail-label-max-width: 16.25rem;
+  --conversation-rail-sigma-y: .75rem;
+  --conversation-rail-full-x: 2rem;
+  --conversation-rail-sigma-x: 1.5rem;
+  --conversation-rail-max-dx: 4rem;
+  --conversation-rail-max-dy: 3rem;
+  --conversation-rail-fade-x: 1.25rem;
+  --conversation-rail-label-on: .5;
+  --conversation-rail-label-off: .38;
+  --refresh-control-width: 6rem;
+  --refresh-spin-shift: 1.5rem;
+  --refresh-label-shift: .5rem;
+  --refresh-label-blur: .09375rem;
+
+  /* Named depth, never ad-hoc z-indexes. */
+  --z-below: -1;
+  --z-base: 0;
+  --z-raised: 1;
+  --z-sticky: 10;
+  --z-shell: 20;
+  --z-shell-rail: 30;
+  --z-peek: 40;
+  --z-shell-toggle: 45;
+  --z-panel: var(--z-shell-rail);
+  --z-panel-overlay: var(--z-shell-toggle);
+  --z-scrim: 50;
+  --z-modal: var(--z-scrim);
+  --z-sheet: 60;
+  --z-modal-top: 70;
+  --z-popover: 30;
+  --z-nested: 70;
+  --z-toast: 80;
+  --z-tooltip: 90;
+  --z-demo: 100;
+
+  /* Component-internal paint order. These names stay below application
+     overlay roles and are only for elements sharing one control context. */
+  --z-control-pips: 1;
+  --z-control-occlusion: 2;
+  --z-control-fill: 3;
+  --z-control-content: 4;
+  --z-control-interaction: 5;
+
+  /* Motion. No overshooting curves and no layout-property transitions. */
+  --motion-reduced: 1ms;
+  --motion-instant: 10ms;
+  --motion-indicator: 100ms;
+  --motion-press: 120ms;
+  --motion-feedback: 150ms;
+  --motion-exit: 160ms;
+  --motion-popover: 180ms;
+  --motion-focus: 180ms;
+  --motion-dissolve: 220ms;
+  --motion-peek-enter: 450ms;
+  --motion-peek-exit: 160ms;
+  --motion-sheet-enter: 450ms;
+  --motion-tabs-layout: 300ms;
+  --motion-tabs-slide: 250ms;
+  --motion-trace-row: 360ms;
+  --motion-tool-call-cadence: 1600ms;
+  --motion-text-swap: 150ms;
+  --motion-icon-swap: 250ms;
+  --motion-counter-spin: 420ms;
+  --motion-skeleton-pulse: 1000ms;
+  --motion-skeleton-reveal: 400ms;
+  --motion-skeleton-summary-delay: 560ms;
+  --motion-tab-shift: 220ms;
+  --motion-tab-exit: 100ms;
+  --motion-tab-enter: 120ms;
+  --motion-icon-morph: 240ms;
+  --motion-content-blur: 260ms;
+  --motion-instrument: 260ms;
+  --motion-instrument-hide-delay: 250ms;
+  --motion-content: 260ms;
+  --motion-success: 300ms;
+  --motion-furniture: 300ms;
+  --motion-sidebar-show: 300ms;
+  --motion-sidebar-hide: 400ms;
+  --motion-title-cleanup: 520ms;
+  --motion-sheet-cleanup: 260ms;
+  --motion-refresh-morph: 220ms;
+  --motion-refresh-loop: 700ms;
+  --motion-refresh-done-hold: 650ms;
+  --motion-hold-arm: 650ms;
+  --motion-deck-exit: 160ms;
+  --motion-deck-enter: 450ms;
+  --motion-deck-handoff: 60ms;
+  --motion-refresh-request: 1050ms;
+  --motion-refresh-settle-min: 80ms;
+  --motion-refresh-settle-max: 320ms;
+  --motion-loading-show-delay: 250ms;
+  --motion-loading-min-visible: 450ms;
+  --motion-tooltip-delay: 500ms;
+  --motion-tooltip-warm: 300ms;
+  --motion-preview-show: 300ms;
+  --motion-preview-hide: 200ms;
+  --motion-acknowledge: 420ms;
+  --motion-copy-feedback: 900ms;
+  --motion-shimmer: 1800ms;
+  --motion-demo-delay: 700ms;
+  --motion-notification-demo-start: 500ms;
+  --motion-notification-demo-interval: 800ms;
+  --motion-toast-lifetime: 4200ms;
+  --motion-sheet-exit: 160ms;
+  --motion-page-enter: 240ms;
+  --motion-page-chrome: 180ms;
+  --motion-page-reduced: 160ms;
+  --motion-page-stagger: 36ms;
+  --motion-page-skeleton-hold: 180ms;
+  --motion-page-skeleton-reveal: 220ms;
+  --motion-spinner: 700ms;
+  --motion-skeleton: var(--motion-skeleton-pulse);
+  --motion-thinking-comet: 1800ms;
+  --motion-thinking-breath: 2400ms;
+  --motion-thinking-orbit: 700ms;
+  --duration-indicator: var(--motion-indicator);
+  --duration-fast: var(--motion-press);
+  --duration-check: var(--motion-feedback);
+  --duration-row: var(--motion-feedback);
+  --duration-palette: var(--motion-popover);
+  --duration-trace: var(--motion-dissolve);
+  --duration-panel: var(--motion-dissolve);
+  --duration-route: var(--motion-page-enter);
+  --duration-travel: var(--motion-tabs-slide);
+  --tabs-dur: var(--motion-tabs-slide);
+  --smooth-out: cubic-bezier(.22, 1, .36, 1);
+  --ease-out: var(--smooth-out);
+  --ease-out-soft: var(--smooth-out);
+  --ease-hover: var(--smooth-out);
+  --ease-emphasized: cubic-bezier(.32, .72, 0, 1);
+  --ease-standard: cubic-bezier(.2, 0, 0, 1);
+  --ease-decelerate: cubic-bezier(.05, .7, .1, 1);
+  --ease-smooth-out: var(--smooth-out);
+  --tabs-ease: var(--ease-smooth-out);
+  --motion-dissolve-ease: cubic-bezier(.23, 1, .32, 1);
+  --motion-accelerate-ease: cubic-bezier(.4, 0, 1, 1);
+  --motion-drawer-ease: var(--ease-emphasized);
+  --ease-skeleton: ease-in-out;
+  --ease-icon-swap: ease-in-out;
+  --press-scale: .997;
+  --press-scale-subtle: .999;
+  --icon-swap-dur: var(--motion-icon-swap);
+  --icon-swap-blur: 2px;
+  --icon-swap-start-scale: .25;
+  --icon-swap-ease: var(--ease-icon-swap);
+  --motion-distance-subtle: 2px;
+  --motion-distance-entry: 6px;
+  --motion-distance-page: 6px;
+  --motion-distance-swap: 8px;
+  --motion-distance-trace-row: 4px;
+  --motion-distance-deck-exit: 72px;
+  --motion-distance-deck-drop: 56px;
+  --motion-distance-peek-enter: 16px;
+  --motion-distance-peek-exit: 12px;
+  --motion-distance-sheet-enter: 24px;
+  --motion-distance-sheet-exit: 28px;
+  --motion-distance-sidebar-hide: 48px;
+  --motion-distance-dissolve: 4px;
+  --motion-distance-text-swap: 4px;
+  --motion-blur-subtle: 2px;
+  --motion-blur-entry: 3px;
+  --motion-blur-page: 2px;
+  --motion-blur-swap: 2px;
+  --motion-blur-trace-row: 2px;
+  --motion-blur-title: 1.4px;
+  --motion-blur-sidebar: 6px;
+  --motion-blur-dissolve: 2px;
+  --motion-blur-furniture: 1px;
+  --motion-blur-icon-swap: 2px;
+  --motion-blur-counter: 2px;
+  --motion-blur-skeleton: 2px;
+  --focus-ring: 0 0 0 2px var(--paper), 0 0 0 4px color-mix(in oklab, var(--accent) 72%, transparent);
+}
+
+:root.dark:root,
+:root[data-theme="dark"]:root {
+  color-scheme: dark;
+  --surface-1: #171717;
+  --surface-2: #1e1e1e;
+  --surface-3: #252525;
+  --surface-4: #2c2c2c;
+  --surface-5: #333333;
+  --surface-6: #3a3a3a;
+  --surface-7: #414141;
+  --surface-8: #484848;
+  --surface-muted: #1e1e1e;
+  --line: rgb(255 255 255 / 10%);
+  --line-strong: rgb(255 255 255 / 15%);
+  --edge: var(--line);
+  --edge-strong: var(--line-strong);
+  --ink: #ededed;
+  --ink-soft: #c9c9c9;
+  --muted: #b3b3b3;
+  --faint: #ababab;
+  --whisper: #747474;
+  --accent: #918cff;
+  --accent-ink: #b8b5ff;
+  --success: #79c48d;
+  --warning: #ddab55;
+  --danger: #ee9494;
+  --state-hover-bg: rgb(255 255 255 / 5%);
+  --state-selected-bg: rgb(255 255 255 / 8%);
+  --swatch-shadow: inset 0 0 0 1px rgb(255 255 255 / 14%);
+  --hl-keyword: #ededed;
+  --hl-string: #c4c4c4;
+  --hl-number: #a0a0a0;
+  --hl-literal: #a0a0a0;
+  --hl-comment: #7a7a7a;
+  --hl-attr: #c4c4c4;
+  --hl-type: #ededed;
+  --hl-built-in: #ededed;
+  --hl-title: #ededed;
+  --hl-tag: #c4c4c4;
+  --hl-meta: #7a7a7a;
+  --hl-symbol: #c4c4c4;
+  --sunken: #141414;
+  --dm-hi-base: rgb(255 255 255 / 1%);
+  --dm-hi-mid: rgb(255 255 255 / 2%);
+  --dm-hi-high: rgb(255 255 255 / 4%);
+  --dm-hi-peak: rgb(255 255 255 / 6%);
+  --dm-ring-base: rgb(255 255 255 / 2%);
+  --dm-ring-mid: rgb(255 255 255 / 4%);
+  --dm-ring-high: rgb(255 255 255 / 6%);
+  --dm-drop: rgb(0 0 0 / 18%);
+  --shadow-1: inset 0 0 0 1px var(--dm-ring-base);
+  --shadow-2: inset 0 1px 0 0 var(--dm-hi-base), inset 0 0 0 1px var(--dm-ring-base), 0 1px 1px -.5px var(--dm-drop);
+  --shadow-3: inset 0 1px 0 0 var(--dm-hi-mid), inset 0 0 0 1px var(--dm-ring-base), 0 0 0 1px rgb(0 0 0 / 12%), 0 1px 1px -.5px var(--dm-drop), 0 3px 3px -1.5px var(--dm-drop);
+  --shadow-4: inset 0 1px 0 0 var(--dm-hi-mid), inset 0 0 0 1px var(--dm-ring-mid), 0 0 0 1px rgb(0 0 0 / 14%), 0 1px 1px -.5px var(--dm-drop), 0 3px 3px -1.5px var(--dm-drop), 0 6px 6px -3px var(--dm-drop);
+  --shadow-5: inset 0 1px 0 0 var(--dm-hi-high), inset 0 0 0 1px var(--dm-ring-mid), 0 0 0 1px rgb(0 0 0 / 16%), 0 1px 1px -.5px var(--dm-drop), 0 3px 3px -1.5px var(--dm-drop), 0 6px 6px -3px var(--dm-drop), 0 12px 12px -6px var(--dm-drop);
+  --shadow-6: inset 0 1px 0 0 var(--dm-hi-high), inset 0 0 0 1px var(--dm-ring-high), 0 0 0 1px rgb(0 0 0 / 18%), 0 1px 1px -.5px var(--dm-drop), 0 3px 3px -1.5px var(--dm-drop), 0 6px 6px -3px var(--dm-drop), 0 12px 12px -6px var(--dm-drop), 0 24px 24px -12px var(--dm-drop);
+  --shadow-7: inset 0 1px 0 0 var(--dm-hi-peak), inset 0 0 0 1px var(--dm-ring-high), 0 0 0 1px rgb(0 0 0 / 20%), 0 1px 1px -.5px var(--dm-drop), 0 3px 3px -1.5px var(--dm-drop), 0 6px 6px -3px var(--dm-drop), 0 12px 12px -6px var(--dm-drop), 0 24px 24px -12px var(--dm-drop), 0 48px 48px -24px var(--dm-drop);
+  --shadow-8: inset 0 1px 0 0 var(--dm-hi-peak), inset 0 0 0 1px var(--dm-ring-high), 0 0 0 1px rgb(0 0 0 / 22%), 0 1px 1px -.5px var(--dm-drop), 0 3px 3px -1.5px var(--dm-drop), 0 6px 6px -3px var(--dm-drop), 0 12px 12px -6px var(--dm-drop), 0 24px 24px -12px var(--dm-drop), 0 48px 48px -24px var(--dm-drop), 0 96px 96px -48px var(--dm-drop);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root:root {
+    --motion-instant: 1ms;
+    --motion-indicator: 1ms;
+    --motion-press: 1ms;
+    --motion-feedback: 1ms;
+    --motion-exit: 1ms;
+    --motion-popover: 1ms;
+    --motion-focus: 1ms;
+    --motion-dissolve: 1ms;
+    --motion-peek-enter: 1ms;
+    --motion-peek-exit: 1ms;
+    --motion-sheet-enter: 1ms;
+    --motion-tabs-layout: 1ms;
+    --motion-tabs-slide: 1ms;
+    --motion-icon-swap: 1ms;
+    --motion-trace-row: 1ms;
+    --motion-tool-call-cadence: 1ms;
+    --motion-text-swap: 1ms;
+    --motion-content: 1ms;
+    --motion-content-blur: 1ms;
+    --motion-counter-spin: 1ms;
+    --motion-skeleton-pulse: 1ms;
+    --motion-skeleton-reveal: 1ms;
+    --motion-skeleton-summary-delay: 0ms;
+    --motion-tab-shift: 1ms;
+    --motion-tab-exit: 1ms;
+    --motion-tab-enter: 1ms;
+    --motion-icon-morph: 1ms;
+    --motion-instrument: 1ms;
+    --motion-instrument-hide-delay: 0ms;
+    --motion-success: 1ms;
+    --motion-furniture: 1ms;
+    --motion-sidebar-show: 1ms;
+    --motion-sidebar-hide: 1ms;
+    --motion-title-cleanup: 1ms;
+    --motion-sheet-cleanup: 1ms;
+    --motion-refresh-morph: 1ms;
+    --motion-refresh-loop: 1ms;
+    --motion-refresh-done-hold: 0ms;
+    --motion-hold-arm: 0ms;
+    --motion-deck-exit: 1ms;
+    --motion-deck-enter: 1ms;
+    --motion-deck-handoff: 0ms;
+    --motion-refresh-request: 1ms;
+    --motion-refresh-settle-min: 0ms;
+    --motion-refresh-settle-max: 1ms;
+    --motion-loading-show-delay: 0ms;
+    --motion-loading-min-visible: 1ms;
+    --motion-tooltip-delay: 0ms;
+    --motion-tooltip-warm: 1ms;
+    --motion-preview-show: 1ms;
+    --motion-preview-hide: 1ms;
+    --motion-acknowledge: 1ms;
+    --motion-copy-feedback: 1ms;
+    --motion-shimmer: 1ms;
+    --motion-demo-delay: 0ms;
+    --motion-notification-demo-start: 0ms;
+    --motion-notification-demo-interval: 1ms;
+    --motion-toast-lifetime: 1ms;
+    --motion-sheet-exit: 1ms;
+    --motion-page-enter: 1ms;
+    --motion-page-chrome: 1ms;
+    --motion-page-reduced: 1ms;
+    --motion-page-stagger: 0ms;
+    --motion-page-skeleton-hold: 1ms;
+    --motion-page-skeleton-reveal: 1ms;
+    --motion-spinner: 1ms;
+    --motion-skeleton: 1ms;
+    --motion-thinking-comet: 1ms;
+    --motion-thinking-breath: 1ms;
+    --motion-thinking-orbit: 1ms;
+  }
+}
+}

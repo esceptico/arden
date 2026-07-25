@@ -143,6 +143,85 @@ test("enqueueMessage promotes stale queued submit when server starts a new run",
   }
 });
 
+test("enqueueMessage drops a cancellation-tombstoned submit without adding a user message", async () => {
+  const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
+  (globalThis as typeof globalThis & { window?: unknown }).window = {
+    ardenDesktop: {
+      api: {
+        request: async () => ({
+          ok: true,
+          contentType: "application/json",
+          data: { run_id: "", session_id: "session-1", status: "cancelled" },
+        }),
+      },
+    },
+    setTimeout,
+    clearTimeout,
+  };
+
+  try {
+    setState({
+      running: false,
+      currentRunId: null,
+      activeRunSessionIds: new Set(),
+    });
+
+    await enqueueMessage("do not revive this");
+
+    const state = getState();
+    expect(state.queuedMessages).toEqual([]);
+    expect(state.order).toEqual([]);
+    expect(state.messages.size).toBe(0);
+    expect(state.running).toBe(false);
+    expect(state.currentRunId).toBeNull();
+  } finally {
+    (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
+  }
+});
+
+test("enqueueMessage reconciles an ingested retry without a duplicate or a run", async () => {
+  const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
+  const originalRandomUUID = crypto.randomUUID;
+  crypto.randomUUID = () => "cid-ingested";
+  (globalThis as typeof globalThis & { window?: unknown }).window = {
+    ardenDesktop: {
+      api: {
+        request: async () => ({
+          ok: true,
+          contentType: "application/json",
+          data: { run_id: "run-original", session_id: "session-1", status: "ingested" },
+        }),
+      },
+    },
+    setTimeout,
+    clearTimeout,
+  };
+
+  try {
+    setState({
+      messages: new Map([
+        ["cid-ingested", { id: "cid-ingested", role: "user", content: "already durable" }],
+      ]),
+      order: ["cid-ingested"],
+      running: false,
+      currentRunId: null,
+      activeRunSessionIds: new Set(),
+    });
+
+    await enqueueMessage("already durable");
+
+    const state = getState();
+    expect(state.queuedMessages).toEqual([]);
+    expect(state.order).toEqual(["cid-ingested"]);
+    expect(state.messages.size).toBe(1);
+    expect(state.running).toBe(false);
+    expect(state.currentRunId).toBeNull();
+  } finally {
+    crypto.randomUUID = originalRandomUUID;
+    (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
+  }
+});
+
 test("sendMessage with no current session lazily creates one, then sends into it", async () => {
   // Home has no current session — the first message from its hero input
   // must provision one (reusing createSession) rather than silently no-op

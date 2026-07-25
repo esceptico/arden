@@ -43,7 +43,7 @@ export function ConnectionBanner() {
   const Icon = connection.integrationId === "gmail" ? Mail : Plug;
 
   return (
-    <section className="mx-auto mb-2 w-[min(760px,calc(100%-32px))] rounded-xl border border-line-soft bg-surface px-3.5 py-3 shadow-sm">
+    <section className="board-connection-banner mx-auto mb-2 w-[min(760px,calc(100%-32px))] rounded-xl border border-line-soft bg-surface px-3.5 py-3 shadow-sm">
       <div className="flex items-start gap-3">
         <span className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg bg-surface-soft text-ink-soft">
           <Icon size={ICON.MD} />
@@ -65,7 +65,7 @@ export function ConnectionBanner() {
           <div className="mt-2.5 flex flex-wrap gap-2">
             {needsSettings ? (
               <>
-                <Button size="sm" onClick={() => openSettings(null, "integrations")}>Open settings</Button>
+                <Button size="sm" onClick={() => openSettings("integrations")}>Open settings</Button>
                 <Button size="sm" variant="secondary" disabled={busy} onClick={() => void run(() => verifyAndResume(connection))}>
                   Check connection
                 </Button>

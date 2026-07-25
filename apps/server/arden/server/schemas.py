@@ -1,6 +1,6 @@
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from arden.core.content import ContextContent, ContextManifestEntry
 from arden.tools.core.types import ToolOverrideDecision
@@ -503,14 +503,14 @@ class UpdateConfigRequest(BaseModel):
     research_model: str | None = None
     workflow_model: str | None = None
     memory_model: str | None = None
-    max_depth: int | None = Field(default=None, gt=0)
+    max_depth: int | None = Field(default=None, ge=1, le=16)
     reasoning_model: str | None = None
     reasoning_effort: str | None = None
-    compression_threshold: float | None = None
-    max_messages: int | None = None
-    compression_keep_ratio: float | None = None
-    summary_max_tokens: int | None = None
-    consolidation_interval: int | None = None
+    compression_threshold: float | None = Field(default=None, ge=0.1, le=1)
+    max_messages: int | None = Field(default=None, ge=10, le=1000)
+    compression_keep_ratio: float | None = Field(default=None, ge=0, le=1)
+    summary_max_tokens: int | None = Field(default=None, ge=256, le=8000)
+    consolidation_interval: int | None = Field(default=None, ge=1, le=500)
     web_search: Literal["auto", "exa", "ddgs", "none"] | None = None
     tool_overrides: dict[str, ToolOverrideDecision] | None = None
     integrations: IntegrationToggles | None = None
@@ -529,7 +529,8 @@ class UpdateDirectivesRequest(BaseModel):
 
 class CreateAutomationRequest(BaseModel):
     name: str = Field(min_length=1)
-    description: str = Field(min_length=1)
+    prompt: str = Field(min_length=1)
+    description: str | None = Field(default=None, min_length=1, max_length=220)
     model: str | None = None
     trigger_type: str | None = None
     at: str | None = None
@@ -552,7 +553,8 @@ class CreateAutomationRequest(BaseModel):
 class AutomationSuggestionResponse(BaseModel):
     id: str
     name: str
-    description: str
+    description: str | None
+    prompt: str
     triggers: list[dict]
     rationale: str
     evidence: list[str]
@@ -566,7 +568,8 @@ class AutomationSuggestionsResponse(BaseModel):
 
 class UpdateAutomationRequest(BaseModel):
     name: str | None = None
-    description: str | None = None
+    prompt: str | None = Field(default=None, min_length=1)
+    description: str | None = Field(default=None, min_length=1, max_length=220)
     model: str | None = None
     trigger_type: str | None = None
     at: str | None = None
@@ -630,9 +633,15 @@ class ConnectServiceRequest(BaseModel):
 class AddCustomModelRequest(BaseModel):
     model_id: str = Field(..., min_length=1)
     base_url: str = Field(..., min_length=1)
-    context_window: int = Field(..., gt=0)
-    max_output_tokens: int = 8192
+    context_window: int = Field(..., gt=0, le=2_000_000)
+    max_output_tokens: int = Field(default=8192, gt=0)
     api_key: str | None = None
+
+    @model_validator(mode="after")
+    def validate_token_limits(self):
+        if self.max_output_tokens > self.context_window:
+            raise ValueError("max_output_tokens must not exceed context_window")
+        return self
 
 
 # --- Skills ---

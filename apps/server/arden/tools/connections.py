@@ -134,6 +134,7 @@ async def request_connection(execution: ToolExecution, args: RequestConnectionIn
 
 request_connection_tool = tool(
     display_name="Request Connection",
+    display_description="Ask the user to connect an integration.",
     description=(
         "Ask the user to connect one exact registered integration from <available_connections>. "
         "Use only when the user's explicit request requires that capability and no connected tool can satisfy it. "

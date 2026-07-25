@@ -105,3 +105,25 @@ export function formatAccelerator(accelerator: string): string {
   }
   return parts.join(" + ");
 }
+
+/** Split the display form into individual keycaps without duplicating the
+ * platform mapping. macOS modifiers are adjacent glyphs; other platforms use
+ * the existing spaced `+` separator. */
+export function formatAcceleratorParts(accelerator: string): string[] {
+  const formatted = formatAccelerator(accelerator);
+  if (formatted.includes(" + ")) return formatted.split(" + ");
+
+  const parts: string[] = [];
+  let key = "";
+  for (const character of formatted) {
+    if ("⌘⌥⌃⇧".includes(character)) {
+      if (key) parts.push(key);
+      parts.push(character);
+      key = "";
+    } else {
+      key += character;
+    }
+  }
+  if (key) parts.push(key);
+  return parts;
+}

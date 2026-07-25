@@ -1,35 +1,24 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useShallow } from "zustand/react/shallow";
-import { ScrollFadeBottom, ScrollFadeTop } from "@/components/ui/ScrollBlur";
-import { useStore } from "@/stores";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import clsx from "clsx";
+import { useReducedMotion } from "motion/react";
+import { CONVERSATION_RAIL } from "@/lib/tokens/motion";
 
-// Codex-style conversation minimap: one line-tick per turn, anchored to the
-// left edge of the chat. Scroll-spy inks the turn you're reading; click jumps.
-// Hover is a proximity FIELD (per design-language: selection travels, hover is
-// proximity): tick widths follow a gaussian falloff around the cursor —
-// per-frame writes with the transition disabled while live, so the tween never
-// fights the pointer — and ONE label travels between ticks showing the prompt,
-// blur-ramping in and out instead of per-tick tooltip flips.
+type RailAnchor = {
+  key: number;
+  node: HTMLElement;
+};
 
-const BASE_W = 12;
-const ACTIVE_W = 18;
-const HOVER_W = 32;
-const SIGMA_Y = 12;
-// The tick's own extent (mark + its hit area) counts as distance zero —
-// hovering ON the rail is always full strength; the falloff starts beyond it.
-const FULL_X = 32;
-// Liquid: the field is 2D — amplitude also follows the cursor's horizontal
-// approach, so the ticks swell BEFORE the pointer reaches the rail. The nav
-// overlay is pointer-events-none, so the sensor is a document-level
-// pointermove gated to the band's neighborhood.
-const SIGMA_X = 24;
-const MAX_DX = 64;
-const MAX_DY = 48;
-const FADE_X = 20; // envelope: field smoothsteps to 0 over this span at the edges
-// Label commits only near full strength; hysteresis so it can't flicker.
-const LABEL_ON = 0.5;
-const LABEL_OFF = 0.38;
+function anchorLabel(anchor: HTMLElement, index: number, total: number): string {
+  const label = anchor.dataset.chatRailLabel ?? anchor.textContent;
+  const normalized = label?.trim().replace(/\s+/g, " ");
+  return normalized || `Conversation position ${index + 1} of ${total}`;
+}
 
+/**
+ * Conversation outline with the mockup's physical proximity field. Pointer
+ * travel is written directly to compositor-friendly transforms in one RAF; React
+ * remains responsible only for scroll-spy state and accessible labels.
+ */
 export function ChatRail({
   turnIds,
   scrollRef,
@@ -37,40 +26,87 @@ export function ChatRail({
   turnIds: string[];
   scrollRef: { current: HTMLElement | null };
 }) {
-  const titles = useStore(
-    useShallow((s) => turnIds.map((id) => (s.messages.get(id)?.content ?? "").trim())),
-  );
-  const [activeId, setActiveId] = useState<string | null>(null);
-  // Turns currently on screen, as a joined key — string state so identical
-  // frames bail out of re-rendering for free.
+  const reducedMotion = useReducedMotion() ?? false;
+  const [anchors, setAnchors] = useState<RailAnchor[]>([]);
+  const [activeIndex, setActiveIndex] = useState(0);
   const [visibleKey, setVisibleKey] = useState("");
+  const activeRef = useRef<HTMLButtonElement | null>(null);
+  const bandRef = useRef<HTMLDivElement | null>(null);
+  const labelRef = useRef<HTMLDivElement | null>(null);
+  const markRefs = useRef<Array<HTMLSpanElement | null>>([]);
+  const engagedRef = useRef(false);
+  const labelOnRef = useRef(false);
+  const activeIndexRef = useRef(0);
+  const anchorKeysRef = useRef(new WeakMap<HTMLElement, number>());
+  const nextAnchorKeyRef = useRef(1);
+
+  useLayoutEffect(() => {
+    const root = scrollRef.current;
+    if (!root) return;
+    let raf = 0;
+    const sync = () => {
+      raf = 0;
+      const nodes = Array.from(
+        root.querySelectorAll<HTMLElement>("[data-chat-rail-anchor]"),
+      ).filter((node) => node.getClientRects().length > 0);
+      setAnchors((current) => {
+        if (
+          current.length === nodes.length
+          && current.every((anchor, index) => anchor.node === nodes[index])
+        ) {
+          return current;
+        }
+        return nodes.map((node) => {
+          let key = anchorKeysRef.current.get(node);
+          if (key == null) {
+            key = nextAnchorKeyRef.current;
+            nextAnchorKeyRef.current += 1;
+            anchorKeysRef.current.set(node, key);
+          }
+          return { key, node };
+        });
+      });
+    };
+    const schedule = () => {
+      if (!raf) raf = requestAnimationFrame(sync);
+    };
+    const observer = new MutationObserver(schedule);
+    observer.observe(root, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["aria-expanded", "class", "hidden"],
+    });
+    sync();
+    return () => {
+      observer.disconnect();
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [scrollRef, turnIds]);
 
   useEffect(() => {
     const root = scrollRef.current;
-    if (!root || turnIds.length === 0) return;
+    if (!root || anchors.length === 0) return;
     let raf = 0;
     const update = () => {
       raf = 0;
       const rootRect = root.getBoundingClientRect();
-      // Read line sits just below the header fade — the turn whose top last
-      // crossed it is the one being read.
-      const readLine = rootRect.top + 96;
-      let active: string | null = null;
-      const vis: string[] = [];
-      for (const el of root.querySelectorAll<HTMLElement>("[data-turn-id]")) {
-        const id = el.dataset.turnId;
-        if (!id) continue;
-        const r = el.getBoundingClientRect();
-        if (r.top <= readLine) active = id;
-        if (r.bottom > rootRect.top && r.top < rootRect.bottom) vis.push(id);
+      const readLine = rootRect.top + CONVERSATION_RAIL.readLine;
+      let active = 0;
+      const visible: number[] = [];
+      anchors.forEach((anchor, index) => {
+        const rect = anchor.node.getBoundingClientRect();
+        if (rect.top <= readLine) active = index;
+        if (rect.bottom > rootRect.top && rect.top < rootRect.bottom) visible.push(index);
+      });
+      if (
+        root.scrollHeight - root.clientHeight - root.scrollTop
+        < CONVERSATION_RAIL.bottomThreshold
+      ) {
+        active = anchors.length - 1;
       }
-      // At the bottom the tail turns can't push their top past the read line,
-      // so snap to the last turn — otherwise it sticks on an earlier one.
-      if (root.scrollHeight - root.clientHeight - root.scrollTop < 8) {
-        active = turnIds[turnIds.length - 1];
-      }
-      setActiveId(active ?? turnIds[0]);
-      setVisibleKey(vis.join("\n"));
+      setActiveIndex(active);
+      setVisibleKey(visible.join("\n"));
     };
     const onScroll = () => {
       if (!raf) raf = requestAnimationFrame(update);
@@ -81,214 +117,214 @@ export function ChatRail({
       root.removeEventListener("scroll", onScroll);
       if (raf) cancelAnimationFrame(raf);
     };
-  }, [scrollRef, turnIds]);
-
-  const visibleSet = useMemo(() => new Set(visibleKey.split("\n")), [visibleKey]);
-
-  // Turns present at mount render statically; turns that arrive later grow
-  // in (height + blur ramp) instead of popping the band taller.
-  const initialIds = useRef<Set<string> | null>(null);
-  if (initialIds.current === null) initialIds.current = new Set(turnIds);
-
-  const activeRef = useRef<HTMLButtonElement | null>(null);
-
-  // Follow the active tick when a long history scrolls the rail — instantly,
-  // so the rail tracks chat scrolling without lag. A just-arrived tick is
-  // still growing its slot, so a deferred second pass re-aims once the
-  // entrance animation settles. The ticks' scroll-margin gives the follow a
-  // scrolloff buffer: the active tick lands clear of the edge fades with
-  // neighbors visible, never dimmed at the very border.
-  useEffect(() => {
-    const follow = () => activeRef.current?.scrollIntoView({ block: "nearest" });
-    follow();
-    const t = setTimeout(follow, 250);
-    return () => clearTimeout(t);
-  }, [activeId]);
-
-  const bandRef = useRef<HTMLDivElement | null>(null);
-  const labelRef = useRef<HTMLDivElement | null>(null);
-  const ticksRef = useRef<(HTMLSpanElement | null)[]>([]);
-  const activeIndexRef = useRef(-1);
-  activeIndexRef.current = turnIds.indexOf(activeId ?? "");
-  const titlesRef = useRef(titles);
-  titlesRef.current = titles;
+  }, [anchors, scrollRef]);
 
   useEffect(() => {
-    const band = bandRef.current, label = labelRef.current;
-    if (!band || !label) return;
-    let raf = 0;
+    activeRef.current?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex]);
 
-    let engaged = false;
-    let labelOn = false;
+  useEffect(() => {
+    markRefs.current.length = anchors.length;
+  }, [anchors.length]);
 
-    const baseOf = (i: number) => (i === activeIndexRef.current ? ACTIVE_W : BASE_W);
+  const visibleSet = useMemo(
+    () => new Set(visibleKey.split("\n").filter(Boolean).map(Number)),
+    [visibleKey],
+  );
+  activeIndexRef.current = activeIndex;
 
-    const rest = () => {
-      engaged = false;
-      labelOn = false;
-      ticksRef.current.forEach((tick, i) => {
-        if (!tick) return;
-        tick.style.transition =
-          "width var(--duration-panel) var(--ease-hover), background-color var(--duration-panel) var(--ease-hover)";
-        tick.style.width = `${baseOf(i)}px`;
-      });
-      label.style.transition =
-        "opacity var(--duration-fast) var(--ease-hover), filter var(--duration-fast) var(--ease-hover)";
-      label.style.opacity = "0";
-      label.style.filter = "blur(2px)";
-    };
-
-    // 2D gaussian: vertical falloff shapes the bell, horizontal distance to
-    // each tick's anchor scales its amplitude. `env` is the boundary
-    // envelope — it takes the whole field to exactly 0 at the engagement
-    // edges, so crossing them never steps. Returns the nearest tick and the
-    // field strength there.
-    const field = (cursorX: number, cursorY: number, env: number) => {
-      let nearest = 0, nearestD = Infinity, strength = 0;
-      ticksRef.current.forEach((tick, i) => {
-        if (!tick) return;
-        const r = tick.getBoundingClientRect();
-        const dy = cursorY - (r.top + r.height / 2);
-        const dx = Math.max(0, cursorX - (r.left + FULL_X));
-        const g =
-          env * Math.exp(-(dy * dy) / (2 * SIGMA_Y * SIGMA_Y) - (dx * dx) / (2 * SIGMA_X * SIGMA_X));
-        const base = baseOf(i);
-        tick.style.transition = "none";
-        tick.style.width = `${base + (HOVER_W - base) * g}px`;
-        if (Math.abs(dy) < nearestD) {
-          nearestD = Math.abs(dy);
-          nearest = i;
-          strength = g;
-        }
-      });
-      return { nearest, strength };
-    };
-
-    const moveLabel = (index: number, strength: number) => {
-      labelOn = labelOn ? strength > LABEL_OFF : strength > LABEL_ON;
-      if (!labelOn) {
-        label.style.transition =
-          "opacity var(--duration-fast) var(--ease-hover), filter var(--duration-fast) var(--ease-hover)";
-        label.style.opacity = "0";
-        label.style.filter = "blur(2px)";
-        return;
-      }
-      const tick = ticksRef.current[index];
-      if (!tick) return;
-      const tr = tick.getBoundingClientRect();
-      const br = band.getBoundingClientRect();
-      const visible = label.style.opacity === "1";
-      label.style.transition = visible
-        ? "top var(--duration-panel) var(--ease-hover), opacity var(--duration-fast) var(--ease-hover), filter var(--duration-fast) var(--ease-hover)"
-        : "opacity var(--duration-fast) var(--ease-hover), filter var(--duration-fast) var(--ease-hover)";
-      label.style.top = `${tr.top + tr.height / 2 - br.top}px`;
-      label.textContent = titlesRef.current[index] || "Message";
-      label.style.opacity = "1";
-      label.style.filter = "blur(0)";
-    };
-
-    const onMove = (e: PointerEvent) => {
-      const { clientX: x, clientY: y } = e;
-      if (raf) cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => {
-        raf = 0;
-        const br = band.getBoundingClientRect();
-        // The liquid lives in the GUTTER: engagement stops at the chat
-        // content's left edge, so the field never stirs while the user is
-        // reading or interacting with the chat itself. MAX_DX stays as the
-        // outer bound (at that distance the field is ~0 anyway). The column
-        // is re-queried per run — session switches replace the node, and a
-        // captured reference would go stale.
-        const contentLeft =
-          scrollRef.current
-            ?.querySelector<HTMLElement>(".messages-inner")
-            ?.getBoundingClientRect().left ?? Infinity;
-        const limit = Math.min(br.left + MAX_DX, contentLeft);
-        if (y < br.top - MAX_DY || y > br.bottom + MAX_DY) {
-          if (engaged) rest();
-          return;
-        }
-        // Boundary envelope: smoothstep to 0 over the last FADE_X px before
-        // each horizontal edge (left = sidebar side, right = content side),
-        // so engagement never steps from rest to a visible value.
-        const t = Math.min((limit - x) / FADE_X, (x - (br.left - 16)) / FADE_X, 1);
-        if (t <= 0) {
-          if (engaged) rest();
-          return;
-        }
-        engaged = true;
-        const env = t * t * (3 - 2 * t);
-        const { nearest, strength } = field(x, y, env);
-        moveLabel(nearest, strength);
-      });
-    };
-
-    document.addEventListener("pointermove", onMove, { passive: true });
-    return () => {
-      document.removeEventListener("pointermove", onMove);
-      if (raf) cancelAnimationFrame(raf);
-    };
-  }, []);
-
-  // ponytail: a one-turn chat doesn't need a minimap.
-  if (turnIds.length < 2) return null;
-
-  const scrollTo = (id: string) => {
-    scrollRef.current
-      ?.querySelector<HTMLElement>(`[data-turn-id="${CSS.escape(id)}"]`)
-      ?.scrollIntoView({ block: "start", behavior: "smooth" });
+  const scrollTo = (index: number) => {
+    anchors[index]?.node.scrollIntoView({
+      block: "start",
+      behavior: reducedMotion ? "auto" : "smooth",
+    });
   };
 
+  const restField = () => {
+    engagedRef.current = false;
+    labelOnRef.current = false;
+    markRefs.current.forEach((mark) => {
+      if (!mark) return;
+      mark.style.removeProperty("transition");
+      mark.style.removeProperty("transform");
+    });
+    const label = labelRef.current;
+    if (label) {
+      label.style.opacity = "0";
+      label.style.filter = `blur(${CONVERSATION_RAIL.labelBlur}px)`;
+    }
+  };
+
+  const showDirectLabel = (index: number, target: HTMLButtonElement) => {
+    const band = bandRef.current;
+    const label = labelRef.current;
+    if (!band || !label) return;
+    const bandRect = band.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const anchor = anchors[index]?.node;
+    label.textContent = anchor
+      ? anchorLabel(anchor, index, anchors.length)
+      : "Conversation position";
+    label.style.setProperty(
+      "--conversation-rail-label-y",
+      `${targetRect.top + targetRect.height / 2 - bandRect.top}px`,
+    );
+    label.style.opacity = "1";
+    label.style.filter = "blur(0px)";
+    labelOnRef.current = true;
+  };
+
+  useEffect(() => {
+    if (!engagedRef.current) restField();
+  }, [activeIndex]);
+
+  useEffect(() => {
+    let pointerRaf = 0;
+    const smoothstep = (value: number) => {
+      const unit = Math.max(0, Math.min(1, value));
+      return unit * unit * (3 - 2 * unit);
+    };
+    const updateField = (cursorX: number, cursorY: number) => {
+      const band = bandRef.current;
+      const label = labelRef.current;
+      const root = scrollRef.current;
+      const marks = markRefs.current;
+      if (!band || !label || !root || marks.length === 0) return;
+      const bandRect = band.getBoundingClientRect();
+      const lane = root.querySelector<HTMLElement>(".board-chat__lane");
+      const contentLeft = lane?.getBoundingClientRect().left ?? Number.POSITIVE_INFINITY;
+      const limit = Math.min(bandRect.left + CONVERSATION_RAIL.maxDx, contentLeft);
+      const xStart = bandRect.left - CONVERSATION_RAIL.pointerLead;
+      const yStart = bandRect.top - CONVERSATION_RAIL.maxDy;
+      const yEnd = bandRect.bottom + CONVERSATION_RAIL.maxDy;
+      if (
+        cursorX < xStart
+        || cursorX > limit
+        || cursorY < yStart
+        || cursorY > yEnd
+      ) {
+        restField();
+        return;
+      }
+
+      const envX = cursorX > limit - CONVERSATION_RAIL.fadeX
+        ? smoothstep((limit - cursorX) / CONVERSATION_RAIL.fadeX)
+        : 1;
+      const envY = cursorY < bandRect.top
+        ? smoothstep((cursorY - yStart) / CONVERSATION_RAIL.maxDy)
+        : cursorY > bandRect.bottom
+          ? smoothstep((yEnd - cursorY) / CONVERSATION_RAIL.maxDy)
+          : 1;
+      const envelope = envX * envY;
+      let nearest = 0;
+      let nearestDistance = Number.POSITIVE_INFINITY;
+      let nearestStrength = 0;
+
+      marks.forEach((mark, index) => {
+        if (!mark) return;
+        const rect = mark.getBoundingClientRect();
+        const dy = cursorY - (rect.top + rect.height / 2);
+        const dx = Math.max(0, cursorX - (rect.left + CONVERSATION_RAIL.fullX));
+        const field = envelope * Math.exp(
+          -(dy * dy) / (2 * CONVERSATION_RAIL.sigmaY ** 2)
+          - (dx * dx) / (2 * CONVERSATION_RAIL.sigmaX ** 2),
+        );
+        const base = index === activeIndexRef.current
+          ? CONVERSATION_RAIL.activeScale
+          : 1;
+        mark.style.transition = "none";
+        mark.style.transform = `scaleX(${base + (CONVERSATION_RAIL.hoverScale - base) * field})`;
+        if (Math.abs(dy) < nearestDistance) {
+          nearestDistance = Math.abs(dy);
+          nearest = index;
+          nearestStrength = field;
+        }
+      });
+
+      engagedRef.current = true;
+      const show = labelOnRef.current
+        ? nearestStrength > CONVERSATION_RAIL.labelOff
+        : nearestStrength > CONVERSATION_RAIL.labelOn;
+      labelOnRef.current = show;
+      if (!show) {
+        label.style.opacity = "0";
+        label.style.filter = `blur(${CONVERSATION_RAIL.labelBlur}px)`;
+        return;
+      }
+
+      const mark = marks[nearest];
+      const tick = mark?.parentElement;
+      if (!tick) return;
+      const tickRect = tick.getBoundingClientRect();
+      const anchor = anchors[nearest]?.node;
+      label.textContent = anchor
+        ? anchorLabel(anchor, nearest, anchors.length)
+        : "Conversation position";
+      label.style.setProperty(
+        "--conversation-rail-label-y",
+        `${tickRect.top + tickRect.height / 2 - bandRect.top}px`,
+      );
+      label.style.opacity = "1";
+      label.style.filter = "blur(0px)";
+    };
+    const onPointerMove = (event: PointerEvent) => {
+      if (pointerRaf) cancelAnimationFrame(pointerRaf);
+      pointerRaf = requestAnimationFrame(() => {
+        pointerRaf = 0;
+        updateField(event.clientX, event.clientY);
+      });
+    };
+    document.addEventListener("pointermove", onPointerMove, { passive: true });
+    return () => {
+      document.removeEventListener("pointermove", onPointerMove);
+      if (pointerRaf) cancelAnimationFrame(pointerRaf);
+    };
+  }, [anchors, scrollRef]);
+
+  if (anchors.length < 2) return null;
+
   return (
-    // Centred band with fixed-size ticks. When the history is longer than the
-    // band, the rail scrolls internally (active tick auto-followed) rather than
-    // squishing the ticks. The container is wide enough that the traveling
-    // label fits inside it — overflow-y:auto would otherwise clip it on the
-    // x-axis. pointer-events only on the ticks, so the wide overlay never
-    // blocks chat.
     <nav
       aria-label="Conversation"
-      className="absolute inset-y-[16%] left-0 z-[6] hidden @[820px]:flex w-[320px] flex-col overflow-y-auto overflow-x-hidden pl-2 pointer-events-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      className="board-chat-rail scroll-fade absolute z-[var(--z-raised)] hidden @[55rem]:flex flex-col overflow-y-auto overflow-x-hidden pointer-events-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
     >
-      <ScrollFadeTop />
-      <ScrollFadeBottom />
       <div
         ref={bandRef}
-        className="relative my-auto flex shrink-0 flex-col items-start py-1 [&>button+button]:mt-[4px]"
+        className="board-chat-rail__band relative my-auto flex shrink-0 flex-col items-start py-1"
       >
-        {turnIds.map((id, i) => {
-          const active = id === activeId;
-          // Brightness ladder mirrors the chat viewport: the turn being read
-          // is ink, turns on screen are mid, off-screen history recedes.
-          const tone = active ? "bg-ink" : visibleSet.has(id) ? "bg-ink/45" : "bg-ink/20";
-          const appeared = !initialIds.current?.has(id);
+        {anchors.map((anchor, index) => {
+          const active = index === activeIndex;
+          const visible = visibleSet.has(index);
           return (
             <button
-              key={id}
+              key={anchor.key}
               ref={active ? activeRef : undefined}
               type="button"
-              onClick={() => scrollTo(id)}
+              onClick={() => scrollTo(index)}
+              onFocus={(event) => showDirectLabel(index, event.currentTarget)}
+              onBlur={restField}
               aria-current={active ? "true" : undefined}
-              aria-label={titles[i] || "Message"}
-              className={`pointer-events-auto relative flex h-[9px] scroll-mt-[52px] scroll-mb-[30px] items-center after:absolute after:content-[''] after:-inset-y-[7px] after:-left-2 after:-right-8 ${appeared ? "chat-rail-tick-in" : ""}`}
+              aria-label={anchorLabel(anchor.node, index, anchors.length)}
+              className={clsx(
+                "board-chat-rail__tick pointer-events-auto relative flex h-[9px] scroll-mt-[52px] scroll-mb-[30px] items-center after:absolute after:content-[''] after:-inset-y-[7px] after:-left-2 after:-right-8",
+                active && "is-active",
+                visible && "is-visible",
+              )}
             >
               <span
-                ref={(el) => {
-                  ticksRef.current[i] = el;
+                ref={(node) => {
+                  markRefs.current[index] = node;
                 }}
-                className={`block h-[2px] rounded-full transition-[background-color] duration-panel ${tone}`}
-                style={{ width: active ? ACTIVE_W : BASE_W }}
+                aria-hidden
+                className="board-chat-rail__mark"
               />
             </button>
           );
         })}
-        {/* Same surface dialect as the app's tooltips — the pill floats over
-            chat text, so it needs its own material, not bare glyphs. */}
         <div
           ref={labelRef}
           aria-hidden="true"
-          className="surface-panel surface-popover pointer-events-none absolute left-11 z-10 max-w-[280px] -translate-y-1/2 truncate px-2 py-1 text-xs text-ink opacity-0"
-          style={{ filter: "blur(2px)" }}
+          className="conversation-rail-label board-chat-rail__label"
         />
       </div>
     </nav>

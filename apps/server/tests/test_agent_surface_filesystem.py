@@ -1,4 +1,5 @@
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -74,9 +75,46 @@ async def test_compile_schedules_to_automation_rows(tmp_path, automation_store):
     assert compiled == ["fs:daily_digest"]
     assert task is not None
     assert task.name == "daily_digest"
-    assert task.description == "Prepare digest."
+    assert task.description is None
+    assert task.description_source is None
+    assert task.prompt == "Prepare digest."
     assert task.handler is None
     assert task.triggers[0].params() == {"at": "09:00", "days": "daily"}
+
+
+@pytest.mark.asyncio
+async def test_compile_preserves_existing_display_description(tmp_path, automation_store):
+    schedule = tmp_path / "agent" / "schedules" / "daily_digest.yaml"
+    schedule.parent.mkdir(parents=True)
+    schedule.write_text('cron: "0 9 * * *"\nprompt: "Prepare digest."\n')
+    now = datetime(2026, 6, 17, tzinfo=UTC)
+
+    await compile_schedules_to_automations(tmp_path, automation_store, now=now)
+    original = await automation_store.get("fs:daily_digest")
+    assert original is not None
+    run_at = now + timedelta(hours=1)
+    await automation_store.save(
+        replace(
+            original,
+            description="A manual daily digest.",
+            description_source="manual",
+            last_run_at=now,
+            last_result="Already ran.",
+            next_run_at=run_at,
+        )
+    )
+
+    schedule.write_text('cron: "0 9 * * *"\nprompt: "Prepare and post the digest."\n')
+    await compile_schedules_to_automations(tmp_path, automation_store, now=now)
+
+    compiled = await automation_store.get("fs:daily_digest")
+    assert compiled is not None
+    assert compiled.description == "A manual daily digest."
+    assert compiled.description_source == "manual"
+    assert compiled.prompt == "Prepare and post the digest."
+    assert compiled.last_run_at == now
+    assert compiled.last_result == "Already ran."
+    assert compiled.next_run_at == run_at
 
 
 def test_dev_schedule_dispatch_uses_automation_service():
