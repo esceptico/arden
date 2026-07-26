@@ -16,14 +16,19 @@
   flex-direction: column;
 }
 
-/* Optical-center bias: nudge the intact block toward 40% vertical instead of
-   hugging the top. A spacer, not distribution — the block stays contiguous
-   (mid-page staging with a void between content and strips was rejected).
-   Huge flex-shrink means it collapses FIRST when a full deck needs the room,
-   so heavy days degrade to exactly the old top-anchored layout. */
+/* Optical center at EVERY window height: free space splits 2:3 above/below
+   the intact block (a fixed-cap spacer read top-anchored on tall windows).
+   Zero-basis spacers vanish entirely when a full deck consumes the room, so
+   heavy days keep the original top-anchored fit. The block itself stays
+   contiguous — mid-page staging with an internal void was rejected. */
 .mission-control__room::before {
   content: "";
-  flex: 0 10000 clamp(0px, 12vh, 7rem);
+  flex: 2 0 0px;
+}
+
+.mission-control__room::after {
+  content: "";
+  flex: 3 0 0px;
 }
 
 .mission-control__answer {
@@ -103,11 +108,12 @@
   gap: var(--space-1);
 }
 
+/* flex:none, not 1 — the ::after spacer owns the space below the block now. */
 .mission-control__attention {
   min-height: 0;
   margin-top: clamp(1.5rem, 5vh, 3rem);
   display: flex;
-  flex: 1;
+  flex: none;
   flex-direction: column;
 }
 
@@ -375,6 +381,12 @@
    of unexplained air between the ask field and the strips. */
 .mission-control__attention[data-deck-empty] .mission-control__ambient {
   margin-top: 0;
+}
+
+/* All-clear: field → activity table shares the headline → field beat (20px)
+   instead of the deck-era clamp, so every gap on the page is the same note. */
+.mission-control__attention[data-deck-empty] {
+  margin-top: var(--space-5);
 }
 
 .mission-control__ambient > .arden-section-label {

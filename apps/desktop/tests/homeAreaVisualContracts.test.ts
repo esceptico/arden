@@ -14,10 +14,15 @@ test("Home keeps the mock's compact-height attention spacing", () => {
   expect(css).toMatch(/\.mission-control__focus-reason\s*\{[\s\S]*?font:\s*400 var\(--text-sm\)\/1\.5 var\(--sans\);[\s\S]*?-webkit-line-clamp:\s*2;/);
   expect(css).toMatch(/\.mission-control__focus-next\s*\{[\s\S]*?font:\s*400 var\(--text-sm\)\/1\.5 var\(--sans\);/);
   expect(css).toMatch(/@media \(max-height: 53rem\)\s*\{[\s\S]*?\.mission-control__room\s*\{\s*padding-top:\s*2\.875rem;\s*padding-bottom:\s*var\(--space-2-5\);/);
-  // Optical-center bias: a shrink-first spacer nudges the intact block toward
-  // 40% vertical; it must collapse (huge flex-shrink) before content ever
-  // overflows — mid-page distribution with an internal void stays rejected.
-  expect(css).toMatch(/__room::before\s*\{[\s\S]*?flex:\s*0 10000 clamp\(0px, 12vh, 7rem\);/);
+  // Optical center at every height: zero-basis 2:3 spacers split the FREE
+  // space above/below the intact block, vanish when a full deck needs the
+  // room, and the attention block must not reclaim the below-space (flex
+  // none) — mid-page distribution with an internal void stays rejected.
+  expect(css).toMatch(/__room::before\s*\{[\s\S]*?flex:\s*2 0 0px;/);
+  expect(css).toMatch(/__room::after\s*\{[\s\S]*?flex:\s*3 0 0px;/);
+  expect(css).toMatch(/__attention\s*\{[\s\S]*?flex:\s*none;/);
+  // All-clear rhythm: field → activity table shares the 20px headline beat.
+  expect(css).toMatch(/__attention\[data-deck-empty\]\s*\{\s*margin-top:\s*var\(--space-5\);/);
   const compact = css.slice(css.indexOf("@media (max-height: 47rem)"));
   expect(compact).toContain(".mission-control__focus-foot { margin-top: .875rem; }");
   expect(compact).not.toContain(".mission-control__focus-actions { margin-top:");
