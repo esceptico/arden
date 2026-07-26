@@ -192,13 +192,15 @@
   align-items: center;
 }
 
-/* Word ⇄ actions swap uses the icon-swap vocabulary: opacity + uniform 3px
-   blur bridge, feedback tier. */
+/* Word ⇄ actions swap uses the icon-swap vocabulary (same tokens as
+   .t-icon-swap): opacity + blur bridge at the swap tier — the 150ms
+   feedback tier reads as a bare toggle, not motion. No scale: the .25
+   glyph pop is right for one icon, zoomy for a two-button cluster. */
 .home-area-list__suggestion-slot > * {
   grid-area: 1 / 1;
   transition:
-    opacity var(--motion-feedback) var(--ease),
-    filter var(--motion-feedback) var(--ease);
+    opacity var(--icon-swap-dur) var(--icon-swap-ease),
+    filter var(--icon-swap-dur) var(--icon-swap-ease);
 }
 
 .home-area-list__suggestion-cluster {
@@ -206,7 +208,7 @@
   align-items: center;
   gap: var(--space-0-5);
   opacity: 0;
-  filter: blur(3px);
+  filter: blur(var(--icon-swap-blur));
   pointer-events: none;
 }
 
@@ -224,7 +226,7 @@
 
 .home-area-list__row--suggested:is(:hover, :focus-within) .home-area-list__suggestion-slot > small {
   opacity: 0;
-  filter: blur(3px);
+  filter: blur(var(--icon-swap-blur));
 }
 
 .workspace-rail__section-header {

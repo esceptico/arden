@@ -9,7 +9,9 @@ import {
   ZapIcon,
 } from "@/components/icons";
 import { useMemo, useState } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import { useStore } from "@/stores";
+import { EASE_OUT, MOTION, ROW_EXIT, SPRING_LAYOUT } from "@/lib/tokens/motion";
 import { archiveArea, goToChat, goToNewSessionHome } from "@/actions/sessions";
 import { acceptAreaSuggestion, dismissAreaSuggestion } from "@/actions/areas";
 import { fetchAutomations } from "@/actions/automations";
@@ -184,9 +186,14 @@ export function Sidebar() {
                 </small>
               </button>
             ))}
+            <AnimatePresence mode="popLayout" initial={false}>
             {suggestedAreas.map((suggestion) => (
-              <div
+              <motion.div
                 key={suggestion.key}
+                layout
+                layoutDependency={suggestedAreas.map((s) => s.key).join(":")}
+                exit={{ ...ROW_EXIT, transition: { duration: MOTION.row, ease: EASE_OUT } }}
+                transition={{ layout: SPRING_LAYOUT }}
                 className="home-area-list__row home-area-list__row--suggested"
                 title={suggestion.rationale}
               >
@@ -215,8 +222,9 @@ export function Sidebar() {
                     </IconButton>
                   </span>
                 </span>
-              </div>
+              </motion.div>
             ))}
+            </AnimatePresence>
           </nav>
         </div>
         {settingsFooter}
