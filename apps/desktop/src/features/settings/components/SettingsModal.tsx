@@ -4,6 +4,7 @@ import {
   AiBrain01,
   AiMagic,
   Archive01,
+  Bell,
   Database01,
   Key01,
   Layers,
@@ -19,6 +20,7 @@ import { saveAndReconnect, fetchServerConfig } from "@/actions/server";
 import { ConnectionTab } from "@/features/settings/components/ConnectionTab";
 import { ProvidersTab } from "@/features/settings/components/ProvidersTab";
 import { IntegrationsTab } from "@/features/settings/components/IntegrationsTab";
+import { NotifiersTab } from "@/features/settings/components/NotifiersTab";
 import { ModelsTab } from "@/features/settings/components/ModelsTab";
 import { AgentTab } from "@/features/settings/components/AgentTab";
 import { ContextTab } from "@/features/settings/components/ContextTab";
@@ -123,6 +125,12 @@ const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
         label: "Integrations",
         icon: Plug02,
         intro: "Connect the data and action providers Arden can use as tools. Model providers stay in Providers; MCP servers stay in MCP.",
+      },
+      {
+        id: "notifiers",
+        label: "Notifiers",
+        icon: Bell,
+        intro: "Delivery channels for agent and automation notifications.",
       },
       {
         id: "tools",
@@ -367,6 +375,7 @@ export function SettingsModal({
               )}
               {active === "providers" && <ProvidersTab />}
               {active === "integrations" && <IntegrationsTab />}
+              {active === "notifiers" && <NotifiersTab />}
               {active === "models" && <ModelsTab />}
               {active === "agent" && <AgentTab serverConfig={serverConfig} />}
               {active === "context" && <ContextTab serverConfig={serverConfig} />}

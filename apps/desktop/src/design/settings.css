@@ -215,6 +215,10 @@
 
 .settings-page-body {
   display: grid;
+  /* minmax(0, …) — an implicit auto column min-sizes to its content, so one
+     unbreakable string (a notifier's curl command) would stretch the whole
+     page sideways instead of truncating. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 30px;
   margin-top: 30px;
 }
@@ -1362,4 +1366,60 @@
   .settings-data-row {
     transition: none;
   }
+}
+
+/* ── Notifier channel peek ─────────────────────────────────────────
+   Same instrument as the automations run peek: a right-edge inspector.
+   Fixed (not absolute) so the settings scroll container can never clip
+   or scroll it; grid rows pin the header and footer while the field
+   column scrolls. */
+.notifier-peek {
+  position: fixed;
+  z-index: var(--z-peek);
+  top: 4.5rem;
+  right: var(--floating-edge);
+  width: var(--peek-width);
+  max-height: calc(100vh - 9rem);
+  max-width: calc(100vw - var(--space-8));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+}
+
+.notifier-peek > header {
+  min-width: 0;
+  min-height: var(--peek-header-size);
+  padding: 0 var(--space-2) 0 calc(var(--space-3) + var(--space-0-5));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.notifier-peek > header > div {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-0-5);
+}
+
+.notifier-peek header span {
+  color: var(--faint);
+  font: 500 var(--text-meta)/1 var(--mono);
+}
+
+.notifier-peek header b {
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+  font-weight: 580;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Shell commands read in mono regardless of the field chrome's font
+   shorthand (which would otherwise beat the utility class). */
+.notifier-peek textarea.arden-field {
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  line-height: 1.6;
 }

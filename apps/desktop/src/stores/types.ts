@@ -33,6 +33,7 @@ export type SettingsTabId =
   | "connection"
   | "providers"
   | "integrations"
+  | "notifiers"
   | "models"
   | "agent"
   | "context"

@@ -18,7 +18,8 @@ import {
 } from "@/lib/tokens/motion";
 import { apiWithConfig, loadInitialConfig } from "@/api/core";
 import type { SessionListItem } from "@/api/types";
-import type { ImageBlock } from "@/stores";
+import { useStore, type ImageBlock } from "@/stores";
+import { loadPrefs } from "@/stores/prefs";
 
 /** Spotlight-style floating composer rendered in the quick-capture
  *  window (separate Electron BrowserWindow loaded with the
@@ -137,6 +138,11 @@ export function QuickCapture() {
   // typing replaces it and Enter sends it. Esc and submit clear it.
   useEffect(() => {
     const present = () => {
+      // This window outlives the main window's settings changes (it is
+      // created once and kept hidden between summons), so each summon
+      // re-reads the shared prefs — theme, accent, corner profile, and
+      // typography land through the same effects the main window uses.
+      useStore.setState({ prefs: loadPrefs() });
       setPhase("compose");
       setPickerOpen(false);
       setSummonId((n) => n + 1);

@@ -1,10 +1,13 @@
-export type SettingsSurface = "providers" | "integrations";
+export type SettingsSurface = "providers" | "integrations" | "notifiers";
+
+const SURFACE_NOUNS: Record<SettingsSurface, { action: string; load: string }> = {
+  providers: { action: "Provider action failed", load: "Couldn't load providers" },
+  integrations: { action: "Integration action failed", load: "Couldn't load integrations" },
+  notifiers: { action: "Notifier action failed", load: "Couldn't load notifiers" },
+};
 
 export function settingsErrorTitle(surface: SettingsSurface, hasLoadedData: boolean): string {
-  if (hasLoadedData) {
-    return surface === "providers" ? "Provider action failed" : "Integration action failed";
-  }
-  return surface === "providers" ? "Couldn't load providers" : "Couldn't load integrations";
+  return hasLoadedData ? SURFACE_NOUNS[surface].action : SURFACE_NOUNS[surface].load;
 }
 
 export function shouldShowLoadedSettingsContent({
