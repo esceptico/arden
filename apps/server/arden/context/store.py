@@ -378,6 +378,7 @@ WHERE archived_at IS NULL
 ORDER BY last_activity DESC LIMIT 1
 """
 
+# {direction} is filled with DESC/ASC from a bool — never caller text.
 SQL_LIST_SESSIONS = """
 SELECT session_id, started_at, last_activity, name,
        session_type, origin_automation_id, parent_session_id, parent_tool_call_id,
@@ -385,7 +386,7 @@ SELECT session_id, started_at, last_activity, name,
        json_array_length(COALESCE(messages, '[]')) AS message_count
 FROM sessions
 WHERE archived_at IS NULL
-ORDER BY last_activity DESC
+ORDER BY last_activity {direction}
 LIMIT ? OFFSET ?
 """
 
@@ -397,7 +398,7 @@ SELECT session_id, started_at, last_activity, name,
 FROM sessions
 WHERE archived_at IS NULL
   AND COALESCE(session_type, 'chat') != 'agent'
-ORDER BY last_activity DESC
+ORDER BY last_activity {direction}
 LIMIT ? OFFSET ?
 """
 
@@ -3435,13 +3436,15 @@ class SessionStore:
         area_id: str | None | object = AREA_FILTER_UNSET,
         include_agents: bool = True,
         offset: int = 0,
+        newest_first: bool = True,
     ) -> list[dict]:
+        direction = "DESC" if newest_first else "ASC"
         if area_id is AREA_FILTER_UNSET:
             sql = SQL_LIST_SESSIONS if include_agents else SQL_LIST_PRIMARY_SESSIONS
-            rows = await self.read_conn.execute_fetchall(sql, (limit, offset))
+            rows = await self.read_conn.execute_fetchall(sql.format(direction=direction), (limit, offset))
         elif area_id is None:
             rows = await self.read_conn.execute_fetchall(
-                """
+                f"""
                 SELECT session_id, started_at, last_activity, name,
                        session_type, origin_automation_id, parent_session_id, parent_tool_call_id,
                        agent_type, agent_status, area_id, chat_model,
@@ -3450,14 +3453,14 @@ class SessionStore:
                 WHERE archived_at IS NULL
                   AND area_id IS NULL
                   AND (? OR COALESCE(session_type, 'chat') != 'agent')
-                ORDER BY last_activity DESC
+                ORDER BY last_activity {direction}
                 LIMIT ? OFFSET ?
                 """,
                 (include_agents, limit, offset),
             )
         else:
             rows = await self.read_conn.execute_fetchall(
-                """
+                f"""
                 SELECT session_id, started_at, last_activity, name,
                        session_type, origin_automation_id, parent_session_id, parent_tool_call_id,
                        agent_type, agent_status, area_id, chat_model,
@@ -3466,7 +3469,7 @@ class SessionStore:
                 WHERE archived_at IS NULL
                   AND area_id = ?
                   AND (? OR COALESCE(session_type, 'chat') != 'agent')
-                ORDER BY last_activity DESC
+                ORDER BY last_activity {direction}
                 LIMIT ? OFFSET ?
                 """,
                 (area_id, include_agents, limit, offset),

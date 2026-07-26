@@ -90,6 +90,14 @@ class ListRecentSessionsInput(BaseModel):
             "offset=offset+limit to reach sessions older than the first page."
         ),
     )
+    order: Literal["newest", "oldest"] = Field(
+        default="newest",
+        description=(
+            "Sort by last activity. 'oldest' puts the stalest sessions on the "
+            "first page — the right mode for archival sweeps ('archive chats "
+            "inactive >30 days') instead of paging in from the newest end."
+        ),
+    )
     within_days: int | None = Field(
         default=None,
         ge=1,
@@ -284,10 +292,12 @@ async def list_recent_sessions(execution: ToolExecution, args: ListRecentSession
     fetch_limit = args.limit * 2 if args.within_days else args.limit
     # One row past the page is a probe: if the store hands it back, an older
     # page exists and the caller can reach it by advancing offset.
+    newest_first = args.order == "newest"
     rows = await svc.list_sessions(
         limit=fetch_limit + 1,
         offset=args.offset,
         area_id=_area_filter(execution),
+        newest_first=newest_first,
     )
     more_rows = len(rows) > fetch_limit
     sessions = rows[:fetch_limit]
@@ -295,16 +305,18 @@ async def list_recent_sessions(execution: ToolExecution, args: ListRecentSession
     if args.within_days is not None:
         cutoff = datetime.now(UTC) - timedelta(days=args.within_days)
         kept = [s for s in sessions if (when := _parse_when(s.get("last_activity"))) is not None and when >= cutoff]
-        # Rows arrive newest-first, so once the window drops one, every later
-        # row is older still — there is nothing further to page to.
-        more_rows = more_rows and len(kept) == len(sessions)
+        # Newest-first: once the window drops a row, everything further is
+        # older still — no next page. Oldest-first walks INTO the window, so
+        # later pages may still hold matches and paging stays open.
+        if newest_first:
+            more_rows = more_rows and len(kept) == len(sessions)
         sessions = kept
     sessions.sort(
         key=lambda session: (
             _parse_when(session.get("last_activity") or session.get("started_at")) or datetime.min.replace(tzinfo=UTC),
             str(session.get("session_id", "")),
         ),
-        reverse=True,
+        reverse=newest_first,
     )
     has_more = more_rows or len(sessions) > args.limit
     sessions = sessions[: args.limit]

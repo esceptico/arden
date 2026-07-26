@@ -613,3 +613,40 @@ async def test_read_session_omits_the_header_without_a_run_registry():
     result = await read_session(execution, ReadSessionInput(session_id="s1"))
 
     assert not result.content.startswith("[session")
+
+
+@pytest.mark.asyncio
+async def test_list_recent_sessions_oldest_first_for_archival_sweeps():
+    # order="oldest" puts the stalest sessions on page ONE — an archival
+    # automation reads exactly the rows it wants instead of paging in from
+    # the newest end.
+    service = _StubSessionService(sessions=_session_page(3))
+    execution = _make_execution(services={"session": service})
+
+    result = await list_recent_sessions(execution, ListRecentSessionsInput(limit=3, order="oldest"))
+
+    assert service.calls[-1][1]["newest_first"] is False
+    assert result.content.index("s2") < result.content.index("s1") < result.content.index("s0")
+
+
+@pytest.mark.asyncio
+async def test_oldest_first_keeps_paging_open_under_a_time_window():
+    # Walking oldest-first INTO a within_days window: dropped rows are the
+    # too-old head, so later pages may still match — has_more must survive.
+    now = datetime.now(UTC)
+    service = _StubSessionService(
+        sessions=[
+            {
+                "session_id": f"s{i}",
+                "name": f"Session {i}",
+                "last_activity": (now - timedelta(days=40 - i * 15)).isoformat(),
+                "message_count": 1,
+            }
+            for i in range(3)  # 40d, 25d, 10d old — oldest first as the store would return
+        ]
+    )
+    execution = _make_execution(services={"session": service})
+
+    result = await list_recent_sessions(execution, ListRecentSessionsInput(limit=1, order="oldest", within_days=30))
+
+    assert result.data["has_more"] is True

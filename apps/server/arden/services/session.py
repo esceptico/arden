@@ -372,12 +372,14 @@ class SessionService:
         area_id: str | None | object = AREA_FILTER_UNSET,
         include_agents: bool = True,
         offset: int = 0,
+        newest_first: bool = True,
     ) -> list[dict]:
         return await self.store.list_sessions(
             limit=limit,
             area_id=area_id,
             include_agents=include_agents,
             offset=offset,
+            newest_first=newest_first,
         )
 
     async def list_messages(
