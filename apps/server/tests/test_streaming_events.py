@@ -2011,10 +2011,11 @@ async def test_goal_meta_run_dispatches_followup_even_without_tool_activity(monk
     await run_chat(ctx, SessionBus(session_id="sess-1"), BusRegistry())
 
     assert len(dispatched) == 1
-    assert dispatched[0][0][0] == "sess-1"
-    assert dispatched[0][0][1].startswith("<goal_context>")
-    assert dispatched[0][0][2].startswith("goal:goal-1:")
-    assert dispatched[0][0][3] is True
+    args, kwargs = dispatched[0]
+    assert args[0] == "sess-1"
+    assert args[1].startswith("<goal_context>")
+    assert kwargs["client_id"].startswith("goal:goal-1:")
+    assert kwargs["skip_approvals"] is True
 
 
 @pytest.mark.asyncio

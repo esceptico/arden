@@ -886,12 +886,13 @@ async def _maybe_dispatch_goal_continuation(ctx: ChatContext, run: RunState, *, 
         return
 
     client_id = f"goal:{ctx.goal_id}:{int(datetime.now(UTC).timestamp() * 1000)}"
+    # Keywords, deliberately: this call once broke silently when the
+    # dispatcher grew a positional param between client_id and the rest.
     await ctx.dispatch_session_message(
         ctx.session_state.session_id,
         goal_continuation_prompt(goal),
-        client_id,
-        True,
-        None,
+        client_id=client_id,
+        skip_approvals=True,
     )
 
 
