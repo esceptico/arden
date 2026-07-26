@@ -12,7 +12,7 @@ import { ChevronDown, X } from "@/components/icons";
 import type { AreaAsk, AreaBriefItem, AreasBrief } from "@/api/areas";
 import type { Automation } from "@/api/types";
 import { useStore } from "@/stores";
-import { formatElapsed, formatOpenSince, formatRelativeFuture, formatRelativePastAgo } from "@/lib/format";
+import { formatElapsed, formatRelativeFuture, formatRelativePastAgo } from "@/lib/format";
 import { fetchAreasOverview, resolveAsk } from "@/actions/areas";
 import { switchSession } from "@/actions/sessions";
 import { FocusRow, type FocusRowKeyboardActions } from "@/features/home/components/FocusRow";
@@ -44,7 +44,12 @@ interface AmbientItem {
   id: string;
   label: string;
   detail: string;
+  /** Shown in the peek row, next to the item's full text. */
   meta?: string;
+  /** Shown in the collapsed strip head. Only for metas that explain
+   *  themselves in isolation ("for 3m" on a running automation, "in 2h" on
+   *  a schedule) — a bare age on an open loop reads as gibberish there. */
+  headMeta?: string;
   tone?: "success" | "warning" | "danger";
   areaId?: string;
   /** Raw timestamp used to order the lane (soonest-next / freshest-first). */
@@ -80,9 +85,12 @@ function briefItem(item: AreaBriefItem, openArea: (key: string) => void, done = 
     id: `${done ? "done" : "work"}:${item.area_id}:${item.stable_key}`,
     label: item.area_title,
     detail: item.outcome_title ? `${item.outcome_title} · ${item.text}` : item.text,
-    // Open work is not running — "open 12h" says what the number means,
-    // where "for 12h" (live effort) and "12h ago" (past event) both lie.
-    meta: when ? (done ? formatRelativePastAgo(when) : formatOpenSince(when)) : undefined,
+    // Open work is not running, so no compact duration explains itself in
+    // the head ("for 12h" lies, "open 12h" is gibberish to a new user). The
+    // age shows only in the peek, where "12h ago" sits next to the work
+    // text and plainly reads as last activity.
+    meta: when ? formatRelativePastAgo(when) : undefined,
+    headMeta: done && when ? formatRelativePastAgo(when) : undefined,
     tone: done ? "success" : undefined,
     areaId: item.area_id,
     when: when ?? undefined,
@@ -108,15 +116,19 @@ function automationItem(
     : state === "scheduled"
       ? automation.next_run_at
       : automation.last_run_at;
+  const meta = timestamp
+    ? state === "scheduled"
+      ? formatRelativeFuture(timestamp)
+      : state === "working" ? formatElapsed(timestamp) : formatRelativePastAgo(timestamp)
+    : undefined;
   return {
     id: `automation:${state}:${automation.task_id}`,
     label: automation.name,
     detail,
-    meta: timestamp
-      ? state === "scheduled"
-        ? formatRelativeFuture(timestamp)
-        : state === "working" ? formatElapsed(timestamp) : formatRelativePastAgo(timestamp)
-      : undefined,
+    meta,
+    // An automation's meta explains itself anywhere ("for 3m" while running,
+    // "in 2h" scheduled) — it earns the head slot as-is.
+    headMeta: meta,
     tone: isFailed ? "danger" : state === "done" ? "success" : undefined,
     when: timestamp ?? undefined,
     // Finished work links to its result, not just the automation's settings.
@@ -198,7 +210,7 @@ function AmbientStrip({
           <span className="mission-control__strip-preview">
             {prefix && <><em>{prefix}</em>{" "}</>}
             {preview.label}
-            {preview.meta ? ` · ${preview.meta}` : ""}
+            {preview.headMeta ? ` · ${preview.headMeta}` : ""}
           </span>
         )}
         {hasItems && (

@@ -23,13 +23,6 @@ export function formatElapsed(value: string): string {
   return `for ${formatRelativePast(value)}`;
 }
 
-/** "open 12h" — for OPEN work that nobody is actively running. "for 12h"
- *  reads as live effort and "12h ago" as a past event; an open loop is
- *  neither, it is simply still open. */
-export function formatOpenSince(value: string): string {
-  return `open ${formatRelativePast(value)}`;
-}
-
 /** Compact relative-future label ("in 12m", "in 3h", "in 2d"). Clamps an
  *  already-due moment to "soon" — the scheduler fires on its next tick. */
 export function formatRelativeFuture(value: string): string {
