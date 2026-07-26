@@ -12,7 +12,7 @@ import { ChevronDown, X } from "@/components/icons";
 import type { AreaAsk, AreaBriefItem, AreasBrief } from "@/api/areas";
 import type { Automation } from "@/api/types";
 import { useStore } from "@/stores";
-import { formatElapsed, formatRelativeFuture, formatRelativePastAgo } from "@/lib/format";
+import { formatElapsed, formatOpenSince, formatRelativeFuture, formatRelativePastAgo } from "@/lib/format";
 import { fetchAreasOverview, resolveAsk } from "@/actions/areas";
 import { switchSession } from "@/actions/sessions";
 import { FocusRow, type FocusRowKeyboardActions } from "@/features/home/components/FocusRow";
@@ -80,7 +80,9 @@ function briefItem(item: AreaBriefItem, openArea: (key: string) => void, done = 
     id: `${done ? "done" : "work"}:${item.area_id}:${item.stable_key}`,
     label: item.area_title,
     detail: item.outcome_title ? `${item.outcome_title} · ${item.text}` : item.text,
-    meta: when ? (done ? formatRelativePastAgo(when) : formatElapsed(when)) : undefined,
+    // Open work is not running — "open 12h" says what the number means,
+    // where "for 12h" (live effort) and "12h ago" (past event) both lie.
+    meta: when ? (done ? formatRelativePastAgo(when) : formatOpenSince(when)) : undefined,
     tone: done ? "success" : undefined,
     areaId: item.area_id,
     when: when ?? undefined,

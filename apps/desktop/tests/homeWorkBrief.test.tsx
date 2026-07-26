@@ -65,7 +65,7 @@ test("WorkBrief focuses one ask, keeps peers compact, and routes ambient work", 
   }
 });
 
-test("working preview reads as elapsed duration, never as a past recency stamp", async () => {
+test("open work reads as \"open 11h\" — not live effort, not a past event", async () => {
   const openedAt = new Date(Date.now() - 11 * 3_600_000).toISOString();
   const datedBrief: AreasBrief = {
     ...brief,
@@ -75,14 +75,14 @@ test("working preview reads as elapsed duration, never as a past recency stamp",
   try {
     await act(async () => root.render(<WorkBrief brief={datedBrief} />));
     const head = host.querySelector('[data-kind="working"] .mission-control__strip-preview');
-    expect(head?.textContent).toBe("Health · for 11h");
+    expect(head?.textContent).toBe("Health · open 11h");
     expect(head?.textContent).not.toContain("ago");
     expect(head?.querySelector("em")).toBeNull();
 
     const working = host.querySelector('[data-kind="working"] > button') as HTMLButtonElement;
     await act(async () => working.click());
     const meta = document.body.querySelector(".mission-control__ambient-peek .mission-control__ambient-row-meta");
-    expect(meta?.textContent).toBe("for 11h");
+    expect(meta?.textContent).toBe("open 11h");
 
     const done = host.querySelector('[data-kind="done"] .mission-control__strip-preview');
     expect(done?.querySelector("em")?.textContent).toBe("latest:");
