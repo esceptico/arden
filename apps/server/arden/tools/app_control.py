@@ -57,10 +57,14 @@ class RenameSessionInput(BaseModel):
 
 
 class ArchiveSessionInput(BaseModel):
-    session_id: str = Field(
+    session_ids: list[str] = Field(
         min_length=1,
-        max_length=200,
-        description="Session id from list_recent_sessions. Must not be the session you are running in.",
+        max_length=50,
+        description=(
+            "Session ids from list_recent_sessions to archive. A single "
+            "session is a one-element list; an archival sweep passes the "
+            "whole batch at once."
+        ),
     )
 
 
@@ -216,35 +220,43 @@ async def rename_session(execution: ToolExecution, args: RenameSessionInput) -> 
 
 
 async def archive_session(execution: ToolExecution, args: ArchiveSessionInput) -> ToolResult:
-    if args.session_id == execution.ctx.session_id:
-        return ToolResult.failure(
-            code="invalid_arguments",
-            message="archive_session cannot archive the session it is running in.",
-            preview="Same session",
-            recovery_action="Target a different session_id; the user archives this one themselves.",
-        )
-
     registry = execution.ctx.run_registry
-    if registry is not None and registry.get_active_run(args.session_id) is not None:
+    svc = execution.ctx.services["session"]
+    lines: list[str] = []
+    archived = 0
+
+    # Each id stands alone: a sweep must not lose 49 good archives to one
+    # bad id, so skips are reported, never fatal.
+    for session_id in dict.fromkeys(args.session_ids):
+        if session_id == execution.ctx.session_id:
+            lines.append(f"- {session_id} · skipped — this is the session you are running in")
+            continue
+        if registry is not None and registry.get_active_run(session_id) is not None:
+            lines.append(f"- {session_id} · skipped — live run in progress")
+            continue
+        data = await svc.load(session_id)
+        if data is None:
+            lines.append(f"- {session_id} · skipped — no such session")
+            continue
+        if await svc.is_archived(session_id):
+            lines.append(f"- {session_id} · skipped — already archived")
+            continue
+        await svc.archive(session_id)
+        archived += 1
+        lines.append(f"- {session_id} · archived — {data.state.name or '(untitled)'}")
+
+    summary = f"Archived {archived} of {len(args.session_ids)}."
+    if archived == 0:
         return ToolResult.failure(
             code="conflict",
-            message=f"Session {args.session_id} has a live run.",
-            preview="Run in progress",
-            recovery_action="Wait for that session's run to finish, or cancel it first.",
+            message="\n".join([summary, *lines]),
+            preview="Nothing archived",
+            recovery_action="Check each skip reason; ids come from list_recent_sessions.",
         )
-
-    svc = execution.ctx.services["session"]
-    data = await svc.load(args.session_id)
-    if data is None:
-        return await _unknown_session(execution, args.session_id)
-    if await svc.is_archived(args.session_id):
-        return _archived_session(args.session_id, "Nothing to do — it is already out of the sidebar.")
-
-    await svc.archive(args.session_id)
-    label = data.state.name or args.session_id
     return ToolResult(
-        content=f"Archived {label} ({args.session_id}). Restore from Settings → Archive.",
-        preview=f"Archived {label}",
+        content="\n".join([f"{summary} Restore from Settings → Archive.", *lines]),
+        preview=summary,
+        data={"archived": archived, "requested": len(args.session_ids)},
     )
 
 
@@ -319,10 +331,11 @@ RENAME_SESSION_DESCRIPTION = (
 )
 
 ARCHIVE_SESSION_DESCRIPTION = (
-    "Archive a chat session — it leaves the sidebar and moves to Settings → Archive, "
-    "where the user can restore it. Reversible; no approval needed. Refuses to "
-    "archive the session you are running in, one with a live run, or one that is "
-    "already archived."
+    "Archive chat sessions — they leave the sidebar and move to Settings → Archive, "
+    "where the user can restore them. Reversible; no approval needed. Takes a batch "
+    "of session_ids; each id succeeds or is skipped independently (the session you "
+    "are running in, one with a live run, an unknown id, or one already archived is "
+    "skipped, never fatal), and the result reports every outcome."
 )
 
 

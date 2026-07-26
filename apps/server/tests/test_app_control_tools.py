@@ -213,57 +213,52 @@ async def test_rename_session_refuses_an_archived_target():
 
 
 @pytest.mark.asyncio
-async def test_archive_session_refuses_own_session():
-    execution, service, _ = _make_execution(sessions={"cur": _session("cur", "Current")})
-
-    result = await archive_session(execution, ArchiveSessionInput(session_id="cur"))
-
-    assert result.is_error
-    assert result.outcome.error.code == "invalid_arguments"
-    assert service.archived == []
-
-
-@pytest.mark.asyncio
-async def test_archive_session_refuses_a_session_with_a_live_run():
+async def test_archive_session_skips_own_session_but_archives_the_rest():
     execution, service, _ = _make_execution(
-        sessions={"s1": _session("s1", "Ops")},
-        run_registry=_StubRunRegistry({"s1": object()}),
-    )
-
-    result = await archive_session(execution, ArchiveSessionInput(session_id="s1"))
-
-    assert result.is_error
-    assert result.outcome.error.code == "conflict"
-    assert service.archived == []
-
-
-@pytest.mark.asyncio
-async def test_archive_session_archives():
-    execution, service, _ = _make_execution(
-        sessions={"s1": _session("s1", "Ops")},
+        sessions={"cur": _session("cur", "Current"), "s1": _session("s1", "Ops")},
         run_registry=_StubRunRegistry(),
     )
 
-    result = await archive_session(execution, ArchiveSessionInput(session_id="s1"))
+    result = await archive_session(execution, ArchiveSessionInput(session_ids=["cur", "s1"]))
 
     assert not result.is_error
     assert service.archived == ["s1"]
-    assert "Settings → Archive" in result.content
+    assert "cur · skipped — this is the session you are running in" in result.content
+    assert "Archived 1 of 2" in result.content
 
 
 @pytest.mark.asyncio
-async def test_archive_session_reports_an_already_archived_session_as_such():
+async def test_archive_session_batch_reports_every_outcome():
+    # A sweep must not lose good archives to one bad id — each stands alone.
+    execution, service, _ = _make_execution(
+        sessions={"s1": _session("s1", "Ops"), "s2": _session("s2", "Live"), "s3": _session("s3", "Old")},
+        archived={"s3"},
+        run_registry=_StubRunRegistry({"s2": object()}),
+    )
+
+    result = await archive_session(execution, ArchiveSessionInput(session_ids=["s1", "s2", "s3", "ghost", "s1"]))
+
+    assert not result.is_error
+    assert service.archived == ["s1"]  # duplicate id archives once
+    assert "s1 · archived — Ops" in result.content
+    assert "s2 · skipped — live run in progress" in result.content
+    assert "s3 · skipped — already archived" in result.content
+    assert "ghost · skipped — no such session" in result.content
+    assert result.data == {"archived": 1, "requested": 5}
+
+
+@pytest.mark.asyncio
+async def test_archive_session_all_skipped_is_an_error():
     execution, service, _ = _make_execution(
         sessions={"s1": _session("s1", "Ops")},
         archived={"s1"},
         run_registry=_StubRunRegistry(),
     )
 
-    result = await archive_session(execution, ArchiveSessionInput(session_id="s1"))
+    result = await archive_session(execution, ArchiveSessionInput(session_ids=["s1", "ghost"]))
 
     assert result.is_error
     assert result.outcome.error.code == "conflict"
-    assert "already out of the sidebar" in result.outcome.error.recovery_action
     assert service.archived == []
 
 
