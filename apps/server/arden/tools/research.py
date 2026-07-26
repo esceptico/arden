@@ -581,9 +581,7 @@ RESEARCH_AGENT_TOOLS = {
 RESEARCH_AGENT_TYPE = AgentType(
     name="research",
     actions=frozenset({ToolAction.READ}),
-    exclude=frozenset(
-        {"background", "cancel_background_task", "list_background_tasks", "get_background_result", "workflow"}
-    ),
+    exclude=frozenset({"background", "cancel_agent", "workflow"}),
     extra_tools=RESEARCH_AGENT_TOOLS,
 )
 register_agent_type(RESEARCH_AGENT_TYPE)

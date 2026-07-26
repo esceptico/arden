@@ -398,10 +398,7 @@ async def test_spawn_wait_false_returns_running_child_run(monkeypatch):
     assert result.agent_type == "background_research"
     assert result.wait is False
     assert result.status == "running"
-    assert result.text == (
-        "Started a background agent to: background research\n"
-        "It runs independently — I'll surface the results automatically when it finishes."
-    )
+    assert result.text == "Started a background agent to: background research"
     assert result.child_run_id not in result.text
 
     task = bg_registry._tasks[result.child_run_id]

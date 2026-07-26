@@ -1,9 +1,11 @@
 """Tests for the read-only sessions tools (`list_recent_sessions`,
 `read_session`) used by cross-session audit automations."""
 
+import sqlite3
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from pydantic import ValidationError
 
 from arden.context.models import SessionState
 from arden.context.store import AREA_FILTER_UNSET
@@ -16,6 +18,7 @@ from arden.tools.core.context import (
 )
 from arden.tools.core.registry import ToolRegistry
 from arden.tools.sessions import (
+    _ITEM_FIELDS,
     CreateSessionInput,
     ListRecentSessionsInput,
     ReadSessionInput,
@@ -325,11 +328,18 @@ async def test_read_session_role_filter():
     )
     execution = _make_execution(services={"session": service})
 
-    result = await read_session(execution, ReadSessionInput(session_id="s1", role_filter="user"))
+    result = await read_session(execution, ReadSessionInput(session_id="s1", role_filter=["user"]))
 
     assert "[user]" in result.content
     assert "[assistant]" not in result.content
     assert "[tool" not in result.content
+
+
+def test_read_session_rejects_an_unknown_role():
+    """A typed enum turns 'usr' into a schema error the model can self-correct,
+    instead of a filter that silently matches nothing."""
+    with pytest.raises(ValidationError):
+        ReadSessionInput(session_id="s1", role_filter=["usr"])
 
 
 # --- create_session tool ---
@@ -650,3 +660,62 @@ async def test_oldest_first_keeps_paging_open_under_a_time_window():
     result = await list_recent_sessions(execution, ListRecentSessionsInput(limit=1, order="oldest", within_days=30))
 
     assert result.data["has_more"] is True
+
+
+@pytest.mark.asyncio
+async def test_list_recent_sessions_projects_only_agent_useful_fields():
+    """Store rows carry plumbing columns; shipping them wholesale is payload no
+    consumer reads."""
+    service = _StubSessionService(
+        sessions=[
+            {
+                "session_id": "s1",
+                "name": "Ops",
+                "last_activity": datetime.now(UTC).isoformat(),
+                "message_count": 3,
+                "chat_model": "claude-sonnet",
+                "parent_session_id": "p1",
+                "parent_tool_call_id": "t1",
+                "area_id": "ops",
+                "origin_automation_id": "auto-9",
+            }
+        ]
+    )
+    execution = _make_execution(services={"session": service})
+
+    result = await list_recent_sessions(execution, ListRecentSessionsInput())
+
+    assert set(result.data["items"][0]) == set(_ITEM_FIELDS)
+    assert result.data["items"][0]["session_id"] == "s1"
+
+
+class _FailingSearchService(_StubSessionService):
+    def __init__(self, error: Exception):
+        super().__init__(sessions=[])
+        self._error = error
+
+    async def search_messages(self, query: str, **kwargs) -> dict:
+        raise self._error
+
+
+@pytest.mark.asyncio
+async def test_search_transcripts_explains_an_fts_syntax_error():
+    service = _FailingSearchService(sqlite3.OperationalError('fts5: syntax error near """'))
+    execution = _make_execution(services={"session": service})
+
+    result = await search_transcripts(execution, SearchTranscriptsInput(query='invoice "'))
+
+    assert result.is_error
+    assert result.outcome.error.code == "invalid_arguments"
+    assert "Quote the phrase" in result.outcome.error.recovery_action
+
+
+@pytest.mark.asyncio
+async def test_search_transcripts_does_not_swallow_other_errors():
+    """A bug in our own code must reach the runner as internal_error, not hide
+    behind a retryable 'search failed'."""
+    service = _FailingSearchService(RuntimeError("boom"))
+    execution = _make_execution(services={"session": service})
+
+    with pytest.raises(RuntimeError):
+        await search_transcripts(execution, SearchTranscriptsInput(query="invoice"))

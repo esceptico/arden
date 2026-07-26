@@ -66,24 +66,50 @@ async def test_background_registry_injects_hidden_meta_completion_with_result():
         label="fetch email",
         status="completed",
         emit=None,
+        child_session_id="sess-1::ab12ef",
     )
 
     assert injected == [
         {
             "role": "user",
             "content": (
-                '<background_agent_result task_id="bg-1" status="completed">\n'
+                '<background_agent_result session_id="sess-1::ab12ef" status="completed">\n'
                 "This is a hidden completion event. The user cannot see this message.\n"
                 "Write a visible assistant response now. Summarize the result directly for the user.\n"
                 "If the result contains sources, IDs, links, or evidence, include the relevant ones inline.\n"
-                "Do not say the sources/result are above, hidden, attached, in a file, or in the bg result.\n\n"
-                "<result>\nemail summary\n</result>\n"
+                "Do not say the sources/result are above, hidden, attached, in a file, or in the bg result.\n"
+                'Read that agent\'s session with read_session(session_id="sess-1::ab12ef") if you need more.\n'
+                "\n<result>\nemail summary\n</result>\n"
                 "</background_agent_result>"
             ),
             "is_meta": True,
             "client_id": "bg:bg-1:completed",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_background_completion_omits_the_session_when_the_durable_row_has_none():
+    """Historical completions redelivered from the DB predate child sessions —
+    naming a session id there would point the agent at nothing."""
+    injected = []
+
+    async def on_result(messages):
+        injected.extend(messages)
+
+    registry = BackgroundTaskRegistry(session_id="sess-1", on_result=on_result)
+
+    await registry.deliver_result(
+        task_id="bg-1",
+        result="email summary",
+        label="fetch email",
+        status="completed",
+        emit=None,
+    )
+
+    content = injected[0]["content"]
+    assert content.startswith('<background_agent_result status="completed">')
+    assert "read_session" not in content
 
 
 @pytest.mark.asyncio

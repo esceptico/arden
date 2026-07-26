@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict
 from arden.agent import ToolResult
 from arden.tools.core.base import Tool
 from arden.tools.core.context import ToolExecution
-from arden.tools.core.types import ApprovalInfo, ToolPolicy
+from arden.tools.core.types import ApprovalInfo, ApprovalWaived, ToolPolicy
 
 ToolSet = dict[str, Tool]
 
@@ -16,7 +16,7 @@ class EmptyInput(BaseModel):
 
 
 ToolHandler = Callable[[ToolExecution, BaseModel], Awaitable[ToolResult]]
-ApprovalHandler = Callable[[ToolExecution, BaseModel], Awaitable[ApprovalInfo | None]]
+ApprovalHandler = Callable[[ToolExecution, BaseModel], Awaitable[ApprovalInfo | ApprovalWaived | None]]
 
 
 class _FunctionTool(Tool):
@@ -45,7 +45,7 @@ class _FunctionTool(Tool):
         self._approval = approval
         self.kind = kind
 
-    async def approval_info(self, execution: ToolExecution, **kwargs: Any) -> ApprovalInfo | None:
+    async def approval_info(self, execution: ToolExecution, **kwargs: Any) -> ApprovalInfo | ApprovalWaived | None:
         if self._approval is None:
             return None
         args = self.input_model(**kwargs)

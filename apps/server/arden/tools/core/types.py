@@ -70,3 +70,13 @@ class ApprovalInfo:
     description: str
     preview: str | None
     diff: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ApprovalWaived:
+    """An approval callback's verdict that THIS call needs no approval — e.g.
+    steering an agent the caller itself spawned. Distinct from returning None,
+    which means no safe preview could be built and blocks the call."""
+
+
+APPROVAL_WAIVED = ApprovalWaived()

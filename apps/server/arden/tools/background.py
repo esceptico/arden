@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 from arden.constants import BACKGROUND_AGENT_TIMEOUT
 from arden.core.agent_types import SPAWN_SURFACE_GUIDANCE
 from arden.events.sse import BackgroundTaskEvent
-from arden.tools.core import EmptyInput, ToolResult, tool
+from arden.tools.core import ToolResult, tool
 from arden.tools.core.context import ToolExecution
 from arden.tools.core.types import ApprovalInfo, ToolAction, ToolPolicy, ToolScope
 
@@ -16,13 +16,13 @@ BACKGROUND_SYSTEM_PROMPT = (
 )
 
 BACKGROUND_DESCRIPTION = (
-    "Spawn a background agent that runs independently and delivers results automatically when done. "
+    "Spawn a background agent that runs independently and delivers its result automatically when done. "
     "The agent has read-only tool access (search, read, web, memory). "
     "Use for long-running tasks: deep research, multi-source investigation, data gathering. "
-    "When it finishes, the result is delivered back into the parent conversation as a hidden meta message. "
-    "Do not inspect the filesystem for background results. "
-    "Use cancel_background_task to stop, list_background_tasks to check currently running tasks, "
-    "and get_background_result only when the user explicitly asks to retrieve a result by task ID."
+    "It gets its own session: the id comes back here, send_message(session_id=...) steers it, "
+    "read_session(session_id=...) shows its work, cancel_agent(session_id=...) stops it. "
+    "The result arrives as a hidden meta message in this conversation — do not poll, and do not "
+    "inspect the filesystem for it."
     f" {SPAWN_SURFACE_GUIDANCE}"
 )
 
@@ -56,106 +56,72 @@ async def background(execution: ToolExecution, args: BackgroundInput) -> ToolRes
         kind="background",
     )
 
-    return ToolResult(content=spawn.text, preview=spawn.text[:80], data=spawn.child_agent_data() or None)
+    if spawn.status == "failed":
+        # The only failure the detached path returns is the per-session concurrency cap.
+        return ToolResult.failure(
+            code="conflict",
+            message=spawn.text,
+            preview="At the agent limit",
+            recovery_action="Wait for a running agent to finish, then spawn again.",
+        )
+
+    content = (
+        f"{spawn.text}\n"
+        f"Its session is {spawn.child_session_id} — steer it with send_message(session_id=...), "
+        "inspect its work with read_session(session_id=...). "
+        "The result is delivered here automatically; do not poll."
+    )
+    return ToolResult(content=content, preview=content[:80], data=spawn.child_agent_data() or None)
 
 
-class CancelBackgroundTaskInput(BaseModel):
-    task_id: str = Field(description="The ID of the background task to cancel")
+class CancelAgentInput(BaseModel):
+    session_id: str = Field(
+        min_length=1,
+        max_length=200,
+        description="Session id of the running agent to stop — the id background() returned.",
+    )
 
 
-async def approve_cancel_background_task(_execution: ToolExecution, args: CancelBackgroundTaskInput) -> ApprovalInfo:
+async def approve_cancel_agent(_execution: ToolExecution, args: CancelAgentInput) -> ApprovalInfo:
     return ApprovalInfo(
-        description="Cancel a running background task",
-        preview=f"Background task: {args.task_id}",
+        description="Stop a running agent",
+        preview=f"Agent session: {args.session_id}",
         diff=None,
     )
 
 
-async def cancel_background_task(execution: ToolExecution, args: CancelBackgroundTaskInput) -> ToolResult:
+async def cancel_agent(execution: ToolExecution, args: CancelAgentInput) -> ToolResult:
     registry = execution.ctx.background_tasks
-    if (command := registry.cancel(args.task_id)) is None:
-        return ToolResult.failure(
-            code="not_found",
-            message=f"No running background task has ID {args.task_id}.",
-            preview="Not found",
-            recovery_action="Call list_background_tasks and retry with an exact returned task_id.",
-        )
-
-    if emit := execution.ctx.io.emit:
-        await emit(BackgroundTaskEvent(task_id=args.task_id, command=command, status="cancelled"))
-
-    return ToolResult(content=f"Cancelled task {args.task_id}: {command}", preview=f"Cancelled · {args.task_id}")
-
-
-class GetBackgroundResultInput(BaseModel):
-    task_id: str = Field(description="The ID of the background task")
-
-
-async def get_background_result(execution: ToolExecution, args: GetBackgroundResultInput) -> ToolResult:
-    content = await execution.ctx.background_tasks.read_background_result(args.task_id)
-    if content is None:
+    task_id = registry.task_for_session(args.session_id)
+    if task_id is None:
+        running = registry.live_child_sessions()
+        listing = "\n".join(f"- {sid}" for sid in running)
         return ToolResult.failure(
             code="not_found",
             message=(
-                f"No stored result for task {args.task_id}. "
-                "If it is still running, wait for the hidden completion notification; do not search files."
+                f"No agent of yours is running in {args.session_id}."
+                + (f" Currently running:\n{listing}" if running else " Nothing is running.")
             ),
             preview="Not found",
-            recovery_action="Call list_background_tasks; if absent, wait for automatic delivery or verify the task_id.",
+            recovery_action=(
+                "Retry with one of the listed sessions. A finished agent needs no cancel — "
+                "read_session shows what it did. Only agents you spawned can be stopped here; "
+                "the user stops their own chats from the app."
+            ),
         )
-    lines = content.count("\n") + 1
-    return ToolResult(content=content, preview=f"{lines} lines")
 
-
-async def list_background_tasks(execution: ToolExecution, args: EmptyInput) -> ToolResult:
-    pending = sorted(execution.ctx.background_tasks.list_pending(), key=lambda item: item[0])
-    if not pending:
-        return ToolResult(content="No background tasks running.", preview="0 tasks")
-
-    lines = [f"- {tid}: {cmd}" for tid, cmd in pending]
-    content = (
-        f"{len(pending)} running:\n" + "\n".join(lines) + "\n\nResults are delivered automatically — do not poll. "
-        "Continue with other work or respond to the user."
-    )
-    return ToolResult(content=content, preview=f"{len(pending)} tasks", data={"items": pending})
-
-
-class SendToAgentInput(BaseModel):
-    task_id: str = Field(description="ID of the running background task to message (from list_background_tasks).")
-    message: str = Field(description="The instruction/message to deliver. The agent receives it at its next step.")
-
-
-async def send_to_agent(execution: ToolExecution, args: SendToAgentInput) -> ToolResult:
-    if not args.message.strip():
-        return ToolResult.failure(
-            code="invalid_arguments",
-            message="Cannot send an empty steering message — provide a non-empty instruction.",
-            preview="Empty",
-            recovery_action="Pass a non-empty message for the running agent.",
-        )
-    registry = execution.ctx.background_tasks
-    delivered = registry.queue_steering(args.task_id, args.message)
-    if delivered:
-        return ToolResult(
-            content=f"Queued for {args.task_id}; it'll see this at its next step if it's still running.",
-            preview=f"Sent · {args.task_id}",
-        )
-    # Self-correcting: a finished/unknown id dead-ends otherwise, so list the
-    # ids that ARE live instead of just failing.
-    pending = registry.list_pending()
-    if pending:
-        listing = "\n".join(f"- {tid}: {cmd}" for tid, cmd in pending)
-        return ToolResult.failure(
-            code="not_found",
-            message=f"No running agent with id '{args.task_id}'. Currently running:\n{listing}",
-            preview="Not found",
-            recovery_action="Retry with one of the listed task IDs.",
-        )
-    return ToolResult.failure(
-        code="not_found",
-        message=f"No running agent with id '{args.task_id}' — nothing is running.",
-        preview="Not found",
-        recovery_action="Start a background agent before sending steering messages.",
+    command = registry.cancel(task_id)
+    if emit := execution.ctx.io.emit:
+        await emit(BackgroundTaskEvent(task_id=task_id, command=command, status="cancelled"))
+    # An agent's own spawns run in ITS session, so stopping it must stop them too —
+    # same cascade the /chat/child-agents/{id}/cancel route performs.
+    cascaded = 0
+    if (run_registry := execution.ctx.run_registry) is not None:
+        cascaded = len(run_registry.cancel_subtree(args.session_id))
+    tail = f" Also stopped {cascaded} agent(s) it had spawned." if cascaded else ""
+    return ToolResult(
+        content=f"Cancelled the agent in {args.session_id}.{tail}",
+        preview=f"Cancelled · {args.session_id}",
     )
 
 
@@ -169,43 +135,16 @@ background_tool = tool(
     kind="agent",
 )
 
-send_to_agent_tool = tool(
-    display_name="Send to Agent",
-    display_description="Steer a running background agent.",
+cancel_agent_tool = tool(
+    display_name="CancelAgent",
+    display_description="Stop a running agent.",
     description=(
-        "Send a message to a RUNNING background agent you spawned — to steer it, add context, "
-        "or correct course mid-run. Delivered at the agent's next step. Get IDs from "
-        "list_background_tasks; for a finished agent read its result instead."
+        "Stop an agent you spawned, addressed by its session id. Anything it spawned stops too. "
+        "Requires approval. A finished agent needs no cancel — its result arrives automatically, "
+        "and read_session shows its work."
     ),
-    input_model=SendToAgentInput,
-    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL),
-    execute=send_to_agent,
-)
-
-cancel_background_task_tool = tool(
-    display_name="Cancel Background Task",
-    description="Cancel a running background task by its ID.",
-    input_model=CancelBackgroundTaskInput,
+    input_model=CancelAgentInput,
     policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, requires_approval=True),
-    approval=approve_cancel_background_task,
-    execute=cancel_background_task,
-)
-
-get_background_result_tool = tool(
-    display_name="Get Background Result",
-    description="Read the result of a completed background task by its ID.",
-    input_model=GetBackgroundResultInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL),
-    execute=get_background_result,
-)
-
-list_background_tasks_tool = tool(
-    display_name="List Background Tasks",
-    display_description="List running background tasks.",
-    description=(
-        "List currently running background tasks only. Finished task results are delivered automatically "
-        "as hidden parent-conversation notifications — do not poll or inspect files for results."
-    ),
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL),
-    execute=list_background_tasks,
+    approval=approve_cancel_agent,
+    execute=cancel_agent,
 )

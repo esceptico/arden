@@ -1158,10 +1158,7 @@ def create_spawn_fn(
         # asynchronously via registry.deliver_result. Usage/cost belong to
         # the background task's own ledger, not this caller's tool result.
         return SpawnResult(
-            text=(
-                f"Started a background agent to: {task}\n"
-                "It runs independently — I'll surface the results automatically when it finishes."
-            ),
+            text=f"Started a background agent to: {task}",
             child_run_id=child_run_id,
             child_session_id=child_state.session_id if has_child_session else None,
             parent_tool_call_id=parent_id,

@@ -20,7 +20,7 @@ from arden.core.tool_executor import ArdenToolExecutor
 from arden.integrations.base import Integration
 from arden.tool_call_metadata import DISPLAY_TITLE_ARG
 from arden.tools.automation import create_automation_tool, loop_done_tool, schedule_wakeup_tool
-from arden.tools.background import cancel_background_task_tool
+from arden.tools.background import cancel_agent_tool
 from arden.tools.bash import bash_tool, execute_bash, is_blocked_command
 from arden.tools.core import EmptyInput, Tool, ToolCall, ToolNext, tool
 from arden.tools.core.context import (
@@ -32,7 +32,15 @@ from arden.tools.core.context import (
     ToolExecution,
 )
 from arden.tools.core.registry import ToolRegistry
-from arden.tools.core.types import ApprovalInfo, ToolAction, ToolOverrideDecision, ToolPolicy, ToolScope
+from arden.tools.core.types import (
+    APPROVAL_WAIVED,
+    ApprovalInfo,
+    ApprovalWaived,
+    ToolAction,
+    ToolOverrideDecision,
+    ToolPolicy,
+    ToolScope,
+)
 from arden.tools.discover import discover_user_tools
 from arden.tools.executor import ToolExecutor
 from arden.tools.notify import notify_tool
@@ -768,6 +776,37 @@ async def test_approval_callback_that_cannot_preview_fails_closed():
 
 
 @pytest.mark.asyncio
+async def test_approval_callback_can_waive_this_call():
+    """APPROVAL_WAIVED short-circuits before request_approval, so the tool runs
+    with no UI wired — which returning None (no safe preview) never does."""
+
+    async def approve(execution: ToolExecution, args: EchoInput) -> ApprovalWaived:
+        return APPROVAL_WAIVED
+
+    async def echo(execution: ToolExecution, args: EchoInput) -> ToolResult:
+        return ToolResult(content=args.text, preview=args.text)
+
+    registry = ToolRegistry()
+    _register_tools(
+        registry,
+        {
+            "echo": tool(
+                description="Echo text.",
+                input_model=EchoInput,
+                execute=echo,
+                approval=approve,
+                policy=WRITE_INTERNAL_APPROVAL_POLICY,
+            )
+        },
+    )
+
+    result = await registry.execute("echo", _make_execution("echo"), {"text": "hello"})
+
+    assert not result.is_error
+    assert result.content == "hello"
+
+
+@pytest.mark.asyncio
 async def test_bash_approval_always_describes_command_and_working_directory():
     execution = _make_execution("bash")
 
@@ -996,14 +1035,14 @@ async def test_approval_gated_tools_render_the_payload():
     )
     wakeup = await schedule_wakeup_tool.approval_info(execution, delay_seconds=120)
     done = await loop_done_tool.approval_info(execution, reason="The requested condition is satisfied")
-    cancel = await cancel_background_task_tool.approval_info(execution, task_id="agent-42")
+    cancel = await cancel_agent_tool.approval_info(execution, session_id="P::a1")
 
     assert notify is not None
     assert notify.description == "Notify via work-telegram: Build failed"
     assert notify.preview == "The release build failed in the signing step."
     assert wakeup is not None and wakeup.preview == "Delay: 120 seconds"
     assert done is not None and done.preview == "The requested condition is satisfied"
-    assert cancel is not None and cancel.preview == "Background task: agent-42"
+    assert cancel is not None and cancel.preview == "Agent session: P::a1"
 
 
 @pytest.mark.asyncio

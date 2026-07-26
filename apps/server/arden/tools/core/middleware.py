@@ -6,7 +6,7 @@ from pydantic import ValidationError
 
 from arden.tools.core.base import Tool, ToolResult
 from arden.tools.core.context import ToolExecution
-from arden.tools.core.types import ApprovalMode
+from arden.tools.core.types import ApprovalMode, ApprovalWaived
 
 
 @dataclass(frozen=True)
@@ -46,6 +46,8 @@ async def request_approval(call: ToolCall, next_call: ToolNext) -> ToolResult:
         return await next_call(call)
 
     info = await call.tool.approval_info(call.execution, **call.arguments)
+    if isinstance(info, ApprovalWaived):
+        return await next_call(call)
     if info is None:
         return ToolResult.failure(
             code="approval_preview_unavailable",

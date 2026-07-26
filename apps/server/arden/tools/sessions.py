@@ -13,6 +13,7 @@ Three tools:
   can post into for channel-aware automations.
 """
 
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
@@ -36,8 +37,21 @@ _MAX_LIST_LIMIT = 100
 _DEFAULT_MESSAGE_LIMIT = 50
 _MAX_MESSAGE_LIMIT = 200
 
+# What a caller actually needs from a session row. The store row also carries
+# plumbing (parent_session_id, origin_automation_id, chat_model, …) that no
+# consumer of this tool acts on.
+_ITEM_FIELDS = (
+    "session_id",
+    "name",
+    "session_type",
+    "started_at",
+    "last_activity",
+    "message_count",
+    "agent_status",
+)
 
-def _area_filter(execution: ToolExecution) -> str | object:
+
+def area_filter(execution: ToolExecution) -> str | object:
     """Which sessions this call may see, with no way for the caller to widen it.
 
     An agent running inside an Area is a bounded permission domain — its page,
@@ -173,11 +187,11 @@ class ReadSessionInput(BaseModel):
             "Keeps a long session readable without blowing context."
         ),
     )
-    role_filter: str | None = Field(
+    role_filter: list[Literal["user", "assistant", "tool", "system"]] | None = Field(
         default=None,
         description=(
-            "Comma-separated roles to include, e.g. 'user' for just the "
-            "prompts, or 'user,assistant' to drop tool noise. Omit for all."
+            "Roles to include, e.g. ['user'] for just the prompts or "
+            "['user', 'assistant'] to drop tool noise. Omit for all."
         ),
     )
     after_seq: int | None = Field(
@@ -296,7 +310,7 @@ async def list_recent_sessions(execution: ToolExecution, args: ListRecentSession
     rows = await svc.list_sessions(
         limit=fetch_limit + 1,
         offset=args.offset,
-        area_id=_area_filter(execution),
+        area_id=area_filter(execution),
         newest_first=newest_first,
     )
     more_rows = len(rows) > fetch_limit
@@ -350,7 +364,7 @@ async def list_recent_sessions(execution: ToolExecution, args: ListRecentSession
         content="\n".join(lines),
         preview=f"{len(sessions)} sessions" + (" (capped)" if has_more else ""),
         data={
-            "items": sessions,
+            "items": [{field: session.get(field) for field in _ITEM_FIELDS} for session in sessions],
             "count": len(sessions),
             "has_more": has_more,
             "offset": args.offset,
@@ -394,9 +408,7 @@ async def read_session(execution: ToolExecution, args: ReadSessionInput) -> Tool
     if svc is None:
         return _session_unavailable()
 
-    roles: set[str] | None = None
-    if args.role_filter:
-        roles = {r.strip().lower() for r in args.role_filter.split(",") if r.strip()}
+    roles = set(args.role_filter) if args.role_filter else None
 
     if args.after_seq is not None and args.before_seq is not None:
         return ToolResult.failure(
@@ -413,7 +425,7 @@ async def read_session(execution: ToolExecution, args: ReadSessionInput) -> Tool
             after_seq=args.after_seq,
             before_seq=args.before_seq,
             around_seq=args.around_seq,
-            area_id=_area_filter(execution),
+            area_id=area_filter(execution),
         )
     except Exception:
         return ToolResult.failure(
@@ -497,15 +509,19 @@ async def search_transcripts(execution: ToolExecution, args: SearchTranscriptsIn
             offset=args.offset,
             session_id=args.session_id,
             since=since,
-            area_id=_area_filter(execution),
+            area_id=area_filter(execution),
         )
-    except Exception:
+    except sqlite3.OperationalError as exc:
+        # The store already retries a malformed query as a quoted phrase, so
+        # only genuinely unparseable FTS5 survives to here. Anything else —
+        # including our own bugs — must reach the runner as internal_error.
+        if "fts5" not in str(exc).lower():
+            raise
         return ToolResult.failure(
-            code="session_search_failed",
-            message="Transcript search failed.",
-            preview="Search failed",
-            retryable=True,
-            recovery_action="Simplify the query or retry with a narrower session/time window.",
+            code="invalid_arguments",
+            message=f"{args.query!r} is not valid FTS5 syntax.",
+            preview="Bad query",
+            recovery_action="Quote the phrase: query='\"exact phrase\"'. Bare words are AND-ed; drop stray operators.",
         )
 
     hits = result.get("hits", [])
@@ -561,7 +577,7 @@ LIST_RECENT_SESSIONS_DESCRIPTION = (
 READ_SESSION_DESCRIPTION = (
     "Read messages from a specific session by session_id. Content is "
     "truncated per message to keep context manageable; raise "
-    "content_chars (up to 4000) for fuller bodies. Use role_filter='user' "
+    "content_chars (up to 4000) for fuller bodies. Use role_filter=['user'] "
     "to scan only user prompts when looking for patterns. Each line is "
     "tagged with its #seq; paginate a long session with after_seq / "
     "before_seq cursors, or center on a search hit with around_seq. "

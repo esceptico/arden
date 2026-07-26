@@ -284,6 +284,24 @@ class BackgroundTaskRegistry:
     def child_session(self, task_id: str) -> str | None:
         return self._child_sessions.get(task_id)
 
+    def _live_by_session(self) -> dict[str, str]:
+        return {
+            child: task_id
+            for task_id, child in self._child_sessions.items()
+            if (task := self._tasks.get(task_id)) is not None and not task.done()
+        }
+
+    def task_for_session(self, session_id: str) -> str | None:
+        """Reverse of `child_session`: the live task whose agent runs in that
+        session. Session-addressed tools resolve the task id internally — it is
+        never part of what the model sees."""
+        return self._live_by_session().get(session_id)
+
+    def live_child_sessions(self) -> list[str]:
+        """Agent sessions currently running under this one — the address list a
+        session-addressed tool offers when the caller names a stale id."""
+        return sorted(self._live_by_session())
+
     def queue_injection(self, task_id: str, message: dict) -> bool:
         """Queue a steering message for a running background agent. Returns
         False when no such agent is live (already finished or unknown)."""
@@ -480,13 +498,21 @@ class BackgroundTaskRegistry:
         except Exception:
             _logger.warning("Failed to write supplementary background result file", exc_info=True)
 
+        # Durable completions recorded before child sessions existed carry no id.
+        session_attr = f' session_id="{child_session_id}"' if child_session_id else ""
+        follow_up = (
+            f'Read that agent\'s session with read_session(session_id="{child_session_id}") if you need more.\n'
+            if child_session_id
+            else ""
+        )
         notification = (
-            f'<background_agent_result task_id="{task_id}" status="{status}">\n'
+            f'<background_agent_result{session_attr} status="{status}">\n'
             "This is a hidden completion event. The user cannot see this message.\n"
             "Write a visible assistant response now. Summarize the result directly for the user.\n"
             "If the result contains sources, IDs, links, or evidence, include the relevant ones inline.\n"
-            "Do not say the sources/result are above, hidden, attached, in a file, or in the bg result.\n\n"
-            f"<result>\n{result}\n</result>\n"
+            "Do not say the sources/result are above, hidden, attached, in a file, or in the bg result.\n"
+            f"{follow_up}"
+            f"\n<result>\n{result}\n</result>\n"
             "</background_agent_result>"
         )
         messages = [

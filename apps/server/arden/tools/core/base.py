@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from arden.agent import ToolResult
 from arden.tools.core.context import ToolExecution
 from arden.tools.core.schema import tool_parameters
-from arden.tools.core.types import ApprovalInfo, ToolPolicy
+from arden.tools.core.types import ApprovalInfo, ApprovalWaived, ToolPolicy
 
 __all__ = ["Tool", "ToolResult", "ApprovalInfo"]
 
@@ -22,7 +22,7 @@ class Tool(ABC):
     # the chat can render them as agent cards instead of plain rows.
     kind: str = "tool"
 
-    async def approval_info(self, execution: ToolExecution, **kwargs: Any) -> ApprovalInfo | None:
+    async def approval_info(self, execution: ToolExecution, **kwargs: Any) -> ApprovalInfo | ApprovalWaived | None:
         return None
 
     @abstractmethod

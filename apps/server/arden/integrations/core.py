@@ -12,7 +12,7 @@ from arden.tools.app_control import (
     open_in_app_tool,
     rename_session_tool,
     request_attention_tool,
-    send_to_session_tool,
+    send_message_tool,
 )
 from arden.tools.area import area_page_patch_tool, area_page_read_tool, area_page_write_tool, area_run_automation_tool
 from arden.tools.automation import (
@@ -26,13 +26,7 @@ from arden.tools.automation import (
     schedule_wakeup_tool,
     update_automation_tool,
 )
-from arden.tools.background import (
-    background_tool,
-    cancel_background_task_tool,
-    get_background_result_tool,
-    list_background_tasks_tool,
-    send_to_agent_tool,
-)
+from arden.tools.background import background_tool, cancel_agent_tool
 from arden.tools.bash import bash_tool
 from arden.tools.connections import request_connection_tool
 from arden.tools.deferred import load_tools_tool, tool_search_tool
@@ -121,12 +115,7 @@ AUTOMATION = Integration(
 BACKGROUND = Integration(
     id="_background",
     label="Background task controls",
-    tools={
-        "cancel_background_task": cancel_background_task_tool,
-        "get_background_result": get_background_result_tool,
-        "list_background_tasks": list_background_tasks_tool,
-        "send_to_agent": send_to_agent_tool,
-    },
+    tools={"cancel_agent": cancel_agent_tool},
 )
 
 NOTIFICATIONS = Integration(
@@ -173,7 +162,7 @@ APP_CONTROL = Integration(
     id="_app_control",
     label="App control",
     tools={
-        "send_to_session": send_to_session_tool,
+        "send_message": send_message_tool,
         "rename_session": rename_session_tool,
         "archive_session": archive_session_tool,
         "request_attention": request_attention_tool,

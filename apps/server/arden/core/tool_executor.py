@@ -25,7 +25,10 @@ from arden.tools.core.types import ToolAction, ToolScope
 from arden.tools.deferred import is_deferred_tool
 from arden.tools.executor import ToolExecutor
 
-LIVE_READ_TOOLS = frozenset({"list_background_tasks"})
+# The live agent-status listing must not be deduped by SharedLedger: a second
+# caller needs the CURRENT state, not the first caller's snapshot. read_session
+# stays deduped — it is a cursor-keyed transcript read.
+LIVE_READ_TOOLS = frozenset({"list_recent_sessions"})
 AUDIT_PREVIEW_MAX_CHARS = 500
 _logger = logging.get_logger(__name__)
 

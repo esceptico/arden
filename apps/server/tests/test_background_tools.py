@@ -7,18 +7,20 @@ import pytest
 import arden.tools.background as background_module
 from arden.context.models import SessionState
 from arden.core.spawner import SpawnResult
+from arden.server.state import RunRegistry
 from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.registry import ToolRegistry
 from arden.tools.core.types import ToolAction
 
 
-def _ctx(registry: BackgroundTaskRegistry) -> ToolContext:
+def _ctx(registry: BackgroundTaskRegistry, run_registry: RunRegistry | None = None) -> ToolContext:
     return ToolContext(
         session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
         registry=ToolRegistry(),
         run=RunContext(run_id="run-1", current_depth=0, max_depth=3),
         io=IOBridge(),
         background_tasks=registry,
+        run_registry=run_registry,
     )
 
 
@@ -34,6 +36,12 @@ async def _cancel(task: asyncio.Task) -> None:
         await task
 
 
+async def _live_agent(registry: BackgroundTaskRegistry, task_id: str, child_session_id: str) -> asyncio.Task:
+    task = await _register_live(registry, task_id, "scan docs")
+    await registry.record_started(task_id=task_id, command="scan docs", child_session_id=child_session_id)
+    return task
+
+
 @pytest.mark.asyncio
 async def test_background_tool_spawns_detached_background_research_agent():
     captured = {}
@@ -44,6 +52,7 @@ async def test_background_tool_spawns_detached_background_research_agent():
         return SpawnResult(
             text="Started a background agent to: scan docs",
             child_run_id="agent-1",
+            child_session_id="test::ab12ef",
             parent_tool_call_id="background-1",
             agent_type="background_research",
             wait=False,
@@ -70,16 +79,42 @@ async def test_background_tool_spawns_detached_background_research_agent():
     assert captured["agent_type"] == "background_research"
     assert captured["wait"] is False
     assert "background" not in captured
-    assert result.content == "Started a background agent to: scan docs"
-    assert result.data == {
-        "child_agent": {
-            "child_run_id": "agent-1",
-            "parent_tool_call_id": "background-1",
-            "agent_type": "background_research",
-            "wait": False,
-            "status": "running",
-        }
-    }
+    # The session id is the agent's only agent-facing address; the task id is not.
+    assert "test::ab12ef" in result.content
+    assert "send_message" in result.content
+    assert "read_session" in result.content
+    assert "agent-1" not in result.content
+    assert result.data["child_agent"]["child_run_id"] == "agent-1"
+    assert result.data["child_agent"]["child_session_id"] == "test::ab12ef"
+
+
+@pytest.mark.asyncio
+async def test_background_tool_reports_the_agent_limit_as_a_failure():
+    async def spawn_fn(ctx, task, **kwargs):
+        return SpawnResult(
+            text="Not started — already at the limit of 3 concurrent background agents in this session.",
+            agent_type="background_research",
+            wait=False,
+            status="failed",
+        )
+
+    ctx = ToolContext(
+        session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
+        registry=ToolRegistry(),
+        run=RunContext(run_id="run-1", current_depth=0, max_depth=3),
+        io=IOBridge(),
+        background_tasks=BackgroundTaskRegistry(session_id="test"),
+    )
+    ctx.spawn_fn = spawn_fn
+
+    result = await background_module.background(
+        ToolExecution(tool_id="background-1", tool_name="background", ctx=ctx),
+        background_module.BackgroundInput(task="scan docs"),
+    )
+
+    assert result.is_error
+    assert result.outcome.error.code == "conflict"
+    assert "limit" in result.content
 
 
 def test_background_tool_is_agent_kind():
@@ -99,64 +134,117 @@ def test_background_registry_reservations_count_toward_cap():
 
 
 @pytest.mark.asyncio
-async def test_send_to_agent_delivers_to_running_agent():
+async def test_task_for_session_ignores_finished_agents():
     registry = BackgroundTaskRegistry(session_id="test")
-    task = await _register_live(registry, "agent-1", "scan docs")
+    live = await _live_agent(registry, "agent-live", "test::live")
+    done = asyncio.create_task(asyncio.sleep(0))
+    await done
+    registry.register("agent-done", done, command="x")
+    await registry.record_started(task_id="agent-done", command="x", child_session_id="test::done")
+
     try:
-        execution = ToolExecution(tool_id="t", tool_name="send_to_agent", ctx=_ctx(registry))
-        result = await background_module.send_to_agent(
-            execution,
-            background_module.SendToAgentInput(task_id="agent-1", message="also check pricing"),
+        assert registry.task_for_session("test::live") == "agent-live"
+        assert registry.task_for_session("test::done") is None
+        assert registry.task_for_session("test::never") is None
+    finally:
+        await _cancel(live)
+
+
+@pytest.mark.asyncio
+async def test_live_child_sessions_lists_only_running():
+    registry = BackgroundTaskRegistry(session_id="test")
+    first = await _live_agent(registry, "agent-b", "test::b")
+    second = await _live_agent(registry, "agent-a", "test::a")
+    # Reserved-but-unregistered spawns have not started, so they are not steerable.
+    registry.reserve("agent-r", command="Agent", limit=9, child_session_id="test::r")
+
+    try:
+        assert registry.live_child_sessions() == ["test::a", "test::b"]
+    finally:
+        await _cancel(first)
+        await _cancel(second)
+
+
+@pytest.mark.asyncio
+async def test_cancel_agent_resolves_the_task_from_the_session_id():
+    registry = BackgroundTaskRegistry(session_id="test")
+    task = await _live_agent(registry, "agent-1", "P::a")
+
+    try:
+        result = await background_module.cancel_agent(
+            ToolExecution(tool_id="t", tool_name="cancel_agent", ctx=_ctx(registry)),
+            background_module.CancelAgentInput(session_id="P::a"),
         )
+
         assert not result.is_error
-        assert "agent-1" in result.content
-
-        drained = registry.drain_injections("agent-1")
-        assert len(drained) == 1
-        assert drained[0]["role"] == "user"
-        assert "also check pricing" in drained[0]["content"]
-        # drained exactly once
-        assert registry.drain_injections("agent-1") == []
+        assert "P::a" in result.content
+        with pytest.raises(asyncio.CancelledError):
+            await task
     finally:
         await _cancel(task)
 
 
 @pytest.mark.asyncio
-async def test_send_to_agent_unknown_id_lists_running_agents():
+async def test_cancel_agent_unknown_session_lists_live_agent_sessions():
     registry = BackgroundTaskRegistry(session_id="test")
-    task = await _register_live(registry, "agent-live", "scan docs")
+    task = await _live_agent(registry, "agent-1", "P::a")
+
     try:
-        execution = ToolExecution(tool_id="t", tool_name="send_to_agent", ctx=_ctx(registry))
-        result = await background_module.send_to_agent(
-            execution,
-            background_module.SendToAgentInput(task_id="agent-missing", message="hi"),
+        result = await background_module.cancel_agent(
+            ToolExecution(tool_id="t", tool_name="cancel_agent", ctx=_ctx(registry)),
+            background_module.CancelAgentInput(session_id="P::ghost"),
         )
+
         assert result.is_error
-        assert "agent-live" in result.content
+        assert result.outcome.error.code == "not_found"
+        assert "P::a" in result.content
     finally:
         await _cancel(task)
 
 
 @pytest.mark.asyncio
-async def test_list_background_tasks_is_sorted_by_task_id():
-    registry = BackgroundTaskRegistry(session_id="test")
-    later = await _register_live(registry, "task-z", "later")
-    earlier = await _register_live(registry, "task-a", "earlier")
+async def test_cancel_agent_cascades_to_grandchildren():
+    reg = RunRegistry()
+    # This session spawned B (running in "P::a"), which itself spawned C in "P::a::b".
+    own = reg.get_background_registry("test")
+    task_b = await _live_agent(own, "agent-B", "P::a")
+    rb = reg.get_background_registry("P::a")
+    task_c = await _register_live(rb, "agent-C", "c")
+    await rb.record_started(task_id="agent-C", command="c", child_session_id="P::a::b")
+
     try:
-        result = await background_module.list_background_tasks(
-            ToolExecution(tool_id="t", tool_name="list_background_tasks", ctx=_ctx(registry)),
-            background_module.EmptyInput(),
+        result = await background_module.cancel_agent(
+            ToolExecution(tool_id="t", tool_name="cancel_agent", ctx=_ctx(own, run_registry=reg)),
+            background_module.CancelAgentInput(session_id="P::a"),
         )
-        assert result.content.index("task-a") < result.content.index("task-z")
+
+        assert not result.is_error
+        assert "Also stopped 1 agent(s)" in result.content
+        with pytest.raises(asyncio.CancelledError):
+            await task_b
+        with pytest.raises(asyncio.CancelledError):
+            await task_c
     finally:
-        await _cancel(later)
-        await _cancel(earlier)
+        await _cancel(task_b)
+        await _cancel(task_c)
+
+
+@pytest.mark.asyncio
+async def test_cancel_agent_approval_preview_names_the_session():
+    approval = await background_module.cancel_agent_tool.approval_info(
+        ToolExecution(
+            tool_id="t",
+            tool_name="cancel_agent",
+            ctx=_ctx(BackgroundTaskRegistry(session_id="test")),
+        ),
+        session_id="P::a1",
+    )
+
+    assert approval.preview == "Agent session: P::a1"
 
 
 @pytest.mark.asyncio
 async def test_cancel_subtree_cancels_descendant_background_agents():
-    from arden.server.state import RunRegistry
-
     reg = RunRegistry()
     # Agent A (session "P") spawned B, which runs in A's child session "P::a"
     # and itself spawned C (running in "P::a::b").

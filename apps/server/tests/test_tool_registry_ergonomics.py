@@ -4,7 +4,7 @@ import arden.tools.executor as executor_module
 from arden.core.agent_types import SPAWN_SURFACE_GUIDANCE
 from arden.integrations.core import DIRECTIVES
 from arden.integrations.web.tools import WebSearchInput
-from arden.tools.background import SendToAgentInput
+from arden.tools.app_control import SendMessageInput
 from arden.tools.core import ToolResult, tool
 from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
 from arden.tools.discover import discover_user_tools
@@ -77,8 +77,8 @@ def test_shared_spawn_guidance_reaches_each_spawn_surface():
 
 
 def test_cross_tool_parameter_names_are_canonical():
-    assert "task_id" in SendToAgentInput.model_fields
-    assert "agent_id" not in SendToAgentInput.model_fields
+    assert "session_id" in SendMessageInput.model_fields
+    assert "task_id" not in SendMessageInput.model_fields
     assert "limit" in WebSearchInput.model_fields
     assert "num_results" not in WebSearchInput.model_fields
     assert "kind" in RecallInput.model_fields

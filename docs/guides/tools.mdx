@@ -112,6 +112,7 @@ Deferred group: `automations`.
 | `block_goal` | Mark the active goal blocked on missing input | — |
 | `create_session` | Create a new chat/channel session | — |
 | `list_recent_sessions` / `read_session` / `search_transcripts` | Inspect readable chat history | — |
+| `send_message` | Message a chat, or steer an agent you spawned | 🔒 (chats only) |
 
 These are mostly internal coordination tools. The desktop app exposes the visible results as todos, channels, session history, and status updates.
 
@@ -121,11 +122,11 @@ Deferred group: `background`.
 
 | Tool | Description | Approval |
 |------|-------------|----------|
-| `cancel_background_task` | Cancel a running background task by ID | 🔒 |
-| `get_background_result` | Get the output of a completed background task | — |
-| `list_background_tasks` | List all running background tasks | — |
+| `cancel_agent` | Stop an agent you spawned, by its session id | 🔒 |
 
-Background tasks are spawned via the `background` tool. Results are delivered automatically via SSE when complete — use `get_background_result` to read the full output.
+Agents are spawned with the always-available `background` tool, which returns the
+agent's own session id. Results are delivered back into the parent chat automatically;
+use `read_session` to inspect an agent's work and `send_message` to steer it.
 
 ## Notifications
 

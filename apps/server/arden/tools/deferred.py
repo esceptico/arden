@@ -76,11 +76,11 @@ GROUP_DESCRIPTIONS: dict[str, str] = {
     "google_drive": "Search/read/create/edit Google Docs and Sheets. Use for Drive documents, spreadsheets, tables, ranges, and rows.",
     "slack": "Search Slack and read channels, DMs, threads, image files, and user profiles. Use for Slack messages, workspace history, coworkers, channels, DMs, threads, screenshots, images, or file IDs.",
     "_automation": "Create/list/update/delete/run autonomous scheduled or event-triggered tasks. Use for reminders, recurring checks, notifications, scheduled agents, or automation management.",
-    "_background": "Inspect, cancel, or read background agents. Use only when the user asks about an existing background task; spawning a background agent uses the always-available background() tool.",
+    "_background": "Stop a running agent you spawned. Spawning uses the always-available background() tool; its result arrives automatically, and read_session shows its work.",
     "_notifications": "Send a user-facing notification. Use when the user explicitly asks to be notified or an automation/background flow needs to alert them.",
     "_directives": "Update persistent behavior directives injected into the system prompt. Use when the user asks to change standing behavior, tone, or operating rules.",
     "_file_actions": "Write or edit local files. Use after inspecting files with read_file/list_files/find_files/search_text and deciding an exact file change is needed.",
-    "_app_control": "Drive the Arden app itself: send a prompt into another chat, rename or archive a chat, raise a needs-you item on the user's Home, or open a place in the UI. Use when the user asks you to act on another conversation, flag something for later, or take them somewhere in the app.",
+    "_app_control": "Drive the Arden app itself: message another chat or an agent you spawned, rename or archive a chat, raise a needs-you item on the user's Home, or open a place in the UI. Use when the user asks you to act on another conversation, flag something for later, or take them somewhere in the app.",
     "mcp": "Connected MCP server tools. Use for external apps/servers not covered by core tools. Load by server, e.g. mcp:obsidian.",
 }
 

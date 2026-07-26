@@ -113,9 +113,9 @@ def _registry() -> ToolRegistry:
         source="_system",
     )
     registry.register(
-        "cancel_background_task",
+        "cancel_agent",
         tool(
-            description="Cancel a background agent",
+            description="Stop a running agent",
             input_model=SearchInput,
             policy=WRITE_INTERNAL_POLICY,
             approval=fake_approval,
@@ -376,7 +376,7 @@ async def test_deferred_middleware_hides_then_reveals_loaded_tools():
     assert "background" in names
     assert "write_file" not in names
     assert "edit_file" not in names
-    assert "cancel_background_task" not in names
+    assert "cancel_agent" not in names
     assert "notify" not in names
     assert "set_directives" not in names
     assert "slack_search" not in names
@@ -879,7 +879,7 @@ def test_deferred_prompt_lists_groups_and_tools():
     assert 'name="slack"' in prompt
     assert "slack_search" in prompt
     assert 'name="background"' in prompt
-    assert "cancel_background_task" in prompt
+    assert "cancel_agent" in prompt
     assert 'name="notifications"' in prompt
     assert "notify" in prompt
     assert 'name="directives"' in prompt
@@ -959,7 +959,7 @@ async def test_background_controls_notifications_and_directives_load_by_group_al
     assert not background_result.is_error
     assert not notify_result.is_error
     assert not directives_result.is_error
-    assert "cancel_background_task" in run.loaded_tools
+    assert "cancel_agent" in run.loaded_tools
     assert "background" not in run.loaded_tools
     assert "notify" in run.loaded_tools
     assert "set_directives" in run.loaded_tools

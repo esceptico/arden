@@ -1,11 +1,11 @@
 """Tools that drive the Arden app itself rather than the outside world.
 
-`send_to_session` delivers a prompt into another chat; `rename_session` and
-`archive_session` curate the sidebar; `request_attention` raises a needs-you
-item on Home; `open_in_app` takes the user somewhere in the UI. They exist
-because the agent can already *read* every session
-(`list_recent_sessions`/`read_session`) but had no way to act on one, and no
-way to reach the user outside its own reply.
+`send_message` delivers a message to a session — another chat, or an agent this
+run spawned; `rename_session` and `archive_session` curate the sidebar;
+`request_attention` raises a needs-you item on Home; `open_in_app` takes the
+user somewhere in the UI. They exist because the agent can already *read* every
+session (`list_recent_sessions`/`read_session`) but had no way to act on one,
+and no way to reach the user outside its own reply.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -16,33 +16,34 @@ from pydantic import BaseModel, Field
 from arden.areas.agent import NOTIFY_ASK_TTL_HOURS
 from arden.areas.asks import nominate_focus
 from arden.areas.models import Ask
-from arden.context.store import AREA_FILTER_UNSET
-from arden.events.destinations import AppDestination
+from arden.events.destinations import AppDestination, AreaDestination, AutomationDestination, SessionDestination
 from arden.events.sse import AreasChangedEvent, NavigationRequestedEvent
 from arden.tools.core import ToolResult, tool
 from arden.tools.core.context import ToolExecution
-from arden.tools.core.types import ApprovalInfo, ToolAction, ToolPolicy, ToolScope
-from arden.tools.sessions import session_ref
+from arden.tools.core.types import APPROVAL_WAIVED, ApprovalInfo, ApprovalWaived, ToolAction, ToolPolicy, ToolScope
+from arden.tools.sessions import area_filter, session_ref
 
 _PREVIEW_CHARS = 1_200
 _RECENT_ID_HINT_LIMIT = 10
 
 
-class SendToSessionInput(BaseModel):
+class SendMessageInput(BaseModel):
     session_id: str = Field(
         min_length=1,
         max_length=200,
         description=(
-            "Target session id from list_recent_sessions. Must not be the session "
-            "you are running in — use create_loop to give yourself another turn."
+            "Target session id: another chat from list_recent_sessions, or the "
+            "session background() returned for an agent you spawned. Must not be "
+            "the session you are running in — use create_loop for another turn here."
         ),
     )
     message: str = Field(
         min_length=1,
         max_length=20_000,
         description=(
-            "The prompt to deliver, written as if the user typed it into that chat. "
-            "It has none of your context — state the task, the target, and any ids in full."
+            "What to deliver. To a chat: write it as if the user typed it there — it has "
+            "none of your context, so state the task, the target and any ids in full. "
+            "To a running agent: the steering instruction it reads at its next step."
         ),
     )
 
@@ -130,13 +131,24 @@ class OpenInAppInput(BaseModel):
 async def _unknown_session(execution: ToolExecution, session_id: str) -> ToolResult:
     """Name the sessions that DO exist so a bad id self-corrects in one turn."""
     svc = execution.ctx.services["session"]
-    recent = await svc.list_sessions(limit=_RECENT_ID_HINT_LIMIT, area_id=AREA_FILTER_UNSET)
+    recent = await svc.list_sessions(limit=_RECENT_ID_HINT_LIMIT, area_id=area_filter(execution))
     known = ", ".join(str(row.get("session_id")) for row in recent) or "none"
     return ToolResult.failure(
         code="not_found",
         message=f"No session {session_id}. Recent session ids: {known}.",
         preview="Unknown session",
         recovery_action="Call list_recent_sessions and retry with an exact session_id.",
+    )
+
+
+async def _unknown_area(execution: ToolExecution, area_id: str) -> ToolResult:
+    areas = await execution.ctx.services["session"].list_areas()
+    known = ", ".join(str(area["area_id"]) for area in areas) or "none"
+    return ToolResult.failure(
+        code="not_found",
+        message=f"No area {area_id}. Areas: {known}.",
+        preview="Unknown area",
+        recovery_action="Retry with an exact area id.",
     )
 
 
@@ -151,7 +163,9 @@ def _archived_session(session_id: str, recovery_action: str) -> ToolResult:
     )
 
 
-async def approve_send_to_session(execution: ToolExecution, args: SendToSessionInput) -> ApprovalInfo:
+async def approve_send_message(execution: ToolExecution, args: SendMessageInput) -> ApprovalInfo | ApprovalWaived:
+    if execution.ctx.background_tasks.task_for_session(args.session_id) is not None:
+        return APPROVAL_WAIVED
     return ApprovalInfo(
         description="Send a prompt to another chat",
         preview=f"To: {args.session_id}\n\n{args.message[:_PREVIEW_CHARS]}",
@@ -159,14 +173,33 @@ async def approve_send_to_session(execution: ToolExecution, args: SendToSessionI
     )
 
 
-async def send_to_session(execution: ToolExecution, args: SendToSessionInput) -> ToolResult:
+async def send_message(execution: ToolExecution, args: SendMessageInput) -> ToolResult:
     if args.session_id == execution.ctx.session_id:
         return ToolResult.failure(
             code="invalid_arguments",
-            message="send_to_session cannot target its own session.",
+            message="send_message cannot target its own session.",
             preview="Same session",
             recovery_action=(
                 "Use create_loop to give yourself another turn in this chat, or target a different session_id."
+            ),
+        )
+
+    registry = execution.ctx.background_tasks
+    if (task_id := registry.task_for_session(args.session_id)) is not None:
+        if registry.queue_steering(task_id, args.message):
+            return ToolResult(
+                content=f"Queued for the agent in {args.session_id}; it reads this at its next step.",
+                preview=f"Steered {args.session_id}",
+            )
+        # It finished between the approval check and here. Falling through to
+        # dispatch would start a fresh run on an approval nobody granted.
+        return ToolResult.failure(
+            code="conflict",
+            message=f"The agent in {args.session_id} finished before the message landed.",
+            preview="Agent finished",
+            recovery_action=(
+                "Its result is delivered automatically; read_session(session_id=...) for detail. "
+                "Call send_message again only if you want a new run in that session."
             ),
         )
 
@@ -183,7 +216,7 @@ async def send_to_session(execution: ToolExecution, args: SendToSessionInput) ->
     await execution.ctx.services["app_control"].dispatch(
         args.session_id,
         args.message,
-        client_id=f"send_to_session:{execution.tool_id}",
+        client_id=f"send_message:{execution.tool_id}",
     )
     label = data.state.name or args.session_id
     return ToolResult(
@@ -207,13 +240,14 @@ async def rename_session(execution: ToolExecution, args: RenameSessionInput) -> 
             "Leave archived chats alone; renaming one would pull it back into the sidebar.",
         )
 
+    previous = data.state.name or "(untitled)"
     await svc.rename(args.session_id, args.name)
     if execution.ctx.run_registry is not None:
         execution.ctx.run_registry.sync_session_name(args.session_id, args.name)
     data.state.name = args.name
     await svc.announce_row(data.state, len(data.messages))
     return ToolResult(
-        content=f"Renamed {args.session_id} to {args.name}.",
+        content=f"Renamed {args.session_id}: {previous} → {args.name}.",
         preview=f"Renamed to {args.name}",
         source_refs=(session_ref(args.session_id, args.name),),
     )
@@ -302,7 +336,41 @@ async def request_attention(execution: ToolExecution, args: RequestAttentionInpu
     return ToolResult(content=f"Raised on Home: {args.text}", preview=f"{args.kind} raised")
 
 
+async def _invalid_destination(execution: ToolExecution, destination: AppDestination) -> ToolResult | None:
+    """A navigation prompt that lands nowhere is worse than a refusal: the user
+    sees a dead card and the agent believes it succeeded. Only ref-carrying
+    destinations can be wrong — home/settings/memory are fixed surfaces."""
+    match destination:
+        case SessionDestination():
+            if await execution.ctx.services["session"].load(destination.session_id) is None:
+                return await _unknown_session(execution, destination.session_id)
+        case AreaDestination():
+            if await execution.ctx.services["session"].get_area(destination.area_id) is None:
+                return await _unknown_area(execution, destination.area_id)
+        case AutomationDestination(task_id=str() as task_id):
+            svc = execution.ctx.services.get("automation")
+            if svc is None:
+                return ToolResult.failure(
+                    code="not_found",
+                    message=f"No automation {task_id} — automations are not available here.",
+                    preview="No automations",
+                    recovery_action="Open the automations surface itself: destination={'kind':'automation'}.",
+                )
+            try:
+                await svc.get(task_id)
+            except KeyError:
+                return ToolResult.failure(
+                    code="not_found",
+                    message=f"No automation {task_id}.",
+                    preview="Unknown automation",
+                    recovery_action="Call list_automations and retry with an exact task_id.",
+                )
+    return None
+
+
 async def open_in_app(execution: ToolExecution, args: OpenInAppInput) -> ToolResult:
+    if failure := await _invalid_destination(execution, args.destination):
+        return failure
     await execution.ctx.services["app_control"].emit(
         NavigationRequestedEvent(
             origin_session_id=execution.ctx.session_id,
@@ -313,15 +381,18 @@ async def open_in_app(execution: ToolExecution, args: OpenInAppInput) -> ToolRes
     return ToolResult(content=f"Asked the app to open: {args.label}.", preview=args.label)
 
 
-SEND_TO_SESSION_DESCRIPTION = (
-    "Deliver a prompt into another chat session. The target's agent picks it up "
-    "immediately if a run is live there, otherwise a fresh run starts.\n\n"
-    "Fire and forget: this returns as soon as the message is delivered. There is no "
-    "waiting, polling, or result handed back here — the target's answer lands in the "
-    "target chat and surfaces to the user through its own unread signal. If you need "
-    "an answer inside this turn, use background() or research() instead.\n\n"
-    "Always requires the user's approval, like bash. Cannot target the session you "
-    "are running in, or an archived one — the user would never see the reply."
+SEND_MESSAGE_DESCRIPTION = (
+    "Deliver a message to a session — the single address for anything you can talk to. "
+    "Two behaviours, chosen from the target:\n\n"
+    "- An agent you spawned that is still running (the session id background() returned): the "
+    "message is queued as steering and the agent reads it at its next step. No approval.\n"
+    "- Any other chat: the target's agent picks it up immediately if a run is live there, "
+    "otherwise a fresh run starts. Always requires the user's approval, like bash. Cannot "
+    "target the session you are running in, or an archived one — the user would never see the reply.\n\n"
+    "Fire and forget either way: nothing is waited for and no answer comes back here. The chat's "
+    "reply lands in that chat; the agent's result is delivered to you automatically when it finishes. "
+    "If you need an answer inside this turn, use research() instead.\n\n"
+    "Find ids with list_recent_sessions; inspect what a session did with read_session."
 )
 
 RENAME_SESSION_DESCRIPTION = (
@@ -335,7 +406,10 @@ ARCHIVE_SESSION_DESCRIPTION = (
     "where the user can restore them. Reversible; no approval needed. Takes a batch "
     "of session_ids; each id succeeds or is skipped independently (the session you "
     "are running in, one with a live run, an unknown id, or one already archived is "
-    "skipped, never fatal), and the result reports every outcome."
+    "skipped, never fatal), and the result reports every outcome. The archival "
+    "chain: list_recent_sessions(order='oldest', within_days=…) → drop rows you must "
+    "keep ([channel], [agent], anything running) → archive_session(session_ids=[…]) "
+    "once with the whole batch."
 )
 
 
@@ -364,11 +438,11 @@ OPEN_IN_APP_DESCRIPTION = (
 )
 
 
-send_to_session_tool = tool(
-    display_name="SendToSession",
-    display_description="Send a prompt to another chat.",
-    description=SEND_TO_SESSION_DESCRIPTION,
-    input_model=SendToSessionInput,
+send_message_tool = tool(
+    display_name="SendMessage",
+    display_description="Message a chat or a running agent.",
+    description=SEND_MESSAGE_DESCRIPTION,
+    input_model=SendMessageInput,
     policy=ToolPolicy(
         action=ToolAction.EXECUTE,
         scope=ToolScope.INTERNAL,
@@ -376,8 +450,8 @@ send_to_session_tool = tool(
         allow_approval_bypass=False,
         permissions=frozenset({"session", "app_control"}),
     ),
-    approval=approve_send_to_session,
-    execute=send_to_session,
+    approval=approve_send_message,
+    execute=send_message,
 )
 
 rename_session_tool = tool(
@@ -412,6 +486,10 @@ open_in_app_tool = tool(
     display_description="Open a place in the Arden app.",
     description=OPEN_IN_APP_DESCRIPTION,
     input_model=OpenInAppInput,
-    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=frozenset({"app_control"})),
+    policy=ToolPolicy(
+        action=ToolAction.WRITE,
+        scope=ToolScope.INTERNAL,
+        permissions=frozenset({"app_control", "session"}),
+    ),
     execute=open_in_app,
 )

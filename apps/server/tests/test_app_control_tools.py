@@ -1,7 +1,11 @@
 """Tests for the app-control tools: acting on other chat sessions, raising a
 needs-you item on Home, and moving the user around the app."""
 
+import asyncio
+import contextlib
 import tempfile
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -16,14 +20,15 @@ from arden.tools.app_control import (
     OpenInAppInput,
     RenameSessionInput,
     RequestAttentionInput,
-    SendToSessionInput,
+    SendMessageInput,
+    approve_send_message,
     archive_session,
     archive_session_tool,
     open_in_app,
     rename_session,
     request_attention,
-    send_to_session,
-    send_to_session_tool,
+    send_message,
+    send_message_tool,
 )
 from arden.tools.core.context import (
     BackgroundTaskRegistry,
@@ -33,12 +38,19 @@ from arden.tools.core.context import (
     ToolExecution,
 )
 from arden.tools.core.registry import ToolRegistry
+from arden.tools.core.types import APPROVAL_WAIVED, ApprovalInfo
 
 
 class _StubSessionService:
-    def __init__(self, sessions: dict[str, SessionData], archived: set[str] | None = None):
+    def __init__(
+        self,
+        sessions: dict[str, SessionData],
+        archived: set[str] | None = None,
+        areas: list[str] | None = None,
+    ):
         self._sessions = sessions
         self._archived = archived or set()
+        self._areas = areas or []
         self.renamed: list[tuple[str, str]] = []
         self.archived: list[str] = []
         self.announced: list[tuple[str, int]] = []
@@ -64,6 +76,22 @@ class _StubSessionService:
 
     async def announce_row(self, session_state: SessionState, message_count: int) -> None:
         self.announced.append((session_state.name, message_count))
+
+    async def get_area(self, area_id: str | None) -> dict | None:
+        return {"area_id": area_id} if area_id in self._areas else None
+
+    async def list_areas(self) -> list[dict]:
+        return [{"area_id": area_id} for area_id in self._areas]
+
+
+class _StubAutomationService:
+    def __init__(self, task_ids: set[str] | None = None):
+        self._task_ids = task_ids or set()
+
+    async def get(self, task_id: str):
+        if task_id not in self._task_ids:
+            raise KeyError(f"Automation {task_id} not found")
+        return {"task_id": task_id}
 
 
 class _StubAppControl:
@@ -101,26 +129,46 @@ def _make_execution(
     archived: set[str] | None = None,
     run_registry: _StubRunRegistry | None = None,
     area_id: str | None = None,
+    background_tasks: BackgroundTaskRegistry | None = None,
+    areas: list[str] | None = None,
+    automation: _StubAutomationService | None = None,
 ) -> tuple[ToolExecution, _StubSessionService, _StubAppControl]:
-    service = _StubSessionService(sessions if sessions is not None else {}, archived)
+    service = _StubSessionService(sessions if sessions is not None else {}, archived, areas)
     app_control = _StubAppControl()
+    services: dict[str, object] = {"session": service, "app_control": app_control}
+    if automation is not None:
+        services["automation"] = automation
     ctx = ToolContext(
         session_state=SessionState(session_id="cur", started_at=datetime.now(UTC), area_id=area_id),
         registry=ToolRegistry(),
         run=RunContext(run_id="run-1"),
         io=IOBridge(),
-        background_tasks=BackgroundTaskRegistry(session_id="cur"),
-        services={"session": service, "app_control": app_control},
+        background_tasks=background_tasks or BackgroundTaskRegistry(session_id="cur"),
+        services=services,
         run_registry=run_registry,
     )
     return ToolExecution(tool_id="t1", tool_name="test", ctx=ctx), service, app_control
 
 
+@asynccontextmanager
+async def _live_agent(session_id: str) -> AsyncIterator[BackgroundTaskRegistry]:
+    registry = BackgroundTaskRegistry(session_id="cur")
+    task = asyncio.create_task(asyncio.sleep(3600))
+    registry.register("agent-1", task, command="scan docs")
+    await registry.record_started(task_id="agent-1", command="scan docs", child_session_id=session_id)
+    try:
+        yield registry
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+
 @pytest.mark.asyncio
-async def test_send_to_session_refuses_its_own_session():
+async def test_send_message_refuses_its_own_session():
     execution, _, app_control = _make_execution(sessions={"cur": _session("cur", "Current")})
 
-    result = await send_to_session(execution, SendToSessionInput(session_id="cur", message="go"))
+    result = await send_message(execution, SendMessageInput(session_id="cur", message="go"))
 
     assert result.is_error
     assert result.outcome.error.code == "invalid_arguments"
@@ -128,10 +176,10 @@ async def test_send_to_session_refuses_its_own_session():
 
 
 @pytest.mark.asyncio
-async def test_send_to_session_reports_unknown_session_with_recent_ids():
+async def test_send_message_reports_unknown_session_with_recent_ids():
     execution, service, app_control = _make_execution(sessions={"s1": _session("s1", "Ops")})
 
-    result = await send_to_session(execution, SendToSessionInput(session_id="nope", message="go"))
+    result = await send_message(execution, SendMessageInput(session_id="nope", message="go"))
 
     assert result.is_error
     assert result.outcome.error.code == "not_found"
@@ -141,20 +189,32 @@ async def test_send_to_session_reports_unknown_session_with_recent_ids():
 
 
 @pytest.mark.asyncio
-async def test_send_to_session_dispatches_with_tool_call_client_id_and_no_approval_override():
+async def test_unknown_session_hint_stays_inside_the_callers_area():
+    """The hint lists real session ids — an Area-scoped agent must not learn
+    about sessions its own list_recent_sessions would never show it."""
+    execution, service, _ = _make_execution(sessions={"s1": _session("s1", "Ops")}, area_id="ops")
+
+    result = await send_message(execution, SendMessageInput(session_id="nope", message="go"))
+
+    assert result.is_error
+    assert service.list_calls[-1]["area_id"] == "ops"
+
+
+@pytest.mark.asyncio
+async def test_send_message_dispatches_with_tool_call_client_id_and_no_approval_override():
     execution, _, app_control = _make_execution(sessions={"s1": _session("s1", "Ops")})
 
-    result = await send_to_session(execution, SendToSessionInput(session_id="s1", message="check the digest"))
+    result = await send_message(execution, SendMessageInput(session_id="s1", message="check the digest"))
 
     assert not result.is_error
     assert app_control.dispatched == [
-        {"session_id": "s1", "message": "check the digest", "client_id": "send_to_session:t1"}
+        {"session_id": "s1", "message": "check the digest", "client_id": "send_message:t1"}
     ]
     assert "Ops" in result.content
 
 
 @pytest.mark.asyncio
-async def test_send_to_session_refuses_an_archived_target():
+async def test_send_message_refuses_an_archived_target():
     """An archived session is out of the sidebar, so its reply lands where the
     user cannot see it — and the approval was granted for a visible answer."""
     execution, _, app_control = _make_execution(
@@ -162,7 +222,7 @@ async def test_send_to_session_refuses_an_archived_target():
         archived={"s1"},
     )
 
-    result = await send_to_session(execution, SendToSessionInput(session_id="s1", message="go"))
+    result = await send_message(execution, SendMessageInput(session_id="s1", message="go"))
 
     assert result.is_error
     assert result.outcome.error.code == "conflict"
@@ -170,10 +230,56 @@ async def test_send_to_session_refuses_an_archived_target():
 
 
 @pytest.mark.asyncio
-async def test_send_to_session_policy_matches_bash():
-    assert send_to_session_tool.policy.requires_approval is True
-    assert send_to_session_tool.policy.allow_approval_bypass is False
-    assert send_to_session_tool.policy.permissions == frozenset({"session", "app_control"})
+async def test_send_message_policy_matches_bash():
+    assert send_message_tool.policy.requires_approval is True
+    assert send_message_tool.policy.allow_approval_bypass is False
+    assert send_message_tool.policy.permissions == frozenset({"session", "app_control"})
+
+
+@pytest.mark.asyncio
+async def test_send_message_steers_a_live_agent_without_dispatching():
+    async with _live_agent("cur::a1") as registry:
+        execution, _, app_control = _make_execution(background_tasks=registry)
+
+        result = await send_message(execution, SendMessageInput(session_id="cur::a1", message="also check pricing"))
+
+        assert not result.is_error
+        assert app_control.dispatched == []
+        drained = registry.drain_injections("agent-1")
+        assert len(drained) == 1
+        assert drained[0]["role"] == "user"
+        assert "<steering_message>" in drained[0]["content"]
+        assert "also check pricing" in drained[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_send_message_waives_approval_only_for_own_live_agents():
+    async with _live_agent("cur::a1") as registry:
+        execution, _, _ = _make_execution(background_tasks=registry)
+
+        waived = await approve_send_message(execution, SendMessageInput(session_id="cur::a1", message="go"))
+        foreign = await approve_send_message(execution, SendMessageInput(session_id="s1", message="go"))
+
+        assert waived is APPROVAL_WAIVED
+        assert isinstance(foreign, ApprovalInfo)
+        assert foreign.preview.startswith("To: s1")
+
+
+@pytest.mark.asyncio
+async def test_send_message_refuses_to_dispatch_when_the_agent_finished_mid_approval(monkeypatch):
+    """A waived approval must never silently become an unapproved cross-chat run."""
+    async with _live_agent("cur::a1") as registry:
+        monkeypatch.setattr(registry, "queue_steering", lambda task_id, text: False)
+        execution, _, app_control = _make_execution(
+            sessions={"cur::a1": _session("cur::a1", "Agent")},
+            background_tasks=registry,
+        )
+
+        result = await send_message(execution, SendMessageInput(session_id="cur::a1", message="go"))
+
+        assert result.is_error
+        assert result.outcome.error.code == "conflict"
+        assert app_control.dispatched == []
 
 
 @pytest.mark.asyncio
@@ -185,6 +291,7 @@ async def test_rename_session_renames_and_announces_row():
     assert not result.is_error
     assert service.renamed == [("s1", "Invoice triage")]
     assert service.announced == [("Invoice triage", 3)]
+    assert "Old name → Invoice triage" in result.content
 
 
 @pytest.mark.asyncio
@@ -349,7 +456,7 @@ async def test_request_attention_says_when_it_loses_the_shared_unfiled_lane():
 
 @pytest.mark.asyncio
 async def test_open_in_app_emits_navigation_requested_with_origin_session():
-    execution, _, app_control = _make_execution()
+    execution, _, app_control = _make_execution(areas=["ops"])
 
     result = await open_in_app(
         execution,
@@ -371,6 +478,92 @@ async def test_open_in_app_drops_unset_optional_destination_fields():
     await open_in_app(execution, OpenInAppInput(destination={"kind": "automation"}, label="Open automations"))
 
     assert app_control.emitted[0].destination == {"kind": "automation"}
+
+
+@pytest.mark.asyncio
+async def test_open_in_app_refuses_an_unknown_session():
+    execution, _, app_control = _make_execution(sessions={"s1": _session("s1", "Ops")})
+
+    result = await open_in_app(
+        execution,
+        OpenInAppInput(destination={"kind": "session", "session_id": "ghost"}, label="Open the ghost chat"),
+    )
+
+    assert result.is_error
+    assert result.outcome.error.code == "not_found"
+    assert not app_control.emitted
+
+
+@pytest.mark.asyncio
+async def test_open_in_app_refuses_an_unknown_area():
+    execution, _, app_control = _make_execution(areas=["ops"])
+
+    result = await open_in_app(
+        execution,
+        OpenInAppInput(destination={"kind": "area", "area_id": "finance"}, label="Open the Finance area"),
+    )
+
+    assert result.is_error
+    assert result.outcome.error.code == "not_found"
+    assert "ops" in result.content
+    assert not app_control.emitted
+
+
+@pytest.mark.asyncio
+async def test_open_in_app_refuses_an_unknown_automation():
+    execution, _, app_control = _make_execution(automation=_StubAutomationService({"digest"}))
+
+    result = await open_in_app(
+        execution,
+        OpenInAppInput(destination={"kind": "automation", "task_id": "ghost"}, label="Review the digest"),
+    )
+
+    assert result.is_error
+    assert result.outcome.error.code == "not_found"
+    assert not app_control.emitted
+
+
+@pytest.mark.asyncio
+async def test_open_in_app_refuses_an_automation_ref_when_automations_are_off():
+    execution, _, app_control = _make_execution()
+
+    result = await open_in_app(
+        execution,
+        OpenInAppInput(destination={"kind": "automation", "task_id": "digest"}, label="Review the digest"),
+    )
+
+    assert result.is_error
+    assert result.outcome.error.code == "not_found"
+    assert not app_control.emitted
+
+
+@pytest.mark.asyncio
+async def test_open_in_app_opens_the_automations_surface_without_a_task_id():
+    """The bare surface carries no ref, so there is nothing to validate."""
+    execution, _, app_control = _make_execution()
+
+    result = await open_in_app(execution, OpenInAppInput(destination={"kind": "automation"}, label="Open automations"))
+
+    assert not result.is_error
+    assert app_control.emitted[0].destination == {"kind": "automation"}
+
+
+@pytest.mark.asyncio
+async def test_open_in_app_still_opens_home_and_settings_without_checks():
+    execution, _, app_control = _make_execution()
+
+    home = await open_in_app(execution, OpenInAppInput(destination={"kind": "home"}, label="Go Home"))
+    settings = await open_in_app(
+        execution,
+        OpenInAppInput(destination={"kind": "settings", "tab": "models"}, label="Open model settings"),
+    )
+
+    assert not home.is_error
+    assert not settings.is_error
+    assert [event.destination for event in app_control.emitted] == [
+        {"kind": "home"},
+        {"kind": "settings", "tab": "models"},
+    ]
 
 
 @pytest.mark.asyncio
