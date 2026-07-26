@@ -37,9 +37,9 @@ class _StubSessionService:
         self._messages = messages or {}
         self.calls: list[tuple[str, dict]] = []
 
-    async def list_sessions(self, limit: int = 20, **kwargs) -> list[dict]:
-        self.calls.append(("list_sessions", kwargs))
-        return list(self._sessions[:limit])
+    async def list_sessions(self, limit: int = 20, offset: int = 0, **kwargs) -> list[dict]:
+        self.calls.append(("list_sessions", {"limit": limit, "offset": offset, **kwargs}))
+        return list(self._sessions[offset : offset + limit])
 
     async def list_messages(self, session_id: str, limit: int = 100, **kwargs) -> dict:
         self.calls.append(("list_messages", kwargs))
@@ -147,7 +147,7 @@ async def test_session_tools_pass_active_project_scope():
     await list_recent_sessions(execution, ListRecentSessionsInput())
     await read_session(execution, ReadSessionInput(session_id="s1"))
 
-    assert ("list_sessions", {"area_id": "proj-1"}) in service.calls
+    assert any(name == "list_sessions" and kwargs.get("area_id") == "proj-1" for name, kwargs in service.calls)
     assert any(name == "list_messages" and kwargs.get("area_id") == "proj-1" for name, kwargs in service.calls)
 
 
@@ -176,6 +176,104 @@ async def test_list_recent_sessions_filters_by_within_days():
 
     assert "recent" in result.content
     assert "old" not in result.content
+
+
+def _session_page(count: int) -> list[dict]:
+    """`count` sessions, newest first, one hour apart."""
+    now = datetime.now(UTC)
+    return [
+        {
+            "session_id": f"s{i}",
+            "name": f"Session {i}",
+            "last_activity": (now - timedelta(hours=i)).isoformat(),
+            "message_count": 1,
+        }
+        for i in range(count)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_list_recent_sessions_pages_with_offset():
+    """An archival automation must be able to walk past the newest page —
+    without offset, sessions older than `limit` were unreachable."""
+    service = _StubSessionService(sessions=_session_page(5))
+    execution = _make_execution(services={"session": service})
+
+    result = await list_recent_sessions(execution, ListRecentSessionsInput(limit=2, offset=2))
+
+    assert service.calls[-1][1]["offset"] == 2
+    assert "s2" in result.content
+    assert "s3" in result.content
+    assert "s0" not in result.content
+    assert result.data["offset"] == 2
+    assert result.data["next_offset"] == 4
+    # The footer has to teach the exact next call, not just "more exist".
+    assert "Showing 2 sessions (offset 2); more exist — call again with offset=4." in result.content
+
+
+@pytest.mark.asyncio
+async def test_list_recent_sessions_reports_more_on_the_first_page():
+    service = _StubSessionService(sessions=_session_page(5))
+    execution = _make_execution(services={"session": service})
+
+    result = await list_recent_sessions(execution, ListRecentSessionsInput(limit=3))
+
+    assert result.data["has_more"] is True
+    assert "call again with offset=3." in result.content
+
+
+@pytest.mark.asyncio
+async def test_list_recent_sessions_last_page_does_not_invite_another_call():
+    service = _StubSessionService(sessions=_session_page(5))
+    execution = _make_execution(services={"session": service})
+
+    result = await list_recent_sessions(execution, ListRecentSessionsInput(limit=3, offset=3))
+
+    assert result.data["has_more"] is False
+    assert result.data["next_offset"] is None
+    assert "call again" not in result.content
+
+
+@pytest.mark.asyncio
+async def test_list_recent_sessions_offset_keeps_area_scope():
+    service = _StubSessionService(sessions=_session_page(5))
+    execution = _make_execution(services={"session": service}, area_id="ops")
+
+    await list_recent_sessions(execution, ListRecentSessionsInput(limit=2, offset=2))
+
+    assert service.calls[-1][1]["area_id"] == "ops"
+    assert service.calls[-1][1]["offset"] == 2
+
+
+@pytest.mark.asyncio
+async def test_list_recent_sessions_within_days_stops_at_the_window_edge():
+    """Rows are newest-first, so once the window drops one there is no older
+    page worth fetching — don't send the caller after it."""
+    now = datetime.now(UTC)
+    service = _StubSessionService(
+        sessions=[
+            {"session_id": "recent", "name": "Today", "last_activity": now.isoformat(), "message_count": 1},
+            {
+                "session_id": "old",
+                "name": "Last month",
+                "last_activity": (now - timedelta(days=20)).isoformat(),
+                "message_count": 1,
+            },
+            {
+                "session_id": "older",
+                "name": "Ancient",
+                "last_activity": (now - timedelta(days=40)).isoformat(),
+                "message_count": 1,
+            },
+        ]
+    )
+    execution = _make_execution(services={"session": service})
+
+    result = await list_recent_sessions(execution, ListRecentSessionsInput(limit=1, within_days=7))
+
+    assert "recent" in result.content
+    assert result.data["has_more"] is False
+    assert "call again" not in result.content
 
 
 @pytest.mark.asyncio
@@ -438,7 +536,8 @@ async def test_list_recent_sessions_inside_an_area_stays_in_that_area():
 
     await list_recent_sessions(execution, ListRecentSessionsInput())
 
-    assert service.calls[-1] == ("list_sessions", {"area_id": "ops"})
+    assert service.calls[-1][0] == "list_sessions"
+    assert service.calls[-1][1]["area_id"] == "ops"
 
 
 @pytest.mark.asyncio

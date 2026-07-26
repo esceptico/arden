@@ -13,6 +13,7 @@ from arden.automation.service import AutomationService
 from arden.automation.store import AutomationStore
 from arden.automation.triggers import MessageTrigger, TimeTrigger
 from arden.events.internal import RunCompleted, RunFailed
+from arden.events.sse import AutomationFinishedEvent, AutomationProgressEvent, SSEEvent
 from arden.events.triggers import MessageReceived
 
 
@@ -1355,3 +1356,80 @@ async def test_detached_run_reaped_when_completion_never_arrives(store: Automati
     reaped = await store.get(auto.task_id)
     assert reaped.running_since is None
     assert auto.task_id not in sched._detached_task_ids
+
+
+# ---------------------------------------------------------------------------
+# automation_finished must mean "this run reached a terminal state". A
+# fire-and-accept iteration dispatch has only *started* one.
+# ---------------------------------------------------------------------------
+
+
+def _capture_automation_events(sched: Scheduler) -> list[SSEEvent]:
+    events: list[SSEEvent] = []
+
+    async def emit(event: SSEEvent) -> None:
+        events.append(event)
+
+    sched.emit_automation_event = emit  # type: ignore[method-assign]
+    return events
+
+
+@pytest.mark.asyncio
+async def test_iteration_dispatch_announces_start_not_finish(store: AutomationStore):
+    await store.save(_loop())
+    sched, dispatched = _make_scheduler(store)
+    events = _capture_automation_events(sched)
+
+    await sched._tick()
+    for t in list(sched._running):
+        await t
+
+    assert len(dispatched) == 1
+    assert [e.status for e in events if isinstance(e, AutomationProgressEvent)] == ["starting..."]
+    # The agent is still working — a finish here would report a completion at
+    # the moment the automation started.
+    assert [e for e in events if isinstance(e, AutomationFinishedEvent)] == []
+
+    events.clear()
+    await sched.handle_run_completed(
+        RunCompleted(run_id="run-x", session_id="sess-1", messages=(), usage=Usage(), result="wrote 3 notes")
+    )
+
+    finished = [e for e in events if isinstance(e, AutomationFinishedEvent)]
+    assert len(finished) == 1
+    assert finished[0].task_id == "loop-1"
+    assert finished[0].result == "wrote 3 notes"
+
+
+@pytest.mark.asyncio
+async def test_iteration_dispatch_failure_announces_a_finish(store: AutomationStore):
+    """A dispatch that never detached IS terminal — it must still announce."""
+    await store.save(_loop())
+
+    async def dispatcher(auto: Automation, context: str | dict | None = None) -> str | None:
+        raise RuntimeError("session gone")
+
+    sched = Scheduler(store=store, build_deps=lambda: None)
+    sched.set_iteration_dispatcher(dispatcher)
+    events = _capture_automation_events(sched)
+
+    await sched._tick()
+    for t in list(sched._running):
+        await t
+
+    assert [e for e in events if isinstance(e, AutomationFinishedEvent)] != []
+
+
+@pytest.mark.asyncio
+async def test_post_mode_announces_one_finish_carrying_its_result(store: AutomationStore):
+    await store.save(_loop(session_id="sess-post", read_history=False, thread_id="sess-post"))
+    sched, _dispatched, _results = _make_post_scheduler(store)
+    events = _capture_automation_events(sched)
+
+    await sched._tick()
+    for t in list(sched._running):
+        await t
+
+    finished = [e for e in events if isinstance(e, AutomationFinishedEvent)]
+    assert len(finished) == 1
+    assert finished[0].result == "agent result for loop-1"

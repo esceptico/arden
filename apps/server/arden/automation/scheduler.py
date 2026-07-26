@@ -547,12 +547,16 @@ class Scheduler:
         finally:
             detached = isinstance(result, DetachedRun)
             result_text = None if detached else result
-            # A detached run is still going — the "finished" event (with the
-            # real result) is emitted when RunCompleted settles it; this one
-            # only nudges the UI to refresh schedule/running state.
-            await self.emit_automation_event(
-                AutomationFinishedEvent(task_id=automation.task_id, result=result_text),
-            )
+            # A detached run has only been *dispatched* here — the agent is
+            # still working. Announcing a finish at this point reports a
+            # completion the moment the automation starts (and, because the
+            # client keys its toast on the task, makes the real completion look
+            # like a duplicate). The finish is emitted with the actual result
+            # when RunCompleted/RunFailed settles the run.
+            if not detached:
+                await self.emit_automation_event(
+                    AutomationFinishedEvent(task_id=automation.task_id, result=result_text),
+                )
             now = datetime.now(UTC)
             # If _run_session_bound disabled this automation (aged_out / max_iterations),
             # the snapshot's enabled was mutated to False — don't write a

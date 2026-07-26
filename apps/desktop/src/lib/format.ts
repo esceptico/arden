@@ -16,6 +16,13 @@ export function formatRelativePastAgo(value: string): string {
   return `${formatRelativePast(value)} ago`;
 }
 
+/** "for 11h" — how long something still open has been running. A live lane
+ *  can't stamp its own item with a past-recency label ("11h ago"): the item
+ *  is the present, and only its duration is in the past. */
+export function formatElapsed(value: string): string {
+  return `for ${formatRelativePast(value)}`;
+}
+
 /** Compact relative-future label ("in 12m", "in 3h", "in 2d"). Clamps an
  *  already-due moment to "soon" — the scheduler fires on its next tick. */
 export function formatRelativeFuture(value: string): string {

@@ -12,7 +12,7 @@ import { ChevronDown, X } from "@/components/icons";
 import type { AreaAsk, AreaBriefItem, AreasBrief } from "@/api/areas";
 import type { Automation } from "@/api/types";
 import { useStore } from "@/stores";
-import { formatRelativeFuture, formatRelativePastAgo } from "@/lib/format";
+import { formatElapsed, formatRelativeFuture, formatRelativePastAgo } from "@/lib/format";
 import { fetchAreasOverview, resolveAsk } from "@/actions/areas";
 import { switchSession } from "@/actions/sessions";
 import { FocusRow, type FocusRowKeyboardActions } from "@/features/home/components/FocusRow";
@@ -80,7 +80,7 @@ function briefItem(item: AreaBriefItem, openArea: (key: string) => void, done = 
     id: `${done ? "done" : "work"}:${item.area_id}:${item.stable_key}`,
     label: item.area_title,
     detail: item.outcome_title ? `${item.outcome_title} · ${item.text}` : item.text,
-    meta: when ? formatRelativePastAgo(when) : undefined,
+    meta: when ? (done ? formatRelativePastAgo(when) : formatElapsed(when)) : undefined,
     tone: done ? "success" : undefined,
     areaId: item.area_id,
     when: when ?? undefined,
@@ -111,7 +111,9 @@ function automationItem(
     label: automation.name,
     detail,
     meta: timestamp
-      ? state === "scheduled" ? formatRelativeFuture(timestamp) : formatRelativePastAgo(timestamp)
+      ? state === "scheduled"
+        ? formatRelativeFuture(timestamp)
+        : state === "working" ? formatElapsed(timestamp) : formatRelativePastAgo(timestamp)
       : undefined,
     tone: isFailed ? "danger" : state === "done" ? "success" : undefined,
     when: timestamp ?? undefined,
@@ -169,6 +171,8 @@ function AmbientStrip({
   onToggle: () => void;
 }) {
   const hasItems = items.length > 0;
+  const preview = hasItems ? items[0] : null;
+  const prefix = preview ? previewPrefix(kind, preview) : null;
 
   return (
     <motion.div
@@ -188,10 +192,11 @@ function AmbientStrip({
         onClick={onToggle}
       >
         <strong>{label}</strong>
-        {hasItems && (
+        {preview && (
           <span className="mission-control__strip-preview">
-            <em>{STRIP_PREVIEW_PREFIX[kind]}</em> {items[0].label}
-            {items[0].meta ? ` · ${items[0].meta}` : ""}
+            {prefix && <><em>{prefix}</em>{" "}</>}
+            {preview.label}
+            {preview.meta ? ` · ${preview.meta}` : ""}
           </span>
         )}
         {hasItems && (
@@ -229,6 +234,13 @@ const STRIP_PREVIEW_PREFIX: Record<AmbientKind, string> = {
   done: "latest:",
   aside: "held:",
 };
+
+/** "now:" claims this instant, but a working item carries its own elapsed
+ *  duration ("for 11h") — asserting both reads as a contradiction, so the
+ *  duration speaks alone and "now:" only fills in for an undated item. */
+function previewPrefix(kind: AmbientKind, item: AmbientItem): string | null {
+  return kind === "working" && item.meta ? null : STRIP_PREVIEW_PREFIX[kind];
+}
 
 function stripSummary(kind: AmbientKind, count: number): string {
   const phrase = STRIP_PHRASES[kind];

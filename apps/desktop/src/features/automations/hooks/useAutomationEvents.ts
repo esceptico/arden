@@ -107,9 +107,11 @@ export function useAutomationEvents(): void {
       if (event.type === "automation_progress") {
         store().automationProgress(event.task_id, event.status);
         // "starting..." is the scheduler's fire signal — the server just bumped
-        // next_run_at, so pull loops to reset the countdown chip immediately
-        // instead of pinning at 0s until the next 3s poll.
+        // next_run_at and claimed the running flag, so pull loops and the
+        // automation list to reset the countdown chip and show the run
+        // immediately instead of waiting out the next poll.
         if (event.status === "starting...") {
+          void fetchAutomations();
           const sid = useStore.getState().currentSessionId;
           if (sid) void refreshLoops(sid);
         }

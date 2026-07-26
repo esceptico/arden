@@ -81,6 +81,15 @@ class ListRecentSessionsInput(BaseModel):
         le=_MAX_LIST_LIMIT,
         description=f"Max sessions to return (default {_DEFAULT_LIST_LIMIT}, max {_MAX_LIST_LIMIT}). Most recent first.",
     )
+    offset: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Pagination offset — skip this many sessions. Rows are newest-first, "
+            "so a larger offset walks backwards in time; page with "
+            "offset=offset+limit to reach sessions older than the first page."
+        ),
+    )
     within_days: int | None = Field(
         default=None,
         ge=1,
@@ -272,14 +281,24 @@ async def list_recent_sessions(execution: ToolExecution, args: ListRecentSession
     if svc is None:
         return _session_unavailable()
 
-    sessions = await svc.list_sessions(
-        limit=args.limit * 2 if args.within_days else args.limit,
+    fetch_limit = args.limit * 2 if args.within_days else args.limit
+    # One row past the page is a probe: if the store hands it back, an older
+    # page exists and the caller can reach it by advancing offset.
+    rows = await svc.list_sessions(
+        limit=fetch_limit + 1,
+        offset=args.offset,
         area_id=_area_filter(execution),
     )
+    more_rows = len(rows) > fetch_limit
+    sessions = rows[:fetch_limit]
 
     if args.within_days is not None:
         cutoff = datetime.now(UTC) - timedelta(days=args.within_days)
-        sessions = [s for s in sessions if (when := _parse_when(s.get("last_activity"))) is not None and when >= cutoff]
+        kept = [s for s in sessions if (when := _parse_when(s.get("last_activity"))) is not None and when >= cutoff]
+        # Rows arrive newest-first, so once the window drops one, every later
+        # row is older still — there is nothing further to page to.
+        more_rows = more_rows and len(kept) == len(sessions)
+        sessions = kept
     sessions.sort(
         key=lambda session: (
             _parse_when(session.get("last_activity") or session.get("started_at")) or datetime.min.replace(tzinfo=UTC),
@@ -287,7 +306,7 @@ async def list_recent_sessions(execution: ToolExecution, args: ListRecentSession
         ),
         reverse=True,
     )
-    has_more = len(sessions) > args.limit
+    has_more = more_rows or len(sessions) > args.limit
     sessions = sessions[: args.limit]
 
     if not sessions:
@@ -308,13 +327,23 @@ async def list_recent_sessions(execution: ToolExecution, args: ListRecentSession
         row = f"- {sid} · {name}{kind} · {when} · {count} msgs"
         lines.append(f"{row} · {status}" if status else row)
 
+    next_offset = args.offset + len(sessions)
     if has_more:
-        lines.append(f"Showing {len(sessions)} sessions; more exist. Increase limit or narrow within_days.")
+        lines.append(
+            f"Showing {len(sessions)} sessions (offset {args.offset}); "
+            f"more exist — call again with offset={next_offset}."
+        )
 
     return ToolResult(
         content="\n".join(lines),
         preview=f"{len(sessions)} sessions" + (" (capped)" if has_more else ""),
-        data={"items": sessions, "count": len(sessions), "has_more": has_more},
+        data={
+            "items": sessions,
+            "count": len(sessions),
+            "has_more": has_more,
+            "offset": args.offset,
+            "next_offset": next_offset if has_more else None,
+        },
         source_refs=normalize_source_refs(
             session_ref(str(session.get("session_id", "")), str(session.get("name") or session.get("session_id", "")))
             for session in sessions
@@ -510,8 +539,11 @@ LIST_RECENT_SESSIONS_DESCRIPTION = (
     "pattern detection (audit automations, propose-* skills running in "
     "a scheduled context with no current conversation). Each row ends with "
     "its live state when one applies — running, needs approval, or the agent "
-    "session's last status. Inside an Area, only that Area's sessions are "
-    "listed."
+    "session's last status. Page with limit+offset: rows are newest-first, so "
+    "advancing offset walks backwards in time — keep paging until the footer "
+    "stops reporting more, which is how you reach sessions older than the "
+    "newest page (e.g. archiving everything inactive for 30+ days). Inside an "
+    "Area, only that Area's sessions are listed."
 )
 
 READ_SESSION_DESCRIPTION = (

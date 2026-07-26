@@ -789,7 +789,9 @@ textarea.arden-field {
 .arden-toast {
   width: min(21.25rem, calc(100vw - 2rem));
   padding: var(--space-3) var(--space-4);
-  display: block;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
   border: 1px solid var(--edge);
   border-radius: var(--r-shell);
   color: var(--ink);
@@ -799,6 +801,19 @@ textarea.arden-field {
   pointer-events: auto;
 }
 [data-toast-host][data-modal-blocked="true"] .arden-toast { pointer-events: none; }
+.arden-toast__body {
+  flex: 1;
+  min-width: 0;
+  display: block;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: none;
+  text-align: left;
+}
+/* The close button holds its slot at rest, so revealing it on hover changes
+   opacity only — the card never reflows under the cursor. */
+.arden-toast__close { margin-block-start: -.0625rem; }
 .arden-toast__head { display: flex; align-items: baseline; gap: var(--space-2-5); }
 
 /* Toast copy arrives from agents and errors at arbitrary length; the card

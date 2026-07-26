@@ -47,6 +47,8 @@ test("WorkBrief focuses one ask, keeps peers compact, and routes ambient work", 
     expect(text).toContain("Done");
     expect(text).toContain("Aside");
     expect(text).not.toContain("That’s it for today.");
+    expect(host.querySelector('[data-kind="working"] .mission-control__strip-preview em')?.textContent)
+      .toBe("now:");
 
     const working = host.querySelector('[data-kind="working"] > button') as HTMLButtonElement;
     await act(async () => working.click());
@@ -57,6 +59,33 @@ test("WorkBrief focuses one ask, keeps peers compact, and routes ambient work", 
     const row = peek?.querySelector('button[data-area-id="health"]') as HTMLButtonElement;
     await act(async () => row.click());
     expect(getState().areas.openAreaKey).toBe("health");
+  } finally {
+    await act(async () => root.unmount());
+    restore();
+  }
+});
+
+test("working preview reads as elapsed duration, never as a past recency stamp", async () => {
+  const openedAt = new Date(Date.now() - 11 * 3_600_000).toISOString();
+  const datedBrief: AreasBrief = {
+    ...brief,
+    in_progress: [{ ...brief.in_progress[0], updated_at: openedAt }],
+  };
+  const { host, root, restore } = setupDom();
+  try {
+    await act(async () => root.render(<WorkBrief brief={datedBrief} />));
+    const head = host.querySelector('[data-kind="working"] .mission-control__strip-preview');
+    expect(head?.textContent).toBe("Health · for 11h");
+    expect(head?.textContent).not.toContain("ago");
+    expect(head?.querySelector("em")).toBeNull();
+
+    const working = host.querySelector('[data-kind="working"] > button') as HTMLButtonElement;
+    await act(async () => working.click());
+    const meta = document.body.querySelector(".mission-control__ambient-peek .mission-control__ambient-row-meta");
+    expect(meta?.textContent).toBe("for 11h");
+
+    const done = host.querySelector('[data-kind="done"] .mission-control__strip-preview');
+    expect(done?.querySelector("em")?.textContent).toBe("latest:");
   } finally {
     await act(async () => root.unmount());
     restore();

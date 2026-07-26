@@ -3,6 +3,9 @@ import {
   automationToast,
   backgroundAgentToast,
   isTerminalStatus,
+  toastDismissDelay,
+  TOAST_CEILING_MS,
+  TOAST_LIFETIME_MS,
 } from "@/lib/taskToast";
 import type { BackgroundAgent } from "@/stores/background-agent-domain";
 
@@ -63,4 +66,27 @@ test("automationToast: falls back to a generic title; suppressed when modal open
   expect(
     automationToast({ taskId: "a1", name: "X", result: null, automationsOpen: true }),
   ).toBeNull();
+});
+
+test("toastDismissDelay: a resting card counts down its lifetime", () => {
+  expect(toastDismissDelay({ hovered: false, expired: false, blocked: false })).toBe(
+    TOAST_LIFETIME_MS,
+  );
+});
+
+test("toastDismissDelay: hover and blocking overlays hold the card", () => {
+  expect(toastDismissDelay({ hovered: true, expired: false, blocked: false })).toBeNull();
+  expect(toastDismissDelay({ hovered: false, expired: false, blocked: true })).toBeNull();
+});
+
+test("toastDismissDelay: past the ceiling only hover still holds", () => {
+  // The card outlived the ceiling behind an overlay — it goes the moment the
+  // overlay closes, without another full lifetime.
+  expect(toastDismissDelay({ hovered: false, expired: true, blocked: true })).toBe(0);
+  expect(toastDismissDelay({ hovered: false, expired: true, blocked: false })).toBe(0);
+  expect(toastDismissDelay({ hovered: true, expired: true, blocked: false })).toBeNull();
+});
+
+test("the ceiling bounds a held card at a small multiple of its lifetime", () => {
+  expect(TOAST_CEILING_MS).toBe(TOAST_LIFETIME_MS * 3);
 });
