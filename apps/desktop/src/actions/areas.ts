@@ -151,10 +151,23 @@ export async function detachAreaPage(key: string): Promise<void> {
   await Promise.all([fetchAreaDetail(key), fetchAreasOverview()]);
 }
 
+/** The ghost row must start its exit the instant the user acts — held
+ *  hostage to the round trip it sits frozen for ~half a second and the
+ *  150ms dissolve lands after attention has moved on. Optimistic removal;
+ *  the closing refetch restores truth either way (including on failure). */
+function removeSuggestionRow(key: string): void {
+  const s = getState();
+  const overview = s.areas.overview;
+  if (overview) {
+    s.areasOverviewLoaded({ ...overview, suggested: overview.suggested.filter((x) => x.key !== key) });
+  }
+}
+
 /** Accept a suggested area: create the area attached to the suggestion's
  *  topic page (server treats page_path attach as promote-not-duplicate),
- *  then refetch so the ghost row becomes a real one in place. */
+ *  then refetch so the ghost row becomes a real one. */
 export async function acceptAreaSuggestion(suggestion: AreaSuggestion): Promise<void> {
+  removeSuggestionRow(suggestion.key);
   const s = getState();
   const area = await createAreaApi(s.config, {
     name: humanizeSlug(suggestion.title),
@@ -165,6 +178,7 @@ export async function acceptAreaSuggestion(suggestion: AreaSuggestion): Promise<
 }
 
 export async function dismissAreaSuggestion(key: string): Promise<void> {
+  removeSuggestionRow(key);
   await dismissAreaSuggestionApi(getState().config, key);
   await fetchAreasOverview();
 }
