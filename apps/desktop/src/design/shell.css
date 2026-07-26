@@ -111,8 +111,12 @@
 }
 
 /* Long-⌘-hold shortcut reveal: the kbd holds its trailing slot so the row
-   never reflows, and only fades in while the gesture is active. */
+   never reflows, and only fades in while the gesture is active. The
+   negative margin is concentric math against the row highlight: row r 15
+   (20 clamped at 30px height) − chip r 10 = 5px inset, not the row's
+   12px text inset. */
 .workspace-rail__nav-hint {
+  margin-right: -7px;
   opacity: 0;
   transition: opacity var(--motion-feedback) var(--ease);
 }

@@ -62,7 +62,7 @@ export function NavRow({
       {trailing ? <span className="workspace-rail__row-meta">{trailing}</span> : null}
       {!trailing && hint ? (
         <kbd
-          className="arden-kbd workspace-rail__nav-hint"
+          className="arden-kbd arden-kbd--chord workspace-rail__nav-hint"
           data-visible={hintVisible || undefined}
           aria-hidden={!hintVisible}
         >

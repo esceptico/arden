@@ -132,13 +132,11 @@ export function HeroInput({
           data-ask={sheetVisible || undefined}
         >
           <span className="mission-control__capture-hint" data-hint="ask">
-            <kbd className="arden-kbd">⌘</kbd>
-            <kbd className="arden-kbd">↩</kbd>
+            <kbd className="arden-kbd arden-kbd--chord">⌘↩</kbd>
             <span className="mission-control__capture-hint-label">ask</span>
           </span>
           <span className="mission-control__capture-hint" data-hint="default">
-            <kbd className="arden-kbd">⌘</kbd>
-            <kbd className="arden-kbd">K</kbd>
+            <kbd className="arden-kbd arden-kbd--chord">⌘K</kbd>
           </span>
         </span>
         <AnimatePresence>

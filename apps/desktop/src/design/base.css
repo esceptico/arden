@@ -662,7 +662,9 @@
   --kbd-size: 1.25rem;
   --kbd-gap: var(--space-1);
   --kbd-inline-padding: var(--space-1);
-  --kbd-radius: var(--r-mark);
+  /* Kbd chips follow the corner profile: --r-pill auto-clamps to a capsule
+     at kbd height, --r-square reads as the same soft square as controls. */
+  --kbd-radius: var(--r-control);
   --icon-button-size: 1.75rem;
   --control-size: 1.75rem;
   --control-size-compact: 1.625rem;

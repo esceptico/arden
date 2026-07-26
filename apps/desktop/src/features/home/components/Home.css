@@ -85,10 +85,13 @@
   transition-duration: var(--motion-peek-enter);
 }
 
+/* Right inset is concentric math, not rhythm: the ⌘K capsule (r 10) nests
+   inside the field's r 20 end, and nested curves align when gap = outer r
+   − inner r = 10px. The text keeps the full --space-4 on the left. */
 .mission-control__capture-field {
   position: relative;
   min-height: 2.625rem;
-  padding-inline: var(--space-4);
+  padding-inline: var(--space-4) .625rem;
   display: flex;
   align-items: center;
   gap: var(--space-2-5);

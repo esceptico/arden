@@ -886,12 +886,28 @@ textarea.arden-field {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: var(--r-mark);
+  border-radius: var(--kbd-radius);
   color: var(--muted);
   background: var(--surface-4);
   font: 500 .75rem/1 var(--sans);
   white-space: nowrap;
   user-select: none;
+}
+
+/* Joint chord in one chip (macOS menu form: ⇧⌘H). Tracking opens the
+   glyphs apart; the negative margin trims the trailing tracking space.
+   Padding is asymmetric on purpose: modifier glyphs (⇧ ⌘) carry air in
+   their own side bearings while the flat-sided key letter has none, so
+   metric centering reads right-heavy — the wider right pad rebalances
+   the gaps optically against the capsule curves. */
+.arden-kbd--chord {
+  padding-inline: .25rem .375rem;
+  letter-spacing: .08em;
+}
+
+.arden-kbd--chord::after {
+  content: "";
+  margin-left: -.08em;
 }
 
 .arden-status {
