@@ -84,7 +84,7 @@
 .md.typeset :where(dt + dt) { margin-block-start: .25em; }
 .md.typeset :where(dd) { margin-block-start: .25em; margin-inline-start: 0; padding-inline-start: 1em; color: var(--typeset-muted); }
 .md.typeset :where(:not(pre) > code) { padding: .125em .3em; border-radius: min(calc(var(--radius, .5em) * .6), .35em); color: inherit; background-color: color-mix(in oklab, currentColor 8%, transparent); font-family: var(--typeset-font-mono); font-size: .85em; }
-.md.typeset :where(pre) { max-width: none; margin-block: calc(var(--typeset-flow) / .875) 0; padding: .75em 1em; overflow-x: auto; border: 0; border-radius: var(--radius, .5em); background-color: color-mix(in oklab, currentColor 8%, transparent); font-family: var(--typeset-font-mono); font-size: .875em; line-height: 1.5; tab-size: 2; direction: ltr; }
+.md.typeset :where(pre) { max-width: none; margin-block: calc(var(--typeset-flow) / .875) 0; padding: .75em 1em; overflow-x: auto; border: 0; border-radius: var(--radius, .5em); background-color: color-mix(in oklab, currentColor 8%, transparent); font-family: var(--typeset-font-mono); font-size: var(--code-font-size); line-height: 1.5; tab-size: 2; direction: ltr; }
 .md.typeset :where(pre code) { padding: 0; border-radius: 0; color: inherit; background-color: transparent; font: inherit; }
 .md.typeset :where(blockquote) { margin: var(--typeset-flow) 0 0; padding-inline-start: 1em; border-inline-start: 2px solid var(--typeset-rule); color: inherit; text-indent: 0; quotes: auto; }
 .md.typeset :where(blockquote)::before,

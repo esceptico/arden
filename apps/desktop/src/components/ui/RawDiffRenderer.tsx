@@ -49,7 +49,7 @@ function RawCell({
       data-placeholder={placeholder ? side : undefined}
       aria-label={placeholder ? `No ${side} line` : undefined}
       className={clsx(
-        "grid h-full min-h-[19px] min-w-0 grid-cols-[4ch_minmax(0,1fr)] font-mono text-xs leading-[19px]",
+        "grid h-full min-h-[19px] min-w-0 grid-cols-[4ch_minmax(0,1fr)] font-mono text-[length:var(--code-font-size)] leading-[19px]",
         change === "removed" && "bg-bad-soft",
         change === "added" && "bg-ok-soft",
         placeholder && "bg-surface-soft/35",
@@ -257,7 +257,7 @@ function StackedPane({ side, groups, expanded, onToggle }: {
 
 function UnifiedPatch({ patch }: { patch: string }) {
   return (
-    <section role="table" aria-label="Unified raw file diff" className="min-w-max bg-bg-main py-1 font-mono text-xs leading-[19px]">
+    <section role="table" aria-label="Unified raw file diff" className="min-w-max bg-bg-main py-1 font-mono text-[length:var(--code-font-size)] leading-[19px]">
       <div role="rowgroup" data-raw-diff-lines>
         {patch.split("\n").map((line, index) => {
           const header = line.startsWith("---") || line.startsWith("+++") || line.startsWith("@@");
@@ -268,7 +268,11 @@ function UnifiedPatch({ patch }: { patch: string }) {
               role="row"
               key={index}
               data-patch-line={header ? "header" : added ? "added" : removed ? "removed" : "context"}
-              className={clsx(header && "text-info", added && "bg-ok-soft", removed && "bg-bad-soft")}
+              className={clsx(
+                header && "text-info",
+                added && "bg-ok-soft",
+                removed && "bg-bad-soft",
+              )}
             >
               <code role="cell" className="block min-h-[19px] whitespace-pre px-3 text-ink">{line || " "}</code>
             </div>

@@ -27,7 +27,7 @@ import { ContextMenu, type ContextMenuEntry, type ContextMenuPosition } from "@/
 import { SidebarToggle } from "@/components/ui/SidebarToggle";
 import { PeekSurface } from "@/components/workspace/PeekSurface";
 import { NotebookRail, type MemoryRailMode } from "@/features/memory/components/NotebookRail";
-import { PaneResizeHandle } from "@/features/memory/components/PaneResizeHandle";
+import { PaneResizeHandle } from "@/components/workspace/PaneResizeHandle";
 import { MemoryNote } from "@/features/memory/components/MemoryNote";
 import {
   loadMemoryInspectorPane,

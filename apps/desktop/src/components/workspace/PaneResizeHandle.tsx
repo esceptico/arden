@@ -1,9 +1,10 @@
 import { useCallback, type RefObject } from "react";
 
-/** Drag-to-resize handle for the memory workspace panes, following the
- *  SidebarResizeHandle pattern: during drag the CSS variable is written
- *  imperatively (no React re-render per pixel); the final width persists
- *  to localStorage. Double-click resets to the default. */
+/** Drag-to-resize handle for workspace panes (memory rail/context,
+ *  automations rail), following the SidebarResizeHandle pattern: during
+ *  drag the CSS variable is written imperatively (no React re-render per
+ *  pixel); the final width persists to localStorage. Double-click resets
+ *  to the default. */
 export function PaneResizeHandle({
   layoutRef,
   cssVar,

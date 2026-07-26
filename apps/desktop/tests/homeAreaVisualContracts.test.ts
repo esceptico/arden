@@ -8,7 +8,10 @@ test("Home keeps the mock's compact-height attention spacing", () => {
 
   expect(css).toMatch(/\.mission-control__answer\s*\{[\s\S]*?padding:\s*\.375rem var\(--space-0-5\) 0;/);
   expect(css).toMatch(/\.mission-control__capture input\s*\{[\s\S]*?font:\s*460 var\(--text-md\)\/normal var\(--sans\);/);
-  expect(css).toMatch(/\.mission-control__capture-shortcut\s*\{[\s\S]*?min-width:\s*3\.625rem;[\s\S]*?gap:\s*var\(--space-1\);/);
+  // Both hint states share one grid cell — the slot holds the wider state's
+  // width so the ⌘K ⇄ ⌘↩ swap never reflows the input row.
+  expect(css).toMatch(/\.mission-control__capture-shortcut\s*\{[\s\S]*?display:\s*inline-grid;[\s\S]*?justify-items:\s*end;/);
+  expect(css).toMatch(/__capture-shortcut > \.mission-control__capture-hint\s*\{\s*grid-area:\s*1 \/ 1;/);
   expect(css).toMatch(/\.mission-control__focus h2\s*\{[\s\S]*?display:\s*-webkit-box;[\s\S]*?-webkit-line-clamp:\s*2;/);
   expect(css).not.toMatch(/\.mission-control__focus h2\s*\{[^}]*max-width:/);
   expect(css).toMatch(/\.mission-control__focus-reason\s*\{[\s\S]*?font:\s*400 var\(--text-sm\)\/1\.5 var\(--sans\);[\s\S]*?-webkit-line-clamp:\s*2;/);

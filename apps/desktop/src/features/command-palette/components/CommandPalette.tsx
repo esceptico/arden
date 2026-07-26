@@ -12,7 +12,7 @@ import {
   SHEET_EXIT_TRANSITION,
 } from "@/lib/tokens/motion";
 import { PaletteBody } from "@/features/command-palette/components/PaletteBody";
-import type { Crumb } from "@/features/command-palette/types";
+import type { Crumb } from "@/lib/commandEntries/types";
 import {
   useOverlayLayer,
 } from "@/lib/overlayStack";

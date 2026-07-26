@@ -638,21 +638,23 @@
   --mono: "Geist Mono", ui-monospace, monospace;
   --font-geist: var(--sans);
   --font-geist-mono: var(--mono);
-  --text-2xs: 11px;
-  --text-xs: 12.5px;
-  --text-sm: 13px;
-  --text-base: 14px;
-  --text-md: 15px;
-  --text-lg: 16.5px;
-  --text-xl: 18px;
-  --text-2xl: 20px;
-  --text-3xl: 28px;
-  --text-display: 24px;
+  --ui-font-size: 14px;
+  --code-font-size: calc(var(--ui-font-size) - 1px);
+  --text-2xs: calc(var(--ui-font-size) - 3px);      /* 11 */
+  --text-xs: calc(var(--ui-font-size) - 1.5px);     /* 12.5 */
+  --text-sm: calc(var(--ui-font-size) - 1px);       /* 13 */
+  --text-base: var(--ui-font-size);                  /* 14 */
+  --text-md: calc(var(--ui-font-size) + 1px);       /* 15 */
+  --text-lg: calc(var(--ui-font-size) + 2.5px);     /* 16.5 */
+  --text-xl: calc(var(--ui-font-size) + 4px);       /* 18 */
+  --text-2xl: calc(var(--ui-font-size) + 6px);      /* 20 */
+  --text-3xl: calc(var(--ui-font-size) + 14px);     /* 28 */
+  --text-display: calc(var(--ui-font-size) + 10px); /* 24 */
   --text-section: var(--text-xl);
   --text-reading: var(--text-md);
   --text-body: var(--text-sm);
-  --text-control: 12px;
-  --text-meta: 10.5px;
+  --text-control: calc(var(--ui-font-size) - 2px);  /* 12 */
+  --text-meta: calc(var(--ui-font-size) - 3.5px);   /* 10.5 */
   --leading-reading: 1.65;
   --leading-body: 1.55;
   --leading-meta: 1.4;
@@ -839,6 +841,7 @@ body {
   font: var(--text-base)/var(--leading-body) var(--sans);
   -webkit-font-smoothing: antialiased;
 }
+html[data-font-smoothing="native"] body { -webkit-font-smoothing: auto; }
 button, input, textarea, select { font: inherit; }
 button {
   appearance: none;

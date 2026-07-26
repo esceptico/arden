@@ -94,8 +94,8 @@ export function TurnGroup({
         finalAssistantId: lastAssistantId(children),
       };
   const hasWork = layout.workIds.length > 0;
-  // Live runs have a real durationMs; historic ones don't (we don't persist
-  // turn timing). Show the time when we have it, plain "Worked" otherwise.
+  // Live runs measure durationMs directly; history derives it from message
+  // stamps. Falls back to plain "Worked" when neither yields a time.
   const wasStopped = childSummaries.some((child) => child.activityLabel === "Stopped");
   const headerLabel = turnHeaderLabel(turn?.durationMs, wasStopped);
   const activityCount = childSummaries.reduce(

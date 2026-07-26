@@ -8,6 +8,7 @@ import { IconButton } from "@/components/ui/IconButton";
 import { ICON } from "@/lib/icons";
 import { useThemeEffect } from "@/lib/theme";
 import { useCornerProfileEffect } from "@/lib/cornerProfile";
+import { useTypographyEffect } from "@/lib/typography";
 import {
   EXIT_FAST,
   POPOVER_ENTER_TRANSITION,
@@ -62,6 +63,7 @@ export function QuickCapture() {
   // picked in Settings.
   useThemeEffect();
   useCornerProfileEffect();
+  useTypographyEffect();
 
   const [text, setText] = useState("");
   const [images, setImages] = useState<ImageBlock[]>([]);

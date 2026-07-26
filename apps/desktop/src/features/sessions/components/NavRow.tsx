@@ -10,6 +10,8 @@ export function NavRow({
   onClick,
   active = false,
   trailing,
+  hint,
+  hintVisible = false,
   onMenu,
 }: {
   icon: React.ReactNode;
@@ -19,6 +21,10 @@ export function NavRow({
   onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
   active?: boolean;
   trailing?: React.ReactNode;
+  /** Keyboard-shortcut kbd shown in the trailing column while the
+   *  long-⌘-hold gesture is active (see useCmdHeld). */
+  hint?: string;
+  hintVisible?: boolean;
   onMenu?: (position: ContextMenuPosition) => void;
 }) {
   return (
@@ -54,6 +60,15 @@ export function NavRow({
       </span>
       <span className="truncate">{label}</span>
       {trailing ? <span className="workspace-rail__row-meta">{trailing}</span> : null}
+      {!trailing && hint ? (
+        <kbd
+          className="arden-kbd workspace-rail__nav-hint"
+          data-visible={hintVisible || undefined}
+          aria-hidden={!hintVisible}
+        >
+          {hint}
+        </kbd>
+      ) : null}
     </button>
   );
 }

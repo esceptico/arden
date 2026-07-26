@@ -2,7 +2,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { ChevronRight } from "@/components/icons";
 import { ICON } from "@/lib/icons";
 import { EASE_EMPHASIZED, MOTION } from "@/lib/tokens/motion";
-import type { Crumb } from "@/features/command-palette/types";
+import type { Crumb } from "@/lib/commandEntries/types";
 
 /** Breadcrumb trail rendered inline with the input. Each chip pops the
  *  stack back to that depth. Animates in with a tiny stagger and slides

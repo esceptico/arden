@@ -335,7 +335,7 @@ button:not(:disabled):active { transform: scale(var(--press-scale)); }
   border-radius: var(--r-house);
   color: var(--ink-soft);
   background: var(--surface-2);
-  font: var(--text-control) / 1.6 var(--mono);
+  font: var(--code-font-size) / 1.6 var(--mono);
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
@@ -545,6 +545,34 @@ button:not(:disabled):active { transform: scale(var(--press-scale)); }
 .arden-peek-rule-below::after { bottom: 0; }
 .arden-peek-rule-above::before { top: 0; }
 
+/* Focus veil — iA-style calm: while one surface is awake, the rest of the
+   room defocuses. Blur carries the effect; the paper tint only evens the
+   luminance underneath so bright elements can't smear through (never a dark
+   scrim). Must be a SIBLING overlay above the content it hushes — nesting
+   under another backdrop-filter surface samples the wrong ancestor. Blur is
+   constant; only opacity animates (GPU-cheap). */
+.arden-focus-veil {
+  position: absolute;
+  inset: 0;
+  /* Paper-toned wash: heavier mix lowers the contrast of everything
+     behind the veil rather than darkening it — calm, not a scrim. */
+  background: color-mix(in oklab, var(--paper) 52%, transparent);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  opacity: 0;
+  pointer-events: none;
+  /* Asymmetric: waking back up rides this fast exit — leaving focus must
+     never feel sluggish. The slow settle lives on the active state. */
+  transition: opacity var(--motion-dissolve) var(--smooth-out);
+}
+
+/* Room-scale hush settles on the felt band (peek-enter tier), not the
+   feedback tier — a 200ms snap reads as a glitch, not a breath. */
+.arden-focus-veil[data-active] {
+  opacity: 1;
+  transition-duration: var(--motion-peek-enter);
+}
+
 /* Drag-to-resize affordance — the workspace sidebar's handle made canonical:
    a 10px hit strip with a centered 42px hint line that tints accent on hover.
    Explicitly no-drag: desk surfaces (memory rail/instruments) restore native
@@ -559,13 +587,15 @@ button:not(:disabled):active { transform: scale(var(--press-scale)); }
   -webkit-app-region: no-drag;
 }
 
+/* Rest-visible: a faint line marks the grab spot so the affordance is
+   discoverable without hunting; hover tints it accent. */
 .arden-resize-handle::after {
   content: "";
   position: absolute;
   top: calc(50% - 1.3125rem);
   width: .0625rem;
   height: 2.625rem;
-  background: transparent;
+  background: color-mix(in oklab, var(--ink) 10%, transparent);
   transition: background var(--motion-feedback) var(--ease);
 }
 

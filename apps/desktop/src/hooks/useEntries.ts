@@ -5,6 +5,7 @@ import {
   Brain,
   Copy,
   Eraser,
+  Folder,
   FolderPlus,
   GitBranch,
   House,
@@ -26,20 +27,24 @@ import {
 import { useStore } from "@/stores";
 import { loadHistory } from "@/actions/history";
 import { archiveSession, branchAtMessage, createArea, goToNewSessionHome, renameSession, switchSession } from "@/actions/sessions";
+import { goHome } from "@/actions/navigation";
 import { stopRun } from "@/actions/messages";
 import { runBuiltinCommand } from "@/actions/builtins";
 import { toggleAuto } from "@/actions/loops";
 import { compactSessionApi } from "@/api/core";
 import { formatRelativePast } from "@/lib/format";
 import { copyText } from "@/lib/clipboard";
-import { lastAssistantId } from "@/features/command-palette/lib/filter";
-import { buildProviderView, buildThemeView } from "@/features/command-palette/lib/views";
-import type { CommandEntry } from "@/features/command-palette/types";
+import { lastAssistantId } from "@/lib/commandEntries/filter";
+import { buildProviderView, buildThemeView } from "@/lib/commandEntries/views";
+import type { CommandEntry } from "@/lib/commandEntries/types";
 
 export function useEntries(): CommandEntry[] {
   const sessions = useStore((s) => s.sessions);
   const currentSessionId = useStore((s) => s.currentSessionId);
   const config = useStore((s) => s.config);
+  const areasOverview = useStore((s) => s.areas.overview);
+  const openArea = useStore((s) => s.openArea);
+  const automationsList = useStore((s) => s.automations);
   const openSettings = useStore((s) => s.openSettings);
   const openAutomations = useStore((s) => s.openAutomations);
   const openMemory = useStore((s) => s.openMemory);
@@ -138,7 +143,8 @@ export function useEntries(): CommandEntry[] {
       section: "open",
       label: "Home",
       icon: House,
-      run: () => goToNewSessionHome(),
+      shortcut: "⇧⌘H",
+      run: () => goHome(),
       search: "home mission control desk overview",
     });
     entries.push({
@@ -186,6 +192,30 @@ export function useEntries(): CommandEntry[] {
         icon: Bot,
         children: () => buildProviderView(serverModels.groups, currentChatModel),
         search: "switch model chat provider anthropic openai",
+      });
+    }
+
+    // Areas — jump straight into a room instead of routing through Home.
+    for (const area of areasOverview?.areas ?? []) {
+      entries.push({
+        id: `area:${area.key}`,
+        section: "area",
+        label: area.title,
+        icon: Folder,
+        run: () => openArea(area.key),
+        search: `${area.title.toLowerCase()} area`,
+      });
+    }
+
+    // Automations — jump straight into one automation's detail.
+    for (const automation of automationsList ?? []) {
+      entries.push({
+        id: `automation:${automation.task_id}`,
+        section: "automation",
+        label: automation.name,
+        icon: Zap,
+        run: () => openAutomations(automation.task_id),
+        search: `${automation.name.toLowerCase()} automation`,
       });
     }
 
@@ -303,6 +333,9 @@ export function useEntries(): CommandEntry[] {
     sessions,
     currentSessionId,
     config,
+    areasOverview,
+    openArea,
+    automationsList,
     openSettings,
     openAutomations,
     openMemory,

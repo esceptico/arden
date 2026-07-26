@@ -110,6 +110,17 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Long-⌘-hold shortcut reveal: the kbd holds its trailing slot so the row
+   never reflows, and only fades in while the gesture is active. */
+.workspace-rail__nav-hint {
+  opacity: 0;
+  transition: opacity var(--motion-feedback) var(--ease);
+}
+
+.workspace-rail__nav-hint[data-visible] {
+  opacity: 1;
+}
+
 .workspace-rail__sessions {
   display: flex;
   min-height: 0;

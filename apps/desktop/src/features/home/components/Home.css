@@ -4,6 +4,10 @@
   overflow: hidden;
   overscroll-behavior: contain;
   background: var(--paper);
+  /* Home's internal z tiers (veil < field/sheet) must never compete with
+     the app shell — without isolation the z-popover capture field paints
+     OVER the floating sidebar rail. */
+  isolation: isolate;
 }
 
 .mission-control__room {
@@ -64,11 +68,25 @@
 .mission-control__answer p b { color: var(--ink-soft); font-weight: 560; }
 
 .mission-control__capture {
+  position: relative;
+  z-index: var(--z-popover);
   flex: none;
   margin-top: var(--space-5);
 }
 
+/* The veil sits above resting furniture (strips are z-sticky) and below the
+   awake field + its sheet (z-popover). Focus on the field = the room hushes. */
+.mission-control__veil {
+  z-index: calc(var(--z-sticky) + 1);
+}
+
+.mission-control:has(.mission-control__capture-field:focus-within) .mission-control__veil {
+  opacity: 1;
+  transition-duration: var(--motion-peek-enter);
+}
+
 .mission-control__capture-field {
+  position: relative;
   min-height: 2.625rem;
   padding-inline: var(--space-4);
   display: flex;
@@ -77,14 +95,82 @@
   border-radius: var(--r-control);
   background: var(--paper);
   box-shadow: inset 0 0 0 1px var(--line-strong);
+  /* Pill→card morph rides the same clock as the sheet's unfold (250ms swap
+     tier) — one breath, not a fast radius snap under a slower reveal. */
   transition:
-    background var(--motion-focus) var(--smooth-out),
-    box-shadow var(--motion-focus) var(--smooth-out);
+    background var(--motion-icon-swap) var(--smooth-out),
+    box-shadow var(--motion-icon-swap) var(--smooth-out),
+    border-radius var(--motion-icon-swap) var(--smooth-out);
 }
 
 .mission-control__capture-field:focus-within {
   background: var(--card);
   box-shadow: var(--shadow-3), 0 0 0 1px color-mix(in oklab, var(--accent) 40%, transparent);
+}
+
+/* Router open: the field's bottom corners square off into the docked sheet
+   below it, so field + sheet read as one object — never two floating boxes
+   with a gap between them. */
+.mission-control__capture-field[data-sheet-open] {
+  border-radius: var(--r-control) var(--r-control) 0 0;
+  background: var(--card);
+  box-shadow: var(--shadow-3), 0 0 0 1px color-mix(in oklab, var(--accent) 40%, transparent);
+}
+
+.mission-control__capture-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.mission-control__capture-hint-label {
+  color: var(--faint);
+  font: 500 var(--text-meta)/1 var(--mono);
+}
+
+/* Docked results — an extension of the field, not a popover: it shares the
+   field's ring and picks up exactly where the field's rounded bottom would
+   have been. */
+.mission-control__omnibox-sheet {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  /* Above the ambient strips (z-sticky + opaque paper): transient results
+     must cover resting page furniture. */
+  z-index: var(--z-popover);
+  overflow: hidden;
+  border-radius: 0 0 var(--r-control) var(--r-control);
+  background: var(--card);
+  box-shadow: var(--shadow-3), 0 0 0 1px color-mix(in oklab, var(--accent) 40%, transparent);
+}
+
+/* Viewport-bounded: a fixed cap ran the sheet's bottom off short windows
+   with nothing scrollable (the list wasn't the overflowing element). */
+.mission-control__omnibox-list {
+  max-height: min(21rem, 44vh);
+  padding: var(--space-1-5);
+  display: grid;
+  gap: var(--space-1-5);
+  overflow-y: auto;
+}
+
+.mission-control__omnibox-group-items {
+  display: grid;
+  gap: var(--interactive-row-gap);
+}
+
+/* The docked sheet lives in the rail-density world (27px rows), not the
+   floating palette's airy scale — same fonts, tighter box. */
+.mission-control__omnibox-sheet .command-palette__row {
+  min-height: var(--interactive-row-height);
+  padding-block: 0;
+  border-radius: var(--r-row);
+}
+
+.mission-control__omnibox-sheet .command-palette__heading {
+  padding-top: var(--space-1);
+  padding-bottom: var(--space-0-5);
 }
 
 .mission-control__capture input {
@@ -99,13 +185,31 @@
 
 .mission-control__capture input::placeholder { color: var(--faint); }
 
+/* One grid cell holds both hint states — slot width = the wider state,
+   constant, so swapping never reflows the input row. */
 .mission-control__capture-shortcut {
-  display: inline-flex;
+  display: inline-grid;
   flex: none;
-  min-width: 3.625rem;
   align-items: center;
-  justify-content: flex-end;
-  gap: var(--space-1);
+  justify-items: end;
+}
+
+.mission-control__capture-shortcut > .mission-control__capture-hint {
+  grid-area: 1 / 1;
+  transition:
+    opacity var(--icon-swap-dur) var(--icon-swap-ease),
+    filter var(--icon-swap-dur) var(--icon-swap-ease);
+}
+
+.mission-control__capture-shortcut > [data-hint="ask"],
+.mission-control__capture-shortcut[data-ask] > [data-hint="default"] {
+  opacity: 0;
+  filter: blur(var(--icon-swap-blur));
+}
+
+.mission-control__capture-shortcut[data-ask] > [data-hint="ask"] {
+  opacity: 1;
+  filter: blur(0);
 }
 
 /* flex:none, not 1 — the ::after spacer owns the space below the block now. */

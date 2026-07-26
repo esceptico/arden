@@ -215,7 +215,9 @@
   position: relative;
   width: 100%;
   max-inline-size: none;
-  margin: .75rem 0 1.375rem;
+  /* Bottom matches top — the old 1.375rem left a dead band between the
+     hairline and the answer text. */
+  margin: .75rem 0;
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
   align-items: start;
@@ -265,8 +267,9 @@
   transition: transform var(--motion-tab-shift) var(--ease);
 }
 
+/* Right-facing disclosure (Codex idiom): › at rest, rotated down when open. */
 .board-trace__toggle[aria-expanded="true"] .board-trace__chevron {
-  transform: rotate(180deg);
+  transform: rotate(90deg);
 }
 
 .board-trace__panel,

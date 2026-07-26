@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import { Command } from "cmdk";
 import { Breadcrumbs } from "@/features/command-palette/components/Breadcrumbs";
 import { Row } from "@/features/command-palette/components/Row";
-import { filterEntries, groupBySection } from "@/features/command-palette/lib/filter";
-import { useEntries } from "@/features/command-palette/hooks/useEntries";
-import { SECTION_LABEL, type CommandEntry, type Crumb } from "@/features/command-palette/types";
+import { filterEntries, groupBySection } from "@/lib/commandEntries/filter";
+import { useEntries } from "@/hooks/useEntries";
+import { SECTION_LABEL, type CommandEntry, type Crumb } from "@/lib/commandEntries/types";
 
 const LIST_ID = "command-palette-listbox";
 const optionId = (entryId: string) => `${LIST_ID}-opt-${entryId}`;

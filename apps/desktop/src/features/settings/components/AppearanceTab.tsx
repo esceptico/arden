@@ -9,7 +9,10 @@ import { AnimatePresence, motion } from "motion/react";
 import clsx from "clsx";
 import { RotateCcw } from "@/components/icons";
 import {
+  DEFAULT_PREFS,
   DEFAULT_QUICK_CAPTURE_SHORTCUT,
+  FONT_SIZE_MAX,
+  FONT_SIZE_MIN,
   isThinkingAnimation,
   isThinkingIntensity,
   useStore,
@@ -26,6 +29,8 @@ import { EASE_OUT, MOTION } from "@/lib/tokens/motion";
 import { ICON } from "@/lib/icons";
 import { BlurSwap } from "@/components/ui/BlurSwap";
 import { IconButton } from "@/components/ui/IconButton";
+import { Input } from "@/components/ui/Input";
+import { SwitchControl } from "@/components/ui/SwitchControl";
 import { radioGroupKeyDown } from "@/components/ui/RadioGroup";
 import { Tab, Tabs } from "@/components/ui/Tabs";
 import { ACCENT_PALETTES, type AccentPalette } from "@/lib/palettes";
@@ -56,6 +61,9 @@ export function AppearanceTab() {
   const cornerProfile = useStore((s) => s.prefs.cornerProfile);
   const thinkingAnimation = useStore((s) => s.prefs.thinkingAnimation);
   const thinkingIntensity = useStore((s) => s.prefs.thinkingIntensity);
+  const uiFont = useStore((s) => s.prefs.uiFont);
+  const uiFontSize = useStore((s) => s.prefs.uiFontSize);
+  const fontSmoothing = useStore((s) => s.prefs.fontSmoothing);
   const setPref = useStore((s) => s.setPref);
 
   const onAccentKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) =>
@@ -140,6 +148,49 @@ export function AppearanceTab() {
         </SettingsSurface>
       </SettingsSection>
 
+      <SettingsSection title="Typography" detail="local preference">
+        <SettingsSurface>
+          <SettingsSettingRow
+            title="Font"
+            hint="Custom font-family stack for the interface. Empty uses the default Geist stack; code keeps Geist Mono."
+            control={
+              <Input
+                value={uiFont}
+                onChange={(e) => setPref("uiFont", e.target.value)}
+                placeholder="Geist"
+                aria-label="Font"
+                spellCheck={false}
+                autoComplete="off"
+                className="w-[220px]"
+              />
+            }
+          />
+          <SettingsSettingRow
+            title="Font size"
+            hint="Base size the whole type scale derives from — code blocks and diffs follow."
+            control={
+              <FontSizeField
+                value={uiFontSize}
+                defaultValue={DEFAULT_PREFS.uiFontSize}
+                onCommit={(v) => setPref("uiFontSize", v)}
+                ariaLabel="Font size"
+              />
+            }
+          />
+          <SettingsSettingRow
+            title="Font smoothing"
+            hint="Grayscale anti-aliasing. Off uses the platform's native subpixel rendering."
+            control={
+              <SwitchControl
+                checked={fontSmoothing}
+                onChange={(next) => setPref("fontSmoothing", next)}
+                aria-label="Font smoothing"
+              />
+            }
+          />
+        </SettingsSurface>
+      </SettingsSection>
+
       <SettingsSection title="Thinking indicator" detail={`${thinkingIntensity} intensity`}>
         <SettingsSurface>
           <SettingsSettingRow
@@ -205,6 +256,82 @@ function ThinkingTreatmentPicker({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+/** Numeric px entry for a font-size preference. Free typing is buffered
+ *  locally and clamped to [FONT_SIZE_MIN, FONT_SIZE_MAX] on commit (blur or
+ *  Enter) rather than on every keystroke, so typing "18" doesn't clamp
+ *  through "1" first. Reset affordance follows ShortcutRecorder's pattern. */
+function FontSizeField({
+  value,
+  defaultValue,
+  onCommit,
+  ariaLabel,
+}: {
+  value: number;
+  defaultValue: number;
+  onCommit: (next: number) => void;
+  ariaLabel: string;
+}) {
+  const [draft, setDraft] = useState(String(value));
+
+  useEffect(() => {
+    setDraft(String(value));
+  }, [value]);
+
+  const commit = () => {
+    const parsed = Math.round(Number(draft));
+    const clamped = Number.isFinite(parsed)
+      ? Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, parsed))
+      : value;
+    setDraft(String(clamped));
+    if (clamped !== value) onCommit(clamped);
+  };
+
+  return (
+    <div className="inline-flex items-center gap-1.5">
+      <div className="inline-flex items-center gap-1">
+        <Input
+          type="number"
+          inputMode="numeric"
+          aria-label={ariaLabel}
+          min={FONT_SIZE_MIN}
+          max={FONT_SIZE_MAX}
+          step={1}
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={commit}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") event.currentTarget.blur();
+          }}
+          className="w-16 text-right"
+        />
+        <span className="text-xs text-faint">px</span>
+      </div>
+      <AnimatePresence initial={false}>
+        {value !== defaultValue && (
+          <motion.span
+            key="reset"
+            initial={{ opacity: 0, scale: 0.96 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.96 }}
+            transition={{ duration: MOTION.check, ease: EASE_OUT }}
+          >
+            <IconButton
+              size="lg"
+              tone="faint"
+              className="rounded-[8px]"
+              onClick={() => onCommit(defaultValue)}
+              aria-label="Reset to default"
+              title="Reset to default"
+            >
+              <RotateCcw size={ICON.SM} />
+            </IconButton>
+          </motion.span>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

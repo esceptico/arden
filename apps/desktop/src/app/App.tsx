@@ -32,6 +32,7 @@ import { useAutomationEvents } from "@/features/automations/hooks/useAutomationE
 import { useTaskResultToasts } from "@/hooks/useTaskResultToasts";
 import { useThemeEffect } from "@/lib/theme";
 import { useCornerProfileEffect } from "@/lib/cornerProfile";
+import { useTypographyEffect } from "@/lib/typography";
 import {
   COMPACT_SHELL_QUERY,
   resolveEffectiveSidebarHidden,
@@ -39,6 +40,7 @@ import {
 } from "@/lib/shellOwnership";
 import { bootstrap, startServerConnectionPolling } from "@/actions/bootstrap";
 import { createSession, goToNewSessionHome, switchSession } from "@/actions/sessions";
+import { goHome } from "@/actions/navigation";
 import { sendMessage } from "@/actions/messages";
 
 // The five "open from chrome" modals only mount when the user actually
@@ -185,6 +187,7 @@ export function App() {
 
   useThemeEffect();
   useCornerProfileEffect();
+  useTypographyEffect();
   useFullscreenClass();
 
   useEffect(() => {
@@ -210,6 +213,11 @@ export function App() {
         if (k === "n" && !e.shiftKey) {
           e.preventDefault();
           goToNewSessionHome();
+          return;
+        }
+        if (k === "h" && e.shiftKey) {
+          e.preventDefault();
+          goHome();
           return;
         }
         if (e.key === ",") {

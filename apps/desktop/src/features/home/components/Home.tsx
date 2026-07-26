@@ -11,6 +11,7 @@ import { ICON } from "@/lib/icons";
 import {
   useHomeKeyboard,
   type HomeDeckShortcutActions,
+  type HomeOmniboxShortcutActions,
 } from "@/features/home/hooks/useHomeKeyboard";
 import "./Home.css";
 
@@ -63,7 +64,8 @@ export function Home() {
   const { overview, phase, reload } = useAreasData();
   const captureInputRef = useRef<HTMLInputElement>(null);
   const deckActionsRef = useRef<HomeDeckShortcutActions | null>(null);
-  useHomeKeyboard({ captureInput: captureInputRef, deckActions: deckActionsRef });
+  const omniboxActionsRef = useRef<HomeOmniboxShortcutActions | null>(null);
+  useHomeKeyboard({ captureInput: captureInputRef, deckActions: deckActionsRef, omnibox: omniboxActionsRef });
   const connected = useStore((s) => s.connected);
   const openSettings = useStore((s) => s.openSettings);
   const automations = useStore((s) => s.automations);
@@ -132,6 +134,9 @@ export function Home() {
 
   return (
     <div className="mission-control">
+      {/* iA-style calm: the room defocuses while the router field is awake.
+          Activation is pure CSS (:has focus-within) — see Home.css. */}
+      <div className="mission-control__veil arden-focus-veil" aria-hidden />
       <div className="mission-control__room">
         {stale && (
           <Callout
@@ -147,7 +152,7 @@ export function Home() {
             <BlurSwap swapKey={answer.text}>{answerContent(answer)}</BlurSwap>
           </h1>
         </header>
-        <HeroInput inputRef={captureInputRef} />
+        <HeroInput inputRef={captureInputRef} omniboxActionsRef={omniboxActionsRef} />
         <WorkBrief
           brief={brief}
           automations={automations ?? []}

@@ -5,6 +5,9 @@ import {
 } from "@/stores/types";
 import { DEFAULT_ACCENT } from "@/lib/palettes";
 
+export const FONT_SIZE_MIN = 10;
+export const FONT_SIZE_MAX = 24;
+
 export const SIDEBAR_MIN_WIDTH = 200;
 export const SIDEBAR_MAX_WIDTH = 380;
 export const SIDEBAR_SNAP_POINTS = [220, 244, 288, 320] as const;
@@ -40,6 +43,9 @@ export const DEFAULT_PREFS: Prefs = {
   sidebarWidth: 288,
   rightPanelWidth: RIGHT_PANEL_DEFAULT_WIDTH,
   quickCaptureShortcut: DEFAULT_QUICK_CAPTURE_SHORTCUT,
+  uiFont: "",
+  uiFontSize: 14,
+  fontSmoothing: true,
 };
 
 type LegacyPrefs = Partial<Prefs> & Record<string, unknown> & {
@@ -47,10 +53,22 @@ type LegacyPrefs = Partial<Prefs> & Record<string, unknown> & {
   palette?: unknown;
   material?: unknown;
   showReasoningInChat?: unknown;
+  codeFont?: unknown;
+  codeFontSize?: unknown;
+  diffMarkers?: unknown;
 };
 
 function isPrefsRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function isFontSizePx(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= FONT_SIZE_MIN &&
+    value <= FONT_SIZE_MAX
+  );
 }
 
 /**
@@ -67,12 +85,21 @@ function normalizePrefs(value: unknown, migrateLegacyLayout: boolean): Prefs {
   Reflect.deleteProperty(parsed, "material");
   Reflect.deleteProperty(parsed, "glass");
   Reflect.deleteProperty(parsed, "showReasoningInChat");
+  Reflect.deleteProperty(parsed, "codeFont");
+  Reflect.deleteProperty(parsed, "codeFontSize");
+  Reflect.deleteProperty(parsed, "diffMarkers");
 
   if (!isThinkingAnimation(parsed.thinkingAnimation)) {
     Reflect.deleteProperty(parsed, "thinkingAnimation");
   }
   if (!isThinkingIntensity(parsed.thinkingIntensity)) {
     Reflect.deleteProperty(parsed, "thinkingIntensity");
+  }
+  if (typeof parsed.uiFont !== "string") {
+    Reflect.deleteProperty(parsed, "uiFont");
+  }
+  if (!isFontSizePx(parsed.uiFontSize)) {
+    Reflect.deleteProperty(parsed, "uiFontSize");
   }
 
   if (migrateLegacyLayout && prefsVersion < PREFS_VERSION && parsed.sidebarWidth === 272) {
@@ -95,6 +122,7 @@ function normalizePrefs(value: unknown, migrateLegacyLayout: boolean): Prefs {
 export function isValidPrefValue(key: keyof Prefs, value: unknown): boolean {
   if (key === "thinkingAnimation") return isThinkingAnimation(value);
   if (key === "thinkingIntensity") return isThinkingIntensity(value);
+  if (key === "uiFontSize") return isFontSizePx(value);
   return true;
 }
 

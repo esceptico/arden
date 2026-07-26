@@ -1,8 +1,8 @@
-import { ChevronDown, SquareTerminal } from "@/components/icons";
+import { ChevronRight, SquareTerminal } from "@/components/icons";
 import { useStore, type ActivityLabel } from "@/stores";
 import { BlurSwap } from "@/components/ui/BlurSwap";
 import { RollingToken } from "@/components/ui/RollingToken";
-import { formatTurnDuration } from "@/features/chat/lib/turnHeader";
+import { turnHeaderLabel } from "@/features/chat/lib/turnHeader";
 
 export function ActivityHeader({
   done,
@@ -30,13 +30,15 @@ export function ActivityHeader({
   railLabel?: string;
 }) {
   const word = count === 1 ? "call" : "calls";
+  // A settled turn reads as one quiet sentence — "Worked for 1m 59s" /
+  // "Stopped after 40s" — with the call count left to the expanded rows.
+  // Live turns keep their working numbers: those are information, not recap.
+  const settled = !backgrounded && (done || label === "Stopped");
   const heading = backgrounded
     ? "Backgrounded"
-    : label === "Stopped"
-      ? "Stopped"
-      : done
-        ? "Worked"
-        : "Working";
+    : settled
+      ? turnHeaderLabel(durationMs, label === "Stopped")
+      : "Working";
   const interactive = !!onToggle;
   const streamReplaying = useStore((s) => s.streamReplaying);
   const suppressMotion = motionDisabled ?? streamReplaying;
@@ -57,25 +59,23 @@ export function ActivityHeader({
           ? heading
           : <BlurSwap swapKey={heading}>{heading}</BlurSwap>}
       </span>
-      <span aria-hidden>·</span>
-      <span className="board-trace__count">
-        <RollingToken value={String(count)} mono motionDisabled={suppressMotion} />
-        <RollingToken value={word} motionDisabled={suppressMotion} />
-        {durationMs != null && (
-          <>
-            <span aria-hidden>·</span>
-            <span>{formatTurnDuration(durationMs)}</span>
-          </>
-        )}
-      </span>
-      {activeCount > 0 && (
+      {!settled && (
+        <>
+          <span aria-hidden>·</span>
+          <span className="board-trace__count">
+            <RollingToken value={String(count)} motionDisabled={suppressMotion} />
+            <RollingToken value={word} motionDisabled={suppressMotion} />
+          </span>
+        </>
+      )}
+      {!settled && activeCount > 0 && (
         <span className="board-trace__count">
-          <RollingToken value={String(activeCount)} mono motionDisabled={suppressMotion} />
+          <RollingToken value={String(activeCount)} motionDisabled={suppressMotion} />
           <span>active</span>
         </span>
       )}
       {interactive && (
-        <ChevronDown
+        <ChevronRight
           aria-hidden
           className="board-trace__chevron"
         />

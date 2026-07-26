@@ -4,7 +4,7 @@ import type { ArdenIcon } from "@/components/icons";
  *  (`children`) that opens a sub-view via breadcrumb drill-down. */
 export interface CommandEntry {
   id: string;
-  section: "suggested" | "open" | "session" | "provider" | "model" | "appearance" | "system";
+  section: "suggested" | "open" | "area" | "automation" | "session" | "provider" | "model" | "appearance" | "system";
   label: string;
   hint?: string;
   shortcut?: string;
@@ -33,6 +33,8 @@ export interface Crumb {
 export const SECTION_LABEL: Record<CommandEntry["section"], string> = {
   suggested: "Suggested",
   open: "Navigation",
+  area: "Areas",
+  automation: "Automations",
   appearance: "Appearance",
   session: "Sessions",
   system: "System",
@@ -43,6 +45,8 @@ export const SECTION_LABEL: Record<CommandEntry["section"], string> = {
 export const SECTION_ORDER: CommandEntry["section"][] = [
   "suggested",
   "open",
+  "area",
+  "automation",
   "appearance",
   "provider",
   "model",

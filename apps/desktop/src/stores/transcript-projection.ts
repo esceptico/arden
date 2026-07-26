@@ -505,6 +505,7 @@ export function rebuildTranscriptFromHistory(
   const items: UiMessage[] = [];
   let activeActivityId: string | null = null;
   let activeTodoId: string | null = null;
+  let turnOwner: UiMessage | null = null;
 
   const findActivity = (id: string) =>
     items.find((it) => it.id === id && it.role === "activity")?.activity;
@@ -514,6 +515,16 @@ export function rebuildTranscriptFromHistory(
     const sourceMessageId = msg.message_id ?? msg.id;
     const stableId = msg.id ?? msg.message_id ?? `history-${sourceIndex}`;
     const stampedAt = msg.created_at ? Date.parse(msg.created_at) : 0;
+
+    // Turn duration is derivable from message stamps: the turn ran from the
+    // user message to the last stamped message before the next user turn.
+    if (msg.role !== "user" && turnOwner?.turn && stampedAt > turnOwner.turn.startedAt) {
+      turnOwner.turn = {
+        startedAt: turnOwner.turn.startedAt,
+        endedAt: stampedAt,
+        durationMs: stampedAt - turnOwner.turn.startedAt,
+      };
+    }
 
     if (msg.role === "user") {
       activeActivityId = null;
@@ -529,6 +540,7 @@ export function rebuildTranscriptFromHistory(
         images: msg.images,
         isMeta: msg.is_meta,
       });
+      turnOwner = stampedAt ? items[items.length - 1] : null;
       return;
     }
 

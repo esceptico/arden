@@ -18,6 +18,7 @@ import { fetchAutomations } from "@/actions/automations";
 import { humanizeSlug } from "@/lib/format";
 import { ICON } from "@/lib/icons";
 import { useVisibilityPoll } from "@/lib/hooks";
+import { useCmdHeld } from "@/hooks/useCmdHeld";
 import { NavRow } from "@/features/sessions/components/NavRow";
 import { SessionList } from "@/features/sessions/components/SessionList";
 import { IconButton } from "@/components/ui/IconButton";
@@ -48,6 +49,7 @@ export function Sidebar() {
   const areas = areasOverview?.areas ?? [];
   const suggestedAreas = areasOverview?.suggested ?? [];
   const automations = automationState ?? [];
+  const cmdHeld = useCmdHeld();
   const [contextMenu, setContextMenu] = useState<SidebarContextMenuState | null>(null);
   useVisibilityPoll(fetchAutomations, 20_000);
 
@@ -92,6 +94,8 @@ export function Sidebar() {
         icon={<House size={ICON.MD} />}
         label="Home"
         active={homeActive}
+        hint="⇧⌘H"
+        hintVisible={cmdHeld}
         onClick={() => goToNewSessionHome()}
         onMenu={openNavMenu(() => goToNewSessionHome())}
       />

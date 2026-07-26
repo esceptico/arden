@@ -124,6 +124,15 @@ export interface Prefs {
    *  process via IPC; main re-registers on change. Empty string disables
    *  the shortcut entirely. */
   quickCaptureShortcut: string;
+  /** Custom interface font-family stack. Empty string = default Geist
+   *  stack. Code keeps its mono stack; only the size follows. */
+  uiFont: string;
+  /** Base px size the whole type scale derives from — code blocks and
+   *  diffs follow 1px smaller via --code-font-size in base.css. */
+  uiFontSize: number;
+  /** True = -webkit-font-smoothing: antialiased (default). False = auto,
+   *  the platform's native subpixel rendering. */
+  fontSmoothing: boolean;
 }
 
 /** A desktop-owned fresh turn waiting behind the active run. */

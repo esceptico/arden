@@ -17,10 +17,16 @@ import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { SidebarToggle } from "@/components/ui/SidebarToggle";
 import { Takeover } from "@/components/workspace/Takeover";
 import { DialogLayer } from "@/components/workspace/DialogLayer";
+import { PaneResizeHandle } from "@/components/workspace/PaneResizeHandle";
 import { PeekSurface } from "@/components/workspace/PeekSurface";
 import { ShellBackButton } from "@/components/workspace/ShellBackButton";
 import { ICON } from "@/lib/icons";
 import "./automations-workspace.css";
+
+const RAIL_WIDTH_KEY = "arden.desktop.automations.railWidth";
+const RAIL_MIN = 220;
+const RAIL_MAX = 400;
+const RAIL_DEFAULT = 288;
 
 type Draft = { key: number; preset: CreateAutomationPayload | null };
 
@@ -97,6 +103,7 @@ export function AutomationsModal() {
 
   const newButtonRef = useRef<HTMLButtonElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const railRef = useRef<HTMLElement>(null);
   const draftSequence = useRef(0);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -313,6 +320,21 @@ export function AutomationsModal() {
     setDetailDirection(1);
   }, [open]);
 
+  // Restore the persisted rail width when the rail attaches — it remounts
+  // with the Takeover (after `open` flips), so an open-keyed effect would
+  // fire before the node exists.
+  const attachRail = useCallback((node: HTMLElement | null) => {
+    railRef.current = node;
+    if (!node) return;
+    const stored = Number(localStorage.getItem(RAIL_WIDTH_KEY));
+    if (Number.isFinite(stored) && stored > 0) {
+      node.style.setProperty(
+        "--automation-rail-w",
+        `${Math.max(RAIL_MIN, Math.min(RAIL_MAX, stored))}px`,
+      );
+    }
+  }, []);
+
   return (
     <Takeover
       open={open}
@@ -331,12 +353,23 @@ export function AutomationsModal() {
       />
       <ShellBackButton onClick={() => requestIntent({ kind: "home" })} />
       <aside
+        ref={attachRail}
         className="automation-workspace__rail"
         aria-label="Automations"
         data-page-enter-item="chrome"
         aria-hidden={railHidden}
         inert={railHidden ? true : undefined}
       >
+        <PaneResizeHandle
+          layoutRef={railRef}
+          cssVar="--automation-rail-w"
+          storageKey={RAIL_WIDTH_KEY}
+          min={RAIL_MIN}
+          max={RAIL_MAX}
+          defaultWidth={RAIL_DEFAULT}
+          edge="end"
+          label="Resize automation list"
+        />
         <header className="automation-workspace__rail-header">
           <h1>Automations</h1>
           <Button

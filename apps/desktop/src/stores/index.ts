@@ -140,7 +140,10 @@ export type {
 export type { Workflow, WorkflowAgent, WorkflowPhase } from "@/stores/workflow-domain";
 export { selectWorkflowsForSession } from "@/stores/workflow-domain";
 export {
+  DEFAULT_PREFS,
   DEFAULT_QUICK_CAPTURE_SHORTCUT,
+  FONT_SIZE_MAX,
+  FONT_SIZE_MIN,
   RIGHT_PANEL_DEFAULT_WIDTH,
   RIGHT_PANEL_MAX_WIDTH,
   RIGHT_PANEL_MIN_WIDTH,

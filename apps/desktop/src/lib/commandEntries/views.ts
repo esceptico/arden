@@ -1,8 +1,8 @@
 import { Bot, Layers, Monitor, Moon, Sun, type ArdenIcon } from "@/components/icons";
 import { updateServerConfig } from "@/actions/server";
 import type { ThemeChoice } from "@/stores";
-import { prettyProvider, stripProviderPrefix } from "@/features/command-palette/lib/filter";
-import type { CommandView } from "@/features/command-palette/types";
+import { prettyProvider, stripProviderPrefix } from "@/lib/commandEntries/filter";
+import type { CommandView } from "@/lib/commandEntries/types";
 
 /** Provider-level view: one row per provider, drills into model list. */
 export function buildProviderView(

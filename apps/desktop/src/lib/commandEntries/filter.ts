@@ -1,4 +1,4 @@
-import { SECTION_ORDER, type CommandEntry } from "@/features/command-palette/types";
+import { SECTION_ORDER, type CommandEntry } from "@/lib/commandEntries/types";
 
 export function prettyProvider(provider: string): string {
   if (!provider) return "Unknown";
@@ -28,7 +28,11 @@ export function filterEntries(entries: CommandEntry[], query: string): CommandEn
   if (!q) {
     // No query → show actions and open targets first, then a few recent
     // sessions. Keeps the default view useful as a "what can I do" list.
-    const acts = entries.filter((e) => e.section !== "session");
+    // Areas/automations only earn a spot once the user actually searches —
+    // unsliced, they could flood this view for a workspace with many of
+    // either, and Home's own room already lists them ambiently.
+    const HIDDEN_BY_DEFAULT = new Set(["session", "area", "automation"]);
+    const acts = entries.filter((e) => !HIDDEN_BY_DEFAULT.has(e.section));
     const sess = entries.filter((e) => e.section === "session").slice(0, 6);
     filtered = [...acts, ...sess];
   } else {

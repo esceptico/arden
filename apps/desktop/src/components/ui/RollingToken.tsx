@@ -90,12 +90,16 @@ export const RollingToken = memo(function RollingToken({
         const unchanged = oldChar === nextChar;
         const delay = counterSpinDelay(cells.length, index);
         const transition = { ...COUNTER_SPIN_TRANSITION, delay };
+        // Fixed slots keep rolling digits in rhythm; letters take their
+        // natural width — padding them apart reads as broken kerning.
+        const digitSlot = /\d/.test(oldChar) || /\d/.test(nextChar);
         return (
           <span
             key={`${index}:${oldChar}:${nextChar}`}
             aria-hidden="true"
             className={clsx(
-              "t-spin-cell relative inline-grid h-[1em] min-w-[.58em] overflow-hidden text-center leading-none",
+              "t-spin-cell relative inline-grid h-[1em] overflow-hidden leading-none",
+              digitSlot && "min-w-[.58em] text-center",
               !unchanged && "is-spinning",
             )}
           >

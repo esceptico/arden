@@ -1,4 +1,6 @@
 .automation-workspace {
+  --automation-rail-w: var(--sidebar-width);
+
   z-index: var(--z-sheet);
   position: relative;
   display: block;
@@ -13,7 +15,7 @@
   position: absolute;
   inset: var(--sidebar-edge) auto var(--sidebar-edge) var(--sidebar-edge);
   z-index: var(--z-sticky);
-  width: var(--sidebar-width);
+  width: var(--automation-rail-w);
   min-width: 0;
   margin: 0;
   padding: calc(var(--space-8) + var(--space-4)) var(--space-2) var(--space-2);

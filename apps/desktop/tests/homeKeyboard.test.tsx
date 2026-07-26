@@ -166,6 +166,9 @@ test("Home shortcut dispatcher mirrors deck verbs while preserving typing and mo
 
   capture.focus();
   expect(dispatch("1")).toBe(false);
+  // ⌘K toggles: focused → release, unfocused → summon with select-all.
+  expect(dispatch("k", { metaKey: true })).toBe(true);
+  expect(document.activeElement).not.toBe(capture);
   expect(dispatch("k", { metaKey: true })).toBe(true);
   expect(document.activeElement).toBe(capture);
   expect(capture.selectionStart).toBe(0);
@@ -176,19 +179,25 @@ test("Home shortcut dispatcher mirrors deck verbs while preserving typing and mo
   expect(calls.at(-1)).toBe("escape");
 });
 
-test("Home reserves Cmd+K, rotates the deck with J, and closes its foot with Escape", async () => {
+test("Home reserves Cmd+K for the router field, rotates the deck with J, and closes its foot with Escape", async () => {
   installBridge();
   seed([ask("First", "question"), ask("Second", "question")]);
   const app = await renderHome(true);
   await waitFor(() => requests.filter((request) => request.path === "/areas/overview").length >= 1);
   const capture = app.querySelector<HTMLInputElement>("#message-input")!;
 
-  capture.focus();
-  capture.setSelectionRange(0, 0);
+  capture.blur();
   await act(async () => keydown("k", { metaKey: true }));
+  // On Home the chord selects the router field — the field IS the palette
+  // here (same entry brain); the floating twin never opens.
   expect(document.activeElement).toBe(capture);
   expect(capture.selectionStart).toBe(0);
   expect(capture.selectionEnd).toBe(capture.value.length);
+  expect(getState().paletteOpen).toBe(false);
+
+  // Second press toggles the focus (and its veil) back off.
+  await act(async () => keydown("k", { metaKey: true }));
+  expect(document.activeElement).not.toBe(capture);
   expect(getState().paletteOpen).toBe(false);
 
   app.tabIndex = -1;

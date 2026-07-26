@@ -1,7 +1,7 @@
 import { ChevronRight } from "@/components/icons";
 import { Command } from "cmdk";
 import { ICON } from "@/lib/icons";
-import type { CommandEntry } from "@/features/command-palette/types";
+import type { CommandEntry } from "@/lib/commandEntries/types";
 
 export function Row({
   entry,
