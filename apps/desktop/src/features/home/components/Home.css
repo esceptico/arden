@@ -16,6 +16,16 @@
   flex-direction: column;
 }
 
+/* Optical-center bias: nudge the intact block toward 40% vertical instead of
+   hugging the top. A spacer, not distribution — the block stays contiguous
+   (mid-page staging with a void between content and strips was rejected).
+   Huge flex-shrink means it collapses FIRST when a full deck needs the room,
+   so heavy days degrade to exactly the old top-anchored layout. */
+.mission-control__room::before {
+  content: "";
+  flex: 0 10000 clamp(0px, 12vh, 7rem);
+}
+
 .mission-control__answer {
   flex: none;
   padding: .375rem var(--space-0-5) 0;
@@ -358,6 +368,13 @@
   gap: var(--interactive-row-gap);
   border-top: 1px solid var(--edge);
   background: var(--paper);
+}
+
+/* The strips' offset separates them from deck CONTENT. With the deck empty
+   (clean all-clear) it would stack invisibly on the attention margin — 65px
+   of unexplained air between the ask field and the strips. */
+.mission-control__attention[data-deck-empty] .mission-control__ambient {
+  margin-top: 0;
 }
 
 .mission-control__ambient > .arden-section-label {

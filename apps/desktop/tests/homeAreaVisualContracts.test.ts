@@ -14,6 +14,10 @@ test("Home keeps the mock's compact-height attention spacing", () => {
   expect(css).toMatch(/\.mission-control__focus-reason\s*\{[\s\S]*?font:\s*400 var\(--text-sm\)\/1\.5 var\(--sans\);[\s\S]*?-webkit-line-clamp:\s*2;/);
   expect(css).toMatch(/\.mission-control__focus-next\s*\{[\s\S]*?font:\s*400 var\(--text-sm\)\/1\.5 var\(--sans\);/);
   expect(css).toMatch(/@media \(max-height: 53rem\)\s*\{[\s\S]*?\.mission-control__room\s*\{\s*padding-top:\s*2\.875rem;\s*padding-bottom:\s*var\(--space-2-5\);/);
+  // Optical-center bias: a shrink-first spacer nudges the intact block toward
+  // 40% vertical; it must collapse (huge flex-shrink) before content ever
+  // overflows — mid-page distribution with an internal void stays rejected.
+  expect(css).toMatch(/__room::before\s*\{[\s\S]*?flex:\s*0 10000 clamp\(0px, 12vh, 7rem\);/);
   const compact = css.slice(css.indexOf("@media (max-height: 47rem)"));
   expect(compact).toContain(".mission-control__focus-foot { margin-top: .875rem; }");
   expect(compact).not.toContain(".mission-control__focus-actions { margin-top:");

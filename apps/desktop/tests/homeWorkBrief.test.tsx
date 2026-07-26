@@ -132,9 +132,17 @@ test("WorkBrief keeps a compact all-clear state without a dashboard recap", asyn
   try {
     await act(async () => root.render(<WorkBrief brief={{ done: [], in_progress: [], needs_you: [] }} />));
     expect(host.querySelector('[data-region="deck"]')?.getAttribute("aria-label")).toBe("Needs you");
-    expect(host.textContent).toContain("All requests handled");
+    // The headline ("All clear") carries the happy zero — no redundant line,
+    // and the empty deck slot collapses to nothing.
+    expect(host.textContent).not.toContain("All requests handled");
+    expect(host.querySelector(".mission-control__zero")).toBeNull();
+    expect((host.querySelector(".mission-control__deck-slot") as HTMLElement).getBoundingClientRect().height).toBe(0);
     expect(host.textContent).toContain("Agent activity");
     expect(host.textContent).not.toContain("That’s it for today.");
+
+    // The STALE zero still speaks — it says something "All clear" cannot.
+    await act(async () => root.render(<WorkBrief brief={{ done: [], in_progress: [], needs_you: [] }} stale />));
+    expect(host.textContent).toContain("No requests in the last successful check");
   } finally {
     await act(async () => root.unmount());
     restore();

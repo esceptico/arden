@@ -563,7 +563,12 @@ export function WorkBrief({
   }, [keyboardActionsRef]);
 
   return (
-    <section className="mission-control__attention" aria-label="Attention desk" data-page-enter-item>
+    <section
+      className="mission-control__attention"
+      aria-label="Attention desk"
+      data-page-enter-item
+      data-deck-empty={!head && peers.length === 0 && !(showZero && stale) ? "" : undefined}
+    >
       <section className="mission-control__deck" data-region="deck" aria-label="Needs you">
         {brief.needs_you.length > 4 && (
           <p className="mission-control__capacity">More than a usual day — still one at a time.</p>
@@ -610,8 +615,11 @@ export function WorkBrief({
               </span>
             </motion.div>
           )}
+          {/* The headline ("All clear") already says the happy zero in words —
+              only the STALE variant carries information of its own, so only it
+              earns a line; a clean zero renders nothing and the slot collapses. */}
           <AnimatePresence initial={false}>
-            {showZero && (
+            {showZero && stale && (
               <motion.p
                 key="all-handled"
                 className="mission-control__zero"
@@ -624,7 +632,7 @@ export function WorkBrief({
                 exit={{ opacity: 0 }}
                 transition={CONTENT_ENTER_TRANSITION}
               >
-                {stale ? "No requests in the last successful check" : "All requests handled"}
+                No requests in the last successful check
               </motion.p>
             )}
           </AnimatePresence>
