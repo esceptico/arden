@@ -27,3 +27,9 @@ export function formatRelativeFuture(value: string): string {
   if (hours < 48) return `in ${hours}h`;
   return `in ${Math.floor(hours / 24)}d`;
 }
+
+/** "job-applications" → "Job applications" — display form of a page slug. */
+export function humanizeSlug(slug: string): string {
+  const spaced = slug.replace(/[-_]+/g, " ").trim();
+  return spaced ? spaced[0].toUpperCase() + spaced.slice(1) : slug;
+}

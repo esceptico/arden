@@ -33,7 +33,7 @@ export async function listAreasApi(config: AppConfig): Promise<Area[]> {
 
 export async function createAreaApi(
   config: AppConfig,
-  payload: { name: string; default_cwd?: string | null; instructions?: string | null },
+  payload: { name: string; default_cwd?: string | null; instructions?: string | null; page_path?: string },
 ): Promise<Area> {
   return apiWithConfig<Area>(config, "/areas", {
     method: "POST",

@@ -154,10 +154,23 @@ export interface AreasBrief {
   needs_you: AreaAsk[];
 }
 
+/** Nightly Area Suggester output: a topic page that reads like a life
+ *  domain but has no standing area yet. Accepting = create an area
+ *  attached to `page_path`; dismissing is remembered server-side. */
+export interface AreaSuggestion {
+  id: string;
+  key: string;
+  title: string;
+  page_path: string;
+  rationale: string;
+  created_at: string;
+}
+
 export interface AreasOverview {
   areas: AreaSummary[];
   focus: AreaAsk[];
   brief: AreasBrief;
+  suggested: AreaSuggestion[];
 }
 
 export interface AreaDetail {
@@ -184,6 +197,12 @@ export async function fetchAreasOverview(config: AppConfig): Promise<AreasOvervi
 
 export async function fetchAreaDetail(config: AppConfig, key: string): Promise<AreaDetail> {
   return apiWithConfig<AreaDetail>(config, `/areas/${encodeURIComponent(key)}`);
+}
+
+export async function dismissAreaSuggestion(config: AppConfig, key: string): Promise<void> {
+  await apiWithConfig(config, `/areas/suggestions/${encodeURIComponent(key)}/dismiss`, {
+    method: "POST",
+  });
 }
 
 export async function createAreaOutcome(

@@ -174,6 +174,59 @@
 .home-area-list__row small[data-tone="warning"] { color: var(--warning); }
 .home-area-list__row small[data-tone="live"] { color: var(--accent-ink); }
 
+/* Suggested areas: ghost rows in the same list — each sits exactly where the
+   area would live once accepted. The status word and the accept/dismiss
+   cluster stack in ONE grid cell anchored to the row's right edge, so idle
+   rows keep the exact status column of the real rows above, and hover swaps
+   word → actions in place with zero layout shift. */
+.home-area-list__row--suggested { color: var(--muted); }
+
+.home-area-list__row--suggested:hover {
+  color: var(--ink-soft);
+  background: var(--state-hover-bg);
+}
+
+.home-area-list__suggestion-slot {
+  display: grid;
+  justify-items: end;
+  align-items: center;
+}
+
+/* Word ⇄ actions swap uses the icon-swap vocabulary: opacity + uniform 3px
+   blur bridge, feedback tier. */
+.home-area-list__suggestion-slot > * {
+  grid-area: 1 / 1;
+  transition:
+    opacity var(--motion-feedback) var(--ease),
+    filter var(--motion-feedback) var(--ease);
+}
+
+.home-area-list__suggestion-cluster {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-0-5);
+  opacity: 0;
+  filter: blur(3px);
+  pointer-events: none;
+}
+
+/* Bare glyphs, no hover pill: at row scale the buttons' fill would read as a
+   second capsule inside the row's own hover fill. Color is the feedback. */
+.home-area-list__suggestion-cluster > .arden-icon-button:hover {
+  background: transparent;
+}
+
+.home-area-list__row--suggested:is(:hover, :focus-within) .home-area-list__suggestion-cluster {
+  opacity: 1;
+  filter: blur(0);
+  pointer-events: auto;
+}
+
+.home-area-list__row--suggested:is(:hover, :focus-within) .home-area-list__suggestion-slot > small {
+  opacity: 0;
+  filter: blur(3px);
+}
+
 .workspace-rail__section-header {
   display: flex;
   height: 2rem;

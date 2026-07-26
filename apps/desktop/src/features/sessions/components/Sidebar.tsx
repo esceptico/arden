@@ -2,14 +2,18 @@ import {
   Brain01,
   BubbleChat,
   House,
+  Plus,
   Settings as SettingsIcon,
   SlidersHorizontal,
+  X,
   ZapIcon,
 } from "@/components/icons";
 import { useMemo, useState } from "react";
 import { useStore } from "@/stores";
 import { archiveArea, goToChat, goToNewSessionHome } from "@/actions/sessions";
+import { acceptAreaSuggestion, dismissAreaSuggestion } from "@/actions/areas";
 import { fetchAutomations } from "@/actions/automations";
+import { humanizeSlug } from "@/lib/format";
 import { ICON } from "@/lib/icons";
 import { useVisibilityPoll } from "@/lib/hooks";
 import { NavRow } from "@/features/sessions/components/NavRow";
@@ -40,6 +44,7 @@ export function Sidebar() {
   const areasOverview = useStore((s) => s.areas.overview);
   const automationState = useStore((s) => s.automations);
   const areas = areasOverview?.areas ?? [];
+  const suggestedAreas = areasOverview?.suggested ?? [];
   const automations = automationState ?? [];
   const [contextMenu, setContextMenu] = useState<SidebarContextMenuState | null>(null);
   useVisibilityPoll(fetchAutomations, 20_000);
@@ -178,6 +183,39 @@ export function Sidebar() {
                   {area.ask_count > 0 ? "needs you" : area.live ? "running" : "quiet"}
                 </small>
               </button>
+            ))}
+            {suggestedAreas.map((suggestion) => (
+              <div
+                key={suggestion.key}
+                className="home-area-list__row home-area-list__row--suggested"
+                title={suggestion.rationale}
+              >
+                <span>{humanizeSlug(suggestion.title)}</span>
+                {/* The status word and the accept/dismiss cluster share one
+                    grid cell: idle rows keep the exact status column of the
+                    real rows above; hover swaps word → actions in place. */}
+                <span className="home-area-list__suggestion-slot">
+                  <small>suggested</small>
+                  <span className="home-area-list__suggestion-cluster">
+                    <IconButton
+                      aria-label={`Create area from ${humanizeSlug(suggestion.title)}`}
+                      title="Create this area"
+                      size="xs"
+                      onClick={() => void acceptAreaSuggestion(suggestion)}
+                    >
+                      <Plus size={ICON.XS} />
+                    </IconButton>
+                    <IconButton
+                      aria-label={`Dismiss suggestion ${humanizeSlug(suggestion.title)}`}
+                      title="Dismiss"
+                      size="xs"
+                      onClick={() => void dismissAreaSuggestion(suggestion.key)}
+                    >
+                      <X size={ICON.XS} />
+                    </IconButton>
+                  </span>
+                </span>
+              </div>
             ))}
           </nav>
         </div>

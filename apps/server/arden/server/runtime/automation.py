@@ -393,7 +393,11 @@ class AutomationRuntime:
                 cheap_llm=cheap_llm,
                 model=self.cheap_model,
             )
-            return await suggester.run()
+            summary = await suggester.run()
+            # Fresh suggestions ride /areas/overview — nudge an open desktop
+            # to refetch, or the nightly run stays invisible until reload.
+            await self.scheduler.emit_automation_event(AreasChangedEvent())
+            return summary
 
         return handler
 

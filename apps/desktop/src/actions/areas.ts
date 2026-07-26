@@ -2,6 +2,7 @@ import {
   createAreaPage as createAreaPageApi,
   createAreaOutcome as createAreaOutcomeApi,
   detachAreaPage as detachAreaPageApi,
+  dismissAreaSuggestion as dismissAreaSuggestionApi,
   fetchAreasOverview as fetchAreasOverviewApi,
   fetchAreaDetail as fetchAreaDetailApi,
   resolveAsk as resolveAskApi,
@@ -16,9 +17,12 @@ import type {
   AreaAttention,
   AreaInterrupts,
   AreaOutcomeStatus,
+  AreaSuggestion,
   AreaWorkItem,
   AreaWorkStatus,
 } from "@/api/areas";
+import { createAreaApi } from "@/api/sessions";
+import { humanizeSlug } from "@/lib/format";
 import { getState } from "@/stores";
 
 export async function fetchAreasOverview(): Promise<boolean> {
@@ -145,4 +149,22 @@ export async function detachAreaPage(key: string): Promise<void> {
   const record = await detachAreaPageApi(s.config, key);
   s.upsertAreaRecord(record);
   await Promise.all([fetchAreaDetail(key), fetchAreasOverview()]);
+}
+
+/** Accept a suggested area: create the area attached to the suggestion's
+ *  topic page (server treats page_path attach as promote-not-duplicate),
+ *  then refetch so the ghost row becomes a real one in place. */
+export async function acceptAreaSuggestion(suggestion: AreaSuggestion): Promise<void> {
+  const s = getState();
+  const area = await createAreaApi(s.config, {
+    name: humanizeSlug(suggestion.title),
+    page_path: suggestion.page_path,
+  });
+  s.upsertAreaRecord(area);
+  await fetchAreasOverview();
+}
+
+export async function dismissAreaSuggestion(key: string): Promise<void> {
+  await dismissAreaSuggestionApi(getState().config, key);
+  await fetchAreasOverview();
 }

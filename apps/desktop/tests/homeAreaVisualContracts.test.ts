@@ -200,3 +200,34 @@ test("Home, Chat, and Area use the mock's exact visible icon variants", () => {
   expect(assistant).not.toContain("strokeWidth");
   expect(actions).not.toContain("strokeWidth");
 });
+
+test("area suggestions surface as ghost rows in the sidebar areas list", async () => {
+  const sidebar = read("../src/features/sessions/components/Sidebar.tsx");
+  const actions = read("../src/actions/areas.ts");
+  const shell = read("../src/design/shell.css");
+
+  // Rows render from overview.suggested, rationale as tooltip, status word
+  // (never a dot), sitting in the same list where the area would live.
+  expect(sidebar).toContain("areasOverview?.suggested");
+  expect(sidebar).toContain("home-area-list__row--suggested");
+  expect(sidebar).toContain("title={suggestion.rationale}");
+  expect(sidebar).toContain("<small>suggested</small>");
+
+  // Accept attaches the topic page (server create-or-reuse by name makes an
+  // existing same-named area gain the page, never a duplicate); dismiss is
+  // remembered server-side.
+  expect(actions).toContain("page_path: suggestion.page_path");
+  expect(actions).toContain("dismissAreaSuggestionApi");
+
+  // Ghost treatment: muted row. The status word and the action cluster stack
+  // in ONE right-anchored grid cell — idle rows keep the exact status column
+  // of real rows, and hover/focus swaps word → actions with no layout shift.
+  expect(shell).toContain(".home-area-list__row--suggested { color: var(--muted); }");
+  expect(shell).toMatch(/__suggestion-slot \{\s*display: grid;\s*justify-items: end;/);
+  expect(shell).toMatch(/__suggestion-cluster \{[^}]*opacity: 0;/s);
+  expect(shell).toContain(":is(:hover, :focus-within) .home-area-list__suggestion-slot > small");
+
+  const { humanizeSlug } = await import("@/lib/format");
+  expect(humanizeSlug("job-applications")).toBe("Job applications");
+  expect(humanizeSlug("avanta")).toBe("Avanta");
+});
