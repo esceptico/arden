@@ -411,6 +411,10 @@ button:not(:disabled):active { transform: scale(var(--press-scale)); }
   font: 450 var(--text-md) / 1.2 var(--sans);
 }
 .command-palette__input:focus-visible { outline: 0; }
+
+/* Same contract as the palette input: the surrounding bar IS the focus
+   affordance, so the field never draws its own ring. */
+.quick-capture-card textarea:focus-visible { outline: 0; }
 .command-palette__input::placeholder { color: var(--faint); }
 .command-palette__results {
   min-height: 0;

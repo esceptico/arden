@@ -45,23 +45,24 @@ test("SystemSheet keeps viewer and review shells on the canonical bottom-sheet c
   expect(app.querySelector("footer")?.className).toContain("min-h-[3.25rem]");
 });
 
-test("native Quick Capture mirrors the canonical sheet geometry and motion", () => {
+test("native Quick Capture keeps the companion-bar geometry and motion contract", () => {
   const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
   const capture = read("../src/app/QuickCapture.tsx");
   const electron = read("../electron/main.cjs");
 
+  // Shared sheet motion, bar-shaped card: bottom-anchored root so upward
+  // window growth keeps the input row fixed on screen, picker above it.
   expect(capture).toContain("initial={POSE_SHEET_IN}");
   expect(capture).toContain("transition={exiting ? SHEET_EXIT_TRANSITION : SHEET_ENTER_TRANSITION}");
-  expect(capture).toContain("Quick capture");
   expect(capture).toContain("What needs attention?");
-  expect(capture).toContain("Inbox · new chat");
-  expect(capture).toContain("Cmd/Ctrl+Enter");
-  expect(capture).toContain("const PICKER_OVERHEAD = 19;");
+  expect(capture).toContain("items-end");
+  expect(capture).toContain("const WINDOW_GUTTERS = 8 + 36;");
+  expect(capture).toContain("ResizeObserver");
   expect(capture).toContain("rounded-[var(--r-panel)]");
+  // Companion-bar placement: bottom-fraction anchor, upward growth.
   expect(electron).toContain("const QUICK_WIDTH = 656;");
-  expect(electron).toContain("const QUICK_BASE_HEIGHT = 324;");
-  expect(electron).toContain("const QUICK_VISIBLE_TOP_GUTTER = 8;");
-  expect(electron).toContain("dh * 0.18");
-  expect(electron).toContain("2.5 * 16");
-  expect(electron).toContain("4.5 * 16");
+  expect(electron).toContain("const QUICK_BASE_HEIGHT = 102;");
+  expect(electron).toContain("const QUICK_VISIBLE_BOTTOM_GUTTER = 36;");
+  expect(electron).toContain("const QUICK_BOTTOM_FRACTION = 0.15;");
+  expect(electron).toContain("y: y + (current - clamped)");
 });

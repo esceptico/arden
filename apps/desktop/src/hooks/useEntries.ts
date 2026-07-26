@@ -89,25 +89,24 @@ export function useEntries(): CommandEntry[] {
       run: toggleSidebar,
       search: "sidebar panel toggle hide show",
     });
-    entries.push({
-      id: "suggested:compact",
-      section: "suggested",
-      label: "Compact context",
-      icon: Sparkles,
-      run: async () => {
-        if (!currentSessionId) return;
-        try {
-          const result = await compactSessionApi(config, currentSessionId);
-          if (result.status === "compacted" && useStore.getState().currentSessionId === currentSessionId) {
-            await loadHistory(currentSessionId);
-          }
-        } catch {
-          /* surfaced via the global error path */
-        }
-      },
-      search: "compact context summarize",
-    });
     if (currentSessionId) {
+      entries.push({
+        id: "suggested:compact",
+        section: "suggested",
+        label: "Compact context",
+        icon: Sparkles,
+        run: async () => {
+          try {
+            const result = await compactSessionApi(config, currentSessionId);
+            if (result.status === "compacted" && useStore.getState().currentSessionId === currentSessionId) {
+              await loadHistory(currentSessionId);
+            }
+          } catch {
+            /* surfaced via the global error path */
+          }
+        },
+        search: "compact context summarize",
+      });
       entries.push({
         id: "suggested:archive-current",
         section: "suggested",

@@ -1,20 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Camera, Check, Plus, X } from "@/components/icons";
-import { AnimatePresence, motion, MotionConfig } from "motion/react";
+import { Camera, Check, ChevronDown, Plus } from "@/components/icons";
+import { motion, MotionConfig } from "motion/react";
 import clsx from "clsx";
+import { Collapse } from "@/components/ui/Collapse";
 import { Tooltip } from "@/components/ui/Tooltip";
-import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
 import { ICON } from "@/lib/icons";
 import { useThemeEffect } from "@/lib/theme";
 import { useCornerProfileEffect } from "@/lib/cornerProfile";
 import { useTypographyEffect } from "@/lib/typography";
 import {
-  EXIT_FAST,
-  POPOVER_ENTER_TRANSITION,
-  POSE_INLINE_POPOVER_IN,
-  POSE_INLINE_POPOVER_OUT,
-  POSE_INLINE_POPOVER_VISIBLE,
   POSE_SHEET_IN,
   POSE_SHEET_OUT,
   POSE_SHEET_VISIBLE,
@@ -43,11 +38,14 @@ import type { ImageBlock } from "@/stores";
 
 type Phase = "compose" | "exit-submit" | "exit-cancel";
 
-/** Mirrors QUICK_BASE_HEIGHT in electron/main.cjs. */
-const BASE_WINDOW_HEIGHT = 324;
-const PICKER_ROW_HEIGHT = 30;
-// 12px gap + 1px rule + 6px inset above the 30px rows.
-const PICKER_OVERHEAD = 19;
+/** Shadow gutters around the card inside the transparent window —
+ *  mirrors the pt-2/pb-9 padding on the root and the geometry in
+ *  electron/main.cjs. The card hugs its content; a ResizeObserver
+ *  requests `card height + gutters` from main, which clamps to
+ *  [QUICK_BASE_HEIGHT, QUICK_MAX_HEIGHT]. */
+const WINDOW_GUTTERS = 8 + 36;
+/** Covers a full picker unfold in one leading resize (7 rows + padding). */
+const GROWTH_HEADROOM = 240;
 const MAX_PICKER_SESSIONS = 6;
 const MAX_IMAGES = 3;
 
@@ -78,25 +76,60 @@ export function QuickCapture() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerIndex, setPickerIndex] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
 
   const items: PickerItem[] = [
     { sessionId: null, label: "New chat" },
     ...sessions.map((s) => ({ sessionId: s.session_id, label: s.name?.trim() || "Untitled chat" })),
   ];
 
-  const closePicker = useCallback(() => {
-    setPickerOpen(false);
-    void window.ardenDesktop?.quickCapture?.resize?.(BASE_WINDOW_HEIGHT);
-  }, []);
+  const closePicker = useCallback(() => setPickerOpen(false), []);
 
   const openPicker = useCallback(() => {
-    const rows = Math.min(sessions.length, MAX_PICKER_SESSIONS) + 1;
-    void window.ardenDesktop?.quickCapture?.resize?.(
-      BASE_WINDOW_HEIGHT + rows * PICKER_ROW_HEIGHT + PICKER_OVERHEAD,
-    );
     setPickerIndex(Math.max(0, items.findIndex((i) => i.sessionId === (target?.session_id ?? null))));
     setPickerOpen(true);
-  }, [sessions.length, items, target]);
+  }, [items, target]);
+
+  // The bar grows with content (multi-line drafts, image chips, the
+  // picker); the window follows the card instead of hand-maintained
+  // height math per state. Growth LEADS with transparent headroom — the
+  // window must never clip the springing card, and oversize is invisible
+  // in a transparent window — then settles to the exact height once the
+  // card stops moving. Shrinks only settle, so collapse-out never clips.
+  useEffect(() => {
+    const card = cardRef.current;
+    if (!card) return;
+    let settleTimer: ReturnType<typeof setTimeout> | null = null;
+    let requested = 0;
+    const observer = new ResizeObserver(() => {
+      const target = Math.ceil(card.getBoundingClientRect().height) + WINDOW_GUTTERS;
+      if (settleTimer !== null) clearTimeout(settleTimer);
+      if (target > requested) {
+        requested = target + GROWTH_HEADROOM;
+        void window.ardenDesktop?.quickCapture?.resize?.(requested);
+      }
+      settleTimer = setTimeout(() => {
+        requested = target;
+        void window.ardenDesktop?.quickCapture?.resize?.(target);
+      }, 280);
+    });
+    observer.observe(card);
+    return () => {
+      observer.disconnect();
+      if (settleTimer !== null) clearTimeout(settleTimer);
+    };
+  }, []);
+
+  // Single-line at rest, grows to a cap with the draft, scrolls beyond.
+  const autogrow = useCallback(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 132)}px`;
+  }, []);
+  useEffect(() => {
+    autogrow();
+  }, [text, summonId, autogrow]);
 
   // Each summon (window shown by the global shortcut): re-present the
   // card, refresh the recent-chats list, and focus the input. The draft
@@ -208,76 +241,69 @@ export function QuickCapture() {
   }, [phase]);
 
   const exiting = phase !== "compose";
-  const disabled = (!text.trim() && images.length === 0) || exiting;
 
   return (
     <MotionConfig reducedMotion="user">
       {/* Padding gives the card's drop shadow room to render inside the
           transparent BrowserWindow (24px sides, 36px below — matched to
-          the window size set in electron/main.cjs). The card itself IS
-          the visible surface — no outer frame, no vibrancy layer. */}
-      <div className="quick-capture-root grid min-h-screen px-6 pt-2 pb-9">
+          the window size set in electron/main.cjs). The card is a
+          Spotlight-class BAR: one input row with inline accessories,
+          growing only with content (draft lines, image chips, picker).
+          Esc and window blur dismiss; Enter sends, ⇧↩ breaks a line. */}
+      <div className="quick-capture-root grid min-h-screen items-end px-6 pt-2 pb-9">
         <motion.div
           key={summonId}
           initial={POSE_SHEET_IN}
           animate={exiting ? POSE_SHEET_OUT : POSE_SHEET_VISIBLE}
           transition={exiting ? SHEET_EXIT_TRANSITION : SHEET_ENTER_TRANSITION}
           onAnimationComplete={onCardAnimationComplete}
-          className="quick-capture-card surface-sheet flex h-full flex-col overflow-hidden rounded-[var(--r-panel)]"
+          className="quick-capture-card surface-sheet flex flex-col overflow-hidden rounded-[var(--r-panel)]"
         >
-          <header className="flex h-12 shrink-0 items-center border-b border-line px-3 pl-4">
-            <strong className="text-base font-semibold text-ink">Quick capture</strong>
-            <IconButton
-              onClick={onClose}
-              aria-label="Close quick capture"
-              title="Close quick capture"
-              className="ml-auto"
-            >
-              <X size={ICON.SM} />
-            </IconButton>
-          </header>
-          <div className="min-h-0 flex-1 p-4">
-            <textarea
-              ref={inputRef}
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                  e.preventDefault();
-                  if (pickerOpen) choosePickerItem(items[pickerIndex]);
-                  else onSubmit();
-                }
-              }}
-              placeholder="What needs attention?"
-              spellCheck={false}
-              autoCorrect="off"
-              autoCapitalize="off"
-              readOnly={exiting}
-              aria-label="Capture message"
-              className="arden-field min-h-28 resize-none rounded-[var(--r-panel)] py-3"
-            />
-            <div className="group mt-3 flex min-h-6 items-center justify-between gap-3 text-2xs font-mono text-faint">
-              <div className="flex min-w-0 items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => (pickerOpen ? closePicker() : openPicker())}
-                  aria-expanded={pickerOpen}
-                  aria-label="Choose destination chat"
-                  className={clsx(
-                    "flex min-w-0 items-center gap-1 rounded-[var(--r-tag)] text-left",
-                    pickerOpen && "bg-fill-selected px-1 text-ink",
-                  )}
-                >
-                  <span className="truncate">
-                    {target ? `Inbox · ${target.name?.trim() || "Untitled chat"}` : "Inbox · new chat"}
-                  </span>
-                </button>
+          {/* Bottom-anchored: the window grows UPWARD, so the picker and
+              image chips render ABOVE the input row — the bar itself never
+              moves on screen. */}
+          <div ref={cardRef} className="flex flex-col">
+            <Collapse open={pickerOpen} mode="height">
+              {/* Spacing lives INSIDE the measured content (Height Collapse
+                  contract) so the reveal travels with it. */}
+              <div
+                className="border-b border-line-soft px-1.5 py-1.5"
+                role="listbox"
+                aria-label="Destination chat"
+              >
+                {items.map((item, index) => (
+                  <button
+                    key={item.sessionId ?? "new"}
+                    type="button"
+                    role="option"
+                    aria-selected={(target?.session_id ?? null) === item.sessionId}
+                    tabIndex={pickerOpen ? 0 : -1}
+                    onClick={() => choosePickerItem(item)}
+                    onMouseEnter={() => setPickerIndex(index)}
+                    className={clsx(
+                      "flex h-[30px] w-full items-center gap-2 rounded-[var(--r-control)] px-2 text-left text-sm",
+                      index === pickerIndex ? "bg-fill-selected text-ink" : "text-muted",
+                    )}
+                  >
+                    <span aria-hidden className="grid w-4 shrink-0 place-items-center text-faint">
+                      {item.sessionId === null && <Plus size={ICON.XS} />}
+                    </span>
+                    <span className="flex-1 truncate">{item.label}</span>
+                    {(target?.session_id ?? null) === item.sessionId && (
+                      <Check size={ICON.XS} className="shrink-0 text-accent" />
+                    )}
+                  </button>
+                ))}
+              </div>
+            </Collapse>
+            {images.length > 0 && (
+              <div className="flex items-center gap-1.5 px-5 pt-2.5">
                 {images.map((image, index) => (
                   <Tooltip key={index} label="Remove screenshot">
                     <button
                       type="button"
                       onClick={() => setImages((prev) => prev.filter((_, i) => i !== index))}
-                      className="h-6 w-8 shrink-0 overflow-hidden rounded-[var(--r-tag)] ring-1 ring-ink/15"
+                      className="h-8 w-11 shrink-0 overflow-hidden rounded-[var(--r-tag)] ring-1 ring-ink/15"
                     >
                       <img
                         src={`data:${image.media_type};base64,${image.data}`}
@@ -287,63 +313,70 @@ export function QuickCapture() {
                     </button>
                   </Tooltip>
                 ))}
+              </div>
+            )}
+            <div className="flex min-h-14 items-center gap-2 pl-5 pr-3">
+              <textarea
+                ref={inputRef}
+                rows={1}
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Tab" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+                    e.preventDefault();
+                    if (pickerOpen) closePicker();
+                    else openPicker();
+                    return;
+                  }
+                  if (pickerOpen && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+                    e.preventDefault();
+                    const delta = e.key === "ArrowDown" ? 1 : -1;
+                    setPickerIndex((index) => (index + delta + items.length) % items.length);
+                    return;
+                  }
+                  if (e.key !== "Enter") return;
+                  // Enter captures; ⇧↩ makes a newline; ⌘↩ keeps the old chord.
+                  if (e.shiftKey && !e.metaKey && !e.ctrlKey) return;
+                  e.preventDefault();
+                  if (pickerOpen) choosePickerItem(items[pickerIndex]);
+                  else onSubmit();
+                }}
+                placeholder="What needs attention?"
+                spellCheck={false}
+                autoCorrect="off"
+                autoCapitalize="off"
+                readOnly={exiting}
+                aria-label="Capture message"
+                className="min-w-0 flex-1 resize-none self-center overflow-y-auto bg-transparent py-1 text-lg leading-normal text-ink outline-none placeholder:text-faint"
+              />
+              <span className="flex shrink-0 items-center gap-1 self-center">
                 <IconButton
-                  size="xs"
                   onClick={() => void onCapture()}
                   disabled={capturing || exiting || images.length >= MAX_IMAGES}
                   aria-label="Capture screen"
                   title="Capture a screenshot"
-                  className="opacity-0 transition-opacity duration-check ease-out group-hover:opacity-100 focus-visible:opacity-100"
+                  tone="faint"
                 >
-                  <Camera size={ICON.XS} />
+                  <Camera size={ICON.SM} />
                 </IconButton>
-              </div>
-              <span className="flex shrink-0 items-center gap-1">
-                <span className="flex items-center gap-1" aria-label="Command Enter">
-                  <kbd className="arden-kbd">⌘</kbd>
-                  <kbd className="arden-kbd">Enter</kbd>
-                </span>
-                to send
+                <button
+                  type="button"
+                  onClick={() => (pickerOpen ? closePicker() : openPicker())}
+                  aria-expanded={pickerOpen}
+                  aria-label="Choose destination chat"
+                  className={clsx(
+                    "flex h-7 max-w-44 min-w-0 items-center gap-1 rounded-[var(--r-control)] px-2.5 text-xs",
+                    pickerOpen ? "bg-fill-selected text-ink" : "text-muted hover:bg-fill-hover hover:text-ink",
+                  )}
+                >
+                  <span className="truncate">
+                    {target ? target.name?.trim() || "Untitled chat" : "New chat"}
+                  </span>
+                  <ChevronDown size={ICON.XS} aria-hidden className="shrink-0 text-faint" />
+                </button>
               </span>
             </div>
-            <AnimatePresence>
-              {pickerOpen && (
-                <motion.div
-                  key="picker"
-                  initial={POSE_INLINE_POPOVER_IN}
-                  animate={POSE_INLINE_POPOVER_VISIBLE}
-                  exit={{ ...POSE_INLINE_POPOVER_OUT, transition: EXIT_FAST }}
-                  transition={POPOVER_ENTER_TRANSITION}
-                  className="mt-3 border-t border-line pt-1.5"
-                >
-                  {items.map((item, index) => (
-                    <button
-                      key={item.sessionId ?? "new"}
-                      type="button"
-                      onClick={() => choosePickerItem(item)}
-                      onMouseEnter={() => setPickerIndex(index)}
-                      className={clsx(
-                        "flex h-[30px] w-full items-center gap-2 rounded-[var(--r-mark)] px-2 text-left text-sm",
-                        index === pickerIndex ? "bg-fill-selected text-ink" : "text-muted",
-                      )}
-                    >
-                      <span aria-hidden className="grid w-4 shrink-0 place-items-center text-faint">
-                        {item.sessionId === null && <Plus size={ICON.XS} />}
-                      </span>
-                      <span className="flex-1 truncate">{item.label}</span>
-                      {(target?.session_id ?? null) === item.sessionId && (
-                        <Check size={ICON.XS} className="shrink-0 text-accent" />
-                      )}
-                    </button>
-                  ))}
-                </motion.div>
-              )}
-            </AnimatePresence>
           </div>
-          <footer className="flex h-[3.25rem] shrink-0 items-center justify-end gap-2 border-t border-line px-3">
-            <Button variant="quiet" onClick={onClose}>Cancel</Button>
-            <Button variant="primary" onClick={onSubmit} disabled={disabled}>Send</Button>
-          </footer>
         </motion.div>
       </div>
     </MotionConfig>

@@ -288,14 +288,16 @@ const DEFAULT_QUICK_SHORTCUT = "CommandOrControl+Shift+Space";
 // The visible sheet is 608px (the system-overlay contract); the transparent
 // window adds the renderer's 24px shadow gutters on both sides.
 const QUICK_WIDTH = 656;
-/** Base height: 48px header + 180px composer + 52px footer, plus the
- * renderer's 8px top and 36px bottom shadow gutters. The renderer requests a
- * taller window only while its destination picker is open. */
-const QUICK_BASE_HEIGHT = 324;
+/** Base height: the resting Spotlight-class bar — 56px input row with
+ * inline accessories, plus the renderer's 8px top and 36px bottom shadow
+ * gutters. The renderer's ResizeObserver requests taller bounds as the
+ * bar grows (draft lines, image chips, destination picker). */
+const QUICK_BASE_HEIGHT = 102;
 const QUICK_MAX_HEIGHT = 560;
-const QUICK_VISIBLE_TOP_GUTTER = 8;
-const QUICK_COMPACT_WIDTH = 46.25 * 16;
-const QUICK_SHORT_HEIGHT = 38 * 16;
+const QUICK_VISIBLE_BOTTOM_GUTTER = 36;
+/** The visible bar's bottom edge sits this fraction of the work area up
+ * from the bottom (companion-bar placement, not Spotlight's top third). */
+const QUICK_BOTTOM_FRACTION = 0.15;
 
 /** Register the quick-capture global shortcut, replacing whatever was
  *  previously bound. Pass an empty string / nullish value to clear.
@@ -506,23 +508,18 @@ function showQuickWindow() {
 }
 
 function presentQuickWindow(win) {
-  // Horizontally centered on the display that currently owns the cursor;
-  // the visible sheet starts at the system-overlay mock's 18vh anchor.
-  // Reset to base size first: a prior summon may have grown the window
-  // for the chat picker.
+  // Horizontally centered on the display that currently owns the cursor,
+  // riding LOW like a companion bar: the visible card's bottom edge sits
+  // ~15% of the work area up from the bottom. Reset to base size first:
+  // a prior summon may have grown the window for the chat picker.
   const cursorPoint = screen.getCursorScreenPoint();
   const display = screen.getDisplayNearestPoint(cursorPoint);
   const { x: dx, y: dy, width: dw, height: dh } = display.workArea;
   const x = Math.round(dx + (dw - QUICK_WIDTH) / 2);
-  // Match the overlay's responsive top anchor. The renderer's transparent
-  // top shadow gutter is subtracted so the visible card—not its window—lands
-  // exactly on the anchor.
-  const visibleTop = dh <= QUICK_SHORT_HEIGHT
-    ? 2.5 * 16
-    : dw <= QUICK_COMPACT_WIDTH
-      ? 4.5 * 16
-      : dh * 0.18;
-  const y = Math.max(dy, Math.round(dy + visibleTop - QUICK_VISIBLE_TOP_GUTTER));
+  // The renderer's transparent bottom shadow gutter is subtracted so the
+  // visible card — not its window — lands on the anchor.
+  const visibleBottom = dy + Math.round(dh * (1 - QUICK_BOTTOM_FRACTION));
+  const y = Math.max(dy, visibleBottom - (QUICK_BASE_HEIGHT - QUICK_VISIBLE_BOTTOM_GUTTER));
   win.setBounds({ x, y, width: QUICK_WIDTH, height: QUICK_BASE_HEIGHT });
   win.show();
   win.focus();
@@ -705,8 +702,9 @@ app.whenReady().then(() => {
     if (typeof height !== "number" || !Number.isFinite(height)) return;
     if (!quickWindow || quickWindow.isDestroyed()) return;
     const clamped = Math.round(Math.min(Math.max(height, QUICK_BASE_HEIGHT), QUICK_MAX_HEIGHT));
-    const { x, y } = quickWindow.getBounds();
-    quickWindow.setBounds({ x, y, width: QUICK_WIDTH, height: clamped });
+    // Bottom-anchored bar: growth extends upward so the input row stays put.
+    const { x, y, height: current } = quickWindow.getBounds();
+    quickWindow.setBounds({ x, y: y + (current - clamped), width: QUICK_WIDTH, height: clamped });
   });
 
   createWindow({ show: true });
