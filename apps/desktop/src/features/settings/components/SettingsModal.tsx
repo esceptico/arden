@@ -165,6 +165,23 @@ const TABS = SETTINGS_NAV_GROUPS.flatMap((group) =>
 );
 const SETTINGS_TAB_IDS = TABS.map((tab) => tab.id);
 
+// Which section you were last in is session state, not a Prefs field — same
+// treatment as the memory inspector's open/closed. Settings reopened on
+// Providers every single time, which is the sixth row in the rail and reads as
+// arbitrary once your providers are set up.
+const LAST_TAB_KEY = "arden.desktop.settings.tab";
+/** Providers only for a first-ever open: nothing works until one is connected. */
+const FIRST_RUN_TAB: TabId = "providers";
+
+function loadLastTab(): TabId | null {
+  try {
+    const stored = localStorage.getItem(LAST_TAB_KEY);
+    return SETTINGS_TAB_IDS.includes(stored as TabId) ? (stored as TabId) : null;
+  } catch {
+    return null;
+  }
+}
+
 export function SettingsModal({
   railOpen = true,
   compact = false,
@@ -190,7 +207,7 @@ export function SettingsModal({
   const contentRef = useRef<HTMLElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const [active, setActive] = useState<TabId>("providers");
+  const [active, setActive] = useState<TabId>(() => loadLastTab() ?? FIRST_RUN_TAB);
   const [navContextMenu, setNavContextMenu] = useState<SettingsNavContextMenuState | null>(null);
   const direction = useTabDirection(SETTINGS_TAB_IDS, active);
   const activeTab = TABS.find((tab) => tab.id === active) ?? TABS[0];
@@ -210,9 +227,19 @@ export function SettingsModal({
     return () => cancelAnimationFrame(frame);
   }, [open]);
 
+  // A deep link still wins; otherwise reopen where the user left off.
   useEffect(() => {
-    if (open) setActive(requestedTab ?? "providers");
+    if (open) setActive(requestedTab ?? loadLastTab() ?? FIRST_RUN_TAB);
   }, [open, requestedTab]);
+
+  useEffect(() => {
+    if (!open) return;
+    try {
+      localStorage.setItem(LAST_TAB_KEY, active);
+    } catch {
+      /* localStorage unavailable — non-fatal */
+    }
+  }, [active, open]);
 
   useLayoutEffect(() => {
     if (!open || !scrollRef.current) return;

@@ -63,8 +63,12 @@ test("settings takeover keeps the shared rail geometry and entrance targets", ()
   expect(styles).not.toContain(".settings-accent-swatch:hover");
   expect(styles).toMatch(/@media \(max-width: 32\.5rem\)[\s\S]*?\.settings-setting-row\s*\{\s*padding:\s*var\(--space-3\);/);
   expect(styles).not.toMatch(/@media \(max-width: 32\.5rem\)[\s\S]*?\.settings-section-actions\s*\{/);
-  expect(modal).toContain('useState<TabId>("providers")');
-  expect(modal).toContain('setActive(requestedTab ?? "providers")');
+  // Settings reopens where you left off; Providers is the first-run landing
+  // only, and a deep link still wins over both.
+  expect(modal).toContain("useState<TabId>(() => loadLastTab() ?? FIRST_RUN_TAB)");
+  expect(modal).toContain("setActive(requestedTab ?? loadLastTab() ?? FIRST_RUN_TAB)");
+  expect(modal).toContain('const LAST_TAB_KEY = "arden.desktop.settings.tab"');
+  expect(modal).toContain("localStorage.setItem(LAST_TAB_KEY, active)");
 });
 
 test("native Settings stays interactive above the draggable app shell", () => {
