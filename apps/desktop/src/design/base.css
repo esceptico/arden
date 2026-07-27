@@ -697,7 +697,10 @@
   --automation-footer-size: 3.375rem;
   --automation-row-size: 2.75rem;
   --automation-ledger-row-size: 2.5rem;
-  --automation-content-inset: .125rem;
+  /* 2px could not host a focus ring: the detail pane's scroller is
+     overflow:auto and --focus-ring reaches 4px outside a field's box, so a
+     focused Instructions box had its ring clipped at both sides. */
+  --automation-content-inset: .375rem;
   --automation-schedule-row-size: 2rem;
   --automation-schedule-token-size: 1.5rem;
   --automation-schedule-tape-size: 5rem;
