@@ -866,7 +866,6 @@
 
 .settings-integration-row > .switch-control {
   justify-self: center;
-  background: var(--gs-track-bg);
 }
 
 .settings-integration-disclosure {

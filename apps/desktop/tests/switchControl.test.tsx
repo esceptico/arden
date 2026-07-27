@@ -57,7 +57,7 @@ test("all call-site sizes preserve the canonical switch geometry", () => {
   }
 
   const component = read("../src/components/ui/SwitchControl.tsx");
-  const css = read("../src/styles.css");
+  const css = read("../src/design/foundation.css");
   expect(component).not.toContain("onPointerMove");
   expect(component).not.toContain("SPRING_LAYOUT");
   expect(css).toMatch(/\.switch-control\s*\{[\s\S]*?width:\s*2rem;[\s\S]*?height:\s*1\.125rem;/);
@@ -65,4 +65,23 @@ test("all call-site sizes preserve the canonical switch geometry", () => {
   expect(css).toContain("transform: translateX(0.875rem)");
   expect(css).toContain("inset: -0.25rem -0.1875rem");
   expect(css).toContain("transform var(--motion-feedback) var(--smooth-out)");
+});
+
+test("the switch track paints, because it is not behind a cascade layer", () => {
+  const foundation = read("../src/design/foundation.css");
+  const styles = read("../src/styles.css");
+  const settings = read("../src/design/settings.css");
+
+  // The track renders on a <button>, and base.css's unlayered
+  // `button { background: none }` beats ANY layered rule regardless of
+  // specificity. Layered (in styles.css's @layer components) the track
+  // background never applied at all — on and off differed only by knob
+  // position and read as the same control.
+  expect(foundation).not.toMatch(/^\s*@layer\b/m);
+  expect(foundation).toContain("background: var(--gs-track-bg);");
+  expect(foundation).toContain(".switch-control.switch-control-on {");
+  expect(styles).not.toContain(".switch-control");
+
+  // Which also retires the local restatement that used to patch one surface.
+  expect(settings).not.toMatch(/\.settings-integration-row > \.switch-control \{[^}]*background:/);
 });
