@@ -16,7 +16,7 @@ from uuid import uuid4
 from weakref import WeakValueDictionary
 from zoneinfo import ZoneInfo
 
-from arden.memory.artifacts import ArtifactMemoryStore
+from arden.memory.artifacts import ArtifactMemoryStore, is_reserved_managed_path
 from arden.memory.file_store import CanonicalFileRole, FilePageStore, ObservedFileChange
 from arden.memory.journal import JournalConflictError
 from arden.memory.merge import synthesis_base_rel
@@ -499,6 +499,10 @@ class PageEditService:
         )
         if pending is None or (pending.reconciliation != "pending" and not external_review) or pending.analysis is None:
             raise ValueError("pending page edit event not found")
+        try:
+            self._validate_page_path(pending.path)
+        except FileNotFoundError as exc:
+            raise ValueError("managed wiki pages cannot be retried through page edits") from exc
         applied = next(
             (event for event in events if event.reconciles_event_id == event_id and event.reconciliation == "applied"),
             None,
@@ -729,6 +733,7 @@ class PageEditService:
             raise ValueError("invalid persisted preview payload") from exc
         if preview.id != requested_id:
             raise ValueError("invalid persisted preview id")
+        self._validate_page_path(preview.path)
         if page_revision(candidate) != preview.result_revision:
             raise ValueError("invalid persisted preview candidate revision")
         current = self._resources.read_resource_bytes(preview.path)
@@ -793,7 +798,11 @@ class PageEditService:
         safe = Path(path)
         if safe.is_absolute() or not safe.parts or any(part in {"", ".", ".."} for part in safe.parts):
             raise FileNotFoundError(path)
-        if safe.parts[0] in {"raw", ".arden", ".index", ".maintenance"} or safe.suffix.casefold() != ".md":
+        if (
+            safe.parts[0] in {"raw", ".arden", ".index", ".maintenance"}
+            or is_reserved_managed_path(safe)
+            or safe.suffix.casefold() != ".md"
+        ):
             raise FileNotFoundError(path)
         return safe.as_posix()
 

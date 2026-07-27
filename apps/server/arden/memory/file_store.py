@@ -36,6 +36,7 @@ from uuid import uuid4
 from arden.constants import MEMORY_MIN_ENTITY_RECORDS, RRF_K
 from arden.database import serialize_embedding
 from arden.logging import get_logger
+from arden.memory.artifacts import is_reserved_managed_path
 from arden.memory.journal import JournalConflictError, VaultJournal
 from arden.memory.ledger import LedgerEntry, LedgerMeta
 from arden.memory.models import TRUST_DEFAULT, TRUST_LEVEL, Kind, Record, SourceRef, now_iso, union_source_refs
@@ -301,6 +302,8 @@ class FilePageStore:
                 except OSError:
                     continue
                 if stat.S_ISLNK(child_st.st_mode):
+                    continue
+                if is_reserved_managed_path(child.relative_to(self._root)):
                     continue
                 if stat.S_ISDIR(child_st.st_mode):
                     if child.name not in excluded:
@@ -1433,6 +1436,8 @@ class FilePageStore:
             raise ValueError("caller file role must be a CanonicalFileRole")
         if any(role not in {CanonicalFileRole.USER_PAGE, CanonicalFileRole.EVENT} for role in roles.values()):
             raise ValueError("projection caller files cannot enter a canonical commit")
+        if any(is_reserved_managed_path(path) for path in payload):
+            raise ValueError("managed wiki files cannot enter a canonical commit")
         return payload
 
     def _persist_many(

@@ -48,6 +48,7 @@ from arden.server.routers.session import router as session_router
 from arden.server.routers.settings import router as settings_router
 from arden.server.routers.setup import router as setup_router
 from arden.server.routers.skills import router as skills_router
+from arden.server.routers.wiki import router as wiki_router
 from arden.server.runtime import Runtime
 from arden.services.chat import resume_suspended_chat_run, submit_chat_message
 from arden.tools.core.scope import with_read_floor
@@ -356,11 +357,7 @@ async def lifespan(app: FastAPI):
                 parts.append(INTAKE_ADDENDUM.strip())
             if parts:
                 ctx_str = "\n\n".join(([ctx_str] if ctx_str else []) + parts)
-        message = (
-            AUTOMATION_PROMPT.render(prompt=automation.prompt, context=ctx_str)
-            if ctx_str
-            else automation.prompt
-        )
+        message = AUTOMATION_PROMPT.render(prompt=automation.prompt, context=ctx_str) if ctx_str else automation.prompt
         return await _dispatch_session_message(
             _loop_target_id(automation) or "",
             message,
@@ -562,5 +559,6 @@ app.include_router(skills_router)
 app.include_router(mcp_router)
 app.include_router(loops_router)
 app.include_router(memory_router)
+app.include_router(wiki_router)
 app.include_router(areas_router)
 app.include_router(asks_router)

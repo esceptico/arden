@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 from fastapi import HTTPException, Request
 
+import arden.database as database
 from arden.config import Config, get_config
 from arden.core.factory import AgentConfig
 from arden.integrations import ALL_INTEGRATIONS, IntegrationRegistry
@@ -19,6 +20,7 @@ from arden.notifiers.base import NotifierContext
 from arden.notifiers.service import NotifierService
 from arden.observability import init_tracing, shutdown_tracing
 from arden.operator.runner import OperatorDeps
+from arden.revisions import ManagedFileRepository
 from arden.server.app_control import AppControlService
 from arden.server.runtime.automation import AutomationRuntime
 from arden.server.runtime.config import RuntimeConfig
@@ -30,6 +32,7 @@ from arden.skills.registry import SkillRegistry
 from arden.skills.service import SkillService, get_skills_dirs
 from arden.tools.connections import ConnectionService
 from arden.tools.executor import ToolExecutor
+from arden.wiki import WikiRenameApprovalCoordinator, WikiRenameApprovalStore, WikiService
 
 _logger = get_logger(__name__)
 
@@ -54,12 +57,19 @@ class Runtime:
         self.skill_registry: SkillRegistry | None = None
         self.skill_service: SkillService | None = None
         self.notifier_service: NotifierService | None = None
-        self.dispatch_session_message: Callable[
-            [str, str, str | None, bool | None, list[dict] | None],
-            Awaitable[object],
-        ] | None = None
+        self.dispatch_session_message: (
+            Callable[
+                [str, str, str | None, bool | None, list[dict] | None],
+                Awaitable[object],
+            ]
+            | None
+        ) = None
         self.resume_suspended_chat_run: Callable[[str, str], Awaitable[object]] | None = None
         self.app_control: AppControlService | None = None
+        self.wiki_repository: ManagedFileRepository | None = None
+        self.wiki_service: WikiService | None = None
+        self.wiki_rename_coordinator: WikiRenameApprovalCoordinator | None = None
+        self._wiki_approval_conn: database.aiosqlite.Connection | None = None
 
         self._connected = False
         self._closing = False
@@ -197,6 +207,7 @@ class Runtime:
         init_tracing()
         llm_init(self.config)
         self.stores = await Stores.connect(self.config)
+        await self._init_wiki()
         await self.knowledge.connect(self.stores)
         self._init_skills()
         await self._init_notifiers()
@@ -215,6 +226,20 @@ class Runtime:
         self.skill_registry = SkillRegistry()
         self.skill_registry.load(get_skills_dirs())
         self.skill_service = SkillService(self.skill_registry)
+
+    async def _init_wiki(self) -> None:
+        wiki_root = self.config.memory_artifacts_dir / "wiki"
+        self.wiki_repository = ManagedFileRepository(
+            wiki_root / "pages",
+            history_root=wiki_root / ".wiki-history",
+        )
+        self.wiki_service = WikiService(self.wiki_repository)
+        # The wiki approval store must not share Stores' writer connection: it
+        # owns its own lock/transactions while persisting in sessions.db.
+        self._wiki_approval_conn = await database.connect(self.config.sessions_db_path)
+        approval_store = WikiRenameApprovalStore(self._wiki_approval_conn)
+        await approval_store.init_schema()
+        self.wiki_rename_coordinator = WikiRenameApprovalCoordinator(self.wiki_service, approval_store)
 
     async def _init_notifiers(self) -> None:
         self.notifier_service = NotifierService(
@@ -270,6 +295,9 @@ class Runtime:
         if self.mcp_manager:
             await self.mcp_manager.close()
         await self.knowledge.close()
+        if self._wiki_approval_conn:
+            await self._wiki_approval_conn.close()
+            self._wiki_approval_conn = None
         if self.stores:
             await self.stores.close()
         await llm_close()

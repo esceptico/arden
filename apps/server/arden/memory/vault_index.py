@@ -10,6 +10,7 @@ from pathlib import Path
 from urllib.parse import quote, unquote
 from uuid import uuid4
 
+from arden.memory.artifacts import is_reserved_managed_path
 from arden.memory.frontmatter import parse_frontmatter
 from arden.memory.markers import INDEX_END, INDEX_MARKER_PAIRS, INDEX_START, PATH_RE
 
@@ -132,6 +133,8 @@ class VaultIndexer:
                 if stat.S_ISLNK(child_st.st_mode):
                     continue
                 rel = child.relative_to(self.root)
+                if is_reserved_managed_path(rel):
+                    continue
                 if stat.S_ISDIR(child_st.st_mode):
                     if child.name in _ENGINE_DIRS:
                         continue

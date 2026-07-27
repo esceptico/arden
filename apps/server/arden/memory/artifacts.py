@@ -54,7 +54,10 @@ ARTIFACT_DIR_KINDS: dict[str, str] = {
 ARTIFACT_DIR_ORDER = {name: i for i, name in enumerate(ARTIFACT_DIR_KINDS)}
 _OPEN_RESOURCE_SUFFIXES = {".md", ".txt"}
 _ENGINE_RESOURCE_DIRS = {"raw", ".arden", ".index", ".maintenance"}
-MACHINE_PAGE_DIRS = _ENGINE_RESOURCE_DIRS | {"changelog"}
+# Managed trees have their own lifecycle and never enter the legacy artifact,
+# page-edit, watcher, or index pipeline.
+RESERVED_MANAGED_DIRS = frozenset({"wiki"})
+MACHINE_PAGE_DIRS = _ENGINE_RESOURCE_DIRS | {"changelog", *RESERVED_MANAGED_DIRS}
 _PAGE_EDIT_INTERNAL_PREFIXES = (
     Path("raw/events"),
     Path(".arden/maintenance/page-edit-previews"),
@@ -75,6 +78,11 @@ MAX_DOSSIER_SNIPPET_CHARS = 280
 # so render those instead of a "synthesis pending" placeholder that never resolves.
 _RECORD_LIST_PAGES = {"directives.md", "lessons.md", "references.md"}
 _RECORD_LIST_DIRS = {"insights"}  # insights/<month>.md — dream insights are the records
+
+
+def is_reserved_managed_path(path: Path | str) -> bool:
+    parts = Path(path).parts
+    return bool(parts) and parts[0] in RESERVED_MANAGED_DIRS
 
 
 def _is_record_list_page(rel: str) -> bool:
@@ -999,7 +1007,12 @@ class ArtifactMemoryStore:
         return self._open_anchored_regular(rel, flags, create_parents=create_parents)
 
     def _open_anchored_parent(self, rel: Path, *, create_parents: bool) -> tuple[int, str]:
-        if rel.is_absolute() or not rel.parts or any(part in {"", ".", ".."} for part in rel.parts):
+        if (
+            rel.is_absolute()
+            or not rel.parts
+            or any(part in {"", ".", ".."} for part in rel.parts)
+            or is_reserved_managed_path(rel)
+        ):
             raise FileNotFoundError(rel.as_posix())
         directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
         current = os.open(self.root, directory_flags)
@@ -1111,6 +1124,8 @@ class ArtifactMemoryStore:
             return False
         if any(part in _ENGINE_RESOURCE_DIRS for part in parts):
             return False
+        if is_reserved_managed_path(safe):
+            return False
         if safe.suffix.casefold() not in _OPEN_RESOURCE_SUFFIXES:
             return False
         return not (parts[0] == "raw" or parts[0] == ".arden")
@@ -1142,7 +1157,10 @@ class ArtifactMemoryStore:
             if stat.S_ISLNK(child_st.st_mode):
                 continue
             if stat.S_ISDIR(child_st.st_mode):
-                if child.name not in _ENGINE_RESOURCE_DIRS:
+                if (
+                    not is_reserved_managed_path(child.relative_to(self.root))
+                    and child.name not in _ENGINE_RESOURCE_DIRS
+                ):
                     out.extend(self._walk_resource_files(child))
             elif stat.S_ISREG(child_st.st_mode) and child.suffix.casefold() in _OPEN_RESOURCE_SUFFIXES:
                 rel = child.relative_to(self.root).as_posix()
@@ -1190,7 +1208,7 @@ class ArtifactMemoryStore:
     def _safe_path(self, rel: str) -> Path:
         self._assert_root_safe()
         safe = Path(rel)
-        if safe.is_absolute() or ".." in safe.parts:
+        if safe.is_absolute() or ".." in safe.parts or is_reserved_managed_path(safe):
             raise FileNotFoundError(rel)
         rel_posix = safe.as_posix()
         if rel_posix in ("", "."):
