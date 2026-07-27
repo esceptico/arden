@@ -176,3 +176,33 @@ test("Chat composer uses the mock's single surface focus ring", () => {
   expect(inputRule).toContain("outline: 0");
   expect(inputRule).toContain("box-shadow: none");
 });
+
+test("a link's favicon covers its fallback globe instead of dropping below it", () => {
+  // The favicon is chrome absolutely positioned inside its own 1em box, not
+  // prose content — so it is excluded from the flow rhythm every other image
+  // gets. It sets `margin: 0` itself, but at equal specificity and EARLIER in
+  // the file, so the generic rule won: inside a list item, where neither the
+  // `p img` nor the `li > :first-child` exception reaches it, the leading
+  // margin pushed it a full line below the globe and both showed at once.
+  expect(typeset).toContain(
+    ".md.typeset :where(img:not(.external-link__favicon), video) { max-width: 100%; height: auto; margin-block: var(--typeset-flow) 0;",
+  );
+  expect(typeset).toMatch(
+    /\.md\.typeset :where\(\.external-link__favicon\) \{[^}]*position: absolute;[^}]*inset: 0;[^}]*margin: 0;/,
+  );
+  expect(typeset).toMatch(
+    /\.md\.typeset :where\(\.external-link__icon\) \{[^}]*position: relative;[^}]*width: 1em;[^}]*height: 1em;/,
+  );
+
+  // And the globe is a fallback, not a backdrop — a favicon with any
+  // transparency showed it through from underneath. It goes when the real icon
+  // arrives, and stays when none does (onError removes the img instead).
+  const markdown = readFileSync(new URL("../src/components/ui/Markdown.tsx", import.meta.url), "utf8");
+  expect(markdown).toContain(
+    'onLoad={(event) => event.currentTarget.parentElement?.setAttribute("data-favicon", "loaded")}',
+  );
+  expect(markdown).toContain("onError={(event) => event.currentTarget.remove()}");
+  expect(typeset).toContain(
+    '.md.typeset :where(.external-link__icon[data-favicon="loaded"] .external-link__fallback) { display: none; }',
+  );
+});

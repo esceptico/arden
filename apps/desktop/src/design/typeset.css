@@ -67,6 +67,7 @@
 .md.typeset :where(.external-link__icon) { position: relative; width: 1em; height: 1em; margin-inline-end: .3em; display: inline-flex; align-items: center; justify-content: center; color: var(--typeset-muted); vertical-align: -.14em; }
 .md.typeset :where(.external-link__favicon) { position: absolute; inset: 0; width: 1em; height: 1em; margin: 0; display: block; border-radius: .18em; object-fit: contain; }
 .md.typeset :where(.external-link__fallback) { width: .9em; height: .9em; }
+.md.typeset :where(.external-link__icon[data-favicon="loaded"] .external-link__fallback) { display: none; }
 .md.typeset :where(:is(h1, h2, h3, h4, h5, h6) a) { font-weight: inherit; }
 .md.typeset :where(mark) { padding: .05em .15em; border-radius: .2em; color: inherit; background-color: color-mix(in oklab, oklch(.86 .17 95) 40%, transparent); }
 .md.typeset :where(abbr[title]) { cursor: help; text-decoration-line: underline; text-decoration-style: dotted; text-underline-offset: .2em; }
@@ -93,7 +94,13 @@
 .md.typeset :where(hr + h1, hr + h2, hr + h3, hr + h4) { margin-block-start: var(--typeset-flow); }
 .md.typeset :where(.footnotes, [data-footnotes]) { margin-block-start: calc(var(--typeset-flow) * 2); padding-block-start: var(--typeset-flow); border-block-start: 1px solid var(--typeset-rule); color: var(--typeset-muted); font-size: .875em; }
 .md.typeset :where(math[display="block"]) { margin-block: var(--typeset-flow) 0; padding-block: .25em; overflow-x: auto; overflow-y: hidden; }
-.md.typeset :where(img, video) { max-width: 100%; height: auto; margin-block: var(--typeset-flow) 0; border-radius: var(--radius, .5em); }
+/* A link's favicon is not prose content — it is chrome positioned inside its
+   own 1em box — so it takes none of the flow rhythm. It sets `margin: 0`
+   itself, but at equal specificity and earlier in this file, which the generic
+   rule then overrode: inside a list item (where no `p img` or `li > :first-child`
+   exception reaches it) the leading margin pushed the absolutely positioned
+   favicon a full line below the fallback globe, showing both. */
+.md.typeset :where(img:not(.external-link__favicon), video) { max-width: 100%; height: auto; margin-block: var(--typeset-flow) 0; border-radius: var(--radius, .5em); }
 .md.typeset :where(p img) { margin-block-start: 0; }
 .md.typeset :where(figure) { margin-block: var(--typeset-flow) 0; margin-inline: 0; }
 .md.typeset :where(figcaption, caption) { margin-block-start: calc(.75em / .875); color: var(--typeset-muted); font-size: .875em; text-align: center; }

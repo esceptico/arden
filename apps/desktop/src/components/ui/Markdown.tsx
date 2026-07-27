@@ -236,6 +236,11 @@ function Anchor({ href, children, ...rest }: React.AnchorHTMLAttributes<HTMLAnch
             alt=""
             decoding="async"
             referrerPolicy="no-referrer"
+            // The globe is a fallback, not a backdrop: a favicon with any
+            // transparency (most of them) leaves it showing through from
+            // underneath. Retire it the moment the real icon arrives, and keep
+            // it when none does.
+            onLoad={(event) => event.currentTarget.parentElement?.setAttribute("data-favicon", "loaded")}
             onError={(event) => event.currentTarget.remove()}
           />
         </span>
