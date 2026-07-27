@@ -15,6 +15,7 @@ import {
   SettingsSurface,
 } from "@/features/settings/components/SettingsPage";
 import { Tab, Tabs } from "@/components/ui/Tabs";
+import { BlurSwap } from "@/components/ui/BlurSwap";
 import { providerReadinessSummary } from "@/features/settings/lib/providerConnection";
 import {
   canSaveCustomModelDraft,
@@ -285,6 +286,7 @@ export function ProvidersTab() {
             >
               {connectedProviders.map(renderProvider)}
             </SettingsDataSection>
+            <WebSearchSection />
             <SettingsDataSection
               title="Set up more"
               detail={`${setupProviders.length} available`}
@@ -292,7 +294,6 @@ export function ProvidersTab() {
             >
               {setupProviders.map(renderProvider)}
             </SettingsDataSection>
-            <WebSearchSection />
           </>
         )}
       </div>
@@ -339,18 +340,25 @@ function WebSearchSection() {
         <SettingsSettingRow
           title="Search provider"
           hint={
-            mode === "auto" ? (
-              <>
-                Auto prefers Exa when its key is connected and falls back to DuckDuckGo.{" "}
-                <strong className="font-medium text-ink-soft">
-                  Currently using {resolved === "exa" ? "Exa" : resolved === "ddgs" ? "DuckDuckGo" : "none"}.
-                </strong>
-              </>
-            ) : mode === "none" ? (
-              "Web search tools are disabled for the agent."
-            ) : (
-              `All agent web searches go through ${mode === "exa" ? "Exa" : "DuckDuckGo"}.`
-            )
+            /* Fixed two-line footprint: the Auto hint wraps to two lines and
+               the others are one — without the reserve the whole card jumps
+               on every switch. The swap itself rides BlurSwap. */
+            <span className="block min-h-[2lh]">
+              <BlurSwap swapKey={`${mode}:${resolved}`}>
+                {mode === "auto" ? (
+                  <>
+                    Auto prefers Exa when its key is connected and falls back to DuckDuckGo.{" "}
+                    <strong className="font-medium text-ink-soft">
+                      Currently using {resolved === "exa" ? "Exa" : resolved === "ddgs" ? "DuckDuckGo" : "none"}.
+                    </strong>
+                  </>
+                ) : mode === "none" ? (
+                  "Web search tools are disabled for the agent."
+                ) : (
+                  `All agent web searches go through ${mode === "exa" ? "Exa" : "DuckDuckGo"}.`
+                )}
+              </BlurSwap>
+            </span>
           }
           control={
             <div className="flex flex-col items-end gap-1">

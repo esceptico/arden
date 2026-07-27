@@ -118,7 +118,7 @@ const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
         id: "providers",
         label: "Providers",
         icon: Key01,
-        intro: "Connect model providers here. Server connection and tool integrations stay separate.",
+        intro: "Model providers and the agent's search engine. Server connection and tool integrations stay separate.",
       },
       {
         id: "integrations",
