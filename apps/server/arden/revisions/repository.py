@@ -110,6 +110,10 @@ class ManagedFileRepository:
                 return self._load_commit(prior["commit_id"])
 
             old_head, current = self._load_current_tree()
+            if change_set.expected_head is not None and old_head != change_set.expected_head:
+                raise RevisionConflictError(
+                    f"current head changed: expected {change_set.expected_head!r}, found {old_head!r}"
+                )
             self._assert_current_files(current)
             resulting, changes, payloads = self._apply(change_set.operations, current)
             rows = self._materialization_rows(current, resulting)
@@ -714,6 +718,7 @@ class ManagedFileRepository:
             "actor": change_set.actor,
             "origin": change_set.origin,
             "reason": change_set.reason,
+            "expected_head": change_set.expected_head,
             "operations": operations,
         }
         return sha256(canonical_jsonl(request)), sha256(change_set.idempotency_key.encode())

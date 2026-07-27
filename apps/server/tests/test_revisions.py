@@ -31,13 +31,18 @@ from arden.revisions._codec import make_version, tree_record
 from arden.revisions._storage import canonical_jsonl, sha256
 
 
-def _changes(*operations, key: str = "key") -> ChangeSet:
+def _changes(
+    *operations,
+    key: str = "key",
+    expected_head: str | None = None,
+) -> ChangeSet:
     return ChangeSet(
         operations=operations,
         actor="tester",
         origin="test",
         reason="exercise revision contract",
         idempotency_key=key,
+        expected_head=expected_head,
     )
 
 
@@ -110,6 +115,35 @@ def test_per_resource_cas_allows_unrelated_changes_but_rejects_stale_version(tmp
 
     assert repo.read("a") == b"a1"
     assert repo.read("b") == b"b1"
+
+
+def test_expected_head_rejects_unrelated_changes_but_idempotent_retry_wins_first(
+    tmp_path: Path,
+) -> None:
+    repo = _repo(tmp_path)
+    head = repo.commit(_changes(Create("a", "a.md", b"a0"), key="create"))
+    a0 = repo.get("a")
+    planned = _changes(
+        Update("a", a0.version_id, b"a1"),
+        key="planned",
+        expected_head=head.commit_id,
+    )
+    repo.commit(_changes(Create("b", "b.md", b"b0"), key="unrelated"))
+
+    with pytest.raises(RevisionConflictError, match="current head changed"):
+        repo.commit(planned)
+    assert repo.read("a") == b"a0"
+
+    fresh_head = repo.head
+    assert fresh_head is not None
+    fresh = _changes(
+        Update("a", a0.version_id, b"a1"),
+        key="fresh",
+        expected_head=fresh_head,
+    )
+    committed = repo.commit(fresh)
+    assert repo.commit(fresh) == committed
+    assert repo.read("a") == b"a1"
 
 
 def test_resource_version_token_does_not_repeat_after_value_reverts(tmp_path: Path) -> None:

@@ -128,6 +128,7 @@ class ChangeSet:
     origin: str
     reason: str
     idempotency_key: str
+    expected_head: str | None = None
 
     def __post_init__(self) -> None:
         operations = _tuple(self.operations, "operations")
@@ -140,6 +141,8 @@ class ChangeSet:
         _require_text(self.origin, "origin")
         _require_text(self.reason, "reason")
         _require_text(self.idempotency_key, "idempotency_key")
+        if self.expected_head is not None:
+            _require_text(self.expected_head, "expected_head")
 
 
 @dataclass(frozen=True)
