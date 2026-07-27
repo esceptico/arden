@@ -964,9 +964,15 @@
 }
 
 .settings-integration-detail {
+  /* The card carries pill buttons 12px in from its corner, which clamp to a
+     14px radius at control height — so a fixed 8px corner read TIGHTER than
+     its own contents, the wrong way round. Concentric with those pills wants
+     26px; --r-panel is 23px, within 3px of it, already the radius of every
+     other panel here, and follows the corner profile instead of pinning one
+     value across both. */
   margin: 12px 14px 14px;
   padding: 4px 12px;
-  border-radius: var(--r-house);
+  border-radius: var(--r-panel);
   background: var(--paper);
   box-shadow: inset 0 0 0 1px var(--line);
 }
