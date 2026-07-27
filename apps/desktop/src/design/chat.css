@@ -687,9 +687,11 @@
   transition: opacity var(--motion-dissolve) var(--motion-dissolve-ease);
 }
 
+/* The rail hangs 12px back into the gap beside the sidebar. With the sidebar
+   gone there is no gap to hang into and it left the window entirely, so it
+   takes the same breathing room from the window edge instead. */
 .board-shell-content[data-sidebar-hidden="true"] .board-chat-rail {
-  opacity: 0;
-  pointer-events: none;
+  left: calc(var(--conversation-rail-inline-offset) * -1);
 }
 
 .board-chat-rail__band { gap: 0; }
@@ -740,7 +742,10 @@
   max-width: var(--conversation-rail-label-max-width);
   padding: 4px 8px;
   overflow: hidden;
-  border-radius: var(--r-house);
+  /* A small slab that floats over the conversation — same class of object as
+     a tooltip, so it takes the corner profile the same way instead of holding
+     a fixed 8px while everything around it switches. */
+  border-radius: var(--tooltip-radius);
   color: var(--ink);
   background: color-mix(in oklab, var(--surface-3) 90%, transparent);
   box-shadow: var(--shadow-3);

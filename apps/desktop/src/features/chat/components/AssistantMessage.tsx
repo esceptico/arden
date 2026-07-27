@@ -54,7 +54,6 @@ export const AssistantMessage = memo(function AssistantMessage({
         streaming={isStreaming}
         externalLinkFavicons
         typeset
-        conversationAnchors
         className="board-assistant__prose text-base leading-[1.5] text-ink break-words"
       />
       {isFinal && sourceTurnId && sourceCount > 0 && (
@@ -64,8 +63,6 @@ export const AssistantMessage = memo(function AssistantMessage({
           aria-label={`Open ${sourceCount} ${sourceCount === 1 ? "source" : "sources"} for this turn`}
           data-source-footer="true"
           data-inspector-trigger
-          data-chat-rail-anchor
-          data-chat-rail-label={`${sourceCount} ${sourceCount === 1 ? "source" : "sources"}`}
           className="board-assistant__sources arden-row flex w-fit items-center gap-1.5 px-1.5 py-1 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         >
           <BookOpen01 aria-hidden size={ICON.XS} />

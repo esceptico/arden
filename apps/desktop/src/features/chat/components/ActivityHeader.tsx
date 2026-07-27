@@ -14,8 +14,6 @@ export function ActivityHeader({
   motionDisabled,
   onToggle,
   expanded,
-  railAnchor = false,
-  railLabel,
 }: {
   done: boolean;
   label?: ActivityLabel;
@@ -26,8 +24,6 @@ export function ActivityHeader({
   motionDisabled?: boolean;
   onToggle?: () => void;
   expanded?: boolean;
-  railAnchor?: boolean;
-  railLabel?: string;
 }) {
   const word = count === 1 ? "call" : "calls";
   // A settled turn reads as one quiet sentence — "Worked for 1m 59s" /
@@ -49,8 +45,6 @@ export function ActivityHeader({
       onClick={onToggle}
       disabled={!interactive}
       aria-expanded={interactive ? expanded : undefined}
-      data-chat-rail-anchor={railAnchor ? "" : undefined}
-      data-chat-rail-label={railLabel}
       className="board-trace__toggle"
     >
       <SquareTerminal aria-hidden />

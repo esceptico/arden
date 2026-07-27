@@ -109,7 +109,6 @@ export function Markdown({
   streaming = false,
   typeset = false,
   provenance = false,
-  conversationAnchors = false,
   externalLinkFavicons = false,
 }: {
   content: string;
@@ -121,7 +120,6 @@ export function Markdown({
    *  inline chips. Only the memory wiki view opts in; chat prose stays literal. */
   provenance?: boolean;
   /** Opt chat prose into the explicit conversation-outline contract. */
-  conversationAnchors?: boolean;
   /** Decorate completed assistant-response links with cached website icons. */
   externalLinkFavicons?: boolean;
 }) {
@@ -133,9 +131,6 @@ export function Markdown({
     a: Anchor,
     code: InlineCode,
     td: TableCell,
-    ...(conversationAnchors
-      ? { h2: RailHeading, p: RailParagraph }
-      : {}),
   };
   return (
     <div className={clsx("md", typeset && "typeset typeset-notes", className)}>
@@ -174,14 +169,6 @@ export function Markdown({
       </ExternalLinkFaviconContext.Provider>
     </div>
   );
-}
-
-function RailHeading(props: React.HTMLAttributes<HTMLHeadingElement>) {
-  return <h2 {...props} data-chat-rail-anchor />;
-}
-
-function RailParagraph(props: React.HTMLAttributes<HTMLParagraphElement>) {
-  return <p {...props} data-chat-rail-anchor />;
 }
 
 function Anchor({ href, children, ...rest }: React.AnchorHTMLAttributes<HTMLAnchorElement>) {

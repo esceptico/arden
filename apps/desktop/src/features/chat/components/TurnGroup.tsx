@@ -120,8 +120,6 @@ export function TurnGroup({
         durationMs={turn?.durationMs}
         motionDisabled={motionDisabled}
         expanded={expanded}
-        railAnchor
-        railLabel={headerLabel}
         onToggle={() => {
           onManualResize?.();
           setExpanded((value) => !value);

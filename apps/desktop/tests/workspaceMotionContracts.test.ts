@@ -116,9 +116,16 @@ test("conversation rail indexes explicit production anchors and restores the moc
   expect(rail).toContain("CONVERSATION_RAIL.sigmaX");
   expect(rail).toContain("CONVERSATION_RAIL.sigmaY");
   expect(rail).toContain('behavior: reducedMotion ? "auto" : "smooth"');
+  // The rail is an outline of YOUR turns. Anchoring assistant prose, activity
+  // steps and artifacts too made it a tick per paragraph — 63 marks in one
+  // conversation, navigable by nothing in particular.
   expect(user).toContain("data-chat-rail-anchor");
-  expect(assistant).toContain("conversationAnchors");
-  expect(trace).toContain("data-chat-rail-anchor");
+  expect(assistant).not.toContain("data-chat-rail-anchor");
+  expect(assistant).not.toContain("conversationAnchors");
+  expect(trace).not.toContain("data-chat-rail-anchor");
+  // And the label is the prompt: the anchor is the whole article, so
+  // textContent would drag the action row's timestamp in with it.
+  expect(user).toContain("data-chat-rail-label={railLabel || undefined}");
 });
 
 test("full-page takeovers use the shared staged entrance", () => {

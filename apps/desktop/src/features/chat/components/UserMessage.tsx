@@ -98,6 +98,9 @@ export const UserMessage = memo(function UserMessage({ id }: { id: string }) {
 
   const visibleText = goalMatch ?? (skillMatch ? skillMatch.rest : message.content);
   const showBubble = visibleText.trim().length > 0 || Boolean(skillMatch);
+  // The anchor is the whole article, so textContent would sweep in the action
+  // row's timestamp — the rail label has to be the prompt itself.
+  const railLabel = visibleText.trim().replace(/\s+/g, " ");
   const images = message.images ?? [];
   const hasContent = images.length > 0 || Boolean(goalMatch) || showBubble;
 
@@ -110,6 +113,7 @@ export const UserMessage = memo(function UserMessage({ id }: { id: string }) {
       )}
       data-id={id}
       data-chat-rail-anchor
+      data-chat-rail-label={railLabel || undefined}
       data-source-focus={sourceFocused ? "true" : undefined}
       data-source-index={message.sourceIndex}
     >

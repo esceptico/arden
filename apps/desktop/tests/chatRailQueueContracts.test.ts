@@ -26,7 +26,11 @@ test("conversation rails use exact transform-only marks and continuous label blu
   expect(runtimeRailStyles).toMatch(/board-chat-rail__mark[\s\S]*?transform var\(--motion-furniture\) var\(--motion-dissolve-ease\)/);
   expect(runtimeRailStyles).toMatch(/board-chat-rail__tick\s*\{[\s\S]*?height:\s*9px;/);
   expect(runtimeRailStyles).toMatch(/board-chat-rail__mark\s*\{[\s\S]*?height:\s*var\(--tab-line-size\);[\s\S]*?border-radius:\s*var\(--r-control\);/);
-  expect(runtimeRailStyles).toMatch(/data-sidebar-hidden="true"\] \.board-chat-rail\s*\{[\s\S]*?opacity:\s*0;[\s\S]*?pointer-events:\s*none;/);
+  // The rail used to be hidden with the sidebar because it sat 12px INTO that
+  // gutter and left the window without it. It keeps the same breathing room
+  // from the window edge instead of disappearing.
+  expect(runtimeRailStyles).not.toMatch(/data-sidebar-hidden="true"\] \.board-chat-rail\s*\{[^}]*opacity:\s*0;/);
+  expect(runtimeRailStyles).toMatch(/data-sidebar-hidden="true"\] \.board-chat-rail\s*\{\s*left:\s*calc\(var\(--conversation-rail-inline-offset\) \* -1\);/);
   expect(runtimeRailStyles).not.toContain("var(--ease)");
 });
 

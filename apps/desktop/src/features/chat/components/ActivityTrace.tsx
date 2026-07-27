@@ -91,7 +91,6 @@ export function ActivityTail({
             entry.kind === "workflow" ? (
               <motion.div
                 key={`wf:${entry.workflow.workflowId}`}
-                data-chat-rail-anchor
                 layout={suppressMotion ? false : "position"}
                 className="board-trace__artifact mt-1 space-y-1"
                 initial={suppressMotion ? false : TRACE_ROW_ENTER}
@@ -104,7 +103,6 @@ export function ActivityTail({
             ) : entry.kind === "html_widget" ? (
               <motion.div
                 key={`hw:${entry.item.id}`}
-                data-chat-rail-anchor
                 layout={suppressMotion ? false : "position"}
                 className="board-trace__artifact mt-1 space-y-1"
                 initial={suppressMotion ? false : TRACE_ROW_ENTER}
@@ -125,7 +123,6 @@ export function ActivityTail({
                   {buildRollingList(entry.items, max as number).map((item, idx, arr) => (
                     <motion.div
                       key={item.id}
-                      data-chat-rail-anchor
                       layout={suppressMotion ? false : "position"}
                       initial={suppressMotion ? false : TRACE_ROW_ENTER}
                       animate={TRACE_ROW_VISIBLE}
@@ -162,14 +159,14 @@ export function ActivityTail({
       {entries.map((entry, i) => {
         if (entry.kind === "workflow") {
           return (
-            <div key={`wf:${entry.workflow.workflowId}`} data-chat-rail-anchor className="board-trace__artifact mt-1 space-y-1">
+            <div key={`wf:${entry.workflow.workflowId}`} className="board-trace__artifact mt-1 space-y-1">
               <ExpandableWorkflowCard workflow={entry.workflow} />
             </div>
           );
         }
         if (entry.kind === "html_widget") {
           return (
-            <div key={`hw:${entry.item.id}`} data-chat-rail-anchor className="board-trace__artifact mt-1 space-y-1">
+            <div key={`hw:${entry.item.id}`} className="board-trace__artifact mt-1 space-y-1">
               <HtmlWidgetCard item={entry.item} />
             </div>
           );
@@ -197,7 +194,6 @@ export function ActivityTail({
                   {rows.map((row, idx) => (
                     <div
                       key={row.type === "group" ? `g:${row.key}` : row.item.id}
-                      data-chat-rail-anchor
                       className="board-trace__row min-w-0"
                     >
                       {row.type === "group" ? (
