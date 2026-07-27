@@ -928,6 +928,15 @@ textarea.arden-field {
   pointer-events: auto;
 }
 [data-toast-host][data-modal-blocked="true"] .arden-toast { pointer-events: none; }
+/* Dismiss survives the block. Blocking exists so a toast cannot steal a click
+   from an overlay or navigate out from under it — closing one does neither, and
+   a notification you cannot clear is worse than one you can. It has to be
+   forced visible too: its reveal keys off hovering the card, which no longer
+   takes pointer events. */
+[data-toast-host][data-modal-blocked="true"] .arden-toast__close {
+  pointer-events: auto;
+  opacity: 1;
+}
 .arden-toast__body {
   flex: 1;
   min-width: 0;

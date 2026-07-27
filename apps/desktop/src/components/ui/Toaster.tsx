@@ -172,7 +172,6 @@ function ToastCard(
       <IconButton
         size="xs"
         tone="faint"
-        disabled={blocked}
         aria-label="Dismiss notification"
         onClick={() => dismissToast(toast.id)}
         className="arden-toast__close opacity-0 transition-opacity duration-check ease-out group-hover/toast:opacity-100 focus-visible:opacity-100"
