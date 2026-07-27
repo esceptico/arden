@@ -413,6 +413,15 @@
   gap: var(--space-3);
 }
 
+/* A text-only heading is smaller than its 28px band, so it reads with air
+   above the card below. A 28px button FILLS that band and lands flush on
+   the card — its bottom edge reads as truncated. Grow the band so the
+   action sits centred with air on both sides. */
+.automation-detail__section-heading:has(> .arden-button) {
+  min-height: 2.25rem;
+  margin-bottom: var(--space-1);
+}
+
 .automation-detail__section-heading h2 {
   margin: 0;
   color: var(--ink-soft);
@@ -531,7 +540,10 @@
   }
 }
 
-.automation-detail__control-row + .automation-detail__control-row {
+/* General sibling, not adjacent: the model picker renders a hidden <input>
+   between rows, so `+` silently dropped the separator above Auto-Approve.
+   "Any row that has a row before it" is the real contract. */
+.automation-detail__control-row ~ .automation-detail__control-row {
   border-top: 1px solid var(--edge);
 }
 
@@ -798,6 +810,37 @@
   gap: var(--space-2);
 }
 
+/* Instructions read view: prose, not a keyhole textarea — capped so the
+   pane's control rows stay above the fold, scrolled with the house fade. */
+/* Chrome on the wrapper, scrolling on the child: .scroll-fade masks the
+   element it sits on, so putting it on the card dissolved the card's own
+   hairline at both ends. */
+.automation-detail__prompt-read {
+  overflow: hidden;
+  border-radius: var(--r-panel);
+  background: var(--panel);
+  box-shadow: var(--shadow-2);
+}
+
+.automation-detail__prompt-read-scroll {
+  max-height: 11rem;
+  padding: var(--space-3) .875rem;
+  overflow-y: auto;
+}
+
+.automation-detail__prompt-read-scroll p {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.automation-detail__prompt-read-scroll p[data-empty] { color: var(--faint); }
+
+/* Same shell as the trigger peek — one instrument, two contents. */
+.automation-prompt-peek,
 .automation-trigger-peek {
   position: absolute;
   z-index: var(--z-peek);
@@ -810,6 +853,41 @@
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   overflow: hidden;
+}
+
+.automation-prompt-peek__body {
+  min-height: 0;
+  padding: var(--space-3) calc(var(--space-3) + var(--space-0-5));
+  display: grid;
+}
+
+.automation-prompt-peek__body textarea {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  padding: var(--space-3);
+  resize: none;
+  border: 0;
+  outline: 0;
+  border-radius: var(--r-house);
+  color: var(--ink);
+  background: var(--panel-soft);
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+.automation-prompt-peek__body textarea:focus {
+  box-shadow: var(--focus-ring);
+}
+
+.automation-prompt-peek__footer {
+  padding: var(--space-3) calc(var(--space-3) + var(--space-0-5));
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
 }
 
 .automation-trigger-peek__header {

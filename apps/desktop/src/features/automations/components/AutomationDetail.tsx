@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ChevronDown,
   Clock,
@@ -43,6 +43,7 @@ import {
   shortModelLabel,
 } from "@/components/ui/ModelPickers";
 import { ScheduleTriggerPeek } from "@/features/automations/components/ScheduleTriggerPeek";
+import { PeekSurface } from "@/components/workspace/PeekSurface";
 import { AnchoredPopover } from "@/components/ui/AnchoredPopover";
 import { ContextMenu, type ContextMenuEntry, type ContextMenuPosition } from "@/components/ui/ContextMenu";
 import { Button } from "@/components/ui/Button";
@@ -122,11 +123,20 @@ function groupLabel(automation: Automation | null): string {
   return "automations / yours";
 }
 
-function SectionHeading({ children, meta }: { children: string; meta?: string }) {
+function SectionHeading({
+  children,
+  meta,
+  action,
+}: {
+  children: string;
+  meta?: string;
+  action?: ReactNode;
+}) {
   return (
     <header className="automation-detail__section-heading">
       <h2>{children}</h2>
       {meta && <span>{meta}</span>}
+      {action}
     </header>
   );
 }
@@ -195,6 +205,10 @@ export function AutomationDetail({
   const [moreOpen, setMoreOpen] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [triggerDraft, setTriggerDraft] = useState<Schedule | null>(null);
+  // Instructions are read in the pane and edited in a peek: the prose is long
+  // and the pane is an instrument panel of compact rows. Null = closed; the
+  // draft means Cancel/Escape leave the form untouched (trigger-peek contract).
+  const [promptDraft, setPromptDraft] = useState<string | null>(null);
   const [runContextMenu, setRunContextMenu] = useState<RunContextMenuState | null>(null);
   const [descriptionState, setDescriptionState] = useState<"idle" | "loading" | "ready" | "error">(
     automation?.description ? "ready" : "idle",
@@ -450,16 +464,33 @@ export function AutomationDetail({
 
       <div className="automation-detail__scroll scroll-thin scroll-fade" data-page-enter-item data-page-skeleton>
         <section className="automation-detail__section">
-          <SectionHeading>Instructions</SectionHeading>
-          <textarea
-            value={form.prompt}
-            onChange={(event) => updateForm({ prompt: event.target.value })}
-            placeholder="What should the agent do when this automation fires?"
-            spellCheck={false}
-            rows={seed.kind === "draft" ? 7 : 4}
-            readOnly={builtin}
-            className="automation-detail__prompt"
-          />
+          <SectionHeading
+            action={seed.kind !== "draft" && !builtin ? (
+              <Button size="sm" onClick={() => setPromptDraft(form.prompt)}>Edit</Button>
+            ) : undefined}
+          >
+            Instructions
+          </SectionHeading>
+          {seed.kind === "draft" ? (
+            /* Drafts are write-first: a new automation opening as a read-only
+               box with an Edit button would be a worse first run. */
+            <textarea
+              value={form.prompt}
+              onChange={(event) => updateForm({ prompt: event.target.value })}
+              placeholder="What should the agent do when this automation fires?"
+              spellCheck={false}
+              rows={7}
+              className="automation-detail__prompt"
+            />
+          ) : (
+            <div className="automation-detail__prompt-read">
+              <div className="automation-detail__prompt-read-scroll scroll-thin scroll-fade">
+                <p data-empty={form.prompt.trim() ? undefined : "true"}>
+                  {form.prompt.trim() || "No instructions yet."}
+                </p>
+              </div>
+            </div>
+          )}
           {seed.kind === "draft" && !form.prompt.trim() && (
             <div className="automation-detail__templates">
               <span>Start with a template</span>
@@ -677,6 +708,52 @@ export function AutomationDetail({
           </>
         )}
       </footer>
+
+      <PeekSurface
+        open={promptDraft !== null}
+        onClose={() => setPromptDraft(null)}
+        className="automation-prompt-peek surface-peek"
+        ariaLabel="Edit instructions"
+        layer="automation-prompt-peek"
+        focusOnOpen
+        focusSelector=".automation-prompt-peek textarea"
+        closeOnOutsidePointerDown
+      >
+        <header className="automation-trigger-peek__header arden-peek-rule-below">
+          <b>Instructions</b>
+          <IconButton
+            data-peek-close
+            onClick={() => setPromptDraft(null)}
+            aria-label="Close instructions"
+            title="Close instructions"
+          >
+            <X size={ICON.SM} />
+          </IconButton>
+        </header>
+        <div className="automation-prompt-peek__body">
+          <textarea
+            value={promptDraft ?? ""}
+            onChange={(event) => setPromptDraft(event.target.value)}
+            placeholder="What should the agent do when this automation fires?"
+            spellCheck={false}
+            aria-label="Instructions"
+          />
+        </div>
+        <footer className="automation-prompt-peek__footer arden-peek-rule-above">
+          <Button variant="quiet" size="md" onClick={() => setPromptDraft(null)}>Cancel</Button>
+          <Button
+            variant="primary"
+            size="md"
+            disabled={(promptDraft ?? "").trim().length === 0}
+            onClick={() => {
+              updateForm({ prompt: promptDraft ?? "" });
+              setPromptDraft(null);
+            }}
+          >
+            Save instructions
+          </Button>
+        </footer>
+      </PeekSurface>
 
       <ScheduleTriggerPeek
         open={triggerDraft !== null}
