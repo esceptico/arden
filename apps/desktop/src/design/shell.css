@@ -401,23 +401,35 @@
    column (the Areas filter / theme-toggle axis: rail pad + space-1 inset).
    No flex gap — zero-width collapsed buttons would still contribute gaps and
    push the resting status off axis; spacing rides on margins instead. */
+/* In FLOW (grid column 2), not absolute: the title must truncate against
+   whatever the meta shows, or a persistent "live" label collides with a long
+   name. Everything here collapses to zero width when hidden, so a resting row
+   still gives the title the whole rail. */
 .workspace-rail__session-meta {
-  position: absolute;
-  inset: 0 var(--space-1) 0 auto;
   display: flex;
   align-items: center;
+  padding-right: var(--space-1);
 }
 
 .workspace-rail__session .workspace-rail__status {
   /* Resting live/done labels right-align with nav-row meta (the row's own
      12px inline padding), not with the button axis. */
-  margin-right: var(--space-2);
+  max-width: 0;
+  margin-right: 0;
+  overflow: hidden;
   opacity: 0;
+  white-space: nowrap;
+  transition:
+    max-width var(--motion-feedback) var(--smooth-out),
+    margin-right var(--motion-feedback) var(--smooth-out),
+    opacity var(--motion-feedback) var(--smooth-out);
 }
 
 .workspace-rail__session .workspace-rail__status[data-tone],
 .workspace-rail__session:hover .workspace-rail__status,
 .workspace-rail__session:focus-within .workspace-rail__status {
+  max-width: 6rem;
+  margin-right: var(--space-2);
   opacity: 1;
 }
 
