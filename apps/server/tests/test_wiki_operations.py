@@ -113,6 +113,25 @@ def test_rename_is_atomic_and_preserves_link_bytes(tmp_path: Path) -> None:
     assert service.apply_rename(plan) == commit
 
 
+def test_root_title_link_uses_new_title_not_lowercase_path(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    target = create_page(title="Old", page_id="target")
+    source = create_page(title="Source", page_id="source", body=b"[[Old]]")
+    _seed(repo, ("target", "old.md", target), ("source", "source.md", source))
+    service = WikiService(repo)
+
+    plan = service.prepare_rename(
+        "target",
+        new_path="new.md",
+        new_title="New",
+        expected_version=repo.get("target").version_id,
+        base_head=repo.head,
+    )
+    service.apply_rename(plan)
+
+    assert repo.read("source").endswith(b"[[New]]")
+
+
 def test_rename_rejects_forged_plan_without_changes(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     target = create_page(title="Old", page_id="target")

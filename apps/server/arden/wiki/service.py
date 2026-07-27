@@ -249,8 +249,7 @@ class WikiService:
                 link_count += len(references)
                 page_count += 1
                 targets = {
-                    reference.node: self._rename_target(reference.node, record, new_path, new_title)
-                    for reference in references
+                    reference.node: self._rename_target(reference.node, new_path, new_title) for reference in references
                 }
                 rewritten_body = rewrite_page_targets(source.page.body.decode("utf-8"), targets).encode("utf-8")
                 if source.page.page_id == page_id:
@@ -463,10 +462,9 @@ class WikiService:
         raise WikiValidationError(f"redirect resource already exists: {resource_id}")
 
     @staticmethod
-    def _rename_target(node: WikilinkNode, current: WikiPageRecord, new_path: str, new_title: str) -> str:
+    def _rename_target(node: WikilinkNode, new_path: str, new_title: str) -> str:
         assert node.page is not None
-        current_paths = {current.resource.path.casefold(), current.resource.path[:-3].casefold()}
-        if node.page.casefold() in current_paths:
+        if "/" in node.page or node.page.casefold().endswith(".md"):
             return new_path if node.page.casefold().endswith(".md") else new_path[:-3]
         return new_title
 
