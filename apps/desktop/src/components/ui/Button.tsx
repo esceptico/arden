@@ -8,16 +8,20 @@ import { type ArdenIcon } from "@/components/icons";
 
 /**
  * Text button primitive — sibling to {@link IconButton}. Collapses the
- * recurring inlined `<button>` patterns (primary / secondary / ghost) onto
- * one component so every action button shares the same height, radius,
- * motion, and disabled treatment. For icon-only controls use IconButton.
+ * recurring inlined `<button>` patterns onto one component so every action
+ * button shares the same height, radius, motion, and disabled treatment.
+ * For icon-only controls use IconButton.
  *
- * Variants reproduce the existing hand-rolled classes 1:1, so swapping an
- * inlined button for `<Button>` is visually a no-op.
- *   primary   — solid ink slab (the main CTA: "New", "Save & reconnect")
- *   secondary — bordered, quiet fill on hover (neutral secondary action)
- *   ghost     — text-only, tints on hover (low-emphasis / inline action)
- *   danger    — destructive text, bad-tinted hover
+ * Fill policy (see docs/design-language.md → Buttons): the ink slab is
+ * RATIONED — at most one per visible surface, and only on that surface's
+ * commit action (Send, Save, Approve). Everything else takes the unmarked
+ * default. That is why `secondary` is the default variant: a bare <Button>
+ * can never accidentally out-shout the commit.
+ *   primary   — solid ink slab; the surface's single commit action
+ *   secondary — raised paper (default); the workhorse for everything else
+ *   quiet     — tonal, no shadow; dismissals and third-rank actions
+ *   ghost     — text-only, tints on hover (inline/low-emphasis)
+ *   danger    — destructive text, bad-tinted hover; never the default action
  */
 type ButtonVariant = "primary" | "secondary" | "ghost" | "quiet" | "danger";
 type ButtonSize = "sm" | "md";
@@ -37,7 +41,7 @@ const BUTTON_ICON_PX = 16;
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
   {
-    variant = "primary",
+    variant = "secondary",
     size = "md",
     leadingIcon: Leading,
     trailingIcon: Trailing,

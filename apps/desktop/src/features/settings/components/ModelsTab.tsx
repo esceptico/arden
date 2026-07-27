@@ -53,7 +53,7 @@ export function ModelsTab() {
           title="Couldn't load models"
           message="The server is reachable, but the model list did not load."
           action={
-            <Button variant="secondary" size="sm" onClick={() => void fetchServerConfig()}>
+            <Button size="sm" onClick={() => void fetchServerConfig()}>
               Retry
             </Button>
           }

@@ -137,11 +137,11 @@ function Section({
                 onSelect(entry);
               }}
               onMouseMove={() => setIndex(idx)}
-              className="app-row group/cmd flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-ink-soft"
+              className="app-row group/cmd flex items-center gap-2.5 px-2.5 py-1.5 rounded-[var(--r-row)] text-ink-soft"
             >
               <span
                 className={clsx(
-                  "shrink-0 grid place-items-center w-5 h-5 rounded-md transition-colors duration-check ease-out",
+                  "shrink-0 grid place-items-center w-5 h-5 rounded-[var(--r-icon)] transition-colors duration-check ease-out",
                   active ? "text-ink-soft" : "text-faint",
                 )}
               >

@@ -74,6 +74,39 @@ Every interactive primitive defines default, hover, focus-visible, active, disab
 - The control is the confirmation for local effects. Toasts are reserved for effects that land elsewhere.
 - Destructive actions require explicit language and a recoverable path where possible.
 
+### Button fills
+
+The ink slab is rationed. `secondary` (raised paper) is the unmarked default —
+a bare `<Button>` can never accidentally out-shout a commit.
+
+- `primary` (ink fill, paper text): the surface's single commit action — Send,
+  Save, Create, Approve. At most one per visible surface; zero on surfaces
+  with no commit semantics (settings pages apply changes live).
+- `secondary` (raised paper, the default): the workhorse — alternatives
+  beside a primary, standalone actions in content, retries, utilities.
+- `quiet` (tonal, no shadow): dismissals and third-rank actions — Cancel,
+  Not now, Later.
+- `ghost` / `danger`: bare text affordances; destructive stays red on
+  transparent, confirms before arming, and is never the default action.
+
+Dark theme inverts through the ink/paper tokens; variants never hardcode fills.
+
+### Action placement
+
+Where a control lives states its scope; groups never migrate per page.
+
+- Page header (`SettingsPageAction`): page-scoped, non-committal utilities —
+  Refresh, and "+ new" when the page is one collection.
+- Section header: "+ new" only when a page holds several collections and the
+  add is section-scoped.
+- Row: at most one inline affordance; management belongs in the peek.
+- Peek/modal footer: the commit pair, right-aligned in macOS order — Cancel
+  (quiet), then primary. Destructive sits far left and is never the default.
+- Settings bodies carry no Save/Apply — changes apply live. Only explicit
+  editors (peeks, forms) get a footer.
+- Close (X) sits top-right of a takeover or peek header, never alongside a
+  Cancel that means the same thing.
+
 ## Overlays and focus
 
 The shared overlay order is shell/sticky, popover, peek, scrim, sheet, nested popover, toast, tooltip. Named z-index tokens must encode these roles; arbitrary numeric z-index values are forbidden in page files.

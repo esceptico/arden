@@ -18,7 +18,7 @@ export function CopyButton({ getValue }: { getValue: () => string }) {
       onClick={() => void onCopy()}
       aria-label={copied ? "Copied" : "Copy"}
       className={clsx(
-        "ml-auto inline-flex items-center gap-1 h-6 px-1.5 rounded-md text-xs font-medium tracking-[-0.005em] transition-[background-color,color,scale] duration-check ease-out active:scale-[0.97]",
+        "ml-auto inline-flex items-center gap-1 h-6 px-1.5 rounded-[var(--r-control)] text-xs font-medium tracking-[-0.005em] transition-[background-color,color,scale] duration-check ease-out active:scale-[0.97]",
         copied ? "text-accent-strong bg-accent-soft" : "text-muted hover:bg-surface-soft hover:text-ink",
       )}
     >

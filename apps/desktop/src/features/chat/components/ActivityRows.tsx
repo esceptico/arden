@@ -93,7 +93,7 @@ export function ItemButton({ item, onOpen, last }: RowProps) {
     <ThinkingStep
       node={<StepGlyph iconKey={iconKey} errored={errored} />}
       last={last}
-      className="board-trace-row rounded-lg px-0.5 py-1.5 transition-colors hover:bg-surface-soft/60"
+      className="board-trace-row rounded-[var(--r-row)] px-0.5 py-1.5 transition-colors hover:bg-surface-soft/60"
       style={depth > 0 ? { paddingLeft: depth * NEST_PX } : undefined}
     >
       <button
@@ -139,7 +139,7 @@ export function ToolGroupRow({
     <ThinkingStep
       node={<StepGlyph iconKey={iconKey} errored={errored} />}
       last={last}
-      className="board-trace-row rounded-lg px-0.5 py-1.5 transition-colors hover:bg-surface-soft/60"
+      className="board-trace-row rounded-[var(--r-row)] px-0.5 py-1.5 transition-colors hover:bg-surface-soft/60"
       style={depth > 0 ? { paddingLeft: depth * NEST_PX } : undefined}
     >
       <button
@@ -217,14 +217,14 @@ function AgentRow({
   return (
     <ThinkingStep
       last={last}
-      className="board-trace-row group/agent rounded-lg px-0.5 py-1.5 transition-colors hover:bg-surface-soft/60"
+      className="board-trace-row group/agent rounded-[var(--r-row)] px-0.5 py-1.5 transition-colors hover:bg-surface-soft/60"
       style={depth > 0 ? { paddingLeft: depth * NEST_PX } : undefined}
       node={
         <span className="relative grid h-4 w-4 place-items-center">
           <span
             aria-hidden
             className={clsx(
-              "grid h-4 w-4 place-items-center rounded-md transition-opacity duration-row ease-out",
+              "grid h-4 w-4 place-items-center rounded-[var(--r-icon)] transition-opacity duration-row ease-out",
               running ? "bg-accent-soft text-accent-strong" : "bg-surface-soft text-faint",
               canStop && "group-hover/agent:opacity-0",
             )}
@@ -240,7 +240,7 @@ function AgentRow({
                   event.stopPropagation();
                   if (item.runId) void cancelSubagent(item.runId, item.id);
                 }}
-                className="absolute inset-0 grid place-items-center rounded-md border-0 p-0 m-0 bg-surface-soft text-faint opacity-0 pointer-events-none transition-[opacity,color] duration-row ease-out group-hover/agent:pointer-events-auto group-hover/agent:opacity-100 hover:text-bad focus-visible:pointer-events-auto focus-visible:opacity-100"
+                className="absolute inset-0 grid place-items-center rounded-[var(--r-icon)] border-0 p-0 m-0 bg-surface-soft text-faint opacity-0 pointer-events-none transition-[opacity,color] duration-row ease-out group-hover/agent:pointer-events-auto group-hover/agent:opacity-100 hover:text-bad focus-visible:pointer-events-auto focus-visible:opacity-100"
               >
                 <Stop size={ICON.XS} />
               </button>

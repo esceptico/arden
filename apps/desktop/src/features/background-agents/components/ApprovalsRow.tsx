@@ -29,7 +29,6 @@ function HubApprovalCard({
       <p>{detail}</p>
       <footer>
         <Button
-          variant="secondary"
           size="sm"
           onClick={() => void respondToApproval(approval.toolId, false)}
         >

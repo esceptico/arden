@@ -153,7 +153,7 @@ export function RadioGroup({
           data-radio-highlight
           className={clsx(
             "pointer-events-none absolute bg-fill-selected",
-            dense ? "rounded-md" : "rounded-lg",
+            dense ? "rounded-[var(--r-house)]" : "rounded-[var(--r-house)]",
           )}
           initial={false}
           animate={{
@@ -171,7 +171,7 @@ export function RadioGroup({
           <motion.div
             aria-hidden
             data-radio-highlight
-            className="pointer-events-none absolute z-[var(--z-control-interaction)] rounded-lg ring-2 ring-accent"
+            className="pointer-events-none absolute z-[var(--z-control-interaction)] rounded-[var(--r-house)] ring-2 ring-accent"
             initial={false}
             animate={{
               left: focusRect.left - 2,
@@ -240,7 +240,7 @@ export function RadioGroupItem({
       className={clsx(
         "group relative z-[var(--z-control-content)] flex items-center outline-none",
         "hover:bg-fill-hover transition-colors duration-check ease-out",
-        dense ? "gap-2 rounded-md px-2 py-[5px]" : "gap-2.5 rounded-lg px-3 py-2",
+        dense ? "gap-2 rounded-[var(--r-house)] px-2 py-[5px]" : "gap-2.5 rounded-[var(--r-house)] px-3 py-2",
       )}
     >
       <span className="relative h-[15px] w-[15px] shrink-0">

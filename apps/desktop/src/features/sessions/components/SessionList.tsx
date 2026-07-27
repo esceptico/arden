@@ -258,7 +258,7 @@ export function SessionList() {
                                 ? `Show ${Math.min(REVEAL_STEP, remaining)} more session${remaining === 1 ? "" : "s"}`
                                 : "Show fewer sessions"
                             }
-                            className="workspace-rail__show-more arden-row app-row grid grid-cols-[16px_minmax(0,1fr)] items-center gap-2 w-full px-2 py-0.5 rounded-lg text-faint hover:text-ink transition-colors"
+                            className="workspace-rail__show-more arden-row app-row grid grid-cols-[16px_minmax(0,1fr)] items-center gap-2 w-full px-2 py-0.5 text-faint hover:text-ink transition-colors"
                           >
                             <span className="text-left text-base">
                               {remaining > 0 ? `Show ${Math.min(REVEAL_STEP, remaining)} more` : "Show less"}

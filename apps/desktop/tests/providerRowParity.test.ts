@@ -7,6 +7,6 @@ const source = readFileSync(
 );
 
 test("env-managed providers reuse the canonical mockup button geometry", () => {
-  expect(source).toContain('<span className="btn arden-button" data-variant="secondary">');
+  expect(source).toContain('<span className="btn arden-button">');
   expect(source).not.toContain("rounded-md border border-line-soft bg-surface-soft");
 });

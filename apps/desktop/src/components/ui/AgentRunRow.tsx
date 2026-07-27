@@ -75,7 +75,7 @@ function AgentGlyph({
       <span
         aria-hidden
         className={clsx(
-          "grid place-items-center rounded-md transition-opacity duration-row ease-out",
+          "grid place-items-center rounded-[var(--r-icon)] transition-opacity duration-row ease-out",
           glyphToneClass(status),
           canStop && "group-hover/run:opacity-0",
         )}
@@ -93,7 +93,7 @@ function AgentGlyph({
             event.stopPropagation();
             onStop?.();
           }}
-          className="absolute inset-0 grid place-items-center rounded-md border-0 p-0 m-0 bg-surface-soft text-faint opacity-0 pointer-events-none transition-[opacity,color,scale] duration-row ease-out group-hover/run:pointer-events-auto group-hover/run:opacity-100 hover:text-bad active:scale-[0.97] focus-visible:pointer-events-auto focus-visible:opacity-100 disabled:opacity-[0.6]"
+          className="absolute inset-0 grid place-items-center rounded-[var(--r-icon)] border-0 p-0 m-0 bg-surface-soft text-faint opacity-0 pointer-events-none transition-[opacity,color,scale] duration-row ease-out group-hover/run:pointer-events-auto group-hover/run:opacity-100 hover:text-bad active:scale-[0.97] focus-visible:pointer-events-auto focus-visible:opacity-100 disabled:opacity-[0.6]"
         >
           <Square size={ICON.XS} strokeWidth={2} />
         </button>
@@ -407,7 +407,7 @@ export function AgentRunContent({
             }}
             placeholder="Message this agent…"
             spellCheck={false}
-            className="w-full h-7 px-2 rounded-md bg-surface-soft focus:bg-surface-sunken text-xs text-ink-soft placeholder:text-muted outline-none border border-transparent focus:border-line transition-colors duration-check disabled:opacity-60"
+            className="w-full h-7 px-2 rounded-[var(--r-control)] bg-surface-soft focus:bg-surface-sunken text-xs text-ink-soft placeholder:text-muted outline-none border border-transparent focus:border-line transition-colors duration-check disabled:opacity-60"
           />
         </div>
       </Collapse>
@@ -438,7 +438,7 @@ export function AgentRunRow({
       data-active={active || undefined}
       className={clsx(
         "group/run py-1",
-        active && "app-row rounded-lg -mx-1.5 px-1.5",
+        active && "app-row rounded-[var(--r-row)] -mx-1.5 px-1.5",
       )}
     >
       <AgentRunContent

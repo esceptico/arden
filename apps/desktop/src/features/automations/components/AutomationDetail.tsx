@@ -467,7 +467,6 @@ export function AutomationDetail({
                 {TEMPLATES.map((template) => (
                   <Button
                     key={template.id}
-                    variant="secondary"
                     size="sm"
                     leadingIcon={template.icon}
                     onClick={() => {
@@ -637,7 +636,6 @@ export function AutomationDetail({
         ) : (
           <>
             <Button
-              variant="secondary"
               size="md"
               className="automation-detail__pause"
               onClick={() => void toggle()}

@@ -143,7 +143,7 @@ export function ServerForm({
         />
 
         {transportLocked ? (
-          <div className="inline-flex items-center h-8 px-3 rounded-md bg-surface-soft border border-line-soft text-sm font-medium text-ink-soft self-start">
+          <div className="inline-flex items-center h-8 px-3 rounded-[var(--r-house)] bg-surface-soft border border-line-soft text-sm font-medium text-ink-soft self-start">
             {transport === "stdio" ? "STDIO" : "Streamable HTTP"}
           </div>
         ) : (

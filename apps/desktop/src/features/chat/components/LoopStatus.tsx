@@ -111,7 +111,7 @@ export function LoopStatusBar() {
           {loops.map((loop) => {
             const runAt = loop.next_run_at ? Date.parse(loop.next_run_at) : Number.POSITIVE_INFINITY;
             return (
-              <div key={loop.task_id} className="flex items-start gap-2 rounded-lg px-1.5 py-1.5">
+              <div key={loop.task_id} className="flex items-start gap-2 rounded-[var(--r-row)] px-1.5 py-1.5">
                 <IconButton
                   size="xs"
                   tone="faint"
@@ -125,7 +125,7 @@ export function LoopStatusBar() {
                 <button
                   type="button"
                   onClick={() => setOpenLoop(loop)}
-                  className="min-w-0 text-left -my-1.5 -mr-1.5 py-1.5 pr-1.5 rounded-md hover:bg-surface-soft transition-colors"
+                  className="min-w-0 text-left -my-1.5 -mr-1.5 py-1.5 pr-1.5 rounded-[var(--r-row)] hover:bg-surface-soft transition-colors"
                   title="Show full prompt"
                 >
                   <div className="truncate text-sm text-ink-soft">{loop.prompt}</div>

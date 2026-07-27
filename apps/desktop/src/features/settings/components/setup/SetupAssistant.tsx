@@ -164,8 +164,9 @@ export function SetupAssistant({
         {error && <p className="setup-sheet-error" role="alert">{error}</p>}
       </div>
       <footer className="sheet-actions dp-sheet-footer">
-        <Button variant="secondary" className="sheet-cancel" onClick={onClose}>Cancel</Button>
+        <Button className="sheet-cancel" onClick={onClose}>Cancel</Button>
         <Button
+          variant="primary"
           className="sheet-primary"
           onClick={() => void handlePrimary()}
           disabled={busy || (isMcp && value.trim().length === 0)}

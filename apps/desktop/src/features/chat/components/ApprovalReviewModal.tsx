@@ -89,7 +89,7 @@ export function ApprovalReviewModal() {
                 </p>
               </div>
               {toolItem && (
-                <Button variant="secondary" onClick={() => viewTool(toolItem)}>
+                <Button onClick={() => viewTool(toolItem)}>
                   Inspect tool call
                 </Button>
               )}

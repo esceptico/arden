@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { ServerList } from "@/features/settings/components/mcp/ServerList";
+import { SettingsPage } from "@/features/settings/components/SettingsPage";
 
 let root: Root | null = null;
 
@@ -18,14 +19,16 @@ test("empty MCP state explains both setup paths without a decorative surface", a
 
   await act(async () => {
     root?.render(
-      <ServerList
-        servers={[]}
-        loadError={null}
-        onAdd={() => {}}
-        onEdit={() => {}}
-        onChanged={async () => {}}
-        onAssistant={() => {}}
-      />,
+      <SettingsPage section="capabilities" title="MCP servers" intro="">
+        <ServerList
+          servers={[]}
+          loadError={null}
+          onAdd={() => {}}
+          onEdit={() => {}}
+          onChanged={async () => {}}
+          onAssistant={() => {}}
+        />
+      </SettingsPage>,
     );
   });
 

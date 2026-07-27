@@ -87,7 +87,7 @@ export function ToolsTab() {
           title="Couldn't load tools"
           message={settingsErrorMessage(loadError)}
           action={
-            <Button variant="secondary" size="sm" onClick={() => void refresh()}>
+            <Button size="sm" onClick={() => void refresh()}>
               Retry
             </Button>
           }

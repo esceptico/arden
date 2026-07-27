@@ -123,7 +123,7 @@ export function CustomModelsPanel({
             spellCheck={false}
             autoComplete="off"
           />
-          <Button onClick={onCreate} disabled={!canSaveCustomModelDraft(draft) || creating}>
+          <Button variant="primary" onClick={onCreate} disabled={!canSaveCustomModelDraft(draft) || creating}>
             <IconSwap
               state={creating ? "b" : "a"}
               iconA={<Plus size={ICON.MD} />}

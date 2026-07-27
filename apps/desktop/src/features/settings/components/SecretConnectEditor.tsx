@@ -52,11 +52,11 @@ export function SecretConnectEditor({
         spellCheck={false}
         autoComplete="off"
       />
-      <Button onClick={onConnect} disabled={!value.trim() || pending}>
+      <Button variant="primary" onClick={onConnect} disabled={!value.trim() || pending}>
         {pending && spinner}
         Connect
       </Button>
-      <Button variant="secondary" onClick={onCancel} disabled={pending}>
+      <Button onClick={onCancel} disabled={pending}>
         Cancel
       </Button>
     </motion.div>

@@ -125,7 +125,7 @@ export function MemoryEditReview({
               <h1 className="text-lg font-semibold text-ink">Page changed elsewhere</h1>
               <p className="break-words text-xs text-muted">Compare both changes from your saved base. Your draft was not changed.</p>
             </div>
-            <Button className="ml-auto" variant="secondary" size="sm" aria-label="Back to draft" disabled={pending} onClick={onCancel}>Back to draft</Button>
+            <Button className="ml-auto" size="sm" aria-label="Back to draft" disabled={pending} onClick={onCancel}>Back to draft</Button>
             <Button size="sm" aria-label="Continue with current page" disabled={pending} onClick={onRebase}>Continue with current</Button>
           </header>
           <div className="memory-edit-review__conflict grid min-h-0 min-w-0 flex-1 gap-3 overflow-auto lg:grid-cols-2">

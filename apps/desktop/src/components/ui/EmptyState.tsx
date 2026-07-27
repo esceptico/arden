@@ -19,7 +19,7 @@ export function EmptyState({ icon: Icon = Inbox, children, hint, action, size = 
   return (
     <div className={clsx("grid place-items-center px-6 text-center", className)}>
       <div className={clsx("flex max-w-[260px] flex-col items-center", sm ? "gap-2.5" : "gap-3")}>
-        <div className={clsx("grid place-items-center rounded-xl bg-surface-soft text-faint", sm ? "size-9" : "size-12")}>
+        <div className={clsx("grid place-items-center rounded-[var(--r-house)] bg-surface-soft text-faint", sm ? "size-9" : "size-12")}>
           <Icon size={sm ? 16 : 22} strokeWidth={1.75} />
         </div>
         <div className="text-sm text-muted">{children}</div>

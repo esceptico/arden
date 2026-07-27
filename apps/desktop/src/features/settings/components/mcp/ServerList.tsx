@@ -2,7 +2,7 @@ import { Plus } from "@/components/icons";
 import type { MCPServer } from "@/api/settings";
 import { settingsErrorMessage } from "@/features/settings/lib/settingsLoadState";
 import { SettingsConnectionHint, SettingsInlineError } from "@/features/settings/components/SettingsNotice";
-import { SettingsSection, SettingsSurface } from "@/features/settings/components/SettingsPage";
+import { SettingsPageAction, SettingsSection, SettingsSurface } from "@/features/settings/components/SettingsPage";
 import { ICON } from "@/lib/icons";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
@@ -25,12 +25,14 @@ export function ServerList({
   onAssistant: () => void;
 }) {
   return (
-    <SettingsSection
-      title="Servers"
-      action={
-        !loadError && (
-          <div className="flex flex-wrap gap-2">
-            <Button variant="secondary" size="sm" onClick={onAssistant}>
+    <SettingsSection title="Servers">
+      {/* Page-scoped utilities live on the page header (the placement
+          grammar in docs/design-language.md); this action list unmounts
+          with the list view, so the form views keep a clean header. */}
+      {!loadError && (
+        <SettingsPageAction>
+          <span className="flex items-center gap-2">
+            <Button size="sm" onClick={onAssistant}>
               Guided setup
             </Button>
             <IconButton
@@ -41,10 +43,9 @@ export function ServerList({
             >
               <Plus size={ICON.XS} />
             </IconButton>
-          </div>
-        )
-      }
-    >
+          </span>
+        </SettingsPageAction>
+      )}
       {servers === null ? (
         <SettingsTabSkeleton variant="cards" label="Loading MCP servers…" />
       ) : loadError ? (
@@ -53,7 +54,7 @@ export function ServerList({
             title="Couldn't load MCP servers"
             message={settingsErrorMessage(loadError)}
             action={
-              <Button variant="secondary" size="sm" onClick={() => void onChanged()}>
+              <Button size="sm" onClick={() => void onChanged()}>
                 Retry
               </Button>
             }

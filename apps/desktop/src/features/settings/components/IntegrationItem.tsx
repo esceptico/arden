@@ -86,7 +86,6 @@ export function IntegrationItem({
         ) : (
           <Button
             size="sm"
-            variant="secondary"
             className="settings-integration-action"
             disabled={action.disabled}
             onClick={action.onClick}
@@ -126,7 +125,6 @@ export function IntegrationItem({
                 <div className="settings-integration-detail-actions">
                   <Button
                     size="sm"
-                    variant="secondary"
                     disabled={row.actionDisabled}
                     onClick={row.onAction}
                   >

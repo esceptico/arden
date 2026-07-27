@@ -300,7 +300,7 @@ function ApprovalCard({
                 {structured.body.label}
               </div>
               <pre
-                className="m-0 font-mono text-xs text-ink-soft whitespace-pre-wrap break-words rounded-md border border-line-soft bg-bg-main/30 p-2 max-h-[8.4em] overflow-hidden"
+                className="m-0 font-mono text-xs text-ink-soft whitespace-pre-wrap break-words rounded-[var(--r-house)] border border-line-soft bg-bg-main/30 p-2 max-h-[8.4em] overflow-hidden"
               >
                 {structured.body.text}
               </pre>
@@ -348,7 +348,7 @@ function ApprovalCard({
             placeholder="Why? — sent to the agent as guidance"
             className="flex-1 min-w-0"
           />
-          <Button variant="secondary" size="sm" onClick={submitDeny}>
+          <Button size="sm" onClick={submitDeny}>
             Deny
           </Button>
         </div>
@@ -377,7 +377,6 @@ function ApprovalCard({
               Reject all
             </Button>
             <Button
-              variant="secondary"
               size="sm"
               tabIndex={interactive ? 0 : -1}
               onClick={() => onDismissWith("approve", () => respondToAllApprovals(true))}
@@ -398,7 +397,6 @@ function ApprovalCard({
           <MessageSquareText size={ICON.SM} strokeWidth={2} />
         </IconButton>
         <Button
-          variant="secondary"
           size="sm"
           tabIndex={interactive ? 0 : -1}
           onClick={() => onDismissWith("reject", () => respondToApproval(toolId, false))}

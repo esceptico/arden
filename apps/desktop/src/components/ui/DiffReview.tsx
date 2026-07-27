@@ -62,7 +62,7 @@ function DecisionRadio({
       disabled={disabled}
       onClick={onSelect}
       className={clsx(
-        "min-w-0 flex-1 rounded-md border px-2 py-1.5 text-xs font-medium transition-colors duration-check",
+        "min-w-0 flex-1 rounded-[var(--r-house)] border px-2 py-1.5 text-xs font-medium transition-colors duration-check",
         selected
           ? "border-accent bg-accent-soft text-ink"
           : "border-line-soft text-muted hover:border-line-strong hover:text-ink",
@@ -132,7 +132,7 @@ function MemoryEffects({
           <li
             key={operation.id}
             className={clsx(
-              "rounded-lg bg-surface-soft/55 p-2.5",
+              "rounded-[var(--r-house)] bg-surface-soft/55 p-2.5",
               operation.kind === "ASK" && "border border-warn/30 bg-warn/5",
             )}
           >
@@ -183,7 +183,7 @@ function ModeTabs({
     event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')[next]?.focus();
   };
   return (
-    <div role="tablist" aria-label="Diff view" aria-disabled={disabled} onKeyDown={onKeyDown} className="flex rounded-md bg-surface-soft p-0.5">
+    <div role="tablist" aria-label="Diff view" aria-disabled={disabled} onKeyDown={onKeyDown} className="flex rounded-[var(--r-house)] bg-surface-soft p-0.5">
       {modes.map((candidate) => (
         <button
           key={candidate}
@@ -244,7 +244,7 @@ export function DiffReview({
       data-layout={layout}
       data-motion={reduced ? "reduced" : "standard"}
       aria-label={`Review changes to ${after.path || before.path}`}
-      className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-line-soft bg-bg-main"
+      className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-[var(--r-panel)] border border-line-soft bg-bg-main"
     >
       <header className="flex flex-wrap items-center gap-3 border-b border-line-soft bg-surface px-3 py-2.5">
         <div className="min-w-0">
@@ -287,8 +287,9 @@ export function DiffReview({
             {unresolved > 0 ? ` · ${unresolved} decision${unresolved === 1 ? "" : "s"} required` : ""}
           </span>
         )}
-        {onCancel && <Button variant="secondary" size="sm" className="ml-auto" disabled={interactionDisabled} onClick={onCancel}>{cancelLabel}</Button>}
+        {onCancel && <Button size="sm" className="ml-auto" disabled={interactionDisabled} onClick={onCancel}>{cancelLabel}</Button>}
         <Button
+          variant="primary"
           size="sm"
           className={onCancel ? undefined : "ml-auto"}
           aria-label={applyLabel}

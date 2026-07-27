@@ -183,7 +183,7 @@ function RowAction({
       onClick={onClick}
       disabled={busy}
       className={clsx(
-        "inline-flex items-center gap-1.5 h-6 px-2 rounded-md text-xs font-medium tracking-[-0.005em] transition-[color,background-color,scale] duration-check ease-out active:scale-[0.97]",
+        "inline-flex items-center gap-1.5 h-6 px-2 rounded-[var(--r-control)] text-xs font-medium tracking-[-0.005em] transition-[color,background-color,scale] duration-check ease-out active:scale-[0.97]",
         busy
           ? "text-faint cursor-wait"
           : danger

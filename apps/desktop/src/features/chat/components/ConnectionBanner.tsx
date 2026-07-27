@@ -43,9 +43,9 @@ export function ConnectionBanner() {
   const Icon = connection.integrationId === "gmail" ? Mail : Plug;
 
   return (
-    <section className="board-connection-banner mx-auto mb-2 w-[min(760px,calc(100%-32px))] rounded-xl border border-line-soft bg-surface px-3.5 py-3 shadow-sm">
+    <section className="board-connection-banner mx-auto mb-2 w-[min(760px,calc(100%-32px))] rounded-[var(--r-panel)] border border-line-soft bg-surface px-3.5 py-3 shadow-sm">
       <div className="flex items-start gap-3">
-        <span className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg bg-surface-soft text-ink-soft">
+        <span className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-[var(--r-icon)] bg-surface-soft text-ink-soft">
           <Icon size={ICON.MD} />
         </span>
         <div className="min-w-0 flex-1">
@@ -66,12 +66,12 @@ export function ConnectionBanner() {
             {needsSettings ? (
               <>
                 <Button size="sm" onClick={() => openSettings("integrations")}>Open settings</Button>
-                <Button size="sm" variant="secondary" disabled={busy} onClick={() => void run(() => verifyAndResume(connection))}>
+                <Button size="sm" disabled={busy} onClick={() => void run(() => verifyAndResume(connection))}>
                   Check connection
                 </Button>
               </>
             ) : (
-              <Button size="sm" disabled={busy} onClick={() => void run(() => connectAndResume(connection))}>
+              <Button size="sm" variant="primary" disabled={busy} onClick={() => void run(() => connectAndResume(connection))}>
                 {busy ? "Connecting…" : actionLabel(connection)}
               </Button>
             )}

@@ -374,7 +374,6 @@ export function AutomationsModal() {
           <h1>Automations</h1>
           <Button
             ref={newButtonRef}
-            variant="secondary"
             size="md"
             leadingIcon={Plus}
             active={newOpen}
@@ -466,7 +465,7 @@ export function AutomationsModal() {
                 <p>Start from a template or write the first one from scratch.</p>
               </div>
               <div>
-                <Button variant="secondary" onClick={() => setNewOpen(true)}>Browse templates</Button>
+                <Button onClick={() => setNewOpen(true)}>Browse templates</Button>
                 <Button variant="quiet" onClick={() => requestIntent({ kind: "new", preset: null })}>Start from scratch</Button>
               </div>
             </section>

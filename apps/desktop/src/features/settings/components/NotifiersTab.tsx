@@ -224,10 +224,7 @@ export function NotifiersTab() {
         {visibleEditor && (
           <>
             <header className="arden-peek-rule-below">
-              <div>
-                <span>{visibleEditor.original ? "Channel" : "New channel"}</span>
-                <b>{visibleEditor.original ?? TYPE_LABELS[visibleEditor.type] ?? visibleEditor.type}</b>
-              </div>
+              <strong>{visibleEditor.original ?? "New channel"}</strong>
               <IconButton data-peek-close onClick={() => setEditor(null)} aria-label="Close" title="Close">
                 <X size={ICON.SM} />
               </IconButton>

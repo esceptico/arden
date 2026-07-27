@@ -1396,20 +1396,12 @@
   gap: var(--space-3);
 }
 
-.notifier-peek > header > div {
+/* One-line title (sheet-header idiom): the editor has nothing worth a
+   kicker line, and a single line centers cleanly against the close X. */
+.notifier-peek header strong {
   min-width: 0;
-  display: grid;
-  gap: var(--space-0-5);
-}
-
-.notifier-peek header span {
-  color: var(--faint);
-  font: 500 var(--text-meta)/1 var(--mono);
-}
-
-.notifier-peek header b {
   overflow: hidden;
-  color: var(--ink-soft);
+  color: var(--ink);
   font-size: var(--text-sm);
   font-weight: 580;
   text-overflow: ellipsis;

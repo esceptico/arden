@@ -161,13 +161,13 @@ export function WorkflowProgressCard({
         }
       }}
       title={workflow.description ?? `${workflow.name ?? "Workflow"} — open`}
-      className="group/workflow flex w-full flex-col gap-1.5 rounded-md border border-line bg-surface-sunken px-2.5 py-2 text-left transition-[background-color,border-color,scale] duration-row ease-out hover:border-line-strong hover:bg-surface-soft active:scale-[0.985]"
+      className="group/workflow flex w-full flex-col gap-1.5 rounded-[var(--r-house)] border border-line bg-surface-sunken px-2.5 py-2 text-left transition-[background-color,border-color,scale] duration-row ease-out hover:border-line-strong hover:bg-surface-soft active:scale-[0.985]"
     >
       <div className="flex min-w-0 items-center gap-2">
         <span
           aria-hidden
           className={clsx(
-            "grid place-items-center w-5 h-5 shrink-0 rounded-md transition-colors duration-trace ease-out",
+            "grid place-items-center w-5 h-5 shrink-0 rounded-[var(--r-icon)] transition-colors duration-trace ease-out",
             running ? "bg-accent-soft text-accent-strong" : "bg-surface-sunken text-faint",
           )}
         >

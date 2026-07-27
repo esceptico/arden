@@ -28,13 +28,12 @@ export function OAuthStatus({
 
   return (
     <LabeledField label="Auth">
-      <div className="grid gap-2 rounded-md border border-line-soft bg-surface-soft px-3 py-2.5">
+      <div className="grid gap-2 rounded-[var(--r-house)] border border-line-soft bg-surface-soft px-3 py-2.5">
         <div className="flex items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2">
             <span className="text-sm font-medium text-ink">OAuth · {status}</span>
           </div>
           <Button
-            variant="secondary"
             size="sm"
             onClick={onReauthenticate}
             disabled={busy}

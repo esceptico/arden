@@ -51,7 +51,6 @@ export function SettingsRefreshAction({
 
   return (
     <Button
-      variant="secondary"
       className="settings-refresh-action"
       data-phase={phase}
       disabled={loading || phase !== "idle"}

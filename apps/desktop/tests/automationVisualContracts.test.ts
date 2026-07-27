@@ -193,12 +193,14 @@ test("Automations owns the mock shell controls and hands a hidden rail's full wi
   expect(workspace).toContain('kind: "home"');
   expect(workspace).toContain("goToNewSessionHome()");
   expect(workspace).toContain("aria-hidden={railHidden}");
-  expect(workspace).toContain('variant="secondary"\n            size="md"\n            leadingIcon={Plus}');
+  // The rail "New" button is the unmarked secondary default (fill policy).
+  expect(workspace).not.toContain('variant="primary"\n            size="md"\n            leadingIcon={Plus}');
+  expect(workspace).toContain('size="md"\n            leadingIcon={Plus}');
   expect(workspace).not.toContain('size="sm"\n            leadingIcon={Plus}');
   expect(css).toMatch(/\.automation-workspace__rail-header > \.arden-button\s*\{[\s\S]*?padding-inline:\s*\.625rem;/);
 
   const detail = read("../src/features/automations/components/AutomationDetail.tsx");
-  expect(detail).toMatch(/variant="secondary"\s+size="md"\s+className="automation-detail__pause"/);
+  expect(detail).toMatch(/size="md"\s+className="automation-detail__pause"/);
   expect(detail).toMatch(/variant=\{dirty \? "secondary" : "primary"\}\s+size="md"/);
 
   expect(css).toMatch(/\.automation-workspace__rail\s*\{[\s\S]*?transition:[\s\S]*?transform var\(--motion-sidebar-hide\) var\(--motion-drawer-ease\),[\s\S]*?opacity var\(--motion-sidebar-hide\) var\(--ease-out\),[\s\S]*?filter var\(--motion-sidebar-hide\) var\(--ease-out\);/);

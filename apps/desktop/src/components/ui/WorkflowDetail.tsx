@@ -76,7 +76,7 @@ function parseScript(args: string | undefined): string | null {
 }
 
 const SOURCE_PRE_CLASS =
-  "hljs mt-1 mx-1.5 mb-0.5 p-2.5 rounded-lg bg-code-bg border border-line-soft text-xs leading-[1.55] " +
+  "hljs mt-1 mx-1.5 mb-0.5 p-2.5 rounded-[var(--r-house)] bg-code-bg border border-line-soft text-xs leading-[1.55] " +
   "text-ink-soft font-mono whitespace-pre max-h-[40vh] min-w-0 max-w-full overflow-auto scroll-thin";
 
 // A collapsible "Source" disclosure that reveals the exact Python the agent
@@ -119,7 +119,7 @@ function WorkflowSource({ parentToolCallId }: { parentToolCallId?: string }) {
             onClick={() => void onCopy()}
             aria-label={copied ? "Copied" : "Copy script"}
             className={clsx(
-              "shrink-0 inline-flex items-center gap-1 h-5 px-1.5 rounded-md text-2xs font-medium transition-[background-color,color,scale] duration-row ease-out active:scale-[0.97]",
+              "shrink-0 inline-flex items-center gap-1 h-5 px-1.5 rounded-[var(--r-control)] text-2xs font-medium transition-[background-color,color,scale] duration-row ease-out active:scale-[0.97]",
               copied ? "text-accent-strong bg-accent-soft" : "text-faint hover:bg-surface-soft hover:text-ink",
             )}
           >

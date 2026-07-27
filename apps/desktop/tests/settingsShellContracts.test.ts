@@ -214,8 +214,11 @@ test("setup assistant keeps the mock's fixed sheet contract", () => {
   expect(setup).toContain('className="sheet-field"');
   expect(setup).toContain('className="arden-field dp-field"');
   expect(setup).toContain('className="scope-list"');
-  expect(setup).toContain('className="sheet-primary"');
-  expect(setup).toContain('variant="secondary" className="sheet-cancel"');
+  // One ink slab per surface: the sheet commit is explicit primary, the
+  // cancel rides the unmarked secondary default.
+  expect(setup).toContain('variant="primary"\n          className="sheet-primary"');
+  expect(setup).toContain('className="sheet-cancel"');
+  expect(setup).not.toContain('variant="secondary"');
   expect(setup).not.toContain('title={`Close ${copy.title}`}');
   expect(setup).toContain('primaryLabel: "Continue to server form"');
   expect(setup).toContain('fieldPlaceholder: "URL, package name, or command"');

@@ -66,7 +66,6 @@ export function ServerRow({
       <div className="settings-data-row-end">
         {needsAuth && (
           <Button
-            variant="secondary"
             size="sm"
             onClick={onAuthenticate}
             disabled={busy}

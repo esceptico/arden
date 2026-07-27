@@ -122,12 +122,13 @@ export function ProviderRow({
 
         <div className="settings-data-row-end">
           {readOnlyPrimary ? (
-            <span className="btn arden-button" data-variant="secondary">
+            <span className="btn arden-button">
               {isCustom ? "Configured separately" : actionLabel}
             </span>
           ) : (
             <Button
-              variant={provider.connected ? "secondary" : "primary"}
+              // Never an ink slab: several unconnected rows would stack
+              // several primaries on one page (fill policy).
               onClick={primaryAction}
               disabled={pending}
             >

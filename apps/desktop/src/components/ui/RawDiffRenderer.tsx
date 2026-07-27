@@ -137,7 +137,7 @@ function ExpandRow({ hidden, expanded, onToggle, columnSpan = 1 }: {
             event.preventDefault();
             onToggle();
           }}
-          className="sticky left-0 my-1 w-full rounded-md border border-line-soft bg-surface-soft px-2 py-1 font-sans text-2xs text-muted hover:text-ink"
+          className="sticky left-0 my-1 w-full rounded-[var(--r-house)] border border-line-soft bg-surface-soft px-2 py-1 font-sans text-2xs text-muted hover:text-ink"
         >
           {expanded ? "Hide" : "Show"} {hidden} unchanged lines
         </button>

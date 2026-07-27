@@ -68,7 +68,7 @@ export function ConnectionTab({
         </div>
         {error && <SettingsInlineError title="Could not connect" message={error} />}
         <div className="settings-section-actions">
-          <Button type="submit" disabled={saving}>
+          <Button type="submit" variant="primary" disabled={saving}>
             <BlurSwap swapKey={saving ? "checking" : "save"} blur={2}>
               {saving ? "Checking…" : "Save & reconnect"}
             </BlurSwap>

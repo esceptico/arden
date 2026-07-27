@@ -53,7 +53,7 @@ export function NavRow({
       } : undefined}
       data-active={active ? "true" : undefined}
       aria-current={active ? "page" : undefined}
-      className="workspace-rail__nav-row arden-row app-row grid grid-cols-[16px_minmax(0,1fr)_auto] items-center gap-2 w-full px-2 py-1 rounded-lg text-base text-ink-soft text-left tracking-[-0.005em]"
+      className="workspace-rail__nav-row arden-row app-row grid grid-cols-[16px_minmax(0,1fr)_auto] items-center gap-2 w-full px-2 py-1 text-base text-ink-soft text-left tracking-[-0.005em]"
     >
       <span className="grid place-items-center w-4 h-4 shrink-0">
         {icon}

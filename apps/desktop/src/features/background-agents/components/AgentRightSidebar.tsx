@@ -402,7 +402,7 @@ export function AgentRightSidebar({
         aria-label={effectiveCollapsed ? `Show inspector${totalCount > 0 ? ` (${totalCount})` : ""}` : "Hide inspector"}
         data-open={effectiveCollapsed ? "false" : "true"}
         data-inspector-trigger
-        className="board-inspector-toggle right-sidebar-toggle shell-control inline-flex items-center gap-1.5 h-[22px] px-1 rounded-md text-muted hover:bg-surface-soft hover:text-ink transition-[background-color,color,opacity,scale] duration-row ease-out active:scale-[0.96]"
+        className="board-inspector-toggle right-sidebar-toggle shell-control inline-flex items-center gap-1.5 h-[22px] px-1 rounded-[var(--r-control)] text-muted hover:bg-surface-soft hover:text-ink transition-[background-color,color,opacity,scale] duration-row ease-out active:scale-[0.96]"
       >
         {effectiveCollapsed && activeCount > 0 && (
           <span className="arden-status" aria-hidden>{activeCount} active</span>

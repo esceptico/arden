@@ -26,7 +26,7 @@ export function ComposerImageStrip({
           <img
             src={`data:${img.media_type};base64,${img.data}`}
             alt=""
-            className="h-14 w-14 rounded-md object-cover outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10"
+            className="h-14 w-14 rounded-[var(--r-tag)] object-cover outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10"
           />
           <button
             type="button"

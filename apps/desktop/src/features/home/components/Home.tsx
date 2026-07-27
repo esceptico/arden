@@ -142,7 +142,7 @@ export function Home() {
           <Callout
             tone="warn"
             title="Desk data is stale"
-            action={<Button variant="secondary" size="sm" onClick={() => void reload()}>Retry</Button>}
+            action={<Button size="sm" onClick={() => void reload()}>Retry</Button>}
           >
             Showing the last successful overview. Current asks and activity may have changed.
           </Callout>

@@ -110,7 +110,7 @@ export function AreaRoom({ areaKey }: { areaKey: string }) {
           <Callout
             tone="warn"
             title="Area data is stale"
-            action={<Button variant="secondary" size="sm" onClick={() => void fetchAreaDetail(areaKey)}>Retry</Button>}
+            action={<Button size="sm" onClick={() => void fetchAreaDetail(areaKey)}>Retry</Button>}
             className="board-area-stale"
           >
             Showing the last successful Area snapshot.

@@ -74,7 +74,7 @@ export function Mermaid({ code }: { code: string }) {
   }
   if (!svg) {
     return (
-      <div className="my-[0.6em] px-4 py-3.5 border border-dashed border-line-soft rounded-xl text-faint text-xs italic text-center">
+      <div className="my-[0.6em] px-4 py-3.5 border border-dashed border-line-soft rounded-[var(--r-house)] text-faint text-xs italic text-center">
         Rendering…
       </div>
     );
@@ -228,7 +228,7 @@ function PanelInner({
         "grid grid-rows-[auto_1fr] overflow-hidden",
         fullscreen
           ? "m-0 h-full bg-transparent"
-          : "my-[0.6em] h-[480px] border border-line-soft rounded-xl bg-code-bg",
+          : "my-[0.6em] h-[480px] border border-line-soft rounded-[var(--r-house)] bg-code-bg",
       )}
     >
       {fullscreen ? (
@@ -336,7 +336,7 @@ function MermaidErrorBlock({ source, message }: { source: string; message: strin
     if (await copyText(source)) flashCopied();
   };
   return (
-    <div className="my-[0.6em] px-3.5 py-3 border border-bad/20 rounded-xl bg-bad-soft">
+    <div className="my-[0.6em] px-3.5 py-3 border border-bad/20 rounded-[var(--r-house)] bg-bad-soft">
       <div className="flex items-center justify-between gap-2 mb-1.5">
         <strong className="text-xs font-semibold text-bad">Couldn't render diagram</strong>
         <IconButton
