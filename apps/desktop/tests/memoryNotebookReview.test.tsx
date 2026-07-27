@@ -228,12 +228,13 @@ test("vault change refetches selected timeline even when page revision is unchan
   const index = artifact("index.md", "Index", null, { generated: true, editable: false });
   const me = artifact("me.md", "Me");
   let meReads = 0;
+  let vaultChanged = false;
   installBridge((path) => {
     if (path === "/admin/memory/artifacts") return response({ artifacts: [index, me] });
     const artifactPath = decodeURIComponent(path.replace("/admin/memory/artifacts/", ""));
     if (artifactPath === "index.md") return response({ artifact: detail(index) });
     meReads += 1;
-    const text = meReads === 1 ? "Old evidence" : "Fresh evidence";
+    const text = vaultChanged ? "Fresh evidence" : "Old evidence";
     return response({ artifact: detail(me, "Me prose", [{
       id: "record-me", text, kind: "fact", date: "2026-07-13", src: "chat", pinned: false, superseded: false,
     }]) });
@@ -242,15 +243,17 @@ test("vault change refetches selected timeline even when page revision is unchan
   localStorage.setItem("arden.desktop.memory.lastPath", "me.md");
   await act(async () => root.render(<ArtifactMemoryView config={config} />));
   await settle(220);
-  // The record ledger is collapsed under the prose — open it once; the
-  // disclosure survives the refetch (same note stays mounted).
-  await act(async () => Array.from(host.querySelectorAll<HTMLButtonElement>("button"))
-    .find((button) => button.textContent?.startsWith("Records"))?.click());
+  // Records render in the instrument panel — open it once; the pane
+  // survives the refetch (same note stays mounted).
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Open records"]')?.click());
+  await settle(120);
   expect(host.textContent).toContain("Old evidence");
 
+  const readsBefore = meReads;
+  vaultChanged = true;
   await act(async () => useStore.getState().memoryVaultChanged());
   await settle(220);
-  expect(meReads).toBe(2);
+  expect(meReads).toBeGreaterThan(readsBefore);
   expect(host.textContent).toContain("Fresh evidence");
   expect(host.textContent).not.toContain("Old evidence");
 });

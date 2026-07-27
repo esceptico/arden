@@ -225,9 +225,11 @@ test("memory opens as a filesystem notebook with a plain tree, tabs, and stems",
   const prose = workspace?.querySelector(".mw-prose");
   expect(prose?.textContent).toContain("I build personal tools.");
   expect(prose?.querySelector("h1")?.textContent).toBe("Me");
-  const records = Array.from(workspace?.querySelectorAll("button") ?? [])
+  // Records live in the instrument panel only — no ledger under the prose.
+  const ledger = Array.from(workspace?.querySelectorAll("button") ?? [])
     .find((button) => button.textContent?.includes("Records"));
-  expect(records?.textContent).toContain("1");
+  expect(ledger).toBeUndefined();
+  expect(workspace?.querySelector('[aria-label="Open records"]')).not.toBeNull();
   expect(bridge.requests).toContain("/admin/memory/artifacts/me.md");
 
   // Wiki links resolve through the links index and navigate in place.

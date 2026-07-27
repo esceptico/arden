@@ -1,6 +1,5 @@
-import { useRef, useState } from "react";
-import clsx from "clsx";
-import { ChevronRight, FileText } from "@/components/icons";
+import { useRef } from "react";
+import { FileText } from "@/components/icons";
 import { Markdown } from "@/components/ui/Markdown";
 import { DetailPlaceholder } from "@/components/ui/EmptyState";
 import { ListError } from "@/components/ui/ListColumn";
@@ -8,11 +7,9 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { WikiLinkContext, type WikiLinkHandlers } from "@/lib/wikilink";
 import { MemoryFindBar } from "@/features/memory/components/MemoryFindBar";
 import { MemoryProperties, type MemoryFrontmatter } from "@/features/memory/components/MemoryProperties";
-import { isRecordListPage, kindLabel, stripCites } from "@/features/memory/lib/format";
+import { stripCites } from "@/features/memory/lib/format";
 import type { MemoryArtifactDetail, MemoryArtifactSummary } from "@/features/memory/lib/notebookTypes";
 
-const FRONTMATTER_RE = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/;
-const ENT_TAG_RE = /\s*\[ent:[^\]]+\]/g;
 function filenameStem(path: string): string {
   const name = path.split("/").pop() ?? path;
   return name.replace(/\.md$/, "");
@@ -21,38 +18,6 @@ function filenameStem(path: string): string {
 function noteTrail(path: string): string {
   const parts = path.replace(/\.md$/, "").split("/");
   return parts.length > 1 ? parts.slice(0, -1).join(" / ") : "memory";
-}
-
-// The page's dated record ledger, collapsed under the prose (draft's krecs).
-function RecordsDisclosure({
-  records,
-  defaultOpen,
-}: {
-  records: MemoryArtifactDetail["timeline"];
-  defaultOpen: boolean;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <section className={clsx("mw-krecs", open && "open")}>
-      <button type="button" className="mw-krecs-head" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
-        <ChevronRight className="mw-chev" aria-hidden />
-        Records <span className="n">{records.length}</span>
-      </button>
-      {open && (
-        <div className="mw-krecs-body">
-          {records.map((entry) => (
-            <div key={entry.id} className="mw-krec">
-              <div className="kmeta">
-                <div>{entry.date}</div>
-                <span className="kind">{kindLabel(entry.kind)}</span>
-              </div>
-              <p className="ktext">{entry.text.replace(ENT_TAG_RE, "")}</p>
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
-  );
 }
 
 export function MemoryNote({
@@ -94,8 +59,6 @@ export function MemoryNote({
   }
 
   const content = detail?.content ?? "";
-  const body = content.replace(FRONTMATTER_RE, "");
-  const records = (detail?.timeline ?? []).filter((entry) => !entry.superseded);
 
   return (
     <article
@@ -139,13 +102,6 @@ export function MemoryNote({
                     <Markdown content={stripCites(content)} className="memory-doc max-w-none" />
                   </div>
                 </WikiLinkContext.Provider>
-                {detail && records.length > 0 && !isRecordListPage(detail.path) && (
-                  <RecordsDisclosure
-                    key={detail.path}
-                    records={records}
-                    defaultOpen={stripCites(body).trim() === ""}
-                  />
-                )}
               </>
             )}
           </div>
