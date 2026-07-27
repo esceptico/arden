@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
 import { isNotebookResourcePath } from "@/features/memory/lib/notebookIndex";
 import {
-  bucketOf,
   buildWorkspaceTree,
   collectNotes,
   countNotes,
   findDir,
+  noteDateGroup,
   prettyDate,
   sortNotes,
   stem,
@@ -72,15 +72,18 @@ test("sortNotes pins index.md first and honors key + direction", () => {
     .toEqual(["index.md", "topics/beta.md", "topics/alpha.md"]);
 });
 
-test("stems, buckets, and pretty dates match the draft semantics", () => {
+test("stems, date groups, and pretty dates match the draft semantics", () => {
   expect(stem("topics/nexus.md")).toBe("nexus");
   expect(stem("me.md")).toBe("me");
   const now = new Date("2026-07-14T12:00:00Z");
-  expect(bucketOf("2026-07-14T09:00:00Z", now)).toBe("Today");
-  expect(bucketOf("2026-07-13T09:00:00Z", now)).toBe("Yesterday");
-  expect(bucketOf("2026-07-08T09:00:00Z", now)).toBe("This week");
-  expect(bucketOf("2026-06-20T09:00:00Z", now)).toBe("This month");
-  expect(bucketOf("2026-01-01T09:00:00Z", now)).toBe("Earlier");
-  expect(bucketOf(null, now)).toBe("Undated");
+  // Notebook Navigator's rail: relative buckets first, then calendar months,
+  // year-qualified once they leave the current one.
+  expect(noteDateGroup("2026-07-14T09:00:00Z", now)).toBe("Today");
+  expect(noteDateGroup("2026-07-13T09:00:00Z", now)).toBe("Yesterday");
+  expect(noteDateGroup("2026-07-08T09:00:00Z", now)).toBe("Previous 7 days");
+  expect(noteDateGroup("2026-06-20T09:00:00Z", now)).toBe("Previous 30 days");
+  expect(noteDateGroup("2026-05-01T09:00:00Z", now)).toBe("May");
+  expect(noteDateGroup("2025-01-01T09:00:00Z", now)).toBe("January 2025");
+  expect(noteDateGroup(null, now)).toBe("Undated");
   expect(prettyDate("2026-07-13T08:00:00Z")).toBe("Jul 13, 2026");
 });
