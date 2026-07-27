@@ -1373,7 +1373,8 @@
    Fixed (not absolute) so the settings scroll container can never clip
    or scroll it; grid rows pin the header and footer while the field
    column scrolls. */
-.notifier-peek {
+.notifier-peek,
+.settings-key-peek {
   position: fixed;
   z-index: var(--z-peek);
   top: 4.5rem;
@@ -1386,7 +1387,8 @@
   overflow: hidden;
 }
 
-.notifier-peek > header {
+.notifier-peek > header,
+.settings-key-peek > header {
   min-width: 0;
   min-height: var(--peek-header-size);
   padding: 0 var(--space-2) 0 calc(var(--space-3) + var(--space-0-5));
@@ -1398,7 +1400,8 @@
 
 /* One-line title (sheet-header idiom): the editor has nothing worth a
    kicker line, and a single line centers cleanly against the close X. */
-.notifier-peek header strong {
+.notifier-peek header strong,
+.settings-key-peek header strong {
   min-width: 0;
   overflow: hidden;
   color: var(--ink);

@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { createCustomModelApi, connectModelProviderApi, deleteCustomModelApi, disconnectModelProviderApi, getOpenAICodexOAuthStatusApi, listModelProvidersApi, startOpenAICodexOAuthApi, type ModelProvider, type OpenAICodexOAuthStatus } from "@/api/settings";
+import { connectServiceApi, createCustomModelApi, connectModelProviderApi, deleteCustomModelApi, disconnectModelProviderApi, disconnectServiceApi, getOpenAICodexOAuthStatusApi, listModelProvidersApi, listServicesApi, startOpenAICodexOAuthApi, type ModelProvider, type OpenAICodexOAuthStatus, type ServiceConnection } from "@/api/settings";
 import { fetchServerConfig, updateServerConfig } from "@/actions/server";
 import { useStore } from "@/stores";
 import { ProviderRow } from "@/features/settings/components/ProviderRow";
@@ -16,6 +16,12 @@ import {
 } from "@/features/settings/components/SettingsPage";
 import { Tab, Tabs } from "@/components/ui/Tabs";
 import { BlurSwap } from "@/components/ui/BlurSwap";
+import { Button } from "@/components/ui/Button";
+import { IconButton } from "@/components/ui/IconButton";
+import { Input } from "@/components/ui/Input";
+import { PeekSurface } from "@/components/workspace/PeekSurface";
+import { Loader2, X } from "@/components/icons";
+import { ICON } from "@/lib/icons";
 import { providerReadinessSummary } from "@/features/settings/lib/providerConnection";
 import {
   canSaveCustomModelDraft,
@@ -312,27 +318,122 @@ type WebSearchMode = (typeof WEB_SEARCH_MODES)[number]["id"];
 
 /** The web-search provider lives with the other provider decisions: which
  *  engine backs the agent's search tools. Auto resolves per key availability
- *  server-side; the hint names the live resolution. */
+ *  server-side; the hint names the live resolution. Selecting Exa without a
+ *  connected key opens the key peek INSTEAD of committing — the mode never
+ *  points at an engine that cannot run. */
 function WebSearchSection() {
+  const config = useStore((s) => s.config);
   const serverConfig = useStore((s) => s.serverConfig);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  if (!serverConfig) return null;
+  const [exa, setExa] = useState<ServiceConnection | null>(null);
+  const [peekOpen, setPeekOpen] = useState(false);
+  const [keyValue, setKeyValue] = useState("");
+  const [keyPending, setKeyPending] = useState(false);
+  const [keyError, setKeyError] = useState<string | null>(null);
+  // Set when the peek was opened by selecting Exa keyless: a successful
+  // connect commits that intent; cancel leaves the mode untouched.
+  const commitExaAfterConnect = useRef(false);
 
-  const mode = serverConfig.web_search;
-  const resolved = serverConfig.web_search_provider;
-  const select = async (value: string) => {
-    if (pending || value === mode) return;
+  const loadExa = useCallback(async () => {
+    try {
+      const services = await listServicesApi(config);
+      setExa(services.find((service) => service.id === "exa_api_key") ?? null);
+    } catch {
+      setExa(null);
+    }
+  }, [config]);
+
+  useEffect(() => {
+    void loadExa();
+  }, [loadExa]);
+
+  const applyMode = useCallback(async (value: WebSearchMode) => {
     setPending(true);
     setError(null);
     try {
-      await updateServerConfig({ web_search: value as WebSearchMode });
+      await updateServerConfig({ web_search: value });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setPending(false);
     }
+  }, []);
+
+  if (!serverConfig) return null;
+
+  const mode = serverConfig.web_search;
+  const resolved = serverConfig.web_search_provider;
+  const exaConnected = !!exa?.connected;
+
+  const select = (value: string) => {
+    if (pending || value === mode) return;
+    if (value === "exa" && !exaConnected) {
+      commitExaAfterConnect.current = true;
+      setKeyError(null);
+      setPeekOpen(true);
+      return;
+    }
+    void applyMode(value as WebSearchMode);
   };
+
+  const openManage = () => {
+    commitExaAfterConnect.current = false;
+    setKeyError(null);
+    setPeekOpen(true);
+  };
+
+  const closePeek = () => {
+    setPeekOpen(false);
+    setKeyValue("");
+    commitExaAfterConnect.current = false;
+  };
+
+  const connectExa = async () => {
+    if (keyPending || !keyValue.trim()) return;
+    setKeyPending(true);
+    setKeyError(null);
+    try {
+      await connectServiceApi(config, "exa_api_key", keyValue.trim());
+      const commitMode = commitExaAfterConnect.current;
+      setKeyValue("");
+      setPeekOpen(false);
+      commitExaAfterConnect.current = false;
+      await loadExa();
+      if (commitMode) await applyMode("exa");
+      else await fetchServerConfig();
+    } catch (cause) {
+      setKeyError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setKeyPending(false);
+    }
+  };
+
+  const disconnectExa = async () => {
+    if (keyPending) return;
+    setKeyPending(true);
+    setKeyError(null);
+    try {
+      await disconnectServiceApi(config, "exa_api_key");
+      setPeekOpen(false);
+      await loadExa();
+      await fetchServerConfig();
+    } catch (cause) {
+      setKeyError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setKeyPending(false);
+    }
+  };
+
+  const manageAffordance = (
+    <button
+      type="button"
+      onClick={openManage}
+      className="text-muted underline decoration-line-strong underline-offset-2 transition-colors duration-check hover:text-ink"
+    >
+      Manage key
+    </button>
+  );
 
   return (
     <SettingsSection title="Web search">
@@ -344,25 +445,31 @@ function WebSearchSection() {
                the others are one — without the reserve the whole card jumps
                on every switch. The swap itself rides BlurSwap. */
             <span className="block min-h-[2lh]">
-              <BlurSwap swapKey={`${mode}:${resolved}`}>
+              <BlurSwap swapKey={`${mode}:${resolved}:${exaConnected}`}>
                 {mode === "auto" ? (
                   <>
                     Auto prefers Exa when its key is connected and falls back to DuckDuckGo.{" "}
                     <strong className="font-medium text-ink-soft">
                       Currently using {resolved === "exa" ? "Exa" : resolved === "ddgs" ? "DuckDuckGo" : "none"}.
                     </strong>
+                    {exaConnected && <> {manageAffordance}</>}
                   </>
                 ) : mode === "none" ? (
                   "Web search tools are disabled for the agent."
+                ) : mode === "exa" ? (
+                  <>
+                    All agent web searches go through Exa
+                    {exa?.key_hint ? ` (${exa.key_hint})` : ""}. {manageAffordance}
+                  </>
                 ) : (
-                  `All agent web searches go through ${mode === "exa" ? "Exa" : "DuckDuckGo"}.`
+                  "All agent web searches go through DuckDuckGo. No key needed."
                 )}
               </BlurSwap>
             </span>
           }
           control={
             <div className="flex flex-col items-end gap-1">
-              <Tabs variant="segmented" size="sm" value={mode} onChange={(value) => void select(value)}>
+              <Tabs variant="segmented" size="sm" value={mode} onChange={select}>
                 {WEB_SEARCH_MODES.map((option) => (
                   <Tab key={option.id} value={option.id}>{option.label}</Tab>
                 ))}
@@ -372,6 +479,58 @@ function WebSearchSection() {
           }
         />
       </SettingsSurface>
+
+      <PeekSurface
+        open={peekOpen}
+        onClose={closePeek}
+        className="settings-key-peek surface-peek"
+        ariaLabel="Exa key"
+        layer="exa-key-peek"
+        focusOnOpen
+        focusSelector='input[type="password"]'
+        closeOnOutsidePointerDown
+      >
+        <header className="arden-peek-rule-below">
+          <strong>Exa key</strong>
+          <IconButton data-peek-close onClick={closePeek} aria-label="Close" title="Close">
+            <X size={ICON.SM} />
+          </IconButton>
+        </header>
+        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
+          <p className="m-0 text-sm leading-relaxed text-muted">
+            {exaConnected
+              ? <>Connected{exa?.key_hint ? <> · <span className="font-mono text-xs">{exa.key_hint}</span></> : null}{exa?.from_env ? " (set via EXA_API_KEY)" : ""}. Paste a new key to rotate it.</>
+              : "Exa powers the higher-quality engine. Paste an API key from exa.ai to connect it."}
+          </p>
+          <Input
+            type="password"
+            value={keyValue}
+            onChange={(event) => setKeyValue(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void connectExa();
+            }}
+            placeholder="Exa API key"
+            aria-label="Exa API key"
+            spellCheck={false}
+            autoComplete="off"
+          />
+          {keyError && <p role="alert" className="m-0 text-xs text-bad">{keyError}</p>}
+        </div>
+        <footer className="arden-peek-rule-above flex shrink-0 items-center gap-2 p-3">
+          {exaConnected && !exa?.from_env && (
+            <Button variant="danger" disabled={keyPending} onClick={() => void disconnectExa()}>
+              Disconnect
+            </Button>
+          )}
+          <span className="ml-auto flex items-center gap-2">
+            <Button variant="quiet" onClick={closePeek} disabled={keyPending}>Cancel</Button>
+            <Button variant="primary" onClick={() => void connectExa()} disabled={!keyValue.trim() || keyPending}>
+              {keyPending && <Loader2 size={ICON.SM} className="animate-spin" />}
+              Connect
+            </Button>
+          </span>
+        </footer>
+      </PeekSurface>
     </SettingsSection>
   );
 }
