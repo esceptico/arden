@@ -265,6 +265,26 @@ async def test_replan_race_returns_to_pending_for_retry(tmp_path: Path, monkeypa
 
 
 @pytest.mark.asyncio
+async def test_external_file_drift_does_not_create_endless_approval_generations(tmp_path: Path) -> None:
+    service, coordinator, conn = await _coordinator(tmp_path)
+    _seed(service.repository, ("target", "old.md", create_page(title="Old", page_id="target")))
+    original = await coordinator.request_rename(**_request(service))
+    assert original.approval is not None
+    (service.repository.root / "old.md").write_bytes(b"changed outside revision history")
+
+    conflicted = await coordinator.accept(original.approval.approval_id)
+
+    assert conflicted.status == "pending"
+    assert conflicted.approval is not None
+    assert conflicted.approval.approval_id == original.approval.approval_id
+    assert conflicted.approval.generation == 0
+    assert conflicted.approval.resolution is not None
+    assert "outside revision history" in conflicted.approval.resolution
+    assert await coordinator.list_pending() == [conflicted.approval]
+    await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_tampered_plan_or_metadata_is_never_applied(tmp_path: Path) -> None:
     service, coordinator, conn = await _coordinator(tmp_path)
     _seed(service.repository, ("target", "old.md", create_page(title="Old", page_id="target")))

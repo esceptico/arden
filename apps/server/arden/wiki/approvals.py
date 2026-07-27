@@ -135,7 +135,14 @@ class WikiRenameApprovalCoordinator:
                 raise CorruptWikiRenameApprovalError("accepted rename claim was not persisted")
         try:
             commit = self.service.apply_rename(plan)
-        except RevisionConflictError:
+        except RevisionConflictError as error:
+            if self.service.repository.head == plan.base_head:
+                await self.store.release_accept(
+                    approval.approval_id,
+                    resolution=f"managed wiki files changed outside revision history: {error}",
+                )
+                current = await self._required_approval(approval.approval_id)
+                return WikiRenameCoordinatorResult(status=current.status, approval=current)
             try:
                 replacement = await self._replace_after_conflict(approval, plan)
             except (KeyError, RevisionConflictError, WikiValidationError) as error:
