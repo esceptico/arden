@@ -206,3 +206,18 @@ test("a link's favicon covers its fallback globe instead of dropping below it", 
     '.md.typeset :where(.external-link__icon[data-favicon="loaded"] .external-link__fallback) { display: none; }',
   );
 });
+
+test("the composer toolbar keeps one gap across the whole row", () => {
+  const pickerCss = readFileSync(new URL("../src/design/model-pickers.css", import.meta.url), "utf8");
+  const toolbar = readFileSync(new URL("../src/features/chat/components/ComposerToolbar.tsx", import.meta.url), "utf8");
+
+  // The row's gap is the toolbar's gap-1.5. The picker carries the Settings
+  // field's wider --space-2 between its two controls, which put an 8px gap
+  // between model and effort against 6px everywhere else in the same row.
+  expect(toolbar).toContain('className="board-composer__toolbar flex items-center gap-1.5');
+  expect(pickerCss).toMatch(
+    /\.board-composer \.model-picker--field \{[^}]*width: auto;[^}]*gap: var\(--space-1-5\);/,
+  );
+  // Settings keeps its own geometry; only the composer narrows.
+  expect(pickerCss).toMatch(/\.model-picker--field \{[^}]*width: 276px;[^}]*gap: var\(--space-2\);/);
+});
