@@ -236,3 +236,24 @@ test("New automation menu keeps the mock's rich, text-only popover contract", ()
   expect(workspace).toContain("suggestion={suggestion}");
   expect(workspace).toContain("setSuggestion(suggestions[0] ?? null)");
 });
+
+test("the zero-automations pane only stands in for an actually empty workspace", () => {
+  const workspace = read("../src/features/automations/components/AutomationsModal.tsx");
+
+  // Deleting one of many cleared the selection, and the unselected pane read
+  // "No automations yet." while the rest sat in the rail.
+  expect(workspace).toContain("automations?.length === 0 ? (");
+  expect(workspace).toMatch(/automations\?\.length === 0 \? \([\s\S]*?<h2>No automations yet\.<\/h2>/);
+  expect(workspace).toContain("No automations yet.");
+
+  // Deleting hands the pane straight to the neighbouring row — routing through
+  // an unselected pane costs a blank swap in and another straight back out.
+  expect(workspace).toContain("setSelectedId(successorTo(selectedId));");
+  expect(workspace).toContain("return orderedIds[index + 1] ?? orderedIds[index - 1] ?? null;");
+
+  // And the open-time fallback lands before paint, so that gap never shows either.
+  expect(workspace).toMatch(
+    /useLayoutEffect\(\(\) => \{\s*if \(!open \|\| draft \|\| !automations \|\| selected\) return;/,
+  );
+  expect(workspace).toContain("const first = groups.user[0] ?? groups.area[0] ?? groups.system[0];");
+});

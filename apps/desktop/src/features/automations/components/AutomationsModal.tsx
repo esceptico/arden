@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft02, CalendarClock, Plus, Search, Settings, X } from "@/components/icons";
 import { useStore } from "@/stores";
 import { duplicateAutomation, fetchAutomations, runAutomation, toggleAutomation } from "@/actions/automations";
@@ -132,6 +132,22 @@ export function AutomationsModal() {
     () => automations?.find((automation) => automation.task_id === selectedId) ?? null,
     [automations, selectedId],
   );
+  /** Rail order, flattened — the sequence a successor is picked from. */
+  const orderedIds = useMemo(() => {
+    if (!automations) return [];
+    const groups = groupAutomations(automations);
+    return [...groups.user, ...groups.area, ...groups.system].map((automation) => automation.task_id);
+  }, [automations]);
+  /** Deleting hands the pane to the next row down (or the last one up), the way
+   *  closing a tab does. Never to nothing: an unselected pane between the two
+   *  states costs a blank swap in and another straight back out. The list can
+   *  already be refreshed by the time this runs — then the deleted id is gone
+   *  and the first remaining row is as good a landing as any. */
+  const successorTo = useCallback((taskId: string | null) => {
+    const index = taskId ? orderedIds.indexOf(taskId) : -1;
+    if (index < 0) return orderedIds[0] ?? null;
+    return orderedIds[index + 1] ?? orderedIds[index - 1] ?? null;
+  }, [orderedIds]);
   const seed: DetailSeed | null = draft
     ? { kind: "draft", preset: draft.preset }
     : selected
@@ -297,7 +313,9 @@ export function AutomationsModal() {
   // A resolvable deep-link target defers to the target effect above — both
   // run in the same commit, where `selected` is still stale-null, and this
   // one would otherwise clobber the targeted selection with the default.
-  useEffect(() => {
+  // LAYOUT effect: a passive one lands after paint, so deleting an automation
+  // flashed the unselected pane for a frame before the successor arrived.
+  useLayoutEffect(() => {
     if (!open || draft || !automations || selected) return;
     if (targetId && automations.some((automation) => automation.task_id === targetId)) return;
     const groups = groupAutomations(automations);
@@ -446,7 +464,7 @@ export function AutomationsModal() {
               }}
               onDiscardDraft={() => requestIntent({ kind: "discard-draft" })}
               onDeleted={() => {
-                setSelectedId(null);
+                setSelectedId(successorTo(selectedId));
                 setDetailDirty(false);
                 setCompactDetail(false);
               }}
@@ -457,7 +475,10 @@ export function AutomationsModal() {
               openLatestRun={openLatestRun}
               onLatestRunConsumed={() => setOpenLatestRun(false)}
             />
-          ) : (
+          ) : automations?.length === 0 ? (
+            // Only when the workspace is genuinely empty. An unselected pane —
+            // still loading, or one frame after a delete — is not "no
+            // automations yet", and saying so while 33 sit in the rail is a lie.
             <section className="automation-workspace__empty">
               <CalendarClock size={30} aria-hidden="true" />
               <div>
@@ -469,7 +490,7 @@ export function AutomationsModal() {
                 <Button variant="quiet" onClick={() => requestIntent({ kind: "new", preset: null })}>Start from scratch</Button>
               </div>
             </section>
-          )}
+          ) : null}
         </TabPanels>
       </main>
 
