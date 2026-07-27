@@ -28,6 +28,7 @@ import { SidebarToggle } from "@/components/ui/SidebarToggle";
 import { PeekSurface } from "@/components/workspace/PeekSurface";
 import { NotebookRail, type MemoryRailMode } from "@/features/memory/components/NotebookRail";
 import { PaneResizeHandle } from "@/components/workspace/PaneResizeHandle";
+import { SidebarResizeHandle } from "@/components/workspace/SidebarResizeHandle";
 import { MemoryNote } from "@/features/memory/components/MemoryNote";
 import {
   loadMemoryInspectorPane,
@@ -55,7 +56,6 @@ import type { MemoryFrontmatter } from "@/features/memory/components/MemoryPrope
 import type { MemoryArtifactDetail, MemoryArtifactSummary, MemoryOperation, PageEditEvent, PageEditHistory, PageEditPreview, PageLinks } from "@/features/memory/lib/notebookTypes";
 
 const RECORD_PAGE_SIZE = 100;
-const RAIL_WIDTH_KEY = "arden.desktop.memory.railWidth";
 const CTX_WIDTH_KEY = "arden.desktop.memory.ctxWidth";
 const LAST_PATH_KEY = "arden.desktop.memory.lastPath";
 const COMPACT_RAIL_QUERY = "(max-width: 740px)";
@@ -518,8 +518,6 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     const layout = layoutRef.current;
     if (!layout) return;
     try {
-      const rail = parseInt(localStorage.getItem(RAIL_WIDTH_KEY) ?? "", 10);
-      if (Number.isFinite(rail)) layout.style.setProperty("--mw-rail-w", `${Math.max(220, Math.min(400, rail))}px`);
       const ctx = parseInt(localStorage.getItem(CTX_WIDTH_KEY) ?? "", 10);
       if (Number.isFinite(ctx)) layout.style.setProperty("--mw-ctx-w", `${Math.max(240, Math.min(480, ctx))}px`);
     } catch { /* non-fatal */ }
@@ -1401,7 +1399,10 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
         className="mw-rail"
       >
         <div className="mw-rail-drag" aria-hidden />
-        <PaneResizeHandle layoutRef={layoutRef} cssVar="--mw-rail-w" storageKey={RAIL_WIDTH_KEY} min={220} max={400} defaultWidth={288} edge="end" label="Resize memory rail" />
+        {/* The notebook rail IS the app sidebar in this workspace — same
+            shared width (prefs.sidebarWidth), so a drag here moves every
+            other rail with it instead of forking a memory-local width. */}
+        <SidebarResizeHandle />
         <NotebookRail
           mode={railMode}
           tree={workspaceTree}

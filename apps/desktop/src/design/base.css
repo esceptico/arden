@@ -663,7 +663,8 @@
   --kbd-gap: var(--space-1);
   --kbd-inline-padding: var(--space-1);
   /* Kbd chips follow the corner profile: --r-pill auto-clamps to a capsule
-     at kbd height, --r-square reads as the same soft square as controls. */
+     at kbd height. Square mode uses --r-tag rather than --r-control, whose
+     9px reads as the same capsule once clamped to a 16-20px chip. */
   --kbd-radius: var(--r-control);
   --icon-button-size: 1.75rem;
   --control-size: 1.75rem;
@@ -834,6 +835,8 @@
   --ease-out: var(--smooth-out);
   --ease-drawer: var(--motion-drawer-ease);
 }
+
+html[data-corners="square"] { --kbd-radius: var(--r-tag); }
 
 * { box-sizing: border-box; }
 html, body { width: 100%; height: 100%; margin: 0; }

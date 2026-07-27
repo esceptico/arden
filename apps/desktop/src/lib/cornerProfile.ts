@@ -13,6 +13,10 @@ function applyCornerProfile(profile: CornerProfile): void {
   root.classList.add("radius-transitioning");
   void root.offsetHeight; // flush so the transition below applies to this change
 
+  // Small surfaces (kbd chips) need their OWN square value: --r-square (9px)
+  // on a 16px chip is visually identical to the clamped pill, so "square"
+  // would look like a no-op there. They branch on this attribute.
+  root.dataset.corners = profile;
   root.style.setProperty("--r-control", square ? "var(--r-square)" : "var(--r-pill)");
   root.style.setProperty("--r-shell", square ? "var(--r-shell-square)" : "var(--r-shell-round)");
   root.style.setProperty("--r-menu", square ? "var(--r-menu-square)" : "var(--r-menu-round)");

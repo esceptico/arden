@@ -54,7 +54,12 @@ test("memory rail keeps the three mock modes in one 288px plane", () => {
   expect(css).toContain("gap: var(--interactive-row-gap)");
   expect(css).not.toContain(".memory-facts-rail");
   expect(css).not.toContain(".mw-rail-top");
-  expect(view).toContain("max={400} defaultWidth={288}");
+  // The notebook rail IS the app sidebar here: one shared width
+  // (prefs.sidebarWidth via SidebarResizeHandle), no memory-local key.
+  expect(view).toContain("<SidebarResizeHandle />");
+  expect(view).not.toContain("memory.railWidth");
+  // The context panel keeps its own width — it is not a sidebar.
+  expect(view).toContain('cssVar="--mw-ctx-w"');
   expect(view).not.toContain("RecordDetailPane");
   expect(view).not.toContain("setRecordPinned");
   expect(view).not.toContain("516");
@@ -76,9 +81,13 @@ test("memory open-page tabs keep the mock overflow geometry and shared motion", 
   expect(tabs).toContain("list.scrollTo");
   expect(tabs).toContain('edgeLeft && "edge-left"');
   expect(tabs).toContain('edgeRight && "edge-right"');
-  expect(css).toContain("padding: 4px");
-  expect(css).toContain("margin: -4px");
-  expect(css).toContain("scroll-padding-inline: 4px");
+  // The padding / negative-margin pair cancels for layout (tokenised since
+  // this pin was written), and the snap inset clears the strip's 10px edge
+  // fade so a newly opened tab never parks half-dissolved under the mask.
+  expect(css).toContain("padding: var(--tab-bar-padding)");
+  expect(css).toContain("margin: calc(var(--tab-bar-padding) * -1)");
+  expect(css).toContain("scroll-padding-inline: 14px");
+  expect(css).toContain("padding-inline-end: calc(var(--tab-bar-padding) + 14px)");
   expect(tabs).toContain('readLength("--tab-bar-gap")');
   expect(tabs).toContain('readLength("--tab-strip-chrome")');
   expect(tabs).toContain('readLength("--tab-overflow-min-width")');

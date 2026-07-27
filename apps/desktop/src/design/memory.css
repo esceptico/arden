@@ -67,6 +67,11 @@
 #app > .memory-surface :is(.mw-rail, .mw-tab-strip, .mw-instruments) { -webkit-app-region: drag; }
 #app > .memory-surface :is(.mw-rail, .mw-tab-strip, .mw-instruments) :is(button, input, [role="button"], [role="tab"], [role="separator"]) { -webkit-app-region: no-drag; }
 
+.memory-surface .mw-rail > .workspace-rail__resize-handle {
+  top: var(--space-2);
+  bottom: var(--space-2);
+}
+
 .memory-surface .mw-rail-drag {
   height: 1.375rem;
   flex: none;
@@ -419,6 +424,10 @@
      pair still cancels out for layout regardless of the exact value, but
      matching the token keeps every inset in this strip on one source. */
   padding: var(--tab-bar-padding);
+  /* Trailing scroll room: without it the last tab IS the content edge, so
+     scrolling it into view still leaves it dissolving under the strip's
+     10px end fade — there is nothing further to scroll. */
+  padding-inline-end: calc(var(--tab-bar-padding) + 14px);
   margin: calc(var(--tab-bar-padding) * -1);
   display: flex;
   gap: var(--space-0-5);
@@ -429,7 +438,10 @@
   touch-action: pan-x;
   scrollbar-width: none;
   scroll-snap-type: x proximity;
-  scroll-padding-inline: 4px;
+  /* Matches TAB_EDGE_INSET in MemoryDocumentTabs: the snap inset has to clear
+     the strip's 10px edge fade, or snapping undoes the scroll-into-view and
+     parks a newly opened tab half-dissolved under the mask. */
+  scroll-padding-inline: 14px;
 }
 
 .memory-surface .mw-doc-tabs::-webkit-scrollbar { display: none; }
@@ -538,17 +550,18 @@
   max-height: min(22rem, calc(100vh - 2rem));
   padding: var(--space-1-5);
   overflow-y: auto;
-  border-radius: var(--r-house);
+  /* A menu surface: takes the profile-switched menu radius like every
+     other popover, not the fixed 8px house corner. */
+  border-radius: var(--r-menu);
   background: var(--card);
   box-shadow: var(--shadow-3);
 }
 
 .mw-tab-menu .arden-context-menu__item {
   padding: .4375rem .5625rem;
-  /* .mw-tab-menu is r-house (8px) with space-1-5 (6px) padding — this item
-     was reusing r-row (999px pill / 9px square), badly overshooting the
-     menu's own corner in EITHER mode, not just "square". */
-  border-radius: calc(var(--r-house) - var(--space-1-5));
+  /* Concentric with the menu shell: its radius minus the 6px padding.
+     (Reusing r-row overshot the corner in either mode.) */
+  border-radius: calc(var(--r-menu) - var(--space-1-5));
   color: var(--muted);
   font-size: var(--text-control);
   font-weight: 500;

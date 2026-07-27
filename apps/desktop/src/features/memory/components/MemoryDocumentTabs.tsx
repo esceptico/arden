@@ -57,6 +57,9 @@ export function countFullyHiddenTabs(
 /** The mock's complete open-page tab contract: shared moving indicator,
  * append/activate state supplied by the workspace, roving keyboard focus,
  * active-only close focus, edge fades, ensure-visible, and the +N menu. */
+/** Strip edge fade (10px mask) plus a little air. */
+const TAB_EDGE_INSET = 14;
+
 export function MemoryDocumentTabs({
   paths,
   activeIndex,
@@ -183,8 +186,14 @@ export function MemoryDocumentTabs({
     const listRect = list.getBoundingClientRect();
     const activeRect = active.getBoundingClientRect();
     let next = list.scrollLeft;
-    if (activeRect.left < listRect.left) next -= listRect.left - activeRect.left;
-    else if (activeRect.right > listRect.right) next += activeRect.right - listRect.right;
+    // Land the tab CLEAR of the strip's 10px edge fade (memory.css masks
+    // both ends when the list overflows) — scrolling it flush to the edge
+    // leaves a newly opened tab dissolving under the mask.
+    if (activeRect.left < listRect.left + TAB_EDGE_INSET) {
+      next -= listRect.left + TAB_EDGE_INSET - activeRect.left;
+    } else if (activeRect.right > listRect.right - TAB_EDGE_INSET) {
+      next += activeRect.right - (listRect.right - TAB_EDGE_INSET);
+    }
     if (next !== list.scrollLeft) {
       if (typeof list.scrollTo === "function") {
         list.scrollTo({ left: next, behavior: reducedMotion ? "auto" : "smooth" });
