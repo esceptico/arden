@@ -163,3 +163,38 @@ async def test_config_service_deletes_custom_model_and_clears_active_fields(monk
         "model_reasoning_efforts": {"other": "low"},
     }
     assert reload_seen == [persisted]
+
+
+@pytest.mark.asyncio
+async def test_writing_role_setups_retires_the_flat_legacy_keys(monkeypatch):
+    """Config READS the old scalars so an existing install keeps its models, but
+    once the role objects are written the file should have one source of truth."""
+    import arden.services.config as config_module
+
+    persisted = {
+        "chat_model": "gpt-5.2",
+        "research_model": "gpt-5.2",
+        "research_reasoning_effort": "high",
+        "memory_model": "gpt-5.2",
+    }
+
+    def load_settings() -> dict:
+        return deepcopy(persisted)
+
+    def save_settings(settings: dict) -> None:
+        nonlocal persisted
+        persisted = deepcopy(settings)
+
+    async def reload_config() -> None:
+        return None
+
+    monkeypatch.setattr(config_module, "load_user_settings", load_settings)
+    monkeypatch.setattr(config_module, "save_user_settings", save_settings)
+
+    service = ConfigService(on_config_change=reload_config)
+    await service.update(model_roles={"research": {"model": "gpt-5.2", "reasoning_effort": "low"}})
+
+    assert persisted["model_roles"] == {"research": {"model": "gpt-5.2", "reasoning_effort": "low"}}
+    for stale in ("research_model", "research_reasoning_effort", "memory_model"):
+        assert stale not in persisted
+    assert persisted["chat_model"] == "gpt-5.2"

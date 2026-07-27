@@ -126,6 +126,9 @@ class Orchestra:
         # to the chat model server-side). A script's explicit agent(model=...)
         # still wins.
         self._default_model = getattr(run, "workflow_model", None)
+        # And the effort that role is configured at, when the user set one —
+        # otherwise the child falls back to whatever the model is mapped to.
+        self._default_reasoning_effort = getattr(run, "workflow_reasoning_effort", None)
 
     @classmethod
     def for_ctx(
@@ -321,6 +324,7 @@ class Orchestra:
                 system_prompt=system_prompt,
                 tools=tools,
                 model_override=model or self._default_model,
+                reasoning_effort_override=self._default_reasoning_effort,
                 parent_id=self.parent_id,
                 isolation=IsolationLevel.FULL,
                 agent_type=agent_type_label or phase or "workflow",

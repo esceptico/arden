@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Literal, Self
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from arden.constants import (
@@ -75,12 +75,32 @@ MODEL_DEFAULTS = {
 OPENAI_CODEX_DEFAULT_CHAT = "openai-codex/gpt-5.5"
 OPENAI_CODEX_DEFAULT_MEMORY = "openai-codex/gpt-5.4-mini"
 
+ROLE_NAMES = ("research", "workflow", "memory")
+
+
+class RoleModelSetup(BaseModel):
+    """Everything a background role needs to make a call, kept together.
+
+    Roles used to be a row of parallel scalars — research_model,
+    research_reasoning_effort, and one more top-level field per knob after
+    that. One object per role means the next knob (output ceiling, provider
+    routing, a thinking budget) lands in one place for all of them.
+
+    Effort here overrides the per-model map: research, workflows and memory
+    routinely share a model, and sharing its single effort entry made the three
+    settings rows move together.
+    """
+
+    model: str | None = None
+    reasoning_effort: str | None = None
+
+    model_config = {"extra": "forbid"}
+
+
 PERSIST_KEYS = frozenset(
     {
         "chat_model",
-        "research_model",
-        "workflow_model",
-        "memory_model",
+        "model_roles",
         "embedding_model",
         "memory",
         "memory_timezone",
@@ -134,9 +154,10 @@ class Config(BaseSettings):
 
     # Model IDs
     chat_model: str | None = None
-    research_model: str | None = None
-    workflow_model: str | None = None
-    memory_model: str | None = None
+    # Per-role setup (research | workflow | memory). The `<role>_model` and
+    # `<role>_reasoning_effort` properties below read out of here, so the rest
+    # of the codebase never learned about the move.
+    model_roles: dict[str, RoleModelSetup] = Field(default_factory=dict)
     embedding_model: str | None = None
 
     # Memory
@@ -170,6 +191,9 @@ class Config(BaseSettings):
     agent_max_wall_time_seconds: float | None = AGENT_MAX_WALL_TIME_SECONDS
     agent_max_cost: float | None = AGENT_MAX_COST
     agent_max_output_tokens: int | None = AGENT_MAX_OUTPUT_TOKENS
+    # Effort keyed by MODEL. Right for chat — a session pins its model and
+    # carries the effort with it — and it stays the default a role falls back
+    # to when its own setup names none.
     model_reasoning_efforts: dict[str, str] = Field(default_factory=dict)
     deferred_tools: bool = True
     approval_timeout_seconds: int = 300
@@ -189,6 +213,51 @@ class Config(BaseSettings):
 
     # --- Validators ---
 
+    @model_validator(mode="before")
+    @classmethod
+    def _fold_legacy_role_keys(cls, data):
+        """Settings written before roles were objects carry `research_model` and
+        friends at the top level. Read them into `model_roles` so an existing
+        install keeps its models; the next save writes only the new shape."""
+        if not isinstance(data, dict):
+            return data
+        roles = dict(data.get("model_roles") or {})
+        for role in ROLE_NAMES:
+            legacy = {
+                "model": data.pop(f"{role}_model", None),
+                "reasoning_effort": data.pop(f"{role}_reasoning_effort", None),
+            }
+            carried = {k: v for k, v in legacy.items() if v is not None}
+            if not carried:
+                continue
+            existing = roles.get(role) or {}
+            if not isinstance(existing, dict):
+                existing = existing.model_dump()
+            roles[role] = {**carried, **{k: v for k, v in existing.items() if v is not None}}
+        if roles:
+            data["model_roles"] = roles
+        return data
+
+    def role_setup(self, role: str) -> RoleModelSetup:
+        return self.model_roles.get(role) or RoleModelSetup()
+
+    def _set_role_model(self, role: str, model_id: str | None) -> None:
+        roles = dict(self.model_roles)
+        roles[role] = self.role_setup(role).model_copy(update={"model": model_id})
+        object.__setattr__(self, "model_roles", roles)
+
+    @property
+    def research_model(self) -> str | None:
+        return self.role_setup("research").model
+
+    @property
+    def workflow_model(self) -> str | None:
+        return self.role_setup("workflow").model
+
+    @property
+    def memory_model(self) -> str | None:
+        return self.role_setup("memory").model
+
     @model_validator(mode="after")
     def _resolve_model_defaults(self) -> Self:
         self._resolve_chat_model()
@@ -203,20 +272,19 @@ class Config(BaseSettings):
             if getattr(self, field, None):
                 object.__setattr__(self, "chat_model", chat)
                 if not self.memory_model:
-                    object.__setattr__(self, "memory_model", memory)
+                    self._set_role_model("memory", memory)
                 return
         if _has_openai_codex_auth():
             if not self.memory_model:
-                object.__setattr__(self, "memory_model", OPENAI_CODEX_DEFAULT_MEMORY)
+                self._set_role_model("memory", OPENAI_CODEX_DEFAULT_MEMORY)
             object.__setattr__(self, "chat_model", OPENAI_CODEX_DEFAULT_CHAT)
 
     def _fill_model_fallbacks(self) -> None:
-        if not self.memory_model and self.chat_model:
-            self.memory_model = self.chat_model
-        if not self.research_model and self.chat_model:
-            self.research_model = self.chat_model
-        if not self.workflow_model and self.chat_model:
-            self.workflow_model = self.chat_model
+        if not self.chat_model:
+            return
+        for role in ROLE_NAMES:
+            if not self.role_setup(role).model:
+                self._set_role_model(role, self.chat_model)
 
     def _resolve_embedding_model(self) -> None:
         if self.embedding_model or "embedding_model" in self.model_fields_set:
@@ -226,7 +294,17 @@ class Config(BaseSettings):
                 self.embedding_model = embedding
                 return
 
-    @field_validator("chat_model", "research_model", "workflow_model", "memory_model")
+    @field_validator("model_roles")
+    @classmethod
+    def _validate_role_models(cls, roles: dict[str, RoleModelSetup]) -> dict[str, RoleModelSetup]:
+        known = get_models()
+        for role, setup in roles.items():
+            if setup.model and setup.model not in known:
+                _logger.warning("Unknown model '%s' for role '%s', falling back to default", setup.model, role)
+                roles[role] = setup.model_copy(update={"model": None})
+        return roles
+
+    @field_validator("chat_model")
     @classmethod
     def _validate_model(cls, v: str | None) -> str | None:
         if v is None:
@@ -300,6 +378,17 @@ class Config(BaseSettings):
         if not effort:
             return None
         return effort if effort in get_models()[model_id].reasoning_efforts else None
+
+    def reasoning_effort_for_role(self, role: str, model_id: str | None) -> str | None:
+        """A background role's effort: its own override when set and valid for the
+        model, else whatever the per-model map says. `role` is research | workflow
+        | memory."""
+        if not model_id:
+            return None
+        override = self.role_setup(role).reasoning_effort
+        if override and override in get_models()[model_id].reasoning_efforts:
+            return override
+        return self.reasoning_effort_for(model_id)
 
     @property
     def db_dir(self) -> Path:

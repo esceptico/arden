@@ -2,7 +2,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from copy import deepcopy
 
-from arden.config import PERSIST_KEYS, PROVIDER_KEY_FIELDS
+from arden.config import PERSIST_KEYS, PROVIDER_KEY_FIELDS, ROLE_NAMES
 from arden.llm.models import Model, Provider, add_custom_model, get_models_by_provider, remove_custom_model
 from arden.logging import get_logger
 from arden.settings import load_user_settings, save_user_settings
@@ -40,6 +40,14 @@ class ConfigService:
                     settings.pop(key, None)
                 else:
                     settings[key] = value
+            if "model_roles" in persist:
+                # Roles moved from a scalar per knob into one object each. Config
+                # still READS the old keys so an existing install keeps its
+                # models; drop them once the new shape lands so the file has a
+                # single source of truth.
+                for role in ROLE_NAMES:
+                    settings.pop(f"{role}_model", None)
+                    settings.pop(f"{role}_reasoning_effort", None)
 
         await self._with_rollback(mutate)
 

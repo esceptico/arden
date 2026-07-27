@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import ValidationError
 
+from arden.config import ROLE_NAMES
 from arden.constants import COMPRESSION_TOKEN_HEADROOM
 from arden.llm.models import (
     Provider,
@@ -129,6 +130,7 @@ def _config_response(rt: Runtime) -> dict:
         "memory_enabled": memory_connected,
         "integrations": integrations,
         "tool_overrides": {name: decision.value for name, decision in config.tool_overrides.items()},
+        "model_roles": {role: config.role_setup(role).model_dump() for role in ROLE_NAMES},
     }
 
 
@@ -139,7 +141,34 @@ def _reasoning_efforts(model_id: str | None) -> tuple[str, ...]:
     return get_model(model_id).reasoning_efforts if model_id else ()
 
 
+def _merge_role_patch(fields: dict, config) -> None:
+    """Fold a role patch onto stored setup so touching one role — or one knob
+    within it — leaves the rest alone, and check each role's effort against the
+    model THAT role runs on rather than the chat model."""
+    patch = fields.pop("model_roles", None)
+    if not patch:
+        return
+    merged = {role: config.role_setup(role).model_dump() for role in ROLE_NAMES}
+    for role, changes in patch.items():
+        if role not in merged:
+            raise HTTPException(status_code=400, detail=f"Unknown model role {role!r}; expected one of {ROLE_NAMES}")
+        merged[role].update(changes)
+        effort = merged[role].get("reasoning_effort")
+        if effort is None:
+            continue
+        model_id = merged[role].get("model")
+        efforts = _reasoning_efforts(model_id)
+        if effort not in efforts:
+            available = ", ".join(efforts) or "none"
+            raise HTTPException(
+                status_code=400,
+                detail=f"reasoning_effort {effort!r} is not supported by {model_id!r}; available: {available}",
+            )
+    fields["model_roles"] = merged
+
+
 def _validate_reasoning_patch(fields: dict, config) -> None:
+    _merge_role_patch(fields, config)
     target_model = fields.pop("reasoning_model", None) or fields.get("chat_model", config.chat_model)
     efforts = _reasoning_efforts(target_model)
 

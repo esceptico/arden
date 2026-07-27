@@ -328,6 +328,7 @@ def create_spawn_fn(
         tools: list[dict] | None = None,
         timeout: int = SUBAGENT_DEFAULT_TIMEOUT,
         model_override: str | None = None,
+        reasoning_effort_override: str | None = None,
         parent_id: str | None = None,
         isolation: IsolationLevel = IsolationLevel.FULL,
         silent: bool = False,
@@ -412,7 +413,9 @@ def create_spawn_fn(
             child_state.agent_status = "running"
             child_state.area_id = calling_ctx.session_state.area_id
             child_state.chat_model = child_model
-        child_reasoning_effort = (
+        # A caller spawning FOR a role (research, a workflow agent) names the
+        # effort that role is configured at. Otherwise effort follows the model.
+        child_reasoning_effort = reasoning_effort_override or (
             model_reasoning_efforts.get(child_model) if model_reasoning_efforts is not None else reasoning_effort
         )
 
@@ -429,6 +432,8 @@ def create_spawn_fn(
             extra_auto_approve=calling_ctx.run.extra_auto_approve,
             approval_controls=calling_ctx.run.approval_controls,
             research_model=calling_ctx.run.research_model,
+            research_reasoning_effort=calling_ctx.run.research_reasoning_effort,
+            workflow_reasoning_effort=calling_ctx.run.workflow_reasoning_effort,
             deferred_tools_enabled=calling_ctx.run.deferred_tools_enabled,
             deferred_tool_loader=calling_ctx.run.deferred_tool_loader,
             loaded_tools=set(calling_ctx.run.loaded_tools),

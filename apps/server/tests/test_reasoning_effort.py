@@ -345,3 +345,86 @@ async def test_anthropic_stream_emits_tool_search_before_loaded_tool_call():
     assert items[0].done is False
     assert isinstance(items[1], ProviderToolCall)
     assert items[1].result == "Matched tools: slack_search"
+
+
+def test_roles_sharing_a_model_no_longer_share_its_effort():
+    """Research, workflows and memory routinely point at one model. Effort keyed
+    by model alone meant three settings rows writing a single value, so changing
+    one visibly moved the other two."""
+    config = Config(
+        memory=False,
+        chat_model="gpt-5.2",
+        research_model="gpt-5.2",
+        workflow_model="gpt-5.2",
+        memory_model="gpt-5.2",
+        model_reasoning_efforts={"gpt-5.2": "low"},
+        research_reasoning_effort="high",
+    )
+
+    assert config.reasoning_effort_for_role("research", "gpt-5.2") == "high"
+    # The other two keep following the model until they are given their own.
+    assert config.reasoning_effort_for_role("workflow", "gpt-5.2") == "low"
+    assert config.reasoning_effort_for_role("memory", "gpt-5.2") == "low"
+    # And chat is untouched by any of it.
+    assert config.reasoning_effort_for("gpt-5.2") == "low"
+
+
+def test_role_effort_falls_back_when_unsupported_by_its_model():
+    config = Config(
+        memory=False,
+        chat_model="gpt-5.2",
+        research_model="gpt-5.2",
+        model_reasoning_efforts={"gpt-5.2": "low"},
+        research_reasoning_effort="not-a-real-effort",
+    )
+
+    assert config.reasoning_effort_for_role("research", "gpt-5.2") == "low"
+
+
+def test_role_patch_is_validated_against_its_own_role_model():
+    config = Config(memory=False, chat_model="gpt-5.2", research_model="gpt-5.2")
+
+    fields = {"model_roles": {"research": {"reasoning_effort": "max"}}}
+    with pytest.raises(HTTPException):
+        _validate_reasoning_patch(fields, config)
+
+    fields = {"model_roles": {"research": {"reasoning_effort": "high"}}}
+    _validate_reasoning_patch(fields, config)
+    # The patch merges onto stored setup: research keeps its model and the other
+    # two roles come through untouched rather than being blanked.
+    assert fields["model_roles"]["research"] == {"model": "gpt-5.2", "reasoning_effort": "high"}
+    assert fields["model_roles"]["workflow"]["reasoning_effort"] is None
+    assert fields["model_roles"]["memory"]["model"] == "gpt-5.2"
+
+
+def test_unknown_role_in_a_patch_is_rejected():
+    config = Config(memory=False, chat_model="gpt-5.2")
+    with pytest.raises(HTTPException):
+        _validate_reasoning_patch({"model_roles": {"nonsense": {"model": "gpt-5.2"}}}, config)
+
+
+def test_legacy_flat_role_keys_migrate_into_role_setups():
+    """Settings written before roles were objects must keep their models."""
+    config = Config(
+        memory=False,
+        chat_model="gpt-5.2",
+        research_model="gpt-5.2",
+        workflow_model="gpt-5.2",
+        memory_model="gpt-5.2",
+        research_reasoning_effort="high",
+        model_reasoning_efforts={"gpt-5.2": "low"},
+    )
+
+    assert config.role_setup("research").model == "gpt-5.2"
+    assert config.role_setup("research").reasoning_effort == "high"
+    assert config.role_setup("workflow").reasoning_effort is None
+    # The flat names still read, so the 40-odd call sites never had to change.
+    assert config.memory_model == "gpt-5.2"
+
+
+def test_roles_unset_still_fall_back_to_the_chat_model():
+    config = Config(memory=False, chat_model="gpt-5.2")
+
+    assert config.research_model == "gpt-5.2"
+    assert config.workflow_model == "gpt-5.2"
+    assert config.memory_model == "gpt-5.2"

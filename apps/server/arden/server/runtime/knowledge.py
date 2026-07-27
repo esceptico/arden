@@ -602,7 +602,7 @@ class KnowledgeRuntime:
         API-default and time out. Returns None for non-reasoning models."""
         if not model_id:
             return None
-        configured = self.config.reasoning_effort_for(model_id)
+        configured = self.config.reasoning_effort_for_role("memory", model_id)
         if configured:
             return configured
         from arden.llm.models import get_models

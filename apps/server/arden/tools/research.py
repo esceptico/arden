@@ -280,6 +280,7 @@ async def research(execution: ToolExecution, args: ResearchInput) -> ToolResult:
             ctx,
             task=args.task,
             model_override=ctx.run.research_model,
+            reasoning_effort_override=ctx.run.research_reasoning_effort,
             parent_id=execution.tool_id,
             isolation=IsolationLevel.FULL,
             agent_type="research",

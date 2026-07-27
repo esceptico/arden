@@ -122,6 +122,13 @@ export interface ServerConfig {
   reasoning_effort: string | null;
   reasoning_efforts: string[];
   model_reasoning_efforts: Record<string, string>;
+  /** Per-role setup, keyed by role (research | workflow | memory). A role's
+   *  effort overrides the per-model map, which every role pointed at the same
+   *  model would otherwise share. */
+  /** Absent on a server older than the role split — the Models tab says so
+   *  rather than the whole config failing to parse and taking every other
+   *  settings surface down with it. */
+  model_roles?: Record<string, RoleModelSetup>;
   compression_threshold: number;
   max_messages: number;
   compression_keep_ratio: number;
@@ -130,6 +137,11 @@ export interface ServerConfig {
   memory_enabled: boolean;
   integrations: Record<string, Record<string, unknown>>;
   tool_overrides: Record<string, ToolOverrideDecision>;
+}
+
+export interface RoleModelSetup {
+  model: string | null;
+  reasoning_effort: string | null;
 }
 
 export interface ModelGroup {

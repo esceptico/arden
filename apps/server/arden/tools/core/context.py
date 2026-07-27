@@ -90,6 +90,11 @@ class RunContext:
     approval_controls: ApprovalControls = field(default_factory=ApprovalControls)
     research_model: str | None = None
     workflow_model: str | None = None
+    # Effort for those roles, when the user set one. Beside the models because
+    # they travel together: the role picks both, and a child spawned for the
+    # role should not inherit whatever the per-model map says.
+    research_reasoning_effort: str | None = None
+    workflow_reasoning_effort: str | None = None
     deferred_tools_enabled: bool = False
     deferred_tool_loader: Literal["load_tools", "tool_search"] = "load_tools"
     loaded_tools: set[str] = field(default_factory=set)

@@ -400,12 +400,11 @@ export async function getServerModels(config: AppConfig): Promise<ModelsResponse
 
 export type ServerConfigPatch = Partial<{
   chat_model: string;
-  research_model: string;
-  workflow_model: string;
-  memory_model: string;
   max_depth: number;
   reasoning_model: string;
   reasoning_effort: string | null;
+  /** Partial: omitted roles and omitted keys keep their stored value. */
+  model_roles: Record<string, { model?: string; reasoning_effort?: string | null }>;
   compression_threshold: number;
   max_messages: number;
   compression_keep_ratio: number;

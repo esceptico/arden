@@ -498,11 +498,20 @@ class IntegrationToggles(BaseModel):
     memory: bool | None = None
 
 
+class RoleSetupPatch(BaseModel):
+    """Partial update for one role. Omitted keys keep their stored value; an
+    explicit null clears one. A new per-role knob is a field here and nothing
+    else — that is the point of the shape."""
+
+    model: str | None = None
+    reasoning_effort: str | None = None
+
+    model_config = {"extra": "forbid"}
+
+
 class UpdateConfigRequest(BaseModel):
     chat_model: str | None = None
-    research_model: str | None = None
-    workflow_model: str | None = None
-    memory_model: str | None = None
+    model_roles: dict[str, RoleSetupPatch] | None = None
     max_depth: int | None = Field(default=None, ge=1, le=16)
     reasoning_model: str | None = None
     reasoning_effort: str | None = None

@@ -89,6 +89,7 @@ async def test_runtime_research_runner_areas_internal_ledger_notes(monkeypatch):
             agent_max_cost=None,
             agent_max_output_tokens=None,
             model_reasoning_efforts={},
+            role_setup=lambda _role: SimpleNamespace(model=None, reasoning_effort=None),
             deferred_tools=False,
             compression_threshold=0.8,
             max_messages=120,

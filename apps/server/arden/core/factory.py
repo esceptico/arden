@@ -44,6 +44,8 @@ class AgentConfig:
     max_output_tokens: int | None = None
     reasoning_effort: str | None = None
     model_reasoning_efforts: dict[str, str] | None = None
+    research_reasoning_effort: str | None = None
+    workflow_reasoning_effort: str | None = None
     deferred_tools: bool = True
     approval_timeout_seconds: int = 300
     compactor: Compactor | None = None
@@ -62,6 +64,8 @@ class AgentConfig:
             max_output_tokens=config.agent_max_output_tokens,
             reasoning_effort=config.reasoning_effort_for(model or config.chat_model),
             model_reasoning_efforts=dict(config.model_reasoning_efforts),
+            research_reasoning_effort=config.role_setup("research").reasoning_effort,
+            workflow_reasoning_effort=config.role_setup("workflow").reasoning_effort,
             deferred_tools=config.deferred_tools,
             approval_timeout_seconds=config.approval_timeout_seconds,
             compactor=SummaryCompactor(
@@ -114,6 +118,8 @@ def create_agent(
         approval_controls=approval_controls or ApprovalControls(),
         research_model=config.research_model,
         workflow_model=config.workflow_model,
+        research_reasoning_effort=config.research_reasoning_effort,
+        workflow_reasoning_effort=config.workflow_reasoning_effort,
         deferred_tools_enabled=config.deferred_tools,
         loaded_tools=loaded_tools if loaded_tools is not None else set(),
         allowed_tool_names=tool_schema_names(tools),

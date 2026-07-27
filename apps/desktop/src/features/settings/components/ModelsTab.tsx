@@ -14,24 +14,29 @@ import {
 import { SettingsTabSkeleton } from "@/features/settings/components/SettingsTabSkeleton";
 import { Button } from "@/components/ui/Button";
 
-type ModelKind = "research_model" | "workflow_model" | "memory_model";
+/** One row per background role. Model and effort live together in the role's
+ *  own setup, so effort stops being keyed by model alone — these three roles
+ *  routinely share a model, and sharing its single effort entry made all three
+ *  rows move at once. A role falls back to the per-model value until it names
+ *  its own. */
+type ModelKind = "research" | "workflow" | "memory";
 
 const KIND_LABELS: Record<ModelKind, { title: string; description: string }> = {
-  research_model: {
+  research: {
     title: "Research",
     description: "Used by research-style sub-agents and deeper investigations.",
   },
-  workflow_model: {
+  workflow: {
     title: "Workflows",
     description: "Default for workflow agents; a script's explicit per-agent model still wins.",
   },
-  memory_model: {
+  memory: {
     title: "Memory",
     description: "Knowledge reflection, activation, and retention.",
   },
 };
 
-const SETTINGS_MODEL_KINDS: ModelKind[] = ["research_model", "workflow_model", "memory_model"];
+const SETTINGS_MODEL_KINDS: ModelKind[] = ["research", "workflow", "memory"];
 
 export function ModelsTab() {
   const connected = useStore((s) => s.connected);
@@ -68,6 +73,7 @@ export function ModelsTab() {
 
   if (
     !Object.prototype.hasOwnProperty.call(cfg, "model_reasoning_efforts") ||
+    !Object.prototype.hasOwnProperty.call(cfg, "model_roles") ||
     !Object.prototype.hasOwnProperty.call(models, "reasoning_efforts")
   ) {
     return (
@@ -132,9 +138,10 @@ export function ModelsTab() {
           }}
         />
         {SETTINGS_MODEL_KINDS.map((kind) => {
-          const current = cfg[kind];
+          const setup = cfg.model_roles?.[kind];
+          const current = setup?.model;
           // Absent until the server restarts onto a build that ships this key.
-          if (current === undefined) return null;
+          if (!current) return null;
           const meta = KIND_LABELS[kind];
           return (
             <Section
@@ -146,13 +153,13 @@ export function ModelsTab() {
               savingReasoning={saving === `${kind}:reasoning`}
               groups={groups}
               reasoningEfforts={models.reasoning_efforts}
-              currentReasoning={cfg.model_reasoning_efforts[current] ?? null}
+              currentReasoning={setup?.reasoning_effort ?? cfg.model_reasoning_efforts[current] ?? null}
               onSelect={async (model) => {
                 if (model === current || saving) return;
                 setSaving(`${kind}:model`);
                 setError(null);
                 try {
-                  await updateServerConfig({ [kind]: model });
+                  await updateServerConfig({ model_roles: { [kind]: { model } } });
                   fireSaved();
                 } catch (err) {
                   setError(err instanceof Error ? err.message : String(err));
@@ -166,10 +173,7 @@ export function ModelsTab() {
                 setSaving(`${kind}:reasoning`);
                 setError(null);
                 try {
-                  await updateServerConfig({
-                    reasoning_model: current,
-                    reasoning_effort: effort,
-                  });
+                  await updateServerConfig({ model_roles: { [kind]: { reasoning_effort: effort } } });
                   fireSaved();
                 } catch (err) {
                   setError(err instanceof Error ? err.message : String(err));
