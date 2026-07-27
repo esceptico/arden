@@ -113,7 +113,7 @@ function FilterSwitch({
   return (
     <div className="flex items-center justify-between gap-3 py-1 text-sm text-ink select-none">
       <span>{label}</span>
-      <SwitchControl size="sm" checked={checked} onChange={onChange} aria-label={label} />
+      <SwitchControl checked={checked} onChange={onChange} aria-label={label} />
     </div>
   );
 }

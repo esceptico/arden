@@ -50,13 +50,17 @@ test("a disabled switch does not toggle on click", async () => {
   restore();
 });
 
-test("all call-site sizes preserve the canonical switch geometry", () => {
-  for (const size of ["sm", "md"] as const) {
-    const html = renderToStaticMarkup(<SwitchControl size={size} checked={false} onChange={() => {}} aria-label={size} />);
-    expect(html).toContain('role="switch"');
-  }
+test("the switch has one geometry and no phantom size variant", () => {
+  const html = renderToStaticMarkup(<SwitchControl checked={false} onChange={() => {}} aria-label="switch" />);
+  expect(html).toContain('role="switch"');
+  // `size` stamped data-size and nothing ever styled it, so four call sites
+  // asked for "sm" and got the 32 × 18 control anyway. The prop is gone; a
+  // real second size would be a deliberate change to shipped surfaces.
+  expect(html).not.toContain("data-size");
 
   const component = read("../src/components/ui/SwitchControl.tsx");
+  expect(component).not.toContain('size?: "sm"');
+  expect(component).not.toMatch(/data-size=\{/);
   const css = read("../src/design/foundation.css");
   expect(component).not.toContain("onPointerMove");
   expect(component).not.toContain("SPRING_LAYOUT");

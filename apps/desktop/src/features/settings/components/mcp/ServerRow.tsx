@@ -79,7 +79,6 @@ export function ServerRow({
           <SettingsIcon size={ICON.MD} />
         </IconButton>
         <SwitchControl
-          size="sm"
           checked={server.enabled}
           onChange={onToggle}
           disabled={busy}

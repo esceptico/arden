@@ -994,7 +994,8 @@
 .memory-surface .mw-prop-add-row input.value { width: 100%; }
 
 .memory-surface .mw-prop-check { width: .875rem; height: .875rem; display: inline-block; border: 1px solid var(--line-strong); border-radius: var(--r-mark); }
-.memory-surface .mw-prop-check.on { border-color: var(--accent); background: var(--accent); }
+/* Checked fills speak one language app-wide — ink, like the switch. */
+.memory-surface .mw-prop-check.on { border-color: var(--ink); background: var(--ink); }
 
 .memory-surface .mw-prose {
   margin-top: 0;

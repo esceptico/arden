@@ -66,7 +66,6 @@ export function ToolsSection({
               <div className="settings-data-row-main">
                 <div className="settings-data-row-title">
                   <SwitchControl
-                    size="sm"
                     checked={checked}
                     disabled={busy}
                     onChange={(next) => {

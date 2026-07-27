@@ -723,7 +723,13 @@ textarea.arden-field {
    the track background never applied — so on and off differed only by knob
    position and read as the same control. */
 .switch-control {
-  --gs-on: var(--color-accent);
+  /* On is an ink slab with a paper knob — the same "this is committed"
+     vocabulary as the primary button, and it inverts with the theme on its
+     own. Accent stays reserved for links and focus rings, where it is doing
+     wayfinding work; a saturated toggle was the only such fill on these
+     surfaces and outshouted the primary action next to it. */
+  --gs-on: var(--ink);
+  --gs-on-knob: var(--paper);
   --gs-track-bg: #d8d8d4;
   --gs-track-shadow: inset 0 0 0 1px rgb(0 0 0 / 6%);
   --gs-knob-bg: #ffffff;
@@ -755,6 +761,7 @@ textarea.arden-field {
 }
 .switch-control.switch-control-on {
   --gs-track-bg: var(--gs-on);
+  --gs-knob-bg: var(--gs-on-knob);
 }
 .switch-control-knob {
   position: absolute;
@@ -784,8 +791,11 @@ textarea.arden-field {
   --gs-knob-bg: var(--ink);
   --gs-knob-shadow: 0 1px 3px rgb(0 0 0 / 48%);
 }
+/* The dark resting rule above is (0,3,0) and would otherwise keep its ink
+   knob on an ink track — restate both on the checked pair. */
 :root.dark .switch-control.switch-control-on {
   --gs-track-bg: var(--gs-on);
+  --gs-knob-bg: var(--gs-on-knob);
 }
 
 /* Search is one material role: 30px field by default, with compact and

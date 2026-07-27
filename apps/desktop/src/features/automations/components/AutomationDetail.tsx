@@ -559,7 +559,6 @@ export function AutomationDetail({
                 </span>
               </span>
               <SwitchControl
-                size="sm"
                 checked={form.auto_approve}
                 onChange={(autoApprove) => updateForm({ auto_approve: autoApprove })}
                 aria-label="Auto-Approve"
