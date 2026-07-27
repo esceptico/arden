@@ -40,6 +40,7 @@ import {
 import {
   ModelMenuPicker,
   availableModelChoices,
+  configuredModelChoices,
   shortModelLabel,
 } from "@/components/ui/ModelPickers";
 import { ScheduleTriggerPeek } from "@/features/automations/components/ScheduleTriggerPeek";
@@ -856,9 +857,12 @@ function AutomationModelPicker({
   onChange: (model: string | null) => void;
 }) {
   const serverModels = useStore((state) => state.serverModels);
+  const serverConfig = useStore((state) => state.serverConfig);
   const availableModels = useMemo(
-    () => availableModelChoices(model, serverModels?.models),
-    [model, serverModels],
+    // Configured models stand in when the catalog never loaded, so the picker
+    // is never reduced to whatever this automation already had.
+    () => availableModelChoices(model, serverModels?.models ?? configuredModelChoices(serverConfig)),
+    [model, serverConfig, serverModels],
   );
   const options = [
     { value: "", label: DEFAULT_MODEL_LABEL },

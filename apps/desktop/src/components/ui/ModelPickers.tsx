@@ -11,7 +11,7 @@ import { Check, ChevronDown } from "@/components/icons";
 import { BlurSwap } from "@/components/ui/BlurSwap";
 import { updateServerConfig, fetchServerConfig } from "@/actions/server";
 import { updateSessionModelAction, refreshSessions } from "@/actions/sessions";
-import type { ModelGroup } from "@/api/types";
+import type { ModelGroup, ServerConfig } from "@/api/types";
 import { ICON } from "@/lib/icons";
 import { useOverlayLayer } from "@/lib/overlayStack";
 import { useStore } from "@/stores";
@@ -69,6 +69,21 @@ export function reasoningEffortLabel(effort: string | null): string {
   if (effort === null) return "Default";
   return REASONING_EFFORT_LABELS[effort]
     ?? `${effort.slice(0, 1).toUpperCase()}${effort.slice(1)}`;
+}
+
+/**
+ * What the server is already configured to run — the chat default plus every
+ * role's model. `/models` is fetched with `.catch(() => null)` and never
+ * retried, so one failed catalog load at startup leaves every picker in the
+ * app empty for the rest of the session. These are known-good ids that need no
+ * catalog to be offerable.
+ */
+export function configuredModelChoices(config: ServerConfig | null): string[] {
+  if (!config) return [];
+  return [
+    config.chat_model,
+    ...Object.values(config.model_roles ?? {}).map((role) => role.model),
+  ].filter((model): model is string => Boolean(model));
 }
 
 export function availableModelChoices(
@@ -428,7 +443,10 @@ export function ModelReasoningChip() {
   const currentModel = session?.chat_model ?? config.chat_model;
   const modelReasoningEfforts = config.model_reasoning_efforts;
   const currentEffort = modelReasoningEfforts[currentModel] ?? null;
-  const groups = catalog?.groups ?? [];
+  const configured = availableModelChoices(currentModel, configuredModelChoices(config));
+  const groups: ModelGroup[] = catalog?.groups.length
+    ? catalog.groups
+    : [{ provider: "configured", label: "Configured", models: configured }];
 
   const selectModel = async (model: string) => {
     if (!currentSessionId || model === currentModel || pendingModel) return;

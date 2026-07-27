@@ -6,6 +6,7 @@ import {
   ModelReasoningPicker,
   ModelMenuPicker,
   availableModelChoices,
+  configuredModelChoices,
   reasoningEffortLabel,
 } from "@/components/ui/ModelPickers";
 import type { ModelGroup } from "@/api/types";
@@ -49,6 +50,39 @@ test("model choices lead with the current model and survive an absent catalog", 
   // No catalog yet: the current model alone keeps the picker usable.
   expect(availableModelChoices("openai-codex/gpt-sol", null)).toEqual(["openai-codex/gpt-sol"]);
   expect(availableModelChoices(null, ["claude-opus"])).toEqual(["claude-opus"]);
+});
+
+test("configured models stand in for a catalog that never loaded", () => {
+  // /models is fetched with .catch(() => null) and never retried, so one failed
+  // load leaves every picker empty for the session unless something known-good
+  // can be offered without it.
+  const config = {
+    chat_model: "openai-codex/gpt-sol",
+    model_roles: {
+      research: { model: "claude-opus", reasoning_effort: null },
+      workflow: { model: "claude-opus", reasoning_effort: "high" },
+      memory: { model: "claude-sonnet", reasoning_effort: null },
+    },
+  } as unknown as Parameters<typeof configuredModelChoices>[0];
+
+  expect(configuredModelChoices(config)).toEqual([
+    "openai-codex/gpt-sol",
+    "claude-opus",
+    "claude-opus",
+    "claude-sonnet",
+  ]);
+  // Deduped, and the session's own model still leads.
+  expect(availableModelChoices("claude-sonnet", configuredModelChoices(config))).toEqual([
+    "claude-sonnet",
+    "openai-codex/gpt-sol",
+    "claude-opus",
+  ]);
+  expect(configuredModelChoices(null)).toEqual([]);
+  // A role with no model set contributes nothing rather than a blank entry.
+  expect(configuredModelChoices({
+    chat_model: "claude-opus",
+    model_roles: { research: { model: null, reasoning_effort: null } },
+  } as unknown as Parameters<typeof configuredModelChoices>[0])).toEqual(["claude-opus"]);
 });
 
 test("reasoning labels preserve wire values without exposing implementation spelling", () => {

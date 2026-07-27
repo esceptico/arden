@@ -229,6 +229,38 @@ test("the chip stays out of the composer until the server contract is there", as
   });
 });
 
+test("a catalog that never loaded still leaves the picker usable", async () => {
+  // serverModels stays null when /models fails once at startup — nothing
+  // retries it — so the picker falls back to the configured models.
+  await withStore(
+    {
+      serverConfig: { ...CONFIG, model_roles: {
+        research: { model: "anthropic/opus", reasoning_effort: null },
+        workflow: { model: "anthropic/sonnet", reasoning_effort: null },
+        memory: { model: "anthropic/opus", reasoning_effort: null },
+      } },
+      serverModels: null,
+      currentSessionId: "session-1",
+      sessions: [SESSION],
+    },
+    async () => {
+      const { el, root, restore } = mount();
+      try {
+        await act(async () => root.render(<ModelReasoningChip />));
+        await act(async () => el.querySelector<HTMLElement>('[role="combobox"]')!.click());
+
+        const catalog = document.querySelector<HTMLElement>('[role="dialog"][aria-label="Choose model"]')!;
+        const offered = Array.from(catalog.querySelectorAll<HTMLElement>('[role="option"]'))
+          .map((item) => item.textContent?.trim());
+        expect(offered).toEqual(["anthropic/opus", "openai/gpt", "anthropic/sonnet"]);
+      } finally {
+        await act(async () => root.unmount());
+        restore();
+      }
+    },
+  );
+});
+
 test("without a session there is nothing to pin a model to, so the control is inert", async () => {
   await withStore(
     {
