@@ -212,7 +212,7 @@ export function App() {
         }
         if (k === "n" && !e.shiftKey) {
           e.preventDefault();
-          goToNewSessionHome();
+          void createSession();
           return;
         }
         if (k === "h" && e.shiftKey) {

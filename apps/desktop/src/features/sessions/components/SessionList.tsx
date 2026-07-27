@@ -1,16 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { ChevronDown, Folder, Inbox, Pin } from "@/components/icons";
+import { ChevronDown, Folder, Inbox, Pin, Plus } from "@/components/icons";
 import { MOTION, EASE_EMPHASIZED, EASE_OUT } from "@/lib/tokens/motion";
 import { useStore } from "@/stores";
 import type { SessionListItem } from "@/api/types";
-import { archiveSession, switchSession } from "@/actions/sessions";
+import { archiveArea, archiveSession, createSession, moveSessionToArea, switchSession, toggleSessionPin } from "@/actions/sessions";
 import { ICON } from "@/lib/icons";
 import { useTimeTicker } from "@/lib/hooks";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { groupSessions, primarySidebarSessions } from "@/features/sessions/lib/areas";
+import { IconButton } from "@/components/ui/IconButton";
 import { SessionRow } from "@/features/sessions/components/SessionRow";
 import { SessionContextMenu, type ContextMenuState } from "@/features/sessions/components/SessionContextMenu";
+import { ContextMenu, type ContextMenuPosition } from "@/components/ui/ContextMenu";
 import { SidebarFilters } from "@/features/sessions/components/SidebarFilters";
 import { WorkspaceRailSectionHeader } from "@/components/workspace/WorkspaceRail";
 
@@ -42,6 +44,7 @@ export function SessionList() {
 
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
+  const [areaMenu, setAreaMenu] = useState<(ContextMenuPosition & { areaId: string; label: string }) | null>(null);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   // Per-group count of rows revealed past MAX_VISIBLE (in REVEAL_STEP
   // increments); absent key = collapsed to the cap.
@@ -195,25 +198,66 @@ export function SessionList() {
                 key={group.key}
                 className="workspace-rail__group"
               >
-                <button
-                  type="button"
-                  onClick={() => toggleGroup(group.key)}
-                  aria-expanded={!isCollapsed}
-                  data-collapsed={isCollapsed ? "true" : undefined}
-                  className="workspace-rail__group-heading arden-row"
-                >
-                  <span aria-hidden>
-                    {group.pinned ? (
-                      <Pin size={ICON.MD} strokeWidth={2} />
-                    ) : group.key === "inbox" ? (
-                      <Inbox size={ICON.MD} strokeWidth={2} />
-                    ) : group.area ? (
-                      <Folder size={ICON.MD} strokeWidth={2} />
-                    ) : null}
-                  </span>
-                  <span>{group.label}</span>
-                  <ChevronDown size={ICON.XS} strokeWidth={2.2} />
-                </button>
+                {/* The + is a positioned SIBLING of the toggle (a button
+                    cannot nest a button), hover/focus-revealed like the
+                    session rows' action cluster. */}
+                <div className="group/heading relative">
+                  <button
+                    type="button"
+                    onClick={() => toggleGroup(group.key)}
+                    onContextMenu={group.area ? (event) => {
+                      event.preventDefault();
+                      setAreaMenu({
+                        areaId: group.area!.area_id,
+                        label: group.label,
+                        x: event.clientX,
+                        y: event.clientY,
+                        trigger: event.currentTarget,
+                        source: "pointer",
+                      });
+                    } : undefined}
+                    onKeyDown={group.area ? (event) => {
+                      if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+                      event.preventDefault();
+                      const rect = event.currentTarget.getBoundingClientRect();
+                      setAreaMenu({
+                        areaId: group.area!.area_id,
+                        label: group.label,
+                        x: rect.left + 12,
+                        y: rect.bottom - 4,
+                        trigger: event.currentTarget,
+                        source: "keyboard",
+                      });
+                    } : undefined}
+                    aria-expanded={!isCollapsed}
+                    data-collapsed={isCollapsed ? "true" : undefined}
+                    className="workspace-rail__group-heading arden-row"
+                  >
+                    <span aria-hidden>
+                      {group.pinned ? (
+                        <Pin size={ICON.MD} strokeWidth={2} />
+                      ) : group.key === "inbox" ? (
+                        <Inbox size={ICON.MD} strokeWidth={2} />
+                      ) : group.area ? (
+                        <Folder size={ICON.MD} strokeWidth={2} />
+                      ) : null}
+                    </span>
+                    <span>{group.label}</span>
+                    <ChevronDown size={ICON.XS} strokeWidth={2.2} />
+                  </button>
+                  {!group.pinned && (
+                    <IconButton
+                      size="xs"
+                      tone="faint"
+                      aria-label={`New chat in ${group.label}`}
+                      title={`New chat in ${group.label}`}
+                      onClick={() => void createSession(group.area?.area_id ?? null)}
+                      className="!absolute top-1/2 right-7 -translate-y-1/2 opacity-0 transition-opacity duration-check ease-out group-hover/heading:opacity-100 focus-visible:opacity-100"
+                    >
+                      <Plus size={ICON.XS} />
+                    </IconButton>
+                  )}
+                </div>
                 <AnimatePresence initial={false}>
                   {!isCollapsed && (
                     <motion.div
@@ -275,8 +319,44 @@ export function SessionList() {
         )}
       </div>
 
+      <ContextMenu
+        state={areaMenu}
+        onClose={() => setAreaMenu(null)}
+        ariaLabel="Area actions"
+        entries={areaMenu ? [
+          {
+            id: "open-area",
+            label: "Open area",
+            onSelect: () => useStore.getState().openArea(areaMenu.areaId),
+          },
+          {
+            id: "new-chat",
+            label: "New chat",
+            onSelect: () => void createSession(areaMenu.areaId),
+          },
+          {
+            id: "set-aside",
+            label: "Set aside",
+            onSelect: () => void archiveArea(areaMenu.areaId),
+          },
+        ] : []}
+      />
+
       <SessionContextMenu
         state={menu}
+        areas={areas}
+        currentAreaId={
+          menu ? (chatSessions.find((x) => x.session_id === menu.sessionId)?.area_id ?? null) : null
+        }
+        pinned={menu ? pinnedSet.has(menu.sessionId) : false}
+        onTogglePin={() => {
+          if (!menu) return;
+          toggleSessionPin(menu.sessionId);
+        }}
+        onMove={(areaId) => {
+          if (!menu) return;
+          void moveSessionToArea(menu.sessionId, areaId);
+        }}
         onClose={closeMenu}
         onOpen={() => {
           if (!menu) return;

@@ -173,14 +173,23 @@ test("outside pointerdown dismisses without restoring focus", async () => {
   expect(document.activeElement).not.toBe(trigger);
 });
 
-test("session menu exposes only Board actions with a real desktop route", async () => {
+test("session menu exposes Board actions plus pin and the move-to submenu", async () => {
   const { app, trigger, render } = mount();
+  const areas = [
+    { area_id: "a1", name: "Health" },
+    { area_id: "a2", name: "Design" },
+  ] as never;
   await render(
     <SessionContextMenu
       state={{ sessionId: "session-1", x: 12, y: 24, trigger, source: "pointer" }}
+      areas={areas}
+      currentAreaId="a1"
+      pinned={false}
       onClose={() => {}}
       onOpen={() => {}}
       onRename={() => {}}
+      onTogglePin={() => {}}
+      onMove={() => {}}
       onArchive={() => {}}
     />,
   );
@@ -189,12 +198,27 @@ test("session menu exposes only Board actions with a real desktop route", async 
   expect(Array.from(menu.querySelectorAll('[role="menuitem"]'), (item) => item.textContent)).toEqual([
     "Open chat",
     "Rename",
+    "Pin",
+    "Move to›",
     "Archive",
   ]);
+  // The submenu affordance is a text glyph — the Board no-icon contract holds.
   expect(menu.querySelectorAll('[role="separator"]')).toHaveLength(1);
   expect(menu.querySelectorAll("svg")).toHaveLength(0);
-  expect(menu.textContent).not.toContain("Pin to top");
+  const moveItem = Array.from(menu.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+    .find((item) => item.textContent?.startsWith("Move to"))!;
+  expect(moveItem.getAttribute("aria-haspopup")).toBe("menu");
+  // Hover opens the flyout with the OTHER areas plus Inbox (never the
+  // session's current area).
+  await act(async () => {
+    moveItem.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+  });
+  const menus = app.querySelectorAll<HTMLElement>('[role="menu"]');
+  expect(menus).toHaveLength(2);
+  expect(Array.from(menus[1].querySelectorAll('[role="menuitem"]'), (item) => item.textContent)).toEqual([
+    "Inbox (no area)",
+    "Design",
+  ]);
   expect(menu.textContent).not.toContain("Compact context");
-  expect(menu.textContent).not.toContain("Move to Inbox");
   expect(menu.textContent).not.toContain("Copy link");
 });

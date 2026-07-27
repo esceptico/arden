@@ -14,13 +14,10 @@ export async function switchSession(sessionId: string, historyOptions: LoadHisto
   await fetchGoal(sessionId);
 }
 
-/** "New session" as the sidebar nav row / ⌘N / command palette entry mean
- *  it: land on Home rather than eagerly provisioning an empty session.
- *  Home's hero input creates the actual session lazily on first send (see
- *  sendMessage) — this just clears the current session/room so Home's
- *  no-session branch in App.tsx renders. Other createSession() callers
- *  (quick-capture, new-area, in-area "new session" rows) still want
- *  an eagerly-provisioned session and are unaffected. */
+/** Land on Home (the no-session branch in App.tsx). Home's hero input
+ *  creates a session lazily on first send (see sendMessage). Explicit
+ *  "New chat" intents (⌘N, the palette entry, the sidebar group "+")
+ *  do NOT come here — they eagerly provision via createSession(). */
 export function goToNewSessionHome(): void {
   const s = getState();
   s.setCurrentSession(null);

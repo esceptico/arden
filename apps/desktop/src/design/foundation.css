@@ -231,9 +231,17 @@ button:not(:disabled):active { transform: scale(var(--press-scale)); }
   color: var(--danger);
   background: color-mix(in oklab, var(--danger) 10%, transparent);
 }
+.arden-context-menu__sub-glyph {
+  color: var(--faint);
+  font-size: var(--text-sm);
+  line-height: 1;
+}
+
 .arden-context-menu__separator {
   height: var(--border-width);
-  margin: var(--space-1) calc(-1 * var(--space-1));
+  /* Inset to the item text edge (the house delimiter), not a full-bleed
+     rule across the menu card. */
+  margin: var(--space-1) .5625rem;
   background: var(--edge);
 }
 .arden-context-menu__shortcut {
