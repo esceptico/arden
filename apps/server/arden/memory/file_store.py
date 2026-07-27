@@ -227,6 +227,7 @@ class FilePageStore:
         search_index: object | None = None,
         project_names: dict[str, str] | None = None,
         post_canonical_commit: Callable[[], None] | None = None,
+        write_guard: Callable[[], None] | None = None,
     ) -> None:
         self._root = Path(root)
         self._search_index = search_index  # optional semantic leg (search.db); lexical-only when None
@@ -241,10 +242,26 @@ class FilePageStore:
         self._watch_task: asyncio.Task | None = None
         self._journal = VaultJournal(self._root)
         self._post_canonical_commit = post_canonical_commit
+        self._write_guard = write_guard
 
     @property
     def canonical_revision(self) -> str:
         return self._journal.canonical_revision
+
+    def set_write_guard(self, guard: Callable[[], None]) -> None:
+        self._write_guard = guard
+
+    def require_writes_enabled(self) -> None:
+        if self._write_guard is not None:
+            self._write_guard()
+
+    @property
+    def writes_enabled(self) -> bool:
+        try:
+            self.require_writes_enabled()
+        except PermissionError:
+            return False
+        return True
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -255,10 +272,12 @@ class FilePageStore:
             raise NotADirectoryError(str(self._root))
         self._load_canonical_pages()
         self._active_ledger_entries()
-        self._write_conventions()
+        if self.writes_enabled:
+            self._write_conventions()
         self._file_state = self._scan_files()
-        self._load_or_initialize_observed_pages()
-        await self._sync_index()
+        if self.writes_enabled:
+            self._load_or_initialize_observed_pages()
+            await self._sync_index()
 
     async def close(self) -> None:
         if self._watch_task is not None and not self._watch_task.done():
@@ -432,6 +451,7 @@ class FilePageStore:
         return pages
 
     def _write_observed_file(self, rel: Path, content: bytes) -> None:
+        self.require_writes_enabled()
         from arden.memory.artifacts import ArtifactMemoryStore
 
         resources = ArtifactMemoryStore(self._root)
@@ -544,6 +564,7 @@ class FilePageStore:
         receipt_id: str | None = None,
         delete_receipt: str | None = None,
     ) -> None:
+        self.require_writes_enabled()
         if not any((event_id, batch_key, entry_ids, receipt_id, delete_receipt)):
             raise ValueError("engine write intent requires a durable receipt")
         state = self._read_observed_state()
@@ -573,6 +594,7 @@ class FilePageStore:
         self._write_observed_state(state)
 
     def acknowledge_observed_change(self, change: ObservedFileChange) -> None:
+        self.require_writes_enabled()
         state = self._read_observed_state()
         pending = state["pending_changes"].get(change.path)
         expected = {
@@ -593,6 +615,7 @@ class FilePageStore:
 
     def abandon_observed_change(self, change: ObservedFileChange) -> None:
         """Drop only the still-current uncommitted observation; keep its logical base."""
+        self.require_writes_enabled()
         state = self._read_observed_state()
         pending = state["pending_changes"].get(change.path)
         expected = {
@@ -833,6 +856,7 @@ class FilePageStore:
         """Absorb external edits (Obsidian, feeds, git, memory_write): reload every
         page whose file or raw sidecar changed since we last saw/wrote it. Returns
         the vault-relative paths of reloaded pages (empty = nothing changed)."""
+        self.require_writes_enabled()
         current = self._scan_files()
         raw_root = self._root / _RAW
         observed = {change.path: change for change in self._observed_page_changes()}
@@ -877,6 +901,8 @@ class FilePageStore:
         """Poll the vault for external edits (ponytail: mtime scan of ~100 files
         beats fsevents plumbing at this scale). `on_change(paths)` fires after a
         batch is absorbed — the server publishes it to the global event bus."""
+        if not self.writes_enabled:
+            return
 
         async def _loop() -> None:
             while True:
@@ -975,6 +1001,7 @@ class FilePageStore:
     async def score_pending(self) -> int:
         """Backfill importance on unscored lines via the attached scorer. Off the
         hot path (curator sweep). No-op when no scorer is attached."""
+        self.require_writes_enabled()
         if self._scorer is None:
             return 0
         scored = 0
@@ -1163,6 +1190,7 @@ class FilePageStore:
         so a supersede that thins a page folds it back the same night. Sweeps both
         the slugs carried by lines AND existing entity-page files, so a page emptied
         by delete/prune/wipe (no tagged line left to name it) still gets reclaimed."""
+        self.require_writes_enabled()
         tagged = {slug for page in self._pages.values() for ln in page.lines for slug in ln.entity}
         files = {
             p.stem for p in self._pages if p.parent.name == _ENTITIES and p.name not in ("index.md", "needs-triage.md")
@@ -1354,6 +1382,7 @@ class FilePageStore:
         return self._root / _RAW / path.relative_to(self._root)
 
     def _write_atomic(self, path: Path, text: str) -> None:
+        self.require_writes_enabled()
         self._journal.replace_file_safely(path.relative_to(self._root), text.encode("utf-8"))
         self._file_state = self._scan_files()
 
@@ -1376,6 +1405,7 @@ class FilePageStore:
         expected_revision: str,
     ) -> None:
         """CAS one generated page with a watcher-verifiable durable receipt."""
+        self.require_writes_enabled()
         if (
             rel.is_absolute()
             or rel.suffix.casefold() != ".md"
@@ -1447,6 +1477,7 @@ class FilePageStore:
         files: Mapping[Path, bytes] | None = None,
         engine_entry_ids: tuple[str, ...] = (),
     ) -> None:
+        self.require_writes_enabled()
         extra = dict(files or {})
         staged: dict[Path, bytes] = {}
         projections: dict[Path, str] = {}
@@ -1518,6 +1549,7 @@ class FilePageStore:
         self._notify_post_canonical_commit()
 
     def _remove_page_files(self, path: Path) -> None:
+        self.require_writes_enabled()
         rel = path.relative_to(self._root)
         raw_rel = self._raw_path(path).relative_to(self._root)
         visible = self._safe_read_bytes(path)
@@ -1538,6 +1570,7 @@ class FilePageStore:
         self._file_state = self._scan_files()
 
     def _move_to_receipt(self, source: Path, receipt: Path) -> bool:
+        self.require_writes_enabled()
         from arden.memory.artifacts import ArtifactMemoryStore
 
         resources = ArtifactMemoryStore(self._root)
@@ -1597,6 +1630,7 @@ class FilePageStore:
         file_roles: Mapping[Path, CanonicalFileRole] | None = None,
     ) -> None:
         """Validate and append immutable schema-v2 entries without rewriting history."""
+        self.require_writes_enabled()
         caller_files = self._validate_caller_files(files, file_roles)
         additions = tuple(entries)
         if not additions:
@@ -1730,6 +1764,7 @@ class FilePageStore:
         batch_key: str | None = None,
     ) -> str:
         """Validate, plan, and publish one reconciliation batch in one commit."""
+        self.require_writes_enabled()
         if batch_key and self.operation_batch_committed(batch_key):
             return self.canonical_revision
         effective_batch_key = batch_key or f"internal-apply:{uuid4().hex}"
@@ -1798,6 +1833,7 @@ class FilePageStore:
         entity_labels: list[str] | None = None,
         date: str | None = None,
     ) -> Record:
+        self.require_writes_enabled()
         rid = record_id or self._new_id()
         if self._ledger_mode():
             recorded_at = now_iso()
@@ -1868,6 +1904,7 @@ class FilePageStore:
         return self._to_record(line, final)
 
     async def supersede(self, old_id: str, new_id: str) -> bool:
+        self.require_writes_enabled()
         found = self._find(old_id)
         if not found:
             return False
@@ -1920,6 +1957,7 @@ class FilePageStore:
         scope_kind: str | None = None,
         scope_key: str | None = None,
     ) -> Record:
+        self.require_writes_enabled()
         found = self._find(old_id)
         if found and isinstance(found[1], LedgerEntry):
             old = found[1]
@@ -1969,6 +2007,7 @@ class FilePageStore:
         return record
 
     async def set_kind(self, record_id: str, kind: str) -> bool:
+        self.require_writes_enabled()
         found = self._find(record_id)
         if not found:
             return False
@@ -2000,6 +2039,7 @@ class FilePageStore:
         return True
 
     async def confirm(self, record_id: str) -> bool:
+        self.require_writes_enabled()
         found = self._find(record_id)
         if not found:
             return False
@@ -2018,6 +2058,7 @@ class FilePageStore:
         return True
 
     async def set_pinned(self, record_id: str, pinned: bool) -> bool:
+        self.require_writes_enabled()
         found = self._find(record_id)
         if not found:
             return False
@@ -2032,6 +2073,7 @@ class FilePageStore:
         return True
 
     async def update(self, record_id: str, text: str, *, source_ref: SourceRef | None = None) -> bool:
+        self.require_writes_enabled()
         found = self._find(record_id)
         if not found:
             return False
@@ -2069,6 +2111,7 @@ class FilePageStore:
         return True
 
     async def delete(self, record_id: str, *, source_ref: SourceRef | None = None) -> None:
+        self.require_writes_enabled()
         found = self._find(record_id)
         if not found:
             return
@@ -2114,6 +2157,7 @@ class FilePageStore:
     async def prune(self) -> dict[str, int]:
         """Hard-delete tombstoned (superseded) lines from their pages + evict their
         vectors. Idempotent: a store with no superseded lines prunes nothing."""
+        self.require_writes_enabled()
         if self._ledger_mode():
             return {"records": 0}
         removed = 0
@@ -2132,6 +2176,7 @@ class FilePageStore:
     async def wipe_except_pinned(self) -> dict[str, int]:
         """/init re-derivation primitive: delete every non-pinned line across all
         pages, keeping pinned survivors. Mirrors RecordStore.wipe_except_pinned."""
+        self.require_writes_enabled()
         if self._ledger_mode():
             active = self._active_ledger_entries()
             victims = [entry for entry in active if not entry.pinned]
@@ -2198,6 +2243,7 @@ class FilePageStore:
         self._persist(path)
 
     async def set_labels(self, record_id: str, labels: list[str], *, entity_labels: list[str] | None = None) -> None:
+        self.require_writes_enabled()
         found = self._find(record_id)
         if not found:
             return
@@ -2240,6 +2286,7 @@ class FilePageStore:
             self._merge_labels(final, entity=merge_entity, meta=labels)
 
     async def add_labels(self, record_id: str, labels: list[str], *, entity_labels: list[str] | None = None) -> None:
+        self.require_writes_enabled()
         found = self._find(record_id)
         if found and isinstance(found[1], LedgerEntry):
             path, line = found
@@ -2355,6 +2402,7 @@ class FilePageStore:
         labels. `text` re-texts + re-confirms (re-scores) the survivor; `kind` retypes it.
         Aborts (None) if the survivor or ANY loser is pinned — pinned records are never
         merged away."""
+        self.require_writes_enabled()
         if self._ledger_mode():
             active = {entry.id: entry for entry in self._active_ledger_entries()}
             predecessor_ids = tuple(dict.fromkeys((survivor_id, *(rid for rid in loser_ids if rid != survivor_id))))
@@ -2440,6 +2488,7 @@ class FilePageStore:
     async def rename_label(self, old: str, new: str) -> None:
         """Fold the label `old` into `new` (lint canonicalization) across meta labels
         and entity tags, then reconcile the entity pages that changed."""
+        self.require_writes_enabled()
         old_slug, new_slug = _slug(old), _slug(new)
         if self._ledger_mode():
             for path, page in self._pages.items():
@@ -2487,6 +2536,7 @@ class FilePageStore:
         (deleting without retagging would silently drop the label). Returns pages changed."""
         if kind != "meta":
             return 0  # meta->entity: can't faithfully map; leave the label untouched
+        self.require_writes_enabled()
         n = 0
         slug = _slug(label)
         if self._ledger_mode():

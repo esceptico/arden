@@ -208,6 +208,7 @@ class Runtime:
         llm_init(self.config)
         self.stores = await Stores.connect(self.config)
         await self._init_wiki()
+        self.knowledge.set_memory_write_guard(self._require_legacy_page_writes)
         await self.knowledge.connect(self.stores)
         self._init_skills()
         await self._init_notifiers()
@@ -221,6 +222,13 @@ class Runtime:
             integrations=len(self.integrations.clients),
             tools=len(self.executor.registry),
         )
+
+    def _require_legacy_page_writes(self) -> None:
+        # The only empty -> managed transition is the supervised, offline
+        # migration. Once a managed head exists, legacy canonical writes stay
+        # disabled globally; path-level coexistence would be dual-write.
+        if self.wiki_repository is not None and self.wiki_repository.head is not None:
+            raise PermissionError("legacy memory page writes are disabled after managed wiki cutover")
 
     def _init_skills(self) -> None:
         self.skill_registry = SkillRegistry()

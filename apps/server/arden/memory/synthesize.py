@@ -384,6 +384,7 @@ async def _synth_active_work(store, labels, llm, model, effort, conventions: str
 
 @observed_trace("memory.synthesis", tags="memory")
 async def run_synthesis(store, llm, model: str, *, reasoning_effort: str | None = None) -> str:
+    store.require_writes_enabled()
     if llm is None or not model:
         return "synthesis skipped: no memory model configured"
     conventions = load_conventions()  # shared operating manual, prepended to every pass (additive)

@@ -35,6 +35,15 @@ class WikiSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class WikiLinkReport:
+    head: str | None
+    page: WikiPageRecord
+    pages: tuple[WikiPageRecord, ...]
+    outgoing: tuple[LinkReference, ...]
+    backlinks: tuple[LinkReference, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class LinkReference:
     source_page_id: str
     node: WikilinkNode

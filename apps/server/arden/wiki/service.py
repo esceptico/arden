@@ -18,7 +18,7 @@ from arden.revisions import (
 )
 from arden.revisions.errors import RevisionConflictError
 
-from .models import LinkReference, LinkStatus, RenamePlan, RenameRewrite, WikiPageRecord, WikiSnapshot
+from .models import LinkReference, LinkStatus, RenamePlan, RenameRewrite, WikiLinkReport, WikiPageRecord, WikiSnapshot
 from .pages import PageValidationError, WikiPage, parse_page
 from .pages import create_page as build_page
 from .wikilinks import WikilinkNode, parse_wikilinks, rewrite_page_targets
@@ -97,28 +97,55 @@ class WikiService:
     def backlinks(self, page_id: str) -> tuple[LinkReference, ...]:
         """Report links to ``page_id`` without guessing unresolved names."""
 
-        snapshot = self._snapshot(strict_names=False)
-        index = self._index(snapshot, strict_names=False)
-        if page_id not in index.pages:
-            raise KeyError(f"unknown active wiki page: {page_id}")
-        result: list[LinkReference] = []
-        for record in snapshot.pages:
-            for node in parse_wikilinks(record.page.body.decode("utf-8")):
-                reference = self._reference(index, record.page.page_id, node)
-                if reference.target_page_id == page_id:
-                    result.append(reference)
-        return tuple(result)
+        return self.link_report(page_id).backlinks
 
     def links(self, page_id: str) -> tuple[LinkReference, ...]:
         """Return outgoing links with explicit resolution status."""
 
+        return self.link_report(page_id).outgoing
+
+    def link_report(self, page_id: str) -> WikiLinkReport:
+        """Resolve both directions from one immutable wiki snapshot."""
+
+        snapshot = self._snapshot(strict_names=False)
+        return self._link_report(snapshot, page_id)
+
+    def link_report_for_path(self, path: str) -> WikiLinkReport:
+        """Resolve an active or redirect path and its links from one snapshot."""
+
         snapshot = self._snapshot(strict_names=False)
         index = self._index(snapshot, strict_names=False)
-        record = index.pages.get(page_id)
+        record = next(
+            (candidate for candidate in snapshot.pages if candidate.resource.path == path),
+            None,
+        )
         if record is None:
+            raise KeyError(f"unknown wiki path: {path}")
+        target_id = self._follow_redirect(index, record.page.page_id)
+        if target_id is None:
+            raise WikiValidationError(f"redirect at {path} has no active target")
+        return self._link_report(snapshot, target_id)
+
+    def _link_report(self, snapshot: WikiSnapshot, page_id: str) -> WikiLinkReport:
+        index = self._index(snapshot, strict_names=False)
+        record = index.pages.get(page_id)
+        if record is None or record.page.lifecycle != "active":
             raise KeyError(f"unknown active wiki page: {page_id}")
-        return tuple(
+        outgoing = tuple(
             self._reference(index, page_id, node) for node in parse_wikilinks(record.page.body.decode("utf-8"))
+        )
+        backlinks: list[LinkReference] = []
+        for source in snapshot.pages:
+            for node in parse_wikilinks(source.page.body.decode("utf-8")):
+                reference = self._reference(index, source.page.page_id, node)
+                if reference.target_page_id == page_id:
+                    backlinks.append(reference)
+        return WikiLinkReport(
+            head=snapshot.head,
+            page=record,
+            pages=snapshot.pages,
+            outgoing=outgoing,
+            backlinks=tuple(backlinks),
         )
 
     def archive_page(

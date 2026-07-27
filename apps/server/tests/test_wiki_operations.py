@@ -111,6 +111,10 @@ def test_rename_is_atomic_and_preserves_link_bytes(tmp_path: Path) -> None:
     assert b"[[New]]" in repo.read("target")
     assert len(repo.history(resource_id="target")) == 2
     assert service.apply_rename(plan) == commit
+    report = service.link_report_for_path("notes/old.md")
+    assert report.head == commit.commit_id
+    assert report.page.resource.path == "notes/new.md"
+    assert plan.redirect_page_id in {page.page.page_id for page in report.pages}
 
 
 def test_root_title_link_uses_new_title_not_lowercase_path(tmp_path: Path) -> None:

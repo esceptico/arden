@@ -10,10 +10,10 @@ import re
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from arden.memory.artifacts import MACHINE_PAGE_DIRS, ArtifactMemoryStore
+from arden.memory.artifacts import MACHINE_PAGE_DIRS, ArtifactMemoryStore, MemoryArtifact
 from arden.memory.frontmatter import strip_frontmatter
 from arden.memory.journal import JournalConflictError
 from arden.memory.ledger import LedgerEntry
@@ -35,6 +35,8 @@ from arden.server.runtime.knowledge import KnowledgeRuntime
 
 router = APIRouter(prefix="/admin/memory", tags=["memory"])
 
+_MANAGED_WIKI_READONLY_REASON = "Managed wiki page — use Rename; editing is not available here yet."
+
 
 def _record_store(knowledge: KnowledgeRuntime = Depends(require_knowledge_runtime)):
     if not knowledge._record_store:
@@ -55,11 +57,14 @@ def _page_edit_service(knowledge: KnowledgeRuntime = Depends(require_knowledge_r
     return knowledge.page_edit_service
 
 
+def _wiki_service(request: Request):
+    """The managed wiki is optional while the runtime is starting and in tests."""
+
+    return getattr(getattr(request.app.state, "runtime", None), "wiki_service", None)
+
+
 def _link_index_projection(knowledge: KnowledgeRuntime = Depends(require_knowledge_runtime)):
-    projection = knowledge._link_index
-    if projection is None:
-        raise HTTPException(status_code=503, detail="memory link index not ready")
-    return projection
+    return getattr(knowledge, "_link_index", None)
 
 
 # --- JSON adapters (record -> item) ------------------------------------------
@@ -204,28 +209,147 @@ def _json_safe(fm: dict) -> dict:
     return {str(k): coerce(v) for k, v in fm.items()}
 
 
+def _wiki_frontmatter(record) -> dict:
+    page = record.page
+    frontmatter = {
+        "page_id": page.page_id,
+        "title": page.title,
+        "aliases": list(page.aliases),
+        "lifecycle": page.lifecycle,
+    }
+    if page.redirect_to is not None:
+        frontmatter["redirect_to"] = page.redirect_to
+    frontmatter.update(page.metadata)
+    return frontmatter
+
+
+def _wiki_artifact(record) -> MemoryArtifact:
+    body = record.page.body.decode("utf-8")
+    frontmatter = _wiki_frontmatter(record)
+    metadata = record.page.metadata
+    declared_kind = metadata.get("kind")
+    kind = declared_kind.strip() if isinstance(declared_kind, str) and declared_kind.strip() else "topic"
+    labels = metadata.get("labels")
+    label_values = tuple(str(label) for label in labels) if isinstance(labels, (list, tuple)) else ()
+    snippet = next(
+        (line.strip() for line in body.splitlines() if line.strip() and not line.lstrip().startswith("#")),
+        None,
+    )
+    summary = metadata.get("summary")
+    parent = Path(record.resource.path).parent
+    return MemoryArtifact(
+        path=record.resource.path,
+        title=record.page.title,
+        kind=kind,
+        scope_kind="global",
+        scope_key=None,
+        content=body,
+        summary=summary if isinstance(summary, str) and summary.strip() else snippet,
+        revision=record.resource.version_id,
+        record_count=None,
+        updated_at=None,
+        created_at=None,
+        type="file",
+        directory="" if parent == Path(".") else parent.as_posix(),
+        generated=False,
+        editable=False,
+        readonly_reason=_MANAGED_WIKI_READONLY_REASON,
+        snippet=snippet,
+        labels=label_values,
+        source="wiki",
+        frontmatter=frontmatter,
+    )
+
+
+def _managed_wiki_artifacts(wiki_service, *, include_redirects: bool = False) -> list[MemoryArtifact]:
+    return [_wiki_artifact(record) for record in wiki_service.list_pages(include_redirects=include_redirects)]
+
+
+def _filter_wiki_artifacts(
+    artifacts: list[MemoryArtifact], *, kind: str | None = None, q: str | None = None
+) -> list[MemoryArtifact]:
+    query = (q or "").strip().lower()
+    filtered: list[MemoryArtifact] = []
+    for artifact in artifacts:
+        if kind and artifact.kind != kind:
+            continue
+        if query:
+            haystack = " ".join(
+                (
+                    artifact.path,
+                    artifact.title,
+                    artifact.kind,
+                    artifact.directory,
+                    artifact.content,
+                    str(artifact.frontmatter),
+                )
+            ).lower()
+            if query not in haystack:
+                continue
+        filtered.append(artifact)
+    return filtered
+
+
+def _managed_wiki_artifact(wiki_service, path: str) -> MemoryArtifact | None:
+    record = _managed_wiki_record(wiki_service, path)
+    return _wiki_artifact(record) if record is not None else None
+
+
+def _managed_wiki_record(wiki_service, path: str):
+    return next(
+        (record for record in wiki_service.list_pages(include_redirects=True) if record.resource.path == path),
+        None,
+    )
+
+
+def _managed_wiki_directories(wiki_artifacts: list[MemoryArtifact]) -> set[str]:
+    directories: set[str] = set()
+    for artifact in wiki_artifacts:
+        parent = Path(artifact.path).parent
+        while parent != Path("."):
+            directories.add(parent.as_posix() + "/")
+            parent = parent.parent
+    return directories
+
+
 @router.get("/artifacts")
 def list_artifacts(
     kind: str | None = Query(default=None),
     q: str | None = Query(default=None, max_length=200),
     artifacts: ArtifactMemoryStore = Depends(_artifact_store),
+    wiki_service=Depends(_wiki_service),
 ) -> dict:
+    visible = {artifact.path: artifact for artifact in artifacts.list_artifacts(kind=kind, q=q)}
+    all_managed = _managed_wiki_artifacts(wiki_service, include_redirects=True) if wiki_service is not None else []
+    active_managed = [artifact for artifact in all_managed if artifact.frontmatter["lifecycle"] == "active"]
+    managed = _filter_wiki_artifacts(active_managed, kind=kind, q=q)
+    # Managed pages own their logical paths. Their physical wiki subtree remains
+    # invisible to ArtifactMemoryStore and FilePageStore.
+    for artifact in all_managed:
+        visible.pop(artifact.path, None)
+    visible.update({artifact.path: artifact for artifact in managed})
     return {
-        "artifacts": [artifact_summary_to_json(a) for a in artifacts.list_artifacts(kind=kind, q=q)],
-        "directories": artifacts.list_directories(),
+        "artifacts": [artifact_summary_to_json(a) for a in visible.values()],
+        "directories": sorted(set(artifacts.list_directories()) | _managed_wiki_directories(active_managed)),
     }
 
 
 @router.post("/artifacts/rebuild")
 async def rebuild_artifacts(
     artifacts: ArtifactMemoryStore = Depends(_artifact_store),
+    wiki_service=Depends(_wiki_service),
 ) -> dict:
     # Memory is file-canonical: the markdown pages ARE the source of truth, there
     # is no projection to re-derive. Exporting here would clobber the pages, so
     # this is a no-op that just returns the current pages.
-    items = artifacts.list_artifacts()
+    visible = {artifact.path: artifact for artifact in artifacts.list_artifacts()}
+    all_managed = _managed_wiki_artifacts(wiki_service, include_redirects=True) if wiki_service is not None else []
+    managed = [artifact for artifact in all_managed if artifact.frontmatter["lifecycle"] == "active"]
+    for artifact in all_managed:
+        visible.pop(artifact.path, None)
+    visible.update({artifact.path: artifact for artifact in managed})
     return {
-        "artifacts": [artifact_summary_to_json(a) for a in items],
+        "artifacts": [artifact_summary_to_json(a) for a in visible.values()],
         "detail": "no-op: memory is file-canonical",
     }
 
@@ -276,6 +400,7 @@ class NotebookCreateBody(BaseModel):
 @router.post("/notebook/create")
 async def create_notebook_entry(
     body: NotebookCreateBody,
+    request: Request,
     artifacts: ArtifactMemoryStore = Depends(_artifact_store),
     service: PageEditService = Depends(_page_edit_service),
 ) -> dict:
@@ -286,8 +411,14 @@ async def create_notebook_entry(
     if body.kind == "note":
         if safe.suffix != ".md":
             raise HTTPException(status_code=422, detail="memory notes must end with .md")
+        if (wiki_service := _wiki_service(request)) is not None and _managed_wiki_artifact(
+            wiki_service, safe.as_posix()
+        ):
+            raise HTTPException(status_code=409, detail="managed wiki page already exists at this path")
         try:
             await service.create_page(path=safe.as_posix(), actor="user:desktop")
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         except (FileExistsError, JournalConflictError) as exc:
             raise HTTPException(status_code=409, detail="memory page already exists") from exc
         except FileNotFoundError as exc:
@@ -356,12 +487,16 @@ def _reject_machine_page(path: str) -> None:
         raise HTTPException(status_code=403, detail="machine-only memory page")
 
 
-def _require_editable_page(path: str, artifacts: ArtifactMemoryStore) -> None:
+def _require_editable_page(path: str, artifacts: ArtifactMemoryStore, wiki_service=None) -> None:
     _reject_machine_page(path)
+    if wiki_service is not None and _managed_wiki_artifact(wiki_service, path) is not None:
+        raise HTTPException(status_code=403, detail=_MANAGED_WIKI_READONLY_REASON)
     try:
         artifact = artifacts.read_artifact(path)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="memory page not found") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     if not artifact.editable:
         raise HTTPException(status_code=403, detail=artifact.readonly_reason or "machine-only memory page")
 
@@ -388,8 +523,9 @@ async def preview_page_edit(
     body: PageEditPreviewRequest,
     service: PageEditService = Depends(_page_edit_service),
     artifacts: ArtifactMemoryStore = Depends(_artifact_store),
+    wiki_service=Depends(_wiki_service),
 ) -> dict:
-    _require_editable_page(body.path, artifacts)
+    _require_editable_page(body.path, artifacts, wiki_service)
     try:
         preview = await service.preview(
             path=body.path,
@@ -399,6 +535,8 @@ async def preview_page_edit(
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="memory page not found") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except StalePageRevisionError as exc:
         raise _revision_conflict(exc) from exc
     except ValueError as exc:
@@ -410,9 +548,15 @@ async def preview_page_edit(
 async def apply_page_edit(
     body: PageEditApplyRequest,
     service: PageEditService = Depends(_page_edit_service),
+    wiki_service=Depends(_wiki_service),
 ) -> dict:
-    decisions = _page_edit_decisions(body.decisions)
     try:
+        if (
+            wiki_service is not None
+            and _managed_wiki_artifact(wiki_service, service.preview_path(body.preview_id)) is not None
+        ):
+            raise HTTPException(status_code=403, detail=_MANAGED_WIKI_READONLY_REASON)
+        decisions = _page_edit_decisions(body.decisions)
         event = await service.apply(
             body.preview_id,
             decisions=decisions,
@@ -422,6 +566,8 @@ async def apply_page_edit(
         raise _revision_conflict(exc) from exc
     except ReconciliationPendingError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except PreviewExpiredError as exc:
         raise HTTPException(status_code=422, detail="page edit preview expired") from exc
     except PreviewNotFoundError as exc:
@@ -437,14 +583,24 @@ async def apply_page_edit(
 async def retry_page_edit(
     body: PageEditRetryRequest,
     service: PageEditService = Depends(_page_edit_service),
+    wiki_service=Depends(_wiki_service),
 ) -> dict:
     try:
+        pending = next((event for event in service.history() if event.id == body.event_id), None)
+        if (
+            pending is not None
+            and wiki_service is not None
+            and _managed_wiki_artifact(wiki_service, pending.path) is not None
+        ):
+            raise HTTPException(status_code=403, detail=_MANAGED_WIKI_READONLY_REASON)
         event = await service.retry(
             body.event_id,
             decisions=_page_edit_decisions(body.decisions),
         )
     except ReconciliationPendingError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"event": event.model_dump(mode="json"), "revision": event.result_revision}
@@ -456,9 +612,12 @@ def page_edit_history(
     limit: int = Query(default=100, ge=1, le=500),
     before_sequence: int | None = Query(default=None, ge=1),
     service: PageEditService = Depends(_page_edit_service),
+    wiki_service=Depends(_wiki_service),
 ) -> dict:
     if path is not None:
         _reject_machine_page(path)
+        if wiki_service is not None and _managed_wiki_record(wiki_service, path) is not None:
+            raise HTTPException(status_code=409, detail="managed wiki history is not legacy page-edit history")
     all_events = tuple(sorted(service.history(path=path), key=lambda event: event.sequence, reverse=True))
     events = tuple(event for event in all_events if before_sequence is None or event.sequence < before_sequence)
     page = events[:limit]
@@ -516,6 +675,61 @@ def _unlinked_mentions(path: str, title: str, snapshot, artifacts: ArtifactMemor
     return mentions
 
 
+def _wiki_link_json(reference, *, source, paths_by_id: dict[str, str]) -> dict:
+    node = reference.node
+    target = f"{node.page or ''}{f'#{node.fragment}' if node.fragment is not None else ''}"
+    display = (node.alias or target).strip()
+    candidate_ids = reference.candidates or (
+        (reference.target_page_id,) if reference.target_page_id is not None else ()
+    )
+    candidates = tuple(
+        sorted(
+            (paths_by_id[page_id] for page_id in candidate_ids if page_id in paths_by_id),
+            key=str.casefold,
+        )
+    )
+    resolved_path = paths_by_id.get(reference.target_page_id) if reference.target_page_id is not None else None
+    source_body = source.page.body.decode("utf-8")
+    prefix = source_body.encode("utf-8")[: node.start].decode("utf-8")
+    line = prefix.count("\n") + 1
+    column = len(prefix.rsplit("\n", 1)[-1]) + 1
+    return {
+        "source_path": source.resource.path,
+        "target": target,
+        "display": display,
+        "heading": None,
+        "context": node.raw,
+        "line": line,
+        "column": column,
+        "status": str(reference.status),
+        "resolved_path": resolved_path,
+        "candidates": candidates,
+        "source_revision": source.resource.version_id,
+    }
+
+
+def _wiki_page_links(report, *, limit: int, offset: int) -> dict:
+    records_by_id = {page.page.page_id: page for page in report.pages}
+    paths_by_id = {page_id: page.resource.path for page_id, page in records_by_id.items()}
+
+    def render(reference) -> dict:
+        source = records_by_id[reference.source_page_id]
+        return _wiki_link_json(reference, source=source, paths_by_id=paths_by_id)
+
+    return {
+        "path": report.page.resource.path,
+        "revision": report.head or report.page.resource.version_id,
+        "stale": False,
+        "outgoing": [render(link) for link in report.outgoing[offset : offset + limit]],
+        "backlinks": [render(link) for link in report.backlinks[offset : offset + limit]],
+        "unlinked": [],
+        "total_outgoing": len(report.outgoing),
+        "total_backlinks": len(report.backlinks),
+        "limit": limit,
+        "offset": offset,
+    }
+
+
 @router.get("/links")
 def page_links(
     path: str = Query(..., min_length=1, max_length=1000),
@@ -523,11 +737,21 @@ def page_links(
     offset: int = Query(default=0, ge=0),
     projection=Depends(_link_index_projection),
     artifacts: ArtifactMemoryStore = Depends(_artifact_store),
+    wiki_service=Depends(_wiki_service),
 ) -> dict:
-    _reject_machine_page(path)
     safe = Path(path)
     if safe.is_absolute() or ".." in safe.parts:
         raise HTTPException(status_code=422, detail="invalid memory page path")
+    if wiki_service is not None:
+        try:
+            report = wiki_service.link_report_for_path(path)
+        except KeyError:
+            pass
+        else:
+            return _wiki_page_links(report, limit=limit, offset=offset)
+    _reject_machine_page(path)
+    if projection is None:
+        raise HTTPException(status_code=503, detail="memory link index not ready")
     snapshot = projection.index.snapshot
     if not snapshot.contains(path):
         raise HTTPException(status_code=404, detail="memory page not found")
@@ -552,7 +776,13 @@ def page_links(
 
 
 @router.get("/artifacts/{path:path}")
-def read_artifact(path: str, artifacts: ArtifactMemoryStore = Depends(_artifact_store)) -> dict:
+def read_artifact(
+    path: str,
+    artifacts: ArtifactMemoryStore = Depends(_artifact_store),
+    wiki_service=Depends(_wiki_service),
+) -> dict:
+    if wiki_service is not None and (artifact := _managed_wiki_artifact(wiki_service, path)) is not None:
+        return {"artifact": artifact_detail_to_json(artifact)}
     try:
         artifact = artifacts.read_artifact(path)
         return {"artifact": artifact_detail_to_json(artifact)}

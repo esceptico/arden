@@ -296,6 +296,7 @@ class KnowledgeRuntime:
         self._vault_index = VaultIndexProjection(config.memory_artifacts_dir)
         self._daily_projection: DailyProjectionCoordinator | None = None
         self._link_index: LinkIndexProjection | None = None
+        self._memory_write_guard: Callable[[], None] | None = None
 
     @property
     def memory_ready(self) -> bool:
@@ -314,6 +315,20 @@ class KnowledgeRuntime:
         service = self._page_edit_service
         return service.artifact_store if service is not None else None
 
+    def set_memory_write_guard(self, guard: Callable[[], None]) -> None:
+        self._memory_write_guard = guard
+
+    @property
+    def memory_writes_enabled(self) -> bool:
+        guard = getattr(self, "_memory_write_guard", None)
+        if guard is None:
+            return True
+        try:
+            guard()
+        except PermissionError:
+            return False
+        return True
+
     @property
     def consolidate(self):
         return self._consolidate
@@ -321,6 +336,8 @@ class KnowledgeRuntime:
     def start_memory_watch(self, on_change) -> None:
         """Turn the vault live: absorb external edits (Obsidian, feeds, git) into
         the in-memory store and fan a change event out through `on_change`."""
+        if not self.memory_writes_enabled:
+            return
         store = self._record_store
         if store is not None and hasattr(store, "start_watch"):
 
@@ -371,7 +388,7 @@ class KnowledgeRuntime:
     async def connect(self, stores: Stores) -> None:
         await self._init_search()
         await self._init_memory(stores)
-        if self.memory_curator is not None:
+        if self.memory_curator is not None and self.memory_writes_enabled:
             self.memory_curator.start_sweep()
         # No boot artifact refresh: files are canonical, there is no projection.
 
@@ -479,8 +496,9 @@ class KnowledgeRuntime:
         from arden.memory.health import initialize_empty_vault, validate_vault
         from arden.memory.journal import VaultJournal
 
-        initialize_empty_vault(self.config.memory_artifacts_dir)
-        VaultJournal(self.config.memory_artifacts_dir).recover()
+        if self.memory_writes_enabled:
+            initialize_empty_vault(self.config.memory_artifacts_dir)
+            VaultJournal(self.config.memory_artifacts_dir).recover()
         health = validate_vault(self.config.memory_artifacts_dir)
         if not health.healthy:
             raise RuntimeError(f"memory vault validation failed: {health.first_error or 'unknown vault error'}")
@@ -497,6 +515,7 @@ class KnowledgeRuntime:
             search_index=self.search_index,
             project_names=load_project_names(self.config.memory_artifacts_dir),
             post_canonical_commit=self._schedule_memory_projections,
+            write_guard=self._memory_write_guard,
         )
         self._consolidate = None  # set below once the memory model is resolved
 
@@ -546,6 +565,7 @@ class KnowledgeRuntime:
             self.config.memory_artifacts_dir,
             self._record_store,
             reconciler=self._reconcile_page_edit,
+            write_guard=self._memory_write_guard,
         )
         from arden.memory.artifacts import ArtifactMemoryStore
         from arden.memory.link_index import LinkIndex
@@ -570,19 +590,20 @@ class KnowledgeRuntime:
         )
         # Evict stale old-engine vectors (source="record") from the shared index.
         # Only touches that partition — transcripts + memory_line are untouched.
-        if self.search_index is not None:
+        if self.search_index is not None and self.memory_writes_enabled:
             try:
                 await self.search_index.store.clear_source("record")
             except Exception:
                 _logger.warning("clear stale record vectors failed", exc_info=True)
         _logger.info("memory ready (file-canonical)", root=str(self.config.memory_artifacts_dir))
-        self._vault_index.schedule()
-        self._link_index.schedule()
-        self._daily_projection.schedule()
+        if self.memory_writes_enabled:
+            self._vault_index.schedule()
+            self._link_index.schedule()
+            self._daily_projection.schedule()
 
         # Synthesize the prose layer (the wiki view) off the hot path: stale-gated,
         # so a freshly-migrated store gets full prose once and later boots are cheap.
-        if memory_llm is not None:
+        if memory_llm is not None and self.memory_writes_enabled:
             from arden.memory.synthesize import run_synthesis
 
             self._artifact_refresh_task = asyncio.create_task(
@@ -590,6 +611,8 @@ class KnowledgeRuntime:
             )
 
     def _schedule_memory_projections(self) -> None:
+        if not self.memory_writes_enabled:
+            return
         self._vault_index.schedule()
         if self._link_index is not None:
             self._link_index.schedule()

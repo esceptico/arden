@@ -11,7 +11,7 @@ import logging
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 from uuid import uuid4
 from weakref import WeakValueDictionary
 from zoneinfo import ZoneInfo
@@ -35,6 +35,9 @@ from arden.memory.page_events import (
 )
 from arden.memory.pages import render_raw
 from arden.memory.reconciler import RecordOperation, validate_operations
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 _logger = logging.getLogger(__name__)
 _VAULT_APPLY_LOCKS: WeakValueDictionary[Path, asyncio.Lock] = WeakValueDictionary()
@@ -80,6 +83,7 @@ class PageEditService:
         timezone: str | tzinfo | None = None,
         now=None,
         preview_ttl: timedelta = timedelta(hours=1),
+        write_guard: Callable[[], None] | None = None,
     ) -> None:
         self._vault = Path(vault)
         self._store = store
@@ -88,11 +92,19 @@ class PageEditService:
         self._timezone = ZoneInfo(timezone) if isinstance(timezone, str) else timezone
         self._now = now or (lambda: datetime.now().astimezone())
         self._preview_ttl = preview_ttl
+        self._write_guard = write_guard or store.require_writes_enabled
         self._apply_lock = _VAULT_APPLY_LOCKS.setdefault(self._vault.resolve(), asyncio.Lock())
 
     @property
     def artifact_store(self) -> ArtifactMemoryStore:
         return self._resources
+
+    def set_write_guard(self, guard: Callable[[], None]) -> None:
+        self._write_guard = guard
+
+    def _require_writes_enabled(self) -> None:
+        if self._write_guard is not None:
+            self._write_guard()
 
     async def preview(
         self,
@@ -103,6 +115,7 @@ class PageEditService:
         actor: str,
         origin: Literal["desktop", "external", "agent", "synthesis"] = "desktop",
     ) -> PageEditPreview:
+        self._require_writes_enabled()
         safe_path = self._validate_page_path(path)
         if not actor.strip():
             raise ValueError("page edit actor is required")
@@ -164,6 +177,20 @@ class PageEditService:
     ) -> PageEditEvent:
         async with self._apply_lock:
             return await self._apply(preview_id, decisions=decisions, save_as_pending=save_as_pending)
+
+    def preview_path(self, preview_id: str) -> str:
+        """Return a persisted preview's target before applying it.
+
+        The router uses this narrow read to enforce ownership boundaries that
+        are outside the legacy page-edit service.
+        """
+
+        envelope = self._load_preview(preview_id)
+        try:
+            preview = PageEditPreview.model_validate(envelope["preview"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("invalid persisted preview") from exc
+        return preview.path
 
     async def create_page(self, *, path: str, actor: str) -> PageEditEvent:
         """Atomically create one EMPTY user page with its audit event."""
@@ -698,6 +725,7 @@ class PageEditService:
         engine_write: tuple[str, bytes, Literal["desktop", "agent", "synthesis"], str] | None = None,
         projection: bool = False,
     ) -> None:
+        self._require_writes_enabled()
         if engine_write is not None:
             path, content, origin, event_id = engine_write
             self._store.register_engine_write_intent(

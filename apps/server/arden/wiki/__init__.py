@@ -12,7 +12,7 @@ from .approvals import (
     WikiRenameApprovalCoordinator,
     WikiRenameCoordinatorResult,
 )
-from .models import LinkReference, LinkStatus, RenamePlan, RenameRewrite, WikiPageRecord, WikiSnapshot
+from .models import LinkReference, LinkStatus, RenamePlan, RenameRewrite, WikiLinkReport, WikiPageRecord, WikiSnapshot
 from .pages import PageValidationError, WikiPage, create_page, parse_page, update_page_metadata, update_page_title
 from .service import WikiAmbiguityError, WikiService, WikiValidationError
 
@@ -26,6 +26,7 @@ __all__ = [
     "RenamePolicy",
     "RenameRewrite",
     "WikiAmbiguityError",
+    "WikiLinkReport",
     "WikiPage",
     "WikiPageRecord",
     "WikiRenameApproval",

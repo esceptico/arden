@@ -184,6 +184,19 @@ def test_links_route_reports_stale_and_rejects_unknown_or_machine_paths(tmp_path
         assert c.get("/admin/memory/links", params={"path": "raw/a.md"}).status_code == 403
 
 
+def test_legacy_links_require_the_legacy_projection(tmp_path: Path):
+    vault = tmp_path / "artifacts"
+    vault.mkdir()
+    (vault / "a.md").write_text("[[Missing]]\n", encoding="utf-8")
+    knowledge = _Knowledge(None, vault)
+    test_app = FastAPI()
+    test_app.include_router(memory_router)
+    test_app.dependency_overrides[require_knowledge_runtime] = lambda: knowledge
+
+    with TestClient(test_app) as c:
+        assert c.get("/admin/memory/links", params={"path": "a.md"}).status_code == 503
+
+
 def test_page_edit_preview_is_non_mutating(page_edit_client):
     c, _store, _service, _reconciler, page = page_edit_client
     base = page.read_bytes()
