@@ -731,6 +731,8 @@
   --conversation-rail-active-scale: 1.5;
   --conversation-rail-hover-width: 2rem;
   --conversation-rail-hover-scale: 2.6666667;
+  /* Trailing dissolve on a clipped session-row title. */
+  --session-title-fade: 1.5rem;
   --conversation-rail-band-width: 20rem;
   --conversation-rail-inline-offset: -.75rem;
   --conversation-rail-block-inset: 16%;

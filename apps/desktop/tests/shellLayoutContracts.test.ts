@@ -118,6 +118,16 @@ test("shared rail geometry keeps app rows and Chat hierarchy on their mock heigh
   expect(shell).toMatch(/\.workspace-rail \.workspace-rail__group-heading\s*\{[\s\S]*?grid-template-columns:\s*var\(--icon-size\) minmax\(0, 1fr\) \.75rem;/);
   expect(shell).toMatch(/\.workspace-rail \.workspace-rail__session\s*\{[\s\S]*?height:\s*var\(--workspace-rail-row-height\);/);
   expect(shell).toMatch(/\.workspace-rail \.workspace-rail__show-more\s*\{[\s\S]*?height:\s*var\(--workspace-rail-row-height\);/);
+
+  // The hovered title dissolves at ITS OWN trailing edge. The title and the
+  // time + pin + archive cluster are flex siblings, so revealing the cluster
+  // already shrinks the title — measuring the fade from the cluster's width
+  // subtracted it twice and masked the title away almost entirely.
+  const appStyles = read("../src/styles.css");
+  expect(appStyles).toContain(
+    "mask-image: linear-gradient(to right, #000 calc(100% - var(--session-title-fade)), transparent);",
+  );
+  expect(appStyles).not.toContain("#000 calc(100% - 6.25rem)");
   expect(sessionList).not.toContain("workspace-rail__group-actions");
   expect(sessionList).not.toContain("RowAction");
 });

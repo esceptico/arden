@@ -322,17 +322,20 @@ button,
    color. Mark the active row with `data-active="true"` (current
    session, keyboard-highlighted entry, etc.) or
    `aria-selected="true"` if the row already exposes it. */
-/* Session-row title fade: on hover the title's right edge dissolves under
-   the revealed time + pin + archive cluster. Mask (not a bg gradient) so it
-   works on any row background. */
+/* Session-row title fade: on hover the title's clipped right edge dissolves
+   instead of ending in a hard cut. Mask (not a bg gradient) so it works on any
+   row background.
+
+   The fade is measured from the TITLE's own edge, not the cluster's width. The
+   title and the time + pin + archive cluster are flex siblings, so revealing
+   the cluster already shrinks the title to clear it — subtracting the cluster
+   width here as well double-counted it. At a 90px cluster the title shrinks to
+   82px and the old `calc(100% - 6.25rem)` stop landed at -18px: the whole
+   title was masked away bar its first 10px. */
 .session-row:hover .session-row-title,
 .session-row:focus-within .session-row-title {
   text-overflow: clip;
-  mask-image: linear-gradient(
-    to right,
-    #000 calc(100% - 6.25rem),
-    transparent calc(100% - 4.5rem)
-  );
+  mask-image: linear-gradient(to right, #000 calc(100% - var(--session-title-fade)), transparent);
 }
 
 .app-row {
