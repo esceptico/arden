@@ -469,6 +469,7 @@ export function NotebookRail({
         anchor={factAnchor}
         role="tooltip"
         className="mw-fact-peek"
+        side="inline"
         closeOnScroll
       >
         {factPreview && (

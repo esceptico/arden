@@ -43,6 +43,10 @@ interface AnchoredPopoverProps {
   className?: string;
   /** Horizontal edge shared with an element anchor. */
   align?: "start" | "end";
+  /** Where an element anchor opens: stacked under (default) or beside it.
+   *  `beside` suits a preview raised from a list row, which would otherwise
+   *  cover the rows you are reading along. */
+  side?: "block" | "inline";
   /** Element-anchor separation in pixels. */
   gap?: number;
   /** "menu" adds role="menu" + roving Arrow/Home/End nav + focus-restore
@@ -123,6 +127,36 @@ export function placeAnchoredPopover(
   };
 }
 
+/**
+ * Beside the trigger instead of under it — for a preview raised from a row in
+ * a list, where the stacked placement would cover the rows you are reading
+ * along. Prefers the right; flips left when the panel would not clear the
+ * viewport there. Vertically it holds the trigger's top edge and clamps.
+ */
+export function placeSidePopover(
+  rect: Pick<DOMRect, "left" | "right" | "top">,
+  width: number,
+  height: number,
+  viewport: Viewport,
+  gap: number = ANCHORED_POPOVER_GAP,
+): PopoverPosition {
+  const roomRight = viewport.width - rect.right - ANCHORED_POPOVER_EDGE;
+  const flip = roomRight < width + gap && rect.left - ANCHORED_POPOVER_EDGE >= width + gap;
+  const left = clamp(
+    flip ? rect.left - width - gap : rect.right + gap,
+    ANCHORED_POPOVER_EDGE,
+    Math.max(ANCHORED_POPOVER_EDGE, viewport.width - width - ANCHORED_POPOVER_EDGE),
+  );
+  const top = clamp(
+    rect.top,
+    ANCHORED_POPOVER_EDGE,
+    Math.max(ANCHORED_POPOVER_EDGE, viewport.height - height - ANCHORED_POPOVER_EDGE),
+  );
+  const originY = clamp(rect.top - top, 0, height);
+
+  return { left, top, transformOrigin: `${flip ? "100%" : "0"} ${originY}px` };
+}
+
 function placePointPopover(
   point: { x: number; y: number },
   width: number,
@@ -186,6 +220,7 @@ export function AnchoredPopover({
   anchor,
   className,
   align = "start",
+  side = "block",
   gap = ANCHORED_POPOVER_GAP,
   variant = "popover",
   ariaLabel,
@@ -262,7 +297,9 @@ export function AnchoredPopover({
           ? placeContextMenu(point, el.offsetWidth, el.offsetHeight, viewport)
           : placePointPopover(point, el.offsetWidth, el.offsetHeight, viewport)
         : rect
-          ? placeAnchoredPopover(rect, el.offsetWidth, el.offsetHeight, viewport, { align, gap })
+          ? side === "inline"
+            ? placeSidePopover(rect, el.offsetWidth, el.offsetHeight, viewport, gap)
+            : placeAnchoredPopover(rect, el.offsetWidth, el.offsetHeight, viewport, { align, gap })
           : null;
       if (!next) return;
       setPos((current) => (
@@ -283,7 +320,7 @@ export function AnchoredPopover({
       if (!isContextMenu) window.removeEventListener("resize", place);
       observer?.disconnect();
     };
-  }, [align, anchor, gap, isContextMenu, open, pointKey]);
+  }, [align, anchor, gap, isContextMenu, open, pointKey, side]);
 
   // Move focus into the menu once positioned so arrow keys work immediately.
   // pointKey: re-focus item 0 when the panel remounts at a new cursor point
