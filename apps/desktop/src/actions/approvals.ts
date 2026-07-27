@@ -1,6 +1,18 @@
 import { submitToolResult } from "@/api/chat";
+import { ApiError } from "@/api/core";
 import { getState } from "@/stores";
 import { clearApprovalFeedbackDraft } from "@/lib/approvalFeedbackDraft";
+
+/** Resolving an approval is idempotent from the user's side: the intent is
+ *  "this tool call should stop waiting on me". The server answers 409 when it
+ *  already has — a second click, another surface (banner / review sheet /
+ *  approve-all / ⌘↩) winning the race, or a banner replayed from history for
+ *  a run that resolved long ago. The transcript already shows the real
+ *  outcome over SSE, so a red error bubble adds noise, not information.
+ *  Everything else still surfaces. */
+function isAlreadyResolved(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 409;
+}
 
 export async function respondToApproval(
   toolId: string,
@@ -19,6 +31,7 @@ export async function respondToApproval(
       approved,
     });
   } catch (error) {
+    if (isAlreadyResolved(error)) return;
     s.appendMessage({
       id: crypto.randomUUID(),
       role: "error",
