@@ -200,7 +200,25 @@ export function buildPayload(
   return p;
 }
 
-export function scheduleLabel(s: Schedule): string {
+/** Calendar distance, not elapsed time: a 4 PM reminder set the night before
+ *  is "Tomorrow", never "in 17h". */
+function relativeDay(iso: string, now: Date): string | null {
+  const then = new Date(iso);
+  if (Number.isNaN(then.getTime())) return null;
+  const startOf = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.round((startOf(then) - startOf(now)) / 86_400_000);
+  if (days === 0) return "Today";
+  if (days === 1) return "Tomorrow";
+  return then.toLocaleDateString(undefined, then.getFullYear() === now.getFullYear()
+    ? { month: "short", day: "numeric" }
+    : { month: "short", day: "numeric", year: "numeric" });
+}
+
+/** `nextRunAt` names the day a one-shot actually fires. Without days a time
+ *  trigger runs ONCE — the server's own `one_shot` is `at && !days`, and it
+ *  disables the automation afterwards — so calling it "Daily" claimed the
+ *  opposite of what the schedule commits to. */
+export function scheduleLabel(s: Schedule, nextRunAt?: string | null): string {
   if (s.kind === "message") {
     const chans = splitKeywords(s.channel);
     if (!chans.length) return "On Slack message";
@@ -211,7 +229,9 @@ export function scheduleLabel(s: Schedule): string {
   if (s.kind === "at") {
     const time = formatTime12(s.at);
     const days = humanDays(s.days);
-    return days ? `${days} at ${time}` : `Daily at ${time}`;
+    if (days) return `${days} at ${time}`;
+    const day = nextRunAt ? relativeDay(nextRunAt, new Date()) : null;
+    return day ? `${day} at ${time}` : `Once at ${time}`;
   }
   if (s.kind === "every") {
     const win = s.start && s.end ? ` (${formatTime12(s.start)}–${formatTime12(s.end)})` : "";

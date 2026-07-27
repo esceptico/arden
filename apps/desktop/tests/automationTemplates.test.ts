@@ -5,6 +5,8 @@ import {
   buildPayload,
   formFromAutomation,
   formFromPreset,
+  scheduleLabel,
+  type Schedule,
 } from "@/features/automations/lib/schedule";
 
 test("templates do not use keyword-signal suggestions", async () => {
@@ -86,4 +88,45 @@ test("a migrated suggestion never substitutes its execution prompt for missing d
 
   expect(preset.description).toBeUndefined();
   expect(preset.prompt).toBe("FULL LEGACY EXECUTION PROMPT");
+});
+
+
+const AT_SCHEDULE = (over: Partial<Schedule> = {}): Schedule => ({
+  kind: "at",
+  at: "16:00",
+  every: "30m",
+  days: "",
+  start: "",
+  end: "",
+  event: "starts",
+  lead: "",
+  channel: "",
+  fromUser: "",
+  keywords: "",
+  ...over,
+});
+
+test("a time trigger with no days is a ONE-SHOT and says which day it fires", () => {
+  // The server's own definition is `at && !days` -> one_shot, and it disables
+  // the automation after the run. Labelling that "Daily" claimed the opposite
+  // of what the schedule commits to.
+  const now = new Date();
+  const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 16, 0).toISOString();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 16, 0).toISOString();
+
+  expect(scheduleLabel(AT_SCHEDULE(), tomorrow)).toBe("Tomorrow at 4:00 PM");
+  expect(scheduleLabel(AT_SCHEDULE(), today)).toBe("Today at 4:00 PM");
+  // Further out falls back to a date rather than counting days.
+  const later = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 9, 16, 0);
+  expect(scheduleLabel(AT_SCHEDULE(), later.toISOString())).toContain("at 4:00 PM");
+  expect(scheduleLabel(AT_SCHEDULE(), later.toISOString())).not.toContain("Daily");
+  // Not yet saved, or already fired and disabled: still honest about running once.
+  expect(scheduleLabel(AT_SCHEDULE(), null)).toBe("Once at 4:00 PM");
+  expect(scheduleLabel(AT_SCHEDULE())).toBe("Once at 4:00 PM");
+});
+
+test("a time trigger WITH days keeps its recurrence label", () => {
+  expect(scheduleLabel(AT_SCHEDULE({ days: "daily" }), null)).toBe("Daily at 4:00 PM");
+  // The next run never overrides a stated recurrence.
+  expect(scheduleLabel(AT_SCHEDULE({ days: "daily" }), new Date().toISOString())).toBe("Daily at 4:00 PM");
 });

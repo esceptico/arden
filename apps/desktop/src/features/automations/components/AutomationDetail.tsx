@@ -542,8 +542,13 @@ export function AutomationDetail({
                   <small>When this automation starts</small>
                 </span>
               </span>
-              <span className="automation-detail__control-value" title={scheduleLabel(form.schedule)}>
-                {scheduleLabel(form.schedule)}
+              {/* A one-shot names the day it fires, which only the saved
+                * automation knows. */}
+              <span
+                className="automation-detail__control-value"
+                title={scheduleLabel(form.schedule, automation?.next_run_at)}
+              >
+                {scheduleLabel(form.schedule, automation?.next_run_at)}
               </span>
               <ChevronDown className="automation-detail__row-chevron" size={12} aria-hidden />
             </button>
