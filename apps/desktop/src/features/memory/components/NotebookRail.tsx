@@ -1,29 +1,35 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CheckList, ChevronDown, FileText, Folder, Notebook01 } from "@/components/icons";
 import clsx from "clsx";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { AnchoredPopover } from "@/components/ui/AnchoredPopover";
 import { Empty } from "@/components/ui/EmptyState";
 import { ListError, ListSkeleton } from "@/components/ui/ListColumn";
 import { ContextMenu, type ContextMenuPosition } from "@/components/ui/ContextMenu";
 import { Tab, Tabs } from "@/components/ui/Tabs";
+import { TabPanels, useTabDirection } from "@/components/ui/TabPanels";
 import { copyText } from "@/lib/clipboard";
 import { GhostBtn } from "@/features/memory/components/shared";
-import {
-  CONTENT_ENTER_TRANSITION,
-  CONTENT_EXIT_TRANSITION,
-  CONTENT_SWAP_VARIANTS,
-} from "@/lib/tokens/motion";
 import type { MemoryItem } from "@/api/memoryItems";
 import type { MemoryArtifactSummary } from "@/features/memory/lib/notebookTypes";
-import { prettyDate, sortNotes, stem, type WorkspaceDir } from "@/features/memory/lib/workspaceTree";
+import { noteDateGroup, prettyDate, sortNotes, stem, type WorkspaceDir } from "@/features/memory/lib/workspaceTree";
 
 const COLLAPSED_KEY = "arden.desktop.memory.rail.collapsed";
+const NOTEBOOK_COLLAPSED_KEY = "arden.desktop.memory.notebook.collapsed";
 const RAIL_MODES = ["files", "notebook", "facts"] as const;
+/** Hover-intent before a fact opens its full text, and the grace that lets the
+ *  pointer cross the gap into the panel — same pair as the wiki-link preview. */
+const FACT_INTENT_MS = 300;
+const FACT_HIDE_MS = 120;
 
 export type MemoryRailMode = (typeof RAIL_MODES)[number];
 
 interface FileContextMenuState extends ContextMenuPosition {
   path: string;
+}
+
+interface FactPreviewState {
+  record: MemoryItem;
+  element: HTMLElement;
 }
 
 function loadStringSet(key: string): Set<string> {
@@ -43,8 +49,20 @@ function persistStringSet(key: string, value: Set<string>): void {
   }
 }
 
-function modeIndex(mode: MemoryRailMode): number {
-  return RAIL_MODES.indexOf(mode);
+/** The rail row is three lines of prose in ~250px — the summary has to survive
+ *  as plain text, so markdown emphasis, headings and wiki-link plumbing are
+ *  stripped rather than rendered. */
+function previewLine(artifact: MemoryArtifactSummary): string {
+  return (artifact.snippet ?? artifact.summary ?? "")
+    // Generated pages open with an `<!-- arden:index:start -->` marker — a
+    // preview of the machinery, not of the note.
+    .replace(/<!--[\s\S]*?(?:-->|$)/g, "")
+    .replace(/\[\[[^\]|]+\|([^\]]+)\]\]/g, "$1")
+    .replace(/\[\[([^\]]+)\]\]/g, "$1")
+    .replace(/^\s*[-*+]\s+/gm, "")
+    .replace(/[*_`>#]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export function NotebookRail({
@@ -82,29 +100,61 @@ export function NotebookRail({
   onRetryRecords: () => void;
   onRebuild: () => void;
 }) {
-  const reduce = useReducedMotion();
   const [collapsed, setCollapsed] = useState<Set<string>>(() => loadStringSet(COLLAPSED_KEY));
+  const [closedGroups, setClosedGroups] = useState<Set<string>>(() => loadStringSet(NOTEBOOK_COLLAPSED_KEY));
   const [fileContextMenu, setFileContextMenu] = useState<FileContextMenuState | null>(null);
+  const [factPreview, setFactPreview] = useState<FactPreviewState | null>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
-  const previousModeRef = useRef(mode);
-  const direction = modeIndex(mode) > modeIndex(previousModeRef.current) ? 1 : -1;
+  const factIntentTimer = useRef<number | null>(null);
+  const factHideTimer = useRef<number | null>(null);
+  const direction = useTabDirection(RAIL_MODES, mode);
   const empty = tree.dirs.length === 0 && tree.files.length === 0;
 
+  const clearFactTimers = useCallback(() => {
+    if (factIntentTimer.current != null) window.clearTimeout(factIntentTimer.current);
+    if (factHideTimer.current != null) window.clearTimeout(factHideTimer.current);
+    factIntentTimer.current = null;
+    factHideTimer.current = null;
+  }, []);
+  const closeFactPreview = useCallback(() => {
+    clearFactTimers();
+    setFactPreview(null);
+  }, [clearFactTimers]);
+  const showFactPreview = useCallback((record: MemoryItem, element: HTMLElement) => {
+    clearFactTimers();
+    setFactPreview({ record, element });
+  }, [clearFactTimers]);
+  const scheduleFactPreview = useCallback((record: MemoryItem, element: HTMLElement) => {
+    clearFactTimers();
+    factIntentTimer.current = window.setTimeout(() => setFactPreview({ record, element }), FACT_INTENT_MS);
+  }, [clearFactTimers]);
+  const scheduleFactHide = useCallback(() => {
+    clearFactTimers();
+    factHideTimer.current = window.setTimeout(() => setFactPreview(null), FACT_HIDE_MS);
+  }, [clearFactTimers]);
+
+  // A preview holds a record object and a live DOM node — both go stale when
+  // the rail swaps mode or the ledger reloads underneath it.
   useEffect(() => {
-    previousModeRef.current = mode;
-  }, [mode]);
+    closeFactPreview();
+    return closeFactPreview;
+  }, [closeFactPreview, mode, records]);
+
+  const factAnchor = useMemo(() => ({ current: factPreview?.element ?? null }), [factPreview?.element]);
 
   useEffect(() => {
-    if (!selectedPath || mode !== "files") return;
-    setCollapsed((current) => {
-      const ancestors = selectedPath.split("/").slice(0, -1)
-        .map((_, index, parts) => `${parts.slice(0, index + 1).join("/")}/`);
-      if (!ancestors.some((ancestor) => current.has(ancestor))) return current;
-      const next = new Set(current);
-      for (const ancestor of ancestors) next.delete(ancestor);
-      persistStringSet(COLLAPSED_KEY, next);
-      return next;
-    });
+    if (!selectedPath || mode === "facts") return;
+    if (mode === "files") {
+      setCollapsed((current) => {
+        const ancestors = selectedPath.split("/").slice(0, -1)
+          .map((_, index, parts) => `${parts.slice(0, index + 1).join("/")}/`);
+        if (!ancestors.some((ancestor) => current.has(ancestor))) return current;
+        const next = new Set(current);
+        for (const ancestor of ancestors) next.delete(ancestor);
+        persistStringSet(COLLAPSED_KEY, next);
+        return next;
+      });
+    }
     const frame = requestAnimationFrame(() => {
       scrollerRef.current
         ?.querySelector<HTMLElement>(`[data-memory-entry="${CSS.escape(selectedPath)}"]`)
@@ -119,6 +169,16 @@ export function NotebookRail({
       if (next.has(path)) next.delete(path);
       else next.add(path);
       persistStringSet(COLLAPSED_KEY, next);
+      return next;
+    });
+  };
+
+  const toggleGroup = (label: string) => {
+    setClosedGroups((current) => {
+      const next = new Set(current);
+      if (next.has(label)) next.delete(label);
+      else next.add(label);
+      persistStringSet(NOTEBOOK_COLLAPSED_KEY, next);
       return next;
     });
   };
@@ -205,33 +265,72 @@ export function NotebookRail({
     return updated || stem(left.path).localeCompare(stem(right.path));
   }), [allNotes]);
 
+  /** Notes stay newest-first; the date buckets fall out of that order, so a
+   *  group is just a run of adjacent notes sharing a label. */
+  const notebookGroups = useMemo(() => {
+    const now = new Date();
+    const groups: { label: string; notes: MemoryArtifactSummary[] }[] = [];
+    for (const artifact of notebookNotes) {
+      const label = noteDateGroup(artifact.updatedAt ?? artifact.createdAt, now);
+      const open = groups.at(-1);
+      if (open?.label === label) open.notes.push(artifact);
+      else groups.push({ label, notes: [artifact] });
+    }
+    return groups;
+  }, [notebookNotes]);
+
   const notebook = useMemo(() => (
-    <div ref={scrollerRef} className="mw-rail-list scroll-fade" data-memory-notebook-list>
-      {notebookNotes.map((artifact) => (
-        <button
-          key={artifact.path}
-          type="button"
-          disabled={navigationDisabled}
-          data-memory-entry={artifact.path}
-          className={clsx("mw-rail-list-row", selectedPath === artifact.path && "active")}
-          onClick={() => selectPath(artifact.path)}
-          onContextMenu={(event) => {
-            event.preventDefault();
-            openFileContextMenu(artifact.path, event.currentTarget, "pointer", event.clientX, event.clientY);
-          }}
-          onKeyDown={(event) => {
-            if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
-            event.preventDefault();
-            const rect = event.currentTarget.getBoundingClientRect();
-            openFileContextMenu(artifact.path, event.currentTarget, "keyboard", rect.left + 12, rect.bottom - 4);
-          }}
+    <div ref={scrollerRef} className="mw-rail-list mw-notebook scroll-fade" data-memory-notebook-list>
+      {notebookGroups.map((group) => (
+        <section
+          key={group.label}
+          className={clsx("mw-notebook-group", closedGroups.has(group.label) && "closed")}
+          data-memory-note-group={group.label}
         >
-          <span className="mw-rail-row-title">{stem(artifact.path)}</span>
-          <span className="mw-rail-row-meta">{prettyDate(artifact.updatedAt ?? artifact.createdAt)}</span>
-        </button>
+          <button
+            type="button"
+            className="mw-fold mw-notebook-fold"
+            aria-expanded={!closedGroups.has(group.label)}
+            aria-label={closedGroups.has(group.label) ? `Expand ${group.label}` : `Collapse ${group.label}`}
+            onClick={() => toggleGroup(group.label)}
+          >
+            <ChevronDown className="mw-chev" aria-hidden />
+            <span className="mw-label">{group.label}</span>
+          </button>
+          <div className="mw-notebook-kids">
+            {group.notes.map((artifact) => {
+              const preview = previewLine(artifact);
+              return (
+                <button
+                  key={artifact.path}
+                  type="button"
+                  disabled={navigationDisabled}
+                  data-memory-entry={artifact.path}
+                  aria-current={selectedPath === artifact.path ? "page" : undefined}
+                  className={clsx("mw-note-card", selectedPath === artifact.path && "active")}
+                  onClick={() => selectPath(artifact.path)}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    openFileContextMenu(artifact.path, event.currentTarget, "pointer", event.clientX, event.clientY);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+                    event.preventDefault();
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    openFileContextMenu(artifact.path, event.currentTarget, "keyboard", rect.left + 12, rect.bottom - 4);
+                  }}
+                >
+                  <span className="mw-note-card-title">{stem(artifact.path)}</span>
+                  {preview ? <span className="mw-note-card-preview">{preview}</span> : null}
+                  <span className="mw-note-card-date">{prettyDate(artifact.updatedAt ?? artifact.createdAt)}</span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
       ))}
     </div>
-  ), [navigationDisabled, notebookNotes, openFileContextMenu, selectPath, selectedPath]);
+  ), [closedGroups, navigationDisabled, notebookGroups, openFileContextMenu, selectPath, selectedPath]);
 
   const facts = useMemo(() => {
     if (recordsLoading && records.length === 0) return <div className="mw-tree"><ListSkeleton /></div>;
@@ -251,7 +350,11 @@ export function NotebookRail({
             type="button"
             disabled={navigationDisabled}
             data-memory-fact={record.id}
-            className="mw-rail-list-row fact"
+            className={clsx("mw-rail-list-row fact", factPreview?.record.id === record.id && "peeking")}
+            onMouseEnter={(event) => scheduleFactPreview(record, event.currentTarget)}
+            onMouseLeave={scheduleFactHide}
+            onFocus={(event) => showFactPreview(record, event.currentTarget)}
+            onBlur={scheduleFactHide}
           >
             <span className="mw-rail-row-meta">{record.updated_at.slice(0, 10)}</span>
             <span className="mw-rail-row-fact">{record.content}</span>
@@ -259,7 +362,17 @@ export function NotebookRail({
         ))}
       </div>
     );
-  }, [navigationDisabled, onRetryRecords, records, recordsError, recordsLoading]);
+  }, [
+    factPreview?.record.id,
+    navigationDisabled,
+    onRetryRecords,
+    records,
+    recordsError,
+    recordsLoading,
+    scheduleFactHide,
+    scheduleFactPreview,
+    showFactPreview,
+  ]);
 
   const notesState = loading && empty ? (
     <div className="mw-tree"><ListSkeleton /></div>
@@ -307,25 +420,13 @@ export function NotebookRail({
           );
         })}
       </Tabs>
-      <AnimatePresence initial={false} mode="wait" custom={direction}>
-        <motion.div
-          key={mode}
-          custom={direction}
-          className="mw-rail-mode"
-          initial={reduce ? false : CONTENT_SWAP_VARIANTS.enter(direction)}
-          animate={{
-            ...CONTENT_SWAP_VARIANTS.center,
-            transition: reduce ? { duration: 0 } : CONTENT_ENTER_TRANSITION,
-            transitionEnd: { filter: "none" },
-          }}
-          exit={reduce ? undefined : {
-            ...CONTENT_SWAP_VARIANTS.exit(direction),
-            transition: CONTENT_EXIT_TRANSITION,
-          }}
-        >
-          {mode === "facts" ? facts : notesState}
-        </motion.div>
-      </AnimatePresence>
+      {/* The house tab swap: `custom` only reaches an exiting child through
+        * variant functions, so the panels have to come from TabPanels — an
+        * inline `exit` object bakes in the PREVIOUS direction and sends the
+        * outgoing mode the same way as the incoming one. */}
+      <TabPanels value={mode} direction={direction} className="mw-rail-mode">
+        {mode === "facts" ? facts : notesState}
+      </TabPanels>
       <ContextMenu
         state={fileContextMenu}
         onClose={() => setFileContextMenu(null)}
@@ -334,6 +435,34 @@ export function NotebookRail({
           { id: "copy-path", label: "Copy path", onSelect: () => void copyText(fileContextMenu.path) },
         ] : []}
       />
+      <AnchoredPopover
+        open={factPreview != null}
+        onClose={closeFactPreview}
+        anchor={factAnchor}
+        role="tooltip"
+        className="mw-fact-peek"
+        closeOnScroll
+      >
+        {factPreview && (
+          <div
+            className="mw-fact-peek-body"
+            data-memory-fact-peek={factPreview.record.id}
+            onMouseEnter={clearFactTimers}
+            onMouseLeave={scheduleFactHide}
+          >
+            <div className="mw-fact-peek-meta">
+              <span>{prettyDate(factPreview.record.updated_at)}</span>
+              <span>·</span>
+              <span>{factPreview.record.kind}</span>
+              {factPreview.record.pinned && <span>pinned</span>}
+            </div>
+            <p>{factPreview.record.content}</p>
+            {factPreview.record.labels.length > 0 && (
+              <div className="mw-fact-peek-labels">{factPreview.record.labels.join(" · ")}</div>
+            )}
+          </div>
+        )}
+      </AnchoredPopover>
     </div>
   );
 }

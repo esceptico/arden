@@ -318,6 +318,10 @@
   min-height: 0;
   flex: 1;
   display: grid;
+  /* Rows measure against the RAIL, never against their own longest line. An
+     implicit column is max-content, so one unwrapped fact used to widen every
+     row past the rail and clip the text off the right edge. */
+  grid-template-columns: minmax(0, 1fr);
   align-content: start;
   gap: var(--interactive-row-gap);
   overflow: auto;
@@ -326,7 +330,7 @@
 }
 
 .memory-surface .mw-rail-list-row {
-  width: 100%;
+  min-width: 0;
   padding: 6px var(--space-2);
   display: flex;
   flex-direction: column;
@@ -340,18 +344,10 @@
     transform var(--motion-press) var(--smooth-out);
 }
 
-.memory-surface .mw-rail-list-row:hover { color: var(--ink); background: var(--state-hover-bg); }
-.memory-surface .mw-rail-list-row.active,
-.memory-surface .mw-rail-list-row[aria-current="true"] { color: var(--ink); background: var(--state-selected-bg); }
+.memory-surface .mw-rail-list-row.fact { cursor: default; }
+.memory-surface .mw-rail-list-row:hover,
+.memory-surface .mw-rail-list-row.peeking { color: var(--ink); background: var(--state-hover-bg); }
 .memory-surface .mw-rail-list-row:active { transform: scale(var(--press-scale-subtle)); }
-
-.memory-surface .mw-rail-row-title {
-  overflow: hidden;
-  font-size: var(--text-body);
-  font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
 .memory-surface .mw-rail-row-meta {
   color: var(--faint);
@@ -362,12 +358,118 @@
 
 .memory-surface .mw-rail-row-fact {
   display: -webkit-box;
+  min-width: 0;
   overflow: hidden;
   color: var(--muted);
   font-size: var(--text-control);
   line-height: var(--leading-body);
+  /* Facts carry raw URLs and identifiers — break inside a token rather than
+     let one run past the clamp. */
+  overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+/* ── Notebook: date-grouped note cards ──────────────────────── */
+
+.memory-surface .mw-notebook { gap: var(--space-2); }
+
+.memory-surface .mw-notebook-group {
+  display: grid;
+  align-content: start;
+  gap: var(--space-0-5);
+}
+
+.memory-surface .mw-notebook-fold {
+  font-size: var(--text-control);
+  font-weight: 600;
+}
+
+.memory-surface .mw-notebook-group.closed > .mw-notebook-fold .mw-chev { transform: rotate(-90deg); }
+.memory-surface .mw-notebook-group.closed > .mw-notebook-kids { display: none; }
+
+.memory-surface .mw-notebook-kids {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: var(--interactive-row-gap);
+}
+
+.memory-surface .mw-note-card {
+  min-width: 0;
+  padding: var(--space-1-5) var(--space-2);
+  display: grid;
+  border-radius: var(--r-row);
+  color: var(--ink-soft);
+  text-align: left;
+  transition:
+    color var(--motion-feedback) var(--smooth-out),
+    background var(--motion-feedback) var(--smooth-out),
+    transform var(--motion-press) var(--smooth-out);
+}
+
+.memory-surface .mw-note-card:hover { color: var(--ink); background: var(--state-hover-bg); }
+.memory-surface .mw-note-card.active { color: var(--ink); background: var(--state-selected-bg); }
+.memory-surface .mw-note-card:active { transform: scale(var(--press-scale-subtle)); }
+
+.memory-surface .mw-note-card-title {
+  overflow: hidden;
+  font-size: var(--text-body);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-surface .mw-note-card-preview {
+  display: -webkit-box;
+  min-width: 0;
+  overflow: hidden;
+  margin-block-start: var(--space-0-5);
+  color: var(--muted);
+  font-size: var(--text-control);
+  line-height: var(--leading-body);
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.memory-surface .mw-note-card-date {
+  margin-block-start: var(--space-1);
+  color: var(--faint);
+  font: 500 var(--text-meta)/var(--leading-meta) var(--mono);
+  letter-spacing: .02em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Portaled out of .memory-surface — scoped by its own class. */
+.mw-fact-peek { width: 21rem; }
+
+.mw-fact-peek-body {
+  padding: var(--space-3);
+  display: grid;
+  gap: var(--space-1-5);
+}
+
+.mw-fact-peek-meta {
+  display: flex;
+  gap: var(--space-1);
+  color: var(--faint);
+  font: 500 var(--text-meta)/var(--leading-meta) var(--mono);
+  letter-spacing: .02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.mw-fact-peek-body p {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--text-control);
+  line-height: var(--leading-body);
+  overflow-wrap: anywhere;
+}
+
+.mw-fact-peek-labels {
+  color: var(--muted);
+  font-size: var(--text-meta);
 }
 
 /* ── Tier 0: paper and desk ─────────────────────────────────── */

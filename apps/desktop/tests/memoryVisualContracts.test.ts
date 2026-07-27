@@ -42,9 +42,13 @@ test("memory rail keeps the three mock modes in one 288px plane", () => {
   const view = read("../src/features/memory/components/ArtifactMemoryView.tsx");
 
   expect(rail).toContain('const RAIL_MODES = ["files", "notebook", "facts"]');
-  expect(rail).toContain('<AnimatePresence initial={false} mode="wait" custom={direction}>');
-  expect(rail).toContain("CONTENT_SWAP_VARIANTS.enter(direction)");
-  expect(rail).toContain("CONTENT_SWAP_VARIANTS.exit(direction)");
+  // The swap goes through TabPanels: `custom` only reaches an EXITING child via
+  // variant functions, so an inline exit object sent the outgoing mode the same
+  // direction as the incoming one. No hand-rolled AnimatePresence here.
+  expect(rail).toContain("const direction = useTabDirection(RAIL_MODES, mode);");
+  expect(rail).toContain('<TabPanels value={mode} direction={direction} className="mw-rail-mode">');
+  expect(rail).not.toContain("AnimatePresence");
+  expect(rail).not.toContain("CONTENT_SWAP_VARIANTS");
   expect(rail).toContain('variant="surface"');
   expect(rail).toContain('indicatorClassName="mw-rail-segment-indicator"');
   expect(tabs).toContain('data-tab-indicator={variant}');

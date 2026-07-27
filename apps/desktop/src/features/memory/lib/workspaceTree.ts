@@ -103,18 +103,30 @@ export function sortNotes(
 }
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
 
 export function prettyDate(iso: string | null | undefined): string {
   if (!iso) return "";
   return `${MONTHS[Number(iso.slice(5, 7)) - 1]} ${Number(iso.slice(8, 10))}, ${iso.slice(0, 4)}`;
 }
 
-export function bucketOf(iso: string | null | undefined, now: Date): string {
+/** Notebook Navigator's date rail: the recent past in relative buckets, then
+ *  calendar months (year-qualified once it leaves the current one). Both sides
+ *  are read as calendar days at UTC midnight so a local evening note doesn't
+ *  land a day off. */
+export function noteDateGroup(iso: string | null | undefined, now: Date): string {
   if (!iso) return "Undated";
-  const days = Math.floor((now.getTime() - new Date(iso.slice(0, 10)).getTime()) / 86_400_000);
+  const localToday = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+  const day = Date.parse(`${iso.slice(0, 10)}T00:00:00Z`);
+  const days = Math.round((localToday - day) / 86_400_000);
   if (days <= 0) return "Today";
   if (days === 1) return "Yesterday";
-  if (days <= 7) return "This week";
-  if (days <= 31) return "This month";
-  return "Earlier";
+  if (days <= 7) return "Previous 7 days";
+  if (days <= 30) return "Previous 30 days";
+  const year = Number(iso.slice(0, 4));
+  const month = MONTH_NAMES[Number(iso.slice(5, 7)) - 1]!;
+  return year === now.getFullYear() ? month : `${month} ${year}`;
 }
