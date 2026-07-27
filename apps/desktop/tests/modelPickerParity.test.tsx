@@ -5,8 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import {
   ModelReasoningPicker,
   ModelMenuPicker,
-  availableConfiguredModelChoices,
-  configuredModelChoices,
+  availableModelChoices,
   reasoningEffortLabel,
 } from "@/components/ui/ModelPickers";
 import type { ModelGroup } from "@/api/types";
@@ -33,38 +32,23 @@ function mount(): { el: HTMLElement; root: Root; restore: () => void } {
 
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
 
-test("configured quick choices are bounded by explicit model roles and retain a session override", () => {
-  expect(configuredModelChoices({
-    currentModel: "openai-codex/gpt-terra",
-    chatModel: "openai-codex/gpt-sol",
-    researchModel: "claude-opus",
-    workflowModel: "claude-opus",
-    memoryModel: "claude-sonnet",
-  })).toEqual([
+test("model choices lead with the current model and survive an absent catalog", () => {
+  // Quick choices used to be bounded by the configured role models. They are
+  // the live catalog now, with the current model pinned first so a session
+  // override stays selectable even when it is not in the list.
+  expect(availableModelChoices("openai-codex/gpt-terra", ["claude-opus", "claude-sonnet"])).toEqual([
     "openai-codex/gpt-terra",
-    "openai-codex/gpt-sol",
     "claude-opus",
     "claude-sonnet",
   ]);
-});
-
-test("configured quick choices remain usable while the live catalog is unavailable", () => {
-  const configured = {
-    currentModel: "openai-codex/gpt-sol",
-    chatModel: "openai-codex/gpt-sol",
-    researchModel: "claude-opus",
-    workflowModel: "claude-sonnet",
-  };
-
-  expect(availableConfiguredModelChoices(configured, null)).toEqual([
-    "openai-codex/gpt-sol",
+  // A model already in the catalog is not repeated.
+  expect(availableModelChoices("claude-opus", ["claude-opus", "claude-sonnet"])).toEqual([
     "claude-opus",
     "claude-sonnet",
   ]);
-  expect(availableConfiguredModelChoices(configured, ["claude-opus"])).toEqual([
-    "openai-codex/gpt-sol",
-    "claude-opus",
-  ]);
+  // No catalog yet: the current model alone keeps the picker usable.
+  expect(availableModelChoices("openai-codex/gpt-sol", null)).toEqual(["openai-codex/gpt-sol"]);
+  expect(availableModelChoices(null, ["claude-opus"])).toEqual(["claude-opus"]);
 });
 
 test("reasoning labels preserve wire values without exposing implementation spelling", () => {
@@ -162,7 +146,8 @@ test("Escape closes a model menu before its owning takeover", async () => {
       '[aria-label="Automation model"]',
     )!;
     await act(async () => trigger.click());
-    expect(document.querySelector('[role="menu"][aria-label="Automation model"]')).not.toBeNull();
+    // ModelMenuPicker is a searchable Combobox now, so its popup is a dialog.
+    expect(document.querySelector('[role="dialog"][aria-label="Automation model"]')).not.toBeNull();
 
     await act(async () => {
       window.dispatchEvent(new KeyboardEvent("keydown", {
@@ -201,20 +186,23 @@ test("all picker variants use the mock geometry, material, and side-aware motion
   expect(css).toMatch(/\.model-picker__model-menu\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;[^}]*overflow:\s*hidden;/s);
   expect(css).toMatch(/\.model-picker__model-list\s*\{[^}]*flex:\s*1;[^}]*overflow:\s*auto;/s);
   expect(pickers).not.toContain("autoHighlight");
-  expect(pickers).toContain("modelListRef.current?.scrollTo({ top: 0 })");
   expect(pickers).toContain("model-search-wrap dp-search-shell dp-search-shell-compact model-picker__search");
   expect(pickers).toContain('<use href="#dp-search" />');
   expect(css).toMatch(/\.model-picker__effort-menu\s*\{[^}]*width:\s*116px;/s);
   expect(css).toMatch(/\.model-picker__positioner\s*\{[^}]*z-index:\s*var\(--z-nested\);/s);
   expect(css).toContain('[data-side="top"]');
   expect(css).toContain("--popover-offset-above");
-  expect(css).toMatch(/\.model-config-menu\s*\{[^}]*width:\s*264px;/s);
-  expect(css).toMatch(/\.model-effort-menu\s*\{[^}]*width:\s*128px;/s);
   expect(css).toMatch(/\.automation-model-menu\s*\{[^}]*width:\s*min\(320px,/s);
-  expect(css).toMatch(/@media \(max-width: 38\.75rem\)[\s\S]*?\.model-config-positioner\s*\{[^}]*inset:\s*auto 16px 108px/);
   expect(pickers).toMatch(/export function ModelMenuPicker[\s\S]*?side="bottom"\s+align="start"/);
   expect(automation).toContain("<AutomationModelPicker");
   expect(automation).toContain("<ModelMenuPicker");
   expect(automation).not.toContain("<ModelReasoningPicker");
-  expect(chat).not.toContain(".model-config-menu");
+  // The composer's combined model+effort menu is gone — Chat uses the same two
+  // controls as Settings via ModelReasoningChip, so its bespoke menu classes
+  // should exist nowhere.
+  for (const retired of [".model-config-menu", ".model-effort-menu", ".model-config-positioner"]) {
+    expect(css).not.toContain(retired);
+    expect(chat).not.toContain(retired);
+  }
+  expect(pickers).not.toContain("ComposerModelConfigPicker");
 });

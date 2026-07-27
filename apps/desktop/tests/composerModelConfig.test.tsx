@@ -1,15 +1,54 @@
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { ComposerModelConfigPicker, ModelReasoningChip } from "@/components/ui/ModelPickers";
+import { ModelReasoningChip } from "@/components/ui/ModelPickers";
 import type { ModelGroup, ServerConfig } from "@/api/types";
 import { getState, setState } from "@/stores";
+
+/* The composer's model control used to be ComposerModelConfigPicker — one
+   trigger opening a combined model + effort menu with submenus. Chat now shares
+   Settings' two controls through ModelReasoningChip: a searchable model
+   combobox and a separate effort menu, wired to the store. These cover what the
+   chip itself owns — which model it reads, and what each choice commits. */
 
 const GROUPS: ModelGroup[] = [
   { provider: "anthropic", label: "Anthropic", models: ["anthropic/opus", "anthropic/sonnet"] },
   { provider: "openai", label: "OpenAI", models: ["openai/gpt"] },
 ];
+
+const CONFIG: ServerConfig = {
+  chat_model: "openai/gpt",
+  chat_model_max_context: 200_000,
+  compaction_token_limit: 160_000,
+  compaction_token_trigger: 150_000,
+  research_model: "anthropic/opus",
+  workflow_model: "anthropic/sonnet",
+  memory_model: "anthropic/opus",
+  embedding_model: "text-embedding-3-small",
+  web_search: "auto",
+  web_search_provider: "none",
+  max_depth: 8,
+  reasoning_effort: "low",
+  reasoning_efforts: ["low", "high"],
+  model_reasoning_efforts: { "anthropic/opus": "low" },
+  compression_threshold: 0.8,
+  max_messages: 100,
+  compression_keep_ratio: 0.5,
+  summary_max_tokens: 500,
+  consolidation_interval: 60,
+  memory_enabled: true,
+  integrations: {},
+  tool_overrides: {},
+};
+
+const SESSION = {
+  session_id: "session-1",
+  started_at: "2026-07-24T00:00:00Z",
+  last_activity: "2026-07-24T00:00:00Z",
+  name: "Picker test",
+  message_count: 0,
+  chat_model: "anthropic/opus",
+};
 
 function mount(): { el: HTMLElement; root: Root; restore: () => void } {
   const el = document.createElement("div");
@@ -17,229 +56,196 @@ function mount(): { el: HTMLElement; root: Root; restore: () => void } {
   return { el, root: createRoot(el), restore: () => el.remove() };
 }
 
-function picker({
-  onSelectModel = () => {},
-  onSelectEffort = () => {},
-}: {
-  onSelectModel?: (model: string) => void;
-  onSelectEffort?: (model: string, effort: string | null) => void;
-} = {}) {
-  return (
-    <ComposerModelConfigPicker
-      currentModel="anthropic/opus"
-      currentEffort={null}
-      modelReasoningEfforts={{
-        "anthropic/sonnet": "medium",
-        "openai/gpt": "low",
-      }}
-      reasoningEfforts={{
-        "anthropic/opus": ["low", "medium", "high"],
-        "anthropic/sonnet": ["low", "medium", "high"],
-        "openai/gpt": ["low", "high"],
-      }}
-      models={GROUPS.flatMap((group) => group.models)}
-      onSelectModel={onSelectModel}
-      onSelectEffort={onSelectEffort}
-    />
-  );
-}
-
-test("Chat model control combines the current model and effort in one menu trigger", async () => {
-  const selectedModels: string[] = [];
-  const { el, root, restore } = mount();
-  try {
-    await act(async () => {
-      root.render(picker({ onSelectModel: (model) => selectedModels.push(model) }));
-    });
-
-    const trigger = el.querySelector<HTMLElement>('[aria-label^="Model configuration:"]')!;
-    expect(trigger).not.toBeNull();
-    expect(trigger.textContent).toContain("opus");
-    expect(trigger.textContent).toContain("Default");
-    expect(trigger.getAttribute("aria-haspopup")).toBe("menu");
-
-    await act(async () => {
-      trigger.click();
-    });
-
-    const menu = document.querySelector<HTMLElement>('[role="menu"][aria-label="Model configuration"]')!;
-    expect(menu).not.toBeNull();
-    expect(menu.querySelector('[role="combobox"]')).toBeNull();
-    expect(menu.querySelectorAll('[role="menuitemradio"]')).toHaveLength(3);
-    expect(menu.textContent).toContain("opus");
-    expect(menu.textContent).toContain("sonnet");
-    expect(menu.textContent).toContain("gpt");
-    expect(menu.textContent).not.toContain("anthropic/");
-
-    const sonnet = Array.from(menu.querySelectorAll<HTMLElement>('[role="menuitemradio"]'))
-      .find((item) => item.textContent?.trim() === "sonnet")!;
-    await act(async () => {
-      sonnet.click();
-    });
-    expect(selectedModels).toEqual(["anthropic/sonnet"]);
-    expect(trigger.getAttribute("aria-expanded")).toBe("true");
-  } finally {
-    await act(async () => root.unmount());
-    restore();
-  }
-});
-
-test("an effort submenu activates its model and commits that model's effort", async () => {
-  const models: string[] = [];
-  const efforts: Array<[string, string | null]> = [];
-  const { el, root, restore } = mount();
-  try {
-    await act(async () => {
-      root.render(picker({
-        onSelectModel: (model) => models.push(model),
-        onSelectEffort: (model, effort) => efforts.push([model, effort]),
-      }));
-    });
-
-    const trigger = el.querySelector<HTMLElement>('[aria-label^="Model configuration:"]')!;
-    await act(async () => {
-      trigger.click();
-    });
-
-    const effortTrigger = document.querySelector<HTMLElement>(
-      '[aria-label="Set reasoning effort for openai/gpt: Low"]',
-    )!;
-    await act(async () => {
-      effortTrigger.click();
-    });
-
-    expect(models).toEqual(["openai/gpt"]);
-    const effortMenu = document.querySelector<HTMLElement>(
-      '[role="menu"][aria-label="Reasoning effort for openai/gpt"]',
-    )!;
-    expect(effortMenu).not.toBeNull();
-    const high = Array.from(effortMenu.querySelectorAll<HTMLElement>('[role="menuitemradio"]'))
-      .find((item) => item.textContent?.trim() === "High")!;
-    await act(async () => {
-      high.click();
-    });
-
-    expect(efforts).toEqual([["openai/gpt", "high"]]);
-    expect(effortTrigger.getAttribute("aria-expanded")).toBe("false");
-    expect(trigger.getAttribute("aria-expanded")).toBe("true");
-  } finally {
-    await act(async () => root.unmount());
-    restore();
-  }
-});
-
-test("the Chat picker opens with configured models when the live catalog is unavailable", async () => {
-  const previous = getState();
-  const originalDesktop = window.ardenDesktop;
-  const requests: Array<{ path: string; method?: string; body?: string; timeout?: number }> = [];
+/** Captures outbound requests and answers each with a valid config payload, so
+ *  the response parser is exercised rather than bypassed. */
+function stubApi(requests: Array<{ path: string; method?: string; body?: string }>) {
+  const original = window.ardenDesktop;
   window.ardenDesktop = {
-    ...originalDesktop,
+    ...original,
     api: {
       request: async (_config, request) => {
         requests.push(request);
         return {
           ok: true,
-          status: 204,
-          statusText: "No Content",
-          contentType: "",
-          data: null,
-          text: "",
+          status: 200,
+          statusText: "OK",
+          contentType: "application/json",
+          data: CONFIG,
+          text: JSON.stringify(CONFIG),
         };
       },
     },
   };
-  const serverConfig: ServerConfig = {
-    chat_model: "openai/gpt",
-    chat_model_max_context: 200_000,
-    compaction_token_limit: 160_000,
-    compaction_token_trigger: 150_000,
-    research_model: "anthropic/opus",
-    workflow_model: "anthropic/sonnet",
-    memory_model: "anthropic/opus",
-    embedding_model: "text-embedding-3-small",
-    web_search: "auto",
-    web_search_provider: "none",
-    max_depth: 8,
-    reasoning_effort: "low",
-    reasoning_efforts: ["low", "high"],
-    model_reasoning_efforts: { "openai/gpt": "low" },
-    compression_threshold: 0.8,
-    max_messages: 100,
-    compression_keep_ratio: 0.5,
-    summary_max_tokens: 500,
-    consolidation_interval: 60,
-    memory_enabled: true,
-    integrations: {},
-    tool_overrides: {},
+  return () => {
+    window.ardenDesktop = original;
   };
-  setState({
-    serverConfig,
-    serverModels: null,
-    currentSessionId: "session-1",
-    sessions: [{
-      session_id: "session-1",
-      started_at: "2026-07-24T00:00:00Z",
-      last_activity: "2026-07-24T00:00:00Z",
-      name: "Picker test",
-      message_count: 0,
-      chat_model: "openai/gpt",
-    }],
-  });
+}
 
-  const { el, root, restore } = mount();
-  try {
-    await act(async () => root.render(<ModelReasoningChip />));
-    const trigger = el.querySelector<HTMLButtonElement>('[aria-label^="Model configuration:"]')!;
-    expect(trigger.disabled).toBe(false);
-
-    await act(async () => trigger.click());
-    const menu = document.querySelector<HTMLElement>('[role="menu"][aria-label="Model configuration"]')!;
-    expect(menu.textContent).toContain("gpt");
-    expect(menu.textContent).toContain("opus");
-    expect(menu.textContent).toContain("sonnet");
-
-    const opus = Array.from(menu.querySelectorAll<HTMLElement>('[role="menuitemradio"]'))
-      .find((item) => item.textContent?.trim() === "opus")!;
-    await act(async () => {
-      opus.click();
-      await Promise.resolve();
-    });
-    expect(requests).toEqual([{
-      path: "/sessions/session-1/model",
-      method: "PUT",
-      body: JSON.stringify({ chat_model: "anthropic/opus" }),
-      timeout: 60_000,
-    }]);
-    expect(getState().sessions[0]?.chat_model).toBe("anthropic/opus");
-  } finally {
-    await act(async () => root.unmount());
-    restore();
+function withStore<T>(patch: Record<string, unknown>, run: () => Promise<T>): Promise<T> {
+  const previous = getState();
+  setState(patch);
+  return run().finally(() => {
     setState({
       serverConfig: previous.serverConfig,
       serverModels: previous.serverModels,
       currentSessionId: previous.currentSessionId,
       sessions: previous.sessions,
     });
-    window.ardenDesktop = originalDesktop;
-  }
+  });
+}
+
+test("the chip reads the session's own model, not the global chat default", async () => {
+  await withStore(
+    {
+      serverConfig: CONFIG,
+      serverModels: { models: GROUPS.flatMap((g) => g.models), groups: GROUPS, reasoning_efforts: { "anthropic/opus": ["low", "high"] } },
+      currentSessionId: "session-1",
+      sessions: [SESSION],
+    },
+    async () => {
+      const { el, root, restore } = mount();
+      try {
+        await act(async () => root.render(<ModelReasoningChip />));
+        const modelTrigger = el.querySelector<HTMLElement>('[role="combobox"]')!;
+        // config.chat_model is openai/gpt; the session pins anthropic/opus.
+        expect(modelTrigger.textContent).toContain("opus");
+        expect(modelTrigger.getAttribute("title")).toBe("anthropic/opus");
+        // Effort comes from the per-model map, keyed by the SESSION's model.
+        expect(el.querySelector('[aria-label="Reasoning effort: Low"]')).not.toBeNull();
+      } finally {
+        await act(async () => root.unmount());
+        restore();
+      }
+    },
+  );
 });
 
-test("the split picker remains available outside Chat and the composer collapses to one chevron at 620px", () => {
-  const selectors = readFileSync(new URL("../src/components/ui/ModelPickers.tsx", import.meta.url), "utf8");
-  const pickerCss = readFileSync(new URL("../src/design/model-pickers.css", import.meta.url), "utf8");
-  const chatPicker = selectors.slice(
-    selectors.indexOf("export function ComposerModelConfigPicker"),
-    selectors.indexOf("/** Board's combined configuration control"),
-  );
+test("choosing a model pins it to the session rather than editing the global default", async () => {
+  const requests: Array<{ path: string; method?: string; body?: string }> = [];
+  const restoreApi = stubApi(requests);
+  await withStore(
+    {
+      serverConfig: CONFIG,
+      serverModels: { models: GROUPS.flatMap((g) => g.models), groups: GROUPS, reasoning_efforts: { "anthropic/opus": ["low", "high"] } },
+      currentSessionId: "session-1",
+      sessions: [SESSION],
+    },
+    async () => {
+      const { el, root, restore } = mount();
+      try {
+        await act(async () => root.render(<ModelReasoningChip />));
+        await act(async () => el.querySelector<HTMLElement>('[role="combobox"]')!.click());
 
-  expect(selectors).toContain("export function ModelReasoningPicker");
-  expect(selectors).toContain("<Combobox.Root");
-  expect(selectors).toContain("function ReasoningMenu");
-  expect(chatPicker).toContain("<Menu.SubmenuRoot");
-  expect(chatPicker).toContain("anchor={menuAnchor}");
-  expect(chatPicker).not.toContain("<Combobox.Root");
-  expect(chatPicker).not.toContain("<ReasoningMenu");
-  expect(pickerCss).toMatch(/\.board-composer \.model-config-trigger \{[\s\S]*?height: var\(--control-size-large\);[\s\S]*?justify-content: center;[\s\S]*?font-size: var\(--text-control\);[\s\S]*?font-weight: 520;/);
-  expect(pickerCss).toMatch(/@media \(max-width: 38\.75rem\)[\s\S]*?\.board-composer \.model-current,[\s\S]*?\.board-composer \.effort-current \{[\s\S]*?display: none;/);
-  expect(pickerCss).toMatch(/\.board-composer \.model-config-trigger \{[\s\S]*?width: 34px;[\s\S]*?justify-content: center;/);
+        const catalog = document.querySelector<HTMLElement>('[role="dialog"][aria-label="Choose model"]')!;
+        expect(catalog.textContent).toContain("Anthropic");
+        const sonnet = Array.from(catalog.querySelectorAll<HTMLElement>('[role="option"]'))
+          .find((item) => item.textContent?.trim() === "anthropic/sonnet")!;
+        await act(async () => {
+          sonnet.click();
+          await Promise.resolve();
+        });
+
+        expect(requests).toEqual([{
+          path: "/sessions/session-1/model",
+          method: "PUT",
+          body: JSON.stringify({ chat_model: "anthropic/sonnet" }),
+          timeout: 60_000,
+        }]);
+      } finally {
+        await act(async () => root.unmount());
+        restore();
+      }
+    },
+  );
+  restoreApi();
+});
+
+test("choosing an effort commits it against the model it was chosen for", async () => {
+  const requests: Array<{ path: string; method?: string; body?: string }> = [];
+  const restoreApi = stubApi(requests);
+  await withStore(
+    {
+      serverConfig: CONFIG,
+      serverModels: { models: GROUPS.flatMap((g) => g.models), groups: GROUPS, reasoning_efforts: { "anthropic/opus": ["low", "high"] } },
+      currentSessionId: "session-1",
+      sessions: [SESSION],
+    },
+    async () => {
+      const { el, root, restore } = mount();
+      try {
+        await act(async () => root.render(<ModelReasoningChip />));
+        await act(async () => el.querySelector<HTMLElement>('[aria-label="Reasoning effort: Low"]')!.click());
+
+        const menu = document.querySelector<HTMLElement>('[role="menu"][aria-label="Reasoning effort"]')!;
+        const high = Array.from(menu.querySelectorAll<HTMLElement>('[role="menuitemradio"]'))
+          .find((item) => item.textContent?.trim() === "High")!;
+        await act(async () => {
+          high.click();
+          await Promise.resolve();
+        });
+
+        expect(requests).toHaveLength(1);
+        expect(requests[0]?.path).toBe("/config");
+        expect(requests[0]?.method).toBe("PATCH");
+        // Against the session's model, not config.chat_model.
+        expect(JSON.parse(requests[0]!.body!)).toEqual({
+          reasoning_model: "anthropic/opus",
+          reasoning_effort: "high",
+        });
+      } finally {
+        await act(async () => root.unmount());
+        restore();
+      }
+    },
+  );
+  restoreApi();
+});
+
+test("the chip stays out of the composer until the server contract is there", async () => {
+  await withStore({ serverConfig: null, serverModels: null, currentSessionId: null, sessions: [] }, async () => {
+    const { el, root, restore } = mount();
+    try {
+      await act(async () => root.render(<ModelReasoningChip />));
+      expect(el.innerHTML).toBe("");
+    } finally {
+      await act(async () => root.unmount());
+      restore();
+    }
+  });
+
+  // A server that predates per-model efforts renders nothing rather than a
+  // control that cannot commit anything.
+  const stale = { ...CONFIG } as Record<string, unknown>;
+  Reflect.deleteProperty(stale, "model_reasoning_efforts");
+  await withStore({ serverConfig: stale, serverModels: null, currentSessionId: "session-1", sessions: [SESSION] }, async () => {
+    const { el, root, restore } = mount();
+    try {
+      await act(async () => root.render(<ModelReasoningChip />));
+      expect(el.innerHTML).toBe("");
+    } finally {
+      await act(async () => root.unmount());
+      restore();
+    }
+  });
+});
+
+test("without a session there is nothing to pin a model to, so the control is inert", async () => {
+  await withStore(
+    {
+      serverConfig: CONFIG,
+      serverModels: { models: GROUPS.flatMap((g) => g.models), groups: GROUPS, reasoning_efforts: {} },
+      currentSessionId: null,
+      sessions: [],
+    },
+    async () => {
+      const { el, root, restore } = mount();
+      try {
+        await act(async () => root.render(<ModelReasoningChip />));
+        expect(el.querySelector<HTMLButtonElement>('[role="combobox"]')!.disabled).toBe(true);
+      } finally {
+        await act(async () => root.unmount());
+        restore();
+      }
+    },
+  );
 });
