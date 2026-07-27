@@ -49,6 +49,13 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(
     const accessibleName =
       (rest["aria-label"] as string | undefined) ??
       (typeof title === "string" ? title : undefined);
+    // A button showing nothing but an icon has to say what it does on hover,
+    // and it already carries the sentence: its accessible name. Labelling one
+    // for screen readers and leaving it mute for everyone else was a split
+    // nobody chose — 15 of 46 call sites had drifted to that state. `title`
+    // still wins where the hint should read differently from the name
+    // ("Capture a screenshot" over "Capture screen").
+    const tooltipLabel = title ?? accessibleName;
     const button = (
       <button
         ref={ref}
@@ -70,6 +77,6 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(
         {children}
       </button>
     );
-    return title ? <Tooltip label={title}>{button}</Tooltip> : button;
+    return tooltipLabel ? <Tooltip label={tooltipLabel}>{button}</Tooltip> : button;
   },
 );

@@ -3,7 +3,6 @@ import { useStore } from "@/stores";
 import { Moon02, Sun } from "@/components/icons";
 import { IconButton } from "@/components/ui/IconButton";
 import { IconSwap } from "@/components/ui/IconSwap";
-import { Tooltip } from "@/components/ui/Tooltip";
 import { ICON } from "@/lib/icons";
 
 /** Resolved light/dark, tracking the OS when the pref is "system". */
@@ -28,21 +27,21 @@ export function ThemeToggle() {
   const isDark = useIsDark();
   const label = isDark ? "Use light appearance" : "Use dark appearance";
 
+  // No explicit Tooltip wrapper — IconButton raises one from the accessible
+  // name itself, and nesting two would portal two panels off one hover.
   return (
-    <Tooltip label={label}>
-      <IconButton
-        size="md"
-        shape="circle"
-        aria-label={label}
-        onClick={() => setPref("theme", isDark ? "light" : "dark")}
-        className="workspace-rail__theme-toggle shrink-0"
-      >
-        <IconSwap
-          state={isDark ? "b" : "a"}
-          iconA={<Sun size={ICON.MD} />}
-          iconB={<Moon02 size={ICON.MD} />}
-        />
-      </IconButton>
-    </Tooltip>
+    <IconButton
+      size="md"
+      shape="circle"
+      aria-label={label}
+      onClick={() => setPref("theme", isDark ? "light" : "dark")}
+      className="workspace-rail__theme-toggle shrink-0"
+    >
+      <IconSwap
+        state={isDark ? "b" : "a"}
+        iconA={<Sun size={ICON.MD} />}
+        iconB={<Moon02 size={ICON.MD} />}
+      />
+    </IconButton>
   );
 }

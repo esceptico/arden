@@ -666,6 +666,10 @@
      at kbd height. Square mode uses --r-tag rather than --r-control, whose
      9px reads as the same capsule once clamped to a 16-20px chip. */
   --kbd-radius: var(--r-control);
+  /* Tooltips are the same class of object as a kbd chip — a small dark slab
+     that floats — and take the same treatment. They were pinned at --r-tag,
+     so they held a 5px corner while every surface around them switched. */
+  --tooltip-radius: var(--r-control);
   --icon-button-size: 1.75rem;
   --control-size: 1.75rem;
   --control-size-compact: 1.625rem;
@@ -839,7 +843,7 @@
   --ease-drawer: var(--motion-drawer-ease);
 }
 
-html[data-corners="square"] { --kbd-radius: var(--r-tag); }
+html[data-corners="square"] { --kbd-radius: var(--r-tag); --tooltip-radius: var(--r-tag); }
 
 * { box-sizing: border-box; }
 html, body { width: 100%; height: 100%; margin: 0; }

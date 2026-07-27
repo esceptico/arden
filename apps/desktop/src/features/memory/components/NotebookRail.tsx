@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CheckList, ChevronDown, FileText, Folder, Notebook01 } from "@/components/icons";
 import clsx from "clsx";
 import { AnchoredPopover } from "@/components/ui/AnchoredPopover";
@@ -105,6 +105,8 @@ export function NotebookRail({
   const [fileContextMenu, setFileContextMenu] = useState<FileContextMenuState | null>(null);
   const [factPreview, setFactPreview] = useState<FactPreviewState | null>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
+  const slotRef = useRef<HTMLDivElement>(null);
+  const [segmentLabelsHidden, setSegmentLabelsHidden] = useState(false);
   const factIntentTimer = useRef<number | null>(null);
   const factHideTimer = useRef<number | null>(null);
   const direction = useTabDirection(RAIL_MODES, mode);
@@ -141,6 +143,30 @@ export function NotebookRail({
   }, [closeFactPreview, mode, records]);
 
   const factAnchor = useMemo(() => ({ current: factPreview?.element ?? null }), [factPreview?.element]);
+
+  // The segment labels come and go on a container query (memory-rail ≥ 19rem),
+  // so the rail is icon-only at narrow widths and the mode names are gone.
+  // Read whether the label actually rendered rather than re-deriving the
+  // breakpoint here — one threshold, living in the stylesheet.
+  useLayoutEffect(() => {
+    const root = slotRef.current;
+    if (!root) return;
+    const read = () => {
+      const label = root.querySelector<HTMLElement>(".mw-rail-segment-label");
+      setSegmentLabelsHidden(label ? getComputedStyle(label).display === "none" : false);
+    };
+    read();
+    const frame = requestAnimationFrame(read);
+    // The slot itself is `display: contents` — no box, so a ResizeObserver on
+    // it never reports. Watch the query container that actually resizes.
+    const container = root.closest<HTMLElement>(".mw-rail");
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(read);
+    if (container) observer?.observe(container);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer?.disconnect();
+    };
+  }, []);
 
   useEffect(() => {
     if (!selectedPath || mode === "facts") return;
@@ -391,7 +417,7 @@ export function NotebookRail({
   ) : mode === "files" ? files : notebook;
 
   return (
-    <div className="memory-notebook-rail-slot">
+    <div ref={slotRef} className="memory-notebook-rail-slot">
       <Tabs
         value={mode}
         onChange={(value) => onModeChange(value as MemoryRailMode)}
@@ -404,17 +430,19 @@ export function NotebookRail({
           const icon = nextMode === "files" ? <Folder size={14} aria-hidden />
             : nextMode === "notebook" ? <Notebook01 size={14} aria-hidden />
               : <CheckList size={14} aria-hidden />;
+          const label = nextMode[0]!.toUpperCase() + nextMode.slice(1);
           return (
             <Tab
               key={nextMode}
               value={nextMode}
               disabled={navigationDisabled}
               className={clsx(mode === nextMode && "active")}
-              title={nextMode[0]!.toUpperCase() + nextMode.slice(1)}
+              aria-label={label}
+              title={segmentLabelsHidden ? label : undefined}
             >
               {icon}
               <span className="mw-rail-segment-label">
-                {nextMode[0]!.toUpperCase() + nextMode.slice(1)}
+                {label}
               </span>
             </Tab>
           );

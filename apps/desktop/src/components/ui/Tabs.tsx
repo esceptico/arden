@@ -10,6 +10,7 @@ import {
 } from "react";
 import { useReducedMotion } from "motion/react";
 import clsx from "clsx";
+import { Tooltip } from "@/components/ui/Tooltip";
 import { TAB_INDICATOR_LINE_SIZE } from "@/lib/tokens/motion";
 
 type Variant = "underline" | "plain" | "segmented" | "expanding" | "sidebar" | "surface";
@@ -285,7 +286,7 @@ export function Tab({
     if (nextValue !== null) ctx.select(nextValue);
   };
 
-  return (
+  const button = (
     <button
       type="button"
       role="tab"
@@ -297,7 +298,6 @@ export function Tab({
       data-active={active ? "true" : undefined}
       data-tab-value={value}
       disabled={disabled}
-      title={title}
       onClick={() => ctx.select(value)}
       onKeyDown={onKeyDown}
       className={clsx(
@@ -324,4 +324,9 @@ export function Tab({
       )}
     </button>
   );
+
+  // `title` raises the house tooltip, not the OS bubble — matching IconButton.
+  // Pass it only when the tab has no visible label of its own; a tooltip that
+  // repeats text already on screen is noise.
+  return title ? <Tooltip label={title}>{button}</Tooltip> : button;
 }

@@ -906,7 +906,7 @@ textarea.arden-field {
   z-index: var(--z-tooltip);
   max-width: 18rem;
   padding: var(--space-1-5) var(--space-2);
-  border-radius: var(--r-tag);
+  border-radius: var(--tooltip-radius);
   color: var(--paper);
   background: var(--ink);
   font-size: var(--text-meta);

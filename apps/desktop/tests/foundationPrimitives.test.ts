@@ -19,7 +19,7 @@ const depthSources = [
   read("../src/components/workspace/SidebarResizeHandle.tsx"),
   read("../src/features/background-agents/components/RightPanelResizeHandle.tsx"),
   read("../src/features/chat/components/ApprovalBanner.tsx"),
-  read("../src/features/memory/components/PaneResizeHandle.tsx"),
+  read("../src/components/workspace/PaneResizeHandle.tsx"),
 ];
 
 test("shared primitives own the exact mock control and overlay contracts", () => {
@@ -103,3 +103,45 @@ test("shared controls use named paint layers instead of numeric z utilities", ()
   }
   expect(styles).not.toMatch(/z-index:\s*\d/);
 });
+
+test("an icon-only button says what it does, and the tooltip follows the corner profile", () => {
+  const iconButton = read("../src/components/ui/IconButton.tsx");
+  const themeToggle = read("../src/components/ui/ThemeToggle.tsx");
+  const base = read("../src/design/base.css");
+
+  // A button showing nothing but an icon already carries the sentence — its
+  // accessible name. 15 of 46 call sites labelled one for screen readers and
+  // left it mute on hover; the name is the tooltip unless `title` overrides.
+  expect(iconButton).toContain("const tooltipLabel = title ?? accessibleName;");
+  expect(iconButton).toContain("return tooltipLabel ? <Tooltip label={tooltipLabel}>{button}</Tooltip> : button;");
+  // Which means a call site must NOT add its own wrapper — two Tooltips
+  // portal two panels off one hover.
+  expect(themeToggle).not.toContain("<Tooltip");
+
+  // Tooltips are kbd-chip-class objects and switch with the profile. They
+  // were pinned at --r-tag, holding a 5px corner in round mode.
+  expect(base).toContain("--tooltip-radius: var(--r-control);");
+  expect(base).toContain('html[data-corners="square"] { --kbd-radius: var(--r-tag); --tooltip-radius: var(--r-tag); }');
+  expect(foundation).toMatch(/\.arden-tooltip\s*\{[\s\S]*?border-radius:\s*var\(--tooltip-radius\);/);
+  expect(foundation).not.toMatch(/\.arden-tooltip\s*\{[\s\S]*?border-radius:\s*var\(--r-tag\);/);
+});
+
+test("an icon-only tab is named on hover, and a labelled one is left alone", () => {
+  const tabs = read("../src/components/ui/Tabs.tsx");
+  const rail = read("../src/features/memory/components/NotebookRail.tsx");
+
+  // Same contract as IconButton: `title` raises the house tooltip, not the OS
+  // bubble. The native attribute has to go or both would fire.
+  expect(tabs).toContain("return title ? <Tooltip label={title}>{button}</Tooltip> : button;");
+  expect(tabs).not.toMatch(/<button[\s\S]*?\n\s+title=\{title\}/);
+
+  // The memory rail drops its segment labels on a container query, so it asks
+  // for the tooltip only while they are gone — a tooltip repeating text
+  // already on screen is noise.
+  expect(rail).toContain("title={segmentLabelsHidden ? label : undefined}");
+  expect(rail).toContain('getComputedStyle(label).display === "none"');
+  // The slot is `display: contents` and reports no box, so the observer has to
+  // watch the query container itself.
+  expect(rail).toContain('const container = root.closest<HTMLElement>(".mw-rail");');
+});
+
