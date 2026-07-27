@@ -695,8 +695,10 @@
   min-width: calc(var(--control-size) + var(--control-size) + var(--control-size) + var(--space-3));
 }
 
+/* Hugs its labels. Every row carries the same three words, so the controls
+   line up without a fixed width holding them there. */
 .settings-tool-policy {
-  width: calc(var(--control-size) + var(--control-size) + var(--control-size) + var(--space-3));
+  width: max-content;
 }
 
 .settings-tool-policy [role="tab"] {
@@ -709,17 +711,6 @@
 
 .settings-tool-policy [role="tab"][aria-selected="true"] {
   color: var(--ink);
-}
-
-.settings-tool-policy [role="tab"] svg {
-  width: var(--icon-size);
-  height: var(--icon-size);
-  opacity: .6;
-  transition: opacity var(--motion-feedback) var(--smooth-out);
-}
-
-.settings-tool-policy [role="tab"][aria-selected="true"] svg {
-  opacity: 1;
 }
 
 .settings-mcp-row .settings-data-row-end {
@@ -1149,7 +1140,7 @@
   }
 
   .settings-tool-row {
-    grid-template-columns: minmax(150px, 1fr) var(--tab-triplet-width);
+    grid-template-columns: minmax(150px, 1fr) auto;
   }
 
   .settings-tool-row .settings-data-row-copy {

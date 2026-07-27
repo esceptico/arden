@@ -129,7 +129,9 @@ test("Settings keeps the mock's 980px action lanes and compact summary", () => {
     styles.indexOf("@media (max-width: 46.25rem)"),
   );
 
-  expect(compact).toContain(".settings-tool-row {\n    grid-template-columns: minmax(150px, 1fr) var(--tab-triplet-width);");
+  // The policy control carries words now, so the column follows the labels
+  // instead of a three-icon-target width.
+  expect(compact).toContain(".settings-tool-row {\n    grid-template-columns: minmax(150px, 1fr) auto;");
   expect(compact).toContain(".settings-tool-row .settings-data-row-end {\n    grid-column: 2;\n    grid-row: 1 / 3;");
   expect(compact).toContain(".settings-mcp-row {\n    grid-template-columns: minmax(150px, 1fr) 184px;");
   expect(compact).toContain(".settings-mcp-row .settings-data-row-end {\n    grid-column: 2;\n    grid-row: 1 / 3;");
@@ -138,13 +140,19 @@ test("Settings keeps the mock's 980px action lanes and compact summary", () => {
   expect(compact).toContain(".settings-thinking-preview-grid {\n    grid-template-columns: repeat(2, minmax(0, 1fr));");
 });
 
-test("tool policy icons preserve the mock's compact visual states", () => {
-  expect(toolPolicy).toContain("<d.Icon size={16}");
+test("the tool policy names its three decisions instead of drawing them", () => {
+  // A tick, a question mark and a slash in a capsule carried no visible label,
+  // so the decision had to be decoded from shapes — the thing the app refuses
+  // to do with status dots everywhere else.
+  expect(toolPolicy).toContain('{ value: "approve", label: "Approve" }');
+  expect(toolPolicy).toContain("{decision.label}");
+  expect(toolPolicy).not.toContain("@/components/icons");
+  expect(toolPolicy).not.toContain("aria-label={d.label}");
+  expect(styles).toMatch(/\.settings-tool-policy\s*\{\s*width:\s*max-content;/);
   expect(styles).toMatch(/\.settings-tool-policy \[role="tab"\]\s*\{\s*color:\s*var\(--faint\);/);
   expect(styles).toMatch(/\.settings-tool-policy \[role="tab"\]:hover\s*\{\s*color:\s*var\(--muted\);/);
   expect(styles).toMatch(/\.settings-tool-policy \[role="tab"\]\[aria-selected="true"\]\s*\{\s*color:\s*var\(--ink\);/);
-  expect(styles).toMatch(/\.settings-tool-policy \[role="tab"\] svg\s*\{[\s\S]*?opacity:\s*\.6;/);
-  expect(styles).toMatch(/\.settings-tool-policy \[role="tab"\]\[aria-selected="true"\] svg\s*\{\s*opacity:\s*1;/);
+  expect(styles).not.toContain('.settings-tool-policy [role="tab"] svg');
 });
 
 test("tool counts stay grammatical for single-tool groups and searches", () => {
