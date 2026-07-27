@@ -730,6 +730,31 @@
   scrollbar-color: var(--line-strong) transparent;
 }
 
+/* The desk chrome (tabs + instruments) floats 54–88px into this scroller,
+   and the house 48px fade ended 40px short — scrolled text passed the tabs
+   at full contrast. Hold the mask fully clear through the chrome band,
+   then dissolve just below it: content disappears UNDER the desk instead
+   of blending with it. Safe at rest — the page's first line sits at
+   ~110px, below the hold. The bottom edge keeps the scroll-driven reveal. */
+.memory-surface .mw-scroller.scroll-fade {
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent 5.5rem,
+    #000 8rem,
+    #000 calc(100% - var(--scroll-fade-size-end)),
+    rgb(0 0 0 / var(--sf-end)) 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent 5.5rem,
+    #000 8rem,
+    #000 calc(100% - var(--scroll-fade-size-end)),
+    rgb(0 0 0 / var(--sf-end)) 100%
+  );
+}
+
 .memory-surface .mw-page {
   width: min(100%, var(--content-max-width));
   margin-inline: auto;
