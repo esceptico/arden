@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { createCustomModelApi, connectModelProviderApi, deleteCustomModelApi, disconnectModelProviderApi, getOpenAICodexOAuthStatusApi, listModelProvidersApi, startOpenAICodexOAuthApi, type ModelProvider, type OpenAICodexOAuthStatus } from "@/api/settings";
-import { fetchServerConfig } from "@/actions/server";
+import { fetchServerConfig, updateServerConfig } from "@/actions/server";
 import { useStore } from "@/stores";
 import { ProviderRow } from "@/features/settings/components/ProviderRow";
 import { CustomModelsPanel } from "@/features/settings/components/CustomModelsPanel";
@@ -9,8 +9,12 @@ import { SettingsTabSkeleton } from "@/features/settings/components/SettingsTabS
 import {
   SettingsDataSection,
   SettingsPageAction,
+  SettingsSection,
+  SettingsSettingRow,
   SettingsSummary,
+  SettingsSurface,
 } from "@/features/settings/components/SettingsPage";
+import { Tab, Tabs } from "@/components/ui/Tabs";
 import { providerReadinessSummary } from "@/features/settings/lib/providerConnection";
 import {
   canSaveCustomModelDraft,
@@ -288,9 +292,78 @@ export function ProvidersTab() {
             >
               {setupProviders.map(renderProvider)}
             </SettingsDataSection>
+            <WebSearchSection />
           </>
         )}
       </div>
     </>
+  );
+}
+
+const WEB_SEARCH_MODES = [
+  { id: "auto", label: "Auto" },
+  { id: "exa", label: "Exa" },
+  { id: "ddgs", label: "DuckDuckGo" },
+  { id: "none", label: "Off" },
+] as const;
+
+type WebSearchMode = (typeof WEB_SEARCH_MODES)[number]["id"];
+
+/** The web-search provider lives with the other provider decisions: which
+ *  engine backs the agent's search tools. Auto resolves per key availability
+ *  server-side; the hint names the live resolution. */
+function WebSearchSection() {
+  const serverConfig = useStore((s) => s.serverConfig);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (!serverConfig) return null;
+
+  const mode = serverConfig.web_search;
+  const resolved = serverConfig.web_search_provider;
+  const select = async (value: string) => {
+    if (pending || value === mode) return;
+    setPending(true);
+    setError(null);
+    try {
+      await updateServerConfig({ web_search: value as WebSearchMode });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setPending(false);
+    }
+  };
+
+  return (
+    <SettingsSection title="Web search">
+      <SettingsSurface>
+        <SettingsSettingRow
+          title="Search provider"
+          hint={
+            mode === "auto" ? (
+              <>
+                Auto prefers Exa when its key is connected and falls back to DuckDuckGo.{" "}
+                <strong className="font-medium text-ink-soft">
+                  Currently using {resolved === "exa" ? "Exa" : resolved === "ddgs" ? "DuckDuckGo" : "none"}.
+                </strong>
+              </>
+            ) : mode === "none" ? (
+              "Web search tools are disabled for the agent."
+            ) : (
+              `All agent web searches go through ${mode === "exa" ? "Exa" : "DuckDuckGo"}.`
+            )
+          }
+          control={
+            <div className="flex flex-col items-end gap-1">
+              <Tabs variant="segmented" size="sm" value={mode} onChange={(value) => void select(value)}>
+                {WEB_SEARCH_MODES.map((option) => (
+                  <Tab key={option.id} value={option.id}>{option.label}</Tab>
+                ))}
+              </Tabs>
+              {error && <span role="alert" className="text-xs text-bad">{error}</span>}
+            </div>
+          }
+        />
+      </SettingsSurface>
+    </SettingsSection>
   );
 }
