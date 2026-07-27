@@ -51,7 +51,29 @@ function reportAutomationActionFailure(action: string, automation: Automation, e
   });
 }
 
+const RESULT_PEEK_WIDTH_KEY = "arden.desktop.automations.resultPeekWidth";
+const RESULT_PEEK_DEFAULT_WIDTH = 420;
+
 function AutomationRunPeek({ view, onClose }: { view: RunPeek | null; onClose: () => void }) {
+  // Takeover owns its own element, so the width rides on <html> — the same
+  // place the corner profile lives — and the peek reads it from there.
+  const layoutRef = useRef<HTMLElement | null>(
+    typeof document === "undefined" ? null : document.documentElement,
+  );
+
+  useLayoutEffect(() => {
+    const root = layoutRef.current;
+    if (!root) return;
+    try {
+      const stored = parseInt(localStorage.getItem(RESULT_PEEK_WIDTH_KEY) ?? "", 10);
+      if (Number.isFinite(stored)) {
+        root.style.setProperty("--automation-result-peek-w", `${Math.max(320, Math.min(900, stored))}px`);
+      }
+    } catch {
+      /* localStorage unavailable — the default width stands */
+    }
+  }, []);
+
   const retainedView = useRef<RunPeek | null>(view);
   if (view) retainedView.current = view;
   const visibleView = retainedView.current;
@@ -72,11 +94,21 @@ function AutomationRunPeek({ view, onClose }: { view: RunPeek | null; onClose: (
       closeOnOutsidePointerDown
       outsidePointerDownIgnoreSelector=".surface-popover, [data-run-peek-owner]"
     >
+      {/* Run output is whatever the automation produced — wide tables of
+        * archived sessions, diffs, logs. A fixed width truncated them with
+        * nowhere to go, so the pane drags like the memory context pane. */}
+      <PaneResizeHandle
+        layoutRef={layoutRef}
+        cssVar="--automation-result-peek-w"
+        storageKey={RESULT_PEEK_WIDTH_KEY}
+        min={320}
+        max={900}
+        defaultWidth={RESULT_PEEK_DEFAULT_WIDTH}
+        edge="start"
+        label="Resize run result"
+      />
       <header className="arden-peek-rule-below">
-        <div>
-          <span>Run result</span>
-          <b>{visibleView.runTitle}</b>
-        </div>
+        <strong title={visibleView.runTitle}>{visibleView.runTitle}</strong>
         <IconButton data-peek-close onClick={onClose} aria-label="Close run result" title="Close run result">
           <X size={ICON.SM} />
         </IconButton>

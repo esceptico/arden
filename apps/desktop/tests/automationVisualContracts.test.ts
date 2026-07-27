@@ -146,7 +146,8 @@ test("Automations keeps its mockup-specific schedule instrument and directional 
   expect(workspace).toContain("setDetailAxis(\"x\")");
   expect(workspace).toContain("axis={detailAxis}");
   expect(workspace).toContain("type RunPeek = { run: AutomationRun; runTitle: string }");
-  expect(workspace).toContain("<b>{visibleView.runTitle}</b>");
+  // Title moved to the one-line sheet header; see the run-peek test below.
+  expect(workspace).toContain("<strong title={visibleView.runTitle}>");
   expect(workspace).not.toContain("focusOnOpen");
 
   expect(tabPanels).toContain('axis?: "x" | "y"');
@@ -256,4 +257,31 @@ test("the zero-automations pane only stands in for an actually empty workspace",
     /useLayoutEffect\(\(\) => \{\s*if \(!open \|\| draft \|\| !automations \|\| selected\) return;/,
   );
   expect(workspace).toContain("const first = groups.user[0] ?? groups.area[0] ?? groups.system[0];");
+});
+
+
+test("the run result peek reads as a sheet: one-line header, its own width, its own measure", () => {
+  const workspace = read("../src/features/automations/components/AutomationsModal.tsx");
+  const css = read("../src/features/automations/components/automations-workspace.css");
+
+  // A "Run result" kicker stacked over the title made a two-line block that
+  // could not centre against the close button — the same fault the notifier
+  // and key peeks already had flattened out of them.
+  expect(workspace).toContain("<strong title={visibleView.runTitle}>{visibleView.runTitle}</strong>");
+  expect(workspace).not.toContain("<span>Run result</span>");
+  expect(css).toMatch(/\.automation-result-peek header strong \{[^}]*white-space: nowrap;/);
+
+  // Run output is arbitrary — wide tables, diffs, logs — so the pane drags
+  // like the memory context pane and the width persists.
+  expect(workspace).toContain('cssVar="--automation-result-peek-w"');
+  expect(workspace).toContain('edge="start"');
+  expect(workspace).toContain('storageKey={RESULT_PEEK_WIDTH_KEY}');
+  expect(css).toContain("width: var(--automation-result-peek-w, var(--peek-width));");
+
+  // It is reference material in a side panel, not prose at the reading width,
+  // and a table wider than the pane scrolls inside its own box.
+  // --typeset-size is the knob the whole scale hangs off; setting font-size on
+  // the container left the prose at 15px because the typeset root restates it.
+  expect(css).toMatch(/\.automation-result-peek__body \.md\.typeset \{[^}]*--typeset-size: var\(--text-sm\);/);
+  expect(css).toMatch(/\.automation-result-peek__body \.md table \{[^}]*display: block;[^}]*overflow-x: auto;/);
 });

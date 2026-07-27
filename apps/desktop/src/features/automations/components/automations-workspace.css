@@ -1310,7 +1310,7 @@
   top: 4.5rem;
   right: var(--floating-edge);
   bottom: auto;
-  width: var(--peek-width);
+  width: var(--automation-result-peek-w, var(--peek-width));
   max-height: calc(100vh - 5.5rem);
   max-width: calc(100vw - var(--sidebar-width) - var(--space-8));
   min-width: min(20rem, calc(100vw - var(--space-8)));
@@ -1329,20 +1329,14 @@
   gap: var(--space-3);
 }
 
-.automation-result-peek > header > div {
+/* One-line title (sheet-header idiom, as the notifier and key peeks use). A
+   "Run result" kicker stacked over the title made a two-line block that would
+   not centre against the close button, and the panel already says what it is
+   through its aria-label. */
+.automation-result-peek header strong {
   min-width: 0;
-  display: grid;
-  gap: var(--space-0-5);
-}
-
-.automation-result-peek header span {
-  color: var(--faint);
-  font: 500 var(--text-meta)/1 var(--mono);
-}
-
-.automation-result-peek header b {
   overflow: hidden;
-  color: var(--ink-soft);
+  color: var(--ink);
   font-size: var(--text-sm);
   font-weight: 580;
   text-overflow: ellipsis;
@@ -1355,6 +1349,24 @@
   overflow: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--line-strong) transparent;
+}
+
+/* Run output is reference material in a side panel, not prose at the reading
+   width. --typeset-size is the one knob the whole scale hangs off — headings,
+   code and the flow spacing are all em-relative to it — so dropping it from
+   15px to 13px shrinks the block coherently instead of leaving oversized
+   headings behind, which setting font-size on the container did (the typeset
+   root restates its own size and the prose never saw it). */
+.automation-result-peek__body .md.typeset {
+  --typeset-size: var(--text-sm);
+}
+
+/* A table of archived sessions is wider than any peek. It scrolls inside its
+   own box so the panel never grows a horizontal scrollbar of its own. */
+.automation-result-peek__body .md table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .automation-result-peek__body h2:first-child { margin-top: 0; }
