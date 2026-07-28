@@ -1,6 +1,6 @@
 import re
 
-from arden.memory.pages import Page
+from arden.wiki.pages import WikiPage
 
 _LOOP_HEADING = re.compile(r"^##\s+open loops\s*:?\s*$", re.IGNORECASE)
 _RELATED_HEADING = re.compile(r"^##\s+related\s*:?\s*$", re.IGNORECASE)
@@ -43,12 +43,13 @@ def parse_related(prose: str) -> list[str]:
     return slugs
 
 
-def page_summary(page: Page) -> dict:
+def page_summary(page: WikiPage) -> dict:
+    prose = page.body.decode("utf-8")
     return {
-        "title": page.frontmatter.get("title", ""),
-        "updated": str(page.frontmatter.get("updated", "")),
-        "open_loops": parse_open_loops(page.prose),
-        "related": parse_related(page.prose),
+        "title": page.title,
+        "updated": str(page.metadata.get("updated", "")),
+        "open_loops": parse_open_loops(prose),
+        "related": parse_related(prose),
     }
 
 

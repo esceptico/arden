@@ -149,6 +149,40 @@ class WikiService:
             raise RevisionConflictError("wiki changed while reading pages")
         return tuple(record for record in records if record.page.lifecycle == "active")
 
+    def resolve_topic_name(
+        self,
+        name: str,
+        *,
+        snapshot: WikiSnapshot | None = None,
+    ) -> WikiPageRecord | None:
+        """Resolve one title or alias from an exact wiki snapshot.
+
+        Paths, stems, page IDs, prose, and inferred similarities are
+        deliberately outside this topic map.
+        """
+
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("topic name must be a nonempty string")
+        pinned = self.snapshot() if snapshot is None else snapshot
+        if not isinstance(pinned, WikiSnapshot):
+            raise TypeError("snapshot must be a WikiSnapshot or None")
+        self._index(pinned)
+        wanted = self._normal(name)
+        matches = tuple(
+            record
+            for record in pinned.pages
+            if wanted
+            in {
+                self._normal(record.page.title),
+                *(self._normal(alias) for alias in record.page.aliases),
+            }
+        )
+        if not matches:
+            return None
+        if len(matches) != 1:
+            raise WikiAmbiguityError(f"ambiguous wiki topic name {name!r}")
+        return matches[0]
+
     def maintenance_feed(self, watermark: str | None) -> WikiMaintenanceFeed:
         """Return a chronological, pinned maintenance backlog without page reads.
 
@@ -548,6 +582,8 @@ class WikiService:
         idempotency_key: str | None = None,
     ) -> WikiPageRecord:
         self._require_markdown_path(path)
+        if page_id == WIKI_HEALTH_RESOURCE_ID or path.casefold() == WIKI_HEALTH_PATH:
+            raise WikiValidationError("health page is backend-managed")
         snapshot = self.snapshot()
         self._require_head(snapshot.head, expected_head)
         page = build_page(title=title, body=body, page_id=page_id, aliases=aliases, metadata=metadata)
@@ -561,9 +597,95 @@ class WikiService:
                 reason=reason,
                 idempotency_key=key,
                 expected_head=snapshot.head,
+                enforce_expected_head=snapshot.head is None,
             )
         )
         return self.read_page(page.page_id)
+
+    def update_page(
+        self,
+        page_id: str,
+        *,
+        content: bytes,
+        expected_version: str,
+        expected_head: str,
+        actor: str = "user:desktop",
+        origin: str = "desktop",
+        reason: str = "edit wiki page",
+        idempotency_key: str | None = None,
+    ) -> WikiPageRecord:
+        """Replace one ordinary page from an exact page and repository revision."""
+
+        record, _commit_id = self.update_page_with_commit(
+            page_id,
+            content=content,
+            expected_version=expected_version,
+            expected_head=expected_head,
+            actor=actor,
+            origin=origin,
+            reason=reason,
+            idempotency_key=idempotency_key,
+        )
+        return record
+
+    def update_page_with_commit(
+        self,
+        page_id: str,
+        *,
+        content: bytes,
+        expected_version: str,
+        expected_head: str,
+        actor: str = "user:desktop",
+        origin: str = "desktop",
+        reason: str = "edit wiki page",
+        idempotency_key: str | None = None,
+    ) -> tuple[WikiPageRecord, str | None]:
+        """Replace one page and return its exact commit ID, or ``None`` for a no-op."""
+
+        if not isinstance(content, bytes):
+            raise TypeError("content must be bytes")
+        if not isinstance(expected_version, str) or not expected_version:
+            raise ValueError("expected_version must be a nonempty string")
+        if not isinstance(expected_head, str) or not expected_head:
+            raise ValueError("expected_head must be a nonempty string")
+
+        snapshot = self.snapshot()
+        self._require_head(snapshot.head, expected_head)
+        record = self._index(snapshot).pages.get(page_id)
+        if record is None or record.page.lifecycle != "active":
+            raise KeyError(f"unknown active wiki page: {page_id}")
+        if page_id == WIKI_HEALTH_RESOURCE_ID:
+            raise WikiValidationError("health page is backend-managed")
+        if record.resource.version_id != expected_version:
+            raise RevisionConflictError(f"resource {page_id} changed: expected {expected_version}")
+
+        replacement = self._parse(record.resource, content)
+        if replacement.lifecycle != "active":
+            raise WikiValidationError("ordinary page edits must preserve active lifecycle")
+        prospective = tuple(
+            WikiPageRecord(item.resource, replacement, content) if item.page.page_id == page_id else item
+            for item in snapshot.pages
+        )
+        self._validate_prospective(snapshot, prospective)
+
+        if content == record.content:
+            current_head = self.repository.head
+            if current_head != snapshot.head:
+                raise RevisionConflictError(f"current head changed: expected {snapshot.head!r}, found {current_head!r}")
+            return record, None
+
+        key = idempotency_key or self._key("update", snapshot.head, page_id, expected_version, content)
+        commit = self.repository.commit(
+            ChangeSet(
+                operations=(Update(page_id, expected_version, content),),
+                actor=actor,
+                origin=origin,
+                reason=reason,
+                idempotency_key=key,
+                expected_head=snapshot.head,
+            )
+        )
+        return self.read_page(page_id), commit.commit_id
 
     def publish_generated(
         self,
@@ -705,6 +827,8 @@ class WikiService:
         base_head: str,
         reason: str = "apply wiki maintenance updates",
         idempotency_key: str | None = None,
+        actor: str = "Wiki Maintenance",
+        origin: str = "wiki.maintenance",
     ) -> str:
         """Atomically apply ordinary edits without changing page identity.
 
@@ -720,6 +844,10 @@ class WikiService:
             raise ValueError("reason must be a nonempty string")
         if idempotency_key is not None and (not isinstance(idempotency_key, str) or not idempotency_key):
             raise ValueError("idempotency_key must be a nonempty string or None")
+        if not isinstance(actor, str) or not actor:
+            raise ValueError("actor must be a nonempty string")
+        if not isinstance(origin, str) or not origin:
+            raise ValueError("origin must be a nonempty string")
 
         snapshot = self._snapshot(strict_names=True, at=base_head)
         records = self._index(snapshot).pages
@@ -774,14 +902,16 @@ class WikiService:
         key = idempotency_key or self._key(
             "maintenance",
             base_head,
+            actor,
+            origin,
             reason,
             tuple((item.page_id, item.expected_version, item.title, item.aliases, item.body) for item in updates),
         )
         commit = self.repository.commit(
             ChangeSet(
                 operations=tuple(operations),
-                actor="Wiki Maintenance",
-                origin="wiki.maintenance",
+                actor=actor,
+                origin=origin,
                 reason=reason,
                 idempotency_key=key,
                 expected_head=base_head,
@@ -915,6 +1045,8 @@ class WikiService:
         record = self._index(snapshot).pages.get(page_id)
         if record is None or record.page.lifecycle != "active":
             raise KeyError(f"unknown active wiki page: {page_id}")
+        if page_id == WIKI_HEALTH_RESOURCE_ID:
+            raise WikiValidationError("health page is backend-managed")
         self._validate_prospective(snapshot, tuple(item for item in snapshot.pages if item.page.page_id != page_id))
         version = expected_version or record.resource.version_id
         key = idempotency_key or self._key("archive", snapshot.head, page_id, version)
@@ -940,6 +1072,8 @@ class WikiService:
         reason: str = "restore page",
         idempotency_key: str | None = None,
     ) -> WikiPageRecord:
+        if page_id == WIKI_HEALTH_RESOURCE_ID:
+            raise WikiValidationError("health page is backend-managed")
         head = self.repository.head
         self._require_head(head, base_head)
         resource = self.repository.get(page_id, at=head)
@@ -1001,6 +1135,8 @@ class WikiService:
         record = index.pages.get(page_id)
         if record is None or record.page.lifecycle != "active":
             raise WikiValidationError("rename requires an active, nonredirect page")
+        if page_id == WIKI_HEALTH_RESOURCE_ID:
+            raise WikiValidationError("health page is backend-managed")
         if record.resource.version_id != expected_version:
             raise RevisionConflictError(f"resource {page_id} changed: expected {expected_version}")
         replacement = record.page.with_title(new_title)

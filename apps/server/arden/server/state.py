@@ -164,9 +164,7 @@ class RunState:
         batch = list(self.inject_queue)
         self.inject_queue.clear()
         self._drained_injection_client_ids.update(
-            client_id
-            for entry in batch
-            if isinstance((client_id := entry.get("client_id")), str)
+            client_id for entry in batch if isinstance((client_id := entry.get("client_id")), str)
         )
         self.updated_at = datetime.now(UTC)
         return batch

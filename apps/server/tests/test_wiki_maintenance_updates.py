@@ -36,6 +36,21 @@ def _update(
     return WikiMaintenancePageUpdate(page_id, record.resource.version_id, title, aliases, body)
 
 
+def test_topic_name_resolution_uses_only_titles_and_aliases_from_one_snapshot(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _seed(
+        repo,
+        ("bicycle", "topics/bike.md", create_page(page_id="bicycle", title="Bicycle", aliases=("Cycle",))),
+    )
+    service = WikiService(repo)
+    snapshot = service.snapshot()
+
+    assert service.resolve_topic_name("bIcYcLe", snapshot=snapshot).page.page_id == "bicycle"
+    assert service.resolve_topic_name(" cycle ", snapshot=snapshot).page.page_id == "bicycle"
+    assert service.resolve_topic_name("topics/bike", snapshot=snapshot) is None
+    assert service.resolve_topic_name("bike.md", snapshot=snapshot) is None
+
+
 def test_maintenance_updates_are_atomic_identity_preserving_and_owned_by_maintenance(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     generated = b"<!-- generated -->\nFact.\n<!-- /generated -->\n\nNotes.\n"

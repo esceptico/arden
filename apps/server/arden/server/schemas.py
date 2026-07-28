@@ -556,23 +556,6 @@ class CreateAutomationRequest(BaseModel):
     cooldown_minutes: int | None = None
     tool_scope: list[str] | None = None
     output_schema: str | None = None
-    from_suggestion_id: str | None = None
-
-
-class AutomationSuggestionResponse(BaseModel):
-    id: str
-    name: str
-    description: str | None
-    prompt: str
-    triggers: list[dict]
-    rationale: str
-    evidence: list[str]
-    category: str
-    icon: str | None = None
-
-
-class AutomationSuggestionsResponse(BaseModel):
-    suggestions: list[AutomationSuggestionResponse]
 
 
 class UpdateAutomationRequest(BaseModel):

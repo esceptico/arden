@@ -4,23 +4,14 @@ from datetime import UTC, datetime
 
 from arden.automation.models import Automation
 from arden.automation.store import AutomationStore
-from arden.automation.triggers import CountTrigger, TimeTrigger, Trigger
+from arden.automation.triggers import TimeTrigger, Trigger
 from arden.constants import (
-    AREA_SUGGESTER_DAILY_AT,
-    AUTOMATION_SUGGESTER_DAILY_AT,
-    BUILTIN_AREA_SUGGESTER_ID,
-    BUILTIN_AUTOMATION_SUGGESTER_DAILY_ID,
     BUILTIN_MEMORY_CONSOLIDATE_ID,
-    BUILTIN_MEMORY_DREAM_ID,
     BUILTIN_MEMORY_RETENTION_ID,
     BUILTIN_MEMORY_SYNTHESIZE_ID,
     BUILTIN_WIKI_MAINTENANCE_ID,
     MEMORY_CONSOLIDATE_AT,
-    MEMORY_DREAM_AT,
     MEMORY_RETENTION_AT,
-    MEMORY_SYNTHESIZE_AT,
-    MEMORY_SYNTHESIZE_COOLDOWN_MINUTES,
-    MEMORY_SYNTHESIZE_EVERY_N_RUNS,
 )
 from arden.logging import get_logger
 
@@ -31,8 +22,6 @@ _logger = get_logger(__name__)
 class BuiltinSpec:
     task_id: str
     name: str
-    # The mockup renders `summary` separately from `prompt`; keep the same
-    # contract for code-owned automation rows.
     description: str
     prompt: str
     triggers: list[Trigger]
@@ -51,7 +40,7 @@ _FACT_RETENTION_TOOL_SCOPE = [
     "plan_fact_changes",
     "commit_fact_changes",
 ]
-
+_FACT_RETENTION_DESCRIPTION = "Review temporary canonical facts when their lifecycle review is due."
 _FACT_RETENTION_PROMPT = (
     "Review only canonical facts that are due for lifecycle review. Start with "
     "get_due_fact_reviews, then inspect any candidate facts and their saved "
@@ -64,7 +53,14 @@ _FACT_RETENTION_PROMPT = (
     "pages, hard-delete history, or use tools outside this fact workflow. Plan "
     "every change first and commit only the returned plan."
 )
-
+_FACT_MAINTENANCE_DESCRIPTION = "Reconcile duplicate and misclassified canonical facts."
+_FACT_MAINTENANCE_PROMPT = (
+    "Review changed canonical facts using prepared, version-pinned candidates. "
+    "Merge only genuine duplicates, correct only kind, labels, subjects, lifecycle, "
+    "or evidence class, and make no change when evidence is weak. Never create or "
+    "rewrite fact text, manage review or expiry, perform general supersession, or "
+    "edit wiki prose. Inferred evidence cannot replace direct evidence."
+)
 _FACT_SYNTHESIS_DESCRIPTION = "Publish fact-backed wiki pages from canonical facts."
 _FACT_SYNTHESIS_PROMPT = (
     "Canonical fact synthesis: publish the managed regions of wiki pages from "
@@ -72,178 +68,64 @@ _FACT_SYNTHESIS_PROMPT = (
     "content outside managed regions, never invent facts, and leave unresolved "
     "or uncertain facts out of publication."
 )
-_LEGACY_SYNTHESIS_DESCRIPTION = "Refresh memory pages from canonical records with provenance."
 _WIKI_MAINTENANCE_DESCRIPTION = "Reconcile cross-page wiki consistency from managed revision evidence."
 _WIKI_MAINTENANCE_PROMPT = (
     "Review managed wiki commits and their linked-page evidence for cross-page consistency. "
     "Preserve user-owned content and never invent facts or citations."
 )
-_FACT_MODE_RETIRED_BUILTIN_IDS = frozenset(
-    {
-        BUILTIN_AREA_SUGGESTER_ID,
-        BUILTIN_AUTOMATION_SUGGESTER_DAILY_ID,
-        BUILTIN_MEMORY_CONSOLIDATE_ID,
-        BUILTIN_MEMORY_DREAM_ID,
-    }
-)
-
 
 BUILTINS = [
     BuiltinSpec(
-        task_id=BUILTIN_AREA_SUGGESTER_ID,
-        name="Area Suggester",
-        description="Find life domains that could benefit from a standing area agent.",
-        prompt="Scan memory topic pages for life domains worth a standing area agent.",
-        triggers=[
-            TimeTrigger(at=AREA_SUGGESTER_DAILY_AT, days="daily"),
-        ],
-        handler="area_suggester_daily",
-        auto_approve=True,
-    ),
-    BuiltinSpec(
-        task_id=BUILTIN_AUTOMATION_SUGGESTER_DAILY_ID,
-        name="Automation Suggester Daily",
-        description="Draft relevant automation suggestions from current context.",
-        prompt="Draft contextual automation suggestions from memory, chats, and actions.",
-        triggers=[
-            TimeTrigger(at=AUTOMATION_SUGGESTER_DAILY_AT, days="daily"),
-        ],
-        handler="automation_suggester_daily",
-        auto_approve=True,
-    ),
-    BuiltinSpec(
         task_id=BUILTIN_MEMORY_CONSOLIDATE_ID,
         name="Memory Maintenance",
-        description="Consolidate duplicate, stale, and contradicted memory records.",
-        prompt="Nightly sleep-time reconcile pass: merge duplicate records, supersede stale or contradicted ones, retype mis-classified records, fold near-duplicate labels, and prune tombstones from the canonical memory pool.",
-        triggers=[
-            TimeTrigger(at=MEMORY_CONSOLIDATE_AT, days="daily"),
-            CountTrigger(every_n=MEMORY_SYNTHESIZE_EVERY_N_RUNS),
-        ],
-        handler="memory_consolidate",
+        description=_FACT_MAINTENANCE_DESCRIPTION,
+        prompt=_FACT_MAINTENANCE_PROMPT,
+        triggers=[TimeTrigger(at=MEMORY_CONSOLIDATE_AT, days="daily")],
+        handler="memory_maintenance",
         auto_approve=True,
-        cooldown_minutes=MEMORY_SYNTHESIZE_COOLDOWN_MINUTES,
     ),
     BuiltinSpec(
         task_id=BUILTIN_MEMORY_SYNTHESIZE_ID,
         name="Memory Synthesis",
-        description=_LEGACY_SYNTHESIS_DESCRIPTION,
-        prompt="File-native synthesis: tag untagged records with their subject, then rewrite the prose summary of me.md, topic pages (topics/<slug>.md), active-work.md, integration source overviews (observations/<source>.md), and daily logs (daily/<date>.md) from the canonical timeline atoms, with inline (record:id) provenance. Stale-gated so only changed pages re-synthesize. Runs nightly AND after a burst of conversation so topic pages stay current, not 24h stale.",
-        triggers=[
-            TimeTrigger(at=MEMORY_SYNTHESIZE_AT, days="daily"),
-            CountTrigger(every_n=MEMORY_SYNTHESIZE_EVERY_N_RUNS),
-        ],
+        description=_FACT_SYNTHESIS_DESCRIPTION,
+        prompt=_FACT_SYNTHESIS_PROMPT,
+        triggers=[TimeTrigger(every="6h")],
         handler="memory_synthesize",
-        auto_approve=True,
-        cooldown_minutes=MEMORY_SYNTHESIZE_COOLDOWN_MINUTES,
-    ),
-    BuiltinSpec(
-        task_id=BUILTIN_MEMORY_DREAM_ID,
-        name="Memory Dream",
-        description="Derive cited cross-domain insights from memory.",
-        prompt="Nightly cross-domain reflection: derive the most salient questions spanning different topics, retrieve cross-topic evidence, and write up to 5 cited cross-domain insights back into memory.",
-        triggers=[
-            TimeTrigger(at=MEMORY_DREAM_AT, days="daily"),
-        ],
-        handler="memory_dream",
         auto_approve=True,
     ),
     BuiltinSpec(
         task_id=BUILTIN_MEMORY_RETENTION_ID,
         name="Memory Retention",
-        description="Apply retention rules to stale transient memory records.",
-        prompt="Nightly deterministic retention: supersede integration observations older than 90 days, source lines older than 180 days, and fact/changelog lines older than 730 days; dreamer-authored insights age at the 180-day transient TTL. Pinned records, directives, and lessons are exempt.",
-        triggers=[
-            TimeTrigger(at=MEMORY_RETENTION_AT, days="daily"),
-        ],
-        handler="memory_retention",
+        description=_FACT_RETENTION_DESCRIPTION,
+        prompt=_FACT_RETENTION_PROMPT,
+        triggers=[TimeTrigger(at=MEMORY_RETENTION_AT, days="daily")],
+        handler=None,
+        auto_approve=True,
+        tool_scope=list(_FACT_RETENTION_TOOL_SCOPE),
+    ),
+    BuiltinSpec(
+        task_id=BUILTIN_WIKI_MAINTENANCE_ID,
+        name="Wiki Maintenance",
+        description=_WIKI_MAINTENANCE_DESCRIPTION,
+        prompt=_WIKI_MAINTENANCE_PROMPT,
+        triggers=[TimeTrigger(every="6h")],
+        handler="wiki_maintenance",
         auto_approve=True,
     ),
 ]
 
 
-def _specs(*, fact_mode: bool) -> list[BuiltinSpec]:
-    if not fact_mode:
-        return BUILTINS
-    specs: list[BuiltinSpec] = []
+async def seed_builtins(store: AutomationStore) -> None:
     for spec in BUILTINS:
-        if spec.task_id in _FACT_MODE_RETIRED_BUILTIN_IDS:
-            continue
-        if spec.task_id == BUILTIN_MEMORY_RETENTION_ID:
-            specs.append(
-                dc_replace(
-                    spec,
-                    handler=None,
-                    prompt=_FACT_RETENTION_PROMPT,
-                    tool_scope=list(_FACT_RETENTION_TOOL_SCOPE),
-                )
-            )
-        elif spec.task_id == BUILTIN_MEMORY_SYNTHESIZE_ID:
-            # Facts commit directly request a debounced run. This six-hour
-            # trigger is only the finite backstop when no commit arrives.
-            specs.append(
-                dc_replace(
-                    spec,
-                    description=_FACT_SYNTHESIS_DESCRIPTION,
-                    prompt=_FACT_SYNTHESIS_PROMPT,
-                    triggers=[TimeTrigger(every="6h")],
-                    cooldown_minutes=None,
-                )
-            )
-        else:
-            specs.append(spec)
-    specs.append(
-        BuiltinSpec(
-            task_id=BUILTIN_WIKI_MAINTENANCE_ID,
-            name="Wiki Maintenance",
-            description=_WIKI_MAINTENANCE_DESCRIPTION,
-            prompt=_WIKI_MAINTENANCE_PROMPT,
-            triggers=[TimeTrigger(every="6h")],
-            handler="wiki_maintenance",
-            auto_approve=True,
-        )
-    )
-    return specs
-
-
-def _is_legacy_synthesis_default(automation: Automation) -> bool:
-    """Whether the only user dials are the old synthesis defaults.
-
-    This intentionally keys on the complete cadence/cooldown tuple, rather
-    than any copy or run-history fields, so a user-customized row is never
-    rewritten during the fact-mode cutover.
-    """
-
-    return automation.cooldown_minutes == MEMORY_SYNTHESIZE_COOLDOWN_MINUTES and automation.triggers == [
-        TimeTrigger(at=MEMORY_SYNTHESIZE_AT, days="daily"),
-        CountTrigger(every_n=MEMORY_SYNTHESIZE_EVERY_N_RUNS),
-    ]
-
-
-async def seed_builtins(store: AutomationStore, *, fact_mode: bool = False) -> None:
-    if fact_mode:
-        for task_id in _FACT_MODE_RETIRED_BUILTIN_IDS:
-            existing = await store.get(task_id)
-            if existing is None:
-                continue
-            if not existing.builtin:
-                raise RuntimeError(f"reserved retired builtin id is not marked builtin: {task_id}")
-            await store.delete(task_id)
-            _logger.info("Retired legacy builtin after canonical fact cutover: %s", existing.name)
-
-    for spec in _specs(fact_mode=fact_mode):
         existing = await store.get(spec.task_id)
         if existing:
             changes: dict = {}
             if existing.name != spec.name:
                 changes["name"] = spec.name
-            # Display copy can have been written manually or generated after
-            # migration. Keep that concise copy stable across restarts; only
-            # seed it when this row has no display description at all.
-            if existing.description is None:
+            if existing.description != spec.description:
                 changes["description"] = spec.description
                 changes["description_source"] = "manual"
-            elif existing.description_source is None:
+            elif existing.description_source != "manual":
                 changes["description_source"] = "manual"
             if existing.prompt != spec.prompt:
                 changes["prompt"] = spec.prompt
@@ -251,55 +133,46 @@ async def seed_builtins(store: AutomationStore, *, fact_mode: bool = False) -> N
                 changes["handler"] = spec.handler
             if existing.auto_approve != spec.auto_approve:
                 changes["auto_approve"] = spec.auto_approve
-            if existing.cooldown_minutes is None and spec.cooldown_minutes is not None:
-                changes["cooldown_minutes"] = spec.cooldown_minutes
-            if fact_mode and spec.task_id == BUILTIN_MEMORY_SYNTHESIZE_ID and _is_legacy_synthesis_default(existing):
+            if existing.triggers != spec.triggers:
                 changes["triggers"] = list(spec.triggers)
-                changes["cooldown_minutes"] = None
-                if existing.description == _LEGACY_SYNTHESIS_DESCRIPTION:
-                    changes["description"] = spec.description
-                # Keep the six-hour interval anchored to actual history. If
-                # the old row is overdue, this remains overdue so the
-                # scheduler catches it up instead of silently delaying it.
-                if existing.enabled:
-                    interval = spec.triggers[0]
-                    assert isinstance(interval, TimeTrigger)
-                    changes["next_run_at"] = interval.next_run(existing.last_run_at or existing.created_at)
-            if spec.task_id == BUILTIN_MEMORY_RETENTION_ID and existing.tool_scope != spec.tool_scope:
+            if existing.cooldown_minutes != spec.cooldown_minutes:
+                changes["cooldown_minutes"] = spec.cooldown_minutes
+            if existing.tool_scope != spec.tool_scope:
                 changes["tool_scope"] = None if spec.tool_scope is None else list(spec.tool_scope)
-            # Triggers and enabled are the USER'S dials once the row exists —
-            # re-stamping them every boot silently reverted cadence edits and
-            # re-enabled paused builtins. Spec values apply on first seed only.
-            time_triggers = [t for t in existing.triggers if isinstance(t, TimeTrigger)]
-            if existing.enabled and existing.next_run_at is None and time_triggers:
-                changes["next_run_at"] = time_triggers[0].next_run(datetime.now(UTC))
+            # Enabled remains the user's pause control. Timing belongs to the
+            # system phase contract.
+            time_triggers = [trigger for trigger in spec.triggers if isinstance(trigger, TimeTrigger)]
+            if existing.enabled and time_triggers:
+                canonical_next_run = time_triggers[0].next_run(existing.last_run_at or existing.created_at)
+                if existing.next_run_at != canonical_next_run:
+                    changes["next_run_at"] = canonical_next_run
             if changes:
-                updated = dc_replace(existing, **changes)
-                await store.update_metadata(updated)
+                await store.update_metadata(dc_replace(existing, **changes))
                 _logger.info("Updated builtin automation defaults: %s", spec.name)
             continue
 
         now = datetime.now(UTC)
-        time_triggers = [t for t in spec.triggers if isinstance(t, TimeTrigger)]
-        automation = Automation(
-            task_id=spec.task_id,
-            name=spec.name,
-            description=spec.description,
-            description_source="manual",
-            prompt=spec.prompt,
-            model=None,
-            triggers=spec.triggers,
-            enabled=spec.enabled,
-            created_at=now,
-            next_run_at=time_triggers[0].next_run(now) if spec.enabled and time_triggers else None,
-            last_run_at=None,
-            last_result=None,
-            running_since=None,
-            auto_approve=spec.auto_approve,
-            handler=spec.handler,
-            builtin=True,
-            cooldown_minutes=spec.cooldown_minutes,
-            tool_scope=None if spec.tool_scope is None else list(spec.tool_scope),
+        time_triggers = [trigger for trigger in spec.triggers if isinstance(trigger, TimeTrigger)]
+        await store.save(
+            Automation(
+                task_id=spec.task_id,
+                name=spec.name,
+                description=spec.description,
+                description_source="manual",
+                prompt=spec.prompt,
+                model=None,
+                triggers=spec.triggers,
+                enabled=spec.enabled,
+                created_at=now,
+                next_run_at=time_triggers[0].next_run(now) if spec.enabled and time_triggers else None,
+                last_run_at=None,
+                last_result=None,
+                running_since=None,
+                auto_approve=spec.auto_approve,
+                handler=spec.handler,
+                builtin=True,
+                cooldown_minutes=spec.cooldown_minutes,
+                tool_scope=None if spec.tool_scope is None else list(spec.tool_scope),
+            )
         )
-        await store.save(automation)
         _logger.info("Seeded builtin automation: %s", spec.name)

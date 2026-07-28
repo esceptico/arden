@@ -13,11 +13,28 @@ from .approvals import (
     WikiRenameCoordinatorResult,
 )
 from .context import WIKI_PAGE_SOURCE, WikiContextBuilder, WikiPageIndexProjection, WikiPageIndexState
+from .curator import (
+    WikiEditCurator,
+    WikiEditCuratorDecision,
+    WikiEditCuratorEvidence,
+    WikiEditCuratorResult,
+    WikiFactCorrection,
+)
+from .curator_completion import CompletionWikiEditCuratorReviewer
+from .curator_queue import (
+    WikiEditCuratorJob,
+    WikiEditCuratorJobOutcome,
+    WikiEditCuratorJobStatus,
+    WikiEditCuratorQueueConflictError,
+    WikiEditCuratorQueueStore,
+)
+from .curator_worker import WikiEditCuratorWorker
 from .health import (
     WikiHealthIndex,
     WikiHealthInput,
     WikiHealthIssue,
     WikiHealthIssueCode,
+    WikiHealthIssueOwner,
     WikiHealthPendingReview,
     WikiHealthProjector,
     WikiHealthResult,
@@ -84,12 +101,14 @@ from .service import GeneratedRegionConflictError, WikiAmbiguityError, WikiServi
 __all__ = [
     "CorruptWikiRenameApprovalError",
     "CompletionWikiMaintenanceReviewer",
+    "CompletionWikiEditCuratorReviewer",
     "GeneratedPageTarget",
     "GeneratedRegionConflictError",
     "WikiHealthIndex",
     "WikiHealthInput",
     "WikiHealthIssue",
     "WikiHealthIssueCode",
+    "WikiHealthIssueOwner",
     "WikiHealthPendingReview",
     "WikiHealthProjector",
     "WikiHealthResult",
@@ -106,6 +125,17 @@ __all__ = [
     "WikiChangeWarning",
     "WikiChangesReport",
     "WikiContextBuilder",
+    "WikiEditCurator",
+    "WikiEditCuratorDecision",
+    "WikiEditCuratorEvidence",
+    "WikiEditCuratorJob",
+    "WikiEditCuratorJobOutcome",
+    "WikiEditCuratorJobStatus",
+    "WikiEditCuratorQueueConflictError",
+    "WikiEditCuratorQueueStore",
+    "WikiEditCuratorResult",
+    "WikiEditCuratorWorker",
+    "WikiFactCorrection",
     "WikiFactCitation",
     "WikiInfrastructureRole",
     "WikiLinkReport",

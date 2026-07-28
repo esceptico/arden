@@ -153,3 +153,26 @@ async def test_fact_consumer_store_rejects_transactional_connections(tmp_path) -
             FactConsumerStore(connection)
     finally:
         await connection.close()
+
+
+async def test_retention_checkpoint_survives_restart_and_allows_an_empty_ledger(tmp_path) -> None:
+    path = tmp_path / "facts.db"
+    first = await FactConsumerStore.open(path)
+    try:
+        assert await first.get_retention_checkpoint("builtin-memory-retention") is None
+        checkpoint = await first.record_retention_checkpoint(
+            "builtin-memory-retention",
+            revision=None,
+            evaluated_at=NOW,
+        )
+        assert checkpoint.revision is None
+        assert checkpoint.evaluated_at == NOW
+    finally:
+        await first.close()
+
+    second = await FactConsumerStore.open(path)
+    try:
+        restored = await second.get_retention_checkpoint("builtin-memory-retention")
+        assert restored == checkpoint
+    finally:
+        await second.close()

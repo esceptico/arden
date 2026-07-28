@@ -570,28 +570,44 @@ class WikiMaintenance:
             existing = await self._store.get_by_evidence(commit.commit_id, "evidence-too-large")
         except Exception as store_exc:
             return await self._error_result(
-                feed.through_revision, expected, initial, reviewed=reviewed, updated=updated, replayed=replayed, error=store_exc
+                feed.through_revision,
+                expected,
+                initial,
+                reviewed=reviewed,
+                updated=updated,
+                replayed=replayed,
+                error=store_exc,
             )
         stale = [
             row
             for row in rows
             if row.status is WikiMaintenanceReviewStatus.NEEDS_REVIEW
             and (
-                existing is None
-                or row.review_id != existing.review_id
-                or row.evidence_fingerprint != error.fingerprint
+                existing is None or row.review_id != existing.review_id or row.evidence_fingerprint != error.fingerprint
             )
         ]
         try:
             await self._clear_stale(stale)
         except Exception as store_exc:
             return await self._error_result(
-                feed.through_revision, expected, initial, reviewed=reviewed, updated=updated, replayed=replayed, error=store_exc
+                feed.through_revision,
+                expected,
+                initial,
+                reviewed=reviewed,
+                updated=updated,
+                replayed=replayed,
+                error=store_exc,
             )
         if existing is not None and existing.evidence_fingerprint == error.fingerprint:
             if existing.status is WikiMaintenanceReviewStatus.NEEDS_REVIEW:
                 return self._result(
-                    feed.through_revision, expected, initial, reviewed=reviewed, updated=updated, replayed=replayed, blocked=True
+                    feed.through_revision,
+                    expected,
+                    initial,
+                    reviewed=reviewed,
+                    updated=updated,
+                    replayed=replayed,
+                    blocked=True,
                 )
             if existing.status in {
                 WikiMaintenanceReviewStatus.ACCEPTED,
@@ -642,10 +658,22 @@ class WikiMaintenance:
             )
         except Exception as store_exc:
             return await self._error_result(
-                feed.through_revision, expected, initial, reviewed=reviewed, updated=updated, replayed=replayed, error=store_exc
+                feed.through_revision,
+                expected,
+                initial,
+                reviewed=reviewed,
+                updated=updated,
+                replayed=replayed,
+                error=store_exc,
             )
         return self._result(
-            feed.through_revision, expected, initial, reviewed=reviewed, updated=updated, replayed=replayed, blocked=True
+            feed.through_revision,
+            expected,
+            initial,
+            reviewed=reviewed,
+            updated=updated,
+            replayed=replayed,
+            blocked=True,
         )
 
     @staticmethod
@@ -760,8 +788,7 @@ class WikiMaintenance:
                 [
                     (
                         f"{prefix} header",
-                        f"## Change ({change.action}) — {token}\n"
-                        f"Before path: {before_path}\nAfter path: {after_path}",
+                        f"## Change ({change.action}) — {token}\nBefore path: {before_path}\nAfter path: {after_path}",
                         _MAX_HEADER_BYTES,
                     ),
                     (f"{prefix} before", "### Before\n" + before, _MAX_PAGE_SECTION_BYTES),
@@ -812,9 +839,7 @@ class WikiMaintenance:
         replay_fingerprint = self._fingerprint(
             {
                 "commit": commit.commit_id,
-                "changes": [
-                    (c.action, c.resource_id, self._identity_text(c.unified_diff)) for c in commit.changes
-                ],
+                "changes": [(c.action, c.resource_id, self._identity_text(c.unified_diff)) for c in commit.changes],
             }
         )
         return WikiMaintenancePreparedReport(
@@ -1067,10 +1092,7 @@ class WikiMaintenance:
         if row.proposal_json is None:
             raise WikiMaintenanceError("accepted maintenance review has no executable proposal")
         proposal = parse_maintenance_update_proposal(row.proposal_json)
-        if (
-            proposal.reason != self._reason(prepared)
-            or proposal.replay_fingerprint != prepared.replay_fingerprint
-        ):
+        if proposal.reason != self._reason(prepared) or proposal.replay_fingerprint != prepared.replay_fingerprint:
             raise WikiMaintenanceError("accepted maintenance proposal does not match current evidence")
         await asyncio.to_thread(
             self._wiki.apply_maintenance_updates,

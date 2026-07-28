@@ -9,7 +9,7 @@ from arden.tools.core import ToolResult, tool
 from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
 from arden.tools.discover import discover_user_tools
 from arden.tools.executor import ToolExecutor
-from arden.tools.memory import RecallInput
+from arden.tools.facts import SearchFactsInput
 
 
 async def _noop(execution, args):
@@ -81,5 +81,5 @@ def test_cross_tool_parameter_names_are_canonical():
     assert "task_id" not in SendMessageInput.model_fields
     assert "limit" in WebSearchInput.model_fields
     assert "num_results" not in WebSearchInput.model_fields
-    assert "kind" in RecallInput.model_fields
-    assert "kinds" not in RecallInput.model_fields
+    assert "subject" in SearchFactsInput.model_fields
+    assert "subjects" not in SearchFactsInput.model_fields

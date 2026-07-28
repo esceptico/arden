@@ -12,7 +12,6 @@ from arden.core.prompts import build_system_prompt
 from arden.events.internal import RunCompleted
 from arden.events.sse import AutomationProgressEvent, ToolCallResultEvent, ToolCallStartEvent, agent_event_to_sse
 from arden.llm.models import supports_native_deferred_tools
-from arden.memory.profile import resident_profile
 from arden.observability import activate_tracing, observed_trace
 from arden.server.bus import SessionBus
 from arden.skills.registry import SkillRegistry
@@ -34,7 +33,7 @@ class OperatorDeps:
     notifiers: list[dict[str, str]]
     enqueue_run_completed: Callable[[RunCompleted], Awaitable[bool]] | None = None
     skill_registry: SkillRegistry | None = None
-    memory_records: object | None = None
+    wiki_context: object | None = None
 
 
 @dataclass(frozen=True)
@@ -72,7 +71,7 @@ async def _prepare(deps: OperatorDeps, request: RunRequest) -> tuple[Agent, list
     session_state = deps.create_session()
     session_state.origin_automation_id = request.automation_id
 
-    memory_context = await resident_profile(deps.memory_records)
+    memory_context = await deps.wiki_context.resident_context() if deps.wiki_context is not None else None
 
     executor = deps.executor
     # Capability selection is independent from approval bypass. Detached runs

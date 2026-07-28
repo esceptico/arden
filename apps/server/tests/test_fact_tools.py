@@ -13,6 +13,7 @@ from arden.context.models import AreaContext, SessionState
 from arden.database import connect
 from arden.integrations.core import FACTS
 from arden.memory.facts import FactLedger, FactPlanStore, FactPrincipal, FactService
+from arden.memory.facts.boundary import source_time
 from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.registry import ToolRegistry
 from arden.tools.facts import (
@@ -88,20 +89,27 @@ async def _commit_direct(
     **extra: object,
 ) -> None:
     principal = FactPrincipal("seed", frozenset({scope}), frozenset({scope}))
-    preview = await service.plan(
-        principal,
-        [
-            {
-                **_create(fact_id=fact_id, text=text, **extra),
-                "scope": {"kind": scope[0], "key": scope[1]},
-                "sources": [{"kind": "test", "ref": fact_id}],
-            }
-        ],
-        request_key=f"seed:{fact_id}",
-        actor="seed",
-        origin="test",
-        reason="seed",
-    )
+    occurred_at = extra.pop("occurred_at", None)
+    original_clock = service.ledger._clock
+    if occurred_at is not None:
+        service.ledger._clock = lambda: datetime.fromisoformat(str(occurred_at).replace("Z", "+00:00"))
+    try:
+        preview = await service.plan(
+            principal,
+            [
+                {
+                    **_create(fact_id=fact_id, text=text, **extra),
+                    "scope": {"kind": scope[0], "key": scope[1]},
+                    "sources": [{"kind": "test", "ref": fact_id}],
+                }
+            ],
+            request_key=f"seed:{fact_id}",
+            actor="seed",
+            origin="test",
+            reason="seed",
+        )
+    finally:
+        service.ledger._clock = original_clock
     await service.commit(principal, preview.plan_id)
 
 
@@ -146,6 +154,13 @@ async def test_plan_and_commit_use_server_derived_identity_scope_and_provenance(
         assert fact.data["fact"]["sources"]["total"] == 1
     finally:
         await connection.close()
+
+
+async def test_fact_source_time_normalizes_utc_without_false_precision() -> None:
+    assert source_time("2026-07-28") == ("2026-07-28", "day")
+    assert source_time("2026-07-28T12:00:00+04:00") == ("2026-07-28T12:00:00+04:00", "second")
+    assert source_time("2026-07-28T12:00:00.1234+04:00") == ("2026-07-28T12:00:00.123+04:00", "millisecond")
+    assert source_time("not a timestamp") == (None, "unknown")
 
 
 async def test_read_tools_page_stably_and_enforce_server_derived_area_scope(tmp_path: Path) -> None:

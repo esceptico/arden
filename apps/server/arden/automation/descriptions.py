@@ -46,7 +46,11 @@ class AutomationDescriptionGenerator:
                 response_format=AutomationDescriptionDraft,
             )
             content = response.choices[0].message.content
-            draft = content if isinstance(content, AutomationDescriptionDraft) else AutomationDescriptionDraft.model_validate_json(content)
+            draft = (
+                content
+                if isinstance(content, AutomationDescriptionDraft)
+                else AutomationDescriptionDraft.model_validate_json(content)
+            )
             description = draft.description.strip()
             if not description:
                 raise ValueError("empty description")

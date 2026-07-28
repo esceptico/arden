@@ -73,14 +73,21 @@ async def _service(tmp_path: Path) -> tuple[FactService, FactPlanStore, object, 
 
 async def _plan(service: FactService, principal: FactPrincipal, fact_id: str = "a", text: str = "One", **extra):
     request_key = extra.pop("request_key", "request:1")
-    return await service.plan(
-        principal,
-        [_create(fact_id, text, **extra)],
-        request_key=request_key,
-        actor="curator:1",
-        origin="memory.curator",
-        reason="verified evidence",
-    )
+    occurred_at = extra.pop("occurred_at", None)
+    original_clock = service.ledger._clock
+    if occurred_at is not None:
+        service.ledger._clock = lambda: datetime.fromisoformat(str(occurred_at).replace("Z", "+00:00"))
+    try:
+        return await service.plan(
+            principal,
+            [_create(fact_id, text, **extra)],
+            request_key=request_key,
+            actor="curator:1",
+            origin="memory.curator",
+            reason="verified evidence",
+        )
+    finally:
+        service.ledger._clock = original_clock
 
 
 async def test_plan_is_durable_owner_scoped_and_identical_request_reuses(tmp_path: Path) -> None:
@@ -368,22 +375,16 @@ async def test_due_reviews_include_visible_related_facts_as_evidence(tmp_path: P
     service, _plans, conn, _ = await _service(tmp_path)
     principal = _principal(scopes=frozenset({AREA, OTHER_AREA}))
     try:
-        due = await service.plan(
+        due = await _plan(
+            service,
             principal,
-            [
-                _create(
-                    "due",
-                    "Due fact",
-                    occurred_at="2026-06-01T00:00:00Z",
-                    lifecycle="temporary",
-                    review_at="2026-07-01T00:00:00Z",
-                    review_basis="explicit",
-                )
-            ],
+            fact_id="due",
+            text="Due fact",
             request_key="due",
-            actor="curator:1",
-            origin="memory.curator",
-            reason="verified evidence",
+            occurred_at="2026-06-01T00:00:00Z",
+            lifecycle="temporary",
+            review_at="2026-07-01T00:00:00Z",
+            review_basis="explicit",
         )
         old = await _plan(
             service,

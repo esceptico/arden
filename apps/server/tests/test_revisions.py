@@ -317,14 +317,9 @@ def test_diff_page_is_bounded_exact_unicode_safe_and_tail_addressable(tmp_path: 
     )
 
     expected = next(
-        diff.unified_diff
-        for diff in repo.diff(initial.commit_id, updated.commit_id)
-        if diff.resource_id == "a"
+        diff.unified_diff for diff in repo.diff(initial.commit_id, updated.commit_id) if diff.resource_id == "a"
     )
-    assert [
-        diff.resource_id
-        for diff in repo.diff(initial.commit_id, updated.commit_id, resource_ids=("a",))
-    ] == ["a"]
+    assert [diff.resource_id for diff in repo.diff(initial.commit_id, updated.commit_id, resource_ids=("a",))] == ["a"]
     with pytest.raises(TypeError, match="iterable of resource IDs"):
         repo.diff(initial.commit_id, updated.commit_id, resource_ids="a")
     pages = []

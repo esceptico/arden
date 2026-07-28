@@ -352,17 +352,23 @@ async def test_cancelled_queue_message_cannot_be_reopened_by_late_enqueue(store:
         message={"role": "user", "content": "first", "client_id": "cid-cancelled"},
     )
 
-    assert await store.cancel_chat_queued_message(
-        session_id="sess-1",
-        client_id="cid-cancelled",
-        run_id="run-1",
-    ) == "cancelled"
-    assert await store.record_chat_queued_message(
-        client_id="cid-cancelled",
-        session_id="sess-1",
-        run_id="run-1",
-        message={"role": "user", "content": "late", "client_id": "cid-cancelled"},
-    ) == "cancelled"
+    assert (
+        await store.cancel_chat_queued_message(
+            session_id="sess-1",
+            client_id="cid-cancelled",
+            run_id="run-1",
+        )
+        == "cancelled"
+    )
+    assert (
+        await store.record_chat_queued_message(
+            client_id="cid-cancelled",
+            session_id="sess-1",
+            run_id="run-1",
+            message={"role": "user", "content": "late", "client_id": "cid-cancelled"},
+        )
+        == "cancelled"
+    )
 
     queued = await store.list_chat_queued_messages("sess-1")
     receipt = await store.get_chat_idempotency_key("sess-1", "cid-cancelled")
@@ -374,10 +380,13 @@ async def test_cancelled_queue_message_cannot_be_reopened_by_late_enqueue(store:
 
 @pytest.mark.asyncio
 async def test_cancelling_absent_queue_message_creates_terminal_tombstone(store: SessionStore):
-    assert await store.cancel_chat_queued_message(
-        session_id="sess-1",
-        client_id="cid-before-post",
-    ) == "cancelled"
+    assert (
+        await store.cancel_chat_queued_message(
+            session_id="sess-1",
+            client_id="cid-before-post",
+        )
+        == "cancelled"
+    )
 
     claimed, receipt = await store.claim_chat_idempotency_key(
         session_id="sess-1",
@@ -387,12 +396,15 @@ async def test_cancelling_absent_queue_message_creates_terminal_tombstone(store:
     assert claimed is False
     assert receipt["status"] == "cancelled"
     assert receipt["run_id"] is None
-    assert await store.record_chat_queued_message(
-        client_id="cid-before-post",
-        session_id="sess-1",
-        run_id="run-late",
-        message={"role": "user", "content": "late", "client_id": "cid-before-post"},
-    ) == "cancelled"
+    assert (
+        await store.record_chat_queued_message(
+            client_id="cid-before-post",
+            session_id="sess-1",
+            run_id="run-late",
+            message={"role": "user", "content": "late", "client_id": "cid-before-post"},
+        )
+        == "cancelled"
+    )
     assert await store.list_chat_queued_messages("sess-1", status="queued") == []
 
 

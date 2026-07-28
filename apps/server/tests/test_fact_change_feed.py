@@ -28,7 +28,8 @@ def _commit(ledger: FactLedger, *changes: dict[str, object]) -> None:
 
 
 def test_change_feed_initial_delta_and_noop_preserve_append_history_order(tmp_path) -> None:
-    ledger = FactLedger(tmp_path / "facts", clock=lambda: NOW)
+    point = [NOW]
+    ledger = FactLedger(tmp_path / "facts", clock=lambda: point[0])
     assert ledger.changes_since(None).through_revision is None
 
     _commit(ledger, _create("a", subject="alpha"))
@@ -46,7 +47,8 @@ def test_change_feed_initial_delta_and_noop_preserve_append_history_order(tmp_pa
             "scope": {"kind": "area", "key": "other"},
         },
     )
-    _commit(ledger, _create("b", subject="beta", occurred_at="2026-06-01T00:00:00Z"))
+    point[0] = datetime(2026, 6, 1, tzinfo=UTC)
+    _commit(ledger, _create("b", subject="beta"))
 
     delta = ledger.changes_since(watermark)
 

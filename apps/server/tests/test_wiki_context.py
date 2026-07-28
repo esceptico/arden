@@ -144,7 +144,7 @@ async def test_malformed_page_is_omitted_without_breaking_valid_chat_context(tmp
 
 
 @pytest.mark.asyncio
-async def test_empty_fact_mode_wiki_has_no_resident_or_retrieval_context(tmp_path) -> None:
+async def test_empty_canonical_wiki_has_no_resident_or_retrieval_context(tmp_path) -> None:
     wiki = WikiService(ManagedFileRepository(tmp_path / "pages", history_root=tmp_path / "history"))
     index = _Index()
     projection = WikiPageIndexProjection(wiki, lambda: index, _fact_revision)
@@ -161,8 +161,10 @@ def test_retrieval_is_after_the_cacheable_resident_block() -> None:
         retrieval_context="## RELEVANT WIKI PAGES\nretrieved",
         use_cache_control=True,
     )
-    resident_index = next(index for index, block in enumerate(blocks) if "WIKI RESIDENT" in block["text"])
-    retrieval_index = next(index for index, block in enumerate(blocks) if "RELEVANT WIKI" in block["text"])
+    resident_index = next(index for index, block in enumerate(blocks) if block["text"].startswith("## WIKI CONTEXT"))
+    retrieval_index = next(
+        index for index, block in enumerate(blocks) if block["text"].startswith("## RELEVANT WIKI PAGES")
+    )
     assert resident_index < retrieval_index
     assert blocks[resident_index]["cache_control"] == {"type": "ephemeral"}
     assert "cache_control" not in blocks[retrieval_index]

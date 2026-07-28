@@ -52,6 +52,7 @@ _TERMINAL = frozenset({"superseded", "expired", "retracted"})
 _FALLBACK_REVIEW = timedelta(days=90)
 _REVIEW_WINDOW_LIMIT = 5
 _RETENTION_ORIGIN = "memory.retention"
+_MAINTENANCE_ORIGIN = "memory.maintenance"
 _SOURCE_REQUIRED = frozenset({"kind", "ref"})
 _SOURCE_OPTIONAL = frozenset(
     {
@@ -143,13 +144,6 @@ def _parse_time(value: object, field: str) -> datetime:
     if result.tzinfo is None or result.utcoffset() != timedelta(0):
         raise FactValidationError(f"{field} must be UTC")
     return result.astimezone(UTC)
-
-
-def _change_time(value: object) -> datetime:
-    """Validate the migration-only top-level timestamp before canonicalizing it."""
-    if not isinstance(value, str) or _RFC3339_UTC.fullmatch(value) is None:
-        raise FactValidationError("occurred_at must be an RFC3339 UTC string")
-    return _parse_time(value, "occurred_at")
 
 
 def _time(value: datetime) -> str:
@@ -420,6 +414,14 @@ class FactLedger:
             return FactChangeFeed(None, None, (), (), ())
         return self._change_feed_at(watermark, snapshot.head)
 
+    def changes_between(self, watermark: str | None, through_revision: str) -> FactChangeFeed:
+        """Rebuild one exact retained delta without extending it to the live head."""
+
+        if not isinstance(through_revision, str) or not through_revision:
+            raise FactValidationError("through_revision must be a non-empty revision")
+        self._snapshot()
+        return self._change_feed_at(watermark, through_revision)
+
     def validate_change_feed(self, feed: FactChangeFeed) -> None:
         """Prove that a retained feed exactly matches reachable canonical history."""
 
@@ -610,6 +612,7 @@ class FactLedger:
             if op not in _OPS:
                 raise FactValidationError("unknown fact operation")
             is_retention = origin == _RETENTION_ORIGIN
+            is_maintenance = origin == _MAINTENANCE_ORIGIN
             has_review_window = "expected_review_window" in change
             if is_retention and op not in {"review", "supersede", "expire"}:
                 raise FactValidationError("Retention may only review, supersede, or expire due temporary facts")
@@ -617,7 +620,30 @@ class FactLedger:
                 raise FactValidationError("Retention changes require an expected review window")
             if has_review_window and not is_retention:
                 raise FactValidationError("expected_review_window is reserved for Retention")
-            point = plan_point if "occurred_at" not in change else _change_time(change["occurred_at"])
+            maintenance_merge = change.get("maintenance_merge")
+            if is_maintenance:
+                if op == "amend":
+                    if maintenance_merge is not None:
+                        raise FactValidationError("metadata maintenance must not claim a duplicate merge")
+                    allowed = {
+                        "op",
+                        "fact_id",
+                        "expected_version",
+                        "kind",
+                        "labels",
+                        "subjects",
+                        "lifecycle",
+                        "evidence_class",
+                    }
+                    if unknown := set(change).difference(allowed):
+                        raise FactValidationError(
+                            f"Memory Maintenance may amend only classification metadata: {sorted(unknown)}"
+                        )
+                elif op != "supersede" or maintenance_merge is not True:
+                    raise FactValidationError("Memory Maintenance may only amend metadata or merge duplicates")
+            elif maintenance_merge is not None:
+                raise FactValidationError("maintenance_merge is reserved for Memory Maintenance")
+            point = plan_point
             if op == "create":
                 event, fact = self._create_event(change, plan_id, point, working, actor, origin, reason)
                 self._pin_fact_sources(event.record["payload"], base, dependencies)
@@ -683,8 +709,17 @@ class FactLedger:
         self._validate_successor_graph(working, error_type=FactValidationError)
         return plan
 
-    def commit(self, plan: FactPlan) -> tuple[FactEvent, ...]:
+    def commit(
+        self,
+        plan: FactPlan,
+        *,
+        expected_revision: str | None = None,
+    ) -> tuple[FactEvent, ...]:
         self._validate_plan(plan)
+        if expected_revision is not None and (
+            not isinstance(expected_revision, str) or re.fullmatch(r"[0-9a-f]{64}", expected_revision) is None
+        ):
+            raise FactValidationError("expected_revision must be a lowercase SHA-256 revision")
         actor, origin, reason = self._event_attribution(plan.events)
         for _attempt in range(16):
             snapshot = self._snapshot()
@@ -692,6 +727,8 @@ class FactLedger:
             applied = tuple(event for event in events if event.plan_id == plan.plan_id)
             if applied:
                 return self._match_events(applied, plan.events)
+            if expected_revision is not None and snapshot.head != expected_revision:
+                raise FactConflictError("fact ledger changed before guarded publication")
             self._validate_plan_dependencies(plan, state)
             self._validate_retention_review_windows(plan, state)
             for event in plan.events:
@@ -722,6 +759,25 @@ class FactLedger:
                 raise FactLedgerCorruptionError("fact repository drifted or is corrupt") from exc
             return plan.events
         raise FactConflictError("fact publication remained contended")
+
+    def commit_at_revision(self, plan: FactPlan, expected_revision: str) -> tuple[FactEvent, ...]:
+        """Commit once only if the complete fact ledger is still at one revision.
+
+        An already-applied plan remains idempotently replayable after later
+        commits. The global guard is used by operations whose selection depends
+        on the absence of additional matching facts, not only touched versions.
+        """
+
+        return self.commit(plan, expected_revision=expected_revision)
+
+    def plan_applied(self, plan_id: str) -> bool:
+        """Return whether any canonical event belongs to an exact plan ID."""
+
+        try:
+            plan_id = str(uuid.UUID(_text(plan_id, "plan_id")))
+        except (FactValidationError, ValueError) as exc:
+            raise FactValidationError("plan_id must be a UUID") from exc
+        return any(event.plan_id == plan_id for event in self._snapshot().events)
 
     def validate_plan(self, plan: FactPlan) -> None:
         """Validate a retained plan without reading or mutating canonical facts."""
@@ -768,6 +824,7 @@ class FactLedger:
             raise FactValidationError(str(exc)) from exc
         self._validate_event_order(decoded, error_type=FactValidationError)
         self._validate_retention_plan_invariants(decoded, origin)
+        self._validate_maintenance_plan_invariants(decoded, origin)
 
         created = {event.fact_id for event in decoded if event.op == "create"}
         required_dependencies: set[str] = set()
@@ -815,6 +872,33 @@ class FactLedger:
                 raise FactValidationError("review_window is reserved for Retention")
             if has_window:
                 self._fact_version(payload["review_window"], "review_window")
+
+    @staticmethod
+    def _validate_maintenance_plan_invariants(events: Sequence[FactEvent], origin: str) -> None:
+        for event in events:
+            maintenance_merge = event.record["payload"].get("maintenance_merge")
+            if origin == _MAINTENANCE_ORIGIN:
+                if event.op == "amend":
+                    if maintenance_merge is not None:
+                        raise FactValidationError("metadata maintenance must not claim a duplicate merge")
+                    allowed = {
+                        "kind",
+                        "labels",
+                        "subjects",
+                        "lifecycle",
+                        "evidence_class",
+                        "review_at",
+                        "review_basis",
+                        "expires_at",
+                    }
+                    if unknown := set(event.record["payload"]).difference(allowed):
+                        raise FactValidationError(
+                            f"Memory Maintenance may amend only classification metadata: {sorted(unknown)}"
+                        )
+                elif event.op != "supersede" or maintenance_merge is not True:
+                    raise FactValidationError("Memory Maintenance may only amend metadata or merge duplicates")
+            elif maintenance_merge is not None:
+                raise FactValidationError("maintenance_merge is reserved for Memory Maintenance")
 
     @staticmethod
     def _plan_hashes(value: object, field: str) -> dict[str, str]:
@@ -887,7 +971,6 @@ class FactLedger:
             "expires_at",
             "supersedes",
             "reason",
-            "occurred_at",
         }
         self._unknown(change, allowed)
         supplied_id = change.get("fact_id")
@@ -945,7 +1028,7 @@ class FactLedger:
         dependencies: dict[str, str],
         point: datetime,
     ) -> dict[str, Any]:
-        common = {"op", "fact_id", "occurred_at", "expected_version", "expected_review_window"}
+        common = {"op", "fact_id", "expected_version", "expected_review_window"}
         if op == "review":
             self._unknown(change, common | {"reason", "review_at", "review_basis", "sources", "certainty"})
             reason = _text(change.get("reason"), "reason")
@@ -1010,7 +1093,7 @@ class FactLedger:
                 raise FactValidationError("amend must change metadata")
             return payload
         if op == "supersede":
-            self._unknown(change, common | {"successor_id", "reason", "sources"})
+            self._unknown(change, common | {"successor_id", "reason", "sources", "maintenance_merge"})
             successor_id = _text(change.get("successor_id"), "successor_id")
             if successor_id not in state:
                 raise FactValidationError("successor must exist")
@@ -1018,11 +1101,15 @@ class FactLedger:
             dependencies.setdefault(successor_id, successor.version)
             if current.evidence_class == "direct" and successor.evidence_class == "inferred":
                 raise FactValidationError("inferred evidence may not supersede direct evidence")
+            if change.get("maintenance_merge") is True and current.scope != successor.scope:
+                raise FactValidationError("duplicate merge cannot cross fact scopes")
             self._would_cycle(state, current.fact_id, successor_id)
             payload: dict[str, Any] = {
                 "successor_id": successor_id,
                 "reason": _text(change.get("reason"), "reason"),
             }
+            if change.get("maintenance_merge") is True:
+                payload["maintenance_merge"] = True
         else:
             self._unknown(change, common | {"reason", "sources"})
             payload = {"reason": _text(change.get("reason"), "reason")}
@@ -1340,7 +1427,7 @@ class FactLedger:
                 "review_basis",
                 "expires_at",
             },
-            "supersede": {"successor_id", "reason", "sources", "review_window"},
+            "supersede": {"successor_id", "reason", "sources", "review_window", "maintenance_merge"},
             "expire": {"reason", "sources", "review_window"},
             "retract": {"reason", "sources"},
         }[op]
@@ -1396,6 +1483,8 @@ class FactLedger:
             raise FactValidationError("invalid certainty")
         if "review_window" in payload:
             self._fact_version(payload["review_window"], "review_window")
+        if "maintenance_merge" in payload and payload["maintenance_merge"] is not True:
+            raise FactValidationError("maintenance_merge must be true")
         if "review_at" in payload or "review_basis" in payload:
             if not {"review_at", "review_basis"} <= set(payload):
                 raise FactValidationError("review fields must appear together")

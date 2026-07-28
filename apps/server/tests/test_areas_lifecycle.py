@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING
 import pytest
 
 from arden.areas.lifecycle import AreaLifecycleService, AreaPageService
+from arden.revisions import ManagedFileRepository
+from arden.wiki import WikiService
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -81,6 +83,14 @@ def lifecycle(
         sessions=areas,
         sync_custodian=sync or noop_sync,
         disable_custodian=disable or noop_disable,
+    )
+
+
+def pages(tmp_path, areas: FakeAreas, area_lifecycle: AreaLifecycleService) -> AreaPageService:
+    return AreaPageService(
+        wiki=WikiService(ManagedFileRepository(tmp_path / "wiki")),
+        sessions=areas,
+        lifecycle=area_lifecycle,
     )
 
 
@@ -180,37 +190,15 @@ async def test_create_page_writes_safe_topic_and_attaches_it(tmp_path) -> None:
     areas = FakeAreas()
     area_lifecycle = lifecycle(areas)
     area = await area_lifecycle.create(name="O-1A / Visa")
-    pages = AreaPageService(vault_root=tmp_path / "memory", sessions=areas, lifecycle=area_lifecycle)
+    area_pages = pages(tmp_path, areas, area_lifecycle)
 
-    updated = await pages.create(area["area_id"])
+    updated = await area_pages.create(area["area_id"])
 
     assert updated["page_path"] == "topics/o-1a-visa.md"
-    text = (tmp_path / "memory" / updated["page_path"]).read_text()
+    page = area_pages._wiki.list_pages()[0].page
+    text = page.to_bytes().decode()
     assert "title: O-1A / Visa" in text
     assert "## Open loops" in text
-
-
-@pytest.mark.asyncio
-async def test_create_page_guard_blocks_legacy_write_before_file_creation(tmp_path) -> None:
-    areas = FakeAreas()
-    area_lifecycle = lifecycle(areas)
-    area = await area_lifecycle.create(name="Canonical")
-
-    def reject_legacy_write() -> None:
-        raise PermissionError("legacy memory writes are disabled")
-
-    pages = AreaPageService(
-        vault_root=tmp_path / "memory",
-        sessions=areas,
-        lifecycle=area_lifecycle,
-        write_guard=reject_legacy_write,
-    )
-
-    with pytest.raises(PermissionError, match="legacy memory writes are disabled"):
-        await pages.create(area["area_id"])
-
-    assert (await areas.get_area(area["area_id"]))["page_path"] is None
-    assert not (tmp_path / "memory" / "topics").exists()
 
 
 @pytest.mark.asyncio
@@ -218,7 +206,7 @@ async def test_detach_page_requires_custodian_to_be_disabled(tmp_path) -> None:
     areas = FakeAreas()
     area_lifecycle = lifecycle(areas)
     area = await area_lifecycle.create(name="Health", page_path="topics/health.md", autonomy="observe")
-    pages = AreaPageService(vault_root=tmp_path / "memory", sessions=areas, lifecycle=area_lifecycle)
+    area_pages = pages(tmp_path, areas, area_lifecycle)
 
     with pytest.raises(ValueError, match="Disable the Custodian"):
-        await pages.detach(area["area_id"])
+        await area_pages.detach(area["area_id"])

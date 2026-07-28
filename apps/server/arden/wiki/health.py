@@ -21,15 +21,26 @@ class WikiHealthIssueCode(StrEnum):
     FACT_REVIEW_DUE = "fact_review_due"
 
 
+class WikiHealthIssueOwner(StrEnum):
+    BACKEND = "Backend"
+    SYNTHESIS = "Synthesis"
+    RETENTION = "Memory Retention"
+    MEMORY_MAINTENANCE = "Memory Maintenance"
+    WIKI_MAINTENANCE = "Wiki Maintenance"
+
+
 @dataclass(frozen=True, slots=True)
 class WikiHealthIssue:
     code: WikiHealthIssueCode
     target: str
     evidence: str
+    owner: WikiHealthIssueOwner
 
     def __post_init__(self) -> None:
         if not isinstance(self.code, WikiHealthIssueCode):
             raise TypeError("code must be a WikiHealthIssueCode")
+        if not isinstance(self.owner, WikiHealthIssueOwner):
+            raise TypeError("owner must be a WikiHealthIssueOwner")
         for field in ("target", "evidence"):
             value = getattr(self, field)
             if not isinstance(value, str) or not value:
@@ -44,12 +55,15 @@ class WikiHealthWorker:
     last_success: datetime | None
     processed_through: str | None
     current_revision: str | None
+    current: bool | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name:
             raise ValueError("name must be a nonempty string")
         if self.last_success is not None and not isinstance(self.last_success, datetime):
             raise TypeError("last_success must be a datetime or None")
+        if self.current is not None and not isinstance(self.current, bool):
+            raise TypeError("current must be a bool or None")
         for field in ("processed_through", "current_revision"):
             value = getattr(self, field)
             if value is not None and (not isinstance(value, str) or not value):
@@ -57,6 +71,8 @@ class WikiHealthWorker:
 
     @property
     def status(self) -> str:
+        if self.current is not None:
+            return "current" if self.current else "behind"
         if self.current_revision is None:
             return "not available"
         if self.processed_through == self.current_revision:
@@ -106,8 +122,7 @@ class WikiHealthPendingReview:
 class WikiHealthInput:
     fact_ledger_revision: str | None
     wiki: WikiChangesReport
-    synthesis: WikiHealthWorker
-    maintenance: WikiHealthWorker
+    workers: tuple[WikiHealthWorker, ...]
     index: WikiHealthIndex
     issues: tuple[WikiHealthIssue, ...] = ()
     pending_reviews: tuple[WikiHealthPendingReview, ...] = ()
@@ -121,8 +136,12 @@ class WikiHealthInput:
             raise TypeError("wiki must be a WikiChangesReport")
         if self.wiki.watermark is not None:
             raise ValueError("health requires a whole-wiki report so it can ignore its own commits")
-        if not isinstance(self.synthesis, WikiHealthWorker) or not isinstance(self.maintenance, WikiHealthWorker):
-            raise TypeError("synthesis and maintenance must be WikiHealthWorker values")
+        if (
+            not isinstance(self.workers, tuple)
+            or not self.workers
+            or not all(isinstance(item, WikiHealthWorker) for item in self.workers)
+        ):
+            raise TypeError("workers must be a nonempty tuple of WikiHealthWorker values")
         if not isinstance(self.index, WikiHealthIndex):
             raise TypeError("index must be a WikiHealthIndex")
         if not isinstance(self.issues, tuple) or not all(isinstance(item, WikiHealthIssue) for item in self.issues):
@@ -168,11 +187,30 @@ def _mechanical_issues(report: WikiChangesReport) -> tuple[WikiHealthIssue, ...]
     for warning in report.warnings:
         if warning.code in {"unresolved_link", "ambiguous_link"}:
             evidence = warning.evidence if warning.code == "unresolved_link" else f"ambiguous: {warning.evidence}"
-            issues.append(WikiHealthIssue(WikiHealthIssueCode.UNRESOLVED_LINK, warning.target, evidence))
+            issues.append(
+                WikiHealthIssue(
+                    WikiHealthIssueCode.UNRESOLVED_LINK,
+                    warning.target,
+                    evidence,
+                    WikiHealthIssueOwner.WIKI_MAINTENANCE,
+                )
+            )
         elif warning.code in {"invalid_page", "invalid_fact_citations", "invalid_generated_from_revision"}:
-            issues.append(WikiHealthIssue(WikiHealthIssueCode.VALIDATION_ERROR, warning.target, warning.evidence))
+            owner = (
+                WikiHealthIssueOwner.SYNTHESIS
+                if warning.code in {"invalid_fact_citations", "invalid_generated_from_revision"}
+                else WikiHealthIssueOwner.WIKI_MAINTENANCE
+            )
+            issues.append(
+                WikiHealthIssue(WikiHealthIssueCode.VALIDATION_ERROR, warning.target, warning.evidence, owner)
+            )
     issues.extend(
-        WikiHealthIssue(WikiHealthIssueCode.VALIDATION_ERROR, issue.target, issue.detail)
+        WikiHealthIssue(
+            WikiHealthIssueCode.VALIDATION_ERROR,
+            issue.target,
+            issue.detail,
+            WikiHealthIssueOwner.BACKEND,
+        )
         for issue in report.integrity.issues
     )
     return tuple(issues)
@@ -182,7 +220,7 @@ def _index_issues(index: WikiHealthIndex, observed_wiki_revision: str | None) ->
     if observed_wiki_revision is None or index.revision == observed_wiki_revision:
         return ()
     detail = index.detail or f"indexed {index.revision or 'nothing'}, observed {observed_wiki_revision}"
-    return (WikiHealthIssue(WikiHealthIssueCode.INDEX_BEHIND, "wiki_page", detail),)
+    return (WikiHealthIssue(WikiHealthIssueCode.INDEX_BEHIND, "wiki_page", detail, WikiHealthIssueOwner.BACKEND),)
 
 
 def _dedupe(items: tuple[WikiHealthIssue, ...]) -> tuple[WikiHealthIssue, ...]:
@@ -199,7 +237,7 @@ def _dedupe(items: tuple[WikiHealthIssue, ...]) -> tuple[WikiHealthIssue, ...]:
 def _render(value: WikiHealthInput, observed: str | None, issues: tuple[WikiHealthIssue, ...]) -> bytes:
     index_status = value.index.state_for(observed)
     storage_status = _storage_status(value.wiki)
-    workers = (value.synthesis, value.maintenance)
+    workers = value.workers
     state = "healthy"
     if (
         issues
@@ -216,7 +254,8 @@ def _render(value: WikiHealthInput, observed: str | None, issues: tuple[WikiHeal
             f"- Fact ledger: `{_revision(value.fact_ledger_revision)}`",
             f"- Wiki: `{_revision(observed)}`",
             "",
-            "## Maintenance", "",
+            "## Maintenance",
+            "",
             "| Worker | Status | Processed through | Last success |",
             "| --- | --- | --- | --- |",
         )
@@ -252,7 +291,10 @@ def _render(value: WikiHealthInput, observed: str | None, issues: tuple[WikiHeal
         lines.append("- None")
     lines.extend(("", "## Actionable issues", ""))
     if issues:
-        lines.extend(f"- **{issue.code.value}** — `{issue.target}`: {issue.evidence}" for issue in issues)
+        lines.extend(
+            f"- **{issue.code.value}** — owner: {issue.owner.value}; `{issue.target}`: {issue.evidence}"
+            for issue in issues
+        )
     else:
         lines.append("- None")
     return ("\n".join(lines) + "\n").encode()

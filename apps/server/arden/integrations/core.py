@@ -48,17 +48,6 @@ from arden.tools.files import (
     write_file_tool,
 )
 from arden.tools.goals import block_goal_tool, complete_goal_tool, get_goal_tool
-from arden.tools.memory import (
-    forget_tool,
-    memory_patch_tool,
-    memory_read_tool,
-    memory_search_tool,
-    memory_tree_tool,
-    memory_write_tool,
-    recall_tool,
-    remember_tool,
-    search_memory_candidates_tool,
-)
 from arden.tools.notify import notify_tool
 from arden.tools.render_html import render_html_tool
 from arden.tools.research import research_tool
@@ -189,30 +178,6 @@ AREA = Integration(
     },
 )
 
-# Memory record and artifact tools stay hidden until the knowledge runtime wires
-# the memory_records service — each tool's permission — so they never appear when
-# memory is off.
-# Transcript recall stays in the hybrid search_transcripts tool; recall here is
-# the record-layer lookup; memory_* filesystem tools only inspect/patch the
-# artifact projection.
-MEMORY = Integration(
-    id="_memory",
-    label="Memory",
-    tools={
-        "remember": remember_tool,
-        "search_memory_candidates": search_memory_candidates_tool,
-        "forget": forget_tool,
-        "recall": recall_tool,
-        "memory_tree": memory_tree_tool,
-        "memory_read": memory_read_tool,
-        "memory_search": memory_search_tool,
-        "memory_patch": memory_patch_tool,
-        "memory_write": memory_write_tool,
-    },
-)
-
-# These tools remain hidden until a future offline cutover wires the separate
-# `facts` capability. They intentionally do not share the legacy memory tools.
 FACTS = Integration(
     id="_facts",
     label="Facts",
@@ -238,6 +203,5 @@ CORE_INTEGRATIONS = [
     SESSIONS,
     APP_CONTROL,
     AREA,
-    MEMORY,
     FACTS,
 ]

@@ -2,7 +2,6 @@ import asyncio
 import json
 import signal
 from contextlib import asynccontextmanager
-from hashlib import sha256
 from importlib.metadata import version
 
 from fastapi import FastAPI
@@ -13,7 +12,6 @@ from arden.agent import Role
 from arden.areas.agent import INTAKE_ADDENDUM, is_custodian_task_id, render_work_context
 from arden.areas.lifecycle import AreaLifecycleService, AreaPageService
 from arden.areas.models import areas_from_records
-from arden.areas.paths import resolve_area_page
 from arden.areas.projection import area_automation_match
 from arden.areas.service import AreaService
 from arden.areas.work_models import AreaWorkSnapshot
@@ -22,10 +20,9 @@ from arden.automation.output_schemas import resolve_output_schema
 from arden.automation.prompts import AUTOMATION_PROMPT, AUTOMATION_SUFFIX
 from arden.automation.scheduler import AUTOMATION_BUS_KEY, RunSkipped, split_manual_flag
 from arden.core.tool_result_files import prune_offload_store
-from arden.events.sse import AreasChangedEvent, MemoryChangedEvent
+from arden.events.sse import AreasChangedEvent
 from arden.llm.openai_codex_catalog import refresh_codex_models
 from arden.logging import get_logger
-from arden.memory.pages import parse_page
 from arden.operator.runner import RunRequest, run_agent, run_agent_streaming
 from arden.server.app_control import AppControlService
 from arden.server.bus import BusRegistry, prime_bus_cursor_from_store
@@ -33,6 +30,8 @@ from arden.server.middleware import AuthMiddleware, TracingMiddleware
 from arden.server.routers.areas import asks_router
 from arden.server.routers.areas import router as areas_router
 from arden.server.routers.automation import router as automation_router
+from arden.server.routers.canonical_memory import facts_router
+from arden.server.routers.canonical_memory import wiki_router as wiki_pages_router
 from arden.server.routers.chat import router as chat_router
 from arden.server.routers.context import router as context_router
 from arden.server.routers.dev_runtime import router as dev_runtime_router
@@ -40,7 +39,6 @@ from arden.server.routers.gmail import router as gmail_router
 from arden.server.routers.google import router as google_router
 from arden.server.routers.loops import router as loops_router
 from arden.server.routers.mcp import router as mcp_router
-from arden.server.routers.memory import router as memory_router
 from arden.server.routers.ops import router as ops_router
 from arden.server.routers.providers import router as providers_router
 from arden.server.routers.runtime_info import router as runtime_info_router
@@ -127,34 +125,6 @@ async def lifespan(app: FastAPI):
 
         runtime.session_service.set_event_sink(_publish_session_event)
 
-    # Live memory vault: the store polls the memory dir for external edits
-    # (Obsidian, feed automations, git) and fans each absorbed batch out on the
-    # global stream so the desktop memory view refreshes itself — no restarts.
-    async def _publish_memory_changed(
-        paths: list[str], *, revision: str | None = None, review_required: bool = False
-    ) -> None:
-        await bus_registry.get_or_create(AUTOMATION_BUS_KEY).emit(
-            MemoryChangedEvent(paths=paths, revision=revision, review_required=review_required)
-        )
-        # Event beats polling: an external edit to an area's topic page (the
-        # user in Obsidian, another agent) wakes that area's custodian.
-        # Drop only an exact digest recorded by an Area page tool. A real user
-        # edit immediately after a run must still wake the Custodian.
-        if runtime.session_service:
-            changed = set(paths)
-            for record in await runtime.session_service.list_areas():
-                page = record.get("page_path")
-                if not page or page not in changed:
-                    continue
-                full_path = resolve_area_page(runtime.config.memory_artifacts_dir, page)
-                if full_path.is_file():
-                    digest = sha256(full_path.read_bytes()).hexdigest()
-                    if runtime.automation.custodians.consume_self_write(record["area_id"], digest):
-                        continue
-                await runtime.automation.request_area_wake(record["area_id"], f"topic page edited ({page})")
-
-    runtime.knowledge.start_memory_watch(_publish_memory_changed)
-
     # Areas: a container's automations/sessions/asks, keyed by area_id
     # (areas and areas are one concept; an area = an area with
     # capabilities). Asks live under ~/.arden next to the other flat-file
@@ -170,28 +140,21 @@ async def lifespan(app: FastAPI):
         disable_custodian=runtime.automation.disable_area_custodian,
     )
     app.state.area_pages = AreaPageService(
-        vault_root=runtime.config.memory_artifacts_dir,
+        wiki=runtime.wiki_service,
         sessions=runtime.session_service,
         lifecycle=app.state.area_lifecycle,
-        write_guard=runtime._require_legacy_page_writes,
     )
 
     def _area_get_page(page_path: str):
-        if runtime.fact_service is not None and runtime.wiki_service is not None:
-            resolve_area_page(runtime.config.memory_artifacts_dir, page_path)
-            record = next(
-                (
-                    candidate
-                    for candidate in runtime.wiki_service.readable_pages()
-                    if candidate.resource.path == page_path
-                ),
-                None,
-            )
-            text = record.content.decode("utf-8") if record is not None else ""
-            return parse_page(text)
-        full_path = resolve_area_page(runtime.config.memory_artifacts_dir, page_path)
-        text = full_path.read_text(encoding="utf-8") if full_path.exists() else ""
-        return parse_page(text)
+        if runtime.wiki_service is None:
+            raise KeyError(page_path)
+        record = next(
+            (candidate for candidate in runtime.wiki_service.readable_pages() if candidate.resource.path == page_path),
+            None,
+        )
+        if record is None:
+            raise KeyError(page_path)
+        return record.page
 
     # AreaService's injected callables are synchronous (Task 5's contract),
     # but the session/automation stores are async-only. A per-request async
@@ -281,7 +244,6 @@ async def lifespan(app: FastAPI):
         state["runs_today_display"] = cust.runs_today(key)
         return state
 
-    app.state.area_suggestions = runtime.automation.area_suggestions
     app.state.area_service = AreaService(
         areas=lambda: area_snapshot["areas"],
         asks=area_asks,
@@ -571,7 +533,8 @@ app.include_router(settings_router)
 app.include_router(skills_router)
 app.include_router(mcp_router)
 app.include_router(loops_router)
-app.include_router(memory_router)
+app.include_router(facts_router)
+app.include_router(wiki_pages_router)
 app.include_router(wiki_router)
 app.include_router(areas_router)
 app.include_router(asks_router)

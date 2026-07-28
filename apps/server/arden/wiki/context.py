@@ -238,6 +238,18 @@ class WikiContextBuilder:
         residents = [record for record in (pages or ()) if _is_resident(record)]
         return _render_pages("## WIKI RESIDENT CONTEXT", residents, fact_revision, WIKI_RESIDENT_CHAR_BUDGET)
 
+    async def page_context(self, path: str, *, title: str | None = None) -> dict[str, str] | None:
+        """Return one bounded managed page for an explicitly attached Area."""
+
+        pages = await _readable_pages(self.wiki)
+        record = next((item for item in (pages or ()) if item.resource.path == path), None)
+        if record is None:
+            return None
+        body = _body(record)[:WIKI_CONTEXT_CHAR_BUDGET].rstrip()
+        if not body:
+            return None
+        return {"title": title or record.page.title, "page": body}
+
     async def retrieval_context(self, user_message: str) -> str | None:
         query = _normalized_query(user_message)
         if query is None:

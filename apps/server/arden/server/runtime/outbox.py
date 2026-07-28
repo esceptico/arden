@@ -26,7 +26,6 @@ class RuntimeOutbox:
         automation_store: AutomationStore,
         scheduler: Scheduler,
         indexer: Indexer | None,
-        get_chat_connector: Callable[[], object | None],
         on_area_run: Callable[[object], Awaitable[None]] | None = None,
     ):
         self.worker = OutboxWorker(outbox_store)
@@ -34,7 +33,6 @@ class RuntimeOutbox:
         self.automation_store = automation_store
         self.scheduler = scheduler
         self.indexer = indexer
-        self._get_chat_connector_fn = get_chat_connector
         self._on_area_run = on_area_run
         self._register_handlers()
 
@@ -50,12 +48,6 @@ class RuntimeOutbox:
 
     async def _on_run_completed(self, event: OutboxEvent) -> None:
         run_completed = run_completed_from_payload(event.payload)
-        chat_connector = self._get_chat_connector()
-        if chat_connector:
-            try:
-                await chat_connector.on_run_completed(run_completed)
-            except Exception:
-                _logger.warning("Chat connector run-completed handler failed", exc_info=True)
         if self._on_area_run:
             try:
                 await self._on_area_run(run_completed)
@@ -65,9 +57,6 @@ class RuntimeOutbox:
 
     async def _on_run_failed(self, event: OutboxEvent) -> None:
         await self.scheduler.handle_run_failed(run_failed_from_payload(event.payload))
-
-    def _get_chat_connector(self):
-        return self._get_chat_connector_fn()
 
     async def get_status(self) -> dict:
         worker_running = self.worker.is_running

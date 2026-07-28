@@ -410,9 +410,7 @@ class ManagedFileRepository:
         if tail and offset != 0:
             raise ValueError("offset must be zero when tail is requested")
         if source_byte_limit is not None and (
-            isinstance(source_byte_limit, bool)
-            or not isinstance(source_byte_limit, int)
-            or source_byte_limit <= 0
+            isinstance(source_byte_limit, bool) or not isinstance(source_byte_limit, int) or source_byte_limit <= 0
         ):
             raise ValueError("source_byte_limit must be a positive integer or None")
 

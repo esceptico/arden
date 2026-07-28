@@ -782,7 +782,11 @@ async def test_atomic_commit_stops_before_later_diff_or_body_when_shared_budget_
     commit = repo.commit(
         ChangeSet(
             operations=(
-                Update("a-small", versions["a-small"].version_id, create_page(page_id="a-small", title="A", body=b"A2\n").to_bytes()),
+                Update(
+                    "a-small",
+                    versions["a-small"].version_id,
+                    create_page(page_id="a-small", title="A", body=b"A2\n").to_bytes(),
+                ),
                 Update(
                     "b-large",
                     versions["b-large"].version_id,
@@ -792,7 +796,11 @@ async def test_atomic_commit_stops_before_later_diff_or_body_when_shared_budget_
                         body=large_body + b"new tail line\n",
                     ).to_bytes(),
                 ),
-                Update("c-later", versions["c-later"].version_id, create_page(page_id="c-later", title="C", body=b"C2\n").to_bytes()),
+                Update(
+                    "c-later",
+                    versions["c-later"].version_id,
+                    create_page(page_id="c-later", title="C", body=b"C2\n").to_bytes(),
+                ),
             ),
             actor="User",
             origin="desktop",

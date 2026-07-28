@@ -90,7 +90,7 @@ class _Indexer:
         self.index = _Index()
 
 
-def _runtime_outbox(indexer=None, chat_connector=None):
+def _runtime_outbox(indexer=None, on_area_run=None):
     outbox_store = _OutboxStore()
     automation_store = _AutomationStore()
     scheduler = _Scheduler()
@@ -99,7 +99,7 @@ def _runtime_outbox(indexer=None, chat_connector=None):
         automation_store=automation_store,
         scheduler=scheduler,
         indexer=indexer,
-        get_chat_connector=lambda: chat_connector,
+        on_area_run=on_area_run,
     )
     return runtime_outbox, outbox_store, automation_store, scheduler
 
@@ -120,6 +120,30 @@ async def test_runtime_outbox_routes_run_completed_to_scheduler():
     await runtime_outbox._on_run_completed(_event(OUTBOX_RUN_COMPLETED, payload))
 
     assert scheduler.completed[0].run_id == "run-1"
+
+
+@pytest.mark.asyncio
+async def test_runtime_outbox_routes_run_completed_to_area_hook_before_scheduler():
+    seen: list[str] = []
+
+    async def on_area_run(run_completed):
+        seen.append(f"area:{run_completed.run_id}")
+
+    runtime_outbox, _, _, scheduler = _runtime_outbox(on_area_run=on_area_run)
+    payload = run_completed_payload(
+        RunCompleted(
+            run_id="run-1",
+            session_id="sess-1",
+            messages=(),
+            usage=Usage(),
+            result="done",
+        )
+    )
+
+    await runtime_outbox._on_run_completed(_event(OUTBOX_RUN_COMPLETED, payload))
+
+    assert seen == ["area:run-1"]
+    assert [event.run_id for event in scheduler.completed] == ["run-1"]
 
 
 @pytest.mark.asyncio

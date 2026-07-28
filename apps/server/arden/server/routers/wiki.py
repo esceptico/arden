@@ -5,7 +5,7 @@ import json
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel, Field, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 from arden.logging import get_logger
 from arden.revisions import (
@@ -35,10 +35,11 @@ _logger = get_logger(__name__)
 
 
 class WikiRenameRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     page_id: str = Field(min_length=1, max_length=512)
     new_path: str = Field(min_length=1, max_length=4096)
     new_title: str = Field(min_length=1, max_length=4096)
-    policy: RenamePolicy = RenamePolicy.ASK
 
 
 class WikiRenameRejectRequest(BaseModel):
@@ -347,9 +348,7 @@ async def _resolve_maintenance_review(
             try:
                 assert existing.proposal_json is not None
                 executable = parse_maintenance_update_proposal(existing.proposal_json)
-                expected_reason = (
-                    f"wiki maintenance {existing.blocking_commit_id} {executable.replay_fingerprint}"
-                )
+                expected_reason = f"wiki maintenance {existing.blocking_commit_id} {executable.replay_fingerprint}"
                 if executable.reason != expected_reason:
                     raise WikiMaintenanceError("maintenance proposal reason does not match its review")
             except WikiMaintenanceError as exc:
@@ -534,7 +533,7 @@ async def request_rename(request: Request, body: WikiRenameRequest):
             new_title=body.new_title,
             expected_version=current.resource.version_id,
             base_head=coordinator.service.repository.head,
-            policy=body.policy,
+            policy=RenamePolicy.ASK,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="wiki page not found") from exc
@@ -581,13 +580,7 @@ async def reject_rename(request: Request, approval_id: str, body: WikiRenameReje
 
 @router.get("/maintenance-reviews", response_model=WikiMaintenanceReviewListResponse)
 async def list_maintenance_reviews(request: Request):
-    runtime = getattr(request.app.state, "runtime", None)
-    store = getattr(runtime, "wiki_maintenance_store", None)
-    if store is None:
-        # The route exists before fact cutover so the same desktop build can
-        # keep legacy Memory usable. No maintenance store means no review can
-        # exist; mutation routes remain unavailable.
-        return {"reviews": []}
+    store = _maintenance_store(request)
     return {"reviews": [_maintenance_review_response(review) for review in await store.list_pending()]}
 
 

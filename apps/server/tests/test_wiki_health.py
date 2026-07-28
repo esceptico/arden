@@ -13,6 +13,7 @@ from arden.wiki import (
     WikiHealthInput,
     WikiHealthIssue,
     WikiHealthIssueCode,
+    WikiHealthIssueOwner,
     WikiHealthPendingReview,
     WikiHealthProjector,
     WikiHealthWorker,
@@ -34,8 +35,12 @@ def _input(service: WikiService, *, fact: str | None = "facts-1", index: str | N
     return WikiHealthInput(
         fact_ledger_revision=fact,
         wiki=report,
-        synthesis=WikiHealthWorker("Synthesis", datetime(2026, 7, 28, tzinfo=UTC), fact, fact),
-        maintenance=WikiHealthWorker("Wiki Maintenance", None, observed, observed),
+        workers=(
+            WikiHealthWorker("Memory Maintenance", datetime(2026, 7, 28, tzinfo=UTC), fact, fact),
+            WikiHealthWorker("Memory Retention", datetime(2026, 7, 28, tzinfo=UTC), fact, fact),
+            WikiHealthWorker("Memory Synthesis", datetime(2026, 7, 28, tzinfo=UTC), fact, fact),
+            WikiHealthWorker("Wiki Maintenance", None, observed, observed),
+        ),
         index=WikiHealthIndex(index if index is not None else observed, "ready"),
     )
 
@@ -48,10 +53,21 @@ def test_health_projects_typed_evidence_and_mechanics(tmp_path: Path) -> None:
     input_value = WikiHealthInput(
         fact_ledger_revision="facts-2",
         wiki=report,
-        synthesis=WikiHealthWorker("Synthesis", datetime(2026, 7, 28, tzinfo=UTC), "facts-1", "facts-2"),
-        maintenance=WikiHealthWorker("Wiki Maintenance", None, None, report.through_revision),
+        workers=(
+            WikiHealthWorker("Memory Maintenance", datetime(2026, 7, 28, tzinfo=UTC), "facts-2", "facts-2"),
+            WikiHealthWorker("Memory Retention", None, None, "facts-2"),
+            WikiHealthWorker("Memory Synthesis", datetime(2026, 7, 28, tzinfo=UTC), "facts-1", "facts-2"),
+            WikiHealthWorker("Wiki Maintenance", None, None, report.through_revision),
+        ),
         index=WikiHealthIndex(None, "ready", "awaiting wiki_page sync"),
-        issues=(WikiHealthIssue(WikiHealthIssueCode.FACT_REVIEW_DUE, "fact-9", "expired review date"),),
+        issues=(
+            WikiHealthIssue(
+                WikiHealthIssueCode.FACT_REVIEW_DUE,
+                "fact-9",
+                "expired review date",
+                WikiHealthIssueOwner.RETENTION,
+            ),
+        ),
         pending_reviews=(WikiHealthPendingReview("review-1", "Decide whether to merge topic pages"),),
     )
 
@@ -63,16 +79,53 @@ def test_health_projects_typed_evidence_and_mechanics(tmp_path: Path) -> None:
     content = repo.read("health").decode()
     assert "Overall status: **attention needed**" in content
     assert f"Wiki: `{report.through_revision}`" in content
-    assert "| Synthesis | behind | `facts-1` | 2026-07-28T00:00:00+00:00 |" in content
-    assert "**unresolved_link** — `source.md`: Missing" in content
-    assert "**index_behind** — `wiki_page`: awaiting wiki_page sync" in content
-    assert "**fact_review_due** — `fact-9`: expired review date" in content
+    assert "| Memory Synthesis | behind | `facts-1` | 2026-07-28T00:00:00+00:00 |" in content
+    assert "**unresolved_link** — owner: Wiki Maintenance; `source.md`: Missing" in content
+    assert "**index_behind** — owner: Backend; `wiki_page`: awaiting wiki_page sync" in content
+    assert "**fact_review_due** — owner: Memory Retention; `fact-9`: expired review date" in content
     assert "`review-1` — Decide whether to merge topic pages" in content
     assert {issue.code for issue in result.issues} == {
         WikiHealthIssueCode.UNRESOLVED_LINK,
         WikiHealthIssueCode.INDEX_BEHIND,
         WikiHealthIssueCode.FACT_REVIEW_DUE,
     }
+
+
+def test_health_renders_all_four_canonical_workers_in_order(tmp_path: Path) -> None:
+    service = WikiService(_repo(tmp_path))
+
+    WikiHealthProjector(service).project(_input(service))
+
+    content = service.repository.read("health").decode()
+    rows = [
+        line for line in content.splitlines() if line.startswith("| Memory") or line.startswith("| Wiki Maintenance")
+    ]
+    assert rows == [
+        "| Memory Maintenance | current | `facts-1` | 2026-07-28T00:00:00+00:00 |",
+        "| Memory Retention | current | `facts-1` | 2026-07-28T00:00:00+00:00 |",
+        "| Memory Synthesis | current | `facts-1` | 2026-07-28T00:00:00+00:00 |",
+        "| Wiki Maintenance | not available | `none` | never |",
+    ]
+
+
+def test_health_retention_checkpoint_is_behind_when_a_due_review_exists(tmp_path: Path) -> None:
+    service = WikiService(_repo(tmp_path))
+    value = _input(service)
+    value = replace(
+        value,
+        workers=(
+            *value.workers[:1],
+            WikiHealthWorker("Memory Retention", datetime(2026, 7, 28, tzinfo=UTC), "facts-1", "facts-1", False),
+            *value.workers[2:],
+        ),
+    )
+
+    WikiHealthProjector(service).project(value)
+
+    assert (
+        "| Memory Retention | behind | `facts-1` | 2026-07-28T00:00:00+00:00 |"
+        in service.repository.read("health").decode()
+    )
 
 
 def test_generated_health_does_not_claim_the_personal_health_topic_name(tmp_path: Path) -> None:
@@ -254,7 +307,6 @@ def test_health_rejects_a_partial_change_report(tmp_path: Path) -> None:
         WikiHealthInput(
             fact_ledger_revision=None,
             wiki=service.changes_since(service.repository.head),
-            synthesis=WikiHealthWorker("Synthesis", None, None, None),
-            maintenance=WikiHealthWorker("Wiki Maintenance", None, None, None),
+            workers=(WikiHealthWorker("Memory Maintenance", None, None, None),),
             index=WikiHealthIndex(None, "ready"),
         )

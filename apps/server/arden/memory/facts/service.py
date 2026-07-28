@@ -251,7 +251,13 @@ class FactService:
         self._require_write_scopes(principal, stored.scopes)
         return _preview(await self._stored_plan(stored))
 
-    async def commit(self, principal: FactPrincipal, plan_id: str) -> FactCommitResult:
+    async def commit(
+        self,
+        principal: FactPrincipal,
+        plan_id: str,
+        *,
+        expected_revision: str | None = None,
+    ) -> FactCommitResult:
         stored = await self.plans.get(plan_id, owner_id=principal.owner_id)
         self._require_write_scopes(principal, stored.scopes)
         plan = await self._stored_plan(stored)
@@ -260,7 +266,10 @@ class FactService:
         # A persisted `committing` row may be an interrupted caller. The ledger's
         # immutable plan-id idempotency makes resuming it safe after restart.
         try:
-            events = await asyncio.to_thread(self.ledger.commit, plan)
+            if expected_revision is None:
+                events = await asyncio.to_thread(self.ledger.commit, plan)
+            else:
+                events = await asyncio.to_thread(self.ledger.commit_at_revision, plan, expected_revision)
         except FactConflictError:
             await self.plans.release(plan_id, owner_id=principal.owner_id)
             raise

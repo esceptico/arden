@@ -1,12 +1,11 @@
 """Areas router — the API surface for areas (the one container: chats file
 into an area; a page + standing agent are optional capabilities).
-Detail/asks/suggestions ride app.state (AreaService is a plain constructor
+Detail and asks ride app.state (AreaService is a plain constructor
 with injected callables); CRUD goes through the session service's store.
 
 Ask mutation lives on a sibling `/asks` router: ask ids are globally unique
 and an ask raised from a plain chat has no area to route through."""
 
-from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
@@ -66,18 +65,12 @@ async def areas_overview(request: Request):
     await request.app.state.hydrate_area_snapshot()
     svc = _svc(request)
     svc.refresh_mechanical()
-    overview = svc.overview()
-    # Suggestions are page-keyed; a page already attached anywhere must not
-    # resurface as a suggestion.
-    attached = {Path(s["page_path"]).stem for s in overview["areas"] if s.get("page_path")}
-    overview["suggested"] = request.app.state.area_suggestions.list(exclude_keys=attached)
-    return overview
+    return svc.overview()
 
 
 @router.post("", response_model=AreaResponse)
 async def create_area(request: Request, req: CreateAreaRequest):
-    """Create-or-reuse by name (case-insensitive): promoting a suggested page
-    for a container the user already has must attach, not duplicate."""
+    """Create-or-reuse by name, case-insensitively."""
     try:
         area = await _lifecycle(request).create(
             name=req.name,
@@ -91,12 +84,6 @@ async def create_area(request: Request, req: CreateAreaRequest):
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     await request.app.state.emit_areas_changed([area["area_id"]])
     return area
-
-
-@router.post("/suggestions/{key}/dismiss")
-async def dismiss_suggestion(request: Request, key: str):
-    request.app.state.area_suggestions.dismiss(key)
-    return {"dismissed": key}
 
 
 @router.get("/{area_id}")

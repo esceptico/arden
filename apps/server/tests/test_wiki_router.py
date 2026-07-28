@@ -131,6 +131,18 @@ async def test_rename_request_is_safe_idempotent_and_default_ask(wiki_client):
     assert persisted is not None
     assert persisted.request_key == "wiki-rename:target"
 
+    bypass = client.post(
+        "/admin/wiki/rename-approvals",
+        json={
+            "page_id": "other",
+            "new_path": "bypass.md",
+            "new_title": "Bypass",
+            "policy": "always",
+        },
+    )
+    assert bypass.status_code == 422
+    assert service.repository.get("other").path == "other.md"
+
 
 def test_rename_approval_list_accept_and_reject(wiki_client):
     client, service, _store, _maintenance_store = wiki_client
@@ -186,12 +198,11 @@ def test_router_maps_title_only_not_found_and_unavailable_consistently(wiki_clie
     unavailable = TestClient(unavailable_app).get("/admin/wiki/rename-approvals")
     assert unavailable.status_code == 503
 
-    legacy_app = FastAPI()
-    legacy_app.state.runtime = SimpleNamespace(wiki_maintenance_store=None)
-    legacy_app.include_router(wiki_router)
-    legacy = TestClient(legacy_app).get("/admin/wiki/maintenance-reviews")
-    assert legacy.status_code == 200
-    assert legacy.json() == {"reviews": []}
+    unavailable_maintenance_app = FastAPI()
+    unavailable_maintenance_app.state.runtime = SimpleNamespace(wiki_maintenance_store=None)
+    unavailable_maintenance_app.include_router(wiki_router)
+    unavailable_maintenance = TestClient(unavailable_maintenance_app).get("/admin/wiki/maintenance-reviews")
+    assert unavailable_maintenance.status_code == 503
 
 
 def test_router_returns_conflict_when_the_server_snapshot_races(wiki_client, monkeypatch: pytest.MonkeyPatch):
@@ -530,8 +541,12 @@ async def test_maintenance_review_evidence_cursors_span_changes_and_report_unico
     commit = service.repository.commit(
         ChangeSet(
             operations=(
-                Update("other", other.resource.version_id, other.page.with_body(b"older evidence\n" * 2_000).to_bytes()),
-                Update("target", target.resource.version_id, target.page.with_body("😀 evidence\n".encode()).to_bytes()),
+                Update(
+                    "other", other.resource.version_id, other.page.with_body(b"older evidence\n" * 2_000).to_bytes()
+                ),
+                Update(
+                    "target", target.resource.version_id, target.page.with_body("😀 evidence\n".encode()).to_bytes()
+                ),
             ),
             actor="wiki-maintenance",
             origin="wiki.maintenance",
@@ -542,8 +557,7 @@ async def test_maintenance_review_evidence_cursors_span_changes_and_report_unico
     )
     review = await _pending_maintenance_review(store, commit=commit.commit_id, key="cursors", proposal=None)
     diffs = {
-        diff.resource_id: diff.unified_diff
-        for diff in service.repository.diff(commit.parent_id, commit.commit_id)
+        diff.resource_id: diff.unified_diff for diff in service.repository.diff(commit.parent_id, commit.commit_id)
     }
 
     target_response = client.get(
@@ -700,7 +714,11 @@ async def test_maintenance_review_evidence_validates_review_generation_and_commi
             )
         )
     published = {path.name for path in service.repository.history_root.joinpath("published").iterdir()}
-    orphan = next(path.stem for path in service.repository.history_root.joinpath("commits").iterdir() if path.stem not in published)
+    orphan = next(
+        path.stem
+        for path in service.repository.history_root.joinpath("commits").iterdir()
+        if path.stem not in published
+    )
     orphan_review = await _pending_maintenance_review(store, commit=orphan, key="orphan", proposal=None)
     orphan_response = client.get(
         f"/admin/wiki/maintenance-reviews/{orphan_review.review_id}/evidence",

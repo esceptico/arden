@@ -2,14 +2,11 @@
 
 import ast
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
-from arden.memory.reconciler import RecordOperation
 from arden.tools.automation import CreateAutomationInput, UpdateAutomationInput
 from arden.tools.deferred import LoadToolsInput
-from arden.tools.memory import MEMORY_RECONCILER_SERVICE, MEMORY_RECORDS_SERVICE, RememberInput, remember
 from arden.tools.notify import NotifyInput
 from arden.tools.research import ResearchOutlineInput, ResearchVerifyClaimInput
 from arden.tools.workflow import WorkflowInput
@@ -74,30 +71,3 @@ def test_production_tools_do_not_construct_string_only_errors():
                 ):
                     violations.append(f"{path.relative_to(server_root)}:{node.lineno}")
     assert violations == []
-
-
-@pytest.mark.asyncio
-async def test_memory_clarification_is_a_non_error_control_flow_result():
-    class EmptyStore:
-        async def search(self, *args, **kwargs):
-            return []
-
-    class AskReconciler:
-        async def reconcile_direct_memory(self, **kwargs):
-            return [RecordOperation.ask("Which tea should be remembered?")]
-
-    execution = SimpleNamespace(
-        tool_id="call-1",
-        tool_name="remember",
-        ctx=SimpleNamespace(
-            services={MEMORY_RECORDS_SERVICE: EmptyStore(), MEMORY_RECONCILER_SERVICE: AskReconciler()},
-            session_id="session-1",
-            area=None,
-        ),
-    )
-
-    result = await remember(execution, RememberInput(text="Remember the tea", kind="fact"))
-
-    assert not result.is_error
-    assert result.preview == "Clarification required"
-    assert result.data == {"clarification_required": True}

@@ -6,7 +6,14 @@ from typing import TYPE_CHECKING
 from fastapi import HTTPException, Request
 
 import arden.database as database
+from arden.automation.builtins import BUILTINS
 from arden.config import Config, get_config
+from arden.constants import (
+    BUILTIN_MEMORY_CONSOLIDATE_ID,
+    BUILTIN_MEMORY_RETENTION_ID,
+    BUILTIN_MEMORY_SYNTHESIZE_ID,
+    BUILTIN_WIKI_MAINTENANCE_ID,
+)
 from arden.core.factory import AgentConfig
 from arden.integrations import ALL_INTEGRATIONS, IntegrationRegistry
 from arden.integrations.slack.client import SlackClient
@@ -18,14 +25,17 @@ from arden.logging import get_logger
 from arden.mcp.manager import MCPManager
 from arden.memory.facts import (
     LEDGER_DIRECTORY,
+    CompletionFactMaintenanceReviewer,
     CompletionFactSynthesisRenderer,
     FactConsumerStore,
+    FactIndexProjection,
     FactLedger,
+    FactMaintenance,
     FactPlanStore,
     FactService,
     FactSynthesis,
-    load_fact_cutover,
 )
+from arden.memory.facts.maintenance import CONSUMER_ID as FACT_MAINTENANCE_CONSUMER_ID
 from arden.memory.facts.synthesis import CONSUMER_ID as FACT_SYNTHESIS_CONSUMER_ID
 from arden.monitor.slack import SlackMonitor
 from arden.notifiers.base import NotifierContext
@@ -45,13 +55,18 @@ from arden.skills.service import SkillService, get_skills_dirs
 from arden.tools.connections import ConnectionService
 from arden.tools.executor import ToolExecutor
 from arden.wiki import (
+    CompletionWikiEditCuratorReviewer,
     CompletionWikiMaintenanceReviewer,
     WikiChangesReport,
     WikiContextBuilder,
+    WikiEditCurator,
+    WikiEditCuratorQueueStore,
+    WikiEditCuratorWorker,
     WikiHealthIndex,
     WikiHealthInput,
     WikiHealthIssue,
     WikiHealthIssueCode,
+    WikiHealthIssueOwner,
     WikiHealthPendingReview,
     WikiHealthProjector,
     WikiHealthWorker,
@@ -64,6 +79,16 @@ from arden.wiki import (
 )
 
 _logger = get_logger(__name__)
+
+_HEALTH_PHASE_IDS = frozenset(
+    {
+        BUILTIN_MEMORY_CONSOLIDATE_ID,
+        BUILTIN_MEMORY_RETENTION_ID,
+        BUILTIN_MEMORY_SYNTHESIZE_ID,
+        BUILTIN_WIKI_MAINTENANCE_ID,
+    }
+)
+_HEALTH_PHASES = tuple(spec for spec in BUILTINS if spec.task_id in _HEALTH_PHASE_IDS)
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -99,9 +124,12 @@ class Runtime:
         self.wiki_service: WikiService | None = None
         self.wiki_context: WikiContextBuilder | None = None
         self.wiki_page_projection: WikiPageIndexProjection | None = None
+        self.fact_index_projection: FactIndexProjection | None = None
         self.wiki_rename_coordinator: WikiRenameApprovalCoordinator | None = None
         self._wiki_approval_conn: database.aiosqlite.Connection | None = None
         self._wiki_maintenance_store: WikiMaintenanceStore | None = None
+        self._wiki_curator_store: WikiEditCuratorQueueStore | None = None
+        self.wiki_curator_worker: WikiEditCuratorWorker | None = None
         self._wiki_health_lock = asyncio.Lock()
         self.fact_service: FactService | None = None
         self._fact_plan_conn: database.aiosqlite.Connection | None = None
@@ -156,14 +184,6 @@ class Runtime:
         return self.knowledge.indexer
 
     @property
-    def memory_curator(self):
-        return self.knowledge.memory_curator
-
-    @property
-    def memory_records(self):
-        return self.knowledge._record_store
-
-    @property
     def search_index(self):
         return self.knowledge.search_index
 
@@ -187,10 +207,8 @@ class Runtime:
     def tool_services(self) -> dict[str, object]:
         services: dict[str, object] = dict(self.integrations.clients)
         services["connections"] = self.connection_service
-        # Area page tools still target legacy vault paths. Keep them unavailable
-        # after fact cutover until Areas are ported onto WikiService.
-        if self.fact_service is None:
-            services["area_pages"] = self.config.memory_artifacts_dir
+        if self.wiki_service is not None:
+            services["wiki"] = self.wiki_service
         if self.automation:
             services["area_custodians"] = self.automation.custodians
         services.update(self.knowledge.tool_services())
@@ -250,14 +268,18 @@ class Runtime:
         if self._connected:
             return
 
-        fact_ledger = self._load_fact_ledger()
+        fact_ledger = FactLedger(self.config.memory_artifacts_dir / LEDGER_DIRECTORY) if self.config.memory else None
         init_tracing()
         llm_init(self.config)
         self.stores = await Stores.connect(self.config)
         await self._init_wiki()
         await self._init_facts(fact_ledger)
-        self.knowledge.set_memory_write_guard(self._require_legacy_page_writes)
+        await self._init_wiki_curator()
         await self.knowledge.connect(self.stores)
+        if self.fact_service is not None:
+            fact_projection = FactIndexProjection(self.fact_service, lambda: self.search_index)
+            self.fact_index_projection = fact_projection
+            await fact_projection.sync()
         if self.fact_service is not None and self.wiki_service is not None:
             projection = WikiPageIndexProjection(
                 self.wiki_service,
@@ -274,6 +296,8 @@ class Runtime:
         await self.project_wiki_health()
         await self._init_mcp()
         self._init_tools()
+        if self.wiki_curator_worker is not None:
+            self.wiki_curator_worker.start()
 
         self._connected = True
         _logger.info(
@@ -281,22 +305,6 @@ class Runtime:
             integrations=len(self.integrations.clients),
             tools=len(self.executor.registry),
         )
-
-    def _require_legacy_page_writes(self) -> None:
-        # The only empty -> managed transition is the supervised, offline
-        # migration. Once a managed head exists, legacy canonical writes stay
-        # disabled globally; path-level coexistence would be dual-write.
-        if self.fact_service is not None:
-            raise PermissionError("legacy memory writes are disabled after canonical fact cutover")
-        if self.wiki_repository is not None and self.wiki_repository.head is not None:
-            raise PermissionError("legacy memory page writes are disabled after managed wiki cutover")
-
-    def _load_fact_ledger(self) -> FactLedger | None:
-        if not self.config.memory or load_fact_cutover(self.config.memory_artifacts_dir) is None:
-            return None
-        ledger = FactLedger(self.config.memory_artifacts_dir / LEDGER_DIRECTORY)
-        ledger.validate_initialized()
-        return ledger
 
     def _init_skills(self) -> None:
         self.skill_registry = SkillRegistry()
@@ -345,6 +353,45 @@ class Runtime:
         self.fact_service = FactService(ledger, plans, post_commit=self._after_fact_commit)
         self.knowledge.set_fact_service(self.fact_service)
 
+    async def _init_wiki_curator(self) -> None:
+        if self.fact_service is None or self.wiki_service is None:
+            return
+        store = await WikiEditCuratorQueueStore.open(self.config.memory_db_path)
+        self._wiki_curator_store = store
+        try:
+            commits = await asyncio.to_thread(self.wiki_service.repository.history)
+            for commit in reversed(commits):
+                if (commit.actor, commit.origin) == ("user:desktop", "desktop"):
+                    await store.enqueue(commit.commit_id)
+
+            model = self.config.memory_model
+            if not model:
+                return
+            curator = WikiEditCurator(
+                self.wiki_service,
+                self.fact_service,
+                CompletionWikiEditCuratorReviewer(
+                    get_completion_client(model),
+                    model,
+                    reasoning_effort=self.knowledge._memory_reasoning_effort(model),
+                ),
+            )
+            self.wiki_curator_worker = WikiEditCuratorWorker(store, curator, self.fact_service)
+        except BaseException:
+            await store.close()
+            self._wiki_curator_store = None
+            raise
+
+    async def enqueue_wiki_user_edit(self, commit_id: str) -> None:
+        """Durably enqueue one exact user wiki commit for background curation."""
+
+        if self.wiki_curator_worker is not None:
+            await self.wiki_curator_worker.enqueue_user_commit(commit_id)
+        elif self._wiki_curator_store is not None:
+            await self._wiki_curator_store.enqueue(commit_id)
+        else:
+            raise RuntimeError("wiki edit curator queue is unavailable")
+
     async def _request_fact_synthesis(self) -> None:
         if self.automation is not None:
             await self.automation.request_fact_synthesis()
@@ -359,9 +406,34 @@ class Runtime:
 
     async def _after_fact_commit(self) -> None:
         try:
-            await self._request_fact_synthesis()
+            if self.fact_index_projection is not None:
+                await self.fact_index_projection.sync()
         finally:
-            await self.project_wiki_health()
+            try:
+                await self._request_fact_synthesis()
+            finally:
+                await self.project_wiki_health()
+
+    async def _after_automation_finished(self, task_id: str, success: bool) -> None:
+        if task_id not in _HEALTH_PHASE_IDS:
+            return
+        if success and task_id == BUILTIN_MEMORY_RETENTION_ID:
+            await self._record_retention_checkpoint()
+        await self.project_wiki_health()
+
+    async def _record_retention_checkpoint(self) -> None:
+        """Persist Retention coverage only after the backend proves no review remains due."""
+
+        if self._fact_ledger is None or self.fact_service is None or self._fact_consumer_store is None:
+            return
+        revision, evaluated_at, due_reviews = await asyncio.to_thread(self._fact_ledger.due_review_snapshot)
+        if due_reviews or await self.fact_service.revision() != revision:
+            return
+        await self._fact_consumer_store.record_retention_checkpoint(
+            BUILTIN_MEMORY_RETENTION_ID,
+            revision=revision,
+            evaluated_at=evaluated_at,
+        )
 
     def _get_fact_synthesis(self) -> FactSynthesis | None:
         model = self.config.memory_model
@@ -376,6 +448,22 @@ class Runtime:
                 model,
                 reasoning_effort=self.knowledge._memory_reasoning_effort(model),
             ),
+        )
+
+    def _get_fact_maintenance(self) -> FactMaintenance | None:
+        model = self.config.memory_model
+        if self.fact_service is None or self._fact_consumer_store is None or self.wiki_service is None or not model:
+            return None
+        return FactMaintenance(
+            self.fact_service,
+            self._fact_consumer_store,
+            CompletionFactMaintenanceReviewer(
+                get_completion_client(model),
+                model,
+                reasoning_effort=self.knowledge._memory_reasoning_effort(model),
+            ),
+            wiki=self.wiki_service,
+            candidate_provider=self.fact_index_projection,
         )
 
     def _get_wiki_maintenance(self) -> WikiMaintenance | None:
@@ -422,9 +510,14 @@ class Runtime:
                     fact_revision, _evaluated_at, due_reviews = await asyncio.to_thread(
                         self._fact_ledger.due_review_snapshot
                     )
+                    fact_maintenance = await self._fact_consumer_store.get(FACT_MAINTENANCE_CONSUMER_ID)
                     synthesis = await self._fact_consumer_store.get(FACT_SYNTHESIS_CONSUMER_ID)
+                    retention = await self._fact_consumer_store.get_retention_checkpoint(BUILTIN_MEMORY_RETENTION_ID)
                     maintenance = await self._wiki_maintenance_store.get_watermark()
                     pending = await self._wiki_maintenance_store.list_pending()
+                    completed_runs = await self.stores.automations.latest_completed_runs(
+                        tuple(spec.task_id for spec in _HEALTH_PHASES)
+                    )
                     report = await asyncio.to_thread(
                         self.wiki_service.changes_since,
                         None,
@@ -453,27 +546,45 @@ class Runtime:
                     if not maintenance_revision_known:
                         maintenance_revision = None
 
-                    value = WikiHealthInput(
-                        fact_ledger_revision=fact_revision,
-                        wiki=report,
-                        synthesis=WikiHealthWorker(
-                            "Synthesis",
-                            None if synthesis is None else synthesis.updated_at,
+                    workers_by_id = {
+                        BUILTIN_MEMORY_CONSOLIDATE_ID: WikiHealthWorker(
+                            "Memory Maintenance",
+                            completed_runs.get(BUILTIN_MEMORY_CONSOLIDATE_ID),
+                            None if fact_maintenance is None else fact_maintenance.revision,
+                            fact_revision,
+                        ),
+                        BUILTIN_MEMORY_RETENTION_ID: WikiHealthWorker(
+                            "Memory Retention",
+                            completed_runs.get(BUILTIN_MEMORY_RETENTION_ID),
+                            None if retention is None else retention.revision,
+                            fact_revision,
+                            None if retention is None else retention.revision == fact_revision and not due_reviews,
+                        ),
+                        BUILTIN_MEMORY_SYNTHESIZE_ID: WikiHealthWorker(
+                            "Memory Synthesis",
+                            completed_runs.get(BUILTIN_MEMORY_SYNTHESIZE_ID),
                             None if synthesis is None else synthesis.revision,
                             fact_revision,
                         ),
-                        maintenance=WikiHealthWorker(
+                        BUILTIN_WIKI_MAINTENANCE_ID: WikiHealthWorker(
                             "Wiki Maintenance",
-                            None if maintenance is None else maintenance.updated_at,
+                            completed_runs.get(BUILTIN_WIKI_MAINTENANCE_ID),
                             maintenance_revision,
                             observed,
                         ),
+                    }
+
+                    value = WikiHealthInput(
+                        fact_ledger_revision=fact_revision,
+                        wiki=report,
+                        workers=tuple(workers_by_id[spec.task_id] for spec in _HEALTH_PHASES),
                         index=WikiHealthIndex(index_revision, index_status, index_detail),
                         issues=tuple(
                             WikiHealthIssue(
                                 WikiHealthIssueCode.FACT_REVIEW_DUE,
                                 item.fact.fact_id,
                                 f"review due at {item.due_at.isoformat()}",
+                                WikiHealthIssueOwner.RETENTION,
                             )
                             for item in due_reviews
                         ),
@@ -526,20 +637,17 @@ class Runtime:
             stores=self.stores,
             config=self.config,
             build_operator_deps=self.build_operator_deps,
-            get_records=lambda: self.memory_records,
-            get_chat_connector=lambda: self.knowledge.chat_connector,
             get_calendar_source=lambda: self.integrations.get_client("calendar"),
             get_slack_client=lambda: self.integrations.get_client("slack"),
             get_cheap_llm=lambda: get_completion_client(self.config.memory_model) if self.config.memory_model else None,
             cheap_model=self.config.memory_model,
             indexer=self.indexer,
-            get_consolidate=lambda: self.knowledge._consolidate,
+            get_fact_maintenance=self._get_fact_maintenance,
             get_fact_synthesis=self._get_fact_synthesis,
             get_wiki_maintenance=self._get_wiki_maintenance,
             synthesis_is_current=self._synthesis_is_current,
             project_wiki_health=self.project_wiki_health,
-            get_knowledge=lambda: self.knowledge,
-            get_integration_clients=lambda: self.integrations.clients,
+            on_automation_finished=self._after_automation_finished,
             get_notifiers=lambda: self.notifier_service,
         )
 
@@ -562,6 +670,9 @@ class Runtime:
         # Phase 2: stop background services
         if self.automation:
             await self.automation.stop()
+        if self.wiki_curator_worker:
+            await self.wiki_curator_worker.stop()
+            self.wiki_curator_worker = None
         await self.knowledge.stop()
 
         # Phase 3: close resources
@@ -571,6 +682,9 @@ class Runtime:
         if self._wiki_maintenance_store:
             await self._wiki_maintenance_store.close()
             self._wiki_maintenance_store = None
+        if self._wiki_curator_store:
+            await self._wiki_curator_store.close()
+            self._wiki_curator_store = None
         if self._fact_consumer_store:
             await self._fact_consumer_store.close()
             self._fact_consumer_store = None
@@ -579,6 +693,7 @@ class Runtime:
             self._fact_plan_conn = None
         self.fact_service = None
         self._fact_ledger = None
+        self.fact_index_projection = None
         self.wiki_context = None
         self.wiki_page_projection = None
         self.knowledge.set_fact_service(None)
@@ -594,7 +709,7 @@ class Runtime:
 
     def get_available_integrations(self) -> list[str]:
         ids = list(self.integrations.clients.keys())
-        if self.memory_records is not None or self.fact_service is not None:
+        if self.fact_service is not None:
             ids.append("memory")
         return ids
 
@@ -622,8 +737,6 @@ class Runtime:
             enqueue_run_completed=self.stores.outbox.enqueue_run_completed if self.stores else None,
             enqueue_run_failed=self.stores.outbox.enqueue_run_failed if self.stores else None,
             dispatch_session_message=self.dispatch_session_message,
-            memory_curator=self.memory_curator,
-            memory_records=self.memory_records,
             wiki_context=self.wiki_context,
             skill_registry=self.skill_registry,
             notifier_service=self.notifier_service,
@@ -644,7 +757,7 @@ class Runtime:
     def build_operator_deps(self) -> OperatorDeps:
         return OperatorDeps(
             executor=self.executor,
-            memory_records=self.memory_records,
+            wiki_context=self.wiki_context,
             config=AgentConfig.from_config(self.config),
             source_details={},
             create_session=self.stores.sessions.create,

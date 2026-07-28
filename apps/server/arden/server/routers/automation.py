@@ -1,26 +1,21 @@
 import asyncio
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
 from arden.automation.descriptions import AutomationDescriptionUnavailableError
 from arden.automation.models import Automation
 from arden.automation.service import AutomationService
-from arden.automation.suggestions import AutomationSuggestion
 from arden.notifiers.service import NotifierService
 from arden.server.bus import BusRegistry
 from arden.server.deps import (
     get_bus_registry,
-    require_automation_runtime,
     require_automation_service,
     require_notifier_service,
 )
 from arden.server.middleware import SSEStreamingResponse
 from arden.server.runtime import Runtime, get_runtime
-from arden.server.runtime.automation import AutomationRuntime, SuggesterUnavailableError
 from arden.server.schemas import (
-    AutomationSuggestionResponse,
-    AutomationSuggestionsResponse,
     CreateAutomationRequest,
     CreateNotifierRequest,
     UpdateAutomationRequest,
@@ -92,8 +87,6 @@ async def create_automation(
         raise HTTPException(status_code=503, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    if request.from_suggestion_id:
-        await svc.store.mark_suggestion_accepted(request.from_suggestion_id, automation.task_id)
     return _automation_to_dict(automation)
 
 
@@ -102,43 +95,6 @@ async def list_automations(svc: AutomationService = Depends(require_automation_s
     automations = await svc.list_all()
     statuses = await svc.store.recent_run_statuses([a.task_id for a in automations])
     return {"automations": [_automation_to_dict(a, statuses.get(a.task_id, [])) for a in automations]}
-
-
-def _suggestion_to_response(s: AutomationSuggestion) -> AutomationSuggestionResponse:
-    return AutomationSuggestionResponse(
-        id=s.id,
-        name=s.name,
-        description=s.description,
-        prompt=s.prompt,
-        triggers=[{"type": t.type, **t.params()} for t in s.triggers],
-        rationale=s.rationale,
-        evidence=s.evidence,
-        category=s.category,
-        icon=s.icon,
-    )
-
-
-@router.get("/automations/suggestions", response_model=AutomationSuggestionsResponse)
-async def list_automation_suggestions(svc: AutomationService = Depends(require_automation_service)):
-    suggestions = await svc.store.list_active_suggestions()
-    return AutomationSuggestionsResponse(suggestions=[_suggestion_to_response(s) for s in suggestions])
-
-
-@router.post("/automations/suggestions/refresh", response_model=AutomationSuggestionsResponse)
-async def refresh_automation_suggestions(runtime: AutomationRuntime = Depends(require_automation_runtime)):
-    try:
-        suggestions = await runtime.refresh_suggestions()
-    except SuggesterUnavailableError as e:
-        raise HTTPException(status_code=503, detail=str(e))
-    return AutomationSuggestionsResponse(suggestions=[_suggestion_to_response(s) for s in suggestions])
-
-
-@router.post("/automations/suggestions/{suggestion_id}/dismiss", status_code=204)
-async def dismiss_automation_suggestion(
-    suggestion_id: str, svc: AutomationService = Depends(require_automation_service)
-):
-    await svc.store.mark_suggestion_dismissed(suggestion_id)
-    return Response(status_code=204)
 
 
 KEEPALIVE_INTERVAL = 5

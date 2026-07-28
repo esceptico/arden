@@ -14,9 +14,7 @@ from arden.memory.facts import (
     FactLedger,
     FactLedgerCorruptionError,
     FactValidationError,
-    adapt_legacy_source_ref,
 )
-from arden.memory.models import SourceRef
 from arden.revisions import ChangeSet, Update
 
 JULY = datetime(2026, 7, 28, 12, tzinfo=UTC)
@@ -169,7 +167,7 @@ def test_schema_roundtrip_multiple_subjects_expiry_and_fallback(tmp_path: Path) 
     assert (ledger.records_root / "2026-07.jsonl").is_file()
 
 
-def test_legacy_scopes_and_source_provenance_roundtrip(tmp_path: Path) -> None:
+def test_scopes_and_source_provenance_roundtrip(tmp_path: Path) -> None:
     ledger = _ledger(tmp_path)
     _commit(
         ledger,
@@ -217,84 +215,6 @@ def test_legacy_scopes_and_source_provenance_roundtrip(tmp_path: Path) -> None:
         "flags": [True, None],
     }
     assert restarted.get("global").sources[0]["ref"] == ""
-
-
-def test_legacy_source_ref_adapter_preserves_provenance_through_restart(tmp_path: Path) -> None:
-    legacy = SourceRef(
-        kind="page_edit",
-        ref="page:inbox",
-        captured_at="2026-07-28T12:00:00+04:00",
-        scope_kind="integration",
-        scope_key="slack:C123",
-        occurred_at="2026-07-28T11:59:00+04:00",
-        time_precision="second",
-        role="evidence",
-        excerpt_hash="abc123",
-        extra={"session_id": "session:1", "seq": 2, "tool_name": "memory.curate"},
-    ).to_dict()
-
-    source = adapt_legacy_source_ref(legacy)
-
-    assert source == {
-        "kind": "page_edit",
-        "ref": "page:inbox",
-        "captured_at": "2026-07-28T08:00:00.000000Z",
-        "scope_kind": "integration",
-        "scope_key": "slack:C123",
-        "occurred_at": "2026-07-28T07:59:00Z",
-        "time_precision": "second",
-        "role": "evidence",
-        "excerpt_hash": "abc123",
-        "extra": {"session_id": "session:1", "seq": 2, "tool_name": "memory.curate"},
-    }
-    ledger = _ledger(tmp_path)
-    _commit(
-        ledger,
-        _create(
-            "adapted",
-            "A page was edited",
-            scope={"kind": "integration", "key": "slack:C123"},
-            sources=[source],
-        ),
-    )
-    assert FactLedger(ledger.root).get("adapted").sources == (source,)
-
-
-def test_legacy_source_ref_adapter_keeps_day_precision_date() -> None:
-    source = adapt_legacy_source_ref(
-        SourceRef(
-            kind="calendar",
-            ref="event:1",
-            captured_at="2026-07-28T12:00:00+04:00",
-            occurred_at="2026-07-28",
-            time_precision="day",
-        ).to_dict()
-    )
-    assert source["captured_at"] == "2026-07-28T08:00:00.000000Z"
-    assert source["occurred_at"] == "2026-07-28"
-
-
-@pytest.mark.parametrize(
-    ("precision", "occurred_at", "expected"),
-    [
-        ("minute", "2026-07-28T11:59:00+04:00", "2026-07-28T07:59:00Z"),
-        ("millisecond", "2026-07-28T11:59:00.123+04:00", "2026-07-28T07:59:00.123Z"),
-    ],
-)
-def test_legacy_source_ref_adapter_preserves_stated_precision(
-    precision: str,
-    occurred_at: str,
-    expected: str,
-) -> None:
-    source = adapt_legacy_source_ref(
-        SourceRef(
-            kind="calendar",
-            ref="event:1",
-            occurred_at=occurred_at,
-            time_precision=precision,
-        ).to_dict()
-    )
-    assert source["occurred_at"] == expected
 
 
 @pytest.mark.parametrize(
@@ -355,38 +275,6 @@ def test_source_timestamp_precision_rejects_false_precision(
 
 
 @pytest.mark.parametrize(
-    "source",
-    [
-        SourceRef(kind="chat", ref="x", extra={"extra": "collision"}).to_dict(),
-        SourceRef(kind="chat", ref="x", extra={"bad": object()}).to_dict(),
-        SourceRef(kind="chat", ref="x", extra={"bad": float("nan")}).to_dict(),
-        SourceRef(kind="calendar", ref="event:1", occurred_at="not-a-date", time_precision="day").to_dict(),
-        SourceRef(
-            kind="calendar",
-            ref="event:1",
-            occurred_at="2026-07-28T11:59:01Z",
-            time_precision="minute",
-        ).to_dict(),
-        SourceRef(
-            kind="calendar",
-            ref="event:1",
-            occurred_at="2026-07-28T11:59:00.1Z",
-            time_precision="second",
-        ).to_dict(),
-        SourceRef(
-            kind="calendar",
-            ref="event:1",
-            occurred_at="2026-07-28T11:59:00.12Z",
-            time_precision="millisecond",
-        ).to_dict(),
-    ],
-)
-def test_legacy_source_ref_adapter_rejects_collision_and_non_json_extra(source: dict[object, object]) -> None:
-    with pytest.raises(FactValidationError):
-        adapt_legacy_source_ref(source)
-
-
-@pytest.mark.parametrize(
     "scope,source",
     [
         ({"kind": "area", "key": None}, _source("invalid")),
@@ -403,7 +291,7 @@ def test_legacy_source_ref_adapter_rejects_collision_and_non_json_extra(source: 
         ({"kind": "user", "key": None}, {"kind": "chat_message", "ref": "bad\0ref"}),
     ],
 )
-def test_legacy_scope_and_extra_validation(
+def test_scope_and_extra_validation(
     tmp_path: Path,
     scope: dict[str, object],
     source: dict[object, object],
@@ -997,90 +885,6 @@ def test_cross_month_same_fact_interleaving_conflicts_atomically(
         august.commit(old)
     assert (august.records_root / "2026-08.jsonl").exists() is False
     assert (august.records_root / "2026-09.jsonl").is_file()
-
-
-def test_migration_timestamps_preserve_mixed_month_fact_history_and_restart(
-    tmp_path: Path,
-) -> None:
-    ledger = _ledger(tmp_path)
-    _commit(
-        ledger,
-        _create("old", "Original", occurred_at="2026-06-10T09:00:00Z"),
-        _create("withdraw", "Withdraw later", occurred_at="2026-06-11T09:00:00Z"),
-    )
-
-    plan = _plan(
-        ledger,
-        (
-            _create("replacement", "Replacement", occurred_at="2026-07-05T10:00:00Z"),
-            {
-                "op": "retract",
-                "fact_id": "withdraw",
-                "reason": "migration preserved retraction",
-                "occurred_at": "2026-09-07T12:00:00Z",
-            },
-            {
-                "op": "supersede",
-                "fact_id": "old",
-                "successor_id": "replacement",
-                "reason": "migration preserved correction",
-                "occurred_at": "2026-08-06T11:00:00Z",
-            },
-        ),
-        actor="migration:current-memory",
-        origin="memory.migration",
-        reason="preserve historical facts",
-    )
-    first = ledger.commit(plan)
-    retried = FactLedger(ledger.root, clock=lambda: datetime(2030, 1, 1, tzinfo=UTC)).commit(plan)
-
-    assert retried == first
-    assert ledger.get("replacement").created_at == datetime(2026, 7, 5, 10, tzinfo=UTC)
-    assert [event.occurred_at for event in ledger.history("old")] == [
-        datetime(2026, 6, 10, 9, tzinfo=UTC),
-        datetime(2026, 8, 6, 11, tzinfo=UTC),
-    ]
-    assert [event.occurred_at for event in ledger.history("withdraw")] == [
-        datetime(2026, 6, 11, 9, tzinfo=UTC),
-        datetime(2026, 9, 7, 12, tzinfo=UTC),
-    ]
-    assert {(event.actor, event.origin, event.plan_reason) for event in first} == {
-        ("migration:current-memory", "memory.migration", "preserve historical facts")
-    }
-    assert all("occurred_at" not in event.record["payload"] for event in first)
-    assert {
-        path.name for path in ledger.records_root.glob("*.jsonl") if plan.plan_id in path.read_text(encoding="utf-8")
-    } == {"2026-07.jsonl", "2026-08.jsonl", "2026-09.jsonl"}
-
-
-@pytest.mark.parametrize(
-    "occurred_at",
-    [None, "2026-07-01", "2026-07-01 12:00:00Z", "2026-07-01T12:00:00+04:00"],
-)
-def test_migration_timestamp_requires_strict_utc_rfc3339(
-    tmp_path: Path,
-    occurred_at: object,
-) -> None:
-    ledger = _ledger(tmp_path)
-    with pytest.raises(FactValidationError, match="occurred_at"):
-        _plan(ledger, (_create("a", "Invalid time", occurred_at=occurred_at),))
-
-
-def test_migration_timestamp_cannot_move_a_fact_backwards(tmp_path: Path) -> None:
-    ledger = _ledger(tmp_path)
-    _commit(ledger, _create("a", "Original", occurred_at="2026-08-01T00:00:00Z"))
-    with pytest.raises(FactValidationError, match="time moved backwards"):
-        _plan(
-            ledger,
-            (
-                {
-                    "op": "amend",
-                    "fact_id": "a",
-                    "labels": ["migrated"],
-                    "occurred_at": "2026-07-31T23:59:59Z",
-                },
-            ),
-        )
 
 
 def test_ordinary_fact_changes_still_use_the_plan_clock(tmp_path: Path) -> None:

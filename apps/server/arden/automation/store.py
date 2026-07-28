@@ -4,7 +4,6 @@ from datetime import UTC, datetime
 import aiosqlite
 
 from arden.automation.models import Automation, IdempotencyClaim
-from arden.automation.suggestions import AutomationSuggestion
 from arden.automation.triggers import parse_triggers
 from arden.logging import get_logger
 
@@ -114,23 +113,6 @@ def _row_to_automation(row: dict) -> Automation:
 
 def _serialize_triggers(triggers: list) -> str:
     return json.dumps([{"type": t.type, **t.params()} for t in triggers])
-
-
-def _row_to_suggestion(row: dict) -> AutomationSuggestion:
-    return AutomationSuggestion(
-        id=row["id"],
-        name=row["name"],
-        description=row["description"],
-        prompt=row["prompt"],
-        triggers=parse_triggers(row["triggers"]),
-        rationale=row["rationale"],
-        category=row["category"],
-        evidence=json.loads(row["evidence"]) if row["evidence"] else [],
-        icon=row["icon"],
-        status=row["status"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-        source_automation_id=row["source_automation_id"],
-    )
 
 
 _SCHEMA = """
@@ -620,36 +602,6 @@ SELECT
 FROM automation_event_dead_letter
 """
 
-_SUGGESTION_COLUMNS = (
-    "id, name, description, prompt, triggers, rationale, evidence, category, icon, status, created_at, source_automation_id"
-)
-
-_SQL_DELETE_ACTIVE_SUGGESTIONS = "DELETE FROM automation_suggestions WHERE status = 'active'"
-
-_SQL_INSERT_SUGGESTION = f"""
-INSERT INTO automation_suggestions ({_SUGGESTION_COLUMNS})
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-"""
-
-_SQL_LIST_ACTIVE_SUGGESTIONS = f"""
-SELECT {_SUGGESTION_COLUMNS} FROM automation_suggestions
-WHERE status = 'active'
-ORDER BY created_at DESC
-"""
-
-_SQL_DISMISS_SUGGESTION = "UPDATE automation_suggestions SET status = 'dismissed' WHERE id = ?"
-
-_SQL_ACCEPT_SUGGESTION = """
-UPDATE automation_suggestions
-SET status = 'accepted', source_automation_id = ?
-WHERE id = ?
-"""
-
-_SQL_LIST_EXCLUDED_SIGNATURES = """
-SELECT name || ' — ' || prompt AS signature FROM automation_suggestions
-WHERE status IN ('dismissed', 'accepted')
-"""
-
 # --- Migration ---
 
 _MIGRATION_V1 = """
@@ -898,44 +850,6 @@ async def _migrate_v14(conn: aiosqlite.Connection) -> None:
             CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_idempotency
             ON scheduled_tasks(idempotency_scope, idempotency_key)
             WHERE idempotency_key IS NOT NULL;
-            """
-        )
-
-    suggestion_rows = await conn.execute_fetchall("PRAGMA table_info(automation_suggestions)")
-    suggestion_columns = {row["name"] for row in suggestion_rows}
-    if suggestion_rows and "prompt" not in suggestion_columns:
-        await conn.executescript(
-            """
-            ALTER TABLE automation_suggestions RENAME TO automation_suggestions_v14_old;
-
-            CREATE TABLE automation_suggestions (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                description TEXT,
-                prompt TEXT NOT NULL,
-                triggers TEXT NOT NULL,
-                rationale TEXT NOT NULL,
-                evidence TEXT,
-                category TEXT NOT NULL,
-                icon TEXT,
-                status TEXT NOT NULL DEFAULT 'active',
-                created_at TEXT NOT NULL,
-                source_automation_id TEXT
-            );
-
-            INSERT INTO automation_suggestions (
-                id, name, description, prompt, triggers, rationale, evidence,
-                category, icon, status, created_at, source_automation_id
-            )
-            SELECT
-                id, name, NULL, description, triggers, rationale, evidence,
-                category, icon, status, created_at, source_automation_id
-            FROM automation_suggestions_v14_old;
-
-            DROP TABLE automation_suggestions_v14_old;
-
-            CREATE INDEX IF NOT EXISTS idx_suggestions_status
-            ON automation_suggestions(status, created_at);
             """
         )
 
@@ -1241,30 +1155,8 @@ async def _migrate(conn: aiosqlite.Connection) -> None:
         _logger.info("Migrated automation store to v10 (dropped target_session_id, rewrote kind index to thread_id)")
 
     if version < 11:
-        await conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS automation_suggestions (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                description TEXT,
-                prompt TEXT NOT NULL,
-                triggers TEXT NOT NULL,
-                rationale TEXT NOT NULL,
-                evidence TEXT,
-                category TEXT NOT NULL,
-                icon TEXT,
-                status TEXT NOT NULL DEFAULT 'active',
-                created_at TEXT NOT NULL,
-                source_automation_id TEXT
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_suggestions_status
-            ON automation_suggestions(status, created_at);
-            """
-        )
         await _set_schema_version(conn, 11)
         await conn.commit()
-        _logger.info("Migrated automation store to v11 (automation_suggestions table)")
 
     if version < 12:
         await _migrate_v12(conn)
@@ -1513,6 +1405,29 @@ class AutomationStore:
             }
             for row in rows
         }
+
+    async def latest_completed_runs(self, task_ids: tuple[str, ...]) -> dict[str, datetime]:
+        """Latest successfully completed run per requested task."""
+
+        if not task_ids:
+            return {}
+        placeholders = ", ".join("?" for _ in task_ids)
+        rows = await self.conn.execute_fetchall(
+            f"""
+            SELECT task_id, ended_at
+            FROM automation_runs
+            WHERE status = 'completed'
+              AND ended_at IS NOT NULL
+              AND task_id IN ({placeholders})
+              AND id IN (
+                  SELECT max(id) FROM automation_runs
+                  WHERE status = 'completed' AND task_id IN ({placeholders})
+                  GROUP BY task_id
+              )
+            """,
+            (*task_ids, *task_ids),
+        )
+        return {row["task_id"]: _parse_dt(row["ended_at"]) for row in rows if _parse_dt(row["ended_at"]) is not None}
 
     async def list_runs(self, task_id: str, limit: int = 20) -> list[dict]:
         cursor = await self.conn.execute(_SQL_LIST_RUNS, (task_id, limit))
@@ -1930,46 +1845,3 @@ class AutomationStore:
                 "newest_failed_at": dead_letter_row["newest_failed_at"],
             },
         }
-
-    async def replace_active_suggestions(self, items: list[AutomationSuggestion]) -> None:
-        await self.conn.execute("BEGIN")
-        try:
-            await self.conn.execute(_SQL_DELETE_ACTIVE_SUGGESTIONS)
-            for item in items:
-                await self.conn.execute(
-                    _SQL_INSERT_SUGGESTION,
-                    (
-                        item.id,
-                        item.name,
-                        item.description,
-                        item.prompt,
-                        _serialize_triggers(item.triggers),
-                        item.rationale,
-                        json.dumps(item.evidence),
-                        item.category,
-                        item.icon,
-                        item.status,
-                        item.created_at.isoformat(),
-                        item.source_automation_id,
-                    ),
-                )
-            await self.conn.commit()
-        except BaseException:
-            await self.conn.rollback()
-            raise
-
-    async def list_active_suggestions(self) -> list[AutomationSuggestion]:
-        rows = await self.conn.execute_fetchall(_SQL_LIST_ACTIVE_SUGGESTIONS)
-        return [_row_to_suggestion(row) for row in rows]
-
-    async def mark_suggestion_dismissed(self, suggestion_id: str) -> None:
-        await self.conn.execute(_SQL_DISMISS_SUGGESTION, (suggestion_id,))
-        await self.conn.commit()
-
-    async def mark_suggestion_accepted(self, suggestion_id: str, source_automation_id: str) -> None:
-        await self.conn.execute(_SQL_ACCEPT_SUGGESTION, (source_automation_id, suggestion_id))
-        await self.conn.commit()
-
-    async def list_excluded_signatures(self) -> list[str]:
-        rows = await self.conn.execute_fetchall(_SQL_LIST_EXCLUDED_SIGNATURES)
-        return [row["signature"] for row in rows]

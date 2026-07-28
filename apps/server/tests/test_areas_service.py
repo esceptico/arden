@@ -4,9 +4,14 @@ from arden.areas.asks import AskStore
 from arden.areas.models import Area, Ask
 from arden.areas.service import AreaService
 from arden.areas.work_models import AreaWorkSnapshot
-from arden.memory.pages import parse_page
+from arden.wiki import create_page
 
-PAGE = "---\ntitle: O-1A\nupdated: 2026-07-05\n---\n# O-1A\n\n## Open loops\n- Find counsel.\n"
+PAGE = create_page(
+    page_id="o-1a-page",
+    title="O-1A",
+    body=b"# O-1A\n\n## Open loops\n- Find counsel.\n",
+    metadata={"updated": "2026-07-05"},
+)
 
 AREAS = [Area(key="o-1a", title="O-1A", page_path="topics/o-1a.md", autonomy="observe")]
 
@@ -20,7 +25,7 @@ def make_service(
     return AreaService(
         areas=lambda: AREAS,
         asks=AskStore(tmp_path / "state.json"),
-        get_page=lambda path: parse_page(PAGE),
+        get_page=lambda path: PAGE,
         pending_approvals=lambda: [
             {"run_id": "r1", "tool_call_id": "t1", "session_id": "s1", "tool_name": "bash", "preview": "gh pr create"}
         ],
@@ -100,7 +105,7 @@ def test_overview_returns_finite_enriched_work_brief(tmp_path: Path):
     svc = AreaService(
         areas=lambda: AREAS,
         asks=store,
-        get_page=lambda path: parse_page(PAGE),
+        get_page=lambda path: PAGE,
         pending_approvals=lambda: [],
         session_area=lambda sid: None,
         area_automations=lambda key: [],
@@ -121,7 +126,7 @@ def test_detail_surfaces_latest_custodian_failure(tmp_path: Path):
     svc = AreaService(
         areas=lambda: AREAS,
         asks=AskStore(tmp_path / "state.json"),
-        get_page=lambda path: parse_page(PAGE),
+        get_page=lambda path: PAGE,
         pending_approvals=lambda: [],
         session_area=lambda sid: None,
         area_automations=lambda key: [
@@ -148,7 +153,7 @@ def test_mechanical_approval_retires_when_no_longer_pending(tmp_path: Path):
     svc = AreaService(
         areas=lambda: AREAS,
         asks=AskStore(tmp_path / "state.json"),
-        get_page=lambda path: parse_page(PAGE),
+        get_page=lambda path: PAGE,
         pending_approvals=lambda: pending,
         session_area=lambda sid: "o-1a",
         area_automations=lambda key: [],
@@ -175,7 +180,7 @@ def test_latest_failed_run_reconciles_and_success_retires_failure_ask(tmp_path: 
     svc = AreaService(
         areas=lambda: AREAS,
         asks=AskStore(tmp_path / "state.json"),
-        get_page=lambda path: parse_page(PAGE),
+        get_page=lambda path: PAGE,
         pending_approvals=lambda: [],
         session_area=lambda sid: None,
         area_automations=lambda key: automations,
@@ -210,7 +215,7 @@ def test_overview_excludes_asks_for_non_active_areas(tmp_path: Path):
     svc = AreaService(
         areas=lambda: AREAS,
         asks=store,
-        get_page=lambda path: parse_page(PAGE),
+        get_page=lambda path: PAGE,
         pending_approvals=lambda: [],
         session_area=lambda sid: None,
         area_automations=lambda key: [],

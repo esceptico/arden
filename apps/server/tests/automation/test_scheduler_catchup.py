@@ -48,7 +48,7 @@ def _auto(**kw) -> Automation:
         "last_result": None,
         "running_since": None,
         "auto_approve": True,
-        "handler": "memory_consolidate",
+        "handler": "memory_maintenance",
         "builtin": True,
         "cooldown_minutes": None,
     }
@@ -87,7 +87,7 @@ def test_no_catch_up_for_user_automation():
 
 
 def test_no_catch_up_for_other_builtin_handler():
-    assert Scheduler._should_catch_up_missed(_auto(handler="automation_suggester_daily"), NOW) is False
+    assert Scheduler._should_catch_up_missed(_auto(handler="other"), NOW) is False
 
 
 def test_no_catch_up_with_extra_triggers():
@@ -105,32 +105,32 @@ async def _wait_until(predicate, *, timeout: float = 1.0) -> None:
 
 
 @pytest.mark.asyncio
-async def test_overdue_memory_builtin_catches_up(store: AutomationStore):
+async def test_overdue_memory_maintenance_catches_up(store: AutomationStore):
     started: list[str] = []
-    release_consolidate = asyncio.Event()
+    release_maintenance = asyncio.Event()
 
-    async def memory_consolidate(_ctx):
-        started.append("memory_consolidate")
-        await release_consolidate.wait()
-        return "memory_consolidate"
+    async def memory_maintenance(_ctx):
+        started.append("memory_maintenance")
+        await release_maintenance.wait()
+        return "memory_maintenance"
 
     await store.save(
         _auto(
-            task_id="consolidate",
-            handler="memory_consolidate",
+            task_id="maintenance",
+            handler="memory_maintenance",
             last_run_at=NOW - timedelta(hours=30),
             next_run_at=NOW - timedelta(hours=6),
         )
     )
 
     sched = Scheduler(store=store, build_deps=lambda: None)
-    sched.register_handler("memory_consolidate", memory_consolidate)
+    sched.register_handler("memory_maintenance", memory_maintenance)
 
     loop_task = asyncio.create_task(sched._loop())
     try:
-        await _wait_until(lambda: started == ["memory_consolidate"])
+        await _wait_until(lambda: started == ["memory_maintenance"])
 
-        release_consolidate.set()
+        release_maintenance.set()
 
         for task in list(sched._running):
             await task
@@ -141,27 +141,23 @@ async def test_overdue_memory_builtin_catches_up(store: AutomationStore):
 
 
 @pytest.mark.asyncio
-async def test_fact_synthesis_migration_stays_due_through_startup_reconciliation(store: AutomationStore):
-    """The fact-mode seed migration and scheduler boot path must compose.
-
-    Its six-hour trigger is a backstop, not permission to skip an overdue
-    canonical publication after the server was offline.
-    """
+async def test_fact_synthesis_stays_due_through_startup_reconciliation(store: AutomationStore):
+    """The six-hour trigger is a reliability backstop, not permission to skip."""
     from arden.automation.builtins import seed_builtins
     from arden.constants import BUILTIN_MEMORY_SYNTHESIZE_ID
 
     await seed_builtins(store)
-    legacy = await store.get(BUILTIN_MEMORY_SYNTHESIZE_ID)
-    assert legacy is not None
+    synthesis = await store.get(BUILTIN_MEMORY_SYNTHESIZE_ID)
+    assert synthesis is not None
     last_run = datetime.now(UTC) - timedelta(hours=12)
     await store.save(
         replace(
-            legacy,
+            synthesis,
             last_run_at=last_run,
             next_run_at=last_run + timedelta(days=1),
         )
     )
-    await seed_builtins(store, fact_mode=True)
+    await seed_builtins(store)
 
     migrated = await store.get(BUILTIN_MEMORY_SYNTHESIZE_ID)
     assert migrated is not None
@@ -188,11 +184,11 @@ async def test_fact_synthesis_migration_stays_due_through_startup_reconciliation
 
 
 @pytest.mark.asyncio
-async def test_overdue_fact_mode_wiki_maintenance_catches_up_once(store: AutomationStore):
+async def test_overdue_wiki_maintenance_catches_up_once(store: AutomationStore):
     from arden.automation.builtins import seed_builtins
     from arden.constants import BUILTIN_WIKI_MAINTENANCE_ID
 
-    await seed_builtins(store, fact_mode=True)
+    await seed_builtins(store)
     maintenance = await store.get(BUILTIN_WIKI_MAINTENANCE_ID)
     assert maintenance is not None
     last_run = datetime.now(UTC) - timedelta(hours=12)

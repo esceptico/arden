@@ -1,22 +1,17 @@
+import asyncio
 from hashlib import sha256
-from pathlib import Path
 
 from pydantic import BaseModel, Field
 
 from arden.agent.types.tools import ToolEffect, ToolOutcome, ToolOutcomeStatus
-from arden.areas.paths import resolve_area_page
+from arden.revisions import RevisionConflictError
 from arden.tools.core import ToolResult, tool
 from arden.tools.core.context import ToolExecution
-from arden.tools.core.file_mutation import (
-    RevisionConflict,
-    atomic_compare_and_swap,
-    read_file_snapshot,
-    revision_or_absent,
-)
 from arden.tools.core.formatting import format_lines_with_pagination
 from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
+from arden.wiki import WikiService, WikiValidationError
 
-AREA_PAGES_SERVICE = "area_pages"
+WIKI_SERVICE = "wiki"
 
 
 class AreaPageReadInput(BaseModel):
@@ -27,27 +22,23 @@ class AreaPageReadInput(BaseModel):
 class AreaPagePatchInput(BaseModel):
     old_text: str = Field(min_length=1, max_length=100_000)
     new_text: str = Field(max_length=100_000)
-    expected_sha256: str = Field(
-        min_length=6, max_length=64, description="SHA-256 returned by area_page_read for the page being edited."
-    )
+    expected_version: str = Field(min_length=1, max_length=128)
+    expected_head: str = Field(min_length=1, max_length=128)
 
 
 class AreaPageWriteInput(BaseModel):
-    content: str = Field(
-        min_length=1, max_length=100_000, description="Complete Markdown body; frontmatter is preserved."
-    )
-    expected_sha256: str = Field(
-        description="SHA-256 returned by area_page_read, or the literal 'absent' when creating the page."
-    )
+    content: str = Field(min_length=1, max_length=100_000, description="Complete Markdown body.")
+    expected_version: str = Field(min_length=1, max_length=128)
+    expected_head: str = Field(min_length=1, max_length=128)
 
 
 class AreaAutomationRunInput(BaseModel):
     task_id: str = Field(min_length=1, max_length=200)
 
 
-def _target(execution: ToolExecution) -> Path | ToolResult:
+def _target(execution: ToolExecution):
     area = execution.ctx.area
-    vault = execution.ctx.services.get(AREA_PAGES_SERVICE)
+    wiki = execution.ctx.services.get(WIKI_SERVICE)
     if area is None or not area.page_path:
         return ToolResult.failure(
             code="not_found",
@@ -55,164 +46,157 @@ def _target(execution: ToolExecution) -> Path | ToolResult:
             preview="No Area page",
             recovery_action="Attach a page to the Area before using Area page tools.",
         )
-    if not isinstance(vault, Path):
+    if not isinstance(wiki, WikiService):
         return ToolResult.failure(
             code="not_configured",
-            message="Area page service is unavailable.",
-            preview="Unavailable",
-            recovery_action="Configure the Area page vault before retrying.",
+            message="The managed wiki is unavailable.",
+            preview="Wiki unavailable",
+            recovery_action="Enable canonical memory before retrying.",
         )
-    try:
-        return resolve_area_page(vault, area.page_path)
-    except ValueError:
+    snapshot = wiki.snapshot()
+    record = next((item for item in snapshot.pages if item.resource.path == area.page_path), None)
+    if record is None or record.page.lifecycle != "active":
         return ToolResult.failure(
-            code="invalid_ref",
-            message="The attached Area page path is invalid.",
-            preview="Invalid Area page",
-            recovery_action="Attach a valid relative page path inside the configured Area vault.",
+            code="not_found",
+            message="The attached Area page is missing.",
+            preview="Page missing",
+            recovery_action="Restore the attached wiki page or update the Area page path.",
         )
+    return wiki, snapshot.head, record
 
 
-def _frontmatter_prefix(raw: str) -> str:
-    if not raw.startswith("---\n"):
-        return ""
-    end = raw.find("\n---\n", 4)
-    return raw[: end + 5] if end >= 0 else ""
-
-
-def _revision_conflict(target: Path, expected_sha256: str) -> ToolResult | None:
-    observed = revision_or_absent(target)
-    if observed == expected_sha256:
-        return None
+def _write_failure(exc: Exception) -> ToolResult:
+    if isinstance(exc, RevisionConflictError):
+        return ToolResult.failure(
+            code="write_conflict",
+            message="The Area wiki page changed after it was read.",
+            preview="Write conflict",
+            recovery_action="Read the Area page again, recompute the edit, and retry.",
+        )
+    if isinstance(exc, (WikiValidationError, ValueError, UnicodeError)):
+        return ToolResult.failure(
+            code="invalid_input",
+            message=f"The Area page edit is invalid: {exc}",
+            preview="Invalid page edit",
+            recovery_action="Read the page and submit valid canonical Markdown.",
+        )
     return ToolResult.failure(
-        code="write_conflict",
-        message=(
-            f"Area page changed since it was read. Expected {expected_sha256}, observed {observed}. "
-            "Read it again before writing."
-        ),
-        preview="Write conflict",
-        recovery_action="Read the Area page, recompute the change, and retry with its new sha256.",
+        code="wiki_error",
+        message="The Area page could not be updated.",
+        preview="Page update failed",
+        retryable=True,
     )
 
 
-def _record_write(execution: ToolExecution, written: str) -> None:
-    """Self-write provenance: only the Custodian's own automation runs record
-    digests. An edit made from any other session (the user working through
-    the room's assistant, another agent) must still wake the Custodian."""
+def _record_write(execution: ToolExecution, content: bytes) -> None:
+    """Mark only the active Custodian's exact self-write for watcher deduplication."""
+
     area = execution.ctx.area
     if area is None or execution.ctx.run.loop_task_id != f"area:{area.area_id}":
         return
     provenance = execution.ctx.services.get("area_custodians")
     if provenance is not None:
-        # Hash the written string — the CAS writer wrote exactly these UTF-8
-        # bytes, so this matches the watcher's read_bytes() digest.
-        provenance.record_page_write(area.area_id, sha256(written.encode("utf-8")).hexdigest())
+        provenance.record_page_write(area.area_id, sha256(content).hexdigest())
 
 
 async def area_page_read(execution: ToolExecution, args: AreaPageReadInput) -> ToolResult:
-    target = _target(execution)
+    target = await asyncio.to_thread(_target, execution)
     if isinstance(target, ToolResult):
         return target
-    if not target.is_file():
-        return ToolResult.failure(
-            code="not_found",
-            message="The attached Area page is missing.",
-            preview="Page missing",
-            recovery_action="Restore the attached page or update the Area page path.",
-        )
-    snapshot, revision = read_file_snapshot(target)
-    raw = snapshot.decode("utf-8")
+    _wiki, head, record = target
+    raw = record.content.decode("utf-8")
     content = format_lines_with_pagination(raw, args.offset, args.limit)
     return ToolResult(
         content=content,
-        preview=content.splitlines()[0],
+        preview=record.page.title,
         data={
-            "page_path": execution.ctx.area.page_path,
+            "page_id": record.page.page_id,
+            "page_path": record.resource.path,
             "offset": args.offset,
-            "sha256": revision.sha256,
-            "size": revision.size,
+            "version": record.resource.version_id,
+            "head": head,
+            "size": len(record.content),
         },
     )
 
 
 async def area_page_patch(execution: ToolExecution, args: AreaPagePatchInput) -> ToolResult:
-    target = _target(execution)
+    target = await asyncio.to_thread(_target, execution)
     if isinstance(target, ToolResult):
         return target
-    if conflict := _revision_conflict(target, args.expected_sha256):
-        return conflict
-    raw = target.read_text(encoding="utf-8") if target.exists() else ""
+    wiki, head, record = target
+    if record.resource.version_id != args.expected_version or head != args.expected_head:
+        return _write_failure(RevisionConflictError("Area page revision changed"))
+    raw = record.content.decode("utf-8")
     matches = raw.count(args.old_text)
-    if matches == 0:
+    if matches != 1:
         return ToolResult.failure(
-            code="not_found",
-            message="old_text was not found in the Area page.",
+            code="not_found" if matches == 0 else "ambiguous_ref",
+            message="old_text was not found." if matches == 0 else f"old_text matches {matches} places.",
             preview="Patch not applied",
-            recovery_action="Read the page and copy the exact block, including whitespace.",
+            recovery_action="Read the page and include enough exact surrounding text for one match.",
         )
-    if matches > 1:
-        return ToolResult.failure(
-            code="ambiguous_ref",
-            message=f"old_text matches {matches} places.",
-            preview="Patch not applied",
-            recovery_action="Include more surrounding lines so the block is unique.",
-        )
-    written = raw.replace(args.old_text, args.new_text, 1)
+    content = raw.replace(args.old_text, args.new_text, 1).encode()
     try:
-        revision = atomic_compare_and_swap(target, written, args.expected_sha256)
-    except RevisionConflict:
-        return _revision_conflict(target, args.expected_sha256) or ToolResult.failure(
-            code="write_conflict",
-            message="Area page changed during the write. Read it again before retrying.",
-            preview="Write conflict",
+        updated = await asyncio.to_thread(
+            wiki.update_page,
+            record.page.page_id,
+            content=content,
+            expected_version=args.expected_version,
+            expected_head=args.expected_head,
+            actor=f"automation:{execution.ctx.run.automation_id or 'area'}",
+            origin="area.page",
+            reason="update attached Area page",
         )
-    _record_write(execution, written)
+    except Exception as exc:
+        return _write_failure(exc)
+    _record_write(execution, updated.content)
+    return _updated_result(record, updated, wiki.repository.head, "Patched this Area's wiki page.", "Area page patched")
+
+
+async def area_page_write(execution: ToolExecution, args: AreaPageWriteInput) -> ToolResult:
+    target = await asyncio.to_thread(_target, execution)
+    if isinstance(target, ToolResult):
+        return target
+    wiki, head, record = target
+    if record.resource.version_id != args.expected_version or head != args.expected_head:
+        return _write_failure(RevisionConflictError("Area page revision changed"))
+    content = record.page.with_body((args.content.rstrip() + "\n").encode()).to_bytes()
+    try:
+        updated = await asyncio.to_thread(
+            wiki.update_page,
+            record.page.page_id,
+            content=content,
+            expected_version=args.expected_version,
+            expected_head=args.expected_head,
+            actor=f"automation:{execution.ctx.run.automation_id or 'area'}",
+            origin="area.page",
+            reason="replace attached Area page body",
+        )
+    except Exception as exc:
+        return _write_failure(exc)
+    _record_write(execution, updated.content)
+    return _updated_result(record, updated, wiki.repository.head, "Updated this Area's wiki page.", "Area page updated")
+
+
+def _updated_result(before, after, head: str | None, content: str, preview: str) -> ToolResult:
     return ToolResult(
-        content="Patched this Area's page.",
-        preview="Area page patched",
-        data={"sha256": revision.sha256, "size": revision.size},
+        content=content,
+        preview=preview,
+        data={
+            "page_id": after.page.page_id,
+            "page_path": after.resource.path,
+            "version": after.resource.version_id,
+            "head": head,
+            "size": len(after.content),
+        },
         outcome=ToolOutcome(
             status=ToolOutcomeStatus.SUCCEEDED,
             effect=ToolEffect(
                 operation="edit",
-                target=str(target),
-                before_ref=args.expected_sha256,
-                after_ref=revision.sha256,
-            ),
-        ),
-    )
-
-
-async def area_page_write(execution: ToolExecution, args: AreaPageWriteInput) -> ToolResult:
-    target = _target(execution)
-    if isinstance(target, ToolResult):
-        return target
-    if conflict := _revision_conflict(target, args.expected_sha256):
-        return conflict
-    existing = target.read_text(encoding="utf-8") if target.exists() else ""
-    body = args.content.strip() + "\n"
-    prefix = _frontmatter_prefix(existing)
-    written = f"{prefix}\n{body}" if prefix else body
-    try:
-        revision = atomic_compare_and_swap(target, written, args.expected_sha256)
-    except RevisionConflict:
-        return _revision_conflict(target, args.expected_sha256) or ToolResult.failure(
-            code="write_conflict",
-            message="Area page changed during the write. Read it again before retrying.",
-            preview="Write conflict",
-        )
-    _record_write(execution, written)
-    return ToolResult(
-        content="Updated this Area's page.",
-        preview="Area page updated",
-        data={"sha256": revision.sha256, "size": revision.size},
-        outcome=ToolOutcome(
-            status=ToolOutcomeStatus.SUCCEEDED,
-            effect=ToolEffect(
-                operation="create" if args.expected_sha256 == "absent" else "replace",
-                target=str(target),
-                before_ref=args.expected_sha256,
-                after_ref=revision.sha256,
+                target=after.resource.path,
+                before_ref=before.resource.version_id,
+                after_ref=after.resource.version_id,
             ),
         ),
     )
@@ -232,72 +216,56 @@ async def area_run_automation(execution: ToolExecution, args: AreaAutomationRunI
     if service is None:
         return ToolResult.failure(
             code="not_configured",
-            message="Automation service unavailable.",
+            message="Area automation service unavailable.",
             preview="Unavailable",
-            recovery_action="Enable automation support before retrying.",
         )
     try:
         await service.run_now(args.task_id)
     except KeyError:
-        return ToolResult.failure(
-            code="not_found",
-            message="Area automation not found.",
-            preview="Not found",
-            recovery_action="Refresh the Area work context and retry with an exact child automation ID.",
-        )
+        return ToolResult.failure(code="not_found", message="Area automation not found.", preview="Not found")
     except RuntimeError:
         return ToolResult.failure(
             code="temporarily_unavailable",
             message="The Area automation could not be started.",
             preview="Unavailable",
             retryable=True,
-            recovery_action="Check the current Area automation state before retrying.",
         )
     return ToolResult(content=f"Started Area automation {args.task_id}.", preview="Area automation started")
 
 
-_AREA_PERMISSION = frozenset({AREA_PAGES_SERVICE})
+_WIKI_PERMISSION = frozenset({WIKI_SERVICE})
 
 area_page_read_tool = tool(
     display_name="AreaPageRead",
-    display_description="Read the current Area page.",
-    description=(
-        "Read the current Area's attached page and its SHA-256 revision. "
-        "The path is fixed by the Area and cannot be overridden."
-    ),
+    display_description="Read the current Area wiki page.",
+    description="Read the current Area's attached managed wiki page and exact version tokens.",
     input_model=AreaPageReadInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=_AREA_PERMISSION),
+    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=_WIKI_PERMISSION),
     execute=area_page_read,
 )
 
 area_page_patch_tool = tool(
     display_name="AreaPagePatch",
-    display_description="Patch the current Area page.",
-    description=(
-        "Replace one exact block in the current Area's attached page using the sha256 from area_page_read. "
-        "Cannot edit any other page."
-    ),
+    display_description="Patch the current Area wiki page.",
+    description="Replace one exact block in the attached managed page using its version and wiki head.",
     input_model=AreaPagePatchInput,
-    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=_AREA_PERMISSION),
+    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=_WIKI_PERMISSION),
     execute=area_page_patch,
 )
 
 area_page_write_tool = tool(
     display_name="AreaPageWrite",
-    display_description="Replace the current Area page.",
-    description=(
-        "Replace the Markdown body of the current Area's attached page while preserving frontmatter. "
-        "Pass the sha256 from area_page_read as expected_sha256."
-    ),
+    display_description="Replace the current Area wiki page body.",
+    description="Replace only the Markdown body of the attached managed page using exact version tokens.",
     input_model=AreaPageWriteInput,
-    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=_AREA_PERMISSION),
+    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=_WIKI_PERMISSION),
     execute=area_page_write,
 )
 
 area_run_automation_tool = tool(
     display_name="RunAreaAutomation",
     display_description="Run an automation for this Area.",
-    description="Run a child automation owned by the current Area. Cannot target the Custodian itself or another Area.",
+    description="Run a child automation owned by the current Area.",
     input_model=AreaAutomationRunInput,
     policy=ToolPolicy(action=ToolAction.EXECUTE, scope=ToolScope.INTERNAL, permissions=frozenset({"automation"})),
     execute=area_run_automation,

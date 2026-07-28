@@ -10,7 +10,9 @@ from hashlib import sha256
 from typing import TYPE_CHECKING, Protocol
 
 from arden.revisions import ResourceState
-from arden.wiki import GeneratedPageTarget, WikiPageRecord, WikiService, parse_page
+from arden.wiki.models import GeneratedPageTarget, WikiPageRecord
+from arden.wiki.pages import parse_page
+from arden.wiki.service import WikiService
 
 from .models import Fact, FactChangeFeed
 

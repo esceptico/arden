@@ -34,8 +34,7 @@ from arden.memory.facts import (
     FactService,
     FactValidationError,
 )
-from arden.memory.models import SourceRef, source_time
-from arden.memory.scopes import scope_for_write, scopes_for_read
+from arden.memory.facts.boundary import fact_read_scopes, fact_write_scope, source_time
 from arden.tools.core import ToolResult, tool
 from arden.tools.core.context import ToolExecution
 from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
@@ -183,7 +182,7 @@ def _unavailable() -> ToolResult:
         code="not_configured",
         message="Canonical facts are not available.",
         preview="Facts unavailable",
-        recovery_action="Enable the fact service after the offline fact-ledger cutover.",
+        recovery_action="Configure the canonical fact service.",
     )
 
 
@@ -213,22 +212,14 @@ async def _principal(execution: ToolExecution, service: FactService) -> FactPrin
             readable_scopes=scopes,
             writable_scopes=scopes,
         )
-    scopes = frozenset(
-        (scope.kind, scope.key) for scope in scopes_for_read(project=execution.ctx.area, session_id=session_id)
-    )
+    scopes = fact_read_scopes(execution.ctx.area)
     # Write authority is supplied only by this server-side session/Area policy.
     # Individual changes never carry an authority grant.
     return FactPrincipal(owner_id=f"session:{session_id}", readable_scopes=scopes, writable_scopes=scopes)
 
 
 def _write_scope(execution: ToolExecution, kind: str) -> tuple[str, str | None]:
-    scope = scope_for_write(
-        kind=kind,
-        project=execution.ctx.area,
-        session_id=_session_id(execution),
-        source_ref=SourceRef(kind="tool_call", ref=execution.tool_id),
-    )
-    return scope.kind or "user", scope.key
+    return fact_write_scope(kind=kind, area=execution.ctx.area)
 
 
 async def _sources(execution: ToolExecution, scope: tuple[str, str | None]) -> list[dict[str, Any]]:

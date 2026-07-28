@@ -24,6 +24,12 @@ CREATE TABLE IF NOT EXISTS fact_consumer_watermarks (
     revision TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS fact_retention_checkpoints (
+    consumer_id TEXT PRIMARY KEY,
+    revision TEXT,
+    evaluated_at TEXT NOT NULL
+);
 """
 
 
@@ -36,6 +42,12 @@ class FactConsumerWatermark:
     consumer_id: str
     revision: str
     updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class FactRetentionCheckpoint:
+    revision: str | None
+    evaluated_at: datetime
 
 
 def _consumer_id(value: object) -> str:
@@ -62,6 +74,19 @@ def _row(row) -> FactConsumerWatermark:
     if updated_at.tzinfo is None or updated_at.utcoffset() != timedelta(0):
         raise RuntimeError("persisted fact consumer watermark is not UTC")
     return FactConsumerWatermark(_consumer_id(row["consumer_id"]), _revision(row["revision"], "revision"), updated_at)
+
+
+def _checkpoint_row(row) -> FactRetentionCheckpoint:
+    try:
+        evaluated_at = datetime.fromisoformat(row["evaluated_at"].replace("Z", "+00:00"))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError("persisted fact retention checkpoint is invalid") from exc
+    if evaluated_at.tzinfo is None or evaluated_at.utcoffset() != timedelta(0):
+        raise RuntimeError("persisted fact retention checkpoint is not UTC")
+    revision = row["revision"]
+    if revision is not None:
+        revision = _revision(revision, "revision")
+    return FactRetentionCheckpoint(revision, evaluated_at)
 
 
 class FactConsumerStore:
@@ -136,6 +161,37 @@ class FactConsumerStore:
         if cursor.rowcount != 1:
             raise FactConsumerWatermarkConflictError("fact consumer watermark changed before advance")
         return FactConsumerWatermark(consumer_id, revision, datetime.fromisoformat(updated_at))
+
+    async def get_retention_checkpoint(self, consumer_id: str) -> FactRetentionCheckpoint | None:
+        consumer_id = _consumer_id(consumer_id)
+        rows = await self._conn.execute_fetchall(
+            "SELECT revision, evaluated_at FROM fact_retention_checkpoints WHERE consumer_id = ?",
+            (consumer_id,),
+        )
+        return None if not rows else _checkpoint_row(rows[0])
+
+    async def record_retention_checkpoint(
+        self,
+        consumer_id: str,
+        *,
+        revision: str | None,
+        evaluated_at: datetime,
+    ) -> FactRetentionCheckpoint:
+        consumer_id = _consumer_id(consumer_id)
+        if revision is not None:
+            revision = _revision(revision, "revision")
+        if evaluated_at.tzinfo is None or evaluated_at.utcoffset() != timedelta(0):
+            raise ValueError("evaluated_at must be UTC")
+        encoded = evaluated_at.isoformat()
+        await self._conn.execute(
+            """
+            INSERT INTO fact_retention_checkpoints (consumer_id, revision, evaluated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(consumer_id) DO UPDATE SET revision = excluded.revision, evaluated_at = excluded.evaluated_at
+            """,
+            (consumer_id, revision, encoded),
+        )
+        return FactRetentionCheckpoint(revision, datetime.fromisoformat(encoded))
 
     async def close(self) -> None:
         await self._conn.close()

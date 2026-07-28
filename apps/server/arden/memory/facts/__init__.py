@@ -1,17 +1,24 @@
 """Canonical append-only facts; intentionally independent from wiki projections."""
 
 from .completion_renderer import CompletionFactSynthesisRenderer
-from .consumer_store import FactConsumerStore, FactConsumerWatermark, FactConsumerWatermarkConflictError
-from .cutover import (
-    LEDGER_DIRECTORY,
-    MARKER_NAME,
-    FactCutover,
-    FactCutoverError,
-    fact_cutover_content,
-    load_fact_cutover,
+from .consumer_store import (
+    FactConsumerStore,
+    FactConsumerWatermark,
+    FactConsumerWatermarkConflictError,
+    FactRetentionCheckpoint,
 )
+from .index import FACT_SEARCH_SOURCE, FactIndexProjection, FactIndexState
 from .ledger import FactLedger
-from .legacy import adapt_legacy_source_ref
+from .maintenance import (
+    FactMaintenance,
+    FactMaintenanceCandidateProvider,
+    FactMaintenanceDecision,
+    FactMaintenanceError,
+    FactMaintenancePreparedCluster,
+    FactMaintenanceResult,
+    FactMaintenanceReviewer,
+)
+from .maintenance_completion import CompletionFactMaintenanceReviewer
 from .models import (
     DueReviewCandidate,
     Fact,
@@ -42,6 +49,8 @@ from .service import (
 )
 from .synthesis import FactSynthesis, FactSynthesisError, FactSynthesisRenderer, FactSynthesisResult, SynthesisFact
 
+LEDGER_DIRECTORY = "facts"
+
 __all__ = [
     "DueReviewCandidate",
     "DueFactReview",
@@ -50,14 +59,23 @@ __all__ = [
     "FactConsumerStore",
     "FactConsumerWatermark",
     "FactConsumerWatermarkConflictError",
+    "FactRetentionCheckpoint",
     "CompletionFactSynthesisRenderer",
-    "FactCutover",
-    "FactCutoverError",
+    "CompletionFactMaintenanceReviewer",
     "FactConflictError",
     "FactEvent",
+    "FactIndexProjection",
+    "FactIndexState",
     "FactLedger",
     "FactLedgerCorruptionError",
     "FactLedgerError",
+    "FactMaintenance",
+    "FactMaintenanceCandidateProvider",
+    "FactMaintenanceDecision",
+    "FactMaintenanceError",
+    "FactMaintenancePreparedCluster",
+    "FactMaintenanceResult",
+    "FactMaintenanceReviewer",
     "FactPage",
     "FactPlan",
     "FactPlanCorruptionError",
@@ -77,9 +95,6 @@ __all__ = [
     "FactSynthesisRenderer",
     "FactSynthesisResult",
     "FactValidationError",
+    "FACT_SEARCH_SOURCE",
     "LEDGER_DIRECTORY",
-    "MARKER_NAME",
-    "adapt_legacy_source_ref",
-    "fact_cutover_content",
-    "load_fact_cutover",
 ]

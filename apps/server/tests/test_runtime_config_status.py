@@ -7,7 +7,6 @@ from arden.server.runtime.config import RuntimeConfig
 from arden.server.runtime.core import Runtime
 from arden.server.runtime.knowledge import KnowledgeRuntime
 from arden.server.schemas import AddCustomModelRequest, UpdateConfigRequest
-from arden.tools.memory import MEMORY_RECONCILER_SERVICE
 
 
 class _Integrations:
@@ -183,8 +182,7 @@ async def test_knowledge_runtime_syncs_indexer_with_embedding_config(tmp_path, m
     initial.db_dir.mkdir(parents=True, exist_ok=True)
     knowledge = KnowledgeRuntime(initial)
 
-    assert MEMORY_RECONCILER_SERVICE in knowledge.tool_services()
-    assert knowledge.tool_services()[MEMORY_RECONCILER_SERVICE] is None
+    assert knowledge.tool_services() == {}
 
     assert knowledge.indexer is None
     assert knowledge.search_index is None

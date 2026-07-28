@@ -1,0 +1,498 @@
+"""Canonical fact and managed-wiki HTTP surfaces."""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Mapping
+from dataclasses import fields, is_dataclass
+from datetime import UTC, datetime
+from enum import Enum
+from typing import Any
+
+from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel, ConfigDict, Field
+
+from arden.logging import get_logger
+from arden.memory.facts import (
+    FactLedgerCorruptionError,
+    FactPrincipal,
+    FactScopeError,
+    FactService,
+    FactValidationError,
+)
+from arden.revisions import CorruptRepositoryError, RevisionConflictError, UnsafePathError
+from arden.wiki import WikiService, WikiValidationError
+
+wiki_router = APIRouter(prefix="/admin/wiki", tags=["wiki"])
+facts_router = APIRouter(prefix="/admin/facts", tags=["facts"])
+_logger = get_logger(__name__)
+
+
+class _Request(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class WikiCreateRequest(_Request):
+    path: str = Field(min_length=1, max_length=4096)
+    title: str = Field(min_length=1, max_length=4096)
+    body: str = ""
+    page_id: str | None = Field(default=None, min_length=1, max_length=512)
+    aliases: list[str] = Field(default_factory=list, max_length=100)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    expected_head: str | None
+
+
+class WikiUpdateRequest(_Request):
+    content: str
+    expected_version: str = Field(min_length=1, max_length=128)
+    expected_head: str = Field(min_length=1, max_length=128)
+
+
+class WikiVersionRequest(_Request):
+    expected_version: str = Field(min_length=1, max_length=128)
+    expected_head: str = Field(min_length=1, max_length=128)
+
+
+def _json_value(value: object) -> object:
+    """Recursively turn immutable domain values into ordinary JSON values."""
+
+    if isinstance(value, Enum):
+        return value.value
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return value
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, bytes):
+        return value.decode("utf-8")
+    if isinstance(value, Mapping):
+        return {str(key): _json_value(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_json_value(item) for item in value]
+    if is_dataclass(value):
+        return {field.name: _json_value(getattr(value, field.name)) for field in fields(value)}
+    raise TypeError(f"cannot serialize {type(value).__name__}")
+
+
+def _wiki_service(request: Request) -> WikiService:
+    service = getattr(getattr(request.app.state, "runtime", None), "wiki_service", None)
+    if not isinstance(service, WikiService):
+        raise HTTPException(status_code=503, detail="wiki service not ready")
+    return service
+
+
+def _fact_service(request: Request) -> FactService:
+    service = getattr(getattr(request.app.state, "runtime", None), "fact_service", None)
+    if not isinstance(service, FactService):
+        raise HTTPException(status_code=503, detail="fact service not ready")
+    return service
+
+
+def _page_timestamps(
+    service: WikiService,
+    head: str | None,
+    page_ids: set[str],
+) -> dict[str, tuple[datetime | None, datetime | None]]:
+    """Derive page creation/update times from canonical commit history."""
+
+    result: dict[str, list[datetime | None]] = {page_id: [None, None] for page_id in page_ids}
+    if head is None or not page_ids:
+        return dict.fromkeys(page_ids, (None, None))
+    for commit in service.repository.history(start=head):
+        for change in commit.changes:
+            version = change.after or change.before
+            if version is None or version.resource_id not in result:
+                continue
+            times = result[version.resource_id]
+            if times[1] is None:
+                times[1] = commit.timestamp
+            if change.action == "create":
+                times[0] = commit.timestamp
+        if all(created is not None and updated is not None for created, updated in result.values()):
+            break
+    return {page_id: (times[0], times[1]) for page_id, times in result.items()}
+
+
+def _page_json(
+    record,
+    head: str | None,
+    *,
+    content: bool,
+    timestamps: Mapping[str, tuple[datetime | None, datetime | None]] | None = None,
+) -> dict[str, object]:
+    created_at, updated_at = (None, None) if timestamps is None else timestamps.get(record.page.page_id, (None, None))
+    result: dict[str, object] = {
+        "page_id": record.page.page_id,
+        "path": record.resource.path,
+        "resource_state": record.resource.state.value,
+        "title": record.page.title,
+        "aliases": list(record.page.aliases),
+        "lifecycle": record.page.lifecycle,
+        "redirect_to": record.page.redirect_to,
+        "metadata": _json_value(record.page.metadata),
+        "version": record.resource.version_id,
+        "repository_head": head,
+        "created_at": None if created_at is None else created_at.isoformat(),
+        "updated_at": None if updated_at is None else updated_at.isoformat(),
+    }
+    if content:
+        result["content"] = record.content.decode("utf-8")
+    return result
+
+
+def _page_snapshot(service: WikiService, page_id: str):
+    snapshot = service.snapshot()
+    record = next((item for item in snapshot.pages if item.page.page_id == page_id), None)
+    if record is None:
+        raise KeyError(f"unknown wiki page: {page_id}")
+    return snapshot.head, record
+
+
+def _wiki_conflict(service: WikiService, page_id: str, exc: RevisionConflictError) -> HTTPException:
+    detail: dict[str, object] = {"error": "page_revision_conflict", "message": str(exc)}
+    try:
+        head = service.repository.head
+        resource = service.repository.get(page_id, at=head)
+        detail.update(
+            current_content=service.repository.read_version(resource).decode("utf-8"),
+            current_revision=resource.version_id,
+            current_head=head,
+        )
+    except (KeyError, UnicodeDecodeError, CorruptRepositoryError):
+        pass
+    return HTTPException(status_code=409, detail=detail)
+
+
+def _wiki_error(service: WikiService, page_id: str, exc: Exception) -> HTTPException:
+    if isinstance(exc, RevisionConflictError):
+        return _wiki_conflict(service, page_id, exc)
+    if isinstance(exc, KeyError):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, CorruptRepositoryError):
+        return HTTPException(status_code=503, detail="wiki repository is corrupt")
+    if isinstance(exc, (WikiValidationError, UnsafePathError, UnicodeError, TypeError, ValueError)):
+        return HTTPException(status_code=422, detail=str(exc))
+    raise exc
+
+
+@wiki_router.get("/pages")
+def list_wiki_pages(
+    request: Request,
+    include_redirects: bool = Query(default=False),
+) -> dict[str, object]:
+    service = _wiki_service(request)
+    try:
+        snapshot = service.snapshot()
+        timestamps = _page_timestamps(service, snapshot.head, {record.page.page_id for record in snapshot.pages})
+        pages = [
+            _page_json(record, snapshot.head, content=False, timestamps=timestamps)
+            for record in snapshot.pages
+            if include_redirects or record.page.lifecycle == "active"
+        ]
+        return {"repository_head": snapshot.head, "pages": pages}
+    except Exception as exc:
+        raise _wiki_error(service, "", exc) from exc
+
+
+@wiki_router.get("/pages/{page_id}")
+def read_wiki_page(page_id: str, request: Request) -> dict[str, object]:
+    service = _wiki_service(request)
+    try:
+        head, record = _page_snapshot(service, page_id)
+        return _page_json(
+            record,
+            head,
+            content=True,
+            timestamps=_page_timestamps(service, head, {page_id}),
+        )
+    except Exception as exc:
+        raise _wiki_error(service, page_id, exc) from exc
+
+
+@wiki_router.post("/pages", status_code=201)
+def create_wiki_page(body: WikiCreateRequest, request: Request) -> dict[str, object]:
+    service = _wiki_service(request)
+    try:
+        actual_head = service.repository.head
+        if actual_head != body.expected_head:
+            raise RevisionConflictError(f"current head changed: expected {body.expected_head!r}, found {actual_head!r}")
+        created = service.create_page(
+            path=body.path,
+            title=body.title,
+            body=body.body.encode("utf-8"),
+            page_id=body.page_id,
+            aliases=tuple(body.aliases),
+            metadata=body.metadata,
+            expected_head=body.expected_head,
+            actor="user:desktop",
+            origin="desktop",
+            reason="create wiki page",
+        )
+        head, record = _page_snapshot(service, created.page.page_id)
+        return _page_json(
+            record,
+            head,
+            content=True,
+            timestamps=_page_timestamps(service, head, {record.page.page_id}),
+        )
+    except Exception as exc:
+        raise _wiki_error(service, body.page_id or "", exc) from exc
+
+
+@wiki_router.put("/pages/{page_id}")
+async def update_wiki_page(page_id: str, body: WikiUpdateRequest, request: Request) -> dict[str, object]:
+    service = _wiki_service(request)
+    try:
+        _record, commit_id = await asyncio.to_thread(
+            service.update_page_with_commit,
+            page_id,
+            content=body.content.encode("utf-8"),
+            expected_version=body.expected_version,
+            expected_head=body.expected_head,
+        )
+        if commit_id is not None:
+            enqueue = getattr(getattr(request.app.state, "runtime", None), "enqueue_wiki_user_edit", None)
+            if enqueue is None:
+                _logger.error("Wiki edit saved without an available Curator queue", commit_id=commit_id)
+            else:
+                try:
+                    await enqueue(commit_id)
+                except Exception:
+                    # Startup history backfill provides the durable recovery path.
+                    _logger.exception("Wiki edit Curator enqueue failed", commit_id=commit_id)
+        head, record = _page_snapshot(service, page_id)
+        return _page_json(
+            record,
+            head,
+            content=True,
+            timestamps=_page_timestamps(service, head, {page_id}),
+        )
+    except Exception as exc:
+        raise _wiki_error(service, page_id, exc) from exc
+
+
+@wiki_router.post("/pages/{page_id}/archive")
+def archive_wiki_page(page_id: str, body: WikiVersionRequest, request: Request) -> dict[str, object]:
+    service = _wiki_service(request)
+    try:
+        service.archive_page(
+            page_id,
+            expected_version=body.expected_version,
+            base_head=body.expected_head,
+            actor="user:desktop",
+            origin="desktop",
+            reason="archive wiki page",
+        )
+        head = service.repository.head
+        resource = service.repository.get(page_id, at=head)
+        return {
+            "page_id": page_id,
+            "path": resource.path,
+            "resource_state": resource.state.value,
+            "version": resource.version_id,
+            "repository_head": head,
+        }
+    except Exception as exc:
+        raise _wiki_error(service, page_id, exc) from exc
+
+
+@wiki_router.post("/pages/{page_id}/restore")
+def restore_wiki_page(page_id: str, body: WikiVersionRequest, request: Request) -> dict[str, object]:
+    service = _wiki_service(request)
+    try:
+        service.restore_page(
+            page_id,
+            expected_version=body.expected_version,
+            base_head=body.expected_head,
+            actor="user:desktop",
+            origin="desktop",
+            reason="restore wiki page",
+        )
+        head, record = _page_snapshot(service, page_id)
+        return _page_json(
+            record,
+            head,
+            content=True,
+            timestamps=_page_timestamps(service, head, {page_id}),
+        )
+    except Exception as exc:
+        raise _wiki_error(service, page_id, exc) from exc
+
+
+@wiki_router.get("/pages/{page_id}/history")
+def wiki_page_history(
+    page_id: str,
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+) -> dict[str, object]:
+    service = _wiki_service(request)
+    try:
+        head = service.repository.head
+        service.repository.get(page_id, at=head)
+        commits = service.repository.history(resource_id=page_id, start=head, limit=limit)
+        return {"page_id": page_id, "repository_head": head, "commits": _json_value(commits)}
+    except Exception as exc:
+        raise _wiki_error(service, page_id, exc) from exc
+
+
+@wiki_router.get("/pages/{page_id}/diff")
+def wiki_page_diff(
+    page_id: str,
+    request: Request,
+    base: str | None = Query(default=None, max_length=128),
+    target: str | None = Query(default=None, max_length=128),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=16_384, ge=1, le=65_536),
+    tail: bool = Query(default=False),
+) -> dict[str, object]:
+    service = _wiki_service(request)
+    try:
+        target_revision = service.repository.head if target is None else target
+        page = service.repository.diff_page(
+            base,
+            target_revision,
+            page_id,
+            offset=offset,
+            limit=limit,
+            tail=tail,
+        )
+        return {"base": base, "target": target_revision, "diff": _json_value(page)}
+    except Exception as exc:
+        raise _wiki_error(service, page_id, exc) from exc
+
+
+@wiki_router.get("/pages/{page_id}/links")
+def wiki_page_links(page_id: str, request: Request) -> dict[str, object]:
+    service = _wiki_service(request)
+    try:
+        report = service.link_report(page_id)
+        return {
+            "page_id": page_id,
+            "repository_head": report.head,
+            "outgoing": _json_value(report.outgoing),
+            "backlinks": _json_value(report.backlinks),
+        }
+    except Exception as exc:
+        raise _wiki_error(service, page_id, exc) from exc
+
+
+async def _fact_principal(service: FactService) -> FactPrincipal:
+    return FactPrincipal(
+        owner_id="admin:facts",
+        readable_scopes=await service.known_scopes(),
+        writable_scopes=frozenset(),
+    )
+
+
+def _fact_after(created_at: datetime | None, fact_id: str | None):
+    if created_at is None and fact_id is None:
+        return None
+    if created_at is None or fact_id is None:
+        raise HTTPException(status_code=422, detail="after_created_at and after_fact_id must be supplied together")
+    if created_at.tzinfo is None:
+        raise HTTPException(status_code=422, detail="after_created_at must include a timezone")
+    return created_at.astimezone(UTC), fact_id
+
+
+def _fact_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, HTTPException):
+        return exc
+    if isinstance(exc, KeyError):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, FactScopeError):
+        return HTTPException(status_code=403, detail=str(exc))
+    if isinstance(exc, FactValidationError):
+        return HTTPException(status_code=422, detail=str(exc))
+    if isinstance(exc, FactLedgerCorruptionError):
+        return HTTPException(status_code=503, detail="fact ledger is corrupt")
+    if isinstance(exc, (TypeError, ValueError)):
+        return HTTPException(status_code=422, detail=str(exc))
+    raise exc
+
+
+async def _fact_page(
+    service: FactService,
+    *,
+    query: str | None,
+    subject: str | None,
+    include_inactive: bool,
+    limit: int,
+    after_created_at: datetime | None,
+    after_fact_id: str | None,
+) -> dict[str, object]:
+    page = await service.search_page(
+        await _fact_principal(service),
+        query,
+        subject=subject,
+        include_inactive=include_inactive,
+        limit=limit,
+        after=_fact_after(after_created_at, after_fact_id),
+    )
+    next_after = None
+    if page.has_more and page.items:
+        last = page.items[-1]
+        next_after = {"created_at": last.created_at.isoformat(), "fact_id": last.fact_id}
+    return {
+        "facts": _json_value(page.items),
+        "total": page.total,
+        "has_more": page.has_more,
+        "next_after": next_after,
+    }
+
+
+@facts_router.get("")
+async def list_facts(
+    request: Request,
+    subject: str | None = Query(default=None, min_length=1, max_length=500),
+    include_inactive: bool = Query(default=False),
+    limit: int = Query(default=100, ge=1, le=100),
+    after_created_at: datetime | None = Query(default=None),
+    after_fact_id: str | None = Query(default=None, min_length=1, max_length=500),
+) -> dict[str, object]:
+    service = _fact_service(request)
+    try:
+        return await _fact_page(
+            service,
+            query=None,
+            subject=subject,
+            include_inactive=include_inactive,
+            limit=limit,
+            after_created_at=after_created_at,
+            after_fact_id=after_fact_id,
+        )
+    except Exception as exc:
+        raise _fact_error(exc) from exc
+
+
+@facts_router.get("/search")
+async def search_facts(
+    request: Request,
+    query: str = Query(min_length=1, max_length=20_000),
+    subject: str | None = Query(default=None, min_length=1, max_length=500),
+    include_inactive: bool = Query(default=False),
+    limit: int = Query(default=100, ge=1, le=100),
+    after_created_at: datetime | None = Query(default=None),
+    after_fact_id: str | None = Query(default=None, min_length=1, max_length=500),
+) -> dict[str, object]:
+    service = _fact_service(request)
+    try:
+        return await _fact_page(
+            service,
+            query=query,
+            subject=subject,
+            include_inactive=include_inactive,
+            limit=limit,
+            after_created_at=after_created_at,
+            after_fact_id=after_fact_id,
+        )
+    except Exception as exc:
+        raise _fact_error(exc) from exc
+
+
+@facts_router.get("/{fact_id}")
+async def read_fact(fact_id: str, request: Request) -> dict[str, object]:
+    service = _fact_service(request)
+    try:
+        fact = await service.get(await _fact_principal(service), fact_id)
+        return {"fact": _json_value(fact)}
+    except Exception as exc:
+        raise _fact_error(exc) from exc

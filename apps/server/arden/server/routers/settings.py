@@ -30,7 +30,7 @@ router = APIRouter(tags=["settings"])
 
 def _config_response(rt: Runtime) -> dict:
     config = rt.config
-    memory_connected = rt.memory_records is not None or rt.fact_service is not None
+    memory_connected = rt.fact_service is not None
     web_client = rt.integrations.get_client("web")
     web_provider = getattr(web_client, "provider", "unknown") if web_client else "none"
     reasoning_efforts = list(get_model(config.chat_model).reasoning_efforts) if config.chat_model else []

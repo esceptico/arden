@@ -13,8 +13,6 @@ from arden.agent import Agent, Role, ToolOutcome, ToolOutcomeStatus, ToolResult
 from arden.agent.llm.parsing import trailing_incomplete_tool_step
 from arden.agent.types.events import Result, ToolCompleted
 from arden.agent.types.tool_call import PendingToolCall
-from arden.areas.context import load_area_context
-from arden.config import get_config
 from arden.constants import CONVERSATION_GAP_THRESHOLD, LOOP_ITERATION_HISTORY_WINDOW
 from arden.context.models import AreaContext, SessionData, SessionState
 from arden.core.content import (
@@ -45,7 +43,6 @@ from arden.events.sse import (
 )
 from arden.llm.models import Provider, get_model, supports_native_deferred_tools
 from arden.logging import get_logger
-from arden.memory.profile import resident_profile
 from arden.notifiers.service import NotifierService
 from arden.observability import activate_tracing, observed_trace
 from arden.server.bus import BusRegistry, SessionBus, prime_bus_cursor_from_store
@@ -70,7 +67,7 @@ from arden.tools.executor import ToolExecutor
 
 _logger = get_logger(__name__)
 
-INIT_AUTO_APPROVE = {"remember", "forget"}
+INIT_AUTO_APPROVE = {"plan_fact_changes", "commit_fact_changes"}
 
 
 async def _recover_durable_tool_calls(
@@ -228,8 +225,6 @@ class ChatDeps:
         ]
         | None
     ) = None
-    memory_curator: object | None = None
-    memory_records: object | None = None
     wiki_context: object | None = None
     skill_registry: SkillRegistry | None = None
     notifier_service: NotifierService | None = None
@@ -261,7 +256,6 @@ class ChatContext:
         ]
         | None
     ) = None
-    memory_curator: object | None = None
     output_schema: type[BaseModel] | None = None
 
 
@@ -504,12 +498,13 @@ def _is_meta_client_id(client_id: str | None) -> bool:
     return bool(client_id and client_id.startswith(("loop:", "bg:", "goal:")))
 
 
-def _load_legacy_area_page_context(executor: ToolExecutor, area_record: dict | None) -> dict | None:
-    """Do not inject unmanaged Area prose once its legacy capability is retired."""
-
-    if not area_record or not area_record.get("page_path") or "area_pages" not in executor.tool_services:
+async def _load_area_page_context(wiki_context: object | None, area_record: dict | None) -> dict | None:
+    if not area_record or not area_record.get("page_path") or wiki_context is None:
         return None
-    return load_area_context(get_config().memory_artifacts_dir, area_record)
+    page_context = getattr(wiki_context, "page_context", None)
+    if page_context is None:
+        return None
+    return await page_context(area_record["page_path"], title=area_record.get("name"))
 
 
 # Below this many chars of user input there is nothing worth a scoped recall
@@ -533,12 +528,10 @@ async def _prepare_messages(
     append_user: bool = True,
     context_manifest: list[ContextManifestEntry] | None = None,
 ) -> list[dict]:
-    memory_context = await resident_profile(deps.memory_records, project_context=area_context, session_id=session_id)
     wiki_context = deps.wiki_context
     wiki_resident = await wiki_context.resident_context() if wiki_context is not None else None
     wiki_retrieval = await wiki_context.retrieval_context(user_message) if wiki_context is not None else None
-    if wiki_resident:
-        memory_context = "\n\n".join(part for part in (memory_context, wiki_resident) if part)
+    memory_context = wiki_resident
 
     skills_context = deps.skill_registry.to_prompt_xml() if deps.skill_registry else None
     directives = load_directives()
@@ -774,7 +767,7 @@ async def prepare_chat(
     area_context = _area_context_from_record(area_record)
     # Area context = the container's topic page (a capability on the area
     # row); plain area chats get None and stay ordinary.
-    area_page_context = _load_legacy_area_page_context(deps.executor, area_record)
+    area_page_context = await _load_area_page_context(deps.wiki_context, area_record)
     context_manifest: list[ContextManifestEntry] = []
     messages = await _prepare_messages(
         deps,
@@ -832,7 +825,6 @@ async def prepare_chat(
         enqueue_run_completed=deps.enqueue_run_completed,
         enqueue_run_failed=deps.enqueue_run_failed,
         dispatch_session_message=deps.dispatch_session_message,
-        memory_curator=deps.memory_curator,
         output_schema=output_schema,
     )
 
@@ -1229,15 +1221,6 @@ async def _record_completed_run(ctx: ChatContext, *, last_seq: int | None) -> No
     )
     await _update_run_client_idempotency(ctx.session_service, ctx.run, RunStatus.COMPLETED.value)
     ctx.run_registry.complete_run(ctx.run.run_id)
-    # Curate USER CHATS into durable memory (one LLM call, admit-gated).
-    # Automation channels and spawned agent sessions are operational
-    # transcripts — memory never reads them (mirrors the sweep's gate).
-    # Fire-and-forget off the response path; the curator tracks the task and
-    # swallows errors. Without this, chats never become memory.
-    curator = ctx.memory_curator
-    state = ctx.session_state
-    if curator is not None and state.session_type == "chat" and state.origin_automation_id is None:
-        curator.schedule_curation(state.session_id)
 
 
 @observed_trace("chat.backgrounded", tags="chat")

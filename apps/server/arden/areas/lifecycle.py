@@ -1,8 +1,7 @@
+import asyncio
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
-from pathlib import Path
 
-from arden.areas.paths import resolve_area_page
+from arden.wiki import WikiService
 
 
 class AreaLifecycleService:
@@ -86,19 +85,15 @@ class AreaPageService:
     def __init__(
         self,
         *,
-        vault_root: Path,
+        wiki: WikiService,
         sessions,
         lifecycle: AreaLifecycleService,
-        write_guard: Callable[[], None] | None = None,
     ) -> None:
-        self._vault_root = vault_root
+        self._wiki = wiki
         self._sessions = sessions
         self._lifecycle = lifecycle
-        self._write_guard = write_guard
 
     async def create(self, area_id: str) -> dict:
-        if self._write_guard is not None:
-            self._write_guard()
         area = await self._sessions.get_area(area_id)
         if area is None:
             raise KeyError(area_id)
@@ -106,28 +101,36 @@ class AreaPageService:
             raise ValueError("Area already has a page")
         slug = self._slug(area["name"])
         suffix = 1
+        snapshot = await asyncio.to_thread(self._wiki.snapshot)
+        paths = {record.resource.path for record in snapshot.pages}
         while True:
             candidate_slug = slug if suffix == 1 else f"{slug}-{suffix}"
             page_path = f"topics/{candidate_slug}.md"
-            page_file = resolve_area_page(self._vault_root, page_path)
-            if not page_file.exists():
+            if page_path not in paths:
                 break
             suffix += 1
-        page_file.parent.mkdir(parents=True, exist_ok=True)
-        page_file.write_text(
-            "---\n"
-            f"title: {area['name']}\n"
-            f"updated: {datetime.now(UTC).date().isoformat()}\n"
-            "---\n\n"
-            f"# {area['name']}\n\n"
-            "## Open loops\n\n"
-            "## Related\n",
-            encoding="utf-8",
+        page = await asyncio.to_thread(
+            self._wiki.create_page,
+            path=page_path,
+            title=area["name"],
+            body=f"# {area['name']}\n\n## Open loops\n\n## Related\n".encode(),
+            expected_head=snapshot.head,
+            actor="user:area",
+            origin="area",
+            reason=f"attach wiki page to Area {area_id}",
         )
         try:
             return await self._lifecycle.update(area_id, page_path=page_path)
         except Exception:
-            page_file.unlink(missing_ok=True)
+            await asyncio.to_thread(
+                self._wiki.archive_page,
+                page.page.page_id,
+                expected_version=page.resource.version_id,
+                base_head=self._wiki.repository.head,
+                actor="backend",
+                origin="area.rollback",
+                reason=f"rollback failed Area page attachment {area_id}",
+            )
             raise
 
     async def detach(self, area_id: str) -> dict:

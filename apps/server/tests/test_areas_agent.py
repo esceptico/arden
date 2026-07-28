@@ -186,10 +186,11 @@ def test_repeated_stable_nomination_updates_without_becoming_new(tmp_path):
     assert [ask.text for ask in store.list("o-1a")] == ["Clearer wording"]
 
 
-def test_observe_scope_is_area_locked_and_can_read_area_transcripts():
+def test_observe_scope_is_area_locked_and_uses_canonical_facts():
     assert matches_scope(tuple(OBSERVE_TOOL_SCOPE), "area_page_patch")
     assert matches_scope(tuple(OBSERVE_TOOL_SCOPE), "area_page_write")
-    assert matches_scope(tuple(OBSERVE_TOOL_SCOPE), "recall")
+    assert matches_scope(tuple(OBSERVE_TOOL_SCOPE), "search_facts")
+    assert matches_scope(tuple(OBSERVE_TOOL_SCOPE), "get_fact")
     assert matches_scope(tuple(OBSERVE_TOOL_SCOPE), "list_recent_sessions")
     assert matches_scope(tuple(OBSERVE_TOOL_SCOPE), "read_session")
     assert matches_scope(tuple(OBSERVE_TOOL_SCOPE), "web_search")
@@ -198,6 +199,7 @@ def test_observe_scope_is_area_locked_and_can_read_area_transcripts():
     assert matches_scope(tuple(OBSERVE_TOOL_SCOPE), "slack_search")
     assert not matches_scope(tuple(OBSERVE_TOOL_SCOPE), "memory_patch")
     assert not matches_scope(tuple(OBSERVE_TOOL_SCOPE), "memory_write")
+    assert not matches_scope(tuple(OBSERVE_TOOL_SCOPE), "recall")
     assert not matches_scope(tuple(OBSERVE_TOOL_SCOPE), "remember")
     assert not matches_scope(tuple(OBSERVE_TOOL_SCOPE), "forget")
     assert not matches_scope(tuple(OBSERVE_TOOL_SCOPE), "send_email")
@@ -282,37 +284,6 @@ def test_custodian_report_is_the_registered_runtime_schema():
 
     assert resolve_output_schema("area_custodian") is AreaCustodianReport
     assert resolve_output_schema("area_ask") is AreaCustodianReport
-
-
-def test_load_area_context_reads_page_or_degrades(tmp_path):
-    from arden.areas.context import load_area_context
-
-    vault = tmp_path / "memory"
-    (vault / "topics").mkdir(parents=True)
-    (vault / "topics" / "o-1a.md").write_text("---\ntitle: O-1A\n---\n# O-1A\n\n## Open loops\n- Find counsel.\n")
-    area = {"area_id": "p1", "name": "O-1A", "page_path": "topics/o-1a.md"}
-
-    ctx = load_area_context(vault, area)
-    assert ctx["title"] == "O-1A"
-    assert "Find counsel." in ctx["page"]
-
-    assert load_area_context(vault, None) is None  # unfiled chat → plain chat
-    assert load_area_context(vault, {"area_id": "p2", "name": "Design", "page_path": None}) is None  # pageless
-    (vault / "topics" / "o-1a.md").unlink()
-    assert load_area_context(vault, area) is None  # missing page → plain chat
-
-
-def test_fact_mode_does_not_inject_legacy_area_page_context(monkeypatch):
-    from arden.services.chat import _load_legacy_area_page_context
-
-    def unexpected_legacy_read(*_args, **_kwargs):
-        raise AssertionError("legacy Area page must not be read")
-
-    monkeypatch.setattr("arden.services.chat.load_area_context", unexpected_legacy_read)
-    executor = SimpleNamespace(tool_services={})
-    area = {"area_id": "p1", "name": "O-1A", "page_path": "topics/o-1a.md"}
-
-    assert _load_legacy_area_page_context(executor, area) is None
 
 
 def test_system_blocks_include_area_block():

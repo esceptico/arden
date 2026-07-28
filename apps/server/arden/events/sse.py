@@ -84,7 +84,6 @@ class EventType(StrEnum):
     TASK_FINISHED = "task_finished"
     AUTOMATION_PROGRESS = "automation_progress"
     AUTOMATION_FINISHED = "automation_finished"
-    AUTOMATION_SUGGESTIONS_UPDATED = "automation_suggestions_updated"
     COMPACTION_STARTED = "compaction_started"
     COMPACTION_FINISHED = "compaction_finished"
     TOKEN_USAGE = "token_usage"
@@ -593,11 +592,6 @@ class AutomationFinishedEvent(SSEEvent):
 
 
 @dataclass(frozen=True)
-class AutomationSuggestionsUpdatedEvent(SSEEvent):
-    type: EventType = field(default=EventType.AUTOMATION_SUGGESTIONS_UPDATED, init=False)
-
-
-@dataclass(frozen=True)
 class CompactionStartedEvent(SSEEvent):
     type: EventType = field(default=EventType.COMPACTION_STARTED, init=False)
     run_id: str = ""
@@ -699,7 +693,6 @@ _EVENT_CLASSES = {
     EventType.STREAM_KEEPALIVE.value: KeepaliveEvent,
     EventType.AUTOMATION_PROGRESS.value: AutomationProgressEvent,
     EventType.AUTOMATION_FINISHED.value: AutomationFinishedEvent,
-    EventType.AUTOMATION_SUGGESTIONS_UPDATED.value: AutomationSuggestionsUpdatedEvent,
     EventType.COMPACTION_STARTED.value: CompactionStartedEvent,
     EventType.COMPACTION_FINISHED.value: CompactionFinishedEvent,
     EventType.TOKEN_USAGE.value: TokenUsageEvent,

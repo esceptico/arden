@@ -17,15 +17,20 @@ from arden.areas.asks import AskStore
 from arden.areas.lifecycle import AreaLifecycleService, AreaPageService
 from arden.areas.models import Ask, areas_from_records
 from arden.areas.service import AreaService
-from arden.areas.suggester import AreaSuggestionStore
 from arden.areas.work_models import AreaWorkSnapshot
 from arden.areas.work_store import AreaWorkConflict
-from arden.memory.pages import parse_page
+from arden.revisions import ManagedFileRepository
 from arden.server.app import app
 from arden.server.routers.areas import asks_router
 from arden.server.routers.areas import router as areas_router
+from arden.wiki import WikiService, create_page
 
-PAGE = "---\ntitle: O-1A\nupdated: 2026-07-05\n---\n# O-1A\n\n## Open loops\n- Find counsel.\n"
+PAGE = create_page(
+    page_id="o-1a-page",
+    title="O-1A",
+    body=b"# O-1A\n\n## Open loops\n- Find counsel.\n",
+    metadata={"updated": "2026-07-05"},
+)
 
 
 class _FakeAreaStore:
@@ -137,7 +142,7 @@ def client(tmp_path: Path):
     svc = AreaService(
         areas=lambda: areas_from_records(list(areas._rows.values())),
         asks=asks,
-        get_page=lambda path: parse_page(PAGE),
+        get_page=lambda path: PAGE,
         pending_approvals=lambda: [
             {"run_id": "r1", "tool_call_id": "t1", "session_id": "s1", "tool_name": "bash", "preview": "gh pr create"}
         ],
@@ -160,19 +165,6 @@ def client(tmp_path: Path):
     test_app = FastAPI()
     test_app.include_router(areas_router)
     test_app.include_router(asks_router)
-    suggestions = AreaSuggestionStore(tmp_path / "suggestions.json")
-    suggestions.replace_suggestions(
-        [
-            {
-                "id": "sg1",
-                "key": "health",
-                "title": "Health",
-                "page_path": "topics/health.md",
-                "rationale": "r",
-                "created_at": "2026-07-07",
-            }
-        ]
-    )
     test_app.state.area_service = svc
 
     class _Automations:
@@ -206,7 +198,7 @@ def client(tmp_path: Path):
         disable_custodian=_disable_custodian,
     )
     test_app.state.area_pages = AreaPageService(
-        vault_root=tmp_path / "memory",
+        wiki=WikiService(ManagedFileRepository(tmp_path / "wiki")),
         sessions=areas,
         lifecycle=test_app.state.area_lifecycle,
     )
@@ -220,8 +212,6 @@ def client(tmp_path: Path):
     test_app.state.request_area_wake = _request_area_wake
     test_app.state.wakes = wakes
     test_app.state.hydrate_area_snapshot = _hydrate_area_snapshot
-    test_app.state.area_suggestions = suggestions
-
     with TestClient(test_app) as c:
         yield c, svc, emitted, o1a["area_id"], areas
 
@@ -574,21 +564,6 @@ def test_create_and_detach_area_page(client):
     assert detached.json()["page_path"] is None
 
 
-def test_create_area_page_reports_cutover_write_guard(client):
-    c, _, _, _, areas = client
-    plain = areas._seed(name="Canonical")
-
-    class BlockedPages:
-        async def create(self, _area_id: str) -> dict:
-            raise PermissionError("legacy memory writes are disabled")
-
-    c.app.state.area_pages = BlockedPages()
-    response = c.post(f"/areas/{plain['area_id']}/page")
-
-    assert response.status_code == 409
-    assert response.json()["detail"] == "legacy memory writes are disabled"
-
-
 def test_detach_area_page_rejects_delegated_area(client):
     c, _, _, o1a, _ = client
 
@@ -628,11 +603,3 @@ def test_get_areas_flat_list(client):
     res = c.get("/areas")
     assert res.status_code == 200
     assert [a["area_id"] for a in res.json()["areas"]] == [o1a]
-
-
-def test_overview_includes_suggestions_and_dismiss_persists(client):
-    c, *_ = client
-    body = c.get("/areas/overview").json()
-    assert [s["key"] for s in body["suggested"]] == ["health"]
-    c.post("/areas/suggestions/health/dismiss")
-    assert c.get("/areas/overview").json()["suggested"] == []

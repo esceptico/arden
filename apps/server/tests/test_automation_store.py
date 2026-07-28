@@ -9,7 +9,7 @@ import arden.database as database
 from arden.automation.models import Automation
 from arden.automation.scheduler import Scheduler
 from arden.automation.store import AutomationStore
-from arden.automation.triggers import CountTrigger, TimeTrigger, parse_triggers
+from arden.automation.triggers import TimeTrigger, parse_triggers
 
 
 @pytest_asyncio.fixture
@@ -186,6 +186,29 @@ async def test_recent_run_statuses_respects_per_task_cap(automation_store: Autom
         await automation_store.record_run_start("A", base + timedelta(minutes=i))
     res = await automation_store.recent_run_statuses(["A"], per_task=4)
     assert len(res["A"]) == 4
+
+
+async def test_latest_completed_runs_ignores_newer_failed_and_running_attempts(automation_store: AutomationStore):
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    completed = await automation_store.record_run_start("A", base)
+    await automation_store.record_run_finish(
+        completed,
+        status="completed",
+        result="ok",
+        error=None,
+        ended_at=base + timedelta(minutes=1),
+    )
+    failed = await automation_store.record_run_start("A", base + timedelta(minutes=2))
+    await automation_store.record_run_finish(
+        failed,
+        status="failed",
+        result=None,
+        error="boom",
+        ended_at=base + timedelta(minutes=3),
+    )
+    await automation_store.record_run_start("A", base + timedelta(minutes=4))
+
+    assert await automation_store.latest_completed_runs(("A", "missing")) == {"A": base + timedelta(minutes=1)}
 
 
 async def test_run_history_truncates_long_result(automation_store: AutomationStore):
@@ -729,106 +752,34 @@ def test_scheduler_constructor_has_no_learning_recorder(automation_store: Automa
 
 
 @pytest.mark.asyncio
-async def test_seed_builtins_schedules_suggester_job(automation_store: AutomationStore):
+async def test_seed_builtins_seeds_exact_canonical_memory_phases(automation_store: AutomationStore):
     from arden.automation.builtins import seed_builtins
-    from arden.constants import BUILTIN_AUTOMATION_SUGGESTER_DAILY_ID
-
-    await seed_builtins(automation_store)
-
-    suggester = await automation_store.get(BUILTIN_AUTOMATION_SUGGESTER_DAILY_ID)
-    assert suggester is not None
-    assert suggester.enabled is True
-    assert suggester.next_run_at is not None
-    assert suggester.description == "Draft relevant automation suggestions from current context."
-    assert suggester.description_source == "manual"
-    assert suggester.prompt == "Draft contextual automation suggestions from memory, chats, and actions."
-
-
-@pytest.mark.asyncio
-async def test_seed_builtins_repairs_missing_next_run_at(automation_store: AutomationStore):
-    from arden.automation.builtins import seed_builtins
-    from arden.constants import BUILTIN_AUTOMATION_SUGGESTER_DAILY_ID
-
-    automation = _automation(
-        BUILTIN_AUTOMATION_SUGGESTER_DAILY_ID,
-        name="Automation Suggester Daily",
-        handler="automation_suggester_daily",
-        builtin=True,
-        enabled=True,
-        next_run_at=None,
+    from arden.constants import (
+        BUILTIN_MEMORY_CONSOLIDATE_ID,
+        BUILTIN_MEMORY_RETENTION_ID,
+        BUILTIN_MEMORY_SYNTHESIZE_ID,
+        BUILTIN_WIKI_MAINTENANCE_ID,
     )
-    await automation_store.save(automation)
 
     await seed_builtins(automation_store)
-
-    repaired = await automation_store.get(BUILTIN_AUTOMATION_SUGGESTER_DAILY_ID)
-    assert repaired is not None
-    assert repaired.next_run_at is not None
-
-
-@pytest.mark.asyncio
-async def test_seed_builtins_respects_user_cadence_and_pause(automation_store: AutomationStore):
-    """Triggers and enabled are user dials once the row exists — re-seeding
-    must not revert an edited schedule or re-enable a paused builtin."""
-    from arden.automation.builtins import seed_builtins
-    from arden.constants import BUILTIN_AUTOMATION_SUGGESTER_DAILY_ID
-
-    await seed_builtins(automation_store)
-    seeded = await automation_store.get(BUILTIN_AUTOMATION_SUGGESTER_DAILY_ID)
-    last_run = datetime(2026, 6, 17, 9, tzinfo=UTC)
-    edited = dc_replace(
-        seeded,
-        triggers=[TimeTrigger(at="21:30")],
-        enabled=False,
-        description="A custom concise summary.",
-        description_source="manual",
-        prompt="Outdated builtin prompt.",
-        last_run_at=last_run,
-        last_result="Previous result.",
-        tool_scope=["current_time"],
-    )
-    await automation_store.save(edited)
-
     await seed_builtins(automation_store)
 
-    kept = await automation_store.get(BUILTIN_AUTOMATION_SUGGESTER_DAILY_ID)
-    assert kept.enabled is False
-    assert [(t.at.hour, t.at.minute) for t in kept.triggers] == [(21, 30)]
-    assert kept.description == "A custom concise summary."
-    assert kept.description_source == "manual"
-    assert kept.prompt == "Draft contextual automation suggestions from memory, chats, and actions."
-    assert kept.last_run_at == last_run
-    assert kept.last_result == "Previous result."
-    assert kept.tool_scope == ["current_time"]
+    rows = {row.task_id: row for row in await automation_store.list_all()}
+    assert set(rows) == {
+        BUILTIN_MEMORY_CONSOLIDATE_ID,
+        BUILTIN_MEMORY_RETENTION_ID,
+        BUILTIN_MEMORY_SYNTHESIZE_ID,
+        BUILTIN_WIKI_MAINTENANCE_ID,
+    }
+    maintenance = rows[BUILTIN_MEMORY_CONSOLIDATE_ID]
+    assert maintenance.handler == "memory_maintenance"
+    assert maintenance.triggers == [TimeTrigger(at="03:00", days="daily")]
+    assert "Never create or rewrite fact text" in maintenance.prompt
 
-
-@pytest.mark.asyncio
-async def test_seed_builtins_switches_retention_contract_for_fact_mode(automation_store: AutomationStore):
-    from arden.automation.builtins import seed_builtins
-    from arden.constants import BUILTIN_MEMORY_RETENTION_ID
-
-    await seed_builtins(automation_store)
-    legacy = await automation_store.get(BUILTIN_MEMORY_RETENTION_ID)
-    assert legacy is not None
-    assert legacy.handler == "memory_retention"
-    assert legacy.tool_scope is None
-    assert legacy.auto_approve is True
-    assert "supersede integration observations older than 90 days" in legacy.prompt
-
-    await automation_store.save(
-        dc_replace(
-            legacy,
-            triggers=[TimeTrigger(at="21:30")],
-            enabled=False,
-        )
-    )
-    await seed_builtins(automation_store, fact_mode=True)
-
-    canonical = await automation_store.get(BUILTIN_MEMORY_RETENTION_ID)
-    assert canonical is not None
-    assert canonical.handler is None
-    assert canonical.auto_approve is True
-    assert canonical.tool_scope == [
+    retention = rows[BUILTIN_MEMORY_RETENTION_ID]
+    assert retention.handler is None
+    assert retention.triggers == [TimeTrigger(at="03:45", days="daily")]
+    assert retention.tool_scope == [
         "search_facts",
         "get_fact",
         "get_fact_history",
@@ -836,191 +787,79 @@ async def test_seed_builtins_switches_retention_contract_for_fact_mode(automatio
         "plan_fact_changes",
         "commit_fact_changes",
     ]
-    assert "Never treat silence or age alone as evidence." in canonical.prompt
-    assert canonical.enabled is False
-    assert [(trigger.at.hour, trigger.at.minute) for trigger in canonical.triggers] == [(21, 30)]
+    assert "Never treat silence or age alone as evidence." in retention.prompt
 
-    await seed_builtins(automation_store)
-    restored = await automation_store.get(BUILTIN_MEMORY_RETENTION_ID)
-    assert restored is not None
-    assert restored.handler == "memory_retention"
-    assert restored.tool_scope is None
-    assert "supersede integration observations older than 90 days" in restored.prompt
-    assert restored.enabled is False
-    assert [(trigger.at.hour, trigger.at.minute) for trigger in restored.triggers] == [(21, 30)]
+    synthesis = rows[BUILTIN_MEMORY_SYNTHESIZE_ID]
+    assert synthesis.handler == "memory_synthesize"
+    assert synthesis.triggers == [TimeTrigger(every="6h")]
+    assert "Canonical fact synthesis" in synthesis.prompt
+
+    wiki = rows[BUILTIN_WIKI_MAINTENANCE_ID]
+    assert wiki.handler == "wiki_maintenance"
+    assert wiki.triggers == [TimeTrigger(every="6h")]
+    assert all(row.enabled and row.next_run_at is not None for row in rows.values())
 
 
 @pytest.mark.asyncio
-async def test_seed_builtins_retires_legacy_only_rows_in_fact_mode(automation_store: AutomationStore):
+async def test_seed_builtins_enforces_system_timing_but_preserves_pause_and_history(
+    automation_store: AutomationStore,
+):
     from arden.automation.builtins import seed_builtins
     from arden.constants import (
-        BUILTIN_AREA_SUGGESTER_ID,
-        BUILTIN_AUTOMATION_SUGGESTER_DAILY_ID,
         BUILTIN_MEMORY_CONSOLIDATE_ID,
-        BUILTIN_MEMORY_DREAM_ID,
         BUILTIN_MEMORY_RETENTION_ID,
         BUILTIN_MEMORY_SYNTHESIZE_ID,
         BUILTIN_WIKI_MAINTENANCE_ID,
     )
 
-    retired = {
-        BUILTIN_AREA_SUGGESTER_ID,
-        BUILTIN_AUTOMATION_SUGGESTER_DAILY_ID,
-        BUILTIN_MEMORY_CONSOLIDATE_ID,
-        BUILTIN_MEMORY_DREAM_ID,
-    }
     await seed_builtins(automation_store)
-    for task_id in retired:
-        assert await automation_store.get(task_id) is not None
-    run_id = await automation_store.record_run_start(BUILTIN_MEMORY_DREAM_ID, datetime.now(UTC))
+    last_run = datetime(2026, 6, 17, 9, tzinfo=UTC)
+    for task_id in (
+        BUILTIN_MEMORY_CONSOLIDATE_ID,
+        BUILTIN_MEMORY_RETENTION_ID,
+        BUILTIN_MEMORY_SYNTHESIZE_ID,
+        BUILTIN_WIKI_MAINTENANCE_ID,
+    ):
+        row = await automation_store.get(task_id)
+        assert row is not None
+        await automation_store.save(
+            dc_replace(
+                row,
+                triggers=[TimeTrigger(every="2h")],
+                cooldown_minutes=17,
+                enabled=False,
+                last_run_at=last_run,
+                last_result="Previous result.",
+            )
+        )
+    run_id = await automation_store.record_run_start(BUILTIN_MEMORY_SYNTHESIZE_ID, last_run)
     await automation_store.record_run_finish(
         run_id,
         status="completed",
-        result="Historical dream result.",
+        result="Historical synthesis result.",
         error=None,
-        ended_at=datetime.now(UTC),
+        ended_at=last_run,
     )
-
-    await seed_builtins(automation_store, fact_mode=True)
-    await seed_builtins(automation_store, fact_mode=True)
-
-    for task_id in retired:
-        assert await automation_store.get(task_id) is None
-    assert await automation_store.get(BUILTIN_MEMORY_RETENTION_ID) is not None
-    assert await automation_store.get(BUILTIN_MEMORY_SYNTHESIZE_ID) is not None
-    assert await automation_store.get(BUILTIN_WIKI_MAINTENANCE_ID) is not None
-    assert (await automation_store.list_runs(BUILTIN_MEMORY_DREAM_ID))[0]["result"] == "Historical dream result."
-
-
-@pytest.mark.asyncio
-async def test_seed_builtins_rejects_non_builtin_retired_id_in_fact_mode(automation_store: AutomationStore):
-    from arden.automation.builtins import seed_builtins
-    from arden.constants import BUILTIN_MEMORY_DREAM_ID
-
-    await automation_store.save(_automation(BUILTIN_MEMORY_DREAM_ID))
-
-    with pytest.raises(RuntimeError, match="reserved retired builtin id"):
-        await seed_builtins(automation_store, fact_mode=True)
-
-
-@pytest.mark.asyncio
-async def test_seed_builtins_seeds_fact_synthesis_on_six_hour_backstop(automation_store: AutomationStore):
-    from arden.automation.builtins import seed_builtins
-    from arden.constants import BUILTIN_MEMORY_SYNTHESIZE_ID
-
-    await seed_builtins(automation_store, fact_mode=True)
-
-    synthesis = await automation_store.get(BUILTIN_MEMORY_SYNTHESIZE_ID)
-    assert synthesis is not None
-    assert synthesis.triggers == [TimeTrigger(every="6h")]
-    assert synthesis.cooldown_minutes is None
-    assert "Canonical fact synthesis" in synthesis.prompt
-    assert synthesis.next_run_at is not None
-
-
-@pytest.mark.asyncio
-async def test_seed_builtins_seeds_fact_mode_wiki_maintenance_once(automation_store: AutomationStore):
-    from arden.automation.builtins import seed_builtins
-    from arden.constants import BUILTIN_WIKI_MAINTENANCE_ID
 
     await seed_builtins(automation_store)
-    assert await automation_store.get(BUILTIN_WIKI_MAINTENANCE_ID) is None
 
-    await seed_builtins(automation_store, fact_mode=True)
-
-    maintenance = await automation_store.get(BUILTIN_WIKI_MAINTENANCE_ID)
-    assert maintenance is not None
-    assert maintenance.handler == "wiki_maintenance"
-    assert maintenance.triggers == [TimeTrigger(every="6h")]
-    assert maintenance.cooldown_minutes is None
-    assert maintenance.next_run_at is not None
-
-    last_run = datetime(2026, 6, 17, 9, tzinfo=UTC)
-    custom_triggers = [TimeTrigger(every="2h"), CountTrigger(every_n=3)]
-    await automation_store.save(
-        dc_replace(
-            maintenance,
-            enabled=False,
-            triggers=custom_triggers,
-            cooldown_minutes=17,
-            last_run_at=last_run,
-            last_result="Previous result.",
-        )
+    expected = {
+        BUILTIN_MEMORY_CONSOLIDATE_ID: [TimeTrigger(at="03:00", days="daily")],
+        BUILTIN_MEMORY_RETENTION_ID: [TimeTrigger(at="03:45", days="daily")],
+        BUILTIN_MEMORY_SYNTHESIZE_ID: [TimeTrigger(every="6h")],
+        BUILTIN_WIKI_MAINTENANCE_ID: [TimeTrigger(every="6h")],
+    }
+    for task_id, triggers in expected.items():
+        row = await automation_store.get(task_id)
+        assert row is not None
+        assert row.triggers == triggers
+        assert row.cooldown_minutes is None
+        assert row.enabled is False
+        assert row.last_run_at == last_run
+        assert row.last_result == "Previous result."
+    assert (await automation_store.list_runs(BUILTIN_MEMORY_SYNTHESIZE_ID))[0]["result"] == (
+        "Historical synthesis result."
     )
-
-    await seed_builtins(automation_store, fact_mode=True)
-
-    kept = await automation_store.get(BUILTIN_WIKI_MAINTENANCE_ID)
-    assert kept is not None
-    assert kept.enabled is False
-    assert kept.triggers == custom_triggers
-    assert kept.cooldown_minutes == 17
-    assert kept.last_run_at == last_run
-    assert kept.last_result == "Previous result."
-
-
-@pytest.mark.asyncio
-async def test_seed_builtins_migrates_only_exact_legacy_synthesis_defaults(automation_store: AutomationStore):
-    from arden.automation.builtins import seed_builtins
-    from arden.constants import BUILTIN_MEMORY_SYNTHESIZE_ID
-
-    await seed_builtins(automation_store)
-    synthesis = await automation_store.get(BUILTIN_MEMORY_SYNTHESIZE_ID)
-    assert synthesis is not None
-    last_run = datetime(2026, 1, 1, tzinfo=UTC)
-    await automation_store.save(
-        dc_replace(
-            synthesis,
-            last_run_at=last_run,
-            next_run_at=datetime(2026, 1, 2, tzinfo=UTC),
-            last_result="old result",
-        )
-    )
-
-    await seed_builtins(automation_store, fact_mode=True)
-
-    migrated = await automation_store.get(BUILTIN_MEMORY_SYNTHESIZE_ID)
-    assert migrated is not None
-    assert migrated.triggers == [TimeTrigger(every="6h")]
-    assert migrated.cooldown_minutes is None
-    assert migrated.next_run_at == last_run + timedelta(hours=6)
-    assert migrated.next_run_at < datetime.now(UTC)  # overdue stays due
-    assert migrated.last_result == "old result"
-    assert migrated.description == "Publish fact-backed wiki pages from canonical facts."
-    assert migrated.enabled is True
-
-
-@pytest.mark.asyncio
-async def test_seed_builtins_keeps_custom_synthesis_cadence_cooldown_and_pause(automation_store: AutomationStore):
-    from arden.automation.builtins import seed_builtins
-    from arden.constants import BUILTIN_MEMORY_SYNTHESIZE_ID
-
-    await seed_builtins(automation_store)
-    synthesis = await automation_store.get(BUILTIN_MEMORY_SYNTHESIZE_ID)
-    assert synthesis is not None
-    custom_triggers = [TimeTrigger(every="2h"), CountTrigger(every_n=3)]
-    await automation_store.save(
-        dc_replace(
-            synthesis,
-            triggers=custom_triggers,
-            cooldown_minutes=17,
-            enabled=False,
-            next_run_at=None,
-            description="Keep this description.",
-            description_source="manual",
-        )
-    )
-
-    await seed_builtins(automation_store, fact_mode=True)
-
-    kept = await automation_store.get(BUILTIN_MEMORY_SYNTHESIZE_ID)
-    assert kept is not None
-    assert kept.triggers == custom_triggers
-    assert kept.cooldown_minutes == 17
-    assert kept.enabled is False
-    assert kept.next_run_at is None
-    assert kept.description == "Keep this description."
-    assert "Canonical fact synthesis" in kept.prompt
 
 
 @pytest.mark.asyncio

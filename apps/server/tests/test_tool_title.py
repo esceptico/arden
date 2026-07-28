@@ -62,9 +62,7 @@ def test_title_is_stripped_before_execute_even_for_forbid_models():
     reg.register("readish", _StrictTool(), source="_system")
     # The model emits display metadata alongside the real arg; an extra="forbid"
     # input model would raise if it reached the tool — the registry must strip it.
-    res = asyncio.run(
-        reg.execute("readish", None, {DISPLAY_TITLE_ARG: "Reading the doc", "path": "a.py"})
-    )
+    res = asyncio.run(reg.execute("readish", None, {DISPLAY_TITLE_ARG: "Reading the doc", "path": "a.py"}))
     assert not res.is_error
     assert res.content == "ok:a.py"
 

@@ -30,9 +30,9 @@ AUTOMATION_BUS_KEY = "automation:events"
 
 _logger = get_logger(__name__)
 
-# Builtin daily memory maintenance phases. When multiple phases are overdue
-# after sleep/offline time, catch them up in this order on the same boot.
-_CATCH_UP_HANDLERS = {"memory_consolidate"}
+# Builtin daily memory maintenance phases. When one is overdue after
+# sleep/offline time, catch it up on boot.
+_CATCH_UP_HANDLERS = {"memory_maintenance"}
 _CATCH_UP_CADENCE = timedelta(hours=24)
 _FACT_SYNTHESIS_BACKSTOP = TimeTrigger(every="6h")
 _WIKI_MAINTENANCE_BACKSTOP = TimeTrigger(every="6h")
@@ -86,6 +86,7 @@ class RunSkipped(Exception):
 # would re-enter mid-conversation, post would race the in-flight run on
 # session_service writes.
 LoopFireGate = Callable[[Automation], bool]
+RunFinishedCallback = Callable[[str, bool], Awaitable[None]]
 
 
 class Scheduler:
@@ -93,9 +94,11 @@ class Scheduler:
         self,
         store: AutomationStore,
         build_deps: Callable[[], OperatorDeps],
+        on_run_finished: RunFinishedCallback | None = None,
     ):
         self.store = store
         self._build_deps = build_deps
+        self._on_run_finished = on_run_finished
         self._bus_registry: BusRegistry | None = None
         self._task: asyncio.Task | None = None
         self._wake_task: asyncio.Task | None = None
@@ -298,7 +301,7 @@ class Scheduler:
     def _should_catch_up_missed(automation: Automation, now: datetime) -> bool:
         """Whether an overdue built-in must run now rather than skip ahead.
 
-        Legacy daily consolidation keeps its explicit catch-up policy. The
+        Daily maintenance keeps its explicit catch-up policy. The
         canonical fact synthesis interval is also a reliability backstop, so
         an offline migration must not turn an already-due publication into a
         future six-hour slot during startup reconciliation.
@@ -719,6 +722,11 @@ class Scheduler:
                     await self._start_next_queued_event_if_idle(automation.task_id)
                 except Exception:
                     _logger.exception("Failed to start next queued event for automation %s", automation.task_id)
+            if not detached and self._on_run_finished is not None:
+                try:
+                    await self._on_run_finished(automation.task_id, success)
+                except Exception:
+                    _logger.exception("Automation completion callback failed for %s", automation.task_id)
             if event_settlement_error is not None:
                 raise RuntimeError(
                     f"Failed to settle queued automation event {event_queue_id}"

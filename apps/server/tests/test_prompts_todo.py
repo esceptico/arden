@@ -44,9 +44,9 @@ def test_build_system_blocks_records_deterministic_context_manifest():
     build_system_blocks(source_details={}, memory_context="Known preference", context_manifest=first)
     build_system_blocks(source_details={}, memory_context="Known preference", context_manifest=second)
 
-    memory = next(entry for entry in first if entry.content_type == "memory_context")
-    assert memory.source == "memory"
-    assert memory.ref == "resident_profile"
+    memory = next(entry for entry in first if entry.content_type == "wiki_context")
+    assert memory.source == "wiki"
+    assert memory.ref == "resident_pages"
     assert memory.selection_reason == "activated for this session"
-    assert memory.size_bytes == len(b"## MEMORY CONTEXT\nKnown preference")
+    assert memory.size_bytes == len(b"## WIKI CONTEXT\nKnown preference")
     assert [entry.context_id for entry in first] == [entry.context_id for entry in second]

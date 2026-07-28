@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from arden.revisions import Archive, ChangeSet, Create, ManagedFileRepository, RevisionConflictError
+from arden.revisions import Archive, ChangeSet, Create, ManagedFileRepository, RevisionConflictError, Update
 from arden.wiki import LinkStatus, WikiAmbiguityError, WikiService, WikiValidationError, create_page
 
 
@@ -45,6 +45,112 @@ def test_create_read_and_reject_malformed_resource_identity(tmp_path: Path) -> N
     )
     with pytest.raises(WikiValidationError, match="expected resource identity"):
         service.list_pages()
+
+
+def test_update_page_preserves_exact_bytes_and_requires_page_and_tree_versions(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    service = WikiService(repo)
+    original = service.create_page(path="notes/one.md", title="One", page_id="one")
+    candidate = (
+        b"---\n"
+        b"page_id: one\n"
+        b"title: Updated\n"
+        b"aliases:\n"
+        b"- First\n"
+        b"lifecycle: active\n"
+        b"nested:\n"
+        b"  values: [one, two]\n"
+        b"---\n"
+        b"Exact body bytes.\n"
+    )
+
+    updated = service.update_page(
+        "one",
+        content=candidate,
+        expected_version=original.resource.version_id,
+        expected_head=repo.head,
+    )
+
+    assert updated.content == candidate
+    assert repo.read("one") == candidate
+    assert updated.page.page_id == "one"
+    assert updated.page.title == "Updated"
+    assert updated.page.metadata["nested"]["values"] == ("one", "two")
+    commit = repo.history(resource_id="one", limit=1)[0]
+    assert (commit.actor, commit.origin, commit.reason) == ("user:desktop", "desktop", "edit wiki page")
+
+    head = repo.head
+    with pytest.raises(RevisionConflictError, match="resource one changed"):
+        service.update_page(
+            "one",
+            content=candidate + b"stale",
+            expected_version=original.resource.version_id,
+            expected_head=head,
+        )
+    with pytest.raises(WikiValidationError, match="expected resource identity"):
+        service.update_page(
+            "one",
+            content=candidate.replace(b"page_id: one", b"page_id: other"),
+            expected_version=updated.resource.version_id,
+            expected_head=head,
+        )
+    with pytest.raises(WikiValidationError, match="preserve active lifecycle"):
+        service.update_page(
+            "one",
+            content=candidate.replace(b"lifecycle: active", b"lifecycle: redirect\nredirect_to: one"),
+            expected_version=updated.resource.version_id,
+            expected_head=head,
+        )
+
+    repo.commit(
+        ChangeSet(
+            operations=(Update("one", updated.resource.version_id, candidate + b"concurrent"),),
+            actor="test",
+            origin="test",
+            reason="race",
+            idempotency_key="race",
+            expected_head=head,
+        )
+    )
+    with pytest.raises(RevisionConflictError, match="current head changed"):
+        service.update_page(
+            "one",
+            content=candidate + b"stale tree",
+            expected_version=updated.resource.version_id,
+            expected_head=head,
+        )
+
+
+def test_ordinary_page_operations_cannot_take_over_backend_health(tmp_path: Path) -> None:
+    fresh = WikiService(_repo(tmp_path / "fresh"))
+    with pytest.raises(WikiValidationError, match="backend-managed"):
+        fresh.create_page(path="Health.md", title="Reserved")
+
+    service = WikiService(_repo(tmp_path))
+    service.publish_health(body=b"Healthy.\n", base_head=None)
+    health = service.read_page("health")
+
+    with pytest.raises(WikiValidationError, match="backend-managed"):
+        service.update_page(
+            "health",
+            content=health.content,
+            expected_version=health.resource.version_id,
+            expected_head=service.repository.head,
+        )
+    with pytest.raises(WikiValidationError, match="backend-managed"):
+        service.archive_page(
+            "health",
+            expected_version=health.resource.version_id,
+            base_head=service.repository.head,
+        )
+    with pytest.raises(WikiValidationError, match="backend-managed"):
+        service.prepare_rename(
+            "health",
+            new_path="other.md",
+            new_title="Other",
+            expected_version=health.resource.version_id,
+            base_head=service.repository.head,
+        )
 
 
 def test_backlinks_resolve_title_alias_and_path_and_exclude_hidden_contexts(tmp_path: Path) -> None:

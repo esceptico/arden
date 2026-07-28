@@ -143,36 +143,12 @@ SCHEDULER_EVENT_MAX_RETRIES = 5
 SCHEDULER_EVENT_RETRY_BASE_SECONDS = 30
 SCHEDULER_EVENT_RETRY_MAX_SECONDS = 1800
 
-BUILTIN_AUTOMATION_SUGGESTER_DAILY_ID = "builtin-automation-suggester-daily"
-AUTOMATION_SUGGESTER_DAILY_AT = "07:00"
 BUILTIN_MEMORY_CONSOLIDATE_ID = "builtin-memory-consolidate"
 MEMORY_CONSOLIDATE_AT = "03:00"
-# Cross-domain DREAM: nightly reflection that authors cited cross-topic insights.
-BUILTIN_MEMORY_DREAM_ID = "builtin-memory-dream"
-MEMORY_DREAM_AT = "04:00"
-# Nightly file-native SYNTHESIS: rewrite each page's prose zone from its atoms.
 BUILTIN_MEMORY_SYNTHESIZE_ID = "builtin-memory-synthesize"
-MEMORY_SYNTHESIZE_AT = "03:30"
-# Synthesis also fires after this many completed conversation runs (so topic prose
-# stays current, not 24h stale), throttled by the cooldown. Stale-gated => cheap.
-MEMORY_SYNTHESIZE_EVERY_N_RUNS = 25
-MEMORY_SYNTHESIZE_COOLDOWN_MINUTES = 30
-# Fact-mode cross-page consistency pass.
 BUILTIN_WIKI_MAINTENANCE_ID = "builtin-wiki-maintenance"
-# Deterministic nightly RETENTION (forgetting): TTL-by-kind + salience floor.
 BUILTIN_MEMORY_RETENTION_ID = "builtin-memory-retention"
 MEMORY_RETENTION_AT = "03:45"
-MEMORY_RETENTION_TTL_DURABLE_DAYS = 730  # fact/changelog
-MEMORY_RETENTION_TTL_TRANSIENT_DAYS = 180  # source (re-findable pointers)
-# Raw integration observations are high-volume and low-trust: keep them short so
-# they don't accrete. The dream promotes the valuable ones into durable insights
-# (src:dreamer, fact TTL) before they expire; the rest age out.
-MEMORY_RETENTION_TTL_PROVISIONAL_DAYS = 90  # machine-authored dream insights (provisional by construction)
-# An entity earns its own entities/<slug>.md page only once it has this many
-# active atoms; below it, atoms park on me.md (remembering their entity) so a
-# single stray label can't spawn a dead-end one-fact topic page.
-MEMORY_MIN_ENTITY_RECORDS = 2
-MAX_AUTOMATION_SUGGESTIONS = 6
 # --- Monitor ---
 
 MONITOR_POLL_INTERVAL = 300  # 5 minutes
@@ -192,10 +168,7 @@ assert AUTOMATION_EVENT_APPROACHING_DEFAULT_LEAD_MINUTES <= MONITOR_EVENT_APPROA
 # --- Areas ---
 
 AREAS_STATE_FILE = "areas-state.json"
-AREAS_SUGGESTIONS_FILE = "areas-suggestions.json"
 AREAS_AGENT_STATE_FILE = "areas-agent-state.json"
-BUILTIN_AREA_SUGGESTER_ID = "builtin-area-suggester"
-AREA_SUGGESTER_DAILY_AT = "07:15"
 AREA_AGENT_HANDLER = "area_agent"
 AREA_AGENT_DAILY_AT = "06:30"
 

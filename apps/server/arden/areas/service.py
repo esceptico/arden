@@ -8,7 +8,7 @@ from arden.areas.models import Area, Ask, AskState
 from arden.areas.projection import page_summary
 from arden.areas.work_models import AreaWorkSnapshot
 from arden.constants import AREA_ATTENTION_PRESETS, UNFILED_ASK_TITLE
-from arden.memory.pages import Page
+from arden.wiki.pages import WikiPage
 
 
 class AreaService:
@@ -16,7 +16,7 @@ class AreaService:
         self,
         areas: Callable[[], list[Area]],
         asks: AskStore,
-        get_page: Callable[[str], Page],
+        get_page: Callable[[str], WikiPage],
         pending_approvals: Callable[[], list[dict]],
         session_area: Callable[[str], str | None],
         area_automations: Callable[[str], list[dict]],
@@ -86,7 +86,10 @@ class AreaService:
     def _page_summary(self, s: Area) -> dict:
         if not s.page_path:
             return {"title": s.title, "updated": "", "open_loops": [], "related": []}
-        return page_summary(self._get_page(s.page_path))
+        try:
+            return page_summary(self._get_page(s.page_path))
+        except KeyError:
+            return {"title": s.title, "updated": "", "open_loops": [], "related": []}
 
     def overview(self) -> dict:
         areas = self._areas()

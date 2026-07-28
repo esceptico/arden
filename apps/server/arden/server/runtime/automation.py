@@ -1,6 +1,5 @@
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 from pydantic import ValidationError
 
@@ -9,11 +8,9 @@ from arden.areas.agent import AreaCustodianReport, custodian_contract, record_ar
 from arden.areas.asks import AskStore
 from arden.areas.custodian import CustodianStore
 from arden.areas.models import Area, areas_from_records
-from arden.areas.suggester import AreaSuggester, AreaSuggestionStore
 from arden.automation.builtins import seed_builtins
 from arden.automation.scheduler import Scheduler
 from arden.automation.service import AutomationService
-from arden.automation.suggestions import AutomationSuggester, AutomationSuggestion
 from arden.automation.triggers import TimeTrigger
 from arden.config import Config
 from arden.constants import (
@@ -22,12 +19,10 @@ from arden.constants import (
     AREA_ASK_IGNORED_DAYS,
     AREAS_AGENT_STATE_FILE,
     AREAS_STATE_FILE,
-    AREAS_SUGGESTIONS_FILE,
-    BUILTIN_AREA_SUGGESTER_ID,
     BUILTIN_MEMORY_SYNTHESIZE_ID,
     BUILTIN_WIKI_MAINTENANCE_ID,
 )
-from arden.events.sse import AreasChangedEvent, AutomationSuggestionsUpdatedEvent, MemoryChangedEvent
+from arden.events.sse import AreasChangedEvent, MemoryChangedEvent
 from arden.integrations.calendar.client import MultiCalendarSource
 from arden.logging import get_logger
 from arden.monitor.calendar import CalendarMonitor
@@ -41,10 +36,6 @@ _logger = get_logger(__name__)
 _WIKI_MAINTENANCE_RETRY_DELAY = timedelta(minutes=1)
 
 
-class SuggesterUnavailableError(Exception):
-    """Raised when the automation suggester cannot run (memory or cheap_llm missing)."""
-
-
 class AutomationRuntime:
     def __init__(
         self,
@@ -52,66 +43,53 @@ class AutomationRuntime:
         stores: Stores,
         config: Config,
         build_operator_deps: Callable[[], OperatorDeps],
-        get_records: Callable[[], object | None],
-        get_chat_connector: Callable[[], object | None],
         get_calendar_source: Callable[[], object | None],
         get_slack_client: Callable[[], object | None],
         get_cheap_llm: Callable[[], object | None],
         cheap_model: str | None,
         indexer: Indexer | None,
-        get_consolidate: Callable[[], object | None] = lambda: None,
+        get_fact_maintenance: Callable[[], object | None] = lambda: None,
         get_fact_synthesis: Callable[[], object | None] = lambda: None,
         get_wiki_maintenance: Callable[[], object | None] = lambda: None,
         synthesis_is_current: Callable[[], Awaitable[bool]] | None = None,
         project_wiki_health: Callable[[], Awaitable[None]] | None = None,
-        get_knowledge: Callable[[], object | None] = lambda: None,
-        get_integration_clients: Callable[[], dict[str, object]] = dict,
+        on_automation_finished: Callable[[str, bool], Awaitable[None]] | None = None,
         get_notifiers: Callable[[], object | None] = lambda: None,
     ):
         self.stores = stores
         self.config = config
-        self.get_records = get_records
         self.get_calendar_source = get_calendar_source
         self.get_slack_client = get_slack_client
-        self.get_cheap_llm = get_cheap_llm
-        self.get_consolidate = get_consolidate
+        self.get_fact_maintenance = get_fact_maintenance
         self.get_fact_synthesis = get_fact_synthesis
         self.get_wiki_maintenance = get_wiki_maintenance
         self.synthesis_is_current = synthesis_is_current
         self.project_wiki_health = project_wiki_health
-        self.get_knowledge = get_knowledge
-        self.get_integration_clients = get_integration_clients
-        self.cheap_model = cheap_model
         self.build_operator_deps = build_operator_deps
         self.area_asks = AskStore(config.arden_dir / AREAS_STATE_FILE)
         self.custodians = CustodianStore(config.arden_dir / AREAS_AGENT_STATE_FILE)
         self.get_notifiers = get_notifiers
-        self.area_suggestions = AreaSuggestionStore(config.arden_dir / AREAS_SUGGESTIONS_FILE)
         self.scheduler = Scheduler(
             store=stores.automations,
             build_deps=build_operator_deps,
+            on_run_finished=on_automation_finished,
         )
         self.automation_service = AutomationService(
             store=stores.automations,
             scheduler=self.scheduler,
             session_service=stores.sessions,
             get_slack_client=self.get_slack_client,
-            get_cheap_llm=self.get_cheap_llm,
-            description_model=self.cheap_model,
+            get_cheap_llm=get_cheap_llm,
+            description_model=cheap_model,
         )
         self.outbox_runtime = RuntimeOutbox(
             outbox_store=stores.outbox,
             automation_store=stores.automations,
             scheduler=self.scheduler,
             indexer=indexer,
-            get_chat_connector=get_chat_connector,
             on_area_run=self._on_area_run_completed,
         )
         self.monitor: Monitor | None = None
-
-    def _fact_mode(self) -> bool:
-        knowledge = self.get_knowledge()
-        return bool(knowledge is not None and getattr(knowledge, "facts_ready", False))
 
     async def load_areas(self) -> list[Area]:
         """Areas are the capability-bearing areas (unification: one
@@ -249,8 +227,6 @@ class AutomationRuntime:
         """A domain event happened: note it for the custodian and, budget and
         pause permitting, pull the next run earlier (debounced so a burst of
         events coalesces into one run)."""
-        if self._fact_mode():
-            return
         record = await self.stores.sessions.get_area(area_id)
         if record is None or record.get("autonomy") is None:
             return  # no standing agent to wake
@@ -272,9 +248,6 @@ class AutomationRuntime:
 
     async def sync_area_custodian(self, area: dict) -> None:
         """Synchronously reconcile one live Area into its exact contract."""
-        if self._fact_mode():
-            await self.disable_area_custodian(area["area_id"])
-            return
         projected = Area(
             key=area["area_id"],
             title=area["name"],
@@ -296,16 +269,8 @@ class AutomationRuntime:
 
     async def start_scheduler(self) -> None:
         self.scheduler.register_handler(
-            "automation_suggester_daily",
-            self._build_automation_suggester_handler(),
-        )
-        self.scheduler.register_handler(
-            "memory_consolidate",
-            self._build_memory_consolidate_handler(),
-        )
-        self.scheduler.register_handler(
-            "memory_dream",
-            self._build_memory_dream_handler(),
+            "memory_maintenance",
+            self._build_fact_maintenance_handler(),
         )
         self.scheduler.register_handler(
             "memory_synthesize",
@@ -315,141 +280,41 @@ class AutomationRuntime:
             "wiki_maintenance",
             self._build_wiki_maintenance_handler(),
         )
-        self.scheduler.register_handler(
-            "memory_retention",
-            self._build_memory_retention_handler(),
-        )
-        self.scheduler.register_handler(
-            "area_suggester_daily",
-            self._build_area_suggester_handler(),
-        )
-        fact_mode = self._fact_mode()
-        await seed_builtins(
-            self.stores.automations,
-            fact_mode=fact_mode,
-        )
-        if fact_mode:
-            await self._retire_fact_mode_area_state()
-        else:
-            await self._seed_area_automations()
-            await self._kick_first_area_suggestion()
+        await seed_builtins(self.stores.automations)
+        await self._seed_area_automations()
         await compile_schedules_to_automations(".", self.stores.automations)
         await self.automation_service.backfill_channels()
         self.scheduler.start()
         self.outbox_runtime.start()
 
-    async def _retire_fact_mode_area_state(self) -> None:
-        """Remove legacy page writers while preserving Area records and run history."""
-
-        for automation in await self.stores.automations.list_all():
-            if automation.task_id.startswith("area:"):
-                await self.stores.automations.delete(automation.task_id)
-        self.area_suggestions.replace_suggestions([])
-        await self.stores.automations.replace_active_suggestions([])
-
-    def _build_automation_suggester_handler(self):
+    def _build_fact_maintenance_handler(self):
         async def handler(context: dict | None) -> str | None:
-            return await self._run_suggester()
-
-        return handler
-
-    def _build_memory_consolidate_handler(self):
-        async def handler(context: dict | None) -> str | None:
-            knowledge = self.get_knowledge()
-            if knowledge is not None and not getattr(knowledge, "memory_writes_enabled", True):
-                return "legacy memory writes disabled after managed wiki cutover"
-            consolidate = self.get_consolidate()
-            if consolidate is None:
-                return "memory consolidation unavailable (no memory model configured)"
-            totals: dict[str, int] | None = None
-            # run_once is O(delta)-bounded (200/call); loop so one scheduled run
-            # drains the day's backlog. Empty pass -> done.
-            for _ in range(8):
-                rep = await consolidate.run_once()
-                if totals is None:
-                    totals = dict.fromkeys(rep.summary_counts, 0)
-                for key, value in rep.summary_counts.items():
-                    totals[key] += value
-                if not rep.changed_memory:
-                    break
-            assert totals is not None
-            ordered_keys = (
-                "merged",
-                "superseded",
-                "dropped",
-                "retyped",
-                "relabeled",
-                "reclassified",
-                "pruned",
+            maintenance = self.get_fact_maintenance()
+            if maintenance is None:
+                return "fact maintenance unavailable (no memory model configured)"
+            result = await maintenance.run()
+            if result.empty:
+                return "fact maintenance idle"
+            return (
+                f"fact maintenance: reviewed {result.reviewed_clusters}; "
+                f"amended {result.amended_facts}; merged {result.merged_facts}"
             )
-            return ", ".join(f"{key} {totals[key]}" for key in ordered_keys if key in totals)
-
-        return handler
-
-    def _build_memory_dream_handler(self):
-        async def handler(context: dict | None) -> str | None:
-            knowledge = self.get_knowledge()
-            if knowledge is None:
-                return "memory dream unavailable (memory not ready)"
-            if not knowledge.memory_writes_enabled:
-                return "legacy memory writes disabled after managed wiki cutover"
-            if not knowledge.memory_ready:
-                return "memory dream unavailable (memory not ready)"
-            from arden.memory.dreamer import run_dream
-            from arden.memory.file_store import load_conventions
-            from arden.memory.maintenance import append_learnings, read_learnings
-            from arden.memory.models import now_iso
-
-            llm, model = knowledge._memory_llm()
-            effort = knowledge._memory_reasoning_effort(knowledge.config.memory_model)
-            # B: per-automation continual learning — read prior gotchas, append new ones.
-            root = knowledge.record_store._root
-            learnings = read_learnings(root, "memory_dream")
-            summary, new = await run_dream(
-                knowledge.record_store,
-                llm,
-                model,
-                reasoning_effort=effort,
-                conventions=load_conventions(),
-                learnings=learnings,
-            )
-            append_learnings(root, "memory_dream", new, date=now_iso())
-            return summary
 
         return handler
 
     def _build_memory_synthesize_handler(self):
         async def handler(context: dict | None) -> str | None:
             try:
-                knowledge = self.get_knowledge()
-                if knowledge is not None and getattr(knowledge, "facts_ready", False):
-                    synthesis = self.get_fact_synthesis()
-                    if synthesis is None:
-                        return "fact synthesis unavailable (no memory model configured)"
-                    result = await synthesis.run()
-                    if result.empty:
-                        return "fact synthesis idle"
-                    return (
-                        f"fact synthesis: {result.published_pages} page(s) published"
-                        f"; archived {result.skipped_archived}; under threshold {result.skipped_under_threshold}"
-                    )
-                if knowledge is None:
-                    return "memory synthesis unavailable (memory not ready)"
-                if not knowledge.memory_writes_enabled:
-                    return "legacy memory writes disabled after managed wiki cutover"
-                if not knowledge.memory_ready:
-                    return "memory synthesis unavailable (memory not ready)"
-                from arden.memory.synthesize import run_synthesis
-
-                llm, model = knowledge._memory_llm()
-                effort = knowledge._memory_reasoning_effort(knowledge.config.memory_model)
-                # Tag untagged records with their named subject FIRST, so recurring people/
-                # orgs/products promote to topic pages that this same pass then synthesizes.
-                tagged = 0
-                if knowledge.memory_curator is not None:
-                    tagged = await knowledge.memory_curator.backfill_entity_labels()
-                summary = await run_synthesis(knowledge.record_store, llm, model, reasoning_effort=effort)
-                return f"{summary} (+{tagged} entity tags)" if tagged else summary
+                synthesis = self.get_fact_synthesis()
+                if synthesis is None:
+                    return "fact synthesis unavailable (no memory model configured)"
+                result = await synthesis.run()
+                if result.empty:
+                    return "fact synthesis idle"
+                return (
+                    f"fact synthesis: {result.published_pages} page(s) published"
+                    f"; archived {result.skipped_archived}; under threshold {result.skipped_under_threshold}"
+                )
             finally:
                 await self._refresh_wiki_health()
 
@@ -459,9 +324,6 @@ class AutomationRuntime:
         async def handler(context: dict | None) -> str:
             refresh_health = False
             try:
-                knowledge = self.get_knowledge()
-                if knowledge is None or not getattr(knowledge, "facts_ready", False):
-                    return "wiki maintenance unavailable before canonical fact cutover"
                 if self.synthesis_is_current is None or not await self.synthesis_is_current():
                     task_id = context.get("task_id") if isinstance(context, dict) else None
                     if task_id == BUILTIN_WIKI_MAINTENANCE_ID:
@@ -512,60 +374,6 @@ class AutomationRuntime:
             await self.project_wiki_health()
         except Exception:
             _logger.warning("wiki health projection failed after automation outcome", exc_info=True)
-
-    def _build_memory_retention_handler(self):
-        async def handler(context: dict | None) -> str | None:
-            knowledge = self.get_knowledge()
-            if knowledge is None:
-                return "memory retention unavailable (memory not ready)"
-            if not knowledge.memory_writes_enabled:
-                return "legacy memory writes disabled after managed wiki cutover"
-            if not knowledge.memory_ready:
-                return "memory retention unavailable (memory not ready)"
-            from arden.memory.retention import run_retention
-
-            store = knowledge.record_store
-            report = await run_retention(store)
-            # Retention tombstones atoms; fold any entity page that just dropped
-            # below the promotion threshold back into me.md the same night.
-            stats = await store.reconcile_entities()
-            detail = f"; entities {stats}" if (stats["promoted"] or stats["demoted"]) else ""
-            return report.summary() + detail
-
-        return handler
-
-    def _build_area_suggester_handler(self):
-        async def handler(context: dict | None) -> str | None:
-            cheap_llm = self.get_cheap_llm()
-            if cheap_llm is None:
-                return "area suggester unavailable (no cheap model configured)"
-            attached = {Path(s.page_path).stem for s in await self.load_areas() if s.page_path}
-            suggester = AreaSuggester(
-                attached_page_slugs=attached,
-                vault_dir=self.config.memory_artifacts_dir,
-                store=self.area_suggestions,
-                cheap_llm=cheap_llm,
-                model=self.cheap_model,
-            )
-            summary = await suggester.run()
-            # Fresh suggestions ride /areas/overview — nudge an open desktop
-            # to refetch, or the nightly run stays invisible until reload.
-            await self.scheduler.emit_automation_event(AreasChangedEvent())
-            return summary
-
-        return handler
-
-    async def _kick_first_area_suggestion(self) -> None:
-        """Don't make a fresh install wait a day for its first suggestions:
-        pull the builtin's next run to now so the scheduler fires it on this
-        tick. Guard on last_run_at, NOT the suggestions file — a run killed
-        mid-flight (a quick restart) advances next_run to the far daily slot
-        but never writes the file, so keying on 'has it ever completed'
-        re-arms it every boot until the first real run lands, instead of
-        stranding suggestions for a day."""
-        auto = await self.stores.automations.get(BUILTIN_AREA_SUGGESTER_ID)
-        if auto and auto.enabled and auto.last_run_at is None:
-            await self.stores.automations.set_next_run(BUILTIN_AREA_SUGGESTER_ID, datetime.now(UTC))
 
     @staticmethod
     def _area_run_at(index: int) -> str:
@@ -682,29 +490,6 @@ class AutomationRuntime:
         existing.output_schema = "area_custodian"
         existing.enabled = desired_enabled
         await self.stores.automations.update_metadata(existing)
-
-    def _suggester_available(self) -> bool:
-        return self.get_records() is not None and self.get_cheap_llm() is not None
-
-    async def _run_suggester(self) -> str | None:
-        if not self._suggester_available():
-            return None
-        suggester = AutomationSuggester(
-            records=self.get_records(),
-            sessions=self.stores.sessions,
-            automations=self.stores.automations,
-            cheap_llm=self.get_cheap_llm(),
-            model=self.cheap_model,
-        )
-        summary = await suggester.run()
-        await self.scheduler.emit_automation_event(AutomationSuggestionsUpdatedEvent())
-        return summary
-
-    async def refresh_suggestions(self) -> list[AutomationSuggestion]:
-        if not self._suggester_available():
-            raise SuggesterUnavailableError("memory or cheap_llm is not available")
-        await self._run_suggester()
-        return await self.stores.automations.list_active_suggestions()
 
     def start_monitor(self) -> None:
         if self.stores.monitor is None:
