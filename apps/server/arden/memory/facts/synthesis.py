@@ -9,14 +9,13 @@ from hashlib import sha256
 from typing import Protocol
 from zoneinfo import ZoneInfo
 
+from arden.memory.facts.consumer_store import FactConsumerStore
+from arden.memory.facts.ledger import FactLedger
+from arden.memory.facts.models import Fact, FactChangeFeed
 from arden.revisions.models import ResourceState
 from arden.wiki.models import GeneratedPageTarget, WikiPageRecord
 from arden.wiki.pages import parse_page
 from arden.wiki.service import WikiService
-
-from .consumer_store import FactConsumerStore
-from .ledger import FactLedger
-from .models import Fact, FactChangeFeed
 
 CONSUMER_ID = "memory.synthesis"
 _CITATION_GROUP = re.compile(r"\(fact:(F\d{3,})(?:\s*,\s*fact:(F\d{3,}))*\)")

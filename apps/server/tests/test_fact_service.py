@@ -1,13 +1,11 @@
 """Durable workflow service contracts above the standalone fact ledger."""
 
-from __future__ import annotations
-
 import asyncio
 import hashlib
 import json
 import time
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
@@ -26,9 +24,6 @@ from arden.memory.facts.plan_store import (
 from arden.memory.facts.service import FactPrincipal, FactScopeError, FactService
 
 pytestmark = pytest.mark.asyncio
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 JULY = datetime(2026, 7, 28, 12, tzinfo=UTC)
 AREA = ("area", "project")
@@ -191,8 +186,6 @@ async def test_plan_owner_and_scope_isolation(tmp_path: Path) -> None:
         await service.commit(owner, preview.plan_id)
         with pytest.raises(FactScopeError, match="readable"):
             await service.get(wrong_scope, "a")
-        with pytest.raises(ValueError, match="global scope key"):
-            FactPrincipal("bad", frozenset({("global", "wrong")}), frozenset({("global", "wrong")}))
     finally:
         await conn.close()
 

@@ -11,7 +11,7 @@ from typing import Any
 
 import aiosqlite
 
-from .models import FactEvent, FactPlan
+from arden.memory.facts.models import FactEvent, FactPlan
 
 _PLAN_SCHEMA_VERSION = 1
 _EVENT_FIELDS = frozenset(

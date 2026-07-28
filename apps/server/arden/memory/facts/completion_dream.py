@@ -5,8 +5,7 @@ from datetime import date
 from pydantic import BaseModel, ConfigDict
 
 from arden.llm.base import CompletionClient
-
-from .dream import DreamEvidence, DreamInsight
+from arden.memory.facts.dream import DreamEvidence, DreamInsight
 
 
 class _InsightPayload(BaseModel):
@@ -60,6 +59,6 @@ class CompletionFactDreamRenderer:
             reasoning_effort=self._reasoning_effort,
         )
         if not response.choices or response.choices[0].message.content is None:
-            return ()
+            raise ValueError("memory Dream completion returned no content")
         payload = _DreamPayload.model_validate_json(response.choices[0].message.content)
         return tuple(DreamInsight(item.claim, tuple(item.fact_tokens)) for item in payload.insights)

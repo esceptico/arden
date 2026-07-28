@@ -1,8 +1,6 @@
-from __future__ import annotations
-
 import asyncio
 import json
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
@@ -20,9 +18,6 @@ from arden.wiki.approvals import (
 )
 from arden.wiki.pages import create_page
 from arden.wiki.service import WikiService
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def _repo(tmp_path: Path) -> ManagedFileRepository:

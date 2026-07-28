@@ -1,7 +1,6 @@
-from __future__ import annotations
-
+from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
@@ -16,16 +15,11 @@ from arden.wiki.curation.engine import (
     CURATOR_ORIGIN,
     WikiEditCurator,
     WikiEditCuratorDecision,
+    WikiEditCuratorEvidence,
     WikiFactCorrection,
 )
 from arden.wiki.models import GeneratedPageTarget, WikiMaintenancePageUpdate
 from arden.wiki.service import WikiService
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
-    from pathlib import Path
-
-    from arden.wiki.curation.engine import WikiEditCuratorEvidence
 
 pytestmark = pytest.mark.asyncio
 NOW = datetime(2026, 7, 28, 12, tzinfo=UTC)

@@ -4,19 +4,51 @@ import base64
 import binascii
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import StrEnum
 from typing import Any
 from uuid import uuid4
 
 from arden.revisions.errors import RevisionConflictError
-
-from .approval_store import WikiRenameApproval, WikiRenameApprovalStatus, WikiRenameApprovalStore
-from .models import LinkReference, LinkStatus, RenamePlan, RenameRewrite
-from .service import WikiService, WikiValidationError
-from .wikilinks import WikilinkNode
+from arden.wiki.approval_store import WikiRenameApproval, WikiRenameApprovalStatus, WikiRenameApprovalStore
+from arden.wiki.models import LinkReference, LinkStatus, RenamePlan, RenameRewrite
+from arden.wiki.service import WikiService, WikiValidationError
+from arden.wiki.wikilinks import WikilinkNode
 
 _PLAN_SCHEMA_VERSION = 1
+_PLAN_FIELDS = frozenset(
+    {
+        "base_head",
+        "page_id",
+        "expected_version",
+        "old_path",
+        "new_path",
+        "old_title",
+        "new_title",
+        "moved_content",
+        "redirect_page_id",
+        "rewrite_links",
+        "link_count",
+        "page_count",
+        "rewrites",
+        "idempotency_key",
+    }
+)
+_WIKILINK_NODE_FIELDS = frozenset(
+    {
+        "source_sha256",
+        "source_size",
+        "start",
+        "end",
+        "page_start",
+        "page_end",
+        "page",
+        "fragment",
+        "alias",
+        "embed",
+        "raw",
+    }
+)
 
 
 class RenamePolicy(StrEnum):
@@ -292,7 +324,7 @@ def _rewrite_value(rewrite: RenameRewrite) -> dict[str, object]:
 def _reference_value(reference: LinkReference) -> dict[str, object]:
     return {
         "source_page_id": reference.source_page_id,
-        "node": {name: getattr(reference.node, name) for name in WikilinkNode.__dataclass_fields__},
+        "node": asdict(reference.node),
         "status": reference.status.value,
         "target_page_id": reference.target_page_id,
         "candidates": list(reference.candidates),
@@ -300,7 +332,7 @@ def _reference_value(reference: LinkReference) -> dict[str, object]:
 
 
 def _decode_plan(value: Any) -> RenamePlan:
-    _require_keys(value, set(_plan_value_fields()), "plan")
+    _require_keys(value, _PLAN_FIELDS, "plan")
     return RenamePlan(
         base_head=_optional_string(value["base_head"], "plan.base_head"),
         page_id=_string(value["page_id"], "plan.page_id"),
@@ -338,7 +370,7 @@ def _decode_rewrite(value: Any, index: int) -> RenameRewrite:
 def _decode_reference(value: Any, label: str) -> LinkReference:
     _require_keys(value, {"source_page_id", "node", "status", "target_page_id", "candidates"}, label)
     node_value = value["node"]
-    _require_keys(node_value, set(WikilinkNode.__dataclass_fields__), f"{label}.node")
+    _require_keys(node_value, _WIKILINK_NODE_FIELDS, f"{label}.node")
     try:
         status = LinkStatus(_string(value["status"], f"{label}.status"))
     except ValueError as exc:
@@ -381,25 +413,6 @@ def _bytes(value: Any, label: str) -> bytes:
     return decoded
 
 
-def _plan_value_fields() -> tuple[str, ...]:
-    return (
-        "base_head",
-        "page_id",
-        "expected_version",
-        "old_path",
-        "new_path",
-        "old_title",
-        "new_title",
-        "moved_content",
-        "redirect_page_id",
-        "rewrite_links",
-        "link_count",
-        "page_count",
-        "rewrites",
-        "idempotency_key",
-    )
-
-
 def _canonical_json(value: object) -> str:
     try:
         return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
@@ -416,7 +429,7 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
-def _require_keys(value: Any, keys: set[str], label: str) -> None:
+def _require_keys(value: Any, keys: frozenset[str] | set[str], label: str) -> None:
     if not isinstance(value, dict) or set(value) != keys:
         raise RenamePlanSerializationError(f"{label} has an invalid shape")
 

@@ -8,9 +8,9 @@ from typing import Literal
 
 from arden.revisions.errors import RevisionConflictError
 from arden.search.types import RawItem
-
-from .models import WikiInfrastructureRole, WikiPageRecord
-from .service import WikiService
+from arden.wiki.constants import README_FILENAME
+from arden.wiki.models import WikiInfrastructureRole, WikiPageRecord
+from arden.wiki.service import WikiService
 
 WIKI_PAGE_SOURCE = "wiki_page"
 WIKI_RESULT_LIMIT = 3
@@ -28,26 +28,14 @@ class WikiPageIndexState:
     status: Literal["ready", "error", "not_ready"]
     detail: str | None = None
 
-    def __post_init__(self) -> None:
-        if self.wiki_head is not None and (not isinstance(self.wiki_head, str) or not self.wiki_head):
-            raise ValueError("wiki_head must be a nonempty string or None")
-        if self.status not in {"ready", "error", "not_ready"}:
-            raise ValueError("status must be ready, error, or not_ready")
-        if self.detail is not None and (not isinstance(self.detail, str) or not self.detail):
-            raise ValueError("detail must be a nonempty string or None")
-
 
 async def _readable_pages(wiki: WikiService) -> tuple[WikiPageRecord, ...]:
     """Read one coherent wiki snapshot, retrying one concurrent commit."""
 
-    for attempt in range(2):
-        try:
-            return await asyncio.to_thread(wiki.readable_pages)
-        except RevisionConflictError:
-            if attempt == 0:
-                continue
-            raise
-    raise AssertionError("unreachable")
+    try:
+        return await asyncio.to_thread(wiki.readable_pages)
+    except RevisionConflictError:
+        return await asyncio.to_thread(wiki.readable_pages)
 
 
 def _role(record: WikiPageRecord) -> WikiInfrastructureRole:
@@ -270,7 +258,11 @@ def _normalized_query(value: str) -> str | None:
 def _is_resident(record: WikiPageRecord) -> bool:
     path = record.resource.path.casefold()
     page_id = record.page.page_id.casefold()
-    return path in {"readme.md", "directives.md", "me.md", "profile.md"} or page_id in {"directives", "me", "profile"}
+    return path in {README_FILENAME.casefold(), "directives.md", "me.md", "profile.md"} or page_id in {
+        "directives",
+        "me",
+        "profile",
+    }
 
 
 def _render_pages(header: str, pages: list[WikiPageRecord], fact_revision: str | None, budget: int) -> str | None:

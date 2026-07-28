@@ -28,7 +28,7 @@ class _Reviewer:
         self.decisions = list(decisions)
         self.reports = []
 
-    async def review(self, report) -> WikiMaintenanceDecision:
+    async def __call__(self, report) -> WikiMaintenanceDecision:
         self.reports.append(report)
         return self.decisions.pop(0)
 
@@ -963,7 +963,7 @@ async def test_invalid_utf8_history_uses_lossy_display_without_wedging(tmp_path:
     try:
         result = await WikiMaintenance(store, WikiService(repo), reviewer).run()
 
-        assert result.blocked and result.error is None
+        assert result.blocked
         assert result.feed_target_revision == source
         assert "Lossy UTF-8 display" in reviewer.reports[0].markdown
         assert "\ufffd" in reviewer.reports[0].markdown
@@ -991,9 +991,9 @@ async def test_hard_total_prompt_budget_creates_durable_ask(tmp_path: Path, monk
 
 
 @pytest.mark.asyncio
-async def test_store_failure_is_reported_verbatim_with_actual_processed_watermark(tmp_path: Path, monkeypatch) -> None:
+async def test_store_failure_propagates_to_the_scheduler(tmp_path: Path, monkeypatch) -> None:
     repo = _repo(tmp_path)
-    source = _seed(repo)
+    _seed(repo)
     store = await WikiMaintenanceStore.open(tmp_path / "state.sqlite")
     reviewer = _Reviewer(WikiMaintenanceDecision(outcome="no_change"))
 
@@ -1002,11 +1002,9 @@ async def test_store_failure_is_reported_verbatim_with_actual_processed_watermar
 
     monkeypatch.setattr(store, "apply_run", fail_apply_run)
     try:
-        result = await WikiMaintenance(store, WikiService(repo), reviewer).run()
-        assert result.error == "maintenance state disk failure"
-        assert result.feed_target_revision == source
-        assert result.processed_through_revision is None
-        assert not result.advanced and not result.complete
+        with pytest.raises(RuntimeError, match="maintenance state disk failure"):
+            await WikiMaintenance(store, WikiService(repo), reviewer).run()
+        assert await store.get_watermark() is None
     finally:
         await store.close()
 
@@ -1110,17 +1108,18 @@ async def test_trusted_replay_rejects_multiple_matching_acceptances_before_apply
             )
         assert len(accepted) == 2
 
-        result = await maintenance.run()
-        assert result.error == "multiple accepted reviews match one wiki commit"
-        assert not result.replayed and reviewer.reports == []
-        assert result.processed_through_revision is None
+        with pytest.raises(
+            maintenance_module.WikiMaintenanceError, match="multiple accepted reviews match one wiki commit"
+        ):
+            await maintenance.run()
+        assert reviewer.reports == []
         assert await store.get_watermark() is None
     finally:
         await store.close()
 
 
 @pytest.mark.asyncio
-async def test_concurrent_cas_failure_reports_the_reread_durable_watermark(tmp_path: Path) -> None:
+async def test_concurrent_cas_failure_propagates(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     source = _seed(repo)
     path = tmp_path / "state.sqlite"
@@ -1128,7 +1127,7 @@ async def test_concurrent_cas_failure_reports_the_reread_durable_watermark(tmp_p
     second = await WikiMaintenanceStore.open(path)
 
     class _RacingReviewer:
-        async def review(self, _report):
+        async def __call__(self, _report):
             await second.apply_run(
                 expected_revision=None,
                 ordered_commit_ids=(source,),
@@ -1137,11 +1136,12 @@ async def test_concurrent_cas_failure_reports_the_reread_durable_watermark(tmp_p
             return WikiMaintenanceDecision(outcome="no_change")
 
     try:
-        result = await WikiMaintenance(first, WikiService(repo), _RacingReviewer()).run()
-        assert result.error is not None and "watermark changed before the run began" in result.error
-        assert result.processed_through_revision == source
-        assert result.feed_target_revision == source
-        assert result.advanced and not result.complete
+        with pytest.raises(
+            maintenance_module.WikiMaintenanceWatermarkConflictError, match="watermark changed before the run began"
+        ):
+            await WikiMaintenance(first, WikiService(repo), _RacingReviewer()).run()
+        assert (await first.get_watermark()).revision == source
+        assert (await second.get_watermark()).revision == source
     finally:
         await first.close()
         await second.close()

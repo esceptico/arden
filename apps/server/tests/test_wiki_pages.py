@@ -1,7 +1,5 @@
 """Contract tests for the common visible wiki-page codec."""
 
-from __future__ import annotations
-
 import pytest
 
 from arden.wiki.pages import (

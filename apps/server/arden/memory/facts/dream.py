@@ -9,11 +9,10 @@ from typing import Protocol
 from zoneinfo import ZoneInfo
 
 from arden.constants import BUILTIN_MEMORY_DREAM_ID
+from arden.memory.facts.ledger import FactLedger
+from arden.memory.facts.models import Fact
 from arden.wiki.models import GeneratedPageTarget, WikiPageRecord
 from arden.wiki.service import WikiService
-
-from .ledger import FactLedger
-from .models import Fact
 
 ORIGIN = "memory.dream"
 ACTOR = "Dream"

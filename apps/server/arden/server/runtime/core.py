@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import datetime
+from functools import partial
 
 from fastapi import HTTPException, Request
 
@@ -28,7 +29,7 @@ from arden.memory.facts.consumer_store import FactConsumerStore
 from arden.memory.facts.dream import FactDream
 from arden.memory.facts.index import FactIndexProjection
 from arden.memory.facts.ledger import FactLedger
-from arden.memory.facts.maintenance.completion import CompletionFactMaintenanceReviewer
+from arden.memory.facts.maintenance.completion import review_fact_maintenance
 from arden.memory.facts.maintenance.runner import CONSUMER_ID as FACT_MAINTENANCE_CONSUMER_ID
 from arden.memory.facts.maintenance.runner import FactMaintenance
 from arden.memory.facts.plan_store import FactPlanStore
@@ -54,6 +55,7 @@ from arden.tools.connections import ConnectionService
 from arden.tools.executor import ToolExecutor
 from arden.wiki.approval_store import WikiRenameApprovalStore
 from arden.wiki.approvals import WikiRenameApprovalCoordinator
+from arden.wiki.constants import WIKI_HEALTH_ORIGIN, WIKI_MAINTENANCE_ACTOR
 from arden.wiki.context import WikiContextBuilder, WikiPageIndexProjection
 from arden.wiki.curation.completion import CompletionWikiEditCuratorReviewer
 from arden.wiki.curation.engine import WikiEditCurator
@@ -69,7 +71,7 @@ from arden.wiki.health import (
     WikiHealthProjector,
     WikiHealthWorker,
 )
-from arden.wiki.maintenance.completion import CompletionWikiMaintenanceReviewer
+from arden.wiki.maintenance.completion import review_wiki_maintenance
 from arden.wiki.maintenance.runner import WikiMaintenance
 from arden.wiki.maintenance.store import WikiMaintenanceStore
 from arden.wiki.models import WikiChangesReport
@@ -485,7 +487,8 @@ class Runtime:
         return FactMaintenance(
             self.fact_service,
             self._fact_consumer_store,
-            CompletionFactMaintenanceReviewer(
+            partial(
+                review_fact_maintenance,
                 get_completion_client(model),
                 model,
                 reasoning_effort=self.knowledge._memory_reasoning_effort(model),
@@ -501,7 +504,8 @@ class Runtime:
         return WikiMaintenance(
             self._wiki_maintenance_store,
             self.wiki_service,
-            CompletionWikiMaintenanceReviewer(
+            partial(
+                review_wiki_maintenance,
                 get_completion_client(model),
                 model,
                 reasoning_effort=self.knowledge._memory_reasoning_effort(model),
@@ -600,7 +604,7 @@ class Runtime:
                             fact_revision,
                         ),
                         BUILTIN_WIKI_MAINTENANCE_ID: WikiHealthWorker(
-                            "Wiki Maintenance",
+                            WIKI_MAINTENANCE_ACTOR,
                             completed_runs.get(BUILTIN_WIKI_MAINTENANCE_ID),
                             maintenance_revision,
                             observed,
@@ -634,7 +638,10 @@ class Runtime:
 
     @staticmethod
     def _semantic_wiki_revision(report: WikiChangesReport) -> str | None:
-        return next((commit.commit_id for commit in reversed(report.commits) if commit.origin != "wiki.health"), None)
+        return next(
+            (commit.commit_id for commit in reversed(report.commits) if commit.origin != WIKI_HEALTH_ORIGIN),
+            None,
+        )
 
     @staticmethod
     def _semantic_wiki_revision_at(
@@ -645,7 +652,7 @@ class Runtime:
             return None, True
         semantic: str | None = None
         for commit in report.commits:
-            if commit.origin != "wiki.health":
+            if commit.origin != WIKI_HEALTH_ORIGIN:
                 semantic = commit.commit_id
             if commit.commit_id == raw_revision:
                 return semantic, True

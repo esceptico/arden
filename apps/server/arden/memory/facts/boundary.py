@@ -4,7 +4,7 @@ import re
 from datetime import date, datetime
 from typing import Any, Literal
 
-from .service import FactScope
+from arden.memory.facts.service import FactScope
 
 FactTimePrecision = Literal["millisecond", "second", "minute", "day", "unknown"]
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")

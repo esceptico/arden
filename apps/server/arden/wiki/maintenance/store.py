@@ -19,8 +19,9 @@ from uuid import uuid4
 import aiosqlite
 
 from arden.database import connect
+from arden.wiki.constants import WIKI_MAINTENANCE_ORIGIN
 
-CONSUMER_ID = "wiki.maintenance"
+CONSUMER_ID = WIKI_MAINTENANCE_ORIGIN
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS wiki_maintenance_watermarks (

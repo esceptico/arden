@@ -1,8 +1,7 @@
-"""Structured completion adapter for canonical fact maintenance."""
+"""Typed completion call for canonical fact maintenance."""
 
 from arden.llm.base import CompletionClient
-
-from .runner import FactMaintenanceDecision, FactMaintenancePreparedCluster
+from arden.memory.facts.maintenance.runner import FactMaintenanceDecision, FactMaintenancePreparedCluster
 
 _SYSTEM = """Review one prepared canonical-fact cluster using only the supplied evidence.
 Return no_change when evidence is weak or ambiguous. You may only:
@@ -19,29 +18,29 @@ its own page. Use only the opaque F### and P### tokens shown in the cluster.
 """
 
 
-class CompletionFactMaintenanceReviewer:
-    """Completion bridge; FactMaintenance revalidates every returned field."""
+async def review_fact_maintenance(
+    client: CompletionClient,
+    model: str,
+    cluster: FactMaintenancePreparedCluster,
+    *,
+    reasoning_effort: str | None = None,
+) -> FactMaintenanceDecision:
+    """Request one typed decision from the completion API."""
 
-    def __init__(self, client: CompletionClient, model: str, *, reasoning_effort: str | None = None) -> None:
-        self._client = client
-        self._model = model
-        self._reasoning_effort = reasoning_effort
-
-    async def review(self, cluster: FactMaintenancePreparedCluster) -> FactMaintenanceDecision:
-        response = await self._client.completion(
-            model=self._model,
-            messages=[
-                {"role": "system", "content": _SYSTEM},
-                {"role": "user", "content": cluster.markdown},
-            ],
-            response_format=FactMaintenanceDecision,
-            reasoning_effort=self._reasoning_effort,
-        )
-        if not response.choices or response.choices[0].message.content is None:
-            raise ValueError("fact maintenance reviewer returned no decision")
-        content = response.choices[0].message.content
-        return (
-            content
-            if isinstance(content, FactMaintenanceDecision)
-            else FactMaintenanceDecision.model_validate_json(content)
-        )
+    response = await client.completion(
+        model=model,
+        messages=[
+            {"role": "system", "content": _SYSTEM},
+            {"role": "user", "content": cluster.markdown},
+        ],
+        response_format=FactMaintenanceDecision,
+        reasoning_effort=reasoning_effort,
+    )
+    if not response.choices or response.choices[0].message.content is None:
+        raise ValueError("fact maintenance reviewer returned no decision")
+    content = response.choices[0].message.content
+    return (
+        content
+        if isinstance(content, FactMaintenanceDecision)
+        else FactMaintenanceDecision.model_validate_json(content)
+    )

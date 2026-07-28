@@ -9,10 +9,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from arden.logging import get_logger
-
-from .ledger import FactLedger
-from .models import Fact, FactChangeFeed, FactConflictError, FactEvent, FactPlan, FactValidationError
-from .plan_store import (
+from arden.memory.facts.ledger import FactLedger
+from arden.memory.facts.models import Fact, FactChangeFeed, FactConflictError, FactEvent, FactPlan, FactValidationError
+from arden.memory.facts.plan_store import (
     FactPlanCorruptionError,
     FactPlanRequestConflictError,
     FactPlanStore,
@@ -33,14 +32,6 @@ class FactPrincipal:
     owner_id: str
     readable_scopes: frozenset[FactScope]
     writable_scopes: frozenset[FactScope]
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.owner_id, str) or not self.owner_id.strip() or "\0" in self.owner_id:
-            raise ValueError("owner_id must be a non-empty string")
-        for scope in (*self.readable_scopes, *self.writable_scopes):
-            if not isinstance(scope, tuple) or len(scope) != 2:
-                raise ValueError("scopes must be (kind, key) pairs")
-            _validated_scope(*scope)
 
     def can_read(self, scope: FactScope) -> bool:
         return scope in self.readable_scopes

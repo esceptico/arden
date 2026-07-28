@@ -1,8 +1,6 @@
-from __future__ import annotations
-
 import pytest
 
-from arden.memory.facts.maintenance.completion import CompletionFactMaintenanceReviewer
+from arden.memory.facts.maintenance.completion import review_fact_maintenance
 from arden.memory.facts.maintenance.runner import FactMaintenanceDecision, FactMaintenancePreparedCluster
 from tests.conftest import completion_response
 
@@ -17,9 +15,8 @@ class _Client:
 
 
 @pytest.mark.asyncio
-async def test_completion_reviewer_uses_the_typed_opaque_cluster() -> None:
+async def test_completion_function_uses_the_typed_opaque_cluster() -> None:
     client = _Client()
-    reviewer = CompletionFactMaintenanceReviewer(client, "test-maintenance", reasoning_effort="medium")
     cluster = FactMaintenancePreparedCluster(
         target_token="F000",
         markdown="# Canonical fact maintenance cluster\n\nF000 only",
@@ -30,7 +27,9 @@ async def test_completion_reviewer_uses_the_typed_opaque_cluster() -> None:
         wiki_page_tokens={"P000": "Canonical"},
     )
 
-    assert (await reviewer.review(cluster)).outcome == "no_change"
+    assert (
+        await review_fact_maintenance(client, "test-maintenance", cluster, reasoning_effort="medium")
+    ).outcome == "no_change"
     call = client.calls[0]
     assert call["model"] == "test-maintenance"
     assert call["reasoning_effort"] == "medium"

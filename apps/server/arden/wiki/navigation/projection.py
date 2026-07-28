@@ -7,13 +7,16 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
-from ..models import GeneratedPageTarget, WikiPageRecord, WikiSnapshot
-from ..service import WikiService
-from .store import WikiNavigationStore
+from arden.wiki.constants import (
+    README_FILENAME,
+    WIKI_NAVIGATION_ACTOR,
+    WIKI_NAVIGATION_ORIGIN,
+    WIKI_NAVIGATION_REASON,
+)
+from arden.wiki.models import GeneratedPageTarget, WikiPageRecord, WikiSnapshot
+from arden.wiki.navigation.store import WikiNavigationStore
+from arden.wiki.service import WikiService
 
-WIKI_NAVIGATION_ACTOR = "Wiki Navigation"
-WIKI_NAVIGATION_ORIGIN = "wiki.navigation"
-WIKI_NAVIGATION_REASON = "project deterministic README navigation"
 _ROOT_TITLE = "Home"
 
 
@@ -144,15 +147,15 @@ def _directories(records: tuple[WikiPageRecord, ...]) -> set[str]:
 
 
 def _is_readme(path: str) -> bool:
-    return path == "README.md" or path.endswith("/README.md")
+    return path == README_FILENAME or path.endswith(f"/{README_FILENAME}")
 
 
 def _readme_path(directory: str) -> str:
-    return "README.md" if not directory else f"{directory}/README.md"
+    return README_FILENAME if not directory else f"{directory}/{README_FILENAME}"
 
 
 def _readme_directory(path: str) -> str:
-    return "" if path == "README.md" else str(PurePosixPath(path).parent)
+    return "" if path == README_FILENAME else str(PurePosixPath(path).parent)
 
 
 def _readme_id(directory: str) -> str:

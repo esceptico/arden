@@ -12,10 +12,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from arden.memory.facts.models import Fact
 from arden.memory.facts.service import FactPlanPreview, FactPrincipal, FactScopeError, FactService
 from arden.revisions import Commit, ResourceChange, ResourceState
-
-from ..models import WikiFactCitation
-from ..pages import WikiPage, parse_page
-from ..service import WikiService
+from arden.wiki.models import WikiFactCitation
+from arden.wiki.pages import WikiPage, parse_page
+from arden.wiki.service import WikiService
 
 USER_ACTOR = "user:desktop"
 USER_ORIGIN = "desktop"

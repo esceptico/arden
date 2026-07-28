@@ -1,8 +1,6 @@
-from __future__ import annotations
-
 import pytest
 
-from arden.wiki.maintenance.completion import CompletionWikiMaintenanceReviewer
+from arden.wiki.maintenance.completion import review_wiki_maintenance
 from arden.wiki.maintenance.runner import WikiMaintenanceDecision, WikiMaintenancePreparedReport
 from tests.conftest import completion_response
 
@@ -17,9 +15,8 @@ class _Client:
 
 
 @pytest.mark.asyncio
-async def test_completion_reviewer_uses_structured_opaque_report_only() -> None:
+async def test_completion_function_uses_structured_opaque_report_only() -> None:
     client = _Client()
-    reviewer = CompletionWikiMaintenanceReviewer(client, "test-maintenance", reasoning_effort="medium")
     report = WikiMaintenancePreparedReport(
         commit_id="a" * 64,
         base_head="a" * 64,
@@ -29,7 +26,9 @@ async def test_completion_reviewer_uses_structured_opaque_report_only() -> None:
         page_tokens={},
     )
 
-    assert (await reviewer.review(report)).outcome == "no_change"
+    assert (
+        await review_wiki_maintenance(client, "test-maintenance", report, reasoning_effort="medium")
+    ).outcome == "no_change"
     call = client.calls[0]
     assert call["model"] == "test-maintenance"
     assert call["reasoning_effort"] == "medium"

@@ -3,7 +3,7 @@
 import asyncio
 import unicodedata
 from collections.abc import Mapping
-from dataclasses import fields, is_dataclass
+from dataclasses import asdict, is_dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
@@ -81,7 +81,7 @@ def _json_value(value: object) -> object:
     if isinstance(value, (tuple, list)):
         return [_json_value(item) for item in value]
     if is_dataclass(value):
-        return {field.name: _json_value(getattr(value, field.name)) for field in fields(value)}
+        return _json_value(asdict(value))
     raise TypeError(f"cannot serialize {type(value).__name__}")
 
 

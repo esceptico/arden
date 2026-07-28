@@ -3,16 +3,34 @@
 import asyncio
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
-from typing import Literal, Protocol
+from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StrictStr, ValidationError, model_validator
 
 from arden.revisions.models import ResourceChange, ResourceState
-
-from ..models import (
+from arden.wiki.constants import (
+    README_FILENAME,
+    WIKI_HEALTH_ACTOR,
+    WIKI_HEALTH_ORIGIN,
+    WIKI_HEALTH_REASON,
+    WIKI_HEALTH_RESOURCE_ID,
+    WIKI_MAINTENANCE_ACTOR,
+    WIKI_MAINTENANCE_ORIGIN,
+    WIKI_NAVIGATION_ACTOR,
+    WIKI_NAVIGATION_ORIGIN,
+    WIKI_NAVIGATION_REASON,
+)
+from arden.wiki.maintenance.store import (
+    WikiMaintenanceReview,
+    WikiMaintenanceReviewInput,
+    WikiMaintenanceReviewStatus,
+    WikiMaintenanceStore,
+    WikiMaintenanceWatermarkConflictError,
+)
+from arden.wiki.models import (
     WikiChangeCommit,
     WikiChangesReport,
     WikiMaintenanceCommit,
@@ -21,30 +39,9 @@ from ..models import (
     WikiMaintenancePageUpdate,
     WikiPageRecord,
 )
-from ..navigation.projection import (
-    WIKI_NAVIGATION_ACTOR,
-    WIKI_NAVIGATION_ORIGIN,
-    WIKI_NAVIGATION_REASON,
-)
-from ..service import (
-    WIKI_HEALTH_ACTOR,
-    WIKI_HEALTH_ORIGIN,
-    WIKI_HEALTH_REASON,
-    WIKI_HEALTH_RESOURCE_ID,
-    WikiMaintenanceEvidenceLimitError,
-    WikiService,
-)
-from .store import (
-    WikiMaintenanceReview,
-    WikiMaintenanceReviewInput,
-    WikiMaintenanceReviewStatus,
-    WikiMaintenanceStore,
-    WikiMaintenanceWatermarkConflictError,
-)
+from arden.wiki.service import WikiMaintenanceEvidenceLimitError, WikiService
 
-_CONCERN_KEY = re.compile(r"[a-z0-9][a-z0-9._:-]{0,120}")
-_SHA256 = re.compile(r"[0-9a-f]{64}")
-_ORIGIN = "wiki.maintenance"
+_SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _PAGE_ID_LINE = re.compile(r"(?m)^([+-]?\s*page_id:\s*).*$")
 _MAX_HEADER_BYTES = 16 * 1024
 _MAX_PAGE_SECTION_BYTES = 64 * 1024
@@ -52,6 +49,17 @@ _MAX_DIFF_BYTES = 64 * 1024
 _MAX_LINK_SECTION_BYTES = 32 * 1024
 _MAX_WARNINGS_BYTES = 64 * 1024
 _MAX_PROMPT_BYTES = 256 * 1024
+
+
+def _nonblank(value: str) -> str:
+    if not value.strip():
+        raise ValueError("text must not be blank")
+    return value
+
+
+type _NonBlankText = Annotated[StrictStr, Field(min_length=1), AfterValidator(_nonblank)]
+type _RevisionId = Annotated[StrictStr, Field(pattern=_SHA256_PATTERN)]
+type _ConcernKey = Annotated[StrictStr, Field(pattern=r"^[a-z0-9][a-z0-9._:-]{0,120}$")]
 
 
 class WikiMaintenanceError(RuntimeError):
@@ -82,24 +90,67 @@ class WikiMaintenanceEvidenceTooLarge(WikiMaintenanceError):
 class WikiMaintenanceUpdateDraft(BaseModel):
     """A model proposal addressed only by a run-local opaque page token."""
 
-    page_token: str
-    title: str
-    aliases: list[str] = Field(default_factory=list)
-    body: str
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    page_token: Annotated[_NonBlankText, Field(max_length=20)]
+    title: _NonBlankText
+    aliases: list[_NonBlankText] = Field(default_factory=list)
+    body: StrictStr
 
 
 class WikiMaintenanceConcernDraft(BaseModel):
     """A stable human-review concern returned by the completion model."""
 
-    key: str
-    summary: str
-    proposal: str
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    key: _ConcernKey
+    summary: _NonBlankText
+    proposal: _NonBlankText
 
 
 class WikiMaintenanceDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     outcome: Literal["no_change", "updates", "needs_review"]
     updates: list[WikiMaintenanceUpdateDraft] = Field(default_factory=list)
     concern: WikiMaintenanceConcernDraft | None = None
+
+    @model_validator(mode="after")
+    def _validate_outcome_shape(self) -> Self:
+        if self.outcome == "no_change" and (self.updates or self.concern is not None):
+            raise ValueError("no_change must not contain updates or a concern")
+        if self.outcome == "updates" and (not self.updates or self.concern is not None):
+            raise ValueError("updates requires one or more updates and no concern")
+        if self.outcome == "needs_review" and self.concern is None:
+            raise ValueError("needs_review requires a concern")
+        return self
+
+
+class _PersistedUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    page_id: _NonBlankText
+    expected_version: _RevisionId
+    title: _NonBlankText
+    aliases: list[_NonBlankText]
+    body: StrictStr
+
+
+class _PersistedProposal(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    kind: Literal["maintenance_updates"]
+    reason: _NonBlankText
+    replay_fingerprint: _RevisionId
+    summary: _NonBlankText
+    updates: list[_PersistedUpdate] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _unique_pages(self) -> Self:
+        page_ids = [update.page_id for update in self.updates]
+        if len(page_ids) != len(set(page_ids)):
+            raise ValueError("proposal repeats a page")
+        return self
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,7 +177,6 @@ class WikiMaintenanceResult:
     empty: bool = False
     replayed: bool = False
     reload_required: bool = False
-    error: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,68 +191,27 @@ def parse_maintenance_update_proposal(proposal_json: str) -> WikiMaintenanceExec
     """Parse the private, execution-complete shape persisted with an Ask."""
 
     try:
-        if not isinstance(proposal_json, str):
-            raise TypeError("proposal must be JSON text")
-        proposal = json.loads(proposal_json)
-        if not isinstance(proposal, dict) or proposal.get("kind") != "maintenance_updates":
-            raise ValueError("proposal kind is not executable")
-        reason = proposal["reason"]
-        replay_fingerprint = proposal["replay_fingerprint"]
-        summary = proposal["summary"]
-        raw_updates = proposal["updates"]
-        if (
-            not isinstance(reason, str)
-            or not reason.strip()
-            or not isinstance(replay_fingerprint, str)
-            or _SHA256.fullmatch(replay_fingerprint) is None
-            or not isinstance(summary, str)
-            or not summary.strip()
-            or not isinstance(raw_updates, list)
-            or not raw_updates
-        ):
-            raise ValueError("proposal metadata is invalid")
-        updates: list[WikiMaintenancePageUpdate] = []
-        for item in raw_updates:
-            if not isinstance(item, dict):
-                raise TypeError("proposal update must be an object")
-            aliases = item["aliases"]
-            title = item["title"]
-            expected_version = item["expected_version"]
-            if (
-                not isinstance(aliases, list)
-                or not all(isinstance(alias, str) and alias.strip() for alias in aliases)
-                or not isinstance(title, str)
-                or not title.strip()
-                or not isinstance(expected_version, str)
-                or _SHA256.fullmatch(expected_version) is None
-                or not isinstance(item["body"], str)
-            ):
-                raise ValueError("proposal update content is invalid")
-            updates.append(
-                WikiMaintenancePageUpdate(
-                    page_id=item["page_id"],
-                    expected_version=expected_version,
-                    title=title,
-                    aliases=tuple(aliases),
-                    body=item["body"].encode(),
-                )
-            )
-        if len({update.page_id for update in updates}) != len(updates):
-            raise ValueError("proposal repeats a page")
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        proposal = _PersistedProposal.model_validate_json(proposal_json)
+    except (TypeError, ValidationError) as exc:
         raise WikiMaintenanceError("accepted maintenance proposal is malformed") from exc
     return WikiMaintenanceExecutableProposal(
-        reason=reason,
-        replay_fingerprint=replay_fingerprint,
-        summary=summary,
-        updates=tuple(updates),
+        reason=proposal.reason,
+        replay_fingerprint=proposal.replay_fingerprint,
+        summary=proposal.summary,
+        updates=tuple(
+            WikiMaintenancePageUpdate(
+                page_id=update.page_id,
+                expected_version=update.expected_version,
+                title=update.title,
+                aliases=tuple(update.aliases),
+                body=update.body.encode(),
+            )
+            for update in proposal.updates
+        ),
     )
 
 
-class WikiMaintenanceReviewer(Protocol):
-    """Reviews only one already-prepared wiki evidence bundle."""
-
-    async def review(self, report: WikiMaintenancePreparedReport) -> WikiMaintenanceDecision: ...
+WikiMaintenanceReviewer = Callable[[WikiMaintenancePreparedReport], Awaitable[WikiMaintenanceDecision]]
 
 
 class WikiMaintenance:
@@ -221,45 +230,32 @@ class WikiMaintenance:
         watermark = await self._store.get_watermark()
         expected = None if watermark is None else watermark.revision
         initial = expected
-        try:
-            feed = await asyncio.to_thread(
-                self._wiki.maintenance_feed,
-                expected,
-            )
-        except Exception as exc:
-            return await self._error_result(None, expected, initial, error=exc)
+        feed = await asyncio.to_thread(
+            self._wiki.maintenance_feed,
+            expected,
+        )
         if not feed.commits:
             return self._result(feed.through_revision, expected, initial, empty=True)
 
         commit_ids = tuple(commit.commit_id for commit in feed.commits)
-        assert feed.through_revision is not None
+        if feed.through_revision is None:
+            raise WikiMaintenanceError("nonempty wiki maintenance feed has no target revision")
         reviewed = 0
         updated = 0
         replayed = False
         for commit_metadata in feed.commits:
-            # Metadata is sufficient for commits that can never enter model
-            # review. Keep their detail path cold.
-            if (
-                not self._has_markdown_changes(commit_metadata)
-                or self._is_health_projection(commit_metadata)
-                or self._is_navigation_projection(commit_metadata)
-            ):
-                try:
-                    await self._advance(expected, commit_ids, commit_metadata.commit_id)
-                except Exception as exc:
-                    return await self._error_result(
-                        feed.through_revision,
-                        expected,
-                        initial,
-                        reviewed=reviewed,
-                        updated=updated,
-                        replayed=replayed,
-                        error=exc,
-                    )
-                expected = commit_metadata.commit_id
-                reviewed += 1
-                continue
             try:
+                # Metadata is sufficient for commits that can never enter model
+                # review. Keep their detail path cold.
+                if (
+                    not self._has_markdown_changes(commit_metadata)
+                    or self._is_health_projection(commit_metadata)
+                    or self._is_navigation_projection(commit_metadata)
+                ):
+                    await self._advance(expected, commit_ids, commit_metadata.commit_id)
+                    expected = commit_metadata.commit_id
+                    reviewed += 1
+                    continue
                 detail = await asyncio.to_thread(
                     self._wiki.maintenance_details,
                     commit_metadata,
@@ -268,214 +264,80 @@ class WikiMaintenance:
                     diff_byte_budget=_MAX_PROMPT_BYTES,
                 )
                 commit = detail.commit
-            except WikiMaintenanceEvidenceLimitError as exc:
-                return await self._record_oversized_evidence(
-                    feed=feed,
-                    commit=commit_metadata,
-                    expected=expected,
-                    initial=initial,
-                    reviewed=reviewed,
-                    updated=updated,
-                    replayed=replayed,
-                    error=WikiMaintenanceEvidenceTooLarge(
-                        label=f"resource {exc.resource_id} {exc.section}",
-                        actual_bytes=exc.actual_bytes,
-                        limit_bytes=exc.limit_bytes,
-                        fingerprint=exc.fingerprint,
-                        actual_bytes_at_least=exc.actual_bytes_at_least,
-                    ),
-                )
-            except Exception as exc:
-                return await self._error_result(
-                    feed.through_revision,
-                    expected,
-                    initial,
-                    reviewed=reviewed,
-                    updated=updated,
-                    replayed=replayed,
-                    error=exc,
-                )
-            try:
                 rows = await self._store.list_for_commit(commit.commit_id)
-            except Exception as exc:
-                return await self._error_result(
-                    feed.through_revision,
-                    expected,
-                    initial,
-                    reviewed=reviewed,
-                    updated=updated,
-                    replayed=replayed,
-                    error=exc,
-                )
-            try:
                 prepared = self._prepare(detail, commit)
-            except WikiMaintenanceEvidenceTooLarge as exc:
-                return await self._record_oversized_evidence(
-                    feed=feed,
-                    commit=commit_metadata,
-                    expected=expected,
-                    initial=initial,
-                    reviewed=reviewed,
-                    updated=updated,
-                    replayed=replayed,
-                    error=exc,
-                )
-            matching = [row for row in rows if row.evidence_fingerprint == prepared.evidence_fingerprint]
-            open_rows = [row for row in rows if row.status is WikiMaintenanceReviewStatus.NEEDS_REVIEW]
-            if len(open_rows) > 1:
-                return await self._error_result(
-                    feed.through_revision,
-                    expected,
-                    initial,
-                    reviewed=reviewed,
-                    updated=updated,
-                    replayed=replayed,
-                    error=WikiMaintenanceError("multiple open reviews block one wiki commit"),
-                )
-            accepted = [row for row in matching if row.status is WikiMaintenanceReviewStatus.ACCEPTED]
-            if len(accepted) > 1:
-                return await self._error_result(
-                    feed.through_revision,
-                    expected,
-                    initial,
-                    reviewed=reviewed,
-                    updated=updated,
-                    replayed=replayed,
-                    error=WikiMaintenanceError("multiple accepted reviews match one wiki commit"),
-                )
-            if self._has_trusted_replay(feed, prepared):
-                try:
+                matching = [row for row in rows if row.evidence_fingerprint == prepared.evidence_fingerprint]
+                open_rows = [row for row in rows if row.status is WikiMaintenanceReviewStatus.NEEDS_REVIEW]
+                if len(open_rows) > 1:
+                    raise WikiMaintenanceError("multiple open reviews block one wiki commit")
+                accepted = [row for row in matching if row.status is WikiMaintenanceReviewStatus.ACCEPTED]
+                if len(accepted) > 1:
+                    raise WikiMaintenanceError("multiple accepted reviews match one wiki commit")
+                if self._has_trusted_replay(feed, prepared):
                     await self._clear_stale(open_rows)
                     await self._advance(expected, commit_ids, commit.commit_id)
-                except Exception as exc:
-                    return await self._error_result(
-                        feed.through_revision,
-                        expected,
-                        initial,
-                        reviewed=reviewed,
-                        updated=updated,
-                        replayed=replayed,
-                        error=exc,
-                    )
-                expected = commit.commit_id
-                reviewed += 1
-                replayed = True
-                continue
+                    expected = commit.commit_id
+                    reviewed += 1
+                    replayed = True
+                    continue
 
-            stale_open = [
-                row
-                for row in rows
-                if row.status is WikiMaintenanceReviewStatus.NEEDS_REVIEW
-                and row.evidence_fingerprint != prepared.evidence_fingerprint
-            ]
-            if matching and stale_open:
-                try:
+                stale_open = [
+                    row
+                    for row in rows
+                    if row.status is WikiMaintenanceReviewStatus.NEEDS_REVIEW
+                    and row.evidence_fingerprint != prepared.evidence_fingerprint
+                ]
+                if matching and stale_open:
                     await self._clear_stale(stale_open)
-                except Exception as exc:
-                    return await self._error_result(
+                pending = [row for row in matching if row.status is WikiMaintenanceReviewStatus.NEEDS_REVIEW]
+                if pending:
+                    # Exact evidence already has a visible, durable question. Do not
+                    # spend another completion or silently replace it.
+                    return self._result(
                         feed.through_revision,
                         expected,
                         initial,
                         reviewed=reviewed,
                         updated=updated,
                         replayed=replayed,
-                        error=exc,
+                        blocked=True,
                     )
-            pending = [row for row in matching if row.status is WikiMaintenanceReviewStatus.NEEDS_REVIEW]
-            if pending:
-                # Exact evidence already has a visible, durable question. Do not
-                # spend another completion or silently replace it.
-                return self._result(
-                    feed.through_revision,
-                    expected,
-                    initial,
-                    reviewed=reviewed,
-                    updated=updated,
-                    replayed=replayed,
-                    blocked=True,
-                )
 
-            if accepted:
-                try:
-                    for row in accepted:
-                        updated += await self._apply_accepted(prepared, row)
-                except Exception as exc:
-                    return await self._error_result(
-                        feed.through_revision,
-                        expected,
-                        initial,
-                        reviewed=reviewed,
-                        updated=updated,
-                        replayed=replayed,
-                        error=exc,
-                    )
-                try:
+                if accepted:
+                    updated += await self._apply_accepted(prepared, accepted[0])
                     await self._advance(expected, commit_ids, commit.commit_id)
-                except Exception as exc:
-                    return await self._error_result(
+                    expected = commit.commit_id
+                    reviewed += 1
+                    return self._result(
                         feed.through_revision,
                         expected,
                         initial,
                         reviewed=reviewed,
                         updated=updated,
                         replayed=replayed,
-                        error=exc,
+                        reload_required=True,
                     )
-                expected = commit.commit_id
-                reviewed += 1
-                return self._result(
-                    feed.through_revision,
-                    expected,
-                    initial,
-                    reviewed=reviewed,
-                    updated=updated,
-                    replayed=replayed,
-                    reload_required=True,
-                )
 
-            # Rejected/manual rows are an explicit decision for this exact
-            # evidence. A changed fingerprint falls through to a new review.
-            decided = [
-                row
-                for row in matching
-                if row.status
-                in {
-                    WikiMaintenanceReviewStatus.REJECTED,
-                    WikiMaintenanceReviewStatus.RESOLVED_MANUAL,
-                }
-            ]
-            if decided:
-                try:
+                # Rejected/manual rows are an explicit decision for this exact
+                # evidence. A changed fingerprint falls through to a new review.
+                decided = [
+                    row
+                    for row in matching
+                    if row.status
+                    in {
+                        WikiMaintenanceReviewStatus.REJECTED,
+                        WikiMaintenanceReviewStatus.RESOLVED_MANUAL,
+                    }
+                ]
+                if decided:
                     await self._advance(expected, commit_ids, commit.commit_id)
-                except Exception as exc:
-                    return await self._error_result(
-                        feed.through_revision,
-                        expected,
-                        initial,
-                        reviewed=reviewed,
-                        updated=updated,
-                        replayed=replayed,
-                        error=exc,
-                    )
-                expected = commit.commit_id
-                reviewed += 1
-                continue
+                    expected = commit.commit_id
+                    reviewed += 1
+                    continue
 
-            try:
-                decision = await self._reviewer.review(prepared)
-                self._validate_decision(decision, prepared)
-            except Exception as exc:
-                return await self._error_result(
-                    feed.through_revision,
-                    expected,
-                    initial,
-                    reviewed=reviewed,
-                    updated=updated,
-                    replayed=replayed,
-                    error=exc,
-                )
-
-            try:
+                decision = await self._reviewer(prepared)
+                if decision.outcome != "no_change":
+                    self._updates(prepared, decision.updates)
                 if decision.outcome == "needs_review":
                     assert decision.concern is not None
                     proposal = self._proposal(prepared, decision)
@@ -510,11 +372,29 @@ class WikiMaintenance:
                     updated += await self._apply(prepared, decision.updates)
                 await self._clear_stale(stale_open)
                 await self._advance(expected, commit_ids, commit.commit_id)
-            except Exception as exc:
-                return await self._error_result(
-                    feed.through_revision,
-                    expected,
-                    initial,
+            except WikiMaintenanceEvidenceLimitError as exc:
+                return await self._record_oversized_evidence(
+                    feed=feed,
+                    commit=commit_metadata,
+                    expected=expected,
+                    initial=initial,
+                    reviewed=reviewed,
+                    updated=updated,
+                    replayed=replayed,
+                    error=WikiMaintenanceEvidenceTooLarge(
+                        label=f"resource {exc.resource_id} {exc.section}",
+                        actual_bytes=exc.actual_bytes,
+                        limit_bytes=exc.limit_bytes,
+                        fingerprint=exc.fingerprint,
+                        actual_bytes_at_least=exc.actual_bytes_at_least,
+                    ),
+                )
+            except WikiMaintenanceEvidenceTooLarge as exc:
+                return await self._record_oversized_evidence(
+                    feed=feed,
+                    commit=commit_metadata,
+                    expected=expected,
+                    initial=initial,
                     reviewed=reviewed,
                     updated=updated,
                     replayed=replayed,
@@ -568,19 +448,8 @@ class WikiMaintenance:
     ) -> WikiMaintenanceResult:
         """Persist or honor the one durable manual decision for bounded evidence."""
 
-        try:
-            rows = await self._store.list_for_commit(commit.commit_id)
-            existing = await self._store.get_by_evidence(commit.commit_id, "evidence-too-large")
-        except Exception as store_exc:
-            return await self._error_result(
-                feed.through_revision,
-                expected,
-                initial,
-                reviewed=reviewed,
-                updated=updated,
-                replayed=replayed,
-                error=store_exc,
-            )
+        rows = await self._store.list_for_commit(commit.commit_id)
+        existing = await self._store.get_by_evidence(commit.commit_id, "evidence-too-large")
         stale = [
             row
             for row in rows
@@ -589,18 +458,7 @@ class WikiMaintenance:
                 existing is None or row.review_id != existing.review_id or row.evidence_fingerprint != error.fingerprint
             )
         ]
-        try:
-            await self._clear_stale(stale)
-        except Exception as store_exc:
-            return await self._error_result(
-                feed.through_revision,
-                expected,
-                initial,
-                reviewed=reviewed,
-                updated=updated,
-                replayed=replayed,
-                error=store_exc,
-            )
+        await self._clear_stale(stale)
         if existing is not None and existing.evidence_fingerprint == error.fingerprint:
             if existing.status is WikiMaintenanceReviewStatus.NEEDS_REVIEW:
                 return self._result(
@@ -617,18 +475,7 @@ class WikiMaintenance:
                 WikiMaintenanceReviewStatus.REJECTED,
                 WikiMaintenanceReviewStatus.RESOLVED_MANUAL,
             }:
-                try:
-                    await self._advance(expected, tuple(item.commit_id for item in feed.commits), commit.commit_id)
-                except Exception as store_exc:
-                    return await self._error_result(
-                        feed.through_revision,
-                        expected,
-                        initial,
-                        reviewed=reviewed,
-                        updated=updated,
-                        replayed=replayed,
-                        error=store_exc,
-                    )
+                await self._advance(expected, tuple(item.commit_id for item in feed.commits), commit.commit_id)
                 return self._result(
                     feed.through_revision,
                     commit.commit_id,
@@ -638,37 +485,26 @@ class WikiMaintenance:
                     replayed=replayed,
                     reload_required=commit.commit_id != feed.through_revision,
                 )
-        try:
-            await self._store.apply_run(
-                expected_revision=expected,
-                ordered_commit_ids=self._remaining(tuple(item.commit_id for item in feed.commits), expected),
-                reviewed_through=commit.commit_id,
-                reviews=(
-                    WikiMaintenanceReviewInput(
-                        blocking_commit_id=commit.commit_id,
-                        evidence_key="evidence-too-large",
-                        evidence_fingerprint=error.fingerprint,
-                        summary=str(error),
-                        proposal_json={
-                            "kind": "manual_evidence_review",
-                            "section": error.label,
-                            "actual_bytes": error.actual_bytes,
-                            "actual_bytes_at_least": error.actual_bytes_at_least,
-                            "limit_bytes": error.limit_bytes,
-                        },
-                    ),
+        await self._store.apply_run(
+            expected_revision=expected,
+            ordered_commit_ids=self._remaining(tuple(item.commit_id for item in feed.commits), expected),
+            reviewed_through=commit.commit_id,
+            reviews=(
+                WikiMaintenanceReviewInput(
+                    blocking_commit_id=commit.commit_id,
+                    evidence_key="evidence-too-large",
+                    evidence_fingerprint=error.fingerprint,
+                    summary=str(error),
+                    proposal_json={
+                        "kind": "manual_evidence_review",
+                        "section": error.label,
+                        "actual_bytes": error.actual_bytes,
+                        "actual_bytes_at_least": error.actual_bytes_at_least,
+                        "limit_bytes": error.limit_bytes,
+                    },
                 ),
-            )
-        except Exception as store_exc:
-            return await self._error_result(
-                feed.through_revision,
-                expected,
-                initial,
-                reviewed=reviewed,
-                updated=updated,
-                replayed=replayed,
-                error=store_exc,
-            )
+            ),
+        )
         return self._result(
             feed.through_revision,
             expected,
@@ -691,48 +527,18 @@ class WikiMaintenance:
         empty: bool = False,
         replayed: bool = False,
         reload_required: bool = False,
-        error: str | None = None,
     ) -> WikiMaintenanceResult:
         return WikiMaintenanceResult(
             feed_target_revision=feed_target,
             processed_through_revision=processed_through,
             advanced=processed_through != initial,
-            complete=(processed_through == feed_target and not blocked and not reload_required and error is None),
+            complete=processed_through == feed_target and not blocked and not reload_required,
             reviewed_commits=reviewed,
             updated_pages=updated,
             blocked=blocked,
             empty=empty,
             replayed=replayed,
             reload_required=reload_required,
-            error=error,
-        )
-
-    async def _error_result(
-        self,
-        feed_target: str | None,
-        processed_fallback: str | None,
-        initial: str | None,
-        *,
-        error: BaseException,
-        reviewed: int = 0,
-        updated: int = 0,
-        replayed: bool = False,
-    ) -> WikiMaintenanceResult:
-        message = str(error)
-        try:
-            watermark = await self._store.get_watermark()
-            processed = None if watermark is None else watermark.revision
-        except Exception as reread_error:
-            processed = processed_fallback
-            message = f"{message}; durable watermark reread failed: {reread_error}"
-        return self._result(
-            feed_target,
-            processed,
-            initial,
-            reviewed=reviewed,
-            updated=updated,
-            replayed=replayed,
-            error=message,
         )
 
     @staticmethod
@@ -984,24 +790,6 @@ class WikiMaintenance:
     def _redact_page_ids(markdown: str) -> str:
         return _PAGE_ID_LINE.sub(r"\1[opaque]", markdown)
 
-    def _validate_decision(self, decision: object, prepared: WikiMaintenancePreparedReport) -> None:
-        if not isinstance(decision, WikiMaintenanceDecision):
-            raise WikiMaintenanceError("reviewer returned an invalid decision")
-        if decision.outcome == "no_change":
-            if decision.updates or decision.concern is not None:
-                raise WikiMaintenanceError("no_change must not contain updates or a concern")
-            return
-        if decision.outcome == "updates":
-            if not decision.updates or decision.concern is not None:
-                raise WikiMaintenanceError("updates requires one or more updates and no concern")
-            self._updates(prepared, decision.updates)
-            return
-        if decision.concern is None or not _CONCERN_KEY.fullmatch(decision.concern.key):
-            raise WikiMaintenanceError("needs_review requires a stable concern key")
-        if not decision.concern.summary.strip() or not decision.concern.proposal.strip():
-            raise WikiMaintenanceError("needs_review requires a summary and proposal")
-        self._updates(prepared, decision.updates)
-
     def _updates(
         self, prepared: WikiMaintenancePreparedReport, drafts: Sequence[WikiMaintenanceUpdateDraft]
     ) -> tuple[WikiMaintenancePageUpdate, ...]:
@@ -1013,8 +801,6 @@ class WikiMaintenance:
             record = prepared.page_tokens.get(draft.page_token)
             if record is None:
                 raise WikiMaintenanceError("maintenance output named an unknown page token")
-            if not draft.title.strip() or any(not alias.strip() for alias in draft.aliases):
-                raise WikiMaintenanceError("maintenance output used an empty title or alias")
             result.append(
                 WikiMaintenancePageUpdate(
                     page_id=record.page.page_id,
@@ -1040,8 +826,7 @@ class WikiMaintenance:
 
     async def _clear_stale(self, reviews: Sequence[WikiMaintenanceReview]) -> None:
         for row in reviews:
-            if row.status is WikiMaintenanceReviewStatus.NEEDS_REVIEW:
-                await self._store.clear(row.review_id, expected_generation=row.generation)
+            await self._store.clear(row.review_id, expected_generation=row.generation)
 
     @staticmethod
     def _has_markdown_changes(commit: WikiMaintenanceCommit) -> bool:
@@ -1129,7 +914,11 @@ class WikiMaintenance:
     ) -> bool:
         reason = self._reason(prepared)
         for commit in feed.commits:
-            if commit.actor != "Wiki Maintenance" or commit.origin != _ORIGIN or commit.reason != reason:
+            if (
+                commit.actor != WIKI_MAINTENANCE_ACTOR
+                or commit.origin != WIKI_MAINTENANCE_ORIGIN
+                or commit.reason != reason
+            ):
                 continue
             if commit.commit_id == prepared.commit_id:
                 continue
@@ -1145,4 +934,4 @@ class WikiMaintenance:
 
 
 def _is_readme_path(path: str) -> bool:
-    return path == "README.md" or path.endswith("/README.md")
+    return path == README_FILENAME or path.endswith(f"/{README_FILENAME}")

@@ -1,7 +1,6 @@
-from __future__ import annotations
-
+from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
@@ -22,11 +21,6 @@ from arden.memory.facts.service import FactService
 from arden.revisions import Archive, ChangeSet, Create, ManagedFileRepository, RevisionConflictError, Update
 from arden.wiki.pages import create_page as create_wiki_page
 from arden.wiki.service import WikiService
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
-    from pathlib import Path
-
 
 pytestmark = pytest.mark.asyncio
 NOW = datetime(2026, 7, 28, 12, tzinfo=UTC)
@@ -68,13 +62,13 @@ class _Reviewer:
         self.decide = decide or (lambda _cluster: FactMaintenanceDecision(outcome="no_change", reason="No change."))
         self.calls: list[FactMaintenancePreparedCluster] = []
 
-    async def review(self, cluster: FactMaintenancePreparedCluster) -> FactMaintenanceDecision:
+    async def __call__(self, cluster: FactMaintenancePreparedCluster) -> FactMaintenanceDecision:
         self.calls.append(cluster)
         return self.decide(cluster)
 
 
 class _FailingReviewer(_Reviewer):
-    async def review(self, cluster: FactMaintenancePreparedCluster) -> FactMaintenanceDecision:
+    async def __call__(self, cluster: FactMaintenancePreparedCluster) -> FactMaintenanceDecision:
         self.calls.append(cluster)
         raise RuntimeError("review unavailable")
 
@@ -177,6 +171,7 @@ async def test_one_maintenance_plan_amends_and_merges_then_advances_before_its_o
                 outcome="amend_metadata",
                 reason="Correct classification.",
                 target_token=cluster.target_token,
+                kind="note",
                 labels=["Reviewed"],
                 subjects=["Corrected"],
                 lifecycle="temporary",
@@ -213,6 +208,7 @@ async def test_one_maintenance_plan_amends_and_merges_then_advances_before_its_o
         assert (await consumers.get(CONSUMER_ID)).revision == input_revision
 
         metadata = ledger.get("metadata")
+        assert metadata.kind == "note"
         assert metadata.labels == ("Reviewed",)
         assert metadata.subjects == ("Corrected",)
         assert metadata.lifecycle == "temporary"
@@ -927,10 +923,20 @@ async def test_normalize_topic_retry_after_fact_commit_does_not_reask_reviewer(
         assert (await consumers.get(CONSUMER_ID)).revision == baseline
         assert ledger.get("target").subjects == ("Bicycle",)
 
+        resume_commits = 0
+        original_commit = maintenance._service.commit
+
+        async def count_resume_commit(*args, **kwargs):
+            nonlocal resume_commits
+            resume_commits += 1
+            return await original_commit(*args, **kwargs)
+
+        monkeypatch.setattr(maintenance._service, "commit", count_resume_commit)
         result = await maintenance.run()
         assert result.advanced
         assert ledger.get("target").subjects == ("Bicycle",)
         assert len(reviewer.calls) == 1
+        assert resume_commits == 0
         assert len([event for event in ledger.history("target") if event.origin == ORIGIN]) == 1
     finally:
         await consumers.close()

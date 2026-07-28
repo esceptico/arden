@@ -1,8 +1,7 @@
-"""Structured completion adapter for conservative Wiki Maintenance reviews."""
+"""Typed completion call for conservative Wiki Maintenance reviews."""
 
 from arden.llm.base import CompletionClient
-
-from .runner import WikiMaintenanceDecision, WikiMaintenancePreparedReport
+from arden.wiki.maintenance.runner import WikiMaintenanceDecision, WikiMaintenancePreparedReport
 
 _SYSTEM = """You review one Markdown wiki change using only the supplied report.
 User edits are authoritative. Preserve their intent. Do not add speculative
@@ -19,29 +18,29 @@ Return exactly one outcome:
 """
 
 
-class CompletionWikiMaintenanceReviewer:
-    """Completion client bridge; the runner revalidates every returned field."""
+async def review_wiki_maintenance(
+    client: CompletionClient,
+    model: str,
+    report: WikiMaintenancePreparedReport,
+    *,
+    reasoning_effort: str | None = None,
+) -> WikiMaintenanceDecision:
+    """Request one typed decision from the completion API."""
 
-    def __init__(self, client: CompletionClient, model: str, *, reasoning_effort: str | None = None) -> None:
-        self._client = client
-        self._model = model
-        self._reasoning_effort = reasoning_effort
-
-    async def review(self, report: WikiMaintenancePreparedReport) -> WikiMaintenanceDecision:
-        response = await self._client.completion(
-            model=self._model,
-            messages=[
-                {"role": "system", "content": _SYSTEM},
-                {"role": "user", "content": report.markdown},
-            ],
-            response_format=WikiMaintenanceDecision,
-            reasoning_effort=self._reasoning_effort,
-        )
-        if not response.choices or response.choices[0].message.content is None:
-            raise ValueError("maintenance reviewer returned no decision")
-        content = response.choices[0].message.content
-        return (
-            content
-            if isinstance(content, WikiMaintenanceDecision)
-            else WikiMaintenanceDecision.model_validate_json(content)
-        )
+    response = await client.completion(
+        model=model,
+        messages=[
+            {"role": "system", "content": _SYSTEM},
+            {"role": "user", "content": report.markdown},
+        ],
+        response_format=WikiMaintenanceDecision,
+        reasoning_effort=reasoning_effort,
+    )
+    if not response.choices or response.choices[0].message.content is None:
+        raise ValueError("maintenance reviewer returned no decision")
+    content = response.choices[0].message.content
+    return (
+        content
+        if isinstance(content, WikiMaintenanceDecision)
+        else WikiMaintenanceDecision.model_validate_json(content)
+    )

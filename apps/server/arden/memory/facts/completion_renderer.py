@@ -1,8 +1,7 @@
 """Small completion-client adapter for fact synthesis prose."""
 
 from arden.llm.base import CompletionClient
-
-from .synthesis import SynthesisFact
+from arden.memory.facts.synthesis import SynthesisFact
 
 
 class CompletionFactSynthesisRenderer:
@@ -32,5 +31,5 @@ class CompletionFactSynthesisRenderer:
             reasoning_effort=self._reasoning_effort,
         )
         if not response.choices or response.choices[0].message.content is None:
-            return ""
+            raise ValueError("fact synthesis completion returned no content")
         return response.choices[0].message.content

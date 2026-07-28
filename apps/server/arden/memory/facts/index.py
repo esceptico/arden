@@ -6,9 +6,8 @@ from dataclasses import dataclass
 from typing import Literal
 
 from arden.logging import get_logger
-
-from .models import Fact
-from .service import FactService
+from arden.memory.facts.models import Fact
+from arden.memory.facts.service import FactService
 
 FACT_SEARCH_SOURCE = "fact"
 _logger = get_logger(__name__)

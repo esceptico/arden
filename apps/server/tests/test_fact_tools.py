@@ -1,10 +1,8 @@
 """Structured fact-tool contracts above FactService."""
 
-from __future__ import annotations
-
 import json
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
@@ -27,10 +25,6 @@ from arden.tools.facts import (
     plan_fact_changes_tool,
     search_facts_tool,
 )
-
-if TYPE_CHECKING:
-    from pathlib import Path
-
 
 pytestmark = pytest.mark.asyncio
 JULY = datetime(2026, 7, 28, 12, tzinfo=UTC)

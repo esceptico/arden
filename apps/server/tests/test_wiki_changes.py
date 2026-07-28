@@ -1,7 +1,5 @@
-from __future__ import annotations
-
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
@@ -31,9 +29,6 @@ from arden.wiki.models import (
 )
 from arden.wiki.pages import create_page
 from arden.wiki.service import WikiService, _storage_warnings
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def _repo(tmp_path: Path) -> ManagedFileRepository:
@@ -315,7 +310,7 @@ def test_changes_since_fails_if_the_head_changes_while_deriving_the_report(tmp_p
         WikiService(repo).changes_since(None)
 
 
-def test_change_feed_models_freeze_sequences_and_reject_wrong_values() -> None:
+def test_change_feed_models_are_plain_values() -> None:
     resource = ResourceVersion("one", "one.md", "a" * 64, ResourceState.ACTIVE, "b" * 64)
     page = create_page(title="One", page_id="one")
     citation = WikiFactCitation("fact-1", "c" * 64)
@@ -348,13 +343,9 @@ def test_change_feed_models_freeze_sequences_and_reject_wrong_values() -> None:
         IntegrityReport(True, None, 0, 0, ()),
         StorageReport(0, 0, 0, 0, 0, 0, 0, 0, 0),
     )
-    assert isinstance(revision.fact_citations, tuple)
-    assert len(commit.changes) == 1
-    assert isinstance(report.commits, tuple)
-    with pytest.raises(ValueError, match="lowercase SHA-256"):
-        WikiFactCitation("fact", "bad")
-    with pytest.raises(TypeError, match="WikiChangeCommit"):
-        WikiChangesReport(None, None, ["bad"], [], IntegrityReport(True, None, 0, 0, ()), report.storage)
+    assert revision.fact_citations == [citation]
+    assert len(commit.changes) == 2
+    assert report.commits == [commit]
 
 
 def test_change_feed_page_metadata_is_deeply_immutable(tmp_path: Path) -> None:

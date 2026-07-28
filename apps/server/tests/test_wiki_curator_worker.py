@@ -1,11 +1,9 @@
-from __future__ import annotations
-
 import asyncio
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
-from arden.memory.facts.service import FactPlanPreview
+from arden.memory.facts.service import FactPlanPreview, FactPrincipal
 from arden.wiki.curation.engine import WikiEditCuratorResult
 from arden.wiki.curation.queue import (
     WikiEditCuratorJobOutcome,
@@ -13,11 +11,6 @@ from arden.wiki.curation.queue import (
     WikiEditCuratorQueueStore,
 )
 from arden.wiki.curation.worker import SYSTEM_OWNER_ID, WikiEditCuratorWorker
-
-if TYPE_CHECKING:
-    from pathlib import Path
-
-    from arden.memory.facts.service import FactPrincipal
 
 pytestmark = pytest.mark.asyncio
 SCOPES = frozenset({("user", None), ("area", "general")})

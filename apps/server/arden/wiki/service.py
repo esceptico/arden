@@ -18,8 +18,17 @@ from arden.revisions.models import (
     Update,
 )
 from arden.revisions.repository import ManagedFileRepository
-
-from .models import (
+from arden.wiki.constants import (
+    README_FILENAME,
+    WIKI_HEALTH_ACTOR,
+    WIKI_HEALTH_ORIGIN,
+    WIKI_HEALTH_PATH,
+    WIKI_HEALTH_REASON,
+    WIKI_HEALTH_RESOURCE_ID,
+    WIKI_MAINTENANCE_ACTOR,
+    WIKI_MAINTENANCE_ORIGIN,
+)
+from arden.wiki.models import (
     GeneratedPageTarget,
     LinkReference,
     LinkStatus,
@@ -40,9 +49,15 @@ from .models import (
     WikiResourceChange,
     WikiSnapshot,
 )
-from .pages import PageValidationError, WikiPage, extract_generated_region, parse_page, update_generated_region
-from .pages import create_page as build_page
-from .wikilinks import WikilinkNode, parse_wikilinks, rewrite_page_targets
+from arden.wiki.pages import (
+    PageValidationError,
+    WikiPage,
+    extract_generated_region,
+    parse_page,
+    update_generated_region,
+)
+from arden.wiki.pages import create_page as build_page
+from arden.wiki.wikilinks import WikilinkNode, parse_wikilinks, rewrite_page_targets
 
 
 class WikiValidationError(ValueError):
@@ -87,11 +102,6 @@ class WikiMaintenanceEvidenceLimitError(WikiValidationError):
 
 _STORAGE_INSPECTION_BYTES = 50 * 1024 * 1024
 _STORAGE_NEEDS_ATTENTION_BYTES = 100 * 1024 * 1024
-WIKI_HEALTH_RESOURCE_ID = "health"
-WIKI_HEALTH_PATH = "health.md"
-WIKI_HEALTH_ACTOR = "backend"
-WIKI_HEALTH_ORIGIN = "wiki.health"
-WIKI_HEALTH_REASON = "project wiki health"
 WIKI_RENAME_ACTOR = "Wiki Rename"
 WIKI_RENAME_ORIGIN = "wiki.rename"
 WIKI_RENAME_REASON = "rename page"
@@ -828,8 +838,8 @@ class WikiService:
         base_head: str,
         reason: str = "apply wiki maintenance updates",
         idempotency_key: str | None = None,
-        actor: str = "Wiki Maintenance",
-        origin: str = "wiki.maintenance",
+        actor: str = WIKI_MAINTENANCE_ACTOR,
+        origin: str = WIKI_MAINTENANCE_ORIGIN,
     ) -> str:
         """Atomically apply ordinary edits without changing page identity.
 
@@ -1522,7 +1532,7 @@ class WikiService:
         if "fact_citations" not in page.metadata:
             return generated_from_revision, (), tuple(warnings)
         raw_citations = page.metadata["fact_citations"]
-        if not isinstance(raw_citations, Sequence) or isinstance(raw_citations, (str, bytes)):
+        if not isinstance(raw_citations, Sequence) or isinstance(raw_citations, str | bytes):
             warnings.append(WikiChangeWarning("invalid_fact_citations", path, repr(raw_citations)))
             return generated_from_revision, (), tuple(warnings)
         citations: list[WikiFactCitation] = []
@@ -1545,7 +1555,7 @@ class WikiService:
             return WikiInfrastructureRole.ME
         if resource_id == "active-work" or path == "active-work.md":
             return WikiInfrastructureRole.ACTIVE_WORK
-        if path == "README.md" or path.endswith("/README.md"):
+        if path == README_FILENAME or path.endswith(f"/{README_FILENAME}"):
             return WikiInfrastructureRole.README
         if path.startswith("daily/"):
             return WikiInfrastructureRole.DAILY

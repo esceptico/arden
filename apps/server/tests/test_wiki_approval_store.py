@@ -1,7 +1,5 @@
-from __future__ import annotations
-
 import asyncio
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
@@ -12,9 +10,6 @@ from arden.wiki.approval_store import (
     WikiRenameApprovalStatus,
     WikiRenameApprovalStore,
 )
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 @pytest_asyncio.fixture

@@ -3,6 +3,8 @@ from datetime import date
 import pytest
 from pydantic import ValidationError
 
+from arden.agent.types.llm import CompletionResponse
+from arden.agent.types.usage import Usage
 from arden.memory.facts.completion_dream import CompletionFactDreamRenderer
 from arden.memory.facts.dream import DreamEvidence, DreamInsight
 from tests.helpers import MockCompletionClient, make_text_response
@@ -42,3 +44,14 @@ async def test_completion_dream_rejects_extra_output_fields() -> None:
 
     with pytest.raises(ValidationError):
         await renderer.render(month=date(2026, 7, 1), evidence=_evidence())
+
+
+@pytest.mark.asyncio
+async def test_completion_dream_rejects_missing_content() -> None:
+    client = MockCompletionClient([CompletionResponse(choices=[], usage=Usage(), model="test-memory")])
+
+    with pytest.raises(ValueError, match="returned no content"):
+        await CompletionFactDreamRenderer(client, "test-memory").render(
+            month=date(2026, 7, 1),
+            evidence=_evidence(),
+        )

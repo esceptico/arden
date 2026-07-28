@@ -15,15 +15,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
-from arden.revisions.errors import (
-    CorruptRepositoryError,
-    IdempotencyConflictError,
-    RevisionConflictError,
-)
-from arden.revisions.models import ChangeSet, Commit, Create, ResourceState, Update
-from arden.revisions.repository import ManagedFileRepository
-
-from .models import (
+from arden.memory.facts.models import (
     DueReviewCandidate,
     Fact,
     FactChangeFeed,
@@ -33,6 +25,13 @@ from .models import (
     FactPlan,
     FactValidationError,
 )
+from arden.revisions.errors import (
+    CorruptRepositoryError,
+    IdempotencyConflictError,
+    RevisionConflictError,
+)
+from arden.revisions.models import ChangeSet, Commit, Create, ResourceState, Update
+from arden.revisions.repository import ManagedFileRepository
 
 _VERSION = 1
 _MONTH = re.compile(r"^\d{4}-\d{2}\.jsonl$")
@@ -1601,7 +1600,7 @@ class FactLedger:
             changes["status"] = "expired"
         elif event.op == "retract":
             changes["status"] = "retracted"
-        return self._replace(current, **changes)
+        return replace(current, **changes)
 
     def _validate_plan_dependencies(self, plan: FactPlan, state: Mapping[str, Fact]) -> None:
         for fact_id, version in plan.dependencies.items():
@@ -1730,12 +1729,6 @@ class FactLedger:
                 raise FactValidationError("supersession cycle")
             seen.add(cursor)
             cursor = state[cursor].successor_id
-
-    @staticmethod
-    def _replace(fact: Fact, **changes: Any) -> Fact:
-        values = {field: getattr(fact, field) for field in Fact.__dataclass_fields__}
-        values.update(changes)
-        return Fact(**values)
 
     def _event(
         self,

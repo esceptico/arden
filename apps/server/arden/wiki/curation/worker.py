@@ -5,9 +5,8 @@ from datetime import UTC, datetime, timedelta
 
 from arden.logging import get_logger
 from arden.memory.facts.service import FactPrincipal, FactService
-
-from .engine import WikiEditCurator
-from .queue import (
+from arden.wiki.curation.engine import WikiEditCurator
+from arden.wiki.curation.queue import (
     WikiEditCuratorJob,
     WikiEditCuratorJobOutcome,
     WikiEditCuratorQueueStore,

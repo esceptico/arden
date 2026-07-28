@@ -5,9 +5,9 @@ from datetime import datetime
 from enum import StrEnum
 
 from arden.revisions.models import Commit
-
-from .models import WikiChangesReport
-from .service import WikiService
+from arden.wiki.constants import WIKI_HEALTH_ORIGIN, WIKI_MAINTENANCE_ACTOR
+from arden.wiki.models import WikiChangesReport
+from arden.wiki.service import WikiService
 
 
 class WikiHealthIssueCode(StrEnum):
@@ -24,7 +24,7 @@ class WikiHealthIssueOwner(StrEnum):
     SYNTHESIS = "Synthesis"
     RETENTION = "Memory Retention"
     MEMORY_MAINTENANCE = "Memory Maintenance"
-    WIKI_MAINTENANCE = "Wiki Maintenance"
+    WIKI_MAINTENANCE = WIKI_MAINTENANCE_ACTOR
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,16 +33,6 @@ class WikiHealthIssue:
     target: str
     evidence: str
     owner: WikiHealthIssueOwner
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.code, WikiHealthIssueCode):
-            raise TypeError("code must be a WikiHealthIssueCode")
-        if not isinstance(self.owner, WikiHealthIssueOwner):
-            raise TypeError("owner must be a WikiHealthIssueOwner")
-        for field in ("target", "evidence"):
-            value = getattr(self, field)
-            if not isinstance(value, str) or not value:
-                raise ValueError(f"{field} must be a nonempty string")
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,18 +44,6 @@ class WikiHealthWorker:
     processed_through: str | None
     current_revision: str | None
     current: bool | None = None
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.name, str) or not self.name:
-            raise ValueError("name must be a nonempty string")
-        if self.last_success is not None and not isinstance(self.last_success, datetime):
-            raise TypeError("last_success must be a datetime or None")
-        if self.current is not None and not isinstance(self.current, bool):
-            raise TypeError("current must be a bool or None")
-        for field in ("processed_through", "current_revision"):
-            value = getattr(self, field)
-            if value is not None and (not isinstance(value, str) or not value):
-                raise ValueError(f"{field} must be a nonempty string or None")
 
     @property
     def status(self) -> str:
@@ -86,14 +64,6 @@ class WikiHealthIndex:
     status: str
     detail: str | None = None
 
-    def __post_init__(self) -> None:
-        if self.revision is not None and (not isinstance(self.revision, str) or not self.revision):
-            raise ValueError("revision must be a nonempty string or None")
-        if not isinstance(self.status, str) or not self.status:
-            raise ValueError("status must be a nonempty string")
-        if self.detail is not None and (not isinstance(self.detail, str) or not self.detail):
-            raise ValueError("detail must be a nonempty string or None")
-
     def state_for(self, wiki_revision: str | None) -> str:
         if self.status != "ready":
             return self.status
@@ -109,12 +79,6 @@ class WikiHealthPendingReview:
     review_id: str
     summary: str
 
-    def __post_init__(self) -> None:
-        for field in ("review_id", "summary"):
-            value = getattr(self, field)
-            if not isinstance(value, str) or not value:
-                raise ValueError(f"{field} must be a nonempty string")
-
 
 @dataclass(frozen=True, slots=True)
 class WikiHealthInput:
@@ -124,30 +88,6 @@ class WikiHealthInput:
     index: WikiHealthIndex
     issues: tuple[WikiHealthIssue, ...] = ()
     pending_reviews: tuple[WikiHealthPendingReview, ...] = ()
-
-    def __post_init__(self) -> None:
-        if self.fact_ledger_revision is not None and (
-            not isinstance(self.fact_ledger_revision, str) or not self.fact_ledger_revision
-        ):
-            raise ValueError("fact_ledger_revision must be a nonempty string or None")
-        if not isinstance(self.wiki, WikiChangesReport):
-            raise TypeError("wiki must be a WikiChangesReport")
-        if self.wiki.watermark is not None:
-            raise ValueError("health requires a whole-wiki report so it can ignore its own commits")
-        if (
-            not isinstance(self.workers, tuple)
-            or not self.workers
-            or not all(isinstance(item, WikiHealthWorker) for item in self.workers)
-        ):
-            raise TypeError("workers must be a nonempty tuple of WikiHealthWorker values")
-        if not isinstance(self.index, WikiHealthIndex):
-            raise TypeError("index must be a WikiHealthIndex")
-        if not isinstance(self.issues, tuple) or not all(isinstance(item, WikiHealthIssue) for item in self.issues):
-            raise TypeError("issues must be a tuple of WikiHealthIssue values")
-        if not isinstance(self.pending_reviews, tuple) or not all(
-            isinstance(item, WikiHealthPendingReview) for item in self.pending_reviews
-        ):
-            raise TypeError("pending_reviews must be a tuple of WikiHealthPendingReview values")
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,8 +104,6 @@ class WikiHealthProjector:
         self._wiki = wiki
 
     def project(self, value: WikiHealthInput) -> WikiHealthResult:
-        if not isinstance(value, WikiHealthInput):
-            raise TypeError("value must be a WikiHealthInput")
         observed = _last_non_health_revision(value.wiki)
         issues = _dedupe((*_mechanical_issues(value.wiki), *value.issues, *_index_issues(value.index, observed)))
         body = _render(value, observed, issues)
@@ -175,7 +113,7 @@ class WikiHealthProjector:
 
 def _last_non_health_revision(report: WikiChangesReport) -> str | None:
     for commit in reversed(report.commits):
-        if commit.origin != "wiki.health":
+        if commit.origin != WIKI_HEALTH_ORIGIN:
             return commit.commit_id
     return None
 

@@ -8,9 +8,8 @@ from pathlib import Path
 import aiosqlite
 
 from arden.database import connect
-
-from .ledger import FactLedger
-from .models import FactChangeFeed
+from arden.memory.facts.ledger import FactLedger
+from arden.memory.facts.models import FactChangeFeed
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS fact_consumer_watermarks (

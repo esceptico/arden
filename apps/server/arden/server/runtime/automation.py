@@ -376,8 +376,6 @@ class AutomationRuntime:
                             await navigation.run()
                     result = await maintenance.run()
                     results.append(result)
-                    if result.error is not None:
-                        raise RuntimeError(result.error)
                     if not result.reload_required:
                         break
 

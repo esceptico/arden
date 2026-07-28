@@ -1,6 +1,4 @@
-from __future__ import annotations
-
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
@@ -8,9 +6,6 @@ from arden.revisions import Archive, ChangeSet, Create, ManagedFileRepository, R
 from arden.wiki.models import GeneratedPageTarget
 from arden.wiki.pages import extract_generated_region, parse_page, update_generated_region
 from arden.wiki.service import GeneratedRegionConflictError, WikiAmbiguityError, WikiService, WikiValidationError
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def _repo(tmp_path: Path) -> ManagedFileRepository:

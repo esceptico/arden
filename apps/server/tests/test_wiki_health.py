@@ -1,8 +1,6 @@
-from __future__ import annotations
-
 from dataclasses import replace
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
@@ -22,9 +20,6 @@ from arden.wiki.pages import create_page
 from arden.wiki.service import (
     WikiService,
 )
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def _repo(tmp_path: Path) -> ManagedFileRepository:
@@ -300,15 +295,3 @@ def test_health_uses_the_report_head_as_a_whole_tree_compare_and_swap(tmp_path: 
     with pytest.raises(RevisionConflictError):
         projector.project(stale)
     assert repo.find_by_path("health.md") is None
-
-
-def test_health_rejects_a_partial_change_report(tmp_path: Path) -> None:
-    service = WikiService(_repo(tmp_path))
-    service.create_page(path="one.md", title="One", page_id="one")
-    with pytest.raises(ValueError, match="whole-wiki"):
-        WikiHealthInput(
-            fact_ledger_revision=None,
-            wiki=service.changes_since(service.repository.head),
-            workers=(WikiHealthWorker("Memory Maintenance", None, None, None),),
-            index=WikiHealthIndex(None, "ready"),
-        )

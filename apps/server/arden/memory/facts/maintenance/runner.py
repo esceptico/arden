@@ -3,21 +3,20 @@
 import asyncio
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Literal, Protocol, Self
+from typing import Annotated, Any, Literal, Protocol, Self
 
 import aiosqlite
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, model_validator
 
 from arden.constants import BUILTIN_MEMORY_CONSOLIDATE_ID
+from arden.memory.facts.consumer_store import FactConsumerStore
+from arden.memory.facts.models import Fact, FactChangeFeed, FactConflictError
+from arden.memory.facts.service import FactPrincipal, FactService
 from arden.wiki.models import WikiMaintenancePageUpdate, WikiPageRecord, WikiSnapshot
 from arden.wiki.service import WikiService
-
-from ..consumer_store import FactConsumerStore
-from ..models import Fact, FactChangeFeed, FactConflictError
-from ..service import FactPrincipal, FactService
 
 CONSUMER_ID = "memory.maintenance"
 ORIGIN = "memory.maintenance"
@@ -40,20 +39,27 @@ class FactMaintenanceError(RuntimeError):
     """A maintenance decision could not be applied safely."""
 
 
-@dataclass(frozen=True, slots=True)
-class _NormalizedFactIntent:
-    fact_id: str
-    before_subjects: tuple[str, ...]
-    after_subjects: tuple[str, ...]
+type _NonEmptyText = Annotated[StrictStr, Field(min_length=1)]
 
 
-@dataclass(frozen=True, slots=True)
-class _MaintenanceIntent:
-    from_revision: str | None
-    through_revision: str
-    plan_id: str
-    bindings: tuple[tuple[str, str, str], ...]
-    normalized_facts: tuple[_NormalizedFactIntent, ...]
+class _NormalizedFactIntent(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    fact_id: _NonEmptyText
+    before_subjects: tuple[_NonEmptyText, ...] = Field(min_length=1)
+    after_subjects: tuple[_NonEmptyText, ...] = Field(min_length=1)
+
+
+class _MaintenanceIntent(BaseModel):
+    """Strict representation of one intent persisted in SQLite."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    from_revision: StrictStr | None
+    through_revision: _NonEmptyText
+    plan_id: _NonEmptyText
+    bindings: tuple[tuple[_NonEmptyText, _NonEmptyText, _NonEmptyText], ...] = Field(min_length=1)
+    normalized_facts: tuple[_NormalizedFactIntent, ...] = Field(min_length=1)
 
 
 class _FactMaintenanceIntentStore:
@@ -121,39 +127,22 @@ class _FactMaintenanceIntentStore:
     @staticmethod
     def _decode(row) -> _MaintenanceIntent:
         try:
-            bindings_raw = json.loads(row["bindings_json"])
-            normalized_raw = json.loads(row["normalized_facts_json"])
-            bindings = tuple((str(old_topic), str(page_id), str(title)) for old_topic, page_id, title in bindings_raw)
-            normalized = tuple(
-                _NormalizedFactIntent(
-                    str(fact_id),
-                    tuple(str(subject) for subject in before),
-                    tuple(str(subject) for subject in after),
-                )
-                for fact_id, before, after in normalized_raw
+            return _MaintenanceIntent(
+                from_revision=row["from_revision"],
+                through_revision=row["through_revision"],
+                plan_id=row["plan_id"],
+                bindings=json.loads(row["bindings_json"]),
+                normalized_facts=[
+                    {
+                        "fact_id": fact_id,
+                        "before_subjects": before,
+                        "after_subjects": after,
+                    }
+                    for fact_id, before, after in json.loads(row["normalized_facts_json"])
+                ],
             )
-            intent = _MaintenanceIntent(
-                row["from_revision"],
-                str(row["through_revision"]),
-                str(row["plan_id"]),
-                bindings,
-                normalized,
-            )
-        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        except (KeyError, TypeError, ValueError) as exc:
             raise FactMaintenanceError("persisted topic-normalization intent is invalid") from exc
-        if (
-            not intent.through_revision
-            or not intent.plan_id
-            or not intent.bindings
-            or not intent.normalized_facts
-            or any(not all(binding) for binding in intent.bindings)
-            or any(
-                not item.fact_id or not item.before_subjects or not item.after_subjects
-                for item in intent.normalized_facts
-            )
-        ):
-            raise FactMaintenanceError("persisted topic-normalization intent is invalid")
-        return intent
 
 
 class FactMaintenanceCandidateProvider(Protocol):
@@ -165,7 +154,7 @@ class FactMaintenanceCandidateProvider(Protocol):
 class FactMaintenanceDecision(BaseModel):
     """One constrained decision addressed only by run-local opaque tokens."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     outcome: Literal["no_change", "amend_metadata", "merge_duplicate", "normalize_topic"]
     reason: str = Field(min_length=1, max_length=_MAX_REASON)
@@ -230,8 +219,7 @@ class FactMaintenancePreparedCluster:
     wiki_page_tokens: Mapping[str, str]
 
 
-class FactMaintenanceReviewer(Protocol):
-    async def review(self, cluster: FactMaintenancePreparedCluster) -> FactMaintenanceDecision: ...
+FactMaintenanceReviewer = Callable[[FactMaintenancePreparedCluster], Awaitable[FactMaintenanceDecision]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -307,8 +295,7 @@ class FactMaintenance:
         reviewed: list[_ReviewedDecision] = []
         for target in targets:
             cluster = await self._prepare_cluster(target, facts, wiki_pages)
-            raw_decision = await self._reviewer.review(cluster)
-            decision = FactMaintenanceDecision.model_validate(raw_decision)
+            decision = await self._reviewer(cluster)
             reviewed.append(_ReviewedDecision(target, cluster, decision))
 
         changes, amended, merged, reasons = self._prepare_changes(reviewed)
@@ -335,20 +322,22 @@ class FactMaintenance:
                 reason=reason,
             )
             if topic_changes:
-                normalized = tuple(
-                    _NormalizedFactIntent(
-                        str(change["fact_id"]),
-                        facts[str(change["fact_id"])].subjects,
-                        tuple(str(subject) for subject in change["subjects"]),
+                normalized = []
+                for change in topic_changes:
+                    fact_id = change["fact_id"]
+                    normalized.append(
+                        _NormalizedFactIntent(
+                            fact_id=fact_id,
+                            before_subjects=facts[fact_id].subjects,
+                            after_subjects=tuple(change["subjects"]),
+                        )
                     )
-                    for change in topic_changes
-                )
                 intent = _MaintenanceIntent(
-                    feed.from_revision,
-                    feed.through_revision,
-                    preview.plan_id,
-                    topic_bindings,
-                    normalized,
+                    from_revision=feed.from_revision,
+                    through_revision=feed.through_revision,
+                    plan_id=preview.plan_id,
+                    bindings=topic_bindings,
+                    normalized_facts=tuple(normalized),
                 )
                 await self._intents.save(intent)
                 return await self._resume_intent(intent, feed, reviewed_clusters=len(reviewed))
@@ -374,13 +363,12 @@ class FactMaintenance:
 
         applied = await asyncio.to_thread(self._service.ledger.plan_applied, intent.plan_id)
         mapping_valid = await self._ensure_topic_aliases(intent)
-        if not mapping_valid:
-            if not applied:
-                # The selected page no longer owns the proposed name. Discard
-                # the uncommitted plan and re-review against current wiki truth.
-                await self._intents.delete(intent.plan_id)
-                return await self.run()
-        else:
+        if not mapping_valid and not applied:
+            # The selected page no longer owns the proposed name. Discard the
+            # uncommitted plan and re-review against current wiki truth.
+            await self._intents.delete(intent.plan_id)
+            return await self.run()
+        if mapping_valid and not applied:
             principal = await self._principal()
             try:
                 await self._service.commit(
@@ -394,10 +382,7 @@ class FactMaintenance:
                     if current != intent.through_revision:
                         await self._intents.delete(intent.plan_id)
                 raise
-            applied = True
 
-        if not applied and not await asyncio.to_thread(self._service.ledger.plan_applied, intent.plan_id):
-            raise FactMaintenanceError("topic-normalization plan did not publish")
         await self._converge_committed_normalization(intent)
         await self._consumers.advance(CONSUMER_ID, feed=feed, ledger=self._service.ledger)
         await self._intents.delete(intent.plan_id)
@@ -598,7 +583,7 @@ class FactMaintenance:
             candidate_ids = await self._candidate_provider.semantic_candidates(target, limit=self._candidate_limit)
             selected: list[Fact] = []
             for fact_id in candidate_ids:
-                if not isinstance(fact_id, str) or fact_id in seen or fact_id == target.fact_id:
+                if fact_id in seen or fact_id == target.fact_id:
                     continue
                 candidate = facts.get(fact_id)
                 if candidate is None or candidate.status != "active" or candidate.scope != target.scope:
@@ -667,7 +652,7 @@ class FactMaintenance:
     @staticmethod
     def _fact_line(token: str, fact: Fact) -> str:
         text = fact.text if len(fact.text) <= _MAX_FACT_TEXT else fact.text[:_MAX_FACT_TEXT] + "…"
-        source_kinds = sorted({str(source.get("kind", "unknown")) for source in fact.sources})
+        source_kinds = sorted({source.get("kind", "unknown") for source in fact.sources})
         return (
             f"- {token}: text={json.dumps(text, ensure_ascii=False)}; "
             f"kind={json.dumps(fact.kind)}; subjects={json.dumps(list(fact.subjects), ensure_ascii=False)}; "
@@ -679,8 +664,8 @@ class FactMaintenance:
     def _prepare_changes(
         self,
         reviewed: Sequence[_ReviewedDecision],
-    ) -> tuple[list[dict[str, object]], int, int, tuple[str, ...]]:
-        amendments: dict[str, tuple[Fact, dict[str, object]]] = {}
+    ) -> tuple[list[dict[str, Any]], int, int, tuple[str, ...]]:
+        amendments: dict[str, tuple[Fact, dict[str, Any]]] = {}
         merges: dict[str, tuple[Fact, Fact, str]] = {}
         reasons: list[str] = []
         for item in reviewed:
@@ -720,7 +705,7 @@ class FactMaintenance:
         if set(amendments).intersection(discarded | survivors):
             raise FactMaintenanceError("one maintenance plan cannot both amend and merge a fact")
 
-        changes: list[dict[str, object]] = []
+        changes: list[dict[str, Any]] = []
         for fact_id in sorted(amendments):
             target, metadata = amendments[fact_id]
             changes.append(
@@ -765,7 +750,7 @@ class FactMaintenance:
         wiki_snapshot: WikiSnapshot,
         wiki_pages: Mapping[str, WikiPageRecord],
     ) -> tuple[
-        list[dict[str, object]],
+        list[dict[str, Any]],
         tuple[tuple[str, str, str], ...],
         tuple[str, ...],
     ]:
@@ -846,22 +831,22 @@ class FactMaintenance:
 
     @staticmethod
     def _merge_topic_changes(
-        changes: Sequence[dict[str, object]],
-        topic_changes: Sequence[dict[str, object]],
-    ) -> list[dict[str, object]]:
-        amendments: dict[str, dict[str, object]] = {}
-        merges: list[dict[str, object]] = []
+        changes: Sequence[dict[str, Any]],
+        topic_changes: Sequence[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        amendments: dict[str, dict[str, Any]] = {}
+        merges: list[dict[str, Any]] = []
         merged_facts: set[str] = set()
         for change in changes:
             copy = dict(change)
             if copy["op"] == "amend":
-                amendments[str(copy["fact_id"])] = copy
+                amendments[copy["fact_id"]] = copy
             else:
                 merges.append(copy)
-                merged_facts.add(str(copy["fact_id"]))
-                merged_facts.add(str(copy["successor_id"]))
+                merged_facts.add(copy["fact_id"])
+                merged_facts.add(copy["successor_id"])
         for topic_change in topic_changes:
-            fact_id = str(topic_change["fact_id"])
+            fact_id = topic_change["fact_id"]
             if fact_id in merged_facts:
                 raise FactMaintenanceError("one maintenance plan cannot both normalize and merge a fact")
             existing = amendments.get(fact_id)
@@ -874,7 +859,7 @@ class FactMaintenance:
             existing["subjects"] = subjects
         return [
             *(amendments[fact_id] for fact_id in sorted(amendments)),
-            *sorted(merges, key=lambda change: str(change["fact_id"])),
+            *sorted(merges, key=lambda change: change["fact_id"]),
         ]
 
     @staticmethod
@@ -897,24 +882,18 @@ class FactMaintenance:
             raise FactMaintenanceError("maintenance decision used an unknown fact token") from exc
 
     @staticmethod
-    def _changed_metadata(target: Fact, decision: FactMaintenanceDecision) -> dict[str, object]:
-        proposed = {
-            "kind": decision.kind,
-            "labels": decision.labels,
-            "subjects": decision.subjects,
-            "lifecycle": decision.lifecycle,
-            "evidence_class": decision.evidence_class,
-        }
-        result: dict[str, object] = {}
-        for field, value in proposed.items():
-            if value is None:
-                continue
-            current = getattr(target, field)
-            if isinstance(value, list):
-                if tuple(value) != current:
-                    result[field] = value
-            elif value != current:
-                result[field] = value
+    def _changed_metadata(target: Fact, decision: FactMaintenanceDecision) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        if decision.kind is not None and decision.kind != target.kind:
+            result["kind"] = decision.kind
+        if decision.labels is not None and tuple(decision.labels) != target.labels:
+            result["labels"] = decision.labels
+        if decision.subjects is not None and tuple(decision.subjects) != target.subjects:
+            result["subjects"] = decision.subjects
+        if decision.lifecycle is not None and decision.lifecycle != target.lifecycle:
+            result["lifecycle"] = decision.lifecycle
+        if decision.evidence_class is not None and decision.evidence_class != target.evidence_class:
+            result["evidence_class"] = decision.evidence_class
         return result
 
     @staticmethod
