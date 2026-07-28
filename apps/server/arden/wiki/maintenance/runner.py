@@ -39,7 +39,7 @@ from arden.wiki.models import (
     WikiMaintenancePageUpdate,
     WikiPageRecord,
 )
-from arden.wiki.service import WikiMaintenanceEvidenceLimitError, WikiService
+from arden.wiki.service import WikiMaintenanceEvidenceLimitError, WikiService, WikiSnapshotChangedError
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _PAGE_ID_LINE = re.compile(r"(?m)^([+-]?\s*page_id:\s*).*$")
@@ -230,10 +230,16 @@ class WikiMaintenance:
         watermark = await self._store.get_watermark()
         expected = None if watermark is None else watermark.revision
         initial = expected
-        feed = await asyncio.to_thread(
-            self._wiki.maintenance_feed,
-            expected,
-        )
+        try:
+            feed = await asyncio.to_thread(
+                self._wiki.maintenance_feed,
+                expected,
+            )
+        except WikiSnapshotChangedError:
+            feed = await asyncio.to_thread(
+                self._wiki.maintenance_feed,
+                expected,
+            )
         if not feed.commits:
             return self._result(feed.through_revision, expected, initial, empty=True)
 
@@ -372,6 +378,16 @@ class WikiMaintenance:
                     updated += await self._apply(prepared, decision.updates)
                 await self._clear_stale(stale_open)
                 await self._advance(expected, commit_ids, commit.commit_id)
+            except WikiSnapshotChangedError:
+                return self._result(
+                    feed.through_revision,
+                    expected,
+                    initial,
+                    reviewed=reviewed,
+                    updated=updated,
+                    replayed=replayed,
+                    reload_required=True,
+                )
             except WikiMaintenanceEvidenceLimitError as exc:
                 return await self._record_oversized_evidence(
                     feed=feed,

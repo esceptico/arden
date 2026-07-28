@@ -68,6 +68,10 @@ class WikiAmbiguityError(WikiValidationError):
     """A page name can resolve to more than one page."""
 
 
+class WikiSnapshotChangedError(RevisionConflictError):
+    """A pinned wiki read became stale before it completed."""
+
+
 class GeneratedRegionConflictError(WikiValidationError):
     """A user changed a producer-owned generated region."""
 
@@ -157,7 +161,7 @@ class WikiService:
         head = self.repository.current_revision
         records, _warnings = self._maintenance_snapshot(head)
         if self.repository.current_revision != head:
-            raise RevisionConflictError("wiki changed while reading pages")
+            raise WikiSnapshotChangedError("wiki changed while reading pages")
         return tuple(record for record in records if record.page.lifecycle == "active")
 
     def resolve_topic_name(
@@ -219,7 +223,7 @@ class WikiService:
                 )
             )
         if self.repository.current_revision != head:
-            raise RevisionConflictError("wiki changed while building a maintenance feed")
+            raise WikiSnapshotChangedError("wiki changed while building a maintenance feed")
         return WikiMaintenanceFeed(
             watermark=watermark,
             through_revision=head,
@@ -297,7 +301,7 @@ class WikiService:
                 continue
             reports.append(self._detail_commit(commit, current_links, warnings, diff_char_limit=diff_char_limit))
         if self.repository.head != head:
-            raise RevisionConflictError("wiki changed while building a change feed")
+            raise WikiSnapshotChangedError("wiki changed while building a change feed")
         return WikiChangesReport(
             watermark=watermark,
             through_revision=head,
@@ -333,7 +337,7 @@ class WikiService:
         if isinstance(diff_byte_budget, bool) or not isinstance(diff_byte_budget, int) or diff_byte_budget <= 0:
             raise ValueError("diff_byte_budget must be a positive integer")
         if self.repository.head != through_revision:
-            raise RevisionConflictError("wiki changed before loading commit details")
+            raise WikiSnapshotChangedError("wiki changed before loading commit details")
 
         remaining = diff_byte_budget
         diffs: dict[str, tuple[str, bool]] = {}
@@ -455,7 +459,7 @@ class WikiService:
             precomputed_revisions=revisions,
         )
         if self.repository.head != through_revision:
-            raise RevisionConflictError("wiki changed while loading commit details")
+            raise WikiSnapshotChangedError("wiki changed while loading commit details")
         return WikiMaintenanceDetails(
             through_revision=through_revision,
             warnings=tuple(self._dedupe_warnings(warnings)),

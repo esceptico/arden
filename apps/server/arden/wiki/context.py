@@ -6,11 +6,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
 
-from arden.revisions.errors import RevisionConflictError
 from arden.search.types import RawItem
 from arden.wiki.constants import README_FILENAME
 from arden.wiki.models import WikiInfrastructureRole, WikiPageRecord
-from arden.wiki.service import WikiService
+from arden.wiki.service import WikiService, WikiSnapshotChangedError
 
 WIKI_PAGE_SOURCE = "wiki_page"
 WIKI_RESULT_LIMIT = 3
@@ -34,7 +33,7 @@ async def _readable_pages(wiki: WikiService) -> tuple[WikiPageRecord, ...]:
 
     try:
         return await asyncio.to_thread(wiki.readable_pages)
-    except RevisionConflictError:
+    except WikiSnapshotChangedError:
         return await asyncio.to_thread(wiki.readable_pages)
 
 

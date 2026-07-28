@@ -20,7 +20,7 @@ from arden.wiki.navigation.projection import (
     WIKI_NAVIGATION_REASON,
 )
 from arden.wiki.pages import create_page
-from arden.wiki.service import WikiMaintenanceEvidenceLimitError, WikiService
+from arden.wiki.service import WikiMaintenanceEvidenceLimitError, WikiService, WikiSnapshotChangedError
 
 
 class _Reviewer:
@@ -1113,6 +1113,68 @@ async def test_trusted_replay_rejects_multiple_matching_acceptances_before_apply
         ):
             await maintenance.run()
         assert reviewer.reports == []
+        assert await store.get_watermark() is None
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_wiki_commit_reloads_feed_without_skipping(tmp_path: Path, monkeypatch) -> None:
+    repo = _repo(tmp_path)
+    source = _seed(repo)
+    service = WikiService(repo)
+    original_details = service.maintenance_details
+    raced = False
+
+    def commit_before_first_detail(*args, **kwargs):
+        nonlocal raced
+        if not raced:
+            raced = True
+            _update(repo, "page-one", b"Concurrent\n", key="concurrent")
+        return original_details(*args, **kwargs)
+
+    monkeypatch.setattr(service, "maintenance_details", commit_before_first_detail)
+    store = await WikiMaintenanceStore.open(tmp_path / "state.sqlite")
+    reviewer = _Reviewer(
+        WikiMaintenanceDecision(outcome="no_change"),
+        WikiMaintenanceDecision(outcome="no_change"),
+    )
+    maintenance = WikiMaintenance(store, service, reviewer)
+    try:
+        first = await maintenance.run()
+        assert first.reload_required and not first.complete
+        assert first.feed_target_revision == source
+        assert first.processed_through_revision is None
+        assert reviewer.reports == []
+
+        second = await maintenance.run()
+        assert second.complete and not second.reload_required
+        assert second.reviewed_commits == 2
+        assert second.processed_through_revision == second.feed_target_revision == repo.head
+        assert (await store.get_watermark()).revision == repo.head
+        assert len(reviewer.reports) == 2
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_repeated_maintenance_feed_conflict_surfaces(tmp_path: Path, monkeypatch) -> None:
+    repo = _repo(tmp_path)
+    _seed(repo)
+    service = WikiService(repo)
+    calls = 0
+
+    def always_conflicted(_watermark):
+        nonlocal calls
+        calls += 1
+        raise WikiSnapshotChangedError("wiki keeps changing")
+
+    monkeypatch.setattr(service, "maintenance_feed", always_conflicted)
+    store = await WikiMaintenanceStore.open(tmp_path / "state.sqlite")
+    try:
+        with pytest.raises(WikiSnapshotChangedError, match="wiki keeps changing"):
+            await WikiMaintenance(store, service, _Reviewer()).run()
+        assert calls == 2
         assert await store.get_watermark() is None
     finally:
         await store.close()

@@ -4,7 +4,7 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from arden.core.prompts import build_system_blocks
-from arden.revisions import ChangeSet, Create, ManagedFileRepository, RevisionConflictError
+from arden.revisions import ChangeSet, Create, ManagedFileRepository
 from arden.search.types import SearchResult
 from arden.wiki.context import (
     WIKI_PAGE_SOURCE,
@@ -14,9 +14,7 @@ from arden.wiki.context import (
     _normalized_query,
 )
 from arden.wiki.models import WikiMaintenancePageUpdate
-from arden.wiki.service import (
-    WikiService,
-)
+from arden.wiki.service import WikiService, WikiSnapshotChangedError
 
 
 class _Store:
@@ -224,7 +222,7 @@ async def test_concurrent_wiki_commit_retries_without_failing_chat(tmp_path, mon
         nonlocal calls
         calls += 1
         if calls == 1:
-            raise RevisionConflictError("wiki head changed")
+            raise WikiSnapshotChangedError("wiki head changed")
         return original()
 
     monkeypatch.setattr(wiki, "readable_pages", conflicted_once)
@@ -242,21 +240,21 @@ async def test_repeated_wiki_read_conflict_surfaces_after_one_retry(tmp_path, mo
     builder = WikiContextBuilder(wiki, projection, _fact_revision)
 
     def always_conflicted():
-        raise RevisionConflictError("wiki head keeps changing")
+        raise WikiSnapshotChangedError("wiki head keeps changing")
 
     monkeypatch.setattr(wiki, "readable_pages", always_conflicted)
 
-    with pytest.raises(RevisionConflictError, match="wiki head keeps changing"):
+    with pytest.raises(WikiSnapshotChangedError, match="wiki head keeps changing"):
         await builder.resident_context()
-    with pytest.raises(RevisionConflictError, match="wiki head keeps changing"):
+    with pytest.raises(WikiSnapshotChangedError, match="wiki head keeps changing"):
         await builder.retrieval_context("tell me about the current project")
-    with pytest.raises(RevisionConflictError, match="wiki head keeps changing"):
+    with pytest.raises(WikiSnapshotChangedError, match="wiki head keeps changing"):
         await projection.sync()
     assert set(index.store.items) == {"existing"}
     assert projection.last_state == WikiPageIndexState(
         None,
         "error",
-        "RevisionConflictError: wiki head keeps changing",
+        "WikiSnapshotChangedError: wiki head keeps changing",
     )
 
 
