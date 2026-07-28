@@ -4,10 +4,10 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from ._materialized import ancestor_collision, normalize_relative
-from ._storage import FORMAT_VERSION, canonical_jsonl, sha256, valid_hash
-from .errors import CorruptRepositoryError
-from .models import Commit, ResourceChange, ResourceState, ResourceVersion
+from arden.revisions._materialized import ancestor_collision, normalize_relative
+from arden.revisions._storage import FORMAT_VERSION, canonical_jsonl, sha256, valid_hash
+from arden.revisions.errors import CorruptRepositoryError
+from arden.revisions.models import Commit, ResourceChange, ResourceState, ResourceVersion
 
 
 @dataclass(frozen=True)

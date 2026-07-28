@@ -11,8 +11,8 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 
-from ._anchored import AnchoredDirectory, canonical_absolute, ensure_absolute_directory
-from .errors import CorruptRepositoryError, RevisionConflictError, UnsafePathError
+from arden.revisions._anchored import AnchoredDirectory, canonical_absolute, ensure_absolute_directory
+from arden.revisions.errors import CorruptRepositoryError, RevisionConflictError, UnsafePathError
 
 FORMAT_VERSION = 1
 _HEX = frozenset("0123456789abcdef")

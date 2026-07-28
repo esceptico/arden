@@ -12,10 +12,10 @@ from os import PathLike
 from pathlib import Path, PurePosixPath
 from uuid import uuid4
 
-from .errors import CorruptRepositoryError, RevisionConflictError, UnsafePathError
+from arden.revisions.errors import CorruptRepositoryError, RevisionConflictError, UnsafePathError
 
 _DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-_REGULAR_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0)
+_REGULAR_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
 _LIBC = CDLL(None, use_errno=True)
 
 
@@ -406,7 +406,7 @@ class AnchoredDirectory:
         with self.open_parent(rel, create=True) as (parent, leaf):
             descriptor = os.open(
                 leaf,
-                os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0),
+                os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
                 0o600,
                 dir_fd=parent,
             )
@@ -559,7 +559,7 @@ def _rename_no_replace(
         operation.argtypes = (c_int, c_char_p, c_int, c_char_p, c_uint)
         operation.restype = c_int
         result = operation(source_parent, source, target_parent, target, 0x00000004)
-    elif sys.platform.startswith("linux") and hasattr(_LIBC, "renameat2"):
+    elif sys.platform.startswith("linux"):
         operation = _LIBC.renameat2
         operation.argtypes = (c_int, c_char_p, c_int, c_char_p, c_uint)
         operation.restype = c_int

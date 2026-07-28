@@ -6,7 +6,7 @@ from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from ._codec import (
+from arden.revisions._codec import (
     TransactionRow,
     commit_record,
     make_version,
@@ -15,10 +15,10 @@ from ._codec import (
     tree_record,
     validate_commit_transition,
 )
-from ._materialized import MaterializedFiles, ancestor_collision, normalize_relative
-from ._storage import HistoryStorage, canonical_jsonl, sha256, valid_hash
-from ._transaction import TransactionManager
-from .errors import (
+from arden.revisions._materialized import MaterializedFiles, ancestor_collision, normalize_relative
+from arden.revisions._storage import HistoryStorage, canonical_jsonl, sha256, valid_hash
+from arden.revisions._transaction import TransactionManager
+from arden.revisions.errors import (
     CorruptRepositoryError,
     IdempotencyConflictError,
     NoChangesError,
@@ -26,7 +26,7 @@ from .errors import (
     RevisionContentLimitError,
     UnsafePathError,
 )
-from .models import (
+from arden.revisions.models import (
     Archive,
     ChangeSet,
     CollectionReport,
@@ -102,6 +102,7 @@ class ManagedFileRepository:
             return self._transactions.recover()
 
     def commit(self, change_set: ChangeSet) -> Commit:
+        _validate_change_set(change_set)
         request_hash, key_hash = self._request_identity(change_set)
         with self._storage.locked():
             self._transactions.recover()
@@ -978,6 +979,73 @@ def _record_payload(payloads: dict[str, bytes], content: bytes) -> str:
         raise CorruptRepositoryError(f"SHA-256 collision for blob {blob_id}")
     payloads[blob_id] = content
     return blob_id
+
+
+def _validate_change_set(change_set: ChangeSet) -> None:
+    """Validate caller-provided revision input at the repository boundary."""
+
+    if not isinstance(change_set, ChangeSet):
+        raise TypeError("change_set must be a ChangeSet")
+    if not isinstance(change_set.operations, tuple):
+        raise TypeError("operations must be a tuple")
+    if not change_set.operations:
+        raise ValueError("operations must not be empty")
+    _require_text(change_set.actor, "actor")
+    _require_text(change_set.origin, "origin")
+    _require_text(change_set.reason, "reason")
+    _require_text(change_set.idempotency_key, "idempotency_key")
+    if change_set.expected_head is not None:
+        _require_text(change_set.expected_head, "expected_head")
+    if not isinstance(change_set.enforce_expected_head, bool):
+        raise TypeError("enforce_expected_head must be a bool")
+    if change_set.expected_head is not None and change_set.enforce_expected_head:
+        raise ValueError("enforce_expected_head is only needed for an empty expected head")
+    for operation in change_set.operations:
+        _validate_operation(operation)
+
+
+def _validate_operation(operation: Create | Update | Move | Archive | Restore) -> None:
+    if isinstance(operation, Create):
+        _require_text(operation.resource_id, "resource_id")
+        _require_text(operation.path, "path")
+        _require_bytes(operation.content, "content")
+        return
+    if isinstance(operation, Update):
+        _require_existing_operation(operation)
+        _require_bytes(operation.content, "content")
+        return
+    if isinstance(operation, Move):
+        _require_existing_operation(operation)
+        _require_text(operation.path, "path")
+        if operation.content is not None:
+            _require_bytes(operation.content, "content")
+        return
+    if isinstance(operation, Archive):
+        _require_existing_operation(operation)
+        return
+    if isinstance(operation, Restore):
+        _require_existing_operation(operation)
+        if operation.path is not None:
+            _require_text(operation.path, "path")
+        if operation.content is not None:
+            _require_bytes(operation.content, "content")
+        return
+    raise TypeError("operations must contain revision operations")
+
+
+def _require_existing_operation(operation: Update | Move | Archive | Restore) -> None:
+    _require_text(operation.resource_id, "resource_id")
+    _require_text(operation.expected_version, "expected_version")
+
+
+def _require_text(value: object, name: str) -> None:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{name} must be a non-empty string")
+
+
+def _require_bytes(value: object, name: str) -> None:
+    if not isinstance(value, bytes):
+        raise TypeError(f"{name} must be bytes")
 
 
 def _require_active(version: ResourceVersion, operation: str) -> None:

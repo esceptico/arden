@@ -3,9 +3,9 @@
 import os
 from pathlib import Path, PurePosixPath
 
-from ._anchored import AnchoredDirectory, canonical_absolute, ensure_absolute_directory
-from ._storage import sha256
-from .errors import CorruptRepositoryError, RevisionConflictError, UnsafePathError
+from arden.revisions._anchored import AnchoredDirectory, canonical_absolute, ensure_absolute_directory
+from arden.revisions._storage import sha256
+from arden.revisions.errors import CorruptRepositoryError, RevisionConflictError, UnsafePathError
 
 
 def normalize_relative(value: str) -> str:

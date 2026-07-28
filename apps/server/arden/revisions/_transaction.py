@@ -4,7 +4,7 @@ import stat
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
-from ._codec import (
+from arden.revisions._codec import (
     Transaction,
     TransactionRow,
     parse_commit,
@@ -13,16 +13,16 @@ from ._codec import (
     transaction_record,
     validate_commit_transition,
 )
-from ._materialized import MaterializedFiles
-from ._storage import (
+from arden.revisions._materialized import MaterializedFiles
+from arden.revisions._storage import (
     HistoryStorage,
     canonical_jsonl,
     decode_jsonl,
     sha256,
     valid_hash,
 )
-from .errors import CorruptRepositoryError, RevisionConflictError, UnsafePathError
-from .models import ResourceState, ResourceVersion
+from arden.revisions.errors import CorruptRepositoryError, RevisionConflictError, UnsafePathError
+from arden.revisions.models import ResourceState, ResourceVersion
 
 
 class TransactionManager:

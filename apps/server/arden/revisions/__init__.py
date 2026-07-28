@@ -1,6 +1,6 @@
 """Domain-neutral managed-file revisions."""
 
-from .errors import (
+from arden.revisions.errors import (
     CorruptRepositoryError,
     IdempotencyConflictError,
     NoChangesError,
@@ -9,7 +9,7 @@ from .errors import (
     RevisionError,
     UnsafePathError,
 )
-from .models import (
+from arden.revisions.models import (
     Archive,
     ChangeSet,
     CollectionReport,
@@ -27,7 +27,7 @@ from .models import (
     StorageReport,
     Update,
 )
-from .repository import ManagedFileRepository
+from arden.revisions.repository import ManagedFileRepository
 
 __all__ = [
     "Archive",

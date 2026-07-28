@@ -152,10 +152,12 @@ def test_expected_head_rejects_unrelated_changes_but_idempotent_retry_wins_first
 def test_expected_empty_head_rejects_the_first_concurrent_commit(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     with pytest.raises(ValueError, match="empty expected head"):
-        _changes(
-            Create("invalid", "invalid.md", b"invalid"),
-            expected_head="a" * 64,
-            enforce_expected_head=True,
+        repo.commit(
+            _changes(
+                Create("invalid", "invalid.md", b"invalid"),
+                expected_head="a" * 64,
+                enforce_expected_head=True,
+            )
         )
     planned = _changes(
         Create("a", "a.md", b"a0"),
