@@ -752,10 +752,11 @@ def test_scheduler_constructor_has_no_learning_recorder(automation_store: Automa
 
 
 @pytest.mark.asyncio
-async def test_seed_builtins_seeds_exact_canonical_memory_phases(automation_store: AutomationStore):
+async def test_seed_builtins_seeds_required_workers_and_optional_dream(automation_store: AutomationStore):
     from arden.automation.builtins import seed_builtins
     from arden.constants import (
         BUILTIN_MEMORY_CONSOLIDATE_ID,
+        BUILTIN_MEMORY_DREAM_ID,
         BUILTIN_MEMORY_RETENTION_ID,
         BUILTIN_MEMORY_SYNTHESIZE_ID,
         BUILTIN_WIKI_MAINTENANCE_ID,
@@ -767,6 +768,7 @@ async def test_seed_builtins_seeds_exact_canonical_memory_phases(automation_stor
     rows = {row.task_id: row for row in await automation_store.list_all()}
     assert set(rows) == {
         BUILTIN_MEMORY_CONSOLIDATE_ID,
+        BUILTIN_MEMORY_DREAM_ID,
         BUILTIN_MEMORY_RETENTION_ID,
         BUILTIN_MEMORY_SYNTHESIZE_ID,
         BUILTIN_WIKI_MAINTENANCE_ID,
@@ -797,7 +799,15 @@ async def test_seed_builtins_seeds_exact_canonical_memory_phases(automation_stor
     wiki = rows[BUILTIN_WIKI_MAINTENANCE_ID]
     assert wiki.handler == "wiki_maintenance"
     assert wiki.triggers == [TimeTrigger(every="6h")]
-    assert all(row.enabled and row.next_run_at is not None for row in rows.values())
+
+    dream = rows[BUILTIN_MEMORY_DREAM_ID]
+    assert dream.handler == "memory_dream"
+    assert dream.triggers == [TimeTrigger(at="04:00", days="daily")]
+    assert dream.auto_approve is True
+    assert dream.enabled is False
+    assert dream.next_run_at is None
+
+    assert all(row.next_run_at is not None for row in rows.values() if row.enabled)
 
 
 @pytest.mark.asyncio
@@ -807,6 +817,7 @@ async def test_seed_builtins_enforces_system_timing_but_preserves_pause_and_hist
     from arden.automation.builtins import seed_builtins
     from arden.constants import (
         BUILTIN_MEMORY_CONSOLIDATE_ID,
+        BUILTIN_MEMORY_DREAM_ID,
         BUILTIN_MEMORY_RETENTION_ID,
         BUILTIN_MEMORY_SYNTHESIZE_ID,
         BUILTIN_WIKI_MAINTENANCE_ID,
@@ -816,6 +827,7 @@ async def test_seed_builtins_enforces_system_timing_but_preserves_pause_and_hist
     last_run = datetime(2026, 6, 17, 9, tzinfo=UTC)
     for task_id in (
         BUILTIN_MEMORY_CONSOLIDATE_ID,
+        BUILTIN_MEMORY_DREAM_ID,
         BUILTIN_MEMORY_RETENTION_ID,
         BUILTIN_MEMORY_SYNTHESIZE_ID,
         BUILTIN_WIKI_MAINTENANCE_ID,
@@ -845,6 +857,7 @@ async def test_seed_builtins_enforces_system_timing_but_preserves_pause_and_hist
 
     expected = {
         BUILTIN_MEMORY_CONSOLIDATE_ID: [TimeTrigger(at="03:00", days="daily")],
+        BUILTIN_MEMORY_DREAM_ID: [TimeTrigger(at="04:00", days="daily")],
         BUILTIN_MEMORY_RETENTION_ID: [TimeTrigger(at="03:45", days="daily")],
         BUILTIN_MEMORY_SYNTHESIZE_ID: [TimeTrigger(every="6h")],
         BUILTIN_WIKI_MAINTENANCE_ID: [TimeTrigger(every="6h")],
@@ -860,6 +873,22 @@ async def test_seed_builtins_enforces_system_timing_but_preserves_pause_and_hist
     assert (await automation_store.list_runs(BUILTIN_MEMORY_SYNTHESIZE_ID))[0]["result"] == (
         "Historical synthesis result."
     )
+
+
+@pytest.mark.asyncio
+async def test_seed_builtins_preserves_user_enabled_optional_dream(automation_store: AutomationStore):
+    from arden.automation.builtins import seed_builtins
+    from arden.constants import BUILTIN_MEMORY_DREAM_ID
+
+    await seed_builtins(automation_store)
+    await automation_store.set_enabled(BUILTIN_MEMORY_DREAM_ID, True)
+
+    await seed_builtins(automation_store)
+
+    dream = await automation_store.get(BUILTIN_MEMORY_DREAM_ID)
+    assert dream is not None
+    assert dream.enabled is True
+    assert dream.next_run_at is not None
 
 
 @pytest.mark.asyncio

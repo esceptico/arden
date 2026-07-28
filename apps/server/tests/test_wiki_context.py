@@ -77,13 +77,23 @@ async def test_wiki_index_tracks_active_pages_and_context_keeps_residents_separa
         path="topics/topic.md",
         title="Topic",
         body=b"A useful topic with enough detail for retrieval.\n",
-        metadata={"generated_from_revision": "b" * 64},
+        metadata={"generated_from_revision": "b" * 64, "fact_citations": []},
+    )
+    feed = wiki.create_page(
+        page_id="feed",
+        path="feeds/current.md",
+        title="Current Feed",
+        body=b"Producer-owned content.\n",
+        metadata={
+            "generated_from_revision": "b" * 64,
+            "producer_automation_id": "feed-worker",
+        },
     )
     index = _Index()
     projection = WikiPageIndexProjection(wiki, lambda: index, _fact_revision)
     await projection.sync()
 
-    assert set(index.store.items) == {"home", "directives", "me", "topic"}
+    assert set(index.store.items) == {"home", "directives", "me", "topic", "feed"}
     assert projection.last_state == WikiPageIndexState(wiki.repository.head, "ready")
     with pytest.raises(FrozenInstanceError):
         projection.last_state.status = "error"  # type: ignore[misc]
@@ -92,6 +102,12 @@ async def test_wiki_index_tracks_active_pages_and_context_keeps_residents_separa
         "resource_version": topic.resource.version_id,
         "role": "common",
         "freshness": "stale",
+    }
+    assert index.store.items["feed"][2] == {
+        "resource_path": "feeds/current.md",
+        "resource_version": feed.resource.version_id,
+        "role": "common",
+        "freshness": "current",
     }
 
     current = wiki.read_page("topic")

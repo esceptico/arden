@@ -22,8 +22,10 @@ from arden.llm.router import get_completion_client
 from arden.llm.router import init as llm_init
 from arden.logging import get_logger
 from arden.mcp.manager import MCPManager
+from arden.memory.facts.completion_dream import CompletionFactDreamRenderer
 from arden.memory.facts.completion_renderer import CompletionFactSynthesisRenderer
 from arden.memory.facts.consumer_store import FactConsumerStore
+from arden.memory.facts.dream import FactDream
 from arden.memory.facts.index import FactIndexProjection
 from arden.memory.facts.ledger import FactLedger
 from arden.memory.facts.maintenance.completion import CompletionFactMaintenanceReviewer
@@ -71,6 +73,8 @@ from arden.wiki.maintenance.completion import CompletionWikiMaintenanceReviewer
 from arden.wiki.maintenance.runner import WikiMaintenance
 from arden.wiki.maintenance.store import WikiMaintenanceStore
 from arden.wiki.models import WikiChangesReport
+from arden.wiki.navigation.projection import WikiNavigationProjection
+from arden.wiki.navigation.store import WikiNavigationStore
 from arden.wiki.service import WikiService
 
 _logger = get_logger(__name__)
@@ -128,6 +132,7 @@ class Runtime:
         self.fact_service: FactService | None = None
         self._fact_plan_conn: database.aiosqlite.Connection | None = None
         self._fact_consumer_store: FactConsumerStore | None = None
+        self._wiki_navigation_store: WikiNavigationStore | None = None
         self._fact_ledger: FactLedger | None = None
 
         self._connected = False
@@ -314,10 +319,17 @@ class Runtime:
         self.wiki_service = WikiService(self.wiki_repository)
         # The wiki approval store must not share Stores' writer connection: it
         # owns its own lock/transactions while persisting in sessions.db.
-        self._wiki_approval_conn = await database.connect(self.config.sessions_db_path)
-        approval_store = WikiRenameApprovalStore(self._wiki_approval_conn)
-        await approval_store.init_schema()
+        approval_conn = await database.connect(self.config.sessions_db_path)
+        try:
+            approval_store = WikiRenameApprovalStore(approval_conn)
+            await approval_store.init_schema()
+            navigation_store = await WikiNavigationStore.open(self.config.memory_db_path)
+        except BaseException:
+            await approval_conn.close()
+            raise
+        self._wiki_approval_conn = approval_conn
         self.wiki_rename_coordinator = WikiRenameApprovalCoordinator(self.wiki_service, approval_store)
+        self._wiki_navigation_store = navigation_store
 
     async def _init_facts(self, ledger: FactLedger | None) -> None:
         self.fact_service = None
@@ -448,6 +460,22 @@ class Runtime:
                 model,
                 reasoning_effort=self.knowledge._memory_reasoning_effort(model),
             ),
+            timezone_name=self.config.memory_timezone,
+        )
+
+    def _get_fact_dream(self) -> FactDream | None:
+        model = self.config.memory_model
+        if self._fact_ledger is None or self.wiki_service is None or not model:
+            return None
+        return FactDream(
+            self._fact_ledger,
+            self.wiki_service,
+            CompletionFactDreamRenderer(
+                get_completion_client(model),
+                model,
+                reasoning_effort=self.knowledge._memory_reasoning_effort(model),
+            ),
+            timezone_name=self.config.memory_timezone,
         )
 
     def _get_fact_maintenance(self) -> FactMaintenance | None:
@@ -480,6 +508,11 @@ class Runtime:
             ),
         )
 
+    def _get_wiki_navigation(self) -> WikiNavigationProjection | None:
+        if self._wiki_navigation_store is None or self.wiki_service is None:
+            return None
+        return WikiNavigationProjection(self.wiki_service, self._wiki_navigation_store)
+
     async def _synthesis_is_current(self) -> bool:
         if self.fact_service is None or self._fact_consumer_store is None:
             return False
@@ -493,7 +526,7 @@ class Runtime:
         return watermark is not None and watermark.revision == before
 
     async def project_wiki_health(self) -> None:
-        """Refresh the derived health page without affecting canonical work."""
+        """Refresh the derived health page and surface projection failures."""
 
         if (
             self._fact_ledger is None
@@ -526,7 +559,7 @@ class Runtime:
                     if await self.fact_service.revision() != fact_revision:
                         if attempt == 0:
                             continue
-                        return
+                        raise RevisionConflictError("fact ledger changed during both wiki health projection attempts")
 
                     observed = self._semantic_wiki_revision(report)
                     maintenance_revision, maintenance_revision_known = self._semantic_wiki_revision_at(
@@ -597,10 +630,7 @@ class Runtime:
                 except RevisionConflictError:
                     if attempt == 0:
                         continue
-                    _logger.warning("wiki health projection lost its retry to a concurrent wiki commit")
-                except Exception:
-                    _logger.warning("wiki health projection failed", exc_info=True)
-                    return
+                    raise
 
     @staticmethod
     def _semantic_wiki_revision(report: WikiChangesReport) -> str | None:
@@ -642,9 +672,11 @@ class Runtime:
             get_cheap_llm=lambda: get_completion_client(self.config.memory_model) if self.config.memory_model else None,
             cheap_model=self.config.memory_model,
             indexer=self.indexer,
+            get_fact_dream=self._get_fact_dream,
             get_fact_maintenance=self._get_fact_maintenance,
             get_fact_synthesis=self._get_fact_synthesis,
             get_wiki_maintenance=self._get_wiki_maintenance,
+            get_wiki_navigation=self._get_wiki_navigation,
             synthesis_is_current=self._synthesis_is_current,
             project_wiki_health=self.project_wiki_health,
             on_automation_finished=self._after_automation_finished,
@@ -682,6 +714,9 @@ class Runtime:
         if self._wiki_maintenance_store:
             await self._wiki_maintenance_store.close()
             self._wiki_maintenance_store = None
+        if self._wiki_navigation_store:
+            await self._wiki_navigation_store.close()
+            self._wiki_navigation_store = None
         if self._wiki_curator_store:
             await self._wiki_curator_store.close()
             self._wiki_curator_store = None

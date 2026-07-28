@@ -48,8 +48,10 @@ class AutomationRuntime:
         get_cheap_llm: Callable[[], object | None],
         cheap_model: str | None,
         indexer: Indexer | None,
+        get_fact_dream: Callable[[], object | None] = lambda: None,
         get_fact_maintenance: Callable[[], object | None] = lambda: None,
         get_fact_synthesis: Callable[[], object | None] = lambda: None,
+        get_wiki_navigation: Callable[[], object | None] = lambda: None,
         get_wiki_maintenance: Callable[[], object | None] = lambda: None,
         synthesis_is_current: Callable[[], Awaitable[bool]] | None = None,
         project_wiki_health: Callable[[], Awaitable[None]] | None = None,
@@ -60,8 +62,10 @@ class AutomationRuntime:
         self.config = config
         self.get_calendar_source = get_calendar_source
         self.get_slack_client = get_slack_client
+        self.get_fact_dream = get_fact_dream
         self.get_fact_maintenance = get_fact_maintenance
         self.get_fact_synthesis = get_fact_synthesis
+        self.get_wiki_navigation = get_wiki_navigation
         self.get_wiki_maintenance = get_wiki_maintenance
         self.synthesis_is_current = synthesis_is_current
         self.project_wiki_health = project_wiki_health
@@ -277,6 +281,10 @@ class AutomationRuntime:
             self._build_memory_synthesize_handler(),
         )
         self.scheduler.register_handler(
+            "memory_dream",
+            self._build_memory_dream_handler(),
+        )
+        self.scheduler.register_handler(
             "wiki_maintenance",
             self._build_wiki_maintenance_handler(),
         )
@@ -309,6 +317,9 @@ class AutomationRuntime:
                 if synthesis is None:
                     return "fact synthesis unavailable (no memory model configured)"
                 result = await synthesis.run()
+                navigation = self.get_wiki_navigation()
+                if navigation is not None:
+                    await navigation.run()
                 if result.empty:
                     return "fact synthesis idle"
                 return (
@@ -320,21 +331,49 @@ class AutomationRuntime:
 
         return handler
 
+    def _build_memory_dream_handler(self):
+        async def handler(context: dict | None) -> str:
+            try:
+                dream = self.get_fact_dream()
+                if dream is None:
+                    return "memory dream unavailable (no memory model configured)"
+                result = await dream.run()
+                navigation = self.get_wiki_navigation()
+                if navigation is not None:
+                    await navigation.run()
+                if result.empty:
+                    return "memory dream idle"
+                state = "published" if result.published else "unchanged"
+                return f"memory dream: {result.insight_count} insight(s); {state}"
+            finally:
+                await self._refresh_wiki_health()
+
+        return handler
+
     def _build_wiki_maintenance_handler(self):
         async def handler(context: dict | None) -> str:
             refresh_health = False
             try:
+                navigation = self.get_wiki_navigation()
+                if navigation is not None:
+                    await navigation.run()
+
                 if self.synthesis_is_current is None or not await self.synthesis_is_current():
                     task_id = context.get("task_id") if isinstance(context, dict) else None
                     if task_id == BUILTIN_WIKI_MAINTENANCE_ID:
                         await self.scheduler.request_delayed_run(task_id, _WIKI_MAINTENANCE_RETRY_DELAY)
                     return "wiki maintenance deferred: synthesis is behind"
+
                 maintenance = self.get_wiki_maintenance()
                 if maintenance is None:
                     return "wiki maintenance unavailable (no memory model configured)"
 
                 results = []
-                for _ in range(2):
+                for pass_index in range(2):
+                    if pass_index:
+                        navigation = self.get_wiki_navigation()
+                        if navigation is not None:
+                            await navigation.run()
                     result = await maintenance.run()
                     results.append(result)
                     if result.error is not None:
@@ -370,10 +409,7 @@ class AutomationRuntime:
     async def _refresh_wiki_health(self) -> None:
         if self.project_wiki_health is None:
             return
-        try:
-            await self.project_wiki_health()
-        except Exception:
-            _logger.warning("wiki health projection failed after automation outcome", exc_info=True)
+        await self.project_wiki_health()
 
     @staticmethod
     def _area_run_at(index: int) -> str:

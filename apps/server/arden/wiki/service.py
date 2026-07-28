@@ -54,7 +54,7 @@ class WikiAmbiguityError(WikiValidationError):
 
 
 class GeneratedRegionConflictError(WikiValidationError):
-    """A user changed a Synthesis-owned generated region."""
+    """A user changed a producer-owned generated region."""
 
 
 class WikiMaintenanceEvidenceLimitError(WikiValidationError):
@@ -92,6 +92,9 @@ WIKI_HEALTH_PATH = "health.md"
 WIKI_HEALTH_ACTOR = "backend"
 WIKI_HEALTH_ORIGIN = "wiki.health"
 WIKI_HEALTH_REASON = "project wiki health"
+WIKI_RENAME_ACTOR = "Wiki Rename"
+WIKI_RENAME_ORIGIN = "wiki.rename"
+WIKI_RENAME_REASON = "rename page"
 _MAINTENANCE_CURRENT_SCAN_BYTES = 256 * 1024
 _MAINTENANCE_CURRENT_SCAN_TOTAL_BYTES = 8 * 1024 * 1024
 _MAINTENANCE_CURRENT_EDITABLE_BYTES = 64 * 1024
@@ -558,8 +561,8 @@ class WikiService:
             fingerprint=fingerprint,
         )
 
-    def read_page(self, page_id: str) -> WikiPageRecord:
-        record = self._index(self.snapshot()).pages.get(page_id)
+    def read_page(self, page_id: str, *, at: str | None = None) -> WikiPageRecord:
+        record = self._index(self._snapshot(strict_names=True, at=at)).pages.get(page_id)
         if record is None:
             raise KeyError(f"unknown active wiki page: {page_id}")
         return record
@@ -695,7 +698,7 @@ class WikiService:
         origin: str = "memory.synthesis",
         reason: str | None = None,
     ) -> Commit | None:
-        """Atomically publish Synthesis-owned regions from one wiki snapshot."""
+        """Atomically publish producer-owned regions from one wiki snapshot."""
 
         if not isinstance(source_revision, str) or not source_revision:
             raise ValueError("source_revision must be a nonempty string")
@@ -772,7 +775,7 @@ class WikiService:
                     prospective_names[normalized] = target.page_id
             else:
                 current = extract_generated_region(record.content, expected_page_id=target.page_id)
-                prior_exists, prior = self._last_synthesis_region(target.page_id, actor, origin, base_head)
+                prior_exists, prior = self._last_generated_region(target.page_id, actor, origin, base_head)
                 if not self._generated_region_is_safe(
                     current=current,
                     desired=target.generated,
@@ -983,10 +986,10 @@ class WikiService:
 
         return self.link_report(page_id).outgoing
 
-    def link_report(self, page_id: str) -> WikiLinkReport:
+    def link_report(self, page_id: str, *, at: str | None = None) -> WikiLinkReport:
         """Resolve both directions from one immutable wiki snapshot."""
 
-        snapshot = self._snapshot(strict_names=False)
+        snapshot = self._snapshot(strict_names=False, at=at)
         return self._link_report(snapshot, page_id)
 
     def link_report_for_path(self, path: str) -> WikiLinkReport:
@@ -1199,9 +1202,9 @@ class WikiService:
         self,
         plan: RenamePlan,
         *,
-        actor: str = "wiki",
-        origin: str = "wiki",
-        reason: str = "rename page",
+        actor: str = WIKI_RENAME_ACTOR,
+        origin: str = WIKI_RENAME_ORIGIN,
+        reason: str = WIKI_RENAME_REASON,
     ) -> Commit:
         if not isinstance(plan, RenamePlan):
             raise TypeError("plan must be a RenamePlan")
@@ -1635,12 +1638,12 @@ class WikiService:
         index = self._index(WikiSnapshot(snapshot.head, pages))
         self._validate_redirects(index)
 
-    def _last_synthesis_region(
+    def _last_generated_region(
         self, page_id: str, actor: str, origin: str, base_head: str
     ) -> tuple[bool, bytes | None]:
-        for commit in self.repository.history(resource_id=page_id, start=base_head):
-            if commit.actor != actor or commit.origin != origin:
-                continue
+        trusted_exists = False
+        trusted: bytes | None = None
+        for commit in reversed(self.repository.history(resource_id=page_id, start=base_head)):
             change = next(
                 (
                     item
@@ -1654,8 +1657,26 @@ class WikiService:
             if change is None:
                 continue
             assert change.after is not None
-            return True, extract_generated_region(self.repository.read_version(change.after), expected_page_id=page_id)
-        return False, None
+            after = extract_generated_region(self.repository.read_version(change.after), expected_page_id=page_id)
+            if commit.actor == actor and commit.origin == origin:
+                trusted_exists = True
+                trusted = after
+                continue
+            if (
+                trusted_exists
+                and commit.actor == WIKI_RENAME_ACTOR
+                and commit.origin == WIKI_RENAME_ORIGIN
+                and commit.reason == WIKI_RENAME_REASON
+                and change.before is not None
+                and change.before.state is ResourceState.ACTIVE
+            ):
+                before = extract_generated_region(
+                    self.repository.read_version(change.before),
+                    expected_page_id=page_id,
+                )
+                if before == trusted:
+                    trusted = after
+        return trusted_exists, trusted
 
     @staticmethod
     def _generated_region_is_safe(

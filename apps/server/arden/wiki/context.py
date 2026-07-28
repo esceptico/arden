@@ -56,7 +56,12 @@ def _role(record: WikiPageRecord) -> WikiInfrastructureRole:
 
 def _freshness(record: WikiPageRecord, fact_revision: str | None) -> str:
     generated = record.page.metadata.get("generated_from_revision")
-    if isinstance(generated, str) and fact_revision is not None and generated != fact_revision:
+    if (
+        "fact_citations" in record.page.metadata
+        and isinstance(generated, str)
+        and fact_revision is not None
+        and generated != fact_revision
+    ):
         return "stale"
     return "current"
 

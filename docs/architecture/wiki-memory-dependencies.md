@@ -24,7 +24,7 @@ flowchart TD
   fact_values["fact models"]
   fact_storage["fact ledger plan and consumer stores"]
   fact_service["FactService"]
-  fact_workers["fact index synthesis and maintenance"]
+  fact_workers["fact index synthesis Dream and maintenance"]
 
   wiki_values["wiki pages links and models"]
   wiki_service["WikiService"]
@@ -72,7 +72,7 @@ flowchart TD
   revisions["revisions"]
   fact_core["facts core: models ledger stores service"]
   wiki_core["wiki core: pages links models service"]
-  fact_projection["facts projections: synthesis index"]
+  fact_projection["facts projections: synthesis Dream index"]
   fact_maintenance["facts maintenance"]
   wiki_maintenance["wiki maintenance"]
   wiki_curation["wiki curation"]

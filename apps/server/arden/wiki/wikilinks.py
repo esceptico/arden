@@ -18,6 +18,7 @@ _MARKDOWN = MarkdownIt("commonmark", {"html": True})
 _VOID_HTML_ELEMENTS = frozenset(
     {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
 )
+_PROSE_PLACEHOLDER_TAGS = frozenset({"<ACT>"})
 
 
 class WikilinkError(ValueError):
@@ -212,15 +213,11 @@ def _visible_candidate_indexes(source: str, candidates: Sequence[_Candidate]) ->
     markers = tuple(_marker(index, source) for index in range(len(candidates)))
     marked_source = _insert_markers(source, candidates, markers)
     visible_markers = _text_markers(_MARKDOWN.parse(marked_source), markers)
-    html_spans = _html_spans(source)
-    autolink_spans = _autolink_spans(source)
     frontmatter_span = _leading_frontmatter_span(source)
     return frozenset(
         index
         for index, (candidate, marker) in enumerate(zip(candidates, markers, strict=True))
         if marker in visible_markers
-        and not _is_within_any_span(candidate.start, candidate.end, html_spans)
-        and not _is_within_any_span(candidate.start, candidate.end, autolink_spans)
         and not (frontmatter_span and _is_within_any_span(candidate.start, candidate.end, (frontmatter_span,)))
     )
 
@@ -248,77 +245,60 @@ def _insert_markers(source: str, candidates: Sequence[_Candidate], markers: Sequ
 
 
 def _text_markers(tokens: Sequence[Any], markers: Sequence[str]) -> frozenset[str]:
+    """Return markers in visible text, excluding raw HTML contents."""
+
     found: set[str] = set()
-
-    def visit(token: Any) -> None:
-        if token.type == "text":
-            found.update(marker for marker in markers if marker in token.content)
-        if token.children:
-            for child in token.children:
-                visit(child)
-
+    open_elements: list[str] = []
     for token in tokens:
-        visit(token)
+        if token.type == "html_block":
+            _update_html_stack_from_raw(open_elements, token.content)
+            continue
+        if token.type != "inline" or not token.children:
+            continue
+        autolink_depth = 0
+        for child in token.children:
+            if child.type == "html_inline":
+                _update_html_stack(open_elements, child.content)
+            elif child.type == "link_open" and child.markup == "autolink":
+                autolink_depth += 1
+            elif child.type == "link_close" and child.markup == "autolink":
+                autolink_depth -= 1
+            elif child.type == "text" and not open_elements and autolink_depth == 0:
+                found.update(marker for marker in markers if marker in child.content)
     return frozenset(found)
 
 
-def _html_spans(source: str) -> tuple[tuple[int, int], ...]:
-    """Return raw HTML/comment ranges, including contents of paired elements."""
-
-    spans: list[tuple[int, int]] = []
-    open_elements: list[tuple[str, int]] = []
+def _update_html_stack_from_raw(open_elements: list[str], raw: str) -> None:
     index = 0
-    while index < len(source):
-        if source.startswith("<!--", index):
-            closing = source.find("-->", index + 4)
-            end = len(source) if closing == -1 else closing + 3
-            spans.append((index, end))
-            index = end
+    while index < len(raw):
+        if raw.startswith("<!--", index):
+            closing = raw.find("-->", index + 4)
+            if closing == -1:
+                return
+            index = closing + 3
             continue
-        parsed = _html_tag_at(source, index)
+        parsed = _html_tag_at(raw, index)
         if parsed is None:
             index += 1
             continue
-        name, closing, self_closing, end = parsed
-        spans.append((index, end))
-        if closing:
-            for position in range(len(open_elements) - 1, -1, -1):
-                open_name, open_start = open_elements[position]
-                if open_name == name:
-                    spans.append((open_start, end))
-                    del open_elements[position:]
-                    break
-        elif not self_closing and name not in _VOID_HTML_ELEMENTS:
-            open_elements.append((name, index))
-        index = end
-    spans.extend((start, len(source)) for _name, start in open_elements)
-    return tuple(spans)
+        _update_html_stack(open_elements, raw[index : parsed[3]])
+        index = parsed[3]
 
 
-def _autolink_spans(source: str) -> tuple[tuple[int, int], ...]:
-    spans: list[tuple[int, int]] = []
-    index = 0
-    while index < len(source):
-        if source[index] != "<":
-            index += 1
-            continue
-        end = source.find(">", index + 1)
-        if end == -1:
-            break
-        if _is_uri_autolink(source[index + 1 : end]):
-            spans.append((index, end + 1))
-        index = end + 1
-    return tuple(spans)
-
-
-def _is_uri_autolink(value: str) -> bool:
-    colon = value.find(":")
-    if colon < 1 or colon > 32 or colon == len(value) - 1:
-        return False
-    scheme = value[:colon]
-    if not scheme[0].isalpha() or not all(character.isalnum() or character in "+.-" for character in scheme[1:]):
-        return False
-    return not any(character.isspace() or character in "<>" for character in value)
+def _update_html_stack(open_elements: list[str], raw: str) -> None:
+    if raw in _PROSE_PLACEHOLDER_TAGS:
+        return
+    parsed = _html_tag_at(raw, 0)
+    if parsed is None or parsed[3] != len(raw):
+        return
+    name, closing, self_closing, _end = parsed
+    if closing:
+        for position in range(len(open_elements) - 1, -1, -1):
+            if open_elements[position] == name:
+                del open_elements[position:]
+                return
+    elif not self_closing and name not in _VOID_HTML_ELEMENTS:
+        open_elements.append(name)
 
 
 def _leading_frontmatter_span(source: str) -> tuple[int, int] | None:

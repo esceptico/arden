@@ -58,6 +58,36 @@ def test_parser_accepts_visible_text_but_excludes_markdown_non_text_contexts() -
     assert [node.page for node in parse_wikilinks(source)] == ["One", "Visible label"]
 
 
+def test_unclosed_angle_placeholders_do_not_hide_later_visible_links() -> None:
+    source = "Use `<ACT>` and a _Changed <date/time>._ marker.\n\nSee [[Visible]].\n"
+
+    assert [node.page for node in parse_wikilinks(source)] == ["Visible"]
+    assert [node.page for node in parse_wikilinks("<ACT> [[Visible]]")] == ["Visible"]
+
+
+def test_unclosed_standard_html_still_hides_contained_wikilinks() -> None:
+    assert parse_wikilinks('<a href="/elsewhere">[[Hidden]]') == ()
+
+
+@pytest.mark.parametrize("tag", ["x-foo", "font", "big", "tt", "strike", "output"])
+def test_unclosed_raw_inline_html_hides_contained_wikilinks(tag: str) -> None:
+    assert parse_wikilinks(f"<{tag}>[[Hidden]]") == ()
+
+
+def test_html_tracking_uses_markdown_tokens_instead_of_code_or_escaped_text() -> None:
+    assert [node.page for node in parse_wikilinks("```\n<a>\n```\n[[Visible]]")] == ["Visible"]
+    assert parse_wikilinks("<a> `</a>` [[Hidden]]") == ()
+    assert [node.page for node in parse_wikilinks("\\<a> [[Visible]]")] == ["Visible"]
+    assert [node.page for node in parse_wikilinks("<a !> [[Visible]]")] == ["Visible"]
+
+
+def test_raw_html_state_spans_markdown_blocks_without_hiding_prose_placeholders() -> None:
+    assert parse_wikilinks("<a>\n\n[[Hidden]]") == ()
+    assert parse_wikilinks("<div>\n\n[[Hidden]]\n\n</div>") == ()
+    assert [node.page for node in parse_wikilinks("<div>\n\nHidden\n\n</div>\n\n[[Visible]]")] == ["Visible"]
+    assert [node.page for node in parse_wikilinks("<ACT>\n\n[[Visible]]")] == ["Visible"]
+
+
 def test_parser_excludes_only_complete_leading_yaml_frontmatter() -> None:
     source = "---\r\nname: [[Hidden]]\r\n---\r\n[[Visible]]\r\n"
 

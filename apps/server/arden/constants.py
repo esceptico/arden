@@ -145,6 +145,8 @@ SCHEDULER_EVENT_RETRY_MAX_SECONDS = 1800
 
 BUILTIN_MEMORY_CONSOLIDATE_ID = "builtin-memory-consolidate"
 MEMORY_CONSOLIDATE_AT = "03:00"
+BUILTIN_MEMORY_DREAM_ID = "builtin-memory-dream"
+MEMORY_DREAM_AT = "04:00"
 BUILTIN_MEMORY_SYNTHESIZE_ID = "builtin-memory-synthesize"
 BUILTIN_WIKI_MAINTENANCE_ID = "builtin-wiki-maintenance"
 BUILTIN_MEMORY_RETENTION_ID = "builtin-memory-retention"

@@ -10,7 +10,7 @@ from typing import Literal, Protocol
 
 from pydantic import BaseModel, Field
 
-from arden.revisions.models import ResourceChange
+from arden.revisions.models import ResourceChange, ResourceState
 
 from ..models import (
     WikiChangeCommit,
@@ -20,6 +20,11 @@ from ..models import (
     WikiMaintenanceFeed,
     WikiMaintenancePageUpdate,
     WikiPageRecord,
+)
+from ..navigation.projection import (
+    WIKI_NAVIGATION_ACTOR,
+    WIKI_NAVIGATION_ORIGIN,
+    WIKI_NAVIGATION_REASON,
 )
 from ..service import (
     WIKI_HEALTH_ACTOR,
@@ -234,7 +239,11 @@ class WikiMaintenance:
         for commit_metadata in feed.commits:
             # Metadata is sufficient for commits that can never enter model
             # review. Keep their detail path cold.
-            if not self._has_markdown_changes(commit_metadata) or self._is_health_projection(commit_metadata):
+            if (
+                not self._has_markdown_changes(commit_metadata)
+                or self._is_health_projection(commit_metadata)
+                or self._is_navigation_projection(commit_metadata)
+            ):
                 try:
                     await self._advance(expected, commit_ids, commit_metadata.commit_id)
                 except Exception as exc:
@@ -1060,6 +1069,25 @@ class WikiMaintenance:
             )
         )
 
+    @staticmethod
+    def _is_navigation_projection(commit: WikiMaintenanceCommit) -> bool:
+        return (
+            commit.actor == WIKI_NAVIGATION_ACTOR
+            and commit.origin == WIKI_NAVIGATION_ORIGIN
+            and commit.reason == WIKI_NAVIGATION_REASON
+            and bool(commit.changes)
+            and all(
+                change.after is not None
+                and change.after.state is ResourceState.ACTIVE
+                and _is_readme_path(change.after.path)
+                and (
+                    change.before is None
+                    or (change.before.state is ResourceState.ACTIVE and change.before.path == change.after.path)
+                )
+                for change in commit.changes
+            )
+        )
+
     def _proposal(
         self, prepared: WikiMaintenancePreparedReport, decision: WikiMaintenanceDecision
     ) -> dict[str, object]:
@@ -1114,3 +1142,7 @@ class WikiMaintenance:
     @staticmethod
     def _reason(prepared: WikiMaintenancePreparedReport) -> str:
         return f"wiki maintenance {prepared.commit_id} {prepared.replay_fingerprint}"
+
+
+def _is_readme_path(path: str) -> bool:
+    return path == "README.md" or path.endswith("/README.md")

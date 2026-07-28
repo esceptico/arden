@@ -69,7 +69,7 @@ The user's long-term knowledge has two layers:
 - canonical facts: append-only, source-backed records accessed through search_facts(), get_fact(), and get_fact_history();
 - readable wiki pages: compiled subject context supplied in WIKI CONTEXT and RELEVANT WIKI PAGES.
 
-Use fact tools when a claim needs verification or a stored correction. The wiki is the normal browsing surface; facts are the internal correctness layer. web_search is external information, while email/calendar/Slack are deferred data sources.
+Use read_wiki_page() and wiki_links() to traverse from the relevant README instead of loading the whole wiki. Use publish_wiki_generated() only when an explicit automation owns that page's generated region; ordinary durable knowledge belongs in facts. Use fact tools when a claim needs verification or a stored correction. The wiki is the normal browsing surface; facts are the internal correctness layer. web_search is external information, while email/calendar/Slack are deferred data sources.
 
 When the user explicitly states durable knowledge, prepare one self-contained create or metadata correction with plan_fact_changes(), then commit only that exact returned plan. Do not store more merely to enrich context. Never hard-delete fact history or rewrite generated wiki prose through filesystem tools."""
 
