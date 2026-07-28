@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from hashlib import sha256
 
@@ -14,6 +16,7 @@ from arden.revisions import (
     Move,
     ResourceState,
     Restore,
+    StorageReport,
     Update,
 )
 from arden.revisions.errors import RevisionConflictError
@@ -24,8 +27,15 @@ from .models import (
     LinkStatus,
     RenamePlan,
     RenameRewrite,
+    WikiChangeCommit,
+    WikiChangesReport,
+    WikiChangeWarning,
+    WikiFactCitation,
+    WikiInfrastructureRole,
     WikiLinkReport,
     WikiPageRecord,
+    WikiPageRevision,
+    WikiResourceChange,
     WikiSnapshot,
 )
 from .pages import PageValidationError, WikiPage, extract_generated_region, parse_page, update_generated_region
@@ -43,6 +53,20 @@ class WikiAmbiguityError(WikiValidationError):
 
 class GeneratedRegionConflictError(WikiValidationError):
     """A user changed a Synthesis-owned generated region."""
+
+
+_STORAGE_INSPECTION_BYTES = 50 * 1024 * 1024
+_STORAGE_NEEDS_ATTENTION_BYTES = 100 * 1024 * 1024
+
+
+def _storage_warnings(storage: StorageReport, target: str) -> tuple[WikiChangeWarning, ...]:
+    """Classify storage without touching the filesystem, for deterministic maintenance."""
+
+    if storage.total_bytes >= _STORAGE_NEEDS_ATTENTION_BYTES:
+        return (WikiChangeWarning("storage_needs_attention", target, str(storage.total_bytes)),)
+    if storage.total_bytes >= _STORAGE_INSPECTION_BYTES:
+        return (WikiChangeWarning("storage_inspection", target, str(storage.total_bytes)),)
+    return ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +91,95 @@ class WikiService:
     def list_pages(self, *, include_redirects: bool = False) -> tuple[WikiPageRecord, ...]:
         snapshot = self.snapshot()
         return tuple(record for record in snapshot.pages if include_redirects or record.page.lifecycle == "active")
+
+    def changes_since(self, watermark: str | None) -> WikiChangesReport:
+        """Return chronological managed-Markdown history through one pinned head.
+
+        This deliberately reports malformed historical blobs instead of using the
+        strict page snapshot: maintenance must be able to show the bad revision
+        that requires repair.
+        """
+
+        if watermark is not None and (not isinstance(watermark, str) or not watermark):
+            raise ValueError("watermark must be a nonempty commit ID or None")
+        head = self.repository.head
+        history = () if head is None else self.repository.history(start=head)
+        commits_newest_first = tuple(history)
+        commit_ids = {commit.commit_id for commit in commits_newest_first}
+        if watermark is not None and watermark not in commit_ids:
+            raise KeyError(f"wiki watermark is not reachable from pinned head: {watermark}")
+
+        # Repository history is linear.  Stop at the watermark, then expose the
+        # natural oldest-to-newest review order.
+        selected: list[Commit] = []
+        for commit in commits_newest_first:
+            if commit.commit_id == watermark:
+                break
+            selected.append(commit)
+
+        current_records, current_warnings = self._maintenance_snapshot(head)
+        current_index = self._index(WikiSnapshot(head, current_records), strict_names=False)
+        current_links = self._maintenance_links(current_records, current_index)
+        warnings = list(current_warnings)
+        warnings.extend(self._link_warnings(current_records, current_links))
+        integrity = self.repository.integrity_report()
+        storage = self.repository.storage_report()
+        warnings.extend(WikiChangeWarning(issue.code, issue.target, issue.detail) for issue in integrity.issues)
+        warnings.extend(_storage_warnings(storage, str(self.repository.history_root)))
+
+        reports: list[WikiChangeCommit] = []
+        for commit in reversed(selected):
+            diffs = {
+                item.resource_id: item.unified_diff for item in self.repository.diff(commit.parent_id, commit.commit_id)
+            }
+            changes: list[WikiResourceChange] = []
+            for change in commit.changes:
+                resource = change.after or change.before
+                assert resource is not None
+                if not self._is_markdown_change(change.before, change.after):
+                    continue
+                before = self._revision_at(change.before, commit.parent_id)
+                after = self._revision_at(change.after, commit.commit_id)
+                for revision in (before, after):
+                    if revision is not None:
+                        if revision.validation_error is not None:
+                            warnings.append(
+                                WikiChangeWarning("invalid_page", revision.resource.path, revision.validation_error)
+                            )
+                        warnings.extend(revision.provenance_warnings)
+                outgoing, backlinks = current_links.get(resource.resource_id, ((), ()))
+                changes.append(
+                    WikiResourceChange(
+                        action=change.action,
+                        resource_id=resource.resource_id,
+                        before=before,
+                        after=after,
+                        unified_diff=diffs.get(resource.resource_id, ""),
+                        current_outgoing=outgoing,
+                        current_backlinks=backlinks,
+                    )
+                )
+            reports.append(
+                WikiChangeCommit(
+                    commit_id=commit.commit_id,
+                    parent_id=commit.parent_id,
+                    actor=commit.actor,
+                    origin=commit.origin,
+                    reason=commit.reason,
+                    timestamp=commit.timestamp,
+                    changes=tuple(changes),
+                )
+            )
+        if self.repository.head != head:
+            raise RevisionConflictError("wiki changed while building a change feed")
+        return WikiChangesReport(
+            watermark=watermark,
+            through_revision=head,
+            commits=tuple(reports),
+            warnings=tuple(self._dedupe_warnings(warnings)),
+            integrity=integrity,
+            storage=storage,
+        )
 
     def read_page(self, page_id: str) -> WikiPageRecord:
         record = self._index(self.snapshot()).pages.get(page_id)
@@ -497,6 +610,182 @@ class WikiService:
                 expected_head=plan.base_head,
             )
         )
+
+    def _maintenance_snapshot(
+        self, head: str | None
+    ) -> tuple[tuple[WikiPageRecord, ...], tuple[WikiChangeWarning, ...]]:
+        """Read active Markdown pages without letting one malformed page hide others."""
+
+        records: list[WikiPageRecord] = []
+        warnings: list[WikiChangeWarning] = []
+        for resource in self.repository.list_resources(at=head):
+            if not resource.path.endswith(".md"):
+                continue
+            content = self.repository.read(resource.resource_id, at=head)
+            try:
+                page = self._parse(resource, content)
+            except WikiValidationError as error:
+                warnings.append(WikiChangeWarning("invalid_page", resource.path, str(error)))
+                continue
+            _generated, _citations, provenance_warnings = self._provenance(page, resource.path)
+            warnings.extend(provenance_warnings)
+            records.append(WikiPageRecord(resource, page, content))
+        return tuple(sorted(records, key=lambda record: record.page.page_id)), tuple(warnings)
+
+    def _maintenance_links(
+        self,
+        records: tuple[WikiPageRecord, ...],
+        index: _Index,
+    ) -> dict[str, tuple[tuple[LinkReference, ...], tuple[LinkReference, ...]]]:
+        outgoing: dict[str, tuple[LinkReference, ...]] = {}
+        backlinks: dict[str, list[LinkReference]] = {record.page.page_id: [] for record in records}
+        for record in records:
+            references = tuple(
+                self._reference(index, record.page.page_id, node)
+                for node in parse_wikilinks(record.page.body.decode("utf-8"))
+            )
+            outgoing[record.page.page_id] = references
+            for reference in references:
+                if reference.target_page_id is not None:
+                    backlinks.setdefault(reference.target_page_id, []).append(reference)
+        return {
+            record.page.page_id: (outgoing[record.page.page_id], tuple(backlinks[record.page.page_id]))
+            for record in records
+        }
+
+    def _link_warnings(
+        self,
+        records: tuple[WikiPageRecord, ...],
+        links: dict[str, tuple[tuple[LinkReference, ...], tuple[LinkReference, ...]]],
+    ) -> tuple[WikiChangeWarning, ...]:
+        warnings: list[WikiChangeWarning] = []
+        for record in records:
+            outgoing, backlinks = links[record.page.page_id]
+            for reference in outgoing:
+                if reference.status is LinkStatus.RESOLVED:
+                    continue
+                target = reference.node.page or "#fragment"
+                warnings.append(
+                    WikiChangeWarning(
+                        f"{reference.status.value}_link",
+                        record.resource.path,
+                        f"{target} ({', '.join(reference.candidates)})" if reference.candidates else target,
+                    )
+                )
+            role = self._role(record.resource.resource_id, record.resource.path)
+            if (
+                record.page.lifecycle == "active"
+                and role
+                not in {
+                    WikiInfrastructureRole.README,
+                    WikiInfrastructureRole.ME,
+                    WikiInfrastructureRole.ACTIVE_WORK,
+                    WikiInfrastructureRole.DAILY,
+                }
+                and not backlinks
+            ):
+                warnings.append(WikiChangeWarning("orphan_page", record.resource.path, record.page.page_id))
+        return tuple(warnings)
+
+    def _revision_at(self, resource, at: str | None) -> WikiPageRevision | None:
+        if resource is None:
+            return None
+        content = self.repository.read(resource.resource_id, at=at)
+        try:
+            page = self._parse(resource, content)
+        except WikiValidationError as error:
+            return WikiPageRevision(
+                resource=resource,
+                content=content,
+                page=None,
+                validation_error=str(error),
+                role=self._role(resource.resource_id, resource.path),
+                generated_from_revision=None,
+                fact_citations=(),
+            )
+        generated_from_revision, fact_citations, provenance_warnings = self._provenance(page, resource.path)
+        return WikiPageRevision(
+            resource=resource,
+            content=content,
+            page=page,
+            validation_error=None,
+            role=self._role(resource.resource_id, resource.path),
+            generated_from_revision=generated_from_revision,
+            fact_citations=fact_citations,
+            provenance_warnings=provenance_warnings,
+        )
+
+    @staticmethod
+    def _provenance(
+        page: WikiPage, path: str
+    ) -> tuple[str | None, tuple[WikiFactCitation, ...], tuple[WikiChangeWarning, ...]]:
+        warnings: list[WikiChangeWarning] = []
+        if "generated_from_revision" not in page.metadata:
+            generated_from_revision = None
+        elif isinstance(page.metadata["generated_from_revision"], str) and re.fullmatch(
+            r"[0-9a-f]{64}", page.metadata["generated_from_revision"]
+        ):
+            generated = page.metadata["generated_from_revision"]
+            assert isinstance(generated, str)
+            generated_from_revision = generated
+        else:
+            generated_from_revision = None
+            warnings.append(
+                WikiChangeWarning(
+                    "invalid_generated_from_revision", path, repr(page.metadata["generated_from_revision"])
+                )
+            )
+
+        if "fact_citations" not in page.metadata:
+            return generated_from_revision, (), tuple(warnings)
+        raw_citations = page.metadata["fact_citations"]
+        if not isinstance(raw_citations, Sequence) or isinstance(raw_citations, (str, bytes)):
+            warnings.append(WikiChangeWarning("invalid_fact_citations", path, repr(raw_citations)))
+            return generated_from_revision, (), tuple(warnings)
+        citations: list[WikiFactCitation] = []
+        for index, item in enumerate(raw_citations):
+            if (
+                isinstance(item, Mapping)
+                and isinstance(item.get("fact_id"), str)
+                and item["fact_id"].strip()
+                and isinstance(item.get("version"), str)
+                and re.fullmatch(r"[0-9a-f]{64}", item["version"])
+            ):
+                citations.append(WikiFactCitation(item["fact_id"], item["version"]))
+            else:
+                warnings.append(WikiChangeWarning("invalid_fact_citations", path, f"entry {index}: {item!r}"))
+        return generated_from_revision, tuple(citations), tuple(warnings)
+
+    @staticmethod
+    def _role(resource_id: str, path: str) -> WikiInfrastructureRole:
+        if resource_id == "me" or path == "me.md":
+            return WikiInfrastructureRole.ME
+        if resource_id == "active-work" or path == "active-work.md":
+            return WikiInfrastructureRole.ACTIVE_WORK
+        if path == "README.md" or path.endswith("/README.md"):
+            return WikiInfrastructureRole.README
+        if path.startswith("daily/"):
+            return WikiInfrastructureRole.DAILY
+        if path.startswith("insights/"):
+            return WikiInfrastructureRole.INSIGHT
+        return WikiInfrastructureRole.COMMON
+
+    @staticmethod
+    def _is_markdown_change(before, after) -> bool:
+        return (before is not None and before.path.endswith(".md")) or (
+            after is not None and after.path.endswith(".md")
+        )
+
+    @staticmethod
+    def _dedupe_warnings(warnings: list[WikiChangeWarning]) -> tuple[WikiChangeWarning, ...]:
+        seen: set[tuple[str, str, str]] = set()
+        result: list[WikiChangeWarning] = []
+        for warning in warnings:
+            key = (warning.code, warning.target, warning.evidence)
+            if key not in seen:
+                seen.add(key)
+                result.append(warning)
+        return tuple(result)
 
     def _snapshot(self, *, strict_names: bool, at: str | None = None) -> WikiSnapshot:
         head = self.repository.head if at is None else at

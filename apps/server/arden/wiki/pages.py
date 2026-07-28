@@ -8,15 +8,12 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING
 from uuid import uuid4
 
 import yaml
-
-if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
 
 
 class PageValidationError(ValueError):
@@ -82,7 +79,7 @@ def _json_value(value: object, seen: set[int] | None = None) -> None:
     marker = id(value)
     if marker in seen:
         raise PageValidationError("frontmatter must not contain YAML aliases or cycles")
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
         seen.add(marker)
         try:
             for item in value:
@@ -90,7 +87,7 @@ def _json_value(value: object, seen: set[int] | None = None) -> None:
         finally:
             seen.remove(marker)
         return
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         seen.add(marker)
         try:
             for key, item in value.items():
@@ -101,6 +98,26 @@ def _json_value(value: object, seen: set[int] | None = None) -> None:
             seen.remove(marker)
         return
     raise PageValidationError(f"frontmatter value is not JSON-like: {type(value).__name__}")
+
+
+def _freeze_json(value: object) -> object:
+    """Recursively detach and freeze an already validated JSON-like value."""
+
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _freeze_json(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_json(item) for item in value)
+    return value
+
+
+def _thaw_json(value: object) -> object:
+    """Return plain dict/list values suitable for safe YAML serialization."""
+
+    if isinstance(value, Mapping):
+        return {key: _thaw_json(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw_json(item) for item in value]
+    return value
 
 
 def _validate_generated_boundaries(body: bytes) -> None:
@@ -248,7 +265,7 @@ class WikiPage:
         }
         if self.redirect_to is not None:
             data["redirect_to"] = self.redirect_to
-        data.update(self.metadata)
+        data.update({key: _thaw_json(value) for key, value in self.metadata.items()})
         encoded = yaml.safe_dump(data, sort_keys=False, allow_unicode=True).encode("utf-8")
         return _OPEN + encoded + b"---\n" + self.body
 
@@ -300,7 +317,7 @@ def _page_from_data(data: Mapping[str, object], body: bytes, *, expected_page_id
         raise PageValidationError("active pages must not declare redirect_to")
 
     _validate_generated_boundaries(body)
-    metadata = {key: value for key, value in data.items() if key not in _RESERVED}
+    metadata = {key: _freeze_json(value) for key, value in data.items() if key not in _RESERVED}
     return WikiPage(
         page_id=page_id,
         title=title,

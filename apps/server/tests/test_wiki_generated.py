@@ -284,8 +284,8 @@ def test_publish_generated_records_fact_provenance_without_changing_page_identit
     assert page.aliases == ()
     assert page.lifecycle == "active"
     assert page.metadata["generated_from_revision"] == "facts-9"
-    assert page.metadata["fact_ids"] == ["fact-1", "fact-2"]
-    assert page.metadata["fact_citations"] == {"fact-1": ["source-a"]}
+    assert page.metadata["fact_ids"] == ("fact-1", "fact-2")
+    assert page.metadata["fact_citations"] == {"fact-1": ("source-a",)}
 
 
 @pytest.mark.parametrize(

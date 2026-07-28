@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
 from typing import TYPE_CHECKING, Protocol
@@ -14,8 +15,6 @@ from arden.wiki import GeneratedPageTarget, WikiPageRecord, WikiService, parse_p
 from .models import Fact, FactChangeFeed
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
-
     from .consumer_store import FactConsumerStore
     from .ledger import FactLedger
 
@@ -391,7 +390,7 @@ class FactSynthesis:
                 _names(record_path=resource.path, title=page.title, aliases=page.aliases, page_id=page.page_id)
             )
             scope = page.metadata.get("scope")
-            if isinstance(scope, dict) and scope.get("kind") == "project" and isinstance(scope.get("key"), str):
+            if isinstance(scope, Mapping) and scope.get("kind") == "project" and isinstance(scope.get("key"), str):
                 projects.add(scope["key"])
         return names, projects
 
@@ -427,7 +426,7 @@ def _existing_route(record: WikiPageRecord) -> _Route:
         if key not in {"generated_from_revision", "fact_citations"}
     }
     scope = metadata.get("scope")
-    if isinstance(scope, dict) and scope.get("kind") == "project" and isinstance(scope.get("key"), str):
+    if isinstance(scope, Mapping) and scope.get("kind") == "project" and isinstance(scope.get("key"), str):
         return _Route(
             "project",
             scope["key"],
@@ -649,12 +648,12 @@ def _citation_ids(record: WikiPageRecord) -> set[str]:
 
 def _citation_entries(record: WikiPageRecord) -> tuple[tuple[str, str], ...]:
     value = record.page.metadata.get("fact_citations")
-    if not isinstance(value, list):
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         return ()
     result: list[tuple[str, str]] = []
     for item in value:
         if (
-            isinstance(item, dict)
+            isinstance(item, Mapping)
             and isinstance(item.get("fact_id"), str)
             and isinstance(item.get("version"), str)
             and re.fullmatch(r"[0-9a-f]{64}", item["version"])

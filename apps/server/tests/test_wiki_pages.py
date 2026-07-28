@@ -46,8 +46,33 @@ def test_metadata_and_title_updates_are_immutable_and_preserve_exact_body_bytes(
     parsed = parse_page(changed)
 
     assert parsed.title == "After"
-    assert parsed.metadata == {"custom": {"nested": [1, True]}, "source": "user"}
+    assert parsed.metadata == {"custom": {"nested": (1, True)}, "source": "user"}
     assert parsed.body == parse_page(original).body
+
+
+def test_nested_metadata_is_detached_frozen_and_round_trips_through_yaml() -> None:
+    source = {"nested": {"items": [{"value": 1}]}}
+    page = create_page(title="One", page_id="one", metadata=source)
+    source["nested"]["items"][0]["value"] = 9
+    source["nested"]["items"].append({"value": 2})
+
+    nested = page.metadata["nested"]
+    assert nested["items"][0]["value"] == 1
+    assert len(nested["items"]) == 1
+    with pytest.raises(TypeError):
+        nested["extra"] = True
+    with pytest.raises(TypeError):
+        nested["items"][0]["value"] = 2
+    with pytest.raises(AttributeError):
+        nested["items"].append({"value": 3})
+
+    parsed = parse_page(page.to_bytes(), expected_page_id="one")
+    renamed = parsed.with_title("Renamed")
+    updated = renamed.with_metadata({"other": {"values": [2, 3]}})
+    assert parsed.metadata == page.metadata
+    assert renamed.metadata == page.metadata
+    assert updated.metadata["other"]["values"] == (2, 3)
+    assert parse_page(updated.to_bytes()).metadata == updated.metadata
 
 
 @pytest.mark.parametrize(
