@@ -17,9 +17,12 @@ from arden.logging import get_logger
 from arden.mcp.manager import MCPManager
 from arden.memory.facts import (
     LEDGER_DIRECTORY,
+    CompletionFactSynthesisRenderer,
+    FactConsumerStore,
     FactLedger,
     FactPlanStore,
     FactService,
+    FactSynthesis,
     load_fact_cutover,
 )
 from arden.monitor.slack import SlackMonitor
@@ -79,6 +82,8 @@ class Runtime:
         self._wiki_approval_conn: database.aiosqlite.Connection | None = None
         self.fact_service: FactService | None = None
         self._fact_plan_conn: database.aiosqlite.Connection | None = None
+        self._fact_consumer_store: FactConsumerStore | None = None
+        self._fact_ledger: FactLedger | None = None
 
         self._connected = False
         self._closing = False
@@ -271,19 +276,45 @@ class Runtime:
 
     async def _init_facts(self, ledger: FactLedger | None) -> None:
         self.fact_service = None
+        self._fact_ledger = None
         self.knowledge.set_fact_service(None)
         if ledger is None:
             return
         connection = await database.connect(self.config.memory_db_path)
+        consumers: FactConsumerStore | None = None
         try:
             plans = FactPlanStore(connection)
             await plans.init_schema()
+            consumers = await FactConsumerStore.open(self.config.memory_db_path)
         except BaseException:
+            if consumers is not None:
+                await consumers.close()
             await connection.close()
             raise
         self._fact_plan_conn = connection
-        self.fact_service = FactService(ledger, plans)
+        self._fact_consumer_store = consumers
+        self._fact_ledger = ledger
+        self.fact_service = FactService(ledger, plans, post_commit=self._request_fact_synthesis)
         self.knowledge.set_fact_service(self.fact_service)
+
+    async def _request_fact_synthesis(self) -> None:
+        if self.automation is not None:
+            await self.automation.request_fact_synthesis()
+
+    def _get_fact_synthesis(self) -> FactSynthesis | None:
+        model = self.config.memory_model
+        if self._fact_ledger is None or self._fact_consumer_store is None or self.wiki_service is None or not model:
+            return None
+        return FactSynthesis(
+            self._fact_ledger,
+            self._fact_consumer_store,
+            self.wiki_service,
+            CompletionFactSynthesisRenderer(
+                get_completion_client(model),
+                model,
+                reasoning_effort=self.knowledge._memory_reasoning_effort(model),
+            ),
+        )
 
     async def _init_notifiers(self) -> None:
         self.notifier_service = NotifierService(
@@ -309,6 +340,7 @@ class Runtime:
             cheap_model=self.config.memory_model,
             indexer=self.indexer,
             get_consolidate=lambda: self.knowledge._consolidate,
+            get_fact_synthesis=self._get_fact_synthesis,
             get_knowledge=lambda: self.knowledge,
             get_integration_clients=lambda: self.integrations.clients,
             get_notifiers=lambda: self.notifier_service,
@@ -339,10 +371,14 @@ class Runtime:
         if self.mcp_manager:
             await self.mcp_manager.close()
         await self.knowledge.close()
+        if self._fact_consumer_store:
+            await self._fact_consumer_store.close()
+            self._fact_consumer_store = None
         if self._fact_plan_conn:
             await self._fact_plan_conn.close()
             self._fact_plan_conn = None
         self.fact_service = None
+        self._fact_ledger = None
         self.knowledge.set_fact_service(None)
         if self._wiki_approval_conn:
             await self._wiki_approval_conn.close()

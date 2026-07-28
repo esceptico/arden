@@ -1,15 +1,17 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi import HTTPException
 
 from arden.config import Config
+from arden.constants import BUILTIN_MEMORY_SYNTHESIZE_ID
 from arden.context.models import SessionState
 from arden.memory.facts import (
     MARKER_NAME,
     FactLedger,
     FactLedgerCorruptionError,
     FactPrincipal,
+    FactSynthesisResult,
     fact_cutover_content,
 )
 from arden.server.routers.memory import InitBody, init_memory
@@ -80,10 +82,13 @@ async def test_fact_cutover_wires_only_canonical_fact_memory_and_survives_restar
     runtime = Runtime(config)
     await runtime.connect()
     plan_connection = runtime._fact_plan_conn
+    consumer_store = runtime._fact_consumer_store
     try:
         assert runtime.fact_service is not None
         assert plan_connection is not None
+        assert consumer_store is not None
         assert runtime.stores is not None and plan_connection is not runtime.stores.conn
+        assert consumer_store._conn is not plan_connection
         assert runtime.knowledge.memory_ready is False
         assert runtime.knowledge.facts_ready is True
         assert runtime.knowledge.memory_writes_enabled is False
@@ -106,10 +111,7 @@ async def test_fact_cutover_wires_only_canonical_fact_memory_and_survives_restar
             await init_memory(InitBody(confirm=True), runtime)
         assert init_error.value.status_code == 503
         assert runtime.automation is not None
-        assert (
-            await runtime.automation._build_memory_synthesize_handler()(None)
-            == "legacy memory writes disabled after managed wiki cutover"
-        )
+        assert (await runtime.automation._build_memory_synthesize_handler()(None)).startswith("fact synthesis:")
 
         assert runtime.executor is not None
         fact_tool_names = {
@@ -159,11 +161,14 @@ async def test_fact_cutover_wires_only_canonical_fact_memory_and_survives_restar
         await runtime.close()
 
     assert runtime._fact_plan_conn is None
+    assert runtime._fact_consumer_store is None
     assert runtime.fact_service is None
     assert runtime.knowledge.facts_ready is False
     assert FACT_SERVICE not in runtime.tool_services
     with pytest.raises(ValueError, match="no active connection"):
         await plan_connection.execute("SELECT 1")
+    with pytest.raises(ValueError, match="no active connection"):
+        await consumer_store._conn.execute("SELECT 1")
 
     restarted = Runtime(config)
     await restarted.connect()
@@ -204,3 +209,78 @@ async def test_present_cutover_with_uninitialized_ledger_fails_before_runtime_se
 
     assert runtime.stores is None
     assert not config.sessions_db_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_fact_commit_requests_debounced_synthesis_and_handler_uses_canonical_runner(
+    tmp_path, monkeypatch
+) -> None:
+    config = _config(tmp_path)
+    _seed_fact(config)
+    runtime = Runtime(config)
+    await runtime.connect()
+    try:
+        assert runtime.automation is not None and runtime.fact_service is not None
+        requests: list[tuple[str, timedelta]] = []
+
+        async def request(task_id: str, delay: timedelta) -> bool:
+            requests.append((task_id, delay))
+            return True
+
+        monkeypatch.setattr(runtime.automation.scheduler, "request_delayed_run", request)
+        monkeypatch.setattr(runtime.knowledge, "_memory_reasoning_effort", lambda model: "medium")
+        configured = runtime._get_fact_synthesis()
+        assert configured is not None
+        assert configured._renderer._reasoning_effort == "medium"
+        principal = FactPrincipal("session:test", frozenset({USER_SCOPE}), frozenset({USER_SCOPE}))
+        plan = await runtime.fact_service.plan(
+            principal,
+            [
+                {
+                    "op": "create",
+                    "fact_id": "notify",
+                    "text": "Notify synthesis",
+                    "kind": "fact",
+                    "subjects": ["notify"],
+                    "scope": {"kind": "user", "key": None},
+                    "sources": [{"kind": "test", "ref": "notify"}],
+                }
+            ],
+            request_key="notify-plan",
+            actor="test",
+            origin="test",
+            reason="notify",
+        )
+        await runtime.fact_service.commit(principal, plan.plan_id)
+        assert requests == [(BUILTIN_MEMORY_SYNTHESIZE_ID, timedelta(minutes=5))]
+
+        class _Synthesis:
+            async def run(self):
+                return FactSynthesisResult("a" * 64, published_pages=1, advanced=True)
+
+        monkeypatch.setattr(runtime.automation, "get_fact_synthesis", lambda: _Synthesis())
+        assert await runtime.automation._build_memory_synthesize_handler()(None) == (
+            "fact synthesis: 1 page(s) published; archived 0; under threshold 0"
+        )
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_fact_synthesis_without_model_keeps_feed_unadvanced(tmp_path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    _seed_fact(config)
+    runtime = Runtime(config)
+    await runtime.connect()
+    try:
+        assert runtime.automation is not None
+        consumers = runtime._fact_consumer_store
+        assert consumers is not None
+        monkeypatch.setattr(runtime.automation, "get_fact_synthesis", lambda: None)
+
+        assert await runtime.automation._build_memory_synthesize_handler()(None) == (
+            "fact synthesis unavailable (no memory model configured)"
+        )
+        assert await consumers.get("memory.synthesis") is None
+    finally:
+        await runtime.close()

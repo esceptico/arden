@@ -1,5 +1,6 @@
 """Canonical append-only facts; intentionally independent from wiki projections."""
 
+from .completion_renderer import CompletionFactSynthesisRenderer
 from .consumer_store import FactConsumerStore, FactConsumerWatermark, FactConsumerWatermarkConflictError
 from .cutover import (
     LEDGER_DIRECTORY,
@@ -49,6 +50,7 @@ __all__ = [
     "FactConsumerStore",
     "FactConsumerWatermark",
     "FactConsumerWatermarkConflictError",
+    "CompletionFactSynthesisRenderer",
     "FactCutover",
     "FactCutoverError",
     "FactConflictError",

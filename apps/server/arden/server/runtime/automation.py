@@ -24,6 +24,7 @@ from arden.constants import (
     AREAS_STATE_FILE,
     AREAS_SUGGESTIONS_FILE,
     BUILTIN_AREA_SUGGESTER_ID,
+    BUILTIN_MEMORY_SYNTHESIZE_ID,
 )
 from arden.events.sse import AreasChangedEvent, AutomationSuggestionsUpdatedEvent
 from arden.integrations.calendar.client import MultiCalendarSource
@@ -57,6 +58,7 @@ class AutomationRuntime:
         cheap_model: str | None,
         indexer: Indexer | None,
         get_consolidate: Callable[[], object | None] = lambda: None,
+        get_fact_synthesis: Callable[[], object | None] = lambda: None,
         get_knowledge: Callable[[], object | None] = lambda: None,
         get_integration_clients: Callable[[], dict[str, object]] = dict,
         get_notifiers: Callable[[], object | None] = lambda: None,
@@ -68,6 +70,7 @@ class AutomationRuntime:
         self.get_slack_client = get_slack_client
         self.get_cheap_llm = get_cheap_llm
         self.get_consolidate = get_consolidate
+        self.get_fact_synthesis = get_fact_synthesis
         self.get_knowledge = get_knowledge
         self.get_integration_clients = get_integration_clients
         self.cheap_model = cheap_model
@@ -108,6 +111,14 @@ class AutomationRuntime:
             await self.monitor.stop()
         await self.outbox_runtime.stop()
         await self.scheduler.stop()
+
+    async def request_fact_synthesis(self) -> bool:
+        """Coalesce fact commits into the canonical synthesis run."""
+
+        return await self.scheduler.request_delayed_run(
+            BUILTIN_MEMORY_SYNTHESIZE_ID,
+            timedelta(minutes=5),
+        )
 
     async def _on_area_run_completed(self, run_completed) -> None:
         """Ask sync for area channel runs: when a completed run's session
@@ -358,6 +369,17 @@ class AutomationRuntime:
     def _build_memory_synthesize_handler(self):
         async def handler(context: dict | None) -> str | None:
             knowledge = self.get_knowledge()
+            if knowledge is not None and getattr(knowledge, "facts_ready", False):
+                synthesis = self.get_fact_synthesis()
+                if synthesis is None:
+                    return "fact synthesis unavailable (no memory model configured)"
+                result = await synthesis.run()
+                if result.empty:
+                    return "fact synthesis idle"
+                return (
+                    f"fact synthesis: {result.published_pages} page(s) published"
+                    f"; archived {result.skipped_archived}; under threshold {result.skipped_under_threshold}"
+                )
             if knowledge is None:
                 return "memory synthesis unavailable (memory not ready)"
             if not knowledge.memory_writes_enabled:
