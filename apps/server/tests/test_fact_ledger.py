@@ -408,6 +408,9 @@ def test_lifecycle_expiry_and_metadata_corrections_are_strict(tmp_path: Path) ->
     assert corrected.evidence_class == "inferred"
     assert corrected.review_at == JULY + timedelta(days=90)
     assert corrected.review_basis == "fallback"
+    first_version = ledger.history("a")[0].record
+    created = ledger.get_version("a", hashlib.sha256(("\0" + _canonical(first_version)).encode()).hexdigest())
+    assert created.scope == {"kind": "area", "key": "project"}
     _commit(
         ledger,
         {

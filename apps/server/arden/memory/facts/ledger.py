@@ -302,6 +302,26 @@ class FactLedger:
         except KeyError as exc:
             raise KeyError(f"unknown fact: {fact_id}") from exc
 
+    def get_version(self, fact_id: str, version: str) -> Fact:
+        """Return one exact historical fact version from its immutable chain."""
+
+        fact_id = _text(fact_id, "fact_id")
+        if not isinstance(version, str) or re.fullmatch(r"[0-9a-f]{64}", version) is None:
+            raise FactValidationError("version must be a SHA-256 digest")
+        current: Fact | None = None
+        for event in self._snapshot().events:
+            if event.fact_id != fact_id:
+                continue
+            if event.op == "create":
+                current = self._fact_from_create(event)
+            else:
+                if current is None:
+                    raise FactLedgerCorruptionError("historical event precedes fact creation")
+                current = self._apply(current, event)
+            if current.version == version:
+                return current
+        raise KeyError(f"unknown fact version: {fact_id}@{version}")
+
     def search(
         self,
         query: str | None = None,
@@ -478,6 +498,11 @@ class FactLedger:
                 raise FactLedgerCorruptionError("fact repository drifted or is corrupt") from exc
             return plan.events
         raise FactConflictError("fact publication remained contended")
+
+    def validate_plan(self, plan: FactPlan) -> None:
+        """Validate a retained plan without reading or mutating canonical facts."""
+
+        self._validate_plan(plan)
 
     @staticmethod
     def _match_events(

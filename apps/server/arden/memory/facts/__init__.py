@@ -12,9 +12,18 @@ from .models import (
     FactPlan,
     FactValidationError,
 )
+from .plan_store import (
+    FactPlanCorruptionError,
+    FactPlanOwnershipError,
+    FactPlanRequestConflictError,
+    FactPlanStatus,
+    FactPlanStore,
+)
+from .service import DueFactReview, FactCommitResult, FactPlanPreview, FactPrincipal, FactScopeError, FactService
 
 __all__ = [
     "DueReviewCandidate",
+    "DueFactReview",
     "Fact",
     "FactConflictError",
     "FactEvent",
@@ -22,6 +31,16 @@ __all__ = [
     "FactLedgerCorruptionError",
     "FactLedgerError",
     "FactPlan",
+    "FactPlanCorruptionError",
+    "FactPlanOwnershipError",
+    "FactPlanPreview",
+    "FactPlanRequestConflictError",
+    "FactPlanStatus",
+    "FactPlanStore",
+    "FactPrincipal",
+    "FactScopeError",
+    "FactService",
+    "FactCommitResult",
     "FactValidationError",
     "adapt_legacy_source_ref",
 ]
