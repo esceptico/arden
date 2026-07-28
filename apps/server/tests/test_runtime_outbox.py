@@ -147,6 +147,28 @@ async def test_runtime_outbox_routes_run_completed_to_area_hook_before_scheduler
 
 
 @pytest.mark.asyncio
+async def test_runtime_outbox_retries_the_whole_completion_when_area_hook_fails():
+    async def fail_area_run(_run_completed):
+        raise RuntimeError("area state unavailable")
+
+    runtime_outbox, _, _, scheduler = _runtime_outbox(on_area_run=fail_area_run)
+    payload = run_completed_payload(
+        RunCompleted(
+            run_id="run-1",
+            session_id="sess-1",
+            messages=(),
+            usage=Usage(),
+            result="done",
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="area state unavailable"):
+        await runtime_outbox._on_run_completed(_event(OUTBOX_RUN_COMPLETED, payload))
+
+    assert scheduler.completed == []
+
+
+@pytest.mark.asyncio
 async def test_runtime_outbox_routes_run_failed_to_scheduler():
     runtime_outbox, _, _, scheduler = _runtime_outbox()
     failed = RunFailed(run_id="run-1", session_id="sess-1", error="provider error")

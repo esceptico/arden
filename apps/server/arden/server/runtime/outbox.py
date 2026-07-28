@@ -3,7 +3,6 @@ from datetime import datetime
 
 from arden.automation.scheduler import Scheduler
 from arden.automation.store import AutomationStore
-from arden.logging import get_logger
 from arden.outbox import (
     OUTBOX_RUN_COMPLETED,
     OUTBOX_RUN_FAILED,
@@ -14,8 +13,6 @@ from arden.outbox import (
 )
 from arden.outbox.store import OutboxStore
 from arden.server.indexer import Indexer
-
-_logger = get_logger(__name__)
 
 
 class RuntimeOutbox:
@@ -49,10 +46,7 @@ class RuntimeOutbox:
     async def _on_run_completed(self, event: OutboxEvent) -> None:
         run_completed = run_completed_from_payload(event.payload)
         if self._on_area_run:
-            try:
-                await self._on_area_run(run_completed)
-            except Exception:
-                _logger.warning("Area run-completed hook failed", exc_info=True)
+            await self._on_area_run(run_completed)
         await self.scheduler.handle_run_completed(run_completed)
 
     async def _on_run_failed(self, event: OutboxEvent) -> None:
