@@ -33,6 +33,7 @@ from .models import (
     WikiFactCitation,
     WikiInfrastructureRole,
     WikiLinkReport,
+    WikiMaintenancePageUpdate,
     WikiPageRecord,
     WikiPageRevision,
     WikiResourceChange,
@@ -352,6 +353,95 @@ class WikiService:
                 enforce_expected_head=base_head is None,
             )
         )
+
+    def apply_maintenance_updates(
+        self,
+        updates: tuple[WikiMaintenancePageUpdate, ...],
+        *,
+        base_head: str,
+        reason: str = "apply wiki maintenance updates",
+        idempotency_key: str | None = None,
+    ) -> str:
+        """Atomically apply ordinary edits without changing page identity.
+
+        Maintenance may alter only title, aliases, and body.  Generated content
+        and Synthesis provenance remain owned by their existing publisher.
+        """
+
+        if not isinstance(updates, tuple) or not all(isinstance(item, WikiMaintenancePageUpdate) for item in updates):
+            raise TypeError("updates must be a tuple of WikiMaintenancePageUpdate values")
+        if not isinstance(base_head, str) or not base_head:
+            raise ValueError("base_head must be a nonempty commit ID")
+        if not isinstance(reason, str) or not reason:
+            raise ValueError("reason must be a nonempty string")
+        if idempotency_key is not None and (not isinstance(idempotency_key, str) or not idempotency_key):
+            raise ValueError("idempotency_key must be a nonempty string or None")
+
+        snapshot = self._snapshot(strict_names=True, at=base_head)
+        records = self._index(snapshot).pages
+        page_ids = [item.page_id for item in updates]
+        if len(page_ids) != len(set(page_ids)):
+            raise WikiValidationError("maintenance updates must not repeat a page_id")
+
+        replacements: dict[str, WikiPageRecord] = {}
+        operations: list[Update] = []
+        for update in updates:
+            record = records.get(update.page_id)
+            if record is None or record.page.lifecycle != "active":
+                raise KeyError(f"unknown active wiki page: {update.page_id}")
+            if record.resource.version_id != update.expected_version:
+                raise RevisionConflictError(f"resource {update.page_id} changed: expected {update.expected_version}")
+
+            if (
+                record.page.title == update.title
+                and record.page.aliases == update.aliases
+                and record.page.body == update.body
+            ):
+                replacement = record
+            else:
+                replacement_page = build_page(
+                    page_id=record.page.page_id,
+                    title=update.title,
+                    aliases=update.aliases,
+                    lifecycle=record.page.lifecycle,
+                    redirect_to=record.page.redirect_to,
+                    metadata=record.page.metadata,
+                    body=update.body,
+                )
+                content = replacement_page.to_bytes()
+                parsed = self._parse(record.resource, content)
+                self._assert_maintenance_preserves_owned_content(record.page, parsed)
+                replacement = WikiPageRecord(record.resource, parsed, content)
+            replacements[update.page_id] = replacement
+            if replacement.content != record.content:
+                operations.append(Update(update.page_id, update.expected_version, replacement.content))
+
+        prospective = tuple(replacements.get(record.page.page_id, record) for record in snapshot.pages)
+        self._validate_prospective(snapshot, prospective)
+        if not operations:
+            if self.repository.head != base_head:
+                raise RevisionConflictError(
+                    f"current head changed: expected {base_head!r}, found {self.repository.head!r}"
+                )
+            return base_head
+
+        key = idempotency_key or self._key(
+            "maintenance",
+            base_head,
+            reason,
+            tuple((item.page_id, item.expected_version, item.title, item.aliases, item.body) for item in updates),
+        )
+        commit = self.repository.commit(
+            ChangeSet(
+                operations=tuple(operations),
+                actor="Wiki Maintenance",
+                origin="wiki.maintenance",
+                reason=reason,
+                idempotency_key=key,
+                expected_head=base_head,
+            )
+        )
+        return commit.commit_id
 
     def backlinks(self, page_id: str) -> tuple[LinkReference, ...]:
         """Report links to ``page_id`` without guessing unresolved names."""
@@ -887,6 +977,27 @@ class WikiService:
         if prior_exists:
             return current == prior
         return current is None or current == b""
+
+    @staticmethod
+    def _assert_maintenance_preserves_owned_content(before: WikiPage, after: WikiPage) -> None:
+        if (
+            before.page_id != after.page_id
+            or before.lifecycle != after.lifecycle
+            or before.redirect_to != after.redirect_to
+        ):
+            raise WikiValidationError("maintenance cannot change page identity or lifecycle")
+        for key in ("generated_from_revision", "fact_citations"):
+            if (key in before.metadata) != (key in after.metadata) or before.metadata.get(key) != after.metadata.get(
+                key
+            ):
+                raise WikiValidationError(f"maintenance cannot change {key}")
+        try:
+            before_generated = extract_generated_region(before.to_bytes(), expected_page_id=before.page_id)
+            after_generated = extract_generated_region(after.to_bytes(), expected_page_id=after.page_id)
+        except PageValidationError as error:
+            raise WikiValidationError(f"maintenance generated region is invalid: {error}") from error
+        if before_generated != after_generated:
+            raise GeneratedRegionConflictError("maintenance cannot change generated page content")
 
     @staticmethod
     def _names(page: WikiPage, path: str) -> tuple[str, ...]:

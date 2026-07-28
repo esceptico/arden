@@ -43,6 +43,27 @@ class WikiPageRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class WikiMaintenancePageUpdate:
+    """One ordinary, identity-preserving page edit proposed by maintenance."""
+
+    page_id: str
+    expected_version: str
+    title: str
+    aliases: tuple[str, ...]
+    body: bytes
+
+    def __post_init__(self) -> None:
+        for name in ("page_id", "expected_version", "title"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{name} must be a nonempty string")
+        if not isinstance(self.aliases, tuple) or not all(isinstance(alias, str) for alias in self.aliases):
+            raise TypeError("aliases must be a tuple of strings")
+        if not isinstance(self.body, bytes):
+            raise TypeError("body must be bytes")
+
+
+@dataclass(frozen=True, slots=True)
 class WikiSnapshot:
     head: str | None
     pages: tuple[WikiPageRecord, ...]
