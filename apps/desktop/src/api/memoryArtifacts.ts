@@ -107,6 +107,7 @@ interface MemoryLink {
   sourcePath: string;
   target: string;
   display: string;
+  alias: string | null;
   heading: string | null;
   context: string;
   line: number;
@@ -303,6 +304,7 @@ interface RawLink {
   source_path: string;
   target: string;
   display: string;
+  alias?: string | null;
   heading: string | null;
   context: string;
   line: number;
@@ -517,6 +519,7 @@ function mapLink(raw: RawLink): MemoryLink {
     sourcePath: raw.source_path,
     target: raw.target,
     display: raw.display,
+    alias: raw.alias ?? null,
     heading: raw.heading,
     context: raw.context,
     line: raw.line,

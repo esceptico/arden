@@ -93,7 +93,7 @@ test("memory open-page tabs keep the mock overflow geometry and shared motion", 
   expect(css).toContain("scroll-padding-inline: 14px");
   expect(css).toContain("padding-inline-end: calc(var(--tab-bar-padding) + 14px)");
   expect(tabs).toContain('readLength("--tab-bar-gap")');
-  expect(tabs).toContain('readLength("--tab-strip-chrome")');
+  expect(tabs).toContain('readLength("--tab-bar-padding")');
   expect(tabs).toContain('readLength("--tab-overflow-min-width")');
   expect(tabs).toContain('readLength("--instrument-layout-gap")');
   expect(tabs).toContain("root.style.width = width");
@@ -127,7 +127,7 @@ test("memory routes content and peek motion through shared primitives", () => {
   expect(view).toContain('className="ornament-items mw-instrument-items"');
   expect(view).toContain("instrumentItems.scrollWidth");
   expect(view).toContain("instrumentCollapse.offsetWidth");
-  expect(view).toContain('cssLength("--instrument-inner-gap")');
+  expect(view).toContain('cssLength("--tab-bar-padding")');
   expect(view).toContain('root.style.setProperty("--memory-instrument-expanded-width"');
   expect(view).toContain('<use href="#dp-edit" />');
   expect(view).toContain('<use href="#dp-arrow-right" />');
@@ -171,7 +171,7 @@ test("memory review keeps the sheet mounted through the exact room-release lifec
   expect(css).toContain("body.memory-diff-receded #app");
   expect(view).toContain('className="memory-focus-cache"');
   expect(css).toContain(".memory-focus-plane");
-  const recededCache = css.match(/\.memory-surface \.memory-ws\.review-open \.memory-focus-cache\s*\{([^}]*)\}/)?.[1] ?? "";
+  const recededCache = css.match(/\.memory-surface \.memory-ws:is\(\.review-open, \.rename-open\) \.memory-focus-cache\s*\{([^}]*)\}/)?.[1] ?? "";
   expect(recededCache).toContain("will-change: transform");
   expect(recededCache).toContain("transform: scale(.982)");
   expect(recededCache).not.toContain("filter:");

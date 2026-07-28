@@ -25,15 +25,18 @@ export function stem(path: string): string {
   return leaf.replace(/\.md$/, "");
 }
 
+/** Managed wiki pages own a human title in frontmatter. Legacy artifacts keep
+ * their filename-derived label so ordinary files remain predictable. */
+export function displayTitle(artifact: Pick<MemoryArtifactSummary, "path" | "source" | "title">): string {
+  return artifact.source === "wiki" && artifact.title.trim() ? artifact.title : stem(artifact.path);
+}
+
 export function parentDir(path: string): string {
   const parts = path.split("/");
   return parts.length > 1 ? parts.slice(0, -1).join("/") : "";
 }
 
-export function buildWorkspaceTree(
-  artifacts: MemoryArtifactSummary[],
-  extraDirectories: readonly string[] = [],
-): WorkspaceDir {
+export function buildWorkspaceTree(artifacts: MemoryArtifactSummary[], extraDirectories: readonly string[] = []): WorkspaceDir {
   const root: WorkspaceDir = { name: "", path: "", dirs: [], files: [] };
   const byPath = new Map<string, WorkspaceDir>([["", root]]);
   const ensureDir = (key: string): WorkspaceDir => {
@@ -42,7 +45,12 @@ export function buildWorkspaceTree(
     const trimmed = key.replace(/\/$/, "");
     const parts = trimmed.split("/");
     const parent = ensureDir(parts.length > 1 ? `${parts.slice(0, -1).join("/")}/` : "");
-    const dir: WorkspaceDir = { name: parts.at(-1)!, path: key, dirs: [], files: [] };
+    const dir: WorkspaceDir = {
+      name: parts.at(-1)!,
+      path: key,
+      dirs: [],
+      files: [],
+    };
     parent.dirs.push(dir);
     byPath.set(key, dir);
     return dir;
@@ -52,7 +60,7 @@ export function buildWorkspaceTree(
     if (isNotebookResourcePath(key.replace(/\/$/, ""))) ensureDir(key);
   }
   for (const artifact of artifacts) {
-    if (!isNotebookResourcePath(artifact.path)) continue;
+    if (artifact.source !== "wiki" && !isNotebookResourcePath(artifact.path)) continue;
     const parent = parentDir(artifact.path);
     ensureDir(parent ? `${parent}/` : "").files.push(artifact);
   }
@@ -83,30 +91,21 @@ export function collectNotes(dir: WorkspaceDir): MemoryArtifactSummary[] {
   return [...dir.files, ...dir.dirs.flatMap(collectNotes)];
 }
 
-/** The draft's sortFiles: index.md always first, then by name (filename
- *  stem) or by the timestamp field with name as tiebreak. */
-export function sortNotes(
-  files: readonly MemoryArtifactSummary[],
-  order: SortOrder,
-  createdAt: (artifact: MemoryArtifactSummary) => string,
-): MemoryArtifactSummary[] {
-  const field = (artifact: MemoryArtifactSummary) =>
-    order.key === "modified" ? artifact.updatedAt ?? "" : order.key === "created" ? createdAt(artifact) : "";
+/** Folder overviews stay first, followed by the requested note ordering. */
+export function sortNotes(files: readonly MemoryArtifactSummary[], order: SortOrder, createdAt: (artifact: MemoryArtifactSummary) => string): MemoryArtifactSummary[] {
+  const field = (artifact: MemoryArtifactSummary) => (order.key === "modified" ? (artifact.updatedAt ?? "") : order.key === "created" ? createdAt(artifact) : "");
   return [...files].sort((a, b) => {
+    if (a.path.split("/").at(-1) === "README.md") return -1;
+    if (b.path.split("/").at(-1) === "README.md") return 1;
     if (a.path === "index.md") return -1;
     if (b.path === "index.md") return 1;
-    const cmp = order.key === "name"
-      ? stem(a.path).localeCompare(stem(b.path))
-      : field(a).localeCompare(field(b)) || stem(a.path).localeCompare(stem(b.path));
+    const cmp = order.key === "name" ? displayTitle(a).localeCompare(displayTitle(b)) : field(a).localeCompare(field(b)) || displayTitle(a).localeCompare(displayTitle(b));
     return order.asc ? cmp : -cmp;
   });
 }
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const MONTH_NAMES = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
-];
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
 export function prettyDate(iso: string | null | undefined): string {
   if (!iso) return "";

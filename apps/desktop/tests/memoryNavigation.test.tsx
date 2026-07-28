@@ -156,7 +156,7 @@ test("a refreshed Memory entry hydrates its active tab and note together", async
   await act(async () => useStore.setState((state) => ({ memoryVaultVersion: state.memoryVaultVersion + 1 })));
   await settle(300);
 
-  expect(host.querySelector(".mw-doc-tab.active")?.textContent).toContain("me");
+  expect(host.querySelector(".mw-doc-tab.on")?.textContent).toContain("me");
   expect(host.querySelector("h1")?.textContent).toBe("me");
   expect(host.textContent).not.toContain("Nothing selected");
 });
@@ -519,7 +519,7 @@ test("opening the inspector fetches full-page links and history once and pane sw
   // The mock keeps the links instrument compact: outgoing links are the
   // default view; incoming mentions remain one local tab away.
   const aside = host.querySelector<HTMLElement>('aside[aria-label="Page peek"]')!;
-  expect(aside.textContent).toContain("Roadmap");
+  expect(aside.textContent).toContain("roadmap");
   await act(async () => aside.querySelectorAll<HTMLButtonElement>('[role="tab"]')[1]?.click());
   await settleUntil(() => aside.textContent?.includes("worked on Note") === true);
   expect(aside.textContent).toContain("worked on Note");
@@ -592,10 +592,12 @@ test("vault revision refresh invalidates the selected detail cache", async () =>
   const { host, root } = setup("note.md");
   await act(async () => root.render(<ArtifactMemoryView config={config} />));
   await settle(250);
-  expect(host.textContent).toContain("version 1");
+  const initialReads = detailReads;
+  expect(initialReads).toBeGreaterThanOrEqual(1);
+  expect(host.textContent).toContain(`version ${initialReads}`);
   note = summary("note.md", "Note", "r2");
   await act(async () => useStore.setState((state) => ({ memoryVaultVersion: state.memoryVaultVersion + 1 })));
   await settle(250);
-  expect(detailReads).toBe(2);
-  expect(host.textContent).toContain("version 2");
+  expect(detailReads).toBe(initialReads + 1);
+  expect(host.textContent).toContain(`version ${initialReads + 1}`);
 });

@@ -1290,7 +1290,7 @@
   transition: filter var(--motion-focus) var(--smooth-out);
 }
 
-.memory-surface .memory-ws.review-open .memory-focus-cache {
+.memory-surface .memory-ws:is(.review-open, .rename-open) .memory-focus-cache {
   pointer-events: none;
   will-change: transform;
   transform: scale(.982);
@@ -1300,6 +1300,8 @@
   pointer-events: none;
   filter: blur(2px);
 }
+
+.memory-surface .memory-ws.rename-open .memory-focus-plane { pointer-events: none; }
 
 /* The sheet stays mounted while these classes restore the room. The 180ms
  * focus transition is shared by the sheet exit and the translucent scrim. */
@@ -1327,11 +1329,11 @@
 .memory-edit-review__sheet {
   --memory-review-inline: 18px;
   position: absolute;
-  left: calc(50% - 23.75rem);
+  left: max(0px, calc(50% - 23.75rem));
   bottom: 0;
   z-index: 1;
-  width: 47.5rem;
-  max-height: 78%;
+  width: min(47.5rem, 100%);
+  max-height: min(78%, calc(100vh - var(--space-4)));
   padding: 0;
   overflow: hidden;
   border-radius: var(--r-shell) var(--r-shell) 0 0;
@@ -1363,6 +1365,37 @@
 .memory-edit-review__notice { margin: var(--space-3) var(--memory-review-inline) 0; padding: var(--space-2-5) var(--space-3); border-radius: var(--r-house); color: var(--ink-soft); background: color-mix(in oklab, var(--warning) 12%, transparent); font-size: var(--text-xs); line-height: var(--leading-body); }
 .memory-edit-review__error { margin: 0; padding: var(--space-2) var(--memory-review-inline) var(--space-3); color: var(--danger); font-size: var(--text-xs); }
 .memory-edit-review__conflict { min-height: 0; padding: var(--space-4) var(--memory-review-inline); }
+
+/* Wiki rename uses the same blocking-sheet geometry as edit review. The
+ * fields and change list only supply content, never a competing surface. */
+.wiki-rename-sheet__title {
+  margin: var(--space-1) 0 0;
+  color: var(--ink);
+  font-size: var(--text-section);
+  font-weight: 600;
+  letter-spacing: -.015em;
+}
+.wiki-rename-sheet__body { display: grid; align-content: start; gap: var(--space-4); }
+.wiki-rename-sheet__changes { margin: 0; display: grid; gap: var(--space-3); }
+.wiki-rename-sheet__changes > div { display: grid; grid-template-columns: 6rem minmax(0, 1fr); gap: var(--space-3); }
+.wiki-rename-sheet__changes dt { color: var(--muted); font: 500 var(--text-meta)/var(--leading-meta) var(--mono); }
+.wiki-rename-sheet__changes dd { min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--ink-soft); font-size: var(--text-body); line-height: var(--leading-body); }
+.wiki-rename-sheet__changes code,
+.wiki-rename-sheet__current code { color: var(--ink); font: 500 var(--text-meta)/var(--leading-meta) var(--mono); }
+.wiki-rename-sheet__arrow { padding-inline: var(--space-1); color: var(--muted); }
+.wiki-rename-sheet__explanation,
+.wiki-rename-sheet__current { max-width: 65ch; margin: 0; color: var(--muted); font-size: var(--text-body); line-height: var(--leading-body); }
+.wiki-rename-sheet__field { display: grid; gap: var(--space-1-5); color: var(--ink-soft); font-size: var(--text-control); font-weight: 500; }
+.wiki-rename-sheet__field input { width: 100%; min-width: 0; }
+.wiki-rename-sheet__footer { padding: var(--space-3) var(--memory-review-inline); display: flex; justify-content: flex-end; gap: var(--space-2); border-top: 1px solid var(--edge); background: var(--panel); }
+.wiki-rename-sheet .memory-edit-review__scrim {
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+}
+
+@media (max-width: 42rem) {
+  .wiki-rename-sheet__changes > div { grid-template-columns: 1fr; gap: var(--space-1); }
+}
 
 /* ── Nested diff dialog / quick switcher ────────────────────── */
 

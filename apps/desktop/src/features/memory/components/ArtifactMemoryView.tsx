@@ -2,12 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { Clock, LeftToRightListBullet, Link01 } from "@/components/icons";
 import clsx from "clsx";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import {
-  CONTENT_ENTER_TRANSITION,
-  CONTENT_EXIT_TRANSITION,
-  CONTENT_SWAP_VARIANTS,
-  MOTION,
-} from "@/lib/tokens/motion";
+import { CONTENT_ENTER_TRANSITION, CONTENT_EXIT_TRANSITION, CONTENT_SWAP_VARIANTS, MOTION } from "@/lib/tokens/motion";
 import { useStore } from "@/stores";
 import { ApiError, type AppConfig } from "@/api/core";
 import type { WikiLinkHandlers } from "@/lib/wikilink";
@@ -30,14 +25,12 @@ import { NotebookRail, type MemoryRailMode } from "@/features/memory/components/
 import { PaneResizeHandle } from "@/components/workspace/PaneResizeHandle";
 import { SidebarResizeHandle } from "@/components/workspace/SidebarResizeHandle";
 import { MemoryNote } from "@/features/memory/components/MemoryNote";
-import {
-  loadMemoryInspectorPane,
-  MemoryInspector,
-  persistMemoryInspectorPane,
-  type MemoryInspectorPane,
-} from "@/features/memory/components/MemoryInspector";
+import { loadMemoryInspectorPane, MemoryInspector, persistMemoryInspectorPane, type MemoryInspectorPane } from "@/features/memory/components/MemoryInspector";
 import { MemoryEditor } from "@/features/memory/components/MemoryEditor";
 import { MemoryEditReview, type MemoryConflict } from "@/features/memory/components/MemoryEditReview";
+import { WikiRenameApprovalSheet } from "@/features/memory/components/WikiRenameApprovalSheet";
+import { useWikiRenameApprovals } from "@/features/memory/hooks/useWikiRenameApprovals";
+import type { WikiRenameApprovalResult } from "@/api/wiki";
 import { MemoryDiffOverlay } from "@/features/memory/components/MemoryDiffOverlay";
 import { MemoryQuickSwitcher } from "@/features/memory/components/MemoryQuickSwitcher";
 import { MemoryDocumentTabs } from "@/features/memory/components/MemoryDocumentTabs";
@@ -49,7 +42,7 @@ import { clearDraft, clearDraftIfMatches, draftKey, getDraft, setDraft } from "@
 import { isNotebookResourcePath } from "@/features/memory/lib/notebookIndex";
 import { serializeFrontmatter, splitFrontmatter } from "@/features/memory/lib/format";
 import { getBoardMotion } from "@/lib/boardMotion";
-import { buildWorkspaceTree, stem } from "@/features/memory/lib/workspaceTree";
+import { buildWorkspaceTree, displayTitle, stem } from "@/features/memory/lib/workspaceTree";
 import { planMemoryTabClose, planMemoryTabOpen, type MemoryTabCloseAction } from "@/features/memory/lib/tabContext";
 import { copyText } from "@/lib/clipboard";
 import type { MemoryFrontmatter } from "@/features/memory/components/MemoryProperties";
@@ -101,8 +94,7 @@ function persistInspectorOpen(value: boolean): void {
 }
 
 function loadCompactRail(): boolean {
-  return typeof window.matchMedia === "function"
-    && window.matchMedia(COMPACT_RAIL_QUERY).matches;
+  return typeof window.matchMedia === "function" && window.matchMedia(COMPACT_RAIL_QUERY).matches;
 }
 
 interface SummaryRequest {
@@ -125,8 +117,18 @@ interface EditingSession {
 }
 
 type ReviewState =
-  | { kind: "preview"; generation: number; snapshot: EditSnapshot; preview: PageEditPreview }
-  | { kind: "conflict"; generation: number; snapshot: EditSnapshot; conflict: MemoryConflict };
+  | {
+      kind: "preview";
+      generation: number;
+      snapshot: EditSnapshot;
+      preview: PageEditPreview;
+    }
+  | {
+      kind: "conflict";
+      generation: number;
+      snapshot: EditSnapshot;
+      conflict: MemoryConflict;
+    };
 
 interface EditSnapshot {
   requestGeneration: number;
@@ -138,10 +140,12 @@ interface EditSnapshot {
 }
 
 function editingMatchesSnapshot(editing: EditingSession | null, snapshot: EditSnapshot): boolean {
-  return editing?.path === snapshot.path
-    && editing.baseRevision === snapshot.baseRevision
-    && editing.baseContent === snapshot.baseContent
-    && editing.draftContent === snapshot.candidateContent;
+  return (
+    editing?.path === snapshot.path &&
+    editing.baseRevision === snapshot.baseRevision &&
+    editing.baseContent === snapshot.baseContent &&
+    editing.draftContent === snapshot.candidateContent
+  );
 }
 
 function snapshotEditing(editing: EditingSession, requestGeneration: number): EditSnapshot {
@@ -155,12 +159,7 @@ function snapshotEditing(editing: EditingSession, requestGeneration: number): Ed
   };
 }
 
-function conflictFromDrift(
-  draft: EditingSession,
-  detail: MemoryArtifactDetail,
-  requestGeneration: number,
-  generation: number,
-): ReviewState {
+function conflictFromDrift(draft: EditingSession, detail: MemoryArtifactDetail, requestGeneration: number, generation: number): ReviewState {
   return {
     kind: "conflict",
     generation,
@@ -175,16 +174,38 @@ function conflictFromDrift(
 function diffOperation(operation: MemoryOperation): DiffReviewOperation {
   switch (operation.kind) {
     case "ADD":
-      return { kind: "ADD", id: operation.id, text: operation.text, memoryKind: operation.memoryKind, scope: operation.scope };
+      return {
+        kind: "ADD",
+        id: operation.id,
+        text: operation.text,
+        memoryKind: operation.memoryKind,
+        scope: operation.scope,
+      };
     case "SUPERSEDE":
     case "MERGE":
-      return { kind: operation.kind, id: operation.id, text: operation.text, memoryKind: operation.memoryKind, scope: operation.scope, targetIds: operation.targetIds };
+      return {
+        kind: operation.kind,
+        id: operation.id,
+        text: operation.text,
+        memoryKind: operation.memoryKind,
+        scope: operation.scope,
+        targetIds: operation.targetIds,
+      };
     case "RETRACT":
-      return { kind: "RETRACT", id: operation.id, targetIds: operation.targetIds };
+      return {
+        kind: "RETRACT",
+        id: operation.id,
+        targetIds: operation.targetIds,
+      };
     case "NOOP":
       return { kind: "NOOP", id: operation.id, reason: operation.reason };
     case "ASK":
-      return { kind: "ASK", id: operation.id, question: operation.question, targetIds: operation.targetIds };
+      return {
+        kind: "ASK",
+        id: operation.id,
+        question: operation.question,
+        targetIds: operation.targetIds,
+      };
   }
 }
 
@@ -192,9 +213,16 @@ function revisionConflict(reason: unknown): MemoryConflict | null {
   if (!(reason instanceof ApiError) || reason.status !== 409 || !reason.data || typeof reason.data !== "object") return null;
   const detail = (reason.data as { detail?: unknown }).detail;
   if (!detail || typeof detail !== "object") return null;
-  const value = detail as { error?: unknown; current_revision?: unknown; current_content?: unknown };
+  const value = detail as {
+    error?: unknown;
+    current_revision?: unknown;
+    current_content?: unknown;
+  };
   if (value.error !== "page_revision_conflict" || typeof value.current_revision !== "string" || typeof value.current_content !== "string") return null;
-  return { currentRevision: value.current_revision, currentContent: value.current_content };
+  return {
+    currentRevision: value.current_revision,
+    currentContent: value.current_content,
+  };
 }
 
 const INTERACTIVE_SELECTOR = [
@@ -214,14 +242,13 @@ function isInteractiveShortcutTarget(element: Element | null): boolean {
 }
 
 function focusToken(element: HTMLElement, scroller: HTMLElement): string | null {
-  const kind = element.dataset.wikilink != null ? "wikilink"
-    : element.dataset.memoryPath != null ? "inline"
-      : null;
+  const kind = element.dataset.wikilink != null ? "wikilink" : element.dataset.memoryPath != null ? "inline" : null;
   const target = kind === "wikilink" ? element.dataset.wikilink : element.dataset.memoryPath;
   if (!kind || target == null) return null;
   const attribute = kind === "wikilink" ? "data-wikilink" : "data-memory-path";
-  const matches = Array.from(scroller.querySelectorAll<HTMLElement>(`[${attribute}]`))
-    .filter((candidate) => (kind === "wikilink" ? candidate.dataset.wikilink : candidate.dataset.memoryPath) === target);
+  const matches = Array.from(scroller.querySelectorAll<HTMLElement>(`[${attribute}]`)).filter(
+    (candidate) => (kind === "wikilink" ? candidate.dataset.wikilink : candidate.dataset.memoryPath) === target,
+  );
   const occurrence = matches.indexOf(element);
   return occurrence < 0 ? null : JSON.stringify({ kind, target, occurrence } satisfies MemoryFocusToken);
 }
@@ -235,8 +262,9 @@ function restoreFocusToken(value: string, scroller: HTMLElement) {
   }
   if ((token.kind !== "wikilink" && token.kind !== "inline") || typeof token.target !== "string" || !Number.isInteger(token.occurrence) || token.occurrence < 0) return;
   const attribute = token.kind === "wikilink" ? "data-wikilink" : "data-memory-path";
-  const matches = Array.from(scroller.querySelectorAll<HTMLElement>(`[${attribute}]`))
-    .filter((candidate) => (token.kind === "wikilink" ? candidate.dataset.wikilink : candidate.dataset.memoryPath) === token.target);
+  const matches = Array.from(scroller.querySelectorAll<HTMLElement>(`[${attribute}]`)).filter(
+    (candidate) => (token.kind === "wikilink" ? candidate.dataset.wikilink : candidate.dataset.memoryPath) === token.target,
+  );
   matches[token.occurrence]?.focus({ preventScroll: true });
 }
 
@@ -315,6 +343,8 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const memoryChangeDrainRequested = useRef(false);
   const memoryChangeDrainRef = useRef<(() => Promise<void>) | null>(null);
   const diffReturnFocus = useRef<HTMLElement | null>(null);
+  const wikiRenameReturnFocus = useRef<HTMLElement | null>(null);
+  const wikiRenameFocusPath = useRef<string | null>(null);
   const restoreNoteFocus = useRef(false);
   const mountedRef = useRef(true);
   const disposeControllerRef = useRef(new AbortController());
@@ -350,48 +380,33 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       const rootStyle = getComputedStyle(root);
       const cssLength = (name: string) => {
         const value = rootStyle.getPropertyValue(name).trim();
-        return value.endsWith("rem")
-          ? Number.parseFloat(value) * rootFontSize
-          : Number.parseFloat(value);
+        return value.endsWith("rem") ? Number.parseFloat(value) * rootFontSize : Number.parseFloat(value);
       };
       const measuredInstrumentWidth = Math.ceil(
-        instrumentItems.scrollWidth
-        + instrumentCollapse.offsetWidth
-        + cssLength("--tab-bar-gap")
-        // .mw-instruments' own left+right padding — was --instrument-inner-gap
-        // (a flat 8px, imprecise stand-in, same issue as the doc-tab strip's
-        // old --tab-strip-chrome). Content is right-anchored, so undersizing
-        // this clips the leftmost button; oversizing shows as left-side slack.
-        + cssLength("--tab-bar-padding") * 2,
+        instrumentItems.scrollWidth +
+          instrumentCollapse.offsetWidth +
+          cssLength("--tab-bar-gap") +
+          // .mw-instruments' own left+right padding — was --instrument-inner-gap
+          // (a flat 8px, imprecise stand-in, same issue as the doc-tab strip's
+          // old --tab-strip-chrome). Content is right-anchored, so undersizing
+          // this clips the leftmost button; oversizing shows as left-side slack.
+          cssLength("--tab-bar-padding") * 2,
       );
       if (Number.isFinite(measuredInstrumentWidth)) {
         root.style.setProperty("--memory-instrument-expanded-width", `${measuredInstrumentWidth}px`);
       }
-      const expandedRoomValue = getComputedStyle(root)
-        .getPropertyValue("--instrument-expanded-room")
-        .trim();
-      const expandedRoom = expandedRoomValue.endsWith("rem")
-        ? Number.parseFloat(expandedRoomValue) * rootFontSize
-        : Number.parseFloat(expandedRoomValue);
+      const expandedRoomValue = getComputedStyle(root).getPropertyValue("--instrument-expanded-room").trim();
+      const expandedRoom = expandedRoomValue.endsWith("rem") ? Number.parseFloat(expandedRoomValue) * rootFontSize : Number.parseFloat(expandedRoomValue);
       if (!Number.isFinite(expandedRoom)) return;
 
-      const shouldFitCollapse =
-        instruments.getBoundingClientRect().right - tabStrip.getBoundingClientRect().left < expandedRoom;
+      const shouldFitCollapse = instruments.getBoundingClientRect().right - tabStrip.getBoundingClientRect().left < expandedRoom;
       if (!shouldFitCollapse) instrumentsFitOverride.current = false;
 
-      if (
-        shouldFitCollapse &&
-        !instrumentsFitOverride.current &&
-        !instrumentsCollapsedRef.current
-      ) {
+      if (shouldFitCollapse && !instrumentsFitOverride.current && !instrumentsCollapsedRef.current) {
         instrumentsCollapsedByFit.current = true;
         instrumentsCollapsedRef.current = true;
         setInstrumentsCollapsed(true);
-      } else if (
-        !shouldFitCollapse &&
-        instrumentsCollapsedRef.current &&
-        instrumentsCollapsedByFit.current
-      ) {
+      } else if (!shouldFitCollapse && instrumentsCollapsedRef.current && instrumentsCollapsedByFit.current) {
         instrumentsCollapsedByFit.current = false;
         instrumentsCollapsedRef.current = false;
         setInstrumentsCollapsed(false);
@@ -399,13 +414,9 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     };
 
     syncInstrumentFit();
-    const resizeObserver =
-      typeof ResizeObserver === "function"
-        ? new ResizeObserver(syncInstrumentFit)
-        : null;
+    const resizeObserver = typeof ResizeObserver === "function" ? new ResizeObserver(syncInstrumentFit) : null;
     resizeObserver?.observe(root);
-    root.querySelectorAll<HTMLElement>(".mw-instrument-items, .mw-instrument-collapse")
-      .forEach((element) => resizeObserver?.observe(element));
+    root.querySelectorAll<HTMLElement>(".mw-instrument-items, .mw-instrument-collapse").forEach((element) => resizeObserver?.observe(element));
     window.addEventListener("resize", syncInstrumentFit);
     return () => {
       resizeObserver?.disconnect();
@@ -423,9 +434,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     const items = layoutRef.current?.querySelector<HTMLElement>(".mw-instrument-items");
     const motion = getBoardMotion();
     if (!items || !motion) return;
-    const active = inspectorOpen
-      ? items.querySelector<HTMLElement>(".oinst.on")
-      : null;
+    const active = inspectorOpen ? items.querySelector<HTMLElement>(".oinst.on") : null;
     motion.tabs.sync(items, active, { animate: !reduce });
   }, [inspectorOpen, inspectorPane, reduce]);
 
@@ -444,11 +453,14 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     };
   }, []);
 
-  const openDiff = useCallback((event: PageEditEvent, trigger: HTMLElement) => {
-    if (!diffEvent) diffReturnFocus.current = trigger;
-    setDiffClosing(false);
-    setDiffEvent(event);
-  }, [diffEvent]);
+  const openDiff = useCallback(
+    (event: PageEditEvent, trigger: HTMLElement) => {
+      if (!diffEvent) diffReturnFocus.current = trigger;
+      setDiffClosing(false);
+      setDiffEvent(event);
+    },
+    [diffEvent],
+  );
 
   const beginSummaryRequest = useCallback((): SummaryRequest => {
     summaryRequest.current?.controller.abort();
@@ -466,8 +478,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     return next;
   }, []);
 
-  const isCurrentSummaryRequest = useCallback((request: SummaryRequest) =>
-    mountedRef.current && summaryRequest.current?.epoch === request.epoch, []);
+  const isCurrentSummaryRequest = useCallback((request: SummaryRequest) => mountedRef.current && summaryRequest.current?.epoch === request.epoch, []);
 
   useEffect(() => () => summaryRequest.current?.controller.abort(), []);
 
@@ -501,7 +512,80 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     void load();
   }, [load]);
 
-  const navigableArtifacts = useMemo(() => artifacts.filter((artifact) => isNotebookResourcePath(artifact.path)), [artifacts]);
+  const refreshAfterWikiRename = useCallback(
+    (result: WikiRenameApprovalResult) => {
+      if (result.status === "accepted" && result.approval) {
+        const { oldPath, newPath, newTitle } = result.approval;
+        wikiRenameFocusPath.current = selectedMetaRef.current?.path === oldPath ? newPath : null;
+        detailCache.current.invalidatePath(oldPath);
+        detailCache.current.invalidatePath(newPath);
+        navigationHistory.current.replacePath(oldPath, newPath);
+        if (pendingRestore.current?.path === oldPath) {
+          pendingRestore.current = { ...pendingRestore.current, path: newPath };
+        }
+        setHistoryVersion((version) => version + 1);
+        setTabs((current) => current.map((path) => (path === oldPath ? newPath : path)));
+        setTabContextMenu((current) => (current?.path === oldPath ? { ...current, path: newPath } : current));
+        setActiveDetail((current) => (current?.path === oldPath ? null : current));
+        setArtifacts((current) =>
+          current.map((artifact) =>
+            artifact.path === oldPath
+              ? {
+                  ...artifact,
+                  path: newPath,
+                  title: newTitle,
+                  directory: newPath.includes("/") ? newPath.split("/").slice(0, -1).join("/") : "",
+                }
+              : artifact,
+          ),
+        );
+        setSelected((current) => (current === oldPath ? newPath : current));
+        try {
+          if (localStorage.getItem(LAST_PATH_KEY) === oldPath) localStorage.setItem(LAST_PATH_KEY, newPath);
+        } catch {
+          /* non-fatal */
+        }
+      }
+      setContentRefreshKey((key) => key + 1);
+      void load();
+    },
+    [load],
+  );
+  const {
+    draft: wikiRenameDraft,
+    openDraft: openWikiRenameDraft,
+    cancelDraft: cancelWikiRenameDraft,
+    activeApproval: activeWikiRenameApproval,
+    pending: wikiRenamePending,
+    error: wikiRenameError,
+    reconciliationRequired: wikiRenameReconciliationRequired,
+    request: requestWikiRename,
+    reconcile: reconcileWikiRename,
+    resolve: resolveWikiRename,
+  } = useWikiRenameApprovals(config, refreshAfterWikiRename);
+  const wikiRenameBlocked = wikiRenameDraft != null || activeWikiRenameApproval != null;
+  const navigationDisabled = reviewPending || wikiRenameBlocked;
+
+  useEffect(() => {
+    if (!wikiRenameBlocked) return;
+    setSwitcherOpen(false);
+    setTabContextMenu(null);
+  }, [wikiRenameBlocked]);
+
+  useEffect(() => {
+    if (wikiRenameDraft || activeWikiRenameApproval || !wikiRenameReturnFocus.current) return;
+    const trigger = wikiRenameReturnFocus.current;
+    const timer = window.setTimeout(() => {
+      wikiRenameReturnFocus.current = null;
+      if (!trigger.isConnected || trigger.closest("[inert]")) return;
+      trigger.focus({ preventScroll: true });
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [activeWikiRenameApproval, wikiRenameDraft]);
+
+  const navigableArtifacts = useMemo(() => artifacts.filter((artifact) => artifact.source === "wiki" || isNotebookResourcePath(artifact.path)), [artifacts]);
+  const titleByPath = useMemo(() => new Map(navigableArtifacts.map((artifact) => [artifact.path, displayTitle(artifact)])), [navigableArtifacts]);
+  const titleForPath = useCallback((path: string) => titleByPath.get(path) ?? stem(path), [titleByPath]);
   const workspaceTree = useMemo(() => buildWorkspaceTree(navigableArtifacts, directories), [directories, navigableArtifacts]);
   const selectedMeta = navigableArtifacts.find((artifact) => artifact.path === selected) ?? null;
   selectedMetaRef.current = selectedMeta;
@@ -510,7 +594,9 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     if (!selected) return;
     try {
       localStorage.setItem(LAST_PATH_KEY, selected);
-    } catch { /* non-fatal */ }
+    } catch {
+      /* non-fatal */
+    }
   }, [selected]);
 
   // Restore persisted pane widths once — drags write the vars imperatively.
@@ -520,7 +606,9 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     try {
       const ctx = parseInt(localStorage.getItem(CTX_WIDTH_KEY) ?? "", 10);
       if (Number.isFinite(ctx)) layout.style.setProperty("--mw-ctx-w", `${Math.max(240, Math.min(480, ctx))}px`);
-    } catch { /* non-fatal */ }
+    } catch {
+      /* non-fatal */
+    }
   }, []);
 
   useEffect(() => {
@@ -533,7 +621,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
 
   useLayoutEffect(() => {
     if (loading) return;
-    if (mutationPendingRef.current) return;
+    if (mutationPendingRef.current || navigationDisabled) return;
     if (workspaceEmpty && tabs.length === 0) {
       if (selected !== null) setSelected(null);
       return;
@@ -542,47 +630,54 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     let stored: string | null = null;
     try {
       stored = localStorage.getItem(LAST_PATH_KEY);
-    } catch { /* non-fatal */ }
+    } catch {
+      /* non-fatal */
+    }
     const restored = stored != null && navigableArtifacts.some((artifact) => artifact.path === stored) ? stored : null;
     // The active tab is visible state. Keep it and the document selection
     // together when a list refresh temporarily clears the selected path.
     const activeTabPath = tabs[activeTab];
-    const tabFallback = activeTabPath != null && navigableArtifacts.some((artifact) => artifact.path === activeTabPath)
-      ? activeTabPath
-      : null;
-    const fallback = tabFallback
-      ?? restored
-      ?? (navigableArtifacts.some((artifact) => artifact.path === "index.md") ? "index.md" : null)
-      ?? navigableArtifacts[0]?.path
-      ?? null;
+    const tabFallback = activeTabPath != null && navigableArtifacts.some((artifact) => artifact.path === activeTabPath) ? activeTabPath : null;
+    const fallback =
+      tabFallback ??
+      restored ??
+      (navigableArtifacts.some((artifact) => artifact.path === "README.md") ? "README.md" : null) ??
+      (navigableArtifacts.some((artifact) => artifact.path === "index.md") ? "index.md" : null) ??
+      navigableArtifacts[0]?.path ??
+      null;
     if (fallback) {
-      navigationHistory.current.push({ path: fallback, anchor: null, scrollTop: 0, focusSelector: null });
+      navigationHistory.current.push({
+        path: fallback,
+        anchor: null,
+        scrollTop: 0,
+        focusSelector: null,
+      });
       setHistoryVersion((version) => version + 1);
     }
     setSelected(fallback);
-  }, [activeTab, loading, navigableArtifacts, reviewPending, selected, tabs, workspaceEmpty]);
+  }, [activeTab, loading, navigableArtifacts, navigationDisabled, selected, tabs, workspaceEmpty]);
 
   const setInspectorVisibility = useCallback((open: boolean) => {
     persistInspectorOpen(open);
     setInspectorOpen(open);
   }, []);
 
-  const openInspectorPane = useCallback((pane: MemoryInspectorPane) => {
-    persistMemoryInspectorPane(pane);
-    setInspectorPane(pane);
-    setInspectorVisibility(true);
-  }, [setInspectorVisibility]);
+  const openInspectorPane = useCallback(
+    (pane: MemoryInspectorPane) => {
+      persistMemoryInspectorPane(pane);
+      setInspectorPane(pane);
+      setInspectorVisibility(true);
+    },
+    [setInspectorVisibility],
+  );
 
   const currentLocation = useCallback((): NavigationLocation | null => {
     const path = selectedMeta?.path ?? selected;
     if (!path) return null;
-    const article = Array.from(layoutRef.current?.querySelectorAll<HTMLElement>("[data-memory-note-path]") ?? [])
-      .find((candidate) => candidate.dataset.memoryNotePath === path);
+    const article = Array.from(layoutRef.current?.querySelectorAll<HTMLElement>("[data-memory-note-path]") ?? []).find((candidate) => candidate.dataset.memoryNotePath === path);
     const scroller = article?.querySelector<HTMLElement>("[data-memory-note-scroll]");
     const active = document.activeElement;
-    const focusSelector = active instanceof HTMLElement && scroller?.contains(active)
-      ? focusToken(active, scroller)
-      : null;
+    const focusSelector = active instanceof HTMLElement && scroller?.contains(active) ? focusToken(active, scroller) : null;
     const current = navigationHistory.current.current;
     return {
       path,
@@ -592,57 +687,60 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     };
   }, [selected, selectedMeta?.path]);
 
-  const navigateTo = useCallback((
-    path: string,
-    anchor: string | null = null,
-    direction = 1,
-  ) => {
-    if (mutationPendingRef.current) return;
-    if (workspaceEmpty) setWorkspaceEmpty(false);
-    const destination = navigationHistory.current.current;
-    const currentPath = selectedMetaRef.current?.path ?? selected;
-    if (destination?.path === path && destination.anchor === anchor && currentPath === path) {
-      if (anchor) {
-        pendingRestore.current = destination;
-        setHistoryVersion((version) => version + 1);
+  const navigateTo = useCallback(
+    (path: string, anchor: string | null = null, direction = 1) => {
+      if (mutationPendingRef.current || navigationDisabled) return;
+      if (workspaceEmpty) setWorkspaceEmpty(false);
+      const destination = navigationHistory.current.current;
+      const currentPath = selectedMetaRef.current?.path ?? selected;
+      if (destination?.path === path && destination.anchor === anchor && currentPath === path) {
+        if (anchor) {
+          pendingRestore.current = destination;
+          setHistoryVersion((version) => version + 1);
+        }
+        return;
       }
-      return;
-    }
-    const current = currentLocation();
-    if (current) navigationHistory.current.replaceCurrent(current);
-    const next = { path, anchor, scrollTop: 0, focusSelector: null };
-    navigationHistory.current.push(next);
-    pendingRestore.current = next;
-    setHistoryVersion((version) => version + 1);
-    setContentNotice(null);
-    setContentDirection(direction < 0 ? -1 : 1);
-    setSelected(path);
-  }, [currentLocation, selected, workspaceEmpty]);
+      const current = currentLocation();
+      if (current) navigationHistory.current.replaceCurrent(current);
+      const next = { path, anchor, scrollTop: 0, focusSelector: null };
+      navigationHistory.current.push(next);
+      pendingRestore.current = next;
+      setHistoryVersion((version) => version + 1);
+      setContentNotice(null);
+      setContentDirection(direction < 0 ? -1 : 1);
+      setSelected(path);
+    },
+    [currentLocation, navigationDisabled, selected, workspaceEmpty],
+  );
 
-  const selectFile = useCallback((path: string, direction: number) => {
-    navigateTo(path, null, direction);
-  }, [navigateTo]);
+  const selectFile = useCallback(
+    (path: string, direction: number) => {
+      navigateTo(path, null, direction);
+    },
+    [navigateTo],
+  );
 
-  const moveHistory = useCallback((movement: "back" | "forward") => {
-    if (mutationPendingRef.current) return;
-    const current = currentLocation();
-    if (current) navigationHistory.current.replaceCurrent(current);
-    const location = movement === "back" ? navigationHistory.current.back() : navigationHistory.current.forward();
-    if (!location) return;
-    pendingRestore.current = location;
-    setHistoryVersion((version) => version + 1);
-    setContentNotice(null);
-    setContentDirection(movement === "back" ? -1 : 1);
-    setSelected(location.path);
-  }, [currentLocation]);
+  const moveHistory = useCallback(
+    (movement: "back" | "forward") => {
+      if (mutationPendingRef.current || navigationDisabled) return;
+      const current = currentLocation();
+      if (current) navigationHistory.current.replaceCurrent(current);
+      const location = movement === "back" ? navigationHistory.current.back() : navigationHistory.current.forward();
+      if (!location) return;
+      pendingRestore.current = location;
+      setHistoryVersion((version) => version + 1);
+      setContentNotice(null);
+      setContentDirection(movement === "back" ? -1 : 1);
+      setSelected(location.path);
+    },
+    [currentLocation, navigationDisabled],
+  );
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((!event.metaKey && !event.ctrlKey) || (event.key !== "[" && event.key !== "]")) return;
       const targets = [event.target, document.activeElement];
-      if (targets.some((target) => target instanceof HTMLElement && (
-        target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)
-      ))) return;
+      if (targets.some((target) => target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)))) return;
       event.preventDefault();
       moveHistory(event.key === "[" ? "back" : "forward");
     };
@@ -654,13 +752,13 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     const onKeyDown = (event: KeyboardEvent) => {
       const key = event.key.toLowerCase();
       if ((!event.metaKey && !event.ctrlKey) || (key !== "o" && key !== "p")) return;
-      if (editingRef.current != null || reviewPending) return;
+      if (editingRef.current != null || navigationDisabled) return;
       event.preventDefault();
       setSwitcherOpen(true);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [reviewPending]);
+  }, [navigationDisabled]);
 
   const recentPaths = useMemo(() => {
     const currentPath = selectedMeta?.path ?? selected;
@@ -688,19 +786,19 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       setContentLoading(false);
       return;
     }
-    setActiveDetail((current) => current?.path === selectedMeta.path ? current : null);
+    setActiveDetail((current) => (current?.path === selectedMeta.path ? current : null));
     setContentLoading(true);
     setContentError(null);
-    readMemoryArtifactDetail(config, selectedMeta.path, { signal: controller.signal })
+    readMemoryArtifactDetail(config, selectedMeta.path, {
+      signal: controller.signal,
+    })
       .then((response) => {
         if (controller.signal.aborted || !mountedRef.current) return;
         const detail = response.artifact;
         detailCache.current.set(detail);
         setActiveDetail(detail);
         if (detail.revision !== selectedMeta.revision) {
-          setArtifacts((current) => current.map((artifact) => artifact.path === detail.path
-            ? { ...artifact, revision: detail.revision }
-            : artifact));
+          setArtifacts((current) => current.map((artifact) => (artifact.path === detail.path ? { ...artifact, revision: detail.revision } : artifact)));
         }
       })
       .catch((reason) => {
@@ -708,7 +806,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
         if (isMissingArtifactError(reason)) {
           const missingPath = selectedMeta.path;
           setArtifacts((current) => current.filter((artifact) => artifact.path !== missingPath));
-          if (!mutationPendingRef.current) setSelected((current) => current === missingPath ? null : current);
+          if (!mutationPendingRef.current) setSelected((current) => (current === missingPath ? null : current));
           setActiveDetail(null);
           setContentNotice("That memory note changed or disappeared; refreshed the index.");
           void load();
@@ -737,9 +835,11 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       });
       return;
     }
-    setEditReview((current) => current?.kind === "conflict" && current.conflict.currentRevision === activeDetail.revision
-      ? current
-      : conflictFromDrift(editing, activeDetail, editRequestGeneration.current, ++reviewGeneration.current));
+    setEditReview((current) =>
+      current?.kind === "conflict" && current.conflict.currentRevision === activeDetail.revision
+        ? current
+        : conflictFromDrift(editing, activeDetail, editRequestGeneration.current, ++reviewGeneration.current),
+    );
   }, [activeDetail, editing, reviewPending]);
 
   useEffect(() => {
@@ -749,8 +849,9 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     let timer = 0;
     let attempts = 0;
     const restore = () => {
-      const article = Array.from(layoutRef.current?.querySelectorAll<HTMLElement>("[data-memory-note-path]") ?? [])
-        .find((candidate) => candidate.dataset.memoryNotePath === location.path);
+      const article = Array.from(layoutRef.current?.querySelectorAll<HTMLElement>("[data-memory-note-path]") ?? []).find(
+        (candidate) => candidate.dataset.memoryNotePath === location.path,
+      );
       const scroller = article?.querySelector<HTMLElement>("[data-memory-note-scroll]");
       if (!scroller) {
         attempts += 1;
@@ -759,9 +860,20 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       }
       pendingRestore.current = null;
       if (location.anchor) {
-        const normalized = location.anchor.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-        const heading = Array.from(scroller.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,h6"))
-          .find((candidate) => candidate.id === location.anchor || candidate.textContent?.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") === normalized);
+        const normalized = location.anchor
+          .trim()
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-|-$/g, "");
+        const heading = Array.from(scroller.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,h6")).find(
+          (candidate) =>
+            candidate.id === location.anchor ||
+            candidate.textContent
+              ?.trim()
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/g, "-")
+              .replace(/^-|-$/g, "") === normalized,
+        );
         if (heading) {
           heading.tabIndex = -1;
           heading.scrollIntoView({ block: "start" });
@@ -813,9 +925,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   useEffect(() => {
     memoryVaultChangesRef.current = memoryVaultChanges;
     const retained = new Set(memoryVaultChanges.map((change) => change.seq));
-    processedMemoryChangeSeqs.current = new Set(
-      [...processedMemoryChangeSeqs.current].filter((sequence) => retained.has(sequence)),
-    );
+    processedMemoryChangeSeqs.current = new Set([...processedMemoryChangeSeqs.current].filter((sequence) => retained.has(sequence)));
     void drainMemoryChanges();
   }, [drainMemoryChanges, memoryVaultChanges]);
 
@@ -838,10 +948,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     if (railMode === "facts") setRecordsRefreshKey((key) => key + 1);
   }, [load, memoryVaultChanges, memoryVaultVersion, railMode]);
 
-  const selectedHasWikilinks = activeDetail != null
-    && selectedMeta != null
-    && activeDetail.path === selectedMeta.path
-    && activeDetail.content.includes("[[");
+  const selectedHasWikilinks = activeDetail != null && selectedMeta != null && activeDetail.path === selectedMeta.path && activeDetail.content.includes("[[");
   const shouldLoadLinks = selectedHasWikilinks || inspectorOpen;
   useEffect(() => {
     const controller = new AbortController();
@@ -853,14 +960,17 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       return;
     }
     setLinksLoading(true);
-    getPageLinks(config, { path: selectedMeta.path, limit: 100, offset: 0 }, { signal: controller.signal }).then((links) => {
-      if (!controller.signal.aborted && linksRequestId.current === requestId) setPageLinks(links);
-    }).catch((reason) => {
-      if (controller.signal.aborted || linksRequestId.current !== requestId) return;
-      setLinkError(reason instanceof Error ? reason.message : String(reason));
-    }).finally(() => {
-      if (!controller.signal.aborted && linksRequestId.current === requestId) setLinksLoading(false);
-    });
+    getPageLinks(config, { path: selectedMeta.path, limit: 100, offset: 0 }, { signal: controller.signal })
+      .then((links) => {
+        if (!controller.signal.aborted && linksRequestId.current === requestId) setPageLinks(links);
+      })
+      .catch((reason) => {
+        if (controller.signal.aborted || linksRequestId.current !== requestId) return;
+        setLinkError(reason instanceof Error ? reason.message : String(reason));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted && linksRequestId.current === requestId) setLinksLoading(false);
+      });
     return () => controller.abort();
   }, [config, contentRefreshKey, linksRefreshKey, selectedMeta?.path, shouldLoadLinks]);
 
@@ -870,46 +980,55 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     setPageHistory(null);
     setPageHistoryPath(null);
     setHistoryError(null);
-    if (!selectedMeta || !inspectorOpen) {
+    if (!selectedMeta || !inspectorOpen || selectedMeta.source === "wiki") {
       setHistoryLoading(false);
       return;
     }
     setHistoryLoading(true);
-    getPageHistory(config, { path: selectedMeta.path, limit: 100 }, { signal: controller.signal }).then((history) => {
-      if (controller.signal.aborted || historyRequestId.current !== requestId) return;
-      setPageHistory(history);
-      setPageHistoryPath(selectedMeta.path);
-    }).catch((reason) => {
-      if (controller.signal.aborted || historyRequestId.current !== requestId) return;
-      setHistoryError(reason instanceof Error ? reason.message : String(reason));
-    }).finally(() => {
-      if (!controller.signal.aborted && historyRequestId.current === requestId) setHistoryLoading(false);
-    });
+    getPageHistory(config, { path: selectedMeta.path, limit: 100 }, { signal: controller.signal })
+      .then((history) => {
+        if (controller.signal.aborted || historyRequestId.current !== requestId) return;
+        setPageHistory(history);
+        setPageHistoryPath(selectedMeta.path);
+      })
+      .catch((reason) => {
+        if (controller.signal.aborted || historyRequestId.current !== requestId) return;
+        setHistoryError(reason instanceof Error ? reason.message : String(reason));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted && historyRequestId.current === requestId) setHistoryLoading(false);
+      });
     return () => controller.abort();
-  }, [config, contentRefreshKey, inspectorOpen, selectedMeta?.path]);
+  }, [config, contentRefreshKey, inspectorOpen, selectedMeta?.path, selectedMeta?.source]);
 
   const currentPageLinks = pageLinks?.path === selectedMeta?.path ? pageLinks : null;
   const currentPageHistory = pageHistoryPath === selectedMeta?.path ? pageHistory : null;
   const artifactPaths = useMemo(() => new Set(navigableArtifacts.map((artifact) => artifact.path)), [navigableArtifacts]);
 
-  const wikiHandlers = useMemo<WikiLinkHandlers>(() => ({
-    exists: (target) => resolveWikiTarget(currentPageLinks, target) !== null,
-    onNavigate: (target) => {
-      const resolved = resolveWikiTarget(currentPageLinks, target);
-      if (!resolved) return;
-      navigateTo(resolved.path, resolved.anchor);
-    },
-    existsInline: (target) => artifactPaths.has(target),
-    onNavigateInline: (target, anchor = null) => {
-      if (!artifactPaths.has(target)) return;
-      navigateTo(target, anchor);
-    },
-  }), [artifactPaths, currentPageLinks, navigateTo]);
+  const wikiHandlers = useMemo<WikiLinkHandlers>(
+    () => ({
+      exists: (target) => resolveWikiTarget(currentPageLinks, target) !== null,
+      onNavigate: (target) => {
+        const resolved = resolveWikiTarget(currentPageLinks, target);
+        if (!resolved) return;
+        navigateTo(resolved.path, resolved.anchor);
+      },
+      existsInline: (target) => artifactPaths.has(target),
+      onNavigateInline: (target, anchor = null) => {
+        if (!artifactPaths.has(target)) return;
+        navigateTo(target, anchor);
+      },
+    }),
+    [artifactPaths, currentPageLinks, navigateTo],
+  );
 
-  const loadPreviewDetail = useCallback(async (path: string, signal: AbortSignal) => {
-    const response = await readMemoryArtifactDetail(config, path, { signal });
-    return response.artifact;
-  }, [config]);
+  const loadPreviewDetail = useCallback(
+    async (path: string, signal: AbortSignal) => {
+      const response = await readMemoryArtifactDetail(config, path, { signal });
+      return response.artifact;
+    },
+    [config],
+  );
 
   useEffect(() => {
     if (railMode !== "facts") return;
@@ -946,7 +1065,9 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     setRebuilding(true);
     setContentNotice(null);
     setError(null);
-    rebuildMemoryArtifactSummaries(config, { signal: request.controller.signal })
+    rebuildMemoryArtifactSummaries(config, {
+      signal: request.controller.signal,
+    })
       .then((response) => {
         if (!isCurrentSummaryRequest(request)) return;
         acceptSummaries(response.artifacts);
@@ -959,13 +1080,34 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       });
   };
 
-  const visibleDetail = activeDetail?.path === selectedMeta?.path && activeDetail?.revision === selectedMeta?.revision
-    ? activeDetail
-    : null;
+  const visibleDetail = activeDetail?.path === selectedMeta?.path && activeDetail?.revision === selectedMeta?.revision ? activeDetail : null;
   if (visibleDetail) retainedInspectorDetail.current = visibleDetail;
-  const inspectorDetail = visibleDetail
-    ?? (selectedMeta ? retainedInspectorDetail.current : null);
+  const inspectorDetail = visibleDetail ?? (selectedMeta ? retainedInspectorDetail.current : null);
   const inspectorDetailIsCurrent = inspectorDetail?.path === selectedMeta?.path;
+  const selectedWikiPageId =
+    visibleDetail?.source === "wiki" && typeof visibleDetail.frontmatter.page_id === "string" && visibleDetail.frontmatter.page_id.trim().length > 0
+      ? visibleDetail.frontmatter.page_id.trim()
+      : null;
+
+  useEffect(() => {
+    const focusPath = wikiRenameFocusPath.current;
+    if (wikiRenameBlocked || !focusPath) return;
+    if (selectedMeta?.path !== focusPath) {
+      wikiRenameFocusPath.current = null;
+      return;
+    }
+    const focusReplacement = () => {
+      const rename = layoutRef.current?.querySelector<HTMLButtonElement>('button[aria-label="Rename page"]:not([disabled])');
+      const note = layoutRef.current?.querySelector<HTMLElement>(`[data-memory-note-path="${CSS.escape(focusPath)}"]`);
+      const target = rename ?? note;
+      if (!target) return;
+      target.focus({ preventScroll: true });
+      if (document.activeElement === target) wikiRenameFocusPath.current = null;
+    };
+    queueMicrotask(focusReplacement);
+    const retry = window.setTimeout(focusReplacement, 260);
+    return () => window.clearTimeout(retry);
+  }, [selectedMeta?.path, visibleDetail?.path, wikiRenameBlocked]);
 
   const beginEditing = useCallback(() => {
     const detail = activeDetail;
@@ -995,76 +1137,97 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     if (plan.activeTab !== activeTab) setActiveTab(plan.activeTab);
   }, [activeTab, selected, selectedMeta?.path, tabs]);
 
-  const switchTab = useCallback((index: number) => {
-    if (index === activeTab || mutationPendingRef.current) return;
-    const target = tabs[index];
-    if (!target) return;
-    const direction = index < activeTab ? -1 : 1;
-    setActiveTab(index);
-    navigateTo(target, null, direction);
-  }, [activeTab, navigateTo, tabs]);
+  const switchTab = useCallback(
+    (index: number) => {
+      if (index === activeTab || mutationPendingRef.current || navigationDisabled) return;
+      const target = tabs[index];
+      if (!target) return;
+      const direction = index < activeTab ? -1 : 1;
+      setActiveTab(index);
+      navigateTo(target, null, direction);
+    },
+    [activeTab, navigateTo, navigationDisabled, tabs],
+  );
 
-  const closeTabs = useCallback((targetIndex: number, action: MemoryTabCloseAction) => {
-    if (mutationPendingRef.current) return;
-    const plan = planMemoryTabClose(tabs, activeTab, targetIndex, action);
-    if (!plan.changed) return;
+  const closeTabs = useCallback(
+    (targetIndex: number, action: MemoryTabCloseAction) => {
+      if (mutationPendingRef.current || navigationDisabled) return;
+      const plan = planMemoryTabClose(tabs, activeTab, targetIndex, action);
+      if (!plan.changed) return;
 
-    if (plan.empty) {
-      setTabs([]);
-      setActiveTab(0);
-      setWorkspaceEmpty(true);
-      setSelected(null);
-      setInspectorVisibility(false);
-      return;
-    }
+      if (plan.empty) {
+        setTabs([]);
+        setActiveTab(0);
+        setWorkspaceEmpty(true);
+        setSelected(null);
+        setInspectorVisibility(false);
+        return;
+      }
 
-    const nextPath = plan.tabs[plan.activeTab]!;
-    const currentPath = selectedMeta?.path ?? selected;
-    setTabs(plan.tabs);
-    setActiveTab(plan.activeTab);
-    if (nextPath !== currentPath) {
-      const direction = action === "close-tab"
-        ? plan.activeTab < activeTab ? -1 : 1
-        : targetIndex < activeTab ? -1 : 1;
-      navigateTo(nextPath, null, direction);
-    }
-  }, [activeTab, navigateTo, selected, selectedMeta?.path, setInspectorVisibility, tabs]);
+      const nextPath = plan.tabs[plan.activeTab]!;
+      const currentPath = selectedMeta?.path ?? selected;
+      setTabs(plan.tabs);
+      setActiveTab(plan.activeTab);
+      if (nextPath !== currentPath) {
+        const direction = action === "close-tab" ? (plan.activeTab < activeTab ? -1 : 1) : targetIndex < activeTab ? -1 : 1;
+        navigateTo(nextPath, null, direction);
+      }
+    },
+    [activeTab, navigateTo, navigationDisabled, selected, selectedMeta?.path, setInspectorVisibility, tabs],
+  );
 
-  const closeTab = useCallback((index: number) => {
-    closeTabs(index, "close-tab");
-  }, [closeTabs]);
+  const closeTab = useCallback(
+    (index: number) => {
+      closeTabs(index, "close-tab");
+    },
+    [closeTabs],
+  );
 
-  const openTabContextMenu = useCallback((
-    index: number,
-    path: string,
-    trigger: HTMLElement,
-    source: ContextMenuPosition["source"],
-    x: number,
-    y: number,
-  ) => {
-    if (mutationPendingRef.current) return;
+  const openTabContextMenu = useCallback((index: number, path: string, trigger: HTMLElement, source: ContextMenuPosition["source"], x: number, y: number) => {
+    if (mutationPendingRef.current || navigationDisabled) return;
     setTabContextMenu({ index, path, trigger, source, x, y });
-  }, []);
+  }, [navigationDisabled]);
 
   const tabContextEntries = useMemo<ContextMenuEntry[]>(() => {
     if (!tabContextMenu) return [];
     const { index, path } = tabContextMenu;
     return [
       { id: "open", label: "Open", onSelect: () => switchTab(index) },
-      { id: "copy-path", label: "Copy path", onSelect: () => void copyText(path) },
+      {
+        id: "copy-path",
+        label: "Copy path",
+        onSelect: () => void copyText(path),
+      },
       { id: "divider", type: "separator" },
-      { id: "close-tab", label: "Close tab", shortcut: "⌘W", onSelect: () => closeTabs(index, "close-tab") },
-      { id: "close-others", label: "Close other tabs", onSelect: () => closeTabs(index, "close-others") },
-      { id: "close-right", label: "Close tabs to the right", onSelect: () => closeTabs(index, "close-right") },
-      { id: "close-all", label: "Close all tabs", onSelect: () => closeTabs(index, "close-all") },
+      {
+        id: "close-tab",
+        label: "Close tab",
+        shortcut: "⌘W",
+        onSelect: () => closeTabs(index, "close-tab"),
+      },
+      {
+        id: "close-others",
+        label: "Close other tabs",
+        onSelect: () => closeTabs(index, "close-others"),
+      },
+      {
+        id: "close-right",
+        label: "Close tabs to the right",
+        onSelect: () => closeTabs(index, "close-right"),
+      },
+      {
+        id: "close-all",
+        label: "Close all tabs",
+        onSelect: () => closeTabs(index, "close-all"),
+      },
     ];
   }, [closeTabs, switchTab, tabContextMenu]);
 
   const selectRailMode = useCallback((mode: MemoryRailMode) => {
-    if (mutationPendingRef.current) return;
+    if (mutationPendingRef.current || navigationDisabled) return;
     setRailMode(mode);
     setRailHidden(false);
-  }, []);
+  }, [navigationDisabled]);
 
   // Esc closes the editor (draft behavior) — capture phase so it wins over
   // MemorySurface's window-level Esc-to-close while an editing session is live.
@@ -1085,56 +1248,75 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((!event.metaKey && !event.ctrlKey) || event.key.toLowerCase() !== "b") return;
+      if (navigationDisabled) return;
       event.preventDefault();
       setRailHidden((hidden) => !hidden);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [navigationDisabled]);
 
   // Properties edits recompose the page source (new frontmatter + unchanged
   // body) and run it through the standard review flow — no editor session.
-  const saveFrontmatter = useCallback((next: MemoryFrontmatter) => {
-    const detail = activeDetail;
-    if (!detail || detail.path !== selectedMetaRef.current?.path || detail.editableContent == null || mutationPendingRef.current) return;
-    const { body } = splitFrontmatter(detail.editableContent);
-    const candidate = serializeFrontmatter(next) + body;
-    if (candidate === detail.editableContent) return;
-    editPreviewController.current?.abort();
-    const controller = new AbortController();
-    editPreviewController.current = controller;
-    const requestGeneration = ++editRequestGeneration.current;
-    const snapshot: EditSnapshot = {
-      requestGeneration,
-      path: detail.path,
-      baseRevision: detail.revision,
-      baseContent: detail.editableContent,
-      candidateContent: candidate,
-      draftKey: draftKey(detail.path, detail.revision),
-    };
-    setEditPending(true);
-    setEditError(null);
-    previewPageEdit(config, {
-      path: snapshot.path,
-      baseRevision: snapshot.baseRevision,
-      content: snapshot.candidateContent,
-      actor: "user:desktop",
-    }, { signal: controller.signal })
-      .then((preview) => {
-        if (controller.signal.aborted || editRequestGeneration.current !== requestGeneration) return;
-        setEditDecisions({});
-        setEditReview({ kind: "preview", generation: ++reviewGeneration.current, snapshot, preview });
-      })
-      .catch((reason) => {
-        if (controller.signal.aborted || !mountedRef.current || editRequestGeneration.current !== requestGeneration) return;
-        const conflict = revisionConflict(reason);
-        if (conflict) setEditReview({ kind: "conflict", generation: ++reviewGeneration.current, snapshot, conflict });
-        else setEditError(reason instanceof Error ? reason.message : String(reason));
-      })
-      .finally(() => {
-        if (!controller.signal.aborted && editRequestGeneration.current === requestGeneration) setEditPending(false);
-      });
-  }, [activeDetail, config]);
+  const saveFrontmatter = useCallback(
+    (next: MemoryFrontmatter) => {
+      const detail = activeDetail;
+      if (!detail || detail.path !== selectedMetaRef.current?.path || detail.editableContent == null || mutationPendingRef.current) return;
+      const { body } = splitFrontmatter(detail.editableContent);
+      const candidate = serializeFrontmatter(next) + body;
+      if (candidate === detail.editableContent) return;
+      editPreviewController.current?.abort();
+      const controller = new AbortController();
+      editPreviewController.current = controller;
+      const requestGeneration = ++editRequestGeneration.current;
+      const snapshot: EditSnapshot = {
+        requestGeneration,
+        path: detail.path,
+        baseRevision: detail.revision,
+        baseContent: detail.editableContent,
+        candidateContent: candidate,
+        draftKey: draftKey(detail.path, detail.revision),
+      };
+      setEditPending(true);
+      setEditError(null);
+      previewPageEdit(
+        config,
+        {
+          path: snapshot.path,
+          baseRevision: snapshot.baseRevision,
+          content: snapshot.candidateContent,
+          actor: "user:desktop",
+        },
+        { signal: controller.signal },
+      )
+        .then((preview) => {
+          if (controller.signal.aborted || editRequestGeneration.current !== requestGeneration) return;
+          setEditDecisions({});
+          setEditReview({
+            kind: "preview",
+            generation: ++reviewGeneration.current,
+            snapshot,
+            preview,
+          });
+        })
+        .catch((reason) => {
+          if (controller.signal.aborted || !mountedRef.current || editRequestGeneration.current !== requestGeneration) return;
+          const conflict = revisionConflict(reason);
+          if (conflict)
+            setEditReview({
+              kind: "conflict",
+              generation: ++reviewGeneration.current,
+              snapshot,
+              conflict,
+            });
+          else setEditError(reason instanceof Error ? reason.message : String(reason));
+        })
+        .finally(() => {
+          if (!controller.signal.aborted && editRequestGeneration.current === requestGeneration) setEditPending(false);
+        });
+    },
+    [activeDetail, config],
+  );
 
   const requestEditPreview = useCallback(async () => {
     if (!editing || editing.draftContent === editing.baseContent || editPending) return;
@@ -1146,40 +1328,52 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     setEditPending(true);
     setEditError(null);
     try {
-      const preview = await previewPageEdit(config, {
-        path: snapshot.path,
-        baseRevision: snapshot.baseRevision,
-        content: snapshot.candidateContent,
-        actor: "user:desktop",
-      }, { signal: controller.signal });
-      if (controller.signal.aborted || (
-        editRequestGeneration.current !== requestGeneration
-        || !editingMatchesSnapshot(editingRef.current, snapshot)
-      )) return;
+      const preview = await previewPageEdit(
+        config,
+        {
+          path: snapshot.path,
+          baseRevision: snapshot.baseRevision,
+          content: snapshot.candidateContent,
+          actor: "user:desktop",
+        },
+        { signal: controller.signal },
+      );
+      if (controller.signal.aborted || editRequestGeneration.current !== requestGeneration || !editingMatchesSnapshot(editingRef.current, snapshot)) return;
       setEditDecisions({});
-      setEditReview({ kind: "preview", generation: ++reviewGeneration.current, snapshot, preview });
+      setEditReview({
+        kind: "preview",
+        generation: ++reviewGeneration.current,
+        snapshot,
+        preview,
+      });
     } catch (reason) {
-      if (controller.signal.aborted || !mountedRef.current || (
-        editRequestGeneration.current !== requestGeneration
-        || !editingMatchesSnapshot(editingRef.current, snapshot)
-      )) return;
+      if (controller.signal.aborted || !mountedRef.current || editRequestGeneration.current !== requestGeneration || !editingMatchesSnapshot(editingRef.current, snapshot)) return;
       const conflict = revisionConflict(reason);
-      if (conflict) setEditReview({ kind: "conflict", generation: ++reviewGeneration.current, snapshot, conflict });
+      if (conflict)
+        setEditReview({
+          kind: "conflict",
+          generation: ++reviewGeneration.current,
+          snapshot,
+          conflict,
+        });
       else setEditError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       if (!controller.signal.aborted && editRequestGeneration.current === requestGeneration) setEditPending(false);
     }
   }, [config, editPending, editing]);
 
-  const decisionsForServer = useCallback((operations: readonly MemoryOperation[], questions: readonly { id: string; operationIndex: number }[]) => {
-    const result: Record<string, DiffReviewDecision> = {};
-    for (const question of questions) {
-      const operation = operations[question.operationIndex];
-      const decision = operation ? editDecisions[operation.id] : undefined;
-      if (decision) result[question.id] = decision;
-    }
-    return result;
-  }, [editDecisions]);
+  const decisionsForServer = useCallback(
+    (operations: readonly MemoryOperation[], questions: readonly { id: string; operationIndex: number }[]) => {
+      const result: Record<string, DiffReviewDecision> = {};
+      for (const question of questions) {
+        const operation = operations[question.operationIndex];
+        const decision = operation ? editDecisions[operation.id] : undefined;
+        if (decision) result[question.id] = decision;
+      }
+      return result;
+    },
+    [editDecisions],
+  );
 
   /** Keep the blocking sheet mounted through its 180ms exit so the room,
    * scrim, and sheet release as one visual transaction. */
@@ -1196,29 +1390,32 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     afterExit?.();
   }, []);
 
-  const completeLocalSave = useCallback((revision: string, snapshot: EditSnapshot, activeReviewGeneration: number) => {
-    const finish = () => {
-      clearDraftIfMatches(snapshot.path, snapshot.baseRevision, snapshot.candidateContent);
-      if (!mountedRef.current || editReviewRef.current?.generation !== activeReviewGeneration) return;
-      detailCache.current.invalidatePath(snapshot.path);
-      setArtifacts((current) => current.map((artifact) => artifact.path === snapshot.path ? { ...artifact, revision } : artifact));
-      if (editingMatchesSnapshot(editingRef.current, snapshot)) setEditing(null);
-      setEditReview((current) => current?.generation === activeReviewGeneration ? null : current);
-      setEditDecisions({});
-      setEditError(null);
-      setContentNotice("Saved memory note.");
-      restoreNoteFocus.current = true;
-      setContentRefreshKey((key) => key + 1);
-      void load();
-    };
-    // There is no sheet to animate after unmount; preserve the transactional
-    // draft-clear guarantee without scheduling a callback that cannot fire.
-    if (!mountedRef.current) {
-      finish();
-      return;
-    }
-    requestReviewExit(finish);
-  }, [load, requestReviewExit]);
+  const completeLocalSave = useCallback(
+    (revision: string, snapshot: EditSnapshot, activeReviewGeneration: number) => {
+      const finish = () => {
+        clearDraftIfMatches(snapshot.path, snapshot.baseRevision, snapshot.candidateContent);
+        if (!mountedRef.current || editReviewRef.current?.generation !== activeReviewGeneration) return;
+        detailCache.current.invalidatePath(snapshot.path);
+        setArtifacts((current) => current.map((artifact) => (artifact.path === snapshot.path ? { ...artifact, revision } : artifact)));
+        if (editingMatchesSnapshot(editingRef.current, snapshot)) setEditing(null);
+        setEditReview((current) => (current?.generation === activeReviewGeneration ? null : current));
+        setEditDecisions({});
+        setEditError(null);
+        setContentNotice("Saved memory note.");
+        restoreNoteFocus.current = true;
+        setContentRefreshKey((key) => key + 1);
+        void load();
+      };
+      // There is no sheet to animate after unmount; preserve the transactional
+      // draft-clear guarantee without scheduling a callback that cannot fire.
+      if (!mountedRef.current) {
+        finish();
+        return;
+      }
+      requestReviewExit(finish);
+    },
+    [load, requestReviewExit],
+  );
 
   const returnFromEditReview = useCallback(() => {
     if (reviewPending) return;
@@ -1244,9 +1441,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       });
       detailCache.current.invalidatePath(editing.path);
       setActiveDetail(null);
-      setArtifacts((current) => current.map((artifact) => artifact.path === editing.path
-        ? { ...artifact, revision: currentRevision }
-        : artifact));
+      setArtifacts((current) => current.map((artifact) => (artifact.path === editing.path ? { ...artifact, revision: currentRevision } : artifact)));
       setContentRefreshKey((key) => key + 1);
       setEditReview(null);
       setEditDecisions({});
@@ -1272,12 +1467,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       if (applyGeneration.current !== transactionGeneration) return;
       completeLocalSave(result.revision, review.snapshot, activeReviewGeneration);
     } catch (reason) {
-      if (
-        !mountedRef.current
-        ||
-        applyGeneration.current !== transactionGeneration
-        || editReviewRef.current?.generation !== activeReviewGeneration
-      ) return;
+      if (!mountedRef.current || applyGeneration.current !== transactionGeneration || editReviewRef.current?.generation !== activeReviewGeneration) return;
       const conflict = revisionConflict(reason);
       if (conflict && review.kind === "preview") {
         setEditReview({
@@ -1286,8 +1476,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
           snapshot: review.snapshot,
           conflict,
         });
-      }
-      else setEditError(reason instanceof Error ? reason.message : String(reason));
+      } else setEditError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       if (applyGeneration.current === transactionGeneration) {
         mutationPendingRef.current = false;
@@ -1309,18 +1498,14 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (mutationPendingRef.current) return;
+      if (mutationPendingRef.current || navigationDisabled) return;
       if ((!event.metaKey && !event.ctrlKey) || event.altKey || event.shiftKey) return;
       const key = event.key.toLowerCase();
       if (key !== "e" && key !== "s") return;
       const target = event.target instanceof Element ? event.target : null;
       const focused = document.activeElement;
-      const editorTextarea = [target, focused].some((element) =>
-        element instanceof HTMLTextAreaElement && element.closest("[data-memory-editor]") != null,
-      );
-      const editButton = [target, focused].some((element) =>
-        element instanceof HTMLElement && element.closest('button[aria-label="Edit memory note"]') != null,
-      );
+      const editorTextarea = [target, focused].some((element) => element instanceof HTMLTextAreaElement && element.closest("[data-memory-editor]") != null);
+      const editButton = [target, focused].some((element) => element instanceof HTMLElement && element.closest('button[aria-label="Edit memory note"]') != null);
       if (!editorTextarea && !editButton && [target, focused].some(isInteractiveShortcutTarget)) return;
       if (key === "e") {
         if (!editing && (!visibleDetail?.editable || visibleDetail.editableContent == null)) return;
@@ -1335,10 +1520,10 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [beginEditing, editReview, editing, requestEditPreview, reviewPending, visibleDetail]);
+  }, [beginEditing, editReview, editing, navigationDisabled, requestEditPreview, visibleDetail]);
 
   useEffect(() => {
-    if (!restoreNoteFocus.current || editing || editReview || !visibleDetail) return;
+    if (!restoreNoteFocus.current || wikiRenameBlocked || editing || editReview || !visibleDetail) return;
     // Keep the flag set until focus actually lands: the mode crossfade tears
     // the previous panel down ~200ms in, blurring to body, and visibleDetail
     // refreshes re-run this effect (cancelling naive timers) in between.
@@ -1356,7 +1541,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     queueMicrotask(tryFocus);
     const retry = window.setTimeout(tryFocus, 260);
     return () => window.clearTimeout(retry);
-  }, [editReview, editing, visibleDetail]);
+  }, [editReview, editing, visibleDetail, wikiRenameBlocked]);
 
   const reviewPresentation = useMemo(() => {
     if (!editReview) return null;
@@ -1379,286 +1564,311 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
         instrumentsCollapsed && "instruments-collapsed",
         editing && !editReview && "note-editing",
         editReview && "review-open",
+        (wikiRenameDraft || activeWikiRenameApproval) && "rename-open",
         diffEvent && "diff-open",
         reviewClosing && "review-closing",
         diffClosing && "diff-closing",
       )}
     >
       <div className="memory-focus-cache">
-      <div className="memory-focus-plane" inert={editReview || diffEvent ? true : undefined}>
-      {/* The rail toggle stays pinned by the traffic lights while the
+        <div className="memory-focus-plane" inert={editReview || diffEvent || wikiRenameDraft || activeWikiRenameApproval ? true : undefined}>
+          {/* The rail toggle stays pinned by the traffic lights while the
           floating rail moves beneath it. */}
-      <SidebarToggle
-        hidden={railHidden}
-        onToggle={() => setRailHidden((hidden) => !hidden)}
-      />
-      <nav
-        data-memory-zone="rail"
-        data-page-enter-item="chrome"
-        aria-label="Memory notebook"
-        className="mw-rail"
-      >
-        <div className="mw-rail-drag" aria-hidden />
-        {/* The notebook rail IS the app sidebar in this workspace — same
+          <SidebarToggle hidden={railHidden} onToggle={() => setRailHidden((hidden) => !hidden)} />
+          <nav data-memory-zone="rail" data-page-enter-item="chrome" aria-label="Memory notebook" className="mw-rail">
+            <div className="mw-rail-drag" aria-hidden />
+            {/* The notebook rail IS the app sidebar in this workspace — same
             shared width (prefs.sidebarWidth), so a drag here moves every
             other rail with it instead of forking a memory-local width. */}
-        <SidebarResizeHandle />
-        <NotebookRail
-          mode={railMode}
-          tree={workspaceTree}
-          allNotes={navigableArtifacts}
-          records={records}
-          selectedPath={selectedMeta?.path ?? null}
-          loading={loading}
-          error={error}
-          rebuilding={rebuilding}
-          recordsLoading={recordsLoading}
-          recordsError={recordsError}
-          navigationDisabled={reviewPending}
-          onModeChange={selectRailMode}
-          onSelect={selectFile}
-          onRetry={() => void load()}
-          onRetryRecords={() => setRecordsRefreshKey((key) => key + 1)}
-          onRebuild={rebuild}
-        />
-      </nav>
-
-      <div data-memory-zone="workspace" className="mw-doc">
-        {tabs.length > 0 && (
-          <MemoryDocumentTabs
-            paths={tabs}
-            activeIndex={activeTab}
-            disabled={reviewPending}
-            onSelect={switchTab}
-            onClose={closeTab}
-            onOpenContextMenu={openTabContextMenu}
-          />
-        )}
-
-        <ContextMenu
-          state={tabContextMenu}
-          onClose={() => setTabContextMenu(null)}
-          entries={tabContextEntries}
-        />
-
-        {!workspaceEmpty && (
-        <div className={clsx("ornament ready mw-instruments", instrumentsCollapsed && "collapsed")} data-page-enter-item="chrome" aria-label="Page instruments">
-          <span className="ornament-surface mw-instrument-surface" aria-hidden />
-          <div className="ornament-items mw-instrument-items" inert={instrumentsCollapsed || undefined}>
-            <button
-              type="button"
-              className={clsx("oinst mw-instrument", inspectorOpen && inspectorPane === "links" && "on")}
-              disabled={reviewPending}
-              title="Links"
-              aria-label={inspectorOpen && inspectorPane === "links" ? "Close links" : "Open links"}
-              aria-pressed={inspectorOpen && inspectorPane === "links"}
-              onClick={() => {
-                if (inspectorOpen && inspectorPane === "links") setInspectorVisibility(false);
-                else openInspectorPane("links");
-              }}
-            >
-              <Link01 className="mw-instrument-icon" size={15} aria-hidden />
-              <span>links</span>
-              <span className="oc mw-instrument-count">{currentPageLinks?.totalOutgoing ?? 0}</span>
-            </button>
-            <button
-              type="button"
-              className={clsx("oinst mw-instrument", inspectorOpen && inspectorPane === "records" && "on")}
-              disabled={reviewPending}
-              aria-label={inspectorOpen && inspectorPane === "records" ? "Close records" : "Open records"}
-              aria-pressed={inspectorOpen && inspectorPane === "records"}
-              title="Page records"
-              onClick={() => {
-                if (inspectorOpen && inspectorPane === "records") setInspectorVisibility(false);
-                else openInspectorPane("records");
-              }}
-            >
-              <LeftToRightListBullet className="mw-instrument-icon" size={15} aria-hidden />
-              <span>records</span>
-              <span className="oc mw-instrument-count">{visibleDetail?.recordCount ?? 0}</span>
-            </button>
-            <button
-              type="button"
-              className={clsx("oinst mw-instrument", inspectorOpen && inspectorPane === "activity" && "on")}
-              disabled={reviewPending}
-              aria-label={inspectorOpen && inspectorPane === "activity" ? "Close activity" : "Open activity"}
-              aria-pressed={inspectorOpen && inspectorPane === "activity"}
-              onClick={() => {
-                if (inspectorOpen && inspectorPane === "activity") setInspectorVisibility(false);
-                else openInspectorPane("activity");
-              }}
-            >
-              <Clock className="mw-instrument-icon" size={15} aria-hidden />
-              <span>activity</span>
-            </button>
-            <span className="odiv mw-instrument-divider" aria-hidden />
-            <button
-              type="button"
-              className={clsx("mw-instrument mw-instrument-edit", editing && !editReview && "on")}
-              title={!editing && visibleDetail && (!visibleDetail.editable || visibleDetail.editableContent == null)
-                ? visibleDetail.readonlyReason ?? "Read-only page"
-                : "Edit source (⌘E)"}
-              aria-label="Edit memory note"
-              aria-pressed={editing != null && !editReview}
-              disabled={!editing && (!visibleDetail?.editable || visibleDetail.editableContent == null)}
-              onClick={() => {
-                if (editing) closeEditor();
-                else beginEditing();
-              }}
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <use href="#dp-edit" />
-              </svg>
-            </button>
-          </div>
-          <button
-            type="button"
-            className="mw-instrument mw-instrument-collapse"
-            title={instrumentsCollapsed ? "Expand instruments" : "Compact instruments"}
-            aria-label={instrumentsCollapsed ? "Expand instruments" : "Compact instruments"}
-            aria-expanded={!instrumentsCollapsed}
-            onClick={() => {
-              if (instrumentsCollapsed && instrumentsCollapsedByFit.current) {
-                instrumentsFitOverride.current = true;
-              } else if (!instrumentsCollapsed) {
-                instrumentsFitOverride.current = false;
-              }
-              instrumentsCollapsedByFit.current = false;
-              instrumentsCollapsedRef.current = !instrumentsCollapsed;
-              setInstrumentsCollapsed(!instrumentsCollapsed);
-            }}
-          >
-            <IconSwap
-              state={instrumentsCollapsed ? "b" : "a"}
-              iconA={<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#dp-arrow-right" /></svg>}
-              iconB={<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#dp-more" /></svg>}
+            <SidebarResizeHandle />
+            <NotebookRail
+              mode={railMode}
+              tree={workspaceTree}
+              allNotes={navigableArtifacts}
+              records={records}
+              selectedPath={selectedMeta?.path ?? null}
+              loading={loading}
+              error={error}
+              rebuilding={rebuilding}
+              recordsLoading={recordsLoading}
+              recordsError={recordsError}
+              navigationDisabled={navigationDisabled}
+              onModeChange={selectRailMode}
+              onSelect={selectFile}
+              onRetry={() => void load()}
+              onRetryRecords={() => setRecordsRefreshKey((key) => key + 1)}
+              onRebuild={rebuild}
             />
-          </button>
-        </div>
-        )}
-        <main
-          id="memory-note-panel"
-          aria-label={editing ? "Memory editor" : "Memory note"}
-          aria-labelledby={tabs.length > 0 ? `memory-note-tab-${activeTab}` : undefined}
-          className="mw-main relative min-h-0 flex-1 overflow-hidden"
-        >
-          {editing ? (
-            <div className="absolute inset-0 min-h-0">
-              <MemoryEditor
-                path={editing.path}
-                baseContent={editing.baseContent}
-                value={editing.draftContent}
-                saving={editPending}
-                error={editError}
-                onClose={closeEditor}
-                onChange={(draftContent) => {
-                  editRequestGeneration.current += 1;
-                  editPreviewController.current?.abort();
-                  setEditPending(false);
-                  if (draftContent === editing.baseContent) clearDraft(editing.path, editing.baseRevision);
-                  else setDraft(editing.path, editing.baseRevision, draftContent);
-                  setEditing((current) => current ? { ...current, draftContent } : current);
-                }}
+          </nav>
+
+          <div data-memory-zone="workspace" className="mw-doc">
+            {tabs.length > 0 && (
+              <MemoryDocumentTabs
+                paths={tabs}
+                activeIndex={activeTab}
+                titleForPath={titleForPath}
+                disabled={navigationDisabled}
+                onSelect={switchTab}
+                onClose={closeTab}
+                onOpenContextMenu={openTabContextMenu}
               />
-            </div>
-          ) : (
-            <AnimatePresence initial={false} mode="wait" custom={contentDirection}>
-              <motion.div
-                key={selectedMeta?.path ?? "empty"}
-                custom={contentDirection}
-                variants={MEMORY_PAGE_SWAP_VARIANTS}
-                className="absolute inset-0 min-h-0"
-                initial={reduce ? false : "enter"}
-                animate="center"
-                exit={reduce
-                  ? { opacity: 0, transition: { duration: MOTION.reduced } }
-                  : "exit"}
-              >
-              {workspaceEmpty ? (
-                <div className="mw-empty-workspace">
-                  <h1>No page open</h1>
-                  <p>Choose a page from Files to open it here.</p>
+            )}
+
+            <ContextMenu state={tabContextMenu} onClose={() => setTabContextMenu(null)} entries={tabContextEntries} />
+
+            {!workspaceEmpty && (
+              <div className={clsx("ornament ready mw-instruments", instrumentsCollapsed && "collapsed")} data-page-enter-item="chrome" aria-label="Page instruments">
+                <span className="ornament-surface mw-instrument-surface" aria-hidden />
+                <div className="ornament-items mw-instrument-items" inert={instrumentsCollapsed || undefined}>
+                  <button
+                    type="button"
+                    className={clsx("oinst mw-instrument", inspectorOpen && inspectorPane === "links" && "on")}
+                    disabled={navigationDisabled}
+                    title="Links"
+                    aria-label={inspectorOpen && inspectorPane === "links" ? "Close links" : "Open links"}
+                    aria-pressed={inspectorOpen && inspectorPane === "links"}
+                    onClick={() => {
+                      if (inspectorOpen && inspectorPane === "links") setInspectorVisibility(false);
+                      else openInspectorPane("links");
+                    }}
+                  >
+                    <Link01 className="mw-instrument-icon" size={15} aria-hidden />
+                    <span>links</span>
+                    <span className="oc mw-instrument-count">{currentPageLinks?.totalOutgoing ?? 0}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={clsx("oinst mw-instrument", inspectorOpen && inspectorPane === "records" && "on")}
+                    disabled={navigationDisabled}
+                    aria-label={inspectorOpen && inspectorPane === "records" ? "Close records" : "Open records"}
+                    aria-pressed={inspectorOpen && inspectorPane === "records"}
+                    title="Page records"
+                    onClick={() => {
+                      if (inspectorOpen && inspectorPane === "records") setInspectorVisibility(false);
+                      else openInspectorPane("records");
+                    }}
+                  >
+                    <LeftToRightListBullet className="mw-instrument-icon" size={15} aria-hidden />
+                    <span>records</span>
+                    <span className="oc mw-instrument-count">{visibleDetail?.recordCount ?? 0}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={clsx("oinst mw-instrument", inspectorOpen && inspectorPane === "activity" && "on")}
+                    disabled={navigationDisabled}
+                    aria-label={inspectorOpen && inspectorPane === "activity" ? "Close activity" : "Open activity"}
+                    aria-pressed={inspectorOpen && inspectorPane === "activity"}
+                    onClick={() => {
+                      if (inspectorOpen && inspectorPane === "activity") setInspectorVisibility(false);
+                      else openInspectorPane("activity");
+                    }}
+                  >
+                    <Clock className="mw-instrument-icon" size={15} aria-hidden />
+                    <span>activity</span>
+                  </button>
+                  <span className="odiv mw-instrument-divider" aria-hidden />
+                  <button
+                    type="button"
+                    className={clsx("mw-instrument mw-instrument-edit", editing && !editReview && "on")}
+                    title={
+                      !editing && visibleDetail && (!visibleDetail.editable || visibleDetail.editableContent == null)
+                        ? (visibleDetail.readonlyReason ?? "Read-only page")
+                        : "Edit source (⌘E)"
+                    }
+                    aria-label="Edit memory note"
+                    aria-pressed={editing != null && !editReview}
+                    disabled={navigationDisabled || (!editing && (!visibleDetail?.editable || visibleDetail.editableContent == null))}
+                    onClick={() => {
+                      if (editing) closeEditor();
+                      else beginEditing();
+                    }}
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <use href="#dp-edit" />
+                    </svg>
+                  </button>
+                  {selectedWikiPageId && !editing && !editReview && (
+                    <button
+                      type="button"
+                      className="mw-instrument"
+                      title="Rename page"
+                      aria-label="Rename page"
+                      disabled={navigationDisabled || wikiRenamePending}
+                      onClick={(event) => {
+                        if (!visibleDetail) return;
+                        wikiRenameReturnFocus.current = event.currentTarget;
+                        openWikiRenameDraft({
+                          pageId: selectedWikiPageId,
+                          oldPath: visibleDetail.path,
+                          oldTitle: visibleDetail.title,
+                        });
+                      }}
+                    >
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <use href="#dp-arrow-right" />
+                      </svg>
+                      <span>Rename</span>
+                    </button>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  className="mw-instrument mw-instrument-collapse"
+                  title={instrumentsCollapsed ? "Expand instruments" : "Compact instruments"}
+                  aria-label={instrumentsCollapsed ? "Expand instruments" : "Compact instruments"}
+                  aria-expanded={!instrumentsCollapsed}
+                  onClick={() => {
+                    if (instrumentsCollapsed && instrumentsCollapsedByFit.current) {
+                      instrumentsFitOverride.current = true;
+                    } else if (!instrumentsCollapsed) {
+                      instrumentsFitOverride.current = false;
+                    }
+                    instrumentsCollapsedByFit.current = false;
+                    instrumentsCollapsedRef.current = !instrumentsCollapsed;
+                    setInstrumentsCollapsed(!instrumentsCollapsed);
+                  }}
+                >
+                  <IconSwap
+                    state={instrumentsCollapsed ? "b" : "a"}
+                    iconA={
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <use href="#dp-arrow-right" />
+                      </svg>
+                    }
+                    iconB={
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <use href="#dp-more" />
+                      </svg>
+                    }
+                  />
+                </button>
+              </div>
+            )}
+            <main
+              id="memory-note-panel"
+              aria-label={editing ? "Memory editor" : "Memory note"}
+              aria-labelledby={tabs.length > 0 ? `memory-note-tab-${activeTab}` : undefined}
+              className="mw-main relative min-h-0 flex-1 overflow-hidden"
+            >
+              {editing ? (
+                <div className="absolute inset-0 min-h-0">
+                  <MemoryEditor
+                    path={editing.path}
+                    baseContent={editing.baseContent}
+                    value={editing.draftContent}
+                    saving={editPending}
+                    error={editError}
+                    onClose={closeEditor}
+                    onChange={(draftContent) => {
+                      editRequestGeneration.current += 1;
+                      editPreviewController.current?.abort();
+                      setEditPending(false);
+                      if (draftContent === editing.baseContent) clearDraft(editing.path, editing.baseRevision);
+                      else setDraft(editing.path, editing.baseRevision, draftContent);
+                      setEditing((current) => (current ? { ...current, draftContent } : current));
+                    }}
+                  />
                 </div>
               ) : (
-                <MemoryNote
-                  summary={selectedMeta}
-                  detail={visibleDetail}
-                  listLoading={loading}
-                  contentLoading={contentLoading}
-                  contentNotice={contentNotice}
-                  contentError={contentError}
-                  wikiHandlers={wikiHandlers}
-                  onFrontmatterChange={visibleDetail?.editable && visibleDetail.editableContent != null ? saveFrontmatter : undefined}
-                  onRetry={() => {
-                    if (selectedMeta) {
-                      detailCache.current.invalidatePath(selectedMeta.path);
+                <AnimatePresence initial={false} mode="wait" custom={contentDirection}>
+                  <motion.div
+                    key={selectedMeta?.path ?? "empty"}
+                    custom={contentDirection}
+                    variants={MEMORY_PAGE_SWAP_VARIANTS}
+                    className="absolute inset-0 min-h-0"
+                    initial={reduce ? false : "enter"}
+                    animate="center"
+                    exit={
+                      reduce
+                        ? {
+                            opacity: 0,
+                            transition: { duration: MOTION.reduced },
+                          }
+                        : "exit"
                     }
-                    setContentRefreshKey((key) => key + 1);
-                  }}
-                />
+                  >
+                    {workspaceEmpty ? (
+                      <div className="mw-empty-workspace">
+                        <h1>No page open</h1>
+                        <p>Choose a page from Files to open it here.</p>
+                      </div>
+                    ) : (
+                      <MemoryNote
+                        summary={selectedMeta}
+                        detail={visibleDetail}
+                        listLoading={loading}
+                        contentLoading={contentLoading}
+                        contentNotice={contentNotice}
+                        contentError={contentError}
+                        wikiHandlers={wikiHandlers}
+                        onFrontmatterChange={visibleDetail?.editable && visibleDetail.editableContent != null ? saveFrontmatter : undefined}
+                        onRetry={() => {
+                          if (selectedMeta) {
+                            detailCache.current.invalidatePath(selectedMeta.path);
+                          }
+                          setContentRefreshKey((key) => key + 1);
+                        }}
+                      />
+                    )}
+                  </motion.div>
+                </AnimatePresence>
               )}
-              </motion.div>
-            </AnimatePresence>
-          )}
-        {!workspaceEmpty && !editing && !editReview && (
-          <WikiLinkPreview
-            containerRef={layoutRef}
-            links={currentPageLinks}
-            summaries={navigableArtifacts}
-            cache={detailCache.current}
-            loadDetail={loadPreviewDetail}
+              {!workspaceEmpty && !editing && !editReview && !wikiRenameDraft && !activeWikiRenameApproval && (
+                <WikiLinkPreview containerRef={layoutRef} links={currentPageLinks} summaries={navigableArtifacts} cache={detailCache.current} loadDetail={loadPreviewDetail} />
+              )}
+            </main>
+          </div>
+
+          <div data-memory-zone="inspector">
+            <PeekSurface open={inspectorOpen} onClose={() => setInspectorVisibility(false)} ariaLabel="Page peek" layer="memory-context" className="mw-context surface-peek">
+              <div className="mw-context-plane">
+                <PaneResizeHandle
+                  layoutRef={layoutRef}
+                  cssVar="--mw-ctx-w"
+                  storageKey={CTX_WIDTH_KEY}
+                  min={240}
+                  max={480}
+                  defaultWidth={296}
+                  edge="start"
+                  label="Resize context panel"
+                />
+                {inspectorDetail ? (
+                  <MemoryInspector
+                    page={inspectorDetail}
+                    links={currentPageLinks}
+                    history={currentPageHistory}
+                    linksLoading={linksLoading || !inspectorDetailIsCurrent}
+                    historyLoading={historyLoading || !inspectorDetailIsCurrent}
+                    linkError={inspectorDetailIsCurrent ? linkError : null}
+                    historyError={inspectorDetailIsCurrent ? historyError : null}
+                    navigationDisabled={navigationDisabled || !inspectorDetailIsCurrent}
+                    titleForPath={titleForPath}
+                    onNavigate={navigateTo}
+                    onRetryLinks={() => setLinksRefreshKey((key) => key + 1)}
+                    onOpenDiff={(event, trigger) => {
+                      void openDiff(event, trigger);
+                    }}
+                    activePane={inspectorPane}
+                    onClose={() => setInspectorVisibility(false)}
+                  />
+                ) : (
+                  <p className="mw-ctx-empty mw-ctx-loading">Loading…</p>
+                )}
+              </div>
+            </PeekSurface>
+          </div>
+
+          <MemoryQuickSwitcher
+            open={switcherOpen}
+            artifacts={navigableArtifacts}
+            recentPaths={recentPaths}
+            onClose={() => setSwitcherOpen(false)}
+            onSelect={(path) => {
+              setSwitcherOpen(false);
+              navigateTo(path, null);
+            }}
           />
-        )}
-        </main>
-      </div>
-
-      <div data-memory-zone="inspector">
-        <PeekSurface
-          open={inspectorOpen}
-          onClose={() => setInspectorVisibility(false)}
-          ariaLabel="Page peek"
-          layer="memory-context"
-          className="mw-context surface-peek"
-        >
-        <div className="mw-context-plane">
-          <PaneResizeHandle layoutRef={layoutRef} cssVar="--mw-ctx-w" storageKey={CTX_WIDTH_KEY} min={240} max={480} defaultWidth={296} edge="start" label="Resize context panel" />
-          {inspectorDetail ? (
-            <MemoryInspector
-              page={inspectorDetail}
-              links={currentPageLinks}
-              history={currentPageHistory}
-              linksLoading={linksLoading || !inspectorDetailIsCurrent}
-              historyLoading={historyLoading || !inspectorDetailIsCurrent}
-              linkError={inspectorDetailIsCurrent ? linkError : null}
-              historyError={inspectorDetailIsCurrent ? historyError : null}
-              navigationDisabled={reviewPending || !inspectorDetailIsCurrent}
-              titleForPath={(path) => stem(path)}
-              onNavigate={navigateTo}
-              onRetryLinks={() => setLinksRefreshKey((key) => key + 1)}
-              onOpenDiff={(event, trigger) => {
-                void openDiff(event, trigger);
-              }}
-              activePane={inspectorPane}
-              onClose={() => setInspectorVisibility(false)}
-            />
-          ) : (
-            <p className="mw-ctx-empty mw-ctx-loading">Loading…</p>
-          )}
         </div>
-        </PeekSurface>
-      </div>
-
-      <MemoryQuickSwitcher
-        open={switcherOpen}
-        artifacts={navigableArtifacts}
-        recentPaths={recentPaths}
-        onClose={() => setSwitcherOpen(false)}
-        onSelect={(path) => {
-          setSwitcherOpen(false);
-          navigateTo(path, null);
-        }}
-      />
-      </div>
       </div>
 
       {diffEvent && (
@@ -1689,10 +1899,33 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
           error={editError}
           closing={reviewClosing}
           onExitComplete={finishReviewExit}
-          onDecision={(operationId, decision) => setEditDecisions((current) => ({ ...current, [operationId]: decision }))}
+          onDecision={(operationId, decision) =>
+            setEditDecisions((current) => ({
+              ...current,
+              [operationId]: decision,
+            }))
+          }
           onApply={() => void applyEditReview()}
           onCancel={returnFromEditReview}
           onRebase={rebaseConflict}
+        />
+      )}
+
+      {(wikiRenameDraft || activeWikiRenameApproval) && (
+        <WikiRenameApprovalSheet
+          draft={wikiRenameDraft ?? undefined}
+          approval={activeWikiRenameApproval ?? undefined}
+          pending={wikiRenamePending}
+          reconciliationRequired={wikiRenameReconciliationRequired}
+          error={wikiRenameError}
+          onCancel={() => {
+            if (activeWikiRenameApproval || wikiRenamePending || wikiRenameReconciliationRequired) return;
+            cancelWikiRenameDraft();
+          }}
+          onRequest={(input) => void requestWikiRename(input)}
+          onReconcile={() => void reconcileWikiRename()}
+          onAccept={(approvalId) => void resolveWikiRename(approvalId, "accept")}
+          onReject={(approvalId) => void resolveWikiRename(approvalId, "reject")}
         />
       )}
     </div>

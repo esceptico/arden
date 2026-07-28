@@ -11,7 +11,7 @@ import { copyText } from "@/lib/clipboard";
 import { GhostBtn } from "@/features/memory/components/shared";
 import type { MemoryItem } from "@/api/memoryItems";
 import type { MemoryArtifactSummary } from "@/features/memory/lib/notebookTypes";
-import { noteDateGroup, prettyDate, sortNotes, stem, type WorkspaceDir } from "@/features/memory/lib/workspaceTree";
+import { displayTitle, noteDateGroup, prettyDate, sortNotes, type WorkspaceDir } from "@/features/memory/lib/workspaceTree";
 
 const COLLAPSED_KEY = "arden.desktop.memory.rail.collapsed";
 const NOTEBOOK_COLLAPSED_KEY = "arden.desktop.memory.notebook.collapsed";
@@ -53,16 +53,18 @@ function persistStringSet(key: string, value: Set<string>): void {
  *  as plain text, so markdown emphasis, headings and wiki-link plumbing are
  *  stripped rather than rendered. */
 function previewLine(artifact: MemoryArtifactSummary): string {
-  return (artifact.snippet ?? artifact.summary ?? "")
-    // Generated pages open with an `<!-- arden:index:start -->` marker — a
-    // preview of the machinery, not of the note.
-    .replace(/<!--[\s\S]*?(?:-->|$)/g, "")
-    .replace(/\[\[[^\]|]+\|([^\]]+)\]\]/g, "$1")
-    .replace(/\[\[([^\]]+)\]\]/g, "$1")
-    .replace(/^\s*[-*+]\s+/gm, "")
-    .replace(/[*_`>#]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
+  return (
+    (artifact.snippet ?? artifact.summary ?? "")
+      // Generated pages open with an `<!-- arden:index:start -->` marker — a
+      // preview of the machinery, not of the note.
+      .replace(/<!--[\s\S]*?(?:-->|$)/g, "")
+      .replace(/\[\[[^\]|]+\|([^\]]+)\]\]/g, "$1")
+      .replace(/\[\[([^\]]+)\]\]/g, "$1")
+      .replace(/^\s*[-*+]\s+/gm, "")
+      .replace(/[*_`>#]/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+  );
 }
 
 export function NotebookRail({
@@ -122,14 +124,20 @@ export function NotebookRail({
     clearFactTimers();
     setFactPreview(null);
   }, [clearFactTimers]);
-  const showFactPreview = useCallback((record: MemoryItem, element: HTMLElement) => {
-    clearFactTimers();
-    setFactPreview({ record, element });
-  }, [clearFactTimers]);
-  const scheduleFactPreview = useCallback((record: MemoryItem, element: HTMLElement) => {
-    clearFactTimers();
-    factIntentTimer.current = window.setTimeout(() => setFactPreview({ record, element }), FACT_INTENT_MS);
-  }, [clearFactTimers]);
+  const showFactPreview = useCallback(
+    (record: MemoryItem, element: HTMLElement) => {
+      clearFactTimers();
+      setFactPreview({ record, element });
+    },
+    [clearFactTimers],
+  );
+  const scheduleFactPreview = useCallback(
+    (record: MemoryItem, element: HTMLElement) => {
+      clearFactTimers();
+      factIntentTimer.current = window.setTimeout(() => setFactPreview({ record, element }), FACT_INTENT_MS);
+    },
+    [clearFactTimers],
+  );
   const scheduleFactHide = useCallback(() => {
     clearFactTimers();
     factHideTimer.current = window.setTimeout(() => setFactPreview(null), FACT_HIDE_MS);
@@ -172,7 +180,9 @@ export function NotebookRail({
     if (!selectedPath || mode === "facts") return;
     if (mode === "files") {
       setCollapsed((current) => {
-        const ancestors = selectedPath.split("/").slice(0, -1)
+        const ancestors = selectedPath
+          .split("/")
+          .slice(0, -1)
           .map((_, index, parts) => `${parts.slice(0, index + 1).join("/")}/`);
         if (!ancestors.some((ancestor) => current.has(ancestor))) return current;
         const next = new Set(current);
@@ -182,9 +192,7 @@ export function NotebookRail({
       });
     }
     const frame = requestAnimationFrame(() => {
-      scrollerRef.current
-        ?.querySelector<HTMLElement>(`[data-memory-entry="${CSS.escape(selectedPath)}"]`)
-        ?.scrollIntoView({ block: "nearest" });
+      scrollerRef.current?.querySelector<HTMLElement>(`[data-memory-entry="${CSS.escape(selectedPath)}"]`)?.scrollIntoView({ block: "nearest" });
     });
     return () => cancelAnimationFrame(frame);
   }, [mode, selectedPath]);
@@ -209,25 +217,23 @@ export function NotebookRail({
     });
   };
 
-  const openFileContextMenu = useCallback((
-    path: string,
-    trigger: HTMLElement,
-    source: ContextMenuPosition["source"],
-    x: number,
-    y: number,
-  ) => {
-    if (navigationDisabled) return;
-    setFileContextMenu({ path, trigger, source, x, y });
-  }, [navigationDisabled]);
+  const openFileContextMenu = useCallback(
+    (path: string, trigger: HTMLElement, source: ContextMenuPosition["source"], x: number, y: number) => {
+      if (navigationDisabled) return;
+      setFileContextMenu({ path, trigger, source, x, y });
+    },
+    [navigationDisabled],
+  );
 
-  const selectPath = useCallback((path: string) => {
-    const rows = Array.from(
-      scrollerRef.current?.querySelectorAll<HTMLElement>("[data-memory-entry]") ?? [],
-    );
-    const currentIndex = rows.findIndex((row) => row.dataset.memoryEntry === selectedPath);
-    const nextIndex = rows.findIndex((row) => row.dataset.memoryEntry === path);
-    onSelect(path, currentIndex >= 0 && nextIndex < currentIndex ? -1 : 1);
-  }, [onSelect, selectedPath]);
+  const selectPath = useCallback(
+    (path: string) => {
+      const rows = Array.from(scrollerRef.current?.querySelectorAll<HTMLElement>("[data-memory-entry]") ?? []);
+      const currentIndex = rows.findIndex((row) => row.dataset.memoryEntry === selectedPath);
+      const nextIndex = rows.findIndex((row) => row.dataset.memoryEntry === path);
+      onSelect(path, currentIndex >= 0 && nextIndex < currentIndex ? -1 : 1);
+    },
+    [onSelect, selectedPath],
+  );
 
   const files = useMemo(() => {
     const fileRow = (artifact: MemoryArtifactSummary, depth = 1) => (
@@ -237,12 +243,7 @@ export function NotebookRail({
         disabled={navigationDisabled}
         data-memory-entry={artifact.path}
         aria-current={selectedPath === artifact.path ? "page" : undefined}
-        className={clsx(
-          "mw-tree-row",
-          depth === 0 && "root",
-          depth === 2 && "depth-2",
-          selectedPath === artifact.path && "active",
-        )}
+        className={clsx("mw-tree-row", depth === 0 && "root", depth === 2 && "depth-2", selectedPath === artifact.path && "active")}
         onClick={() => selectPath(artifact.path)}
         onContextMenu={(event) => {
           event.preventDefault();
@@ -255,7 +256,7 @@ export function NotebookRail({
           openFileContextMenu(artifact.path, event.currentTarget, "keyboard", rect.left + 12, rect.bottom - 4);
         }}
       >
-        <span className="mw-label">{stem(artifact.path)}</span>
+        <span className="mw-label">{displayTitle(artifact)}</span>
       </button>
     );
 
@@ -273,7 +274,9 @@ export function NotebookRail({
         </button>
         <div className={clsx("mw-tree-kids", `depth-${Math.min(depth + 1, 2)}`)}>
           {dir.dirs.map((child) => folder(child, depth + 1))}
-          {sortNotes(dir.files, { key: "name", asc: true }, (artifact) => artifact.createdAt ?? artifact.updatedAt ?? "").map((artifact) => fileRow(artifact, Math.min(depth + 1, 2)))}
+          {sortNotes(dir.files, { key: "name", asc: true }, (artifact) => artifact.createdAt ?? artifact.updatedAt ?? "").map((artifact) =>
+            fileRow(artifact, Math.min(depth + 1, 2)),
+          )}
         </div>
       </div>
     );
@@ -286,10 +289,14 @@ export function NotebookRail({
     );
   }, [collapsed, navigationDisabled, openFileContextMenu, selectPath, selectedPath, tree]);
 
-  const notebookNotes = useMemo(() => [...allNotes].sort((left, right) => {
-    const updated = (right.updatedAt ?? right.createdAt ?? "").localeCompare(left.updatedAt ?? left.createdAt ?? "");
-    return updated || stem(left.path).localeCompare(stem(right.path));
-  }), [allNotes]);
+  const notebookNotes = useMemo(
+    () =>
+      [...allNotes].sort((left, right) => {
+        const updated = (right.updatedAt ?? right.createdAt ?? "").localeCompare(left.updatedAt ?? left.createdAt ?? "");
+        return updated || displayTitle(left).localeCompare(displayTitle(right));
+      }),
+    [allNotes],
+  );
 
   /** Notes stay newest-first; the date buckets fall out of that order, so a
    *  group is just a run of adjacent notes sharing a label. */
@@ -305,66 +312,77 @@ export function NotebookRail({
     return groups;
   }, [notebookNotes]);
 
-  const notebook = useMemo(() => (
-    <div ref={scrollerRef} className="mw-rail-list mw-notebook scroll-fade" data-memory-notebook-list>
-      {notebookGroups.map((group) => (
-        <section
-          key={group.label}
-          className={clsx("mw-notebook-group", closedGroups.has(group.label) && "closed")}
-          data-memory-note-group={group.label}
-        >
-          <button
-            type="button"
-            className="mw-fold mw-notebook-fold"
-            aria-expanded={!closedGroups.has(group.label)}
-            aria-label={closedGroups.has(group.label) ? `Expand ${group.label}` : `Collapse ${group.label}`}
-            onClick={() => toggleGroup(group.label)}
-          >
-            <ChevronDown className="mw-chev" aria-hidden />
-            <span className="mw-label">{group.label}</span>
-          </button>
-          <div className="mw-notebook-kids">
-            {group.notes.map((artifact) => {
-              const preview = previewLine(artifact);
-              return (
-                <button
-                  key={artifact.path}
-                  type="button"
-                  disabled={navigationDisabled}
-                  data-memory-entry={artifact.path}
-                  aria-current={selectedPath === artifact.path ? "page" : undefined}
-                  className={clsx("mw-note-card", selectedPath === artifact.path && "active")}
-                  onClick={() => selectPath(artifact.path)}
-                  onContextMenu={(event) => {
-                    event.preventDefault();
-                    openFileContextMenu(artifact.path, event.currentTarget, "pointer", event.clientX, event.clientY);
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
-                    event.preventDefault();
-                    const rect = event.currentTarget.getBoundingClientRect();
-                    openFileContextMenu(artifact.path, event.currentTarget, "keyboard", rect.left + 12, rect.bottom - 4);
-                  }}
-                >
-                  <span className="mw-note-card-title">{stem(artifact.path)}</span>
-                  {preview ? <span className="mw-note-card-preview">{preview}</span> : null}
-                  <span className="mw-note-card-date">{prettyDate(artifact.updatedAt ?? artifact.createdAt)}</span>
-                </button>
-              );
-            })}
-          </div>
-        </section>
-      ))}
-    </div>
-  ), [closedGroups, navigationDisabled, notebookGroups, openFileContextMenu, selectPath, selectedPath]);
+  const notebook = useMemo(
+    () => (
+      <div ref={scrollerRef} className="mw-rail-list mw-notebook scroll-fade" data-memory-notebook-list>
+        {notebookGroups.map((group) => (
+          <section key={group.label} className={clsx("mw-notebook-group", closedGroups.has(group.label) && "closed")} data-memory-note-group={group.label}>
+            <button
+              type="button"
+              className="mw-fold mw-notebook-fold"
+              aria-expanded={!closedGroups.has(group.label)}
+              aria-label={closedGroups.has(group.label) ? `Expand ${group.label}` : `Collapse ${group.label}`}
+              onClick={() => toggleGroup(group.label)}
+            >
+              <ChevronDown className="mw-chev" aria-hidden />
+              <span className="mw-label">{group.label}</span>
+            </button>
+            <div className="mw-notebook-kids">
+              {group.notes.map((artifact) => {
+                const preview = previewLine(artifact);
+                return (
+                  <button
+                    key={artifact.path}
+                    type="button"
+                    disabled={navigationDisabled}
+                    data-memory-entry={artifact.path}
+                    aria-current={selectedPath === artifact.path ? "page" : undefined}
+                    className={clsx("mw-note-card", selectedPath === artifact.path && "active")}
+                    onClick={() => selectPath(artifact.path)}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      openFileContextMenu(artifact.path, event.currentTarget, "pointer", event.clientX, event.clientY);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+                      event.preventDefault();
+                      const rect = event.currentTarget.getBoundingClientRect();
+                      openFileContextMenu(artifact.path, event.currentTarget, "keyboard", rect.left + 12, rect.bottom - 4);
+                    }}
+                  >
+                    <span className="mw-note-card-title">{displayTitle(artifact)}</span>
+                    {preview ? <span className="mw-note-card-preview">{preview}</span> : null}
+                    <span className="mw-note-card-date">{prettyDate(artifact.updatedAt ?? artifact.createdAt)}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        ))}
+      </div>
+    ),
+    [closedGroups, navigationDisabled, notebookGroups, openFileContextMenu, selectPath, selectedPath],
+  );
 
   const facts = useMemo(() => {
-    if (recordsLoading && records.length === 0) return <div className="mw-tree"><ListSkeleton /></div>;
-    if (recordsError) return <div className="mw-tree"><ListError title="Couldn't load memory facts" message={recordsError} onRetry={onRetryRecords} /></div>;
+    if (recordsLoading && records.length === 0)
+      return (
+        <div className="mw-tree">
+          <ListSkeleton />
+        </div>
+      );
+    if (recordsError)
+      return (
+        <div className="mw-tree">
+          <ListError title="Couldn't load memory facts" message={recordsError} onRetry={onRetryRecords} />
+        </div>
+      );
     if (records.length === 0) {
       return (
         <div className="mw-tree">
-          <Empty icon={CheckList} hint="Facts appear here as Arden learns durable context.">No facts yet</Empty>
+          <Empty icon={CheckList} hint="Facts appear here as Arden learns durable context.">
+            No facts yet
+          </Empty>
         </div>
       );
     }
@@ -388,33 +406,36 @@ export function NotebookRail({
         ))}
       </div>
     );
-  }, [
-    factPreview?.record.id,
-    navigationDisabled,
-    onRetryRecords,
-    records,
-    recordsError,
-    recordsLoading,
-    scheduleFactHide,
-    scheduleFactPreview,
-    showFactPreview,
-  ]);
+  }, [factPreview?.record.id, navigationDisabled, onRetryRecords, records, recordsError, recordsLoading, scheduleFactHide, scheduleFactPreview, showFactPreview]);
 
-  const notesState = loading && empty ? (
-    <div className="mw-tree"><ListSkeleton /></div>
-  ) : error ? (
-    <div className="mw-tree"><ListError title="Couldn't load memory notes" message={error} onRetry={onRetry} /></div>
-  ) : empty ? (
-    <div className="mw-tree">
-      <Empty
-        icon={FileText}
-        hint="Memory pages appear here once the vault has notes."
-        action={<GhostBtn onClick={onRebuild} disabled={rebuilding}>{rebuilding ? "Refreshing…" : "Refresh"}</GhostBtn>}
-      >
-        No memory notes yet
-      </Empty>
-    </div>
-  ) : mode === "files" ? files : notebook;
+  const notesState =
+    loading && empty ? (
+      <div className="mw-tree">
+        <ListSkeleton />
+      </div>
+    ) : error ? (
+      <div className="mw-tree">
+        <ListError title="Couldn't load memory notes" message={error} onRetry={onRetry} />
+      </div>
+    ) : empty ? (
+      <div className="mw-tree">
+        <Empty
+          icon={FileText}
+          hint="Memory pages appear here once the vault has notes."
+          action={
+            <GhostBtn onClick={onRebuild} disabled={rebuilding}>
+              {rebuilding ? "Refreshing…" : "Refresh"}
+            </GhostBtn>
+          }
+        >
+          No memory notes yet
+        </Empty>
+      </div>
+    ) : mode === "files" ? (
+      files
+    ) : (
+      notebook
+    );
 
   return (
     <div ref={slotRef} className="memory-notebook-rail-slot">
@@ -427,9 +448,8 @@ export function NotebookRail({
         indicatorClassName="mw-rail-segment-indicator"
       >
         {RAIL_MODES.map((nextMode) => {
-          const icon = nextMode === "files" ? <Folder size={14} aria-hidden />
-            : nextMode === "notebook" ? <Notebook01 size={14} aria-hidden />
-              : <CheckList size={14} aria-hidden />;
+          const icon =
+            nextMode === "files" ? <Folder size={14} aria-hidden /> : nextMode === "notebook" ? <Notebook01 size={14} aria-hidden /> : <CheckList size={14} aria-hidden />;
           const label = nextMode[0]!.toUpperCase() + nextMode.slice(1);
           return (
             <Tab
@@ -441,44 +461,41 @@ export function NotebookRail({
               title={segmentLabelsHidden ? label : undefined}
             >
               {icon}
-              <span className="mw-rail-segment-label">
-                {label}
-              </span>
+              <span className="mw-rail-segment-label">{label}</span>
             </Tab>
           );
         })}
       </Tabs>
       {/* The house tab swap: `custom` only reaches an exiting child through
-        * variant functions, so the panels have to come from TabPanels — an
-        * inline `exit` object bakes in the PREVIOUS direction and sends the
-        * outgoing mode the same way as the incoming one. */}
+       * variant functions, so the panels have to come from TabPanels — an
+       * inline `exit` object bakes in the PREVIOUS direction and sends the
+       * outgoing mode the same way as the incoming one. */}
       <TabPanels value={mode} direction={direction} className="mw-rail-mode">
         {mode === "facts" ? facts : notesState}
       </TabPanels>
       <ContextMenu
         state={fileContextMenu}
         onClose={() => setFileContextMenu(null)}
-        entries={fileContextMenu ? [
-          { id: "open", label: "Open", onSelect: () => selectPath(fileContextMenu.path) },
-          { id: "copy-path", label: "Copy path", onSelect: () => void copyText(fileContextMenu.path) },
-        ] : []}
+        entries={
+          fileContextMenu
+            ? [
+                {
+                  id: "open",
+                  label: "Open",
+                  onSelect: () => selectPath(fileContextMenu.path),
+                },
+                {
+                  id: "copy-path",
+                  label: "Copy path",
+                  onSelect: () => void copyText(fileContextMenu.path),
+                },
+              ]
+            : []
+        }
       />
-      <AnchoredPopover
-        open={factPreview != null}
-        onClose={closeFactPreview}
-        anchor={factAnchor}
-        role="tooltip"
-        className="mw-fact-peek"
-        side="inline"
-        closeOnScroll
-      >
+      <AnchoredPopover open={factPreview != null} onClose={closeFactPreview} anchor={factAnchor} role="tooltip" className="mw-fact-peek" side="inline" closeOnScroll>
         {factPreview && (
-          <div
-            className="mw-fact-peek-body"
-            data-memory-fact-peek={factPreview.record.id}
-            onMouseEnter={clearFactTimers}
-            onMouseLeave={scheduleFactHide}
-          >
+          <div className="mw-fact-peek-body" data-memory-fact-peek={factPreview.record.id} onMouseEnter={clearFactTimers} onMouseLeave={scheduleFactHide}>
             <div className="mw-fact-peek-meta">
               <span>{prettyDate(factPreview.record.updated_at)}</span>
               <span>·</span>
@@ -486,9 +503,7 @@ export function NotebookRail({
               {factPreview.record.pinned && <span>pinned</span>}
             </div>
             <p>{factPreview.record.content}</p>
-            {factPreview.record.labels.length > 0 && (
-              <div className="mw-fact-peek-labels">{factPreview.record.labels.join(" · ")}</div>
-            )}
+            {factPreview.record.labels.length > 0 && <div className="mw-fact-peek-labels">{factPreview.record.labels.join(" · ")}</div>}
           </div>
         )}
       </AnchoredPopover>

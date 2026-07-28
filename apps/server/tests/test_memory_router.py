@@ -133,7 +133,7 @@ def test_routes_registered():
 def test_links_route_returns_paginated_outgoing_and_backlinks(tmp_path: Path):
     vault = tmp_path / "artifacts"
     (vault / "topics").mkdir(parents=True)
-    (vault / "topics/a.md").write_text("# A\n\n[[B]] [[C]] [[D]]\n", encoding="utf-8")
+    (vault / "topics/a.md").write_text("# A\n\n[[B]] [[C|See C]] [[D|D]]\n", encoding="utf-8")
     for name in ("b", "c", "d"):
         (vault / f"topics/{name}.md").write_text(f"# {name.upper()}\n\n[[A]]\n", encoding="utf-8")
     index = LinkIndex(vault)
@@ -160,6 +160,7 @@ def test_links_route_returns_paginated_outgoing_and_backlinks(tmp_path: Path):
         "topics/c.md",
         "topics/d.md",
     ]
+    assert [link["alias"] for link in body["outgoing"]] == ["See C", "D"]
     assert [link["source_path"] for link in body["backlinks"]] == [
         "topics/c.md",
         "topics/d.md",

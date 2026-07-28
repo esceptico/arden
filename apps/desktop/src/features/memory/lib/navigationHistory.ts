@@ -17,10 +17,18 @@ export class NavigationHistory {
     if (!Number.isInteger(limit) || limit < 1) throw new Error("Navigation history limit must be positive");
   }
 
-  get length() { return this.entries.length; }
-  get canBack() { return this.cursor > 0; }
-  get canForward() { return this.cursor >= 0 && this.cursor < this.entries.length - 1; }
-  get current() { return this.cursor < 0 ? null : this.entries[this.cursor] ?? null; }
+  get length() {
+    return this.entries.length;
+  }
+  get canBack() {
+    return this.cursor > 0;
+  }
+  get canForward() {
+    return this.cursor >= 0 && this.cursor < this.entries.length - 1;
+  }
+  get current() {
+    return this.cursor < 0 ? null : (this.entries[this.cursor] ?? null);
+  }
 
   /** Read-only snapshot of visited locations, most-recent-first. Does not
    *  mutate the cursor or entries — for surfaces (like the quick switcher)
@@ -43,6 +51,13 @@ export class NavigationHistory {
     if (this.cursor < 0) return this.push(location);
     this.entries[this.cursor] = location;
     return location;
+  }
+
+  /** A durable page rename preserves back/forward continuity instead of
+   * leaving historical entries pointing at a now-redirected path. */
+  replacePath(oldPath: string, newPath: string) {
+    if (oldPath === newPath) return;
+    this.entries = this.entries.map((entry) => (entry.path === oldPath ? { ...entry, path: newPath } : entry));
   }
 
   back() {

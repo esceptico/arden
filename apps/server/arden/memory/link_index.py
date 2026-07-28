@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from markdown_it.rules_inline.state_inline import StateInline
 
 _SNAPSHOT_REL = Path(".arden/indexes/links.json")
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 _MAX_CONTEXT_CHARS = 280
 _MAX_CONTEXT_TOKEN_CHARS = 160
 _MAX_LINK_TEXT_CHARS = 1000
@@ -33,6 +33,7 @@ class LinkRecord:
     source_path: str
     target: str
     display: str
+    alias: str | None
     heading: str | None
     context: str
     line: int
@@ -53,6 +54,7 @@ class LinkRecord:
             "source_path",
             "target",
             "display",
+            "alias",
             "heading",
             "context",
             "line",
@@ -69,6 +71,8 @@ class LinkRecord:
             for key in ("source_path", "target", "display", "context", "status", "source_revision")
         ):
             raise ValueError("link record has invalid string fields")
+        if raw["alias"] is not None and not isinstance(raw["alias"], str):
+            raise ValueError("link alias must be a string or null")
         if raw["heading"] is not None and not isinstance(raw["heading"], str):
             raise ValueError("link heading must be a string or null")
         if raw["resolved_path"] is not None and not isinstance(raw["resolved_path"], str):
@@ -81,6 +85,7 @@ class LinkRecord:
             source_path=raw["source_path"],
             target=raw["target"],
             display=raw["display"],
+            alias=raw["alias"],
             heading=raw["heading"],
             context=raw["context"],
             line=raw["line"],
@@ -144,6 +149,7 @@ class LinkIndexSnapshot:
 class _ExtractedLink:
     target: str
     display: str
+    alias: str | None
     heading: str | None
     context: str
     line: int
@@ -193,6 +199,7 @@ class LinkIndex:
                         source_path=source_path,
                         target=extracted.target,
                         display=extracted.display,
+                        alias=extracted.alias,
                         heading=extracted.heading,
                         context=extracted.context,
                         line=extracted.line,
@@ -334,6 +341,7 @@ def _wikilink_rule(state: StateInline, silent: bool) -> bool:
     target, separator, label = raw.partition("|")
     target = target.strip()
     display = (label if separator else target).strip()
+    alias = label.strip() if separator else None
     if not target or not display or len(target) > _MAX_LINK_TEXT_CHARS or len(display) > _MAX_LINK_TEXT_CHARS:
         return False
     if not silent:
@@ -342,6 +350,7 @@ def _wikilink_rule(state: StateInline, silent: bool) -> bool:
         token.meta = {
             "target": target,
             "display": display,
+            "alias": alias,
             "raw": state.src[start : end + 2],
             "start": start,
         }
@@ -384,6 +393,7 @@ def _extract_wikilinks(content: str) -> tuple[_ExtractedLink, ...]:
                 _ExtractedLink(
                     target=meta["target"],
                     display=meta["display"],
+                    alias=meta["alias"],
                     heading=heading,
                     context=_context_snippet(token.content, start, meta["raw"]),
                     line=(token.map[0] if token.map else 0) + line_offset + frontmatter_lines + 1,
@@ -464,6 +474,8 @@ def _validate_snapshot(snapshot: LinkIndexSnapshot) -> None:
             raise ValueError("link source is inconsistent with snapshot")
         if not 0 < len(link.target) <= _MAX_LINK_TEXT_CHARS or not 0 < len(link.display) <= _MAX_LINK_TEXT_CHARS:
             raise ValueError("link text is out of bounds")
+        if link.alias is not None and (not link.alias or len(link.alias) > _MAX_LINK_TEXT_CHARS):
+            raise ValueError("link alias is out of bounds")
         if len(link.context) > _MAX_CONTEXT_CHARS:
             raise ValueError("link context is out of bounds")
         if link.heading is not None and (not link.heading or len(link.heading) > _MAX_CONTEXT_CHARS):

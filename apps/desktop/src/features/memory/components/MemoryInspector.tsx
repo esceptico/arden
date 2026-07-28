@@ -173,7 +173,7 @@ export function MemoryInspector({
           {outgoing.length === 0 && <p className="mw-ctx-empty">No outgoing links.</p>}
           {outgoing.map((link) => {
             const path = link.resolvedPath;
-            const title = link.display || (path ? titleForPath(path) ?? stem(path) : link.target);
+            const title = link.alias ?? (path ? titleForPath(path) ?? stem(path) : link.target);
             return (
               <button
                 key={path ?? link.target}

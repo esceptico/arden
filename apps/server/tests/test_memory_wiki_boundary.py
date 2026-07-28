@@ -112,7 +112,7 @@ async def test_memory_api_projects_managed_wiki_pages_without_legacy_writes(tmp_
             page_id="managed-page",
             path="topics/managed.md",
             title="Managed page",
-            body=b"Managed body [[Wiki home]].\n",
+            body=b"Managed body [[Wiki home|Home alias]].\n",
             metadata={"kind": "topic", "summary": "Managed summary"},
         )
         wiki.create_page(
@@ -164,7 +164,7 @@ async def test_memory_api_projects_managed_wiki_pages_without_legacy_writes(tmp_
         detail = client.get("/admin/memory/artifacts/topics/managed.md")
         assert detail.status_code == 200
         artifact = detail.json()["artifact"]
-        assert artifact["content"] == "Managed body [[Wiki home]].\n"
+        assert artifact["content"] == "Managed body [[Wiki home|Home alias]].\n"
         assert artifact["frontmatter"]["page_id"] == "managed-page"
         assert artifact["frontmatter"]["title"] == "Managed page"
         assert artifact["source"] == "wiki"
@@ -177,6 +177,7 @@ async def test_memory_api_projects_managed_wiki_pages_without_legacy_writes(tmp_
         assert link_body["stale"] is False
         assert link_body["revision"] == wiki.repository.head
         assert link_body["outgoing"][0]["target"] == "Wiki home"
+        assert link_body["outgoing"][0]["alias"] == "Home alias"
         assert link_body["outgoing"][0]["resolved_path"] == "README.md"
         assert link_body["outgoing"][0]["candidates"] == ["README.md"]
         assert link_body["backlinks"][0]["source_path"] == "README.md"

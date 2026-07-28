@@ -9,11 +9,7 @@ import { MemoryFindBar } from "@/features/memory/components/MemoryFindBar";
 import { MemoryProperties, type MemoryFrontmatter } from "@/features/memory/components/MemoryProperties";
 import { stripCites } from "@/features/memory/lib/format";
 import type { MemoryArtifactDetail, MemoryArtifactSummary } from "@/features/memory/lib/notebookTypes";
-
-function filenameStem(path: string): string {
-  const name = path.split("/").pop() ?? path;
-  return name.replace(/\.md$/, "");
-}
+import { displayTitle } from "@/features/memory/lib/workspaceTree";
 
 function noteTrail(path: string): string {
   const parts = path.replace(/\.md$/, "").split("/");
@@ -61,32 +57,16 @@ export function MemoryNote({
   const content = detail?.content ?? "";
 
   return (
-    <article
-      data-memory-note-path={summary.path}
-      tabIndex={-1}
-      className="relative flex h-full min-h-0 flex-col outline-none"
-    >
+    <article data-memory-note-path={summary.path} tabIndex={-1} className="relative flex h-full min-h-0 flex-col outline-none">
       <MemoryFindBar scrollerRef={scrollerRef} />
-      <div
-        ref={scrollerRef}
-        data-memory-note-scroll
-        data-page-enter-item
-        data-page-skeleton
-        className="mw-scroller scroll-thin scroll-fade min-w-0"
-      >
+      <div ref={scrollerRef} data-memory-note-scroll data-page-enter-item data-page-skeleton className="mw-scroller scroll-thin scroll-fade min-w-0">
         <div className="mw-page">
-          <p className="mw-note-crumb">{noteTrail(summary.path)} / <b>{filenameStem(summary.path)}</b></p>
-          <h1 className="mw-note-title">{filenameStem(summary.path)}</h1>
-          {detail && (
-            <MemoryProperties
-              frontmatter={detail.frontmatter}
-              editable={onFrontmatterChange != null}
-              onChange={onFrontmatterChange}
-            />
-          )}
-          {contentNotice && (
-            <div className="mb-5 mt-5 rounded-[10px] bg-surface-soft px-3 py-2 text-sm text-muted">{contentNotice}</div>
-          )}
+          <p className="mw-note-crumb">
+            {noteTrail(summary.path)} / <b>{displayTitle(summary)}</b>
+          </p>
+          <h1 className="mw-note-title">{displayTitle(summary)}</h1>
+          {detail && <MemoryProperties frontmatter={detail.frontmatter} editable={onFrontmatterChange != null} onChange={onFrontmatterChange} />}
+          {contentNotice && <div className="mb-5 mt-5 rounded-[10px] bg-surface-soft px-3 py-2 text-sm text-muted">{contentNotice}</div>}
           <div>
             {contentError && !content ? (
               <ListError title="Couldn't load this note" message={contentError} onRetry={onRetry} />

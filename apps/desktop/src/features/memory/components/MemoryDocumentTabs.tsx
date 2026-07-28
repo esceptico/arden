@@ -1,34 +1,19 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type KeyboardEvent,
-  type MouseEvent,
-} from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import clsx from "clsx";
 import { useReducedMotion } from "motion/react";
 import { AnchoredPopover } from "@/components/ui/AnchoredPopover";
 import type { ContextMenuPosition } from "@/components/ui/ContextMenu";
 import { MenuItem } from "@/components/ui/MenuItem";
-import { stem } from "@/features/memory/lib/workspaceTree";
 import { getBoardMotion } from "@/lib/boardMotion";
 
 interface MemoryDocumentTabsProps {
   paths: readonly string[];
   activeIndex: number;
+  titleForPath: (path: string) => string;
   disabled?: boolean;
   onSelect: (index: number) => void;
   onClose: (index: number) => void;
-  onOpenContextMenu: (
-    index: number,
-    path: string,
-    trigger: HTMLElement,
-    source: ContextMenuPosition["source"],
-    x: number,
-    y: number,
-  ) => void;
+  onOpenContextMenu: (index: number, path: string, trigger: HTMLElement, source: ContextMenuPosition["source"], x: number, y: number) => void;
 }
 
 interface TabOverflowState {
@@ -45,13 +30,8 @@ const EMPTY_OVERFLOW: TabOverflowState = {
   edgeRight: false,
 };
 
-export function countFullyHiddenTabs(
-  stripRect: Pick<DOMRect, "left" | "right">,
-  tabRects: readonly Pick<DOMRect, "left" | "right">[],
-) {
-  return tabRects.filter(
-    (rect) => rect.right <= stripRect.left + 0.5 || rect.left >= stripRect.right - 0.5,
-  ).length;
+export function countFullyHiddenTabs(stripRect: Pick<DOMRect, "left" | "right">, tabRects: readonly Pick<DOMRect, "left" | "right">[]) {
+  return tabRects.filter((rect) => rect.right <= stripRect.left + 0.5 || rect.left >= stripRect.right - 0.5).length;
 }
 
 /** The mock's complete open-page tab contract: shared moving indicator,
@@ -60,14 +40,7 @@ export function countFullyHiddenTabs(
 /** Strip edge fade (10px mask) plus a little air. */
 const TAB_EDGE_INSET = 14;
 
-export function MemoryDocumentTabs({
-  paths,
-  activeIndex,
-  disabled = false,
-  onSelect,
-  onClose,
-  onOpenContextMenu,
-}: MemoryDocumentTabsProps) {
+export function MemoryDocumentTabs({ paths, activeIndex, titleForPath, disabled = false, onSelect, onClose, onOpenContextMenu }: MemoryDocumentTabsProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const restoreTabFocus = useRef(false);
@@ -119,20 +92,19 @@ export function MemoryDocumentTabs({
     if (!motion) return;
     const readLength = motion.geometry.read;
     const tabs = Array.from(list.querySelectorAll<HTMLElement>('[role="tab"]'));
-    const natural = tabs.reduce((width, tab) => width + tab.offsetWidth, 0)
-      + readLength("--tab-bar-gap") * Math.max(0, tabs.length - 1)
+    const natural =
+      tabs.reduce((width, tab) => width + tab.offsetWidth, 0) +
+      readLength("--tab-bar-gap") * Math.max(0, tabs.length - 1) +
       // root.style.width below sets the WIDTH OF .mw-tab-strip itself (the
       // padded outer box), not just the tab content — has to add the
       // strip's own left+right padding back in or the last tab overflows
       // it. Was --tab-strip-chrome (a flat 8px, imprecise); this is the
       // strip's actual padding, exactly.
-      + readLength("--tab-bar-padding") * 2;
+      readLength("--tab-bar-padding") * 2;
     const instruments = root.closest(".memory-ws")?.querySelector<HTMLElement>(".mw-instruments");
     const available = Math.max(
       readLength("--tab-overflow-min-width"),
-      (instruments?.getBoundingClientRect().left ?? window.innerWidth)
-        - root.getBoundingClientRect().left
-        - readLength("--instrument-layout-gap"),
+      (instruments?.getBoundingClientRect().left ?? window.innerWidth) - root.getBoundingClientRect().left - readLength("--instrument-layout-gap"),
     );
     const hasOverflow = natural > available;
     const width = `${Math.round(hasOverflow ? available : natural)}px`;
@@ -143,19 +115,19 @@ export function MemoryDocumentTabs({
     const next: TabOverflowState = {
       overflowing: hasOverflow,
       hiddenCount: hasOverflow
-        ? countFullyHiddenTabs(listRect, tabs.map((tab) => tab.getBoundingClientRect()))
+        ? countFullyHiddenTabs(
+            listRect,
+            tabs.map((tab) => tab.getBoundingClientRect()),
+          )
         : 0,
       edgeLeft: hasOverflow && list.scrollLeft > 1,
       edgeRight: hasOverflow && list.scrollLeft < list.scrollWidth - list.clientWidth - 1,
     };
-    setOverflow((current) => (
-      current.overflowing === next.overflowing
-      && current.hiddenCount === next.hiddenCount
-      && current.edgeLeft === next.edgeLeft
-      && current.edgeRight === next.edgeRight
+    setOverflow((current) =>
+      current.overflowing === next.overflowing && current.hiddenCount === next.hiddenCount && current.edgeLeft === next.edgeLeft && current.edgeRight === next.edgeRight
         ? current
-        : next
-    ));
+        : next,
+    );
     if (!hasOverflow || next.hiddenCount === 0) setMenuOpen(false);
   }, []);
 
@@ -196,7 +168,10 @@ export function MemoryDocumentTabs({
     }
     if (next !== list.scrollLeft) {
       if (typeof list.scrollTo === "function") {
-        list.scrollTo({ left: next, behavior: reducedMotion ? "auto" : "smooth" });
+        list.scrollTo({
+          left: next,
+          behavior: reducedMotion ? "auto" : "smooth",
+        });
       } else {
         list.scrollLeft = next;
       }
@@ -231,22 +206,14 @@ export function MemoryDocumentTabs({
     onClose(index);
   };
 
-  const openContextMenu = (
-    event: MouseEvent<HTMLDivElement>,
-    index: number,
-    path: string,
-  ) => {
+  const openContextMenu = (event: MouseEvent<HTMLDivElement>, index: number, path: string) => {
     event.preventDefault();
     const trigger = event.currentTarget.querySelector<HTMLButtonElement>('[role="tab"]');
     if (!trigger) return;
     onOpenContextMenu(index, path, trigger, "pointer", event.clientX, event.clientY);
   };
 
-  const onSlotKeyDown = (
-    event: KeyboardEvent<HTMLDivElement>,
-    index: number,
-    path: string,
-  ) => {
+  const onSlotKeyDown = (event: KeyboardEvent<HTMLDivElement>, index: number, path: string) => {
     const target = event.target instanceof HTMLElement ? event.target.closest('[role="tab"]') : null;
     if (event.key === "Delete" && target) {
       event.preventDefault();
@@ -262,21 +229,8 @@ export function MemoryDocumentTabs({
   };
 
   return (
-    <div
-      ref={rootRef}
-      className={clsx(
-        "tabs mw-tab-strip",
-        overflow.edgeLeft && "edge-left",
-        overflow.edgeRight && "edge-right",
-      )}
-      data-page-enter-item="chrome"
-    >
-      <div
-        ref={listRef}
-        className="tab-strip mw-doc-tabs"
-        role="tablist"
-        aria-label="Open pages"
-      >
+    <div ref={rootRef} className={clsx("tabs mw-tab-strip", overflow.edgeLeft && "edge-left", overflow.edgeRight && "edge-right")} data-page-enter-item="chrome">
+      <div ref={listRef} className="tab-strip mw-doc-tabs" role="tablist" aria-label="Open pages">
         {paths.map((path, index) => (
           <div
             key={path}
@@ -295,12 +249,12 @@ export function MemoryDocumentTabs({
               disabled={disabled}
               className={clsx("tab mw-doc-tab", index === activeIndex && "on")}
             >
-              {stem(path)}
+              {titleForPath(path)}
             </button>
             <button
               type="button"
               className="tab-close mw-doc-tab-x"
-              aria-label={`Close ${stem(path)}`}
+              aria-label={`Close ${titleForPath(path)}`}
               tabIndex={index === activeIndex ? 0 : -1}
               disabled={disabled}
               onClick={() => closeAt(index, true)}
@@ -349,7 +303,7 @@ export function MemoryDocumentTabs({
               setMenuOpen(false);
             }}
           >
-            {stem(path)}
+            {titleForPath(path)}
           </MenuItem>
         ))}
       </AnchoredPopover>

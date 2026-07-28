@@ -679,6 +679,7 @@ def _wiki_link_json(reference, *, source, paths_by_id: dict[str, str]) -> dict:
     node = reference.node
     target = f"{node.page or ''}{f'#{node.fragment}' if node.fragment is not None else ''}"
     display = (node.alias or target).strip()
+    alias = node.alias.strip() if node.alias is not None else None
     candidate_ids = reference.candidates or (
         (reference.target_page_id,) if reference.target_page_id is not None else ()
     )
@@ -697,6 +698,7 @@ def _wiki_link_json(reference, *, source, paths_by_id: dict[str, str]) -> dict:
         "source_path": source.resource.path,
         "target": target,
         "display": display,
+        "alias": alias,
         "heading": None,
         "context": node.raw,
         "line": line,

@@ -50,6 +50,21 @@ test("machine-only paths never reach the workspace tree", () => {
   expect(isNotebookResourcePath("health.md")).toBe(false);
 });
 
+test("managed wiki READMEs remain visible as canonical folder overviews", () => {
+  const rootReadme = summary("README.md", { source: "wiki" });
+  const topicReadme = summary("topics/README.md", { source: "wiki" });
+  const topic = summary("topics/dex.md", { source: "wiki" });
+  const tree = buildWorkspaceTree([topic, rootReadme, topicReadme]);
+
+  expect(tree.files.map((artifact) => artifact.path)).toEqual(["README.md"]);
+  expect(findDir(tree, "topics/")?.files.map((artifact) => artifact.path)).toEqual([
+    "topics/dex.md",
+    "topics/README.md",
+  ]);
+  expect(sortNotes([topic, topicReadme], { key: "name", asc: true }, () => ""))
+    .toEqual([topicReadme, topic]);
+});
+
 test("tree mirrors the directory structure with empty directories included", () => {
   const artifacts = [summary("index.md"), summary("topics/dex.md"), summary("topics/nested/deep.md")];
   const tree = buildWorkspaceTree(artifacts, ["topics/archive/", "inbox/"]);

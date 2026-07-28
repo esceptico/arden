@@ -79,13 +79,13 @@ const page: MemoryArtifactDetail = {
 };
 
 const backlink = (line: number, context: string) => ({
-  sourcePath: "daily/2026-07-13.md", target: "Dex", display: "Dex", heading: "Morning", context,
+  sourcePath: "daily/2026-07-13.md", target: "Dex", display: "Dex", alias: null, heading: "Morning", context,
   line, column: 12, status: "resolved" as const, resolvedPath: page.path, candidates: [page.path], sourceRevision: "ledger:r2",
 });
 
 const links: PageLinks = {
   path: page.path, revision: "ledger:r2", stale: false, totalOutgoing: 1, totalBacklinks: 3, limit: 100, offset: 0,
-  outgoing: [{ sourcePath: page.path, target: "Roadmap", display: "Roadmap", heading: "Work", context: "See [[Roadmap]] next", line: 4, column: 5, status: "resolved", resolvedPath: "roadmap.md", candidates: ["roadmap.md"], sourceRevision: "ledger:r2" }],
+  outgoing: [{ sourcePath: page.path, target: "Roadmap", display: "Roadmap", alias: null, heading: "Work", context: "See [[Roadmap]] next", line: 4, column: 5, status: "resolved", resolvedPath: "roadmap.md", candidates: ["roadmap.md"], sourceRevision: "ledger:r2" }],
   backlinks: [
     backlink(8, "Worked on [[Dex]]"),
     backlink(9, "Shipped **[[Dex]]** review"),
@@ -140,10 +140,10 @@ test("links peek uses outgoing/incoming tabs and navigates context rows", async 
   expect(host.querySelector('[role="tab"]')?.textContent).toContain("outgoing");
   expect(host.querySelectorAll('[role="tab"]')).toHaveLength(2);
 
-  // Outgoing links resolve to stems; a row click navigates to the anchor.
+  // An unaliased outgoing link resolves to the canonical title fallback.
   const outgoing = Array.from(host.querySelectorAll<HTMLButtonElement>("button.mw-lk-row"));
   expect(outgoing).toHaveLength(1);
-  expect(outgoing[0]!.textContent).toContain("Roadmap");
+  expect(outgoing[0]!.textContent).toContain("roadmap");
   await act(async () => outgoing[0]!.click());
   expect(navigated).toEqual([{ path: "roadmap.md", anchor: "Work" }]);
 
@@ -170,6 +170,25 @@ test("links peek uses outgoing/incoming tabs and navigates context rows", async 
   expect(host.querySelector('button[aria-label="Load more memory links"]')).toBeNull();
   expect(host.querySelector('button[aria-label="Correct record record-old"]')).toBeNull();
   expect(host.querySelector('button[aria-label="Forget record record-old"]')).toBeNull();
+});
+
+test("outgoing links use canonical page titles unless an explicit alias wins", async () => {
+  const aliased = {
+    ...links.outgoing[0]!,
+    target: "Plan",
+    display: "Pinned label",
+    alias: "Pinned label",
+    resolvedPath: "plan.md",
+    candidates: ["plan.md"],
+  };
+  const { host, root } = setup();
+  await act(async () => root.render(inspectorElement({
+    links: { ...links, outgoing: [links.outgoing[0]!, aliased], totalOutgoing: 2 },
+    titleForPath: (path) => path === "roadmap.md" ? "Canonical roadmap" : "Canonical plan",
+  })));
+
+  const titles = Array.from(host.querySelectorAll(".mw-lk-title")).map((node) => node.textContent);
+  expect(titles).toEqual(["Canonical roadmap", "Pinned label"]);
 });
 
 test("links stay visible but never activatable while navigation is disabled", async () => {
@@ -208,7 +227,7 @@ test("link and history errors stay independent and the retry refetches links", a
 
   // A history failure only degrades the Activity pane; links render fine.
   await act(async () => root.render(inspectorElement({ history: null, historyError: "History unavailable" })));
-  expect(host.textContent).toContain("Roadmap");
+  expect(host.textContent).toContain("roadmap");
   expect(host.querySelector('[role="alert"]')).toBeNull();
   await act(async () => root.render(inspectorElement({ history: null, historyError: "History unavailable", activePane: "activity" })));
   await settlePanelSwap();

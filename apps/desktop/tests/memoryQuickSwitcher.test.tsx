@@ -6,7 +6,10 @@ import { ArtifactMemoryView } from "@/features/memory/components/ArtifactMemoryV
 import { rankSwitcherMatches } from "@/features/memory/components/MemoryQuickSwitcher";
 import type { MemoryArtifactSummary } from "@/features/memory/lib/notebookTypes";
 
-const config: AppConfig = { serverUrl: "http://localhost:6877", apiKey: "test-key" };
+const config: AppConfig = {
+  serverUrl: "http://localhost:6877",
+  apiKey: "test-key",
+};
 const originalDesktop = window.ardenDesktop;
 const roots = new Set<Root>();
 
@@ -26,10 +29,34 @@ const base = {
 };
 
 const summaries = [
-  { ...base, path: "me.md", directory: "", title: "Me", summary: "Identity, preferences, and durable context." },
-  { ...base, path: "topics/dex.md", directory: "topics", title: "Dex", summary: "Current work and decisions about Dex." },
-  { ...base, path: "topics/dax.md", directory: "topics", title: "Dax", summary: "A different topic entirely." },
-  { ...base, path: "research/latency.md", directory: "research", title: "Latency", summary: "Observed latency behavior." },
+  {
+    ...base,
+    path: "me.md",
+    directory: "",
+    title: "Me",
+    summary: "Identity, preferences, and durable context.",
+  },
+  {
+    ...base,
+    path: "topics/dex.md",
+    directory: "topics",
+    title: "Dex",
+    summary: "Current work and decisions about Dex.",
+  },
+  {
+    ...base,
+    path: "topics/dax.md",
+    directory: "topics",
+    title: "Dax",
+    summary: "A different topic entirely.",
+  },
+  {
+    ...base,
+    path: "research/latency.md",
+    directory: "research",
+    title: "Latency",
+    summary: "Observed latency behavior.",
+  },
 ];
 
 function detail(path: string) {
@@ -49,20 +76,55 @@ function installBridge() {
     api: {
       request: async (_config, request) => {
         if (request.path.startsWith("/admin/memory/artifacts?") || request.path === "/admin/memory/artifacts") {
-          return { ok: true, status: 200, statusText: "OK", contentType: "application/json", data: { artifacts: summaries }, text: "" };
+          return {
+            ok: true,
+            status: 200,
+            statusText: "OK",
+            contentType: "application/json",
+            data: { artifacts: summaries },
+            text: "",
+          };
         }
         if (request.path.startsWith("/admin/memory/items")) {
-          return { ok: true, status: 200, statusText: "OK", contentType: "application/json", data: { items: [], limit: 100 }, text: "" };
+          return {
+            ok: true,
+            status: 200,
+            statusText: "OK",
+            contentType: "application/json",
+            data: { items: [], limit: 100 },
+            text: "",
+          };
         }
         if (request.path.startsWith("/admin/memory/links")) {
           const path = new URL(`http://local${request.path}`).searchParams.get("path")!;
           return {
-            ok: true, status: 200, statusText: "OK", contentType: "application/json",
-            data: { path, revision: "ledger:1", stale: false, outgoing: [], backlinks: [], total_outgoing: 0, total_backlinks: 0, limit: 100, offset: 0 }, text: "",
+            ok: true,
+            status: 200,
+            statusText: "OK",
+            contentType: "application/json",
+            data: {
+              path,
+              revision: "ledger:1",
+              stale: false,
+              outgoing: [],
+              backlinks: [],
+              total_outgoing: 0,
+              total_backlinks: 0,
+              limit: 100,
+              offset: 0,
+            },
+            text: "",
           };
         }
         const path = decodeURIComponent(request.path.replace("/admin/memory/artifacts/", ""));
-        return { ok: true, status: 200, statusText: "OK", contentType: "application/json", data: { artifact: detail(path) }, text: "" };
+        return {
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          contentType: "application/json",
+          data: { artifact: detail(path) },
+          text: "",
+        };
       },
     },
   } as Window["ardenDesktop"];
@@ -100,20 +162,30 @@ afterEach(async () => {
   roots.clear();
   window.ardenDesktop = originalDesktop;
   document.body.replaceChildren();
-  for (const key of [
-    "arden.desktop.memory.inspectorOpen",
-    "arden.desktop.memory.lastPath",
-    "arden.desktop.memory.pins",
-    "arden.desktop.memory.rail.collapsed",
-  ]) localStorage.removeItem(key);
+  for (const key of ["arden.desktop.memory.inspectorOpen", "arden.desktop.memory.lastPath", "arden.desktop.memory.pins", "arden.desktop.memory.rail.collapsed"])
+    localStorage.removeItem(key);
 });
 
 function artifact(path: string, extra: Partial<MemoryArtifactSummary> = {}): MemoryArtifactSummary {
   return {
-    path, title: path, kind: "topic", type: "file", directory: path.includes("/") ? path.split("/")[0]! : "",
-    scope: { kind: "user", key: null }, snippet: null, summary: null, revision: "r", recordCount: 0,
-    generated: false, editable: true, readonlyReason: null, updatedAt: "2026-07-12T10:00:00Z",
-    createdAt: null, labels: [], source: null, ...extra,
+    path,
+    title: path,
+    kind: "topic",
+    type: "file",
+    directory: path.includes("/") ? path.split("/")[0]! : "",
+    scope: { kind: "user", key: null },
+    snippet: null,
+    summary: null,
+    revision: "r",
+    recordCount: 0,
+    generated: false,
+    editable: true,
+    readonlyReason: null,
+    updatedAt: "2026-07-12T10:00:00Z",
+    createdAt: null,
+    labels: [],
+    source: null,
+    ...extra,
   };
 }
 
@@ -134,10 +206,27 @@ test("rankSwitcherMatches orders by recency on empty query and match quality oth
   expect(ranked.map((a) => a.path)).toEqual(["topics/dex.md", "topics/index.md"]);
 });
 
+test("rankSwitcherMatches uses managed wiki titles instead of filename stems", () => {
+  const managed = artifact("topics/opaque-id.md", {
+    source: "wiki",
+    title: "Canonical Decisions",
+  });
+  const legacy = artifact("topics/decisions.md", {
+    title: "Ignored legacy title",
+  });
+
+  expect(rankSwitcherMatches([managed, legacy], "canonical", []).map((item) => item.path)).toEqual(["topics/opaque-id.md"]);
+  expect(rankSwitcherMatches([managed, legacy], "ignored", [])).toEqual([]);
+});
+
 test("rankSwitcherMatches narrows with folder:, @month, and #kind operator tokens", () => {
   const dex = artifact("topics/dex.md", { updatedAt: "2026-07-12T10:00:00Z" });
   const dax = artifact("topics/dax.md", { updatedAt: "2026-06-30T10:00:00Z" });
-  const latency = artifact("research/latency.md", { kind: "lesson", updatedAt: null, createdAt: "2026-07-01T09:00:00Z" });
+  const latency = artifact("research/latency.md", {
+    kind: "lesson",
+    updatedAt: null,
+    createdAt: "2026-07-01T09:00:00Z",
+  });
   const all = [dex, dax, latency];
 
   expect(rankSwitcherMatches(all, "folder:topics", []).map((a) => a.path)).toEqual(["topics/dax.md", "topics/dex.md"]);

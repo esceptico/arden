@@ -78,6 +78,15 @@ def test_context_is_a_bounded_snippet_that_keeps_the_link(tmp_path: Path):
     assert link.context.startswith("…") and link.context.endswith("…")
 
 
+def test_rebuild_preserves_explicit_alias_when_label_equals_target(tmp_path: Path):
+    _write(tmp_path / "old.md", "# Old\n")
+    _write(tmp_path / "source.md", "[[Old]] [[Old|Old]]\n")
+
+    links = LinkIndex(tmp_path).rebuild(ArtifactMemoryStore(tmp_path), "revision-1").outgoing("source.md")
+
+    assert [(link.display, link.alias) for link in links] == [("Old", None), ("Old", "Old")]
+
+
 def test_context_uses_raw_link_offset_and_preserves_label_whitespace(tmp_path: Path):
     _write(tmp_path / "target.md", "# Target\n")
     _write(

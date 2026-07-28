@@ -9,6 +9,12 @@ import {
   readMemoryArtifactDetail,
   rebuildMemoryArtifactSummaries,
 } from "@/api/memoryArtifacts";
+import {
+  acceptWikiRenameApproval,
+  listWikiRenameApprovals,
+  rejectWikiRenameApproval,
+  requestWikiRenameApproval,
+} from "@/api/wiki";
 
 const config: AppConfig = { serverUrl: "http://localhost:6877", apiKey: "test-key" };
 const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
@@ -133,6 +139,23 @@ const rawEvent = {
   source_canonical_revision: "canonical-1",
 };
 
+const rawRenameApproval = {
+  approval_id: "approval-1",
+  old_path: "topics/a.md",
+  new_path: "topics/renamed.md",
+  old_title: "A",
+  new_title: "Renamed A",
+  link_count: 3,
+  page_count: 2,
+  generation: 1,
+  status: "pending",
+  created_at: "2026-07-28T10:00:00Z",
+  resolved_at: null,
+  commit_id: null,
+  resolution: null,
+  replacement_approval_id: null,
+};
+
 afterEach(() => {
   (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
   if (originalDesktopDescriptor) {
@@ -163,6 +186,33 @@ test("preview sends the exact base revision and candidate", async () => {
       actor: "user:desktop",
     },
   });
+});
+
+test("wiki rename API preserves the safe snake_case DTO and maps approvals", async () => {
+  bridgeResponse({ status: "pending", approval: rawRenameApproval, commit_id: null, replacement_approval_id: null });
+  const requested = await requestWikiRenameApproval(config, {
+    pageId: "page-a",
+    newPath: "topics/renamed.md",
+    newTitle: "Renamed A",
+  });
+  expect(lastRequest()).toEqual({
+    method: "POST",
+    path: "/admin/wiki/rename-approvals",
+    body: { page_id: "page-a", new_path: "topics/renamed.md", new_title: "Renamed A" },
+  });
+  expect(requested.approval).toMatchObject({ approvalId: "approval-1", oldPath: "topics/a.md", newPath: "topics/renamed.md", linkCount: 3, pageCount: 2 });
+
+  bridgeResponse({ approvals: [rawRenameApproval] });
+  await expect(listWikiRenameApprovals(config)).resolves.toMatchObject([{ approvalId: "approval-1", generation: 1 }]);
+  expect(lastRequest()).toEqual({ method: "GET", path: "/admin/wiki/rename-approvals", body: undefined });
+
+  bridgeResponse({ status: "accepted", approval: { ...rawRenameApproval, status: "accepted" }, commit_id: "commit-1", replacement_approval_id: null });
+  await acceptWikiRenameApproval(config, "approval-1");
+  expect(lastRequest()).toEqual({ method: "POST", path: "/admin/wiki/rename-approvals/approval-1/accept", body: undefined });
+
+  bridgeResponse({ status: "rejected", approval: { ...rawRenameApproval, status: "rejected" }, commit_id: null, replacement_approval_id: null });
+  await rejectWikiRenameApproval(config, "approval-1", "keep path");
+  expect(lastRequest()).toEqual({ method: "POST", path: "/admin/wiki/rename-approvals/approval-1/reject", body: { resolution: "keep path" } });
 });
 
 test("preview maps every operation kind and question", async () => {
@@ -336,6 +386,7 @@ test("links preserve resolution status, context, candidates, and pagination", as
     source_path: "notes/source.md",
     target: "Dex#Plan",
     display: "the plan",
+    alias: "the plan",
     heading: "Plan",
     context: "We agreed on [[Dex#Plan|the plan]] yesterday.",
     line: 12,
@@ -369,6 +420,7 @@ test("links preserve resolution status, context, candidates, and pagination", as
       sourcePath: "notes/source.md",
       target: "Dex#Plan",
       display: "the plan",
+      alias: "the plan",
       heading: "Plan",
       context: "We agreed on [[Dex#Plan|the plan]] yesterday.",
       line: 12,
@@ -382,6 +434,7 @@ test("links preserve resolution status, context, candidates, and pagination", as
       sourcePath: "notes/source.md",
       target: "Dex#Plan",
       display: "the plan",
+      alias: "the plan",
       heading: "Plan",
       context: "We agreed on [[Dex#Plan|the plan]] yesterday.",
       line: 12,
