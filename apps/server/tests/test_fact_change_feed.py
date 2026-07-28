@@ -3,7 +3,10 @@ from datetime import UTC, datetime
 import pytest
 
 from arden.database import connect
-from arden.memory.facts import FactLedger, FactPlanStore, FactService, FactValidationError
+from arden.memory.facts.ledger import FactLedger
+from arden.memory.facts.models import FactValidationError
+from arden.memory.facts.plan_store import FactPlanStore
+from arden.memory.facts.service import FactService
 
 NOW = datetime(2026, 7, 28, 12, tzinfo=UTC)
 

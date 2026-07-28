@@ -1,21 +1,16 @@
 """Readable wiki projection and small automatic chat context."""
 
-from __future__ import annotations
-
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
-from arden.logging import get_logger
-from arden.revisions import RevisionConflictError
+from arden.revisions.errors import RevisionConflictError
 from arden.search.types import RawItem
 
 from .models import WikiInfrastructureRole, WikiPageRecord
 from .service import WikiService
-
-if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
 
 WIKI_PAGE_SOURCE = "wiki_page"
 WIKI_RESULT_LIMIT = 3
@@ -23,7 +18,6 @@ WIKI_CONTEXT_CHAR_BUDGET = 6_000
 WIKI_RESIDENT_CHAR_BUDGET = 5_000
 WIKI_MIN_QUERY_CHARS = 12
 WIKI_QUERY_CHAR_LIMIT = 512
-_logger = get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,8 +37,8 @@ class WikiPageIndexState:
             raise ValueError("detail must be a nonempty string or None")
 
 
-async def _readable_pages(wiki: WikiService) -> tuple[WikiPageRecord, ...] | None:
-    """Read one coherent wiki snapshot without letting concurrent writes break chat."""
+async def _readable_pages(wiki: WikiService) -> tuple[WikiPageRecord, ...]:
+    """Read one coherent wiki snapshot, retrying one concurrent commit."""
 
     for attempt in range(2):
         try:
@@ -52,12 +46,8 @@ async def _readable_pages(wiki: WikiService) -> tuple[WikiPageRecord, ...] | Non
         except RevisionConflictError:
             if attempt == 0:
                 continue
-            _logger.warning("wiki changed repeatedly while reading chat context", exc_info=True)
-            return None
-        except Exception:
-            _logger.warning("wiki chat context read failed", exc_info=True)
-            return None
-    return None
+            raise
+    raise AssertionError("unreachable")
 
 
 def _role(record: WikiPageRecord) -> WikiInfrastructureRole:
@@ -110,6 +100,7 @@ class WikiPageIndexProjection:
     async def sync(self) -> object | None:
         changed_state: WikiPageIndexState | None = None
         result: object | None = None
+        failure: Exception | None = None
         async with self._lock:
             for attempt in range(2):
                 search_index = self._get_search_index()
@@ -123,10 +114,10 @@ class WikiPageIndexProjection:
                 except Exception as error:
                     if attempt == 0 and self._get_search_index() is not search_index:
                         continue
-                    _logger.warning("wiki_page index sync failed", exc_info=True)
                     changed_state = self._set_state(
                         WikiPageIndexState(None, "error", f"{type(error).__name__}: {error}".rstrip(": "))
                     )
+                    failure = error
                     break
                 if state.status != "ready":
                     if attempt == 0 and self._get_search_index() is not search_index:
@@ -143,6 +134,8 @@ class WikiPageIndexProjection:
                 )
         if changed_state is not None:
             await self._notify_state_change(changed_state)
+        if failure is not None:
+            raise failure
         return result
 
     async def search(self, query: str, *, limit: int) -> list:
@@ -157,11 +150,10 @@ class WikiPageIndexProjection:
             except Exception:
                 if attempt == 0 and self._get_search_index() is not search_index:
                     continue
-                _logger.warning("wiki_page search failed", exc_info=True)
-                return []
+                raise
             if self._get_search_index() is search_index:
                 return list(results)
-        return []
+        raise RuntimeError("search index changed during wiki_page search")
 
     async def _sync(self, search_index: object) -> WikiPageIndexState:
         """Index one pinned wiki head, retrying one concurrent wiki commit."""
@@ -170,12 +162,6 @@ class WikiPageIndexProjection:
             wiki_head = self._wiki.repository.head
             fact_revision = await self._fact_revision()
             pages = await _readable_pages(self._wiki)
-            if pages is None:
-                return WikiPageIndexState(
-                    self._last_state.wiki_head,
-                    "error",
-                    "wiki pages could not be read",
-                )
             now = datetime.now(UTC)
             items = [
                 RawItem(
@@ -216,10 +202,7 @@ class WikiPageIndexProjection:
     async def _notify_state_change(self, state: WikiPageIndexState) -> None:
         if self._on_state_change is None:
             return
-        try:
-            await self._on_state_change(state)
-        except Exception:
-            _logger.warning("wiki_page index state callback failed", exc_info=True)
+        await self._on_state_change(state)
 
 
 @dataclass(frozen=True, slots=True)
@@ -235,14 +218,14 @@ class WikiContextBuilder:
             self.fact_revision(),
             _readable_pages(self.wiki),
         )
-        residents = [record for record in (pages or ()) if _is_resident(record)]
+        residents = [record for record in pages if _is_resident(record)]
         return _render_pages("## WIKI RESIDENT CONTEXT", residents, fact_revision, WIKI_RESIDENT_CHAR_BUDGET)
 
     async def page_context(self, path: str, *, title: str | None = None) -> dict[str, str] | None:
         """Return one bounded managed page for an explicitly attached Area."""
 
         pages = await _readable_pages(self.wiki)
-        record = next((item for item in (pages or ()) if item.resource.path == path), None)
+        record = next((item for item in pages if item.resource.path == path), None)
         if record is None:
             return None
         body = _body(record)[:WIKI_CONTEXT_CHAR_BUDGET].rstrip()
@@ -258,7 +241,7 @@ class WikiContextBuilder:
             self.fact_revision(),
             _readable_pages(self.wiki),
         )
-        pages = {record.page.page_id: record for record in (current_pages or ())}
+        pages = {record.page.page_id: record for record in current_pages}
         residents = {record.page.page_id for record in pages.values() if _is_resident(record)}
         results = await self.projection.search(
             query,

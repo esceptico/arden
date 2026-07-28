@@ -7,8 +7,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from arden.revisions import Archive, ChangeSet, Create, ManagedFileRepository, RevisionConflictError
-from arden.wiki import (
-    WikiChangeWarning,
+from arden.wiki.health import (
     WikiHealthIndex,
     WikiHealthInput,
     WikiHealthIssue,
@@ -17,8 +16,11 @@ from arden.wiki import (
     WikiHealthPendingReview,
     WikiHealthProjector,
     WikiHealthWorker,
+)
+from arden.wiki.models import WikiChangeWarning
+from arden.wiki.pages import create_page
+from arden.wiki.service import (
     WikiService,
-    create_page,
 )
 
 if TYPE_CHECKING:

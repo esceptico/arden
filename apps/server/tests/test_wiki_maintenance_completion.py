@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from arden.wiki import CompletionWikiMaintenanceReviewer, WikiMaintenanceDecision, WikiMaintenancePreparedReport
+from arden.wiki.maintenance.completion import CompletionWikiMaintenanceReviewer
+from arden.wiki.maintenance.runner import WikiMaintenanceDecision, WikiMaintenancePreparedReport
 from tests.conftest import completion_response
 
 

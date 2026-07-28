@@ -9,12 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from arden.memory.facts import (
-    FactConflictError,
-    FactLedger,
-    FactLedgerCorruptionError,
-    FactValidationError,
-)
+from arden.memory.facts.ledger import FactLedger
+from arden.memory.facts.models import FactConflictError, FactLedgerCorruptionError, FactValidationError
 from arden.revisions import ChangeSet, Update
 
 JULY = datetime(2026, 7, 28, 12, tzinfo=UTC)

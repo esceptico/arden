@@ -12,14 +12,11 @@ from arden.revisions import ChangeSet, CorruptRepositoryError, Create, ManagedFi
 from arden.server.app import app as server_app
 from arden.server.routers.wiki import router as wiki_router
 from arden.server.runtime import Runtime
-from arden.wiki import (
-    WikiMaintenanceReviewInput,
-    WikiMaintenanceStore,
-    WikiRenameApprovalCoordinator,
-    WikiRenameApprovalStore,
-    WikiService,
-    create_page,
-)
+from arden.wiki.approval_store import WikiRenameApprovalStore
+from arden.wiki.approvals import WikiRenameApprovalCoordinator
+from arden.wiki.maintenance.store import WikiMaintenanceReviewInput, WikiMaintenanceStore
+from arden.wiki.pages import create_page
+from arden.wiki.service import WikiService
 
 
 def _seed(service: WikiService, page_id: str, path: str, title: str) -> None:
@@ -61,6 +58,7 @@ async def wiki_client(tmp_path: Path):
 
     app = FastAPI()
     runtime = SimpleNamespace(
+        connected=True,
         wiki_rename_coordinator=coordinator,
         wiki_maintenance_store=maintenance_store,
         wiki_service=service,
@@ -180,6 +178,23 @@ def test_rename_approval_list_accept_and_reject(wiki_client):
     assert client.app.state.runtime.health_calls == 1
 
 
+def test_rename_accept_surfaces_health_projection_failures(wiki_client):
+    client, service, _store, _maintenance_store = wiki_client
+    approval = client.post(
+        "/admin/wiki/rename-approvals",
+        json={"page_id": "target", "new_path": "new.md", "new_title": "New"},
+    ).json()["approval"]
+
+    async def fail_health_projection() -> None:
+        raise RuntimeError("health projector unavailable")
+
+    client.app.state.runtime.project_wiki_health = fail_health_projection
+    with pytest.raises(RuntimeError, match="health projector unavailable"):
+        client.post(f"/admin/wiki/rename-approvals/{approval['approval_id']}/accept")
+
+    assert service.repository.get("target").path == "new.md"
+
+
 def test_router_maps_title_only_not_found_and_unavailable_consistently(wiki_client):
     client, _service, _store, _maintenance_store = wiki_client
     title_only = client.post(
@@ -199,7 +214,7 @@ def test_router_maps_title_only_not_found_and_unavailable_consistently(wiki_clie
     assert unavailable.status_code == 503
 
     unavailable_maintenance_app = FastAPI()
-    unavailable_maintenance_app.state.runtime = SimpleNamespace(wiki_maintenance_store=None)
+    unavailable_maintenance_app.state.runtime = SimpleNamespace(connected=True, wiki_maintenance_store=None)
     unavailable_maintenance_app.include_router(wiki_router)
     unavailable_maintenance = TestClient(unavailable_maintenance_app).get("/admin/wiki/maintenance-reviews")
     assert unavailable_maintenance.status_code == 503
@@ -454,6 +469,57 @@ async def test_maintenance_review_routes_sanitize_proposals_and_resolve_with_gen
     )
     assert conflict.status_code == 409
     assert client.post("/admin/wiki/maintenance-reviews/missing/accept", json={"generation": 0}).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_maintenance_decision_surfaces_resume_request_failures(wiki_client):
+    client, _service, _rename_store, store = wiki_client
+    review = await _pending_maintenance_review(
+        store,
+        commit="a" * 64,
+        key="resume-failure",
+        proposal=None,
+    )
+
+    async def fail_request() -> None:
+        raise RuntimeError("scheduler unavailable")
+
+    client.app.state.runtime.request_wiki_maintenance = fail_request
+    with pytest.raises(RuntimeError, match="scheduler unavailable"):
+        client.post(
+            f"/admin/wiki/maintenance-reviews/{review.review_id}/resolve-manually",
+            json={"generation": review.generation, "note": "checked externally"},
+        )
+
+    persisted = await store.get_review(review.review_id)
+    assert persisted is not None
+    assert persisted.status.value == "resolved_manual"
+
+
+@pytest.mark.asyncio
+async def test_maintenance_decision_surfaces_review_notification_failures(wiki_client):
+    client, _service, _rename_store, store = wiki_client
+    review = await _pending_maintenance_review(
+        store,
+        commit="b" * 64,
+        key="notification-failure",
+        proposal=None,
+    )
+
+    async def fail_notification(_revision: str) -> None:
+        raise RuntimeError("notification unavailable")
+
+    client.app.state.runtime.notify_wiki_maintenance_reviews_changed = fail_notification
+    with pytest.raises(RuntimeError, match="notification unavailable"):
+        client.post(
+            f"/admin/wiki/maintenance-reviews/{review.review_id}/resolve-manually",
+            json={"generation": review.generation, "note": "checked externally"},
+        )
+
+    assert client.app.state.runtime.maintenance_resume_requests == 1
+    persisted = await store.get_review(review.review_id)
+    assert persisted is not None
+    assert persisted.status.value == "resolved_manual"
 
 
 @pytest.mark.asyncio

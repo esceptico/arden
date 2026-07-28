@@ -4,13 +4,12 @@ This module deliberately knows no page categories or producers.  It only owns
 the small, visible page contract and returns new values for every edit.
 """
 
-from __future__ import annotations
-
 import math
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
+from typing import Self
 from uuid import uuid4
 
 import yaml
@@ -208,7 +207,7 @@ class WikiPage:
     metadata: Mapping[str, object]
     body: bytes
 
-    def with_title(self, title: str) -> WikiPage:
+    def with_title(self, title: str) -> Self:
         """Return a copy with a new title, without changing the body or identity."""
 
         return _validated_page(
@@ -221,7 +220,7 @@ class WikiPage:
             body=self.body,
         )
 
-    def with_metadata(self, updates: Mapping[str, object]) -> WikiPage:
+    def with_metadata(self, updates: Mapping[str, object]) -> Self:
         """Return a copy with unknown frontmatter fields merged immutably."""
 
         replacement = dict(self.metadata)
@@ -239,7 +238,7 @@ class WikiPage:
             body=self.body,
         )
 
-    def with_body(self, body: bytes) -> WikiPage:
+    def with_body(self, body: bytes) -> Self:
         """Return a copy with validated replacement body bytes."""
 
         if not isinstance(body, bytes):

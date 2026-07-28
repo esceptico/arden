@@ -23,7 +23,8 @@ from arden.revisions import ManagedFileRepository
 from arden.server.app import app
 from arden.server.routers.areas import asks_router
 from arden.server.routers.areas import router as areas_router
-from arden.wiki import WikiService, create_page
+from arden.wiki.pages import create_page
+from arden.wiki.service import WikiService
 
 PAGE = create_page(
     page_id="o-1a-page",

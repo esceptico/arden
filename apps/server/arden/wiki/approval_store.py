@@ -4,18 +4,15 @@ This deliberately stores only the approval boundary.  Planning, revision
 checks, and the actual commit stay in the wiki service.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-if TYPE_CHECKING:
-    import aiosqlite
+import aiosqlite
 
 
 class WikiRenameApprovalStatus(StrEnum):

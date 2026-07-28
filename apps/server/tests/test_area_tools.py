@@ -17,7 +17,7 @@ from arden.tools.area import (
 )
 from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.registry import ToolRegistry
-from arden.wiki import WikiService
+from arden.wiki.service import WikiService
 
 
 def execution(

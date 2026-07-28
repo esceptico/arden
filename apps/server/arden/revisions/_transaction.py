@@ -1,9 +1,8 @@
 """Prepared materialization and crash recovery for revision commits."""
 
-from __future__ import annotations
-
 import stat
-from typing import TYPE_CHECKING
+from collections.abc import Callable, Iterable
+from pathlib import Path
 
 from ._codec import (
     Transaction,
@@ -24,10 +23,6 @@ from ._storage import (
 )
 from .errors import CorruptRepositoryError, RevisionConflictError, UnsafePathError
 from .models import ResourceState, ResourceVersion
-
-if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable
-    from pathlib import Path
 
 
 class TransactionManager:

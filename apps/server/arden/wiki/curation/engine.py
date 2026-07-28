@@ -1,13 +1,11 @@
 """Canonical fact-correction planning for explicit user wiki edits."""
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC
 from types import MappingProxyType
-from typing import Literal, Protocol
+from typing import Literal, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -15,9 +13,9 @@ from arden.memory.facts.models import Fact
 from arden.memory.facts.service import FactPlanPreview, FactPrincipal, FactScopeError, FactService
 from arden.revisions import Commit, ResourceChange, ResourceState
 
-from .models import WikiFactCitation
-from .pages import WikiPage, parse_page
-from .service import WikiService
+from ..models import WikiFactCitation
+from ..pages import WikiPage, parse_page
+from ..service import WikiService
 
 USER_ACTOR = "user:desktop"
 USER_ORIGIN = "desktop"
@@ -53,7 +51,7 @@ class WikiEditCuratorDecision(BaseModel):
     corrections: list[WikiFactCorrection] = Field(default_factory=list, max_length=_MAX_CORRECTIONS)
 
     @model_validator(mode="after")
-    def _validate_outcome_shape(self) -> WikiEditCuratorDecision:
+    def _validate_outcome_shape(self) -> Self:
         if self.outcome == "no_change" and self.corrections:
             raise ValueError("no_change must not include corrections")
         if self.outcome == "correct_facts" and not self.corrections:

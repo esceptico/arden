@@ -1,13 +1,8 @@
 """Small completion-client adapter for fact synthesis prose."""
 
-from __future__ import annotations
-
-from typing import TYPE_CHECKING
+from arden.llm.base import CompletionClient
 
 from .synthesis import SynthesisFact
-
-if TYPE_CHECKING:
-    from arden.llm.base import CompletionClient
 
 
 class CompletionFactSynthesisRenderer:

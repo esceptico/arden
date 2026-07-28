@@ -5,22 +5,19 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-import arden.wiki.maintenance as maintenance_module
+import arden.wiki.maintenance.runner as maintenance_module
 import arden.wiki.service as wiki_service_module
 from arden.revisions import ChangeSet, Create, ManagedFileRepository, Move, Update
-from arden.wiki import (
+from arden.wiki.maintenance.runner import (
     WikiMaintenance,
     WikiMaintenanceConcernDraft,
     WikiMaintenanceDecision,
-    WikiMaintenancePageUpdate,
-    WikiMaintenanceReviewAction,
-    WikiMaintenanceReviewInput,
-    WikiMaintenanceStore,
     WikiMaintenanceUpdateDraft,
-    WikiService,
-    create_page,
 )
-from arden.wiki.service import WikiMaintenanceEvidenceLimitError
+from arden.wiki.maintenance.store import WikiMaintenanceReviewAction, WikiMaintenanceReviewInput, WikiMaintenanceStore
+from arden.wiki.models import WikiMaintenancePageUpdate
+from arden.wiki.pages import create_page
+from arden.wiki.service import WikiMaintenanceEvidenceLimitError, WikiService
 
 if TYPE_CHECKING:
     from pathlib import Path

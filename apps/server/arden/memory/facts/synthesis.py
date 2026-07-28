@@ -1,25 +1,20 @@
 """Canonical fact-ledger projection into Synthesis-owned wiki regions."""
 
-from __future__ import annotations
-
 import asyncio
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
-from typing import TYPE_CHECKING, Protocol
+from typing import Protocol
 
-from arden.revisions import ResourceState
+from arden.revisions.models import ResourceState
 from arden.wiki.models import GeneratedPageTarget, WikiPageRecord
 from arden.wiki.pages import parse_page
 from arden.wiki.service import WikiService
 
+from .consumer_store import FactConsumerStore
+from .ledger import FactLedger
 from .models import Fact, FactChangeFeed
-
-if TYPE_CHECKING:
-    from .consumer_store import FactConsumerStore
-    from .ledger import FactLedger
-
 
 CONSUMER_ID = "memory.synthesis"
 _CITATION_GROUP = re.compile(r"\(fact:(F\d{3,})(?:\s*,\s*fact:(F\d{3,}))*\)")
@@ -30,17 +25,17 @@ class FactSynthesisError(RuntimeError):
     """Synthesis could not safely publish a projection."""
 
 
-class FactSynthesisRenderer(Protocol):
-    """Renders cited Markdown from opaque fact tokens only."""
-
-    async def render(self, *, title: str, facts: tuple[SynthesisFact, ...]) -> str: ...
-
-
 @dataclass(frozen=True, slots=True)
 class SynthesisFact:
     token: str
     text: str
     source_summary: str
+
+
+class FactSynthesisRenderer(Protocol):
+    """Renders cited Markdown from opaque fact tokens only."""
+
+    async def render(self, *, title: str, facts: tuple[SynthesisFact, ...]) -> str: ...
 
 
 @dataclass(frozen=True, slots=True)

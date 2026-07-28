@@ -6,8 +6,6 @@ names or touches the filesystem.  A small lexer records exact UTF-8 byte spans;
 than code, raw HTML, a comment, or a Markdown link destination.
 """
 
-from __future__ import annotations
-
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256

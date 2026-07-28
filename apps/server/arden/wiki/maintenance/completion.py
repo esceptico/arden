@@ -1,14 +1,8 @@
 """Structured completion adapter for conservative Wiki Maintenance reviews."""
 
-from __future__ import annotations
+from arden.llm.base import CompletionClient
 
-from typing import TYPE_CHECKING
-
-from .maintenance import WikiMaintenanceDecision, WikiMaintenancePreparedReport
-
-if TYPE_CHECKING:
-    from arden.llm.base import CompletionClient
-
+from .runner import WikiMaintenanceDecision, WikiMaintenancePreparedReport
 
 _SYSTEM = """You review one Markdown wiki change using only the supplied report.
 User edits are authoritative. Preserve their intent. Do not add speculative

@@ -5,17 +5,16 @@ import pytest
 from arden.config import Config
 from arden.constants import BUILTIN_MEMORY_RETENTION_ID, BUILTIN_MEMORY_SYNTHESIZE_ID, BUILTIN_WIKI_MAINTENANCE_ID
 from arden.events.sse import MemoryChangedEvent
-from arden.memory.facts import (
-    FactConsumerStore,
-    FactLedger,
-    FactMaintenanceResult,
-    FactPrincipal,
-)
+from arden.memory.facts.consumer_store import FactConsumerStore
+from arden.memory.facts.ledger import FactLedger
+from arden.memory.facts.maintenance.runner import FactMaintenanceResult
+from arden.memory.facts.service import FactPrincipal
 from arden.memory.facts.synthesis import CONSUMER_ID as FACT_SYNTHESIS_CONSUMER_ID
 from arden.server.runtime import core as runtime_core
 from arden.server.runtime.core import Runtime
 from arden.tools.facts import FACT_SERVICE
-from arden.wiki import WikiMaintenanceResult, WikiMaintenanceStore
+from arden.wiki.maintenance.runner import WikiMaintenanceResult
+from arden.wiki.maintenance.store import WikiMaintenanceStore
 
 MIGRATED_AT = datetime(2026, 7, 28, 12, tzinfo=UTC)
 USER_SCOPE = ("user", None)

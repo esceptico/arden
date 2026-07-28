@@ -5,12 +5,9 @@ from datetime import UTC, datetime
 import pytest
 
 from arden.database import connect
-from arden.memory.facts import (
-    FactConsumerStore,
-    FactConsumerWatermarkConflictError,
-    FactLedger,
-    FactValidationError,
-)
+from arden.memory.facts.consumer_store import FactConsumerStore, FactConsumerWatermarkConflictError
+from arden.memory.facts.ledger import FactLedger
+from arden.memory.facts.models import FactValidationError
 
 pytestmark = pytest.mark.asyncio
 

@@ -11,7 +11,7 @@ from arden.memory.facts.models import FactConflictError
 from arden.memory.facts.plan_store import FactPlanStore
 from arden.memory.facts.service import FactPrincipal, FactService
 from arden.revisions import ManagedFileRepository
-from arden.wiki.curator import (
+from arden.wiki.curation.engine import (
     CURATOR_ACTOR,
     CURATOR_ORIGIN,
     WikiEditCurator,
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
-    from arden.wiki.curator import WikiEditCuratorEvidence
+    from arden.wiki.curation.engine import WikiEditCuratorEvidence
 
 pytestmark = pytest.mark.asyncio
 NOW = datetime(2026, 7, 28, 12, tzinfo=UTC)

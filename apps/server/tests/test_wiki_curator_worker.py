@@ -6,13 +6,13 @@ from typing import TYPE_CHECKING
 import pytest
 
 from arden.memory.facts.service import FactPlanPreview
-from arden.wiki.curator import WikiEditCuratorResult
-from arden.wiki.curator_queue import (
+from arden.wiki.curation.engine import WikiEditCuratorResult
+from arden.wiki.curation.queue import (
     WikiEditCuratorJobOutcome,
     WikiEditCuratorJobStatus,
     WikiEditCuratorQueueStore,
 )
-from arden.wiki.curator_worker import SYSTEM_OWNER_ID, WikiEditCuratorWorker
+from arden.wiki.curation.worker import SYSTEM_OWNER_ID, WikiEditCuratorWorker
 
 if TYPE_CHECKING:
     from pathlib import Path

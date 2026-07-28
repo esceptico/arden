@@ -1,7 +1,5 @@
 """Durable workflow state for fact plans, separate from canonical fact events."""
 
-from __future__ import annotations
-
 import asyncio
 import hashlib
 import json
@@ -9,13 +7,11 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any
+from typing import Any
+
+import aiosqlite
 
 from .models import FactEvent, FactPlan
-
-if TYPE_CHECKING:
-    import aiosqlite
-
 
 _PLAN_SCHEMA_VERSION = 1
 _EVENT_FIELDS = frozenset(

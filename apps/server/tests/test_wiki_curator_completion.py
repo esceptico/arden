@@ -5,8 +5,8 @@ from datetime import UTC, datetime
 import pytest
 
 from arden.memory.facts.models import Fact
-from arden.wiki.curator import WikiEditCuratorDecision, WikiEditCuratorEvidence
-from arden.wiki.curator_completion import CompletionWikiEditCuratorReviewer
+from arden.wiki.curation.completion import CompletionWikiEditCuratorReviewer
+from arden.wiki.curation.engine import WikiEditCuratorDecision, WikiEditCuratorEvidence
 from tests.conftest import completion_response
 
 

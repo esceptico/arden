@@ -1,15 +1,13 @@
 """Owned background worker for durable wiki-edit curation."""
 
-from __future__ import annotations
-
 import asyncio
 from datetime import UTC, datetime, timedelta
 
 from arden.logging import get_logger
 from arden.memory.facts.service import FactPrincipal, FactService
 
-from .curator import WikiEditCurator
-from .curator_queue import (
+from .engine import WikiEditCurator
+from .queue import (
     WikiEditCuratorJob,
     WikiEditCuratorJobOutcome,
     WikiEditCuratorQueueStore,

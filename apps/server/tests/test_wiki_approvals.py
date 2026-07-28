@@ -8,7 +8,6 @@ import pytest
 
 import arden.database as database
 from arden.revisions import ChangeSet, Create, ManagedFileRepository, RevisionConflictError
-from arden.wiki import WikiService, create_page
 from arden.wiki.approval_store import WikiRenameApprovalStatus, WikiRenameApprovalStore
 from arden.wiki.approvals import (
     CorruptWikiRenameApprovalError,
@@ -19,6 +18,8 @@ from arden.wiki.approvals import (
     rename_plan_fingerprint,
     serialize_rename_plan,
 )
+from arden.wiki.pages import create_page
+from arden.wiki.service import WikiService
 
 if TYPE_CHECKING:
     from pathlib import Path

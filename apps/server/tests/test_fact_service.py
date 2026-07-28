@@ -12,19 +12,18 @@ from typing import TYPE_CHECKING
 import pytest
 
 from arden.database import connect
-from arden.memory.facts import (
-    FactConflictError,
-    FactLedger,
+from arden.memory.facts.ledger import FactLedger
+from arden.memory.facts.models import FactConflictError
+from arden.memory.facts.plan_store import (
     FactPlanCorruptionError,
     FactPlanOwnershipError,
     FactPlanRequestConflictError,
     FactPlanStatus,
     FactPlanStore,
-    FactPrincipal,
-    FactScopeError,
-    FactService,
+    deserialize_fact_plan,
+    serialize_fact_plan,
 )
-from arden.memory.facts.plan_store import deserialize_fact_plan, serialize_fact_plan
+from arden.memory.facts.service import FactPrincipal, FactScopeError, FactService
 
 pytestmark = pytest.mark.asyncio
 

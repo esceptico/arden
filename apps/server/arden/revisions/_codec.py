@@ -1,18 +1,13 @@
 """Canonical records for trees, commits, and recovery transactions."""
 
-from __future__ import annotations
-
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
 
 from ._materialized import ancestor_collision, normalize_relative
 from ._storage import FORMAT_VERSION, canonical_jsonl, sha256, valid_hash
 from .errors import CorruptRepositoryError
 from .models import Commit, ResourceChange, ResourceState, ResourceVersion
-
-if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
 
 
 @dataclass(frozen=True)

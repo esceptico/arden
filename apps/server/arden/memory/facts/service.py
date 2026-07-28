@@ -1,13 +1,12 @@
 """Async, scope-aware service boundary above the synchronous fact ledger."""
 
-from __future__ import annotations
-
 import asyncio
 import hashlib
 import json
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from arden.logging import get_logger
 
@@ -19,9 +18,6 @@ from .plan_store import (
     FactPlanStore,
     StoredFactPlan,
 )
-
-if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
 
 FactScope = tuple[str, str | None]
 FactOrder = tuple[datetime, str]

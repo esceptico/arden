@@ -1,12 +1,10 @@
 """Generic content-addressed history for a materialized managed-file tree."""
 
-from __future__ import annotations
-
 import difflib
 import os
+from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from ._codec import (
     TransactionRow,
@@ -46,9 +44,6 @@ from .models import (
     StorageReport,
     Update,
 )
-
-if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable, Mapping
 
 
 class ManagedFileRepository:

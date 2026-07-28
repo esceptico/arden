@@ -1,14 +1,12 @@
 """Typed values returned by the wiki domain service."""
 
-from __future__ import annotations
-
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from types import MappingProxyType
 
-from arden.revisions import IntegrityReport, ResourceChange, ResourceVersion, StorageReport
+from arden.revisions.models import IntegrityReport, ResourceChange, ResourceVersion, StorageReport
 
 from .pages import WikiPage
 from .wikilinks import WikilinkNode
@@ -70,21 +68,21 @@ class WikiSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
-class WikiLinkReport:
-    head: str | None
-    page: WikiPageRecord
-    pages: tuple[WikiPageRecord, ...]
-    outgoing: tuple[LinkReference, ...]
-    backlinks: tuple[LinkReference, ...]
-
-
-@dataclass(frozen=True, slots=True)
 class LinkReference:
     source_page_id: str
     node: WikilinkNode
     status: LinkStatus
     target_page_id: str | None = None
     candidates: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class WikiLinkReport:
+    head: str | None
+    page: WikiPageRecord
+    pages: tuple[WikiPageRecord, ...]
+    outgoing: tuple[LinkReference, ...]
+    backlinks: tuple[LinkReference, ...]
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,14 +1,8 @@
 """Structured completion adapter for canonical fact maintenance."""
 
-from __future__ import annotations
+from arden.llm.base import CompletionClient
 
-from typing import TYPE_CHECKING
-
-from .maintenance import FactMaintenanceDecision, FactMaintenancePreparedCluster
-
-if TYPE_CHECKING:
-    from arden.llm.base import CompletionClient
-
+from .runner import FactMaintenanceDecision, FactMaintenancePreparedCluster
 
 _SYSTEM = """Review one prepared canonical-fact cluster using only the supplied evidence.
 Return no_change when evidence is weak or ambiguous. You may only:

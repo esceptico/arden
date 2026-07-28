@@ -4,7 +4,9 @@ from pathlib import Path
 import pytest
 
 from arden.revisions import Archive, ChangeSet, Create, ManagedFileRepository, RevisionConflictError, Update
-from arden.wiki import LinkStatus, WikiAmbiguityError, WikiService, WikiValidationError, create_page
+from arden.wiki.models import LinkStatus
+from arden.wiki.pages import create_page
+from arden.wiki.service import WikiAmbiguityError, WikiService, WikiValidationError
 
 
 def _repo(tmp_path: Path) -> ManagedFileRepository:

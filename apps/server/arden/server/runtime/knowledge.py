@@ -1,12 +1,6 @@
-from __future__ import annotations
-
-from typing import TYPE_CHECKING
-
 from arden.config import Config
+from arden.memory.facts.service import FactService
 from arden.server.indexer import Indexer
-
-if TYPE_CHECKING:
-    from arden.memory.facts import FactService
 
 
 class KnowledgeRuntime:

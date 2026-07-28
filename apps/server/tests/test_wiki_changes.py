@@ -19,7 +19,7 @@ from arden.revisions import (
     Update,
 )
 from arden.revisions.errors import RevisionConflictError
-from arden.wiki import (
+from arden.wiki.models import (
     LinkStatus,
     WikiChangeCommit,
     WikiChangesReport,
@@ -28,10 +28,9 @@ from arden.wiki import (
     WikiInfrastructureRole,
     WikiPageRevision,
     WikiResourceChange,
-    WikiService,
-    create_page,
 )
-from arden.wiki.service import _storage_warnings
+from arden.wiki.pages import create_page
+from arden.wiki.service import WikiService, _storage_warnings
 
 if TYPE_CHECKING:
     from pathlib import Path

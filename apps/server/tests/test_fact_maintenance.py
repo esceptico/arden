@@ -6,27 +6,27 @@ from typing import TYPE_CHECKING
 import pytest
 
 from arden.database import connect
-from arden.memory.facts import (
-    FactConflictError,
-    FactConsumerStore,
-    FactLedger,
+from arden.memory.facts.consumer_store import FactConsumerStore
+from arden.memory.facts.ledger import FactLedger
+from arden.memory.facts.maintenance.runner import (
+    CONSUMER_ID,
+    ORIGIN,
     FactMaintenance,
     FactMaintenanceDecision,
     FactMaintenanceError,
-    FactPlanStore,
-    FactService,
-    FactValidationError,
+    FactMaintenancePreparedCluster,
 )
-from arden.memory.facts.maintenance import CONSUMER_ID, ORIGIN
+from arden.memory.facts.models import Fact, FactConflictError, FactValidationError
+from arden.memory.facts.plan_store import FactPlanStore
+from arden.memory.facts.service import FactService
 from arden.revisions import Archive, ChangeSet, Create, ManagedFileRepository, RevisionConflictError, Update
-from arden.wiki import WikiService
-from arden.wiki import create_page as create_wiki_page
+from arden.wiki.pages import create_page as create_wiki_page
+from arden.wiki.service import WikiService
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
-    from arden.memory.facts import Fact, FactMaintenancePreparedCluster
 
 pytestmark = pytest.mark.asyncio
 NOW = datetime(2026, 7, 28, 12, tzinfo=UTC)

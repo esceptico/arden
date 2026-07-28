@@ -6,7 +6,7 @@ import sqlite3
 import pytest
 
 from arden.database import connect
-from arden.wiki.maintenance_store import (
+from arden.wiki.maintenance.store import (
     CONSUMER_ID,
     WikiMaintenanceReview,
     WikiMaintenanceReviewAction,

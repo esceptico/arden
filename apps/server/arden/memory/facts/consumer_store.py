@@ -1,22 +1,16 @@
 """Durable compare-and-swap watermarks for fact-feed consumers."""
 
-from __future__ import annotations
-
 import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from pathlib import Path
+
+import aiosqlite
 
 from arden.database import connect
 
 from .ledger import FactLedger
 from .models import FactChangeFeed
-
-if TYPE_CHECKING:
-    from pathlib import Path
-
-    import aiosqlite
-
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS fact_consumer_watermarks (
@@ -98,7 +92,7 @@ class FactConsumerStore:
         self._conn = conn
 
     @classmethod
-    async def open(cls, db_path: Path) -> FactConsumerStore:
+    async def open(cls, db_path: Path) -> "FactConsumerStore":
         """Open a transaction-independent connection to the shared fact database."""
 
         conn = await connect(db_path, autocommit=True)

@@ -1,29 +1,23 @@
 """Conservative reconciliation over the canonical fact change feed."""
 
-from __future__ import annotations
-
 import asyncio
 import hashlib
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Literal, Protocol
+from typing import Literal, Protocol, Self
 
+import aiosqlite
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from arden.constants import BUILTIN_MEMORY_CONSOLIDATE_ID
 from arden.wiki.models import WikiMaintenancePageUpdate, WikiPageRecord, WikiSnapshot
+from arden.wiki.service import WikiService
 
-from .consumer_store import FactConsumerStore
-from .models import Fact, FactChangeFeed, FactConflictError
-from .service import FactPrincipal, FactService
-
-if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
-
-    import aiosqlite
-
-    from arden.wiki.service import WikiService
+from ..consumer_store import FactConsumerStore
+from ..models import Fact, FactChangeFeed, FactConflictError
+from ..service import FactPrincipal, FactService
 
 CONSUMER_ID = "memory.maintenance"
 ORIGIN = "memory.maintenance"
@@ -187,7 +181,7 @@ class FactMaintenanceDecision(BaseModel):
     canonical_page_token: str | None = None
 
     @model_validator(mode="after")
-    def _validate_outcome_shape(self) -> FactMaintenanceDecision:
+    def _validate_outcome_shape(self) -> Self:
         metadata = (self.kind, self.labels, self.subjects, self.lifecycle, self.evidence_class)
         normalization = (self.old_topic, self.canonical_page_token)
         if self.outcome == "no_change":

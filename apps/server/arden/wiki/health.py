@@ -1,12 +1,10 @@
 """Deterministic, backend-owned projection of wiki maintenance health."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
-from arden.revisions import Commit
+from arden.revisions.models import Commit
 
 from .models import WikiChangesReport
 from .service import WikiService

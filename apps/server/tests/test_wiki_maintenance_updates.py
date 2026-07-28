@@ -3,13 +3,13 @@ from pathlib import Path
 import pytest
 
 from arden.revisions import Archive, ChangeSet, Create, ManagedFileRepository, RevisionConflictError, Update
-from arden.wiki import (
+from arden.wiki.models import WikiMaintenancePageUpdate
+from arden.wiki.pages import create_page
+from arden.wiki.service import (
     GeneratedRegionConflictError,
     WikiAmbiguityError,
-    WikiMaintenancePageUpdate,
     WikiService,
     WikiValidationError,
-    create_page,
 )
 
 

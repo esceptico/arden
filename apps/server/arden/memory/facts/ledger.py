@@ -1,7 +1,5 @@
 """Strict append-only facts backed by the crash-safe managed-file repository."""
 
-from __future__ import annotations
-
 import hashlib
 import json
 import math
@@ -17,12 +15,13 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
-from arden.revisions import ChangeSet, Commit, Create, ManagedFileRepository, ResourceState, Update
 from arden.revisions.errors import (
     CorruptRepositoryError,
     IdempotencyConflictError,
     RevisionConflictError,
 )
+from arden.revisions.models import ChangeSet, Commit, Create, ResourceState, Update
+from arden.revisions.repository import ManagedFileRepository
 
 from .models import (
     DueReviewCandidate,

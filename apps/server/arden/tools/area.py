@@ -9,7 +9,7 @@ from arden.tools.core import ToolResult, tool
 from arden.tools.core.context import ToolExecution
 from arden.tools.core.formatting import format_lines_with_pagination
 from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
-from arden.wiki import WikiService, WikiValidationError
+from arden.wiki.service import WikiService, WikiValidationError
 
 WIKI_SERVICE = "wiki"
 

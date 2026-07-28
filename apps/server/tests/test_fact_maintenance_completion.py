@@ -2,11 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from arden.memory.facts import (
-    CompletionFactMaintenanceReviewer,
-    FactMaintenanceDecision,
-    FactMaintenancePreparedCluster,
-)
+from arden.memory.facts.maintenance.completion import CompletionFactMaintenanceReviewer
+from arden.memory.facts.maintenance.runner import FactMaintenanceDecision, FactMaintenancePreparedCluster
 from tests.conftest import completion_response
 
 

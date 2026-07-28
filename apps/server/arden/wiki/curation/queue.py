@@ -1,20 +1,15 @@
 """Durable SQLite queue state for explicit wiki-edit curation."""
 
-from __future__ import annotations
-
 import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import Self
+
+import aiosqlite
 
 from arden.database import connect
-
-if TYPE_CHECKING:
-    from pathlib import Path
-
-    import aiosqlite
-
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS wiki_edit_curator_jobs (
@@ -143,7 +138,7 @@ class WikiEditCuratorQueueStore:
         self._lock = asyncio.Lock()
 
     @classmethod
-    async def open(cls, db_path: Path) -> WikiEditCuratorQueueStore:
+    async def open(cls, db_path: Path) -> Self:
         conn = await connect(db_path, autocommit=True)
         store = cls(conn)
         try:

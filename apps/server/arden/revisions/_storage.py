@@ -1,7 +1,5 @@
 """Durable immutable-object and ref storage for managed-file revisions."""
 
-from __future__ import annotations
-
 import fcntl
 import hashlib
 import json
@@ -9,15 +7,12 @@ import os
 import re
 import stat
 import threading
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from ._anchored import AnchoredDirectory, canonical_absolute, ensure_absolute_directory
 from .errors import CorruptRepositoryError, RevisionConflictError, UnsafePathError
-
-if TYPE_CHECKING:
-    from collections.abc import Iterator, Mapping
 
 FORMAT_VERSION = 1
 _HEX = frozenset("0123456789abcdef")

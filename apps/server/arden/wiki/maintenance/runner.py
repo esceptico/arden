@@ -1,26 +1,18 @@
 """Conservative, durable maintenance over the revision-backed wiki feed."""
 
-from __future__ import annotations
-
 import asyncio
 import json
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
-from typing import TYPE_CHECKING, Literal, Protocol
+from typing import Literal, Protocol
 
 from pydantic import BaseModel, Field
 
-from arden.revisions import ResourceChange
+from arden.revisions.models import ResourceChange
 
-from .maintenance_store import (
-    WikiMaintenanceReview,
-    WikiMaintenanceReviewInput,
-    WikiMaintenanceReviewStatus,
-    WikiMaintenanceStore,
-    WikiMaintenanceWatermarkConflictError,
-)
-from .models import (
+from ..models import (
     WikiChangeCommit,
     WikiChangesReport,
     WikiMaintenanceCommit,
@@ -29,19 +21,21 @@ from .models import (
     WikiMaintenancePageUpdate,
     WikiPageRecord,
 )
-from .service import (
+from ..service import (
     WIKI_HEALTH_ACTOR,
     WIKI_HEALTH_ORIGIN,
     WIKI_HEALTH_REASON,
     WIKI_HEALTH_RESOURCE_ID,
     WikiMaintenanceEvidenceLimitError,
+    WikiService,
 )
-
-if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
-
-    from .service import WikiService
-
+from .store import (
+    WikiMaintenanceReview,
+    WikiMaintenanceReviewInput,
+    WikiMaintenanceReviewStatus,
+    WikiMaintenanceStore,
+    WikiMaintenanceWatermarkConflictError,
+)
 
 _CONCERN_KEY = re.compile(r"[a-z0-9][a-z0-9._:-]{0,120}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")

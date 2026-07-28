@@ -1,7 +1,6 @@
-from __future__ import annotations
-
 import asyncio
-from typing import TYPE_CHECKING
+from collections.abc import Awaitable, Callable
+from datetime import datetime
 
 from fastapi import HTTPException, Request
 
@@ -23,20 +22,17 @@ from arden.llm.router import get_completion_client
 from arden.llm.router import init as llm_init
 from arden.logging import get_logger
 from arden.mcp.manager import MCPManager
-from arden.memory.facts import (
-    LEDGER_DIRECTORY,
-    CompletionFactMaintenanceReviewer,
-    CompletionFactSynthesisRenderer,
-    FactConsumerStore,
-    FactIndexProjection,
-    FactLedger,
-    FactMaintenance,
-    FactPlanStore,
-    FactService,
-    FactSynthesis,
-)
-from arden.memory.facts.maintenance import CONSUMER_ID as FACT_MAINTENANCE_CONSUMER_ID
+from arden.memory.facts.completion_renderer import CompletionFactSynthesisRenderer
+from arden.memory.facts.consumer_store import FactConsumerStore
+from arden.memory.facts.index import FactIndexProjection
+from arden.memory.facts.ledger import FactLedger
+from arden.memory.facts.maintenance.completion import CompletionFactMaintenanceReviewer
+from arden.memory.facts.maintenance.runner import CONSUMER_ID as FACT_MAINTENANCE_CONSUMER_ID
+from arden.memory.facts.maintenance.runner import FactMaintenance
+from arden.memory.facts.plan_store import FactPlanStore
+from arden.memory.facts.service import FactService
 from arden.memory.facts.synthesis import CONSUMER_ID as FACT_SYNTHESIS_CONSUMER_ID
+from arden.memory.facts.synthesis import FactSynthesis
 from arden.monitor.slack import SlackMonitor
 from arden.notifiers.base import NotifierContext
 from arden.notifiers.service import NotifierService
@@ -54,14 +50,14 @@ from arden.skills.registry import SkillRegistry
 from arden.skills.service import SkillService, get_skills_dirs
 from arden.tools.connections import ConnectionService
 from arden.tools.executor import ToolExecutor
-from arden.wiki import (
-    CompletionWikiEditCuratorReviewer,
-    CompletionWikiMaintenanceReviewer,
-    WikiChangesReport,
-    WikiContextBuilder,
-    WikiEditCurator,
-    WikiEditCuratorQueueStore,
-    WikiEditCuratorWorker,
+from arden.wiki.approval_store import WikiRenameApprovalStore
+from arden.wiki.approvals import WikiRenameApprovalCoordinator
+from arden.wiki.context import WikiContextBuilder, WikiPageIndexProjection
+from arden.wiki.curation.completion import CompletionWikiEditCuratorReviewer
+from arden.wiki.curation.engine import WikiEditCurator
+from arden.wiki.curation.queue import WikiEditCuratorQueueStore
+from arden.wiki.curation.worker import WikiEditCuratorWorker
+from arden.wiki.health import (
     WikiHealthIndex,
     WikiHealthInput,
     WikiHealthIssue,
@@ -70,13 +66,12 @@ from arden.wiki import (
     WikiHealthPendingReview,
     WikiHealthProjector,
     WikiHealthWorker,
-    WikiMaintenance,
-    WikiMaintenanceStore,
-    WikiPageIndexProjection,
-    WikiRenameApprovalCoordinator,
-    WikiRenameApprovalStore,
-    WikiService,
 )
+from arden.wiki.maintenance.completion import CompletionWikiMaintenanceReviewer
+from arden.wiki.maintenance.runner import WikiMaintenance
+from arden.wiki.maintenance.store import WikiMaintenanceStore
+from arden.wiki.models import WikiChangesReport
+from arden.wiki.service import WikiService
 
 _logger = get_logger(__name__)
 
@@ -90,12 +85,17 @@ _HEALTH_PHASE_IDS = frozenset(
 )
 _HEALTH_PHASES = tuple(spec for spec in BUILTINS if spec.task_id in _HEALTH_PHASE_IDS)
 
-if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
-    from datetime import datetime
-
 
 class Runtime:
+    dispatch_session_message: (
+        Callable[
+            [str, str, str | None, bool | None, list[dict] | None],
+            Awaitable[object],
+        ]
+        | None
+    )
+    resume_suspended_chat_run: Callable[[str, str], Awaitable[object]] | None
+
     def __init__(self, config: Config | None = None):
         initial_config = config or get_config()
         self.integrations = IntegrationRegistry(ALL_INTEGRATIONS)
@@ -111,14 +111,8 @@ class Runtime:
         self.skill_registry: SkillRegistry | None = None
         self.skill_service: SkillService | None = None
         self.notifier_service: NotifierService | None = None
-        self.dispatch_session_message: (
-            Callable[
-                [str, str, str | None, bool | None, list[dict] | None],
-                Awaitable[object],
-            ]
-            | None
-        ) = None
-        self.resume_suspended_chat_run: Callable[[str, str], Awaitable[object]] | None = None
+        self.dispatch_session_message = None
+        self.resume_suspended_chat_run = None
         self.app_control: AppControlService | None = None
         self.wiki_repository: ManagedFileRepository | None = None
         self.wiki_service: WikiService | None = None
@@ -268,7 +262,7 @@ class Runtime:
         if self._connected:
             return
 
-        fact_ledger = FactLedger(self.config.memory_artifacts_dir / LEDGER_DIRECTORY) if self.config.memory else None
+        fact_ledger = FactLedger(self.config.memory_artifacts_dir / "facts") if self.config.memory else None
         init_tracing()
         llm_init(self.config)
         self.stores = await Stores.connect(self.config)
@@ -390,6 +384,12 @@ class Runtime:
         elif self._wiki_curator_store is not None:
             await self._wiki_curator_store.enqueue(commit_id)
         else:
+            raise RuntimeError("wiki edit curator queue is unavailable")
+
+    def require_wiki_user_edit_queue(self) -> None:
+        """Reject edits before commit when their durable curation queue is unavailable."""
+
+        if self._wiki_curator_store is None:
             raise RuntimeError("wiki edit curator queue is unavailable")
 
     async def _request_fact_synthesis(self) -> None:

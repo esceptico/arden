@@ -8,14 +8,17 @@ import pytest
 from arden.core.prompts import build_system_blocks
 from arden.revisions import ChangeSet, Create, ManagedFileRepository, RevisionConflictError
 from arden.search.types import SearchResult
-from arden.wiki import (
+from arden.wiki.context import (
+    WIKI_PAGE_SOURCE,
     WikiContextBuilder,
-    WikiMaintenancePageUpdate,
     WikiPageIndexProjection,
     WikiPageIndexState,
+    _normalized_query,
+)
+from arden.wiki.models import WikiMaintenancePageUpdate
+from arden.wiki.service import (
     WikiService,
 )
-from arden.wiki.context import WIKI_PAGE_SOURCE, _normalized_query
 
 
 class _Store:
@@ -217,7 +220,7 @@ async def test_concurrent_wiki_commit_retries_without_failing_chat(tmp_path, mon
 
 
 @pytest.mark.asyncio
-async def test_repeated_wiki_read_conflict_degrades_to_empty_context(tmp_path, monkeypatch) -> None:
+async def test_repeated_wiki_read_conflict_surfaces_after_one_retry(tmp_path, monkeypatch) -> None:
     wiki = WikiService(ManagedFileRepository(tmp_path / "pages", history_root=tmp_path / "history"))
     index = _Index()
     index.store.items["existing"] = ("Existing", "Preserve me.", {})
@@ -229,11 +232,37 @@ async def test_repeated_wiki_read_conflict_degrades_to_empty_context(tmp_path, m
 
     monkeypatch.setattr(wiki, "readable_pages", always_conflicted)
 
-    assert await builder.resident_context() is None
-    assert await builder.retrieval_context("tell me about the current project") is None
-    await projection.sync()
+    with pytest.raises(RevisionConflictError, match="wiki head keeps changing"):
+        await builder.resident_context()
+    with pytest.raises(RevisionConflictError, match="wiki head keeps changing"):
+        await builder.retrieval_context("tell me about the current project")
+    with pytest.raises(RevisionConflictError, match="wiki head keeps changing"):
+        await projection.sync()
     assert set(index.store.items) == {"existing"}
-    assert projection.last_state == WikiPageIndexState(None, "error", "wiki pages could not be read")
+    assert projection.last_state == WikiPageIndexState(
+        None,
+        "error",
+        "RevisionConflictError: wiki head keeps changing",
+    )
+
+
+@pytest.mark.asyncio
+async def test_unexpected_wiki_read_failure_surfaces_and_records_error_state(tmp_path, monkeypatch) -> None:
+    wiki = WikiService(ManagedFileRepository(tmp_path / "pages", history_root=tmp_path / "history"))
+    index = _Index()
+    projection = WikiPageIndexProjection(wiki, lambda: index, _fact_revision)
+    builder = WikiContextBuilder(wiki, projection, _fact_revision)
+
+    def broken_read():
+        raise OSError("wiki storage is unavailable")
+
+    monkeypatch.setattr(wiki, "readable_pages", broken_read)
+
+    with pytest.raises(OSError, match="wiki storage is unavailable"):
+        await builder.resident_context()
+    with pytest.raises(OSError, match="wiki storage is unavailable"):
+        await projection.sync()
+    assert projection.last_state == WikiPageIndexState(None, "error", "OSError: wiki storage is unavailable")
 
 
 @pytest.mark.asyncio
@@ -286,7 +315,7 @@ async def test_projection_never_marks_a_repeatedly_changing_wiki_head_current(tm
 
 
 @pytest.mark.asyncio
-async def test_projection_state_callback_is_outside_the_lock_and_cannot_break_sync(tmp_path) -> None:
+async def test_projection_state_callback_is_outside_the_lock_and_propagates_failure(tmp_path) -> None:
     wiki = WikiService(ManagedFileRepository(tmp_path / "pages", history_root=tmp_path / "history"))
     wiki.create_page(page_id="topic", path="topic.md", title="Topic", body=b"Callback-safe topic.\n")
     index = _Index()
@@ -301,7 +330,8 @@ async def test_projection_state_callback_is_outside_the_lock_and_cannot_break_sy
 
     projection = WikiPageIndexProjection(wiki, lambda: index, _fact_revision, on_state_change=callback)
 
-    assert await projection.sync() is index
+    with pytest.raises(RuntimeError, match="health consumer is unavailable"):
+        await projection.sync()
     assert await projection.sync() is index
     assert states == [WikiPageIndexState(wiki.repository.head, "ready")]
     assert lock_states == [False]
@@ -372,3 +402,21 @@ async def test_concurrent_search_index_reload_retries_without_failing_chat(tmp_p
     assert context is not None
     assert "Reload-safe topic material" in context
     assert set(replacement.store.items) == {"topic"}
+
+
+@pytest.mark.asyncio
+async def test_search_failure_surfaces_instead_of_becoming_empty_context(tmp_path) -> None:
+    wiki = WikiService(ManagedFileRepository(tmp_path / "pages", history_root=tmp_path / "history"))
+    wiki.create_page(page_id="topic", path="topic.md", title="Topic", body=b"Search failure evidence.\n")
+
+    class _BrokenSearchIndex(_Index):
+        async def search(self, _query, *, sources, limit):
+            del sources, limit
+            raise RuntimeError("search backend is unavailable")
+
+    index = _BrokenSearchIndex()
+    projection = WikiPageIndexProjection(wiki, lambda: index, _fact_revision)
+    builder = WikiContextBuilder(wiki, projection, _fact_revision)
+
+    with pytest.raises(RuntimeError, match="search backend is unavailable"):
+        await builder.retrieval_context("tell me about the search failure evidence")

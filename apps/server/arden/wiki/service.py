@@ -1,25 +1,23 @@
 """Snapshot-pinned wiki operations over :mod:`arden.revisions`."""
 
-from __future__ import annotations
-
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from hashlib import sha256
 
-from arden.revisions import (
+from arden.revisions.errors import RevisionConflictError
+from arden.revisions.models import (
     Archive,
     ChangeSet,
     Commit,
     Create,
-    ManagedFileRepository,
     Move,
     ResourceState,
     Restore,
     StorageReport,
     Update,
 )
-from arden.revisions.errors import RevisionConflictError
+from arden.revisions.repository import ManagedFileRepository
 
 from .models import (
     GeneratedPageTarget,

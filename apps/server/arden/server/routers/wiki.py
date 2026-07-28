@@ -7,31 +7,32 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
-from arden.logging import get_logger
 from arden.revisions import (
     CorruptRepositoryError,
     RevisionConflictError,
     RevisionContentLimitError,
     UnsafePathError,
 )
-from arden.wiki import (
+from arden.server.runtime import get_runtime
+from arden.wiki.approval_store import PendingWikiRenameApprovalConflictError, WikiRenameApproval
+from arden.wiki.approvals import (
     CorruptWikiRenameApprovalError,
-    PendingWikiRenameApprovalConflictError,
+    RenamePlanSerializationError,
     RenamePolicy,
-    WikiMaintenanceError,
+    WikiRenameApprovalCoordinator,
+    deserialize_rename_plan,
+    rename_plan_fingerprint,
+)
+from arden.wiki.maintenance.runner import WikiMaintenanceError, parse_maintenance_update_proposal
+from arden.wiki.maintenance.store import (
     WikiMaintenanceReview,
     WikiMaintenanceReviewAction,
     WikiMaintenanceReviewConflictError,
     WikiMaintenanceStore,
-    WikiRenameApproval,
-    WikiRenameApprovalCoordinator,
-    WikiValidationError,
-    parse_maintenance_update_proposal,
 )
-from arden.wiki.approvals import RenamePlanSerializationError, deserialize_rename_plan, rename_plan_fingerprint
+from arden.wiki.service import WikiValidationError
 
 router = APIRouter(prefix="/admin/wiki", tags=["wiki"])
-_logger = get_logger(__name__)
 
 
 class WikiRenameRequest(BaseModel):
@@ -145,28 +146,24 @@ _EVIDENCE_SOURCE_BYTES = 1024 * 1024
 
 
 def _coordinator(request: Request) -> WikiRenameApprovalCoordinator:
-    runtime = getattr(request.app.state, "runtime", None)
-    coordinator = getattr(runtime, "wiki_rename_coordinator", None)
+    coordinator = get_runtime(request).wiki_rename_coordinator
     if coordinator is None:
         raise HTTPException(status_code=503, detail="wiki rename service not ready")
     return coordinator
 
 
 def _maintenance_store(request: Request) -> WikiMaintenanceStore:
-    runtime = getattr(request.app.state, "runtime", None)
-    store = getattr(runtime, "wiki_maintenance_store", None)
+    store = get_runtime(request).wiki_maintenance_store
     if store is None:
         raise HTTPException(status_code=503, detail="wiki maintenance service not ready")
     return store
 
 
 def _wiki_repository(request: Request):
-    runtime = getattr(request.app.state, "runtime", None)
-    service = getattr(runtime, "wiki_service", None)
-    repository = getattr(service, "repository", None)
-    if repository is None:
+    service = get_runtime(request).wiki_service
+    if service is None:
         raise HTTPException(status_code=503, detail="wiki history service not ready")
-    return repository
+    return service.repository
 
 
 def _approval_response(approval: WikiRenameApproval) -> WikiRenameApprovalResponse:
@@ -215,36 +212,15 @@ def _result_response(result) -> WikiRenameResultResponse:
 async def _project_health_after_commit(request: Request, commit_id: str | None) -> None:
     if commit_id is None:
         return
-    runtime = getattr(request.app.state, "runtime", None)
-    callback = getattr(runtime, "project_wiki_health", None)
-    if callback is None:
-        return
-    try:
-        await callback()
-    except Exception:
-        _logger.warning("wiki health projection failed after rename", exc_info=True)
+    await get_runtime(request).project_wiki_health()
 
 
 async def _request_maintenance_after_decision(request: Request) -> None:
-    runtime = getattr(request.app.state, "runtime", None)
-    callback = getattr(runtime, "request_wiki_maintenance", None)
-    if callback is None:
-        return
-    try:
-        await callback()
-    except Exception:
-        _logger.warning("wiki maintenance continuation request failed after decision", exc_info=True)
+    await get_runtime(request).request_wiki_maintenance()
 
 
 async def _notify_maintenance_review_change(request: Request, revision: str) -> None:
-    runtime = getattr(request.app.state, "runtime", None)
-    callback = getattr(runtime, "notify_wiki_maintenance_reviews_changed", None)
-    if callback is None:
-        return
-    try:
-        await callback(revision)
-    except Exception:
-        _logger.warning("wiki maintenance review notification failed", exc_info=True)
+    await get_runtime(request).notify_wiki_maintenance_reviews_changed(revision)
 
 
 def _maintenance_proposal_response(proposal_json: str | None) -> WikiMaintenanceReviewProposalResponse | None:

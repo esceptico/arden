@@ -6,16 +6,12 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from arden.memory.facts import FactConsumerStore, FactLedger
+from arden.memory.facts.consumer_store import FactConsumerStore
+from arden.memory.facts.ledger import FactLedger
 from arden.memory.facts.synthesis import FactSynthesis, FactSynthesisError, SynthesisFact
 from arden.revisions import ChangeSet, Create, ManagedFileRepository, RevisionConflictError, Update
-from arden.wiki import (
-    WikiService,
-    create_page,
-    extract_generated_region,
-    update_generated_region,
-    update_page_title,
-)
+from arden.wiki.pages import create_page, extract_generated_region, update_generated_region, update_page_title
+from arden.wiki.service import WikiService
 
 if TYPE_CHECKING:
     from pathlib import Path

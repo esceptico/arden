@@ -5,25 +5,20 @@ the ordered commits they reviewed; the store makes the resulting review rows
 and checkpoint durable on its own autocommit SQLite connection.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import Any, Self
 from uuid import uuid4
 
+import aiosqlite
+
 from arden.database import connect
-
-if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Sequence
-    from pathlib import Path
-
-    import aiosqlite
-
 
 CONSUMER_ID = "wiki.maintenance"
 
@@ -241,7 +236,7 @@ class WikiMaintenanceStore:
         self._lock = asyncio.Lock()
 
     @classmethod
-    async def open(cls, db_path: Path) -> WikiMaintenanceStore:
+    async def open(cls, db_path: Path) -> Self:
         conn = await connect(db_path, autocommit=True)
         store = cls(conn)
         try:

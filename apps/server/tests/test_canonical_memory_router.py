@@ -4,15 +4,18 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from arden.database import connect
-from arden.memory.facts import FactLedger, FactPlanStore, FactService
+from arden.memory.facts.ledger import FactLedger
+from arden.memory.facts.plan_store import FactPlanStore
+from arden.memory.facts.service import FactService
 from arden.revisions import ManagedFileRepository
 from arden.server.app import app as server_app
 from arden.server.routers.canonical_memory import facts_router, wiki_router
-from arden.wiki import WikiService
+from arden.wiki.service import WikiService
 
 
 def _fact_create(fact_id: str, text: str) -> dict[str, object]:
@@ -54,10 +57,15 @@ def _client(tmp_path: Path) -> TestClient:
     async def enqueue_wiki_user_edit(commit_id: str) -> None:
         queued.append(commit_id)
 
+    def require_wiki_user_edit_queue() -> None:
+        return None
+
     app = FastAPI()
     runtime = SimpleNamespace(
+        connected=True,
         wiki_service=wiki,
         fact_service=None,
+        require_wiki_user_edit_queue=require_wiki_user_edit_queue,
         enqueue_wiki_user_edit=enqueue_wiki_user_edit,
         queued_wiki_edits=queued,
         facts_connection=None,
@@ -280,10 +288,13 @@ def test_pin_fact_is_canonical_idempotent_and_strict(tmp_path: Path) -> None:
             json={"request_id": "agent-result:1", "text": "A different result"},
         )
         assert conflict.status_code == 409
-        assert client.post(
-            "/admin/facts",
-            json={"request_id": "agent-result:blank", "text": "   "},
-        ).status_code == 422
+        assert (
+            client.post(
+                "/admin/facts",
+                json={"request_id": "agent-result:blank", "text": "   "},
+            ).status_code
+            == 422
+        )
 
 
 def test_canonical_routes_report_unavailable_services() -> None:
@@ -293,3 +304,54 @@ def test_canonical_routes_report_unavailable_services() -> None:
     with TestClient(app) as client:
         assert client.get("/admin/wiki/pages").status_code == 503
         assert client.get("/admin/facts").status_code == 503
+
+
+def test_wiki_update_rejects_before_commit_when_curator_queue_is_unavailable(tmp_path: Path) -> None:
+    with _client(tmp_path) as client:
+        created = client.post(
+            "/admin/wiki/pages",
+            json={"path": "one.md", "title": "One", "page_id": "one", "expected_head": None},
+        ).json()
+
+        def unavailable() -> None:
+            raise RuntimeError("wiki edit curator queue is unavailable")
+
+        client.app.state.runtime.require_wiki_user_edit_queue = unavailable
+        response = client.put(
+            "/admin/wiki/pages/one",
+            json={
+                "content": created["content"] + "Not committed.\n",
+                "expected_version": created["version"],
+                "expected_head": created["repository_head"],
+            },
+        )
+
+        assert response.status_code == 503
+        current = client.get("/admin/wiki/pages/one").json()
+        assert current["content"] == created["content"]
+        assert current["version"] == created["version"]
+
+
+def test_wiki_update_surfaces_enqueue_failure_after_commit(tmp_path: Path) -> None:
+    with _client(tmp_path) as client:
+        created = client.post(
+            "/admin/wiki/pages",
+            json={"path": "one.md", "title": "One", "page_id": "one", "expected_head": None},
+        ).json()
+
+        async def fail_enqueue(_commit_id: str) -> None:
+            raise RuntimeError("curator queue write failed")
+
+        client.app.state.runtime.enqueue_wiki_user_edit = fail_enqueue
+        replacement = created["content"] + "Committed before queue failure.\n"
+        with pytest.raises(RuntimeError, match="curator queue write failed"):
+            client.put(
+                "/admin/wiki/pages/one",
+                json={
+                    "content": replacement,
+                    "expected_version": created["version"],
+                    "expected_head": created["repository_head"],
+                },
+            )
+
+        assert client.get("/admin/wiki/pages/one").json()["content"] == replacement

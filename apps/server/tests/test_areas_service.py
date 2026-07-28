@@ -4,7 +4,7 @@ from arden.areas.asks import AskStore
 from arden.areas.models import Area, Ask
 from arden.areas.service import AreaService
 from arden.areas.work_models import AreaWorkSnapshot
-from arden.wiki import create_page
+from arden.wiki.pages import create_page
 
 PAGE = create_page(
     page_id="o-1a-page",

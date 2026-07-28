@@ -1,18 +1,14 @@
 """Rebuildable semantic index over canonical facts."""
 
-from __future__ import annotations
-
 import asyncio
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
 from arden.logging import get_logger
 
 from .models import Fact
 from .service import FactService
-
-if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
 
 FACT_SEARCH_SOURCE = "fact"
 _logger = get_logger(__name__)

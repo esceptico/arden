@@ -1,7 +1,5 @@
 """Anchored, no-symlink access to current visible managed files."""
 
-from __future__ import annotations
-
 import os
 from pathlib import Path, PurePosixPath
 

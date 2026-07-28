@@ -1,6 +1,7 @@
 import pytest
 
-from arden.memory.facts import CompletionFactSynthesisRenderer, SynthesisFact
+from arden.memory.facts.completion_renderer import CompletionFactSynthesisRenderer
+from arden.memory.facts.synthesis import SynthesisFact
 from tests.conftest import completion_response
 
 

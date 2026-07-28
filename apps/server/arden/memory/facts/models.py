@@ -1,13 +1,9 @@
 """Immutable public values for the canonical fact ledger."""
 
-from __future__ import annotations
-
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from collections.abc import Mapping
-    from datetime import datetime
+from datetime import datetime
+from typing import Any
 
 
 class FactLedgerError(RuntimeError):

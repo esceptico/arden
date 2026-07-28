@@ -1,24 +1,18 @@
 """Race-resistant, no-symlink access rooted at one POSIX directory."""
 
-from __future__ import annotations
-
 import errno
 import hashlib
 import os
 import stat as stat_module
 import sys
+from collections.abc import Iterator
 from contextlib import contextmanager
 from ctypes import CDLL, c_char_p, c_int, c_uint, get_errno
+from os import PathLike
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from .errors import CorruptRepositoryError, RevisionConflictError, UnsafePathError
-
-if TYPE_CHECKING:
-    from collections.abc import Iterator
-    from os import PathLike
-
 
 _DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 _REGULAR_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0)
@@ -51,7 +45,7 @@ class AnchoredDirectory:
             os.close(self._root_fd)
             self._root_fd = -1
 
-    def __enter__(self) -> AnchoredDirectory:
+    def __enter__(self) -> "AnchoredDirectory":
         return self
 
     def __exit__(self, *_: object) -> None:
@@ -335,7 +329,7 @@ class AnchoredDirectory:
 
     def rename_to(
         self,
-        other: AnchoredDirectory,
+        other: "AnchoredDirectory",
         source_rel: str | PathLike[str],
         target_rel: str | PathLike[str],
     ) -> None:
@@ -359,7 +353,7 @@ class AnchoredDirectory:
 
     def rename_directory_to(
         self,
-        other: AnchoredDirectory,
+        other: "AnchoredDirectory",
         source_rel: str | PathLike[str],
         target_rel: str | PathLike[str],
     ) -> None:

@@ -1,7 +1,5 @@
 """Canonical fact and managed-wiki HTTP surfaces."""
 
-from __future__ import annotations
-
 import asyncio
 import unicodedata
 from collections.abc import Mapping
@@ -13,24 +11,27 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from arden.logging import get_logger
-from arden.memory.facts import (
+from arden.memory.facts.models import (
     FactConflictError,
     FactLedgerCorruptionError,
+    FactValidationError,
+)
+from arden.memory.facts.plan_store import (
     FactPlanCorruptionError,
     FactPlanOwnershipError,
     FactPlanRequestConflictError,
+)
+from arden.memory.facts.service import (
     FactPrincipal,
     FactScopeError,
     FactService,
-    FactValidationError,
 )
-from arden.revisions import CorruptRepositoryError, RevisionConflictError, UnsafePathError
-from arden.wiki import WikiService, WikiValidationError
+from arden.revisions.errors import CorruptRepositoryError, RevisionConflictError, UnsafePathError
+from arden.server.runtime import get_runtime
+from arden.wiki.service import WikiService, WikiValidationError
 
 wiki_router = APIRouter(prefix="/admin/wiki", tags=["wiki"])
 facts_router = APIRouter(prefix="/admin/facts", tags=["facts"])
-_logger = get_logger(__name__)
 
 
 class _Request(BaseModel):
@@ -84,15 +85,15 @@ def _json_value(value: object) -> object:
 
 
 def _wiki_service(request: Request) -> WikiService:
-    service = getattr(getattr(request.app.state, "runtime", None), "wiki_service", None)
-    if not isinstance(service, WikiService):
+    service = get_runtime(request).wiki_service
+    if service is None:
         raise HTTPException(status_code=503, detail="wiki service not ready")
     return service
 
 
 def _fact_service(request: Request) -> FactService:
-    service = getattr(getattr(request.app.state, "runtime", None), "fact_service", None)
-    if not isinstance(service, FactService):
+    service = get_runtime(request).fact_service
+    if service is None:
         raise HTTPException(status_code=503, detail="fact service not ready")
     return service
 
@@ -250,8 +251,13 @@ def create_wiki_page(body: WikiCreateRequest, request: Request) -> dict[str, obj
 
 @wiki_router.put("/pages/{page_id}")
 async def update_wiki_page(page_id: str, body: WikiUpdateRequest, request: Request) -> dict[str, object]:
+    runtime = get_runtime(request)
     service = _wiki_service(request)
     try:
+        try:
+            runtime.require_wiki_user_edit_queue()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         _record, commit_id = await asyncio.to_thread(
             service.update_page_with_commit,
             page_id,
@@ -260,15 +266,7 @@ async def update_wiki_page(page_id: str, body: WikiUpdateRequest, request: Reque
             expected_head=body.expected_head,
         )
         if commit_id is not None:
-            enqueue = getattr(getattr(request.app.state, "runtime", None), "enqueue_wiki_user_edit", None)
-            if enqueue is None:
-                _logger.error("Wiki edit saved without an available Curator queue", commit_id=commit_id)
-            else:
-                try:
-                    await enqueue(commit_id)
-                except Exception:
-                    # Startup history backfill provides the durable recovery path.
-                    _logger.exception("Wiki edit Curator enqueue failed", commit_id=commit_id)
+            await runtime.enqueue_wiki_user_edit(commit_id)
         head, record = _page_snapshot(service, page_id)
         return _page_json(
             record,
@@ -519,25 +517,29 @@ async def pin_fact(body: PinnedFactRequest, request: Request) -> dict[str, objec
         now = datetime.now(UTC).isoformat()
         preview = await service.plan(
             principal,
-            [{
-                "op": "create",
-                "text": text,
-                "kind": "source",
-                "labels": ["pinned"],
-                "subjects": ["Pinned agent result"],
-                "scope": {"kind": "user", "key": None},
-                "lifecycle": "durable",
-                "certainty": "confirmed",
-                "evidence_class": "direct",
-                "sources": [{
-                    "kind": "desktop_action",
-                    "ref": body.request_id,
-                    "captured_at": now,
-                    "scope_kind": "user",
-                    "scope_key": None,
-                    "role": "user",
-                }],
-            }],
+            [
+                {
+                    "op": "create",
+                    "text": text,
+                    "kind": "source",
+                    "labels": ["pinned"],
+                    "subjects": ["Pinned agent result"],
+                    "scope": {"kind": "user", "key": None},
+                    "lifecycle": "durable",
+                    "certainty": "confirmed",
+                    "evidence_class": "direct",
+                    "sources": [
+                        {
+                            "kind": "desktop_action",
+                            "ref": body.request_id,
+                            "captured_at": now,
+                            "scope_kind": "user",
+                            "scope_key": None,
+                            "role": "user",
+                        }
+                    ],
+                }
+            ],
             request_key=f"desktop-pin:{body.request_id}",
             actor="user:desktop",
             origin="desktop.pin",

@@ -4,8 +4,10 @@ from typing import cast
 
 import pytest
 
-from arden.memory.facts import FACT_SEARCH_SOURCE, FactIndexProjection, FactIndexState, FactLedger, FactService
+from arden.memory.facts.index import FACT_SEARCH_SOURCE, FactIndexProjection, FactIndexState
+from arden.memory.facts.ledger import FactLedger
 from arden.memory.facts.plan_store import FactPlanStore
+from arden.memory.facts.service import FactService
 from arden.search.types import SearchResult
 
 

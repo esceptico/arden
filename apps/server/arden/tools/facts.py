@@ -6,35 +6,32 @@ from the current session and Area, then attaches its own provenance to every
 planned change.
 """
 
-from __future__ import annotations
-
 import base64
 import binascii
 import hashlib
 import json
 from collections.abc import Mapping
 from datetime import datetime, timedelta
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from arden.agent.types.tools import ToolEffect, ToolOutcome, ToolOutcomeStatus, ToolSourceRef, normalize_source_refs
 from arden.constants import BUILTIN_MEMORY_RETENTION_ID
-from arden.memory.facts import (
-    DueFactReview,
+from arden.memory.facts.boundary import fact_read_scopes, fact_write_scope, source_time
+from arden.memory.facts.models import (
     Fact,
     FactConflictError,
     FactEvent,
     FactLedgerCorruptionError,
+    FactValidationError,
+)
+from arden.memory.facts.plan_store import (
     FactPlanCorruptionError,
     FactPlanOwnershipError,
     FactPlanRequestConflictError,
-    FactPrincipal,
-    FactScopeError,
-    FactService,
-    FactValidationError,
 )
-from arden.memory.facts.boundary import fact_read_scopes, fact_write_scope, source_time
+from arden.memory.facts.service import DueFactReview, FactPrincipal, FactScopeError, FactService
 from arden.tools.core import ToolResult, tool
 from arden.tools.core.context import ToolExecution
 from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
@@ -101,7 +98,7 @@ class CreateFactChange(_Input):
     reason: str | None = Field(default=None, min_length=1, max_length=4_000)
 
     @model_validator(mode="after")
-    def _require_supersession_reason(self) -> CreateFactChange:
+    def _require_supersession_reason(self) -> Self:
         if self.reason is not None and not self.supersedes:
             raise ValueError("create reason requires supersedes")
         if self.supersedes and self.reason is None:
@@ -130,7 +127,7 @@ class AmendFactChange(_Input):
     evidence_fact_ids: list[FactId] = Field(default_factory=list, max_length=100)
 
     @model_validator(mode="after")
-    def _require_metadata(self) -> AmendFactChange:
+    def _require_metadata(self) -> Self:
         if all(value is None for value in (self.kind, self.labels, self.subjects, self.lifecycle, self.evidence_class)):
             raise ValueError("amend requires metadata")
         return self

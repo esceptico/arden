@@ -1,7 +1,7 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 
-from arden.wiki import WikiService
+from arden.wiki.service import WikiService
 
 
 class AreaLifecycleService:
