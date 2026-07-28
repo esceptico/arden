@@ -25,12 +25,20 @@ export interface Fact {
   kind: string;
   labels: string[];
   subjects: string[];
+  scope: { kind: string; key: string | null };
   lifecycle: string;
   status: string;
   certainty: string;
   evidenceClass: string;
+  sources: Array<{
+    kind: string;
+    ref: string;
+    capturedAt: string | null;
+  }>;
   createdAt: string;
+  reviewedAt: string | null;
   reviewAt: string | null;
+  expiresAt: string | null;
   version: string;
 }
 
@@ -53,10 +61,32 @@ export interface WikiPageLinks {
 
 export interface WikiHistoryCommit {
   commitId: string;
+  parentId: string | null;
   actor: string;
   origin: string;
   reason: string;
   timestamp: string;
+  changes: WikiHistoryChange[];
+}
+
+export interface WikiHistoryChange {
+  action: string;
+  before: WikiResourceVersion | null;
+  after: WikiResourceVersion | null;
+}
+
+export interface WikiResourceVersion {
+  resourceId: string;
+  path: string;
+  state: "active" | "archived";
+  versionId: string;
+}
+
+export interface WikiPageDiff {
+  offset: number;
+  endOffset: number;
+  hasMore: boolean;
+  unifiedDiff: string;
 }
 
 interface RawWikiPage {
@@ -140,28 +170,125 @@ export function readWikiPageLinks(config: AppConfig, pageId: string, options: { 
   }));
 }
 
-export function readWikiPageHistory(config: AppConfig, pageId: string, options: { signal?: AbortSignal } = {}): Promise<WikiHistoryCommit[]> {
-  return apiWithConfig<{ commits: Array<{ commit_id: string; actor: string; origin: string; reason: string; timestamp: string }> }>(
+function mapResourceVersion(raw: {
+  resource_id: string;
+  path: string;
+  state: "active" | "archived";
+  version_id: string;
+} | null): WikiResourceVersion | null {
+  return raw == null ? null : {
+    resourceId: raw.resource_id,
+    path: raw.path,
+    state: raw.state,
+    versionId: raw.version_id,
+  };
+}
+
+export function readWikiPageHistory(config: AppConfig, pageId: string, options: { signal?: AbortSignal; limit?: number } = {}): Promise<WikiHistoryCommit[]> {
+  const query = new URLSearchParams({ limit: String(options.limit ?? 50) });
+  return apiWithConfig<{ commits: Array<{
+    commit_id: string;
+    parent_id: string | null;
+    actor: string;
+    origin: string;
+    reason: string;
+    timestamp: string;
+    changes: Array<{
+      action: string;
+      before: Parameters<typeof mapResourceVersion>[0];
+      after: Parameters<typeof mapResourceVersion>[0];
+    }>;
+  }> }>(
     config,
-    `/admin/wiki/pages/${encodeURIComponent(pageId)}/history`,
+    `/admin/wiki/pages/${encodeURIComponent(pageId)}/history?${query}`,
     { signal: options.signal },
   ).then((response) => response.commits.map((commit) => ({
     commitId: commit.commit_id,
+    parentId: commit.parent_id,
     actor: commit.actor,
     origin: commit.origin,
     reason: commit.reason,
     timestamp: commit.timestamp,
+    changes: commit.changes.map((change) => ({
+      action: change.action,
+      before: mapResourceVersion(change.before),
+      after: mapResourceVersion(change.after),
+    })),
   })));
 }
 
+export function readWikiPageDiff(
+  config: AppConfig,
+  pageId: string,
+  input: {
+    base: string | null;
+    target: string;
+    offset?: number;
+    limit?: number;
+    signal?: AbortSignal;
+  },
+): Promise<WikiPageDiff> {
+  const query = new URLSearchParams({
+    target: input.target,
+    offset: String(input.offset ?? 0),
+    limit: String(input.limit ?? 65_536),
+  });
+  if (input.base != null) query.set("base", input.base);
+  return apiWithConfig<{
+    diff: {
+      offset: number;
+      end_offset: number;
+      has_more: boolean;
+      unified_diff: string;
+    };
+  }>(config, `/admin/wiki/pages/${encodeURIComponent(pageId)}/diff?${query}`, {
+    signal: input.signal,
+  }).then(({ diff }) => ({
+    offset: diff.offset,
+    endOffset: diff.end_offset,
+    hasMore: diff.has_more,
+    unifiedDiff: diff.unified_diff,
+  }));
+}
+
+interface RawFact {
+  fact_id: string; text: string; kind: string; labels: string[]; subjects: string[];
+  scope: { kind: string; key: string | null };
+  lifecycle: string; status: string; certainty: string; evidence_class: string;
+  sources: Array<{ kind: string; ref: string; captured_at?: string | null }>;
+  created_at: string; reviewed_at: string | null; review_at: string | null;
+  expires_at: string | null; version: string;
+}
+
 interface RawFactPage {
-  facts: Array<{
-    fact_id: string; text: string; kind: string; labels: string[]; subjects: string[];
-    lifecycle: string; status: string; certainty: string; evidence_class: string;
-    created_at: string; review_at: string | null; version: string;
-  }>;
+  facts: RawFact[];
   has_more: boolean;
   next_after: { created_at: string; fact_id: string } | null;
+}
+
+function mapFact(fact: RawFact): Fact {
+  return {
+    factId: fact.fact_id,
+    text: fact.text,
+    kind: fact.kind,
+    labels: fact.labels,
+    subjects: fact.subjects,
+    scope: fact.scope,
+    lifecycle: fact.lifecycle,
+    status: fact.status,
+    certainty: fact.certainty,
+    evidenceClass: fact.evidence_class,
+    sources: fact.sources.map((source) => ({
+      kind: source.kind,
+      ref: source.ref,
+      capturedAt: source.captured_at ?? null,
+    })),
+    createdAt: fact.created_at,
+    reviewedAt: fact.reviewed_at,
+    reviewAt: fact.review_at,
+    expiresAt: fact.expires_at,
+    version: fact.version,
+  };
 }
 
 export async function listFacts(config: AppConfig, options: { signal?: AbortSignal } = {}): Promise<Fact[]> {
@@ -176,24 +303,17 @@ export async function listFacts(config: AppConfig, options: { signal?: AbortSign
     const response: RawFactPage = await apiWithConfig<RawFactPage>(config, `/admin/facts?${query}`, {
       signal: options.signal,
     });
-    facts.push(...response.facts.map((fact) => ({
-      factId: fact.fact_id,
-      text: fact.text,
-      kind: fact.kind,
-      labels: fact.labels,
-      subjects: fact.subjects,
-      lifecycle: fact.lifecycle,
-      status: fact.status,
-      certainty: fact.certainty,
-      evidenceClass: fact.evidence_class,
-      createdAt: fact.created_at,
-      reviewAt: fact.review_at,
-      version: fact.version,
-    })));
+    facts.push(...response.facts.map(mapFact));
     cursor = response.has_more ? response.next_after : null;
     if (response.has_more && cursor == null) throw new Error("Facts pagination response omitted its cursor");
   } while (cursor);
   return facts;
+}
+
+export function readFact(config: AppConfig, factId: string, options: { signal?: AbortSignal } = {}): Promise<Fact> {
+  return apiWithConfig<{ fact: RawFact }>(config, `/admin/facts/${encodeURIComponent(factId)}`, {
+    signal: options.signal,
+  }).then(({ fact }) => mapFact(fact));
 }
 
 export type WikiRenameApprovalStatus = "pending" | "applying" | "accepted" | "rejected" | "superseded";

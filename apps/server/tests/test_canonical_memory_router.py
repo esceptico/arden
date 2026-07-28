@@ -7,7 +7,8 @@ from types import SimpleNamespace
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from arden.memory.facts import FactLedger, FactService
+from arden.database import connect
+from arden.memory.facts import FactLedger, FactPlanStore, FactService
 from arden.revisions import ManagedFileRepository
 from arden.server.app import app as server_app
 from arden.server.routers.canonical_memory import facts_router, wiki_router
@@ -48,20 +49,32 @@ def _client(tmp_path: Path) -> TestClient:
         reason="seed facts",
     )
     ledger.commit(plan)
-    facts = FactService(ledger, plans=None)  # type: ignore[arg-type]
-
     queued: list[str] = []
 
     async def enqueue_wiki_user_edit(commit_id: str) -> None:
         queued.append(commit_id)
 
     app = FastAPI()
-    app.state.runtime = SimpleNamespace(
+    runtime = SimpleNamespace(
         wiki_service=wiki,
-        fact_service=facts,
+        fact_service=None,
         enqueue_wiki_user_edit=enqueue_wiki_user_edit,
         queued_wiki_edits=queued,
+        facts_connection=None,
     )
+    app.state.runtime = runtime
+
+    async def open_facts() -> None:
+        runtime.facts_connection = await connect(tmp_path / "facts.db")
+        plans = FactPlanStore(runtime.facts_connection)
+        await plans.init_schema()
+        runtime.fact_service = FactService(ledger, plans)
+
+    async def close_facts() -> None:
+        await runtime.facts_connection.close()
+
+    app.add_event_handler("startup", open_facts)
+    app.add_event_handler("shutdown", close_facts)
     app.include_router(wiki_router)
     app.include_router(facts_router)
     return TestClient(app)
@@ -232,6 +245,45 @@ def test_fact_list_search_detail_and_seek_pagination(tmp_path: Path) -> None:
             "items": [{"value": "Coffee is good"}],
         }
         assert client.get("/admin/facts/missing").status_code == 404
+
+
+def test_pin_fact_is_canonical_idempotent_and_strict(tmp_path: Path) -> None:
+    with _client(tmp_path) as client:
+        first = client.post(
+            "/admin/facts",
+            json={"request_id": "agent-result:1", "text": "  Completed agent result  "},
+        )
+        assert first.status_code == 201
+        assert first.json()["written"] is True
+
+        duplicate = client.post(
+            "/admin/facts",
+            json={"request_id": "agent-result:2", "text": "completed   AGENT result"},
+        )
+        assert duplicate.status_code == 201
+        assert duplicate.json() == {
+            "written": False,
+            "fact_id": first.json()["fact_id"],
+        }
+
+        detail = client.get(f"/admin/facts/{first.json()['fact_id']}")
+        assert detail.status_code == 200
+        fact = detail.json()["fact"]
+        assert fact["text"] == "Completed agent result"
+        assert fact["kind"] == "source"
+        assert fact["labels"] == ["pinned"]
+        assert fact["scope"] == {"kind": "user", "key": None}
+        assert fact["sources"][0]["ref"] == "agent-result:1"
+
+        conflict = client.post(
+            "/admin/facts",
+            json={"request_id": "agent-result:1", "text": "A different result"},
+        )
+        assert conflict.status_code == 409
+        assert client.post(
+            "/admin/facts",
+            json={"request_id": "agent-result:blank", "text": "   "},
+        ).status_code == 422
 
 
 def test_canonical_routes_report_unavailable_services() -> None:

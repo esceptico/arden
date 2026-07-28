@@ -75,6 +75,19 @@ export async function cancelRun(
   });
 }
 
+/** Persist an explicit user pin through the canonical fact ledger. */
+export async function pinToMemoryApi(
+  config: AppConfig,
+  fact: string,
+): Promise<{ written: boolean }> {
+  const text = fact.trim();
+  if (!text) return { written: false };
+  return apiWithConfig<{ written: boolean; fact_id: string }>(config, "/admin/facts", {
+    method: "POST",
+    body: JSON.stringify({ request_id: crypto.randomUUID(), text }),
+  }).then(({ written }) => ({ written }));
+}
+
 export async function cancelSubagentApi(
   config: AppConfig,
   runId: string,

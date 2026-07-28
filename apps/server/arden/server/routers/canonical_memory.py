@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import unicodedata
 from collections.abc import Mapping
 from dataclasses import fields, is_dataclass
 from datetime import UTC, datetime
@@ -14,7 +15,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from arden.logging import get_logger
 from arden.memory.facts import (
+    FactConflictError,
     FactLedgerCorruptionError,
+    FactPlanCorruptionError,
+    FactPlanOwnershipError,
+    FactPlanRequestConflictError,
     FactPrincipal,
     FactScopeError,
     FactService,
@@ -51,6 +56,11 @@ class WikiUpdateRequest(_Request):
 class WikiVersionRequest(_Request):
     expected_version: str = Field(min_length=1, max_length=128)
     expected_head: str = Field(min_length=1, max_length=128)
+
+
+class PinnedFactRequest(_Request):
+    request_id: str = Field(min_length=1, max_length=200)
+    text: str = Field(min_length=1, max_length=20_000)
 
 
 def _json_value(value: object) -> object:
@@ -383,6 +393,34 @@ async def _fact_principal(service: FactService) -> FactPrincipal:
     )
 
 
+def _pinned_principal() -> FactPrincipal:
+    scope = ("user", None)
+    return FactPrincipal(
+        owner_id="user:desktop",
+        readable_scopes=frozenset({scope}),
+        writable_scopes=frozenset({scope}),
+    )
+
+
+def _normalized_fact_text(value: str) -> str:
+    return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
+
+
+async def _existing_pinned_fact(service: FactService, principal: FactPrincipal, text: str):
+    normalized = _normalized_fact_text(text)
+    matches = await service.search(principal, text, limit=100)
+    return next(
+        (
+            fact
+            for fact in matches
+            if fact.status == "active"
+            and fact.scope == {"kind": "user", "key": None}
+            and fact.normalized_text == normalized
+        ),
+        None,
+    )
+
+
 def _fact_after(created_at: datetime | None, fact_id: str | None):
     if created_at is None and fact_id is None:
         return None
@@ -398,11 +436,13 @@ def _fact_error(exc: Exception) -> HTTPException:
         return exc
     if isinstance(exc, KeyError):
         return HTTPException(status_code=404, detail=str(exc))
-    if isinstance(exc, FactScopeError):
+    if isinstance(exc, (FactScopeError, FactPlanOwnershipError)):
         return HTTPException(status_code=403, detail=str(exc))
+    if isinstance(exc, (FactConflictError, FactPlanRequestConflictError)):
+        return HTTPException(status_code=409, detail=str(exc))
     if isinstance(exc, FactValidationError):
         return HTTPException(status_code=422, detail=str(exc))
-    if isinstance(exc, FactLedgerCorruptionError):
+    if isinstance(exc, (FactLedgerCorruptionError, FactPlanCorruptionError)):
         return HTTPException(status_code=503, detail="fact ledger is corrupt")
     if isinstance(exc, (TypeError, ValueError)):
         return HTTPException(status_code=422, detail=str(exc))
@@ -459,6 +499,58 @@ async def list_facts(
             after_created_at=after_created_at,
             after_fact_id=after_fact_id,
         )
+    except Exception as exc:
+        raise _fact_error(exc) from exc
+
+
+@facts_router.post("", status_code=201)
+async def pin_fact(body: PinnedFactRequest, request: Request) -> dict[str, object]:
+    """Persist an explicit desktop pin through the canonical fact plan boundary."""
+
+    service = _fact_service(request)
+    principal = _pinned_principal()
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="text must not be blank")
+    try:
+        existing = await _existing_pinned_fact(service, principal, text)
+        if existing is not None:
+            return {"written": False, "fact_id": existing.fact_id}
+        now = datetime.now(UTC).isoformat()
+        preview = await service.plan(
+            principal,
+            [{
+                "op": "create",
+                "text": text,
+                "kind": "source",
+                "labels": ["pinned"],
+                "subjects": ["Pinned agent result"],
+                "scope": {"kind": "user", "key": None},
+                "lifecycle": "durable",
+                "certainty": "confirmed",
+                "evidence_class": "direct",
+                "sources": [{
+                    "kind": "desktop_action",
+                    "ref": body.request_id,
+                    "captured_at": now,
+                    "scope_kind": "user",
+                    "scope_key": None,
+                    "role": "user",
+                }],
+            }],
+            request_key=f"desktop-pin:{body.request_id}",
+            actor="user:desktop",
+            origin="desktop.pin",
+            reason="pin completed agent result",
+        )
+        committed = await service.commit(principal, preview.plan_id)
+        fact = committed.facts[0]
+        return {"written": True, "fact_id": fact.fact_id}
+    except FactConflictError:
+        existing = await _existing_pinned_fact(service, principal, text)
+        if existing is not None:
+            return {"written": False, "fact_id": existing.fact_id}
+        raise
     except Exception as exc:
         raise _fact_error(exc) from exc
 

@@ -13,9 +13,13 @@ export type MemoryFrontmatter = Record<string, MemoryFrontmatterValue>;
 
 // arden-maintained fields — kept in the file, hidden from the Properties UI.
 const SYSTEM_PROPS = new Set([
+  "type",
+  "updated",
   "page_id",
   "fact_citations",
   "generated_from_revision",
+  "legacy",
+  "prose_cites",
 ]);
 
 type PropKind = "tags" | "list" | "checkbox" | "number" | "date" | "text";
@@ -31,7 +35,7 @@ const PROP_ICONS: Record<PropKind, ArdenIcon> = {
 
 function propType(key: string, value: MemoryFrontmatterValue): PropKind {
   if (key === "tags" || key === "aliases") return "tags";
-  if (Array.isArray(value) && value.every((item) => item == null || typeof item !== "object")) return "list";
+  if (Array.isArray(value)) return "list";
   if (typeof value === "boolean") return "checkbox";
   if (typeof value === "number") return "number";
   if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}/.test(value)) return "date";
@@ -40,13 +44,6 @@ function propType(key: string, value: MemoryFrontmatterValue): PropKind {
 
 function parsePropInput(raw: string): MemoryFrontmatterValue {
   const v = raw.trim();
-  if (v.startsWith("{") || v.startsWith("[")) {
-    try {
-      return JSON.parse(v) as MemoryFrontmatterValue;
-    } catch {
-      return v;
-    }
-  }
   if (/^(true|yes)$/i.test(v)) return true;
   if (/^(false|no)$/i.test(v)) return false;
   if (/^-?\d+$/.test(v)) return parseInt(v, 10);
@@ -106,12 +103,11 @@ export function MemoryProperties({
   };
 
   const renderValue = (key: string, value: MemoryFrontmatterValue, kind: PropKind) => {
-    const formatted = typeof value === "object" && value !== null ? JSON.stringify(value) : String(value);
     if (edit?.key === key && edit.mode === "edit") {
       return (
         <input
           className="mw-prop-edit-input"
-          defaultValue={Array.isArray(value) && kind !== "text" ? value.join(", ") : formatted}
+          defaultValue={typeof value === "object" && value != null ? JSON.stringify(value) : String(value)}
           autoFocus
           spellCheck={false}
           onFocus={(e) => e.currentTarget.select()}
@@ -136,7 +132,7 @@ export function MemoryProperties({
         <>
           {items.map((item, i) => (
             <span key={i} className="mw-prop-pill">
-              {typeof item === "object" && item !== null ? JSON.stringify(item) : String(item)}
+              {String(item)}
               {editable && (
                 <button type="button" className="mw-prop-pill-x" aria-label="Remove" onClick={() => removeItem(key, i)}>
                   <X size={10} aria-hidden />
@@ -189,7 +185,8 @@ export function MemoryProperties({
         <span className={className} />
       );
     }
-    const body = kind === "date" || kind === "number" ? <span className="mono">{formatted}</span> : formatted;
+    const text = typeof value === "object" && value != null ? JSON.stringify(value) : String(value);
+    const body = kind === "date" || kind === "number" ? <span className="mono">{text}</span> : text;
     return editable ? (
       <button type="button" className="mw-prop-editable" title="Edit" onClick={() => setEdit({ key, mode: "edit" })}>
         {body}

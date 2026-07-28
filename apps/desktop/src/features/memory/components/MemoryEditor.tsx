@@ -2,7 +2,10 @@ import { useEffect, useRef } from "react";
 import { splitFrontmatter } from "@/features/memory/lib/format";
 import { stem } from "@/features/memory/lib/workspaceTree";
 
-/** Body editor for a wiki page. Frontmatter is preserved byte-for-byte. */
+/** Markdown-source editor for a memory page — the draft's in-page editor:
+ *  same page container, filename title, autosized body-only textarea
+ *  (frontmatter is held back and reattached on change). Cmd/Ctrl+S (bound
+ *  in ArtifactMemoryView) sends the draft to the review flow; Esc closes. */
 export function MemoryEditor({
   path,
   baseContent,
@@ -54,7 +57,7 @@ export function MemoryEditor({
       className="mw-scroller scroll-thin h-full"
     >
       <p role="status" aria-live="polite" className="sr-only">
-        {saving ? `Saving ${path}` : dirty ? `Editing ${path} — unsaved draft` : `Editing ${path}`}
+        {saving ? `Reviewing ${path}` : dirty ? `Editing ${path} — unsaved draft` : `Editing ${path}`}
       </p>
       <p id={hintId} className="sr-only">Press Cmd/Ctrl+S to review changes and Escape to close the editor.</p>
       <div className="mw-page">
