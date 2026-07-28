@@ -35,6 +35,7 @@ def _changes(
     *operations,
     key: str = "key",
     expected_head: str | None = None,
+    enforce_expected_head: bool = False,
 ) -> ChangeSet:
     return ChangeSet(
         operations=operations,
@@ -43,6 +44,7 @@ def _changes(
         reason="exercise revision contract",
         idempotency_key=key,
         expected_head=expected_head,
+        enforce_expected_head=enforce_expected_head,
     )
 
 
@@ -146,6 +148,29 @@ def test_expected_head_rejects_unrelated_changes_but_idempotent_retry_wins_first
     assert repo.read("a") == b"a1"
 
 
+def test_expected_empty_head_rejects_the_first_concurrent_commit(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    with pytest.raises(ValueError, match="empty expected head"):
+        _changes(
+            Create("invalid", "invalid.md", b"invalid"),
+            expected_head="a" * 64,
+            enforce_expected_head=True,
+        )
+    planned = _changes(
+        Create("a", "a.md", b"a0"),
+        key="planned-empty",
+        expected_head=None,
+        enforce_expected_head=True,
+    )
+    repo.commit(_changes(Create("b", "b.md", b"b0"), key="concurrent-first"))
+
+    with pytest.raises(RevisionConflictError, match=r"expected None"):
+        repo.commit(planned)
+
+    assert repo.find_by_path("a.md") is None
+    assert repo.read("b") == b"b0"
+
+
 def test_resource_version_token_does_not_repeat_after_value_reverts(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     repo.commit(_changes(Create("note", "note.md", b"zero"), key="create"))
@@ -235,8 +260,29 @@ def test_idempotency_replays_exact_request_and_rejects_conflicting_reuse(tmp_pat
     repo = _repo(tmp_path)
     request = _changes(Create("note", "note.md", b"one"), key="retry")
     first = repo.commit(request)
+    legacy_request_hash = sha256(
+        canonical_jsonl(
+            {
+                "version": 1,
+                "actor": "tester",
+                "origin": "test",
+                "reason": "exercise revision contract",
+                "expected_head": None,
+                "operations": [
+                    {
+                        "resource_id": "note",
+                        "operation": "create",
+                        "path": "note.md",
+                        "content_hash": sha256(b"one"),
+                    }
+                ],
+            }
+        )
+    )
 
     assert repo.commit(request) == first
+    persisted = repo._storage.read_idempotency(sha256(b"retry"))
+    assert persisted is not None and persisted["request_hash"] == legacy_request_hash
     assert len(repo.history()) == 1
     with pytest.raises(IdempotencyConflictError, match="reused for a different change set"):
         repo.commit(_changes(Create("note", "note.md", b"different"), key="retry"))

@@ -129,6 +129,7 @@ class ChangeSet:
     reason: str
     idempotency_key: str
     expected_head: str | None = None
+    enforce_expected_head: bool = False
 
     def __post_init__(self) -> None:
         operations = _tuple(self.operations, "operations")
@@ -143,6 +144,10 @@ class ChangeSet:
         _require_text(self.idempotency_key, "idempotency_key")
         if self.expected_head is not None:
             _require_text(self.expected_head, "expected_head")
+        if not isinstance(self.enforce_expected_head, bool):
+            raise TypeError("enforce_expected_head must be a bool")
+        if self.expected_head is not None and self.enforce_expected_head:
+            raise ValueError("enforce_expected_head is only needed for an empty expected head")
 
 
 @dataclass(frozen=True)
