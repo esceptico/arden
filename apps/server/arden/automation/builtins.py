@@ -35,10 +35,34 @@ class BuiltinSpec:
     description: str
     prompt: str
     triggers: list[Trigger]
-    handler: str
+    handler: str | None
     enabled: bool = True
     auto_approve: bool = False
     cooldown_minutes: int | None = None
+    tool_scope: list[str] | None = None
+
+
+_FACT_RETENTION_TOOL_SCOPE = [
+    "search_facts",
+    "get_fact",
+    "get_fact_history",
+    "get_due_fact_reviews",
+    "plan_fact_changes",
+    "commit_fact_changes",
+]
+
+_FACT_RETENTION_PROMPT = (
+    "Review only canonical facts that are due for lifecycle review. Start with "
+    "get_due_fact_reviews, then inspect any candidate facts and their saved "
+    "provenance before acting. Never treat silence or age alone as evidence. "
+    "Only confirm, supersede, or expire when the available evidence "
+    "supports that exact decision, and pass its exact fact IDs as "
+    "evidence_fact_ids. An expiry may cite the due fact's own explicit expiry. "
+    "Otherwise keep the fact active, explicitly mark it uncertain, and "
+    "schedule another review. Do not create facts, edit wiki "
+    "pages, hard-delete history, or use tools outside this fact workflow. Plan "
+    "every change first and commit only the returned plan."
+)
 
 
 BUILTINS = [
@@ -115,8 +139,24 @@ BUILTINS = [
 ]
 
 
-async def seed_builtins(store: AutomationStore) -> None:
-    for spec in BUILTINS:
+def _specs(*, fact_mode: bool) -> list[BuiltinSpec]:
+    if not fact_mode:
+        return BUILTINS
+    return [
+        dc_replace(
+            spec,
+            handler=None,
+            prompt=_FACT_RETENTION_PROMPT,
+            tool_scope=list(_FACT_RETENTION_TOOL_SCOPE),
+        )
+        if spec.task_id == BUILTIN_MEMORY_RETENTION_ID
+        else spec
+        for spec in BUILTINS
+    ]
+
+
+async def seed_builtins(store: AutomationStore, *, fact_mode: bool = False) -> None:
+    for spec in _specs(fact_mode=fact_mode):
         existing = await store.get(spec.task_id)
         if existing:
             changes: dict = {}
@@ -138,6 +178,8 @@ async def seed_builtins(store: AutomationStore) -> None:
                 changes["auto_approve"] = spec.auto_approve
             if existing.cooldown_minutes is None and spec.cooldown_minutes is not None:
                 changes["cooldown_minutes"] = spec.cooldown_minutes
+            if spec.task_id == BUILTIN_MEMORY_RETENTION_ID and existing.tool_scope != spec.tool_scope:
+                changes["tool_scope"] = None if spec.tool_scope is None else list(spec.tool_scope)
             # Triggers and enabled are the USER'S dials once the row exists —
             # re-stamping them every boot silently reverted cadence edits and
             # re-enabled paused builtins. Spec values apply on first seed only.
@@ -170,6 +212,7 @@ async def seed_builtins(store: AutomationStore) -> None:
             handler=spec.handler,
             builtin=True,
             cooldown_minutes=spec.cooldown_minutes,
+            tool_scope=None if spec.tool_scope is None else list(spec.tool_scope),
         )
         await store.save(automation)
         _logger.info("Seeded builtin automation: %s", spec.name)

@@ -732,6 +732,7 @@ async def test_seed_builtins_respects_user_cadence_and_pause(automation_store: A
         prompt="Outdated builtin prompt.",
         last_run_at=last_run,
         last_result="Previous result.",
+        tool_scope=["current_time"],
     )
     await automation_store.save(edited)
 
@@ -745,6 +746,55 @@ async def test_seed_builtins_respects_user_cadence_and_pause(automation_store: A
     assert kept.prompt == "Draft contextual automation suggestions from memory, chats, and actions."
     assert kept.last_run_at == last_run
     assert kept.last_result == "Previous result."
+    assert kept.tool_scope == ["current_time"]
+
+
+@pytest.mark.asyncio
+async def test_seed_builtins_switches_retention_contract_for_fact_mode(automation_store: AutomationStore):
+    from arden.automation.builtins import seed_builtins
+    from arden.constants import BUILTIN_MEMORY_RETENTION_ID
+
+    await seed_builtins(automation_store)
+    legacy = await automation_store.get(BUILTIN_MEMORY_RETENTION_ID)
+    assert legacy is not None
+    assert legacy.handler == "memory_retention"
+    assert legacy.tool_scope is None
+    assert legacy.auto_approve is True
+    assert "supersede integration observations older than 90 days" in legacy.prompt
+
+    await automation_store.save(
+        dc_replace(
+            legacy,
+            triggers=[TimeTrigger(at="21:30")],
+            enabled=False,
+        )
+    )
+    await seed_builtins(automation_store, fact_mode=True)
+
+    canonical = await automation_store.get(BUILTIN_MEMORY_RETENTION_ID)
+    assert canonical is not None
+    assert canonical.handler is None
+    assert canonical.auto_approve is True
+    assert canonical.tool_scope == [
+        "search_facts",
+        "get_fact",
+        "get_fact_history",
+        "get_due_fact_reviews",
+        "plan_fact_changes",
+        "commit_fact_changes",
+    ]
+    assert "Never treat silence or age alone as evidence." in canonical.prompt
+    assert canonical.enabled is False
+    assert [(trigger.at.hour, trigger.at.minute) for trigger in canonical.triggers] == [(21, 30)]
+
+    await seed_builtins(automation_store)
+    restored = await automation_store.get(BUILTIN_MEMORY_RETENTION_ID)
+    assert restored is not None
+    assert restored.handler == "memory_retention"
+    assert restored.tool_scope is None
+    assert "supersede integration observations older than 90 days" in restored.prompt
+    assert restored.enabled is False
+    assert [(trigger.at.hour, trigger.at.minute) for trigger in restored.triggers] == [(21, 30)]
 
 
 @pytest.mark.asyncio

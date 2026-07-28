@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from arden.constants import BUILTIN_MEMORY_RETENTION_ID
 from arden.context.models import AreaContext, SessionState
 from arden.database import connect
 from arden.integrations.core import FACTS
@@ -47,15 +48,22 @@ def _execution(
     tool_name: str,
     area: AreaContext | None = AREA,
     run_id: str = "run-1",
+    session_id: str = "session-1",
+    origin_automation_id: str | None = None,
+    run_automation_id: str | None = None,
 ) -> ToolExecution:
     ctx = ToolContext(
-        session_state=SessionState(session_id="session-1", started_at=JULY),
+        session_state=SessionState(
+            session_id=session_id,
+            started_at=JULY,
+            origin_automation_id=origin_automation_id,
+        ),
         registry=ToolRegistry(),
-        run=RunContext(run_id=run_id),
+        run=RunContext(run_id=run_id, automation_id=run_automation_id),
         io=IOBridge(),
         services={FACT_SERVICE: service},
         area=area,
-        background_tasks=BackgroundTaskRegistry(session_id="session-1"),
+        background_tasks=BackgroundTaskRegistry(session_id=session_id),
     )
     return ToolExecution(tool_id=tool_id, tool_name=tool_name, ctx=ctx)
 
@@ -71,13 +79,20 @@ def _create(*, fact_id: str, text: str, **extra: object) -> dict[str, object]:
     }
 
 
-async def _commit_direct(service: FactService, fact_id: str, text: str, *, scope: tuple[str, str | None]) -> None:
+async def _commit_direct(
+    service: FactService,
+    fact_id: str,
+    text: str,
+    *,
+    scope: tuple[str, str | None],
+    **extra: object,
+) -> None:
     principal = FactPrincipal("seed", frozenset({scope}), frozenset({scope}))
     preview = await service.plan(
         principal,
         [
             {
-                **_create(fact_id=fact_id, text=text),
+                **_create(fact_id=fact_id, text=text, **extra),
                 "scope": {"kind": scope[0], "key": scope[1]},
                 "sources": [{"kind": "test", "ref": fact_id}],
             }
@@ -203,6 +218,497 @@ async def test_due_reviews_return_evidence_not_a_recommended_action(tmp_path: Pa
         assert due.data["reviews"][0]["fact"]["fact_id"] == "due"
         assert "recommend" not in due.content.lower()
         json.dumps(due.data)
+    finally:
+        await connection.close()
+
+
+async def test_retention_uses_all_scopes_but_only_due_evidence_backed_lifecycle_changes(tmp_path: Path) -> None:
+    service, connection = await _service(tmp_path)
+
+    def retention(tool_id: str, tool_name: str) -> ToolExecution:
+        return _execution(
+            service,
+            tool_id=tool_id,
+            tool_name=tool_name,
+            area=None,
+            session_id="retention-run",
+            origin_automation_id=BUILTIN_MEMORY_RETENTION_ID,
+            run_automation_id=BUILTIN_MEMORY_RETENTION_ID,
+        )
+
+    try:
+        await _commit_direct(
+            service,
+            "due-project",
+            "Project claim",
+            scope=("area", "project"),
+            lifecycle="temporary",
+            expires_at="2026-07-01T00:00:00Z",
+            occurred_at="2026-06-01T00:00:00Z",
+        )
+        await _commit_direct(
+            service,
+            "successor",
+            "New project claim",
+            scope=("area", "project"),
+            occurred_at="2026-07-01T00:00:00Z",
+        )
+        await _commit_direct(
+            service,
+            "old-project",
+            "Old project claim",
+            scope=("area", "project"),
+            occurred_at="2026-05-01T00:00:00Z",
+        )
+        await _commit_direct(
+            service,
+            "due-other",
+            "Other claim",
+            scope=("area", "other"),
+            lifecycle="temporary",
+            review_at="2026-07-01T00:00:00Z",
+            review_basis="explicit",
+        )
+        await _commit_direct(
+            service,
+            "future",
+            "Future review",
+            scope=("area", "project"),
+            lifecycle="temporary",
+            review_at="2026-08-01T00:00:00Z",
+            review_basis="explicit",
+        )
+
+        due = await get_due_fact_reviews_tool.execute(
+            retention("retention-due", "get_due_fact_reviews"),
+            limit=10,
+        )
+        assert {item["fact"]["fact_id"] for item in due.data["reviews"]} == {"due-project", "due-other"}
+        project_review = next(item for item in due.data["reviews"] if item["fact"]["fact_id"] == "due-project")
+        assert project_review["explicit_expiry_due"] is True
+        assert [item["fact_id"] for item in project_review["related_facts"]] == ["future", "successor"]
+        other_review = next(item for item in due.data["reviews"] if item["fact"]["fact_id"] == "due-other")
+        assert other_review["explicit_expiry_due"] is False
+
+        descriptive_origin_only = await get_fact_tool.execute(
+            _execution(
+                service,
+                tool_id="interactive-get",
+                tool_name="get_fact",
+                origin_automation_id=BUILTIN_MEMORY_RETENTION_ID,
+            ),
+            fact_id="due-other",
+        )
+        assert descriptive_origin_only.outcome.error.code == "permission_denied"
+
+        forbidden = await plan_fact_changes_tool.execute(
+            retention("retention-create", "plan_fact_changes"),
+            changes=[_create(fact_id="invented", text="Invented")],
+            reason="Retention must not create facts.",
+        )
+        assert forbidden.outcome.error.code == "invalid_input"
+
+        future = await plan_fact_changes_tool.execute(
+            retention("retention-future", "plan_fact_changes"),
+            changes=[
+                {
+                    "op": "review",
+                    "fact_id": "future",
+                    "certainty": "uncertain",
+                    "reason": "Not due.",
+                }
+            ],
+            reason="Not due.",
+        )
+        assert future.outcome.error.code == "invalid_input"
+
+        cross_scope = await plan_fact_changes_tool.execute(
+            retention("retention-cross", "plan_fact_changes"),
+            changes=[
+                {
+                    "op": "review",
+                    "fact_id": "due-project",
+                    "certainty": "confirmed",
+                    "evidence_fact_ids": ["due-other"],
+                    "reason": "Wrong scope.",
+                }
+            ],
+            reason="Wrong scope.",
+        )
+        assert cross_scope.outcome.error.code == "invalid_input"
+
+        old_evidence = await plan_fact_changes_tool.execute(
+            retention("retention-old", "plan_fact_changes"),
+            changes=[
+                {
+                    "op": "expire",
+                    "fact_id": "due-project",
+                    "evidence_fact_ids": ["old-project"],
+                    "reason": "Old evidence must not decide expiry.",
+                }
+            ],
+            reason="Old evidence.",
+        )
+        assert old_evidence.outcome.error.code == "invalid_input"
+
+        self_without_expiry = await plan_fact_changes_tool.execute(
+            retention("retention-self", "plan_fact_changes"),
+            changes=[
+                {
+                    "op": "expire",
+                    "fact_id": "due-other",
+                    "evidence_fact_ids": ["due-other"],
+                    "reason": "A review date is not an expiry.",
+                }
+            ],
+            reason="No explicit expiry.",
+        )
+        assert self_without_expiry.outcome.error.code == "invalid_input"
+
+        plan = await plan_fact_changes_tool.execute(
+            retention("retention-plan", "plan_fact_changes"),
+            changes=[
+                {
+                    "op": "supersede",
+                    "fact_id": "due-project",
+                    "successor_id": "successor",
+                    "evidence_fact_ids": ["successor"],
+                    "reason": "Newer direct evidence.",
+                },
+                {
+                    "op": "review",
+                    "fact_id": "due-other",
+                    "certainty": "uncertain",
+                    "review_at": "2026-10-28T12:00:00Z",
+                    "review_basis": "inferred",
+                    "reason": "No newer evidence found.",
+                },
+            ],
+            reason="Review every currently due fact.",
+        )
+        assert not plan.is_error
+        supersession = plan.data["events"][0]
+        assert supersession["actor"] == f"automation:{BUILTIN_MEMORY_RETENTION_ID}"
+        assert supersession["origin"] == "memory.retention"
+        assert supersession["sources"]["items"][1]["kind"] == "fact"
+        assert supersession["sources"]["items"][1]["ref"] == "successor"
+
+        committed = await commit_fact_changes_tool.execute(
+            retention("retention-commit", "commit_fact_changes"),
+            plan_id=plan.data["plan_id"],
+        )
+        assert not committed.is_error
+        assert service.ledger.get("due-project").status == "superseded"
+        assert service.ledger.get("due-other").certainty == "uncertain"
+    finally:
+        await connection.close()
+
+
+async def test_retention_due_snapshot_and_selected_evidence_are_cas_pinned(tmp_path: Path, monkeypatch) -> None:
+    service, connection = await _service(tmp_path)
+    principal = FactPrincipal(
+        "seed",
+        frozenset({("area", "project")}),
+        frozenset({("area", "project")}),
+    )
+
+    def retention(tool_id: str, tool_name: str) -> ToolExecution:
+        return _execution(
+            service,
+            tool_id=tool_id,
+            tool_name=tool_name,
+            area=None,
+            session_id="retention-race",
+            run_automation_id=BUILTIN_MEMORY_RETENTION_ID,
+        )
+
+    async def mutate(fact_id: str, request_key: str) -> None:
+        preview = await service.plan(
+            principal,
+            [
+                {
+                    "op": "amend",
+                    "fact_id": fact_id,
+                    "labels": [request_key],
+                    "sources": [{"kind": "test", "ref": request_key}],
+                }
+            ],
+            request_key=request_key,
+            actor="seed",
+            origin="test",
+            reason="simulate concurrent change",
+        )
+        await service.commit(principal, preview.plan_id)
+
+    try:
+        await _commit_direct(
+            service,
+            "due-race",
+            "Due race",
+            scope=("area", "project"),
+            lifecycle="temporary",
+            review_at="2026-07-01T00:00:00Z",
+            review_basis="explicit",
+            occurred_at="2026-06-01T00:00:00Z",
+        )
+        await _commit_direct(
+            service,
+            "race-evidence",
+            "Race evidence",
+            scope=("area", "project"),
+            occurred_at="2026-07-01T00:00:00Z",
+        )
+
+        original_batch = service.retention_review_batch
+
+        async def raced_batch(caller: FactPrincipal):
+            batch = await original_batch(caller)
+            preview = await service.plan(
+                principal,
+                [
+                    {
+                        "op": "review",
+                        "fact_id": "due-race",
+                        "certainty": "confirmed",
+                        "review_at": "2026-10-28T12:00:00Z",
+                        "review_basis": "explicit",
+                        "reason": "concurrent review",
+                        "sources": [{"kind": "test", "ref": "target-raced"}],
+                    }
+                ],
+                request_key="target-raced",
+                actor="seed",
+                origin="test",
+                reason="simulate concurrent review",
+            )
+            await service.commit(principal, preview.plan_id)
+            return batch
+
+        monkeypatch.setattr(service, "retention_review_batch", raced_batch)
+        stale_due = await plan_fact_changes_tool.execute(
+            retention("stale-due", "plan_fact_changes"),
+            changes=[
+                {
+                    "op": "review",
+                    "fact_id": "due-race",
+                    "certainty": "confirmed",
+                    "evidence_fact_ids": ["race-evidence"],
+                    "reason": "Evidence from stale due snapshot.",
+                }
+            ],
+            reason="Stale due snapshot.",
+        )
+        assert stale_due.outcome.error.code == "write_conflict"
+        monkeypatch.setattr(service, "retention_review_batch", original_batch)
+
+        await _commit_direct(
+            service,
+            "due-evidence-race",
+            "Due evidence race",
+            scope=("area", "project"),
+            lifecycle="temporary",
+            review_at="2026-07-01T00:00:00Z",
+            review_basis="explicit",
+            occurred_at="2026-06-01T00:00:00Z",
+        )
+        await _commit_direct(
+            service,
+            "selected-evidence",
+            "Selected evidence",
+            scope=("area", "project"),
+            occurred_at="2026-07-02T00:00:00Z",
+        )
+        plan = await plan_fact_changes_tool.execute(
+            retention("evidence-plan", "plan_fact_changes"),
+            changes=[
+                {
+                    "op": "supersede",
+                    "fact_id": "due-evidence-race",
+                    "successor_id": "selected-evidence",
+                    "evidence_fact_ids": ["selected-evidence"],
+                    "reason": "Selected newer evidence.",
+                }
+            ],
+            reason="Prepare evidence-pinned decision.",
+        )
+        assert not plan.is_error
+
+        await mutate("selected-evidence", "evidence-raced")
+        stale_evidence = await commit_fact_changes_tool.execute(
+            retention("evidence-commit", "commit_fact_changes"),
+            plan_id=plan.data["plan_id"],
+        )
+        assert stale_evidence.outcome.error.code == "write_conflict"
+        assert service.ledger.get("due-evidence-race").status == "active"
+    finally:
+        await connection.close()
+
+
+async def test_retention_review_window_conflicts_only_for_new_relevant_evidence(tmp_path: Path) -> None:
+    service, connection = await _service(tmp_path)
+
+    def retention(tool_id: str) -> ToolExecution:
+        return _execution(
+            service,
+            tool_id=tool_id,
+            tool_name="plan_fact_changes",
+            area=None,
+            session_id="retention-window",
+            run_automation_id=BUILTIN_MEMORY_RETENTION_ID,
+        )
+
+    async def review_plan(fact_id: str, tool_id: str):
+        return await plan_fact_changes_tool.execute(
+            retention(tool_id),
+            changes=[
+                {
+                    "op": "review",
+                    "fact_id": fact_id,
+                    "certainty": "uncertain",
+                    "review_at": "2026-10-28T12:00:00Z",
+                    "review_basis": "explicit",
+                    "reason": "No newer evidence at review time.",
+                }
+            ],
+            reason="Review current evidence window.",
+        )
+
+    try:
+        for fact_id in ("due-window", "due-unrelated"):
+            await _commit_direct(
+                service,
+                fact_id,
+                fact_id,
+                scope=("area", "project"),
+                lifecycle="temporary",
+                review_at="2026-07-01T00:00:00Z",
+                review_basis="explicit",
+                occurred_at="2026-06-01T00:00:00Z",
+            )
+
+        stale = await review_plan("due-window", "window-stale-plan")
+        assert not stale.is_error
+        assert "review_window" not in stale.data["events"][0]["payload"]
+        await _commit_direct(
+            service,
+            "new-related",
+            "New related evidence",
+            scope=("area", "project"),
+            occurred_at="2026-07-02T00:00:00Z",
+        )
+        rejected = await commit_fact_changes_tool.execute(
+            retention("window-stale-commit"),
+            plan_id=stale.data["plan_id"],
+        )
+        assert rejected.outcome.error.code == "write_conflict"
+        assert service.ledger.get("due-window").status == "active"
+
+        clean = await review_plan("due-unrelated", "window-clean-plan")
+        assert not clean.is_error
+        await _commit_direct(
+            service,
+            "unrelated",
+            "Unrelated evidence",
+            scope=("area", "project"),
+            subjects=["beta"],
+            occurred_at="2026-07-03T00:00:00Z",
+        )
+        committed = await commit_fact_changes_tool.execute(
+            retention("window-clean-commit"),
+            plan_id=clean.data["plan_id"],
+        )
+        assert not committed.is_error
+        event = service.ledger.history("due-unrelated")[-1]
+        assert "review_window" in event.record["payload"]
+        assert "expected_review_window" not in event.record["payload"]
+    finally:
+        await connection.close()
+
+
+async def test_retention_scope_race_reaches_cas_and_releases_plan(tmp_path: Path) -> None:
+    service, connection = await _service(tmp_path)
+    old_scope = ("area", "project")
+    new_scope = ("project", "moved")
+
+    def retention(tool_id: str) -> ToolExecution:
+        return _execution(
+            service,
+            tool_id=tool_id,
+            tool_name="plan_fact_changes",
+            area=None,
+            session_id="retention-scope-race",
+            run_automation_id=BUILTIN_MEMORY_RETENTION_ID,
+        )
+
+    try:
+        await _commit_direct(
+            service,
+            "due-scope-race",
+            "Due scope race",
+            scope=old_scope,
+            lifecycle="temporary",
+            review_at="2026-07-01T00:00:00Z",
+            review_basis="explicit",
+        )
+        review_change = {
+            "op": "review",
+            "fact_id": "due-scope-race",
+            "certainty": "uncertain",
+            "review_at": "2026-10-28T12:00:00Z",
+            "review_basis": "explicit",
+            "reason": "No newer evidence.",
+        }
+        plan = await plan_fact_changes_tool.execute(
+            retention("scope-race-plan"),
+            changes=[review_change],
+            reason="Review current scope.",
+        )
+        assert not plan.is_error
+
+        await _commit_direct(
+            service,
+            "new-scope-fact",
+            "Unrelated new scope",
+            scope=new_scope,
+            subjects=["beta"],
+        )
+        retry = await plan_fact_changes_tool.execute(
+            retention("scope-race-plan"),
+            changes=[review_change],
+            reason="Review current scope.",
+        )
+        assert not retry.is_error
+        assert retry.data["plan_id"] == plan.data["plan_id"]
+
+        mover = FactPrincipal("mover", frozenset({old_scope, new_scope}), frozenset({old_scope, new_scope}))
+        moved = await service.plan(
+            mover,
+            [
+                {
+                    "op": "amend",
+                    "fact_id": "due-scope-race",
+                    "scope": {"kind": new_scope[0], "key": new_scope[1]},
+                    "sources": [{"kind": "test", "ref": "scope-move"}],
+                }
+            ],
+            request_key="scope-move",
+            actor="mover",
+            origin="test",
+            reason="simulate concurrent scope correction",
+        )
+        await service.commit(mover, moved.plan_id)
+        assert await service.known_scopes() == frozenset({old_scope, new_scope})
+
+        rejected = await commit_fact_changes_tool.execute(
+            retention("scope-race-commit"),
+            plan_id=plan.data["plan_id"],
+        )
+        assert rejected.outcome.error.code == "write_conflict"
+        stored = await service.plans.get(
+            plan.data["plan_id"],
+            owner_id=f"automation:{BUILTIN_MEMORY_RETENTION_ID}",
+        )
+        assert stored.status.value == "planned"
     finally:
         await connection.close()
 

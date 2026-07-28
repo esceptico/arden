@@ -701,6 +701,130 @@ def test_commit_rejects_inconsistent_plan_values(tmp_path: Path) -> None:
         ledger.commit(replace(dependent, dependencies={}))
 
 
+def test_fact_evidence_and_expected_target_versions_are_cas_dependencies(tmp_path: Path) -> None:
+    ledger = _ledger(tmp_path)
+    _commit(ledger, _create("target", "Target"), _create("evidence", "Evidence"))
+    target_version = ledger.get("target").version
+    evidence_version = ledger.get("evidence").version
+    plan = _plan(
+        ledger,
+        (
+            {
+                "op": "review",
+                "fact_id": "target",
+                "expected_version": target_version,
+                "reason": "newer evidence",
+                "sources": [
+                    {
+                        "kind": "fact",
+                        "ref": "evidence",
+                        "scope_kind": "area",
+                        "scope_key": "project",
+                        "role": "evidence",
+                        "extra": {"version": evidence_version},
+                    }
+                ],
+            },
+        ),
+    )
+    assert plan.dependencies == {"target": target_version, "evidence": evidence_version}
+
+    altered_dependencies = {**plan.dependencies, "evidence": target_version}
+    with pytest.raises(FactValidationError, match="cited evidence"):
+        ledger.validate_plan(replace(plan, dependencies=altered_dependencies))
+
+    _commit(ledger, {"op": "amend", "fact_id": "evidence", "labels": ["changed"]})
+    with pytest.raises(FactConflictError, match="evidence"):
+        ledger.commit(plan)
+
+    _commit(ledger, {"op": "amend", "fact_id": "target", "labels": ["changed"]})
+    with pytest.raises(FactConflictError, match="due review"):
+        _plan(
+            ledger,
+            (
+                {
+                    "op": "review",
+                    "fact_id": "target",
+                    "expected_version": target_version,
+                    "reason": "stale due snapshot",
+                },
+            ),
+        )
+
+    with pytest.raises(FactValidationError, match="exact version"):
+        _plan(
+            ledger,
+            (
+                {
+                    "op": "review",
+                    "fact_id": "target",
+                    "reason": "unversioned evidence",
+                    "sources": [{"kind": "fact", "ref": "evidence"}],
+                },
+            ),
+        )
+
+
+def test_retention_review_window_is_bound_to_retention_plans(tmp_path: Path) -> None:
+    ledger = _ledger(tmp_path)
+    _commit(
+        ledger,
+        _create(
+            "due",
+            "Due fact",
+            lifecycle="temporary",
+            review_at="2026-07-01T00:00:00Z",
+            review_basis="explicit",
+        ),
+    )
+    due = ledger.due_reviews()[0]
+    plan = _plan(
+        ledger,
+        (
+            {
+                "op": "review",
+                "fact_id": "due",
+                "expected_version": due.fact.version,
+                "expected_review_window": due.review_window,
+                "review_at": "2026-08-01T00:00:00Z",
+                "review_basis": "explicit",
+                "certainty": "uncertain",
+                "reason": "No newer evidence",
+            },
+        ),
+        actor="automation:builtin-memory-retention",
+        origin="memory.retention",
+        reason="review due fact",
+    )
+    assert plan.events[0].record["payload"]["review_window"] == due.review_window
+
+    record = dict(plan.events[0].record)
+    payload = dict(record["payload"])
+    payload.pop("review_window")
+    record["payload"] = payload
+    missing_window = replace(plan, events=(replace(plan.events[0], record=record),))
+    with pytest.raises(FactValidationError, match="require"):
+        ledger.validate_plan(missing_window)
+
+    ordinary = _plan(
+        ledger,
+        (
+            {
+                "op": "review",
+                "fact_id": "due",
+                "review_at": "2026-08-01T00:00:00Z",
+                "review_basis": "explicit",
+                "reason": "ordinary review",
+            },
+        ),
+    )
+    record = dict(ordinary.events[0].record)
+    record["payload"] = {**record["payload"], "review_window": "0" * 64}
+    forged_window = replace(ordinary, events=(replace(ordinary.events[0], record=record),))
+    with pytest.raises(FactValidationError, match="reserved"):
+        ledger.validate_plan(forged_window)
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [("actor", ""), ("origin", ""), ("reason", ""), ("actor", 7)],

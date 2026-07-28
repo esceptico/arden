@@ -47,6 +47,8 @@ _REVIEW_BASES = frozenset({"explicit", "inferred", "fallback"})
 _TIME_PRECISIONS = frozenset({"millisecond", "second", "minute", "day", "unknown"})
 _TERMINAL = frozenset({"superseded", "expired", "retracted"})
 _FALLBACK_REVIEW = timedelta(days=90)
+_REVIEW_WINDOW_LIMIT = 5
+_RETENTION_ORIGIN = "memory.retention"
 _SOURCE_REQUIRED = frozenset({"kind", "ref"})
 _SOURCE_OPTIONAL = frozenset(
     {
@@ -242,6 +244,12 @@ def _source(value: object) -> dict[str, Any]:
         if not isinstance(value["extra"], Mapping):
             raise FactValidationError("source.extra must be an object")
         result["extra"] = _json_value(value["extra"], "source.extra")
+    if result["kind"] == "fact":
+        result["ref"] = _text(result["ref"], "source.ref")
+        extra = result.get("extra")
+        version = extra.get("version") if isinstance(extra, Mapping) else None
+        if not isinstance(version, str) or re.fullmatch(r"[0-9a-f]{64}", version) is None:
+            raise FactValidationError("fact source requires an exact version")
     precision = result.get("time_precision")
     if "time_precision" in result and precision not in _TIME_PRECISIONS:
         raise FactValidationError("invalid source.time_precision")
@@ -355,6 +363,18 @@ class FactLedger:
             raise KeyError(f"unknown fact: {fact_id}")
         return events
 
+    def known_scopes(self) -> frozenset[tuple[str, str | None]]:
+        """Return every scope recorded in canonical fact history."""
+
+        scopes = set()
+        for event in self._snapshot().events:
+            payload = event.record["payload"]
+            if event.op != "create" and "scope" not in payload:
+                continue
+            scope = _scope(payload["scope"])
+            scopes.add((scope["kind"], scope["key"]))
+        return frozenset(scopes)
+
     def validate_initialized(self) -> str:
         """Fully validate an initialized ledger and return its current head."""
 
@@ -364,16 +384,69 @@ class FactLedger:
         return head
 
     def due_reviews(self, *, now: datetime | None = None) -> tuple[DueReviewCandidate, ...]:
+        return self.due_review_snapshot(now=now)[2]
+
+    def due_review_snapshot(
+        self,
+        *,
+        now: datetime | None = None,
+    ) -> tuple[str | None, datetime, tuple[DueReviewCandidate, ...]]:
+        """Return due reviews and their evidence from one validated state."""
+
+        snapshot = self._snapshot()
         point = self._now() if now is None else self._utc(now)
+        active = tuple(
+            sorted(
+                (fact for fact in snapshot.state.values() if fact.status == "active"),
+                key=lambda fact: (fact.created_at, fact.fact_id),
+            )
+        )
         result = []
-        for fact in self._snapshot().state.values():
+        for fact in active:
             candidates = [item for item in (fact.review_at, fact.expires_at) if item is not None]
-            if fact.status != "active" or not candidates:
+            if not candidates:
                 continue
             due_at = min(candidates)
             if due_at <= point:
-                result.append(DueReviewCandidate(fact, due_at))
-        return tuple(sorted(result, key=lambda item: (item.due_at, item.fact.fact_id)))
+                related = self._review_window_facts(fact, active)
+                result.append(DueReviewCandidate(fact, due_at, related, self._review_window(fact, related)))
+        due = tuple(sorted(result, key=lambda item: (item.due_at, item.fact.fact_id)))
+        return snapshot.head, point, due
+
+    @staticmethod
+    def _review_window_facts(fact: Fact, active: Iterable[Fact]) -> tuple[Fact, ...]:
+        """The exact newest shared-subject evidence Retention was shown."""
+
+        evidence_cutoff = fact.reviewed_at or fact.created_at
+        subjects = set(fact.subjects)
+        return tuple(
+            sorted(
+                (
+                    candidate
+                    for candidate in active
+                    if candidate.fact_id != fact.fact_id
+                    and candidate.scope == fact.scope
+                    and candidate.created_at > evidence_cutoff
+                    and subjects.intersection(candidate.subjects)
+                ),
+                key=lambda candidate: (candidate.created_at, candidate.fact_id),
+                reverse=True,
+            )[:_REVIEW_WINDOW_LIMIT]
+        )
+
+    @staticmethod
+    def _review_window(fact: Fact, related: Iterable[Fact]) -> str:
+        cutoff = fact.reviewed_at or fact.created_at
+        return _digest(
+            {
+                "fact_id": fact.fact_id,
+                "version": fact.version,
+                "scope": dict(fact.scope),
+                "subjects": list(fact.subjects),
+                "cutoff": _time(cutoff),
+                "candidates": [{"fact_id": candidate.fact_id, "version": candidate.version} for candidate in related],
+            }
+        )
 
     def active_subject_count(
         self,
@@ -417,9 +490,18 @@ class FactLedger:
             op = change.get("op")
             if op not in _OPS:
                 raise FactValidationError("unknown fact operation")
+            is_retention = origin == _RETENTION_ORIGIN
+            has_review_window = "expected_review_window" in change
+            if is_retention and op not in {"review", "supersede", "expire"}:
+                raise FactValidationError("Retention may only review, supersede, or expire due temporary facts")
+            if is_retention and not has_review_window:
+                raise FactValidationError("Retention changes require an expected review window")
+            if has_review_window and not is_retention:
+                raise FactValidationError("expected_review_window is reserved for Retention")
             point = plan_point if "occurred_at" not in change else _change_time(change["occurred_at"])
             if op == "create":
                 event, fact = self._create_event(change, plan_id, point, working, actor, origin, reason)
+                self._pin_fact_sources(event.record["payload"], base, dependencies)
                 events.append(event)
                 working[fact.fact_id] = fact
                 supersedes = change.get("supersedes", ())
@@ -448,15 +530,23 @@ class FactLedger:
                         origin,
                         reason,
                     )
+                    self._pin_fact_sources(event.record["payload"], base, dependencies)
                     events.append(event)
                     working[old.fact_id] = self._apply(old, event)
                 continue
             fact_id = _text(change.get("fact_id"), "fact_id")
             current = self._active(working, fact_id, dependencies)
+            if "expected_version" in change:
+                expected = self._fact_version(change["expected_version"], "expected_version")
+                if current.version != expected:
+                    raise FactConflictError(f"fact changed since due review: {fact_id}")
+            if is_retention:
+                self._validate_retention_plan_change(change, current, base, plan_point)
             if op == "amend" and "text" in change:
                 raise FactValidationError("text amendments require create with supersedes")
             payload = self._change_payload(op, change, current, working, dependencies, point)
             event = self._event(plan_id, fact_id, str(op), point, payload, actor, origin, reason)
+            self._pin_fact_sources(event.record["payload"], base, dependencies)
             events.append(event)
             working[fact_id] = self._apply(current, event)
         windows = self._changed_windows(base, working)
@@ -484,6 +574,7 @@ class FactLedger:
             if applied:
                 return self._match_events(applied, plan.events)
             self._validate_plan_dependencies(plan, state)
+            self._validate_retention_review_windows(plan, state)
             for event in plan.events:
                 if event.op == "create" and event.fact_id in state:
                     raise FactConflictError(f"fact was created since plan: {event.fact_id}")
@@ -553,26 +644,58 @@ class FactLedger:
         if len({event.event_id for event in decoded}) != len(decoded):
             raise FactValidationError("fact plan contains duplicate event ids")
         try:
-            self._event_attribution(decoded)
+            _actor, origin, _reason = self._event_attribution(decoded)
         except FactLedgerCorruptionError as exc:
             raise FactValidationError(str(exc)) from exc
         self._validate_event_order(decoded, error_type=FactValidationError)
+        self._validate_retention_plan_invariants(decoded, origin)
 
-        created: set[str] = set()
+        created = {event.fact_id for event in decoded if event.op == "create"}
         required_dependencies: set[str] = set()
+        source_versions: dict[str, str] = {}
+        seen_created: set[str] = set()
         for event in decoded:
             if event.op == "create":
-                created.add(event.fact_id)
-            elif event.fact_id not in created:
+                seen_created.add(event.fact_id)
+            elif event.fact_id not in seen_created:
                 required_dependencies.add(event.fact_id)
             if event.op == "supersede":
                 successor_id = event.record["payload"]["successor_id"]
-                if successor_id not in created:
+                if successor_id not in seen_created:
                     required_dependencies.add(successor_id)
+            payload = event.record["payload"]
+            if "sources" in payload:
+                for source in _sources(payload["sources"]):
+                    if source["kind"] != "fact":
+                        continue
+                    source_id = source["ref"]
+                    if source_id in created:
+                        raise FactValidationError("fact source must reference pre-plan canonical evidence")
+                    version = self._fact_version(source["extra"]["version"], "source.extra.version")
+                    existing = source_versions.setdefault(source_id, version)
+                    if existing != version:
+                        raise FactValidationError("fact plan cites conflicting evidence versions")
+                    required_dependencies.add(source_id)
         dependencies = self._plan_hashes(plan.dependencies, "dependencies")
         if set(dependencies) != required_dependencies:
             raise FactValidationError("fact plan dependencies do not match its events")
+        if any(dependencies[fact_id] != version for fact_id, version in source_versions.items()):
+            raise FactValidationError("fact plan dependency does not match cited evidence")
         self._plan_hashes(plan.duplicate_windows, "duplicate_windows")
+
+    def _validate_retention_plan_invariants(self, events: Sequence[FactEvent], origin: str) -> None:
+        for event in events:
+            payload = event.record["payload"]
+            has_window = "review_window" in payload
+            if origin == _RETENTION_ORIGIN:
+                if event.op not in {"review", "supersede", "expire"}:
+                    raise FactValidationError("Retention may only review, supersede, or expire due temporary facts")
+                if not has_window:
+                    raise FactValidationError("Retention changes require an expected review window")
+            elif has_window:
+                raise FactValidationError("review_window is reserved for Retention")
+            if has_window:
+                self._fact_version(payload["review_window"], "review_window")
 
     @staticmethod
     def _plan_hashes(value: object, field: str) -> dict[str, str]:
@@ -588,6 +711,35 @@ class FactLedger:
                 raise FactValidationError(f"invalid fact plan {field} digest")
             result[clean_key] = item
         return result
+
+    @staticmethod
+    def _fact_version(value: object, field: str) -> str:
+        if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+            raise FactValidationError(f"{field} must be a SHA-256 digest")
+        return value
+
+    @classmethod
+    def _pin_fact_sources(
+        cls,
+        payload: Mapping[str, Any],
+        base: Mapping[str, Fact],
+        dependencies: dict[str, str],
+    ) -> None:
+        if "sources" not in payload:
+            return
+        for source in _sources(payload["sources"]):
+            if source["kind"] != "fact":
+                continue
+            fact_id = source["ref"]
+            version = cls._fact_version(source["extra"]["version"], "source.extra.version")
+            current = base.get(fact_id)
+            if current is None:
+                raise FactValidationError(f"fact source is not canonical: {fact_id}")
+            if current.version != version:
+                raise FactConflictError(f"fact evidence changed since it was read: {fact_id}")
+            existing = dependencies.setdefault(fact_id, version)
+            if existing != version:
+                raise FactConflictError(f"fact evidence version conflicts with this plan: {fact_id}")
 
     def _create_event(
         self,
@@ -674,7 +826,7 @@ class FactLedger:
         dependencies: dict[str, str],
         point: datetime,
     ) -> dict[str, Any]:
-        common = {"op", "fact_id", "occurred_at"}
+        common = {"op", "fact_id", "occurred_at", "expected_version", "expected_review_window"}
         if op == "review":
             self._unknown(change, common | {"reason", "review_at", "review_basis", "sources", "certainty"})
             reason = _text(change.get("reason"), "reason")
@@ -695,6 +847,7 @@ class FactLedger:
                 if change["certainty"] not in _CERTAINTIES:
                     raise FactValidationError("invalid certainty")
                 payload["certainty"] = change["certainty"]
+            self._copy_expected_review_window(change, payload)
             return payload
         if op == "amend":
             allowed = {
@@ -756,7 +909,12 @@ class FactLedger:
             payload = {"reason": _text(change.get("reason"), "reason")}
         if "sources" in change:
             payload["sources"] = list(_sources(change["sources"]))
+        self._copy_expected_review_window(change, payload)
         return payload
+
+    def _copy_expected_review_window(self, change: Mapping[str, Any], payload: dict[str, Any]) -> None:
+        if "expected_review_window" in change:
+            payload["review_window"] = self._fact_version(change["expected_review_window"], "expected_review_window")
 
     def _metadata_payload(
         self,
@@ -1023,7 +1181,7 @@ class FactLedger:
                 raise FactValidationError("explicit expiry must not use fallback review")
             return
         allowed = {
-            "review": {"reason", "review_at", "review_basis", "sources", "certainty"},
+            "review": {"reason", "review_at", "review_basis", "sources", "certainty", "review_window"},
             "amend": {
                 "kind",
                 "labels",
@@ -1036,8 +1194,8 @@ class FactLedger:
                 "review_basis",
                 "expires_at",
             },
-            "supersede": {"successor_id", "reason", "sources"},
-            "expire": {"reason", "sources"},
+            "supersede": {"successor_id", "reason", "sources", "review_window"},
+            "expire": {"reason", "sources", "review_window"},
             "retract": {"reason", "sources"},
         }[op]
         required = {
@@ -1090,6 +1248,8 @@ class FactLedger:
             _sources(payload["sources"])
         if "certainty" in payload and payload["certainty"] not in _CERTAINTIES:
             raise FactValidationError("invalid certainty")
+        if "review_window" in payload:
+            self._fact_version(payload["review_window"], "review_window")
         if "review_at" in payload or "review_basis" in payload:
             if not {"review_at", "review_basis"} <= set(payload):
                 raise FactValidationError("review fields must appear together")
@@ -1217,6 +1377,46 @@ class FactLedger:
             scope_kind, scope_key, text = self._window_parts(key)
             if self._duplicate_digest(state, scope_kind, scope_key, text) != digest:
                 raise FactConflictError("same-scope exact-text duplicate window changed")
+
+    def _validate_retention_plan_change(
+        self,
+        change: Mapping[str, Any],
+        current: Fact,
+        state: Mapping[str, Fact],
+        point: datetime,
+    ) -> None:
+        """Validate the server-derived Retention evidence window at planning."""
+
+        if current.lifecycle != "temporary":
+            raise FactValidationError("Retention may only change temporary facts")
+        if "expected_version" not in change:
+            raise FactValidationError("Retention changes require expected_version")
+        due_at = min(item for item in (current.review_at, current.expires_at) if item is not None)
+        if due_at > point:
+            raise FactValidationError("Retention may only change facts currently due for review")
+        expected = self._fact_version(change["expected_review_window"], "expected_review_window")
+        related = self._review_window_facts(
+            current,
+            (fact for fact in state.values() if fact.status == "active"),
+        )
+        if self._review_window(current, related) != expected:
+            raise FactConflictError("newer related evidence changed since due review")
+
+    def _validate_retention_review_windows(self, plan: FactPlan, state: Mapping[str, Fact]) -> None:
+        for event in plan.events:
+            payload = event.record["payload"]
+            expected = payload.get("review_window")
+            if expected is None:
+                continue
+            current = state.get(event.fact_id)
+            if current is None or current.status != "active":
+                raise FactConflictError(f"fact changed since due review: {event.fact_id}")
+            related = self._review_window_facts(
+                current,
+                (fact for fact in state.values() if fact.status == "active"),
+            )
+            if self._review_window(current, related) != expected:
+                raise FactConflictError("newer related evidence changed since due review")
 
     @staticmethod
     def _duplicate_digest(

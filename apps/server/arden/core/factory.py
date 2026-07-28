@@ -90,6 +90,7 @@ def create_agent(
     background_tasks: BackgroundTaskRegistry | None = None,
     loaded_tools: set[str] | None = None,
     loop_task_id: str | None = None,
+    automation_id: str | None = None,
     parent_tracker: UsageTracker | None = None,
     initial_input_tokens: int | None = None,
     run_registry: "RunRegistry | None" = None,
@@ -124,6 +125,7 @@ def create_agent(
         loaded_tools=loaded_tools if loaded_tools is not None else set(),
         allowed_tool_names=tool_schema_names(tools),
         loop_task_id=loop_task_id,
+        automation_id=automation_id,
         budget=budget,
     )
 

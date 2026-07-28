@@ -101,6 +101,9 @@ class RunContext:
     declined_connections: set[str] = field(default_factory=set)
     allowed_tool_names: set[str] | None = None
     loop_task_id: str | None = None
+    # Trusted, run-scoped automation identity. Session metadata may describe
+    # an automation origin, but must never grant authority to later runs.
+    automation_id: str | None = None
     active_plan_ref: str | None = None
     research_scope_id: str | None = None
     # Builds an IOBridge bound to a child (subagent) session's own SSE bus, so a

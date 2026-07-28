@@ -98,6 +98,29 @@ async def test_prepare_allows_missing_skill_registry(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_prepare_stamps_server_owned_automation_identity(monkeypatch):
+    captured = {}
+
+    def create_agent(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(runner, "create_agent", create_agent)
+    await runner._prepare(
+        _deps(None),
+        RunRequest(
+            prompt="review due facts",
+            auto_approve=True,
+            source_id="builtin-memory-retention",
+            automation_id="builtin-memory-retention",
+        ),
+    )
+
+    assert captured["session_state"].origin_automation_id == "builtin-memory-retention"
+    assert captured["automation_id"] == "builtin-memory-retention"
+
+
+@pytest.mark.asyncio
 async def test_prepare_auto_approve_ignores_extra_tool_names(monkeypatch):
     """extra_tool_names takes precedence over auto_approve for the TOOLSET:
     naming extras always means the narrow read+extras set, with auto_approve

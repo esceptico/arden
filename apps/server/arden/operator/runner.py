@@ -70,6 +70,7 @@ class RunResult:
 async def _prepare(deps: OperatorDeps, request: RunRequest) -> tuple[Agent, list[dict], str, str]:
     run_id = generate_run_id()
     session_state = deps.create_session()
+    session_state.origin_automation_id = request.automation_id
 
     memory_context = await resident_profile(deps.memory_records)
 
@@ -118,6 +119,7 @@ async def _prepare(deps: OperatorDeps, request: RunRequest) -> tuple[Agent, list
         session_state=session_state,
         run_id=run_id,
         approval_controls=ApprovalControls(skip_approvals=request.skip_approvals),
+        automation_id=request.automation_id,
         output_schema=request.output_schema,
     )
 

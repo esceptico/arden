@@ -174,6 +174,53 @@ async def test_scope_correction_requires_authority_over_old_and_new_scopes(tmp_p
         await conn.close()
 
 
+async def test_fact_evidence_requires_read_authority(tmp_path: Path) -> None:
+    service, _plans, conn, _ = await _service(tmp_path)
+    both = _principal(scopes=frozenset({AREA, OTHER_AREA}))
+    area_only = _principal(scopes=frozenset({AREA}))
+    try:
+        target = await _plan(service, both, fact_id="target", text="Target")
+        evidence = await _plan(
+            service,
+            both,
+            fact_id="evidence",
+            text="Evidence",
+            scope=OTHER_AREA,
+            request_key="evidence",
+        )
+        await service.commit(both, target.plan_id)
+        await service.commit(both, evidence.plan_id)
+        evidence_fact = await service.get(both, "evidence")
+
+        with pytest.raises(FactScopeError, match="readable"):
+            await service.plan(
+                area_only,
+                [
+                    {
+                        "op": "review",
+                        "fact_id": "target",
+                        "reason": "cross-scope evidence",
+                        "sources": [
+                            {
+                                "kind": "fact",
+                                "ref": "evidence",
+                                "scope_kind": "area",
+                                "scope_key": "other",
+                                "role": "evidence",
+                                "extra": {"version": evidence_fact.version},
+                            }
+                        ],
+                    }
+                ],
+                request_key="cross-scope-evidence",
+                actor="curator:1",
+                origin="memory.curator",
+                reason="must enforce evidence visibility",
+            )
+    finally:
+        await conn.close()
+
+
 async def test_plan_codec_rejects_noncanonical_and_persisted_tampering(tmp_path: Path) -> None:
     service, _plans, conn, _ = await _service(tmp_path)
     principal = _principal()
@@ -277,7 +324,7 @@ async def test_stale_semantic_conflict_is_preserved_by_durable_plan(tmp_path: Pa
 
 async def test_due_reviews_include_visible_related_facts_as_evidence(tmp_path: Path) -> None:
     service, _plans, conn, _ = await _service(tmp_path)
-    principal = _principal()
+    principal = _principal(scopes=frozenset({AREA, OTHER_AREA}))
     try:
         due = await service.plan(
             principal,
@@ -305,14 +352,27 @@ async def test_due_reviews_include_visible_related_facts_as_evidence(tmp_path: P
             occurred_at="2026-05-01T00:00:00Z",
         )
         related = await _plan(service, principal, fact_id="related", text="Related fact", request_key="related")
+        wrong_scope = await _plan(
+            service,
+            principal,
+            fact_id="wrong-scope",
+            text="Wrong-scope related fact",
+            request_key="wrong-scope",
+            scope=OTHER_AREA,
+        )
         await service.commit(principal, old.plan_id)
         await service.commit(principal, due.plan_id)
         await service.commit(principal, related.plan_id)
+        await service.commit(principal, wrong_scope.plan_id)
 
         reviews = await service.due_reviews(principal, limit=1)
         assert [(review.fact.fact_id, [fact.fact_id for fact in review.related_facts]) for review in reviews] == [
             ("due", ["related"])
         ]
+        assert await service.known_scopes() == frozenset({AREA, OTHER_AREA})
+        batch = await service.retention_review_batch(principal)
+        assert [item.fact.fact_id for item in batch.reviews] == ["due"]
+        assert batch.reviews[0].explicit_expiry_due is False
         assert await service.search(principal, include_inactive=False, limit=1)
         with pytest.raises(ValueError, match="limit"):
             await service.search(principal, limit=0)

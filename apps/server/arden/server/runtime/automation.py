@@ -272,7 +272,11 @@ class AutomationRuntime:
             "area_suggester_daily",
             self._build_area_suggester_handler(),
         )
-        await seed_builtins(self.stores.automations)
+        knowledge = self.get_knowledge()
+        await seed_builtins(
+            self.stores.automations,
+            fact_mode=bool(knowledge is not None and knowledge.facts_ready),
+        )
         await self._seed_area_automations()
         await self._kick_first_area_suggestion()
         await compile_schedules_to_automations(".", self.stores.automations)

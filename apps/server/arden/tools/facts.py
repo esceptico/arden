@@ -19,7 +19,9 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from arden.agent.types.tools import ToolEffect, ToolOutcome, ToolOutcomeStatus, ToolSourceRef, normalize_source_refs
+from arden.constants import BUILTIN_MEMORY_RETENTION_ID
 from arden.memory.facts import (
+    DueFactReview,
     Fact,
     FactConflictError,
     FactEvent,
@@ -27,6 +29,7 @@ from arden.memory.facts import (
     FactPlanCorruptionError,
     FactPlanOwnershipError,
     FactPlanRequestConflictError,
+    FactPrincipal,
     FactScopeError,
     FactService,
     FactValidationError,
@@ -46,6 +49,9 @@ _CURSOR_VERSION = 1
 
 class _Input(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+FactId = Annotated[str, Field(min_length=1, max_length=500)]
 
 
 class SearchFactsInput(_Input):
@@ -111,6 +117,7 @@ class ReviewFactChange(_Input):
     review_at: str | None = Field(default=None, max_length=64)
     review_basis: Literal["explicit", "inferred", "fallback"] | None = None
     certainty: Literal["confirmed", "uncertain"] | None = None
+    evidence_fact_ids: list[FactId] = Field(default_factory=list, max_length=100)
 
 
 class AmendFactChange(_Input):
@@ -121,6 +128,7 @@ class AmendFactChange(_Input):
     subjects: list[str] | None = Field(default=None, min_length=1, max_length=100)
     lifecycle: Literal["durable", "temporary"] | None = None
     evidence_class: Literal["direct", "inferred"] | None = None
+    evidence_fact_ids: list[FactId] = Field(default_factory=list, max_length=100)
 
     @model_validator(mode="after")
     def _require_metadata(self) -> AmendFactChange:
@@ -134,18 +142,21 @@ class SupersedeFactChange(_Input):
     fact_id: str = Field(min_length=1, max_length=500)
     successor_id: str = Field(min_length=1, max_length=500)
     reason: str = Field(min_length=1, max_length=4_000)
+    evidence_fact_ids: list[FactId] = Field(default_factory=list, max_length=100)
 
 
 class ExpireFactChange(_Input):
     op: Literal["expire"]
     fact_id: str = Field(min_length=1, max_length=500)
     reason: str = Field(min_length=1, max_length=4_000)
+    evidence_fact_ids: list[FactId] = Field(default_factory=list, max_length=100)
 
 
 class RetractFactChange(_Input):
     op: Literal["retract"]
     fact_id: str = Field(min_length=1, max_length=500)
     reason: str = Field(min_length=1, max_length=4_000)
+    evidence_fact_ids: list[FactId] = Field(default_factory=list, max_length=100)
 
 
 FactChange = Annotated[
@@ -185,15 +196,28 @@ def _session_id(execution: ToolExecution) -> str:
     return execution.ctx.session_id
 
 
-def _principal(execution: ToolExecution):
+def _automation_id(execution: ToolExecution) -> str | None:
+    return execution.ctx.run.automation_id
+
+
+def _is_retention(execution: ToolExecution) -> bool:
+    return _automation_id(execution) == BUILTIN_MEMORY_RETENTION_ID
+
+
+async def _principal(execution: ToolExecution, service: FactService) -> FactPrincipal:
     session_id = _session_id(execution)
+    if _is_retention(execution):
+        scopes = await service.known_scopes()
+        return FactPrincipal(
+            owner_id=f"automation:{BUILTIN_MEMORY_RETENTION_ID}",
+            readable_scopes=scopes,
+            writable_scopes=scopes,
+        )
     scopes = frozenset(
         (scope.kind, scope.key) for scope in scopes_for_read(project=execution.ctx.area, session_id=session_id)
     )
     # Write authority is supplied only by this server-side session/Area policy.
     # Individual changes never carry an authority grant.
-    from arden.memory.facts import FactPrincipal
-
     return FactPrincipal(owner_id=f"session:{session_id}", readable_scopes=scopes, writable_scopes=scopes)
 
 
@@ -209,13 +233,16 @@ def _write_scope(execution: ToolExecution, kind: str) -> tuple[str, str | None]:
 
 async def _sources(execution: ToolExecution, scope: tuple[str, str | None]) -> list[dict[str, Any]]:
     session_id = _session_id(execution)
+    extra = {"session_id": session_id, "tool_name": execution.tool_name}
+    if automation_id := _automation_id(execution):
+        extra["origin_automation_id"] = automation_id
     source: dict[str, Any] = {
         "kind": "tool_call",
         "ref": execution.tool_id,
         "scope_kind": scope[0],
         "scope_key": scope[1],
         "role": "evidence",
-        "extra": {"session_id": session_id, "tool_name": execution.tool_name},
+        "extra": extra,
     }
     sources: list[dict[str, Any]] = [source]
     sessions = execution.ctx.services.get("session")
@@ -245,18 +272,131 @@ async def _sources(execution: ToolExecution, scope: tuple[str, str | None]) -> l
     return sources
 
 
-async def _prepared_changes(execution: ToolExecution, changes: list[FactChange]) -> list[dict[str, Any]]:
+async def _evidence_sources(
+    service: FactService,
+    principal: FactPrincipal,
+    fact_ids: tuple[str, ...],
+    *,
+    retained_facts: Mapping[str, Fact] | None = None,
+) -> list[dict[str, Any]]:
+    if len(set(fact_ids)) != len(fact_ids):
+        raise ValueError("evidence_fact_ids must not contain duplicates")
+    sources = []
+    for fact_id in fact_ids:
+        if retained_facts is None:
+            fact = await service.get(principal, fact_id)
+        else:
+            try:
+                fact = retained_facts[fact_id]
+            except KeyError as exc:
+                raise ValueError("Retention evidence must be a returned newer related fact") from exc
+        fact_scope = (str(fact.scope["kind"]), fact.scope["key"])
+        sources.append(
+            {
+                "kind": "fact",
+                "ref": fact.fact_id,
+                "scope_kind": fact_scope[0],
+                "scope_key": fact_scope[1],
+                "role": "evidence",
+                "extra": {"version": fact.version},
+            }
+        )
+    return sources
+
+
+def _guard_retention_change(
+    change: dict[str, Any],
+    evidence_fact_ids: tuple[str, ...],
+    review: DueFactReview,
+    evaluated_at: datetime,
+) -> dict[str, Fact]:
+    op = change["op"]
+    if op not in {"review", "supersede", "expire"}:
+        raise ValueError("Retention may only review, supersede, or expire due temporary facts")
+    allowed = {fact.fact_id: fact for fact in review.related_facts}
+    if review.explicit_expiry_due:
+        allowed[review.fact.fact_id] = review.fact
+    if not set(evidence_fact_ids).issubset(allowed):
+        raise ValueError("Retention evidence must be returned for this due fact")
+    if op == "review":
+        if review.explicit_expiry_due:
+            raise ValueError("A due explicit expiry must be expired or superseded")
+        if not evidence_fact_ids:
+            if change.get("certainty") != "uncertain":
+                raise ValueError("Retention review without newer evidence must mark the fact uncertain")
+            review_at = change.get("review_at")
+            review_basis = change.get("review_basis")
+            try:
+                next_review = datetime.fromisoformat(str(review_at))
+            except ValueError as exc:
+                raise ValueError("Uncertain Retention review requires an explicit future review_at") from exc
+            if next_review.tzinfo is None or next_review.utcoffset() != timedelta(0) or next_review <= evaluated_at:
+                raise ValueError("Uncertain Retention review requires an explicit future UTC review_at")
+            if review_basis not in {"explicit", "inferred", "fallback"}:
+                raise ValueError("Uncertain Retention review requires review_basis")
+    if op == "expire" and not evidence_fact_ids:
+        raise ValueError("Retention expiry requires explicit fact evidence")
+    if op == "supersede" and change["successor_id"] not in evidence_fact_ids:
+        raise ValueError("Retention supersession must cite its successor as evidence")
+    return allowed
+
+
+async def _prepared_changes(
+    execution: ToolExecution,
+    service: FactService,
+    principal: FactPrincipal,
+    changes: list[FactChange],
+) -> list[dict[str, Any]]:
+    retention = _is_retention(execution)
+    review_batch = await service.retention_review_batch(principal) if retention else None
+    reviews = {} if review_batch is None else {item.fact.fact_id: item for item in review_batch.reviews}
     prepared: list[dict[str, Any]] = []
     for item in changes:
         change = item.model_dump(exclude_none=True)
-        scope = _write_scope(execution, str(change.get("kind", "fact")))
+        evidence_fact_ids = tuple(change.pop("evidence_fact_ids", ()))
+        retained_facts = None
+        if retention:
+            try:
+                review = reviews[str(change.get("fact_id"))]
+            except KeyError as exc:
+                raise ValueError("Retention may only change facts currently due for review") from exc
+            assert review_batch is not None
+            retained_facts = _guard_retention_change(
+                change,
+                evidence_fact_ids,
+                review,
+                review_batch.evaluated_at,
+            )
+            target = review.fact
+            change["expected_version"] = target.version
+            change["expected_review_window"] = review.review_window
         # Scope and provenance are derived by the server. Models cannot select
         # either for new facts, and every lifecycle event receives current evidence.
         if change["op"] == "create":
+            scope = _write_scope(execution, str(change["kind"]))
             change["scope"] = {"kind": scope[0], "key": scope[1]}
-        change["sources"] = await _sources(execution, scope)
+        elif not retention:
+            target = await service.get(principal, str(change["fact_id"]))
+            scope = (str(target.scope["kind"]), target.scope["key"])
+        else:
+            scope = (str(target.scope["kind"]), target.scope["key"])
+        change["sources"] = [
+            *await _sources(execution, scope),
+            *await _evidence_sources(
+                service,
+                principal,
+                evidence_fact_ids,
+                retained_facts=retained_facts,
+            ),
+        ]
         prepared.append(change)
     return prepared
+
+
+def _attribution(execution: ToolExecution) -> tuple[str, str]:
+    if _is_retention(execution):
+        return f"automation:{BUILTIN_MEMORY_RETENTION_ID}", "memory.retention"
+    return f"session:{_session_id(execution)}", "tool.fact_changes"
 
 
 def _quote(value: object) -> str:
@@ -309,6 +449,7 @@ def _fact_data(fact: Fact, *, include_sources: bool = False) -> dict[str, Any]:
 def _event_data(event: FactEvent) -> dict[str, Any]:
     payload = dict(event.record["payload"])
     sources = payload.pop("sources", ())
+    payload.pop("review_window", None)
     value: dict[str, Any] = {
         "event_id": event.event_id,
         "plan_id": event.plan_id,
@@ -567,7 +708,7 @@ async def search_facts(execution: ToolExecution, args: SearchFactsInput) -> Tool
     if isinstance(service, ToolResult):
         return service
     try:
-        principal = _principal(execution)
+        principal = await _principal(execution, service)
         binding = _cursor_binding(
             "search",
             {
@@ -634,7 +775,7 @@ async def get_fact(execution: ToolExecution, args: GetFactInput) -> ToolResult:
     if isinstance(service, ToolResult):
         return service
     try:
-        fact = await service.get(_principal(execution), args.fact_id)
+        fact = await service.get(await _principal(execution, service), args.fact_id)
         return ToolResult(
             content=_fact_line(fact),
             preview=f"Fact {fact.fact_id}",
@@ -650,7 +791,7 @@ async def get_fact_history(execution: ToolExecution, args: GetFactHistoryInput) 
     if isinstance(service, ToolResult):
         return service
     try:
-        principal = _principal(execution)
+        principal = await _principal(execution, service)
         events = await service.history(principal, args.fact_id)
         paged = _page(
             list(events),
@@ -681,7 +822,7 @@ async def get_due_fact_reviews(execution: ToolExecution, args: GetDueFactReviews
     if isinstance(service, ToolResult):
         return service
     try:
-        principal = _principal(execution)
+        principal = await _principal(execution, service)
         binding = _cursor_binding("due", _visibility(principal))
         revision = await service.revision()
         snapshot = revision or "empty"
@@ -720,6 +861,7 @@ async def get_due_fact_reviews(execution: ToolExecution, args: GetDueFactReviews
             {
                 "fact": _fact_data(item.fact),
                 "due_at": _time(item.due_at),
+                "explicit_expiry_due": item.explicit_expiry_due,
                 "related_facts": [_fact_data(fact) for fact in item.related_facts],
             }
             for item in selected
@@ -749,12 +891,14 @@ async def plan_fact_changes(execution: ToolExecution, args: PlanFactChangesInput
     if isinstance(service, ToolResult):
         return service
     try:
+        principal = await _principal(execution, service)
+        actor, origin = _attribution(execution)
         preview = await service.plan(
-            _principal(execution),
-            await _prepared_changes(execution, args.changes),
-            request_key=f"tool:{execution.tool_id}",
-            actor=f"session:{_session_id(execution)}",
-            origin="tool.fact_changes",
+            principal,
+            await _prepared_changes(execution, service, principal, args.changes),
+            request_key=f"tool:{_session_id(execution)}:{execution.tool_id}",
+            actor=actor,
+            origin=origin,
             reason=args.reason,
         )
         return ToolResult(
@@ -776,7 +920,7 @@ async def commit_fact_changes(execution: ToolExecution, args: CommitFactChangesI
     if isinstance(service, ToolResult):
         return service
     try:
-        committed = await service.commit(_principal(execution), args.plan_id)
+        committed = await service.commit(await _principal(execution, service), args.plan_id)
         return ToolResult(
             content=f"Committed {len(committed.events)} fact event(s).",
             preview="Fact plan committed",

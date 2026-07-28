@@ -35,6 +35,7 @@ from .service import (
     FactPrincipal,
     FactScopeError,
     FactService,
+    RetentionReviewBatch,
 )
 
 __all__ = [
@@ -57,6 +58,7 @@ __all__ = [
     "FactPlanStatus",
     "FactPlanStore",
     "FactPrincipal",
+    "RetentionReviewBatch",
     "FactScopeError",
     "FactService",
     "FactCommitResult",

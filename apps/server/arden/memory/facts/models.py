@@ -79,3 +79,5 @@ class FactPlan:
 class DueReviewCandidate:
     fact: Fact
     due_at: datetime
+    related_facts: tuple[Fact, ...]
+    review_window: str

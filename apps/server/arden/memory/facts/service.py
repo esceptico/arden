@@ -22,7 +22,6 @@ FactScope = tuple[str, str | None]
 FactOrder = tuple[datetime, str]
 _SCOPE_KINDS = frozenset({"user", "area", "global", "project", "integration"})
 DEFAULT_RESULT_LIMIT = 100
-RELATED_DUE_FACT_LIMIT = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +68,15 @@ class DueFactReview:
     fact: Fact
     due_at: datetime
     related_facts: tuple[Fact, ...]
+    review_window: str
+    explicit_expiry_due: bool
+
+
+@dataclass(frozen=True, slots=True)
+class RetentionReviewBatch:
+    revision: str | None
+    evaluated_at: datetime
+    reviews: tuple[DueFactReview, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,6 +143,11 @@ class FactService:
     async def revision(self) -> str | None:
         return await asyncio.to_thread(lambda: self.ledger.revision)
 
+    async def known_scopes(self) -> frozenset[FactScope]:
+        """Return scopes present in canonical history without granting authority."""
+
+        return await asyncio.to_thread(self.ledger.known_scopes)
+
     async def get(self, principal: FactPrincipal, fact_id: str) -> Fact:
         fact = await asyncio.to_thread(self.ledger.get, fact_id)
         self._require_read(principal, _scope(fact))
@@ -169,30 +182,27 @@ class FactService:
     ) -> FactPage[DueFactReview]:
         limit = _limit(limit)
         after = _after(after)
-        due = await asyncio.to_thread(self.ledger.due_reviews)
-        facts = await asyncio.to_thread(self.ledger.search, include_inactive=False)
-        visible = tuple(fact for fact in facts if principal.can_read(_scope(fact)))
-        visible_due = tuple(item for item in due if principal.can_read(_scope(item.fact)))
+        batch = await self.retention_review_batch(principal)
+        visible_due = batch.reviews
         remaining = tuple(item for item in visible_due if after is None or (item.due_at, item.fact.fact_id) > after)
-        result = []
-        for item in remaining[:limit]:
-            subjects = set(item.fact.subjects)
-            evidence_cutoff = item.fact.reviewed_at or item.fact.created_at
-            related = tuple(
-                sorted(
-                    (
-                        fact
-                        for fact in visible
-                        if fact.fact_id != item.fact.fact_id
-                        and fact.created_at > evidence_cutoff
-                        and subjects.intersection(fact.subjects)
-                    ),
-                    key=lambda fact: (fact.created_at, fact.fact_id),
-                    reverse=True,
+        return FactPage(remaining[:limit], len(visible_due), len(remaining) > limit)
+
+    async def retention_review_batch(self, principal: FactPrincipal) -> RetentionReviewBatch:
+        revision, evaluated_at, due = await asyncio.to_thread(self.ledger.due_review_snapshot)
+        reviews = []
+        for item in due:
+            if not principal.can_read(_scope(item.fact)):
+                continue
+            reviews.append(
+                DueFactReview(
+                    item.fact,
+                    item.due_at,
+                    item.related_facts,
+                    item.review_window,
+                    item.fact.expires_at is not None and item.fact.expires_at <= evaluated_at,
                 )
-            )[:RELATED_DUE_FACT_LIMIT]
-            result.append(DueFactReview(item.fact, item.due_at, related))
-        return FactPage(tuple(result), len(visible_due), len(remaining) > limit)
+            )
+        return RetentionReviewBatch(revision, evaluated_at, tuple(reviews))
 
     async def plan(
         self,
@@ -211,11 +221,14 @@ class FactService:
             if existing.request_fingerprint != request_fingerprint:
                 raise FactPlanRequestConflictError("request_key was reused for a different fact plan request")
             self._require_write_scopes(principal, existing.scopes)
-            return _preview(await self._stored_plan(existing))
+            plan = await self._stored_plan(existing)
+            self._require_read_scopes(principal, await self._plan_evidence_scopes(plan))
+            return _preview(plan)
 
         plan = await asyncio.to_thread(self.ledger.plan, batch, actor=actor, origin=origin, reason=reason)
         scopes = await self._plan_scopes(plan)
         self._require_write_scopes(principal, scopes)
+        self._require_read_scopes(principal, await self._plan_evidence_scopes(plan))
         stored = await self.plans.create_or_reuse(
             owner_id=principal.owner_id,
             request_key=request_key,
@@ -227,9 +240,11 @@ class FactService:
         return _preview(await self._stored_plan(stored))
 
     async def commit(self, principal: FactPrincipal, plan_id: str) -> FactCommitResult:
-        stored, _claimed = await self.plans.claim(plan_id, owner_id=principal.owner_id)
+        stored = await self.plans.get(plan_id, owner_id=principal.owner_id)
         self._require_write_scopes(principal, stored.scopes)
         plan = await self._stored_plan(stored)
+        self._require_read_scopes(principal, await self._plan_evidence_scopes(plan))
+        stored, _claimed = await self.plans.claim(plan_id, owner_id=principal.owner_id)
         # A persisted `committing` row may be an interrupted caller. The ledger's
         # immutable plan-id idempotency makes resuming it safe after restart.
         try:
@@ -284,6 +299,15 @@ class FactService:
             raise FactPlanCorruptionError("fact plan dependency is unavailable") from exc
         return _scope(fact)
 
+    async def _plan_evidence_scopes(self, plan: FactPlan) -> tuple[FactScope, ...]:
+        scopes = set()
+        for event in plan.events:
+            for source in event.record["payload"].get("sources", ()):
+                if source.get("kind") != "fact":
+                    continue
+                scopes.add(await self._dependency_scope(plan, source["ref"]))
+        return tuple(sorted(scopes, key=lambda item: (item[0], item[1] or "")))
+
     @staticmethod
     def _require_read(principal: FactPrincipal, scope: FactScope) -> None:
         if not principal.can_read(scope):
@@ -293,6 +317,11 @@ class FactService:
     def _require_write_scopes(principal: FactPrincipal, scopes: tuple[FactScope, ...]) -> None:
         if any(not principal.can_write(scope) for scope in scopes):
             raise FactScopeError("fact plan is outside the current writable scope")
+
+    @staticmethod
+    def _require_read_scopes(principal: FactPrincipal, scopes: tuple[FactScope, ...]) -> None:
+        if any(not principal.can_read(scope) for scope in scopes):
+            raise FactScopeError("fact evidence is outside the current readable scope")
 
 
 def _scope(fact: Fact) -> FactScope:
@@ -355,9 +384,6 @@ def _request_fingerprint(
 ) -> str:
     value = {
         "owner_id": principal.owner_id,
-        "writable_scopes": [
-            [kind, key] for kind, key in sorted(principal.writable_scopes, key=lambda item: (item[0], item[1] or ""))
-        ],
         "changes": changes,
         "actor": actor,
         "origin": origin,
