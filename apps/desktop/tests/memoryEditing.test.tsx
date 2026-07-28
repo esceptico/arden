@@ -107,6 +107,7 @@ function installBridge(options: {
     const method = request.method ?? "GET";
     const body = request.body ? JSON.parse(request.body) : null;
     requests.push({ path: request.path, method, body });
+    if (request.path === "/admin/wiki/maintenance-reviews" && method === "GET") return ok({ reviews: [] });
     if (request.path.startsWith("/admin/memory/artifacts?") || request.path === "/admin/memory/artifacts") {
       listCalls += 1;
       const query = new URL(request.path, "http://arden.test").searchParams.get("q");

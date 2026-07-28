@@ -99,6 +99,7 @@ function installBridge(
         const method = request.method ?? "GET";
         const body = request.body ? JSON.parse(request.body) : null;
         requests.push({ path: request.path, method, body });
+        if (request.path === "/admin/wiki/maintenance-reviews" && method === "GET") return ok({ reviews: [] });
         if (request.path === "/admin/memory/artifacts") return ok({ artifacts: options.artifacts?.() ?? [index, page] });
         if (request.path.startsWith("/admin/memory/artifacts/")) {
           const path = decodeURIComponent(request.path.replace("/admin/memory/artifacts/", ""));

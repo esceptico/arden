@@ -75,6 +75,16 @@ function installBridge() {
   window.ardenDesktop = {
     api: {
       request: async (_config, request) => {
+        if (request.path === "/admin/wiki/maintenance-reviews") {
+          return {
+            ok: true,
+            status: 200,
+            statusText: "OK",
+            contentType: "application/json",
+            data: { reviews: [] },
+            text: "",
+          };
+        }
         if (request.path.startsWith("/admin/memory/artifacts?") || request.path === "/admin/memory/artifacts") {
           return {
             ok: true,

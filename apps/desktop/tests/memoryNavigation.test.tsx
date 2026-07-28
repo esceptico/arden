@@ -135,6 +135,7 @@ test("a refreshed Memory entry hydrates its active tab and note together", async
   const me = summary("me.md", "Me");
   let rows: MemoryArtifactSummary[] = [index, me];
   window.ardenDesktop = { api: { request: async (_config, request) => {
+    if (request.path === "/admin/wiki/maintenance-reviews") return response({ reviews: [] });
     if (request.path === "/admin/memory/artifacts") return response({ artifacts: rows.map((item) => rawArtifact(item)) });
     if (request.path.startsWith("/admin/memory/links")) return response({ path: "me.md", revision: "ledger:1", stale: false, outgoing: [], backlinks: [], total_outgoing: 0, total_backlinks: 0, limit: 100, offset: 0 });
     if (request.path.startsWith("/admin/memory/page-edits/history")) return response({ events: [], total: 0, limit: 100, next_before_sequence: null });
@@ -346,6 +347,7 @@ test("notebook history shortcuts restore pages and ignore focused editors", asyn
   const requests: string[] = [];
   window.ardenDesktop = { api: { request: async (_config, request) => {
     requests.push(request.path);
+    if (request.path === "/admin/wiki/maintenance-reviews") return response({ reviews: [] });
     if (request.path === "/admin/memory/artifacts") return response({ artifacts: rows.map((item) => rawArtifact(item)) });
     if (request.path.startsWith("/admin/memory/links")) {
       const path = new URL(`http://x${request.path}`).searchParams.get("path")!;
@@ -435,6 +437,7 @@ test("a delayed link snapshot cannot resolve the next page or overwrite a later 
   let releaseB: (() => void) | null = null;
   const bGate = new Promise<void>((resolve) => { releaseB = resolve; });
   window.ardenDesktop = { api: { request: async (_config, request) => {
+    if (request.path === "/admin/wiki/maintenance-reviews") return response({ reviews: [] });
     if (request.path === "/admin/memory/artifacts") return response({ artifacts: rows.map((item) => rawArtifact(item)) });
     if (request.path.startsWith("/admin/memory/links")) {
       const path = new URL(`http://x${request.path}`).searchParams.get("path")!;
@@ -487,6 +490,7 @@ test("opening the inspector fetches full-page links and history once and pane sw
   });
   window.ardenDesktop = { api: { request: async (_config, request) => {
     requests.push(request.path);
+    if (request.path === "/admin/wiki/maintenance-reviews") return response({ reviews: [] });
     if (request.path === "/admin/memory/artifacts") return response({ artifacts: rows.map((item) => rawArtifact(item)) });
     if (request.path.startsWith("/admin/memory/links")) {
       const outgoing = [{ source_path: "note.md", target: "Roadmap", display: "Roadmap", heading: null, context: "See [[Roadmap]]", line: 1, column: 1, status: "resolved", resolved_path: "roadmap.md", candidates: ["roadmap.md"], source_revision: "ledger:1" }];
@@ -543,6 +547,7 @@ test("stale links stay unresolved and a vault change refetches the snapshot from
   const offsets: number[] = [];
   let linkRead = 0;
   window.ardenDesktop = { api: { request: async (_config, request) => {
+    if (request.path === "/admin/wiki/maintenance-reviews") return response({ reviews: [] });
     if (request.path === "/admin/memory/artifacts") return response({ artifacts: rows.map((item) => rawArtifact(item)) });
     if (request.path.startsWith("/admin/memory/links")) {
       const offset = Number(new URL(`http://x${request.path}`).searchParams.get("offset") ?? 0);
@@ -581,6 +586,7 @@ test("vault revision refresh invalidates the selected detail cache", async () =>
   let note = summary("note.md", "Note", "r1");
   let detailReads = 0;
   window.ardenDesktop = { api: { request: async (_config, request) => {
+    if (request.path === "/admin/wiki/maintenance-reviews") return response({ reviews: [] });
     if (request.path === "/admin/memory/artifacts") return response({ artifacts: [rawArtifact(index), rawArtifact(note)] });
     if (request.path.startsWith("/admin/memory/links")) return response({ path: "note.md", revision: "ledger:1", stale: false, outgoing: [], backlinks: [], total_outgoing: 0, total_backlinks: 0, limit: 100, offset: 0 });
     if (request.path.startsWith("/admin/memory/page-edits/history")) return response({ events: [], total: 0, limit: 100, next_before_sequence: null });

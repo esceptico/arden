@@ -65,6 +65,9 @@ function installBridge(options: { list?: typeof summaries; directories?: string[
     api: {
       request: async (_config, request) => {
         requests.push(request.path);
+        if (request.path === "/admin/wiki/maintenance-reviews") {
+          return { ok: true, status: 200, statusText: "OK", contentType: "application/json", data: { reviews: [] }, text: "" };
+        }
         if (request.path.startsWith("/admin/memory/artifacts?") || request.path === "/admin/memory/artifacts") {
           if (options.delayList) await listGate;
           if (options.failList) {

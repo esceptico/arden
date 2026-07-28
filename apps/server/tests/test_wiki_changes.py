@@ -83,6 +83,38 @@ def test_changes_since_keeps_non_markdown_commits_in_the_contiguous_chain(tmp_pa
     assert report.commits[0].changes == ()
 
 
+def test_changes_since_scopes_diff_work_to_markdown_and_can_omit_it(tmp_path: Path, monkeypatch) -> None:
+    repo = _repo(tmp_path)
+    page = create_page(title="One", page_id="one")
+    _commit(
+        repo,
+        (
+            Create("one", "one.md", page.to_bytes()),
+            Create("asset", "assets/data.bin", b"private attachment"),
+        ),
+        reason="mixed",
+    )
+    service = WikiService(repo)
+    original_diff = repo.diff
+    selected: list[tuple[str, ...] | None] = []
+
+    def capture_diff(base, target, *, resource_ids=None):
+        selected.append(resource_ids)
+        return original_diff(base, target, resource_ids=resource_ids)
+
+    monkeypatch.setattr(repo, "diff", capture_diff)
+    report = service.changes_since(None)
+    assert selected == [("one",)]
+    assert "+title: One" in report.commits[0].changes[0].unified_diff
+
+    def reject_diff(*_args, **_kwargs):
+        raise AssertionError("metadata-only feeds must not build diffs")
+
+    monkeypatch.setattr(repo, "diff", reject_diff)
+    metadata_only = service.changes_since(None, include_diffs=False)
+    assert metadata_only.commits[0].changes == ()
+
+
 def test_changes_since_rejects_invalid_unknown_and_unreachable_watermarks(tmp_path: Path) -> None:
     service = WikiService(_repo(tmp_path))
     with pytest.raises(ValueError, match="watermark"):

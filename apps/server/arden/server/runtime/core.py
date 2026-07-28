@@ -142,6 +142,12 @@ class Runtime:
         return self.stores.sessions if self.stores else None
 
     @property
+    def wiki_maintenance_store(self) -> WikiMaintenanceStore | None:
+        """Durable review state exposed read-only to the admin API."""
+
+        return self._wiki_maintenance_store
+
+    @property
     def embedding(self):
         return self.knowledge.embedding
 
@@ -340,6 +346,14 @@ class Runtime:
         if self.automation is not None:
             await self.automation.request_fact_synthesis()
 
+    async def notify_wiki_maintenance_reviews_changed(self, revision: str | None) -> None:
+        if self.automation is not None:
+            await self.automation.notify_wiki_maintenance_reviews_changed(revision)
+
+    async def request_wiki_maintenance(self) -> None:
+        if self.automation is not None:
+            await self.automation.request_wiki_maintenance()
+
     async def _after_fact_commit(self) -> None:
         try:
             await self._request_fact_synthesis()
@@ -408,7 +422,11 @@ class Runtime:
                     synthesis = await self._fact_consumer_store.get(FACT_SYNTHESIS_CONSUMER_ID)
                     maintenance = await self._wiki_maintenance_store.get_watermark()
                     pending = await self._wiki_maintenance_store.list_pending()
-                    report = await asyncio.to_thread(self.wiki_service.changes_since, None)
+                    report = await asyncio.to_thread(
+                        self.wiki_service.changes_since,
+                        None,
+                        include_diffs=False,
+                    )
                     if await self.fact_service.revision() != fact_revision:
                         if attempt == 0:
                             continue

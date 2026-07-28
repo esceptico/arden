@@ -1290,7 +1290,7 @@
   transition: filter var(--motion-focus) var(--smooth-out);
 }
 
-.memory-surface .memory-ws:is(.review-open, .rename-open) .memory-focus-cache {
+.memory-surface .memory-ws:is(.review-open, .rename-open, .maintenance-review-open) .memory-focus-cache {
   pointer-events: none;
   will-change: transform;
   transform: scale(.982);
@@ -1301,7 +1301,7 @@
   filter: blur(2px);
 }
 
-.memory-surface .memory-ws.rename-open .memory-focus-plane { pointer-events: none; }
+.memory-surface .memory-ws:is(.rename-open, .maintenance-review-open) .memory-focus-plane { pointer-events: none; }
 
 /* The sheet stays mounted while these classes restore the room. The 180ms
  * focus transition is shared by the sheet exit and the translucent scrim. */
@@ -1393,8 +1393,127 @@
   backdrop-filter: blur(2px);
 }
 
+/* Durable Wiki Maintenance questions share the established blocking sheet.
+ * The content is evidence, not a dashboard: one readable sequence, with page
+ * updates separated by rules instead of nested cards. */
+.wiki-maintenance-review__title {
+  margin: var(--space-1) 0 0;
+  color: var(--ink);
+  font-size: var(--text-section);
+  font-weight: 600;
+  letter-spacing: -.015em;
+}
+.wiki-maintenance-review__body { display: grid; align-content: start; gap: var(--space-5); }
+.wiki-maintenance-review__status p {
+  max-width: 65ch;
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+}
+.wiki-maintenance-review__summary,
+.wiki-maintenance-review__proposal { max-width: 70ch; }
+.wiki-maintenance-review__summary h2,
+.wiki-maintenance-review__proposal > h2 {
+  margin: 0 0 var(--space-2);
+  color: var(--ink);
+  font-size: var(--text-control);
+  font-weight: 600;
+}
+.wiki-maintenance-review__summary p,
+.wiki-maintenance-review__proposal > p,
+.wiki-maintenance-review__empty,
+.wiki-maintenance-review__explanation {
+  max-width: 70ch;
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+}
+.wiki-maintenance-review__proposal > button { margin-top: var(--space-3); }
+.wiki-maintenance-review__explanation,
+.wiki-maintenance-review__empty { color: var(--muted); }
+.wiki-maintenance-review__evidence { margin-top: var(--space-4); }
+.wiki-maintenance-review__evidence > p,
+.wiki-maintenance-review__evidence-error > p {
+  margin: 0 0 var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: var(--leading-body);
+}
+.wiki-maintenance-review__evidence-error { margin-top: var(--space-3); }
+.wiki-maintenance-review__evidence-error > button { margin-top: var(--space-1); }
+.wiki-maintenance-review__evidence-warning {
+  margin: var(--space-2) 0 0;
+  color: var(--warning);
+  font-size: var(--text-xs);
+  line-height: var(--leading-body);
+}
+.wiki-maintenance-review__evidence-navigation {
+  margin-top: var(--space-2);
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-1);
+}
+.wiki-maintenance-review button[aria-disabled="true"] { cursor: wait; opacity: .55; }
+.wiki-maintenance-review__updates { margin: var(--space-4) 0 0; padding: 0; list-style: none; }
+.wiki-maintenance-review__updates > li {
+  padding: var(--space-4) 0;
+  border-top: 1px solid var(--edge);
+}
+.wiki-maintenance-review__updates > li:last-child { padding-bottom: 0; }
+.wiki-maintenance-review__page-heading { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); }
+.wiki-maintenance-review__page-heading h3 {
+  min-width: 0;
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--text-body);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.wiki-maintenance-review__page-heading code {
+  flex: none;
+  color: var(--muted);
+  font: 500 var(--text-meta)/var(--leading-meta) var(--mono);
+}
+.wiki-maintenance-review__aliases {
+  margin: var(--space-1-5) 0 var(--space-3);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: var(--leading-body);
+}
+.wiki-maintenance-review__updates pre {
+  max-height: 15rem;
+  margin: 0;
+  padding: var(--space-3);
+  overflow: auto;
+  border-radius: var(--r-house);
+  color: var(--ink-soft);
+  background: var(--surface-2);
+  font: 500 var(--text-meta)/1.55 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.wiki-maintenance-review__field { max-width: 70ch; display: grid; gap: var(--space-1-5); color: var(--ink-soft); font-size: var(--text-control); font-weight: 500; }
+.wiki-maintenance-review__field textarea { min-height: 7rem; }
+.wiki-maintenance-review__field small { color: var(--muted); font-size: var(--text-xs); font-weight: 400; line-height: var(--leading-body); }
+.wiki-maintenance-review__footer {
+  padding: var(--space-3) var(--memory-review-inline);
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  border-top: 1px solid var(--edge);
+  background: var(--panel);
+}
+.wiki-maintenance-review .memory-edit-review__scrim {
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+}
+
 @media (max-width: 42rem) {
   .wiki-rename-sheet__changes > div { grid-template-columns: 1fr; gap: var(--space-1); }
+  .wiki-maintenance-review__page-heading { align-items: flex-start; flex-direction: column; gap: var(--space-1); }
+  .wiki-maintenance-review__footer { flex-wrap: wrap; }
 }
 
 /* ── Nested diff dialog / quick switcher ────────────────────── */

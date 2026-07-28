@@ -64,6 +64,7 @@ class HistoryStorage:
         self.blobs = self.objects / "blobs"
         self.trees = self.objects / "trees"
         self.commits = self.root / "commits"
+        self.published = self.root / "published"
         self.refs = self.root / "refs"
         self.transactions = self.root / "transactions"
         self.conflicts = self.root / "conflicts"
@@ -89,6 +90,7 @@ class HistoryStorage:
             self.blobs,
             self.trees,
             self.commits,
+            self.published,
             self.refs,
             self.transactions,
             self.conflicts,
@@ -130,6 +132,45 @@ class HistoryStorage:
     def read_blob(self, object_id: str) -> bytes:
         self._require_hash(object_id, "blob")
         return self._read_immutable(self.blobs / object_id, object_id, "blob")
+
+    def blob_size(self, object_id: str) -> int:
+        """Return an immutable blob's byte length without reading its content."""
+        return self._immutable_size(self.blobs / object_id, object_id, "blob")
+
+    def commit_size(self, object_id: str) -> int:
+        """Return an immutable commit record's byte length without reading it."""
+        return self._immutable_size(self.commits / f"{object_id}.jsonl", object_id, "commit")
+
+    def publish_commit(self, object_id: str) -> None:
+        """Write the durable O(1) certificate for a single-ref published commit."""
+
+        self._require_hash(object_id, "published commit")
+        path = self.published / object_id
+        if self.metadata_exists(path):
+            if self.read_metadata(path) != b"":
+                raise CorruptRepositoryError(f"published commit marker is invalid: {object_id}")
+            return
+        self.atomic_write(path, b"", no_replace=True)
+        self.fsync_dir(self.published)
+
+    def is_published(self, object_id: str) -> bool:
+        self._require_hash(object_id, "published commit")
+        path = self.published / object_id
+        if not self.metadata_exists(path):
+            return False
+        if self.read_metadata(path) != b"":
+            raise CorruptRepositoryError(f"published commit marker is invalid: {object_id}")
+        return True
+
+    def _immutable_size(self, path: Path, object_id: str, label: str) -> int:
+        self._require_hash(object_id, label)
+        try:
+            metadata = self._anchor.stat(self._relative(path))
+        except OSError as exc:
+            raise CorruptRepositoryError(f"cannot stat {label} {object_id}") from exc
+        if metadata is None:
+            raise CorruptRepositoryError(f"required {label} {object_id} is missing")
+        return metadata.st_size
 
     def write_tree(self, record: Mapping[str, object]) -> str:
         return self._write_json_object(self.trees, "tree", record)
@@ -261,6 +302,7 @@ class HistoryStorage:
                 self.commits,
                 lambda target: target.endswith(".jsonl") and valid_hash(target.removesuffix(".jsonl")),
             ),
+            (self.published, valid_hash),
             (self.refs, lambda target: target == self.current_ref.name),
             (
                 self.idempotency,
@@ -397,6 +439,7 @@ class HistoryStorage:
             self.blobs,
             self.trees,
             self.commits,
+            self.published,
             self.refs,
             self.transactions,
             self.conflicts,

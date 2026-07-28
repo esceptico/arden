@@ -171,7 +171,10 @@ test("memory review keeps the sheet mounted through the exact room-release lifec
   expect(css).toContain("body.memory-diff-receded #app");
   expect(view).toContain('className="memory-focus-cache"');
   expect(css).toContain(".memory-focus-plane");
-  const recededCache = css.match(/\.memory-surface \.memory-ws:is\(\.review-open, \.rename-open\) \.memory-focus-cache\s*\{([^}]*)\}/)?.[1] ?? "";
+  const recededCache =
+    css.match(
+      /\.memory-surface \.memory-ws:is\(\.review-open, \.rename-open, \.maintenance-review-open\) \.memory-focus-cache\s*\{([^}]*)\}/,
+    )?.[1] ?? "";
   expect(recededCache).toContain("will-change: transform");
   expect(recededCache).toContain("transform: scale(.982)");
   expect(recededCache).not.toContain("filter:");

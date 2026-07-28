@@ -8,7 +8,7 @@ from datetime import datetime
 from enum import StrEnum
 from types import MappingProxyType
 
-from arden.revisions import IntegrityReport, ResourceVersion, StorageReport
+from arden.revisions import IntegrityReport, ResourceChange, ResourceVersion, StorageReport
 
 from .pages import WikiPage
 from .wikilinks import WikilinkNode
@@ -216,6 +216,7 @@ class WikiResourceChange:
     unified_diff: str
     current_outgoing: tuple[LinkReference, ...]
     current_backlinks: tuple[LinkReference, ...]
+    unified_diff_complete: bool = True
 
     def __post_init__(self) -> None:
         if not isinstance(self.action, str) or not self.action:
@@ -232,6 +233,8 @@ class WikiResourceChange:
             raise ValueError("a resource change requires before or after")
         if not isinstance(self.unified_diff, str):
             raise TypeError("unified_diff must be a string")
+        if not isinstance(self.unified_diff_complete, bool):
+            raise TypeError("unified_diff_complete must be a bool")
         object.__setattr__(self, "current_outgoing", _freeze(self.current_outgoing, LinkReference, "current_outgoing"))
         object.__setattr__(
             self, "current_backlinks", _freeze(self.current_backlinks, LinkReference, "current_backlinks")
@@ -266,6 +269,68 @@ class WikiChangeCommit:
 
 
 @dataclass(frozen=True, slots=True)
+class WikiMaintenanceCommit:
+    """Pinned commit metadata retained until maintenance reaches it.
+
+    This deliberately carries revision metadata only.  In particular, creating
+    the feed does not read page blobs or derive current wiki health.
+    """
+
+    commit_id: str
+    parent_id: str | None
+    actor: str
+    origin: str
+    reason: str
+    timestamp: datetime
+    changes: tuple[ResourceChange, ...]
+
+    def __post_init__(self) -> None:
+        for name in ("commit_id", "actor", "origin", "reason"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{name} must be a nonempty string")
+        if self.parent_id is not None and (not isinstance(self.parent_id, str) or not self.parent_id):
+            raise ValueError("parent_id must be a nonempty string or None")
+        if not isinstance(self.timestamp, datetime):
+            raise TypeError("timestamp must be a datetime")
+        object.__setattr__(self, "changes", _freeze(self.changes, ResourceChange, "changes"))
+
+
+@dataclass(frozen=True, slots=True)
+class WikiMaintenanceFeed:
+    """Chronological, head-pinned metadata for scheduled maintenance."""
+
+    watermark: str | None
+    through_revision: str | None
+    commits: tuple[WikiMaintenanceCommit, ...]
+
+    def __post_init__(self) -> None:
+        for name in ("watermark", "through_revision"):
+            value = getattr(self, name)
+            if value is not None and (not isinstance(value, str) or not value):
+                raise ValueError(f"{name} must be a nonempty string or None")
+        object.__setattr__(self, "commits", _freeze(self.commits, WikiMaintenanceCommit, "commits"))
+
+
+@dataclass(frozen=True, slots=True)
+class WikiMaintenanceDetails:
+    """Bounded current evidence for one scheduled maintenance commit."""
+
+    through_revision: str
+    commit: WikiChangeCommit
+    warnings: tuple[WikiChangeWarning, ...]
+    current_records: tuple[WikiPageRecord, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.through_revision, str) or not self.through_revision:
+            raise ValueError("through_revision must be a nonempty string")
+        if not isinstance(self.commit, WikiChangeCommit):
+            raise TypeError("commit must be a WikiChangeCommit")
+        object.__setattr__(self, "warnings", _freeze(self.warnings, WikiChangeWarning, "warnings"))
+        object.__setattr__(self, "current_records", _freeze(self.current_records, WikiPageRecord, "current_records"))
+
+
+@dataclass(frozen=True, slots=True)
 class WikiChangesReport:
     """Immutable, head-pinned managed Markdown history plus current findings."""
 
@@ -275,6 +340,10 @@ class WikiChangesReport:
     warnings: tuple[WikiChangeWarning, ...]
     integrity: IntegrityReport
     storage: StorageReport
+    # Scheduled maintenance preloads only the changed/link-neighbor records it
+    # will hand to a reviewer.  The ordinary history feed may carry the full
+    # current snapshot for the same internal prepared-report contract.
+    current_records: tuple[WikiPageRecord, ...] = ()
 
     def __post_init__(self) -> None:
         for name in ("watermark", "through_revision"):
@@ -287,6 +356,7 @@ class WikiChangesReport:
             raise TypeError("storage must be a StorageReport")
         object.__setattr__(self, "commits", _freeze(self.commits, WikiChangeCommit, "commits"))
         object.__setattr__(self, "warnings", _freeze(self.warnings, WikiChangeWarning, "warnings"))
+        object.__setattr__(self, "current_records", _freeze(self.current_records, WikiPageRecord, "current_records"))
 
 
 def _freeze(value: object, expected: type, name: str) -> tuple:

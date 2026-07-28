@@ -25,6 +25,7 @@ from .errors import (
     IdempotencyConflictError,
     NoChangesError,
     RevisionConflictError,
+    RevisionContentLimitError,
     UnsafePathError,
 )
 from .models import (
@@ -38,6 +39,7 @@ from .models import (
     Move,
     ResourceChange,
     ResourceDiff,
+    ResourceDiffPage,
     ResourceState,
     ResourceVersion,
     Restore,
@@ -87,11 +89,18 @@ class ManagedFileRepository:
     @property
     def head(self) -> str | None:
         self._ensure_recovered()
-        commit_id = self._storage.read_ref()
+        commit_id = self._read_published_ref()
         if commit_id is not None:
             commit = self._load_commit(commit_id)
             self._validate_commit_transition(commit)
         return commit_id
+
+    @property
+    def current_revision(self) -> str | None:
+        """Return the published ref without loading its commit or tree."""
+
+        self._ensure_recovered()
+        return self._read_published_ref()
 
     def recover(self) -> tuple[str, ...]:
         with self._storage.locked():
@@ -189,39 +198,119 @@ class ManagedFileRepository:
     def read(self, resource_id: str, *, at: str | None = None) -> bytes:
         return self._storage.read_blob(self.get(resource_id, at=at).blob_id)
 
+    def read_version(self, resource: ResourceVersion) -> bytes:
+        """Read one exact immutable resource version without tree traversal."""
+
+        if not isinstance(resource, ResourceVersion):
+            raise TypeError("resource must be a ResourceVersion")
+        return self._storage.read_blob(resource.blob_id)
+
+    def content_size(
+        self,
+        resource: ResourceVersion | str,
+        *,
+        at: str | None = None,
+    ) -> int:
+        """Return a resource version's immutable content length without reading it.
+
+        ``ResourceVersion`` callers already hold an immutable blob reference. A
+        resource ID is resolved at the optional pinned commit before its blob is
+        statted.
+        """
+        if isinstance(resource, ResourceVersion):
+            if at is not None:
+                raise ValueError("at is only supported when content_size receives a resource ID")
+            version = resource
+        elif isinstance(resource, str):
+            version = self.get(resource, at=at)
+        else:
+            raise TypeError("resource must be a ResourceVersion or resource ID")
+        return self._storage.blob_size(version.blob_id)
+
+    def commit_size(self, commit_id: str) -> int:
+        """Return an exact immutable commit record's size without walking history."""
+
+        self._ensure_recovered()
+        if not valid_hash(commit_id) or not self._storage.is_published(commit_id):
+            raise KeyError(f"unknown commit: {commit_id!r}")
+        return self._storage.commit_size(commit_id)
+
+    def inspect_commit(self, commit_id: str) -> Commit:
+        """Read one exact immutable commit without traversing from the current ref.
+
+        This validates the content-addressed commit record itself. Callers must
+        already hold a trusted commit reference when current reachability is
+        required.
+        """
+
+        self.commit_size(commit_id)
+        return self._load_commit(commit_id)
+
     def history(
         self,
         *,
         resource_id: str | None = None,
         start: str | None = None,
+        stop_before: str | None = None,
         limit: int | None = None,
     ) -> tuple[Commit, ...]:
+        """Return newest-first reachable commits.
+
+        ``stop_before`` is an exclusive reachable boundary. It lets consumers
+        replay only commits after a known watermark: the boundary itself and all
+        older commits are never traversed. Every returned commit retains normal
+        transition validation; validating the oldest returned transition may
+        read the boundary commit and tree once.
+        """
         self._ensure_recovered()
         if limit is not None and limit < 1:
             raise ValueError("history limit must be positive")
-        cursor = self.head if start is None else start
+        if stop_before is not None and not valid_hash(stop_before):
+            raise KeyError(f"unknown history stop boundary: {stop_before!r}")
+        cursor = self._read_published_ref() if start is None else start
         if start is not None:
             self._require_reachable(start)
         commits: list[Commit] = []
         seen: set[str] = set()
         while cursor is not None:
+            if cursor == stop_before:
+                return tuple(commits)
             if cursor in seen:
                 raise CorruptRepositoryError(f"commit history contains a cycle at {cursor}")
             seen.add(cursor)
             commit = self._load_commit(cursor)
             self._validate_commit_transition(commit)
             if resource_id is None or any(_change_resource_id(change) == resource_id for change in commit.changes):
-                commits.append(commit)
-                if limit is not None and len(commits) >= limit:
+                if limit is None or len(commits) < limit:
+                    commits.append(commit)
+                if stop_before is None and limit is not None and len(commits) >= limit:
                     break
             cursor = commit.parent_id
+        if stop_before is not None:
+            raise KeyError(f"history stop boundary is not reachable from the selected start: {stop_before}")
         return tuple(commits)
 
-    def diff(self, base: str | None, target: str | None) -> tuple[ResourceDiff, ...]:
+    def diff(
+        self,
+        base: str | None,
+        target: str | None,
+        *,
+        resource_ids: Iterable[str] | None = None,
+    ) -> tuple[ResourceDiff, ...]:
         before = self._tree_at(base, none_means_empty=True)
         after = self._tree_at(target, none_means_empty=True)
+        selected: set[str] | None = None
+        if resource_ids is not None:
+            if isinstance(resource_ids, (str, bytes)):
+                raise TypeError("resource_ids must be an iterable of resource IDs")
+            selected = set(resource_ids)
+            if not all(isinstance(resource_id, str) and resource_id for resource_id in selected):
+                raise ValueError("resource_ids must contain only nonempty strings")
         result: list[ResourceDiff] = []
-        for resource_id in sorted(set(before) | set(after)):
+        changed_ids = set(before) | set(after)
+        if selected is not None:
+            changed_ids &= selected
+        for resource_id in sorted(changed_ids):
             old = before.get(resource_id)
             new = after.get(resource_id)
             if old == new:
@@ -239,6 +328,124 @@ class ManagedFileRepository:
                 )
             )
         return tuple(result)
+
+    def diff_page(
+        self,
+        base: str | None,
+        target: str | None,
+        resource_id: str,
+        *,
+        offset: int = 0,
+        limit: int = 16_384,
+        tail: bool = False,
+    ) -> ResourceDiffPage:
+        if not isinstance(resource_id, str) or not resource_id:
+            raise ValueError("resource_id must be a nonempty string")
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise ValueError("offset must be a nonnegative integer")
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise ValueError("limit must be a positive integer")
+        if not isinstance(tail, bool):
+            raise TypeError("tail must be a bool")
+        if tail and offset != 0:
+            raise ValueError("offset must be zero when tail is requested")
+
+        before = self._tree_at(base, none_means_empty=True)
+        after = self._tree_at(target, none_means_empty=True)
+        old = before.get(resource_id)
+        new = after.get(resource_id)
+        if old == new:
+            raise ValueError(f"resource did not change between revisions: {resource_id}")
+        old_content = b"" if old is None else self._storage.read_blob(old.blob_id)
+        new_content = b"" if new is None else self._storage.read_blob(new.blob_id)
+        old_label = "/dev/null" if old is None else old.path
+        new_label = "/dev/null" if new is None else new.path
+        page_offset, page_end, has_more, text = _unified_diff_page(
+            old_content,
+            new_content,
+            old_label,
+            new_label,
+            offset=offset,
+            limit=limit,
+            tail=tail,
+        )
+        return ResourceDiffPage(
+            resource_id=resource_id,
+            before=old,
+            after=new,
+            offset=page_offset,
+            end_offset=page_end,
+            has_more=has_more,
+            unified_diff=text,
+        )
+
+    def diff_versions_page(
+        self,
+        before: ResourceVersion | None,
+        after: ResourceVersion | None,
+        *,
+        offset: int = 0,
+        limit: int = 16_384,
+        tail: bool = False,
+        source_byte_limit: int | None = None,
+    ) -> ResourceDiffPage:
+        """Page a diff between exact immutable versions without tree traversal."""
+
+        if before is None and after is None:
+            raise ValueError("a resource diff requires before or after")
+        for name, version in (("before", before), ("after", after)):
+            if version is not None and not isinstance(version, ResourceVersion):
+                raise TypeError(f"{name} must be a ResourceVersion or None")
+        if before is not None and after is not None and before.resource_id != after.resource_id:
+            raise ValueError("resource versions must have the same resource ID")
+        if before == after:
+            resource_id = before.resource_id if before is not None else after.resource_id
+            raise ValueError(f"resource did not change between versions: {resource_id}")
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise ValueError("offset must be a nonnegative integer")
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise ValueError("limit must be a positive integer")
+        if not isinstance(tail, bool):
+            raise TypeError("tail must be a bool")
+        if tail and offset != 0:
+            raise ValueError("offset must be zero when tail is requested")
+        if source_byte_limit is not None and (
+            isinstance(source_byte_limit, bool)
+            or not isinstance(source_byte_limit, int)
+            or source_byte_limit <= 0
+        ):
+            raise ValueError("source_byte_limit must be a positive integer or None")
+
+        versions = tuple(version for version in (before, after) if version is not None)
+        unique = {version.blob_id: version for version in versions}
+        actual_bytes = sum(self.content_size(version) for version in unique.values())
+        if source_byte_limit is not None and actual_bytes > source_byte_limit:
+            raise RevisionContentLimitError(actual_bytes=actual_bytes, limit_bytes=source_byte_limit)
+        contents = {blob_id: self._storage.read_blob(blob_id) for blob_id in unique}
+        old_content = b"" if before is None else contents[before.blob_id]
+        new_content = b"" if after is None else contents[after.blob_id]
+        old_label = "/dev/null" if before is None else before.path
+        new_label = "/dev/null" if after is None else after.path
+        page_offset, page_end, has_more, text = _unified_diff_page(
+            old_content,
+            new_content,
+            old_label,
+            new_label,
+            offset=offset,
+            limit=limit,
+            tail=tail,
+        )
+        resource = after or before
+        assert resource is not None
+        return ResourceDiffPage(
+            resource_id=resource.resource_id,
+            before=before,
+            after=after,
+            offset=page_offset,
+            end_offset=page_end,
+            has_more=has_more,
+            unified_diff=text,
+        )
 
     def restore_from_commit(
         self,
@@ -339,12 +546,13 @@ class ManagedFileRepository:
             transaction_bytes, _ = self._directory_size(self._storage.transactions, recursive=True)
             conflict_bytes, _ = self._directory_size(self._storage.conflicts, recursive=True)
             idempotency_bytes, _ = self._directory_size(self._storage.idempotency)
+            publication_bytes, _ = self._directory_size(self._storage.published)
             ref_bytes, _ = self._directory_size(self._storage.refs)
             lock_stat = self._storage.metadata_stat(self._storage.lock_path)
             assert lock_stat is not None
             lock_bytes = lock_stat.st_size
             recovery_bytes = transaction_bytes + conflict_bytes
-            metadata_bytes = idempotency_bytes + ref_bytes + lock_bytes
+            metadata_bytes = idempotency_bytes + publication_bytes + ref_bytes + lock_bytes
             total = blob_bytes + tree_bytes + commit_bytes + recovery_bytes + metadata_bytes
             return StorageReport(
                 total_bytes=total,
@@ -539,7 +747,7 @@ class ManagedFileRepository:
         return self._validate_commit_transition(commit)
 
     def _load_current_tree(self) -> tuple[str | None, dict[str, ResourceVersion]]:
-        head = self._storage.read_ref()
+        head = self._read_published_ref()
         if head is None:
             return None, {}
         commit = self._load_commit(head)
@@ -566,16 +774,14 @@ class ManagedFileRepository:
     def _require_reachable(self, commit_id: str) -> None:
         if not valid_hash(commit_id):
             raise KeyError(f"unknown published commit: {commit_id!r}")
-        cursor = self._storage.read_ref()
-        seen: set[str] = set()
-        while cursor is not None:
-            if cursor == commit_id:
-                return
-            if cursor in seen:
-                raise CorruptRepositoryError(f"commit history contains a cycle at {cursor}")
-            seen.add(cursor)
-            cursor = self._load_commit(cursor).parent_id
-        raise KeyError(f"commit is not reachable from the current ref: {commit_id}")
+        if not self._storage.is_published(commit_id):
+            raise KeyError(f"commit is not reachable from the current ref: {commit_id}")
+
+    def _read_published_ref(self) -> str | None:
+        commit_id = self._storage.read_ref()
+        if commit_id is not None and not self._storage.is_published(commit_id):
+            raise CorruptRepositoryError(f"current ref points to unpublished commit: {commit_id}")
+        return commit_id
 
     def _walk_reachable(self, head: str) -> tuple[set[str], dict[str, ResourceVersion]]:
         commits: set[str] = set()
@@ -649,10 +855,34 @@ class ManagedFileRepository:
                         detail=str(exc),
                     )
                 )
+        published: set[str] = set()
+        for path in self._storage.list_metadata(self._storage.published):
+            try:
+                if not valid_hash(path.name) or not self._storage.is_published(path.name):
+                    raise CorruptRepositoryError(f"invalid published commit marker: {path.name}")
+                if path.name not in reachable_commits:
+                    raise CorruptRepositoryError(f"published commit marker points outside current history: {path.name}")
+                published.add(path.name)
+            except (CorruptRepositoryError, UnsafePathError) as exc:
+                issues.append(
+                    IntegrityIssue(
+                        code="publication_corrupt",
+                        target=path.name,
+                        detail=str(exc),
+                    )
+                )
+        for commit_id in sorted(reachable_commits - published):
+            issues.append(
+                IntegrityIssue(
+                    code="publication_missing",
+                    target=commit_id,
+                    detail="reachable commit lacks its publication certificate",
+                )
+            )
 
     def _collection_roots(self) -> tuple[set[str], set[str], set[str]]:
         commit_roots: set[str] = set()
-        current = self._storage.read_ref()
+        current = self._read_published_ref()
         if current is not None:
             commit_roots.add(current)
         transactions = self._transactions.load_protected_transactions()
@@ -771,17 +1001,71 @@ def _change_resource_id(change: ResourceChange) -> str:
 
 
 def _unified_diff(before: bytes, after: bytes, old_label: str, new_label: str) -> str:
+    return "".join(_unified_diff_chunks(before, after, old_label, new_label))
+
+
+def _unified_diff_chunks(before: bytes, after: bytes, old_label: str, new_label: str):
     before_text = before.decode("utf-8", errors="surrogateescape").splitlines(keepends=True)
     after_text = after.decode("utf-8", errors="surrogateescape").splitlines(keepends=True)
-    return "".join(
-        difflib.unified_diff(
-            before_text,
-            after_text,
-            fromfile=old_label,
-            tofile=new_label,
-            lineterm="\n",
-        )
+    return difflib.unified_diff(
+        before_text,
+        after_text,
+        fromfile=old_label,
+        tofile=new_label,
+        lineterm="\n",
     )
+
+
+def _unified_diff_page(
+    before: bytes,
+    after: bytes,
+    old_label: str,
+    new_label: str,
+    *,
+    offset: int,
+    limit: int,
+    tail: bool,
+) -> tuple[int, int, bool, str]:
+    chunks = _unified_diff_chunks(before, after, old_label, new_label)
+    if tail:
+        text = ""
+        total = 0
+        for chunk in chunks:
+            total += len(chunk)
+            text = chunk[-limit:] if len(chunk) >= limit else (text + chunk)[-limit:]
+        page_offset = 0 if total == 0 else ((total - 1) // limit) * limit
+        page_length = total - page_offset
+        return page_offset, total, False, text[-page_length:] if page_length else ""
+
+    cursor = 0
+    parts: list[str] = []
+    length = 0
+    has_more = False
+    iterator = iter(chunks)
+    for chunk in iterator:
+        next_cursor = cursor + len(chunk)
+        if next_cursor <= offset:
+            cursor = next_cursor
+            continue
+        start = max(0, offset - cursor)
+        available_length = len(chunk) - start
+        remaining = limit - length
+        taken = min(available_length, remaining)
+        parts.append(chunk[start : start + taken])
+        length += taken
+        cursor = next_cursor
+        if available_length > remaining:
+            has_more = True
+            break
+        if length == limit:
+            has_more = any(bool(next_chunk) for next_chunk in iterator)
+            break
+    else:
+        if offset > cursor or (offset == cursor and cursor > 0 and length == 0):
+            raise IndexError("offset is outside the resource diff")
+
+    text = "".join(parts)
+    return offset, offset + len(text), has_more, text
 
 
 def _reject_ancestor_collisions(paths: Iterable[str]) -> None:

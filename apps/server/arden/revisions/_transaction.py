@@ -220,6 +220,8 @@ class TransactionManager:
         self.checkpoint("after_ref")
         if not decided:
             self._write_marker(transaction_path, "DECIDED")
+        self.storage.publish_commit(transaction.new_head)
+        self.checkpoint("after_publication")
         self.checkpoint("after_decision")
         self.storage.write_idempotency(
             transaction.key_hash,

@@ -33,6 +33,9 @@ from .models import (
     WikiFactCitation,
     WikiInfrastructureRole,
     WikiLinkReport,
+    WikiMaintenanceCommit,
+    WikiMaintenanceDetails,
+    WikiMaintenanceFeed,
     WikiMaintenancePageUpdate,
     WikiPageRecord,
     WikiPageRevision,
@@ -56,6 +59,34 @@ class GeneratedRegionConflictError(WikiValidationError):
     """A user changed a Synthesis-owned generated region."""
 
 
+class WikiMaintenanceEvidenceLimitError(WikiValidationError):
+    """Bounded scheduled evidence cannot safely include a whole commit."""
+
+    def __init__(
+        self,
+        *,
+        commit_id: str,
+        resource_id: str,
+        section: str,
+        actual_bytes: int,
+        limit_bytes: int,
+        actual_bytes_at_least: bool,
+        fingerprint: str,
+    ) -> None:
+        qualifier = "at least " if actual_bytes_at_least else ""
+        super().__init__(
+            f"commit {commit_id} resource {resource_id} {section} is {qualifier}{actual_bytes} UTF-8 bytes; "
+            f"limit is {limit_bytes}"
+        )
+        self.commit_id = commit_id
+        self.resource_id = resource_id
+        self.section = section
+        self.actual_bytes = actual_bytes
+        self.limit_bytes = limit_bytes
+        self.actual_bytes_at_least = actual_bytes_at_least
+        self.fingerprint = fingerprint
+
+
 _STORAGE_INSPECTION_BYTES = 50 * 1024 * 1024
 _STORAGE_NEEDS_ATTENTION_BYTES = 100 * 1024 * 1024
 WIKI_HEALTH_RESOURCE_ID = "health"
@@ -63,6 +94,9 @@ WIKI_HEALTH_PATH = "health.md"
 WIKI_HEALTH_ACTOR = "backend"
 WIKI_HEALTH_ORIGIN = "wiki.health"
 WIKI_HEALTH_REASON = "project wiki health"
+_MAINTENANCE_CURRENT_SCAN_BYTES = 256 * 1024
+_MAINTENANCE_CURRENT_SCAN_TOTAL_BYTES = 8 * 1024 * 1024
+_MAINTENANCE_CURRENT_EDITABLE_BYTES = 64 * 1024
 
 
 def _storage_warnings(storage: StorageReport, target: str) -> tuple[WikiChangeWarning, ...]:
@@ -79,6 +113,14 @@ def _storage_warnings(storage: StorageReport, target: str) -> tuple[WikiChangeWa
 class _Index:
     names: dict[str, tuple[str, ...]]
     pages: dict[str, WikiPageRecord]
+
+
+@dataclass(frozen=True, slots=True)
+class _MaintenanceCurrentContext:
+    """Current-page metadata retained while scheduled maintenance stays bounded."""
+
+    record: WikiPageRecord
+    nodes: tuple[WikilinkNode, ...]
 
 
 class WikiService:
@@ -101,22 +143,83 @@ class WikiService:
     def readable_pages(self) -> tuple[WikiPageRecord, ...]:
         """Return valid active pages while independently omitting malformed ones."""
 
-        head = self.repository.head
+        head = self.repository.current_revision
         records, _warnings = self._maintenance_snapshot(head)
-        if self.repository.head != head:
+        if self.repository.current_revision != head:
             raise RevisionConflictError("wiki changed while reading pages")
         return tuple(record for record in records if record.page.lifecycle == "active")
 
-    def changes_since(self, watermark: str | None) -> WikiChangesReport:
-        """Return chronological managed-Markdown history through one pinned head.
+    def maintenance_feed(self, watermark: str | None) -> WikiMaintenanceFeed:
+        """Return a chronological, pinned maintenance backlog without page reads.
 
-        This deliberately reports malformed historical blobs instead of using the
-        strict page snapshot: maintenance must be able to show the bad revision
-        that requires repair.
+        Scheduled maintenance must first decide which single commit is next.  It
+        does not need current pages, diffs, integrity, or storage to make that
+        choice, and reading any of those here turns a long blocked backlog into
+        unnecessary blob work.
         """
 
         if watermark is not None and (not isinstance(watermark, str) or not watermark):
             raise ValueError("watermark must be a nonempty commit ID or None")
+        head = self.repository.current_revision
+        if watermark == head and head is not None:
+            return WikiMaintenanceFeed(watermark=watermark, through_revision=head, commits=())
+        if head is None:
+            if watermark is not None:
+                raise KeyError(f"wiki watermark is not reachable from pinned head: {watermark}")
+            commits_newest_first = ()
+        else:
+            try:
+                commits_newest_first = self.repository.history(stop_before=watermark)
+            except KeyError as exc:
+                raise KeyError(f"wiki watermark is not reachable from pinned head: {watermark}") from exc
+        selected: list[WikiMaintenanceCommit] = []
+        for commit in commits_newest_first:
+            selected.append(
+                WikiMaintenanceCommit(
+                    commit_id=commit.commit_id,
+                    parent_id=commit.parent_id,
+                    actor=commit.actor,
+                    origin=commit.origin,
+                    reason=commit.reason,
+                    timestamp=commit.timestamp,
+                    changes=commit.changes,
+                )
+            )
+        if self.repository.current_revision != head:
+            raise RevisionConflictError("wiki changed while building a maintenance feed")
+        return WikiMaintenanceFeed(
+            watermark=watermark,
+            through_revision=head,
+            commits=tuple(reversed(selected)),
+        )
+
+    def changes_since(
+        self,
+        watermark: str | None,
+        *,
+        include_diffs: bool = True,
+        diff_char_limit: int | None = None,
+    ) -> WikiChangesReport:
+        """Return chronological managed-Markdown history through one pinned head.
+
+        This deliberately reports malformed historical blobs instead of using the
+        strict page snapshot: maintenance must be able to show the bad revision
+        that requires repair. Derived consumers that need only revision and
+        health metadata can omit diffs so user decisions never rebuild history.
+        ``diff_char_limit`` is an explicit bounded-evidence mode: callers must
+        treat incomplete diffs as non-reviewable, while the default remains an
+        exact full-diff feed.
+        """
+
+        if watermark is not None and (not isinstance(watermark, str) or not watermark):
+            raise ValueError("watermark must be a nonempty commit ID or None")
+        if not isinstance(include_diffs, bool):
+            raise TypeError("include_diffs must be a bool")
+        if diff_char_limit is not None:
+            if isinstance(diff_char_limit, bool) or not isinstance(diff_char_limit, int) or diff_char_limit <= 0:
+                raise ValueError("diff_char_limit must be a positive integer or None")
+            if not include_diffs:
+                raise ValueError("diff_char_limit requires include_diffs=True")
         head = self.repository.head
         history = () if head is None else self.repository.history(start=head)
         commits_newest_first = tuple(history)
@@ -144,47 +247,20 @@ class WikiService:
 
         reports: list[WikiChangeCommit] = []
         for commit in reversed(selected):
-            diffs = {
-                item.resource_id: item.unified_diff for item in self.repository.diff(commit.parent_id, commit.commit_id)
-            }
-            changes: list[WikiResourceChange] = []
-            for change in commit.changes:
-                resource = change.after or change.before
-                assert resource is not None
-                if not self._is_markdown_change(change.before, change.after):
-                    continue
-                before = self._revision_at(change.before, commit.parent_id)
-                after = self._revision_at(change.after, commit.commit_id)
-                for revision in (before, after):
-                    if revision is not None:
-                        if revision.validation_error is not None:
-                            warnings.append(
-                                WikiChangeWarning("invalid_page", revision.resource.path, revision.validation_error)
-                            )
-                        warnings.extend(revision.provenance_warnings)
-                outgoing, backlinks = current_links.get(resource.resource_id, ((), ()))
-                changes.append(
-                    WikiResourceChange(
-                        action=change.action,
-                        resource_id=resource.resource_id,
-                        before=before,
-                        after=after,
-                        unified_diff=diffs.get(resource.resource_id, ""),
-                        current_outgoing=outgoing,
-                        current_backlinks=backlinks,
+            if not include_diffs:
+                reports.append(
+                    WikiChangeCommit(
+                        commit_id=commit.commit_id,
+                        parent_id=commit.parent_id,
+                        actor=commit.actor,
+                        origin=commit.origin,
+                        reason=commit.reason,
+                        timestamp=commit.timestamp,
+                        changes=(),
                     )
                 )
-            reports.append(
-                WikiChangeCommit(
-                    commit_id=commit.commit_id,
-                    parent_id=commit.parent_id,
-                    actor=commit.actor,
-                    origin=commit.origin,
-                    reason=commit.reason,
-                    timestamp=commit.timestamp,
-                    changes=tuple(changes),
-                )
-            )
+                continue
+            reports.append(self._detail_commit(commit, current_links, warnings, diff_char_limit=diff_char_limit))
         if self.repository.head != head:
             raise RevisionConflictError("wiki changed while building a change feed")
         return WikiChangesReport(
@@ -194,6 +270,270 @@ class WikiService:
             warnings=tuple(self._dedupe_warnings(warnings)),
             integrity=integrity,
             storage=storage,
+            current_records=current_records,
+        )
+
+    def maintenance_details(
+        self,
+        commit: WikiMaintenanceCommit,
+        *,
+        through_revision: str,
+        diff_char_limit: int,
+        diff_byte_budget: int,
+    ) -> WikiMaintenanceDetails:
+        """Load one reached commit from :meth:`maintenance_feed`.
+
+        Diff evidence is loaded in commit order under one shared byte budget
+        before any page snapshot or derived inspection.  If it is already too
+        large, maintenance can persist an Ask without reading later resources
+        or unrelated current pages.
+        """
+
+        if not isinstance(commit, WikiMaintenanceCommit):
+            raise TypeError("commit must be a WikiMaintenanceCommit")
+        if not isinstance(through_revision, str) or not through_revision:
+            raise ValueError("through_revision must be a nonempty commit ID")
+        if isinstance(diff_char_limit, bool) or not isinstance(diff_char_limit, int) or diff_char_limit <= 1:
+            raise ValueError("diff_char_limit must be an integer greater than one")
+        if isinstance(diff_byte_budget, bool) or not isinstance(diff_byte_budget, int) or diff_byte_budget <= 0:
+            raise ValueError("diff_byte_budget must be a positive integer")
+        if self.repository.head != through_revision:
+            raise RevisionConflictError("wiki changed before loading commit details")
+
+        remaining = diff_byte_budget
+        diffs: dict[str, tuple[str, bool]] = {}
+        revisions: dict[str, WikiPageRevision] = {}
+        markdown_changes = tuple(
+            change for change in commit.changes if self._is_markdown_change(change.before, change.after)
+        )
+        for change in markdown_changes:
+            resource = change.after or change.before
+            assert resource is not None
+            if remaining <= 0:
+                raise self._maintenance_evidence_limit(
+                    commit,
+                    resource.resource_id,
+                    section="commit evidence",
+                    actual_bytes=diff_byte_budget + 1,
+                    limit_bytes=diff_byte_budget,
+                    actual_bytes_at_least=True,
+                    suffix=b"budget-exhausted",
+                )
+            # ``diff_page`` reads both immutable blobs.  Reserve their exact
+            # size first, so an oversized changed page cannot bypass the
+            # bounded maintenance path just because its textual diff is small.
+            reserved = 0
+            reserved_sizes: dict[str, int] = {}
+            for section, revision in (("before page", change.before), ("after page", change.after)):
+                if revision is None or revision.version_id in revisions:
+                    continue
+                size = self.repository.content_size(revision)
+                if size > remaining - reserved:
+                    raise self._maintenance_evidence_limit(
+                        commit,
+                        revision.resource_id,
+                        section=section,
+                        actual_bytes=diff_byte_budget - remaining + reserved + size,
+                        limit_bytes=diff_byte_budget,
+                        actual_bytes_at_least=False,
+                        suffix=revision.blob_id.encode(),
+                    )
+                reserved += size
+                reserved_sizes[revision.version_id] = size
+            page_limit = min(diff_char_limit, remaining - reserved + 1)
+            page = self.repository.diff_versions_page(
+                change.before,
+                change.after,
+                limit=page_limit,
+                source_byte_limit=remaining,
+            )
+            actual = len(page.unified_diff.encode("utf-8", errors="surrogateescape"))
+            if page.has_more:
+                shared_budget_exhausted = page_limit < diff_char_limit
+                raise self._maintenance_evidence_limit(
+                    commit,
+                    resource.resource_id,
+                    section="diff",
+                    actual_bytes=(
+                        diff_byte_budget - remaining + reserved + actual
+                        if shared_budget_exhausted
+                        else actual
+                    ),
+                    limit_bytes=(diff_byte_budget if shared_budget_exhausted else diff_char_limit - 1),
+                    actual_bytes_at_least=True,
+                    suffix=page.unified_diff.encode("utf-8", errors="surrogateescape"),
+                )
+            if actual > remaining - reserved:
+                raise self._maintenance_evidence_limit(
+                    commit,
+                    resource.resource_id,
+                    section="diff",
+                    actual_bytes=diff_byte_budget - remaining + reserved + actual,
+                    limit_bytes=diff_byte_budget,
+                    actual_bytes_at_least=False,
+                    suffix=page.unified_diff.encode("utf-8", errors="surrogateescape"),
+                )
+            remaining -= actual
+            diffs[resource.resource_id] = (page.unified_diff, True)
+            # A commit can contain many individually-small diffs whose
+            # complete before/after bodies exceed the shared evidence budget.
+            # Keep the resource walk interleaved, so that outcome also avoids
+            # later diffs and bodies.
+            for section, resource in (
+                ("before page", change.before),
+                ("after page", change.after),
+            ):
+                if resource is None or resource.version_id in revisions:
+                    continue
+                reserved_size = reserved_sizes[resource.version_id]
+                if reserved_size > remaining:
+                    raise self._maintenance_evidence_limit(
+                        commit,
+                        resource.resource_id,
+                        section=section,
+                        actual_bytes=diff_byte_budget - remaining + reserved_size,
+                        limit_bytes=diff_byte_budget,
+                        actual_bytes_at_least=False,
+                        suffix=resource.blob_id.encode(),
+                    )
+                content = self.repository.read_version(resource)
+                remaining -= reserved_size
+                revisions[resource.version_id] = self._revision_from_content(resource, content)
+
+        current_records, current_links, current_warnings, remaining = self._maintenance_current_context(
+            through_revision,
+            changed_page_ids={
+                (change.after or change.before).resource_id
+                for change in markdown_changes
+                if change.after is not None or change.before is not None
+            },
+            cached_revisions=revisions,
+            remaining=remaining,
+            limit=diff_byte_budget,
+            commit=commit,
+        )
+        warnings = list(current_warnings)
+        report = self._detail_commit(
+            commit,
+            current_links,
+            warnings,
+            diff_char_limit=None,
+            precomputed_diffs=diffs,
+            precomputed_revisions=revisions,
+        )
+        if self.repository.head != through_revision:
+            raise RevisionConflictError("wiki changed while loading commit details")
+        return WikiMaintenanceDetails(
+            through_revision=through_revision,
+            warnings=tuple(self._dedupe_warnings(warnings)),
+            commit=report,
+            current_records=current_records,
+        )
+
+    def _detail_commit(
+        self,
+        commit: Commit | WikiMaintenanceCommit,
+        current_links: Mapping[str, tuple[tuple[LinkReference, ...], tuple[LinkReference, ...]]],
+        warnings: list[WikiChangeWarning],
+        *,
+        diff_char_limit: int | None,
+        precomputed_diffs: Mapping[str, tuple[str, bool]] | None = None,
+        precomputed_revisions: Mapping[str, WikiPageRevision] | None = None,
+    ) -> WikiChangeCommit:
+        markdown_changes = tuple(
+            change for change in commit.changes if self._is_markdown_change(change.before, change.after)
+        )
+        markdown_ids = tuple((change.after or change.before).resource_id for change in markdown_changes)
+        if precomputed_diffs is not None:
+            diffs = dict(precomputed_diffs)
+        elif diff_char_limit is None:
+            diffs = {
+                item.resource_id: (item.unified_diff, True)
+                for item in self.repository.diff(
+                    commit.parent_id,
+                    commit.commit_id,
+                    resource_ids=markdown_ids,
+                )
+            }
+        else:
+            diffs = {
+                resource_id: (page.unified_diff, not page.has_more)
+                for resource_id in markdown_ids
+                for page in (
+                    self.repository.diff_page(
+                        commit.parent_id,
+                        commit.commit_id,
+                        resource_id,
+                        limit=diff_char_limit,
+                    ),
+                )
+            }
+        changes: list[WikiResourceChange] = []
+        for change in markdown_changes:
+            resource = change.after or change.before
+            assert resource is not None
+            before = self._revision_for(change.before, commit.parent_id, precomputed_revisions)
+            after = self._revision_for(change.after, commit.commit_id, precomputed_revisions)
+            for revision in (before, after):
+                if revision is not None:
+                    if revision.validation_error is not None:
+                        warnings.append(WikiChangeWarning("invalid_page", revision.resource.path, revision.validation_error))
+                    warnings.extend(revision.provenance_warnings)
+            outgoing, backlinks = current_links.get(resource.resource_id, ((), ()))
+            diff, complete = diffs.get(resource.resource_id, ("", True))
+            changes.append(
+                WikiResourceChange(
+                    action=change.action,
+                    resource_id=resource.resource_id,
+                    before=before,
+                    after=after,
+                    unified_diff=diff,
+                    current_outgoing=outgoing,
+                    current_backlinks=backlinks,
+                    unified_diff_complete=complete,
+                )
+            )
+        return WikiChangeCommit(
+            commit_id=commit.commit_id,
+            parent_id=commit.parent_id,
+            actor=commit.actor,
+            origin=commit.origin,
+            reason=commit.reason,
+            timestamp=commit.timestamp,
+            changes=tuple(changes),
+        )
+
+    @staticmethod
+    def _maintenance_evidence_limit(
+        commit: WikiMaintenanceCommit,
+        resource_id: str,
+        *,
+        section: str,
+        actual_bytes: int,
+        limit_bytes: int,
+        actual_bytes_at_least: bool,
+        suffix: bytes,
+    ) -> WikiMaintenanceEvidenceLimitError:
+        fingerprint = sha256(
+            b"\0".join(
+                (
+                    commit.commit_id.encode(),
+                    resource_id.encode(),
+                    section.encode(),
+                    str(actual_bytes).encode(),
+                    str(limit_bytes).encode(),
+                    suffix,
+                )
+            )
+        ).hexdigest()
+        return WikiMaintenanceEvidenceLimitError(
+            commit_id=commit.commit_id,
+            resource_id=resource_id,
+            section=section,
+            actual_bytes=actual_bytes,
+            limit_bytes=limit_bytes,
+            actual_bytes_at_least=actual_bytes_at_least,
+            fingerprint=fingerprint,
         )
 
     def read_page(self, page_id: str) -> WikiPageRecord:
@@ -269,7 +609,7 @@ class WikiService:
             for resource in self.repository.list_resources(at=base_head, include_archived=True):
                 if resource.state is not ResourceState.ARCHIVED or not resource.path.endswith(".md"):
                     continue
-                page = self._parse(resource, self.repository.read(resource.resource_id, at=base_head))
+                page = self._parse(resource, self.repository.read_version(resource))
                 archived_names.update(self._normal(name) for name in self._names(page, resource.path))
         for target in targets:
             self._require_markdown_path(target.path)
@@ -495,7 +835,7 @@ class WikiService:
                 raise WikiValidationError(f"health resource must remain at {WIKI_HEALTH_PATH}")
             if path_owner is None or path_owner.resource_id != WIKI_HEALTH_RESOURCE_ID:
                 raise WikiValidationError(f"{WIKI_HEALTH_PATH} must belong to the health resource")
-            if self.repository.read(WIKI_HEALTH_RESOURCE_ID, at=base_head) == content:
+            if self.repository.read_version(existing) == content:
                 if self.repository.head != base_head:
                     raise RevisionConflictError(
                         f"current head changed: expected {base_head!r}, found {self.repository.head!r}"
@@ -615,7 +955,7 @@ class WikiService:
         resource = self.repository.get(page_id, at=head)
         if resource.state is not ResourceState.ARCHIVED:
             raise WikiValidationError(f"page is not archived: {page_id}")
-        content = self.repository.read(page_id, at=head)
+        content = self.repository.read_version(resource)
         page = self._parse(resource, content)
         active = self._snapshot(strict_names=True, at=head)
         self._assert_new_names(active, page, resource.path)
@@ -774,7 +1114,10 @@ class WikiService:
         )
 
     def _maintenance_snapshot(
-        self, head: str | None
+        self,
+        head: str | None,
+        *,
+        cached_revisions: Mapping[str, WikiPageRevision] | None = None,
     ) -> tuple[tuple[WikiPageRecord, ...], tuple[WikiChangeWarning, ...]]:
         """Read active Markdown pages without letting one malformed page hide others."""
 
@@ -783,16 +1126,137 @@ class WikiService:
         for resource in self.repository.list_resources(at=head):
             if not resource.path.endswith(".md"):
                 continue
-            content = self.repository.read(resource.resource_id, at=head)
-            try:
-                page = self._parse(resource, content)
-            except WikiValidationError as error:
-                warnings.append(WikiChangeWarning("invalid_page", resource.path, str(error)))
+            revision = None if cached_revisions is None else cached_revisions.get(resource.version_id)
+            if revision is None:
+                content = self.repository.read_version(resource)
+                revision = self._revision_from_content(resource, content)
+            if revision.page is None:
+                warnings.append(WikiChangeWarning("invalid_page", resource.path, revision.validation_error or "invalid page"))
                 continue
-            _generated, _citations, provenance_warnings = self._provenance(page, resource.path)
-            warnings.extend(provenance_warnings)
-            records.append(WikiPageRecord(resource, page, content))
+            warnings.extend(revision.provenance_warnings)
+            records.append(WikiPageRecord(resource, revision.page, revision.content))
         return tuple(sorted(records, key=lambda record: record.page.page_id)), tuple(warnings)
+
+    def _maintenance_current_context(
+        self,
+        head: str,
+        *,
+        changed_page_ids: set[str],
+        cached_revisions: Mapping[str, WikiPageRevision],
+        remaining: int,
+        limit: int,
+        commit: WikiMaintenanceCommit,
+    ) -> tuple[
+        tuple[WikiPageRecord, ...],
+        dict[str, tuple[tuple[LinkReference, ...], tuple[LinkReference, ...]]],
+        tuple[WikiChangeWarning, ...],
+        int,
+    ]:
+        """Derive exact current link context without retaining every page body.
+
+        The metadata scan is deliberately one blob at a time.  A blob is sized
+        before it is read, so a page too large to complete link evidence
+        becomes a durable manual review rather than an invisible omission.
+        Only changed pages and their resolved link neighbors are retained as
+        editable records; the prepared report bounds those retained bodies.
+        """
+
+        contexts: list[_MaintenanceCurrentContext] = []
+        warnings: list[WikiChangeWarning] = []
+        scanned = 0
+        for resource in self.repository.list_resources(at=head):
+            if not resource.path.endswith(".md"):
+                continue
+            size = self.repository.content_size(resource)
+            if size > _MAINTENANCE_CURRENT_SCAN_BYTES:
+                raise self._maintenance_evidence_limit(
+                    commit,
+                    resource.resource_id,
+                    section="current page",
+                    actual_bytes=size,
+                    limit_bytes=_MAINTENANCE_CURRENT_SCAN_BYTES,
+                    actual_bytes_at_least=False,
+                    suffix=f"{head}:{resource.blob_id}".encode(),
+                )
+            if size > _MAINTENANCE_CURRENT_SCAN_TOTAL_BYTES - scanned:
+                raise self._maintenance_evidence_limit(
+                    commit,
+                    resource.resource_id,
+                    section="current wiki link context",
+                    actual_bytes=scanned + size,
+                    limit_bytes=_MAINTENANCE_CURRENT_SCAN_TOTAL_BYTES,
+                    actual_bytes_at_least=False,
+                    suffix=f"{head}:{resource.blob_id}".encode(),
+                )
+            scanned += size
+            revision = cached_revisions.get(resource.version_id)
+            if revision is None:
+                content = self.repository.read_version(resource)
+                revision = self._revision_from_content(resource, content)
+            if revision.page is None:
+                warnings.append(WikiChangeWarning("invalid_page", resource.path, revision.validation_error or "invalid page"))
+                continue
+            warnings.extend(revision.provenance_warnings)
+            # Do not retain arbitrary current bodies merely to resolve links.
+            page = replace(revision.page, body=b"")
+            contexts.append(
+                _MaintenanceCurrentContext(
+                    record=WikiPageRecord(resource, page, b""),
+                    nodes=parse_wikilinks(revision.page.body.decode("utf-8")),
+                )
+            )
+
+        context_by_id = {context.record.page.page_id: context for context in contexts}
+        metadata_records = tuple(sorted((context.record for context in contexts), key=lambda record: record.page.page_id))
+        index = self._index(WikiSnapshot(head, metadata_records), strict_names=False)
+        current_links = self._maintenance_links_from_nodes(contexts, index)
+        warnings.extend(self._link_warnings(metadata_records, current_links))
+
+        page_ids = set(changed_page_ids)
+        for page_id in changed_page_ids:
+            outgoing, backlinks = current_links.get(page_id, ((), ()))
+            page_ids.update(reference.target_page_id for reference in outgoing if reference.target_page_id)
+            page_ids.update(reference.source_page_id for reference in backlinks)
+
+        records: list[WikiPageRecord] = []
+        for page_id in sorted(page_ids):
+            context = context_by_id.get(page_id)
+            if context is None:
+                continue
+            resource = context.record.resource
+            size = self.repository.content_size(resource)
+            if size > _MAINTENANCE_CURRENT_EDITABLE_BYTES:
+                raise self._maintenance_evidence_limit(
+                    commit,
+                    resource.resource_id,
+                    section="current editable page",
+                    actual_bytes=size,
+                    limit_bytes=_MAINTENANCE_CURRENT_EDITABLE_BYTES,
+                    actual_bytes_at_least=False,
+                    suffix=f"{head}:{resource.blob_id}".encode(),
+                )
+            if size > remaining:
+                raise self._maintenance_evidence_limit(
+                    commit,
+                    resource.resource_id,
+                    section="current editable page",
+                    actual_bytes=limit - remaining + size,
+                    limit_bytes=limit,
+                    actual_bytes_at_least=False,
+                    suffix=f"{head}:{resource.blob_id}".encode(),
+                )
+            revision = cached_revisions.get(resource.version_id)
+            if revision is None:
+                content = self.repository.read_version(resource)
+                revision = self._revision_from_content(resource, content)
+            if revision.page is None:
+                # The page was valid in the pinned context above; a different
+                # outcome can only be a repository integrity failure, which is
+                # safer to report than to fabricate editable evidence.
+                raise WikiValidationError(f"current page changed while preparing evidence: {resource.path}")
+            remaining -= size
+            records.append(WikiPageRecord(resource, revision.page, revision.content))
+        return tuple(records), current_links, tuple(warnings), remaining
 
     def _maintenance_links(
         self,
@@ -813,6 +1277,32 @@ class WikiService:
         return {
             record.page.page_id: (outgoing[record.page.page_id], tuple(backlinks[record.page.page_id]))
             for record in records
+        }
+
+    def _maintenance_links_from_nodes(
+        self,
+        contexts: Sequence[_MaintenanceCurrentContext],
+        index: _Index,
+    ) -> dict[str, tuple[tuple[LinkReference, ...], tuple[LinkReference, ...]]]:
+        """Resolve already-parsed nodes from the bounded current-page scan."""
+
+        outgoing: dict[str, tuple[LinkReference, ...]] = {}
+        backlinks: dict[str, list[LinkReference]] = {
+            context.record.page.page_id: [] for context in contexts
+        }
+        for context in contexts:
+            page_id = context.record.page.page_id
+            references = tuple(self._reference(index, page_id, node) for node in context.nodes)
+            outgoing[page_id] = references
+            for reference in references:
+                if reference.target_page_id is not None:
+                    backlinks.setdefault(reference.target_page_id, []).append(reference)
+        return {
+            context.record.page.page_id: (
+                outgoing[context.record.page.page_id],
+                tuple(backlinks[context.record.page.page_id]),
+            )
+            for context in contexts
         }
 
     def _link_warnings(
@@ -849,10 +1339,25 @@ class WikiService:
                 warnings.append(WikiChangeWarning("orphan_page", record.resource.path, record.page.page_id))
         return tuple(warnings)
 
-    def _revision_at(self, resource, at: str | None) -> WikiPageRevision | None:
+    def _revision_for(
+        self,
+        resource,
+        at: str | None,
+        cached_revisions: Mapping[str, WikiPageRevision] | None,
+    ) -> WikiPageRevision | None:
         if resource is None:
             return None
-        content = self.repository.read(resource.resource_id, at=at)
+        if cached_revisions is not None:
+            cached = cached_revisions.get(resource.version_id)
+            if cached is not None:
+                return cached
+        content = self.repository.read_version(resource)
+        return self._revision_from_content(resource, content)
+
+    def _revision_at(self, resource, at: str | None) -> WikiPageRevision | None:
+        return self._revision_for(resource, at, None)
+
+    def _revision_from_content(self, resource, content: bytes) -> WikiPageRevision:
         try:
             page = self._parse(resource, content)
         except WikiValidationError as error:
@@ -955,7 +1460,7 @@ class WikiService:
         for resource in self.repository.list_resources(at=head):
             if not resource.path.endswith(".md"):
                 continue
-            content = self.repository.read(resource.resource_id, at=head)
+            content = self.repository.read_version(resource)
             records.append(WikiPageRecord(resource, self._parse(resource, content), content))
         snapshot = WikiSnapshot(head=head, pages=tuple(sorted(records, key=lambda record: record.page.page_id)))
         index = self._index(snapshot, strict_names=strict_names)
@@ -1035,8 +1540,9 @@ class WikiService:
             )
             if change is None:
                 continue
+            assert change.after is not None
             return True, extract_generated_region(
-                self.repository.read(page_id, at=commit.commit_id), expected_page_id=page_id
+                self.repository.read_version(change.after), expected_page_id=page_id
             )
         return False, None
 

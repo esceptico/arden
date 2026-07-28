@@ -296,6 +296,16 @@ class WikiMaintenanceStore:
         )
         return [_review_row(row) for row in rows]
 
+    async def list_for_commit(self, blocking_commit_id: str) -> list[WikiMaintenanceReview]:
+        """Return the complete durable review history for one blocking commit."""
+
+        blocking_commit_id = _revision("blocking_commit_id", blocking_commit_id)
+        rows = await self._conn.execute_fetchall(
+            "SELECT * FROM wiki_maintenance_reviews WHERE blocking_commit_id = ? ORDER BY created_at, review_id",
+            (blocking_commit_id,),
+        )
+        return [_review_row(row) for row in rows]
+
     async def resolve(
         self,
         review_id: str,
@@ -494,7 +504,22 @@ class WikiMaintenanceStore:
 
         existing = _review_row(rows[0])
         if existing.evidence_fingerprint == review.evidence_fingerprint:
-            return existing
+            if existing.status is not WikiMaintenanceReviewStatus.CLEARED:
+                return existing
+            await self._assert_no_other_open(review.blocking_commit_id, excluding_review_id=existing.review_id)
+            await self._conn.execute(
+                """
+                UPDATE wiki_maintenance_reviews
+                SET generation = generation + 1, status = 'needs_review',
+                    summary = ?, proposal_json = ?, updated_at = ?,
+                    resolved_at = NULL, decision_note = NULL
+                WHERE review_id = ? AND status = 'cleared'
+                """,
+                (review.summary, review.proposal_json, now, existing.review_id),
+            )
+            refreshed = await self.get_review(existing.review_id)
+            assert refreshed is not None
+            return refreshed
         await self._assert_no_other_open(review.blocking_commit_id, excluding_review_id=existing.review_id)
         await self._conn.execute(
             """

@@ -24,6 +24,7 @@ from arden.revisions import (
     ResourceState,
     Restore,
     RevisionConflictError,
+    RevisionContentLimitError,
     UnsafePathError,
     Update,
 )
@@ -239,6 +240,179 @@ def test_multi_resource_change_is_one_sorted_commit_and_history_diff_is_exact(tm
     assert a_diff.unified_diff == "--- a.md\n+++ a.md\n@@ -1 +1 @@\n-one\n+two\n"
 
 
+def test_content_size_uses_immutable_blob_metadata_without_reading_content(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = _repo(tmp_path)
+    initial = repo.commit(_changes(Create("note", "note.md", b"old"), key="create"))
+    repo.commit(_changes(Update("note", repo.get("note").version_id, b"newer"), key="update"))
+    initial_version = repo.get("note", at=initial.commit_id)
+
+    def reject_read(*_args: object) -> bytes:
+        raise AssertionError("content size must not read a blob")
+
+    monkeypatch.setattr(repo._storage, "read_blob", reject_read)
+
+    assert repo.content_size(initial_version) == 3
+    assert repo.content_size("note", at=initial.commit_id) == 3
+    assert repo.content_size("note") == 5
+
+
+def test_history_stop_before_is_exclusive_bounded_and_rejects_unreachable_stops(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = _repo(tmp_path)
+    watermark = repo.commit(_changes(Create("note", "note.md", b"one"), key="one"))
+    second = repo.commit(_changes(Update("note", repo.get("note").version_id, b"two"), key="two"))
+    third = repo.commit(_changes(Update("note", repo.get("note").version_id, b"three"), key="three"))
+    head = repo.head
+    assert head == third.commit_id
+
+    original_load = repo._load_commit
+    loaded: list[str] = []
+
+    def track_load(commit_id: object):
+        loaded.append(str(commit_id))
+        return original_load(commit_id)
+
+    monkeypatch.setattr(repo, "_load_commit", track_load)
+
+    assert [commit.commit_id for commit in repo.history(stop_before=watermark.commit_id)] == [
+        third.commit_id,
+        second.commit_id,
+    ]
+    assert loaded == [third.commit_id, second.commit_id, second.commit_id, watermark.commit_id]
+
+    loaded.clear()
+    assert repo.current_revision == head
+    assert loaded == []
+
+    assert repo.history(stop_before=head) == ()
+    assert loaded == []
+
+    other = _repo(tmp_path / "other").commit(_changes(Create("other", "other.md", b"other"), key="other"))
+    with pytest.raises(KeyError, match="stop boundary is not reachable"):
+        repo.history(stop_before=other.commit_id)
+
+
+def test_diff_page_is_bounded_exact_unicode_safe_and_tail_addressable(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    initial = repo.commit(
+        _changes(
+            Create("a", "a.md", b"old\n"),
+            Create("z", "z.md", b"z0\n"),
+            key="create",
+        )
+    )
+    a0 = repo.get("a")
+    z0 = repo.get("z")
+    updated = repo.commit(
+        _changes(
+            Update("a", a0.version_id, ("😀 evidence\n" * 40).encode()),
+            Update("z", z0.version_id, b"z1\n"),
+            key="update",
+        )
+    )
+
+    expected = next(
+        diff.unified_diff
+        for diff in repo.diff(initial.commit_id, updated.commit_id)
+        if diff.resource_id == "a"
+    )
+    assert [
+        diff.resource_id
+        for diff in repo.diff(initial.commit_id, updated.commit_id, resource_ids=("a",))
+    ] == ["a"]
+    with pytest.raises(TypeError, match="iterable of resource IDs"):
+        repo.diff(initial.commit_id, updated.commit_id, resource_ids="a")
+    pages = []
+    offset = 0
+    while True:
+        page = repo.diff_page(initial.commit_id, updated.commit_id, "a", offset=offset, limit=37)
+        pages.append(page.unified_diff)
+        assert page.offset == offset
+        assert page.end_offset == offset + len(page.unified_diff)
+        assert len(page.unified_diff) <= 37
+        if not page.has_more:
+            break
+        offset = page.end_offset
+    assert "".join(pages) == expected
+
+    tail = repo.diff_page(initial.commit_id, updated.commit_id, "a", limit=37, tail=True)
+    tail_offset = 0 if not expected else ((len(expected) - 1) // 37) * 37
+    assert tail.unified_diff == expected[tail_offset:]
+    assert tail.offset == tail_offset
+    assert tail.end_offset == len(expected)
+    assert not tail.has_more
+
+    with pytest.raises(IndexError, match="outside the resource diff"):
+        repo.diff_page(initial.commit_id, updated.commit_id, "a", offset=len(expected), limit=37)
+    with pytest.raises(ValueError, match="positive integer"):
+        repo.diff_page(initial.commit_id, updated.commit_id, "a", limit=0)
+
+    huge = repo.commit(
+        _changes(
+            Update("a", repo.get("a").version_id, b"x" * 2_000_000),
+            key="huge-single-line",
+        )
+    )
+    tiny_page = repo.diff_page(updated.commit_id, huge.commit_id, "a", limit=7)
+    assert len(tiny_page.unified_diff) == 7
+    assert tiny_page.has_more
+
+
+def test_exact_commit_and_version_diff_avoid_ref_and_tree_history_walks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = _repo(tmp_path)
+    initial = repo.commit(_changes(Create("note", "note.md", b"old\n"), key="create"))
+    before = repo.get("note")
+    updated = repo.commit(_changes(Update("note", before.version_id, b"new\n"), key="update"))
+    change = updated.changes[0]
+
+    def reject_walk(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("exact immutable evidence must not walk ref history or trees")
+
+    monkeypatch.setattr(repo, "_require_reachable", reject_walk)
+    monkeypatch.setattr(repo, "_tree_at", reject_walk)
+
+    assert repo.inspect_commit(updated.commit_id) == updated
+    expected = "--- note.md\n+++ note.md\n@@ -1 +1 @@\n-old\n+new\n"
+    page = repo.diff_versions_page(change.before, change.after, limit=1_000, source_byte_limit=1_000)
+    assert page.unified_diff == expected
+    assert not page.has_more
+    assert initial.commit_id == updated.parent_id
+
+
+def test_exact_version_diff_preflights_source_size_before_blob_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = _repo(tmp_path)
+    initial = repo.commit(_changes(Create("note", "note.md", b"old\n"), key="create"))
+    updated = repo.commit(
+        _changes(
+            Update("note", repo.get("note").version_id, b"x" * 2_000_000),
+            key="large",
+        )
+    )
+    change = updated.changes[0]
+
+    def reject_read(*_args: object) -> bytes:
+        raise AssertionError("oversized exact evidence must be rejected before blob reads")
+
+    monkeypatch.setattr(repo._storage, "read_blob", reject_read)
+
+    with pytest.raises(RevisionContentLimitError) as raised:
+        repo.diff_versions_page(change.before, change.after, source_byte_limit=1024)
+
+    assert raised.value.actual_bytes > raised.value.limit_bytes
+    assert repo.commit_size(initial.commit_id) > 0
+
+
 def test_objects_are_immutable_content_addressed_and_deduplicated(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     commit = repo.commit(
@@ -254,6 +428,7 @@ def test_objects_are_immutable_content_addressed_and_deduplicated(tmp_path: Path
     assert repo._storage.write_commit(repo._storage.read_commit(commit.commit_id)) == commit.commit_id
     assert len(list(repo.history_root.joinpath("objects", "trees").iterdir())) == 1
     assert len(list(repo.history_root.joinpath("commits").iterdir())) == 1
+    assert [path.name for path in repo.history_root.joinpath("published").iterdir()] == [commit.commit_id]
 
 
 def test_idempotency_replays_exact_request_and_rejects_conflicting_reuse(tmp_path: Path) -> None:
@@ -301,6 +476,7 @@ def test_idempotency_replays_exact_request_and_rejects_conflicting_reuse(tmp_pat
         ("before_decision", b"old-a", (b"old-a", b"old-b"), 1),
         ("after_decision", b"new-a", (b"new-a", b"new-b"), 1),
         ("after_ref", b"new-a", (b"new-a", b"new-b"), 1),
+        ("after_publication", b"new-a", (b"new-a", b"new-b"), 1),
         ("after_idempotency", b"new-a", (b"new-a", b"new-b"), 1),
         ("after_committed", b"new-a", (b"new-a", b"new-b"), 1),
         ("after_cleanup", b"new-a", (b"new-a", b"new-b"), 0),
@@ -348,6 +524,9 @@ def test_recovery_at_decision_and_ref_boundaries_never_leaves_mixed_state(
     recovered = ManagedFileRepository(repo.root)
     assert ((repo.root / "a.md").read_bytes(), (repo.root / "b.md").read_bytes()) == expected
     assert recovered.recover() == ()
+    recovered_head = recovered.head
+    assert recovered_head is not None
+    assert recovered.inspect_commit(recovered_head).commit_id == recovered_head
     assert not any(recovered.history_root.joinpath("transactions").iterdir())
 
 
@@ -490,6 +669,11 @@ def test_aborted_orphan_commit_is_not_a_public_historical_revision(tmp_path: Pat
     assert repo.head is None
     with pytest.raises(KeyError, match="not reachable"):
         repo.read("note", at=orphan)
+    with pytest.raises(KeyError, match="unknown commit"):
+        repo.inspect_commit(orphan)
+    repo._storage.compare_and_swap_ref(None, orphan)
+    with pytest.raises(CorruptRepositoryError, match="current ref points to unpublished commit"):
+        _ = repo.current_revision
 
 
 def test_rollback_quarantines_then_restores_an_externally_raced_file(
@@ -998,6 +1182,7 @@ def test_tree_and_commit_semantics_fail_closed_even_when_records_are_content_add
     raw_changes[0]["action"] = "archive"
     fabricated = repo._storage.write_commit(record)
     repo._storage.compare_and_swap_ref(commit.commit_id, fabricated)
+    repo._storage.publish_commit(fabricated)
     with pytest.raises(CorruptRepositoryError, match="invalid archive semantics"):
         _ = repo.head
 

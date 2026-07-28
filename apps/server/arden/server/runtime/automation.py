@@ -27,7 +27,7 @@ from arden.constants import (
     BUILTIN_MEMORY_SYNTHESIZE_ID,
     BUILTIN_WIKI_MAINTENANCE_ID,
 )
-from arden.events.sse import AreasChangedEvent, AutomationSuggestionsUpdatedEvent
+from arden.events.sse import AreasChangedEvent, AutomationSuggestionsUpdatedEvent, MemoryChangedEvent
 from arden.integrations.calendar.client import MultiCalendarSource
 from arden.logging import get_logger
 from arden.monitor.calendar import CalendarMonitor
@@ -126,6 +126,25 @@ class AutomationRuntime:
         return await self.scheduler.request_delayed_run(
             BUILTIN_MEMORY_SYNTHESIZE_ID,
             timedelta(minutes=5),
+        )
+
+    async def request_wiki_maintenance(self) -> bool:
+        """Resume durable maintenance immediately after a user decision."""
+
+        return await self.scheduler.request_delayed_run(
+            BUILTIN_WIKI_MAINTENANCE_ID,
+            timedelta(0),
+        )
+
+    async def notify_wiki_maintenance_reviews_changed(self, revision: str | None) -> None:
+        """Invalidate the durable review queue in every open desktop."""
+
+        await self.scheduler.emit_automation_event(
+            MemoryChangedEvent(
+                paths=[],
+                revision=revision,
+                review_required=True,
+            )
         )
 
     async def _on_area_run_completed(self, run_completed) -> None:
@@ -417,6 +436,7 @@ class AutomationRuntime:
 
     def _build_wiki_maintenance_handler(self):
         async def handler(context: dict | None) -> str:
+            refresh_health = False
             try:
                 knowledge = self.get_knowledge()
                 if knowledge is None or not getattr(knowledge, "facts_ready", False):
@@ -452,9 +472,15 @@ class AutomationRuntime:
                     state = "current"
                 else:
                     state = "incomplete"
+                if final.blocked:
+                    # The review row is durable, but no vault file changed. Notify an
+                    # already-open desktop to refetch its review list immediately.
+                    await self.notify_wiki_maintenance_reviews_changed(final.feed_target_revision)
+                refresh_health = final.complete or final.empty
                 return f"wiki maintenance: {state}; reviewed {reviewed}; updated {updated}"
             finally:
-                await self._refresh_wiki_health()
+                if refresh_health:
+                    await self._refresh_wiki_health()
 
         return handler
 

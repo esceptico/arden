@@ -29,7 +29,12 @@ import { loadMemoryInspectorPane, MemoryInspector, persistMemoryInspectorPane, t
 import { MemoryEditor } from "@/features/memory/components/MemoryEditor";
 import { MemoryEditReview, type MemoryConflict } from "@/features/memory/components/MemoryEditReview";
 import { WikiRenameApprovalSheet } from "@/features/memory/components/WikiRenameApprovalSheet";
+import {
+  WikiMaintenanceReviewSheet,
+  WikiMaintenanceReviewStatusSheet,
+} from "@/features/memory/components/WikiMaintenanceReviewSheet";
 import { useWikiRenameApprovals } from "@/features/memory/hooks/useWikiRenameApprovals";
+import { useWikiMaintenanceReviews } from "@/features/memory/hooks/useWikiMaintenanceReviews";
 import type { WikiRenameApprovalResult } from "@/api/wiki";
 import { MemoryDiffOverlay } from "@/features/memory/components/MemoryDiffOverlay";
 import { MemoryQuickSwitcher } from "@/features/memory/components/MemoryQuickSwitcher";
@@ -314,6 +319,11 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const [workspaceEmpty, setWorkspaceEmpty] = useState(false);
   const [tabContextMenu, setTabContextMenu] = useState<MemoryTabContextMenuState | null>(null);
   const [contentDirection, setContentDirection] = useState(1);
+  const [wikiMaintenanceDraft, setWikiMaintenanceDraft] = useState<{
+    reviewKey: string;
+    manual: boolean;
+    note: string;
+  } | null>(null);
 
   const summaryRequest = useRef<SummaryRequest | null>(null);
   const recordsRequestId = useRef(0);
@@ -344,6 +354,8 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const memoryChangeDrainRef = useRef<(() => Promise<void>) | null>(null);
   const diffReturnFocus = useRef<HTMLElement | null>(null);
   const wikiRenameReturnFocus = useRef<HTMLElement | null>(null);
+  const wikiMaintenanceReturnFocus = useRef<HTMLElement | null>(null);
+  const wikiMaintenanceWasVisible = useRef(false);
   const wikiRenameFocusPath = useRef<string | null>(null);
   const restoreNoteFocus = useRef(false);
   const mountedRef = useRef(true);
@@ -564,13 +576,39 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     resolve: resolveWikiRename,
   } = useWikiRenameApprovals(config, refreshAfterWikiRename);
   const wikiRenameBlocked = wikiRenameDraft != null || activeWikiRenameApproval != null;
-  const navigationDisabled = reviewPending || wikiRenameBlocked;
+  const {
+    reviews: wikiMaintenanceReviews,
+    activeReview: activeWikiMaintenanceReview,
+    pending: wikiMaintenancePending,
+    error: wikiMaintenanceError,
+    verification: wikiMaintenanceVerification,
+    reconciliationRequired: wikiMaintenanceReconciliationRequired,
+    refresh: refreshWikiMaintenanceReviews,
+    resolve: resolveWikiMaintenanceReview,
+  } = useWikiMaintenanceReviews(config);
+  const wikiMaintenanceReviewKey = activeWikiMaintenanceReview == null
+    ? null
+    : `${activeWikiMaintenanceReview.reviewId}:${activeWikiMaintenanceReview.generation}`;
+  const activeWikiMaintenanceDraft =
+    wikiMaintenanceDraft?.reviewKey === wikiMaintenanceReviewKey
+      ? wikiMaintenanceDraft
+      : { reviewKey: wikiMaintenanceReviewKey ?? "", manual: false, note: "" };
+  const wikiMaintenanceBlocked =
+    activeWikiMaintenanceReview != null || wikiMaintenanceVerification !== "ready";
+  const wikiMaintenanceVisible =
+    wikiMaintenanceBlocked && !editReview && !wikiRenameBlocked && !diffEvent;
+  const navigationDisabled = reviewPending || wikiRenameBlocked || wikiMaintenanceBlocked;
 
   useEffect(() => {
-    if (!wikiRenameBlocked) return;
+    if (wikiMaintenanceDraft == null || wikiMaintenanceDraft.reviewKey === wikiMaintenanceReviewKey) return;
+    setWikiMaintenanceDraft(null);
+  }, [wikiMaintenanceDraft, wikiMaintenanceReviewKey]);
+
+  useEffect(() => {
+    if (!wikiRenameBlocked && !wikiMaintenanceBlocked) return;
     setSwitcherOpen(false);
     setTabContextMenu(null);
-  }, [wikiRenameBlocked]);
+  }, [wikiMaintenanceBlocked, wikiRenameBlocked]);
 
   useEffect(() => {
     if (wikiRenameDraft || activeWikiRenameApproval || !wikiRenameReturnFocus.current) return;
@@ -582,6 +620,99 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     }, 0);
     return () => window.clearTimeout(timer);
   }, [activeWikiRenameApproval, wikiRenameDraft]);
+
+  useLayoutEffect(() => {
+    if (!wikiMaintenanceVisible || wikiMaintenanceWasVisible.current) return;
+    wikiMaintenanceWasVisible.current = true;
+    const active = document.activeElement;
+    if (
+      active instanceof HTMLElement
+      && active !== document.body
+      && !active.closest("[data-wiki-maintenance-review], [data-wiki-maintenance-status]")
+    ) {
+      wikiMaintenanceReturnFocus.current = active;
+    }
+  }, [wikiMaintenanceVisible]);
+
+  useEffect(() => {
+    if (
+      wikiMaintenanceVisible ||
+      wikiMaintenanceBlocked ||
+      editReview ||
+      wikiRenameBlocked ||
+      diffEvent ||
+      !wikiMaintenanceWasVisible.current
+    ) {
+      return;
+    }
+    const trigger = wikiMaintenanceReturnFocus.current;
+    let attempts = 0;
+    let timer: number | null = null;
+    let restored = false;
+    const complete = () => {
+      wikiMaintenanceReturnFocus.current = null;
+      wikiMaintenanceWasVisible.current = false;
+      restored = true;
+    };
+    const restoreFocus = () => {
+      if (restored) return;
+      const current = document.activeElement;
+      if (
+        current instanceof HTMLElement
+        && current !== document.body
+        && current.isConnected
+        && !current.closest("[inert], [data-wiki-maintenance-review], [data-wiki-maintenance-status]")
+      ) {
+        complete();
+        return;
+      }
+      if (trigger?.isConnected && !trigger.closest("[inert]")) {
+        trigger.focus({ preventScroll: true });
+        if (document.activeElement === trigger) {
+          complete();
+          return;
+        }
+      }
+      const path = selectedMetaRef.current?.path;
+      const notes = Array.from(layoutRef.current?.querySelectorAll<HTMLElement>("[data-memory-note-path]") ?? []);
+      const note = notes.filter((candidate) => candidate.dataset.memoryNotePath === path).at(-1) ?? notes.at(-1);
+      note?.focus({ preventScroll: true });
+      if (note && document.activeElement === note) {
+        complete();
+        return;
+      }
+      // An intentionally empty workspace has no note transition to wait for.
+      // Return focus to the persistent shell control immediately instead of
+      // letting the page sit on body through the retry window.
+      if (workspaceEmpty) {
+        const sidebarToggle = layoutRef.current?.querySelector<HTMLButtonElement>("button.sidebar-toggle:not(:disabled)");
+        const fallback = sidebarToggle && !sidebarToggle.closest("[inert]") ? sidebarToggle : layoutRef.current;
+        fallback?.focus({ preventScroll: true });
+        complete();
+        return;
+      }
+      attempts += 1;
+      if (attempts < 40) {
+        timer = window.setTimeout(restoreFocus, 16);
+        return;
+      }
+      const sidebarToggle = layoutRef.current?.querySelector<HTMLButtonElement>("button.sidebar-toggle:not(:disabled)");
+      const fallback = sidebarToggle && !sidebarToggle.closest("[inert]") ? sidebarToggle : layoutRef.current;
+      fallback?.focus({ preventScroll: true });
+      complete();
+    };
+    queueMicrotask(restoreFocus);
+    return () => {
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [
+    diffEvent,
+    editReview,
+    wikiMaintenanceBlocked,
+    wikiMaintenanceVisible,
+    wikiRenameBlocked,
+    workspaceEmpty,
+  ]);
 
   const navigableArtifacts = useMemo(() => artifacts.filter((artifact) => artifact.source === "wiki" || isNotebookResourcePath(artifact.path)), [artifacts]);
   const titleByPath = useMemo(() => new Map(navigableArtifacts.map((artifact) => [artifact.path, displayTitle(artifact)])), [navigableArtifacts]);
@@ -1523,7 +1654,16 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   }, [beginEditing, editReview, editing, navigationDisabled, requestEditPreview, visibleDetail]);
 
   useEffect(() => {
-    if (!restoreNoteFocus.current || wikiRenameBlocked || editing || editReview || !visibleDetail) return;
+    if (
+      !restoreNoteFocus.current ||
+      wikiRenameBlocked ||
+      wikiMaintenanceBlocked ||
+      editing ||
+      editReview ||
+      !visibleDetail
+    ) {
+      return;
+    }
     // Keep the flag set until focus actually lands: the mode crossfade tears
     // the previous panel down ~200ms in, blurring to body, and visibleDetail
     // refreshes re-run this effect (cancelling naive timers) in between.
@@ -1541,7 +1681,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     queueMicrotask(tryFocus);
     const retry = window.setTimeout(tryFocus, 260);
     return () => window.clearTimeout(retry);
-  }, [editReview, editing, visibleDetail, wikiRenameBlocked]);
+  }, [editReview, editing, visibleDetail, wikiMaintenanceBlocked, wikiRenameBlocked]);
 
   const reviewPresentation = useMemo(() => {
     if (!editReview) return null;
@@ -1558,6 +1698,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     <div
       ref={layoutRef}
       data-memory-layout="notebook"
+      tabIndex={-1}
       className={clsx(
         "memory-ws",
         railHidden && "rail-hidden",
@@ -1565,13 +1706,21 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
         editing && !editReview && "note-editing",
         editReview && "review-open",
         (wikiRenameDraft || activeWikiRenameApproval) && "rename-open",
+        wikiMaintenanceVisible && "maintenance-review-open",
         diffEvent && "diff-open",
         reviewClosing && "review-closing",
         diffClosing && "diff-closing",
       )}
     >
       <div className="memory-focus-cache">
-        <div className="memory-focus-plane" inert={editReview || diffEvent || wikiRenameDraft || activeWikiRenameApproval ? true : undefined}>
+        <div
+          className="memory-focus-plane"
+          inert={
+            editReview || diffEvent || wikiRenameDraft || activeWikiRenameApproval || wikiMaintenanceVisible
+              ? true
+              : undefined
+          }
+        >
           {/* The rail toggle stays pinned by the traffic lights while the
           floating rail moves beneath it. */}
           <SidebarToggle hidden={railHidden} onToggle={() => setRailHidden((hidden) => !hidden)} />
@@ -1926,6 +2075,47 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
           onReconcile={() => void reconcileWikiRename()}
           onAccept={(approvalId) => void resolveWikiRename(approvalId, "accept")}
           onReject={(approvalId) => void resolveWikiRename(approvalId, "reject")}
+        />
+      )}
+
+      {wikiMaintenanceVisible && activeWikiMaintenanceReview && (
+        <WikiMaintenanceReviewSheet
+          key={`${activeWikiMaintenanceReview.reviewId}:${activeWikiMaintenanceReview.generation}`}
+          config={config}
+          review={activeWikiMaintenanceReview}
+          position={1}
+          total={wikiMaintenanceReviews.length}
+          pending={wikiMaintenancePending}
+          checking={wikiMaintenanceVerification === "loading"}
+          reconciliationRequired={wikiMaintenanceReconciliationRequired}
+          error={wikiMaintenanceError}
+          manual={activeWikiMaintenanceDraft.manual}
+          note={activeWikiMaintenanceDraft.note}
+          onManualChange={(manual) => {
+            if (!wikiMaintenanceReviewKey) return;
+            setWikiMaintenanceDraft((current) => ({
+              reviewKey: wikiMaintenanceReviewKey,
+              manual,
+              note: current?.reviewKey === wikiMaintenanceReviewKey ? current.note : "",
+            }));
+          }}
+          onNoteChange={(note) => {
+            if (!wikiMaintenanceReviewKey) return;
+            setWikiMaintenanceDraft((current) => ({
+              reviewKey: wikiMaintenanceReviewKey,
+              manual: current?.reviewKey === wikiMaintenanceReviewKey ? current.manual : true,
+              note,
+            }));
+          }}
+          onReconcile={() => void refreshWikiMaintenanceReviews(true)}
+          onResolve={(review, decision) => void resolveWikiMaintenanceReview(review, decision)}
+        />
+      )}
+
+      {wikiMaintenanceVisible && !activeWikiMaintenanceReview && (
+        <WikiMaintenanceReviewStatusSheet
+          error={wikiMaintenanceVerification === "error" ? wikiMaintenanceError : null}
+          onRetry={() => void refreshWikiMaintenanceReviews(true)}
         />
       )}
     </div>

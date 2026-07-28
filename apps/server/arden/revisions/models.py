@@ -201,6 +201,35 @@ class ResourceDiff:
 
 
 @dataclass(frozen=True)
+class ResourceDiffPage:
+    resource_id: str
+    before: ResourceVersion | None
+    after: ResourceVersion | None
+    offset: int
+    end_offset: int
+    has_more: bool
+    unified_diff: str
+
+    def __post_init__(self) -> None:
+        _require_text(self.resource_id, "resource_id")
+        if (
+            isinstance(self.offset, bool)
+            or not isinstance(self.offset, int)
+            or isinstance(self.end_offset, bool)
+            or not isinstance(self.end_offset, int)
+            or self.offset < 0
+            or self.end_offset < self.offset
+        ):
+            raise ValueError("diff page offsets must be ordered nonnegative integers")
+        if not isinstance(self.has_more, bool):
+            raise TypeError("has_more must be a bool")
+        if not isinstance(self.unified_diff, str):
+            raise TypeError("unified_diff must be a string")
+        if len(self.unified_diff) != self.end_offset - self.offset:
+            raise ValueError("diff page offsets must match its text length")
+
+
+@dataclass(frozen=True)
 class IntegrityIssue:
     code: str
     target: str

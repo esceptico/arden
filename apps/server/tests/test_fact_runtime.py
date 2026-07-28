@@ -6,6 +6,7 @@ from fastapi import HTTPException
 from arden.config import Config
 from arden.constants import BUILTIN_MEMORY_SYNTHESIZE_ID, BUILTIN_WIKI_MAINTENANCE_ID
 from arden.context.models import SessionState
+from arden.events.sse import MemoryChangedEvent
 from arden.memory.facts import (
     MARKER_NAME,
     FactConsumerStore,
@@ -395,7 +396,7 @@ async def test_wiki_maintenance_waits_for_the_durable_synthesis_checkpoint_and_r
         monkeypatch.setattr(runtime.automation, "synthesis_is_current", current)
         assert await handler(None) == "wiki maintenance: current; reviewed 2; updated 2"
         assert maintenance.calls == 2
-        assert health_calls == 2
+        assert health_calls == 1
     finally:
         await runtime.close()
 
@@ -434,6 +435,51 @@ async def test_wiki_maintenance_second_write_stops_the_bounded_handler(tmp_path,
             "wiki maintenance: fresh-feed continuation deferred; reviewed 2; updated 2"
         )
         assert maintenance.calls == 2
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_blocked_wiki_maintenance_notifies_open_desktops(tmp_path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    _seed_fact(config)
+    runtime = Runtime(config)
+    await runtime.connect()
+    try:
+        assert runtime.automation is not None
+
+        async def current() -> bool:
+            return True
+
+        class _Maintenance:
+            async def run(self):
+                return WikiMaintenanceResult(
+                    "c" * 64,
+                    "b" * 64,
+                    blocked=True,
+                    reviewed_commits=1,
+                )
+
+        emitted: list[MemoryChangedEvent] = []
+
+        async def emit(event):
+            emitted.append(event)
+
+        async def reject_health() -> None:
+            raise AssertionError("a blocked bounded pass must not start a full health audit")
+
+        monkeypatch.setattr(runtime.automation, "synthesis_is_current", current)
+        monkeypatch.setattr(runtime.automation, "get_wiki_maintenance", lambda: _Maintenance())
+        monkeypatch.setattr(runtime.automation.scheduler, "emit_automation_event", emit)
+        monkeypatch.setattr(runtime.automation, "project_wiki_health", reject_health)
+
+        assert await runtime.automation._build_wiki_maintenance_handler()(None) == (
+            "wiki maintenance: needs user review; reviewed 1; updated 0"
+        )
+        assert len(emitted) == 1
+        assert emitted[0].paths == []
+        assert emitted[0].revision == "c" * 64
+        assert emitted[0].review_required is True
     finally:
         await runtime.close()
 
@@ -505,7 +551,7 @@ async def test_fact_mode_scheduler_registers_the_wiki_maintenance_handler(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_runtime_health_tracks_synthesis_and_index_checkpoints(tmp_path) -> None:
+async def test_runtime_health_tracks_synthesis_and_index_checkpoints(tmp_path, monkeypatch) -> None:
     config = _config(tmp_path)
     _seed_fact(config)
     runtime = Runtime(config)
@@ -521,6 +567,10 @@ async def test_runtime_health_tracks_synthesis_and_index_checkpoints(tmp_path) -
         health = runtime.wiki_service.read_page("health").page.body.decode()
         assert "| Synthesis | behind | `none` | never |" in health
 
+        def reject_full_diff(*_args, **_kwargs):
+            raise AssertionError("health projection must not materialize wiki diffs")
+
+        monkeypatch.setattr(runtime.wiki_repository, "diff", reject_full_diff)
         feed = await runtime.fact_service.changes_since(None)
         await runtime._fact_consumer_store.advance(
             FACT_SYNTHESIS_CONSUMER_ID,

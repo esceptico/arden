@@ -47,6 +47,7 @@ function installViewBridge() {
   const index = rawArtifact("index.md", "Index", "Index body");
   const note = rawArtifact("note.md", "Note", "Note body");
   window.ardenDesktop = { api: { request: async (_config, request) => {
+    if (request.path === "/admin/wiki/maintenance-reviews") return response({ reviews: [] });
     if (request.path === "/admin/memory/artifacts") return response({ artifacts: [index, note] });
     if (request.path.startsWith("/admin/memory/links")) return response({ path: "note.md", revision: "ledger:1", stale: false, outgoing: [], backlinks: [], unlinked: [], total_outgoing: 0, total_backlinks: 0, limit: 100, offset: 0 });
     if (request.path.startsWith("/admin/memory/page-edits/history")) return response({ events: [], total: 0, limit: 100, next_before_sequence: null });
@@ -373,6 +374,7 @@ test("the open inspector keeps its rendered shell while a new page detail loads"
     resolveNote = resolve;
   });
   window.ardenDesktop = { api: { request: async (_config, request) => {
+    if (request.path === "/admin/wiki/maintenance-reviews") return response({ reviews: [] });
     if (request.path === "/admin/memory/artifacts") return response({ artifacts: [index, note] });
     if (request.path.startsWith("/admin/memory/links")) {
       return response({ path: "index.md", revision: "ledger:1", stale: false, outgoing: [], backlinks: [], unlinked: [], total_outgoing: 0, total_backlinks: 0, limit: 100, offset: 0 });

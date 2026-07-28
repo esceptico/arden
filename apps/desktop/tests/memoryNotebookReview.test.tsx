@@ -60,6 +60,7 @@ function installBridge(handler: (
       request: async (_config, request) => {
         const method = request.method ?? "GET";
         requests.push({ path: request.path, method });
+        if (request.path === "/admin/wiki/maintenance-reviews" && method === "GET") return response({ reviews: [] });
         return handler(request.path, method);
       },
     },
