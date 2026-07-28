@@ -26,6 +26,18 @@ class _Reconciler:
         return self.answer
 
 
+def test_memory_read_routes_return_503_only_without_any_source() -> None:
+    app = FastAPI()
+    app.include_router(memory_router)
+    app.dependency_overrides[require_knowledge_runtime] = lambda: SimpleNamespace(artifact_store=None)
+
+    with TestClient(app) as client:
+        assert client.get("/admin/memory/artifacts").status_code == 503
+        assert client.post("/admin/memory/artifacts/rebuild").status_code == 503
+        assert client.get("/admin/memory/artifacts/missing.md").status_code == 503
+        assert client.get("/admin/memory/links", params={"path": "missing.md"}).status_code == 503
+
+
 @pytest.mark.asyncio
 async def test_legacy_memory_surfaces_exclude_the_managed_wiki_subtree(tmp_path: Path):
     vault = tmp_path / "memory"
