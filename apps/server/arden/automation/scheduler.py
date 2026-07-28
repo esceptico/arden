@@ -338,6 +338,45 @@ class Scheduler:
         self._wake_deadline = deadline
         self._wake_task = asyncio.create_task(self._wake_at(deadline))
 
+    @staticmethod
+    def _time_trigger_backstop(automation: Automation, now: datetime) -> datetime | None:
+        """Return the next natural time-trigger slot, independent of a debounce."""
+        trigger = next((t for t in automation.triggers if isinstance(t, TimeTrigger)), None)
+        if trigger is None:
+            return None
+        # Interval schedules are anchored to their last completed run.  Wall
+        # clock schedules derive directly from now and need no stored anchor.
+        ref = (automation.last_run_at or automation.created_at) if trigger.every else now
+        next_run = trigger.next_run(ref)
+        while next_run <= now:
+            next_run = trigger.next_run(next_run)
+        return next_run
+
+    async def request_delayed_run(self, task_id: str, delay: timedelta) -> bool:
+        """Reset one enabled task's delayed run, retaining its time-trigger cap.
+
+        An active run already satisfies the reliability cadence, so only idle
+        tasks are capped at their independently derived next time-trigger slot.
+        """
+        if delay < timedelta(0):
+            raise ValueError("delay must not be negative")
+        automation = await self.store.get(task_id)
+        if automation is None or not automation.enabled:
+            return False
+
+        now = datetime.now(UTC)
+        requested = now + delay
+        if automation.running_since is None:
+            backstop = self._time_trigger_backstop(automation, now)
+            if backstop is not None:
+                requested = min(requested, backstop)
+
+        if not await self.store.set_next_run_if_enabled(task_id, requested):
+            return False
+        self._schedule_wake(requested)
+        self._wake_event.set()
+        return True
+
     async def _wake_at(self, deadline: datetime) -> None:
         try:
             delay = max(0.0, (deadline - datetime.now(UTC)).total_seconds())
@@ -492,13 +531,25 @@ class Scheduler:
         # finally block to advance *again*, shifting the schedule forward
         # by one extra interval every fire.
         try:
+            next_run: datetime | None = None
             if automation.enabled:
                 now = datetime.now(UTC)
                 next_run = self._advance_to_future(automation, now)
-                if next_run is not None:
-                    await self.store.set_next_run(automation.task_id, next_run)
+                prewrote = await self.store.compare_and_set_next_run(
+                    automation.task_id,
+                    automation.next_run_at,
+                    next_run,
+                )
+                if prewrote and next_run is not None:
                     self._schedule_wake(next_run)
-            execution = asyncio.create_task(self._run_and_finalize(automation, context))
+            execution = asyncio.create_task(
+                self._run_and_finalize(
+                    automation,
+                    context,
+                    prewritten_next_run=next_run,
+                    has_prewritten_next_run=True,
+                )
+            )
             self._track(execution, automation.task_id)
             self._pending_running_task_ids.discard(automation.task_id)
         except BaseException:
@@ -520,6 +571,8 @@ class Scheduler:
         context: str | dict | None = None,
         event_queue_id: int | None = None,
         event_attempt_count: int = 0,
+        prewritten_next_run: datetime | None = None,
+        has_prewritten_next_run: bool = False,
     ) -> None:
         await self.emit_automation_event(
             AutomationProgressEvent(task_id=automation.task_id, status="starting..."),
@@ -567,9 +620,19 @@ class Scheduler:
                 next_run = self._advance_to_future(automation, now) if automation.enabled else None
                 # Detached: advance the clock but keep last_result — the real
                 # report lands via RunCompleted.
-                await self.store.update_last_run(
-                    automation.task_id, now, next_run, result=result_text, preserve_result=detached
-                )
+                if not has_prewritten_next_run:
+                    await self.store.update_last_run(
+                        automation.task_id, now, next_run, result=result_text, preserve_result=detached
+                    )
+                else:
+                    await self.store.update_last_run_if_next_run(
+                        automation.task_id,
+                        now,
+                        next_run,
+                        prewritten_next_run,
+                        result=result_text,
+                        preserve_result=detached,
+                    )
                 if any(t.one_shot for t in automation.triggers):
                     await self.store.set_enabled(automation.task_id, False)
             except Exception:

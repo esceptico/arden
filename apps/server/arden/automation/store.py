@@ -347,6 +347,31 @@ _SQL_SET_NEXT_RUN = """
 UPDATE scheduled_tasks SET next_run_at = ? WHERE task_id = ?
 """
 
+_SQL_SET_NEXT_RUN_IF_ENABLED = """
+UPDATE scheduled_tasks SET next_run_at = ? WHERE task_id = ? AND enabled = 1
+"""
+
+_SQL_COMPARE_AND_SET_NEXT_RUN = """
+UPDATE scheduled_tasks
+SET next_run_at = ?
+WHERE task_id = ? AND next_run_at IS ?
+"""
+
+_SQL_UPDATE_LAST_RUN_IF_NEXT_RUN = """
+UPDATE scheduled_tasks
+SET last_run_at = ?,
+    next_run_at = CASE WHEN next_run_at IS ? THEN ? ELSE next_run_at END,
+    last_result = ?
+WHERE task_id = ?
+"""
+
+_SQL_UPDATE_LAST_RUN_KEEP_RESULT_IF_NEXT_RUN = """
+UPDATE scheduled_tasks
+SET last_run_at = ?,
+    next_run_at = CASE WHEN next_run_at IS ? THEN ? ELSE next_run_at END
+WHERE task_id = ?
+"""
+
 _SQL_SET_LAST_RESULT = """
 UPDATE scheduled_tasks SET last_result = ? WHERE task_id = ?
 """
@@ -1382,6 +1407,39 @@ class AutomationStore:
             )
         await self.conn.commit()
 
+    async def update_last_run_if_next_run(
+        self,
+        task_id: str,
+        last_run: datetime,
+        next_run: datetime | None,
+        expected_next_run: datetime | None,
+        result: str | None = None,
+        *,
+        preserve_result: bool = False,
+    ) -> None:
+        """Finish a run without replacing a later external reschedule.
+
+        The scheduler writes ``expected_next_run`` before dispatch.  If a
+        debounce changes it while the handler is running, this one statement
+        still records the result but leaves the newer due time intact.
+        """
+        params = (
+            last_run.isoformat(),
+            expected_next_run.isoformat() if expected_next_run else None,
+            next_run.isoformat() if next_run else None,
+        )
+        if preserve_result:
+            await self.conn.execute(
+                _SQL_UPDATE_LAST_RUN_KEEP_RESULT_IF_NEXT_RUN,
+                (*params, task_id),
+            )
+        else:
+            await self.conn.execute(
+                _SQL_UPDATE_LAST_RUN_IF_NEXT_RUN,
+                (*params, result, task_id),
+            )
+        await self.conn.commit()
+
     async def record_run_start(self, task_id: str, started_at: datetime) -> int:
         cursor = await self.conn.execute(_SQL_INSERT_RUN, (task_id, started_at.isoformat()))
         await self.conn.commit()
@@ -1550,6 +1608,29 @@ class AutomationStore:
     async def set_next_run(self, task_id: str, next_run: datetime) -> None:
         await self.conn.execute(_SQL_SET_NEXT_RUN, (next_run.isoformat(), task_id))
         await self.conn.commit()
+
+    async def set_next_run_if_enabled(self, task_id: str, next_run: datetime) -> bool:
+        cursor = await self.conn.execute(_SQL_SET_NEXT_RUN_IF_ENABLED, (next_run.isoformat(), task_id))
+        await self.conn.commit()
+        return cursor.rowcount > 0
+
+    async def compare_and_set_next_run(
+        self,
+        task_id: str,
+        expected_next_run: datetime | None,
+        next_run: datetime | None,
+    ) -> bool:
+        """Set the due time only when its persisted value is still expected."""
+        cursor = await self.conn.execute(
+            _SQL_COMPARE_AND_SET_NEXT_RUN,
+            (
+                next_run.isoformat() if next_run else None,
+                task_id,
+                expected_next_run.isoformat() if expected_next_run else None,
+            ),
+        )
+        await self.conn.commit()
+        return cursor.rowcount > 0
 
     async def set_last_result(self, task_id: str, result: str | None) -> None:
         # Bound the stored text so a chatty run can't bloat the row.

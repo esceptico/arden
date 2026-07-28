@@ -78,6 +78,59 @@ async def test_update_last_run_preserve_result(automation_store: AutomationStore
     assert auto.last_run_at == t0 + timedelta(hours=1)
 
 
+async def test_update_last_run_if_next_run_preserves_external_reschedule(automation_store: AutomationStore):
+    initial = datetime(2026, 1, 1, tzinfo=UTC)
+    prewritten = initial + timedelta(hours=6)
+    external = initial + timedelta(minutes=5)
+    await automation_store.save(_automation("loop-1", next_run_at=prewritten))
+    await automation_store.set_next_run("loop-1", external)
+
+    await automation_store.update_last_run_if_next_run(
+        "loop-1",
+        initial,
+        initial + timedelta(hours=12),
+        prewritten,
+        result="completed",
+    )
+
+    auto = await automation_store.get("loop-1")
+    assert auto is not None
+    assert auto.last_run_at == initial
+    assert auto.last_result == "completed"
+    assert auto.next_run_at == external
+
+
+async def test_update_last_run_if_null_next_run_preserves_external_reschedule(automation_store: AutomationStore):
+    initial = datetime(2026, 1, 1, tzinfo=UTC)
+    external = initial + timedelta(minutes=5)
+    await automation_store.save(_automation("loop-1", next_run_at=None))
+    await automation_store.set_next_run("loop-1", external)
+
+    await automation_store.update_last_run_if_next_run(
+        "loop-1",
+        initial,
+        initial + timedelta(hours=12),
+        None,
+        result="completed",
+    )
+
+    auto = await automation_store.get("loop-1")
+    assert auto is not None
+    assert auto.last_run_at == initial
+    assert auto.last_result == "completed"
+    assert auto.next_run_at == external
+
+
+async def test_compare_and_set_next_run_supports_null_expected_value(automation_store: AutomationStore):
+    due = datetime(2026, 1, 1, tzinfo=UTC)
+    await automation_store.save(_automation("loop-1", next_run_at=None))
+
+    assert await automation_store.compare_and_set_next_run("loop-1", None, due)
+    assert not await automation_store.compare_and_set_next_run("loop-1", None, due + timedelta(hours=1))
+    auto = await automation_store.get("loop-1")
+    assert auto is not None and auto.next_run_at == due
+
+
 async def test_run_history_records_start_then_finish(automation_store: AutomationStore):
     t0 = datetime(2026, 1, 1, tzinfo=UTC)
     run_id = await automation_store.record_run_start("task-1", t0)

@@ -282,14 +282,14 @@ async def test_pending_running_claim_is_not_cleared_before_task_is_tracked(store
     sched, dispatched = _make_scheduler(store)
     entered = asyncio.Event()
     release = asyncio.Event()
-    original_set_next_run = store.set_next_run
+    original_compare_and_set_next_run = store.compare_and_set_next_run
 
-    async def blocked_set_next_run(*args, **kwargs):
+    async def blocked_compare_and_set_next_run(*args, **kwargs):
         entered.set()
         await release.wait()
-        return await original_set_next_run(*args, **kwargs)
+        return await original_compare_and_set_next_run(*args, **kwargs)
 
-    monkeypatch.setattr(store, "set_next_run", blocked_set_next_run)
+    monkeypatch.setattr(store, "compare_and_set_next_run", blocked_compare_and_set_next_run)
 
     start_task = asyncio.create_task(sched._start_run(auto))
     await asyncio.wait_for(entered.wait(), timeout=1)
@@ -377,6 +377,201 @@ async def test_scheduler_wakes_at_rescheduled_loop_time(store: AutomationStore):
         await sched._wake_task
     except asyncio.CancelledError:
         pass
+
+
+@pytest.mark.asyncio
+async def test_request_delayed_run_resets_bursts_and_caps_at_time_backstop(store: AutomationStore):
+    now = datetime.now(UTC)
+    auto = _loop(every="6h", next_run_at=now + timedelta(hours=6))
+    auto.last_run_at = now - timedelta(hours=5, minutes=58)
+    await store.save(auto)
+    sched, _ = _make_scheduler(store)
+
+    assert await sched.request_delayed_run(auto.task_id, timedelta(minutes=5))
+    capped = await store.get(auto.task_id)
+    assert capped is not None
+    expected_backstop = auto.triggers[0].next_run(auto.last_run_at)
+    assert capped.next_run_at == expected_backstop
+
+    auto.last_run_at = now
+    auto.next_run_at = now + timedelta(hours=6)
+    await store.save(auto)
+    assert await sched.request_delayed_run(auto.task_id, timedelta(minutes=5))
+    first = await store.get(auto.task_id)
+    assert first is not None and first.next_run_at is not None
+    await asyncio.sleep(0.01)
+    assert await sched.request_delayed_run(auto.task_id, timedelta(minutes=5))
+    second = await store.get(auto.task_id)
+    assert second is not None and second.next_run_at is not None
+    assert second.next_run_at > first.next_run_at
+
+    if sched._wake_task:
+        sched._wake_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await sched._wake_task
+
+
+@pytest.mark.asyncio
+async def test_request_delayed_run_is_noop_for_missing_or_disabled_task(store: AutomationStore):
+    sched, _ = _make_scheduler(store)
+    assert not await sched.request_delayed_run("missing", timedelta(minutes=5))
+
+    auto = _loop()
+    auto.enabled = False
+    initial = auto.next_run_at
+    await store.save(auto)
+    assert not await sched.request_delayed_run(auto.task_id, timedelta(minutes=5))
+    reloaded = await store.get(auto.task_id)
+    assert reloaded is not None and reloaded.next_run_at == initial
+
+
+@pytest.mark.asyncio
+async def test_during_run_debounce_survives_finalization(store: AutomationStore):
+    auto = _loop(read_history=False, every="6h")
+    auto.handler = "blocking"
+    auto.thread_id = None
+    auto.last_run_at = datetime.now(UTC) - timedelta(hours=5, minutes=58)
+    natural_backstop = auto.triggers[0].next_run(auto.last_run_at)
+    await store.save(auto)
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def blocking(_ctx: dict | None) -> str:
+        started.set()
+        await release.wait()
+        return "done"
+
+    sched = Scheduler(store=store, build_deps=lambda: None)
+    sched.register_handler("blocking", blocking)
+    await sched._start_run(auto)
+    await asyncio.wait_for(started.wait(), timeout=1)
+    assert await sched.request_delayed_run(auto.task_id, timedelta(minutes=5))
+    delayed = await store.get(auto.task_id)
+    assert delayed is not None and delayed.next_run_at is not None
+    assert delayed.next_run_at > natural_backstop
+
+    release.set()
+    for task in list(sched._running):
+        await task
+
+    reloaded = await store.get(auto.task_id)
+    assert reloaded is not None
+    assert reloaded.next_run_at == delayed.next_run_at
+
+
+@pytest.mark.asyncio
+async def test_null_prewrite_preserves_during_run_reschedule(store: AutomationStore):
+    auto = _loop(read_history=False)
+    auto.handler = "blocking"
+    auto.thread_id = None
+    auto.triggers = []
+    auto.next_run_at = None
+    await store.save(auto)
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def blocking(_ctx: dict | None) -> str:
+        started.set()
+        await release.wait()
+        return "done"
+
+    sched = Scheduler(store=store, build_deps=lambda: None)
+    sched.register_handler("blocking", blocking)
+    finalize = asyncio.create_task(
+        sched._run_and_finalize(auto, prewritten_next_run=None, has_prewritten_next_run=True)
+    )
+    await asyncio.wait_for(started.wait(), timeout=1)
+    delayed = datetime.now(UTC) + timedelta(minutes=5)
+    await store.set_next_run(auto.task_id, delayed)
+    release.set()
+    await finalize
+
+    reloaded = await store.get(auto.task_id)
+    assert reloaded is not None
+    assert reloaded.next_run_at == delayed
+
+
+@pytest.mark.asyncio
+async def test_delayed_reset_wins_race_with_timed_run_prewrite(store: AutomationStore, monkeypatch):
+    auto = _loop(read_history=False, every="6h")
+    auto.handler = "blocking"
+    auto.thread_id = None
+    await store.save(auto)
+    started = asyncio.Event()
+    release_handler = asyncio.Event()
+    entered_prewrite = asyncio.Event()
+    release_prewrite = asyncio.Event()
+    original_compare = store.compare_and_set_next_run
+
+    async def blocking(_ctx: dict | None) -> str:
+        started.set()
+        await release_handler.wait()
+        return "done"
+
+    async def blocked_compare(*args, **kwargs):
+        entered_prewrite.set()
+        await release_prewrite.wait()
+        return await original_compare(*args, **kwargs)
+
+    sched = Scheduler(store=store, build_deps=lambda: None)
+    sched.register_handler("blocking", blocking)
+    monkeypatch.setattr(store, "compare_and_set_next_run", blocked_compare)
+    tick = asyncio.create_task(sched._tick())
+    await asyncio.wait_for(entered_prewrite.wait(), timeout=1)
+    assert await sched.request_delayed_run(auto.task_id, timedelta(minutes=5))
+    delayed = await store.get(auto.task_id)
+    assert delayed is not None and delayed.next_run_at is not None
+    release_prewrite.set()
+    await tick
+    await asyncio.wait_for(started.wait(), timeout=1)
+    release_handler.set()
+    for task in list(sched._running):
+        await task
+
+    reloaded = await store.get(auto.task_id)
+    assert reloaded is not None and reloaded.next_run_at == delayed.next_run_at
+
+
+@pytest.mark.asyncio
+async def test_delayed_reset_wins_race_with_null_run_prewrite(store: AutomationStore, monkeypatch):
+    auto = _loop(read_history=False)
+    auto.handler = "blocking"
+    auto.thread_id = None
+    auto.triggers = []
+    auto.next_run_at = None
+    await store.save(auto)
+    started = asyncio.Event()
+    release_handler = asyncio.Event()
+    entered_prewrite = asyncio.Event()
+    release_prewrite = asyncio.Event()
+    original_compare = store.compare_and_set_next_run
+
+    async def blocking(_ctx: dict | None) -> str:
+        started.set()
+        await release_handler.wait()
+        return "done"
+
+    async def blocked_compare(*args, **kwargs):
+        entered_prewrite.set()
+        await release_prewrite.wait()
+        return await original_compare(*args, **kwargs)
+
+    sched = Scheduler(store=store, build_deps=lambda: None)
+    sched.register_handler("blocking", blocking)
+    monkeypatch.setattr(store, "compare_and_set_next_run", blocked_compare)
+    sched.schedule_run(auto.task_id)
+    await asyncio.wait_for(entered_prewrite.wait(), timeout=1)
+    assert await sched.request_delayed_run(auto.task_id, timedelta(minutes=5))
+    delayed = await store.get(auto.task_id)
+    assert delayed is not None and delayed.next_run_at is not None
+    release_prewrite.set()
+    await asyncio.wait_for(started.wait(), timeout=1)
+    release_handler.set()
+    for task in list(sched._running):
+        await task
+
+    reloaded = await store.get(auto.task_id)
+    assert reloaded is not None and reloaded.next_run_at == delayed.next_run_at
 
 
 @pytest.mark.asyncio
