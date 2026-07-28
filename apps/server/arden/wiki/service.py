@@ -188,14 +188,13 @@ class WikiService:
                     metadata=metadata,
                 )
                 page = self._parse(Create(target.page_id, target.path, content), content)
-                for name in self._names(page, target.path):
-                    normalized = self._normal(name)
+                for normalized in {self._normal(name) for name in self._names(page, target.path)}:
                     if normalized in prospective_names:
                         raise WikiAmbiguityError(f"wiki name already exists: {normalized}")
                     prospective_names[normalized] = target.page_id
             else:
                 current = extract_generated_region(record.content, expected_page_id=target.page_id)
-                prior_exists, prior = self._last_synthesis_region(target.page_id, origin, base_head)
+                prior_exists, prior = self._last_synthesis_region(target.page_id, actor, origin, base_head)
                 if not self._generated_region_is_safe(
                     current=current,
                     desired=target.generated,
@@ -567,9 +566,11 @@ class WikiService:
         index = self._index(WikiSnapshot(snapshot.head, pages))
         self._validate_redirects(index)
 
-    def _last_synthesis_region(self, page_id: str, origin: str, base_head: str) -> tuple[bool, bytes | None]:
+    def _last_synthesis_region(
+        self, page_id: str, actor: str, origin: str, base_head: str
+    ) -> tuple[bool, bytes | None]:
         for commit in self.repository.history(resource_id=page_id, start=base_head):
-            if commit.origin != origin:
+            if commit.actor != actor or commit.origin != origin:
                 continue
             change = next(
                 (

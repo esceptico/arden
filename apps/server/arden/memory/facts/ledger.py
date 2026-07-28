@@ -8,7 +8,8 @@ import math
 import re
 import unicodedata
 import uuid
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from itertools import pairwise
@@ -351,6 +352,14 @@ class FactLedger:
         feed = self._change_feed_at(None, revision)
         state = self._state_from(self._storage_order(feed.events))
         return MappingProxyType({fact_id: _readonly_fact(fact) for fact_id, fact in state.items()})
+
+    @contextmanager
+    def locked_facts(self) -> Iterator[Mapping[str, Fact]]:
+        """Hold the fact repository lock around one current read-only snapshot."""
+
+        with self._repository._storage.locked():
+            snapshot = self._snapshot()
+            yield MappingProxyType({fact_id: _readonly_fact(fact) for fact_id, fact in snapshot.state.items()})
 
     def get_version(self, fact_id: str, version: str) -> Fact:
         """Return one exact historical fact version from its immutable chain."""

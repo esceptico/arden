@@ -39,6 +39,7 @@ from .service import (
     FactService,
     RetentionReviewBatch,
 )
+from .synthesis import FactSynthesis, FactSynthesisError, FactSynthesisRenderer, FactSynthesisResult, SynthesisFact
 
 __all__ = [
     "DueReviewCandidate",
@@ -65,9 +66,14 @@ __all__ = [
     "FactPlanStore",
     "FactPrincipal",
     "RetentionReviewBatch",
+    "SynthesisFact",
     "FactScopeError",
     "FactService",
     "FactCommitResult",
+    "FactSynthesis",
+    "FactSynthesisError",
+    "FactSynthesisRenderer",
+    "FactSynthesisResult",
     "FactValidationError",
     "LEDGER_DIRECTORY",
     "MARKER_NAME",

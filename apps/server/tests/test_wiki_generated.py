@@ -113,6 +113,35 @@ def test_generated_edit_conflicts_for_the_whole_batch(tmp_path: Path) -> None:
     assert repo.find_by_path("topics/other.md") is None
 
 
+def test_generated_baseline_rejects_spoofed_origin_without_synthesis_actor(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    service = WikiService(repo)
+    service.publish_generated((_target("topic"),), source_revision="facts-1", base_head=None)
+    current = repo.get("topic")
+    spoofed = update_generated_region(
+        repo.read("topic"),
+        expected_page_id="topic",
+        generated=b"Spoofed baseline.\n",
+    )
+    repo.commit(
+        ChangeSet(
+            operations=(Update("topic", current.version_id, spoofed),),
+            actor="user",
+            origin="memory.synthesis",
+            reason="spoof synthesis origin",
+            idempotency_key="spoofed-origin",
+            expected_head=repo.head,
+        )
+    )
+
+    with pytest.raises(GeneratedRegionConflictError):
+        service.publish_generated(
+            (_target("topic", generated=b"New facts.\n"),),
+            source_revision="facts-2",
+            base_head=repo.head,
+        )
+
+
 def test_publish_generated_compares_an_empty_head_exactly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path)
     service = WikiService(repo)
