@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS wiki_maintenance_reviews (
     evidence_key TEXT NOT NULL,
     evidence_fingerprint TEXT NOT NULL,
     generation INTEGER NOT NULL CHECK (generation >= 0),
-    status TEXT NOT NULL CHECK (status IN ('needs_review', 'accepted', 'rejected', 'resolved_manual')),
+    status TEXT NOT NULL CHECK (status IN ('needs_review', 'accepted', 'rejected', 'resolved_manual', 'cleared')),
     summary TEXT NOT NULL,
     proposal_json TEXT,
     created_at TEXT NOT NULL,
@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS wiki_maintenance_reviews (
     UNIQUE (blocking_commit_id, evidence_key),
     CHECK (
         (status = 'needs_review' AND resolved_at IS NULL AND decision_note IS NULL)
-        OR (status IN ('accepted', 'rejected') AND resolved_at IS NOT NULL)
+        OR (status IN ('accepted', 'rejected', 'cleared') AND resolved_at IS NOT NULL)
         OR (
             status = 'resolved_manual'
             AND resolved_at IS NOT NULL
@@ -64,6 +64,10 @@ CREATE TABLE IF NOT EXISTS wiki_maintenance_reviews (
 CREATE INDEX IF NOT EXISTS idx_wiki_maintenance_reviews_pending
     ON wiki_maintenance_reviews(status, blocking_commit_id, created_at)
     WHERE status = 'needs_review';
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_wiki_maintenance_one_pending_per_commit
+    ON wiki_maintenance_reviews(blocking_commit_id)
+    WHERE status = 'needs_review';
 """
 
 
@@ -72,6 +76,7 @@ class WikiMaintenanceReviewStatus(StrEnum):
     ACCEPTED = "accepted"
     REJECTED = "rejected"
     RESOLVED_MANUAL = "resolved_manual"
+    CLEARED = "cleared"
 
 
 class WikiMaintenanceReviewAction(StrEnum):
@@ -329,6 +334,32 @@ class WikiMaintenanceStore:
             assert result is not None
             return result
 
+    async def clear(self, review_id: str, *, expected_generation: int) -> WikiMaintenanceReview:
+        """Mark stale open evidence as no longer applicable after a fresh run.
+
+        This is deliberately not a user action: a changed evidence bundle was
+        re-reviewed and did not reproduce the prior concern.
+        """
+
+        review_id = _text("review_id", review_id)
+        if isinstance(expected_generation, bool) or not isinstance(expected_generation, int) or expected_generation < 0:
+            raise ValueError("expected_generation must be a nonnegative integer")
+        now = datetime.now(UTC).isoformat()
+        async with self._lock:
+            cursor = await self._conn.execute(
+                """
+                UPDATE wiki_maintenance_reviews
+                SET status = 'cleared', resolved_at = ?, updated_at = ?
+                WHERE review_id = ? AND generation = ? AND status = 'needs_review'
+                """,
+                (now, now, review_id, expected_generation),
+            )
+            if cursor.rowcount != 1:
+                raise WikiMaintenanceReviewConflictError("review changed before clearing")
+            result = await self.get_review(review_id)
+            assert result is not None
+            return result
+
     async def apply_run(
         self,
         *,
@@ -437,6 +468,7 @@ class WikiMaintenanceStore:
         )
         now = datetime.now(UTC).isoformat()
         if not rows:
+            await self._assert_no_other_open(review.blocking_commit_id)
             review_id = uuid4().hex
             await self._conn.execute(
                 """
@@ -463,6 +495,7 @@ class WikiMaintenanceStore:
         existing = _review_row(rows[0])
         if existing.evidence_fingerprint == review.evidence_fingerprint:
             return existing
+        await self._assert_no_other_open(review.blocking_commit_id, excluding_review_id=existing.review_id)
         await self._conn.execute(
             """
             UPDATE wiki_maintenance_reviews
@@ -482,6 +515,33 @@ class WikiMaintenanceStore:
         refreshed = await self.get_review(existing.review_id)
         assert refreshed is not None
         return refreshed
+
+    async def _assert_no_other_open(
+        self,
+        blocking_commit_id: str,
+        *,
+        excluding_review_id: str | None = None,
+    ) -> None:
+        if excluding_review_id is None:
+            rows = await self._conn.execute_fetchall(
+                """
+                SELECT review_id FROM wiki_maintenance_reviews
+                WHERE blocking_commit_id = ? AND status = 'needs_review'
+                LIMIT 1
+                """,
+                (blocking_commit_id,),
+            )
+        else:
+            rows = await self._conn.execute_fetchall(
+                """
+                SELECT review_id FROM wiki_maintenance_reviews
+                WHERE blocking_commit_id = ? AND status = 'needs_review' AND review_id != ?
+                LIMIT 1
+                """,
+                (blocking_commit_id, excluding_review_id),
+            )
+        if rows:
+            raise WikiMaintenanceReviewConflictError("a different open review already blocks this wiki commit")
 
     @staticmethod
     def _reviewed_prefix(commit_ids: Sequence[str], reviewed_through: str | None) -> tuple[str, ...]:

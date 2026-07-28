@@ -83,6 +83,28 @@ async def test_review_and_watermark_survive_restart(tmp_path) -> None:
         await second.close()
 
 
+async def test_system_clear_is_generation_guarded_and_survives_restart(tmp_path) -> None:
+    path = tmp_path / "maintenance.sqlite"
+    store = await WikiMaintenanceStore.open(path)
+    try:
+        created = await _persist_review(store, _review())
+        with pytest.raises(WikiMaintenanceReviewConflictError, match="before clearing"):
+            await store.clear(created.review_id, expected_generation=created.generation + 1)
+        cleared = await store.clear(created.review_id, expected_generation=created.generation)
+        assert cleared.status is WikiMaintenanceReviewStatus.CLEARED
+        assert cleared.resolved_at is not None
+        assert await store.list_pending() == []
+    finally:
+        await store.close()
+
+    restored = await WikiMaintenanceStore.open(path)
+    try:
+        review = (await restored.list_history())[0]
+        assert review.status is WikiMaintenanceReviewStatus.CLEARED
+    finally:
+        await restored.close()
+
+
 async def test_same_evidence_is_idempotent_and_does_not_reopen_resolution(tmp_path) -> None:
     store = await WikiMaintenanceStore.open(tmp_path / "maintenance.sqlite")
     try:
@@ -226,6 +248,37 @@ async def test_apply_run_watermark_cas_has_one_concurrent_winner(tmp_path) -> No
         )
         assert sum(isinstance(result, WikiMaintenanceWatermarkConflictError) for result in results) == 1
         assert (await first.get_watermark()).revision in {_revision("b"), _revision("c")}
+    finally:
+        await first.close()
+        await second.close()
+
+
+async def test_two_connections_allow_only_one_open_concern_per_commit(tmp_path) -> None:
+    path = tmp_path / "maintenance.sqlite"
+    first = await WikiMaintenanceStore.open(path)
+    second = await WikiMaintenanceStore.open(path)
+    commit = _revision("a")
+    try:
+        results = await asyncio.gather(
+            first.apply_run(
+                expected_revision=None,
+                ordered_commit_ids=(commit,),
+                reviewed_through=commit,
+                reviews=(_review(commit=commit, key="first"),),
+            ),
+            second.apply_run(
+                expected_revision=None,
+                ordered_commit_ids=(commit,),
+                reviewed_through=commit,
+                reviews=(_review(commit=commit, key="second"),),
+            ),
+            return_exceptions=True,
+        )
+        assert sum(isinstance(result, WikiMaintenanceReviewConflictError) for result in results) == 1
+        pending = await first.list_pending()
+        assert len(pending) == 1
+        assert pending[0].evidence_key in {"first", "second"}
+        assert await first.get_watermark() is None
     finally:
         await first.close()
         await second.close()

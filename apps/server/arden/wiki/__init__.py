@@ -12,6 +12,18 @@ from .approvals import (
     WikiRenameApprovalCoordinator,
     WikiRenameCoordinatorResult,
 )
+from .maintenance import (
+    WikiMaintenance,
+    WikiMaintenanceConcernDraft,
+    WikiMaintenanceDecision,
+    WikiMaintenanceError,
+    WikiMaintenanceEvidenceTooLarge,
+    WikiMaintenancePreparedReport,
+    WikiMaintenanceResult,
+    WikiMaintenanceReviewer,
+    WikiMaintenanceUpdateDraft,
+)
+from .maintenance_completion import CompletionWikiMaintenanceReviewer
 from .maintenance_store import (
     WikiMaintenanceApplyResult,
     WikiMaintenanceReview,
@@ -55,6 +67,7 @@ from .service import GeneratedRegionConflictError, WikiAmbiguityError, WikiServi
 
 __all__ = [
     "CorruptWikiRenameApprovalError",
+    "CompletionWikiMaintenanceReviewer",
     "GeneratedPageTarget",
     "GeneratedRegionConflictError",
     "LinkReference",
@@ -72,12 +85,21 @@ __all__ = [
     "WikiInfrastructureRole",
     "WikiLinkReport",
     "WikiMaintenanceApplyResult",
+    "WikiMaintenance",
+    "WikiMaintenanceConcernDraft",
+    "WikiMaintenanceDecision",
+    "WikiMaintenanceError",
+    "WikiMaintenanceEvidenceTooLarge",
+    "WikiMaintenancePreparedReport",
     "WikiMaintenanceReview",
     "WikiMaintenanceReviewAction",
     "WikiMaintenanceReviewConflictError",
     "WikiMaintenanceReviewInput",
     "WikiMaintenanceReviewStatus",
     "WikiMaintenanceStore",
+    "WikiMaintenanceResult",
+    "WikiMaintenanceReviewer",
+    "WikiMaintenanceUpdateDraft",
     "WikiMaintenanceWatermark",
     "WikiMaintenanceWatermarkConflictError",
     "WikiMaintenancePageUpdate",
