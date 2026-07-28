@@ -7,7 +7,9 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+from arden.logging import get_logger
 
 from .ledger import FactLedger
 from .models import Fact, FactChangeFeed, FactConflictError, FactEvent, FactPlan, FactValidationError
@@ -18,10 +20,14 @@ from .plan_store import (
     StoredFactPlan,
 )
 
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
 FactScope = tuple[str, str | None]
 FactOrder = tuple[datetime, str]
 _SCOPE_KINDS = frozenset({"user", "area", "global", "project", "integration"})
 DEFAULT_RESULT_LIMIT = 100
+_logger = get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +102,7 @@ class FactService:
 
     ledger: FactLedger
     plans: FactPlanStore
+    post_commit: Callable[[], Awaitable[None]] | None = None
 
     async def search(
         self,
@@ -258,6 +265,13 @@ class FactService:
             await self.plans.release(plan_id, owner_id=principal.owner_id)
             raise
         await self.plans.mark_committed(plan_id, owner_id=principal.owner_id)
+        # Notification is deliberately at-least-once. A replay after an
+        # uncertain callback must be able to re-arm the idempotent debounce.
+        if self.post_commit is not None:
+            try:
+                await self.post_commit()
+            except Exception:
+                _logger.warning("post-commit fact notification failed", exc_info=True)
         fact_ids = tuple(dict.fromkeys(event.fact_id for event in events))
         facts = tuple(await asyncio.gather(*(asyncio.to_thread(self.ledger.get, fact_id) for fact_id in fact_ids)))
         return FactCommitResult(plan_id, events, facts)

@@ -105,6 +105,48 @@ async def test_plan_is_durable_owner_scoped_and_identical_request_reuses(tmp_pat
         await conn.close()
 
 
+async def test_post_commit_is_at_least_once_and_only_after_durable_commit(tmp_path: Path) -> None:
+    service, plans, conn, _ = await _service(tmp_path)
+    principal = _principal()
+    observed: list[str] = []
+
+    async def post_commit() -> None:
+        assert service.ledger.get("a").text == "One"
+        stored = await plans.get(preview.plan_id, owner_id=principal.owner_id)
+        assert stored.status is FactPlanStatus.COMMITTED
+        observed.append(stored.plan_id)
+
+    service.post_commit = post_commit
+    try:
+        preview = await _plan(service, principal)
+        await service.commit(principal, preview.plan_id)
+        await service.commit(principal, preview.plan_id)
+
+        assert observed == [preview.plan_id, preview.plan_id]
+    finally:
+        await conn.close()
+
+
+async def test_post_commit_failure_does_not_undo_a_fact_commit(tmp_path: Path) -> None:
+    service, plans, conn, _ = await _service(tmp_path)
+    principal = _principal()
+
+    async def fail() -> None:
+        raise RuntimeError("scheduler unavailable")
+
+    service.post_commit = fail
+    try:
+        preview = await _plan(service, principal)
+
+        result = await service.commit(principal, preview.plan_id)
+
+        assert [fact.fact_id for fact in result.facts] == ["a"]
+        assert service.ledger.get("a").text == "One"
+        assert (await plans.get(preview.plan_id, owner_id=principal.owner_id)).status is FactPlanStatus.COMMITTED
+    finally:
+        await conn.close()
+
+
 async def test_concurrent_services_reuse_one_request_plan(tmp_path: Path) -> None:
     db_path = tmp_path / "workflow.db"
     first_conn = await connect(db_path)
