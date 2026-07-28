@@ -443,6 +443,62 @@ class WikiService:
         )
         return commit.commit_id
 
+    def publish_health(self, *, body: bytes, base_head: str | None) -> Commit | None:
+        """Publish the single backend-owned, read-only health page.
+
+        ``health`` is deliberately not a generated-region page: its complete
+        body is a deterministic projection.  It therefore has one narrow
+        writer and cannot touch any user page.
+        """
+
+        if not isinstance(body, bytes):
+            raise TypeError("body must be bytes")
+        if not isinstance(base_head, str | None):
+            raise TypeError("base_head must be a string or None")
+
+        content = build_page(page_id="health", title="Wiki health", body=body).to_bytes()
+        try:
+            existing = self.repository.get("health", at=base_head)
+        except KeyError:
+            existing = None
+        path_owner = self.repository.find_by_path("health.md", at=base_head, include_archived=True)
+
+        if (existing is not None and existing.state is ResourceState.ARCHIVED) or (
+            path_owner is not None and path_owner.state is ResourceState.ARCHIVED
+        ):
+            current_head = self.repository.head
+            if current_head != base_head:
+                raise RevisionConflictError(f"current head changed: expected {base_head!r}, found {current_head!r}")
+            return None
+        if existing is None:
+            if path_owner is not None:
+                raise WikiValidationError("health.md belongs to a different wiki resource")
+            operation = Create("health", "health.md", content)
+        else:
+            if existing.path != "health.md":
+                raise WikiValidationError("health resource must remain at health.md")
+            if path_owner is None or path_owner.resource_id != "health":
+                raise WikiValidationError("health.md must belong to the health resource")
+            if self.repository.read("health", at=base_head) == content:
+                if self.repository.head != base_head:
+                    raise RevisionConflictError(
+                        f"current head changed: expected {base_head!r}, found {self.repository.head!r}"
+                    )
+                return None
+            operation = Update("health", existing.version_id, content)
+
+        return self.repository.commit(
+            ChangeSet(
+                operations=(operation,),
+                actor="backend",
+                origin="wiki.health",
+                reason="project wiki health",
+                idempotency_key=self._key("health", base_head, content),
+                expected_head=base_head,
+                enforce_expected_head=base_head is None,
+            )
+        )
+
     def backlinks(self, page_id: str) -> tuple[LinkReference, ...]:
         """Report links to ``page_id`` without guessing unresolved names."""
 

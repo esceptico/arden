@@ -12,6 +12,16 @@ from .approvals import (
     WikiRenameApprovalCoordinator,
     WikiRenameCoordinatorResult,
 )
+from .health import (
+    WikiHealthIndex,
+    WikiHealthInput,
+    WikiHealthIssue,
+    WikiHealthIssueCode,
+    WikiHealthPendingReview,
+    WikiHealthProjector,
+    WikiHealthResult,
+    WikiHealthWorker,
+)
 from .maintenance import (
     WikiMaintenance,
     WikiMaintenanceConcernDraft,
@@ -70,6 +80,14 @@ __all__ = [
     "CompletionWikiMaintenanceReviewer",
     "GeneratedPageTarget",
     "GeneratedRegionConflictError",
+    "WikiHealthIndex",
+    "WikiHealthInput",
+    "WikiHealthIssue",
+    "WikiHealthIssueCode",
+    "WikiHealthPendingReview",
+    "WikiHealthProjector",
+    "WikiHealthResult",
+    "WikiHealthWorker",
     "LinkReference",
     "LinkStatus",
     "PageValidationError",
