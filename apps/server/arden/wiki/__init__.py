@@ -12,12 +12,32 @@ from .approvals import (
     WikiRenameApprovalCoordinator,
     WikiRenameCoordinatorResult,
 )
-from .models import LinkReference, LinkStatus, RenamePlan, RenameRewrite, WikiLinkReport, WikiPageRecord, WikiSnapshot
-from .pages import PageValidationError, WikiPage, create_page, parse_page, update_page_metadata, update_page_title
-from .service import WikiAmbiguityError, WikiService, WikiValidationError
+from .models import (
+    GeneratedPageTarget,
+    LinkReference,
+    LinkStatus,
+    RenamePlan,
+    RenameRewrite,
+    WikiLinkReport,
+    WikiPageRecord,
+    WikiSnapshot,
+)
+from .pages import (
+    PageValidationError,
+    WikiPage,
+    create_page,
+    extract_generated_region,
+    parse_page,
+    update_generated_region,
+    update_page_metadata,
+    update_page_title,
+)
+from .service import GeneratedRegionConflictError, WikiAmbiguityError, WikiService, WikiValidationError
 
 __all__ = [
     "CorruptWikiRenameApprovalError",
+    "GeneratedPageTarget",
+    "GeneratedRegionConflictError",
     "LinkReference",
     "LinkStatus",
     "PageValidationError",
@@ -38,7 +58,9 @@ __all__ = [
     "WikiSnapshot",
     "WikiValidationError",
     "create_page",
+    "extract_generated_region",
     "parse_page",
+    "update_generated_region",
     "update_page_metadata",
     "update_page_title",
 ]

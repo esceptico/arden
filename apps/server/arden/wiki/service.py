@@ -18,8 +18,17 @@ from arden.revisions import (
 )
 from arden.revisions.errors import RevisionConflictError
 
-from .models import LinkReference, LinkStatus, RenamePlan, RenameRewrite, WikiLinkReport, WikiPageRecord, WikiSnapshot
-from .pages import PageValidationError, WikiPage, parse_page
+from .models import (
+    GeneratedPageTarget,
+    LinkReference,
+    LinkStatus,
+    RenamePlan,
+    RenameRewrite,
+    WikiLinkReport,
+    WikiPageRecord,
+    WikiSnapshot,
+)
+from .pages import PageValidationError, WikiPage, extract_generated_region, parse_page, update_generated_region
 from .pages import create_page as build_page
 from .wikilinks import WikilinkNode, parse_wikilinks, rewrite_page_targets
 
@@ -30,6 +39,10 @@ class WikiValidationError(ValueError):
 
 class WikiAmbiguityError(WikiValidationError):
     """A page name can resolve to more than one page."""
+
+
+class GeneratedRegionConflictError(WikiValidationError):
+    """A user changed a Synthesis-owned generated region."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +106,140 @@ class WikiService:
             )
         )
         return self.read_page(page.page_id)
+
+    def publish_generated(
+        self,
+        targets: tuple[GeneratedPageTarget, ...],
+        *,
+        source_revision: str,
+        base_head: str | None,
+        actor: str = "Synthesis",
+        origin: str = "memory.synthesis",
+        reason: str | None = None,
+    ) -> Commit | None:
+        """Atomically publish Synthesis-owned regions from one wiki snapshot."""
+
+        if not isinstance(source_revision, str) or not source_revision:
+            raise ValueError("source_revision must be a nonempty string")
+        if not isinstance(base_head, str | None):
+            raise TypeError("base_head must be a string or None")
+        if not isinstance(targets, tuple) or not all(isinstance(target, GeneratedPageTarget) for target in targets):
+            raise TypeError("targets must be a tuple of GeneratedPageTarget values")
+
+        snapshot = (
+            WikiSnapshot(head=None, pages=()) if base_head is None else self._snapshot(strict_names=True, at=base_head)
+        )
+        if not targets:
+            return None
+
+        records = self._index(snapshot).pages
+        target_ids = [target.page_id for target in targets]
+        if len(target_ids) != len(set(target_ids)):
+            raise WikiValidationError("generated targets must not repeat a page_id")
+        archived_names: set[str] = set()
+        if base_head is not None:
+            for resource in self.repository.list_resources(at=base_head, include_archived=True):
+                if resource.state is not ResourceState.ARCHIVED or not resource.path.endswith(".md"):
+                    continue
+                page = self._parse(resource, self.repository.read(resource.resource_id, at=base_head))
+                archived_names.update(self._normal(name) for name in self._names(page, resource.path))
+        for target in targets:
+            self._require_markdown_path(target.path)
+            record = records.get(target.page_id)
+            if record is not None:
+                if record.page.lifecycle != "active":
+                    raise WikiValidationError("generated targets must be active pages")
+                if (
+                    record.resource.path != target.path
+                    or record.page.title != target.title
+                    or record.page.aliases != target.aliases
+                ):
+                    raise WikiValidationError("generated target identity does not match the existing page")
+            elif base_head is not None:
+                try:
+                    self.repository.get(target.page_id, at=base_head)
+                except KeyError:
+                    pass
+                else:
+                    raise WikiValidationError(f"generated target resource is unavailable: {target.page_id}")
+                reused = {self._normal(name) for name in self._names_for_target(target)} & archived_names
+                if reused:
+                    raise WikiValidationError(f"generated target reuses an archived wiki name: {min(reused)}")
+
+        finals: list[tuple[GeneratedPageTarget, WikiPageRecord | None, bytes]] = []
+        prospective_names = {
+            self._normal(name): record.page.page_id
+            for record in snapshot.pages
+            for name in self._names(record.page, record.resource.path)
+        }
+        for target in sorted(targets, key=lambda item: item.page_id):
+            record = records.get(target.page_id)
+            metadata = {**target.metadata, "generated_from_revision": source_revision}
+            if record is None:
+                empty = build_page(
+                    page_id=target.page_id,
+                    title=target.title,
+                    aliases=target.aliases,
+                ).to_bytes()
+                content = update_generated_region(
+                    empty,
+                    expected_page_id=target.page_id,
+                    generated=target.generated,
+                    metadata=metadata,
+                )
+                page = self._parse(Create(target.page_id, target.path, content), content)
+                for name in self._names(page, target.path):
+                    normalized = self._normal(name)
+                    if normalized in prospective_names:
+                        raise WikiAmbiguityError(f"wiki name already exists: {normalized}")
+                    prospective_names[normalized] = target.page_id
+            else:
+                current = extract_generated_region(record.content, expected_page_id=target.page_id)
+                prior_exists, prior = self._last_synthesis_region(target.page_id, origin, base_head)
+                if not self._generated_region_is_safe(
+                    current=current,
+                    desired=target.generated,
+                    prior_exists=prior_exists,
+                    prior=prior,
+                ):
+                    raise GeneratedRegionConflictError(f"generated region changed by a user: {record.resource.path}")
+                content = update_generated_region(
+                    record.content,
+                    expected_page_id=target.page_id,
+                    generated=target.generated,
+                    metadata=metadata,
+                )
+            finals.append((target, record, content))
+
+        operations = tuple(
+            Create(target.page_id, target.path, content)
+            if record is None
+            else Update(target.page_id, record.resource.version_id, content)
+            for target, record, content in finals
+            if record is None or content != record.content
+        )
+        if not operations:
+            current_head = self.repository.head
+            if current_head != base_head:
+                raise RevisionConflictError(f"current head changed: expected {base_head!r}, found {current_head!r}")
+            return None
+        key = self._key(
+            "generated",
+            base_head,
+            source_revision,
+            tuple((target.page_id, content) for target, _record, content in finals),
+        )
+        return self.repository.commit(
+            ChangeSet(
+                operations=operations,
+                actor=actor,
+                origin=origin,
+                reason=reason or "publish generated wiki pages",
+                idempotency_key=key,
+                expected_head=base_head,
+                enforce_expected_head=base_head is None,
+            )
+        )
 
     def backlinks(self, page_id: str) -> tuple[LinkReference, ...]:
         """Report links to ``page_id`` without guessing unresolved names."""
@@ -420,10 +567,46 @@ class WikiService:
         index = self._index(WikiSnapshot(snapshot.head, pages))
         self._validate_redirects(index)
 
+    def _last_synthesis_region(self, page_id: str, origin: str, base_head: str) -> tuple[bool, bytes | None]:
+        for commit in self.repository.history(resource_id=page_id, start=base_head):
+            if commit.origin != origin:
+                continue
+            change = next(
+                (
+                    item
+                    for item in commit.changes
+                    if item.after is not None
+                    and item.after.resource_id == page_id
+                    and item.after.state is ResourceState.ACTIVE
+                ),
+                None,
+            )
+            if change is None:
+                continue
+            return True, extract_generated_region(
+                self.repository.read(page_id, at=commit.commit_id), expected_page_id=page_id
+            )
+        return False, None
+
+    @staticmethod
+    def _generated_region_is_safe(
+        *, current: bytes | None, desired: bytes, prior_exists: bool, prior: bytes | None
+    ) -> bool:
+        if current == desired:
+            return True
+        if prior_exists:
+            return current == prior
+        return current is None or current == b""
+
     @staticmethod
     def _names(page: WikiPage, path: str) -> tuple[str, ...]:
         stem = path[:-3] if path.endswith(".md") else path
         return (page.title, *page.aliases, path, stem)
+
+    @staticmethod
+    def _names_for_target(target: GeneratedPageTarget) -> tuple[str, ...]:
+        stem = target.path[:-3] if target.path.endswith(".md") else target.path
+        return (target.title, *target.aliases, target.path, stem)
 
     @staticmethod
     def _normal(value: str) -> str:

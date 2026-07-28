@@ -46,6 +46,8 @@ _UniqueKeyLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
 _OPEN = b"---\n"
 _CLOSE = b"\n---\n"
 _GENERATED_TOKEN = re.compile(r"<!--\s*/?\s*generated\s*-->")
+_GENERATED_OPEN = b"<!-- generated -->"
+_GENERATED_CLOSE = b"<!-- /generated -->"
 _RESERVED = frozenset({"page_id", "title", "aliases", "lifecycle", "redirect_to"})
 _OWN_REVISION_FIELDS = frozenset(
     {
@@ -120,6 +122,39 @@ def _validate_generated_boundaries(body: bytes) -> None:
         raise PageValidationError("generated boundaries must contain one ordered opening and closing marker")
 
 
+def _generated_region_bounds(body: bytes) -> tuple[int, int] | None:
+    """Return the byte range between a validated generated marker pair."""
+
+    opening_end: int | None = None
+    closing_start: int | None = None
+    offset = 0
+    for line in body.splitlines(keepends=True):
+        marker = line.rstrip(b"\r\n")
+        if marker == _GENERATED_OPEN:
+            opening_end = offset + len(line)
+        elif marker == _GENERATED_CLOSE:
+            closing_start = offset
+        offset += len(line)
+    if opening_end is None and closing_start is None:
+        return None
+    if opening_end is None or closing_start is None or opening_end > closing_start:
+        raise PageValidationError("generated boundaries must contain one ordered opening and closing marker")
+    return opening_end, closing_start
+
+
+def _validate_generated_content(generated: bytes) -> None:
+    if not isinstance(generated, bytes):
+        raise TypeError("generated must be bytes")
+    try:
+        text = generated.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise PageValidationError("generated content must be valid UTF-8") from exc
+    if _GENERATED_TOKEN.search(text):
+        raise PageValidationError("generated content must not contain generated markers")
+    if generated and not generated.endswith(b"\n"):
+        raise PageValidationError("generated content must be empty or newline-terminated")
+
+
 def _required_string(data: Mapping[str, object], key: str) -> str:
     value = data.get(key)
     if not isinstance(value, str) or not value.strip():
@@ -185,6 +220,21 @@ class WikiPage:
             redirect_to=self.redirect_to,
             metadata=replacement,
             body=self.body,
+        )
+
+    def with_body(self, body: bytes) -> WikiPage:
+        """Return a copy with validated replacement body bytes."""
+
+        if not isinstance(body, bytes):
+            raise TypeError("body must be bytes")
+        return _validated_page(
+            page_id=self.page_id,
+            title=self.title,
+            aliases=self.aliases,
+            lifecycle=self.lifecycle,
+            redirect_to=self.redirect_to,
+            metadata=self.metadata,
+            body=body,
         )
 
     def to_bytes(self) -> bytes:
@@ -323,3 +373,40 @@ def update_page_metadata(content: bytes, *, expected_page_id: str, updates: Mapp
     """Validate an expected identity and return a new page byte stream with merged metadata."""
 
     return parse_page(content, expected_page_id=expected_page_id).with_metadata(updates).to_bytes()
+
+
+def extract_generated_region(content: bytes, *, expected_page_id: str | None = None) -> bytes | None:
+    """Return generated body bytes, or ``None`` when the page has no generated region."""
+
+    page = parse_page(content, expected_page_id=expected_page_id)
+    bounds = _generated_region_bounds(page.body)
+    if bounds is None:
+        return None
+    start, end = bounds
+    return page.body[start:end]
+
+
+def update_generated_region(
+    content: bytes,
+    *,
+    expected_page_id: str,
+    generated: bytes,
+    metadata: Mapping[str, object] | None = None,
+) -> bytes:
+    """Replace or prepend the generated region, preserving all other body bytes."""
+
+    page = parse_page(content, expected_page_id=expected_page_id)
+    _validate_generated_content(generated)
+    bounds = _generated_region_bounds(page.body)
+    if bounds is None:
+        body = _GENERATED_OPEN + b"\n" + generated + _GENERATED_CLOSE + b"\n" + page.body
+    else:
+        start, end = bounds
+        body = page.body[:start] + generated + page.body[end:]
+
+    updated = page.with_body(body)
+    if metadata is not None:
+        return updated.with_metadata(metadata).to_bytes()
+
+    body_offset = content.find(_CLOSE, len(_OPEN)) + len(_CLOSE)
+    return content[:body_offset] + updated.body

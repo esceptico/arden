@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from types import MappingProxyType
 
 from arden.revisions import ResourceVersion
 
@@ -76,3 +78,28 @@ class RenamePlan:
     page_count: int
     rewrites: tuple[RenameRewrite, ...]
     idempotency_key: str
+
+
+@dataclass(frozen=True, slots=True)
+class GeneratedPageTarget:
+    """One Synthesis-owned generated-region publication target."""
+
+    page_id: str
+    path: str
+    title: str
+    aliases: tuple[str, ...]
+    generated: bytes
+    metadata: Mapping[str, object]
+
+    def __post_init__(self) -> None:
+        for name in ("page_id", "path", "title"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{name} must be a nonempty string")
+        if not isinstance(self.aliases, tuple) or not all(isinstance(alias, str) and alias for alias in self.aliases):
+            raise ValueError("aliases must be a tuple of nonempty strings")
+        if not isinstance(self.generated, bytes):
+            raise TypeError("generated must be bytes")
+        if not isinstance(self.metadata, Mapping):
+            raise TypeError("metadata must be a mapping")
+        object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
