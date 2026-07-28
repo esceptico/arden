@@ -158,20 +158,8 @@ class WikiService:
         unnecessary blob work.
         """
 
-        if watermark is not None and (not isinstance(watermark, str) or not watermark):
-            raise ValueError("watermark must be a nonempty commit ID or None")
         head = self.repository.current_revision
-        if watermark == head and head is not None:
-            return WikiMaintenanceFeed(watermark=watermark, through_revision=head, commits=())
-        if head is None:
-            if watermark is not None:
-                raise KeyError(f"wiki watermark is not reachable from pinned head: {watermark}")
-            commits_newest_first = ()
-        else:
-            try:
-                commits_newest_first = self.repository.history(stop_before=watermark)
-            except KeyError as exc:
-                raise KeyError(f"wiki watermark is not reachable from pinned head: {watermark}") from exc
+        commits_newest_first = self._history_since(head, watermark)
         selected: list[WikiMaintenanceCommit] = []
         for commit in commits_newest_first:
             selected.append(
@@ -193,6 +181,22 @@ class WikiService:
             commits=tuple(reversed(selected)),
         )
 
+    def _history_since(self, head: str | None, watermark: str | None) -> tuple[Commit, ...]:
+        """Return newest-first history after one watermark from a pinned head."""
+
+        if watermark is not None and (not isinstance(watermark, str) or not watermark):
+            raise ValueError("watermark must be a nonempty commit ID or None")
+        if head is None:
+            if watermark is not None:
+                raise KeyError(f"wiki watermark is not reachable from pinned head: {watermark}")
+            return ()
+        if watermark == head:
+            return ()
+        try:
+            return self.repository.history(start=head, stop_before=watermark)
+        except KeyError as exc:
+            raise KeyError(f"wiki watermark is not reachable from pinned head: {watermark}") from exc
+
     def changes_since(
         self,
         watermark: str | None,
@@ -211,8 +215,6 @@ class WikiService:
         exact full-diff feed.
         """
 
-        if watermark is not None and (not isinstance(watermark, str) or not watermark):
-            raise ValueError("watermark must be a nonempty commit ID or None")
         if not isinstance(include_diffs, bool):
             raise TypeError("include_diffs must be a bool")
         if diff_char_limit is not None:
@@ -221,19 +223,7 @@ class WikiService:
             if not include_diffs:
                 raise ValueError("diff_char_limit requires include_diffs=True")
         head = self.repository.head
-        history = () if head is None else self.repository.history(start=head)
-        commits_newest_first = tuple(history)
-        commit_ids = {commit.commit_id for commit in commits_newest_first}
-        if watermark is not None and watermark not in commit_ids:
-            raise KeyError(f"wiki watermark is not reachable from pinned head: {watermark}")
-
-        # Repository history is linear.  Stop at the watermark, then expose the
-        # natural oldest-to-newest review order.
-        selected: list[Commit] = []
-        for commit in commits_newest_first:
-            if commit.commit_id == watermark:
-                break
-            selected.append(commit)
+        commits_newest_first = self._history_since(head, watermark)
 
         current_records, current_warnings = self._maintenance_snapshot(head)
         current_index = self._index(WikiSnapshot(head, current_records), strict_names=False)
@@ -246,7 +236,7 @@ class WikiService:
         warnings.extend(_storage_warnings(storage, str(self.repository.history_root)))
 
         reports: list[WikiChangeCommit] = []
-        for commit in reversed(selected):
+        for commit in reversed(commits_newest_first):
             if not include_diffs:
                 reports.append(
                     WikiChangeCommit(
@@ -1209,7 +1199,10 @@ class WikiService:
         context_by_id = {context.record.page.page_id: context for context in contexts}
         metadata_records = tuple(sorted((context.record for context in contexts), key=lambda record: record.page.page_id))
         index = self._index(WikiSnapshot(head, metadata_records), strict_names=False)
-        current_links = self._maintenance_links_from_nodes(contexts, index)
+        current_links = self._maintenance_links_from_nodes(
+            tuple((context.record.page.page_id, context.nodes) for context in contexts),
+            index,
+        )
         warnings.extend(self._link_warnings(metadata_records, current_links))
 
         page_ids = set(changed_page_ids)
@@ -1263,46 +1256,32 @@ class WikiService:
         records: tuple[WikiPageRecord, ...],
         index: _Index,
     ) -> dict[str, tuple[tuple[LinkReference, ...], tuple[LinkReference, ...]]]:
-        outgoing: dict[str, tuple[LinkReference, ...]] = {}
-        backlinks: dict[str, list[LinkReference]] = {record.page.page_id: [] for record in records}
-        for record in records:
-            references = tuple(
-                self._reference(index, record.page.page_id, node)
-                for node in parse_wikilinks(record.page.body.decode("utf-8"))
-            )
-            outgoing[record.page.page_id] = references
-            for reference in references:
-                if reference.target_page_id is not None:
-                    backlinks.setdefault(reference.target_page_id, []).append(reference)
-        return {
-            record.page.page_id: (outgoing[record.page.page_id], tuple(backlinks[record.page.page_id]))
-            for record in records
-        }
+        return self._maintenance_links_from_nodes(
+            tuple(
+                (record.page.page_id, parse_wikilinks(record.page.body.decode("utf-8")))
+                for record in records
+            ),
+            index,
+        )
 
     def _maintenance_links_from_nodes(
         self,
-        contexts: Sequence[_MaintenanceCurrentContext],
+        pages: Sequence[tuple[str, Sequence[WikilinkNode]]],
         index: _Index,
     ) -> dict[str, tuple[tuple[LinkReference, ...], tuple[LinkReference, ...]]]:
         """Resolve already-parsed nodes from the bounded current-page scan."""
 
         outgoing: dict[str, tuple[LinkReference, ...]] = {}
-        backlinks: dict[str, list[LinkReference]] = {
-            context.record.page.page_id: [] for context in contexts
-        }
-        for context in contexts:
-            page_id = context.record.page.page_id
-            references = tuple(self._reference(index, page_id, node) for node in context.nodes)
+        backlinks: dict[str, list[LinkReference]] = {page_id: [] for page_id, _nodes in pages}
+        for page_id, nodes in pages:
+            references = tuple(self._reference(index, page_id, node) for node in nodes)
             outgoing[page_id] = references
             for reference in references:
                 if reference.target_page_id is not None:
                     backlinks.setdefault(reference.target_page_id, []).append(reference)
         return {
-            context.record.page.page_id: (
-                outgoing[context.record.page.page_id],
-                tuple(backlinks[context.record.page.page_id]),
-            )
-            for context in contexts
+            page_id: (outgoing[page_id], tuple(backlinks[page_id]))
+            for page_id, _nodes in pages
         }
 
     def _link_warnings(
