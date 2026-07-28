@@ -51,6 +51,18 @@ def _artifact_store(knowledge: KnowledgeRuntime = Depends(require_knowledge_runt
     return artifacts
 
 
+def _legacy_artifact_store(
+    knowledge: KnowledgeRuntime = Depends(require_knowledge_runtime),
+) -> ArtifactMemoryStore | None:
+    """Legacy pages are absent after the canonical fact cutover.
+
+    Read endpoints can still be served entirely by the managed wiki in that
+    mode. Write and edit endpoints deliberately keep using `_artifact_store`.
+    """
+
+    return knowledge.artifact_store
+
+
 def _page_edit_service(knowledge: KnowledgeRuntime = Depends(require_knowledge_runtime)) -> PageEditService:
     if knowledge.page_edit_service is None:
         raise HTTPException(status_code=503, detail="memory page edits not ready")
@@ -312,14 +324,20 @@ def _managed_wiki_directories(wiki_artifacts: list[MemoryArtifact]) -> set[str]:
     return directories
 
 
+def _require_memory_read_source(artifacts: ArtifactMemoryStore | None, wiki_service) -> None:
+    if artifacts is None and wiki_service is None:
+        raise HTTPException(status_code=503, detail="memory artifacts not ready")
+
+
 @router.get("/artifacts")
 def list_artifacts(
     kind: str | None = Query(default=None),
     q: str | None = Query(default=None, max_length=200),
-    artifacts: ArtifactMemoryStore = Depends(_artifact_store),
+    artifacts: ArtifactMemoryStore | None = Depends(_legacy_artifact_store),
     wiki_service=Depends(_wiki_service),
 ) -> dict:
-    visible = {artifact.path: artifact for artifact in artifacts.list_artifacts(kind=kind, q=q)}
+    _require_memory_read_source(artifacts, wiki_service)
+    visible = {artifact.path: artifact for artifact in artifacts.list_artifacts(kind=kind, q=q)} if artifacts else {}
     all_managed = _managed_wiki_artifacts(wiki_service, include_redirects=True) if wiki_service is not None else []
     active_managed = [artifact for artifact in all_managed if artifact.frontmatter["lifecycle"] == "active"]
     managed = _filter_wiki_artifacts(active_managed, kind=kind, q=q)
@@ -330,19 +348,22 @@ def list_artifacts(
     visible.update({artifact.path: artifact for artifact in managed})
     return {
         "artifacts": [artifact_summary_to_json(a) for a in visible.values()],
-        "directories": sorted(set(artifacts.list_directories()) | _managed_wiki_directories(active_managed)),
+        "directories": sorted(
+            (set(artifacts.list_directories()) if artifacts else set()) | _managed_wiki_directories(active_managed)
+        ),
     }
 
 
 @router.post("/artifacts/rebuild")
 async def rebuild_artifacts(
-    artifacts: ArtifactMemoryStore = Depends(_artifact_store),
+    artifacts: ArtifactMemoryStore | None = Depends(_legacy_artifact_store),
     wiki_service=Depends(_wiki_service),
 ) -> dict:
     # Memory is file-canonical: the markdown pages ARE the source of truth, there
     # is no projection to re-derive. Exporting here would clobber the pages, so
     # this is a no-op that just returns the current pages.
-    visible = {artifact.path: artifact for artifact in artifacts.list_artifacts()}
+    _require_memory_read_source(artifacts, wiki_service)
+    visible = {artifact.path: artifact for artifact in artifacts.list_artifacts()} if artifacts else {}
     all_managed = _managed_wiki_artifacts(wiki_service, include_redirects=True) if wiki_service is not None else []
     managed = [artifact for artifact in all_managed if artifact.frontmatter["lifecycle"] == "active"]
     for artifact in all_managed:
@@ -738,7 +759,7 @@ def page_links(
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     projection=Depends(_link_index_projection),
-    artifacts: ArtifactMemoryStore = Depends(_artifact_store),
+    artifacts: ArtifactMemoryStore | None = Depends(_legacy_artifact_store),
     wiki_service=Depends(_wiki_service),
 ) -> dict:
     safe = Path(path)
@@ -751,6 +772,9 @@ def page_links(
             pass
         else:
             return _wiki_page_links(report, limit=limit, offset=offset)
+    if artifacts is None:
+        _require_memory_read_source(artifacts, wiki_service)
+        raise HTTPException(status_code=404, detail="memory page not found")
     _reject_machine_page(path)
     if projection is None:
         raise HTTPException(status_code=503, detail="memory link index not ready")
@@ -780,11 +804,14 @@ def page_links(
 @router.get("/artifacts/{path:path}")
 def read_artifact(
     path: str,
-    artifacts: ArtifactMemoryStore = Depends(_artifact_store),
+    artifacts: ArtifactMemoryStore | None = Depends(_legacy_artifact_store),
     wiki_service=Depends(_wiki_service),
 ) -> dict:
     if wiki_service is not None and (artifact := _managed_wiki_artifact(wiki_service, path)) is not None:
         return {"artifact": artifact_detail_to_json(artifact)}
+    if artifacts is None:
+        _require_memory_read_source(artifacts, wiki_service)
+        raise HTTPException(status_code=404, detail="memory artifact not found")
     try:
         artifact = artifacts.read_artifact(path)
         return {"artifact": artifact_detail_to_json(artifact)}

@@ -1,7 +1,8 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
 
 from arden.config import Config
 from arden.constants import BUILTIN_MEMORY_SYNTHESIZE_ID, BUILTIN_WIKI_MAINTENANCE_ID
@@ -18,6 +19,7 @@ from arden.memory.facts import (
 )
 from arden.memory.facts.synthesis import CONSUMER_ID as FACT_SYNTHESIS_CONSUMER_ID
 from arden.server.routers.memory import InitBody, init_memory
+from arden.server.routers.memory import router as memory_router
 from arden.server.routers.settings import _config_response
 from arden.server.runtime import core as runtime_core
 from arden.server.runtime.core import Runtime
@@ -207,6 +209,63 @@ async def test_fact_cutover_wires_only_canonical_fact_memory_and_survives_restar
         assert replay.plan_id == preview.plan_id
     finally:
         await restarted.close()
+
+
+@pytest.mark.asyncio
+async def test_fact_mode_memory_router_reads_managed_wiki_without_legacy_artifacts(tmp_path) -> None:
+    config = _config(tmp_path)
+    _seed_fact(config)
+    runtime = Runtime(config)
+    await runtime.connect()
+    try:
+        assert runtime.knowledge.artifact_store is None
+        assert runtime.wiki_service is not None
+        runtime.wiki_service.create_page(
+            page_id="router-target",
+            path="topics/target.md",
+            title="Router target",
+            body=b"Target body.\n",
+            metadata={"kind": "topic"},
+        )
+        runtime.wiki_service.create_page(
+            page_id="router-source",
+            path="topics/source.md",
+            title="Router source",
+            body=b"Source body [[Router target]].\n",
+            metadata={"kind": "topic"},
+        )
+        app = FastAPI()
+        app.include_router(memory_router)
+        app.state.runtime = runtime
+
+        with TestClient(app) as client:
+            listed = client.get("/admin/memory/artifacts")
+            assert listed.status_code == 200
+            assert {item["path"] for item in listed.json()["artifacts"]} >= {
+                "topics/source.md",
+                "topics/target.md",
+            }
+
+            rebuilt = client.post("/admin/memory/artifacts/rebuild")
+            assert rebuilt.status_code == 200
+            assert {item["path"] for item in rebuilt.json()["artifacts"]} >= {
+                "topics/source.md",
+                "topics/target.md",
+            }
+
+            detail = client.get("/admin/memory/artifacts/topics/source.md")
+            assert detail.status_code == 200
+            assert detail.json()["artifact"]["source"] == "wiki"
+            assert detail.json()["artifact"]["content"] == "Source body [[Router target]].\n"
+
+            links = client.get("/admin/memory/links", params={"path": "topics/source.md"})
+            assert links.status_code == 200
+            assert links.json()["outgoing"][0]["resolved_path"] == "topics/target.md"
+
+            assert client.get("/admin/memory/artifacts/missing.md").status_code == 404
+            assert client.get("/admin/memory/links", params={"path": "missing.md"}).status_code == 404
+    finally:
+        await runtime.close()
 
 
 @pytest.mark.asyncio
