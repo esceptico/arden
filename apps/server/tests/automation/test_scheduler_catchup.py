@@ -1,15 +1,10 @@
 """Missed-run catch-up: daily maintenance builtins that miss their slot while
 the machine is asleep must run on boot, not skip to tomorrow."""
 
-from __future__ import annotations
-
 import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from pathlib import Path
 
 import pytest
 import pytest_asyncio

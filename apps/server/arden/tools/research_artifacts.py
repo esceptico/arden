@@ -7,17 +7,12 @@ specific parts on demand. Artifacts are written under
 paths, plus a small ``manifest.json``.
 """
 
-from __future__ import annotations
-
 import asyncio
 import hashlib
 import json
 import re
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from pathlib import Path
 
 from pydantic import BaseModel, Field
 

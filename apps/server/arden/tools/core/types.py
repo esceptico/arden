@@ -1,7 +1,9 @@
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
 
 class ToolAction(StrEnum):
@@ -26,7 +28,7 @@ class ToolPolicy(BaseModel):
 
     action: ToolAction
     scope: ToolScope
-    requires_approval: bool = False
+    requires_approval: StrictBool = False
     approval_mode: ApprovalMode | None = None
     permissions: frozenset[str] = Field(default_factory=frozenset)
     timeout_seconds: int | None = None
@@ -38,19 +40,27 @@ class ToolPolicy(BaseModel):
     open_world: bool | None = None
     idempotent: bool | None = None
 
-    @model_validator(mode="after")
-    def _normalize_approval_mode(self):
-        if self.approval_mode is None:
-            mode = ApprovalMode.ALWAYS if self.requires_approval else ApprovalMode.NEVER
-            object.__setattr__(self, "approval_mode", mode)
-            return self
-        if not isinstance(self.approval_mode, ApprovalMode):
-            raise ValueError(f"Unsupported approval_mode: {self.approval_mode!r}")
-        if self.requires_approval and self.approval_mode == ApprovalMode.NEVER:
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_approval_mode(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return value
+        normalized = dict(value)
+        requires_approval = normalized.get("requires_approval", False)
+        raw_mode = normalized.get("approval_mode")
+        if raw_mode is None:
+            if isinstance(requires_approval, bool):
+                normalized["approval_mode"] = ApprovalMode.ALWAYS if requires_approval else ApprovalMode.NEVER
+            return normalized
+        try:
+            mode = ApprovalMode(raw_mode)
+        except (TypeError, ValueError):
+            return normalized
+        if requires_approval is True and mode is ApprovalMode.NEVER:
             raise ValueError("approval_mode='never' cannot downgrade requires_approval=True")
-        requires = self.approval_mode != ApprovalMode.NEVER
-        object.__setattr__(self, "requires_approval", requires)
-        return self
+        normalized["approval_mode"] = mode
+        normalized["requires_approval"] = mode is not ApprovalMode.NEVER
+        return normalized
 
 
 class PermissionDecision(StrEnum):

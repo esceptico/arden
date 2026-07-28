@@ -22,7 +22,6 @@ Identity and visibility rules:
 import json
 import time
 from dataclasses import asdict, dataclass, field
-from enum import StrEnum
 from typing import Literal
 from uuid import uuid4
 
@@ -42,61 +41,9 @@ from arden.agent import (
     ToolStarted,
 )
 from arden.agent.types.tools import normalize_source_refs
+from arden.events.types import EventType
 from arden.tool_call_metadata import split_tool_arguments
-
-
-class EventType(StrEnum):
-    # ─── AG-UI canonical events (uppercase) ────────────────────────────
-    RUN_STARTED = "RUN_STARTED"
-    RUN_FINISHED = "RUN_FINISHED"
-    RUN_ERROR = "RUN_ERROR"
-
-    TEXT_MESSAGE_START = "TEXT_MESSAGE_START"
-    TEXT_MESSAGE_CONTENT = "TEXT_MESSAGE_CONTENT"
-    TEXT_MESSAGE_END = "TEXT_MESSAGE_END"
-
-    TOOL_CALL_START = "TOOL_CALL_START"
-    TOOL_CALL_ARGS = "TOOL_CALL_ARGS"
-    TOOL_CALL_END = "TOOL_CALL_END"
-    TOOL_CALL_RESULT = "TOOL_CALL_RESULT"
-
-    REASONING_START = "REASONING_START"
-    REASONING_MESSAGE_START = "REASONING_MESSAGE_START"
-    REASONING_MESSAGE_CONTENT = "REASONING_MESSAGE_CONTENT"
-    REASONING_MESSAGE_END = "REASONING_MESSAGE_END"
-    REASONING_END = "REASONING_END"
-
-    # ─── arden-specific events (snake_case, non-canonical) ──────────────
-    THINKING = "thinking"
-    APPROVAL_NEEDED = "approval_needed"
-    INPUT_NEEDED = "input_needed"
-    CONNECTION_NEEDED = "connection_needed"
-    BACKGROUND_TASK = "background_task"
-    WORKFLOW_STARTED = "workflow_started"
-    WORKFLOW_FINISHED = "workflow_finished"
-    RUN_CANCELLED = "run_cancelled"
-    RUN_BACKGROUNDED = "run_backgrounded"
-    MESSAGE_INGESTED = "message_ingested"
-    STREAM_RESET = "stream_reset"
-    STREAM_KEEPALIVE = "stream_keepalive"
-    TASK_STARTED = "task_started"
-    TASK_PROGRESS = "task_progress"
-    TASK_FINISHED = "task_finished"
-    AUTOMATION_PROGRESS = "automation_progress"
-    AUTOMATION_FINISHED = "automation_finished"
-    COMPACTION_STARTED = "compaction_started"
-    COMPACTION_FINISHED = "compaction_finished"
-    TOKEN_USAGE = "token_usage"
-    GOAL_UPDATED = "goal_updated"
-    GOAL_CLEARED = "goal_cleared"
-    MEMORY_CHANGED = "memory_changed"
-    AREAS_CHANGED = "areas_changed"
-    TODO_UPDATED = "todo_updated"
-    SESSION_UPDATED = "session_updated"
-    SESSION_CREATED = "session_created"
-    SESSION_ACTIVITY = "session_activity"
-    NAVIGATION_REQUESTED = "navigation_requested"
-
+from arden.workflow.models import WorkflowState, state_for_event_type
 
 # Token-level delta events are ephemeral transport: their cumulative text is
 # recoverable from terminal events. Oversized tool-result raw bodies may be
@@ -130,8 +77,6 @@ class SSEEvent:
     def to_sse(self) -> dict:
         data = asdict(self)
         data["type"] = self.type.value
-        from arden.workflow.models import state_for_event
-
         state = state_for_event(self)
         if state is not None:
             data["workflow_state"] = state.value
@@ -519,6 +464,23 @@ class TaskFinishedEvent(SSEEvent):
     tool_count: int | None = None
 
 
+def state_for_event(event: SSEEvent) -> WorkflowState | None:
+    match event:
+        case BackgroundTaskEvent(status="completed"):
+            return WorkflowState.COMPLETED
+        case BackgroundTaskEvent(status="failed"):
+            return WorkflowState.FAILED
+        case BackgroundTaskEvent(status="cancelled" | "interrupted"):
+            return WorkflowState.CANCELLED
+        case BackgroundTaskEvent():
+            return WorkflowState.WAITING_FOR_SUBAGENT
+        case TaskFinishedEvent(status="failed"):
+            return WorkflowState.FAILED
+        case TaskFinishedEvent():
+            return WorkflowState.COMPLETED
+    return state_for_event_type(event.type)
+
+
 @dataclass(frozen=True)
 class WorkflowStartedEvent(SSEEvent):
     type: EventType = field(default=EventType.WORKFLOW_STARTED, init=False)
@@ -748,7 +710,7 @@ def agent_events_to_sse(event) -> tuple[SSEEvent, ...]:
         case TextDelta():
             return (
                 TextMessageContentEvent(
-                    message_id=getattr(event, "message_id", "") or "",
+                    message_id=event.message_id or "",
                     delta=event.content,
                     **base,
                 ),

@@ -1,8 +1,7 @@
 import asyncio
 from collections.abc import AsyncGenerator
-from typing import TYPE_CHECKING
 
-from arden.agent import Result
+from arden.agent import Agent, Result
 from arden.agent.types.events import ToolCompleted
 from arden.events.sse import (
     RunCancelledEvent,
@@ -12,19 +11,13 @@ from arden.events.sse import (
     agent_events_to_sse,
 )
 from arden.observability import activate_tracing, observed_trace
-from arden.server.state import RunStatus
-
-if TYPE_CHECKING:
-    from arden.agent import Agent
-    from arden.server.bus import SessionBus
-    from arden.services.chat import ChatContext
+from arden.server.bus import SessionBus
+from arden.services.chat_context import ChatContext
 
 
 @observed_trace("chat.agent", tags="chat")
-async def run_agent_loop(
-    ctx: "ChatContext", agent: "Agent", bus: "SessionBus"
-) -> tuple[str | None, AsyncGenerator | None]:
-    activate_tracing(getattr(ctx.run, "session_id", None), tags="chat")
+async def run_agent_loop(ctx: ChatContext, agent: Agent, bus: SessionBus) -> tuple[str | None, AsyncGenerator | None]:
+    activate_tracing(ctx.run.session_id, tags="chat")
     messages = ctx.run.messages
 
     result = ""
@@ -79,12 +72,7 @@ async def run_agent_loop(
             return
         await close_open_text()
         await bus.emit(RunCancelledEvent(run_id=ctx.run.run_id))
-        registry = getattr(ctx, "run_registry", None)
-        if registry is not None:
-            registry.finish_cancelled(ctx.run.run_id)
-        else:
-            ctx.run.cancel_terminal_emitted = True
-            ctx.run.status = RunStatus.CANCELLED
+        ctx.run_registry.finish_cancelled(ctx.run.run_id)
 
     try:
         async for item in gen:

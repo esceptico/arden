@@ -1,15 +1,10 @@
-from __future__ import annotations
-
-from typing import TYPE_CHECKING
+from collections.abc import Awaitable, Callable
 
 import pytest
 
 from arden.areas.lifecycle import AreaLifecycleService, AreaPageService
 from arden.revisions import ManagedFileRepository
 from arden.wiki.service import WikiService
-
-if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
 
 
 class FakeAreas:

@@ -159,9 +159,6 @@ class _PolicyOverrideTool(Tool):
         self._inner = inner
         self.policy = policy
 
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._inner, name)
-
     @property
     def display_name(self) -> str | None:
         return self._inner.display_name

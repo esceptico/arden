@@ -1,11 +1,9 @@
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
-if TYPE_CHECKING:
-    from arden.config import Config
-    from arden.notifiers.base import Notifier
-
+from arden.config import Config
+from arden.notifiers.base import Notifier
 from arden.tools.core.base import Tool
 
 ConnectionState = Literal[
@@ -74,8 +72,8 @@ class IntegrationConnectionSpec:
     capability: str
     action: ConnectionAction
     settings_tab: str = "integrations"
-    enabled: Callable[["Config"], bool] | None = None
-    configured: Callable[["Config"], bool] | None = None
+    enabled: Callable[[Config], bool] | None = None
+    configured: Callable[[Config], bool] | None = None
     required_scopes: tuple[str, ...] = ()
 
 

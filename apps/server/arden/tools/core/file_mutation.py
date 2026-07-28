@@ -56,8 +56,7 @@ def atomic_compare_and_swap(path: Path, content: str, expected_sha256: str) -> F
     encoded = content.encode("utf-8")
     temp_path = path.with_name(f".{path.name}.arden-{uuid4().hex}.tmp")
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
+    flags |= os.O_NOFOLLOW
     fd = os.open(temp_path, flags, 0o666)
     try:
         if path.exists():

@@ -48,6 +48,7 @@ from arden.observability import activate_tracing, observed_trace
 from arden.server.bus import BusRegistry, SessionBus, prime_bus_cursor_from_store
 from arden.server.state import RunRegistry, RunState, RunStatus
 from arden.server.stream import run_agent_loop
+from arden.services.chat_context import ChatContext
 from arden.services.goal_continuation import (
     goal_continuation_prompt,
 )
@@ -228,35 +229,6 @@ class ChatDeps:
     wiki_context: object | None = None
     skill_registry: SkillRegistry | None = None
     notifier_service: NotifierService | None = None
-
-
-@dataclass
-class ChatContext:
-    run: RunState
-    session_state: SessionState
-    is_init: bool
-    executor: ToolExecutor
-    tools: list[dict]
-    config: AgentConfig
-    available_integrations: list[str]
-    integration_errors: dict[str, str]
-    session_service: SessionService
-    run_registry: RunRegistry
-    connection_catalog: tuple[object, ...] = ()
-    initial_input_tokens: int | None = None
-    goal_id: str | None = None
-    session_name_task: asyncio.Task[str] | None = None
-    area_context: AreaContext | None = None
-    enqueue_run_completed: Callable[[RunCompleted], Awaitable[bool]] | None = None
-    enqueue_run_failed: Callable[[RunFailed], Awaitable[bool]] | None = None
-    dispatch_session_message: (
-        Callable[
-            [str, str, str | None, bool | None, list[dict] | None],
-            Awaitable[object],
-        ]
-        | None
-    ) = None
-    output_schema: type[BaseModel] | None = None
 
 
 async def _apply_generated_session_name(ctx: ChatContext, bus: SessionBus) -> None:

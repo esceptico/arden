@@ -7,10 +7,9 @@ Generated from static Python imports on 2026-07-28. Scope:
 - `arden.wiki`
 - their direct runtime, router, tool, and Area consumers
 
-The AST graph has no runtime strongly connected component inside this scope.
-Treating every current `TYPE_CHECKING` import as a runtime import also creates
-no strongly connected component. The guards are therefore not solving a real
-cycle.
+The final AST graph covers all 315 `arden` modules and 1,200 import edges. It
+has no strongly connected component. Production and tests contain no
+`TYPE_CHECKING` or postponed-annotation imports.
 
 ## Current graph
 
@@ -111,7 +110,7 @@ Rules:
 5. Maintenance and curation packages may depend on fact/wiki core services but
    never on each other.
 
-## Annotation findings
+## Baseline annotation findings
 
 - 34 scoped modules use `from __future__ import annotations`.
 - 21 scoped modules use `TYPE_CHECKING`.
@@ -138,3 +137,54 @@ order and package ownership should make runtime annotations valid directly.
 6. Replace duck-typed required-service lookup and swallowed invariant failures
    with typed dependencies and explicit errors.
 7. Re-run the AST graph and import smoke tests after every move.
+
+## 2026-07-28 simplification contract
+
+The package moves above are complete. The remaining cleanup follows these
+rules:
+
+1. Use absolute imports throughout revisions, facts, and wiki code.
+2. Keep validation at JSON, Markdown, SQLite, HTTP, and completion boundaries.
+   Internal dataclasses are typed value objects and do not repeat runtime type
+   validation.
+3. Do not use `getattr`, `setattr`, `hasattr`, dataclass-field reflection, or
+   `object.__setattr__` in these packages. Fixed schemas stay explicit.
+4. Replace the maintenance completion wrapper classes with direct typed
+   completion functions.
+5. Flatten maintenance flow with guards and one error boundary per durable
+   operation, while preserving checkpoint and retry semantics.
+6. Centralize shared wiki filenames and maintenance identities. Do not add a
+   generic validation or utility layer for unrelated domains.
+7. Prefer explicit field comparisons, `dataclasses.replace`, and outcome
+   dispatch over string-driven reflection.
+8. Remove redundant one-line wrappers when their expression is clearer at the
+   call site.
+
+Verification must include the dependency graph, import smoke tests, focused
+revision/fact/wiki suites, the full server suite, and a source audit for the
+forbidden reflection and relative-import patterns.
+
+## 2026-07-28 result
+
+- All production imports are absolute.
+- The event enum moved to a dependency-neutral module, removing the only
+  runtime event/workflow cycle.
+- Chat execution context moved below the chat service, removing its stream
+  cycle.
+- Tool context depends on small structural contracts rather than importing the
+  concrete registry, server state, and integration implementation back upward.
+- Internal revision, fact, wiki, and health dataclasses are plain value
+  objects. Strict Pydantic models validate completion, SQLite, and persisted
+  proposal input.
+- Maintenance completion wrappers are direct functions. Runner failures
+  propagate except for the explicit oversized-evidence path that creates a
+  durable user review.
+- Shared README, health, maintenance, and navigation identities live in
+  `arden.wiki.constants`.
+- Static architecture tests enforce absolute/eager imports and prohibit
+  reflection in the refactored packages.
+
+Proof: the graph reports 315 modules, 1,200 edges, and zero strongly connected
+components. Ruff checks all 498 server/test Python files; the full suite passes
+2,112 tests. The three existing warnings are `aiosqlite` worker-thread teardown
+warnings after pytest closes an event loop.

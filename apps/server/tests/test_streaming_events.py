@@ -61,6 +61,23 @@ from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContex
 from tests.helpers import make_executor, make_text_response
 
 
+class _RunRegistryStub:
+    def __init__(self, run: RunState) -> None:
+        self.run = run
+
+    def finish_cancelled(self, run_id: str) -> bool:
+        assert run_id == self.run.run_id
+        self.run.cancelled = True
+        self.run.cancel_terminal_emitted = True
+        self.run.accepting_injections = False
+        self.run.status = RunStatus.CANCELLED
+        return True
+
+
+def _stream_context(run: RunState, registry: RunRegistry | None = None) -> SimpleNamespace:
+    return SimpleNamespace(run=run, run_registry=registry or _RunRegistryStub(run))
+
+
 def test_text_boundary_events_convert_to_sse():
     (start,) = agent_events_to_sse(TextStarted(message_id="text-1"))
     (content,) = agent_events_to_sse(TextDelta(message_id="text-1", content="hello"))
@@ -223,7 +240,7 @@ async def test_run_agent_loop_collects_each_tool_source_ref_for_episode_provenan
             )
             yield Result(text="done", stop_reason=StopReason.END_TURN, steps=1, usage=Usage())
 
-    await run_agent_loop(SimpleNamespace(run=run), _Agent(), SessionBus(session_id="session-1"))
+    await run_agent_loop(_stream_context(run), _Agent(), SessionBus(session_id="session-1"))
 
     assert run.source_refs == [source.to_dict(), second.to_dict()]
 
@@ -260,7 +277,7 @@ async def test_run_source_refs_keep_more_than_50_unique_refs_across_tool_complet
                 )
             yield Result(text="done", stop_reason=StopReason.END_TURN, steps=1, usage=Usage())
 
-    await run_agent_loop(SimpleNamespace(run=run), _Agent(), SessionBus(session_id="session-1"))
+    await run_agent_loop(_stream_context(run), _Agent(), SessionBus(session_id="session-1"))
 
     assert len(run.source_refs) == 60
     assert [ref["ref"] for ref in run.source_refs] == [f"C1:{index}" for index in range(60)]
@@ -1134,7 +1151,7 @@ async def test_run_agent_loop_emits_text_end_before_run_cancelled():
             run.cancelled = True
             yield TextEnded(message_id="text-1", content="hello")
 
-    await run_agent_loop(SimpleNamespace(run=run), CancellingAgent(), bus)
+    await run_agent_loop(_stream_context(run), CancellingAgent(), bus)
 
     assert [record.event.type.value for record in bus._recent] == [
         "TEXT_MESSAGE_START",
@@ -1169,7 +1186,7 @@ async def test_run_agent_loop_closes_open_text_on_cooperative_cancel():
 
     bus = CancelAfterSecondContentBus()
 
-    await run_agent_loop(SimpleNamespace(run=run), CooperativeCancellingAgent(), bus)
+    await run_agent_loop(_stream_context(run), CooperativeCancellingAgent(), bus)
 
     assert [record.event.type.value for record in bus._recent] == [
         "TEXT_MESSAGE_START",
@@ -1198,7 +1215,7 @@ async def test_run_agent_loop_closes_text_before_backgrounding():
             run.backgrounded = True
             yield TextEnded(message_id="text-1", content="hello")
 
-    result, bg_gen = await run_agent_loop(SimpleNamespace(run=run), BackgroundingAgent(), bus)
+    result, bg_gen = await run_agent_loop(_stream_context(run), BackgroundingAgent(), bus)
 
     assert result is None
     assert bg_gen is not None
@@ -1231,7 +1248,7 @@ async def test_run_agent_loop_collects_current_tool_sources_before_background_ha
             )
             yield Result(text="done", stop_reason=StopReason.END_TURN, steps=1, usage=Usage())
 
-    result, bg_gen = await run_agent_loop(SimpleNamespace(run=run), BackgroundingAgent(), bus)
+    result, bg_gen = await run_agent_loop(_stream_context(run), BackgroundingAgent(), bus)
 
     assert result is None
     assert bg_gen is not None
@@ -1334,7 +1351,7 @@ async def test_run_agent_loop_closes_text_when_task_cancelled_during_content_flu
             yield TextEnded(depth=1, parent_id="call-research", message_id="text-1", content="hello")
 
     bus = CancellingContentFlushBus(session_id="sess-1")
-    task = asyncio.create_task(run_agent_loop(SimpleNamespace(run=run), AgentWithOpenText(), bus))
+    task = asyncio.create_task(run_agent_loop(_stream_context(run, run_registry), AgentWithOpenText(), bus))
     run.task = task
 
     await task
@@ -1365,7 +1382,7 @@ async def test_run_agent_loop_hard_task_cancel_emits_terminal_cancelled():
             yield TextDelta(depth=1, parent_id="call-research", message_id="text-1", content="partial")
             await released.wait()
 
-    task = asyncio.create_task(run_agent_loop(SimpleNamespace(run=run), AgentWithBlockingStream(), bus))
+    task = asyncio.create_task(run_agent_loop(_stream_context(run), AgentWithBlockingStream(), bus))
 
     async def wait_for_streamed_content():
         while len(bus._recent) < 2:
@@ -2989,7 +3006,7 @@ async def test_run_agent_loop_retries_text_end_when_emit_is_cancelled():
 
     bus = CancellingFirstEndBus()
 
-    await run_agent_loop(SimpleNamespace(run=run), AgentWithTextEnd(), bus)
+    await run_agent_loop(_stream_context(run), AgentWithTextEnd(), bus)
 
     assert [record.event.type.value for record in bus._recent] == [
         "TEXT_MESSAGE_START",

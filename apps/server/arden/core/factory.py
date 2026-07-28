@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from time import monotonic
-from typing import TYPE_CHECKING, Self
+from typing import Self
 
 from pydantic import BaseModel
 
@@ -16,6 +16,7 @@ from arden.core.spawner import create_spawn_fn
 from arden.core.tool_executor import ArdenToolExecutor
 from arden.core.usage_tracker import UsageTracker
 from arden.llm.models import get_model
+from arden.server.state import RunRegistry
 from arden.tools.core.context import (
     ApprovalControls,
     BackgroundTaskRegistry,
@@ -26,9 +27,6 @@ from arden.tools.core.context import (
 )
 from arden.tools.deferred import tool_schema_names
 from arden.tools.executor import ToolExecutor
-
-if TYPE_CHECKING:
-    from arden.server.state import RunRegistry
 
 
 @dataclass(frozen=True)

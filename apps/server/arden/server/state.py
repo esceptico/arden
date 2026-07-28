@@ -2,16 +2,13 @@ import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import TYPE_CHECKING
 
 from arden.agent import Usage
 from arden.agent.types.tools import normalize_source_refs
+from arden.context.models import SessionState
 from arden.core.ids import generate_run_id
+from arden.integrations.base import IntegrationConnectionDescriptor
 from arden.tools.core.context import ApprovalControls, BackgroundTaskRegistry
-
-if TYPE_CHECKING:
-    from arden.context.models import SessionState
-    from arden.integrations.base import IntegrationConnectionDescriptor
 
 
 class RunStatus(StrEnum):
@@ -54,7 +51,7 @@ class RunState:
     # pending input an empty string.
     pending_inputs: dict[str, "asyncio.Future[dict]"] = field(default_factory=dict)
     pending_connections: dict[str, "asyncio.Future[dict]"] = field(default_factory=dict)
-    pending_connection_descriptors: dict[str, "IntegrationConnectionDescriptor"] = field(default_factory=dict)
+    pending_connection_descriptors: dict[str, IntegrationConnectionDescriptor] = field(default_factory=dict)
     task: asyncio.Task | None = None
     inject_queue: list[dict] = field(default_factory=list)
     # Once an entry leaves inject_queue it may already be in the model's next

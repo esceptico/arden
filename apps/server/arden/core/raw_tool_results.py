@@ -5,8 +5,6 @@ The exact raw body lives here as compressed bytes keyed by sha256 so duplicate
 payloads share one object and old manifests can be garbage-collected later.
 """
 
-from __future__ import annotations
-
 import gzip
 import hashlib
 import os

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import UTC, datetime

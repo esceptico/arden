@@ -4,7 +4,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, TypedDict
+from typing import Any, Literal, TypedDict
 from uuid import uuid4
 
 from arden.agent import Role, ToolOutcomeStatus, ToolResult
@@ -14,14 +14,10 @@ from arden.constants import ARDEN_TMP_BASE
 from arden.context.models import AreaContext, SessionState
 from arden.events.sse import ApprovalNeededEvent, BackgroundTaskEvent, ConnectionNeededEvent, InputNeededEvent
 from arden.logging import get_logger
+from arden.tools.core.contracts import ConnectionDescriptor, RunRegistryContract, ToolRegistryContract
 from arden.tools.core.types import ToolOverrideDecision
 
 _logger = get_logger(__name__)
-
-if TYPE_CHECKING:
-    from arden.integrations.base import IntegrationConnectionDescriptor
-    from arden.server.state import RunRegistry
-    from arden.tools.core.registry import ToolRegistry
 
 
 class ApprovalResponse(TypedDict):
@@ -158,7 +154,7 @@ class IOBridge:
     # Connection requests are user-interaction suspensions, not approvals.
     # Keep them separate so Auto mode never resolves them.
     pending_connections: dict[str, "asyncio.Future[ApprovalResponse]"] | None = None
-    pending_connection_descriptors: dict[str, "IntegrationConnectionDescriptor"] | None = None
+    pending_connection_descriptors: dict[str, ConnectionDescriptor] | None = None
     record_approval: Callable[..., Awaitable[None]] | None = None
     resolve_approval: Callable[..., Awaitable[None]] | None = None
     record_connection: Callable[..., Awaitable[None]] | None = None
@@ -575,7 +571,7 @@ class ToolContext:
     """Shared context for tool execution."""
 
     session_state: SessionState
-    registry: "ToolRegistry"
+    registry: ToolRegistryContract
     run: RunContext
     io: IOBridge
     services: dict[str, Any] = field(default_factory=dict)
@@ -583,7 +579,7 @@ class ToolContext:
     ledger: SharedLedger | None = None
     spawn_fn: Callable[..., Awaitable[Any]] | None = None
     background_tasks: BackgroundTaskRegistry = field(default_factory=BackgroundTaskRegistry)
-    run_registry: "RunRegistry | None" = None
+    run_registry: RunRegistryContract | None = None
     # UsageTracker of the caller. Spawned subagents create their own tracker
     # for their internal LLM calls and, on completion, roll the resulting
     # `cost` (not the token usage — see SpawnResult docstring) into this
@@ -627,7 +623,7 @@ class ToolExecution:
 
     async def request_connection(
         self,
-        descriptor: "IntegrationConnectionDescriptor",
+        descriptor: ConnectionDescriptor,
         *,
         source: Literal["recovery", "suggestion"],
         detail: str | None = None,
