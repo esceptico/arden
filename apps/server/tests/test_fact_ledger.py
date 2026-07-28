@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -77,6 +78,50 @@ def _plan(
 
 def _canonical(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def test_facts_at_replays_exact_reachable_state_without_live_head_mixing(tmp_path: Path) -> None:
+    ledger = _ledger(tmp_path)
+    assert dict(ledger.facts_at(None)) == {}
+
+    source = _source("a")
+    source["extra"] = {"nested": {"value": "original"}, "items": [{"value": "first"}]}
+    _commit(ledger, _create("a", "First", sources=[source]))
+    first_revision = ledger.revision
+    assert first_revision is not None
+    first = ledger.facts_at(first_revision)
+
+    _commit(ledger, {"op": "amend", "fact_id": "a", "labels": ["changed"]}, _create("b", "Second"))
+
+    assert tuple(first) == ("a",)
+    assert first["a"].labels == ("memory",)
+    assert tuple(ledger.facts_at(first_revision)) == ("a",)
+    with pytest.raises(TypeError):
+        first["b"] = ledger.get("b")  # type: ignore[index]
+    with pytest.raises(TypeError):
+        first["a"].scope["key"] = "other"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        first["a"].sources[0]["ref"] = "changed"  # type: ignore[index]
+    extra = first["a"].sources[0]["extra"]
+    assert isinstance(extra, Mapping)
+    nested = extra["nested"]
+    assert isinstance(nested, Mapping)
+    with pytest.raises(TypeError):
+        nested["value"] = "changed"  # type: ignore[index]
+    items = extra["items"]
+    assert isinstance(items, tuple)
+    with pytest.raises(TypeError):
+        items[0]["value"] = "changed"  # type: ignore[index]
+
+
+def test_facts_at_rejects_unreachable_revision(tmp_path: Path) -> None:
+    ledger = _ledger(tmp_path)
+    _commit(ledger, _create("a", "First"))
+
+    with pytest.raises(FactValidationError, match="reachable"):
+        ledger.facts_at("0" * 64)
+    with pytest.raises(FactValidationError, match="revision"):
+        ledger.facts_at("")
 
 
 def test_schema_roundtrip_multiple_subjects_expiry_and_fallback(tmp_path: Path) -> None:

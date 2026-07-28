@@ -9,10 +9,11 @@ import re
 import unicodedata
 import uuid
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from itertools import pairwise
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 from arden.revisions import ChangeSet, Commit, Create, ManagedFileRepository, ResourceState, Update
@@ -82,6 +83,22 @@ class _FactSnapshot:
 
 def _canonical(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _readonly_json(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _readonly_json(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_readonly_json(item) for item in value)
+    return value
+
+
+def _readonly_fact(fact: Fact) -> Fact:
+    return replace(
+        fact,
+        scope=MappingProxyType(dict(fact.scope)),
+        sources=tuple(_readonly_json(source) for source in fact.sources),
+    )
 
 
 def _digest(value: object) -> str:
@@ -316,6 +333,24 @@ class FactLedger:
             return self._snapshot().state[fact_id]
         except KeyError as exc:
             raise KeyError(f"unknown fact: {fact_id}") from exc
+
+    def facts_at(self, revision: str | None) -> Mapping[str, Fact]:
+        """Return the immutable fact state at one reachable revision.
+
+        ``None`` is the empty, pre-ledger revision; it is not an alias for the
+        current head.  Non-empty revisions are replayed only from retained
+        canonical history, so a caller cannot accidentally combine an older
+        feed with the live fact state.
+        """
+
+        self._snapshot()
+        if revision is None:
+            return MappingProxyType({})
+        if not isinstance(revision, str) or not revision:
+            raise FactValidationError("revision must be a non-empty revision or null")
+        feed = self._change_feed_at(None, revision)
+        state = self._state_from(self._storage_order(feed.events))
+        return MappingProxyType({fact_id: _readonly_fact(fact) for fact_id, fact in state.items()})
 
     def get_version(self, fact_id: str, version: str) -> Fact:
         """Return one exact historical fact version from its immutable chain."""
