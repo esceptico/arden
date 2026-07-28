@@ -4,6 +4,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from arden.agent import ToolOutcomeStatus
 from arden.tools.core.base import Tool, ToolResult
 from arden.tools.core.context import ToolExecution
 from arden.tools.core.types import ApprovalMode, ApprovalWaived
@@ -19,6 +20,20 @@ class ToolCall:
 
 ToolNext = Callable[[ToolCall], Awaitable[ToolResult]]
 ToolMiddleware = Callable[[ToolCall, ToolNext], Awaitable[ToolResult]]
+
+
+async def require_capabilities(call: ToolCall, next_call: ToolNext) -> ToolResult:
+    """Enforce the same service boundary used to expose tool schemas."""
+
+    if not call.tool.policy.permissions.issubset(call.execution.ctx.capabilities):
+        return ToolResult.failure(
+            code="permission_denied",
+            message=f"Tool is unavailable in the current runtime: {call.name}.",
+            preview="Tool unavailable",
+            status=ToolOutcomeStatus.DENIED,
+            recovery_action="Use a tool exposed in the current system prompt.",
+        )
+    return await next_call(call)
 
 
 async def validate_arguments(call: ToolCall, next_call: ToolNext) -> ToolResult:
@@ -67,4 +82,8 @@ async def request_approval(call: ToolCall, next_call: ToolNext) -> ToolResult:
     return await next_call(call)
 
 
-DEFAULT_TOOL_MIDDLEWARE: tuple[ToolMiddleware, ...] = (validate_arguments, request_approval)
+DEFAULT_TOOL_MIDDLEWARE: tuple[ToolMiddleware, ...] = (
+    validate_arguments,
+    require_capabilities,
+    request_approval,
+)

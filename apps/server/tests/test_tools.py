@@ -284,6 +284,70 @@ async def test_tool_override_deny_blocks_execution():
 
 
 @pytest.mark.asyncio
+async def test_tool_execution_enforces_required_runtime_capabilities():
+    called = False
+
+    async def handler(execution, args):
+        nonlocal called
+        called = True
+        return ToolResult(content="should not run")
+
+    registry = ToolRegistry()
+    _register_tools(
+        registry,
+        {
+            "write_state": tool(
+                description="Write configured state.",
+                execute=handler,
+                policy=ToolPolicy(
+                    action=ToolAction.WRITE,
+                    scope=ToolScope.INTERNAL,
+                    permissions=frozenset({"configured_store"}),
+                ),
+            )
+        },
+    )
+
+    result = await registry.execute("write_state", _make_execution("write_state"), {})
+
+    assert called is False
+    assert result.is_error is True
+    assert result.preview == "Tool unavailable"
+    assert result.outcome is not None
+    assert result.outcome.status == ToolOutcomeStatus.DENIED
+    assert result.outcome.error is not None
+    assert result.outcome.error.code == "permission_denied"
+
+
+@pytest.mark.asyncio
+async def test_tool_execution_allows_present_runtime_capabilities():
+    async def handler(execution, args):
+        return ToolResult(content="ran", preview="ran")
+
+    registry = ToolRegistry()
+    _register_tools(
+        registry,
+        {
+            "read_state": tool(
+                description="Read configured state.",
+                execute=handler,
+                policy=ToolPolicy(
+                    action=ToolAction.READ,
+                    scope=ToolScope.INTERNAL,
+                    permissions=frozenset({"configured_store"}),
+                ),
+            )
+        },
+    )
+    execution = _make_execution("read_state")
+    execution.ctx.services["configured_store"] = object()
+
+    result = await registry.execute("read_state", execution, {})
+
+    assert result.content == "ran"
+
+
+@pytest.mark.asyncio
 async def test_tool_override_ask_headless_bypasses_skip_approvals():
     """ASK override + headless (no UI) + skip_approvals → bypasses (fires)."""
     registry = ToolRegistry(tool_overrides={"read_state": ToolOverrideDecision.ASK})
