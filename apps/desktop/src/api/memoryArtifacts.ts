@@ -339,7 +339,7 @@ function artifactSummary(page: WikiPageSummary): MemoryArtifactSummary {
     type: "file",
     directory: directory(page.path),
     scope: { kind: "global", key: null },
-    snippet: null,
+    snippet: page.excerpt,
     summary,
     revision: page.version,
     recordCount: pageCitations.length,

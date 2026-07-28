@@ -5,6 +5,8 @@ export interface WikiPageSummary {
   path: string;
   resourceState: "active" | "archived";
   title: string;
+  /** First prose block, supplied so list rows can preview without content. */
+  excerpt: string | null;
   aliases: string[];
   lifecycle: string;
   redirectTo: string | null;
@@ -94,6 +96,7 @@ interface RawWikiPage {
   path: string;
   resource_state: "active" | "archived";
   title: string;
+  excerpt?: string | null;
   aliases: string[];
   lifecycle: string;
   redirect_to: string | null;
@@ -112,6 +115,7 @@ function mapWikiPage(raw: RawWikiPage): WikiPage {
     path: raw.path,
     resourceState: raw.resource_state,
     title: raw.title,
+    excerpt: raw.excerpt ?? null,
     aliases: raw.aliases,
     lifecycle: raw.lifecycle,
     redirectTo: raw.redirect_to,
@@ -138,18 +142,26 @@ export function readWikiPage(config: AppConfig, pageId: string, options: { signa
   return apiWithConfig<RawWikiPage>(config, `/admin/wiki/pages/${encodeURIComponent(pageId)}`, { signal: options.signal }).then(mapWikiPage);
 }
 
+/** The server's WikilinkNode splits `[[page#fragment|alias]]` into its parts.
+ *  Rejoin page and fragment: the renderer matches links by the target exactly
+ *  as it appears in the source, and a fragment-only `[[#heading]]` has no page. */
+function linkTarget(node: { page?: string | null; fragment?: string | null }): string {
+  const page = node.page ?? "";
+  return node.fragment ? `${page}#${node.fragment}` : page;
+}
+
 function mapLink(raw: {
   source_page_id: string;
-  node: { target?: string; alias?: string | null; heading?: string | null };
+  node: { page?: string | null; fragment?: string | null; alias?: string | null };
   status: "resolved" | "ambiguous" | "unresolved";
   target_page_id?: string | null;
   candidates?: string[];
 }): WikiLink {
   return {
     sourcePageId: raw.source_page_id,
-    target: raw.node.target ?? "",
+    target: linkTarget(raw.node),
     alias: raw.node.alias ?? null,
-    heading: raw.node.heading ?? null,
+    heading: raw.node.fragment ?? null,
     status: raw.status,
     targetPageId: raw.target_page_id ?? null,
     candidates: raw.candidates ?? [],

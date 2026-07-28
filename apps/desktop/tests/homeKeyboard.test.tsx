@@ -166,20 +166,17 @@ test("Home shortcut dispatcher mirrors deck verbs while preserving typing and mo
 
   capture.focus();
   expect(dispatch("1")).toBe(false);
-  // ⌘K toggles: focused → release, unfocused → summon with select-all.
-  expect(dispatch("k", { metaKey: true })).toBe(true);
-  expect(document.activeElement).not.toBe(capture);
-  expect(dispatch("k", { metaKey: true })).toBe(true);
+  // ⌘K is the palette's on every surface — Home does not claim it, so the
+  // dispatcher passes it through and the field keeps its focus.
+  expect(dispatch("k", { metaKey: true })).toBe(false);
   expect(document.activeElement).toBe(capture);
-  expect(capture.selectionStart).toBe(0);
-  expect(capture.selectionEnd).toBe(capture.value.length);
   expect(dispatch("Escape")).toBe(true);
   expect(dispatch("1", { ctrlKey: true })).toBe(false);
   expect(dispatch("Escape")).toBe(true);
   expect(calls.at(-1)).toBe("escape");
 });
 
-test("Home reserves Cmd+K for the router field, rotates the deck with J, and closes its foot with Escape", async () => {
+test("Cmd+K opens the palette on Home too, J rotates the deck, Escape closes its foot", async () => {
   installBridge();
   seed([ask("First", "question"), ask("Second", "question")]);
   const app = await renderHome(true);
@@ -188,17 +185,20 @@ test("Home reserves Cmd+K for the router field, rotates the deck with J, and clo
 
   capture.blur();
   await act(async () => keydown("k", { metaKey: true }));
-  // On Home the chord selects the router field — the field IS the palette
-  // here (same entry brain); the floating twin never opens.
-  expect(document.activeElement).toBe(capture);
-  expect(capture.selectionStart).toBe(0);
-  expect(capture.selectionEnd).toBe(capture.value.length);
+  // One chord, one meaning, everywhere: Home no longer hijacks it to focus
+  // its router field. The palette opens here exactly as it does over Memory,
+  // Automations and Settings.
+  expect(getState().paletteOpen).toBe(true);
+  expect(document.activeElement).not.toBe(capture);
+
+  // And it toggles back closed on a second press.
+  await act(async () => keydown("k", { metaKey: true }));
   expect(getState().paletteOpen).toBe(false);
 
-  // Second press toggles the focus (and its veil) back off.
-  await act(async () => keydown("k", { metaKey: true }));
-  expect(document.activeElement).not.toBe(capture);
-  expect(getState().paletteOpen).toBe(false);
+  // The palette holds the overlay stack for its exit; Home's deck keys stay
+  // inert until it has actually left, so wait for the layer to unregister.
+  await act(async () => { await Bun.sleep(400); });
+  expect(document.querySelector('[data-overlay-layer="command-palette"]')).toBeNull();
 
   app.tabIndex = -1;
   app.focus();

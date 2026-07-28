@@ -10,8 +10,9 @@ import { TabPanels, useTabDirection } from "@/components/ui/TabPanels";
 import { copyText } from "@/lib/clipboard";
 import { GhostBtn } from "@/features/memory/components/shared";
 import type { MemoryItem } from "@/api/memoryItems";
+import { stripCites } from "@/features/memory/lib/format";
 import type { MemoryArtifactSummary } from "@/features/memory/lib/notebookTypes";
-import { noteDateGroup, prettyDate, sortNotes, stem, type WorkspaceDir } from "@/features/memory/lib/workspaceTree";
+import { displayTitle, noteDateGroup, prettyDate, sortNotes, type WorkspaceDir } from "@/features/memory/lib/workspaceTree";
 
 const COLLAPSED_KEY = "arden.desktop.memory.rail.collapsed";
 const NOTEBOOK_COLLAPSED_KEY = "arden.desktop.memory.notebook.collapsed";
@@ -53,12 +54,17 @@ function persistStringSet(key: string, value: Set<string>): void {
  *  as plain text, so markdown emphasis, headings and wiki-link plumbing are
  *  stripped rather than rendered. */
 function previewLine(artifact: MemoryArtifactSummary): string {
-  return (artifact.snippet ?? artifact.summary ?? "")
+  return stripCites(artifact.snippet ?? artifact.summary ?? "")
     // Generated pages open with an `<!-- arden:index:start -->` marker — a
     // preview of the machinery, not of the note.
     .replace(/<!--[\s\S]*?(?:-->|$)/g, "")
     .replace(/\[\[[^\]|]+\|([^\]]+)\]\]/g, "$1")
     .replace(/\[\[([^\]]+)\]\]/g, "$1")
+    // Inline links keep their text; the URL is plumbing at this size.
+    .replace(/!?\[([^\]]*)\]\((?:[^()\s]|\([^()]*\))*\)/g, "$1")
+    // The synthesizer's `(from chat)` tags render as chips in the page. Here
+    // they would eat a third of the two visible lines.
+    .replace(/\s*\((?:from [a-z0-9_.:-]+(?: \+ [a-z0-9_.:-]+)*|inferred(?: \+ [a-z0-9_.:-]+)*)\)/g, "")
     .replace(/^\s*[-*+]\s+/gm, "")
     .replace(/[*_`>#]/g, "")
     .replace(/\s+/g, " ")
@@ -255,7 +261,7 @@ export function NotebookRail({
           openFileContextMenu(artifact.path, event.currentTarget, "keyboard", rect.left + 12, rect.bottom - 4);
         }}
       >
-        <span className="mw-label">{stem(artifact.path)}</span>
+        <span className="mw-label">{displayTitle(artifact)}</span>
       </button>
     );
 
@@ -288,7 +294,7 @@ export function NotebookRail({
 
   const notebookNotes = useMemo(() => [...allNotes].sort((left, right) => {
     const updated = (right.updatedAt ?? right.createdAt ?? "").localeCompare(left.updatedAt ?? left.createdAt ?? "");
-    return updated || stem(left.path).localeCompare(stem(right.path));
+    return updated || displayTitle(left).localeCompare(displayTitle(right));
   }), [allNotes]);
 
   /** Notes stay newest-first; the date buckets fall out of that order, so a
@@ -346,7 +352,7 @@ export function NotebookRail({
                     openFileContextMenu(artifact.path, event.currentTarget, "keyboard", rect.left + 12, rect.bottom - 4);
                   }}
                 >
-                  <span className="mw-note-card-title">{stem(artifact.path)}</span>
+                  <span className="mw-note-card-title">{displayTitle(artifact)}</span>
                   {preview ? <span className="mw-note-card-preview">{preview}</span> : null}
                   <span className="mw-note-card-date">{prettyDate(artifact.updatedAt ?? artifact.createdAt)}</span>
                 </button>

@@ -18,7 +18,7 @@ import { getBoardMotion } from "@/lib/boardMotion";
 interface MemoryDocumentTabsProps {
   paths: readonly string[];
   /** Page title lookup; a tab for an unlisted page falls back to its stem. */
-  titleForPath?: (path: string) => string | null;
+  titleForPath?: (path: string) => string | undefined;
   activeIndex: number;
   disabled?: boolean;
   onSelect: (index: number) => void;

@@ -241,12 +241,14 @@ test("canonical links retain resolution and map identities back to notebook path
 
   const links = await getPageLinks(currentConfig, { path: "topics/a.md" });
 
+  // The target is the link exactly as written in the source — page and
+  // fragment rejoined — because that is what the renderer matches against.
   expect(links.outgoing).toEqual([{
     sourcePath: "topics/a.md",
-    target: "B",
+    target: "B#Plan",
     display: "the project",
     heading: "Plan",
-    context: "[[B|the project]]",
+    context: "[[B#Plan|the project]]",
     line: 0,
     column: 0,
     status: "resolved",

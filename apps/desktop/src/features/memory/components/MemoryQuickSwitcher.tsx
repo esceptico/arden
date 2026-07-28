@@ -5,7 +5,7 @@ import clsx from "clsx";
 import { useOverlayLayer } from "@/lib/overlayStack";
 import { useFocusTrap } from "@/lib/hooks";
 import type { MemoryArtifactSummary } from "@/features/memory/lib/notebookTypes";
-import { stem } from "@/features/memory/lib/workspaceTree";
+import { displayTitle } from "@/features/memory/lib/workspaceTree";
 
 // Bounds the rendered list, not what's reachable — the listbox scrolls.
 const RESULT_LIMIT = 100;
@@ -56,14 +56,14 @@ export function rankSwitcherMatches(
     }
     const rest = artifacts
       .filter((artifact) => !seen.has(artifact.path))
-      .sort((a, b) => stem(a.path).localeCompare(stem(b.path)));
+      .sort((a, b) => displayTitle(a).localeCompare(displayTitle(b)));
     return [...recent, ...rest].slice(0, RESULT_LIMIT);
   }
 
   const needle = trimmed;
   const scored: Array<{ artifact: MemoryArtifactSummary; tier: number }> = [];
   for (const artifact of artifacts) {
-    const title = stem(artifact.path).toLowerCase();
+    const title = displayTitle(artifact).toLowerCase();
     const haystack = `${title} ${artifact.path.toLowerCase()}`;
     let tier: number | null = null;
     if (title.includes(needle)) tier = 0;
@@ -72,8 +72,8 @@ export function rankSwitcherMatches(
     if (tier !== null) scored.push({ artifact, tier });
   }
   scored.sort((a, b) => a.tier - b.tier
-    || stem(a.artifact.path).length - stem(b.artifact.path).length
-    || stem(a.artifact.path).localeCompare(stem(b.artifact.path)));
+    || displayTitle(a.artifact).length - displayTitle(b.artifact).length
+    || displayTitle(a.artifact).localeCompare(displayTitle(b.artifact)));
   return scored.slice(0, RESULT_LIMIT).map((entry) => entry.artifact);
 }
 
@@ -193,7 +193,7 @@ export function MemoryQuickSwitcher({
                   <FileText className={clsx("memory-switcher__row-icon", index === safeHighlighted && "active")} />
                   <span className="memory-switcher__row-copy">
                     <span className={clsx("memory-switcher__row-title", index === safeHighlighted && "active")}>
-                      {stem(artifact.path)}
+                      {displayTitle(artifact)}
                     </span>
                     {parent && <span className="memory-switcher__row-path">{parent}</span>}
                   </span>

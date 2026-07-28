@@ -28,6 +28,7 @@ from arden.memory.facts.service import (
 )
 from arden.revisions.errors import CorruptRepositoryError, RevisionConflictError, UnsafePathError
 from arden.server.runtime import get_runtime
+from arden.wiki.pages import page_excerpt
 from arden.wiki.service import WikiService, WikiValidationError
 
 wiki_router = APIRouter(prefix="/admin/wiki", tags=["wiki"])
@@ -136,6 +137,9 @@ def _page_json(
         "path": record.resource.path,
         "resource_state": record.resource.state.value,
         "title": record.page.title,
+        # The list response omits content, so rows have nothing to preview
+        # without this; it is the same first prose block the hover card shows.
+        "excerpt": page_excerpt(record.page.body),
         "aliases": list(record.page.aliases),
         "lifecycle": record.page.lifecycle,
         "redirect_to": record.page.redirect_to,

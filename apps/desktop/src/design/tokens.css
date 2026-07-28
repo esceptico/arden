@@ -84,6 +84,10 @@
   --z-shell-toggle: 45;
   --z-panel: 30;
   --z-panel-overlay: 45;
+  /* A takeover replaces the page, it does not float over it — so it sits
+     BELOW the shared scrim. Above it, the scrim reads identically whether a
+     sheet opens over Home, Memory, Automations or Settings. */
+  --z-takeover: 48;
   --z-scrim: 50;
   --z-modal: 50;
   --z-sheet: 60;
@@ -400,6 +404,7 @@
   --z-shell-toggle: 45;
   --z-panel: var(--z-shell-rail);
   --z-panel-overlay: var(--z-shell-toggle);
+  --z-takeover: 48;
   --z-scrim: 50;
   --z-modal: var(--z-scrim);
   --z-sheet: 60;

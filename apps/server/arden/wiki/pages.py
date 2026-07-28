@@ -328,6 +328,27 @@ def _page_from_data(data: Mapping[str, object], body: bytes, *, expected_page_id
     )
 
 
+_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+
+
+def page_excerpt(body: bytes, limit: int = 240) -> str:
+    """First prose block of a page body, for list rows and link previews.
+
+    Generated pages open with `<!-- generated -->` glued to the title heading,
+    so comments are stripped before a block is judged; otherwise the first
+    block reads as neither empty nor a heading and the excerpt is blank.
+    """
+
+    text = body.decode("utf-8", errors="replace")
+    for raw in re.split(r"\n\s*\n", text):
+        block = _COMMENT_RE.sub("", raw).strip()
+        if not block or block.startswith("#"):
+            continue
+        flat = " ".join(block.split())
+        return flat if len(flat) <= limit else f"{flat[:limit].rstrip()}…"
+    return ""
+
+
 def parse_page(content: bytes, *, expected_page_id: str | None = None) -> WikiPage:
     """Parse and validate a visible wiki Markdown page."""
 

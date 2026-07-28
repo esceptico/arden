@@ -1,13 +1,13 @@
 import { useEffect, useRef } from "react";
 import { splitFrontmatter } from "@/features/memory/lib/format";
-import { stem } from "@/features/memory/lib/workspaceTree";
 
 /** Markdown-source editor for a memory page — the draft's in-page editor:
- *  same page container, filename title, autosized body-only textarea
+ *  same page container and title as the read view, autosized body-only textarea
  *  (frontmatter is held back and reattached on change). Cmd/Ctrl+S (bound
  *  in ArtifactMemoryView) sends the draft to the review flow; Esc closes. */
 export function MemoryEditor({
   path,
+  title,
   baseContent,
   value,
   saving,
@@ -16,6 +16,8 @@ export function MemoryEditor({
   onClose,
 }: {
   path: string;
+  /** The page's own title — the header must not change under the editor. */
+  title: string;
   baseContent: string;
   value: string;
   saving: boolean;
@@ -54,15 +56,17 @@ export function MemoryEditor({
       data-memory-editor
       data-memory-editor-mode="source"
       aria-label={`Edit ${path}`}
-      className="mw-scroller scroll-thin h-full"
+      // Same edge treatment as the read view: without the fade, markdown
+      // source scrolls into the floating tab strip unsoftened.
+      className="mw-scroller scroll-thin scroll-fade h-full"
     >
       <p role="status" aria-live="polite" className="sr-only">
         {saving ? `Reviewing ${path}` : dirty ? `Editing ${path} — unsaved draft` : `Editing ${path}`}
       </p>
       <p id={hintId} className="sr-only">Press Cmd/Ctrl+S to review changes and Escape to close the editor.</p>
       <div className="mw-page">
-        <p className="mw-note-crumb">{path.includes("/") ? path.split("/").slice(0, -1).join(" / ") : "memory"} / <b>{stem(path)}</b></p>
-        <h1 className="mw-note-title">{stem(path)}</h1>
+        <p className="mw-note-crumb">{path.includes("/") ? path.split("/").slice(0, -1).join(" / ") : "memory"} / <b>{title}</b></p>
+        <h1 className="mw-note-title">{title}</h1>
         <textarea
           ref={sourceRef}
           className="mw-editor-textarea"

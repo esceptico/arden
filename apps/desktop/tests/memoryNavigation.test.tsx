@@ -158,7 +158,7 @@ test("a refreshed Memory entry hydrates its active tab and note together", async
   const { host, root } = setup("me.md");
   await act(async () => root.render(<ArtifactMemoryView config={config} />));
   await settle(300);
-  expect(host.querySelector("h1")?.textContent).toBe("me");
+  expect(host.querySelector("h1")?.textContent).toBe("Me");
   localStorage.removeItem("arden.desktop.memory.lastPath");
 
   bridge.state.pages.clear();
@@ -169,8 +169,8 @@ test("a refreshed Memory entry hydrates its active tab and note together", async
   await act(async () => useStore.setState((state) => ({ memoryVaultVersion: state.memoryVaultVersion + 1 })));
   await settle(300);
 
-  expect(host.querySelector(".mw-doc-tab.on")?.textContent).toContain("me");
-  expect(host.querySelector("h1")?.textContent).toBe("me");
+  expect(host.querySelector(".mw-doc-tab.on")?.textContent).toContain("Me");
+  expect(host.querySelector("h1")?.textContent).toBe("Me");
   expect(host.textContent).not.toContain("Nothing selected");
 });
 
@@ -373,7 +373,7 @@ test("notebook history shortcuts restore pages and ignore focused editors", asyn
   const { host, root } = setup("a.md");
   await act(async () => root.render(<ArtifactMemoryView config={config} />));
   await settle(350);
-  expect(host.querySelector("h1")?.textContent).toBe("a");
+  expect(host.querySelector("h1")?.textContent).toBe("A");
   expect(host.querySelector('button[aria-label="Back in memory history"]')).toBeNull();
   expect(bridge.requests.some((request) => request.path.includes("/history"))).toBe(false);
   let inlinePaths = Array.from(host.querySelectorAll<HTMLAnchorElement>('[data-memory-path="b.md"]'));
@@ -409,10 +409,10 @@ test("notebook history shortcuts restore pages and ignore focused editors", asyn
   await act(async () => beeLinks[1]!.click());
   await settle(250);
   expect(bridge.requests.some((request) => request.path === `/admin/wiki/pages/${bPage.pageId}`)).toBe(true);
-  expect(host.querySelector("h1")?.textContent).toBe("b");
+  expect(host.querySelector("h1")?.textContent).toBe("B");
   await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "[", metaKey: true, bubbles: true })));
   await settle(250);
-  expect(host.querySelector("h1")?.textContent).toBe("a");
+  expect(host.querySelector("h1")?.textContent).toBe("A");
 
   // A focused quick-switcher input must swallow history shortcuts.
   await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "o", metaKey: true, bubbles: true })));
@@ -421,12 +421,12 @@ test("notebook history shortcuts restore pages and ignore focused editors", asyn
   await act(async () => input.focus());
   await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "]", metaKey: true, bubbles: true })));
   await settle(250);
-  expect(host.querySelector("h1")?.textContent).toBe("a");
+  expect(host.querySelector("h1")?.textContent).toBe("A");
   await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   await settle();
   await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "]", ctrlKey: true, bubbles: true })));
   await settle(250);
-  expect(host.querySelector("h1")?.textContent).toBe("b");
+  expect(host.querySelector("h1")?.textContent).toBe("B");
   expect(bridge.requests.some((request) => request.path.includes("/history"))).toBe(false);
   await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Open links"]')?.click());
   await settle(30);
@@ -458,7 +458,7 @@ test("a delayed link snapshot cannot resolve the next page or overwrite a later 
           repository_head: "wiki-head-1",
           outgoing: [{
             source_page_id: source.pageId,
-            node: { target: "Shared", alias: null, heading: null },
+            node: { page: "Shared", fragment: null, alias: null },
             status: "resolved",
             target_page_id: target.pageId,
             candidates: [target.pageId],
@@ -476,7 +476,7 @@ test("a delayed link snapshot cannot resolve the next page or overwrite a later 
 
   await act(async () => host.querySelector<HTMLButtonElement>('[data-memory-entry="b.md"]')?.click());
   await settle(250);
-  expect(host.querySelector("h1")?.textContent).toBe("b");
+  expect(host.querySelector("h1")?.textContent).toBe("B");
   expect(host.querySelector<HTMLAnchorElement>('[data-wikilink="Shared"]')?.classList.contains("wikilink--unresolved")).toBe(true);
 
   await act(async () => host.querySelector<HTMLButtonElement>('[data-memory-entry="a.md"]')?.click());
@@ -484,11 +484,11 @@ test("a delayed link snapshot cannot resolve the next page or overwrite a later 
   releaseB?.();
   await settle(100);
   const current = host.querySelector<HTMLAnchorElement>('[data-wikilink="Shared"]')!;
-  expect(host.querySelector("h1")?.textContent).toBe("a");
+  expect(host.querySelector("h1")?.textContent).toBe("A");
   expect(current.classList.contains("wikilink--unresolved")).toBe(false);
   await act(async () => current.click());
   await settle(250);
-  expect(host.querySelector("h1")?.textContent).toBe("x");
+  expect(host.querySelector("h1")?.textContent).toBe("X");
 });
 
 test("opening the inspector fetches full-page links and history once and pane switches stay local", async () => {
@@ -578,7 +578,7 @@ test("a vault change refetches the canonical link snapshot", async () => {
         repository_head: "wiki-head-1",
         outgoing: [{
           source_page_id: notePage.pageId,
-          node: { target: "Target", alias: null, heading: null },
+          node: { page: "Target", fragment: null, alias: null },
           status: "resolved",
           target_page_id: targetPage.pageId,
           candidates: [targetPage.pageId],
@@ -601,7 +601,7 @@ test("a vault change refetches the canonical link snapshot", async () => {
   expect(link.classList.contains("wikilink--unresolved")).toBe(false);
   await act(async () => link.click());
   await settle(250);
-  expect(host.querySelector("h1")?.textContent).toBe("target");
+  expect(host.querySelector("h1")?.textContent).toBe("Target");
 });
 
 test("vault revision refresh invalidates the selected detail cache", async () => {

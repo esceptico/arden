@@ -95,7 +95,7 @@ afterEach(async () => {
   localStorage.removeItem("arden.desktop.memory.lastPath");
 });
 
-test("rail mirrors the plain directory structure with filename stems and precise reserved paths", async () => {
+test("rail mirrors the plain directory structure with page titles and precise reserved paths", async () => {
   const rows = [
     artifact("README.md", "Wiki", null, { generated: true }),
     artifact("lab/README.md", "Lab guide"),
@@ -137,8 +137,8 @@ test("rail mirrors the plain directory structure with filename stems and precise
   ]) {
     expect(tree.querySelector(`[data-memory-entry="${path}"]`)).not.toBeNull();
   }
-  // Rows are labelled by filename stem.
-  expect(tree.querySelector('[data-memory-entry="lab/first.md"]')?.textContent).toBe("first");
+  // Rows are labelled by the page's frontmatter title.
+  expect(tree.querySelector('[data-memory-entry="lab/first.md"]')?.textContent).toBe("First");
   // Reserved paths never render: raw/ anywhere, engine files only at the root.
   expect(tree.querySelector('[data-memory-entry="lab/raw/secret.md"]')).toBeNull();
   expect(tree.querySelector('[data-memory-directory="lab/raw/"]')).toBeNull();
@@ -168,7 +168,7 @@ test("rail mirrors the plain directory structure with filename stems and precise
   }
 
   // Initial fallback selection is README.md; only the selected page is read.
-  expect(host.querySelector('[data-memory-zone="workspace"] h1')?.textContent).toBe("README");
+  expect(host.querySelector('[data-memory-zone="workspace"] h1')?.textContent).toBe("Wiki");
   const home = rows.find((row) => row.path === "README.md")!;
   expect(requests.some((request) => request.path === `/admin/wiki/pages/${home.pageId}`)).toBe(true);
   expect(requests.some((request) => request.path.endsWith("/page-lab-README-md"))).toBe(false);

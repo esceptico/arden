@@ -9,10 +9,14 @@ import { MemoryFindBar } from "@/features/memory/components/MemoryFindBar";
 import { MemoryProperties, type MemoryFrontmatter } from "@/features/memory/components/MemoryProperties";
 import { stripCites } from "@/features/memory/lib/format";
 import type { MemoryArtifactDetail, MemoryArtifactSummary } from "@/features/memory/lib/notebookTypes";
+import { displayTitle } from "@/features/memory/lib/workspaceTree";
 
-function filenameStem(path: string): string {
-  const name = path.split("/").pop() ?? path;
-  return name.replace(/\.md$/, "");
+/** Managed pages open with an H1 repeating their own title. The page header
+ *  already states it, so the body drops that one heading — and only that one. */
+function withoutTitleHeading(content: string, title: string): string {
+  const match = /^\s*#\s+(.+?)\s*(?:\n|$)/.exec(content);
+  if (!match || match[1]!.trim().toLocaleLowerCase() !== title.trim().toLocaleLowerCase()) return content;
+  return content.slice(match[0].length).replace(/^\n+/, "");
 }
 
 function noteTrail(path: string): string {
@@ -58,6 +62,7 @@ export function MemoryNote({
     );
   }
 
+  const title = displayTitle(summary);
   const content = detail?.content ?? "";
 
   return (
@@ -75,8 +80,8 @@ export function MemoryNote({
         className="mw-scroller scroll-thin scroll-fade min-w-0"
       >
         <div className="mw-page">
-          <p className="mw-note-crumb">{noteTrail(summary.path)} / <b>{filenameStem(summary.path)}</b></p>
-          <h1 className="mw-note-title">{filenameStem(summary.path)}</h1>
+          <p className="mw-note-crumb">{noteTrail(summary.path)} / <b>{title}</b></p>
+          <h1 className="mw-note-title">{title}</h1>
           {detail && (
             <MemoryProperties
               frontmatter={detail.frontmatter}
@@ -99,7 +104,7 @@ export function MemoryNote({
               <>
                 <WikiLinkContext.Provider value={wikiHandlers}>
                   <div className="mw-prose">
-                    <Markdown content={stripCites(content)} className="memory-doc max-w-none" />
+                    <Markdown content={withoutTitleHeading(stripCites(content), title)} className="memory-doc max-w-none" />
                   </div>
                 </WikiLinkContext.Provider>
               </>

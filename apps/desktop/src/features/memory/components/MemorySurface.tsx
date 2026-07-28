@@ -45,7 +45,7 @@ export function MemorySurface() {
           : { ...POSE_SHEET_OUT, transition: SHEET_EXIT_TRANSITION }
       }
       transition={reducedMotion ? { duration: MOTION.reduced } : SHEET_ENTER_TRANSITION}
-      className="memory-surface absolute inset-0 z-[var(--z-modal)] flex flex-col bg-bg-main"
+      className="memory-surface absolute inset-0 z-[var(--z-takeover)] flex flex-col bg-bg-main"
     >
       <ShellBackButton
         onClick={() => {

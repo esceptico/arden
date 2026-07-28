@@ -3,6 +3,7 @@ import { Command } from "cmdk";
 import { Breadcrumbs } from "@/features/command-palette/components/Breadcrumbs";
 import { Row } from "@/features/command-palette/components/Row";
 import { filterEntries, groupBySection } from "@/lib/commandEntries/filter";
+import { dismissTopBlockingOverlay } from "@/lib/overlayStack";
 import { useEntries } from "@/hooks/useEntries";
 import { SECTION_LABEL, type CommandEntry, type Crumb } from "@/lib/commandEntries/types";
 
@@ -103,6 +104,10 @@ export function PaletteBody({
     }
     if (entry.run) {
       onClose();
+      // Choosing an entry IS navigation — only now does a takeover underneath
+      // the palette give way, so that opening the palette over Memory and
+      // dismissing it leaves you exactly where you were.
+      dismissTopBlockingOverlay();
       void entry.run();
     }
   }

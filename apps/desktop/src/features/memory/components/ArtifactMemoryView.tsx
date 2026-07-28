@@ -60,7 +60,7 @@ import { clearDraft, clearDraftIfMatches, draftKey, getDraft, setDraft } from "@
 import { isNotebookResourcePath } from "@/features/memory/lib/notebookIndex";
 import { serializeFrontmatter, splitFrontmatter } from "@/features/memory/lib/format";
 import { getBoardMotion } from "@/lib/boardMotion";
-import { buildWorkspaceTree, stem } from "@/features/memory/lib/workspaceTree";
+import { buildWorkspaceTree, displayTitle } from "@/features/memory/lib/workspaceTree";
 import { planMemoryTabClose, planMemoryTabOpen, type MemoryTabCloseAction } from "@/features/memory/lib/tabContext";
 import { copyText } from "@/lib/clipboard";
 import type { MemoryFrontmatter } from "@/features/memory/components/MemoryProperties";
@@ -566,6 +566,11 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   }, [maintenanceDraft, maintenanceKey]);
 
   const navigableArtifacts = useMemo(() => artifacts.filter((artifact) => isNotebookResourcePath(artifact.path)), [artifacts]);
+  const titles = useMemo(
+    () => new Map(artifacts.map((artifact) => [artifact.path, displayTitle(artifact)])),
+    [artifacts],
+  );
+  const titleForPath = useCallback((path: string) => titles.get(path), [titles]);
   const workspaceTree = useMemo(() => buildWorkspaceTree(navigableArtifacts, directories), [directories, navigableArtifacts]);
   const selectedMeta = navigableArtifacts.find((artifact) => artifact.path === selected) ?? null;
   selectedMetaRef.current = selectedMeta;
@@ -1543,7 +1548,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
         {tabs.length > 0 && (
           <MemoryDocumentTabs
             paths={tabs}
-            titleForPath={(path) => stem(path)}
+            titleForPath={titleForPath}
             activeIndex={activeTab}
             disabled={reviewPending}
             onSelect={switchTab}
@@ -1691,6 +1696,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
             <div className="absolute inset-0 min-h-0">
               <MemoryEditor
                 path={editing.path}
+                title={titleForPath(editing.path) ?? editing.path}
                 baseContent={editing.baseContent}
                 value={editing.draftContent}
                 saving={editPending}
@@ -1777,7 +1783,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
               linkError={inspectorDetailIsCurrent ? linkError : null}
               historyError={inspectorDetailIsCurrent ? historyError : null}
               navigationDisabled={reviewPending || !inspectorDetailIsCurrent}
-              titleForPath={(path) => stem(path)}
+              titleForPath={titleForPath}
               onNavigate={navigateTo}
               onRetryLinks={() => setLinksRefreshKey((key) => key + 1)}
               onOpenDiff={(event, trigger) => {

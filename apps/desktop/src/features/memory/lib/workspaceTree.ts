@@ -25,6 +25,12 @@ export function stem(path: string): string {
   return leaf.replace(/\.md$/, "");
 }
 
+/** Every managed page carries a human title in frontmatter; the filename is
+ *  only its address. Labels read the title and fall back to the stem. */
+export function displayTitle(artifact: Pick<MemoryArtifactSummary, "path" | "title">): string {
+  return artifact.title.trim() || stem(artifact.path);
+}
+
 export function parentDir(path: string): string {
   const parts = path.split("/");
   return parts.length > 1 ? parts.slice(0, -1).join("/") : "";

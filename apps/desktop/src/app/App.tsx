@@ -61,6 +61,28 @@ const ToolViewer = lazy(() =>
   import("@/features/chat/components/ToolViewer").then((m) => ({ default: m.ToolViewer })),
 );
 
+/** Fetch the takeover chunks once the app is idle. Without this the FIRST
+ *  open of Memory/Automations/Settings spends ~300ms fetching its chunk
+ *  behind a null Suspense fallback: the click lands, nothing moves, and the
+ *  surface then arrives mid-animation. One rule for every takeover — no
+ *  per-surface preloading. */
+function usePreloadTakeovers(): void {
+  useEffect(() => {
+    const warm = () => {
+      void import("@/features/memory/components/MemorySurface");
+      void import("@/features/automations/components/AutomationsModal");
+      void import("@/features/settings/components/SettingsModal");
+    };
+    const idle = window.requestIdleCallback;
+    if (typeof idle === "function") {
+      const handle = idle(warm, { timeout: 2_000 });
+      return () => window.cancelIdleCallback?.(handle);
+    }
+    const timer = window.setTimeout(warm, 1_000);
+    return () => window.clearTimeout(timer);
+  }, []);
+}
+
 function useMediaQuery(queryText: string): boolean {
   const [matches, setMatches] = useState(() =>
     typeof window.matchMedia === "function"
@@ -108,6 +130,7 @@ function useFullscreenClass(): void {
 }
 
 export function App() {
+  usePreloadTakeovers();
   const hash = useHash();
   const currentSessionId = useStore((s) => s.currentSessionId);
   const sidebarHidden = useStore((s) => s.prefs.sidebarHidden);

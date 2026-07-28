@@ -51,6 +51,18 @@ export function isTopOverlay(element: HTMLElement | null): boolean {
   return stack.at(-1)?.element === element;
 }
 
+/** Whether the upper blocking surface would yield — asked before opening a
+ *  replacement surface, so a question that cannot be dismissed still wins
+ *  without closing anything that merely could be. */
+export function canDismissTopBlockingOverlay(): boolean {
+  for (let index = stack.length - 1; index >= 0; index -= 1) {
+    const entry = stack[index];
+    if (!entry.blocksInput) continue;
+    return !entry.dismissDisabled;
+  }
+  return false;
+}
+
 /** Close the upper blocking surface so a replacement surface can take over. */
 export function dismissTopBlockingOverlay(): boolean {
   for (let index = stack.length - 1; index >= 0; index -= 1) {

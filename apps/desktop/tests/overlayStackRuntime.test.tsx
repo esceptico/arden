@@ -96,7 +96,7 @@ test("a blocking takeover synchronously hides and dismisses older transient laye
   expect(hasBlockingOverlay()).toBe(true);
 });
 
-test("Cmd+K dismisses the top blocking layer and replaces it with the palette", async () => {
+test("Cmd+K opens the palette OVER a blocking layer without dismissing it", async () => {
   const app = document.createElement("div");
   app.id = "app";
   document.body.append(app);
@@ -122,7 +122,11 @@ test("Cmd+K dismisses the top blocking layer and replaces it with the palette", 
     }));
   });
 
-  expect(takeoverDismissals).toBe(1);
+  // Opening the palette is not navigation: the takeover underneath survives,
+  // so dismissing the palette leaves you exactly where you were. Only
+  // activating an entry gives the takeover away (see PaletteBody).
+  expect(takeoverDismissals).toBe(0);
+  expect(hasBlockingOverlay()).toBe(true);
   expect(getState().paletteOpen).toBe(true);
   expect(app.querySelector('[aria-label="Command palette"]')).not.toBeNull();
 });

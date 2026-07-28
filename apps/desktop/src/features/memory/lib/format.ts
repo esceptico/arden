@@ -7,8 +7,9 @@ export function isRecordListPage(path: string): boolean {
 
 // Strip inline (record:XXXXXXXX) provenance groups from synthesized prose for the
 // human view — they stay on disk. Mirrors the server's _CITATION_GROUP_RE so a lone
-// 8-hex token not wrapped in (record:…) is left alone.
-const _CITE_RE = /\s*\(record:[0-9a-fA-F]{8}(?:,\s*record:[0-9a-fA-F]{8})*\)/g;
+// hex token not wrapped in (record:…) is left alone. Ids are NOT a fixed
+// width — pinning the length to 8 left whole groups rendered raw in the prose.
+const _CITE_RE = /\s*\(record:[0-9a-fA-F]{6,}(?:,\s*record:[0-9a-fA-F]{6,})*\)/g;
 export function stripCites(s: string): string {
   return s.replace(_CITE_RE, "");
 }

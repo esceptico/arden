@@ -64,7 +64,7 @@ afterEach(async () => {
 
 function artifact(path: string, extra: Partial<MemoryArtifactSummary> = {}): MemoryArtifactSummary {
   return {
-    path, title: path, kind: "topic", type: "file", directory: path.includes("/") ? path.split("/")[0]! : "",
+    path, title: path.split("/").at(-1)!.replace(/\.md$/, ""), kind: "topic", type: "file", directory: path.includes("/") ? path.split("/")[0]! : "",
     scope: { kind: "user", key: null }, snippet: null, summary: null, revision: "r", recordCount: 0,
     generated: false, editable: true, readonlyReason: null, updatedAt: "2026-07-12T10:00:00Z",
     createdAt: null, labels: [], source: null, ...extra,
@@ -121,16 +121,16 @@ test("Cmd+O opens the switcher, typing filters, Enter navigates", async () => {
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
   await settle();
-  // Rows render path STEMS (with the parent folder as a subtitle), not titles.
+  // Rows render the page title, with the parent folder as a subtitle.
   const options = dialog!.querySelectorAll('[role="option"]');
   expect(options.length).toBe(1);
-  expect(options[0]?.textContent).toContain("dex");
+  expect(options[0]?.textContent).toContain("Dex");
   expect(options[0]?.textContent).toContain("topics");
 
   await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
   await settle(260);
   expect(document.querySelector('[aria-label="Quick switcher"]')).toBeNull();
-  expect(host.querySelector("h1")?.textContent).toBe("dex");
+  expect(host.querySelector("h1")?.textContent).toBe("Dex");
 
   // History recorded the jump — Cmd+[ returns to the previous note.
   await shortcut("[");

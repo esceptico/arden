@@ -8,6 +8,7 @@ from arden.wiki.pages import (
     PageValidationError,
     create_page,
     extract_generated_region,
+    page_excerpt,
     parse_page,
     update_generated_region,
     update_page_metadata,
@@ -177,3 +178,23 @@ def test_with_body_validates_generated_boundaries() -> None:
 
     with pytest.raises(PageValidationError, match="generated"):
         page.with_body(b"<!-- generated -->\n")
+
+
+def test_page_excerpt_skips_generated_markers_and_headings() -> None:
+    # A generated page glues the marker to its title heading with no blank
+    # line between them, so a naive "skip headings" rule returns the marker
+    # block and the excerpt renders blank.
+    body = b"<!-- generated -->\n# Dex\n\n## Employment\n\nHe left on 2026-07-17.\n"
+
+    assert page_excerpt(body) == "He left on 2026-07-17."
+
+
+def test_page_excerpt_collapses_whitespace_truncates_and_tolerates_empty() -> None:
+    assert page_excerpt(b"one\n  two   three\n") == "one two three"
+    assert page_excerpt(b"# Only a title\n") == ""
+    assert page_excerpt(b"") == ""
+    assert page_excerpt(b"<!-- generated -->\n<!-- /generated -->\n") == ""
+
+    long_body = ("word " * 100).encode()
+    excerpt = page_excerpt(long_body, limit=40)
+    assert len(excerpt) <= 41 and excerpt.endswith("…")

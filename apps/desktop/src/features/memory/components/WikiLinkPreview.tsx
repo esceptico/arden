@@ -8,9 +8,17 @@ import type { MemoryArtifactDetail, MemoryArtifactSummary, PageLinks } from "@/f
 const INTENT_DELAY_MS = 300;
 const HIDE_DELAY_MS = 120;
 
+/** First prose block of a page — what the hover card shows.
+ *
+ *  Generated pages open with `<!-- generated -->` markers, and the marker is
+ *  glued to the title heading with no blank line between them. Strip the
+ *  comments BEFORE testing a block, or the first block reads as neither empty
+ *  nor a heading and the card renders blank. */
 function previewMarkdownBlock(content: string) {
   const withoutFrontmatter = content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "");
-  const blocks = withoutFrontmatter.split(/\r?\n\s*\r?\n/).map((block) => block.trim());
+  const blocks = withoutFrontmatter
+    .split(/\r?\n\s*\r?\n/)
+    .map((block) => block.replace(/<!--[\s\S]*?-->/g, "").trim());
   return blocks.find((block) => block && !/^#{1,6}\s/.test(block)) ?? "No preview available.";
 }
 

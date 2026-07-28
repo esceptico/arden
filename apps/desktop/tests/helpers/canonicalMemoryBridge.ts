@@ -162,12 +162,16 @@ function rawFact(fact: FactFixture) {
 }
 
 function rawLink(link: LinkFixture) {
+  // The server's WikilinkNode carries `page` + `fragment`, never a joined
+  // `target` — the fixture has to speak the same shape or the mapper's
+  // rejoin goes untested.
+  const [page, fragment] = link.target.split("#", 2);
   return {
     source_page_id: link.sourcePageId,
     node: {
-      target: link.target,
+      page: page || null,
+      fragment: fragment ?? link.heading ?? null,
       alias: link.alias ?? null,
-      heading: link.heading ?? null,
     },
     status: link.status ?? "resolved",
     target_page_id: link.targetPageId ?? null,

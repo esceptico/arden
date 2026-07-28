@@ -80,7 +80,7 @@ export function Takeover({
               ? SHEET_ENTER_TRANSITION
               : SHEET_EXIT_TRANSITION
         }
-        className={`fixed inset-0 z-[var(--z-sheet)] overflow-hidden bg-[var(--paper)] focus:outline-none ${className}`}
+        className={`fixed inset-0 z-[var(--z-takeover)] overflow-hidden bg-[var(--paper)] focus:outline-none ${className}`}
       >
         <PageEntrance routeKey={ariaLabel}>{children}</PageEntrance>
       </motion.section>

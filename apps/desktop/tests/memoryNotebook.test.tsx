@@ -81,7 +81,7 @@ afterEach(async () => {
   ]) localStorage.removeItem(key);
 });
 
-test("memory opens as a filesystem notebook with a plain tree, tabs, and stems", async () => {
+test("memory opens as a filesystem notebook with a plain tree, tabs, and titles", async () => {
   installBridge();
   const { host, root } = setupDom();
   await act(async () => root.render(<ArtifactMemoryView config={config} />));
@@ -100,19 +100,19 @@ test("memory opens as a filesystem notebook with a plain tree, tabs, and stems",
   // are separate clusters on one desk band.
   const tablist = host.querySelector<HTMLElement>('[role="tablist"][aria-label="Open pages"]');
   expect(tablist).not.toBeNull();
-  expect(tablist?.querySelector('[role="tab"]')?.textContent).toContain("README");
+  expect(tablist?.querySelector('[role="tab"]')?.textContent).toContain("Wiki");
   expect(host.querySelector('[aria-label="Page instruments"]')).not.toBeNull();
   expect(host.querySelector('button[aria-label="Open links"]')).not.toBeNull();
 
   // The rail is a plain filesystem tree: folder nodes derive from managed
-  // paths and rows are labeled with filename stems.
+  // paths and rows are labeled with the page's frontmatter title.
   expect(rail?.querySelector('[data-memory-directory="topics/"]')).not.toBeNull();
   expect(rail?.querySelector('[data-memory-directory="research/"]')).not.toBeNull();
   expect(rail?.querySelector('[data-memory-directory="daily/"]')).not.toBeNull();
   const dexRow = rail?.querySelector<HTMLButtonElement>('[data-memory-entry="topics/dex.md"]');
-  expect(dexRow?.textContent).toBe("dex");
+  expect(dexRow?.textContent).toBe("Dex");
   expect(rail?.querySelector<HTMLButtonElement>('[data-memory-entry="daily/2026-07-13.md"]')?.textContent).toBe("2026-07-13");
-  expect(rail?.querySelector('[data-memory-entry="scratch.md"]')?.textContent).toBe("scratch");
+  expect(rail?.querySelector('[data-memory-entry="scratch.md"]')?.textContent).toBe("Scratch");
   expect(rail?.textContent).not.toContain("topics/dex.md");
   // Reserved machine paths never surface as tree rows.
   expect(rail?.querySelector('[data-memory-entry="raw/events/1.md"]')).toBeNull();
@@ -129,26 +129,27 @@ test("memory opens as a filesystem notebook with a plain tree, tabs, and stems",
   expect(topicsLabel.textContent).toBe("topics");
   await act(async () => topicsLabel.click());
   expect(topicsFolder.classList.contains("closed")).toBe(true);
-  expect(host.querySelector('[data-memory-zone="workspace"] h1')?.textContent).toBe("README");
+  expect(host.querySelector('[data-memory-zone="workspace"] h1')?.textContent).toBe("Wiki");
   await act(async () => topicsFolder.querySelector<HTMLButtonElement>('button[aria-label="Expand topics"]')?.click());
   expect(topicsFolder.classList.contains("closed")).toBe(false);
 
   // File rows navigate directly; the rail has no legacy context-menu layer.
   await act(async () => dexRow?.click());
   await settle(250);
-  expect(host.querySelector('[data-memory-zone="workspace"] h1')?.textContent).toBe("dex");
+  expect(host.querySelector('[data-memory-zone="workspace"] h1')?.textContent).toBe("Dex");
 
-  // The note surface: h1 is the filename stem, frontmatter renders as a
-  // Properties section, and body leading H1s stay in the prose.
+  // The note surface: h1 is the page title, frontmatter renders as a
+  // Properties section, and the body's own repeat of that title is dropped
+  // so the page is not headed twice.
   await act(async () => host.querySelector<HTMLButtonElement>('[data-memory-entry="me.md"]')?.click());
   await settle(250);
   const noteTitle = workspace?.querySelector("h1");
-  expect(noteTitle?.textContent).toBe("me");
+  expect(noteTitle?.textContent).toBe("Me");
   expect(workspace?.textContent).toContain("properties");
   expect(workspace?.textContent).toContain("personal");
   const prose = workspace?.querySelector(".mw-prose");
   expect(prose?.textContent).toContain("I build personal tools.");
-  expect(prose?.querySelector("h1")?.textContent).toBe("Me");
+  expect(prose?.querySelector("h1")).toBeNull();
   // Records live in the instrument panel only — no ledger under the prose.
   const ledger = Array.from(workspace?.querySelectorAll("button") ?? [])
     .find((button) => button.textContent?.includes("Records"));
@@ -158,7 +159,7 @@ test("memory opens as a filesystem notebook with a plain tree, tabs, and stems",
   const dexLink = workspace?.querySelector<HTMLAnchorElement>('[data-wikilink="topics/dex"]');
   await act(async () => dexLink?.click());
   await settle(250);
-  expect(workspace?.querySelector("h1")?.textContent).toBe("dex");
+  expect(workspace?.querySelector("h1")?.textContent).toBe("Dex");
 
   // The three mock modes share one compact rail and never replace it with a
   // diagnostic toolbar.
@@ -170,7 +171,7 @@ test("memory opens as a filesystem notebook with a plain tree, tabs, and stems",
   await settle(500);
   expect(rail?.querySelector('[role="tab"][data-tab-value="notebook"]')?.getAttribute("aria-selected")).toBe("true");
   expect(rail?.querySelector("[data-memory-notebook-list]")).not.toBeNull();
-  expect(rail?.querySelector('[data-memory-entry="me.md"]')?.textContent).toContain("me");
+  expect(rail?.querySelector('[data-memory-entry="me.md"]')?.textContent).toContain("Me");
 
   await act(async () => modeTabs.find((tab) => tab.dataset.tabValue === "facts")?.click());
   await settle(500);
@@ -195,19 +196,19 @@ test("Memory document tabs append, dedupe, rove, close, and preserve focus seman
   );
   const labels = () => openTabs().map((tab) => tab.textContent);
 
-  expect(labels()).toEqual(["README"]);
+  expect(labels()).toEqual(["Wiki"]);
   await act(async () => host.querySelector<HTMLButtonElement>('[data-memory-entry="topics/dex.md"]')?.click());
   await settle(250);
-  expect(labels()).toEqual(["README", "dex"]);
+  expect(labels()).toEqual(["Wiki", "Dex"]);
 
   await act(async () => host.querySelector<HTMLButtonElement>('[data-memory-entry="me.md"]')?.click());
   await settle(250);
-  expect(labels()).toEqual(["README", "dex", "me"]);
+  expect(labels()).toEqual(["Wiki", "Dex", "Me"]);
   expect(openTabs().map((tab) => tab.tabIndex)).toEqual([-1, -1, 0]);
 
   await act(async () => host.querySelector<HTMLButtonElement>('[data-memory-entry="topics/dex.md"]')?.click());
   await settle(250);
-  expect(labels()).toEqual(["README", "dex", "me"]);
+  expect(labels()).toEqual(["Wiki", "Dex", "Me"]);
   expect(openTabs().map((tab) => tab.tabIndex)).toEqual([-1, 0, -1]);
 
   const dexTab = openTabs()[1]!;
@@ -215,12 +216,12 @@ test("Memory document tabs append, dedupe, rove, close, and preserve focus seman
   await act(async () => host.querySelector<HTMLButtonElement>('[data-memory-entry="me.md"]')?.click());
   await settle(250);
   const openPages = host.querySelector('[role="tablist"][aria-label="Open pages"]');
-  expect(openPages?.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("me");
-  expect(host.querySelector("h1")?.textContent).toBe("me");
+  expect(openPages?.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("Me");
+  expect(host.querySelector("h1")?.textContent).toBe("Me");
 
   const closeButtons = Array.from(host.querySelectorAll<HTMLButtonElement>(".mw-doc-tab-x"));
   expect(closeButtons.map((button) => button.getAttribute("aria-label")))
-    .toEqual(["Close README", "Close dex", "Close me"]);
+    .toEqual(["Close Wiki", "Close Dex", "Close Me"]);
   expect(closeButtons.map((button) => button.tabIndex)).toEqual([-1, -1, 0]);
 
   const meTab = openTabs()[2]!;
@@ -231,9 +232,9 @@ test("Memory document tabs append, dedupe, rove, close, and preserve focus seman
     cancelable: true,
   })));
   await settle(250);
-  expect(labels()).toEqual(["README", "dex"]);
-  expect(openPages?.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("dex");
-  expect(document.activeElement?.textContent).toBe("dex");
+  expect(labels()).toEqual(["Wiki", "Dex"]);
+  expect(openPages?.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("Dex");
+  expect(document.activeElement?.textContent).toBe("Dex");
 
   await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", {
     key: "w",
@@ -242,8 +243,8 @@ test("Memory document tabs append, dedupe, rove, close, and preserve focus seman
     cancelable: true,
   })));
   await settle(250);
-  expect(labels()).toEqual(["README"]);
-  expect(openPages?.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("README");
+  expect(labels()).toEqual(["Wiki"]);
+  expect(openPages?.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("Wiki");
 
   await unmountRoot(root);
 });
@@ -307,7 +308,7 @@ test("default selection restores the last path, falls back to README.md, then th
   const readmeDom = setupDom();
   await act(async () => readmeDom.root.render(<ArtifactMemoryView config={config} />));
   await settle(250);
-  expect(readmeDom.host.querySelector('[data-memory-zone="workspace"] h1')?.textContent).toBe("README");
+  expect(readmeDom.host.querySelector('[data-memory-zone="workspace"] h1')?.textContent).toBe("Wiki");
   await unmountRoot(readmeDom.root);
   document.body.replaceChildren();
 
@@ -317,7 +318,7 @@ test("default selection restores the last path, falls back to README.md, then th
   const lastPathDom = setupDom();
   await act(async () => lastPathDom.root.render(<ArtifactMemoryView config={config} />));
   await settle(250);
-  expect(lastPathDom.host.querySelector('[data-memory-zone="workspace"] h1')?.textContent).toBe("me");
+  expect(lastPathDom.host.querySelector('[data-memory-zone="workspace"] h1')?.textContent).toBe("Me");
   await unmountRoot(lastPathDom.root);
   document.body.replaceChildren();
 
@@ -327,6 +328,6 @@ test("default selection restores the last path, falls back to README.md, then th
   const fallbackDom = setupDom();
   await act(async () => fallbackDom.root.render(<ArtifactMemoryView config={config} />));
   await settle(250);
-  expect(fallbackDom.host.querySelector('[data-memory-zone="workspace"] h1')?.textContent).toBe("scratch");
+  expect(fallbackDom.host.querySelector('[data-memory-zone="workspace"] h1')?.textContent).toBe("Scratch");
   await unmountRoot(fallbackDom.root);
 });

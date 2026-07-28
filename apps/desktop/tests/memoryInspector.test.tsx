@@ -326,7 +326,7 @@ test("the notebook inspector defaults closed and opens the links pane on demand"
   const { host, root } = setup();
   await act(async () => root.render(<ArtifactMemoryView config={viewConfig} />));
   await settle(350);
-  expect(host.querySelector("h1")?.textContent).toBe("note");
+  expect(host.querySelector("h1")?.textContent).toBe("Note");
   expect(host.querySelector('aside[aria-label="Page peek"]')).toBeNull();
   await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Open links"]')?.click());
   await settle(100);
@@ -396,5 +396,5 @@ test("the open inspector keeps its rendered shell while a new page detail loads"
   });
   await settle(350);
   expect(host.querySelector('aside[aria-label="Page peek"]')).toBe(inspector);
-  expect(host.querySelector("h1")?.textContent).toBe("note");
+  expect(host.querySelector("h1")?.textContent).toBe("Note");
 });

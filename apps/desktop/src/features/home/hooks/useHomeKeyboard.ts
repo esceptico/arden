@@ -54,21 +54,6 @@ export function dispatchHomeKeyboardShortcut(
   const meta = event.metaKey || event.ctrlKey;
   const key = event.key.toLowerCase();
 
-  // On Home the chord summons the router FIELD, not the floating palette:
-  // both run the same entry brain, so the palette would be a redundant
-  // clone hovering over its own twin. Same intent as everywhere else —
-  // "search/command" — in the surface-appropriate body. Pressing it again
-  // while focused releases the focus (and the veil with it).
-  if (meta && key === "k" && capture) {
-    if (document.activeElement === capture) {
-      capture.blur();
-    } else {
-      capture.focus();
-      capture.select();
-    }
-    return true;
-  }
-
   if (event.key === "Escape") {
     if (capture && document.activeElement === capture) {
       // The router sheet gets first say: close-then-clear before the field

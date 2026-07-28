@@ -1,7 +1,9 @@
 .automation-workspace {
   --automation-rail-w: var(--sidebar-width);
 
-  z-index: var(--z-sheet);
+  /* The paint rung belongs to Takeover (--z-takeover), one rung below the
+     shared scrim. Re-declaring it here put Automations ABOVE the scrim, so
+     Cmd/Ctrl+K opened the palette with no dim behind it. */
   position: relative;
   display: block;
   width: 100%;
