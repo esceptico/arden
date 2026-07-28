@@ -658,9 +658,43 @@ class FactLedger:
                 payload["certainty"] = change["certainty"]
             return payload
         if op == "amend":
-            allowed = {"kind", "labels", "subjects", "sources"}
+            allowed = {
+                "kind",
+                "labels",
+                "subjects",
+                "scope",
+                "lifecycle",
+                "evidence_class",
+                "sources",
+            }
             self._unknown(change, common | allowed)
             payload = self._metadata_payload(change)
+            if "scope" in change:
+                payload["scope"] = _scope(change["scope"])
+            if "evidence_class" in change:
+                evidence_class = change["evidence_class"]
+                if evidence_class not in _EVIDENCE:
+                    raise FactValidationError("invalid evidence_class")
+                payload["evidence_class"] = evidence_class
+            if "lifecycle" in change:
+                lifecycle = change["lifecycle"]
+                if lifecycle not in _LIFECYCLES:
+                    raise FactValidationError("invalid lifecycle")
+                payload["lifecycle"] = lifecycle
+                if lifecycle == "durable":
+                    payload.update(review_at=None, review_basis=None, expires_at=None)
+                elif current.lifecycle == "durable":
+                    payload.update(
+                        review_at=_time(point + _FALLBACK_REVIEW),
+                        review_basis="fallback",
+                        expires_at=None,
+                    )
+                else:
+                    payload.update(
+                        review_at=None if current.review_at is None else _time(current.review_at),
+                        review_basis=current.review_basis,
+                        expires_at=None if current.expires_at is None else _time(current.expires_at),
+                    )
             if not payload:
                 raise FactValidationError("amend must change metadata")
             return payload
@@ -951,7 +985,18 @@ class FactLedger:
             return
         allowed = {
             "review": {"reason", "review_at", "review_basis", "sources", "certainty"},
-            "amend": {"kind", "labels", "subjects", "sources"},
+            "amend": {
+                "kind",
+                "labels",
+                "subjects",
+                "scope",
+                "lifecycle",
+                "evidence_class",
+                "sources",
+                "review_at",
+                "review_basis",
+                "expires_at",
+            },
             "supersede": {"successor_id", "reason", "sources"},
             "expire": {"reason", "sources"},
             "retract": {"reason", "sources"},
@@ -977,6 +1022,31 @@ class FactLedger:
             _strings(payload["labels"], "labels")
         if "subjects" in payload:
             _strings(payload["subjects"], "subjects", required=True)
+        if "scope" in payload:
+            _scope(payload["scope"])
+        if op == "amend":
+            if "lifecycle" in payload:
+                if payload["lifecycle"] not in _LIFECYCLES:
+                    raise FactValidationError("invalid lifecycle")
+                if not {"review_at", "review_basis", "expires_at"} <= set(payload):
+                    raise FactValidationError("lifecycle amendment requires complete timing fields")
+                self._validate_review_pair(payload["review_at"], payload["review_basis"])
+                if payload["expires_at"] is not None:
+                    _parse_time(payload["expires_at"], "expires_at")
+                if payload["lifecycle"] == "durable" and (
+                    payload["review_at"] is not None or payload["expires_at"] is not None
+                ):
+                    raise FactValidationError("durable facts must not have review or expiry dates")
+                if (
+                    payload["lifecycle"] == "temporary"
+                    and payload["review_at"] is None
+                    and payload["expires_at"] is None
+                ):
+                    raise FactValidationError("temporary facts require review or expiry")
+            elif {"review_at", "review_basis", "expires_at"} & set(payload):
+                raise FactValidationError("fact timing fields require lifecycle")
+        if "evidence_class" in payload and payload["evidence_class"] not in _EVIDENCE:
+            raise FactValidationError("invalid evidence_class")
         if "sources" in payload:
             _sources(payload["sources"])
         if "certainty" in payload and payload["certainty"] not in _CERTAINTIES:

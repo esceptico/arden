@@ -387,20 +387,86 @@ def test_strict_schema_validation(tmp_path: Path, field: str, value: object) -> 
         _plan(ledger, (change,))
 
 
-def test_lifecycle_expiry_and_amendment_authority_are_strict(tmp_path: Path) -> None:
+def test_lifecycle_expiry_and_metadata_corrections_are_strict(tmp_path: Path) -> None:
     ledger = _ledger(tmp_path)
     with pytest.raises(FactValidationError, match="durable facts"):
         _plan(ledger, (_create("bad", "Durable expiry", expires_at="2026-08-01T00:00:00Z"),))
     _commit(ledger, _create("a", "Authority"))
+    _commit(
+        ledger,
+        {
+            "op": "amend",
+            "fact_id": "a",
+            "scope": {"kind": "global", "key": None},
+            "lifecycle": "temporary",
+            "evidence_class": "inferred",
+        },
+    )
+    corrected = ledger.get("a")
+    assert corrected.scope == {"kind": "global", "key": None}
+    assert corrected.lifecycle == "temporary"
+    assert corrected.evidence_class == "inferred"
+    assert corrected.review_at == JULY + timedelta(days=90)
+    assert corrected.review_basis == "fallback"
+    _commit(
+        ledger,
+        {
+            "op": "amend",
+            "fact_id": "a",
+            "lifecycle": "temporary",
+            "labels": ["reviewed-metadata"],
+        },
+    )
+    assert ledger.get("a").review_at == corrected.review_at
+    _commit(
+        ledger,
+        {
+            "op": "amend",
+            "fact_id": "a",
+            "scope": {"kind": "user", "key": None},
+            "lifecycle": "durable",
+            "evidence_class": "direct",
+        },
+    )
+    durable = ledger.get("a")
+    assert durable.lifecycle == "durable"
+    assert durable.review_at is None
+    assert durable.review_basis is None
+    assert durable.expires_at is None
     for field, value in (
-        ("evidence_class", "inferred"),
-        ("lifecycle", "temporary"),
+        ("evidence_class", "reported"),
+        ("lifecycle", "forever"),
         ("certainty", "uncertain"),
         ("expires_at", "2026-08-01T00:00:00Z"),
         ("scope", {"kind": "global", "key": "global"}),
     ):
-        with pytest.raises(FactValidationError, match="unknown change fields"):
+        with pytest.raises(FactValidationError):
             _plan(ledger, ({"op": "amend", "fact_id": "a", field: value},))
+
+
+def test_scope_correction_pins_old_and_new_duplicate_windows(tmp_path: Path) -> None:
+    ledger = _ledger(tmp_path)
+    _commit(ledger, _create("a", "Same"))
+    correction = _plan(
+        ledger,
+        (
+            {
+                "op": "amend",
+                "fact_id": "a",
+                "scope": {"kind": "global", "key": None},
+            },
+        ),
+    )
+    _commit(
+        ledger,
+        _create(
+            "b",
+            " Same ",
+            scope={"kind": "global", "key": None},
+        ),
+    )
+    with pytest.raises(FactConflictError, match="duplicate"):
+        ledger.commit(correction)
 
 
 def test_reasons_transitions_and_full_record_chain_hash(tmp_path: Path) -> None:
