@@ -15,6 +15,13 @@ from arden.llm.router import get_completion_client
 from arden.llm.router import init as llm_init
 from arden.logging import get_logger
 from arden.mcp.manager import MCPManager
+from arden.memory.facts import (
+    LEDGER_DIRECTORY,
+    FactLedger,
+    FactPlanStore,
+    FactService,
+    load_fact_cutover,
+)
 from arden.monitor.slack import SlackMonitor
 from arden.notifiers.base import NotifierContext
 from arden.notifiers.service import NotifierService
@@ -70,6 +77,8 @@ class Runtime:
         self.wiki_service: WikiService | None = None
         self.wiki_rename_coordinator: WikiRenameApprovalCoordinator | None = None
         self._wiki_approval_conn: database.aiosqlite.Connection | None = None
+        self.fact_service: FactService | None = None
+        self._fact_plan_conn: database.aiosqlite.Connection | None = None
 
         self._connected = False
         self._closing = False
@@ -204,10 +213,12 @@ class Runtime:
         if self._connected:
             return
 
+        fact_ledger = self._load_fact_ledger()
         init_tracing()
         llm_init(self.config)
         self.stores = await Stores.connect(self.config)
         await self._init_wiki()
+        await self._init_facts(fact_ledger)
         self.knowledge.set_memory_write_guard(self._require_legacy_page_writes)
         await self.knowledge.connect(self.stores)
         self._init_skills()
@@ -227,8 +238,17 @@ class Runtime:
         # The only empty -> managed transition is the supervised, offline
         # migration. Once a managed head exists, legacy canonical writes stay
         # disabled globally; path-level coexistence would be dual-write.
+        if self.fact_service is not None:
+            raise PermissionError("legacy memory writes are disabled after canonical fact cutover")
         if self.wiki_repository is not None and self.wiki_repository.head is not None:
             raise PermissionError("legacy memory page writes are disabled after managed wiki cutover")
+
+    def _load_fact_ledger(self) -> FactLedger | None:
+        if not self.config.memory or load_fact_cutover(self.config.memory_artifacts_dir) is None:
+            return None
+        ledger = FactLedger(self.config.memory_artifacts_dir / LEDGER_DIRECTORY)
+        ledger.validate_initialized()
+        return ledger
 
     def _init_skills(self) -> None:
         self.skill_registry = SkillRegistry()
@@ -248,6 +268,22 @@ class Runtime:
         approval_store = WikiRenameApprovalStore(self._wiki_approval_conn)
         await approval_store.init_schema()
         self.wiki_rename_coordinator = WikiRenameApprovalCoordinator(self.wiki_service, approval_store)
+
+    async def _init_facts(self, ledger: FactLedger | None) -> None:
+        self.fact_service = None
+        self.knowledge.set_fact_service(None)
+        if ledger is None:
+            return
+        connection = await database.connect(self.config.memory_db_path)
+        try:
+            plans = FactPlanStore(connection)
+            await plans.init_schema()
+        except BaseException:
+            await connection.close()
+            raise
+        self._fact_plan_conn = connection
+        self.fact_service = FactService(ledger, plans)
+        self.knowledge.set_fact_service(self.fact_service)
 
     async def _init_notifiers(self) -> None:
         self.notifier_service = NotifierService(
@@ -303,6 +339,11 @@ class Runtime:
         if self.mcp_manager:
             await self.mcp_manager.close()
         await self.knowledge.close()
+        if self._fact_plan_conn:
+            await self._fact_plan_conn.close()
+            self._fact_plan_conn = None
+        self.fact_service = None
+        self.knowledge.set_fact_service(None)
         if self._wiki_approval_conn:
             await self._wiki_approval_conn.close()
             self._wiki_approval_conn = None
@@ -315,7 +356,7 @@ class Runtime:
 
     def get_available_integrations(self) -> list[str]:
         ids = list(self.integrations.clients.keys())
-        if self.memory_records:
+        if self.memory_records is not None or self.fact_service is not None:
             ids.append("memory")
         return ids
 

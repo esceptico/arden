@@ -1,13 +1,20 @@
+from __future__ import annotations
+
 import asyncio
-from collections.abc import Callable
 from datetime import date
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from arden.config import Config
 from arden.llm.router import get_completion_client
 from arden.logging import get_logger
 from arden.server.indexer import Indexer
 from arden.server.stores import Stores
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from pathlib import Path
+
+    from arden.memory.facts import FactService
 
 _logger = get_logger(__name__)
 _EMPTY_CANONICAL_REVISION = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -293,14 +300,19 @@ class KnowledgeRuntime:
         self._page_edit_service = None
         self._consolidate = None
         self._artifact_refresh_task: asyncio.Task | None = None
-        self._vault_index = VaultIndexProjection(config.memory_artifacts_dir)
+        self._vault_index: VaultIndexProjection | None = None
         self._daily_projection: DailyProjectionCoordinator | None = None
         self._link_index: LinkIndexProjection | None = None
         self._memory_write_guard: Callable[[], None] | None = None
+        self._fact_service: FactService | None = None
 
     @property
     def memory_ready(self) -> bool:
         return self._record_store is not None
+
+    @property
+    def facts_ready(self) -> bool:
+        return self._fact_service is not None
 
     @property
     def record_store(self):
@@ -318,8 +330,13 @@ class KnowledgeRuntime:
     def set_memory_write_guard(self, guard: Callable[[], None]) -> None:
         self._memory_write_guard = guard
 
+    def set_fact_service(self, service: FactService | None) -> None:
+        self._fact_service = service
+
     @property
     def memory_writes_enabled(self) -> bool:
+        if getattr(self, "_fact_service", None) is not None:
+            return False
         guard = getattr(self, "_memory_write_guard", None)
         if guard is None:
             return True
@@ -387,6 +404,9 @@ class KnowledgeRuntime:
 
     async def connect(self, stores: Stores) -> None:
         await self._init_search()
+        if self._fact_service is not None:
+            _logger.info("memory ready (canonical facts)", root=str(self._fact_service.ledger.root))
+            return
         await self._init_memory(stores)
         if self.memory_curator is not None and self.memory_writes_enabled:
             self.memory_curator.start_sweep()
@@ -407,7 +427,8 @@ class KnowledgeRuntime:
         if daily_projection is not None:
             await daily_projection.close()
         self._page_edit_service = None
-        await self._vault_index.close()
+        if self._vault_index is not None:
+            await self._vault_index.close()
         if self._artifact_refresh_task is not None:
             self._artifact_refresh_task.cancel()
         if self.memory_curator:
@@ -427,7 +448,8 @@ class KnowledgeRuntime:
         if daily_projection is not None:
             await daily_projection.close()
         self._page_edit_service = None
-        await self._vault_index.close()
+        if self._vault_index is not None:
+            await self._vault_index.close()
         if self._consolidate:
             await self._consolidate.close()
         if self._record_store:
@@ -436,6 +458,14 @@ class KnowledgeRuntime:
             await self.indexer.close()
 
     def tool_services(self) -> dict[str, object | None]:
+        if self._fact_service is not None:
+            from arden.tools.facts import FACT_SERVICE
+
+            services: dict[str, object | None] = {FACT_SERVICE: self._fact_service}
+            if self.search_index:
+                services["search_index"] = self.search_index
+            return services
+
         from arden.tools.memory import MEMORY_RECONCILER_SERVICE, MEMORY_RECORDS_SERVICE
 
         services: dict[str, object | None] = {
@@ -490,7 +520,7 @@ class KnowledgeRuntime:
         if not self.config.memory:
             _logger.info("memory disabled by config")
             return
-        if not hasattr(self, "_vault_index"):
+        if self._vault_index is None:
             self._vault_index = VaultIndexProjection(self.config.memory_artifacts_dir)
 
         from arden.memory.health import initialize_empty_vault, validate_vault

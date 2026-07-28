@@ -296,6 +296,12 @@ class FactLedger:
     def history_root(self) -> Path:
         return self._repository.history_root
 
+    @property
+    def revision(self) -> str | None:
+        """Current validated canonical ledger head."""
+
+        return self._snapshot().head
+
     def get(self, fact_id: str) -> Fact:
         try:
             return self._snapshot().state[fact_id]
@@ -348,6 +354,14 @@ class FactLedger:
         if not events:
             raise KeyError(f"unknown fact: {fact_id}")
         return events
+
+    def validate_initialized(self) -> str:
+        """Fully validate an initialized ledger and return its current head."""
+
+        head = self.revision
+        if head is None:
+            raise FactLedgerCorruptionError("fact ledger is not initialized")
+        return head
 
     def due_reviews(self, *, now: datetime | None = None) -> tuple[DueReviewCandidate, ...]:
         point = self._now() if now is None else self._utc(now)

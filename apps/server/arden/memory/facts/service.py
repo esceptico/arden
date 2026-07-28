@@ -6,7 +6,8 @@ import asyncio
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from .ledger import FactLedger
 from .models import Fact, FactConflictError, FactEvent, FactPlan, FactValidationError
@@ -17,10 +18,8 @@ from .plan_store import (
     StoredFactPlan,
 )
 
-if TYPE_CHECKING:
-    from datetime import datetime
-
 FactScope = tuple[str, str | None]
+FactOrder = tuple[datetime, str]
 _SCOPE_KINDS = frozenset({"user", "area", "global", "project", "integration"})
 DEFAULT_RESULT_LIMIT = 100
 RELATED_DUE_FACT_LIMIT = 5
@@ -72,6 +71,13 @@ class DueFactReview:
     related_facts: tuple[Fact, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class FactPage[T]:
+    items: tuple[T, ...]
+    total: int
+    has_more: bool
+
+
 class FactScopeError(PermissionError):
     """A fact operation falls outside the principal's readable/writeable scopes."""
 
@@ -91,15 +97,43 @@ class FactService:
         subject: str | None = None,
         include_inactive: bool = False,
         limit: int = DEFAULT_RESULT_LIMIT,
+        after: FactOrder | None = None,
     ) -> tuple[Fact, ...]:
+        return (
+            await self.search_page(
+                principal,
+                query,
+                subject=subject,
+                include_inactive=include_inactive,
+                limit=limit,
+                after=after,
+            )
+        ).items
+
+    async def search_page(
+        self,
+        principal: FactPrincipal,
+        query: str | None = None,
+        *,
+        subject: str | None = None,
+        include_inactive: bool = False,
+        limit: int = DEFAULT_RESULT_LIMIT,
+        after: FactOrder | None = None,
+    ) -> FactPage[Fact]:
         limit = _limit(limit)
+        after = _after(after)
         facts = await asyncio.to_thread(
             self.ledger.search,
             query,
             subject=subject,
             include_inactive=include_inactive,
         )
-        return tuple(fact for fact in facts if principal.can_read(_scope(fact)))[:limit]
+        visible = tuple(fact for fact in facts if principal.can_read(_scope(fact)))
+        remaining = tuple(fact for fact in visible if after is None or (fact.created_at, fact.fact_id) > after)
+        return FactPage(remaining[:limit], len(visible), len(remaining) > limit)
+
+    async def revision(self) -> str | None:
+        return await asyncio.to_thread(lambda: self.ledger.revision)
 
     async def get(self, principal: FactPrincipal, fact_id: str) -> Fact:
         fact = await asyncio.to_thread(self.ledger.get, fact_id)
@@ -118,16 +152,30 @@ class FactService:
         return await asyncio.to_thread(self.ledger.history, fact_id)
 
     async def due_reviews(
-        self, principal: FactPrincipal, *, limit: int = DEFAULT_RESULT_LIMIT
+        self,
+        principal: FactPrincipal,
+        *,
+        limit: int = DEFAULT_RESULT_LIMIT,
+        after: FactOrder | None = None,
     ) -> tuple[DueFactReview, ...]:
+        return (await self.due_review_page(principal, limit=limit, after=after)).items
+
+    async def due_review_page(
+        self,
+        principal: FactPrincipal,
+        *,
+        limit: int = DEFAULT_RESULT_LIMIT,
+        after: FactOrder | None = None,
+    ) -> FactPage[DueFactReview]:
         limit = _limit(limit)
+        after = _after(after)
         due = await asyncio.to_thread(self.ledger.due_reviews)
         facts = await asyncio.to_thread(self.ledger.search, include_inactive=False)
         visible = tuple(fact for fact in facts if principal.can_read(_scope(fact)))
+        visible_due = tuple(item for item in due if principal.can_read(_scope(item.fact)))
+        remaining = tuple(item for item in visible_due if after is None or (item.due_at, item.fact.fact_id) > after)
         result = []
-        for item in due:
-            if not principal.can_read(_scope(item.fact)):
-                continue
+        for item in remaining[:limit]:
             subjects = set(item.fact.subjects)
             evidence_cutoff = item.fact.reviewed_at or item.fact.created_at
             related = tuple(
@@ -144,9 +192,7 @@ class FactService:
                 )
             )[:RELATED_DUE_FACT_LIMIT]
             result.append(DueFactReview(item.fact, item.due_at, related))
-            if len(result) == limit:
-                break
-        return tuple(result)
+        return FactPage(tuple(result), len(visible_due), len(remaining) > limit)
 
     async def plan(
         self,
@@ -279,6 +325,24 @@ def _limit(value: int) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= DEFAULT_RESULT_LIMIT:
         raise ValueError(f"limit must be between 1 and {DEFAULT_RESULT_LIMIT}")
     return value
+
+
+def _after(value: FactOrder | None) -> FactOrder | None:
+    if value is None:
+        return None
+    if not isinstance(value, tuple) or len(value) != 2:
+        raise ValueError("after must be a timestamp and fact_id pair")
+    point, fact_id = value
+    if (
+        not isinstance(point, datetime)
+        or point.tzinfo is None
+        or point.utcoffset() != timedelta(0)
+        or not isinstance(fact_id, str)
+        or not fact_id
+        or "\0" in fact_id
+    ):
+        raise ValueError("after must be a UTC timestamp and non-empty fact_id")
+    return point.astimezone(UTC), fact_id
 
 
 def _request_fingerprint(

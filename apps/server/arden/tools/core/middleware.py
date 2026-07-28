@@ -14,7 +14,7 @@ from arden.tools.core.types import ApprovalMode, ApprovalWaived
 class ToolCall:
     name: str
     tool: Tool
-    execution: ToolExecution
+    execution: ToolExecution | None
     arguments: dict[str, Any]
 
 
@@ -25,7 +25,10 @@ ToolMiddleware = Callable[[ToolCall, ToolNext], Awaitable[ToolResult]]
 async def require_capabilities(call: ToolCall, next_call: ToolNext) -> ToolResult:
     """Enforce the same service boundary used to expose tool schemas."""
 
-    if not call.tool.policy.permissions.issubset(call.execution.ctx.capabilities):
+    permissions = call.tool.policy.permissions
+    if not permissions:
+        return await next_call(call)
+    if call.execution is None or not permissions.issubset(call.execution.ctx.capabilities):
         return ToolResult.failure(
             code="permission_denied",
             message=f"Tool is unavailable in the current runtime: {call.name}.",

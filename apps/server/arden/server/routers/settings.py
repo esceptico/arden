@@ -30,7 +30,7 @@ router = APIRouter(tags=["settings"])
 
 def _config_response(rt: Runtime) -> dict:
     config = rt.config
-    memory_connected = rt.memory_records is not None
+    memory_connected = rt.memory_records is not None or rt.fact_service is not None
     web_client = rt.integrations.get_client("web")
     web_provider = getattr(web_client, "provider", "unknown") if web_client else "none"
     reasoning_efforts = list(get_model(config.chat_model).reasoning_efforts) if config.chat_model else []
@@ -204,9 +204,7 @@ async def get_models(runtime: Runtime = Depends(get_runtime)):
     # Pickers list connected providers only; an actively configured model stays
     # visible even if its provider was disconnected, so the selection keeps its
     # label until the user picks a reachable one.
-    visible = {
-        mid: m for mid, m in all_models.items() if m.provider in connected or mid in active
-    }
+    visible = {mid: m for mid, m in all_models.items() if m.provider in connected or mid in active}
     groups: dict[str, list[str]] = {}
     for mid, m in visible.items():
         provider_key = m.provider.value

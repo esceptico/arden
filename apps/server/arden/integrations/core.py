@@ -31,6 +31,14 @@ from arden.tools.bash import bash_tool
 from arden.tools.connections import request_connection_tool
 from arden.tools.deferred import load_tools_tool, tool_search_tool
 from arden.tools.directives import get_directives_tool, set_directives_tool
+from arden.tools.facts import (
+    commit_fact_changes_tool,
+    get_due_fact_reviews_tool,
+    get_fact_history_tool,
+    get_fact_tool,
+    plan_fact_changes_tool,
+    search_facts_tool,
+)
 from arden.tools.files import (
     edit_file_tool,
     find_files_tool,
@@ -203,6 +211,21 @@ MEMORY = Integration(
     },
 )
 
+# These tools remain hidden until a future offline cutover wires the separate
+# `facts` capability. They intentionally do not share the legacy memory tools.
+FACTS = Integration(
+    id="_facts",
+    label="Facts",
+    tools={
+        "search_facts": search_facts_tool,
+        "get_fact": get_fact_tool,
+        "get_fact_history": get_fact_history_tool,
+        "get_due_fact_reviews": get_due_fact_reviews_tool,
+        "plan_fact_changes": plan_fact_changes_tool,
+        "commit_fact_changes": commit_fact_changes_tool,
+    },
+)
+
 CORE_INTEGRATIONS = [
     SYSTEM,
     GOALS,
@@ -216,4 +239,5 @@ CORE_INTEGRATIONS = [
     APP_CONTROL,
     AREA,
     MEMORY,
+    FACTS,
 ]

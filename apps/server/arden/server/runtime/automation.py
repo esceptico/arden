@@ -322,10 +322,12 @@ class AutomationRuntime:
     def _build_memory_dream_handler(self):
         async def handler(context: dict | None) -> str | None:
             knowledge = self.get_knowledge()
-            if knowledge is None or not knowledge.memory_ready:
+            if knowledge is None:
                 return "memory dream unavailable (memory not ready)"
             if not knowledge.memory_writes_enabled:
                 return "legacy memory writes disabled after managed wiki cutover"
+            if not knowledge.memory_ready:
+                return "memory dream unavailable (memory not ready)"
             from arden.memory.dreamer import run_dream
             from arden.memory.file_store import load_conventions
             from arden.memory.maintenance import append_learnings, read_learnings
@@ -352,10 +354,12 @@ class AutomationRuntime:
     def _build_memory_synthesize_handler(self):
         async def handler(context: dict | None) -> str | None:
             knowledge = self.get_knowledge()
-            if knowledge is None or not knowledge.memory_ready:
+            if knowledge is None:
                 return "memory synthesis unavailable (memory not ready)"
             if not knowledge.memory_writes_enabled:
                 return "legacy memory writes disabled after managed wiki cutover"
+            if not knowledge.memory_ready:
+                return "memory synthesis unavailable (memory not ready)"
             from arden.memory.synthesize import run_synthesis
 
             llm, model = knowledge._memory_llm()
@@ -373,10 +377,12 @@ class AutomationRuntime:
     def _build_memory_retention_handler(self):
         async def handler(context: dict | None) -> str | None:
             knowledge = self.get_knowledge()
-            if knowledge is None or not knowledge.memory_ready:
+            if knowledge is None:
                 return "memory retention unavailable (memory not ready)"
             if not knowledge.memory_writes_enabled:
                 return "legacy memory writes disabled after managed wiki cutover"
+            if not knowledge.memory_ready:
+                return "memory retention unavailable (memory not ready)"
             from arden.memory.retention import run_retention
 
             store = knowledge.record_store
