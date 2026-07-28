@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from .ledger import FactLedger
-from .models import Fact, FactConflictError, FactEvent, FactPlan, FactValidationError
+from .models import Fact, FactChangeFeed, FactConflictError, FactEvent, FactPlan, FactValidationError
 from .plan_store import (
     FactPlanCorruptionError,
     FactPlanRequestConflictError,
@@ -142,6 +142,11 @@ class FactService:
 
     async def revision(self) -> str | None:
         return await asyncio.to_thread(lambda: self.ledger.revision)
+
+    async def changes_since(self, watermark: str | None) -> FactChangeFeed:
+        """Read one stable canonical delta for a durable backend consumer."""
+
+        return await asyncio.to_thread(self.ledger.changes_since, watermark)
 
     async def known_scopes(self) -> frozenset[FactScope]:
         """Return scopes present in canonical history without granting authority."""

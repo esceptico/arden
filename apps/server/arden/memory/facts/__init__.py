@@ -1,5 +1,6 @@
 """Canonical append-only facts; intentionally independent from wiki projections."""
 
+from .consumer_store import FactConsumerStore, FactConsumerWatermark, FactConsumerWatermarkConflictError
 from .cutover import (
     LEDGER_DIRECTORY,
     MARKER_NAME,
@@ -13,6 +14,7 @@ from .legacy import adapt_legacy_source_ref
 from .models import (
     DueReviewCandidate,
     Fact,
+    FactChangeFeed,
     FactConflictError,
     FactEvent,
     FactLedgerCorruptionError,
@@ -42,6 +44,10 @@ __all__ = [
     "DueReviewCandidate",
     "DueFactReview",
     "Fact",
+    "FactChangeFeed",
+    "FactConsumerStore",
+    "FactConsumerWatermark",
+    "FactConsumerWatermarkConflictError",
     "FactCutover",
     "FactCutoverError",
     "FactConflictError",

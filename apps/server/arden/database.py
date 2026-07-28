@@ -16,8 +16,14 @@ def serialize_embedding(embedding: np.ndarray | list[float] | None) -> bytes | N
     return arr.tobytes()
 
 
-async def connect(db_path: Path, *, vec: bool = False, readonly: bool = False) -> aiosqlite.Connection:
-    conn = aiosqlite.connect(db_path, isolation_level=None if readonly else "")
+async def connect(
+    db_path: Path,
+    *,
+    vec: bool = False,
+    readonly: bool = False,
+    autocommit: bool = False,
+) -> aiosqlite.Connection:
+    conn = aiosqlite.connect(db_path, isolation_level=None if readonly or autocommit else "")
     # aiosqlite (0.22) spawns a non-daemon worker thread that blocks on its op
     # queue; a connection that's never closed wedges interpreter shutdown
     # (threading._shutdown joins it forever). Mark the worker daemon BEFORE the

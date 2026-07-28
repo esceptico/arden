@@ -76,6 +76,17 @@ class FactPlan:
 
 
 @dataclass(frozen=True)
+class FactChangeFeed:
+    """One pinned delta whose routes cover every before/after event state."""
+
+    from_revision: str | None
+    through_revision: str | None
+    events: tuple[FactEvent, ...]
+    affected_fact_ids: tuple[str, ...]
+    affected_routes: tuple[tuple[str, str | None, str], ...]
+
+
+@dataclass(frozen=True)
 class DueReviewCandidate:
     fact: Fact
     due_at: datetime

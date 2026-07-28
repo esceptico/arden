@@ -15,7 +15,7 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
-from arden.revisions import ChangeSet, Create, ManagedFileRepository, ResourceState, Update
+from arden.revisions import ChangeSet, Commit, Create, ManagedFileRepository, ResourceState, Update
 from arden.revisions.errors import (
     CorruptRepositoryError,
     IdempotencyConflictError,
@@ -25,6 +25,7 @@ from arden.revisions.errors import (
 from .models import (
     DueReviewCandidate,
     Fact,
+    FactChangeFeed,
     FactConflictError,
     FactEvent,
     FactLedgerCorruptionError,
@@ -362,6 +363,80 @@ class FactLedger:
         if not events:
             raise KeyError(f"unknown fact: {fact_id}")
         return events
+
+    def changes_since(self, watermark: str | None) -> FactChangeFeed:
+        """Return one stable append-only delta after a reachable fact revision."""
+
+        if watermark is not None and (not isinstance(watermark, str) or not watermark):
+            raise FactValidationError("watermark must be a non-empty revision or null")
+        snapshot = self._snapshot()
+        if snapshot.head is None:
+            if watermark is not None:
+                raise FactValidationError("watermark is not a reachable fact revision")
+            return FactChangeFeed(None, None, (), (), ())
+        return self._change_feed_at(watermark, snapshot.head)
+
+    def validate_change_feed(self, feed: FactChangeFeed) -> None:
+        """Prove that a retained feed exactly matches reachable canonical history."""
+
+        if not isinstance(feed, FactChangeFeed):
+            raise TypeError("feed must be a FactChangeFeed")
+        self._snapshot()
+        if feed.through_revision is None:
+            canonical = FactChangeFeed(None, None, (), (), ())
+        else:
+            canonical = self._change_feed_at(feed.from_revision, feed.through_revision)
+        if feed != canonical:
+            raise FactValidationError("fact change feed does not match canonical history")
+
+    def _change_feed_at(self, watermark: str | None, through: str) -> FactChangeFeed:
+        if watermark is not None and (not isinstance(watermark, str) or not watermark):
+            raise FactValidationError("watermark must be a non-empty revision or null")
+        try:
+            commits = tuple(reversed(self._repository.history(start=through)))
+        except KeyError as exc:
+            raise FactValidationError("through revision is not reachable from canonical facts") from exc
+        except CorruptRepositoryError as exc:
+            raise FactLedgerCorruptionError("fact revision history is corrupt") from exc
+        started = watermark is None
+        all_events: list[FactEvent] = []
+        events: list[FactEvent] = []
+        for commit in commits:
+            added = self._events_added_by_commit(commit)
+            all_events.extend(added)
+            if not started:
+                if commit.commit_id == watermark:
+                    started = True
+                continue
+            events.extend(added)
+        if not started:
+            raise FactValidationError("watermark is not a reachable fact revision")
+        all_event_ids = [event.event_id for event in all_events]
+        if len(all_event_ids) != len(set(all_event_ids)):
+            raise FactLedgerCorruptionError("duplicate event id in fact revision history")
+        event_ids = {event.event_id for event in events}
+        state = self._state_from(self._storage_order(all_events))
+        prior_events = tuple(event for event in all_events if event.event_id not in event_ids)
+        prior = self._state_from(self._storage_order(prior_events))
+        fact_ids = tuple(dict.fromkeys(event.fact_id for event in events))
+        working = dict(prior)
+        routes: set[tuple[str, str | None, str]] = set()
+        for event in self._storage_order(events):
+            before = working.get(event.fact_id)
+            if before is not None:
+                routes.update((str(before.scope["kind"]), before.scope["key"], subject) for subject in before.subjects)
+            if event.op == "create":
+                after = self._fact_from_create(event)
+            else:
+                if before is None:
+                    raise FactLedgerCorruptionError("delta event references an unknown fact")
+                after = self._apply(before, event)
+            working[event.fact_id] = after
+            routes.update((str(after.scope["kind"]), after.scope["key"], subject) for subject in after.subjects)
+        if any(working[fact_id].version != state[fact_id].version for fact_id in fact_ids):
+            raise FactLedgerCorruptionError("fact delta does not reproduce canonical state")
+        affected_routes = tuple(sorted(routes, key=lambda item: (item[0], item[1] or "", item[2])))
+        return FactChangeFeed(watermark, through, tuple(events), fact_ids, affected_routes)
 
     def known_scopes(self) -> frozenset[tuple[str, str | None]]:
         """Return every scope recorded in canonical fact history."""
@@ -971,6 +1046,33 @@ class FactLedger:
                 self._parse_event_file(month, prior)
                 operations.append(Update(resource.resource_id, resource.version_id, prior + suffix))
         return operations
+
+    def _events_added_by_commit(self, commit: Commit) -> tuple[FactEvent, ...]:
+        """Decode each monthly append in commit order, never timestamp order."""
+
+        result: list[FactEvent] = []
+        for change in sorted(commit.changes, key=lambda item: "" if item.after is None else item.after.path):
+            after = change.after
+            if after is None:
+                raise FactLedgerCorruptionError("fact revision removed a managed resource")
+            path = after.path
+            if path == _MARKER_PATH:
+                continue
+            if _MONTH.fullmatch(path) is None:
+                raise FactLedgerCorruptionError("fact revision changed an unexpected resource")
+            try:
+                current = self._repository.read(after.resource_id, at=commit.commit_id)
+                previous = (
+                    b""
+                    if change.before is None
+                    else self._repository.read(change.before.resource_id, at=commit.parent_id)
+                )
+            except (CorruptRepositoryError, KeyError) as exc:
+                raise FactLedgerCorruptionError("fact revision contents are corrupt") from exc
+            if not current.startswith(previous):
+                raise FactLedgerCorruptionError("monthly fact record lost an append-only prefix")
+            result.extend(self._parse_event_file(path, current[len(previous) :]))
+        return tuple(result)
 
     def _snapshot(self) -> _FactSnapshot:
         last_corruption: FactLedgerCorruptionError | None = None
