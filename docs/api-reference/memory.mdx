@@ -1,146 +1,73 @@
 ---
-title: "Memory"
-description: "Admin APIs for memory records, search, pinning, and the markdown artifact browser."
+title: "Facts and Wiki"
+description: "Canonical admin APIs for durable facts and managed wiki pages."
 ---
 
-## Mental model
+The canonical memory surface has two resources:
 
-The memory API is exposed under `/admin/memory/*`. The substrate is a flat pool
-of atomic **records** with scope metadata for visibility. That flat record pool
-is canonical for storage, retrieval, and mutation. User-created records are
-typed `directive`, `fact`, or `source`; `changelog` is generated audit output,
-not a user-create kind. There is no graph, no lenses, and no derivation edges —
-record detail returns empty `parents`/`children` for client compatibility only.
+- `/admin/facts` provides read-only access to the fact ledger.
+- `/admin/wiki/pages` manages versioned wiki pages.
 
-Most users should manage memory from the desktop Memory view. These endpoints
-back that surface and other admin clients.
+All endpoints require the usual Bearer token. See [Authentication](/api-reference/authentication).
 
-## Records
+## Facts
 
-### Create record
+### List and search
 
-Quick-capture a single record into the pool. `kind_tag` is one of
-`directive | fact | source`.
+`GET /admin/facts` lists facts. `GET /admin/facts/search?query=...` searches them.
+Both accept `subject`, `include_inactive`, and `limit` (1–100). Use the returned
+`next_after` object's `created_at` and `fact_id` as `after_created_at` and
+`after_fact_id` together to continue a page.
 
 ```bash
-curl -X POST http://localhost:6877/admin/memory/record \
+curl "http://localhost:6877/admin/facts/search?query=coffee&limit=20" \
+  -H "Authorization: Bearer $API_KEY"
+```
+
+Responses contain `facts`, `total`, `has_more`, and `next_after`. Read one fact
+with `GET /admin/facts/{fact_id}`; its response contains `fact`.
+
+Facts are managed by their owning workflows. This API does not create, edit, or
+delete them.
+
+## Wiki pages
+
+### Read
+
+- `GET /admin/wiki/pages` lists active pages. Pass `include_redirects=true` to include redirects.
+- `GET /admin/wiki/pages/{page_id}` reads one page, including `content`.
+- `GET /admin/wiki/pages/{page_id}/history?limit=50` returns commit history (1–200).
+- `GET /admin/wiki/pages/{page_id}/diff` returns a diff. It accepts optional `base`, `target`, `offset`, `limit`, and `tail`.
+- `GET /admin/wiki/pages/{page_id}/links` returns outgoing links and backlinks.
+
+Page responses include `page_id`, `path`, `title`, `aliases`, `lifecycle`,
+`redirect_to`, `metadata`, `version`, and `repository_head`.
+
+### Create
+
+`POST /admin/wiki/pages` requires `path`, `title`, and `expected_head`. It also
+accepts `body`, `page_id`, `aliases`, and `metadata`.
+
+```bash
+curl -X POST http://localhost:6877/admin/wiki/pages \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"text":"User prefers concise engineering feedback.","kind_tag":"fact"}'
+  -d '{"path":"notes/coffee.md","title":"Coffee","body":"# Coffee\n","expected_head":null}'
 ```
 
-Optional `scope_kind` / `scope_key` set an explicit scope; otherwise the scope
-is resolved from the kind (directives are global, others default to user).
+### Update, archive, and restore
 
-### Pin or unpin record
-
-Pinned records survive consolidation and ride along in the resident profile.
+`PUT /admin/wiki/pages/{page_id}` requires `content`, `expected_version`, and
+`expected_head`. Archive and restore use `POST` and require
+`expected_version` and `expected_head`:
 
 ```bash
-curl -X POST http://localhost:6877/admin/memory/record/rec_123/pin \
+curl -X POST http://localhost:6877/admin/wiki/pages/page_123/archive \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"pinned":true}'
+  -d '{"expected_version":"rev_123","expected_head":"commit_123"}'
 ```
 
-## Items
-
-Records are returned as `MemoryItem` objects for the desktop client.
-
-### List items
-
-`status` is `active` (default) or `superseded`. Accepts `limit`, `offset`, `q`
-(switches to search), and `scope_kind` / `scope_key` / `kind` filters.
-
-```bash
-curl "http://localhost:6877/admin/memory/items?limit=50" \
-  -H "Authorization: Bearer $API_KEY"
-```
-
-### Get item
-
-```bash
-curl http://localhost:6877/admin/memory/items/item_123 \
-  -H "Authorization: Bearer $API_KEY"
-```
-
-### Search items
-
-Keyword search over the record pool, with semantic hybrid ranking when a search
-index is attached. Accepts `limit`, `include_inactive`, and `scope_kind` /
-`scope_key` / `kind` filters.
-
-```bash
-curl "http://localhost:6877/admin/memory/search?q=backend%20preferences&limit=20" \
-  -H "Authorization: Bearer $API_KEY"
-```
-
-## Scopes
-
-Returns the user-facing scope list. Currently empty — scopes are stored and
-enforced internally on read/write paths, but are not exposed as a browser.
-
-```bash
-curl http://localhost:6877/admin/memory/scopes \
-  -H "Authorization: Bearer $API_KEY"
-```
-
-## Maintenance
-
-### Prune (LINT)
-
-Trigger the LINT pass on demand: hard-delete superseded records, drop the labels
-they orphan, and reconcile the vector index. Runs automatically each
-consolidation sweep too.
-
-```bash
-curl -X POST http://localhost:6877/admin/memory/prune \
-  -H "Authorization: Bearer $API_KEY"
-```
-
-## Artifacts
-
-A generated, read-only markdown projection of memory for browsing. Generated
-artifacts include `context/`, `references/`, `entities/`, `projects/`,
-`facts/index.md`, `directives.md`, `me.md`, `active-work.md`, and
-`changelog/`.
-The `context/` tree is agent-facing context derived from the flat record pool.
-`context/index.md` is the navigational entry point; `context/README.md` documents
-how agents and memory tools should use the generated artifact tree; `context/links.md`
-lists exact `memory_read` paths for generated notes.
-`context/integrations/` is generated from existing records and source refs, not
-from integration configuration.
-
-### List artifacts
-
-Accepts optional `kind` and `q` query parameters.
-
-```bash
-curl http://localhost:6877/admin/memory/artifacts \
-  -H "Authorization: Bearer $API_KEY"
-```
-
-### Read artifact
-
-```bash
-curl http://localhost:6877/admin/memory/artifacts/facts/index.md \
-  -H "Authorization: Bearer $API_KEY"
-```
-
-### Rebuild artifacts
-
-Regenerate the markdown projection from the current records.
-
-```bash
-curl -X POST http://localhost:6877/admin/memory/artifacts/rebuild \
-  -H "Authorization: Bearer $API_KEY"
-```
-
-## Agent tools
-
-For normal chat usage, prefer the agent tools:
-
-- `remember` — store a durable memory record.
-- `recall` — search long-term memory.
-- `forget` — remove a matching remembered record.
-</content>
+Writes are optimistic: supply the version and repository head you read. A stale
+write returns `409` with the current revision, head, and, when available, content.
+Invalid paths or request values return `422`; unknown resources return `404`.

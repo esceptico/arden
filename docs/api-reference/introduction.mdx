@@ -32,7 +32,7 @@ All endpoints return JSON. The event stream (`GET /chat/events/{session_id}`) us
 |-------|-----------|-------------|
 | [Chat](/api-reference/chat) | `GET /chat/events/{session_id}`, `POST /chat/message`, `POST /chat/background`, `POST /cancel` | SSE stream, messaging, background mode |
 | [Sessions](/api-reference/sessions) | `/session*`, `/sessions*` | Session management |
-| [Memory](/api-reference/memory) | `/admin/memory/*` | Memory records, search, pinning, and markdown artifacts |
+| [Facts and Wiki](/api-reference/memory) | `/admin/facts*`, `/admin/wiki/pages*` | Read-only facts and versioned managed wiki pages |
 | [Automations](/api-reference/automations) | `/automations*`, `/notifiers*` | Scheduled tasks, notifier configs |
 | [Config](/api-reference/config) | `/config*`, `/models*`, `/providers*`, `/services*`, `/directives` | Configuration, providers, models |
 | Health | `GET /health` | Server status (public) |
