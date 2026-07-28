@@ -12,7 +12,7 @@ from .approvals import (
     WikiRenameApprovalCoordinator,
     WikiRenameCoordinatorResult,
 )
-from .context import WIKI_PAGE_SOURCE, WikiContextBuilder, WikiPageIndexProjection
+from .context import WIKI_PAGE_SOURCE, WikiContextBuilder, WikiPageIndexProjection, WikiPageIndexState
 from .health import (
     WikiHealthIndex,
     WikiHealthInput,
@@ -126,6 +126,7 @@ __all__ = [
     "WikiPage",
     "WikiPageRecord",
     "WikiPageIndexProjection",
+    "WikiPageIndexState",
     "WikiPageRevision",
     "WikiRenameApproval",
     "WikiRenameApprovalCoordinator",

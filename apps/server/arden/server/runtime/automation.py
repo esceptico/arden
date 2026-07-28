@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -25,6 +25,7 @@ from arden.constants import (
     AREAS_SUGGESTIONS_FILE,
     BUILTIN_AREA_SUGGESTER_ID,
     BUILTIN_MEMORY_SYNTHESIZE_ID,
+    BUILTIN_WIKI_MAINTENANCE_ID,
 )
 from arden.events.sse import AreasChangedEvent, AutomationSuggestionsUpdatedEvent
 from arden.integrations.calendar.client import MultiCalendarSource
@@ -37,6 +38,7 @@ from arden.server.runtime.outbox import RuntimeOutbox
 from arden.server.stores import Stores
 
 _logger = get_logger(__name__)
+_WIKI_MAINTENANCE_RETRY_DELAY = timedelta(minutes=1)
 
 
 class SuggesterUnavailableError(Exception):
@@ -59,6 +61,9 @@ class AutomationRuntime:
         indexer: Indexer | None,
         get_consolidate: Callable[[], object | None] = lambda: None,
         get_fact_synthesis: Callable[[], object | None] = lambda: None,
+        get_wiki_maintenance: Callable[[], object | None] = lambda: None,
+        synthesis_is_current: Callable[[], Awaitable[bool]] | None = None,
+        project_wiki_health: Callable[[], Awaitable[None]] | None = None,
         get_knowledge: Callable[[], object | None] = lambda: None,
         get_integration_clients: Callable[[], dict[str, object]] = dict,
         get_notifiers: Callable[[], object | None] = lambda: None,
@@ -71,6 +76,9 @@ class AutomationRuntime:
         self.get_cheap_llm = get_cheap_llm
         self.get_consolidate = get_consolidate
         self.get_fact_synthesis = get_fact_synthesis
+        self.get_wiki_maintenance = get_wiki_maintenance
+        self.synthesis_is_current = synthesis_is_current
+        self.project_wiki_health = project_wiki_health
         self.get_knowledge = get_knowledge
         self.get_integration_clients = get_integration_clients
         self.cheap_model = cheap_model
@@ -276,6 +284,10 @@ class AutomationRuntime:
             self._build_memory_synthesize_handler(),
         )
         self.scheduler.register_handler(
+            "wiki_maintenance",
+            self._build_wiki_maintenance_handler(),
+        )
+        self.scheduler.register_handler(
             "memory_retention",
             self._build_memory_retention_handler(),
         )
@@ -368,37 +380,91 @@ class AutomationRuntime:
 
     def _build_memory_synthesize_handler(self):
         async def handler(context: dict | None) -> str | None:
-            knowledge = self.get_knowledge()
-            if knowledge is not None and getattr(knowledge, "facts_ready", False):
-                synthesis = self.get_fact_synthesis()
-                if synthesis is None:
-                    return "fact synthesis unavailable (no memory model configured)"
-                result = await synthesis.run()
-                if result.empty:
-                    return "fact synthesis idle"
-                return (
-                    f"fact synthesis: {result.published_pages} page(s) published"
-                    f"; archived {result.skipped_archived}; under threshold {result.skipped_under_threshold}"
-                )
-            if knowledge is None:
-                return "memory synthesis unavailable (memory not ready)"
-            if not knowledge.memory_writes_enabled:
-                return "legacy memory writes disabled after managed wiki cutover"
-            if not knowledge.memory_ready:
-                return "memory synthesis unavailable (memory not ready)"
-            from arden.memory.synthesize import run_synthesis
+            try:
+                knowledge = self.get_knowledge()
+                if knowledge is not None and getattr(knowledge, "facts_ready", False):
+                    synthesis = self.get_fact_synthesis()
+                    if synthesis is None:
+                        return "fact synthesis unavailable (no memory model configured)"
+                    result = await synthesis.run()
+                    if result.empty:
+                        return "fact synthesis idle"
+                    return (
+                        f"fact synthesis: {result.published_pages} page(s) published"
+                        f"; archived {result.skipped_archived}; under threshold {result.skipped_under_threshold}"
+                    )
+                if knowledge is None:
+                    return "memory synthesis unavailable (memory not ready)"
+                if not knowledge.memory_writes_enabled:
+                    return "legacy memory writes disabled after managed wiki cutover"
+                if not knowledge.memory_ready:
+                    return "memory synthesis unavailable (memory not ready)"
+                from arden.memory.synthesize import run_synthesis
 
-            llm, model = knowledge._memory_llm()
-            effort = knowledge._memory_reasoning_effort(knowledge.config.memory_model)
-            # Tag untagged records with their named subject FIRST, so recurring people/
-            # orgs/products promote to topic pages that this same pass then synthesizes.
-            tagged = 0
-            if knowledge.memory_curator is not None:
-                tagged = await knowledge.memory_curator.backfill_entity_labels()
-            summary = await run_synthesis(knowledge.record_store, llm, model, reasoning_effort=effort)
-            return f"{summary} (+{tagged} entity tags)" if tagged else summary
+                llm, model = knowledge._memory_llm()
+                effort = knowledge._memory_reasoning_effort(knowledge.config.memory_model)
+                # Tag untagged records with their named subject FIRST, so recurring people/
+                # orgs/products promote to topic pages that this same pass then synthesizes.
+                tagged = 0
+                if knowledge.memory_curator is not None:
+                    tagged = await knowledge.memory_curator.backfill_entity_labels()
+                summary = await run_synthesis(knowledge.record_store, llm, model, reasoning_effort=effort)
+                return f"{summary} (+{tagged} entity tags)" if tagged else summary
+            finally:
+                await self._refresh_wiki_health()
 
         return handler
+
+    def _build_wiki_maintenance_handler(self):
+        async def handler(context: dict | None) -> str:
+            try:
+                knowledge = self.get_knowledge()
+                if knowledge is None or not getattr(knowledge, "facts_ready", False):
+                    return "wiki maintenance unavailable before canonical fact cutover"
+                if self.synthesis_is_current is None or not await self.synthesis_is_current():
+                    task_id = context.get("task_id") if isinstance(context, dict) else None
+                    if task_id == BUILTIN_WIKI_MAINTENANCE_ID:
+                        await self.scheduler.request_delayed_run(task_id, _WIKI_MAINTENANCE_RETRY_DELAY)
+                    return "wiki maintenance deferred: synthesis is behind"
+                maintenance = self.get_wiki_maintenance()
+                if maintenance is None:
+                    return "wiki maintenance unavailable (no memory model configured)"
+
+                results = []
+                for _ in range(2):
+                    result = await maintenance.run()
+                    results.append(result)
+                    if result.error is not None:
+                        raise RuntimeError(result.error)
+                    if not result.reload_required:
+                        break
+
+                reviewed = sum(result.reviewed_commits for result in results)
+                updated = sum(result.updated_pages for result in results)
+                final = results[-1]
+                if final.blocked:
+                    state = "needs user review"
+                elif final.reload_required:
+                    state = "fresh-feed continuation deferred"
+                elif final.empty:
+                    state = "idle"
+                elif final.complete:
+                    state = "current"
+                else:
+                    state = "incomplete"
+                return f"wiki maintenance: {state}; reviewed {reviewed}; updated {updated}"
+            finally:
+                await self._refresh_wiki_health()
+
+        return handler
+
+    async def _refresh_wiki_health(self) -> None:
+        if self.project_wiki_health is None:
+            return
+        try:
+            await self.project_wiki_health()
+        except Exception:
+            _logger.warning("wiki health projection failed after automation outcome", exc_info=True)
 
     def _build_memory_retention_handler(self):
         async def handler(context: dict | None) -> str | None:

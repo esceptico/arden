@@ -47,7 +47,13 @@ async def wiki_client(tmp_path: Path):
     coordinator = WikiRenameApprovalCoordinator(service, store)
 
     app = FastAPI()
-    app.state.runtime = SimpleNamespace(wiki_rename_coordinator=coordinator)
+    runtime = SimpleNamespace(wiki_rename_coordinator=coordinator, health_calls=0)
+
+    async def project_wiki_health() -> None:
+        runtime.health_calls += 1
+
+    runtime.project_wiki_health = project_wiki_health
+    app.state.runtime = runtime
     app.include_router(wiki_router)
     with TestClient(app) as client:
         yield client, service, store
@@ -120,6 +126,7 @@ def test_rename_approval_list_accept_and_reject(wiki_client):
     assert accepted.json()["status"] == "accepted"
     assert accepted.json()["approval"]["status"] == "accepted"
     assert service.repository.get("target").path == "new.md"
+    assert client.app.state.runtime.health_calls == 1
 
     rejected = client.post(
         f"/admin/wiki/rename-approvals/{other['approval_id']}/reject",
@@ -129,6 +136,7 @@ def test_rename_approval_list_accept_and_reject(wiki_client):
     assert rejected.json()["status"] == "rejected"
     assert rejected.json()["approval"]["resolution"] == "keep this name"
     assert service.repository.get("other").path == "other.md"
+    assert client.app.state.runtime.health_calls == 1
 
 
 def test_router_maps_title_only_not_found_and_unavailable_consistently(wiki_client):

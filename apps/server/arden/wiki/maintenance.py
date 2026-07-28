@@ -22,6 +22,12 @@ from .maintenance_store import (
 )
 from .models import WikiChangeCommit, WikiChangesReport, WikiMaintenancePageUpdate, WikiPageRecord
 from .pages import PageValidationError, parse_page
+from .service import (
+    WIKI_HEALTH_ACTOR,
+    WIKI_HEALTH_ORIGIN,
+    WIKI_HEALTH_REASON,
+    WIKI_HEALTH_RESOURCE_ID,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -140,9 +146,9 @@ class WikiMaintenance:
         replayed = False
         history = await self._store.list_history()
         for commit in feed.commits:
-            # Non-Markdown commits are deliberately part of the contiguous chain
-            # but never require a completion call.
-            if not commit.changes:
+            # Non-Markdown commits and the exact backend-owned health projection
+            # remain in the contiguous chain without entering model review.
+            if not commit.changes or self._is_health_projection(commit):
                 try:
                     await self._advance(expected, commit_ids, commit.commit_id)
                 except Exception as exc:
@@ -807,6 +813,16 @@ class WikiMaintenance:
         for row in reviews:
             if row.status is WikiMaintenanceReviewStatus.NEEDS_REVIEW:
                 await self._store.clear(row.review_id, expected_generation=row.generation)
+
+    @staticmethod
+    def _is_health_projection(commit: WikiChangeCommit) -> bool:
+        return (
+            commit.actor == WIKI_HEALTH_ACTOR
+            and commit.origin == WIKI_HEALTH_ORIGIN
+            and commit.reason == WIKI_HEALTH_REASON
+            and bool(commit.changes)
+            and all(change.resource_id == WIKI_HEALTH_RESOURCE_ID for change in commit.changes)
+        )
 
     def _proposal(
         self, prepared: WikiMaintenancePreparedReport, decision: WikiMaintenanceDecision

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 
 from fastapi import HTTPException, Request
@@ -25,12 +26,13 @@ from arden.memory.facts import (
     FactSynthesis,
     load_fact_cutover,
 )
+from arden.memory.facts.synthesis import CONSUMER_ID as FACT_SYNTHESIS_CONSUMER_ID
 from arden.monitor.slack import SlackMonitor
 from arden.notifiers.base import NotifierContext
 from arden.notifiers.service import NotifierService
 from arden.observability import init_tracing, shutdown_tracing
 from arden.operator.runner import OperatorDeps
-from arden.revisions import ManagedFileRepository
+from arden.revisions import ManagedFileRepository, RevisionConflictError
 from arden.server.app_control import AppControlService
 from arden.server.runtime.automation import AutomationRuntime
 from arden.server.runtime.config import RuntimeConfig
@@ -43,7 +45,18 @@ from arden.skills.service import SkillService, get_skills_dirs
 from arden.tools.connections import ConnectionService
 from arden.tools.executor import ToolExecutor
 from arden.wiki import (
+    CompletionWikiMaintenanceReviewer,
+    WikiChangesReport,
     WikiContextBuilder,
+    WikiHealthIndex,
+    WikiHealthInput,
+    WikiHealthIssue,
+    WikiHealthIssueCode,
+    WikiHealthPendingReview,
+    WikiHealthProjector,
+    WikiHealthWorker,
+    WikiMaintenance,
+    WikiMaintenanceStore,
     WikiPageIndexProjection,
     WikiRenameApprovalCoordinator,
     WikiRenameApprovalStore,
@@ -85,8 +98,11 @@ class Runtime:
         self.wiki_repository: ManagedFileRepository | None = None
         self.wiki_service: WikiService | None = None
         self.wiki_context: WikiContextBuilder | None = None
+        self.wiki_page_projection: WikiPageIndexProjection | None = None
         self.wiki_rename_coordinator: WikiRenameApprovalCoordinator | None = None
         self._wiki_approval_conn: database.aiosqlite.Connection | None = None
+        self._wiki_maintenance_store: WikiMaintenanceStore | None = None
+        self._wiki_health_lock = asyncio.Lock()
         self.fact_service: FactService | None = None
         self._fact_plan_conn: database.aiosqlite.Connection | None = None
         self._fact_consumer_store: FactConsumerStore | None = None
@@ -238,12 +254,15 @@ class Runtime:
                 self.wiki_service,
                 lambda: self.search_index,
                 self.fact_service.revision,
+                on_state_change=lambda _state: self.project_wiki_health(),
             )
+            self.wiki_page_projection = projection
             self.wiki_context = WikiContextBuilder(self.wiki_service, projection, self.fact_service.revision)
             await projection.sync()
         self._init_skills()
         await self._init_notifiers()
         self._init_automation()
+        await self.project_wiki_health()
         await self._init_mcp()
         self._init_tools()
 
@@ -297,24 +316,35 @@ class Runtime:
             return
         connection = await database.connect(self.config.memory_db_path)
         consumers: FactConsumerStore | None = None
+        maintenance: WikiMaintenanceStore | None = None
         try:
             plans = FactPlanStore(connection)
             await plans.init_schema()
             consumers = await FactConsumerStore.open(self.config.memory_db_path)
+            maintenance = await WikiMaintenanceStore.open(self.config.memory_db_path)
         except BaseException:
+            if maintenance is not None:
+                await maintenance.close()
             if consumers is not None:
                 await consumers.close()
             await connection.close()
             raise
         self._fact_plan_conn = connection
         self._fact_consumer_store = consumers
+        self._wiki_maintenance_store = maintenance
         self._fact_ledger = ledger
-        self.fact_service = FactService(ledger, plans, post_commit=self._request_fact_synthesis)
+        self.fact_service = FactService(ledger, plans, post_commit=self._after_fact_commit)
         self.knowledge.set_fact_service(self.fact_service)
 
     async def _request_fact_synthesis(self) -> None:
         if self.automation is not None:
             await self.automation.request_fact_synthesis()
+
+    async def _after_fact_commit(self) -> None:
+        try:
+            await self._request_fact_synthesis()
+        finally:
+            await self.project_wiki_health()
 
     def _get_fact_synthesis(self) -> FactSynthesis | None:
         model = self.config.memory_model
@@ -330,6 +360,134 @@ class Runtime:
                 reasoning_effort=self.knowledge._memory_reasoning_effort(model),
             ),
         )
+
+    def _get_wiki_maintenance(self) -> WikiMaintenance | None:
+        model = self.config.memory_model
+        if self._wiki_maintenance_store is None or self.wiki_service is None or not model:
+            return None
+        return WikiMaintenance(
+            self._wiki_maintenance_store,
+            self.wiki_service,
+            CompletionWikiMaintenanceReviewer(
+                get_completion_client(model),
+                model,
+                reasoning_effort=self.knowledge._memory_reasoning_effort(model),
+            ),
+        )
+
+    async def _synthesis_is_current(self) -> bool:
+        if self.fact_service is None or self._fact_consumer_store is None:
+            return False
+        before = await self.fact_service.revision()
+        watermark = await self._fact_consumer_store.get(FACT_SYNTHESIS_CONSUMER_ID)
+        after = await self.fact_service.revision()
+        if before != after:
+            return False
+        if before is None:
+            return watermark is None
+        return watermark is not None and watermark.revision == before
+
+    async def project_wiki_health(self) -> None:
+        """Refresh the derived health page without affecting canonical work."""
+
+        if (
+            self._fact_ledger is None
+            or self.fact_service is None
+            or self._fact_consumer_store is None
+            or self._wiki_maintenance_store is None
+            or self.wiki_service is None
+            or self.wiki_page_projection is None
+        ):
+            return
+        async with self._wiki_health_lock:
+            for attempt in range(2):
+                try:
+                    fact_revision, _evaluated_at, due_reviews = await asyncio.to_thread(
+                        self._fact_ledger.due_review_snapshot
+                    )
+                    synthesis = await self._fact_consumer_store.get(FACT_SYNTHESIS_CONSUMER_ID)
+                    maintenance = await self._wiki_maintenance_store.get_watermark()
+                    pending = await self._wiki_maintenance_store.list_pending()
+                    report = await asyncio.to_thread(self.wiki_service.changes_since, None)
+                    if await self.fact_service.revision() != fact_revision:
+                        if attempt == 0:
+                            continue
+                        return
+
+                    observed = self._semantic_wiki_revision(report)
+                    maintenance_revision, maintenance_revision_known = self._semantic_wiki_revision_at(
+                        report,
+                        None if maintenance is None else maintenance.revision,
+                    )
+                    index_state = self.wiki_page_projection.last_state
+                    index_revision, index_revision_known = self._semantic_wiki_revision_at(
+                        report,
+                        index_state.wiki_head,
+                    )
+                    index_status = index_state.status
+                    index_detail = index_state.detail
+                    if not index_revision_known:
+                        index_status = "error"
+                        index_detail = "indexed wiki revision is not reachable from the current history"
+                    if not maintenance_revision_known:
+                        maintenance_revision = None
+
+                    value = WikiHealthInput(
+                        fact_ledger_revision=fact_revision,
+                        wiki=report,
+                        synthesis=WikiHealthWorker(
+                            "Synthesis",
+                            None if synthesis is None else synthesis.updated_at,
+                            None if synthesis is None else synthesis.revision,
+                            fact_revision,
+                        ),
+                        maintenance=WikiHealthWorker(
+                            "Wiki Maintenance",
+                            None if maintenance is None else maintenance.updated_at,
+                            maintenance_revision,
+                            observed,
+                        ),
+                        index=WikiHealthIndex(index_revision, index_status, index_detail),
+                        issues=tuple(
+                            WikiHealthIssue(
+                                WikiHealthIssueCode.FACT_REVIEW_DUE,
+                                item.fact.fact_id,
+                                f"review due at {item.due_at.isoformat()}",
+                            )
+                            for item in due_reviews
+                        ),
+                        pending_reviews=tuple(
+                            WikiHealthPendingReview(item.review_id, item.summary) for item in pending
+                        ),
+                    )
+                    await asyncio.to_thread(WikiHealthProjector(self.wiki_service).project, value)
+                    return
+                except RevisionConflictError:
+                    if attempt == 0:
+                        continue
+                    _logger.warning("wiki health projection lost its retry to a concurrent wiki commit")
+                except Exception:
+                    _logger.warning("wiki health projection failed", exc_info=True)
+                    return
+
+    @staticmethod
+    def _semantic_wiki_revision(report: WikiChangesReport) -> str | None:
+        return next((commit.commit_id for commit in reversed(report.commits) if commit.origin != "wiki.health"), None)
+
+    @staticmethod
+    def _semantic_wiki_revision_at(
+        report: WikiChangesReport,
+        raw_revision: str | None,
+    ) -> tuple[str | None, bool]:
+        if raw_revision is None:
+            return None, True
+        semantic: str | None = None
+        for commit in report.commits:
+            if commit.origin != "wiki.health":
+                semantic = commit.commit_id
+            if commit.commit_id == raw_revision:
+                return semantic, True
+        return None, False
 
     async def _init_notifiers(self) -> None:
         self.notifier_service = NotifierService(
@@ -356,6 +514,9 @@ class Runtime:
             indexer=self.indexer,
             get_consolidate=lambda: self.knowledge._consolidate,
             get_fact_synthesis=self._get_fact_synthesis,
+            get_wiki_maintenance=self._get_wiki_maintenance,
+            synthesis_is_current=self._synthesis_is_current,
+            project_wiki_health=self.project_wiki_health,
             get_knowledge=lambda: self.knowledge,
             get_integration_clients=lambda: self.integrations.clients,
             get_notifiers=lambda: self.notifier_service,
@@ -386,6 +547,9 @@ class Runtime:
         if self.mcp_manager:
             await self.mcp_manager.close()
         await self.knowledge.close()
+        if self._wiki_maintenance_store:
+            await self._wiki_maintenance_store.close()
+            self._wiki_maintenance_store = None
         if self._fact_consumer_store:
             await self._fact_consumer_store.close()
             self._fact_consumer_store = None
@@ -394,6 +558,8 @@ class Runtime:
             self._fact_plan_conn = None
         self.fact_service = None
         self._fact_ledger = None
+        self.wiki_context = None
+        self.wiki_page_projection = None
         self.knowledge.set_fact_service(None)
         if self._wiki_approval_conn:
             await self._wiki_approval_conn.close()

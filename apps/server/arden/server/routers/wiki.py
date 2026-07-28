@@ -5,6 +5,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from arden.logging import get_logger
 from arden.revisions import RevisionConflictError
 from arden.wiki import (
     CorruptWikiRenameApprovalError,
@@ -17,6 +18,7 @@ from arden.wiki import (
 from arden.wiki.approvals import RenamePlanSerializationError, deserialize_rename_plan, rename_plan_fingerprint
 
 router = APIRouter(prefix="/admin/wiki", tags=["wiki"])
+_logger = get_logger(__name__)
 
 
 class WikiRenameRequest(BaseModel):
@@ -109,6 +111,19 @@ def _result_response(result) -> WikiRenameResultResponse:
     )
 
 
+async def _project_health_after_commit(request: Request, commit_id: str | None) -> None:
+    if commit_id is None:
+        return
+    runtime = getattr(request.app.state, "runtime", None)
+    callback = getattr(runtime, "project_wiki_health", None)
+    if callback is None:
+        return
+    try:
+        await callback()
+    except Exception:
+        _logger.warning("wiki health projection failed after rename", exc_info=True)
+
+
 @router.post("/rename-approvals", response_model=WikiRenameResultResponse)
 async def request_rename(request: Request, body: WikiRenameRequest):
     coordinator = _coordinator(request)
@@ -133,6 +148,7 @@ async def request_rename(request: Request, body: WikiRenameRequest):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (WikiValidationError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await _project_health_after_commit(request, result.commit_id)
     return _result_response(result)
 
 
@@ -154,6 +170,7 @@ async def accept_rename(request: Request, approval_id: str):
         raise HTTPException(status_code=503, detail="wiki rename approval is corrupt") from exc
     except (WikiValidationError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await _project_health_after_commit(request, result.commit_id)
     return _result_response(result)
 
 

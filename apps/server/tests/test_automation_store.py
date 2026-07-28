@@ -866,6 +866,47 @@ async def test_seed_builtins_seeds_fact_synthesis_on_six_hour_backstop(automatio
 
 
 @pytest.mark.asyncio
+async def test_seed_builtins_seeds_fact_mode_wiki_maintenance_once(automation_store: AutomationStore):
+    from arden.automation.builtins import seed_builtins
+    from arden.constants import BUILTIN_WIKI_MAINTENANCE_ID
+
+    await seed_builtins(automation_store)
+    assert await automation_store.get(BUILTIN_WIKI_MAINTENANCE_ID) is None
+
+    await seed_builtins(automation_store, fact_mode=True)
+
+    maintenance = await automation_store.get(BUILTIN_WIKI_MAINTENANCE_ID)
+    assert maintenance is not None
+    assert maintenance.handler == "wiki_maintenance"
+    assert maintenance.triggers == [TimeTrigger(every="6h")]
+    assert maintenance.cooldown_minutes is None
+    assert maintenance.next_run_at is not None
+
+    last_run = datetime(2026, 6, 17, 9, tzinfo=UTC)
+    custom_triggers = [TimeTrigger(every="2h"), CountTrigger(every_n=3)]
+    await automation_store.save(
+        dc_replace(
+            maintenance,
+            enabled=False,
+            triggers=custom_triggers,
+            cooldown_minutes=17,
+            last_run_at=last_run,
+            last_result="Previous result.",
+        )
+    )
+
+    await seed_builtins(automation_store, fact_mode=True)
+
+    kept = await automation_store.get(BUILTIN_WIKI_MAINTENANCE_ID)
+    assert kept is not None
+    assert kept.enabled is False
+    assert kept.triggers == custom_triggers
+    assert kept.cooldown_minutes == 17
+    assert kept.last_run_at == last_run
+    assert kept.last_result == "Previous result."
+
+
+@pytest.mark.asyncio
 async def test_seed_builtins_migrates_only_exact_legacy_synthesis_defaults(automation_store: AutomationStore):
     from arden.automation.builtins import seed_builtins
     from arden.constants import BUILTIN_MEMORY_SYNTHESIZE_ID

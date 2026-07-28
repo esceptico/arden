@@ -14,6 +14,7 @@ from arden.constants import (
     BUILTIN_MEMORY_DREAM_ID,
     BUILTIN_MEMORY_RETENTION_ID,
     BUILTIN_MEMORY_SYNTHESIZE_ID,
+    BUILTIN_WIKI_MAINTENANCE_ID,
     MEMORY_CONSOLIDATE_AT,
     MEMORY_DREAM_AT,
     MEMORY_RETENTION_AT,
@@ -72,6 +73,11 @@ _FACT_SYNTHESIS_PROMPT = (
     "or uncertain facts out of publication."
 )
 _LEGACY_SYNTHESIS_DESCRIPTION = "Refresh memory pages from canonical records with provenance."
+_WIKI_MAINTENANCE_DESCRIPTION = "Reconcile cross-page wiki consistency from managed revision evidence."
+_WIKI_MAINTENANCE_PROMPT = (
+    "Review managed wiki commits and their linked-page evidence for cross-page consistency. "
+    "Preserve user-owned content and never invent facts or citations."
+)
 
 
 BUILTINS = [
@@ -176,6 +182,17 @@ def _specs(*, fact_mode: bool) -> list[BuiltinSpec]:
             )
         else:
             specs.append(spec)
+    specs.append(
+        BuiltinSpec(
+            task_id=BUILTIN_WIKI_MAINTENANCE_ID,
+            name="Wiki Maintenance",
+            description=_WIKI_MAINTENANCE_DESCRIPTION,
+            prompt=_WIKI_MAINTENANCE_PROMPT,
+            triggers=[TimeTrigger(every="6h")],
+            handler="wiki_maintenance",
+            auto_approve=True,
+        )
+    )
     return specs
 
 

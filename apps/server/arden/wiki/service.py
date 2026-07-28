@@ -58,6 +58,11 @@ class GeneratedRegionConflictError(WikiValidationError):
 
 _STORAGE_INSPECTION_BYTES = 50 * 1024 * 1024
 _STORAGE_NEEDS_ATTENTION_BYTES = 100 * 1024 * 1024
+WIKI_HEALTH_RESOURCE_ID = "health"
+WIKI_HEALTH_PATH = "health.md"
+WIKI_HEALTH_ACTOR = "backend"
+WIKI_HEALTH_ORIGIN = "wiki.health"
+WIKI_HEALTH_REASON = "project wiki health"
 
 
 def _storage_warnings(storage: StorageReport, target: str) -> tuple[WikiChangeWarning, ...]:
@@ -391,6 +396,8 @@ class WikiService:
         page_ids = [item.page_id for item in updates]
         if len(page_ids) != len(set(page_ids)):
             raise WikiValidationError("maintenance updates must not repeat a page_id")
+        if WIKI_HEALTH_RESOURCE_ID in page_ids:
+            raise WikiValidationError("health page is backend-owned")
 
         replacements: dict[str, WikiPageRecord] = {}
         operations: list[Update] = []
@@ -465,12 +472,12 @@ class WikiService:
         if not isinstance(base_head, str | None):
             raise TypeError("base_head must be a string or None")
 
-        content = build_page(page_id="health", title="Wiki health", body=body).to_bytes()
+        content = build_page(page_id=WIKI_HEALTH_RESOURCE_ID, title="Wiki health", body=body).to_bytes()
         try:
-            existing = self.repository.get("health", at=base_head)
+            existing = self.repository.get(WIKI_HEALTH_RESOURCE_ID, at=base_head)
         except KeyError:
             existing = None
-        path_owner = self.repository.find_by_path("health.md", at=base_head, include_archived=True)
+        path_owner = self.repository.find_by_path(WIKI_HEALTH_PATH, at=base_head, include_archived=True)
 
         if (existing is not None and existing.state is ResourceState.ARCHIVED) or (
             path_owner is not None and path_owner.state is ResourceState.ARCHIVED
@@ -481,27 +488,27 @@ class WikiService:
             return None
         if existing is None:
             if path_owner is not None:
-                raise WikiValidationError("health.md belongs to a different wiki resource")
-            operation = Create("health", "health.md", content)
+                raise WikiValidationError(f"{WIKI_HEALTH_PATH} belongs to a different wiki resource")
+            operation = Create(WIKI_HEALTH_RESOURCE_ID, WIKI_HEALTH_PATH, content)
         else:
-            if existing.path != "health.md":
-                raise WikiValidationError("health resource must remain at health.md")
-            if path_owner is None or path_owner.resource_id != "health":
-                raise WikiValidationError("health.md must belong to the health resource")
-            if self.repository.read("health", at=base_head) == content:
+            if existing.path != WIKI_HEALTH_PATH:
+                raise WikiValidationError(f"health resource must remain at {WIKI_HEALTH_PATH}")
+            if path_owner is None or path_owner.resource_id != WIKI_HEALTH_RESOURCE_ID:
+                raise WikiValidationError(f"{WIKI_HEALTH_PATH} must belong to the health resource")
+            if self.repository.read(WIKI_HEALTH_RESOURCE_ID, at=base_head) == content:
                 if self.repository.head != base_head:
                     raise RevisionConflictError(
                         f"current head changed: expected {base_head!r}, found {self.repository.head!r}"
                     )
                 return None
-            operation = Update("health", existing.version_id, content)
+            operation = Update(WIKI_HEALTH_RESOURCE_ID, existing.version_id, content)
 
         return self.repository.commit(
             ChangeSet(
                 operations=(operation,),
-                actor="backend",
-                origin="wiki.health",
-                reason="project wiki health",
+                actor=WIKI_HEALTH_ACTOR,
+                origin=WIKI_HEALTH_ORIGIN,
+                reason=WIKI_HEALTH_REASON,
                 idempotency_key=self._key("health", base_head, content),
                 expected_head=base_head,
                 enforce_expected_head=base_head is None,

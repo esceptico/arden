@@ -185,3 +185,40 @@ async def test_fact_synthesis_migration_stays_due_through_startup_reconciliation
     for task in list(sched._running):
         await task
     assert started == ["memory_synthesize"]
+
+
+@pytest.mark.asyncio
+async def test_overdue_fact_mode_wiki_maintenance_catches_up_once(store: AutomationStore):
+    from arden.automation.builtins import seed_builtins
+    from arden.constants import BUILTIN_WIKI_MAINTENANCE_ID
+
+    await seed_builtins(store, fact_mode=True)
+    maintenance = await store.get(BUILTIN_WIKI_MAINTENANCE_ID)
+    assert maintenance is not None
+    last_run = datetime.now(UTC) - timedelta(hours=12)
+    await store.save(
+        replace(
+            maintenance,
+            last_run_at=last_run,
+            next_run_at=last_run + timedelta(hours=6),
+        )
+    )
+
+    started: list[str] = []
+
+    async def wiki_maintenance(_ctx):
+        started.append("wiki_maintenance")
+        return "reconciled"
+
+    sched = Scheduler(store=store, build_deps=lambda: None)
+    sched.register_handler("wiki_maintenance", wiki_maintenance)
+    await sched._reconcile()
+
+    reconciled = await store.get(BUILTIN_WIKI_MAINTENANCE_ID)
+    assert reconciled is not None
+    assert reconciled.next_run_at == last_run + timedelta(hours=6)
+
+    await sched._tick()
+    for task in list(sched._running):
+        await task
+    assert started == ["wiki_maintenance"]

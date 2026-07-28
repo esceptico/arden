@@ -10,6 +10,7 @@ from arden.automation.store import AutomationStore
 from arden.automation.triggers import CountTrigger, EventTrigger, IdleTrigger, MessageTrigger, TimeTrigger
 from arden.constants import (
     BUILTIN_MEMORY_SYNTHESIZE_ID,
+    BUILTIN_WIKI_MAINTENANCE_ID,
     DETACHED_RUN_MAX_AGE,
     MESSAGE_RECEIVED,
     SCHEDULER_DEDUP_TTL,
@@ -34,6 +35,7 @@ _logger = get_logger(__name__)
 _CATCH_UP_HANDLERS = {"memory_consolidate"}
 _CATCH_UP_CADENCE = timedelta(hours=24)
 _FACT_SYNTHESIS_BACKSTOP = TimeTrigger(every="6h")
+_WIKI_MAINTENANCE_BACKSTOP = TimeTrigger(every="6h")
 
 
 IterationDispatcher = Callable[[Automation, str | dict | None], Awaitable[str | None]]
@@ -260,9 +262,8 @@ class Scheduler:
                 )
                 continue
             if self._should_catch_up_missed(automation, now):
-                # A daily maintenance builtin whose slot was missed (laptop asleep
-                # past 03:00) stays DUE so _tick fires it now, instead of skipping
-                # to tomorrow — otherwise memory maintenance can be skipped for days.
+                # A maintenance builtin whose slot was missed stays DUE so _tick
+                # fires it now instead of silently skipping its cadence.
                 _logger.info(
                     "Catch-up: leaving missed maintenance automation %s due for immediate run", automation.task_id
                 )
@@ -308,7 +309,18 @@ class Scheduler:
             and automation.cooldown_minutes is None
             and automation.triggers == [_FACT_SYNTHESIS_BACKSTOP]
         )
-        if not (is_fact_synthesis_backstop or (automation.builtin and automation.handler in _CATCH_UP_HANDLERS)):
+        is_wiki_maintenance_backstop = (
+            automation.builtin
+            and automation.task_id == BUILTIN_WIKI_MAINTENANCE_ID
+            and automation.handler == "wiki_maintenance"
+            and automation.cooldown_minutes is None
+            and automation.triggers == [_WIKI_MAINTENANCE_BACKSTOP]
+        )
+        if not (
+            is_fact_synthesis_backstop
+            or is_wiki_maintenance_backstop
+            or (automation.builtin and automation.handler in _CATCH_UP_HANDLERS)
+        ):
             return False
         if len(automation.triggers) != 1 or not isinstance(automation.triggers[0], TimeTrigger):
             return False

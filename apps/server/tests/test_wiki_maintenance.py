@@ -125,6 +125,24 @@ async def test_pending_identical_evidence_is_not_asked_again_then_rejection_adva
 
 
 @pytest.mark.asyncio
+async def test_runner_advances_backend_health_projection_without_model_review(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    service = WikiService(repo)
+    commit = service.publish_health(body=b"Healthy.\n", base_head=None)
+    assert commit is not None
+    store = await WikiMaintenanceStore.open(tmp_path / "state.sqlite")
+    reviewer = _Reviewer()
+    try:
+        result = await WikiMaintenance(store, service, reviewer).run()
+        assert result.advanced and result.complete
+        assert result.reviewed_commits == 1
+        assert reviewer.reports == []
+        assert (await store.get_watermark()).revision == commit.commit_id
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
 async def test_changed_evidence_clears_the_old_pending_review_after_fresh_no_change(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     source = _seed(repo)

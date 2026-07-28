@@ -157,6 +157,8 @@ MEMORY_SYNTHESIZE_AT = "03:30"
 # stays current, not 24h stale), throttled by the cooldown. Stale-gated => cheap.
 MEMORY_SYNTHESIZE_EVERY_N_RUNS = 25
 MEMORY_SYNTHESIZE_COOLDOWN_MINUTES = 30
+# Fact-mode cross-page consistency pass.
+BUILTIN_WIKI_MAINTENANCE_ID = "builtin-wiki-maintenance"
 # Deterministic nightly RETENTION (forgetting): TTL-by-kind + salience floor.
 BUILTIN_MEMORY_RETENTION_ID = "builtin-memory-retention"
 MEMORY_RETENTION_AT = "03:45"

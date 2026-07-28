@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 import threading
+from dataclasses import FrozenInstanceError
 
 import pytest
 
 from arden.core.prompts import build_system_blocks
 from arden.revisions import ChangeSet, Create, ManagedFileRepository, RevisionConflictError
 from arden.search.types import SearchResult
-from arden.wiki import WikiContextBuilder, WikiMaintenancePageUpdate, WikiPageIndexProjection, WikiService
+from arden.wiki import (
+    WikiContextBuilder,
+    WikiMaintenancePageUpdate,
+    WikiPageIndexProjection,
+    WikiPageIndexState,
+    WikiService,
+)
 from arden.wiki.context import WIKI_PAGE_SOURCE, _normalized_query
 
 
@@ -74,6 +81,9 @@ async def test_wiki_index_tracks_active_pages_and_context_keeps_residents_separa
     await projection.sync()
 
     assert set(index.store.items) == {"home", "directives", "me", "topic"}
+    assert projection.last_state == WikiPageIndexState(wiki.repository.head, "ready")
+    with pytest.raises(FrozenInstanceError):
+        projection.last_state.status = "error"  # type: ignore[misc]
     assert index.store.items["topic"][2] == {
         "resource_path": "topics/topic.md",
         "resource_version": topic.resource.version_id,
@@ -89,6 +99,7 @@ async def test_wiki_index_tracks_active_pages_and_context_keeps_residents_separa
     )
     await projection.sync()
     assert index.store.items["topic"][0] == "Renamed topic"
+    assert projection.last_state == WikiPageIndexState(wiki.repository.head, "ready")
 
     builder = WikiContextBuilder(wiki, projection, _fact_revision)
     resident = await builder.resident_context()
@@ -220,6 +231,78 @@ async def test_repeated_wiki_read_conflict_degrades_to_empty_context(tmp_path, m
     assert await builder.retrieval_context("tell me about the current project") is None
     await projection.sync()
     assert set(index.store.items) == {"existing"}
+    assert projection.last_state == WikiPageIndexState(None, "error", "wiki pages could not be read")
+
+
+@pytest.mark.asyncio
+async def test_projection_retries_one_wiki_head_change_before_marking_the_index_ready(tmp_path) -> None:
+    wiki = WikiService(ManagedFileRepository(tmp_path / "pages", history_root=tmp_path / "history"))
+    wiki.create_page(page_id="first", path="first.md", title="First", body=b"First page.\n")
+    writes = 0
+
+    class _HeadChangingIndex(_Index):
+        async def upsert(self, *args):
+            nonlocal writes
+            await super().upsert(*args)
+            writes += 1
+            if writes == 1:
+                wiki.create_page(page_id="second", path="second.md", title="Second", body=b"Second page.\n")
+
+    index = _HeadChangingIndex()
+    projection = WikiPageIndexProjection(wiki, lambda: index, _fact_revision)
+
+    assert await projection.sync() is index
+    assert writes >= 3
+    assert set(index.store.items) == {"first", "second"}
+    assert projection.last_state == WikiPageIndexState(wiki.repository.head, "ready")
+
+
+@pytest.mark.asyncio
+async def test_projection_never_marks_a_repeatedly_changing_wiki_head_current(tmp_path) -> None:
+    wiki = WikiService(ManagedFileRepository(tmp_path / "pages", history_root=tmp_path / "history"))
+    wiki.create_page(page_id="first", path="first.md", title="First", body=b"First page.\n")
+    writes = 0
+
+    class _AlwaysChangingIndex(_Index):
+        async def upsert(self, *args):
+            nonlocal writes
+            await super().upsert(*args)
+            writes += 1
+            wiki.create_page(
+                page_id=f"concurrent-{writes}",
+                path=f"concurrent-{writes}.md",
+                title=f"Concurrent {writes}",
+                body=b"Changed during index work.\n",
+            )
+
+    index = _AlwaysChangingIndex()
+    projection = WikiPageIndexProjection(wiki, lambda: index, _fact_revision)
+
+    assert await projection.sync() is None
+    assert writes >= 2
+    assert projection.last_state == WikiPageIndexState(None, "not_ready", "wiki head changed during index sync")
+
+
+@pytest.mark.asyncio
+async def test_projection_state_callback_is_outside_the_lock_and_cannot_break_sync(tmp_path) -> None:
+    wiki = WikiService(ManagedFileRepository(tmp_path / "pages", history_root=tmp_path / "history"))
+    wiki.create_page(page_id="topic", path="topic.md", title="Topic", body=b"Callback-safe topic.\n")
+    index = _Index()
+    states: list[WikiPageIndexState] = []
+    lock_states: list[bool] = []
+    projection: WikiPageIndexProjection
+
+    async def callback(state: WikiPageIndexState) -> None:
+        states.append(state)
+        lock_states.append(projection._lock.locked())
+        raise RuntimeError("health consumer is unavailable")
+
+    projection = WikiPageIndexProjection(wiki, lambda: index, _fact_revision, on_state_change=callback)
+
+    assert await projection.sync() is index
+    assert await projection.sync() is index
+    assert states == [WikiPageIndexState(wiki.repository.head, "ready")]
+    assert lock_states == [False]
 
 
 @pytest.mark.asyncio

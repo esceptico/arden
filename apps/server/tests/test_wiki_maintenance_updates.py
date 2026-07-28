@@ -8,6 +8,7 @@ from arden.wiki import (
     WikiAmbiguityError,
     WikiMaintenancePageUpdate,
     WikiService,
+    WikiValidationError,
     create_page,
 )
 
@@ -172,6 +173,22 @@ def test_maintenance_never_recreates_or_edits_archived_pages(tmp_path: Path) -> 
             (WikiMaintenancePageUpdate("one", repo.get("one").version_id, "One", (), b""),),
             base_head=repo.head,
         )
+
+
+def test_maintenance_cannot_edit_the_backend_owned_health_page(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    service = WikiService(repo)
+    assert service.publish_health(body=b"Healthy.\n", base_head=None) is not None
+    initial = repo.head
+
+    with pytest.raises(WikiValidationError, match="backend-owned"):
+        service.apply_maintenance_updates(
+            (_update(service, "health", title="Changed", aliases=(), body=b"Model edit.\n"),),
+            base_head=initial,
+        )
+
+    assert repo.head == initial
+    assert service.read_page("health").page.body == b"Healthy.\n"
 
 
 def test_maintenance_retry_replays_before_head_compare_and_swap(tmp_path: Path) -> None:
