@@ -345,9 +345,7 @@ class WikiService:
                     resource.resource_id,
                     section="diff",
                     actual_bytes=(
-                        diff_byte_budget - remaining + reserved + actual
-                        if shared_budget_exhausted
-                        else actual
+                        diff_byte_budget - remaining + reserved + actual if shared_budget_exhausted else actual
                     ),
                     limit_bytes=(diff_byte_budget if shared_budget_exhausted else diff_char_limit - 1),
                     actual_bytes_at_least=True,
@@ -467,7 +465,9 @@ class WikiService:
             for revision in (before, after):
                 if revision is not None:
                     if revision.validation_error is not None:
-                        warnings.append(WikiChangeWarning("invalid_page", revision.resource.path, revision.validation_error))
+                        warnings.append(
+                            WikiChangeWarning("invalid_page", revision.resource.path, revision.validation_error)
+                        )
                     warnings.extend(revision.provenance_warnings)
             outgoing, backlinks = current_links.get(resource.resource_id, ((), ()))
             diff, complete = diffs.get(resource.resource_id, ("", True))
@@ -1121,7 +1121,9 @@ class WikiService:
                 content = self.repository.read_version(resource)
                 revision = self._revision_from_content(resource, content)
             if revision.page is None:
-                warnings.append(WikiChangeWarning("invalid_page", resource.path, revision.validation_error or "invalid page"))
+                warnings.append(
+                    WikiChangeWarning("invalid_page", resource.path, revision.validation_error or "invalid page")
+                )
                 continue
             warnings.extend(revision.provenance_warnings)
             records.append(WikiPageRecord(resource, revision.page, revision.content))
@@ -1184,7 +1186,9 @@ class WikiService:
                 content = self.repository.read_version(resource)
                 revision = self._revision_from_content(resource, content)
             if revision.page is None:
-                warnings.append(WikiChangeWarning("invalid_page", resource.path, revision.validation_error or "invalid page"))
+                warnings.append(
+                    WikiChangeWarning("invalid_page", resource.path, revision.validation_error or "invalid page")
+                )
                 continue
             warnings.extend(revision.provenance_warnings)
             # Do not retain arbitrary current bodies merely to resolve links.
@@ -1197,7 +1201,9 @@ class WikiService:
             )
 
         context_by_id = {context.record.page.page_id: context for context in contexts}
-        metadata_records = tuple(sorted((context.record for context in contexts), key=lambda record: record.page.page_id))
+        metadata_records = tuple(
+            sorted((context.record for context in contexts), key=lambda record: record.page.page_id)
+        )
         index = self._index(WikiSnapshot(head, metadata_records), strict_names=False)
         current_links = self._maintenance_links_from_nodes(
             tuple((context.record.page.page_id, context.nodes) for context in contexts),
@@ -1257,10 +1263,7 @@ class WikiService:
         index: _Index,
     ) -> dict[str, tuple[tuple[LinkReference, ...], tuple[LinkReference, ...]]]:
         return self._maintenance_links_from_nodes(
-            tuple(
-                (record.page.page_id, parse_wikilinks(record.page.body.decode("utf-8")))
-                for record in records
-            ),
+            tuple((record.page.page_id, parse_wikilinks(record.page.body.decode("utf-8"))) for record in records),
             index,
         )
 
@@ -1279,10 +1282,7 @@ class WikiService:
             for reference in references:
                 if reference.target_page_id is not None:
                     backlinks.setdefault(reference.target_page_id, []).append(reference)
-        return {
-            page_id: (outgoing[page_id], tuple(backlinks[page_id]))
-            for page_id, _nodes in pages
-        }
+        return {page_id: (outgoing[page_id], tuple(backlinks[page_id])) for page_id, _nodes in pages}
 
     def _link_warnings(
         self,
@@ -1520,9 +1520,7 @@ class WikiService:
             if change is None:
                 continue
             assert change.after is not None
-            return True, extract_generated_region(
-                self.repository.read_version(change.after), expected_page_id=page_id
-            )
+            return True, extract_generated_region(self.repository.read_version(change.after), expected_page_id=page_id)
         return False, None
 
     @staticmethod
@@ -1559,6 +1557,8 @@ class WikiService:
     @staticmethod
     def _names(page: WikiPage, path: str) -> tuple[str, ...]:
         stem = path[:-3] if path.endswith(".md") else path
+        if page.page_id == WIKI_HEALTH_RESOURCE_ID and path == WIKI_HEALTH_PATH:
+            return (page.title, *page.aliases, path)
         return (page.title, *page.aliases, path, stem)
 
     @staticmethod

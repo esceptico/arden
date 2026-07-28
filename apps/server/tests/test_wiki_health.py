@@ -75,6 +75,23 @@ def test_health_projects_typed_evidence_and_mechanics(tmp_path: Path) -> None:
     }
 
 
+def test_generated_health_does_not_claim_the_personal_health_topic_name(tmp_path: Path) -> None:
+    service = WikiService(_repo(tmp_path))
+    service.create_page(path="topics/health.md", title="Health", page_id="personal-health")
+    service.create_page(
+        path="source.md",
+        title="Source",
+        page_id="source",
+        body=b"[[Health]] and [[Wiki health]].\n",
+    )
+
+    WikiHealthProjector(service).project(_input(service))
+
+    assert len(service.snapshot().pages) == 3
+    outgoing = service.link_report("source").outgoing
+    assert [reference.target_page_id for reference in outgoing] == ["personal-health", "health"]
+
+
 def test_health_preserves_an_index_error_at_the_current_revision(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     service = WikiService(repo)
@@ -142,8 +159,7 @@ def test_health_surfaces_revision_history_storage_warnings(
     content = repo.read("health").decode()
     assert "Overall status: **attention needed**" in content
     assert (
-        f"## Revision history storage\n\n- Status: {expected}\n"
-        "- Thresholds: 50 MiB inspection; 100 MiB attention"
+        f"## Revision history storage\n\n- Status: {expected}\n- Thresholds: 50 MiB inspection; 100 MiB attention"
     ) in content
 
 
