@@ -426,6 +426,21 @@ async def test_request_delayed_run_is_noop_for_missing_or_disabled_task(store: A
 
 
 @pytest.mark.asyncio
+async def test_request_delayed_run_does_not_postpone_overdue_idle_task(store: AutomationStore):
+    now = datetime.now(UTC)
+    overdue = now - timedelta(minutes=1)
+    auto = _loop(every="6h", next_run_at=overdue)
+    auto.last_run_at = now - timedelta(hours=7)
+    await store.save(auto)
+    sched, _ = _make_scheduler(store)
+
+    assert await sched.request_delayed_run(auto.task_id, timedelta(minutes=5))
+    reloaded = await store.get(auto.task_id)
+    assert reloaded is not None
+    assert reloaded.next_run_at == overdue
+
+
+@pytest.mark.asyncio
 async def test_during_run_debounce_survives_finalization(store: AutomationStore):
     auto = _loop(read_history=False, every="6h")
     auto.handler = "blocking"

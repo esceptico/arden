@@ -346,11 +346,9 @@ class Scheduler:
             return None
         # Interval schedules are anchored to their last completed run.  Wall
         # clock schedules derive directly from now and need no stored anchor.
-        ref = (automation.last_run_at or automation.created_at) if trigger.every else now
-        next_run = trigger.next_run(ref)
-        while next_run <= now:
-            next_run = trigger.next_run(next_run)
-        return next_run
+        if trigger.every:
+            return trigger.next_run(automation.last_run_at or automation.created_at)
+        return trigger.next_run(now)
 
     async def request_delayed_run(self, task_id: str, delay: timedelta) -> bool:
         """Reset one enabled task's delayed run, retaining its time-trigger cap.
@@ -367,9 +365,12 @@ class Scheduler:
         now = datetime.now(UTC)
         requested = now + delay
         if automation.running_since is None:
-            backstop = self._time_trigger_backstop(automation, now)
-            if backstop is not None:
-                requested = min(requested, backstop)
+            if automation.next_run_at is not None and automation.next_run_at <= now:
+                requested = automation.next_run_at
+            else:
+                backstop = self._time_trigger_backstop(automation, now)
+                if backstop is not None:
+                    requested = min(requested, backstop)
 
         if not await self.store.set_next_run_if_enabled(task_id, requested):
             return False
