@@ -19,6 +19,10 @@ _VEC_SCHEMA_VERSION = "2"
 SNIPPET_DISPLAY_LIMIT = 500
 
 
+def _metadata_json(metadata: dict | None) -> str | None:
+    return json.dumps(metadata, sort_keys=True, separators=(",", ":")) if metadata else None
+
+
 @dataclass
 class Item:
     id: int
@@ -211,6 +215,23 @@ class SearchStore:
         )
         return {row["source_id"]: (row["id"], row["content_hash"]) for row in rows}
 
+    async def update_metadata(self, source: str, source_id: str, metadata: dict | None) -> bool:
+        """Refresh non-embedding identity without invalidating the vector."""
+
+        metadata_json = _metadata_json(metadata)
+        rows = await self.conn.execute_fetchall(
+            "SELECT metadata FROM items WHERE source = ? AND source_id = ?",
+            (source, source_id),
+        )
+        if not rows or rows[0]["metadata"] == metadata_json:
+            return False
+        await self.conn.execute(
+            "UPDATE items SET metadata = ?, indexed_at = ? WHERE source = ? AND source_id = ?",
+            (metadata_json, datetime.now(UTC).isoformat(), source, source_id),
+        )
+        await self.conn.commit()
+        return True
+
     async def upsert(
         self,
         source: str,
@@ -219,11 +240,13 @@ class SearchStore:
         content: str,
         embedding: bytes,
         metadata: dict | None = None,
+        *,
+        content_hash: str | None = None,
     ) -> bool:
-        content_hash = self.hash_content(content)
+        content_hash = content_hash or self.hash_content(content)
         snippet = self.make_snippet(content)
         now = datetime.now(UTC).isoformat()
-        metadata_json = json.dumps(metadata) if metadata else None
+        metadata_json = _metadata_json(metadata)
 
         existing = await self.conn.execute_fetchall(
             "SELECT id, content_hash FROM items WHERE source = ? AND source_id = ?",

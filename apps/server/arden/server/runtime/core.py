@@ -42,7 +42,13 @@ from arden.skills.registry import SkillRegistry
 from arden.skills.service import SkillService, get_skills_dirs
 from arden.tools.connections import ConnectionService
 from arden.tools.executor import ToolExecutor
-from arden.wiki import WikiRenameApprovalCoordinator, WikiRenameApprovalStore, WikiService
+from arden.wiki import (
+    WikiContextBuilder,
+    WikiPageIndexProjection,
+    WikiRenameApprovalCoordinator,
+    WikiRenameApprovalStore,
+    WikiService,
+)
 
 _logger = get_logger(__name__)
 
@@ -78,6 +84,7 @@ class Runtime:
         self.app_control: AppControlService | None = None
         self.wiki_repository: ManagedFileRepository | None = None
         self.wiki_service: WikiService | None = None
+        self.wiki_context: WikiContextBuilder | None = None
         self.wiki_rename_coordinator: WikiRenameApprovalCoordinator | None = None
         self._wiki_approval_conn: database.aiosqlite.Connection | None = None
         self.fact_service: FactService | None = None
@@ -226,6 +233,14 @@ class Runtime:
         await self._init_facts(fact_ledger)
         self.knowledge.set_memory_write_guard(self._require_legacy_page_writes)
         await self.knowledge.connect(self.stores)
+        if self.fact_service is not None and self.wiki_service is not None:
+            projection = WikiPageIndexProjection(
+                self.wiki_service,
+                lambda: self.search_index,
+                self.fact_service.revision,
+            )
+            self.wiki_context = WikiContextBuilder(self.wiki_service, projection, self.fact_service.revision)
+            await projection.sync()
         self._init_skills()
         await self._init_notifiers()
         self._init_automation()
@@ -422,6 +437,7 @@ class Runtime:
             dispatch_session_message=self.dispatch_session_message,
             memory_curator=self.memory_curator,
             memory_records=self.memory_records,
+            wiki_context=self.wiki_context,
             skill_registry=self.skill_registry,
             notifier_service=self.notifier_service,
         )

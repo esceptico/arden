@@ -27,6 +27,7 @@ from arden.memory.ledger import LedgerEntry, LedgerMeta, render_ledger_entry
 from arden.memory.models import Kind, SourceRef
 from arden.memory.pages import Page, render_raw
 from arden.memory.records import RecordStore
+from arden.search.index import item_hash
 
 pytestmark = pytest.mark.asyncio
 
@@ -692,6 +693,28 @@ class _FailingLedgerIndex(_LedgerIndex):
         return False
 
 
+class _HashAwareLedgerIndex(_LedgerIndex):
+    def __init__(self, hashes: dict[str, str]):
+        super().__init__()
+        self.store.hashes = hashes
+        self.upserted: list[str] = []
+
+        async def get_indexed_hashes(source):
+            assert source == "memory_line"
+            return {
+                source_id: (position, content_hash)
+                for position, (source_id, content_hash) in enumerate(self.store.hashes.items())
+            }
+
+        self.store.get_indexed_hashes = get_indexed_hashes
+
+    async def upsert(self, *, source, source_id, title, content, metadata=None):
+        assert source == "memory_line"
+        self.upserted.append(source_id)
+        self.store.hashes[source_id] = item_hash(title, content)
+        return True
+
+
 async def test_memory_index_sync_stops_after_first_embedding_failure(tmp_path: Path):
     index = _FailingLedgerIndex()
     entries = [
@@ -703,6 +726,21 @@ async def test_memory_index_sync_stops_after_first_embedding_failure(tmp_path: P
     await _file_store_pages(tmp_path / "memory", {"topics/a.md": entries}, index=index)
 
     assert index.upsert_calls == 1
+
+
+async def test_memory_index_sync_skips_canonical_first_hash_and_reaches_later_change(tmp_path: Path):
+    first = _ledger_entry("first", "First", sequence=1)
+    second = _ledger_entry("second", "Second", sequence=2)
+    index = _HashAwareLedgerIndex(
+        {
+            first.id: item_hash(f"{first.kind} line", first.text),
+            second.id: "legacy-or-stale-hash",
+        }
+    )
+
+    await _file_store_pages(tmp_path / "memory", {"topics/a.md": [first, second]}, index=index)
+
+    assert index.upserted == [second.id]
 
 
 async def test_page_active_entries_uses_relationship_graph_and_rejects_invalid_targets():

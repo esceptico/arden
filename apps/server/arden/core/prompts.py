@@ -329,6 +329,7 @@ def build_system_blocks(
     use_cache_control: bool = False,
     native_deferred_tools: bool = False,
     context_manifest: list[ContextManifestEntry] | None = None,
+    retrieval_context: str | None = None,
 ) -> list[dict]:
     """Build system prompt as a list of content blocks.
 
@@ -381,6 +382,10 @@ def build_system_blocks(
         manifest_specs.append(
             ("memory_context", "memory", "resident_profile", "session load", "activated for this session")
         )
+
+    if retrieval_context:
+        blocks.append({"type": "text", "text": retrieval_context})
+        manifest_specs.append(("wiki_retrieval", "wiki", "wiki_page", "current turn", "bounded relevant pages"))
 
     if goal_context:
         blocks.append({"type": "text", "text": GOAL_BLOCK.render(goal=goal_context)})

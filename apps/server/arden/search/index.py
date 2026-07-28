@@ -1,3 +1,4 @@
+import json
 from collections.abc import Callable
 from typing import NamedTuple
 
@@ -10,6 +11,20 @@ from arden.search.store import SearchStore
 from arden.search.types import RawItem, SearchResult
 
 _logger = get_logger(__name__)
+_ITEM_HASH_VERSION = 2
+
+
+def item_hash(title: str, content: str) -> str:
+    """One versioned embedding identity shared by direct and batch indexing."""
+
+    return SearchStore.hash_content(
+        json.dumps(
+            {"version": _ITEM_HASH_VERSION, "title": title, "content": content},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
 
 
 class SyncResult(NamedTuple):
@@ -52,10 +67,10 @@ class SearchIndex:
         content: str,
         metadata: dict | None = None,
     ) -> bool:
-        content_hash = SearchStore.hash_content(content)
+        content_hash = item_hash(title, content)
 
         if await self.store.exists_with_hash(source, source_id, content_hash):
-            return False
+            return await self.store.update_metadata(source, source_id, metadata)
 
         try:
             embedding = await self.embedder.embed_one(f"{title}\n{content}")
@@ -64,7 +79,15 @@ class SearchIndex:
             return False
         embedding_bytes = serialize_embedding(embedding)
 
-        return await self.store.upsert(source, source_id, title, content, embedding_bytes, metadata)
+        return await self.store.upsert(
+            source,
+            source_id,
+            title,
+            content,
+            embedding_bytes,
+            metadata,
+            content_hash=content_hash,
+        )
 
     async def delete(self, source: str, source_id: str) -> bool:
         return await self.store.delete(source, source_id)
@@ -94,8 +117,9 @@ class SearchIndex:
             if progress_callback:
                 progress_callback(i + 1, total)
 
-            content_hash = SearchStore.hash_content(item.content)
+            content_hash = item_hash(item.title, item.content)
             if item.source_id in indexed and indexed[item.source_id][1] == content_hash:
+                await self.store.update_metadata(source_name, item.source_id, item.metadata)
                 continue
 
             items_to_embed.append(item)
@@ -115,7 +139,15 @@ class SearchIndex:
 
             for item, embedding in zip(batch, embeddings):
                 embedding_bytes = serialize_embedding(embedding)
-                await self.store.upsert(source_name, item.source_id, item.title, item.content, embedding_bytes)
+                await self.store.upsert(
+                    source_name,
+                    item.source_id,
+                    item.title,
+                    item.content,
+                    embedding_bytes,
+                    item.metadata,
+                    content_hash=item_hash(item.title, item.content),
+                )
                 updated += 1
 
         return SyncResult(updated, deleted)

@@ -93,6 +93,15 @@ class WikiService:
         snapshot = self.snapshot()
         return tuple(record for record in snapshot.pages if include_redirects or record.page.lifecycle == "active")
 
+    def readable_pages(self) -> tuple[WikiPageRecord, ...]:
+        """Return valid active pages while independently omitting malformed ones."""
+
+        head = self.repository.head
+        records, _warnings = self._maintenance_snapshot(head)
+        if self.repository.head != head:
+            raise RevisionConflictError("wiki changed while reading pages")
+        return tuple(record for record in records if record.page.lifecycle == "active")
+
     def changes_since(self, watermark: str | None) -> WikiChangesReport:
         """Return chronological managed-Markdown history through one pinned head.
 

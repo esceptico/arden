@@ -230,6 +230,7 @@ class ChatDeps:
     ) = None
     memory_curator: object | None = None
     memory_records: object | None = None
+    wiki_context: object | None = None
     skill_registry: SkillRegistry | None = None
     notifier_service: NotifierService | None = None
 
@@ -525,6 +526,11 @@ async def _prepare_messages(
     context_manifest: list[ContextManifestEntry] | None = None,
 ) -> list[dict]:
     memory_context = await resident_profile(deps.memory_records, project_context=area_context, session_id=session_id)
+    wiki_context = deps.wiki_context
+    wiki_resident = await wiki_context.resident_context() if wiki_context is not None else None
+    wiki_retrieval = await wiki_context.retrieval_context(user_message) if wiki_context is not None else None
+    if wiki_resident:
+        memory_context = "\n\n".join(part for part in (memory_context, wiki_resident) if part)
 
     skills_context = deps.skill_registry.to_prompt_xml() if deps.skill_registry else None
     directives = load_directives()
@@ -555,6 +561,7 @@ async def _prepare_messages(
         use_cache_control=_is_anthropic(deps.chat_model),
         native_deferred_tools=native_deferred_tools,
         context_manifest=context_manifest,
+        retrieval_context=wiki_retrieval,
     )
 
     messages = _retain_user_content(messages)

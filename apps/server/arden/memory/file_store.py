@@ -43,8 +43,8 @@ from arden.memory.models import TRUST_DEFAULT, TRUST_LEVEL, Kind, Record, Source
 from arden.memory.pages import Line, Page, merge_split, parse_page, render_page, render_raw
 from arden.memory.reconciler import RecordOperation, validate_operations
 from arden.memory.scorer import salience
+from arden.search.index import item_hash
 from arden.search.retrieval import rrf_merge
-from arden.search.store import SearchStore
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -985,7 +985,7 @@ class FilePageStore:
                 await index.delete(_MEMORY_LINE_SOURCE, stale)
             for line in active.values():
                 stored = indexed.get(line.id)
-                if stored is not None and stored[1] == SearchStore.hash_content(line.text):
+                if stored is not None and stored[1] == item_hash(f"{line.kind} line", line.text):
                     continue
                 if not await index.upsert(
                     source=_MEMORY_LINE_SOURCE,
