@@ -64,6 +64,15 @@ _FACT_RETENTION_PROMPT = (
     "every change first and commit only the returned plan."
 )
 
+_FACT_SYNTHESIS_DESCRIPTION = "Publish fact-backed wiki pages from canonical facts."
+_FACT_SYNTHESIS_PROMPT = (
+    "Canonical fact synthesis: publish the managed regions of wiki pages from "
+    "active confirmed canonical facts with exact fact citations. Preserve user "
+    "content outside managed regions, never invent facts, and leave unresolved "
+    "or uncertain facts out of publication."
+)
+_LEGACY_SYNTHESIS_DESCRIPTION = "Refresh memory pages from canonical records with provenance."
+
 
 BUILTINS = [
     BuiltinSpec(
@@ -104,7 +113,7 @@ BUILTINS = [
     BuiltinSpec(
         task_id=BUILTIN_MEMORY_SYNTHESIZE_ID,
         name="Memory Synthesis",
-        description="Refresh memory pages from canonical records with provenance.",
+        description=_LEGACY_SYNTHESIS_DESCRIPTION,
         prompt="File-native synthesis: tag untagged records with their subject, then rewrite the prose summary of me.md, topic pages (topics/<slug>.md), active-work.md, integration source overviews (observations/<source>.md), and daily logs (daily/<date>.md) from the canonical timeline atoms, with inline (record:id) provenance. Stale-gated so only changed pages re-synthesize. Runs nightly AND after a burst of conversation so topic pages stay current, not 24h stale.",
         triggers=[
             TimeTrigger(at=MEMORY_SYNTHESIZE_AT, days="daily"),
@@ -142,16 +151,45 @@ BUILTINS = [
 def _specs(*, fact_mode: bool) -> list[BuiltinSpec]:
     if not fact_mode:
         return BUILTINS
-    return [
-        dc_replace(
-            spec,
-            handler=None,
-            prompt=_FACT_RETENTION_PROMPT,
-            tool_scope=list(_FACT_RETENTION_TOOL_SCOPE),
-        )
-        if spec.task_id == BUILTIN_MEMORY_RETENTION_ID
-        else spec
-        for spec in BUILTINS
+    specs: list[BuiltinSpec] = []
+    for spec in BUILTINS:
+        if spec.task_id == BUILTIN_MEMORY_RETENTION_ID:
+            specs.append(
+                dc_replace(
+                    spec,
+                    handler=None,
+                    prompt=_FACT_RETENTION_PROMPT,
+                    tool_scope=list(_FACT_RETENTION_TOOL_SCOPE),
+                )
+            )
+        elif spec.task_id == BUILTIN_MEMORY_SYNTHESIZE_ID:
+            # Facts commit directly request a debounced run. This six-hour
+            # trigger is only the finite backstop when no commit arrives.
+            specs.append(
+                dc_replace(
+                    spec,
+                    description=_FACT_SYNTHESIS_DESCRIPTION,
+                    prompt=_FACT_SYNTHESIS_PROMPT,
+                    triggers=[TimeTrigger(every="6h")],
+                    cooldown_minutes=None,
+                )
+            )
+        else:
+            specs.append(spec)
+    return specs
+
+
+def _is_legacy_synthesis_default(automation: Automation) -> bool:
+    """Whether the only user dials are the old synthesis defaults.
+
+    This intentionally keys on the complete cadence/cooldown tuple, rather
+    than any copy or run-history fields, so a user-customized row is never
+    rewritten during the fact-mode cutover.
+    """
+
+    return automation.cooldown_minutes == MEMORY_SYNTHESIZE_COOLDOWN_MINUTES and automation.triggers == [
+        TimeTrigger(at=MEMORY_SYNTHESIZE_AT, days="daily"),
+        CountTrigger(every_n=MEMORY_SYNTHESIZE_EVERY_N_RUNS),
     ]
 
 
@@ -178,6 +216,18 @@ async def seed_builtins(store: AutomationStore, *, fact_mode: bool = False) -> N
                 changes["auto_approve"] = spec.auto_approve
             if existing.cooldown_minutes is None and spec.cooldown_minutes is not None:
                 changes["cooldown_minutes"] = spec.cooldown_minutes
+            if fact_mode and spec.task_id == BUILTIN_MEMORY_SYNTHESIZE_ID and _is_legacy_synthesis_default(existing):
+                changes["triggers"] = list(spec.triggers)
+                changes["cooldown_minutes"] = None
+                if existing.description == _LEGACY_SYNTHESIS_DESCRIPTION:
+                    changes["description"] = spec.description
+                # Keep the six-hour interval anchored to actual history. If
+                # the old row is overdue, this remains overdue so the
+                # scheduler catches it up instead of silently delaying it.
+                if existing.enabled:
+                    interval = spec.triggers[0]
+                    assert isinstance(interval, TimeTrigger)
+                    changes["next_run_at"] = interval.next_run(existing.last_run_at or existing.created_at)
             if spec.task_id == BUILTIN_MEMORY_RETENTION_ID and existing.tool_scope != spec.tool_scope:
                 changes["tool_scope"] = None if spec.tool_scope is None else list(spec.tool_scope)
             # Triggers and enabled are the USER'S dials once the row exists —

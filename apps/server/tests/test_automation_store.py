@@ -9,7 +9,7 @@ import arden.database as database
 from arden.automation.models import Automation
 from arden.automation.scheduler import Scheduler
 from arden.automation.store import AutomationStore
-from arden.automation.triggers import TimeTrigger, parse_triggers
+from arden.automation.triggers import CountTrigger, TimeTrigger, parse_triggers
 
 
 @pytest_asyncio.fixture
@@ -848,6 +848,85 @@ async def test_seed_builtins_switches_retention_contract_for_fact_mode(automatio
     assert "supersede integration observations older than 90 days" in restored.prompt
     assert restored.enabled is False
     assert [(trigger.at.hour, trigger.at.minute) for trigger in restored.triggers] == [(21, 30)]
+
+
+@pytest.mark.asyncio
+async def test_seed_builtins_seeds_fact_synthesis_on_six_hour_backstop(automation_store: AutomationStore):
+    from arden.automation.builtins import seed_builtins
+    from arden.constants import BUILTIN_MEMORY_SYNTHESIZE_ID
+
+    await seed_builtins(automation_store, fact_mode=True)
+
+    synthesis = await automation_store.get(BUILTIN_MEMORY_SYNTHESIZE_ID)
+    assert synthesis is not None
+    assert synthesis.triggers == [TimeTrigger(every="6h")]
+    assert synthesis.cooldown_minutes is None
+    assert "Canonical fact synthesis" in synthesis.prompt
+    assert synthesis.next_run_at is not None
+
+
+@pytest.mark.asyncio
+async def test_seed_builtins_migrates_only_exact_legacy_synthesis_defaults(automation_store: AutomationStore):
+    from arden.automation.builtins import seed_builtins
+    from arden.constants import BUILTIN_MEMORY_SYNTHESIZE_ID
+
+    await seed_builtins(automation_store)
+    synthesis = await automation_store.get(BUILTIN_MEMORY_SYNTHESIZE_ID)
+    assert synthesis is not None
+    last_run = datetime(2026, 1, 1, tzinfo=UTC)
+    await automation_store.save(
+        dc_replace(
+            synthesis,
+            last_run_at=last_run,
+            next_run_at=datetime(2026, 1, 2, tzinfo=UTC),
+            last_result="old result",
+        )
+    )
+
+    await seed_builtins(automation_store, fact_mode=True)
+
+    migrated = await automation_store.get(BUILTIN_MEMORY_SYNTHESIZE_ID)
+    assert migrated is not None
+    assert migrated.triggers == [TimeTrigger(every="6h")]
+    assert migrated.cooldown_minutes is None
+    assert migrated.next_run_at == last_run + timedelta(hours=6)
+    assert migrated.next_run_at < datetime.now(UTC)  # overdue stays due
+    assert migrated.last_result == "old result"
+    assert migrated.description == "Publish fact-backed wiki pages from canonical facts."
+    assert migrated.enabled is True
+
+
+@pytest.mark.asyncio
+async def test_seed_builtins_keeps_custom_synthesis_cadence_cooldown_and_pause(automation_store: AutomationStore):
+    from arden.automation.builtins import seed_builtins
+    from arden.constants import BUILTIN_MEMORY_SYNTHESIZE_ID
+
+    await seed_builtins(automation_store)
+    synthesis = await automation_store.get(BUILTIN_MEMORY_SYNTHESIZE_ID)
+    assert synthesis is not None
+    custom_triggers = [TimeTrigger(every="2h"), CountTrigger(every_n=3)]
+    await automation_store.save(
+        dc_replace(
+            synthesis,
+            triggers=custom_triggers,
+            cooldown_minutes=17,
+            enabled=False,
+            next_run_at=None,
+            description="Keep this description.",
+            description_source="manual",
+        )
+    )
+
+    await seed_builtins(automation_store, fact_mode=True)
+
+    kept = await automation_store.get(BUILTIN_MEMORY_SYNTHESIZE_ID)
+    assert kept is not None
+    assert kept.triggers == custom_triggers
+    assert kept.cooldown_minutes == 17
+    assert kept.enabled is False
+    assert kept.next_run_at is None
+    assert kept.description == "Keep this description."
+    assert "Canonical fact synthesis" in kept.prompt
 
 
 @pytest.mark.asyncio

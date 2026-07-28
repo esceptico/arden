@@ -9,6 +9,7 @@ from arden.automation.prompts import AUTOMATION_PROMPT, AUTOMATION_SUFFIX
 from arden.automation.store import AutomationStore
 from arden.automation.triggers import CountTrigger, EventTrigger, IdleTrigger, MessageTrigger, TimeTrigger
 from arden.constants import (
+    BUILTIN_MEMORY_SYNTHESIZE_ID,
     DETACHED_RUN_MAX_AGE,
     MESSAGE_RECEIVED,
     SCHEDULER_DEDUP_TTL,
@@ -32,6 +33,7 @@ _logger = get_logger(__name__)
 # after sleep/offline time, catch them up in this order on the same boot.
 _CATCH_UP_HANDLERS = {"memory_consolidate"}
 _CATCH_UP_CADENCE = timedelta(hours=24)
+_FACT_SYNTHESIS_BACKSTOP = TimeTrigger(every="6h")
 
 
 IterationDispatcher = Callable[[Automation, str | dict | None], Awaitable[str | None]]
@@ -293,12 +295,20 @@ class Scheduler:
 
     @staticmethod
     def _should_catch_up_missed(automation: Automation, now: datetime) -> bool:
-        """A missed daily maintenance builtin should run immediately on boot rather
-        than skip to its next future slot. Scoped to builtin maintenance handlers
-        on a single daily TimeTrigger whose scheduled slot is now overdue and
-        still unsatisfied — so a machine asleep/off at 03:00 still gets memory
-        maintenance, without surprising user-created reminders."""
-        if not (automation.builtin and automation.handler in _CATCH_UP_HANDLERS):
+        """Whether an overdue built-in must run now rather than skip ahead.
+
+        Legacy daily consolidation keeps its explicit catch-up policy. The
+        canonical fact synthesis interval is also a reliability backstop, so
+        an offline migration must not turn an already-due publication into a
+        future six-hour slot during startup reconciliation.
+        """
+        is_fact_synthesis_backstop = (
+            automation.builtin
+            and automation.task_id == BUILTIN_MEMORY_SYNTHESIZE_ID
+            and automation.cooldown_minutes is None
+            and automation.triggers == [_FACT_SYNTHESIS_BACKSTOP]
+        )
+        if not (is_fact_synthesis_backstop or (automation.builtin and automation.handler in _CATCH_UP_HANDLERS)):
             return False
         if len(automation.triggers) != 1 or not isinstance(automation.triggers[0], TimeTrigger):
             return False

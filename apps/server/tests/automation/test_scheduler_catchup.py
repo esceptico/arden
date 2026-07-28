@@ -4,6 +4,7 @@ the machine is asleep must run on boot, not skip to tomorrow."""
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -137,3 +138,50 @@ async def test_overdue_memory_builtin_catches_up(store: AutomationStore):
         loop_task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await loop_task
+
+
+@pytest.mark.asyncio
+async def test_fact_synthesis_migration_stays_due_through_startup_reconciliation(store: AutomationStore):
+    """The fact-mode seed migration and scheduler boot path must compose.
+
+    Its six-hour trigger is a backstop, not permission to skip an overdue
+    canonical publication after the server was offline.
+    """
+    from arden.automation.builtins import seed_builtins
+    from arden.constants import BUILTIN_MEMORY_SYNTHESIZE_ID
+
+    await seed_builtins(store)
+    legacy = await store.get(BUILTIN_MEMORY_SYNTHESIZE_ID)
+    assert legacy is not None
+    last_run = datetime.now(UTC) - timedelta(hours=12)
+    await store.save(
+        replace(
+            legacy,
+            last_run_at=last_run,
+            next_run_at=last_run + timedelta(days=1),
+        )
+    )
+    await seed_builtins(store, fact_mode=True)
+
+    migrated = await store.get(BUILTIN_MEMORY_SYNTHESIZE_ID)
+    assert migrated is not None
+    assert migrated.next_run_at == last_run + timedelta(hours=6)
+
+    started: list[str] = []
+
+    async def memory_synthesize(_ctx):
+        started.append("memory_synthesize")
+        return "published"
+
+    sched = Scheduler(store=store, build_deps=lambda: None)
+    sched.register_handler("memory_synthesize", memory_synthesize)
+    await sched._reconcile()
+
+    reconciled = await store.get(BUILTIN_MEMORY_SYNTHESIZE_ID)
+    assert reconciled is not None
+    assert reconciled.next_run_at == last_run + timedelta(hours=6)
+
+    await sched._tick()
+    for task in list(sched._running):
+        await task
+    assert started == ["memory_synthesize"]
