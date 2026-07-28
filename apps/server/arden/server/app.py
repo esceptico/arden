@@ -173,9 +173,22 @@ async def lifespan(app: FastAPI):
         vault_root=runtime.config.memory_artifacts_dir,
         sessions=runtime.session_service,
         lifecycle=app.state.area_lifecycle,
+        write_guard=runtime._require_legacy_page_writes,
     )
 
     def _area_get_page(page_path: str):
+        if runtime.fact_service is not None and runtime.wiki_service is not None:
+            resolve_area_page(runtime.config.memory_artifacts_dir, page_path)
+            record = next(
+                (
+                    candidate
+                    for candidate in runtime.wiki_service.readable_pages()
+                    if candidate.resource.path == page_path
+                ),
+                None,
+            )
+            text = record.content.decode("utf-8") if record is not None else ""
+            return parse_page(text)
         full_path = resolve_area_page(runtime.config.memory_artifacts_dir, page_path)
         text = full_path.read_text(encoding="utf-8") if full_path.exists() else ""
         return parse_page(text)

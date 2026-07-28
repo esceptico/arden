@@ -574,6 +574,21 @@ def test_create_and_detach_area_page(client):
     assert detached.json()["page_path"] is None
 
 
+def test_create_area_page_reports_cutover_write_guard(client):
+    c, _, _, _, areas = client
+    plain = areas._seed(name="Canonical")
+
+    class BlockedPages:
+        async def create(self, _area_id: str) -> dict:
+            raise PermissionError("legacy memory writes are disabled")
+
+    c.app.state.area_pages = BlockedPages()
+    response = c.post(f"/areas/{plain['area_id']}/page")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "legacy memory writes are disabled"
+
+
 def test_detach_area_page_rejects_delegated_area(client):
     c, _, _, o1a, _ = client
 

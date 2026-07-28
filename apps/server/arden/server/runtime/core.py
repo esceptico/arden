@@ -187,7 +187,10 @@ class Runtime:
     def tool_services(self) -> dict[str, object]:
         services: dict[str, object] = dict(self.integrations.clients)
         services["connections"] = self.connection_service
-        services["area_pages"] = self.config.memory_artifacts_dir
+        # Area page tools still target legacy vault paths. Keep them unavailable
+        # after fact cutover until Areas are ported onto WikiService.
+        if self.fact_service is None:
+            services["area_pages"] = self.config.memory_artifacts_dir
         if self.automation:
             services["area_custodians"] = self.automation.custodians
         services.update(self.knowledge.tool_services())

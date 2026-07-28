@@ -78,6 +78,14 @@ _WIKI_MAINTENANCE_PROMPT = (
     "Review managed wiki commits and their linked-page evidence for cross-page consistency. "
     "Preserve user-owned content and never invent facts or citations."
 )
+_FACT_MODE_RETIRED_BUILTIN_IDS = frozenset(
+    {
+        BUILTIN_AREA_SUGGESTER_ID,
+        BUILTIN_AUTOMATION_SUGGESTER_DAILY_ID,
+        BUILTIN_MEMORY_CONSOLIDATE_ID,
+        BUILTIN_MEMORY_DREAM_ID,
+    }
+)
 
 
 BUILTINS = [
@@ -159,6 +167,8 @@ def _specs(*, fact_mode: bool) -> list[BuiltinSpec]:
         return BUILTINS
     specs: list[BuiltinSpec] = []
     for spec in BUILTINS:
+        if spec.task_id in _FACT_MODE_RETIRED_BUILTIN_IDS:
+            continue
         if spec.task_id == BUILTIN_MEMORY_RETENTION_ID:
             specs.append(
                 dc_replace(
@@ -211,6 +221,16 @@ def _is_legacy_synthesis_default(automation: Automation) -> bool:
 
 
 async def seed_builtins(store: AutomationStore, *, fact_mode: bool = False) -> None:
+    if fact_mode:
+        for task_id in _FACT_MODE_RETIRED_BUILTIN_IDS:
+            existing = await store.get(task_id)
+            if existing is None:
+                continue
+            if not existing.builtin:
+                raise RuntimeError(f"reserved retired builtin id is not marked builtin: {task_id}")
+            await store.delete(task_id)
+            _logger.info("Retired legacy builtin after canonical fact cutover: %s", existing.name)
+
     for spec in _specs(fact_mode=fact_mode):
         existing = await store.get(spec.task_id)
         if existing:

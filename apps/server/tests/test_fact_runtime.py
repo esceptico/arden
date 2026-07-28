@@ -115,6 +115,7 @@ async def test_fact_cutover_wires_only_canonical_fact_memory_and_survives_restar
         assert services[FACT_SERVICE] is runtime.fact_service
         assert MEMORY_RECORDS_SERVICE not in services
         assert MEMORY_RECONCILER_SERVICE not in services
+        assert "area_pages" not in runtime.tool_services
         assert "memory" in runtime.get_available_integrations()
         assert _config_response(runtime)["integrations"]["memory"]["connected"] is True
 
@@ -137,6 +138,11 @@ async def test_fact_cutover_wires_only_canonical_fact_memory_and_survives_restar
             "get_due_fact_reviews",
             "plan_fact_changes",
             "commit_fact_changes",
+        }
+        assert not {
+            schema["function"]["name"]
+            for schema in runtime.executor.get_tools()
+            if schema["function"]["name"].startswith("area_page_")
         }
 
         blocked = await runtime.executor.execute(
@@ -239,6 +245,39 @@ async def test_fact_mode_memory_router_reads_managed_wiki_without_legacy_artifac
         app.state.runtime = runtime
 
         with TestClient(app) as client:
+            items = client.get("/admin/memory/items")
+            assert items.status_code == 200
+            assert items.json()["items"] == [
+                {
+                    "id": "seed",
+                    "content": "Seed fact",
+                    "kind": "fact",
+                    "canonical_subject": "seed",
+                    "labels": [],
+                    "scope": {"kind": "user", "key": None},
+                    "provenance": "recorded",
+                    "pinned": False,
+                    "status": "active",
+                    "standing": "durable",
+                    "depth": 0,
+                    "valid_from": MIGRATED_AT.isoformat(),
+                    "invalid_at": None,
+                    "source_refs": [
+                        {
+                            "kind": "migration",
+                            "ref": "seed",
+                            "captured_at": MIGRATED_AT.isoformat(),
+                        }
+                    ],
+                    "corroboration": 1,
+                    "last_relevant_at": MIGRATED_AT.isoformat(),
+                    "feedback": "confirmed",
+                    "created_at": MIGRATED_AT.isoformat(),
+                    "updated_at": MIGRATED_AT.isoformat(),
+                }
+            ]
+            assert client.get("/admin/memory/items", params={"q": ""}).status_code == 200
+
             listed = client.get("/admin/memory/artifacts")
             assert listed.status_code == 200
             assert {item["path"] for item in listed.json()["artifacts"]} >= {
@@ -264,6 +303,46 @@ async def test_fact_mode_memory_router_reads_managed_wiki_without_legacy_artifac
 
             assert client.get("/admin/memory/artifacts/missing.md").status_code == 404
             assert client.get("/admin/memory/links", params={"path": "missing.md"}).status_code == 404
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_fact_mode_memory_items_scope_kind_without_key_is_exact(tmp_path) -> None:
+    config = _config(tmp_path)
+    ledger = _seed_fact(config)
+    plan = ledger.plan(
+        [
+            {
+                "op": "create",
+                "fact_id": "keyed",
+                "text": "Keyed project fact",
+                "kind": "fact",
+                "subjects": ["scope"],
+                "scope": {"kind": "project", "key": "project"},
+                "sources": [{"kind": "test", "ref": "scope"}],
+            }
+        ],
+        actor="test",
+        origin="test",
+        reason="scope filter regression",
+    )
+    ledger.commit(plan)
+    runtime = Runtime(config)
+    await runtime.connect()
+    try:
+        app = FastAPI()
+        app.include_router(memory_router)
+        app.state.runtime = runtime
+        with TestClient(app) as client:
+            unkeyed = client.get("/admin/memory/items", params={"scope_kind": "project"})
+            keyed = client.get(
+                "/admin/memory/items",
+                params={"scope_kind": "project", "scope_key": "project"},
+            )
+
+        assert unkeyed.json()["items"] == []
+        assert [item["id"] for item in keyed.json()["items"]] == ["keyed"]
     finally:
         await runtime.close()
 
@@ -593,18 +672,89 @@ async def test_synthesis_current_gate_accepts_a_stable_empty_ledger(tmp_path, mo
 
 @pytest.mark.asyncio
 async def test_fact_mode_scheduler_registers_the_wiki_maintenance_handler(tmp_path) -> None:
+    from arden.automation.builtins import seed_builtins
+    from arden.automation.models import Automation
+    from arden.automation.suggestions import AutomationSuggestion
+    from arden.automation.triggers import TimeTrigger
+    from arden.constants import (
+        BUILTIN_AREA_SUGGESTER_ID,
+        BUILTIN_AUTOMATION_SUGGESTER_DAILY_ID,
+        BUILTIN_MEMORY_CONSOLIDATE_ID,
+        BUILTIN_MEMORY_DREAM_ID,
+        BUILTIN_MEMORY_RETENTION_ID,
+    )
+
     config = _config(tmp_path)
     _seed_fact(config)
     runtime = Runtime(config)
     await runtime.connect()
     try:
-        assert runtime.automation is not None
+        assert runtime.automation is not None and runtime.stores is not None
+        await seed_builtins(runtime.stores.automations)
+        await runtime.stores.automations.save(
+            Automation(
+                task_id="area:test",
+                name="Legacy Area agent",
+                prompt="Write the legacy Area page.",
+                model=None,
+                triggers=[TimeTrigger(every="6h")],
+                enabled=True,
+                created_at=MIGRATED_AT,
+                next_run_at=MIGRATED_AT,
+                last_run_at=None,
+                last_result=None,
+                running_since=None,
+                auto_approve=True,
+                thread_id="legacy-area-channel",
+            )
+        )
+        runtime.automation.area_suggestions.replace_suggestions(
+            [{"id": "area-stale", "key": "stale", "title": "Stale", "page_path": "topics/stale.md"}]
+        )
+        await runtime.stores.automations.replace_active_suggestions(
+            [
+                AutomationSuggestion(
+                    id="automation-stale",
+                    name="Stale suggestion",
+                    description="Uses legacy records.",
+                    prompt="Do stale work.",
+                    triggers=[TimeTrigger(every="6h")],
+                    rationale="Legacy evidence.",
+                    category="memory",
+                    created_at=MIGRATED_AT,
+                )
+            ]
+        )
+
         await runtime.start_scheduler()
 
         automation = await runtime.stores.automations.get(BUILTIN_WIKI_MAINTENANCE_ID)
         assert automation is not None
         assert automation.handler == "wiki_maintenance"
         assert "wiki_maintenance" in runtime.automation.scheduler._handlers
+        assert await runtime.stores.automations.get(BUILTIN_MEMORY_RETENTION_ID) is not None
+        assert await runtime.stores.automations.get(BUILTIN_MEMORY_SYNTHESIZE_ID) is not None
+        for task_id in (
+            BUILTIN_AREA_SUGGESTER_ID,
+            BUILTIN_AUTOMATION_SUGGESTER_DAILY_ID,
+            BUILTIN_MEMORY_CONSOLIDATE_ID,
+            BUILTIN_MEMORY_DREAM_ID,
+        ):
+            assert await runtime.stores.automations.get(task_id) is None
+        assert await runtime.stores.automations.get("area:test") is None
+        with pytest.raises(KeyError):
+            await runtime.automation.automation_service.toggle_enabled("area:test")
+        await runtime.automation.sync_area_custodian(
+            {
+                "area_id": "test",
+                "name": "Legacy Area",
+                "page_path": "topics/stale.md",
+                "autonomy": "observe",
+            }
+        )
+        assert await runtime.stores.automations.get("area:test") is None
+        assert runtime.automation.area_suggestions.list(set()) == []
+        assert await runtime.stores.automations.list_active_suggestions() == []
     finally:
         await runtime.close()
 

@@ -83,12 +83,22 @@ class AreaLifecycleService:
 
 
 class AreaPageService:
-    def __init__(self, *, vault_root: Path, sessions, lifecycle: AreaLifecycleService) -> None:
+    def __init__(
+        self,
+        *,
+        vault_root: Path,
+        sessions,
+        lifecycle: AreaLifecycleService,
+        write_guard: Callable[[], None] | None = None,
+    ) -> None:
         self._vault_root = vault_root
         self._sessions = sessions
         self._lifecycle = lifecycle
+        self._write_guard = write_guard
 
     async def create(self, area_id: str) -> dict:
+        if self._write_guard is not None:
+            self._write_guard()
         area = await self._sessions.get_area(area_id)
         if area is None:
             raise KeyError(area_id)

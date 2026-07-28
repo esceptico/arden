@@ -191,6 +191,29 @@ async def test_create_page_writes_safe_topic_and_attaches_it(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_create_page_guard_blocks_legacy_write_before_file_creation(tmp_path) -> None:
+    areas = FakeAreas()
+    area_lifecycle = lifecycle(areas)
+    area = await area_lifecycle.create(name="Canonical")
+
+    def reject_legacy_write() -> None:
+        raise PermissionError("legacy memory writes are disabled")
+
+    pages = AreaPageService(
+        vault_root=tmp_path / "memory",
+        sessions=areas,
+        lifecycle=area_lifecycle,
+        write_guard=reject_legacy_write,
+    )
+
+    with pytest.raises(PermissionError, match="legacy memory writes are disabled"):
+        await pages.create(area["area_id"])
+
+    assert (await areas.get_area(area["area_id"]))["page_path"] is None
+    assert not (tmp_path / "memory" / "topics").exists()
+
+
+@pytest.mark.asyncio
 async def test_detach_page_requires_custodian_to_be_disabled(tmp_path) -> None:
     areas = FakeAreas()
     area_lifecycle = lifecycle(areas)

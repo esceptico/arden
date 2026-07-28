@@ -504,6 +504,14 @@ def _is_meta_client_id(client_id: str | None) -> bool:
     return bool(client_id and client_id.startswith(("loop:", "bg:", "goal:")))
 
 
+def _load_legacy_area_page_context(executor: ToolExecutor, area_record: dict | None) -> dict | None:
+    """Do not inject unmanaged Area prose once its legacy capability is retired."""
+
+    if not area_record or not area_record.get("page_path") or "area_pages" not in executor.tool_services:
+        return None
+    return load_area_context(get_config().memory_artifacts_dir, area_record)
+
+
 # Below this many chars of user input there is nothing worth a scoped recall
 
 
@@ -766,7 +774,7 @@ async def prepare_chat(
     area_context = _area_context_from_record(area_record)
     # Area context = the container's topic page (a capability on the area
     # row); plain area chats get None and stay ordinary.
-    area_page_context = load_area_context(get_config().memory_artifacts_dir, area_record)
+    area_page_context = _load_legacy_area_page_context(deps.executor, area_record)
     context_manifest: list[ContextManifestEntry] = []
     messages = await _prepare_messages(
         deps,

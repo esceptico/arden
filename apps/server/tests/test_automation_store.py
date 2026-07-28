@@ -851,6 +851,59 @@ async def test_seed_builtins_switches_retention_contract_for_fact_mode(automatio
 
 
 @pytest.mark.asyncio
+async def test_seed_builtins_retires_legacy_only_rows_in_fact_mode(automation_store: AutomationStore):
+    from arden.automation.builtins import seed_builtins
+    from arden.constants import (
+        BUILTIN_AREA_SUGGESTER_ID,
+        BUILTIN_AUTOMATION_SUGGESTER_DAILY_ID,
+        BUILTIN_MEMORY_CONSOLIDATE_ID,
+        BUILTIN_MEMORY_DREAM_ID,
+        BUILTIN_MEMORY_RETENTION_ID,
+        BUILTIN_MEMORY_SYNTHESIZE_ID,
+        BUILTIN_WIKI_MAINTENANCE_ID,
+    )
+
+    retired = {
+        BUILTIN_AREA_SUGGESTER_ID,
+        BUILTIN_AUTOMATION_SUGGESTER_DAILY_ID,
+        BUILTIN_MEMORY_CONSOLIDATE_ID,
+        BUILTIN_MEMORY_DREAM_ID,
+    }
+    await seed_builtins(automation_store)
+    for task_id in retired:
+        assert await automation_store.get(task_id) is not None
+    run_id = await automation_store.record_run_start(BUILTIN_MEMORY_DREAM_ID, datetime.now(UTC))
+    await automation_store.record_run_finish(
+        run_id,
+        status="completed",
+        result="Historical dream result.",
+        error=None,
+        ended_at=datetime.now(UTC),
+    )
+
+    await seed_builtins(automation_store, fact_mode=True)
+    await seed_builtins(automation_store, fact_mode=True)
+
+    for task_id in retired:
+        assert await automation_store.get(task_id) is None
+    assert await automation_store.get(BUILTIN_MEMORY_RETENTION_ID) is not None
+    assert await automation_store.get(BUILTIN_MEMORY_SYNTHESIZE_ID) is not None
+    assert await automation_store.get(BUILTIN_WIKI_MAINTENANCE_ID) is not None
+    assert (await automation_store.list_runs(BUILTIN_MEMORY_DREAM_ID))[0]["result"] == "Historical dream result."
+
+
+@pytest.mark.asyncio
+async def test_seed_builtins_rejects_non_builtin_retired_id_in_fact_mode(automation_store: AutomationStore):
+    from arden.automation.builtins import seed_builtins
+    from arden.constants import BUILTIN_MEMORY_DREAM_ID
+
+    await automation_store.save(_automation(BUILTIN_MEMORY_DREAM_ID))
+
+    with pytest.raises(RuntimeError, match="reserved retired builtin id"):
+        await seed_builtins(automation_store, fact_mode=True)
+
+
+@pytest.mark.asyncio
 async def test_seed_builtins_seeds_fact_synthesis_on_six_hour_backstop(automation_store: AutomationStore):
     from arden.automation.builtins import seed_builtins
     from arden.constants import BUILTIN_MEMORY_SYNTHESIZE_ID

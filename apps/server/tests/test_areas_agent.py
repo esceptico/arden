@@ -302,6 +302,19 @@ def test_load_area_context_reads_page_or_degrades(tmp_path):
     assert load_area_context(vault, area) is None  # missing page → plain chat
 
 
+def test_fact_mode_does_not_inject_legacy_area_page_context(monkeypatch):
+    from arden.services.chat import _load_legacy_area_page_context
+
+    def unexpected_legacy_read(*_args, **_kwargs):
+        raise AssertionError("legacy Area page must not be read")
+
+    monkeypatch.setattr("arden.services.chat.load_area_context", unexpected_legacy_read)
+    executor = SimpleNamespace(tool_services={})
+    area = {"area_id": "p1", "name": "O-1A", "page_path": "topics/o-1a.md"}
+
+    assert _load_legacy_area_page_context(executor, area) is None
+
+
 def test_system_blocks_include_area_block():
     from arden.core.prompts import build_system_blocks
 

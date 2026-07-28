@@ -185,6 +185,8 @@ async def create_area_page(request: Request, area_id: str):
         area = await _pages(request).create(area_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Area not found") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     await request.app.state.emit_areas_changed([area_id])

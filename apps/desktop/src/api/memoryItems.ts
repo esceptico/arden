@@ -1,7 +1,7 @@
 import { apiWithConfig, type AppConfig } from "@/api/core";
 
 // ── Scope ─────────────────────────────────────────────────────────────────
-export type ScopeKind = "global" | "area" | "session" | "integration" | "user";
+export type ScopeKind = "global" | "area" | "project" | "session" | "integration" | "user";
 export interface ScopeParams {
   scope_kind?: ScopeKind;
   scope_key?: string;
@@ -12,8 +12,8 @@ export interface MemoryScope {
 }
 
 // ── Shared value objects ────────────────────────────────────────────────────
-export type MemoryKind = "directive" | "fact" | "source";
-export type MemoryStatus = "active" | "superseded" | "archived" | "unresolved" | "retired";
+export type MemoryKind = string;
+export type MemoryStatus = "active" | "superseded" | "expired" | "retracted" | "archived" | "unresolved" | "retired";
 export type MemoryFeedback = "none" | "confirmed" | "corrected";
 
 export interface MemorySourceRef {

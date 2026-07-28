@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from arden.memory.artifacts import MACHINE_PAGE_DIRS, ArtifactMemoryStore, MemoryArtifact
+from arden.memory.facts import Fact, FactPrincipal, FactService
 from arden.memory.frontmatter import strip_frontmatter
 from arden.memory.journal import JournalConflictError
 from arden.memory.ledger import LedgerEntry
@@ -142,6 +143,94 @@ async def hydrated_items_json(store, records: list[Record]) -> list[dict]:
     """Render many records as MemoryItems with ONE labels_for batch query."""
     labels = await store.labels_for([r.id for r in records])
     return [record_to_item_json(r, labels[r.id]) for r in records]
+
+
+def fact_to_item_json(fact: Fact) -> dict:
+    """Render one canonical fact through the existing desktop item contract."""
+
+    created_at = fact.created_at.isoformat()
+    updated_at = (fact.reviewed_at or fact.created_at).isoformat()
+    source_refs = [
+        {
+            "kind": str(source.get("kind") or "unknown"),
+            "ref": str(source.get("ref") or ""),
+            "captured_at": str(source.get("occurred_at") or source.get("captured_at") or created_at),
+        }
+        for source in fact.sources
+    ]
+    source_kinds = {source["kind"] for source in source_refs}
+    if source_kinds & _USER_SOURCE_KINDS:
+        provenance = _PROVENANCE_USER
+    elif source_kinds & _INTEGRATION_SOURCE_KINDS:
+        provenance = _PROVENANCE_EXTERNAL
+    else:
+        provenance = _PROVENANCE_RECORDED
+    return {
+        "id": fact.fact_id,
+        "content": fact.text,
+        "kind": fact.kind,
+        "canonical_subject": fact.subjects[0],
+        "labels": list(fact.labels),
+        "scope": {"kind": fact.scope["kind"], "key": fact.scope["key"]},
+        "provenance": provenance,
+        "pinned": False,
+        "status": fact.status,
+        "standing": fact.lifecycle,
+        "depth": 0,
+        "valid_from": created_at,
+        "invalid_at": None,
+        "source_refs": source_refs,
+        "corroboration": len(source_refs),
+        "last_relevant_at": updated_at,
+        "feedback": "confirmed" if fact.certainty == "confirmed" else "none",
+        "created_at": created_at,
+        "updated_at": updated_at,
+    }
+
+
+async def _canonical_fact_items(
+    service: FactService,
+    *,
+    status: str,
+    limit: int,
+    offset: int,
+    query: str | None,
+    scope_kind: str | None,
+    scope_key: str | None,
+    kind: str | None,
+) -> list[dict]:
+    """Bridge the desktop's offset list onto canonical seek reads."""
+
+    scopes = await service.known_scopes()
+    principal = FactPrincipal(
+        owner_id="desktop:memory",
+        readable_scopes=scopes,
+        writable_scopes=frozenset(),
+    )
+    facts: list[Fact] = []
+    after = None
+    while True:
+        page = await service.search_page(
+            principal,
+            query or None,
+            include_inactive=status != "active",
+            limit=100,
+            after=after,
+        )
+        facts.extend(page.items)
+        if not page.has_more:
+            break
+        last = page.items[-1]
+        after = (last.created_at, last.fact_id)
+
+    if status:
+        facts = [fact for fact in facts if fact.status == status]
+    if scope_kind is not None:
+        facts = [fact for fact in facts if fact.scope["kind"] == scope_kind and fact.scope["key"] == scope_key]
+    if kind is not None:
+        facts = [fact for fact in facts if fact.kind == kind]
+    facts.sort(key=lambda fact: (fact.reviewed_at or fact.created_at, fact.fact_id), reverse=True)
+    return [fact_to_item_json(fact) for fact in facts[offset : offset + limit]]
 
 
 # --- 1: scopes ---------------------------------------------------------------
@@ -903,12 +992,29 @@ async def list_items(
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     q: str | None = Query(default=None, max_length=200),
-    store=Depends(_record_store),
+    knowledge: KnowledgeRuntime = Depends(require_knowledge_runtime),
     # Scope filters are visibility metadata.
     scope_kind: str | None = None,
     scope_key: str | None = None,
     kind: str | None = None,
 ) -> dict:
+    fact_service = getattr(knowledge, "_fact_service", None)
+    if isinstance(fact_service, FactService):
+        items = await _canonical_fact_items(
+            fact_service,
+            status=status,
+            limit=limit,
+            offset=offset,
+            query=q,
+            scope_kind=scope_kind,
+            scope_key=scope_key,
+            kind=kind,
+        )
+        return {"items": items, "limit": limit, "offset": offset}
+
+    store = getattr(knowledge, "_record_store", None)
+    if store is None:
+        raise HTTPException(status_code=503, detail="memory not ready")
     include_superseded = status == "superseded"
     scopes = [(scope_kind, scope_key)] if scope_kind is not None else None
     if q:

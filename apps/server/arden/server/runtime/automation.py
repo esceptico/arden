@@ -109,6 +109,10 @@ class AutomationRuntime:
         )
         self.monitor: Monitor | None = None
 
+    def _fact_mode(self) -> bool:
+        knowledge = self.get_knowledge()
+        return bool(knowledge is not None and getattr(knowledge, "facts_ready", False))
+
     async def load_areas(self) -> list[Area]:
         """Areas are the capability-bearing areas (unification: one
         container concept, area_id as identity)."""
@@ -245,6 +249,8 @@ class AutomationRuntime:
         """A domain event happened: note it for the custodian and, budget and
         pause permitting, pull the next run earlier (debounced so a burst of
         events coalesces into one run)."""
+        if self._fact_mode():
+            return
         record = await self.stores.sessions.get_area(area_id)
         if record is None or record.get("autonomy") is None:
             return  # no standing agent to wake
@@ -266,6 +272,9 @@ class AutomationRuntime:
 
     async def sync_area_custodian(self, area: dict) -> None:
         """Synchronously reconcile one live Area into its exact contract."""
+        if self._fact_mode():
+            await self.disable_area_custodian(area["area_id"])
+            return
         projected = Area(
             key=area["area_id"],
             title=area["name"],
@@ -314,17 +323,29 @@ class AutomationRuntime:
             "area_suggester_daily",
             self._build_area_suggester_handler(),
         )
-        knowledge = self.get_knowledge()
+        fact_mode = self._fact_mode()
         await seed_builtins(
             self.stores.automations,
-            fact_mode=bool(knowledge is not None and knowledge.facts_ready),
+            fact_mode=fact_mode,
         )
-        await self._seed_area_automations()
-        await self._kick_first_area_suggestion()
+        if fact_mode:
+            await self._retire_fact_mode_area_state()
+        else:
+            await self._seed_area_automations()
+            await self._kick_first_area_suggestion()
         await compile_schedules_to_automations(".", self.stores.automations)
         await self.automation_service.backfill_channels()
         self.scheduler.start()
         self.outbox_runtime.start()
+
+    async def _retire_fact_mode_area_state(self) -> None:
+        """Remove legacy page writers while preserving Area records and run history."""
+
+        for automation in await self.stores.automations.list_all():
+            if automation.task_id.startswith("area:"):
+                await self.stores.automations.delete(automation.task_id)
+        self.area_suggestions.replace_suggestions([])
+        await self.stores.automations.replace_active_suggestions([])
 
     def _build_automation_suggester_handler(self):
         async def handler(context: dict | None) -> str | None:
