@@ -210,3 +210,53 @@ export function WikiRenameApprovalSheet({
     </section>
   );
 }
+
+export function WikiRenameApprovalStatusSheet({
+  error,
+  onRetry,
+}: {
+  error: string | null;
+  onRetry: () => void;
+}) {
+  const overlayRef = useRef<HTMLElement>(null);
+  const retryRef = useRef<HTMLButtonElement>(null);
+  const checking = error === null;
+  useOverlayLayer(overlayRef, true, () => {}, true);
+  useFocusTrap(overlayRef, true);
+  useEffect(() => {
+    if (!checking) retryRef.current?.focus({ preventScroll: true });
+  }, [checking]);
+  return (
+    <section
+      ref={overlayRef}
+      data-wiki-rename-status
+      role="alertdialog"
+      aria-modal="true"
+      aria-label={checking ? "Checking page renames" : "Couldn’t check page renames"}
+      tabIndex={-1}
+      className="memory-edit-review wiki-rename-sheet min-w-0"
+    >
+      <div className="memory-edit-review__scrim" aria-hidden="true" />
+      <div className="memory-edit-review__sheet flex min-h-0 min-w-0 flex-col">
+        <header className="memory-edit-review__header">
+          <div>
+            <p className="memory-edit-review__crumb">Durable rename check</p>
+            <h1 className="wiki-rename-sheet__title">
+              {checking ? "Checking page renames" : "Couldn’t check page renames"}
+            </h1>
+          </div>
+        </header>
+        <div className="memory-edit-review__body wiki-rename-sheet__body scroll-fade min-h-0 min-w-0 flex-1">
+          <p role={checking ? "status" : "alert"}>
+            {checking ? "Checking for unanswered rename requests…" : error}
+          </p>
+        </div>
+        {!checking && (
+          <footer className="wiki-rename-sheet__footer">
+            <Button ref={retryRef} variant="primary" onClick={onRetry}>Retry check</Button>
+          </footer>
+        )}
+      </div>
+    </section>
+  );
+}

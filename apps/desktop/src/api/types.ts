@@ -257,9 +257,6 @@ export interface CreateAutomationPayload {
   cooldown_minutes?: number | null;
   tool_scope?: string[] | null;
   output_schema?: string | null;
-  /** The server marks this contextual suggestion accepted after a successful
-   * create. It is draft provenance, not an editable automation field. */
-  from_suggestion_id?: string;
 }
 
 export type UpdateAutomationPayload = Partial<
@@ -274,21 +271,6 @@ export interface AutomationRun {
   status: string;
   result: string | null;
   error: string | null;
-}
-
-/** A server-generated candidate for the New menu. The suggester validates a
- * time/event trigger before persisting, so its first trigger fully seeds the
- * existing draft editor. */
-export interface AutomationSuggestion {
-  id: string;
-  name: string;
-  description: string | null;
-  prompt: string;
-  triggers: [AutomationTrigger & { type: "time" | "event" }, ...AutomationTrigger[]];
-  rationale: string;
-  evidence: string[];
-  category: string;
-  icon: string | null;
 }
 
 export interface BackgroundTaskSummary {

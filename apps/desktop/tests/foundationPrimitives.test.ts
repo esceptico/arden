@@ -67,7 +67,7 @@ test("shared primitives own the exact mock control and overlay contracts", () =>
   expect(approvalReview).toContain("<CodeWell");
   expect(approvalReview).not.toContain("rounded-[var(--r-row)]");
   expect(foundation).toMatch(/\.command-palette__search\s*\{[\s\S]*?padding:\s*\.625rem var\(--space-4\) \.25rem;/);
-  expect(foundation).toContain("font: 450 var(--text-control) / 1.2 var(--sans);");
+  expect(foundation).toContain("font: 450 var(--text-md) / 1.2 var(--sans);");
   expect(palette).toContain('className="command-palette__search"');
   expect(palette).toContain('className="command-palette__input"');
   expect(palette).not.toContain("AnimatePresence");
@@ -144,4 +144,3 @@ test("an icon-only tab is named on hover, and a labelled one is left alone", () 
   // watch the query container itself.
   expect(rail).toContain('const container = root.closest<HTMLElement>(".mw-rail");');
 });
-

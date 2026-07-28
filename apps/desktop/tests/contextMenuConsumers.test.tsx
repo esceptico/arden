@@ -7,7 +7,6 @@ import type { MemoryArtifactSummary } from "@/features/memory/lib/notebookTypes"
 import { duplicateAutomationPayload } from "@/actions/automations";
 import { AutomationRail } from "@/features/automations/components/AutomationRail";
 import { NotebookRail } from "@/features/memory/components/NotebookRail";
-import { planMemoryTabClose, planMemoryTabOpen } from "@/features/memory/lib/tabContext";
 import { NavRow } from "@/features/sessions/components/NavRow";
 import { Sidebar } from "@/features/sessions/components/Sidebar";
 import { getState, setState } from "@/stores";
@@ -138,7 +137,7 @@ test("Memory tree context action opens the selected file from keyboard", async (
       selectedPath={null}
       loading={false}
       error={null}
-      rebuilding={false}
+      refreshing={false}
       recordsLoading={false}
       recordsError={null}
       navigationDisabled={false}
@@ -146,7 +145,7 @@ test("Memory tree context action opens the selected file from keyboard", async (
       onSelect={(path) => selected.push(path)}
       onRetry={() => {}}
       onRetryRecords={() => {}}
-      onRebuild={() => {}}
+      onRefresh={() => {}}
     />,
   );
 
@@ -277,69 +276,6 @@ test("Sidebar menus open real app and area destinations, and keep Set aside boun
     if (previousDesktop) window.ardenDesktop = previousDesktop;
     else delete window.ardenDesktop;
   }
-});
-
-test("Memory tab close planning keeps the valid no-page workspace and tab targeting contract", () => {
-  expect(planMemoryTabClose(["a"], 0, 0, "close-tab")).toEqual({
-    changed: true,
-    tabs: [],
-    activeTab: 0,
-    empty: true,
-  });
-  expect(planMemoryTabClose(["a", "b", "c"], 0, 1, "close-others")).toEqual({
-    changed: true,
-    tabs: ["b"],
-    activeTab: 0,
-    empty: false,
-  });
-  expect(planMemoryTabClose(["a", "b", "c"], 2, 1, "close-right")).toEqual({
-    changed: true,
-    tabs: ["a", "b"],
-    activeTab: 1,
-    empty: false,
-  });
-  const view = read("../src/features/memory/components/ArtifactMemoryView.tsx");
-  expect(view).toContain('label: "Close tab"');
-  expect(view).toContain('label: "Close other tabs"');
-  expect(view).toContain('label: "Close tabs to the right"');
-  expect(view).toContain('label: "Close all tabs"');
-});
-
-test("Memory tab opening appends unique pages and activates existing pages", () => {
-  expect(planMemoryTabOpen([], 0, "a.md")).toEqual({
-    changed: true,
-    tabs: ["a.md"],
-    activeTab: 0,
-  });
-  expect(planMemoryTabOpen(["a.md", "b.md"], 0, "c.md")).toEqual({
-    changed: true,
-    tabs: ["a.md", "b.md", "c.md"],
-    activeTab: 2,
-  });
-  expect(planMemoryTabOpen(["a.md", "b.md", "c.md"], 2, "a.md")).toEqual({
-    changed: true,
-    tabs: ["a.md", "b.md", "c.md"],
-    activeTab: 0,
-  });
-  expect(planMemoryTabOpen(["a.md", "b.md"], 1, "b.md")).toEqual({
-    changed: false,
-    tabs: ["a.md", "b.md"],
-    activeTab: 1,
-  });
-});
-
-test("Memory empty workspace keeps the mock reading-column geometry and material", () => {
-  const css = read("../src/design/memory.css");
-  const view = read("../src/features/memory/components/ArtifactMemoryView.tsx");
-  expect(css).toContain(".memory-surface .mw-empty-workspace");
-  expect(css).toContain("width: min(100%, var(--content-max-width))");
-  expect(css).toContain("margin-inline: auto");
-  expect(css).toContain("padding: calc(6.875rem + 4.5rem) var(--content-gutter) 8.75rem");
-  expect(css).toContain("font-size: var(--text-section)");
-  expect(css).toContain("font-weight: 600");
-  expect(css).toContain("letter-spacing: -.015em");
-  expect(view).toContain('className="mw-empty-workspace"');
-  expect(view).toContain("if (workspaceEmpty && tabs.length === 0)");
 });
 
 test("Automation duplicate payload retains the real trigger and capability boundary", () => {

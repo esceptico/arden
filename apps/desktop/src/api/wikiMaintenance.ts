@@ -43,6 +43,11 @@ export interface WikiMaintenanceReview {
   decisionNote: string | null;
 }
 
+export interface WikiMaintenanceEvidenceCursor {
+  changeIndex: number;
+  diffOffset: number;
+}
+
 export interface WikiMaintenanceEvidence {
   reviewId: string;
   generation: number;
@@ -66,12 +71,7 @@ export interface WikiMaintenanceEvidence {
   };
 }
 
-export interface WikiMaintenanceEvidenceCursor {
-  changeIndex: number;
-  diffOffset: number;
-}
-
-interface RawWikiMaintenanceReview {
+interface RawReview {
   review_id: string;
   blocking_commit_id: string;
   generation: number;
@@ -84,7 +84,7 @@ interface RawWikiMaintenanceReview {
   decision_note: string | null;
 }
 
-interface RawWikiMaintenanceEvidence {
+interface RawEvidence {
   review_id: string;
   generation: number;
   actor: string;
@@ -101,7 +101,7 @@ interface RawWikiMaintenanceEvidence {
   change: WikiMaintenanceEvidence["change"];
 }
 
-function mapReview(raw: RawWikiMaintenanceReview): WikiMaintenanceReview {
+function review(raw: RawReview): WikiMaintenanceReview {
   return {
     reviewId: raw.review_id,
     blockingCommitId: raw.blocking_commit_id,
@@ -120,56 +120,62 @@ export function listWikiMaintenanceReviews(
   config: AppConfig,
   options: { signal?: AbortSignal } = {},
 ): Promise<WikiMaintenanceReview[]> {
-  return apiWithConfig<{ reviews: RawWikiMaintenanceReview[] }>(
+  return apiWithConfig<{ reviews: RawReview[] }>(
     config,
     "/admin/wiki/maintenance-reviews",
     { signal: options.signal },
-  ).then((response) => response.reviews.map(mapReview));
+  ).then((response) => response.reviews.map(review));
 }
 
 export function resolveWikiMaintenanceReview(
   config: AppConfig,
-  review: Pick<WikiMaintenanceReview, "reviewId" | "generation">,
+  item: Pick<WikiMaintenanceReview, "reviewId" | "generation">,
   decision:
     | { action: "accept" | "reject" }
     | { action: "resolve-manually"; note: string },
 ): Promise<WikiMaintenanceReview> {
-  const path = `/admin/wiki/maintenance-reviews/${encodeURIComponent(review.reviewId)}/${decision.action}`;
-  const body =
-    decision.action === "resolve-manually"
-      ? { generation: review.generation, note: decision.note }
-      : { generation: review.generation };
-  return apiWithConfig<RawWikiMaintenanceReview>(config, path, {
+  const path = `/admin/wiki/maintenance-reviews/${encodeURIComponent(item.reviewId)}/${decision.action}`;
+  const body = decision.action === "resolve-manually"
+    ? { generation: item.generation, note: decision.note }
+    : { generation: item.generation };
+  return apiWithConfig<RawReview>(config, path, {
     method: "POST",
     body: JSON.stringify(body),
-  }).then(mapReview);
+  }).then(review);
 }
 
 export function readWikiMaintenanceReviewEvidence(
   config: AppConfig,
-  review: Pick<WikiMaintenanceReview, "reviewId" | "generation">,
-  options: { changeIndex?: number; diffOffset?: number; signal?: AbortSignal } = {},
+  item: Pick<WikiMaintenanceReview, "reviewId" | "generation">,
+  options: {
+    changeIndex?: number;
+    diffOffset?: number;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<WikiMaintenanceEvidence> {
   const query = new URLSearchParams({
-    generation: String(review.generation),
+    generation: String(item.generation),
     change_index: String(options.changeIndex ?? 0),
     diff_offset: String(options.diffOffset ?? 0),
   });
-  const path = `/admin/wiki/maintenance-reviews/${encodeURIComponent(review.reviewId)}/evidence?${query}`;
-  return apiWithConfig<RawWikiMaintenanceEvidence>(config, path, { signal: options.signal }).then((response) => ({
-    reviewId: response.review_id,
-    generation: response.generation,
-    actor: response.actor,
-    origin: response.origin,
-    reason: response.reason,
-    occurredAt: response.occurred_at,
-    changeIndex: response.changeIndex,
-    changeCount: response.changeCount,
-    diffOffset: response.diffOffset,
-    diffEndOffset: response.diffEndOffset,
-    moreInChange: response.moreInChange,
-    previousCursor: response.previousCursor,
-    nextCursor: response.nextCursor,
-    change: response.change,
+  return apiWithConfig<RawEvidence>(
+    config,
+    `/admin/wiki/maintenance-reviews/${encodeURIComponent(item.reviewId)}/evidence?${query}`,
+    { signal: options.signal },
+  ).then((raw) => ({
+    reviewId: raw.review_id,
+    generation: raw.generation,
+    actor: raw.actor,
+    origin: raw.origin,
+    reason: raw.reason,
+    occurredAt: raw.occurred_at,
+    changeIndex: raw.changeIndex,
+    changeCount: raw.changeCount,
+    diffOffset: raw.diffOffset,
+    diffEndOffset: raw.diffEndOffset,
+    moreInChange: raw.moreInChange,
+    previousCursor: raw.previousCursor,
+    nextCursor: raw.nextCursor,
+    change: raw.change,
   }));
 }

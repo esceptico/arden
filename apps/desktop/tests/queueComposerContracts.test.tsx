@@ -315,8 +315,8 @@ test("queue is staged above the composer as a compact Sonner-like stack", () => 
   const sendRule = css.match(/\.board-composer__send\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";
   expect(sendRule).toContain("color: var(--paper);");
   expect(sendRule).toContain("background: var(--ink);");
-  expect(sendRule).toContain("border-radius: var(--r-circle);");
+  expect(sendRule).toContain("border-radius: var(--r-icon);");
 
   expect(css).toContain(".board-queue-stack__item:hover .board-queue-stack__actions");
-  expect(foundation).toContain(':where(.arden-icon-button[data-size="sm"]) { width: 1.5rem; height: 1.5rem; }');
+  expect(foundation).toContain('.arden-icon-button[data-size="sm"] { width: 1.5rem; height: 1.5rem; }');
 });

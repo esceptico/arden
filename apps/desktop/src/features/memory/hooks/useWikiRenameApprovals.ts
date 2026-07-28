@@ -21,6 +21,7 @@ export function useWikiRenameApprovals(config: AppConfig, onResolved: (result: W
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reconciliationRequired, setReconciliationRequired] = useState(false);
+  const [verification, setVerification] = useState<"loading" | "ready" | "error">("loading");
   const mounted = useRef(true);
   const requestId = useRef(0);
   const reconciliationRequiredRef = useRef(false);
@@ -36,6 +37,7 @@ export function useWikiRenameApprovals(config: AppConfig, onResolved: (result: W
 
   const refresh = useCallback(async () => {
     if (reconciliationRequiredRef.current) return;
+    setVerification("loading");
     const currentRequest = ++requestId.current;
     try {
       const next = await listWikiRenameApprovals(config);
@@ -43,8 +45,15 @@ export function useWikiRenameApprovals(config: AppConfig, onResolved: (result: W
       setApprovals(next);
       if (next.length > 0) setDraft(null);
       setError(null);
+      setVerification("ready");
     } catch (reason) {
-      if (mounted.current && requestId.current === currentRequest) setError(reason instanceof Error ? reason.message : String(reason));
+      if (!mounted.current || requestId.current !== currentRequest) return;
+      requestFailure.current = null;
+      reconciliationRequiredRef.current = true;
+      setReconciliationRequired(true);
+      setVerification("error");
+      const detail = reason instanceof Error ? reason.message : String(reason);
+      setError(`Couldn’t check pending rename approvals: ${detail}`);
     }
   }, [config]);
 
@@ -67,9 +76,11 @@ export function useWikiRenameApprovals(config: AppConfig, onResolved: (result: W
         }
         reconciliationRequiredRef.current = false;
         setReconciliationRequired(false);
+        setVerification("ready");
       } catch (reason) {
         if (!mounted.current || requestId.current !== currentRequest) return;
         const detail = reason instanceof Error ? reason.message : String(reason);
+        setVerification("error");
         setError(`Rename request outcome is unknown. Could not check pending approvals: ${detail}. Retry the status check before continuing.`);
       }
     },
@@ -97,6 +108,7 @@ export function useWikiRenameApprovals(config: AppConfig, onResolved: (result: W
         requestId.current += 1;
         reconciliationRequiredRef.current = false;
         setReconciliationRequired(false);
+        setVerification("ready");
         requestFailure.current = null;
         setDraft(null);
         if (result.approval) {
@@ -122,11 +134,28 @@ export function useWikiRenameApprovals(config: AppConfig, onResolved: (result: W
     setPending(true);
     setError(null);
     try {
-      await reconcileFailedRequest(requestFailure.current ?? "Rename request failed.");
+      if (requestFailure.current != null) {
+        await reconcileFailedRequest(requestFailure.current);
+      } else {
+        setVerification("loading");
+        const next = await listWikiRenameApprovals(config);
+        if (!mounted.current) return;
+        setApprovals(next);
+        if (next.length > 0) setDraft(null);
+        reconciliationRequiredRef.current = false;
+        setReconciliationRequired(false);
+        setVerification("ready");
+        setError(null);
+      }
+    } catch (reason) {
+      if (!mounted.current) return;
+      const detail = reason instanceof Error ? reason.message : String(reason);
+      setVerification("error");
+      setError(`Couldn’t check pending rename approvals: ${detail}`);
     } finally {
       if (mounted.current) setPending(false);
     }
-  }, [pending, reconcileFailedRequest]);
+  }, [config, pending, reconcileFailedRequest]);
 
   const resolve = useCallback(
     async (approvalId: string, decision: "accept" | "reject") => {
@@ -175,6 +204,7 @@ export function useWikiRenameApprovals(config: AppConfig, onResolved: (result: W
     pending,
     error,
     reconciliationRequired,
+    verification,
     request,
     reconcile,
     resolve,

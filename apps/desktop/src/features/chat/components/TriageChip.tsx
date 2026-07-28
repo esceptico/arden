@@ -5,7 +5,7 @@ import { ICON } from "@/lib/icons";
 import { Collapse } from "@/components/ui/Collapse";
 
 /** Quiet filing proposal for a just-started chat: a single tonal pill above
- *  the composer (same chip family as the area suggestions). The body
+ *  the composer (same chip family as the compact composer actions). The body
  *  accepts, the ✕ dismisses; the rationale rides the tooltip. Silent —
  *  nothing renders until triage returns a confident move/create.
  *

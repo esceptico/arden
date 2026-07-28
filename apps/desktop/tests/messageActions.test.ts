@@ -101,7 +101,7 @@ beforeEach(() => {
   });
 });
 
-test("enqueueMessage promotes stale queued submit when server starts a new run", async () => {
+test("enqueueMessage stages a local FIFO turn without starting another run", async () => {
   const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
   const requests: unknown[] = [];
   (globalThis as typeof globalThis & { window?: unknown }).window = {
@@ -131,19 +131,18 @@ test("enqueueMessage promotes stale queued submit when server starts a new run",
     await enqueueMessage("use mcp");
 
     const state = getState();
-    expect(requests).toHaveLength(1);
-    expect(state.queuedMessages).toEqual([]);
+    expect(requests).toHaveLength(0);
+    expect(state.queuedMessages).toHaveLength(1);
+    expect(state.queuedMessages[0]).toMatchObject({ text: "use mcp", status: "pending" });
     expect(state.running).toBe(true);
-    expect(state.currentRunId).toBe("run-new");
-    expect(state.order).toHaveLength(1);
-    expect(state.messages.get(state.order[0])?.role).toBe("user");
-    expect(state.messages.get(state.order[0])?.content).toBe("use mcp");
+    expect(state.currentRunId).toBe("run-stale");
+    expect(state.order).toHaveLength(0);
   } finally {
     (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
   }
 });
 
-test("enqueueMessage drops a cancellation-tombstoned submit without adding a user message", async () => {
+test("enqueueMessage stays local until the current run reaches a dispatch point", async () => {
   const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
   (globalThis as typeof globalThis & { window?: unknown }).window = {
     ardenDesktop: {
@@ -169,7 +168,8 @@ test("enqueueMessage drops a cancellation-tombstoned submit without adding a use
     await enqueueMessage("do not revive this");
 
     const state = getState();
-    expect(state.queuedMessages).toEqual([]);
+    expect(state.queuedMessages).toHaveLength(1);
+    expect(state.queuedMessages[0]).toMatchObject({ text: "do not revive this", status: "pending" });
     expect(state.order).toEqual([]);
     expect(state.messages.size).toBe(0);
     expect(state.running).toBe(false);
@@ -179,7 +179,7 @@ test("enqueueMessage drops a cancellation-tombstoned submit without adding a use
   }
 });
 
-test("enqueueMessage reconciles an ingested retry without a duplicate or a run", async () => {
+test("enqueueMessage reserves its client id locally until dispatch", async () => {
   const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
   const originalRandomUUID = crypto.randomUUID;
   crypto.randomUUID = () => "cid-ingested";
@@ -211,7 +211,9 @@ test("enqueueMessage reconciles an ingested retry without a duplicate or a run",
     await enqueueMessage("already durable");
 
     const state = getState();
-    expect(state.queuedMessages).toEqual([]);
+    expect(state.queuedMessages).toEqual([
+      expect.objectContaining({ clientId: "cid-ingested", text: "already durable", status: "pending" }),
+    ]);
     expect(state.order).toEqual(["cid-ingested"]);
     expect(state.messages.size).toBe(1);
     expect(state.running).toBe(false);
@@ -289,7 +291,7 @@ test("sendMessage with no current session lazily creates one, then sends into it
   }
 });
 
-test("enqueueMessage removes queue card when enqueue request fails", async () => {
+test("enqueueMessage does not make a request before local dispatch", async () => {
   const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
   (globalThis as typeof globalThis & { window?: unknown }).window = {
     ardenDesktop: {
@@ -313,10 +315,9 @@ test("enqueueMessage removes queue card when enqueue request fails", async () =>
     await enqueueMessage("use mcp");
 
     const state = getState();
-    expect(state.queuedMessages).toEqual([]);
-    expect(state.order).toHaveLength(1);
-    expect(state.messages.get(state.order[0])?.role).toBe("error");
-    expect(state.messages.get(state.order[0])?.content).toBe("request failed");
+    expect(state.queuedMessages).toHaveLength(1);
+    expect(state.queuedMessages[0]).toMatchObject({ text: "use mcp", status: "pending" });
+    expect(state.order).toHaveLength(0);
   } finally {
     (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
   }

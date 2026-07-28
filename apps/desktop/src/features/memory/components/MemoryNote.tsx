@@ -7,7 +7,6 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { WikiLinkContext, type WikiLinkHandlers } from "@/lib/wikilink";
 import { MemoryFindBar } from "@/features/memory/components/MemoryFindBar";
 import { MemoryProperties, type MemoryFrontmatter } from "@/features/memory/components/MemoryProperties";
-import { stripCites } from "@/features/memory/lib/format";
 import type { MemoryArtifactDetail, MemoryArtifactSummary } from "@/features/memory/lib/notebookTypes";
 import { displayTitle } from "@/features/memory/lib/workspaceTree";
 
@@ -79,7 +78,7 @@ export function MemoryNote({
               <>
                 <WikiLinkContext.Provider value={wikiHandlers}>
                   <div className="mw-prose">
-                    <Markdown content={stripCites(content)} className="memory-doc max-w-none" />
+                    <Markdown content={content} className="memory-doc max-w-none" />
                   </div>
                 </WikiLinkContext.Provider>
               </>

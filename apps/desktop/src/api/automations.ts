@@ -2,7 +2,6 @@ import { apiWithConfig, type AppConfig } from "@/api/core";
 import type {
   Automation,
   AutomationRun,
-  AutomationSuggestion,
   CreateAutomationPayload,
   UpdateAutomationPayload,
 } from "@/api/types";
@@ -71,38 +70,4 @@ export async function runAutomationApi(config: AppConfig, taskId: string): Promi
 
 export async function deleteAutomationApi(config: AppConfig, taskId: string): Promise<void> {
   await apiWithConfig(config, `/automations/${encodeURIComponent(taskId)}`, { method: "DELETE" });
-}
-
-/** Active suggestions are server-authored candidates, never client-side
- * guesses. The New menu intentionally uses only the most relevant one. */
-export async function listAutomationSuggestionsApi(config: AppConfig): Promise<AutomationSuggestion[]> {
-  const r = await apiWithConfig<{ suggestions: AutomationSuggestion[] }>(config, "/automations/suggestions");
-  return r.suggestions;
-}
-
-/** Flatten the validated first trigger into the existing draft-editor seed,
- * retaining the server id so a successful Create consumes the suggestion. */
-export function suggestionToPayload(suggestion: AutomationSuggestion): CreateAutomationPayload {
-  const [trigger] = suggestion.triggers;
-  const schedule = trigger.type === "event"
-    ? {
-      trigger_type: "event" as const,
-      event_type: trigger.event_type,
-      lead_minutes: trigger.lead_minutes,
-    }
-    : {
-      trigger_type: "time" as const,
-      at: trigger.at,
-      days: trigger.days,
-      every: trigger.every,
-      start: trigger.start,
-      end: trigger.end,
-    };
-  return {
-    name: suggestion.name,
-    prompt: suggestion.prompt,
-    ...(suggestion.description ? { description: suggestion.description } : {}),
-    from_suggestion_id: suggestion.id,
-    ...schedule,
-  };
 }

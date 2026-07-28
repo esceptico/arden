@@ -810,10 +810,10 @@ test("history reload clears queued messages that are already persisted", () => {
   expect(getState().queuedMessages).toEqual([]);
 });
 
-test("resetCancellingQueuedMessages flips cancelling back to pending", () => {
+test("resetCancellingQueuedMessages releases an interrupted send back to pending", () => {
   const s = getState();
   s.setCurrentSession("A");
-  s.addQueuedMessage({ clientId: "cid-1", text: "a", status: "cancelling", enqueuedAt: 0 });
+  s.addQueuedMessage({ clientId: "cid-1", text: "a", status: "sending", enqueuedAt: 0 });
   s.addQueuedMessage({ clientId: "cid-2", text: "b", status: "pending", enqueuedAt: 0 });
   s.resetCancellingQueuedMessages();
   expect(getState().queuedMessages.map((q) => q.status)).toEqual(["pending", "pending"]);

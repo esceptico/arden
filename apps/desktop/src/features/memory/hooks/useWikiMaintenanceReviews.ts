@@ -24,14 +24,14 @@ export function useWikiMaintenanceReviews(config: AppConfig) {
   const [reviews, setReviews] = useState<WikiMaintenanceReview[]>([]);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [verification, setVerification] = useState<WikiMaintenanceReviewVerification>("loading");
+  const [verification, setVerification] =
+    useState<WikiMaintenanceReviewVerification>("loading");
   const [reconciliationRequired, setReconciliationRequired] = useState(false);
   const reviewsRef = useRef<WikiMaintenanceReview[]>([]);
   const mounted = useRef(true);
   const requestId = useRef(0);
   const mutationPending = useRef(false);
   const refreshRequested = useRef(false);
-  const refreshRequiresFresh = useRef(false);
   const observedReviewSignal = useRef(reviewSignal);
 
   useEffect(() => {
@@ -45,7 +45,6 @@ export function useWikiMaintenanceReviews(config: AppConfig) {
   const refresh = useCallback(async (requireFresh = false) => {
     if (mutationPending.current) {
       refreshRequested.current = true;
-      refreshRequiresFresh.current ||= requireFresh;
       return;
     }
     if (requireFresh) {
@@ -74,10 +73,10 @@ export function useWikiMaintenanceReviews(config: AppConfig) {
   }, [refresh]);
 
   useEffect(() => {
-    const refreshOnFocus = () => void refresh(reviews.length > 0);
-    window.addEventListener("focus", refreshOnFocus);
-    return () => window.removeEventListener("focus", refreshOnFocus);
-  }, [refresh, reviews.length]);
+    const onFocus = () => void refresh(reviewsRef.current.length > 0);
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [refresh]);
 
   useEffect(() => {
     if (reviewSignal == null || reviewSignal === observedReviewSignal.current) return;
@@ -85,71 +84,70 @@ export function useWikiMaintenanceReviews(config: AppConfig) {
     void refresh(true);
   }, [refresh, reviewSignal]);
 
-  const reconcileMutation = useCallback(
-    async (review: WikiMaintenanceReview, failure: unknown) => {
-      const currentRequest = ++requestId.current;
-      try {
-        const next = await listWikiMaintenanceReviews(config);
-        if (!mounted.current || requestId.current !== currentRequest) return;
-        reviewsRef.current = next;
-        setReviews(next);
-        setVerification("ready");
-        setReconciliationRequired(false);
-        if (!next.some((candidate) => candidate.reviewId === review.reviewId)) {
-          setError(null);
-          return;
-        }
-        setError(
-          failure instanceof ApiError && failure.status === 409
-            ? "This review changed while you were deciding. Check the latest version and try again."
-            : `Could not save this decision: ${failure instanceof Error ? failure.message : String(failure)}`,
-        );
-      } catch (reason) {
-        if (!mounted.current || requestId.current !== currentRequest) return;
-        const detail = reason instanceof Error ? reason.message : String(reason);
-        setVerification("error");
-        setReconciliationRequired(true);
-        setError(`Decision outcome is unknown. Could not check pending reviews: ${detail}. Check status before trying again.`);
-      }
-    },
-    [config],
-  );
-
-  const resolve = useCallback(
-    async (review: WikiMaintenanceReview, decision: WikiMaintenanceDecision) => {
-      if (mutationPending.current || reconciliationRequired || verification !== "ready") return;
-      mutationPending.current = true;
-      setPending(true);
-      setError(null);
-      try {
-        await resolveWikiMaintenanceReview(config, review, decision);
-        if (!mounted.current) return;
-        requestId.current += 1;
-        setReviews((current) => {
-          const next = current.filter((candidate) => candidate.reviewId !== review.reviewId);
-          reviewsRef.current = next;
-          return next;
-        });
+  const reconcile = useCallback(async (
+    item: WikiMaintenanceReview,
+    failure: unknown,
+  ) => {
+    const currentRequest = ++requestId.current;
+    try {
+      const next = await listWikiMaintenanceReviews(config);
+      if (!mounted.current || requestId.current !== currentRequest) return;
+      reviewsRef.current = next;
+      setReviews(next);
+      setVerification("ready");
+      setReconciliationRequired(false);
+      if (!next.some((candidate) => candidate.reviewId === item.reviewId)) {
         setError(null);
-        refreshRequested.current = true;
-        refreshRequiresFresh.current = true;
-      } catch (reason) {
-        if (mounted.current) await reconcileMutation(review, reason);
-      } finally {
-        mutationPending.current = false;
-        if (mounted.current) {
-          setPending(false);
-          if (refreshRequested.current) {
-            refreshRequested.current = false;
-            const requireFresh = refreshRequiresFresh.current;
-            refreshRequiresFresh.current = false;
-            void refresh(requireFresh);
-          }
+        return;
+      }
+      setError(
+        failure instanceof ApiError && failure.status === 409
+          ? "This question changed. Review the latest version and answer again."
+          : `Could not save this answer: ${failure instanceof Error ? failure.message : String(failure)}`,
+      );
+    } catch (reason) {
+      if (!mounted.current || requestId.current !== currentRequest) return;
+      setVerification("error");
+      setReconciliationRequired(true);
+      setError(
+        `Answer outcome is unknown. Check its durable status before answering again: ${
+          reason instanceof Error ? reason.message : String(reason)
+        }`,
+      );
+    }
+  }, [config]);
+
+  const resolve = useCallback(async (
+    item: WikiMaintenanceReview,
+    decision: WikiMaintenanceDecision,
+  ) => {
+    if (mutationPending.current || reconciliationRequired || verification !== "ready") return;
+    mutationPending.current = true;
+    setPending(true);
+    setError(null);
+    try {
+      await resolveWikiMaintenanceReview(config, item, decision);
+      if (!mounted.current) return;
+      requestId.current += 1;
+      setReviews((current) => {
+        const next = current.filter((candidate) => candidate.reviewId !== item.reviewId);
+        reviewsRef.current = next;
+        return next;
+      });
+      refreshRequested.current = true;
+    } catch (reason) {
+      if (mounted.current) await reconcile(item, reason);
+    } finally {
+      mutationPending.current = false;
+      if (mounted.current) {
+        setPending(false);
+        if (refreshRequested.current) {
+          refreshRequested.current = false;
+          void refresh(true);
         }
       }
-    },
-    [config, reconcileMutation, reconciliationRequired, refresh, verification],
-  );
+    }
+  }, [config, reconcile, reconciliationRequired, refresh, verification]);
 
   return {
     reviews,

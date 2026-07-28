@@ -23,15 +23,17 @@ function Layer({
   name,
   open,
   blocksInput,
+  dismissDisabled = false,
   onDismiss,
 }: {
   name: string;
   open: boolean;
   blocksInput: boolean;
+  dismissDisabled?: boolean;
   onDismiss: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  useOverlayLayer(ref, open, onDismiss, false, blocksInput);
+  useOverlayLayer(ref, open, onDismiss, dismissDisabled, blocksInput);
   return open ? <div ref={ref} data-layer={name} /> : null;
 }
 
@@ -123,6 +125,35 @@ test("Cmd+K dismisses the top blocking layer and replaces it with the palette", 
   expect(takeoverDismissals).toBe(1);
   expect(getState().paletteOpen).toBe(true);
   expect(app.querySelector('[aria-label="Command palette"]')).not.toBeNull();
+});
+
+test("Cmd+K cannot bypass a blocking question that requires an answer", async () => {
+  const app = document.createElement("div");
+  app.id = "app";
+  document.body.append(app);
+  root = createRoot(app);
+  setState({ paletteOpen: false });
+
+  await act(async () => {
+    root?.render(
+      <>
+        <Layer name="question" open blocksInput dismissDisabled onDismiss={() => {}} />
+        <CommandPalette />
+      </>,
+    );
+  });
+
+  await act(async () => {
+    window.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "k",
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    }));
+  });
+
+  expect(getState().paletteOpen).toBe(false);
+  expect(app.querySelector('[aria-label="Command palette"]')).toBeNull();
 });
 
 test("a shared popover derives page versus nested elevation from overlay state", async () => {

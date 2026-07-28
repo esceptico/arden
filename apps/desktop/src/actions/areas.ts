@@ -2,7 +2,6 @@ import {
   createAreaPage as createAreaPageApi,
   createAreaOutcome as createAreaOutcomeApi,
   detachAreaPage as detachAreaPageApi,
-  dismissAreaSuggestion as dismissAreaSuggestionApi,
   fetchAreasOverview as fetchAreasOverviewApi,
   fetchAreaDetail as fetchAreaDetailApi,
   resolveAsk as resolveAskApi,
@@ -17,12 +16,9 @@ import type {
   AreaAttention,
   AreaInterrupts,
   AreaOutcomeStatus,
-  AreaSuggestion,
   AreaWorkItem,
   AreaWorkStatus,
 } from "@/api/areas";
-import { createAreaApi } from "@/api/sessions";
-import { humanizeSlug } from "@/lib/format";
 import { getState } from "@/stores";
 
 export async function fetchAreasOverview(): Promise<boolean> {
@@ -149,36 +145,4 @@ export async function detachAreaPage(key: string): Promise<void> {
   const record = await detachAreaPageApi(s.config, key);
   s.upsertAreaRecord(record);
   await Promise.all([fetchAreaDetail(key), fetchAreasOverview()]);
-}
-
-/** The ghost row must start its exit the instant the user acts — held
- *  hostage to the round trip it sits frozen for ~half a second and the
- *  150ms dissolve lands after attention has moved on. Optimistic removal;
- *  the closing refetch restores truth either way (including on failure). */
-function removeSuggestionRow(key: string): void {
-  const s = getState();
-  const overview = s.areas.overview;
-  if (overview) {
-    s.areasOverviewLoaded({ ...overview, suggested: overview.suggested.filter((x) => x.key !== key) });
-  }
-}
-
-/** Accept a suggested area: create the area attached to the suggestion's
- *  topic page (server treats page_path attach as promote-not-duplicate),
- *  then refetch so the ghost row becomes a real one. */
-export async function acceptAreaSuggestion(suggestion: AreaSuggestion): Promise<void> {
-  removeSuggestionRow(suggestion.key);
-  const s = getState();
-  const area = await createAreaApi(s.config, {
-    name: humanizeSlug(suggestion.title),
-    page_path: suggestion.page_path,
-  });
-  s.upsertAreaRecord(area);
-  await fetchAreasOverview();
-}
-
-export async function dismissAreaSuggestion(key: string): Promise<void> {
-  removeSuggestionRow(key);
-  await dismissAreaSuggestionApi(getState().config, key);
-  await fetchAreasOverview();
 }

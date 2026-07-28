@@ -71,10 +71,12 @@ test("overlay tokens preserve the mockup sheet and scrim contract", () => {
   expect(MOTION.focus).toBe(0.18);
 
   const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
-  expect(styles).toContain("background: color-mix(in oklab, var(--ink) 5%, transparent)");
+  const tokens = readFileSync(new URL("../src/design/tokens.css", import.meta.url), "utf8");
+  expect(tokens).toContain("--modal-scrim-bg: color-mix(in oklab, var(--ink) 9%, transparent)");
+  expect(styles).toContain("background: var(--modal-scrim-bg)");
   expect(styles).toContain("z-index: var(--z-scrim)");
   expect(styles).toContain("position: fixed");
-  expect(styles).toContain("backdrop-filter: none");
+  expect(styles).toContain("backdrop-filter: blur(var(--modal-scrim-blur))");
 });
 
 test("command palette retains focus, inertness, and its scrim through the sheet exit", async () => {

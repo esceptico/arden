@@ -1,10 +1,6 @@
 import type { MemoryArtifactSummary } from "@/features/memory/lib/notebookTypes";
-import { isNotebookResourcePath } from "@/features/memory/lib/notebookIndex";
 
-/** Filesystem tree for the memory workspace rail — the draft's TREE model:
- *  plain directory structure from artifact paths (Obsidian-native), with
- *  filenames as labels. Directories may also come from the server's
- *  `directories` listing so empty (just-created) folders stay visible. */
+/** Plain directory structure derived from canonical wiki page paths. */
 export interface WorkspaceDir {
   name: string;
   /** Directory key with trailing slash ("topics/"); "" for the root. */
@@ -25,10 +21,9 @@ export function stem(path: string): string {
   return leaf.replace(/\.md$/, "");
 }
 
-/** Managed wiki pages own a human title in frontmatter. Legacy artifacts keep
- * their filename-derived label so ordinary files remain predictable. */
+/** Managed wiki pages own a human title in frontmatter. */
 export function displayTitle(artifact: Pick<MemoryArtifactSummary, "path" | "source" | "title">): string {
-  return artifact.source === "wiki" && artifact.title.trim() ? artifact.title : stem(artifact.path);
+  return artifact.title.trim() || stem(artifact.path);
 }
 
 export function parentDir(path: string): string {
@@ -36,7 +31,7 @@ export function parentDir(path: string): string {
   return parts.length > 1 ? parts.slice(0, -1).join("/") : "";
 }
 
-export function buildWorkspaceTree(artifacts: MemoryArtifactSummary[], extraDirectories: readonly string[] = []): WorkspaceDir {
+export function buildWorkspaceTree(artifacts: MemoryArtifactSummary[]): WorkspaceDir {
   const root: WorkspaceDir = { name: "", path: "", dirs: [], files: [] };
   const byPath = new Map<string, WorkspaceDir>([["", root]]);
   const ensureDir = (key: string): WorkspaceDir => {
@@ -55,12 +50,7 @@ export function buildWorkspaceTree(artifacts: MemoryArtifactSummary[], extraDire
     byPath.set(key, dir);
     return dir;
   };
-  for (const raw of extraDirectories) {
-    const key = raw.endsWith("/") ? raw : `${raw}/`;
-    if (isNotebookResourcePath(key.replace(/\/$/, ""))) ensureDir(key);
-  }
   for (const artifact of artifacts) {
-    if (artifact.source !== "wiki" && !isNotebookResourcePath(artifact.path)) continue;
     const parent = parentDir(artifact.path);
     ensureDir(parent ? `${parent}/` : "").files.push(artifact);
   }
@@ -70,25 +60,6 @@ export function buildWorkspaceTree(artifacts: MemoryArtifactSummary[], extraDire
   };
   sortDirs(root);
   return root;
-}
-
-export function findDir(root: WorkspaceDir, key: string): WorkspaceDir | null {
-  if (key === "") return root;
-  const parts = key.replace(/\/$/, "").split("/");
-  let node: WorkspaceDir | null = root;
-  for (const part of parts) {
-    node = node?.dirs.find((dir) => dir.name === part) ?? null;
-    if (!node) return null;
-  }
-  return node;
-}
-
-export function countNotes(dir: WorkspaceDir): number {
-  return dir.files.length + dir.dirs.reduce((sum, child) => sum + countNotes(child), 0);
-}
-
-export function collectNotes(dir: WorkspaceDir): MemoryArtifactSummary[] {
-  return [...dir.files, ...dir.dirs.flatMap(collectNotes)];
 }
 
 /** Folder overviews stay first, followed by the requested note ordering. */

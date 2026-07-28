@@ -75,25 +75,6 @@ export async function cancelRun(
   });
 }
 
-/** Pin a fact to memory by writing it as an atomic, pinned record in the flat
- *  records pool. There is no scope/area partition — one pool. */
-export async function pinToMemoryApi(
-  config: AppConfig,
-  fact: string,
-): Promise<{ written: boolean }> {
-  const text = fact.trim();
-  if (!text) return { written: false };
-  const r = await apiWithConfig<{ record: { id: string } }>(config, "/admin/memory/record", {
-    method: "POST",
-    body: JSON.stringify({ text, kind_tag: "fact" }),
-  });
-  await apiWithConfig(config, `/admin/memory/record/${encodeURIComponent(r.record.id)}/pin`, {
-    method: "POST",
-    body: JSON.stringify({ pinned: true }),
-  });
-  return { written: true };
-}
-
 export async function cancelSubagentApi(
   config: AppConfig,
   runId: string,

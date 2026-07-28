@@ -2,9 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { ArrowLeft02, CalendarClock, Plus, Search, Settings, X } from "@/components/icons";
 import { useStore } from "@/stores";
 import { duplicateAutomation, fetchAutomations, runAutomation, toggleAutomation } from "@/actions/automations";
-import { listAutomationSuggestionsApi } from "@/api/automations";
 import { goToNewSessionHome, switchSession } from "@/actions/sessions";
-import type { Automation, AutomationRun, AutomationSuggestion, CreateAutomationPayload } from "@/api/types";
+import type { Automation, AutomationRun, CreateAutomationPayload } from "@/api/types";
 import { isIterationLoop } from "@/lib/automationFilters";
 import { AutomationRail, groupAutomations } from "@/features/automations/components/AutomationRail";
 import { AutomationDetail, type DetailSeed } from "@/features/automations/components/AutomationDetail";
@@ -131,7 +130,6 @@ export function AutomationsModal() {
   const targetRun = useStore((state) => state.automationTargetRun);
   const clearTarget = useStore((state) => state.clearAutomationTarget);
   const openSettings = useStore((state) => state.openSettings);
-  const config = useStore((state) => state.config);
 
   const newButtonRef = useRef<HTMLButtonElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -141,7 +139,6 @@ export function AutomationsModal() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [newOpen, setNewOpen] = useState(false);
-  const [suggestion, setSuggestion] = useState<AutomationSuggestion | null>(null);
   const [query, setQuery] = useState("");
   const [compactDetail, setCompactDetail] = useState(false);
   const [detailDirty, setDetailDirty] = useState(false);
@@ -295,27 +292,6 @@ export function AutomationsModal() {
     if (!open) return;
     void fetchAutomations();
   }, [open]);
-
-  // The mock has one personalized slot. It is populated only from the
-  // server's active candidates; an empty/unavailable response leaves no
-  // fabricated "For you" section behind.
-  useEffect(() => {
-    if (!open) {
-      setSuggestion(null);
-      return;
-    }
-    let current = true;
-    void listAutomationSuggestionsApi(config)
-      .then((suggestions) => {
-        if (current) setSuggestion(suggestions[0] ?? null);
-      })
-      .catch(() => {
-        if (current) setSuggestion(null);
-      });
-    return () => {
-      current = false;
-    };
-  }, [config, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -530,7 +506,6 @@ export function AutomationsModal() {
         open={newOpen}
         onClose={() => setNewOpen(false)}
         anchor={newButtonRef}
-        suggestion={suggestion}
         onPick={(preset) => requestIntent({ kind: "new", preset })}
       />
 

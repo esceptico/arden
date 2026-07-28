@@ -138,27 +138,23 @@ test("Chat header leaves scroll veiling to the shared progressive blur", () => {
   expect(header).not.toContain("linear-gradient");
 });
 
-test("Chat keeps the mock's icon-only 620px composer controls", () => {
-  const compact = modelPickers.slice(modelPickers.indexOf("@media (max-width: 38.75rem)"));
-
+test("Chat keeps the compact budget control and shared model picker classes", () => {
   expect(chatHeader).toContain("board-chat__header-content chat-head-inner");
-  expect(budget).toContain('"budget-trigger inline-flex');
-  expect(selectors).toContain('className="model-config-trigger group"');
-  expect(selectors).toContain('className="composer-model-effort-trigger"');
-  expect(selectors).toContain('className="effort-current"');
+  expect(budget).toContain('"budget-trigger composer-toolbar-control inline-flex');
+  expect(selectors).toContain('className="model-picker__trigger model-picker__model-trigger group"');
+  expect(selectors).toContain('className="model-picker__trigger model-picker__effort-trigger group"');
+  expect(selectors).toContain('className="model-picker__current-effort"');
   expect(chat).toContain(
     ".chat-head-inner { padding-left: calc(var(--chrome-chat-title-inset) - .125rem); }",
   );
-  expect(compact).toContain(".board-composer .model-current,");
-  expect(compact).toContain(".board-composer .effort-current {");
   expect(chat).toContain(".board-composer .budget-trigger {\n    width: var(--icon-button-size);");
-  expect(compact).toContain(".board-composer .model-config-trigger {\n    width: 34px;");
+  expect(modelPickers).toContain(".board-composer .model-picker--field {");
 });
 
 test("Chat composer keeps the mock's 66px input and 42px toolbar geometry", () => {
   expect(composer).toContain("board-composer__input-row flex min-h-[66px]");
-  expect(composerToolbar).toContain('className="composer-tool-button"');
-  expect(composerToolbar).toContain('className="composer-tool-button composer-mode-button"');
+  expect(composerToolbar).toContain('className="composer-tool-button composer-toolbar-control"');
+  expect(composerToolbar).toContain('className="composer-tool-button composer-toolbar-control composer-mode-button"');
   expect(chat).toContain(".board-composer__input-row { min-height: 4.125rem; }");
   expect(chat).toContain(".board-composer__toolbar { height: 2.625rem; min-height: 2.625rem; flex: none; }");
   expect(chat).toContain(".board-composer .composer-tool-button { min-height: var(--control-size-large); }");

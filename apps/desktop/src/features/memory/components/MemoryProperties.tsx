@@ -2,11 +2,21 @@ import { useRef, useState } from "react";
 import clsx from "clsx";
 import { Calendar, ChevronDown, Hash, LeftToRightListBullet, SquareCheck, Tag, Text, X, type ArdenIcon } from "@/components/icons";
 
-export type MemoryFrontmatterValue = string | number | boolean | null | Array<string | number | boolean | null>;
+export type MemoryFrontmatterValue =
+  | string
+  | number
+  | boolean
+  | null
+  | MemoryFrontmatterValue[]
+  | { [key: string]: MemoryFrontmatterValue };
 export type MemoryFrontmatter = Record<string, MemoryFrontmatterValue>;
 
 // arden-maintained fields — kept in the file, hidden from the Properties UI.
-const SYSTEM_PROPS = new Set(["type", "updated"]);
+const SYSTEM_PROPS = new Set([
+  "page_id",
+  "fact_citations",
+  "generated_from_revision",
+]);
 
 type PropKind = "tags" | "list" | "checkbox" | "number" | "date" | "text";
 
@@ -21,7 +31,7 @@ const PROP_ICONS: Record<PropKind, ArdenIcon> = {
 
 function propType(key: string, value: MemoryFrontmatterValue): PropKind {
   if (key === "tags" || key === "aliases") return "tags";
-  if (Array.isArray(value)) return "list";
+  if (Array.isArray(value) && value.every((item) => item == null || typeof item !== "object")) return "list";
   if (typeof value === "boolean") return "checkbox";
   if (typeof value === "number") return "number";
   if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}/.test(value)) return "date";
@@ -30,6 +40,13 @@ function propType(key: string, value: MemoryFrontmatterValue): PropKind {
 
 function parsePropInput(raw: string): MemoryFrontmatterValue {
   const v = raw.trim();
+  if (v.startsWith("{") || v.startsWith("[")) {
+    try {
+      return JSON.parse(v) as MemoryFrontmatterValue;
+    } catch {
+      return v;
+    }
+  }
   if (/^(true|yes)$/i.test(v)) return true;
   if (/^(false|no)$/i.test(v)) return false;
   if (/^-?\d+$/.test(v)) return parseInt(v, 10);
@@ -89,11 +106,12 @@ export function MemoryProperties({
   };
 
   const renderValue = (key: string, value: MemoryFrontmatterValue, kind: PropKind) => {
+    const formatted = typeof value === "object" && value !== null ? JSON.stringify(value) : String(value);
     if (edit?.key === key && edit.mode === "edit") {
       return (
         <input
           className="mw-prop-edit-input"
-          defaultValue={Array.isArray(value) ? value.join(", ") : String(value)}
+          defaultValue={Array.isArray(value) && kind !== "text" ? value.join(", ") : formatted}
           autoFocus
           spellCheck={false}
           onFocus={(e) => e.currentTarget.select()}
@@ -118,7 +136,7 @@ export function MemoryProperties({
         <>
           {items.map((item, i) => (
             <span key={i} className="mw-prop-pill">
-              {String(item)}
+              {typeof item === "object" && item !== null ? JSON.stringify(item) : String(item)}
               {editable && (
                 <button type="button" className="mw-prop-pill-x" aria-label="Remove" onClick={() => removeItem(key, i)}>
                   <X size={10} aria-hidden />
@@ -171,7 +189,7 @@ export function MemoryProperties({
         <span className={className} />
       );
     }
-    const body = kind === "date" || kind === "number" ? <span className="mono">{String(value)}</span> : String(value);
+    const body = kind === "date" || kind === "number" ? <span className="mono">{formatted}</span> : formatted;
     return editable ? (
       <button type="button" className="mw-prop-editable" title="Edit" onClick={() => setEdit({ key, mode: "edit" })}>
         {body}

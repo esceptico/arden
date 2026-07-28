@@ -2,14 +2,14 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { CheckList, ChevronDown, FileText, Folder, Notebook01 } from "@/components/icons";
 import clsx from "clsx";
 import { AnchoredPopover } from "@/components/ui/AnchoredPopover";
+import { Button } from "@/components/ui/Button";
 import { Empty } from "@/components/ui/EmptyState";
 import { ListError, ListSkeleton } from "@/components/ui/ListColumn";
 import { ContextMenu, type ContextMenuPosition } from "@/components/ui/ContextMenu";
 import { Tab, Tabs } from "@/components/ui/Tabs";
 import { TabPanels, useTabDirection } from "@/components/ui/TabPanels";
 import { copyText } from "@/lib/clipboard";
-import { GhostBtn } from "@/features/memory/components/shared";
-import type { MemoryItem } from "@/api/memoryItems";
+import type { MemoryItem } from "@/features/memory/lib/notebookTypes";
 import type { MemoryArtifactSummary } from "@/features/memory/lib/notebookTypes";
 import { displayTitle, noteDateGroup, prettyDate, sortNotes, type WorkspaceDir } from "@/features/memory/lib/workspaceTree";
 
@@ -75,7 +75,7 @@ export function NotebookRail({
   selectedPath,
   loading,
   error,
-  rebuilding,
+  refreshing,
   recordsLoading,
   recordsError,
   navigationDisabled,
@@ -83,7 +83,7 @@ export function NotebookRail({
   onSelect,
   onRetry,
   onRetryRecords,
-  onRebuild,
+  onRefresh,
 }: {
   mode: MemoryRailMode;
   tree: WorkspaceDir;
@@ -92,7 +92,7 @@ export function NotebookRail({
   selectedPath: string | null;
   loading: boolean;
   error: string | null;
-  rebuilding: boolean;
+  refreshing: boolean;
   recordsLoading: boolean;
   recordsError: string | null;
   navigationDisabled: boolean;
@@ -100,7 +100,7 @@ export function NotebookRail({
   onSelect: (path: string, direction: number) => void;
   onRetry: () => void;
   onRetryRecords: () => void;
-  onRebuild: () => void;
+  onRefresh: () => void;
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(() => loadStringSet(COLLAPSED_KEY));
   const [closedGroups, setClosedGroups] = useState<Set<string>>(() => loadStringSet(NOTEBOOK_COLLAPSED_KEY));
@@ -400,7 +400,7 @@ export function NotebookRail({
             onFocus={(event) => showFactPreview(record, event.currentTarget)}
             onBlur={scheduleFactHide}
           >
-            <span className="mw-rail-row-meta">{record.updated_at.slice(0, 10)}</span>
+            <span className="mw-rail-row-meta">{record.updatedAt.slice(0, 10)}</span>
             <span className="mw-rail-row-fact">{record.content}</span>
           </button>
         ))}
@@ -423,9 +423,9 @@ export function NotebookRail({
           icon={FileText}
           hint="Memory pages appear here once the vault has notes."
           action={
-            <GhostBtn onClick={onRebuild} disabled={rebuilding}>
-              {rebuilding ? "Refreshing…" : "Refresh"}
-            </GhostBtn>
+            <Button variant="ghost" size="sm" onClick={onRefresh} disabled={refreshing}>
+              {refreshing ? "Refreshing…" : "Refresh"}
+            </Button>
           }
         >
           No memory notes yet
@@ -497,10 +497,9 @@ export function NotebookRail({
         {factPreview && (
           <div className="mw-fact-peek-body" data-memory-fact-peek={factPreview.record.id} onMouseEnter={clearFactTimers} onMouseLeave={scheduleFactHide}>
             <div className="mw-fact-peek-meta">
-              <span>{prettyDate(factPreview.record.updated_at)}</span>
+              <span>{prettyDate(factPreview.record.updatedAt)}</span>
               <span>·</span>
               <span>{factPreview.record.kind}</span>
-              {factPreview.record.pinned && <span>pinned</span>}
             </div>
             <p>{factPreview.record.content}</p>
             {factPreview.record.labels.length > 0 && <div className="mw-fact-peek-labels">{factPreview.record.labels.join(" · ")}</div>}

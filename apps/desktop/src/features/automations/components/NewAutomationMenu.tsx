@@ -1,6 +1,5 @@
 import type { RefObject } from "react";
-import type { AutomationSuggestion, AutomationTrigger, CreateAutomationPayload } from "@/api/types";
-import { suggestionToPayload } from "@/api/automations";
+import type { CreateAutomationPayload } from "@/api/types";
 import { TEMPLATES } from "@/features/automations/lib/templates";
 import { AnchoredPopover } from "@/components/ui/AnchoredPopover";
 import { MenuItem } from "@/components/ui/MenuItem";
@@ -18,13 +17,6 @@ function cadenceForPayload(payload: Pick<CreateAutomationPayload, "every" | "tri
   if (payload.trigger_type === "event") return "on event";
   if (payload.trigger_type === "message") return "on message";
   return payload.days ?? "daily";
-}
-
-function cadenceForTrigger(trigger: AutomationTrigger): string {
-  if (trigger.type === "time") return trigger.every ? `every ${trigger.every}` : trigger.days ?? "daily";
-  if (trigger.type === "event") return "on event";
-  if (trigger.type === "message") return "on message";
-  return trigger.type;
 }
 
 function RichRow({
@@ -62,14 +54,11 @@ export function NewAutomationMenu({
   onClose,
   anchor,
   onPick,
-  suggestion = null,
 }: {
   open: boolean;
   onClose: () => void;
   anchor: RefObject<HTMLElement | null>;
   onPick: (preset: CreateAutomationPayload | null) => void;
-  /** The top active server suggestion, if the runtime has one. */
-  suggestion?: AutomationSuggestion | null;
 }) {
   const pick = (preset: CreateAutomationPayload | null) => {
     onPick(preset);
@@ -85,17 +74,6 @@ export function NewAutomationMenu({
       ariaLabel="New automation"
       className="w-[320px] max-w-[calc(100vw-2rem)] max-h-[calc(100vh-2rem)] overflow-auto !bg-[var(--surface-5)] p-[5px] !shadow-[var(--shadow-3)]"
     >
-      {suggestion && (
-        <>
-          <SectionLabel>For you</SectionLabel>
-          <RichRow
-            title={suggestion.name}
-            description={suggestion.rationale}
-            cadence={cadenceForTrigger(suggestion.triggers[0])}
-            onClick={() => pick(suggestionToPayload(suggestion))}
-          />
-        </>
-      )}
       <SectionLabel>Templates</SectionLabel>
       {TEMPLATES.map((t) => (
         <RichRow

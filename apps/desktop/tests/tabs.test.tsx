@@ -82,7 +82,7 @@ test("shared tabs measure geometry directly and animate only indicator transform
   expect(tabs).toContain("transform: `translate(${geometry.x}px, ${geometry.y}px)`");
   expect(tabs).not.toContain("layoutId");
   expect(tabs).not.toContain("<motion.");
-  expect(styles).toContain(".arden-tab-indicator {");
+  expect(styles).toContain(".arden-tab-indicator,\n.dp-tab-indicator {");
   expect(styles).toContain("transition: transform var(--tabs-dur) var(--tabs-ease);");
 });
 

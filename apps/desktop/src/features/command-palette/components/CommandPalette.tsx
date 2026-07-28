@@ -14,6 +14,8 @@ import {
 import { PaletteBody } from "@/features/command-palette/components/PaletteBody";
 import type { Crumb } from "@/lib/commandEntries/types";
 import {
+  dismissTopBlockingOverlay,
+  hasBlockingOverlay,
   useOverlayLayer,
 } from "@/lib/overlayStack";
 import { useRetainedPresence } from "@/components/workspace/useRetainedPresence";
@@ -42,6 +44,10 @@ export function CommandPalette() {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
+        // Cmd+K replaces a blocking surface with the palette. Keep the
+        // palette's ordinary toggle behavior when it already owns the layer,
+        // but never bypass a question that deliberately cannot be dismissed.
+        if (!open && hasBlockingOverlay() && !dismissTopBlockingOverlay()) return;
         togglePalette();
         return;
       }

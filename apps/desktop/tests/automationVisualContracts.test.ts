@@ -215,15 +215,11 @@ test("Automations owns the mock shell controls and hands a hidden rail's full wi
   expect(toggle).toContain("aria-expanded={!sidebarHidden}");
 });
 
-test("New automation menu keeps the mock's rich, text-only popover contract", () => {
+test("New automation menu keeps the template popover contract", () => {
   const menu = read("../src/features/automations/components/NewAutomationMenu.tsx");
   const item = read("../src/components/ui/MenuItem.tsx");
-  const api = read("../src/api/automations.ts");
-  const workspace = read("../src/features/automations/components/AutomationsModal.tsx");
-
   expect(menu).toContain('className="w-[320px] max-w-[calc(100vw-2rem)] max-h-[calc(100vh-2rem)] overflow-auto !bg-[var(--surface-5)] p-[5px] !shadow-[var(--shadow-3)]"');
-  expect(menu).toContain("<SectionLabel>For you</SectionLabel>");
-  expect(menu).toContain("description={suggestion.rationale}");
+  expect(menu).toContain("<SectionLabel>Templates</SectionLabel>");
   expect(menu).toContain("description={t.blurb}");
   expect(menu).toContain("text-xs font-[560] leading-[1.55]");
   expect(menu).toContain("text-2xs leading-[1.35] text-faint");
@@ -232,10 +228,6 @@ test("New automation menu keeps the mock's rich, text-only popover contract", ()
   expect(menu).not.toContain("leading={<t.icon");
   expect(item).toContain("rich?: boolean");
   expect(item).toContain("{rich ? children");
-  expect(api).toContain("listAutomationSuggestionsApi");
-  expect(api).toContain("from_suggestion_id: suggestion.id");
-  expect(workspace).toContain("suggestion={suggestion}");
-  expect(workspace).toContain("setSuggestion(suggestions[0] ?? null)");
 });
 
 test("the zero-automations pane only stands in for an actually empty workspace", () => {

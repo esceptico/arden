@@ -28,7 +28,6 @@ const AUTOMATION_STALL_CHECK_MS = 5_000;
 type AutomationEvent =
   | { type: "automation_progress"; task_id: string; status: string; seq?: number }
   | { type: "automation_finished"; task_id: string; result: string | null; seq?: number }
-  | { type: "automation_suggestions_updated"; seq?: number }
   | { type: "session_created"; session: SessionListItem; seq?: number }
   | { type: "session_activity"; session: SessionListItem; seq?: number }
   | { type: "memory_changed"; paths: string[]; revision?: string | null; review_required?: boolean; seq?: number }

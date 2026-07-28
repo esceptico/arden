@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { cancelChildAgentApi, getChildAgentResultApi } from "@/api/agents";
-import { pinToMemoryApi, sendToChildAgentApi } from "@/api/chat";
+import { sendToChildAgentApi } from "@/api/chat";
 import { agentRunFromBackgroundAgent, isActiveAgentStatus } from "@/lib/agentRun";
 import { createSession, switchSession } from "@/actions/sessions";
 import { sendMessage } from "@/actions/messages";
@@ -21,7 +21,6 @@ export function SidebarAgentRow({
   const config = useStore((s) => s.config);
   const upsertBackgroundAgent = useStore((s) => s.upsertBackgroundAgent);
   const setDraft = useStore((s) => s.setDraft);
-  const pushToast = useStore((s) => s.pushToast);
   // The server's `command` is a generic "Agent" placeholder until an async
   // labeler runs; the child session's own name (the task) is the better title.
   const childName = useStore((s) =>
@@ -67,27 +66,6 @@ export function SidebarAgentRow({
           if (!text) return;
           const prev = getState().draft;
           setDraft(prev.trim() ? `${prev}\n\n${text}` : text);
-        },
-        onPin: async () => {
-          const text = await fetchResult();
-          if (!text) return;
-          try {
-            const outcome = await pinToMemoryApi(config, text);
-            pushToast({
-              id: crypto.randomUUID(),
-              title: outcome.written ? "Pinned to memory" : "Already in memory",
-              status: "completed",
-              target: { kind: "session", sessionId: agent.sessionId },
-            });
-          } catch (error) {
-            pushToast({
-              id: crypto.randomUUID(),
-              title: "Couldn't pin to memory",
-              detail: error instanceof Error ? error.message : String(error),
-              status: "failed",
-              target: { kind: "session", sessionId: agent.sessionId },
-            });
-          }
         },
         onRoute: async () => {
           const text = await fetchResult();

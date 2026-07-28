@@ -2,20 +2,14 @@ import {
   Brain01,
   BubbleChat,
   House,
-  Plus,
   Settings as SettingsIcon,
   SlidersHorizontal,
-  X,
   ZapIcon,
 } from "@/components/icons";
 import { useMemo, useState } from "react";
-import { AnimatePresence, motion } from "motion/react";
 import { useStore } from "@/stores";
-import { EASE_OUT, MOTION, ROW_EXIT, SPRING_LAYOUT } from "@/lib/tokens/motion";
 import { archiveArea, goToChat, goToNewSessionHome } from "@/actions/sessions";
-import { acceptAreaSuggestion, dismissAreaSuggestion } from "@/actions/areas";
 import { fetchAutomations } from "@/actions/automations";
-import { humanizeSlug } from "@/lib/format";
 import { ICON } from "@/lib/icons";
 import { useVisibilityPoll } from "@/lib/hooks";
 import { useCmdHeld } from "@/hooks/useCmdHeld";
@@ -47,7 +41,6 @@ export function Sidebar() {
   const areasOverview = useStore((s) => s.areas.overview);
   const automationState = useStore((s) => s.automations);
   const areas = areasOverview?.areas ?? [];
-  const suggestedAreas = areasOverview?.suggested ?? [];
   const automations = automationState ?? [];
   const cmdHeld = useCmdHeld();
   const [contextMenu, setContextMenu] = useState<SidebarContextMenuState | null>(null);
@@ -190,45 +183,6 @@ export function Sidebar() {
                 </small>
               </button>
             ))}
-            <AnimatePresence mode="popLayout" initial={false}>
-            {suggestedAreas.map((suggestion) => (
-              <motion.div
-                key={suggestion.key}
-                layout
-                layoutDependency={suggestedAreas.map((s) => s.key).join(":")}
-                exit={{ ...ROW_EXIT, transition: { duration: MOTION.row, ease: EASE_OUT } }}
-                transition={{ layout: SPRING_LAYOUT }}
-                className="home-area-list__row home-area-list__row--suggested"
-                title={suggestion.rationale}
-              >
-                <span>{humanizeSlug(suggestion.title)}</span>
-                {/* The status word and the accept/dismiss cluster share one
-                    grid cell: idle rows keep the exact status column of the
-                    real rows above; hover swaps word → actions in place. */}
-                <span className="home-area-list__suggestion-slot">
-                  <small>suggested</small>
-                  <span className="home-area-list__suggestion-cluster">
-                    <IconButton
-                      aria-label={`Create area from ${humanizeSlug(suggestion.title)}`}
-                      title="Create this area"
-                      size="xs"
-                      onClick={() => void acceptAreaSuggestion(suggestion)}
-                    >
-                      <Plus size={ICON.XS} />
-                    </IconButton>
-                    <IconButton
-                      aria-label={`Dismiss suggestion ${humanizeSlug(suggestion.title)}`}
-                      title="Dismiss"
-                      size="xs"
-                      onClick={() => void dismissAreaSuggestion(suggestion.key)}
-                    >
-                      <X size={ICON.XS} />
-                    </IconButton>
-                  </span>
-                </span>
-              </motion.div>
-            ))}
-            </AnimatePresence>
           </nav>
         </div>
         {settingsFooter}

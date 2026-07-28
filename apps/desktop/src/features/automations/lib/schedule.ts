@@ -60,8 +60,6 @@ export interface FormState {
   auto_approve: boolean;
   /** Explicit model override; null = the session default. */
   model: string | null;
-  /** Preserved from a real server suggestion until this draft is created. */
-  from_suggestion_id?: string;
 }
 
 export function emptyForm(): FormState {
@@ -81,7 +79,6 @@ export function formFromPreset(p: CreateAutomationPayload): FormState {
   f.description = p.description?.trim() || null;
   f.prompt = p.prompt ?? "";
   f.model = p.model ?? null;
-  f.from_suggestion_id = p.from_suggestion_id;
   if (p.auto_approve) f.auto_approve = true;
   const msg = p.trigger_type === "message" ? p.triggers?.[0] : undefined;
   if (msg && msg.type === "message") {
@@ -196,7 +193,6 @@ export function buildPayload(
     const lead = s.lead.trim();
     if (lead) p.lead_minutes = lead;
   }
-  if (f.from_suggestion_id) p.from_suggestion_id = f.from_suggestion_id;
   return p;
 }
 

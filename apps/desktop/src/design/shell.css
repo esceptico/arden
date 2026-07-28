@@ -189,61 +189,6 @@
 .home-area-list__row small[data-tone="warning"] { color: var(--warning); }
 .home-area-list__row small[data-tone="live"] { color: var(--accent-ink); }
 
-/* Suggested areas: ghost rows in the same list — each sits exactly where the
-   area would live once accepted. The status word and the accept/dismiss
-   cluster stack in ONE grid cell anchored to the row's right edge, so idle
-   rows keep the exact status column of the real rows above, and hover swaps
-   word → actions in place with zero layout shift. */
-.home-area-list__row--suggested { color: var(--muted); }
-
-.home-area-list__row--suggested:hover {
-  color: var(--ink-soft);
-  background: var(--state-hover-bg);
-}
-
-.home-area-list__suggestion-slot {
-  display: grid;
-  justify-items: end;
-  align-items: center;
-}
-
-/* Word ⇄ actions swap uses the icon-swap vocabulary (same tokens as
-   .t-icon-swap): opacity + blur bridge at the swap tier — the 150ms
-   feedback tier reads as a bare toggle, not motion. No scale: the .25
-   glyph pop is right for one icon, zoomy for a two-button cluster. */
-.home-area-list__suggestion-slot > * {
-  grid-area: 1 / 1;
-  transition:
-    opacity var(--icon-swap-dur) var(--icon-swap-ease),
-    filter var(--icon-swap-dur) var(--icon-swap-ease);
-}
-
-.home-area-list__suggestion-cluster {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-0-5);
-  opacity: 0;
-  filter: blur(var(--icon-swap-blur));
-  pointer-events: none;
-}
-
-/* Bare glyphs, no hover pill: at row scale the buttons' fill would read as a
-   second capsule inside the row's own hover fill. Color is the feedback. */
-.home-area-list__suggestion-cluster > .arden-icon-button:hover {
-  background: transparent;
-}
-
-.home-area-list__row--suggested:is(:hover, :focus-within) .home-area-list__suggestion-cluster {
-  opacity: 1;
-  filter: blur(0);
-  pointer-events: auto;
-}
-
-.home-area-list__row--suggested:is(:hover, :focus-within) .home-area-list__suggestion-slot > small {
-  opacity: 0;
-  filter: blur(var(--icon-swap-blur));
-}
-
 .workspace-rail__section-header {
   display: flex;
   height: 2rem;
