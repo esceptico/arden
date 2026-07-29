@@ -50,3 +50,21 @@ def test_refactored_packages_do_not_use_dynamic_attribute_access() -> None:
                 violations.append(f"{source}:{node.lineno}:{node.attr}")
 
     assert violations == []
+
+
+def test_revision_repository_facade_keeps_query_and_maintenance_ownership_split() -> None:
+    facade = ARDEN / "revisions" / "repository.py"
+    extracted = (ARDEN / "revisions" / "query.py", ARDEN / "revisions" / "maintenance.py")
+    forbidden_prefixes = ("arden.server", "arden.services", "arden.tools", "arden.wiki")
+
+    assert len(facade.read_text(encoding="utf-8").splitlines()) < 1_000
+    for source in extracted:
+        tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+        imported_modules = [node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)]
+        assert all(module is None or not module.startswith(forbidden_prefixes) for module in imported_modules), source
+
+    from arden.revisions import ManagedFileRepository
+    from arden.revisions.errors import RevisionConflictError
+
+    assert ManagedFileRepository.__name__ == "ManagedFileRepository"
+    assert RevisionConflictError.__name__ == "RevisionConflictError"

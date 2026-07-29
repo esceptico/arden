@@ -1,11 +1,11 @@
 """Generic content-addressed history for a materialized managed-file tree."""
 
-import difflib
 import os
 from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from arden.revisions import maintenance, query
 from arden.revisions._codec import (
     TransactionRow,
     commit_record,
@@ -23,8 +23,6 @@ from arden.revisions.errors import (
     IdempotencyConflictError,
     NoChangesError,
     RevisionConflictError,
-    RevisionContentLimitError,
-    UnsafePathError,
 )
 from arden.revisions.models import (
     Archive,
@@ -32,7 +30,6 @@ from arden.revisions.models import (
     CollectionReport,
     Commit,
     Create,
-    IntegrityIssue,
     IntegrityReport,
     Move,
     ResourceChange,
@@ -259,32 +256,17 @@ class ManagedFileRepository:
         read the boundary commit and tree once.
         """
         self._ensure_recovered()
-        if limit is not None and limit < 1:
-            raise ValueError("history limit must be positive")
-        if stop_before is not None and not valid_hash(stop_before):
-            raise KeyError(f"unknown history stop boundary: {stop_before!r}")
-        cursor = self._read_published_ref() if start is None else start
-        if start is not None:
-            self._require_reachable(start)
-        commits: list[Commit] = []
-        seen: set[str] = set()
-        while cursor is not None:
-            if cursor == stop_before:
-                return tuple(commits)
-            if cursor in seen:
-                raise CorruptRepositoryError(f"commit history contains a cycle at {cursor}")
-            seen.add(cursor)
-            commit = self._load_commit(cursor)
-            self._validate_commit_transition(commit)
-            if resource_id is None or any(_change_resource_id(change) == resource_id for change in commit.changes):
-                if limit is None or len(commits) < limit:
-                    commits.append(commit)
-                if stop_before is None and limit is not None and len(commits) >= limit:
-                    break
-            cursor = commit.parent_id
-        if stop_before is not None:
-            raise KeyError(f"history stop boundary is not reachable from the selected start: {stop_before}")
-        return tuple(commits)
+        return query.history(
+            head=self._read_published_ref(),
+            resource_id=resource_id,
+            start=start,
+            stop_before=stop_before,
+            limit=limit,
+            valid_hash=valid_hash,
+            require_reachable=self._require_reachable,
+            load_commit=self._load_commit,
+            validate_commit_transition=self._validate_commit_transition,
+        )
 
     def diff(
         self,
@@ -295,35 +277,12 @@ class ManagedFileRepository:
     ) -> tuple[ResourceDiff, ...]:
         before = self._tree_at(base, none_means_empty=True)
         after = self._tree_at(target, none_means_empty=True)
-        selected: set[str] | None = None
-        if resource_ids is not None:
-            if isinstance(resource_ids, (str, bytes)):
-                raise TypeError("resource_ids must be an iterable of resource IDs")
-            selected = set(resource_ids)
-            if not all(isinstance(resource_id, str) and resource_id for resource_id in selected):
-                raise ValueError("resource_ids must contain only nonempty strings")
-        result: list[ResourceDiff] = []
-        changed_ids = set(before) | set(after)
-        if selected is not None:
-            changed_ids &= selected
-        for resource_id in sorted(changed_ids):
-            old = before.get(resource_id)
-            new = after.get(resource_id)
-            if old == new:
-                continue
-            old_content = b"" if old is None else self._storage.read_blob(old.blob_id)
-            new_content = b"" if new is None else self._storage.read_blob(new.blob_id)
-            old_label = "/dev/null" if old is None else old.path
-            new_label = "/dev/null" if new is None else new.path
-            result.append(
-                ResourceDiff(
-                    resource_id=resource_id,
-                    before=old,
-                    after=new,
-                    unified_diff=_unified_diff(old_content, new_content, old_label, new_label),
-                )
-            )
-        return tuple(result)
+        return query.diff(
+            before=before,
+            after=after,
+            resource_ids=resource_ids,
+            read_blob=self._storage.read_blob,
+        )
 
     def diff_page(
         self,
@@ -335,44 +294,19 @@ class ManagedFileRepository:
         limit: int = 16_384,
         tail: bool = False,
     ) -> ResourceDiffPage:
-        if not isinstance(resource_id, str) or not resource_id:
-            raise ValueError("resource_id must be a nonempty string")
-        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
-            raise ValueError("offset must be a nonnegative integer")
-        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
-            raise ValueError("limit must be a positive integer")
-        if not isinstance(tail, bool):
-            raise TypeError("tail must be a bool")
-        if tail and offset != 0:
-            raise ValueError("offset must be zero when tail is requested")
-
+        query.validate_page_arguments(resource_id=resource_id, offset=offset, limit=limit, tail=tail)
         before = self._tree_at(base, none_means_empty=True)
         after = self._tree_at(target, none_means_empty=True)
         old = before.get(resource_id)
         new = after.get(resource_id)
-        if old == new:
-            raise ValueError(f"resource did not change between revisions: {resource_id}")
-        old_content = b"" if old is None else self._storage.read_blob(old.blob_id)
-        new_content = b"" if new is None else self._storage.read_blob(new.blob_id)
-        old_label = "/dev/null" if old is None else old.path
-        new_label = "/dev/null" if new is None else new.path
-        page_offset, page_end, has_more, text = _unified_diff_page(
-            old_content,
-            new_content,
-            old_label,
-            new_label,
+        return query.diff_page(
+            before=old,
+            after=new,
+            resource_id=resource_id,
             offset=offset,
             limit=limit,
             tail=tail,
-        )
-        return ResourceDiffPage(
-            resource_id=resource_id,
-            before=old,
-            after=new,
-            offset=page_offset,
-            end_offset=page_end,
-            has_more=has_more,
-            unified_diff=text,
+            read_blob=self._storage.read_blob,
         )
 
     def diff_versions_page(
@@ -387,58 +321,15 @@ class ManagedFileRepository:
     ) -> ResourceDiffPage:
         """Page a diff between exact immutable versions without tree traversal."""
 
-        if before is None and after is None:
-            raise ValueError("a resource diff requires before or after")
-        for name, version in (("before", before), ("after", after)):
-            if version is not None and not isinstance(version, ResourceVersion):
-                raise TypeError(f"{name} must be a ResourceVersion or None")
-        if before is not None and after is not None and before.resource_id != after.resource_id:
-            raise ValueError("resource versions must have the same resource ID")
-        if before == after:
-            resource_id = before.resource_id if before is not None else after.resource_id
-            raise ValueError(f"resource did not change between versions: {resource_id}")
-        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
-            raise ValueError("offset must be a nonnegative integer")
-        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
-            raise ValueError("limit must be a positive integer")
-        if not isinstance(tail, bool):
-            raise TypeError("tail must be a bool")
-        if tail and offset != 0:
-            raise ValueError("offset must be zero when tail is requested")
-        if source_byte_limit is not None and (
-            isinstance(source_byte_limit, bool) or not isinstance(source_byte_limit, int) or source_byte_limit <= 0
-        ):
-            raise ValueError("source_byte_limit must be a positive integer or None")
-
-        versions = tuple(version for version in (before, after) if version is not None)
-        unique = {version.blob_id: version for version in versions}
-        actual_bytes = sum(self.content_size(version) for version in unique.values())
-        if source_byte_limit is not None and actual_bytes > source_byte_limit:
-            raise RevisionContentLimitError(actual_bytes=actual_bytes, limit_bytes=source_byte_limit)
-        contents = {blob_id: self._storage.read_blob(blob_id) for blob_id in unique}
-        old_content = b"" if before is None else contents[before.blob_id]
-        new_content = b"" if after is None else contents[after.blob_id]
-        old_label = "/dev/null" if before is None else before.path
-        new_label = "/dev/null" if after is None else after.path
-        page_offset, page_end, has_more, text = _unified_diff_page(
-            old_content,
-            new_content,
-            old_label,
-            new_label,
+        return query.diff_versions_page(
+            before=before,
+            after=after,
             offset=offset,
             limit=limit,
             tail=tail,
-        )
-        resource = after or before
-        assert resource is not None
-        return ResourceDiffPage(
-            resource_id=resource.resource_id,
-            before=before,
-            after=after,
-            offset=page_offset,
-            end_offset=page_end,
-            has_more=has_more,
-            unified_diff=text,
+            source_byte_limit=source_byte_limit,
+            blob_size=self._storage.blob_size,
+            read_blob=self._storage.read_blob,
         )
 
     def restore_from_commit(
@@ -472,93 +363,18 @@ class ManagedFileRepository:
         )
 
     def integrity_report(self) -> IntegrityReport:
-        issues: list[IntegrityIssue] = []
-        resources: dict[str, ResourceVersion] = {}
-        object_count = 0
-        head: str | None = None
-        reachable_commits: set[str] = set()
-        try:
-            with self._storage.locked():
-                head = self._storage.read_ref()
-                object_count = self._validate_all_objects(issues)
-                if head is not None:
-                    reachable_commits, resources = self._walk_reachable(head)
-                    for version in resources.values():
-                        if version.state is ResourceState.ACTIVE:
-                            try:
-                                self._files.assert_state(version.path, version.blob_id)
-                            except (RevisionConflictError, UnsafePathError) as exc:
-                                issues.append(
-                                    IntegrityIssue(
-                                        code="managed_file_mismatch",
-                                        target=version.path,
-                                        detail=str(exc),
-                                    )
-                                )
-                self._validate_metadata_indexes(issues, reachable_commits)
-                try:
-                    self._transactions.load_protected_transactions()
-                    for conflict in self._storage.list_metadata(self._storage.conflicts):
-                        issues.append(
-                            IntegrityIssue(
-                                code="recovery_conflict",
-                                target=conflict.name,
-                                detail="an external write prevented automatic rollback",
-                            )
-                        )
-                except (CorruptRepositoryError, UnsafePathError) as exc:
-                    issues.append(
-                        IntegrityIssue(
-                            code="recovery_corrupt",
-                            target="transactions",
-                            detail=str(exc),
-                        )
-                    )
-        except (CorruptRepositoryError, UnsafePathError, OSError) as exc:
-            issues.append(
-                IntegrityIssue(
-                    code="repository_corrupt",
-                    target=str(self.history_root),
-                    detail=str(exc),
-                )
-            )
-        return IntegrityReport(
-            ok=not issues,
-            head_commit=head,
-            resources=len(resources),
-            objects=object_count,
-            issues=tuple(issues),
+        return maintenance.integrity_report(
+            self._storage,
+            self._files,
+            self._transactions,
+            self.history_root,
         )
 
     def storage_report(self) -> StorageReport:
         self._ensure_recovered()
         with self._storage.locked():
             _, resources = self._load_current_tree()
-            blob_bytes, blob_count = self._directory_size(self._storage.blobs)
-            tree_bytes, tree_count = self._directory_size(self._storage.trees)
-            commit_bytes, commit_count = self._directory_size(self._storage.commits)
-            transaction_bytes, _ = self._directory_size(self._storage.transactions, recursive=True)
-            conflict_bytes, _ = self._directory_size(self._storage.conflicts, recursive=True)
-            idempotency_bytes, _ = self._directory_size(self._storage.idempotency)
-            publication_bytes, _ = self._directory_size(self._storage.published)
-            ref_bytes, _ = self._directory_size(self._storage.refs)
-            lock_stat = self._storage.metadata_stat(self._storage.lock_path)
-            assert lock_stat is not None
-            lock_bytes = lock_stat.st_size
-            recovery_bytes = transaction_bytes + conflict_bytes
-            metadata_bytes = idempotency_bytes + publication_bytes + ref_bytes + lock_bytes
-            total = blob_bytes + tree_bytes + commit_bytes + recovery_bytes + metadata_bytes
-            return StorageReport(
-                total_bytes=total,
-                blob_bytes=blob_bytes,
-                tree_bytes=tree_bytes,
-                commit_bytes=commit_bytes,
-                recovery_bytes=recovery_bytes,
-                metadata_bytes=metadata_bytes,
-                resource_count=len(resources),
-                commit_count=commit_count,
-                object_count=blob_count + tree_count + commit_count,
-            )
+            return maintenance.storage_report(self._storage, resources)
 
     def collect(
         self,
@@ -573,41 +389,7 @@ class ManagedFileRepository:
         cutoff = effective_now.timestamp() - effective_grace.total_seconds()
         with self._storage.locked():
             self._transactions.recover()
-            reachable_commits, reachable_trees, reachable_blobs = self._collection_roots()
-            scanned = 0
-            removed = 0
-            retained = 0
-            bytes_removed = 0
-            specifications = (
-                (self._storage.blobs, reachable_blobs, False),
-                (self._storage.trees, reachable_trees, True),
-                (self._storage.commits, reachable_commits, True),
-            )
-            for directory, reachable, jsonl in specifications:
-                for path in self._storage.list_metadata(directory):
-                    object_id = _object_id(path.name, jsonl=jsonl)
-                    path_stat = self._storage.metadata_stat(path)
-                    assert path_stat is not None
-                    scanned += 1
-                    if object_id in reachable or path_stat.st_mtime > cutoff:
-                        retained += 1
-                        continue
-                    content = self._storage.read_metadata(path)
-                    if jsonl:
-                        if sha256(content) != object_id:
-                            raise CorruptRepositoryError(f"unreachable object is corrupt: {path.name}")
-                    elif sha256(content) != object_id:
-                        raise CorruptRepositoryError(f"unreachable blob is corrupt: {path.name}")
-                    bytes_removed += path_stat.st_size
-                    self._storage.unlink_metadata(path)
-                    removed += 1
-                self._storage.fsync_dir(directory)
-            return CollectionReport(
-                scanned=scanned,
-                removed=removed,
-                retained=retained,
-                bytes_removed=bytes_removed,
-            )
+            return maintenance.collect(self._storage, self._collection_roots(), cutoff)
 
     def _apply(
         self,
@@ -777,146 +559,8 @@ class ManagedFileRepository:
             raise CorruptRepositoryError(f"current ref points to unpublished commit: {commit_id}")
         return commit_id
 
-    def _walk_reachable(self, head: str) -> tuple[set[str], dict[str, ResourceVersion]]:
-        commits: set[str] = set()
-        cursor: str | None = head
-        head_resources: dict[str, ResourceVersion] | None = None
-        while cursor is not None:
-            if cursor in commits:
-                raise CorruptRepositoryError(f"commit history contains a cycle at {cursor}")
-            commits.add(cursor)
-            commit = self._load_commit(cursor)
-            resources = self._validate_commit_transition(commit)
-            for version in resources.values():
-                self._storage.read_blob(version.blob_id)
-            if head_resources is None:
-                head_resources = resources
-            cursor = commit.parent_id
-        return commits, head_resources or {}
-
-    def _validate_all_objects(self, issues: list[IntegrityIssue]) -> int:
-        count = 0
-        for path in self._storage.list_metadata(self._storage.blobs):
-            count += 1
-            try:
-                object_id = _object_id(path.name, jsonl=False)
-                self._storage.read_blob(object_id)
-            except (CorruptRepositoryError, UnsafePathError) as exc:
-                issues.append(IntegrityIssue(code="blob_corrupt", target=path.name, detail=str(exc)))
-        for path in self._storage.list_metadata(self._storage.trees):
-            count += 1
-            try:
-                object_id = _object_id(path.name, jsonl=True)
-                self._load_tree(object_id)
-            except (CorruptRepositoryError, UnsafePathError) as exc:
-                issues.append(IntegrityIssue(code="tree_corrupt", target=path.name, detail=str(exc)))
-        for path in self._storage.list_metadata(self._storage.commits):
-            count += 1
-            try:
-                object_id = _object_id(path.name, jsonl=True)
-                self._load_commit(object_id)
-            except (CorruptRepositoryError, UnsafePathError) as exc:
-                issues.append(IntegrityIssue(code="commit_corrupt", target=path.name, detail=str(exc)))
-        return count
-
-    def _validate_metadata_indexes(
-        self,
-        issues: list[IntegrityIssue],
-        reachable_commits: set[str],
-    ) -> None:
-        for path in self._storage.list_metadata(self._storage.refs):
-            if path != self._storage.current_ref:
-                issues.append(
-                    IntegrityIssue(
-                        code="unsupported_ref",
-                        target=path.name,
-                        detail="the single-ref repository contains an unknown ref",
-                    )
-                )
-        for path in self._storage.list_metadata(self._storage.idempotency):
-            try:
-                if not path.name.endswith(".jsonl"):
-                    raise CorruptRepositoryError(f"invalid idempotency filename: {path.name}")
-                key_hash = path.name.removesuffix(".jsonl")
-                record = self._storage.read_idempotency(key_hash)
-                if record is None or record["commit_id"] not in reachable_commits:
-                    raise CorruptRepositoryError(f"idempotency record {path.name} points outside published history")
-            except (CorruptRepositoryError, UnsafePathError) as exc:
-                issues.append(
-                    IntegrityIssue(
-                        code="idempotency_corrupt",
-                        target=path.name,
-                        detail=str(exc),
-                    )
-                )
-        published: set[str] = set()
-        for path in self._storage.list_metadata(self._storage.published):
-            try:
-                if not valid_hash(path.name) or not self._storage.is_published(path.name):
-                    raise CorruptRepositoryError(f"invalid published commit marker: {path.name}")
-                if path.name not in reachable_commits:
-                    raise CorruptRepositoryError(f"published commit marker points outside current history: {path.name}")
-                published.add(path.name)
-            except (CorruptRepositoryError, UnsafePathError) as exc:
-                issues.append(
-                    IntegrityIssue(
-                        code="publication_corrupt",
-                        target=path.name,
-                        detail=str(exc),
-                    )
-                )
-        for commit_id in sorted(reachable_commits - published):
-            issues.append(
-                IntegrityIssue(
-                    code="publication_missing",
-                    target=commit_id,
-                    detail="reachable commit lacks its publication certificate",
-                )
-            )
-
     def _collection_roots(self) -> tuple[set[str], set[str], set[str]]:
-        commit_roots: set[str] = set()
-        current = self._read_published_ref()
-        if current is not None:
-            commit_roots.add(current)
-        transactions = self._transactions.load_protected_transactions()
-        for transaction in transactions:
-            commit_roots.add(transaction.new_head)
-            if transaction.old_head is not None:
-                commit_roots.add(transaction.old_head)
-        for record_path in self._storage.list_metadata(self._storage.idempotency):
-            if not record_path.name.endswith(".jsonl"):
-                raise CorruptRepositoryError(f"invalid idempotency filename: {record_path.name}")
-            key_hash = record_path.name.removesuffix(".jsonl")
-            record = self._storage.read_idempotency(key_hash)
-            if record is not None:
-                commit_roots.add(record["commit_id"])
-
-        commits: set[str] = set()
-        trees: set[str] = set()
-        blobs: set[str] = set()
-        pending = list(commit_roots)
-        while pending:
-            commit_id = pending.pop()
-            if commit_id in commits:
-                continue
-            commit = self._load_commit(commit_id)
-            commits.add(commit_id)
-            trees.add(commit.tree_id)
-            resources = self._validate_commit_transition(commit)
-            for version in resources.values():
-                self._storage.read_blob(version.blob_id)
-                blobs.add(version.blob_id)
-            if commit.parent_id is not None:
-                pending.append(commit.parent_id)
-        for transaction in transactions:
-            trees.add(transaction.tree_id)
-            for row in transaction.rows:
-                if row.old_blob is not None:
-                    blobs.add(row.old_blob)
-                if row.new_blob is not None:
-                    blobs.add(row.new_blob)
-        return commits, trees, blobs
+        return maintenance.collection_roots(self._storage, self._transactions)
 
     def _request_identity(self, change_set: ChangeSet) -> tuple[str, str]:
         operations: list[dict[str, object]] = []
@@ -957,9 +601,6 @@ class ManagedFileRepository:
         if len(active_paths) != len(set(active_paths)):
             raise RevisionConflictError("two active resources cannot share one path")
         _reject_ancestor_collisions(active_paths)
-
-    def _directory_size(self, directory: Path, *, recursive: bool = False) -> tuple[int, int]:
-        return self._storage.directory_size(directory, recursive=recursive)
 
     def _now(self) -> datetime:
         return _aware_utc(self._clock())
@@ -1053,95 +694,10 @@ def _require_active(version: ResourceVersion, operation: str) -> None:
         raise RevisionConflictError(f"cannot {operation} archived resource {version.resource_id}")
 
 
-def _change_resource_id(change: ResourceChange) -> str:
-    if change.after is not None:
-        return change.after.resource_id
-    if change.before is not None:
-        return change.before.resource_id
-    raise CorruptRepositoryError("resource change has no identity")
-
-
-def _unified_diff(before: bytes, after: bytes, old_label: str, new_label: str) -> str:
-    return "".join(_unified_diff_chunks(before, after, old_label, new_label))
-
-
-def _unified_diff_chunks(before: bytes, after: bytes, old_label: str, new_label: str):
-    before_text = before.decode("utf-8", errors="surrogateescape").splitlines(keepends=True)
-    after_text = after.decode("utf-8", errors="surrogateescape").splitlines(keepends=True)
-    return difflib.unified_diff(
-        before_text,
-        after_text,
-        fromfile=old_label,
-        tofile=new_label,
-        lineterm="\n",
-    )
-
-
-def _unified_diff_page(
-    before: bytes,
-    after: bytes,
-    old_label: str,
-    new_label: str,
-    *,
-    offset: int,
-    limit: int,
-    tail: bool,
-) -> tuple[int, int, bool, str]:
-    chunks = _unified_diff_chunks(before, after, old_label, new_label)
-    if tail:
-        text = ""
-        total = 0
-        for chunk in chunks:
-            total += len(chunk)
-            text = chunk[-limit:] if len(chunk) >= limit else (text + chunk)[-limit:]
-        page_offset = 0 if total == 0 else ((total - 1) // limit) * limit
-        page_length = total - page_offset
-        return page_offset, total, False, text[-page_length:] if page_length else ""
-
-    cursor = 0
-    parts: list[str] = []
-    length = 0
-    has_more = False
-    iterator = iter(chunks)
-    for chunk in iterator:
-        next_cursor = cursor + len(chunk)
-        if next_cursor <= offset:
-            cursor = next_cursor
-            continue
-        start = max(0, offset - cursor)
-        available_length = len(chunk) - start
-        remaining = limit - length
-        taken = min(available_length, remaining)
-        parts.append(chunk[start : start + taken])
-        length += taken
-        cursor = next_cursor
-        if available_length > remaining:
-            has_more = True
-            break
-        if length == limit:
-            has_more = any(bool(next_chunk) for next_chunk in iterator)
-            break
-    else:
-        if offset > cursor or (offset == cursor and cursor > 0 and length == 0):
-            raise IndexError("offset is outside the resource diff")
-
-    text = "".join(parts)
-    return offset, offset + len(text), has_more, text
-
-
 def _reject_ancestor_collisions(paths: Iterable[str]) -> None:
     collision = ancestor_collision(list(paths))
     if collision is not None:
         raise RevisionConflictError(f"managed file paths overlap: {collision[0]} and {collision[1]}")
-
-
-def _object_id(filename: str, *, jsonl: bool) -> str:
-    name = filename.removesuffix(".jsonl") if jsonl else filename
-    if jsonl and not filename.endswith(".jsonl"):
-        raise CorruptRepositoryError(f"object filename is invalid: {filename}")
-    if not valid_hash(name):
-        raise CorruptRepositoryError(f"object filename is invalid: {filename}")
-    return name
 
 
 def _aware_utc(value: datetime) -> datetime:
