@@ -1,6 +1,5 @@
 """Snapshot-pinned wiki operations over :mod:`arden.revisions`."""
 
-import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from hashlib import sha256
@@ -37,7 +36,6 @@ from arden.wiki.models import (
     WikiChangeCommit,
     WikiChangesReport,
     WikiChangeWarning,
-    WikiFactCitation,
     WikiInfrastructureRole,
     WikiLinkReport,
     WikiMaintenanceCommit,
@@ -57,6 +55,7 @@ from arden.wiki.pages import (
     update_generated_region,
 )
 from arden.wiki.pages import create_page as build_page
+from arden.wiki.provenance import parse_fact_provenance
 from arden.wiki.wikilinks import WikilinkNode, parse_wikilinks, rewrite_page_targets
 
 
@@ -1487,58 +1486,17 @@ class WikiService:
                 generated_from_revision=None,
                 fact_citations=(),
             )
-        generated_from_revision, fact_citations, provenance_warnings = self._provenance(page, resource.path)
+        provenance = parse_fact_provenance(page.metadata, resource.path)
         return WikiPageRevision(
             resource=resource,
             content=content,
             page=page,
             validation_error=None,
             role=self._role(resource.resource_id, resource.path),
-            generated_from_revision=generated_from_revision,
-            fact_citations=fact_citations,
-            provenance_warnings=provenance_warnings,
+            generated_from_revision=provenance.generated_from_revision,
+            fact_citations=provenance.citations,
+            provenance_warnings=provenance.warnings,
         )
-
-    @staticmethod
-    def _provenance(
-        page: WikiPage, path: str
-    ) -> tuple[str | None, tuple[WikiFactCitation, ...], tuple[WikiChangeWarning, ...]]:
-        warnings: list[WikiChangeWarning] = []
-        if "generated_from_revision" not in page.metadata:
-            generated_from_revision = None
-        elif isinstance(page.metadata["generated_from_revision"], str) and re.fullmatch(
-            r"[0-9a-f]{64}", page.metadata["generated_from_revision"]
-        ):
-            generated = page.metadata["generated_from_revision"]
-            assert isinstance(generated, str)
-            generated_from_revision = generated
-        else:
-            generated_from_revision = None
-            warnings.append(
-                WikiChangeWarning(
-                    "invalid_generated_from_revision", path, repr(page.metadata["generated_from_revision"])
-                )
-            )
-
-        if "fact_citations" not in page.metadata:
-            return generated_from_revision, (), tuple(warnings)
-        raw_citations = page.metadata["fact_citations"]
-        if not isinstance(raw_citations, Sequence) or isinstance(raw_citations, str | bytes):
-            warnings.append(WikiChangeWarning("invalid_fact_citations", path, repr(raw_citations)))
-            return generated_from_revision, (), tuple(warnings)
-        citations: list[WikiFactCitation] = []
-        for index, item in enumerate(raw_citations):
-            if (
-                isinstance(item, Mapping)
-                and isinstance(item.get("fact_id"), str)
-                and item["fact_id"].strip()
-                and isinstance(item.get("version"), str)
-                and re.fullmatch(r"[0-9a-f]{64}", item["version"])
-            ):
-                citations.append(WikiFactCitation(item["fact_id"], item["version"]))
-            else:
-                warnings.append(WikiChangeWarning("invalid_fact_citations", path, f"entry {index}: {item!r}"))
-        return generated_from_revision, tuple(citations), tuple(warnings)
 
     @staticmethod
     def _role(resource_id: str, path: str) -> WikiInfrastructureRole:

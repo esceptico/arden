@@ -9,6 +9,7 @@ from typing import Literal
 from arden.search.types import RawItem
 from arden.wiki.constants import README_FILENAME
 from arden.wiki.models import WikiInfrastructureRole, WikiPageRecord
+from arden.wiki.provenance import fact_page_freshness
 from arden.wiki.service import WikiService, WikiSnapshotChangedError
 
 WIKI_PAGE_SOURCE = "wiki_page"
@@ -42,15 +43,7 @@ def _role(record: WikiPageRecord) -> WikiInfrastructureRole:
 
 
 def _freshness(record: WikiPageRecord, fact_revision: str | None) -> str:
-    generated = record.page.metadata.get("generated_from_revision")
-    if (
-        "fact_citations" in record.page.metadata
-        and isinstance(generated, str)
-        and fact_revision is not None
-        and generated != fact_revision
-    ):
-        return "stale"
-    return "current"
+    return fact_page_freshness(record.page.metadata, fact_revision).value
 
 
 def _body(record: WikiPageRecord) -> str:

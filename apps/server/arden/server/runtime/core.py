@@ -48,6 +48,7 @@ from arden.server.runtime.config import RuntimeConfig
 from arden.server.runtime.knowledge import KnowledgeRuntime
 from arden.server.state import RunRegistry
 from arden.server.stores import Stores
+from arden.server.wiki_health import dangling_fact_citation_issues
 from arden.services.session import SessionService
 from arden.skills.registry import SkillRegistry
 from arden.skills.service import SkillService, get_skills_dirs
@@ -571,6 +572,11 @@ class Runtime:
                         None,
                         include_diffs=False,
                     )
+                    citation_issues = await asyncio.to_thread(
+                        dangling_fact_citation_issues,
+                        self._fact_ledger,
+                        report,
+                    )
                     if await self.fact_service.revision() != fact_revision:
                         if attempt == 0:
                             continue
@@ -627,20 +633,27 @@ class Runtime:
                         wiki=report,
                         workers=tuple(workers_by_id[spec.task_id] for spec in _HEALTH_PHASES),
                         index=WikiHealthIndex(index_revision, index_status, index_detail),
-                        issues=tuple(
-                            WikiHealthIssue(
-                                WikiHealthIssueCode.FACT_REVIEW_DUE,
-                                item.fact.fact_id,
-                                f"review due at {item.due_at.isoformat()}",
-                                WikiHealthIssueOwner.RETENTION,
-                            )
-                            for item in due_reviews
+                        issues=(
+                            *(
+                                WikiHealthIssue(
+                                    WikiHealthIssueCode.FACT_REVIEW_DUE,
+                                    item.fact.fact_id,
+                                    f"review due at {item.due_at.isoformat()}",
+                                    WikiHealthIssueOwner.RETENTION,
+                                )
+                                for item in due_reviews
+                            ),
+                            *citation_issues,
                         ),
                         pending_reviews=tuple(
                             WikiHealthPendingReview(item.review_id, item.summary) for item in pending
                         ),
                     )
                     result = await asyncio.to_thread(WikiHealthProjector(self.wiki_service).project, value)
+                    if await self.fact_service.revision() != fact_revision:
+                        if attempt == 0:
+                            continue
+                        raise RevisionConflictError("fact ledger changed during both wiki health projection attempts")
                     return report.through_revision if result.commit is None else result.commit.commit_id
                 except RevisionConflictError:
                     if attempt == 0:

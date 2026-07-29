@@ -127,6 +127,25 @@ async def test_wiki_index_tracks_active_pages_and_context_keeps_residents_separa
     assert "Home" not in retrieved
 
 
+@pytest.mark.asyncio
+async def test_wiki_index_marks_malformed_fact_provenance_invalid(tmp_path) -> None:
+    wiki = WikiService(ManagedFileRepository(tmp_path / "pages", history_root=tmp_path / "history"))
+    wiki.create_page(
+        page_id="invalid",
+        path="topics/invalid.md",
+        title="Invalid",
+        metadata={
+            "generated_from_revision": "not-a-revision",
+            "fact_citations": [{"fact_id": "fact-1", "version": "b" * 64}],
+        },
+    )
+    index = _Index()
+
+    await WikiPageIndexProjection(wiki, lambda: index, _fact_revision).sync()
+
+    assert index.store.items["invalid"][2]["freshness"] == "invalid"
+
+
 def test_wiki_context_uses_bounded_minimum_length_queries() -> None:
     assert _normalized_query("okay") is None
     assert _normalized_query("  THANK  YOU ") is None

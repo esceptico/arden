@@ -195,6 +195,80 @@ async def test_runtime_wires_canonical_facts_and_survives_restart(tmp_path) -> N
 
 
 @pytest.mark.asyncio
+async def test_runtime_health_reports_a_dangling_fact_citation(tmp_path) -> None:
+    runtime = Runtime(_config(tmp_path))
+    await runtime.connect()
+    try:
+        assert runtime.wiki_service is not None
+        runtime.wiki_service.create_page(
+            page_id="dangling",
+            path="topics/dangling.md",
+            title="Dangling",
+            metadata={
+                "generated_from_revision": "a" * 64,
+                "fact_citations": [{"fact_id": "missing-fact", "version": "b" * 64}],
+            },
+        )
+
+        await runtime.project_wiki_health()
+
+        health = runtime.wiki_service.read_page("health").page.body.decode()
+        assert (
+            "**dangling_citation** — owner: Synthesis; `topics/dangling.md`: "
+            f"missing fact version missing-fact@{'b' * 64}"
+        ) in health
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_runtime_health_retries_when_facts_change_during_publication(tmp_path) -> None:
+    runtime = Runtime(_config(tmp_path))
+    await runtime.connect()
+    try:
+        assert runtime._fact_ledger is not None
+        assert runtime.wiki_service is not None
+
+        class RacingFactRevision:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def revision(self) -> str | None:
+                self.calls += 1
+                if self.calls == 2:
+                    runtime._fact_ledger.commit(
+                        runtime._fact_ledger.plan(
+                            [
+                                {
+                                    "op": "create",
+                                    "fact_id": "racing-fact",
+                                    "text": "Committed during health publication",
+                                    "kind": "fact",
+                                    "subjects": ["health"],
+                                    "scope": {"kind": "user", "key": None},
+                                    "sources": [{"kind": "test", "ref": "race"}],
+                                }
+                            ],
+                            actor="test",
+                            origin="test",
+                            reason="force health retry",
+                        )
+                    )
+                return runtime._fact_ledger.revision
+
+        racing = RacingFactRevision()
+        runtime.fact_service = racing
+
+        await runtime.project_wiki_health()
+
+        health = runtime.wiki_service.read_page("health").page.body.decode()
+        assert f"Fact ledger: `{runtime._fact_ledger.revision}`" in health
+        assert racing.calls == 4
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_wiki_producer_completion_requires_a_successful_page_read(tmp_path) -> None:
     runtime = Runtime(_config(tmp_path))
     await runtime.connect()

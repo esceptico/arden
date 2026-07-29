@@ -1,12 +1,15 @@
 """Deterministic, backend-owned projection of wiki maintenance health."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
+from arden.constants import BUILTIN_MEMORY_DREAM_ID
 from arden.revisions.models import Commit
 from arden.wiki.constants import WIKI_HEALTH_ORIGIN, WIKI_MAINTENANCE_ACTOR
 from arden.wiki.models import WikiChangesReport
+from arden.wiki.provenance import FactPageFreshness, fact_page_freshness, parse_fact_provenance
 from arden.wiki.service import WikiService
 
 
@@ -21,6 +24,7 @@ class WikiHealthIssueCode(StrEnum):
 
 class WikiHealthIssueOwner(StrEnum):
     BACKEND = "Backend"
+    DREAM = "Memory Dream"
     SYNTHESIS = "Synthesis"
     RETENTION = "Memory Retention"
     MEMORY_MAINTENANCE = "Memory Maintenance"
@@ -105,7 +109,13 @@ class WikiHealthProjector:
 
     def project(self, value: WikiHealthInput) -> WikiHealthResult:
         observed = _last_non_health_revision(value.wiki)
-        issues = _dedupe((*_mechanical_issues(value.wiki), *value.issues, *_index_issues(value.index, observed)))
+        issues = _dedupe(
+            (
+                *_mechanical_issues(value.wiki, value.fact_ledger_revision),
+                *value.issues,
+                *_index_issues(value.index, observed),
+            )
+        )
         body = _render(value, observed, issues)
         commit = self._wiki.publish_health(body=body, base_head=value.wiki.through_revision)
         return WikiHealthResult(observed, commit, issues)
@@ -118,7 +128,10 @@ def _last_non_health_revision(report: WikiChangesReport) -> str | None:
     return None
 
 
-def _mechanical_issues(report: WikiChangesReport) -> tuple[WikiHealthIssue, ...]:
+def _mechanical_issues(
+    report: WikiChangesReport,
+    fact_revision: str | None,
+) -> tuple[WikiHealthIssue, ...]:
     issues: list[WikiHealthIssue] = []
     for warning in report.warnings:
         if warning.code in {"unresolved_link", "ambiguous_link"}:
@@ -149,7 +162,26 @@ def _mechanical_issues(report: WikiChangesReport) -> tuple[WikiHealthIssue, ...]
         )
         for issue in report.integrity.issues
     )
+    for record in report.current_records:
+        if fact_page_freshness(record.page.metadata, fact_revision) is not FactPageFreshness.STALE:
+            continue
+        generated = parse_fact_provenance(record.page.metadata, record.resource.path).generated_from_revision
+        assert generated is not None
+        issues.append(
+            WikiHealthIssue(
+                WikiHealthIssueCode.STALE_PAGE,
+                record.resource.path,
+                f"generated from {generated}; current fact revision is {fact_revision}",
+                fact_page_owner(record.page.metadata),
+            )
+        )
     return tuple(issues)
+
+
+def fact_page_owner(metadata: Mapping[str, object]) -> WikiHealthIssueOwner:
+    if metadata.get("producer_automation_id") == BUILTIN_MEMORY_DREAM_ID:
+        return WikiHealthIssueOwner.DREAM
+    return WikiHealthIssueOwner.SYNTHESIS
 
 
 def _index_issues(index: WikiHealthIndex, observed_wiki_revision: str | None) -> tuple[WikiHealthIssue, ...]:

@@ -184,6 +184,44 @@ def test_health_maps_ambiguous_links_to_unresolved_link_issues(tmp_path: Path) -
     assert issue.evidence.startswith("ambiguous: Shared")
 
 
+def test_health_emits_stale_fact_page_with_revision_evidence(tmp_path: Path) -> None:
+    service = WikiService(_repo(tmp_path))
+    service.create_page(
+        path="topics/stale.md",
+        title="Stale",
+        page_id="stale",
+        metadata={
+            "generated_from_revision": "a" * 64,
+            "fact_citations": [{"fact_id": "fact-1", "version": "b" * 64}],
+        },
+    )
+
+    result = WikiHealthProjector(service).project(_input(service, fact="c" * 64))
+
+    issue = next(issue for issue in result.issues if issue.code is WikiHealthIssueCode.STALE_PAGE)
+    assert issue.target == "topics/stale.md"
+    assert issue.owner is WikiHealthIssueOwner.SYNTHESIS
+    assert issue.evidence == f"generated from {'a' * 64}; current fact revision is {'c' * 64}"
+
+
+def test_health_does_not_duplicate_invalid_provenance_as_stale(tmp_path: Path) -> None:
+    service = WikiService(_repo(tmp_path))
+    service.create_page(
+        path="topics/invalid.md",
+        title="Invalid",
+        page_id="invalid",
+        metadata={
+            "generated_from_revision": "not-a-revision",
+            "fact_citations": [{"fact_id": "fact-1", "version": "b" * 64}],
+        },
+    )
+
+    result = WikiHealthProjector(service).project(_input(service, fact="c" * 64))
+
+    codes = [issue.code for issue in result.issues if issue.target == "topics/invalid.md"]
+    assert codes == [WikiHealthIssueCode.VALIDATION_ERROR]
+
+
 @pytest.mark.parametrize(
     ("warning_code", "total_bytes", "expected"),
     [
