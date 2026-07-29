@@ -117,16 +117,13 @@ export type {
   SourceRef,
   State,
   ThemeChoice,
-  ThinkingAnimation,
   ThinkingIntensity,
   TodoListState,
   TurnMeta,
   UiMessage,
 } from "@/stores/types";
 export {
-  isThinkingAnimation,
   isThinkingIntensity,
-  THINKING_ANIMATION_IDS,
   THINKING_INTENSITY_IDS,
 } from "@/stores/types";
 export type {

@@ -440,96 +440,6 @@
   gap: var(--space-1);
 }
 
-/* Four compact cards turn the persisted composer treatment into something
-   inspectable before it is chosen. The active ring and keyboard focus remain
-   visible independently; selection does not rely on a color-only state. */
-.settings-thinking-preview-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--space-2);
-  padding: 14px;
-}
-
-.settings-thinking-card {
-  min-width: 0;
-  min-height: 88px;
-  padding: 11px;
-  border-radius: var(--r-house);
-  color: var(--ink);
-  background: var(--paper);
-  box-shadow: inset 0 0 0 1px var(--line);
-  text-align: left;
-  transition:
-    background var(--motion-feedback) var(--smooth-out),
-    box-shadow var(--motion-feedback) var(--smooth-out),
-    transform var(--motion-press) var(--smooth-out);
-}
-
-.settings-thinking-card:hover {
-  background: color-mix(in oklab, var(--ink) 3%, var(--paper));
-}
-
-.settings-thinking-card.is-selected {
-  box-shadow: inset 0 0 0 1.5px var(--ink);
-}
-
-.settings-thinking-card:focus-visible {
-  box-shadow: var(--focus-ring), inset 0 0 0 1.5px var(--accent);
-}
-
-.settings-thinking-card:active { transform: scale(var(--press-scale)); }
-
-/* The mock's 18px orbit occupies a full body line. Reserve that line-box
-   remainder without enlarging the visible mark. */
-.settings-thinking-card::after {
-  content: "";
-  display: block;
-  height: calc(1lh - 18px);
-}
-
-.settings-thinking-card__mark {
-  display: block;
-  width: 28px;
-  height: 5px;
-  border-radius: var(--r-control);
-  background: var(--ink);
-  opacity: .75;
-}
-
-.settings-thinking-card[data-thinking-animation="breath"] .settings-thinking-card__mark {
-  filter: blur(2px);
-  transform: scaleX(1.35);
-  transform-origin: left center;
-}
-
-.settings-thinking-card[data-thinking-animation="border"] .settings-thinking-card__mark {
-  background: linear-gradient(90deg, var(--ink), var(--accent));
-}
-
-.settings-thinking-card[data-thinking-animation="orbit"] .settings-thinking-card__mark {
-  width: 18px;
-  height: 18px;
-  border: 2px solid var(--line-strong);
-  border-top-color: var(--ink);
-  border-radius: var(--r-circle);
-  background: none;
-}
-
-.settings-thinking-card__title {
-  display: block;
-  margin-top: 18px;
-  font-size: var(--text-control);
-  font-weight: 700;
-  line-height: var(--leading-body);
-}
-
-.settings-thinking-card__description {
-  display: block;
-  margin-top: 3px;
-  color: var(--faint);
-  font: 500 var(--text-meta)/1.3 var(--mono);
-}
-
 .settings-control-wide {
   width: 18.75rem;
   min-width: 18.75rem;
@@ -1189,10 +1099,6 @@
     display: none;
   }
 
-  .settings-thinking-preview-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
   .settings-integration-row {
     grid-template-columns: minmax(150px, 1fr) 148px 34px 30px;
   }
@@ -1297,10 +1203,6 @@
 
   .settings-setting-row {
     padding: var(--space-3);
-  }
-
-  .settings-thinking-preview-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .settings-field-actions,

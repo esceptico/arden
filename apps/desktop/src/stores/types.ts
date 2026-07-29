@@ -61,19 +61,11 @@ export interface PendingGoalProposal {
 export type ThemeChoice = "light" | "dark" | "system";
 /** Global border-radius language: capsule controls, or softened rectangles. */
 export type CornerProfile = "round" | "square";
-/** Persisted IDs for the composer treatment shown before the first token.
- * Keep this runtime registry as the authority for both saved preferences and
- * the Appearance picker; a type alone cannot reject stale localStorage. */
-export const THINKING_ANIMATION_IDS = ["comet", "breath", "border", "orbit"] as const;
-export type ThinkingAnimation = (typeof THINKING_ANIMATION_IDS)[number];
-
-/** Persisted visual-strength IDs for the selected thinking treatment. */
+/** Persisted visual-strength IDs for the composer's working strip. Keep this
+ * runtime registry as the authority for both saved preferences and the
+ * Appearance control; a type alone cannot reject stale localStorage. */
 export const THINKING_INTENSITY_IDS = ["subtle", "normal", "strong"] as const;
 export type ThinkingIntensity = (typeof THINKING_INTENSITY_IDS)[number];
-
-export function isThinkingAnimation(value: unknown): value is ThinkingAnimation {
-  return typeof value === "string" && (THINKING_ANIMATION_IDS as readonly string[]).includes(value);
-}
 
 export function isThinkingIntensity(value: unknown): value is ThinkingIntensity {
   return typeof value === "string" && (THINKING_INTENSITY_IDS as readonly string[]).includes(value);
@@ -87,9 +79,7 @@ export interface Prefs {
   accent: string;
   /** Round (capsule) or square (softened rectangle) control/shell radius. */
   cornerProfile: CornerProfile;
-  /** Composer treatment shown between run start and the first output token. */
-  thinkingAnimation: ThinkingAnimation;
-  /** Visual strength of the selected composer thinking treatment. */
+  /** Visual strength of the composer's working strip. */
   thinkingIntensity: ThinkingIntensity;
   /** How the sidebar session list is grouped. */
   sidebarGroupBy: SidebarGroupBy;

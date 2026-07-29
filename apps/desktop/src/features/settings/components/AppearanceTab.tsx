@@ -13,11 +13,9 @@ import {
   DEFAULT_QUICK_CAPTURE_SHORTCUT,
   FONT_SIZE_MAX,
   FONT_SIZE_MIN,
-  isThinkingAnimation,
   isThinkingIntensity,
   useStore,
   type CornerProfile,
-  type ThinkingAnimation,
   type ThemeChoice,
 } from "@/stores";
 import {
@@ -36,7 +34,6 @@ import { Tab, Tabs } from "@/components/ui/Tabs";
 import { ACCENT_PALETTES, type AccentPalette } from "@/lib/palettes";
 import {
   THINKING_INTENSITIES,
-  THINKING_TREATMENTS,
 } from "@/lib/thinkingIndicator";
 import {
   SettingsSection,
@@ -59,7 +56,6 @@ export function AppearanceTab() {
   const theme = useStore((s) => s.prefs.theme);
   const accent = useStore((s) => s.prefs.accent);
   const cornerProfile = useStore((s) => s.prefs.cornerProfile);
-  const thinkingAnimation = useStore((s) => s.prefs.thinkingAnimation);
   const thinkingIntensity = useStore((s) => s.prefs.thinkingIntensity);
   const uiFont = useStore((s) => s.prefs.uiFont);
   const uiFontSize = useStore((s) => s.prefs.uiFontSize);
@@ -68,9 +64,6 @@ export function AppearanceTab() {
 
   const onAccentKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) =>
     radioGroupKeyDown(e, accent, (v) => setPref("accent", v));
-  const selectThinkingAnimation = (value: string) => {
-    if (isThinkingAnimation(value)) setPref("thinkingAnimation", value);
-  };
   const selectThinkingIntensity = (value: string) => {
     if (isThinkingIntensity(value)) setPref("thinkingIntensity", value);
   };
@@ -191,16 +184,16 @@ export function AppearanceTab() {
         </SettingsSurface>
       </SettingsSection>
 
-      <SettingsSection title="Thinking indicator" detail={`${thinkingIntensity} intensity`}>
+      <SettingsSection title="Working strip" detail={`${thinkingIntensity} intensity`}>
         <SettingsSurface>
           <SettingsSettingRow
-            title="Thinking indicator"
-            hint="Shown on the composer while the agent is running but has not yet streamed its first token."
+            title="Working strip"
+            hint="Shown above the composer input while the agent is running. Names the tool it is currently in."
             control={
               <Tabs
                 variant="segmented"
                 size="sm"
-                label="Thinking indicator intensity"
+                label="Working strip intensity"
                 value={thinkingIntensity}
                 onChange={selectThinkingIntensity}
               >
@@ -212,53 +205,12 @@ export function AppearanceTab() {
               </Tabs>
             }
           />
-          <ThinkingTreatmentPicker
-            value={thinkingAnimation}
-            onChange={selectThinkingAnimation}
-          />
         </SettingsSurface>
       </SettingsSection>
     </>
   );
 }
 
-function ThinkingTreatmentPicker({
-  value,
-  onChange,
-}: {
-  value: ThinkingAnimation;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <div
-      role="radiogroup"
-      aria-label="Thinking indicator treatment"
-      className="settings-thinking-preview-grid"
-      onKeyDown={(event) => radioGroupKeyDown(event, value, onChange)}
-    >
-      {THINKING_TREATMENTS.map((treatment) => {
-        const selected = value === treatment.id;
-        return (
-          <button
-            key={treatment.id}
-            type="button"
-            role="radio"
-            aria-checked={selected}
-            data-value={treatment.id}
-            data-thinking-animation={treatment.id}
-            tabIndex={selected ? 0 : -1}
-            onClick={() => onChange(treatment.id)}
-            className={clsx("settings-thinking-card", selected && "is-selected")}
-          >
-            <span aria-hidden className="settings-thinking-card__mark" />
-            <span className="settings-thinking-card__title">{treatment.label}</span>
-            <span className="settings-thinking-card__description">{treatment.description}</span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
 
 /** Numeric px entry for a font-size preference. Free typing is buffered
  *  locally and clamped to [FONT_SIZE_MIN, FONT_SIZE_MAX] on commit (blur or

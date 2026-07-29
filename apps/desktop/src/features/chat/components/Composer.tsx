@@ -21,10 +21,11 @@ import { GoalProposalCard } from "@/features/chat/components/GoalProposalCard";
 import { ComposerEditingBanner } from "@/features/chat/components/ComposerEditingBanner";
 import { ComposerImageStrip } from "@/features/chat/components/ComposerImageStrip";
 import { ComposerToolbar, type ComposerAction } from "@/features/chat/components/ComposerToolbar";
+import { WorkingStrip } from "@/features/chat/components/WorkingStrip";
 import { useListNav } from "@/lib/hooks";
 import { ICON } from "@/lib/icons";
 import { RISE_IN, RISE_SETTLED } from "@/lib/tokens/motion";
-import { awaitingFirstRunOutput } from "@/features/chat/lib/runIndicators";
+import { workingLabel } from "@/features/chat/lib/workingLabel";
 import { filterCommands, useCommandList, type CommandEntry } from "@/features/chat/lib/commands";
 import { SECTION_ENTER, SECTION_EXIT } from "@/features/chat/lib/composerMotion";
 import { fileToImageBlock, pickerQuery, resize } from "@/features/chat/lib/composerHelpers";
@@ -36,7 +37,6 @@ export function Composer() {
   const setDraft = useStore((s) => s.setDraft);
   const running = useStore((s) => s.running);
   const connected = useStore((s) => s.connected);
-  const thinkingAnimation = useStore((s) => s.prefs.thinkingAnimation);
   const thinkingIntensity = useStore((s) => s.prefs.thinkingIntensity);
   const pendingApprovalCount = useStore((s) => s.pendingApprovals.length);
   const editingId = useStore((s) => s.editingId);
@@ -117,36 +117,32 @@ export function Composer() {
       : "stop"
     : "send";
 
-  // Keep the waiting affordance on the surface that produced the action.
-  // Appearance selects its treatment; CSS owns the visual intensity and the
-  // reduced-motion version of that same state.
-  const order = useStore((s) => s.order);
+  // Keep the waiting affordance on the surface that produced the action. The
+  // strip stays up for the whole run, not just the pre-first-token gap: once
+  // it can name the running tool, hiding it the moment output starts would
+  // drop the readout exactly when there is something to read.
   const messages = useStore((s) => s.messages);
   const currentRunId = useStore((s) => s.currentRunId);
   const thinkingRunId = useStore((s) => s.thinkingRunId);
-  const indicatorMessages = useMemo(
-    () =>
-      order
-        .map((id) => messages.get(id))
-        .filter((message): message is NonNullable<typeof message> => message !== undefined),
-    [order, messages],
-  );
+  const activeActivityId = useStore((s) => s.activeActivityId);
   const serverThinking = Boolean(thinkingRunId && (!currentRunId || thinkingRunId === currentRunId));
-  const awaitingFirstToken = serverThinking || awaitingFirstRunOutput(running, indicatorMessages);
+  const workingNow = running || serverThinking;
   // 350ms threshold — fast replies (cached, small models, short tool
-  // chains) shouldn't briefly flash the indicator. If the agent starts
-  // emitting within the threshold, awaitingFirstToken flips false before
-  // the timer fires and the indicator never appears. This is the
-  // "spinner only when actually slow" pattern from ChatGPT/Cursor.
+  // chains) shouldn't briefly flash the indicator. If the run finishes
+  // within the threshold, workingNow flips false before the timer fires
+  // and the strip never appears. This is the "spinner only when actually
+  // slow" pattern from ChatGPT/Cursor.
   const [showWorking, setShowWorking] = useState(false);
   useEffect(() => {
-    if (!awaitingFirstToken) {
+    if (!workingNow) {
       setShowWorking(false);
       return;
     }
     const id = window.setTimeout(() => setShowWorking(true), 350);
     return () => window.clearTimeout(id);
-  }, [awaitingFirstToken]);
+  }, [workingNow]);
+  const activityMessage = activeActivityId ? messages.get(activeActivityId) : null;
+  const stripLabel = useMemo(() => workingLabel(activityMessage), [activityMessage]);
 
   // Layout effect so the height is set before paint — an effect-timed
   // resize lets a multi-line programmatic draft (history recall, edit)
@@ -306,20 +302,10 @@ export function Composer() {
             showWorking && "is-working",
             dragOver && "is-drop-target",
           )}
-          data-thinking-animation={thinkingAnimation}
           data-thinking-intensity={thinkingIntensity}
           data-thinking-state={showWorking ? "waiting" : "idle"}
         >
-          {showWorking && thinkingAnimation === "comet" && (
-            <svg
-              aria-hidden="true"
-              className="board-composer__comet"
-              focusable="false"
-              preserveAspectRatio="none"
-            >
-              <rect className="board-composer__comet-path" pathLength="100" />
-            </svg>
-          )}
+          <WorkingStrip active={showWorking} label={stripLabel} />
           {/* Always-mounted live region — a region that mounts together with
               its content is not reliably announced, so the span stays and
               only its text toggles. Covers the submit → first-token window;
@@ -493,8 +479,6 @@ export function Composer() {
             sendDisabled={disabled || (composerAction === "queue" && queueFull)}
             queueFull={queueFull}
             working={showWorking}
-            thinkingAnimation={thinkingAnimation}
-            thinkingIntensity={thinkingIntensity}
             onStop={() => void stopRun()}
           />
         </form>

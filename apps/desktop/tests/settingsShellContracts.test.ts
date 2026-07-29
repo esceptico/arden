@@ -141,7 +141,6 @@ test("Settings keeps the mock's 980px action lanes and compact summary", () => {
   expect(compact).toContain(".settings-mcp-row .settings-data-row-end {\n    grid-column: 2;\n    grid-row: 1 / 3;");
   expect(compact).toContain(".settings-summary {\n    grid-template-columns: 1fr 110px;");
   expect(compact).toContain(".settings-summary-stat:last-child {\n    display: none;");
-  expect(compact).toContain(".settings-thinking-preview-grid {\n    grid-template-columns: repeat(2, minmax(0, 1fr));");
 });
 
 test("the tool policy names its three decisions instead of drawing them", () => {

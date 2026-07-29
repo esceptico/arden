@@ -318,11 +318,8 @@
 .board-composer-wrap { container-type: inline-size; }
 
 .board-composer {
-  --thinking-accent-strength: 56%;
-  --thinking-halo-rest-strength: 8%;
-  --thinking-halo-strength: 20%;
-  --thinking-breath-spread: 16px;
-  --thinking-orbit-inset: -3px;
+  --strip-field-strength: .85;
+  --strip-rim-strength: 42%;
   overflow: hidden;
   border-radius: var(--r-panel);
   background: var(--surface-3);
@@ -331,19 +328,13 @@
 }
 
 .board-composer[data-thinking-intensity="subtle"] {
-  --thinking-accent-strength: 38%;
-  --thinking-halo-rest-strength: 5%;
-  --thinking-halo-strength: 13%;
-  --thinking-breath-spread: 10px;
-  --thinking-orbit-inset: -2px;
+  --strip-field-strength: .55;
+  --strip-rim-strength: 26%;
 }
 
 .board-composer[data-thinking-intensity="strong"] {
-  --thinking-accent-strength: 76%;
-  --thinking-halo-rest-strength: 11%;
-  --thinking-halo-strength: 28%;
-  --thinking-breath-spread: 22px;
-  --thinking-orbit-inset: -4px;
+  --strip-field-strength: 1;
+  --strip-rim-strength: 62%;
 }
 
 .board-composer:focus-within {
@@ -353,69 +344,82 @@
     0 0 0 var(--border-width) color-mix(in oklab, var(--accent) 40%, transparent);
 }
 
-/* The selected pre-first-token treatment stays on the composer that produced
-   the action. Each option has one clear locus: rim, halo, static border, or
-   send control. No layout properties animate. */
+/* One working state, one locus: a strip above the input that names the tool
+   in flight. The rim tint marks the composer as busy; the strip carries the
+   detail. No layout properties animate except the strip's own height. */
 .board-composer.is-working {
-  box-shadow: var(--shadow-3), inset 0 0 0 1px color-mix(in oklab, var(--accent) 42%, transparent);
+  box-shadow: var(--shadow-3), inset 0 0 0 1px color-mix(in oklab, var(--accent) var(--strip-rim-strength), transparent);
 }
 
-.board-composer.is-working[data-thinking-animation="comet"] {
-  box-shadow: var(--shadow-3);
+/* Height is the only animated property. Padding and the rule live on the
+   inner element so the row opens without the type sliding inside it. */
+.board-composer__strip {
+  height: 0;
+  overflow: hidden;
+  transition: height var(--motion-sheet-enter, .45s) var(--ease-emphasized, cubic-bezier(.32,.72,0,1));
 }
 
-.board-composer__comet {
+.board-composer__strip[data-active="true"] { height: 1.9375rem; }
+
+.board-composer__strip-inner {
+  position: relative;
+  height: 1.875rem;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-4);
+  isolation: isolate;
+  /* The house inset rule, not a full-bleed border: a border here spans the
+     panel edge-to-edge and paints over the is-working ring, breaking it at
+     the corners. `.arden-peek-rule-below` insets to the content padding. */
+  opacity: 0;
+  transition: opacity var(--motion-sheet-exit, .16s) var(--smooth-out);
+}
+
+.board-composer__strip[data-active="true"] .board-composer__strip-inner {
+  opacity: 1;
+  transition: opacity .28s var(--smooth-out) .12s;
+}
+
+/* The rule is inset to the strip's own text padding so it lines up with the
+   label rather than with the panel edge. */
+.board-composer__strip-inner::after {
+  right: var(--space-4);
+  left: var(--space-4);
+}
+
+/* The canvas reads its own resolved `color` to paint the field, so the ink
+   follows the theme instead of being hardcoded. */
+.board-composer__strip-field {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
+  z-index: 0;
   pointer-events: none;
+  color: var(--ink);
+  opacity: var(--strip-field-strength);
 }
 
-.board-composer__comet-path {
-  x: .75px;
-  y: .75px;
-  width: calc(100% - 1.5px);
-  height: calc(100% - 1.5px);
-  rx: calc(var(--r-panel) - .75px);
-  ry: calc(var(--r-panel) - .75px);
-  fill: none;
-  stroke: color-mix(in oklab, var(--accent) var(--thinking-accent-strength), transparent);
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-dasharray: 2px 98px;
-  stroke-dashoffset: 0;
-  vector-effect: non-scaling-stroke;
-  animation: arden-thinking-comet var(--motion-thinking-comet) linear infinite;
+.board-composer__strip-label {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+  font-size: var(--text-xs);
+  color: var(--muted);
+  white-space: nowrap;
 }
 
-.board-composer.is-working[data-thinking-animation="breath"] {
-  animation: arden-thinking-breath var(--motion-thinking-breath) var(--ease-skeleton) infinite alternate;
+.board-composer__strip-step {
+  display: inline-flex;
+  gap: .25em;
+  min-width: 0;
 }
 
-.board-composer.is-working[data-thinking-animation="border"] {
-  box-shadow: var(--shadow-3), inset 0 0 0 1px color-mix(in oklab, var(--accent) var(--thinking-accent-strength), transparent);
-}
-
-.board-composer.is-working[data-thinking-animation="orbit"] {
-  box-shadow: var(--shadow-3);
-}
-
-@keyframes arden-thinking-comet {
-  to { stroke-dashoffset: -100px; }
-}
-
-@keyframes arden-thinking-breath {
-  from {
-    box-shadow:
-      var(--shadow-3),
-      0 0 5px color-mix(in oklab, var(--accent) var(--thinking-halo-rest-strength), transparent);
-  }
-  to {
-    box-shadow:
-      var(--shadow-3),
-      0 0 var(--thinking-breath-spread) color-mix(in oklab, var(--accent) var(--thinking-halo-strength), transparent);
-  }
+.board-composer__strip-label b {
+  font-weight: 500;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .board-composer.is-drop-target {
@@ -463,11 +467,6 @@
 }
 .board-composer .composer-mode-button svg { color: var(--accent); }
 
-.board-composer__status {
-  margin-left: var(--space-1);
-  color: var(--muted);
-}
-
 .board-composer__send {
   position: relative;
   width: var(--icon-button-size);
@@ -493,33 +492,12 @@
   transform: scale(var(--press-scale));
 }
 
-.board-composer__send[data-working="true"][data-thinking-animation="orbit"]::before {
-  content: "";
-  position: absolute;
-  inset: var(--thinking-orbit-inset);
-  border: 1.5px solid color-mix(in oklab, var(--accent) 28%, transparent);
-  border-top-color: var(--accent);
-  border-radius: inherit;
-  pointer-events: none;
-  will-change: transform;
-  animation: arden-thinking-orbit var(--motion-thinking-orbit) linear infinite;
-}
-
-@keyframes arden-thinking-orbit {
-  to { transform: rotate(1turn); }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .board-composer__comet-path,
-  .board-composer__send[data-working="true"][data-thinking-animation="orbit"]::before {
-    animation: none;
-  }
-
-  .board-composer.is-working[data-thinking-animation="breath"] {
-    animation: none;
-    box-shadow:
-      var(--shadow-3),
-      0 0 var(--thinking-breath-spread) color-mix(in oklab, var(--accent) var(--thinking-halo-strength), transparent);
+  /* The field itself stops in WorkingStrip (it paints one still frame and
+     schedules nothing); the row still needs to stop growing. */
+  .board-composer__strip,
+  .board-composer__strip-inner {
+    transition: none;
   }
 }
 

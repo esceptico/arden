@@ -7,7 +7,6 @@ import { GoalStatusBar } from "@/features/chat/components/GoalStrip";
 import { LoopStatusBar } from "@/features/chat/components/LoopStatus";
 import { BudgetDial } from "@/features/chat/components/BudgetDial";
 import { ICON } from "@/lib/icons";
-import type { ThinkingAnimation, ThinkingIntensity } from "@/stores";
 
 export type ComposerAction = "send" | "queue" | "stop";
 
@@ -19,8 +18,6 @@ export function ComposerToolbar({
   sendDisabled,
   queueFull = false,
   working,
-  thinkingAnimation,
-  thinkingIntensity,
   onStop,
 }: {
   onAttach: () => void;
@@ -30,8 +27,6 @@ export function ComposerToolbar({
   sendDisabled: boolean;
   queueFull?: boolean;
   working: boolean;
-  thinkingAnimation: ThinkingAnimation;
-  thinkingIntensity: ThinkingIntensity;
   onStop: () => void;
 }) {
   const stopping = action === "stop";
@@ -72,7 +67,6 @@ export function ComposerToolbar({
       </Chip>
       <LoopStatusBar />
       <GoalStatusBar />
-      {working && <span className="board-composer__status arden-status" aria-hidden>working</span>}
       <span className="flex-1" />
       <BudgetDial />
       <ModelReasoningChip />
@@ -85,8 +79,6 @@ export function ComposerToolbar({
         aria-label={actionLabel}
         title={actionTitle}
         data-mode={action}
-        data-thinking-animation={thinkingAnimation}
-        data-thinking-intensity={thinkingIntensity}
         data-working={working ? "true" : "false"}
         className="board-composer__send hover:opacity-90 disabled:opacity-[0.45] disabled:shadow-none transition-[opacity,scale] duration-fast ease-out active:scale-[0.97]"
       >

@@ -1,5 +1,4 @@
 import {
-  isThinkingAnimation,
   isThinkingIntensity,
   type Prefs,
 } from "@/stores/types";
@@ -28,7 +27,6 @@ export const DEFAULT_PREFS: Prefs = {
   theme: "system",
   accent: DEFAULT_ACCENT,
   cornerProfile: "round",
-  thinkingAnimation: "comet",
   thinkingIntensity: "normal",
   sidebarGroupBy: "area",
   sidebarUnreadOnly: false,
@@ -89,9 +87,9 @@ function normalizePrefs(value: unknown, migrateLegacyLayout: boolean): Prefs {
   Reflect.deleteProperty(parsed, "codeFontSize");
   Reflect.deleteProperty(parsed, "diffMarkers");
 
-  if (!isThinkingAnimation(parsed.thinkingAnimation)) {
-    Reflect.deleteProperty(parsed, "thinkingAnimation");
-  }
+  // The four treatments collapsed into the one working strip; a saved
+  // "comet"/"breath"/"border"/"orbit" is now meaningless, not merely invalid.
+  Reflect.deleteProperty(parsed, "thinkingAnimation");
   if (!isThinkingIntensity(parsed.thinkingIntensity)) {
     Reflect.deleteProperty(parsed, "thinkingIntensity");
   }
@@ -120,7 +118,6 @@ function normalizePrefs(value: unknown, migrateLegacyLayout: boolean): Prefs {
 
 /** Runtime counterpart to `Prefs`' generic `setPref` signature. */
 export function isValidPrefValue(key: keyof Prefs, value: unknown): boolean {
-  if (key === "thinkingAnimation") return isThinkingAnimation(value);
   if (key === "thinkingIntensity") return isThinkingIntensity(value);
   if (key === "uiFontSize") return isFontSizePx(value);
   return true;

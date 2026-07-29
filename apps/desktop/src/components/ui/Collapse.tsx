@@ -20,6 +20,11 @@ interface CollapseProps {
   mode?: "reveal" | "height";
 }
 
+/** Headroom the open clip leaves around the panel so a child's focus ring or
+ *  shadow is not cropped by the wipe's own clip-path. Wide enough for the
+ *  2px field ring plus its antialiasing. */
+const CLIP_BLEED = 4;
+
 /** Disclosure reveal with snap-layout semantics. */
 export function Collapse({ open, children, className, mode = "reveal" }: CollapseProps) {
   if (mode === "height") {
@@ -36,20 +41,26 @@ export function Collapse({ open, children, className, mode = "reveal" }: Collaps
           initial={{
             opacity: 0,
             y: -DISTANCE.contentSwap,
-            clipPath: "inset(0 0 100% 0)",
+            clipPath: `inset(-${CLIP_BLEED}px -${CLIP_BLEED}px 100% -${CLIP_BLEED}px)`,
             filter: "blur(2px)",
           }}
           animate={{
             opacity: 1,
             y: 0,
-            clipPath: "inset(0)",
+            // Settles slightly OUTSIDE the border box, not flush to it. The
+            // wipe needs a clip, but `inset(0)` keeps cropping once open and
+            // shears whatever a child paints outside its box — a focused
+            // field's 2px ring came out sheared flat across the top. The rest
+            // state must stay an inset() rather than `none`, or the exit has
+            // no interpolable value to animate from and the wipe snaps.
+            clipPath: `inset(-${CLIP_BLEED}px)`,
             filter: "blur(0px)",
             transition: CONTENT_ENTER_TRANSITION,
           }}
           exit={{
             opacity: 0,
             y: -DISTANCE.dissolve,
-            clipPath: "inset(0 0 100% 0)",
+            clipPath: `inset(-${CLIP_BLEED}px -${CLIP_BLEED}px 100% -${CLIP_BLEED}px)`,
             filter: "blur(2px)",
             transition: CONTENT_EXIT_TRANSITION,
           }}

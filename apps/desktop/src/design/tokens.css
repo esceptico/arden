@@ -492,9 +492,6 @@
   --motion-page-skeleton-reveal: 220ms;
   --motion-spinner: 700ms;
   --motion-skeleton: var(--motion-skeleton-pulse);
-  --motion-thinking-comet: 1800ms;
-  --motion-thinking-breath: 2400ms;
-  --motion-thinking-orbit: 700ms;
   --duration-indicator: var(--motion-indicator);
   --duration-fast: var(--motion-press);
   --duration-check: var(--motion-feedback);
@@ -683,9 +680,6 @@
     --motion-page-skeleton-reveal: 1ms;
     --motion-spinner: 1ms;
     --motion-skeleton: 1ms;
-    --motion-thinking-comet: 1ms;
-    --motion-thinking-breath: 1ms;
-    --motion-thinking-orbit: 1ms;
   }
 }
 }

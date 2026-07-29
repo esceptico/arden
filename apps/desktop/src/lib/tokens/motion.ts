@@ -164,9 +164,6 @@ export const MOTION = {
   spinner: 0.7,
   /** Backwards-compatible skeleton cadence; new surfaces use skeletonPulse. */
   skeleton: 1,
-  thinkingComet: 1.8,
-  thinkingBreath: 2.4,
-  thinkingOrbit: 0.7,
   fast: 0.12,
   check: 0.15,
   row: 0.15,

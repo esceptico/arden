@@ -4,7 +4,7 @@ import { useStore } from "@/stores";
 
 const PREFS_KEY = "arden.desktop.prefs";
 
-test("previous prefs migrate while retaining valid thinking selections", () => {
+test("previous prefs migrate while retaining a valid intensity", () => {
   localStorage.setItem(
     PREFS_KEY,
     JSON.stringify({
@@ -15,11 +15,14 @@ test("previous prefs migrate while retaining valid thinking selections", () => {
     }),
   );
 
-  expect(loadPrefs()).toMatchObject({
+  const loaded = loadPrefs();
+  expect(loaded).toMatchObject({
     sidebarWidth: DEFAULT_PREFS.sidebarWidth,
-    thinkingAnimation: "orbit",
     thinkingIntensity: "subtle",
   });
+  // The four treatments collapsed into one strip, so a saved treatment is
+  // meaningless rather than merely invalid — it is dropped, not defaulted.
+  expect(loaded).not.toHaveProperty("thinkingAnimation");
 });
 
 test("redesign defaults migrate Chat open and Area closed", () => {
@@ -38,7 +41,7 @@ test("redesign defaults migrate Chat open and Area closed", () => {
   });
 });
 
-test("stale thinking IDs fall back to the canonical defaults", () => {
+test("stale intensity IDs fall back to the canonical default", () => {
   localStorage.setItem(
     PREFS_KEY,
     JSON.stringify({
@@ -48,35 +51,27 @@ test("stale thinking IDs fall back to the canonical defaults", () => {
     }),
   );
 
-  expect(loadPrefs()).toMatchObject({
-    thinkingAnimation: DEFAULT_PREFS.thinkingAnimation,
-    thinkingIntensity: DEFAULT_PREFS.thinkingIntensity,
-  });
+  const loaded = loadPrefs();
+  expect(loaded).toMatchObject({ thinkingIntensity: DEFAULT_PREFS.thinkingIntensity });
+  expect(loaded).not.toHaveProperty("thinkingAnimation");
 });
 
-test("persistPrefs cannot write arbitrary thinking IDs through an unsafe caller", () => {
-  persistPrefs({
-    ...DEFAULT_PREFS,
-    thinkingAnimation: "legacy-pulse" as never,
-    thinkingIntensity: "maximum" as never,
-  });
+test("persistPrefs cannot write an arbitrary intensity through an unsafe caller", () => {
+  persistPrefs({ ...DEFAULT_PREFS, thinkingIntensity: "maximum" as never });
 
   expect(JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}"))
     .toMatchObject({
       prefsVersion: PREFS_VERSION,
-      thinkingAnimation: DEFAULT_PREFS.thinkingAnimation,
       thinkingIntensity: DEFAULT_PREFS.thinkingIntensity,
     });
 });
 
-test("setPref refuses arbitrary thinking IDs at the state boundary", () => {
+test("setPref refuses an arbitrary intensity at the state boundary", () => {
   const previous = useStore.getState().prefs;
   try {
-    useStore.getState().setPref("thinkingAnimation", "legacy-pulse" as never);
     useStore.getState().setPref("thinkingIntensity", "maximum" as never);
 
     expect(useStore.getState().prefs).toMatchObject({
-      thinkingAnimation: previous.thinkingAnimation,
       thinkingIntensity: previous.thinkingIntensity,
     });
   } finally {

@@ -11,21 +11,14 @@ import {
   type Ref,
 } from "react";
 import clsx from "clsx";
+import { textLaneOpacity } from "@/lib/textLane";
 
 const clamp = (value: number, min: number, max: number) =>
   Math.max(min, Math.min(max, value));
 
-/** Fade the marker before it crosses either protected text lane. */
-export function sliderMarkerOpacity(
-  position: number,
-  labelEnd: number,
-  valueStart: number,
-  fadeDistance: number,
-): number {
-  if (position <= labelEnd || position >= valueStart) return 0;
-  if (fadeDistance <= 0) return 1;
-  return clamp(Math.min(position - labelEnd, valueStart - position) / fadeDistance, 0, 1);
-}
+/** Fade the marker before it crosses either protected text lane. The rule is
+ *  shared with the composer's working strip — same band, same lanes. */
+export const sliderMarkerOpacity = textLaneOpacity;
 
 /** Center shared by a discrete dot, fill edge, and marker. */
 export function sliderPipStopCenter(
