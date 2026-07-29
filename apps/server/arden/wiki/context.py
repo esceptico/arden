@@ -7,8 +7,9 @@ from datetime import UTC, datetime
 from typing import Literal
 
 from arden.search.types import RawItem
+from arden.wiki.changes import role
 from arden.wiki.constants import README_FILENAME
-from arden.wiki.models import WikiInfrastructureRole, WikiPageRecord
+from arden.wiki.models import WikiPageRecord
 from arden.wiki.provenance import fact_page_freshness
 from arden.wiki.service import WikiService, WikiSnapshotChangedError
 
@@ -38,10 +39,6 @@ async def _readable_pages(wiki: WikiService) -> tuple[WikiPageRecord, ...]:
         return await asyncio.to_thread(wiki.readable_pages)
 
 
-def _role(record: WikiPageRecord) -> WikiInfrastructureRole:
-    return WikiService._role(record.resource.resource_id, record.resource.path)
-
-
 def _freshness(record: WikiPageRecord, fact_revision: str | None) -> str:
     return fact_page_freshness(record.page.metadata, fact_revision).value
 
@@ -54,7 +51,7 @@ def _metadata(record: WikiPageRecord, fact_revision: str | None) -> dict[str, st
     return {
         "resource_path": record.resource.path,
         "resource_version": record.resource.version_id,
-        "role": _role(record).value,
+        "role": role(record.resource.resource_id, record.resource.path).value,
         "freshness": _freshness(record, fact_revision),
     }
 

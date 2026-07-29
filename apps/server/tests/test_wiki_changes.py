@@ -17,6 +17,7 @@ from arden.revisions import (
     Update,
 )
 from arden.revisions.errors import RevisionConflictError
+from arden.wiki.changes import storage_warnings as _storage_warnings
 from arden.wiki.models import (
     LinkStatus,
     WikiChangeCommit,
@@ -28,7 +29,7 @@ from arden.wiki.models import (
     WikiResourceChange,
 )
 from arden.wiki.pages import create_page
-from arden.wiki.service import WikiService, _storage_warnings
+from arden.wiki.service import WikiService
 
 
 def _repo(tmp_path: Path) -> ManagedFileRepository:

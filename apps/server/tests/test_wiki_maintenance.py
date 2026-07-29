@@ -707,7 +707,7 @@ def test_current_link_context_has_a_total_scan_bound(tmp_path: Path, monkeypatch
     repo = _repo(tmp_path)
     commit_id = _seed(repo)
     commit = WikiService(repo).maintenance_feed(None).commits[0]
-    monkeypatch.setattr(wiki_service_module, "_MAINTENANCE_CURRENT_SCAN_TOTAL_BYTES", 1)
+    monkeypatch.setattr(wiki_service_module.changes, "_MAINTENANCE_CURRENT_SCAN_TOTAL_BYTES", 1)
 
     with pytest.raises(WikiMaintenanceEvidenceLimitError) as raised:
         WikiService(repo).maintenance_details(
