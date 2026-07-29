@@ -184,10 +184,10 @@ test("a link's favicon covers its fallback globe instead of dropping below it", 
     ".md.typeset :where(img:not(.external-link__favicon), video) { max-width: 100%; height: auto; margin-block: var(--typeset-flow) 0;",
   );
   expect(typeset).toMatch(
-    /\.md\.typeset :where\(\.external-link__favicon\) \{[^}]*position: absolute;[^}]*inset: 0;[^}]*margin: 0;/,
+    /\.md :where\(\.external-link__favicon\) \{[^}]*position: absolute;[^}]*inset: 0;[^}]*margin: 0;/,
   );
   expect(typeset).toMatch(
-    /\.md\.typeset :where\(\.external-link__icon\) \{[^}]*position: relative;[^}]*width: 1em;[^}]*height: 1em;/,
+    /\.md :where\(\.external-link__icon\) \{[^}]*position: relative;[^}]*width: 1em;[^}]*height: 1em;/,
   );
 
   // And the globe is a fallback, not a backdrop — a favicon with any
@@ -199,7 +199,7 @@ test("a link's favicon covers its fallback globe instead of dropping below it", 
   );
   expect(markdown).toContain("onError={(event) => event.currentTarget.remove()}");
   expect(typeset).toContain(
-    '.md.typeset :where(.external-link__icon[data-favicon="loaded"] .external-link__fallback) { display: none; }',
+    '.md :where(.external-link__icon[data-favicon="loaded"] .external-link__fallback) { display: none; }',
   );
 });
 
