@@ -603,6 +603,32 @@ def test_patch_area_attaches_page_to_existing_container(client):
     assert plain["area_id"] in {s["key"] for s in svc.overview()["areas"]}
 
 
+def test_patch_area_runtime_failure_is_not_reported_as_success(client):
+    c, _, emitted, o1a, areas = client
+
+    async def fail_sync(area: dict) -> None:
+        if area["name"] == "Broken":
+            raise RuntimeError("runtime unavailable")
+
+    async def disable(_area_id: str) -> None:
+        return None
+
+    c.app.state.area_lifecycle = AreaLifecycleService(
+        sessions=areas,
+        sync_custodian=fail_sync,
+        disable_custodian=disable,
+    )
+    failed_client = TestClient(c.app, raise_server_exceptions=False)
+    try:
+        response = failed_client.patch(f"/areas/{o1a}", json={"name": "Broken"})
+    finally:
+        failed_client.close()
+
+    assert response.status_code == 500
+    assert areas._rows[o1a]["name"] == "O-1A"
+    assert emitted == []
+
+
 def test_post_areas_by_name_reuses_existing_area_case_insensitive(client):
     c, _, _, _, areas = client
     plain = areas._seed(name="mats")

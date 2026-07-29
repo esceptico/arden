@@ -49,16 +49,27 @@ class AreaLifecycleService:
                 await self._disable_custodian(area_id)
             else:
                 await self._sync_custodian(updated)
-        except Exception:
+        except Exception as primary_error:
             rollback = {
                 key: before.get("paused_at") is not None if key == "paused" else before.get(key) for key in patch
             }
-            restored = await self._sessions.update_area(area_id, **rollback)
-            if restored and restored.get("autonomy") is not None:
-                try:
+            try:
+                restored = await self._sessions.update_area(area_id, **rollback)
+            except Exception as restore_error:
+                raise ExceptionGroup("Area update rollback failed", [primary_error, restore_error]) from None
+            if restored is None:
+                restore_error = RuntimeError(f"Area {area_id} disappeared during rollback")
+                raise ExceptionGroup("Area update rollback failed", [primary_error, restore_error]) from None
+            try:
+                if restored.get("autonomy") is None:
+                    await self._disable_custodian(area_id)
+                else:
                     await self._sync_custodian(restored)
-                except Exception:
-                    pass
+            except Exception as reconciliation_error:
+                raise ExceptionGroup(
+                    "Area update rollback reconciliation failed",
+                    [primary_error, reconciliation_error],
+                ) from None
             raise
         return updated
 

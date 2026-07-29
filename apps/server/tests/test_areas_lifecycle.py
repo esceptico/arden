@@ -237,8 +237,10 @@ async def test_archive_disables_and_restore_resyncs_custodian() -> None:
 @pytest.mark.asyncio
 async def test_failed_runtime_sync_rolls_back_area_update() -> None:
     areas = FakeAreas()
+    synced: list[str] = []
 
     async def fail_sync(area: dict) -> None:
+        synced.append(area["name"])
         if area["name"] == "Broken":
             raise RuntimeError("runtime unavailable")
 
@@ -249,6 +251,81 @@ async def test_failed_runtime_sync_rolls_back_area_update() -> None:
         await svc.update(area["area_id"], name="Broken")
 
     assert (await areas.get_area(area["area_id"]))["name"] == "Health"
+    assert synced == ["Health", "Broken", "Health"]
+
+
+@pytest.mark.asyncio
+async def test_failed_enable_disables_partial_custodian_during_rollback() -> None:
+    areas = FakeAreas()
+    disabled: list[str] = []
+
+    async def fail_sync(_area: dict) -> None:
+        raise RuntimeError("enable failed")
+
+    async def disable(area_id: str) -> None:
+        disabled.append(area_id)
+
+    svc = lifecycle(areas, sync=fail_sync, disable=disable)
+    area = await svc.create(name="Health", page_path="topics/health.md")
+
+    with pytest.raises(RuntimeError, match="enable failed"):
+        await svc.update(area["area_id"], autonomy="observe")
+
+    assert (await areas.get_area(area["area_id"]))["autonomy"] is None
+    assert disabled == [area["area_id"]]
+
+
+@pytest.mark.asyncio
+async def test_failed_rollback_sync_surfaces_primary_and_reconciliation_errors() -> None:
+    areas = FakeAreas()
+    health_syncs = 0
+
+    async def fail_sync(area: dict) -> None:
+        nonlocal health_syncs
+        if area["name"] == "Broken":
+            raise RuntimeError("primary sync failed")
+        health_syncs += 1
+        if health_syncs > 1:
+            raise RuntimeError("rollback sync failed")
+
+    svc = lifecycle(areas, sync=fail_sync)
+    area = await svc.create(name="Health", page_path="topics/health.md", autonomy="observe")
+
+    with pytest.raises(ExceptionGroup) as raised:
+        await svc.update(area["area_id"], name="Broken")
+
+    assert [str(error) for error in raised.value.exceptions] == ["primary sync failed", "rollback sync failed"]
+    assert (await areas.get_area(area["area_id"]))["name"] == "Health"
+
+
+@pytest.mark.asyncio
+async def test_missing_row_during_rollback_surfaces_primary_and_restore_errors() -> None:
+    class MissingRollbackAreas(FakeAreas):
+        def __init__(self) -> None:
+            super().__init__()
+            self.updates = 0
+
+        async def update_area(self, area_id: str, **patch) -> dict | None:
+            self.updates += 1
+            if self.updates == 2:
+                return None
+            return await super().update_area(area_id, **patch)
+
+    areas = MissingRollbackAreas()
+
+    async def fail_sync(_area: dict) -> None:
+        raise RuntimeError("primary sync failed")
+
+    svc = lifecycle(areas, sync=fail_sync)
+    area = await svc.create(name="Health", page_path="topics/health.md")
+
+    with pytest.raises(ExceptionGroup) as raised:
+        await svc.update(area["area_id"], autonomy="observe")
+
+    assert [str(error) for error in raised.value.exceptions] == [
+        "primary sync failed",
+        f"Area {area['area_id']} disappeared during rollback",
+    ]
 
 
 @pytest.mark.asyncio
