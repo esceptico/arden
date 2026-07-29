@@ -68,3 +68,24 @@ def test_revision_repository_facade_keeps_query_and_maintenance_ownership_split(
 
     assert ManagedFileRepository.__name__ == "ManagedFileRepository"
     assert RevisionConflictError.__name__ == "RevisionConflictError"
+
+
+def test_fact_ledger_facade_keeps_codec_and_state_ownership_split() -> None:
+    facade = ARDEN / "memory" / "facts" / "ledger.py"
+    extracted = (ARDEN / "memory" / "facts" / "event_codec.py", ARDEN / "memory" / "facts" / "state.py")
+    forbidden_prefixes = ("arden.server", "arden.services", "arden.tools", "arden.wiki")
+
+    assert len(facade.read_text(encoding="utf-8").splitlines()) < 1_000
+    for source in extracted:
+        tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+        imported_modules = [node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)]
+        assert all(module is None or not module.startswith(forbidden_prefixes) for module in imported_modules), source
+
+    from arden.memory.facts.event_codec import decode_event, parse_event_file
+    from arden.memory.facts.ledger import FactLedger
+    from arden.memory.facts.state import state_from
+
+    assert FactLedger.__name__ == "FactLedger"
+    assert decode_event.__name__ == "decode_event"
+    assert parse_event_file.__name__ == "parse_event_file"
+    assert state_from.__name__ == "state_from"
