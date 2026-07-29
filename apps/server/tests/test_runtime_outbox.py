@@ -6,7 +6,7 @@ import pytest_asyncio
 
 import arden.database as database
 from arden.agent import Usage
-from arden.events.internal import RunCompleted, RunFailed
+from arden.events.internal import RunCompleted, RunCompletionRejected, RunFailed
 from arden.outbox import (
     OUTBOX_AUTOMATION_SETTLED,
     OUTBOX_RUN_COMPLETED,
@@ -155,6 +155,36 @@ async def test_runtime_outbox_retries_the_whole_completion_when_area_hook_fails(
         await runtime_outbox._on_run_completed(_event(OUTBOX_RUN_COMPLETED, payload))
 
     assert scheduler.completed == []
+
+
+@pytest.mark.asyncio
+async def test_runtime_outbox_fails_run_when_area_report_is_rejected():
+    async def reject_area_run(_run_completed):
+        raise RunCompletionRejected("AreaWorkReportError: invalid work change")
+
+    runtime_outbox, _, scheduler = _runtime_outbox(on_area_run=reject_area_run)
+    completed = RunCompleted(
+        run_id="run-1",
+        session_id="sess-1",
+        messages=(),
+        usage=Usage(),
+        result="done",
+        automation_task_id="area:health",
+    )
+
+    await runtime_outbox._on_run_completed(
+        _event(OUTBOX_RUN_COMPLETED, run_completed_payload(completed))
+    )
+
+    assert scheduler.completed == []
+    assert scheduler.failed == [
+        RunFailed(
+            run_id="run-1",
+            session_id="sess-1",
+            error="AreaWorkReportError: invalid work change",
+            automation_task_id="area:health",
+        )
+    ]
 
 
 @pytest.mark.asyncio

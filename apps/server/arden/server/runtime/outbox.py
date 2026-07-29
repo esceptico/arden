@@ -2,7 +2,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 
 from arden.automation.scheduler import Scheduler
-from arden.events.internal import RunCompleted
+from arden.events.internal import RunCompleted, RunCompletionRejected, RunFailed
 from arden.outbox import (
     OUTBOX_AUTOMATION_SETTLED,
     OUTBOX_RUN_COMPLETED,
@@ -47,7 +47,18 @@ class RuntimeOutbox:
     async def _on_run_completed(self, event: OutboxEvent) -> None:
         run_completed = run_completed_from_payload(event.payload)
         if self._on_area_run:
-            await self._on_area_run(run_completed)
+            try:
+                await self._on_area_run(run_completed)
+            except RunCompletionRejected as exc:
+                await self.scheduler.handle_run_failed(
+                    RunFailed(
+                        run_id=run_completed.run_id,
+                        session_id=run_completed.session_id,
+                        error=str(exc),
+                        automation_task_id=run_completed.automation_task_id,
+                    )
+                )
+                return
         await self.scheduler.handle_run_completed(run_completed)
 
     async def _on_run_failed(self, event: OutboxEvent) -> None:

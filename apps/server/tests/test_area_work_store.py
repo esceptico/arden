@@ -238,6 +238,85 @@ async def test_report_applies_atomically_once_with_evidence(work_env) -> None:
 
 
 @pytest.mark.asyncio
+async def test_report_ignores_exact_noop_update_to_terminal_work_item(work_env) -> None:
+    _conn, _sessions, work, health, _visa = work_env
+    item = await work.create_work_item(
+        health["area_id"],
+        key="watching-section",
+        outcome_key=None,
+        kind="action",
+        text="Added the WATCHING section",
+        owner="custodian",
+    )
+    completed = await work.update_work_item(
+        health["area_id"],
+        item.stable_key,
+        expected_updated_at=item.updated_at,
+        status="completed",
+    )
+    unchanged = report(
+        outcome_changes=[],
+        work_changes=[
+            {
+                "op": "update",
+                "key": completed.stable_key,
+                "text": completed.text,
+                "owner": completed.owner,
+                "expected_updated_at": completed.updated_at,
+            }
+        ],
+        evidence=[
+            {
+                "target_type": "work",
+                "target_key": completed.stable_key,
+                "event_type": "completed",
+                "summary": "The WATCHING section remains complete",
+                "source_refs": ["area_page_read:topics/health.md"],
+            }
+        ],
+    )
+
+    assert await work.apply_report(health["area_id"], "run:noop", unchanged)
+    snapshot = await work.snapshot(health["area_id"])
+    assert snapshot.work_items[0].updated_at == completed.updated_at
+    assert [event.summary for event in snapshot.events] == ["The WATCHING section remains complete"]
+
+
+@pytest.mark.asyncio
+async def test_report_rejects_real_update_to_terminal_work_item(work_env) -> None:
+    _conn, _sessions, work, health, _visa = work_env
+    item = await work.create_work_item(
+        health["area_id"],
+        key="watching-section",
+        outcome_key=None,
+        kind="action",
+        text="Added the WATCHING section",
+        owner="custodian",
+    )
+    completed = await work.update_work_item(
+        health["area_id"],
+        item.stable_key,
+        expected_updated_at=item.updated_at,
+        status="completed",
+    )
+    changed = report(
+        outcome_changes=[],
+        work_changes=[
+            {
+                "op": "update",
+                "key": completed.stable_key,
+                "text": "Rewrite the completed work",
+                "expected_updated_at": completed.updated_at,
+            }
+        ],
+        evidence=[],
+    )
+
+    with pytest.raises(AreaWorkReportError, match="Terminal work item"):
+        await work.apply_report(health["area_id"], "run:changed-terminal", changed)
+
+
+@pytest.mark.asyncio
 async def test_invalid_report_rolls_back_every_operation(work_env) -> None:
     _conn, _sessions, work, health, _visa = work_env
     invalid = report(

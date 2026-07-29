@@ -107,6 +107,9 @@ class CustodianStore:
             raise RuntimeError(f"Custodian delivery iteration moved backwards for {area_id}")
         return delivery
 
+    def needs_intake(self, area_id: str) -> bool:
+        return self.state(area_id)["last_report"] is None
+
     # ── event wakes ─────────────────────────────────────────
 
     def note_event(
@@ -238,6 +241,7 @@ class CustodianStore:
         preset = AREA_ATTENTION_PRESETS.get(attention, AREA_ATTENTION_PRESETS["ambient"])
         so = structured_output or {}
         st = self.state(area_id)
+        st.pop("pending_delivery", None)
 
         made_progress = bool(so.get("made_progress"))
         quiet = not so.get("asks") and not made_progress

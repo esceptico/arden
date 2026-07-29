@@ -7,6 +7,8 @@ import pytest
 from arden.areas.agent import AreaCustodianReport, render_work_context
 from arden.areas.asks import AskStore
 from arden.areas.work_models import AreaOutcome, AreaWorkEvent, AreaWorkItem, AreaWorkSnapshot
+from arden.areas.work_store import AreaWorkReportError
+from arden.events.internal import RunCompletionRejected
 from arden.server.runtime.automation import AutomationRuntime
 
 
@@ -53,6 +55,30 @@ async def test_work_report_commits_before_asks(tmp_path: Path) -> None:
 
     assert calls == ["work"]
     assert runtime.area_asks.list("area_health") == []
+
+
+@pytest.mark.asyncio
+async def test_invalid_work_report_rejects_run_completion(tmp_path: Path) -> None:
+    class Work:
+        async def apply_report(self, area_id, run_ref, structured):
+            raise AreaWorkReportError("terminal item")
+
+    runtime = AutomationRuntime.__new__(AutomationRuntime)
+    runtime.stores = SimpleNamespace(area_work=Work())
+    runtime.area_asks = AskStore(tmp_path / "asks.json")
+
+    with pytest.raises(RunCompletionRejected, match="AreaWorkReportError: terminal item"):
+        await runtime._commit_area_report("area_health", "topics/health.md", report().model_dump(), "run:r1")
+
+
+@pytest.mark.asyncio
+async def test_malformed_report_rejects_run_completion(tmp_path: Path) -> None:
+    runtime = AutomationRuntime.__new__(AutomationRuntime)
+    runtime.stores = SimpleNamespace()
+    runtime.area_asks = AskStore(tmp_path / "asks.json")
+
+    with pytest.raises(RunCompletionRejected, match="ValidationError"):
+        await runtime._commit_area_report("area_health", "topics/health.md", {}, "run:r1")
 
 
 def test_work_context_uses_report_keys_instead_of_internal_ids() -> None:

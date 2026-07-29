@@ -5,6 +5,10 @@ from arden.agent import Usage
 # --- Run lifecycle ---
 
 
+class RunCompletionRejected(RuntimeError):
+    """A deterministic postcondition rejected an otherwise completed run."""
+
+
 @dataclass(frozen=True)
 class RunCompleted:
     run_id: str

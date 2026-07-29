@@ -9,6 +9,7 @@ from arden.areas.agent import AreaCustodianReport, custodian_contract, record_ar
 from arden.areas.asks import AskStore
 from arden.areas.custodian import CustodianStore
 from arden.areas.models import Area, areas_from_records
+from arden.areas.work_store import AreaWorkReportError
 from arden.automation.builtins import (
     FACT_MAINTENANCE_PROMPT,
     FACT_MAINTENANCE_TOOL_SCOPE,
@@ -31,7 +32,7 @@ from arden.constants import (
     BUILTIN_MEMORY_SYNTHESIZE_ID,
     BUILTIN_WIKI_MAINTENANCE_ID,
 )
-from arden.events.internal import RunCompleted
+from arden.events.internal import RunCompleted, RunCompletionRejected
 from arden.events.sse import AreasChangedEvent, MemoryChangedEvent
 from arden.integrations.calendar.client import MultiCalendarSource
 from arden.logging import get_logger
@@ -236,10 +237,12 @@ class AutomationRuntime:
             return []
         try:
             report = AreaCustodianReport.model_validate(structured_output)
-        except ValidationError:
-            _logger.warning("Ignoring malformed Custodian report for %s", area_id, exc_info=True)
-            return []
-        await self.stores.area_work.apply_report(area_id, run_ref, report)
+        except ValidationError as exc:
+            raise RunCompletionRejected(f"{type(exc).__name__}: {exc}") from exc
+        try:
+            await self.stores.area_work.apply_report(area_id, run_ref, report)
+        except AreaWorkReportError as exc:
+            raise RunCompletionRejected(f"{type(exc).__name__}: {exc}") from exc
         return record_area_run(
             self.area_asks,
             area_id,

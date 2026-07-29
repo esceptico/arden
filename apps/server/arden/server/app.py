@@ -352,7 +352,7 @@ async def lifespan(app: FastAPI):
                         parts.append(
                             "WOKEN BY (events since your last run):\n" + "\n".join(f"- {event}" for event in woken_by)
                         )
-                    if iteration == 1:
+                    if iteration == 1 and runtime.automation.custodians.needs_intake(area_id):
                         parts.append(INTAKE_ADDENDUM.strip())
                     run_context = "\n\n".join(([ctx_str] if ctx_str else []) + parts)
                     return AUTOMATION_PROMPT.render(prompt=automation.prompt, context=run_context)

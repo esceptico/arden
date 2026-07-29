@@ -41,6 +41,14 @@ def test_missing_nomination_falls_back_to_ceiling_never_a_tight_loop(tmp_path):
     assert nxt == NOW + timedelta(hours=AREA_ATTENTION_PRESETS["ambient"]["max_hours"])
 
 
+def test_intake_is_only_needed_before_first_successful_report(tmp_path):
+    c = _store(tmp_path)
+
+    assert c.needs_intake("a1")
+    c.record_run("a1", _nom([], hours=24), attention="ambient", now=NOW)
+    assert not c.needs_intake("a1")
+
+
 def test_quiet_streak_decays_cadence_and_activity_resets_it(tmp_path):
     c = _store(tmp_path)
     # 1st quiet run: agent's choice honored (24h within ambient bounds).
@@ -101,6 +109,7 @@ def test_active_work_can_request_short_bounded_continuation(tmp_path):
 
     assert nxt == NOW + timedelta(minutes=5)
     assert c.state("a1")["next_check_reason"] == "finish comparing labs"
+    assert "pending_delivery" not in c.state("a1")
 
 
 def test_continuation_falls_back_when_daily_cap_is_spent(tmp_path):

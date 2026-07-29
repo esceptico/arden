@@ -287,7 +287,7 @@ class AreaWorkStore:
         await self.conn.commit()
         return await self._get_work_item(area_id, stable_key)
 
-    async def apply_report(self, area_id: str, run_ref: str, report: object) -> bool:
+    async def apply_report(self, area_id: str, run_ref: str, report) -> bool:
         prior = await self.read_conn.execute_fetchall(
             "SELECT 1 FROM area_work_reports WHERE run_ref = ?",
             (run_ref,),
@@ -295,12 +295,42 @@ class AreaWorkStore:
         if prior:
             return False
 
-        outcome_changes: list[OutcomeChange] = list(getattr(report, "outcome_changes", []))
-        work_changes: list[WorkChange] = list(getattr(report, "work_changes", []))
-        evidence: list[EvidenceDraft] = list(getattr(report, "evidence", []))
+        outcome_changes: list[OutcomeChange] = list(report.outcome_changes)
+        work_changes: list[WorkChange] = list(report.work_changes)
+        evidence: list[EvidenceDraft] = list(report.evidence)
         snapshot = await self.snapshot(area_id)
         outcomes = {row.stable_key: row for row in snapshot.outcomes}
         work_items = {row.stable_key: row for row in snapshot.work_items}
+        effective_outcome_changes = []
+        for change in outcome_changes:
+            if change.op != "update" or change.key not in outcomes:
+                effective_outcome_changes.append(change)
+                continue
+            current = outcomes[change.key]
+            if (
+                (change.title is not None and change.title != current.title)
+                or (change.success_criteria is not None and change.success_criteria != current.success_criteria)
+                or (change.priority is not None and change.priority != current.priority)
+            ):
+                effective_outcome_changes.append(change)
+        outcome_changes = effective_outcome_changes
+
+        effective_work_changes = []
+        for change in work_changes:
+            if change.op != "update" or change.key not in work_items:
+                effective_work_changes.append(change)
+                continue
+            current = work_items[change.key]
+            outcome_id = f"outcome:{area_id}:{change.outcome_key}" if change.outcome_key else None
+            if (
+                (outcome_id is not None and outcome_id != current.outcome_id)
+                or (change.text is not None and change.text != current.text)
+                or (change.owner is not None and change.owner != current.owner)
+                or (change.due_at is not None and change.due_at != current.due_at)
+                or (change.next_attempt_at is not None and change.next_attempt_at != current.next_attempt_at)
+            ):
+                effective_work_changes.append(change)
+        work_changes = effective_work_changes
         self._validate_report(outcomes, work_items, outcome_changes, work_changes, evidence)
 
         now = _now()
