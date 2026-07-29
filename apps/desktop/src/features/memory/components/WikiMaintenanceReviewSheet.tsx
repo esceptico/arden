@@ -82,7 +82,8 @@ export function WikiMaintenanceReviewSheet({
 
   const evidenceReview = review.proposal?.kind === "manual_evidence_review" ? review : null;
   const hasUpdates = review.proposal?.kind === "maintenance_updates" && review.proposal.updates.length > 0;
-  const canAccept = hasUpdates || evidenceReview !== null;
+  const hasMerge = review.proposal?.kind === "page_merge";
+  const canAccept = hasUpdates || hasMerge || evidenceReview !== null;
   const controlsDisabled = pending || checking || reconciliationRequired;
 
   // An unresolved question must not be dismissed with Escape or a backdrop.
@@ -235,7 +236,13 @@ export function WikiMaintenanceReviewSheet({
                     disabled={controlsDisabled}
                     onClick={() => onResolve(review, { action: "accept" })}
                   >
-                    {pending ? "Saving…" : hasUpdates ? "Accept change" : "Accept as-is"}
+                    {pending
+                      ? "Saving…"
+                      : hasUpdates
+                        ? "Accept change"
+                        : hasMerge
+                          ? "Accept merge"
+                          : "Accept as-is"}
                   </Button>
                 )}
               </>
@@ -286,6 +293,22 @@ function ReviewBody({
               </li>
             ))}
           </ol>
+        </>
+      )}
+      {proposal?.kind === "page_merge" && (
+        <>
+          <p className="wiki-rename-sheet__explanation">{proposal.summary}</p>
+          <div className="wiki-maintenance-review__updates">
+            <div className="wiki-maintenance-review__page-heading">
+              <h3>{proposal.loserTitle} → {proposal.canonicalTitle}</h3>
+            </div>
+            <p className="wiki-maintenance-review__aliases">
+              Preserve the canonical page, merge unique notes, update {proposal.linkCount} link{proposal.linkCount === 1 ? "" : "s"} across {proposal.pageCount} page{proposal.pageCount === 1 ? "" : "s"}, and archive the duplicate.
+            </p>
+            <p className="wiki-maintenance-review__aliases">
+              Redirects: {proposal.redirectCount}
+            </p>
+          </div>
         </>
       )}
       {proposal?.kind === "manual_evidence_review" && (

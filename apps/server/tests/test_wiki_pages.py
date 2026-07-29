@@ -6,6 +6,7 @@ from arden.wiki.pages import (
     PageValidationError,
     create_page,
     extract_generated_region,
+    extract_user_body,
     page_excerpt,
     parse_page,
     update_generated_region,
@@ -125,6 +126,16 @@ def test_generated_region_replaces_only_inner_bytes_and_supports_crlf() -> None:
     assert updated.startswith(content[: content.index(prefix) + len(prefix)])
     assert parse_page(updated).body == prefix + b"new\n" + suffix
     assert extract_generated_region(updated, expected_page_id="stable") == b"new\n"
+
+
+def test_user_body_excludes_the_validated_generated_block_with_crlf() -> None:
+    content = create_page(
+        page_id="stable",
+        title="Stable",
+        body=(b"Before.\r\n<!-- generated -->\r\nGenerated.\r\n<!-- /generated -->\r\nAfter.\r\n"),
+    ).to_bytes()
+
+    assert extract_user_body(content, expected_page_id="stable") == b"Before.\r\nAfter.\r\n"
 
 
 def test_generated_region_is_prepended_without_changing_original_body_suffix() -> None:

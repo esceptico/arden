@@ -30,8 +30,14 @@ from arden.memory.facts.consumer_store import FactConsumerStore
 from arden.memory.facts.dream import FactDream
 from arden.memory.facts.index import FactIndexProjection
 from arden.memory.facts.ledger import FactLedger
-from arden.memory.facts.maintenance.runner import CONSUMER_ID as FACT_MAINTENANCE_CONSUMER_ID
-from arden.memory.facts.maintenance.runner import FactMaintenance, FactMaintenanceReviewer
+from arden.memory.facts.maintenance.runner import (
+    CONSUMER_ID as FACT_MAINTENANCE_CONSUMER_ID,
+)
+from arden.memory.facts.maintenance.runner import (
+    FactMaintenance,
+    FactMaintenanceReviewer,
+    TopicPageCollisionDisposition,
+)
 from arden.memory.facts.plan_store import FactPlanStore
 from arden.memory.facts.service import FactService
 from arden.memory.facts.synthesis import CONSUMER_ID as FACT_SYNTHESIS_CONSUMER_ID
@@ -73,8 +79,12 @@ from arden.wiki.health import (
     WikiHealthProjector,
     WikiHealthWorker,
 )
-from arden.wiki.maintenance.runner import WikiMaintenance, WikiMaintenanceReviewer
-from arden.wiki.maintenance.store import WikiMaintenanceStore
+from arden.wiki.maintenance.runner import (
+    WikiMaintenance,
+    WikiMaintenanceReviewer,
+    record_page_collision_review,
+)
+from arden.wiki.maintenance.store import WikiMaintenanceReviewStatus, WikiMaintenanceStore
 from arden.wiki.models import WikiChangesReport
 from arden.wiki.service import WikiService
 
@@ -528,7 +538,30 @@ class Runtime:
             reviewer,
             wiki=self.wiki_service,
             candidate_provider=self.fact_index_projection,
+            record_topic_page_collision=self._record_topic_page_collision,
         )
+
+    async def _record_topic_page_collision(
+        self,
+        canonical_page_id: str,
+        loser_page_id: str,
+    ) -> TopicPageCollisionDisposition:
+        if self._wiki_maintenance_store is None or self.wiki_service is None:
+            raise RuntimeError("wiki maintenance review service is unavailable")
+        result = await record_page_collision_review(
+            self._wiki_maintenance_store,
+            self.wiki_service,
+            canonical_page_id=canonical_page_id,
+            loser_page_id=loser_page_id,
+        )
+        if result.status in {
+            WikiMaintenanceReviewStatus.REJECTED,
+            WikiMaintenanceReviewStatus.RESOLVED_MANUAL,
+        }:
+            return TopicPageCollisionDisposition.DECLINED
+        await self.notify_wiki_maintenance_reviews_changed(result.blocking_commit_id)
+        await self.request_wiki_maintenance()
+        return TopicPageCollisionDisposition.BLOCKED
 
     def _create_wiki_maintenance(self, reviewer: WikiMaintenanceReviewer) -> WikiMaintenance | None:
         if self._wiki_maintenance_store is None or self.wiki_service is None or not self.config.memory_model:

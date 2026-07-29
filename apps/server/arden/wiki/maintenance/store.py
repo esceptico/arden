@@ -19,11 +19,14 @@ from uuid import uuid4
 import aiosqlite
 
 from arden.database import connect
-from arden.wiki.constants import WIKI_MAINTENANCE_ORIGIN, WIKI_PROJECTION_CONSUMER_ID
+from arden.wiki.constants import (
+    TOPIC_PAGE_COLLISION_EVIDENCE_PREFIX,
+    WIKI_MAINTENANCE_ORIGIN,
+    WIKI_PROJECTION_CONSUMER_ID,
+)
 
 CONSUMER_ID = WIKI_MAINTENANCE_ORIGIN
-
-_SCHEMA = """
+_SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS wiki_maintenance_watermarks (
     consumer_id TEXT PRIMARY KEY,
     revision TEXT NOT NULL,
@@ -61,9 +64,12 @@ CREATE INDEX IF NOT EXISTS idx_wiki_maintenance_reviews_pending
     ON wiki_maintenance_reviews(status, blocking_commit_id, created_at)
     WHERE status = 'needs_review';
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_wiki_maintenance_one_pending_per_commit
+DROP INDEX IF EXISTS idx_wiki_maintenance_one_pending_per_commit;
+
+CREATE UNIQUE INDEX idx_wiki_maintenance_one_pending_per_commit
     ON wiki_maintenance_reviews(blocking_commit_id)
-    WHERE status = 'needs_review';
+    WHERE status = 'needs_review'
+      AND evidence_key NOT LIKE '{TOPIC_PAGE_COLLISION_EVIDENCE_PREFIX}%';
 """
 
 
@@ -335,6 +341,69 @@ class WikiMaintenanceStore:
         )
         return [_review_row(row) for row in rows]
 
+    async def list_page_collision_reviews(self) -> list[WikiMaintenanceReview]:
+        rows = await self._conn.execute_fetchall(
+            """
+            SELECT * FROM wiki_maintenance_reviews
+            WHERE evidence_key LIKE ?
+            ORDER BY updated_at, review_id
+            """,
+            (f"{TOPIC_PAGE_COLLISION_EVIDENCE_PREFIX}%",),
+        )
+        return [_review_row(row) for row in rows]
+
+    async def record_page_collision_review(self, review: WikiMaintenanceReviewInput) -> WikiMaintenanceReview:
+        """Persist one trusted page-collision Ask without moving the watermark."""
+
+        normalized = self._review_input(review)
+        self._require_page_collision(normalized)
+        async with self._lock, self._transaction():
+            return await self._create_or_refresh(normalized)
+
+    async def refresh_page_collision_review(
+        self,
+        review_id: str,
+        *,
+        expected_generation: int,
+        expected_status: WikiMaintenanceReviewStatus,
+        review: WikiMaintenanceReviewInput,
+    ) -> WikiMaintenanceReview:
+        """Replace stale collision evidence unless the user decided meanwhile."""
+
+        review_id = _text("review_id", review_id)
+        if isinstance(expected_generation, bool) or not isinstance(expected_generation, int) or expected_generation < 0:
+            raise ValueError("expected_generation must be a nonnegative integer")
+        normalized = self._review_input(review)
+        self._require_page_collision(normalized)
+        now = datetime.now(UTC).isoformat()
+        async with self._lock, self._transaction():
+            cursor = await self._conn.execute(
+                """
+                UPDATE wiki_maintenance_reviews
+                SET blocking_commit_id = ?, evidence_key = ?, evidence_fingerprint = ?,
+                    generation = generation + 1, status = 'needs_review', summary = ?,
+                    proposal_json = ?, updated_at = ?, resolved_at = NULL, decision_note = NULL
+                WHERE review_id = ? AND generation = ? AND status = ?
+                """,
+                (
+                    normalized.blocking_commit_id,
+                    normalized.evidence_key,
+                    normalized.evidence_fingerprint,
+                    normalized.summary,
+                    normalized.proposal_json,
+                    now,
+                    review_id,
+                    expected_generation,
+                    expected_status.value,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise WikiMaintenanceReviewConflictError("review changed before evidence refresh")
+            refreshed = await self.get_review(review_id)
+            if refreshed is None:
+                raise RuntimeError("refreshed wiki maintenance review disappeared")
+            return refreshed
+
     async def list_for_commit(self, blocking_commit_id: str) -> list[WikiMaintenanceReview]:
         """Return the complete durable review history for one blocking commit."""
 
@@ -369,6 +438,11 @@ class WikiMaintenanceStore:
             WikiMaintenanceReviewAction.RESOLVE_MANUAL: WikiMaintenanceReviewStatus.RESOLVED_MANUAL,
         }[action]
         async with self._lock:
+            existing = await self.get_review(review_id)
+            if existing is None:
+                raise WikiMaintenanceReviewConflictError("review changed before resolution")
+            if action is WikiMaintenanceReviewAction.ACCEPT and existing.proposal_json is None:
+                raise ValueError("a non-executable review cannot be accepted")
             cursor = await self._conn.execute(
                 """
                 UPDATE wiki_maintenance_reviews
@@ -441,6 +515,8 @@ class WikiMaintenanceStore:
         if reviewed_through is None and expected_revision is not None and commit_ids:
             raise ValueError("reviewed_through is required when ordered_commit_ids are supplied")
         normalized = tuple(self._review_input(review) for review in reviews)
+        if any(review.evidence_key.startswith(TOPIC_PAGE_COLLISION_EVIDENCE_PREFIX) for review in normalized):
+            raise ValueError("page collision reviews require the trusted collision API")
         if any(review.blocking_commit_id not in commit_ids for review in normalized):
             raise ValueError("review blocking_commit_id must occur in ordered_commit_ids")
 
@@ -467,6 +543,11 @@ class WikiMaintenanceStore:
             summary=_text("summary", review.summary),
             proposal_json=_proposal_json(review.proposal_json),
         )
+
+    @staticmethod
+    def _require_page_collision(review: WikiMaintenanceReviewInput) -> None:
+        if not review.evidence_key.startswith(TOPIC_PAGE_COLLISION_EVIDENCE_PREFIX):
+            raise ValueError("trusted collision review must use the reserved evidence prefix")
 
     @asynccontextmanager
     async def _transaction(self) -> AsyncIterator[None]:
@@ -517,7 +598,10 @@ class WikiMaintenanceStore:
         )
         now = datetime.now(UTC).isoformat()
         if not rows:
-            await self._assert_no_other_open(review.blocking_commit_id)
+            await self._assert_no_other_open(
+                review.blocking_commit_id,
+                evidence_key=review.evidence_key,
+            )
             review_id = uuid4().hex
             await self._conn.execute(
                 """
@@ -545,7 +629,11 @@ class WikiMaintenanceStore:
         if existing.evidence_fingerprint == review.evidence_fingerprint:
             if existing.status is not WikiMaintenanceReviewStatus.CLEARED:
                 return existing
-            await self._assert_no_other_open(review.blocking_commit_id, excluding_review_id=existing.review_id)
+            await self._assert_no_other_open(
+                review.blocking_commit_id,
+                evidence_key=review.evidence_key,
+                excluding_review_id=existing.review_id,
+            )
             await self._conn.execute(
                 """
                 UPDATE wiki_maintenance_reviews
@@ -559,7 +647,11 @@ class WikiMaintenanceStore:
             refreshed = await self.get_review(existing.review_id)
             assert refreshed is not None
             return refreshed
-        await self._assert_no_other_open(review.blocking_commit_id, excluding_review_id=existing.review_id)
+        await self._assert_no_other_open(
+            review.blocking_commit_id,
+            evidence_key=review.evidence_key,
+            excluding_review_id=existing.review_id,
+        )
         await self._conn.execute(
             """
             UPDATE wiki_maintenance_reviews
@@ -584,25 +676,34 @@ class WikiMaintenanceStore:
         self,
         blocking_commit_id: str,
         *,
+        evidence_key: str,
         excluding_review_id: str | None = None,
     ) -> None:
+        if evidence_key.startswith(TOPIC_PAGE_COLLISION_EVIDENCE_PREFIX):
+            return
         if excluding_review_id is None:
             rows = await self._conn.execute_fetchall(
                 """
                 SELECT review_id FROM wiki_maintenance_reviews
                 WHERE blocking_commit_id = ? AND status = 'needs_review'
+                  AND evidence_key NOT LIKE ?
                 LIMIT 1
                 """,
-                (blocking_commit_id,),
+                (blocking_commit_id, f"{TOPIC_PAGE_COLLISION_EVIDENCE_PREFIX}%"),
             )
         else:
             rows = await self._conn.execute_fetchall(
                 """
                 SELECT review_id FROM wiki_maintenance_reviews
-                WHERE blocking_commit_id = ? AND status = 'needs_review' AND review_id != ?
+                WHERE blocking_commit_id = ? AND status = 'needs_review'
+                  AND evidence_key NOT LIKE ? AND review_id != ?
                 LIMIT 1
                 """,
-                (blocking_commit_id, excluding_review_id),
+                (
+                    blocking_commit_id,
+                    f"{TOPIC_PAGE_COLLISION_EVIDENCE_PREFIX}%",
+                    excluding_review_id,
+                ),
             )
         if rows:
             raise WikiMaintenanceReviewConflictError("a different open review already blocks this wiki commit")

@@ -5,6 +5,7 @@ import hashlib
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from types import MappingProxyType
 from typing import Annotated, Any, Literal, Protocol
 
@@ -111,6 +112,19 @@ class FactMaintenancePreparedCluster:
 FactMaintenanceReviewer = Callable[[FactMaintenancePreparedCluster], Awaitable[FactMaintenanceDecision]]
 
 
+class TopicPageCollisionDisposition(StrEnum):
+    """How Fact Maintenance should handle one durable page-merge decision."""
+
+    BLOCKED = "blocked"
+    DECLINED = "declined"
+
+
+TopicPageCollisionRecorder = Callable[
+    [str, str],
+    Awaitable[TopicPageCollisionDisposition],
+]
+
+
 @dataclass(frozen=True, slots=True)
 class FactMaintenanceResult:
     through_revision: str | None
@@ -128,6 +142,12 @@ class _ReviewedDecision:
     decision: FactMaintenanceDecision
 
 
+@dataclass(frozen=True, slots=True)
+class _TopicPageCollisionReview:
+    reviewed: tuple[_ReviewedDecision, ...]
+    blocked: bool
+
+
 class FactMaintenance:
     """Review changed facts and publish one version-pinned maintenance plan."""
 
@@ -140,6 +160,7 @@ class FactMaintenance:
         wiki: WikiService,
         candidate_provider: FactMaintenanceCandidateProvider | None = None,
         candidate_limit: int = 12,
+        record_topic_page_collision: TopicPageCollisionRecorder | None = None,
     ) -> None:
         if not 1 <= candidate_limit <= 100:
             raise ValueError("candidate_limit must be between 1 and 100")
@@ -149,6 +170,7 @@ class FactMaintenance:
         self._wiki = wiki
         self._candidate_provider = candidate_provider
         self._candidate_limit = candidate_limit
+        self._record_topic_page_collision = record_topic_page_collision
         self._intents = FactMaintenanceIntentStore(service.plans.conn)
 
     async def run(self) -> FactMaintenanceResult:
@@ -186,6 +208,13 @@ class FactMaintenance:
             cluster = await self._prepare_cluster(target, facts, wiki_pages)
             decision = await self._reviewer(cluster)
             reviewed.append(_ReviewedDecision(target, cluster, decision))
+        collision_review = await self._record_topic_page_collisions(reviewed, wiki_snapshot, wiki_pages)
+        if collision_review.blocked:
+            return FactMaintenanceResult(
+                feed.through_revision,
+                reviewed_clusters=len(reviewed),
+            )
+        reviewed = list(collision_review.reviewed)
 
         changes, amended, merged, reasons = self._prepare_changes(reviewed)
         topic_changes, topic_bindings, topic_reasons = self._prepare_topic_normalizations(
@@ -240,6 +269,40 @@ class FactMaintenance:
             merged_facts=merged,
             advanced=True,
         )
+
+    async def _record_topic_page_collisions(
+        self,
+        reviewed: Sequence[_ReviewedDecision],
+        wiki_snapshot: WikiSnapshot,
+        wiki_pages: Mapping[str, WikiPageRecord],
+    ) -> _TopicPageCollisionReview:
+        if self._record_topic_page_collision is None:
+            return _TopicPageCollisionReview(tuple(reviewed), False)
+        retained: list[_ReviewedDecision] = []
+        blocked = False
+        for item in reviewed:
+            decision = item.decision.root
+            if not isinstance(decision, FactMaintenanceTopicNormalization):
+                retained.append(item)
+                continue
+            canonical = wiki_pages.get(decision.canonical_page_token)
+            if canonical is None:
+                raise FactMaintenanceError("topic normalization used an unknown wiki page token")
+            owner = self._wiki.resolve_topic_name(decision.old_topic, snapshot=wiki_snapshot)
+            if owner is None or owner.page.lifecycle != "active" or owner.page.page_id == canonical.page.page_id:
+                retained.append(item)
+                continue
+            disposition = await self._record_topic_page_collision(
+                canonical.page.page_id,
+                owner.page.page_id,
+            )
+            if disposition is TopicPageCollisionDisposition.BLOCKED:
+                blocked = True
+                retained.append(item)
+                continue
+            if disposition is not TopicPageCollisionDisposition.DECLINED:
+                raise FactMaintenanceError("topic page collision recorder returned an invalid disposition")
+        return _TopicPageCollisionReview(tuple(retained), blocked)
 
     async def _resume_intent(
         self,

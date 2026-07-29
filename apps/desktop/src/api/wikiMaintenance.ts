@@ -26,8 +26,21 @@ export interface WikiMaintenanceEvidenceProposal {
   limitBytes: number;
 }
 
+export interface WikiMaintenancePageMergeProposal {
+  kind: "page_merge";
+  summary: string;
+  canonicalPageId: string;
+  canonicalTitle: string;
+  loserPageId: string;
+  loserTitle: string;
+  linkCount: number;
+  pageCount: number;
+  redirectCount: 0;
+}
+
 export type WikiMaintenanceProposal =
   | WikiMaintenanceUpdateProposal
+  | WikiMaintenancePageMergeProposal
   | WikiMaintenanceEvidenceProposal;
 
 export interface WikiMaintenanceReview {

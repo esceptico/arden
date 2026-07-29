@@ -14,11 +14,18 @@ from arden.memory.facts.maintenance.runner import (
     FactMaintenanceDecision,
     FactMaintenanceError,
     FactMaintenancePreparedCluster,
+    TopicPageCollisionDisposition,
 )
 from arden.memory.facts.models import Fact, FactConflictError, FactValidationError
 from arden.memory.facts.plan_store import FactPlanStore
 from arden.memory.facts.service import FactService
 from arden.revisions import Archive, ChangeSet, Create, ManagedFileRepository, RevisionConflictError, Update
+from arden.wiki.maintenance.runner import WikiMaintenance, record_page_collision_review
+from arden.wiki.maintenance.store import (
+    WikiMaintenanceReviewAction,
+    WikiMaintenanceReviewStatus,
+    WikiMaintenanceStore,
+)
 from arden.wiki.pages import create_page as create_wiki_page
 from arden.wiki.service import WikiService
 
@@ -91,6 +98,7 @@ async def _service(
     provider: _Provider | None = None,
     post_commit=None,
     wiki: WikiService | None = None,
+    record_topic_page_collision=None,
 ) -> tuple[FactLedger, FactConsumerStore, object, FactMaintenance]:
     ledger = FactLedger(tmp_path / "facts", clock=lambda: NOW)
     connection = await connect(tmp_path / "facts.sqlite")
@@ -105,6 +113,7 @@ async def _service(
         wiki=wiki or WikiService(ManagedFileRepository(tmp_path / "wiki")),
         candidate_provider=provider,
         candidate_limit=3,
+        record_topic_page_collision=record_topic_page_collision,
     )
     return ledger, consumers, connection, maintenance
 
@@ -949,7 +958,7 @@ async def test_normalize_topic_retry_after_fact_commit_does_not_reask_reviewer(
         await connection.close()
 
 
-async def test_normalize_topic_is_noop_for_canonical_title_and_separate_old_topic_page(
+async def test_normalize_topic_is_noop_for_canonical_title(
     tmp_path: Path,
 ) -> None:
     canonical_wiki = WikiService(ManagedFileRepository(tmp_path / "canonical-wiki"))
@@ -981,6 +990,250 @@ async def test_normalize_topic_is_noop_for_canonical_title_and_separate_old_topi
         await consumers.close()
         await connection.close()
 
+
+async def test_fact_topic_collision_creates_durable_wiki_merge_review_without_a_wiki_commit(
+    tmp_path: Path,
+) -> None:
+    wiki = WikiService(ManagedFileRepository(tmp_path / "wiki"))
+    wiki.create_page(path="bicycle.md", title="Bicycle", page_id="bicycle-page")
+    wiki.create_page(path="bike.md", title="Bike", page_id="bike-page")
+    wiki_head = wiki.repository.head
+    review_store = await WikiMaintenanceStore.open(tmp_path / "wiki-maintenance.sqlite")
+
+    async def record_collision(
+        canonical_page_id: str,
+        loser_page_id: str,
+    ) -> TopicPageCollisionDisposition:
+        result = await record_page_collision_review(
+            review_store,
+            wiki,
+            canonical_page_id=canonical_page_id,
+            loser_page_id=loser_page_id,
+        )
+        if result.status in {
+            WikiMaintenanceReviewStatus.REJECTED,
+            WikiMaintenanceReviewStatus.RESOLVED_MANUAL,
+        }:
+            return TopicPageCollisionDisposition.DECLINED
+        return TopicPageCollisionDisposition.BLOCKED
+
+    def decide(cluster: FactMaintenancePreparedCluster) -> FactMaintenanceDecision:
+        token = next(token for token, title in cluster.wiki_page_tokens.items() if title == "Bicycle")
+        return FactMaintenanceDecision(
+            outcome="normalize_topic",
+            reason="Bike and Bicycle are the same topic.",
+            old_topic="Bike",
+            canonical_page_token=token,
+        )
+
+    reviewer = _Reviewer(decide)
+    ledger, consumers, connection, maintenance = await _service(
+        tmp_path,
+        reviewer,
+        wiki=wiki,
+        record_topic_page_collision=record_collision,
+    )
+    try:
+        _commit(ledger, _create("target", "Target", subjects=["Bike"]))
+
+        result = await maintenance.run()
+
+        assert not result.advanced
+        assert wiki.repository.head == wiki_head
+        assert await consumers.get(CONSUMER_ID) is None
+        pending = await review_store.list_pending()
+        assert len(pending) == 1
+        assert '"kind":"page_merge"' in (pending[0].proposal_json or "")
+        assert ledger.get("target").subjects == ("Bike",)
+    finally:
+        await review_store.close()
+        await consumers.close()
+        await connection.close()
+
+
+async def test_rejected_topic_collision_skips_only_normalization_and_advances_other_changes(
+    tmp_path: Path,
+) -> None:
+    wiki = WikiService(ManagedFileRepository(tmp_path / "wiki"))
+    wiki.create_page(path="bicycle.md", title="Bicycle", page_id="bicycle-page")
+    wiki.create_page(path="bike.md", title="Bike", page_id="bike-page")
+    wiki_head = wiki.repository.head
+    review_store = await WikiMaintenanceStore.open(tmp_path / "wiki-maintenance.sqlite")
+    await record_page_collision_review(
+        review_store,
+        wiki,
+        canonical_page_id="bicycle-page",
+        loser_page_id="bike-page",
+    )
+    pending = (await review_store.list_pending())[0]
+    await review_store.resolve(
+        pending.review_id,
+        expected_generation=pending.generation,
+        action=WikiMaintenanceReviewAction.REJECT,
+    )
+
+    async def record_collision(
+        canonical_page_id: str,
+        loser_page_id: str,
+    ) -> TopicPageCollisionDisposition:
+        result = await record_page_collision_review(
+            review_store,
+            wiki,
+            canonical_page_id=canonical_page_id,
+            loser_page_id=loser_page_id,
+        )
+        if result.status is WikiMaintenanceReviewStatus.REJECTED:
+            return TopicPageCollisionDisposition.DECLINED
+        return TopicPageCollisionDisposition.BLOCKED
+
+    def decide(cluster: FactMaintenancePreparedCluster) -> FactMaintenanceDecision:
+        target = cluster.fact_tokens[cluster.target_token]
+        if target.fact_id == "collision":
+            token = next(token for token, title in cluster.wiki_page_tokens.items() if title == "Bicycle")
+            return FactMaintenanceDecision(
+                outcome="normalize_topic",
+                reason="Bike and Bicycle are the same topic.",
+                old_topic="Bike",
+                canonical_page_token=token,
+            )
+        return FactMaintenanceDecision(
+            outcome="amend_metadata",
+            reason="Correct the unrelated fact kind.",
+            target_token=cluster.target_token,
+            kind="note",
+        )
+
+    reviewer = _Reviewer(decide)
+    ledger, consumers, connection, maintenance = await _service(
+        tmp_path,
+        reviewer,
+        wiki=wiki,
+        record_topic_page_collision=record_collision,
+    )
+    try:
+        input_revision = _commit(
+            ledger,
+            _create("collision", "Collision", subjects=["Bike"]),
+            _create("metadata", "Metadata", subjects=["Other"]),
+        )
+
+        result = await maintenance.run()
+
+        assert result.advanced and result.amended_facts == 1
+        assert (await consumers.get(CONSUMER_ID)).revision == input_revision
+        assert ledger.get("collision").subjects == ("Bike",)
+        assert ledger.get("metadata").kind == "note"
+        assert wiki.repository.head == wiki_head
+        assert await review_store.list_pending() == []
+
+        assert (await maintenance.run()).advanced
+        assert (await maintenance.run()).empty
+        assert len(reviewer.calls) == 2
+    finally:
+        await review_store.close()
+        await consumers.close()
+        await connection.close()
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        WikiMaintenanceReviewAction.REJECT,
+        WikiMaintenanceReviewAction.RESOLVE_MANUAL,
+    ],
+)
+async def test_unsafe_topic_collision_is_a_non_executable_ask_and_does_not_retry_after_decision(
+    tmp_path: Path,
+    action: WikiMaintenanceReviewAction,
+) -> None:
+    wiki = WikiService(ManagedFileRepository(tmp_path / "wiki"))
+    wiki.create_page(
+        path="bicycle.md",
+        title="Bicycle",
+        page_id="bicycle-page",
+        metadata={"scope": "private"},
+    )
+    wiki.create_page(
+        path="bike.md",
+        title="Bike",
+        page_id="bike-page",
+        metadata={"scope": "shared"},
+    )
+    wiki_head = wiki.repository.head
+    review_store = await WikiMaintenanceStore.open(tmp_path / "wiki-maintenance.sqlite")
+
+    async def record_collision(
+        canonical_page_id: str,
+        loser_page_id: str,
+    ) -> TopicPageCollisionDisposition:
+        review = await record_page_collision_review(
+            review_store,
+            wiki,
+            canonical_page_id=canonical_page_id,
+            loser_page_id=loser_page_id,
+        )
+        if review.status in {
+            WikiMaintenanceReviewStatus.REJECTED,
+            WikiMaintenanceReviewStatus.RESOLVED_MANUAL,
+        }:
+            return TopicPageCollisionDisposition.DECLINED
+        return TopicPageCollisionDisposition.BLOCKED
+
+    def decide(cluster: FactMaintenancePreparedCluster) -> FactMaintenanceDecision:
+        token = next(token for token, title in cluster.wiki_page_tokens.items() if title == "Bicycle")
+        return FactMaintenanceDecision(
+            outcome="normalize_topic",
+            reason="Bike and Bicycle are the same topic.",
+            old_topic="Bike",
+            canonical_page_token=token,
+        )
+
+    reviewer = _Reviewer(decide)
+    ledger, consumers, connection, maintenance = await _service(
+        tmp_path,
+        reviewer,
+        wiki=wiki,
+        record_topic_page_collision=record_collision,
+    )
+    try:
+        input_revision = _commit(ledger, _create("target", "Target", subjects=["Bike"]))
+
+        blocked = await maintenance.run()
+
+        assert not blocked.advanced
+        pending = (await review_store.list_pending())[0]
+        assert pending.proposal_json is None
+
+        async def unexpected_wiki_review(_report):
+            raise AssertionError("an unsafe collision Ask must block before completion")
+
+        wiki_result = await WikiMaintenance(review_store, wiki, unexpected_wiki_review).run()
+        assert wiki_result.blocked
+        await review_store.resolve(
+            pending.review_id,
+            expected_generation=pending.generation,
+            action=action,
+            decision_note="Reconciled outside automation."
+            if action is WikiMaintenanceReviewAction.RESOLVE_MANUAL
+            else None,
+        )
+
+        resolved = await maintenance.run()
+
+        assert resolved.advanced
+        assert (await consumers.get(CONSUMER_ID)).revision == input_revision
+        assert ledger.get("target").subjects == ("Bike",)
+        assert wiki.repository.head == wiki_head
+        assert await review_store.list_pending() == []
+        assert (await maintenance.run()).empty
+        assert len(reviewer.calls) == 2
+    finally:
+        await review_store.close()
+        await consumers.close()
+        await connection.close()
+
+
+async def test_normalize_topic_collision_without_recorder_remains_noop(tmp_path: Path) -> None:
     duplicate_wiki = WikiService(ManagedFileRepository(tmp_path / "duplicate-wiki"))
     duplicate_wiki.create_page(path="bicycle.md", title="Bicycle", page_id="bicycle-page")
     duplicate_wiki.create_page(path="bike.md", title="Bike", page_id="bike-page")

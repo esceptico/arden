@@ -85,9 +85,12 @@ WIKI_MAINTENANCE_PROMPT = (
     "Run Wiki Maintenance to completion. Start with wiki_maintenance_review action='next'. "
     "For each prepared, version-pinned report, preserve user intent and use only the supplied evidence. "
     "Choose no_change unless a targeted title, alias, or ordinary body edit is necessary for cross-page consistency. "
-    "Never do any of the following: invent facts or citations, read raw facts, rename, move, archive, merge, "
-    "redirect, or edit generated regions. "
-    "Use needs_review when a durable user decision is required. If the tool rejects a decision, correct that same report "
+    "When the evidence identifies duplicate pages, propose exactly one page merge with outcome='needs_review', a concern, "
+    "and a nested merge object containing canonical_page_token and loser_page_token. The backend preserves user prose, "
+    "rewrites parsed links, archives the loser, and creates zero redirects only after durable user acceptance. "
+    "Never invent facts or citations, read raw facts, rename, "
+    "move, archive except through that merge proposal, redirect, or edit generated regions. "
+    "Use needs_review for every merge or other durable user decision. If the tool rejects a decision, correct that same report "
     "and retry. Continue until the tool reports completion; never use another tool or stop early."
 )
 

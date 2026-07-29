@@ -3,6 +3,7 @@
 import asyncio
 import json
 from datetime import datetime
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
@@ -24,7 +25,11 @@ from arden.wiki.approvals import (
     deserialize_rename_plan,
     rename_plan_fingerprint,
 )
-from arden.wiki.maintenance.runner import WikiMaintenanceError, parse_maintenance_update_proposal
+from arden.wiki.maintenance.runner import (
+    WikiMaintenanceError,
+    WikiMaintenanceExecutableMerge,
+    parse_maintenance_proposal,
+)
 from arden.wiki.maintenance.store import (
     WikiMaintenanceReview,
     WikiMaintenanceReviewAction,
@@ -86,14 +91,38 @@ class WikiMaintenanceManualResolveRequest(WikiMaintenanceReviewDecisionRequest):
     note: str = Field(min_length=1, max_length=4_000)
 
 
-class WikiMaintenanceReviewProposalResponse(BaseModel):
-    kind: str
-    summary: str | None = None
-    updates: list[dict[str, object]] | None = None
-    section: str | None = None
-    actualBytes: int | None = None
+class WikiMaintenanceUpdatesProposalResponse(BaseModel):
+    kind: Literal["maintenance_updates"]
+    summary: str
+    updates: list[dict[str, object]]
+
+
+class WikiMaintenanceEvidenceProposalResponse(BaseModel):
+    kind: Literal["manual_evidence_review"]
+    section: str
+    actualBytes: int
     actualBytesAtLeast: bool = False
-    limitBytes: int | None = None
+    limitBytes: int
+
+
+class WikiMaintenanceMergeProposalResponse(BaseModel):
+    kind: Literal["page_merge"]
+    summary: str
+    canonicalPageId: str
+    canonicalTitle: str
+    loserPageId: str
+    loserTitle: str
+    linkCount: int
+    pageCount: int
+    redirectCount: Literal[0]
+
+
+type WikiMaintenanceReviewProposalResponse = Annotated[
+    WikiMaintenanceUpdatesProposalResponse
+    | WikiMaintenanceEvidenceProposalResponse
+    | WikiMaintenanceMergeProposalResponse,
+    Field(discriminator="kind"),
+]
 
 
 class WikiMaintenanceReviewResponse(BaseModel):
@@ -264,7 +293,7 @@ def _maintenance_proposal_response(proposal_json: str | None) -> WikiMaintenance
                 ):
                     raise ValueError("maintenance update is malformed")
                 sanitized_updates.append({"pageId": page_id, "title": title, "aliases": aliases, "body": body})
-            return WikiMaintenanceReviewProposalResponse(
+            return WikiMaintenanceUpdatesProposalResponse(
                 kind=kind,
                 summary=summary,
                 updates=sanitized_updates,
@@ -283,12 +312,46 @@ def _maintenance_proposal_response(proposal_json: str | None) -> WikiMaintenance
                 or not isinstance(limit_bytes, int)
             ):
                 raise ValueError("manual evidence proposal is malformed")
-            return WikiMaintenanceReviewProposalResponse(
+            return WikiMaintenanceEvidenceProposalResponse(
                 kind=kind,
                 section=section,
                 actualBytes=actual_bytes,
                 actualBytesAtLeast=actual_bytes_at_least,
                 limitBytes=limit_bytes,
+            )
+        if kind == "page_merge":
+            summary = proposal.get("summary")
+            canonical_page_id = proposal.get("canonical_page_id")
+            canonical_title = proposal.get("canonical_title")
+            loser_page_id = proposal.get("loser_page_id")
+            loser_title = proposal.get("loser_title")
+            link_count = proposal.get("link_count")
+            page_count = proposal.get("page_count")
+            redirect_count = proposal.get("redirect_count")
+            if (
+                not isinstance(summary, str)
+                or not isinstance(canonical_page_id, str)
+                or not isinstance(canonical_title, str)
+                or not isinstance(loser_page_id, str)
+                or not isinstance(loser_title, str)
+                or isinstance(link_count, bool)
+                or not isinstance(link_count, int)
+                or isinstance(page_count, bool)
+                or not isinstance(page_count, int)
+                or isinstance(redirect_count, bool)
+                or redirect_count != 0
+            ):
+                raise ValueError("page merge proposal is malformed")
+            return WikiMaintenanceMergeProposalResponse(
+                kind=kind,
+                summary=summary,
+                canonicalPageId=canonical_page_id,
+                canonicalTitle=canonical_title,
+                loserPageId=loser_page_id,
+                loserTitle=loser_title,
+                linkCount=link_count,
+                pageCount=page_count,
+                redirectCount=redirect_count,
             )
         raise ValueError("maintenance proposal has an unknown kind")
     except (TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -329,13 +392,17 @@ async def _resolve_maintenance_review(
         proposal = _maintenance_proposal_response(existing.proposal_json)
         if proposal is None or (proposal.kind == "maintenance_updates" and not proposal.updates):
             raise HTTPException(status_code=422, detail="wiki maintenance review has no executable proposal")
-        if proposal.kind == "maintenance_updates":
+        if proposal.kind in {"maintenance_updates", "page_merge"}:
             try:
-                assert existing.proposal_json is not None
-                executable = parse_maintenance_update_proposal(existing.proposal_json)
+                proposal_json = existing.proposal_json
+                if proposal_json is None:
+                    raise WikiMaintenanceError("maintenance review has no executable proposal")
+                executable = parse_maintenance_proposal(proposal_json)
                 expected_reason = f"wiki maintenance {existing.blocking_commit_id} {executable.replay_fingerprint}"
                 if executable.reason != expected_reason:
                     raise WikiMaintenanceError("maintenance proposal reason does not match its review")
+                if proposal.kind == "page_merge" and not isinstance(executable, WikiMaintenanceExecutableMerge):
+                    raise WikiMaintenanceError("page merge proposal is malformed")
             except WikiMaintenanceError as exc:
                 raise HTTPException(status_code=503, detail="wiki maintenance review is corrupt") from exc
     try:

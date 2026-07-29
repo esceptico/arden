@@ -96,6 +96,34 @@ class RenamePlan:
 
 
 @dataclass(frozen=True, slots=True)
+class PageMergeRewrite:
+    """One parsed-link rewrite performed as part of a page merge."""
+
+    resource_id: str
+    expected_version: str
+    content: bytes
+    replacements: tuple[LinkReference, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PageMergePlan:
+    """A snapshot-pinned merge of one duplicate page into its canonical peer."""
+
+    base_head: str
+    canonical_page_id: str
+    canonical_expected_version: str
+    canonical_title: str
+    loser_page_id: str
+    loser_expected_version: str
+    loser_title: str
+    canonical_content: bytes
+    rewrites: tuple[PageMergeRewrite, ...]
+    link_count: int
+    page_count: int
+    idempotency_key: str
+
+
+@dataclass(frozen=True, slots=True)
 class GeneratedPageTarget:
     """One Synthesis-owned generated-region publication target."""
 

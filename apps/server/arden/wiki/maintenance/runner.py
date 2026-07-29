@@ -1,14 +1,10 @@
 """Conservative, durable maintenance over the revision-backed wiki feed."""
 
 import asyncio
-import json
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
-from typing import Annotated, Literal, Self
-
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StrictStr, ValidationError, model_validator
 
 from arden.revisions.errors import RevisionConflictError
 from arden.revisions.models import ResourceChange
@@ -20,6 +16,22 @@ from arden.wiki.constants import (
     WIKI_MAINTENANCE_ACTOR,
     WIKI_MAINTENANCE_ORIGIN,
 )
+from arden.wiki.exceptions import WikiValidationError
+from arden.wiki.maintenance.collisions import (
+    manual_page_collision_review,
+    page_collision_review,
+    record_page_collision_review,
+)
+from arden.wiki.maintenance.proposals import (
+    WikiMaintenanceConcernDraft,
+    WikiMaintenanceDecision,
+    WikiMaintenanceError,
+    WikiMaintenanceExecutableMerge,
+    WikiMaintenanceMergeDraft,
+    WikiMaintenanceUpdateDraft,
+    fingerprint,
+    parse_maintenance_proposal,
+)
 from arden.wiki.maintenance.store import (
     WikiMaintenanceReview,
     WikiMaintenanceReviewInput,
@@ -28,6 +40,7 @@ from arden.wiki.maintenance.store import (
     WikiMaintenanceWatermarkConflictError,
 )
 from arden.wiki.models import (
+    PageMergePlan,
     WikiChangeCommit,
     WikiChangesReport,
     WikiMaintenanceCommit,
@@ -38,7 +51,21 @@ from arden.wiki.models import (
 )
 from arden.wiki.service import WikiMaintenanceEvidenceLimitError, WikiService, WikiSnapshotChangedError
 
-_SHA256_PATTERN = r"^[0-9a-f]{64}$"
+__all__ = (
+    "WikiMaintenance",
+    "WikiMaintenanceConcernDraft",
+    "WikiMaintenanceDecision",
+    "WikiMaintenanceError",
+    "WikiMaintenanceExecutableMerge",
+    "WikiMaintenanceMergeDraft",
+    "WikiMaintenancePreparedReport",
+    "WikiMaintenanceResult",
+    "WikiMaintenanceReviewer",
+    "WikiMaintenanceUpdateDraft",
+    "parse_maintenance_proposal",
+    "record_page_collision_review",
+)
+
 _PAGE_ID_LINE = re.compile(r"(?m)^([+-]?\s*page_id:\s*).*$")
 _MAX_HEADER_BYTES = 16 * 1024
 _MAX_PAGE_SECTION_BYTES = 64 * 1024
@@ -46,21 +73,6 @@ _MAX_DIFF_BYTES = 64 * 1024
 _MAX_LINK_SECTION_BYTES = 32 * 1024
 _MAX_WARNINGS_BYTES = 64 * 1024
 _MAX_PROMPT_BYTES = 512 * 1024
-
-
-def _nonblank(value: str) -> str:
-    if not value.strip():
-        raise ValueError("text must not be blank")
-    return value
-
-
-type _NonBlankText = Annotated[StrictStr, Field(min_length=1), AfterValidator(_nonblank)]
-type _RevisionId = Annotated[StrictStr, Field(pattern=_SHA256_PATTERN)]
-type _ConcernKey = Annotated[StrictStr, Field(pattern=r"^[a-z0-9][a-z0-9._:-]{0,120}$")]
-
-
-class WikiMaintenanceError(RuntimeError):
-    """Maintenance could not safely review or apply one contiguous commit."""
 
 
 class WikiMaintenanceEvidenceTooLarge(WikiMaintenanceError):
@@ -82,72 +94,6 @@ class WikiMaintenanceEvidenceTooLarge(WikiMaintenanceError):
         self.limit_bytes = limit_bytes
         self.fingerprint = fingerprint
         self.actual_bytes_at_least = actual_bytes_at_least
-
-
-class WikiMaintenanceUpdateDraft(BaseModel):
-    """A model proposal addressed only by a run-local opaque page token."""
-
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    page_token: Annotated[_NonBlankText, Field(max_length=20)]
-    title: _NonBlankText
-    aliases: list[_NonBlankText] = Field(default_factory=list)
-    body: StrictStr
-
-
-class WikiMaintenanceConcernDraft(BaseModel):
-    """A stable human-review concern returned by the completion model."""
-
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    key: _ConcernKey
-    summary: _NonBlankText
-    proposal: _NonBlankText
-
-
-class WikiMaintenanceDecision(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    outcome: Literal["no_change", "updates", "needs_review"]
-    updates: list[WikiMaintenanceUpdateDraft] = Field(default_factory=list)
-    concern: WikiMaintenanceConcernDraft | None = None
-
-    @model_validator(mode="after")
-    def _validate_outcome_shape(self) -> Self:
-        if self.outcome == "no_change" and (self.updates or self.concern is not None):
-            raise ValueError("no_change must not contain updates or a concern")
-        if self.outcome == "updates" and (not self.updates or self.concern is not None):
-            raise ValueError("updates requires one or more updates and no concern")
-        if self.outcome == "needs_review" and self.concern is None:
-            raise ValueError("needs_review requires a concern")
-        return self
-
-
-class _PersistedUpdate(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    page_id: _NonBlankText
-    expected_version: _RevisionId
-    title: _NonBlankText
-    aliases: list[_NonBlankText]
-    body: StrictStr
-
-
-class _PersistedProposal(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    kind: Literal["maintenance_updates"]
-    reason: _NonBlankText
-    replay_fingerprint: _RevisionId
-    summary: _NonBlankText
-    updates: list[_PersistedUpdate] = Field(min_length=1)
-
-    @model_validator(mode="after")
-    def _unique_pages(self) -> Self:
-        page_ids = [update.page_id for update in self.updates]
-        if len(page_ids) != len(set(page_ids)):
-            raise ValueError("proposal repeats a page")
-        return self
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,38 +122,6 @@ class WikiMaintenanceResult:
     reload_required: bool = False
 
 
-@dataclass(frozen=True, slots=True)
-class WikiMaintenanceExecutableProposal:
-    reason: str
-    replay_fingerprint: str
-    summary: str
-    updates: tuple[WikiMaintenancePageUpdate, ...]
-
-
-def parse_maintenance_update_proposal(proposal_json: str) -> WikiMaintenanceExecutableProposal:
-    """Parse the private, execution-complete shape persisted with an Ask."""
-
-    try:
-        proposal = _PersistedProposal.model_validate_json(proposal_json)
-    except (TypeError, ValidationError) as exc:
-        raise WikiMaintenanceError("accepted maintenance proposal is malformed") from exc
-    return WikiMaintenanceExecutableProposal(
-        reason=proposal.reason,
-        replay_fingerprint=proposal.replay_fingerprint,
-        summary=proposal.summary,
-        updates=tuple(
-            WikiMaintenancePageUpdate(
-                page_id=update.page_id,
-                expected_version=update.expected_version,
-                title=update.title,
-                aliases=tuple(update.aliases),
-                body=update.body.encode(),
-            )
-            for update in proposal.updates
-        ),
-    )
-
-
 WikiMaintenanceReviewer = Callable[[WikiMaintenancePreparedReport], Awaitable[WikiMaintenanceDecision]]
 
 
@@ -226,8 +140,10 @@ class WikiMaintenance:
     def validate_prepared_decision(
         self, prepared: WikiMaintenancePreparedReport, decision: WikiMaintenanceDecision
     ) -> None:
-        if decision.outcome != "no_change":
+        if decision.outcome == "updates":
             self._updates(prepared, decision.updates)
+        if decision.merge is not None:
+            self._merge_records(prepared, decision.merge)
 
     async def run(self) -> WikiMaintenanceResult:
         watermark = await self._store.get_watermark()
@@ -243,6 +159,17 @@ class WikiMaintenance:
                 self._wiki.maintenance_feed,
                 expected,
             )
+        try:
+            collision_result = await self._resume_page_collision(feed, expected, initial)
+        except (WikiSnapshotChangedError, RevisionConflictError):
+            return self._result(
+                feed.through_revision,
+                expected,
+                initial,
+                reload_required=True,
+            )
+        if collision_result is not None:
+            return collision_result
         if not feed.commits:
             return self._result(feed.through_revision, expected, initial, empty=True)
 
@@ -309,7 +236,8 @@ class WikiMaintenance:
                     )
 
                 if accepted:
-                    updated += await self._apply_accepted(prepared, accepted[0])
+                    applied = await self._apply_accepted(prepared, accepted[0])
+                    updated += applied
                     await self._advance(expected, commit_ids, commit.commit_id)
                     expected = commit.commit_id
                     reviewed += 1
@@ -320,7 +248,7 @@ class WikiMaintenance:
                         reviewed=reviewed,
                         updated=updated,
                         replayed=replayed,
-                        reload_required=True,
+                        reload_required=applied > 0,
                     )
 
                 # Rejected/manual rows are an explicit decision for this exact
@@ -343,8 +271,15 @@ class WikiMaintenance:
                 decision = await self._reviewer(prepared)
                 self.validate_prepared_decision(prepared, decision)
                 if decision.outcome == "needs_review":
-                    assert decision.concern is not None
-                    proposal = self._proposal(prepared, decision)
+                    if decision.concern is None:
+                        raise WikiMaintenanceError("needs_review decision has no concern")
+                    try:
+                        proposal = self._proposal(prepared, decision)
+                    except WikiValidationError as error:
+                        proposal = None
+                        summary = f"{decision.concern.summary} Manual reconciliation required: {error}"
+                    else:
+                        summary = decision.concern.summary
                     await self._clear_stale(stale_open)
                     await self._store.apply_run(
                         expected_revision=expected,
@@ -357,7 +292,7 @@ class WikiMaintenance:
                                 blocking_commit_id=commit.commit_id,
                                 evidence_key=decision.concern.key,
                                 evidence_fingerprint=prepared.evidence_fingerprint,
-                                summary=decision.concern.summary,
+                                summary=summary,
                                 proposal_json=proposal,
                             ),
                         ),
@@ -435,6 +370,105 @@ class WikiMaintenance:
             updated=updated,
             replayed=replayed,
         )
+
+    async def _resume_page_collision(
+        self,
+        feed: WikiMaintenanceFeed,
+        expected: str | None,
+        initial: str | None,
+    ) -> WikiMaintenanceResult | None:
+        rows = await self._store.list_page_collision_reviews()
+        for row in reversed(rows):
+            if row.status not in {
+                WikiMaintenanceReviewStatus.NEEDS_REVIEW,
+                WikiMaintenanceReviewStatus.ACCEPTED,
+            }:
+                continue
+            if row.proposal_json is None:
+                if row.status is WikiMaintenanceReviewStatus.NEEDS_REVIEW:
+                    return self._result(
+                        feed.through_revision,
+                        expected,
+                        initial,
+                        blocked=True,
+                    )
+                raise WikiMaintenanceError("accepted page collision review has no executable proposal")
+            proposal = parse_maintenance_proposal(row.proposal_json)
+            if not isinstance(proposal, WikiMaintenanceExecutableMerge):
+                raise WikiMaintenanceError("page collision review is not a page merge")
+            collision_head = self._wiki.repository.head
+            try:
+                plan = await asyncio.to_thread(
+                    self._wiki.prepare_current_maintenance_merge,
+                    canonical_page_id=proposal.canonical_page_id,
+                    loser_page_id=proposal.loser_page_id,
+                )
+            except KeyError:
+                if row.status is WikiMaintenanceReviewStatus.NEEDS_REVIEW:
+                    await self._store.clear(row.review_id, expected_generation=row.generation)
+                continue
+            except WikiValidationError as error:
+                records = {record.page.page_id: record for record in await asyncio.to_thread(self._wiki.readable_pages)}
+                if collision_head is None or self._wiki.repository.head != collision_head:
+                    raise RevisionConflictError("wiki changed before unsafe page collision review")
+                try:
+                    canonical = records[proposal.canonical_page_id]
+                    loser = records[proposal.loser_page_id]
+                except KeyError:
+                    if row.status is WikiMaintenanceReviewStatus.NEEDS_REVIEW:
+                        await self._store.clear(row.review_id, expected_generation=row.generation)
+                    continue
+                await self._store.refresh_page_collision_review(
+                    row.review_id,
+                    expected_generation=row.generation,
+                    expected_status=row.status,
+                    review=manual_page_collision_review(
+                        base_head=collision_head,
+                        canonical=canonical,
+                        loser=loser,
+                        error=error,
+                    ),
+                )
+                return self._result(
+                    feed.through_revision,
+                    expected,
+                    initial,
+                    blocked=True,
+                )
+            fresh = page_collision_review(plan)
+            if row.evidence_fingerprint != fresh.evidence_fingerprint:
+                await self._store.refresh_page_collision_review(
+                    row.review_id,
+                    expected_generation=row.generation,
+                    expected_status=row.status,
+                    review=fresh,
+                )
+                return self._result(
+                    feed.through_revision,
+                    expected,
+                    initial,
+                    blocked=True,
+                )
+            if row.status is WikiMaintenanceReviewStatus.NEEDS_REVIEW:
+                return self._result(
+                    feed.through_revision,
+                    expected,
+                    initial,
+                    blocked=True,
+                )
+            await asyncio.to_thread(
+                self._wiki.apply_maintenance_merge,
+                plan,
+                reason=proposal.reason,
+            )
+            return self._result(
+                feed.through_revision,
+                expected,
+                initial,
+                updated=1,
+                reload_required=True,
+            )
+        return None
 
     async def _advance(self, expected: str | None, commits: Sequence[str], through: str) -> None:
         result = await self._store.apply_run(
@@ -581,8 +615,10 @@ class WikiMaintenance:
             (
                 "# Wiki maintenance review",
                 "Only the supplied Markdown evidence is available. User edits are authoritative: preserve their "
-                "intent, make no speculative insights, and propose no rename, move, archive, merge, or "
-                "generated-region edit.",
+                "intent, make no speculative insights, and never edit a generated region. A duplicate-page "
+                "merge must use needs_review with a nested merge object containing canonical_page_token and "
+                "loser_page_token; it is the only allowed lifecycle operation and is applied atomically only "
+                "after durable user acceptance.",
                 f"Commit: {commit.commit_id[:12]}",
                 f"Actor: {commit.actor}; origin: {commit.origin}; reason: {commit.reason}",
             )
@@ -621,7 +657,7 @@ class WikiMaintenance:
                         "### Diff\n"
                         + ("Lossy UTF-8 display: invalid source bytes appear as U+FFFD.\n" if diff_lossy else "")
                         + "```diff\n"
-                        + self._redact_page_ids(diff)
+                        + _PAGE_ID_LINE.sub(r"\1[opaque]", diff)
                         + "\n```",
                         _MAX_DIFF_BYTES,
                     ),
@@ -659,7 +695,7 @@ class WikiMaintenance:
                 )
             )
         markdown = self._bounded_markdown(commit, feed.through_revision, pieces)
-        replay_fingerprint = self._fingerprint(
+        replay_fingerprint = fingerprint(
             {
                 "commit": commit.commit_id,
                 "changes": [(c.action, c.resource_id, self._identity_text(c.unified_diff)) for c in commit.changes],
@@ -668,7 +704,9 @@ class WikiMaintenance:
         return WikiMaintenancePreparedReport(
             commit_id=commit.commit_id,
             base_head=feed.through_revision or commit.commit_id,
-            evidence_fingerprint=self._fingerprint({"replay": replay_fingerprint, "report": markdown}),
+            evidence_fingerprint=fingerprint(
+                {"base_head": feed.through_revision, "replay": replay_fingerprint, "report": markdown}
+            ),
             replay_fingerprint=replay_fingerprint,
             markdown=markdown,
             page_tokens=page_tokens,
@@ -718,7 +756,7 @@ class WikiMaintenance:
         *,
         actual_bytes_at_least: bool = False,
     ) -> WikiMaintenanceEvidenceTooLarge:
-        fingerprint = self._fingerprint(
+        evidence_fingerprint = fingerprint(
             {
                 "commit": commit.commit_id,
                 "base_head": base_head,
@@ -733,7 +771,7 @@ class WikiMaintenance:
             label=label,
             actual_bytes=actual,
             limit_bytes=limit,
-            fingerprint=fingerprint,
+            fingerprint=evidence_fingerprint,
             actual_bytes_at_least=actual_bytes_at_least,
         )
 
@@ -767,11 +805,6 @@ class WikiMaintenance:
         return "\n".join(result)
 
     @staticmethod
-    def _fingerprint(value: object) -> str:
-        encoded = json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()
-        return sha256(encoded).hexdigest()
-
-    @staticmethod
     def _identity_text(value: str) -> str | dict[str, str]:
         """Keep valid text stable while hashing surrogateescaped raw bytes exactly."""
 
@@ -799,10 +832,6 @@ class WikiMaintenance:
             return value.decode("utf-8"), False
         except UnicodeDecodeError:
             return value.decode("utf-8", errors="replace"), True
-
-    @staticmethod
-    def _redact_page_ids(markdown: str) -> str:
-        return _PAGE_ID_LINE.sub(r"\1[opaque]", markdown)
 
     def _updates(
         self, prepared: WikiMaintenancePreparedReport, drafts: Sequence[WikiMaintenanceUpdateDraft]
@@ -838,6 +867,28 @@ class WikiMaintenance:
         )
         return len(updates)
 
+    def _merge(self, prepared: WikiMaintenancePreparedReport, draft: WikiMaintenanceMergeDraft) -> PageMergePlan:
+        canonical, loser = self._merge_records(prepared, draft)
+        return self._wiki.prepare_maintenance_merge(
+            canonical_page_id=canonical.page.page_id,
+            canonical_expected_version=canonical.resource.version_id,
+            loser_page_id=loser.page.page_id,
+            loser_expected_version=loser.resource.version_id,
+            base_head=prepared.base_head,
+        )
+
+    @staticmethod
+    def _merge_records(
+        prepared: WikiMaintenancePreparedReport, draft: WikiMaintenanceMergeDraft
+    ) -> tuple[WikiPageRecord, WikiPageRecord]:
+        canonical = prepared.page_tokens.get(draft.canonical_page_token)
+        loser = prepared.page_tokens.get(draft.loser_page_token)
+        if canonical is None or loser is None:
+            raise WikiMaintenanceError("maintenance merge named an unknown page token")
+        if canonical.page.page_id == loser.page.page_id:
+            raise WikiMaintenanceError("maintenance merge requires distinct page tokens")
+        return canonical, loser
+
     async def _clear_stale(self, reviews: Sequence[WikiMaintenanceReview]) -> None:
         for row in reviews:
             await self._store.clear(row.review_id, expected_generation=row.generation)
@@ -870,9 +921,31 @@ class WikiMaintenance:
 
     def _proposal(
         self, prepared: WikiMaintenancePreparedReport, decision: WikiMaintenanceDecision
-    ) -> dict[str, object]:
+    ) -> dict[str, object] | None:
         concern = decision.concern
-        assert concern is not None
+        if concern is None:
+            raise WikiMaintenanceError("needs_review decision has no concern")
+        if decision.merge is not None:
+            merge = self._merge(prepared, decision.merge)
+            canonical = prepared.page_tokens[decision.merge.canonical_page_token]
+            loser = prepared.page_tokens[decision.merge.loser_page_token]
+            return {
+                "kind": "page_merge",
+                "reason": self._reason(prepared),
+                "replay_fingerprint": prepared.replay_fingerprint,
+                "summary": concern.proposal,
+                "canonical_page_id": merge.canonical_page_id,
+                "canonical_expected_version": merge.canonical_expected_version,
+                "canonical_title": canonical.page.title,
+                "loser_page_id": merge.loser_page_id,
+                "loser_expected_version": merge.loser_expected_version,
+                "loser_title": loser.page.title,
+                "link_count": merge.link_count,
+                "page_count": merge.page_count,
+                "redirect_count": 0,
+            }
+        if not decision.updates:
+            return None
         return {
             "kind": "maintenance_updates",
             "reason": self._reason(prepared),
@@ -893,9 +966,19 @@ class WikiMaintenance:
     async def _apply_accepted(self, prepared: WikiMaintenancePreparedReport, row: WikiMaintenanceReview) -> int:
         if row.proposal_json is None:
             raise WikiMaintenanceError("accepted maintenance review has no executable proposal")
-        proposal = parse_maintenance_update_proposal(row.proposal_json)
+        proposal = parse_maintenance_proposal(row.proposal_json)
         if proposal.reason != self._reason(prepared) or proposal.replay_fingerprint != prepared.replay_fingerprint:
             raise WikiMaintenanceError("accepted maintenance proposal does not match current evidence")
+        if isinstance(proposal, WikiMaintenanceExecutableMerge):
+            plan = self._wiki.prepare_maintenance_merge(
+                canonical_page_id=proposal.canonical_page_id,
+                canonical_expected_version=proposal.canonical_expected_version,
+                loser_page_id=proposal.loser_page_id,
+                loser_expected_version=proposal.loser_expected_version,
+                base_head=prepared.base_head,
+            )
+            await asyncio.to_thread(self._wiki.apply_maintenance_merge, plan, reason=self._reason(prepared))
+            return 1
         await asyncio.to_thread(
             self._wiki.apply_maintenance_updates,
             proposal.updates,

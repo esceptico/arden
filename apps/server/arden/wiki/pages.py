@@ -423,6 +423,25 @@ def extract_generated_region(content: bytes, *, expected_page_id: str | None = N
     return page.body[start:end]
 
 
+def extract_user_body(content: bytes, *, expected_page_id: str | None = None) -> bytes:
+    """Return body bytes outside the one validated generated block."""
+
+    page = parse_page(content, expected_page_id=expected_page_id)
+    bounds = _generated_region_bounds(page.body)
+    if bounds is None:
+        return page.body
+    generated_start, closing_start = bounds
+    opening_start = page.body.rfind(_GENERATED_OPEN, 0, generated_start)
+    if opening_start < 0:
+        raise PageValidationError("generated opening marker is missing")
+    closing_end = closing_start + len(_GENERATED_CLOSE)
+    if page.body[closing_end : closing_end + 2] == b"\r\n":
+        closing_end += 2
+    elif page.body[closing_end : closing_end + 1] in {b"\n", b"\r"}:
+        closing_end += 1
+    return page.body[:opening_start] + page.body[closing_end:]
+
+
 def update_generated_region(
     content: bytes,
     *,
