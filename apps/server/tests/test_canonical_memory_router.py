@@ -10,12 +10,30 @@ from fastapi.testclient import TestClient
 from arden.database import connect
 from arden.memory.facts.ledger import FactLedger
 from arden.memory.facts.plan_store import FactPlanStore
-from arden.memory.facts.service import FactService
+from arden.memory.facts.service import FactPrincipal, FactService
 from arden.revisions import ManagedFileRepository
 from arden.server.app import app as server_app
 from arden.server.routers.canonical_memory import facts_router, wiki_router
 from arden.wiki.models import WikiMaintenancePageUpdate
 from arden.wiki.service import WikiService
+
+
+class _SnapshotCountingFactLedger(FactLedger):
+    def __init__(self, root: Path, *, clock) -> None:
+        super().__init__(root, clock=clock)
+        self.snapshot_count = 0
+
+    def _snapshot(self):
+        self.snapshot_count += 1
+        return super()._snapshot()
+
+
+class _UnreadableBatchFactService(FactService):
+    async def get_many_with_snapshot_principal(self, fact_ids, principal_from_scopes):
+        return await super().get_many_with_snapshot_principal(
+            fact_ids,
+            lambda _scopes: FactPrincipal("test:unreadable", frozenset(), frozenset()),
+        )
 
 
 def _fact_create(fact_id: str, text: str) -> dict[str, object]:
@@ -107,6 +125,7 @@ def test_canonical_routes_are_registered_on_server_app() -> None:
         "/admin/wiki/pages/{page_id}/links",
         "/admin/facts",
         "/admin/facts/search",
+        "/admin/facts/batch",
         "/admin/facts/{fact_id}",
     } <= paths
 
@@ -269,6 +288,29 @@ def test_fact_list_search_detail_and_seek_pagination(tmp_path: Path) -> None:
         assert client.get("/admin/facts/missing").status_code == 404
 
 
+def test_fact_batch_read_preserves_order_and_fails_loudly(tmp_path: Path) -> None:
+    with _client(tmp_path) as client:
+        service = client.app.state.runtime.fact_service
+        ledger = _SnapshotCountingFactLedger(service.ledger.root, clock=lambda: datetime(2026, 7, 28, 12, tzinfo=UTC))
+        client.app.state.runtime.fact_service = FactService(ledger, service.plans)
+
+        response = client.post("/admin/facts/batch", json={"fact_ids": ["b", "a"]})
+        assert response.status_code == 200
+        assert [fact["fact_id"] for fact in response.json()["facts"]] == ["b", "a"]
+        assert ledger.snapshot_count == 1
+
+        assert client.post("/admin/facts/batch", json={"fact_ids": ["a", "missing"]}).status_code == 404
+        assert client.post("/admin/facts/batch", json={"fact_ids": ["a", "a"]}).status_code == 422
+        assert client.post("/admin/facts/batch", json={"fact_ids": []}).status_code == 422
+        assert (
+            client.post("/admin/facts/batch", json={"fact_ids": [str(index) for index in range(101)]}).status_code
+            == 422
+        )
+
+        client.app.state.runtime.fact_service = _UnreadableBatchFactService(ledger, service.plans)
+        assert client.post("/admin/facts/batch", json={"fact_ids": ["a", "missing"]}).status_code == 403
+
+
 def test_pin_fact_is_canonical_idempotent_and_strict(tmp_path: Path) -> None:
     with _client(tmp_path) as client:
         first = client.post(
@@ -318,6 +360,7 @@ def test_canonical_routes_report_unavailable_services() -> None:
     with TestClient(app) as client:
         assert client.get("/admin/wiki/pages").status_code == 503
         assert client.get("/admin/facts").status_code == 503
+        assert client.post("/admin/facts/batch", json={"fact_ids": ["a"]}).status_code == 503
 
 
 def test_wiki_update_rejects_before_commit_when_curator_queue_is_unavailable(tmp_path: Path) -> None:

@@ -19,6 +19,7 @@ import {
   listMemoryArtifactSummaries,
   previewPageEdit,
   readMemoryArtifactDetail,
+  readMemoryArtifactTimeline,
   rebuildMemoryArtifactSummaries,
   restorePageMaintenanceChange,
 } from "@/api/memoryArtifacts";
@@ -264,6 +265,9 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const [activeDetail, setActiveDetail] = useState<MemoryArtifactDetail | null>(null);
   const [contentLoading, setContentLoading] = useState(false);
   const [contentError, setContentError] = useState<string | null>(null);
+  const [timelineLoading, setTimelineLoading] = useState(false);
+  const [timelineError, setTimelineError] = useState<string | null>(null);
+  const [timelineRefreshKey, setTimelineRefreshKey] = useState(0);
   const [contentNotice, setContentNotice] = useState<string | null>(null);
   const [contentRefreshKey, setContentRefreshKey] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -334,6 +338,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const reviewGeneration = useRef(0);
   const applyGeneration = useRef(0);
   const diffRestoreGeneration = useRef(0);
+  const restoreHydration = useRef<{ path: string; revision: string } | null>(null);
   const mutationPendingRef = useRef(false);
   const memoryVaultChangesRef = useRef(useStore.getState().memoryVaultChanges);
   const processedMemoryChangeSeqs = useRef(new Set<number>());
@@ -762,6 +767,15 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     if (!selectedMeta) {
       setActiveDetail(null);
       setContentLoading(false);
+      setTimelineLoading(false);
+      setTimelineError(null);
+      return;
+    }
+    if (
+      restoreHydration.current?.path === selectedMeta.path
+      && restoreHydration.current.revision === selectedMeta.revision
+    ) {
+      setContentLoading(false);
       return;
     }
     const cached = detailCache.current.get(selectedMeta.path, selectedMeta.revision);
@@ -769,22 +783,45 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       setActiveDetail(cached);
       setContentError(null);
       setContentLoading(false);
+      setTimelineLoading(false);
+      setTimelineError(null);
       return;
     }
     setActiveDetail((current) => current?.path === selectedMeta.path ? current : null);
     setContentLoading(true);
     setContentError(null);
+    setTimelineLoading(false);
+    setTimelineError(null);
     readMemoryArtifactDetail(config, selectedMeta.path, { signal: controller.signal })
       .then((response) => {
         if (controller.signal.aborted || !mountedRef.current) return;
         const detail = response.artifact;
-        detailCache.current.set(detail);
         setActiveDetail(detail);
         if (detail.revision !== selectedMeta.revision) {
           setArtifacts((current) => current.map((artifact) => artifact.path === detail.path
             ? { ...artifact, revision: detail.revision }
             : artifact));
         }
+        if (response.citations.length === 0) {
+          detailCache.current.set(detail, selectedMeta.revision ?? undefined);
+          return;
+        }
+        setTimelineLoading(true);
+        void readMemoryArtifactTimeline(config, response.citations, { signal: controller.signal })
+          .then((timeline) => {
+            if (controller.signal.aborted || !mountedRef.current) return;
+            const hydrated = { ...detail, timeline };
+            detailCache.current.set(hydrated, selectedMeta.revision ?? undefined);
+            setActiveDetail((current) => current?.path === detail.path && current.revision === detail.revision ? hydrated : current);
+            setTimelineError(null);
+          })
+          .catch((reason) => {
+            if (controller.signal.aborted || !mountedRef.current) return;
+            setTimelineError(reason instanceof Error ? reason.message : String(reason));
+          })
+          .finally(() => {
+            if (!controller.signal.aborted && mountedRef.current) setTimelineLoading(false);
+          });
       })
       .catch((reason) => {
         if (controller.signal.aborted || !mountedRef.current) return;
@@ -803,7 +840,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
         if (!controller.signal.aborted && mountedRef.current) setContentLoading(false);
       });
     return () => controller.abort();
-  }, [config, contentRefreshKey, load, selectedMeta?.path, selectedMeta?.revision]);
+  }, [config, contentRefreshKey, load, selectedMeta?.path, selectedMeta?.revision, timelineRefreshKey]);
 
   useEffect(() => {
     if (!editing || !activeDetail || activeDetail.path !== editing.path || activeDetail.revision === editing.baseRevision) return;
@@ -1073,12 +1110,16 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
         commitId: event.id,
         expectedVersion: page.revision,
         expectedHead: page.repositoryHead,
-        current: page,
       });
       if (!mountedRef.current || diffRestoreGeneration.current !== generation) return;
 
       detailCache.current.invalidatePath(page.path);
-      detailCache.current.set(restored.artifact);
+      const needsTimeline = restored.citations.length > 0;
+      if (needsTimeline) {
+        restoreHydration.current = { path: restored.artifact.path, revision: restored.artifact.revision };
+      } else {
+        detailCache.current.set(restored.artifact);
+      }
       setArtifacts((current) => current.map((artifact) => {
         if (artifact.path !== page.path) return artifact;
         const {
@@ -1093,16 +1134,19 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       setActiveDetail(restored.artifact);
       setContentError(null);
       setContentNotice("Restored Maintenance edit.");
+      setTimelineError(null);
+      setTimelineLoading(needsTimeline);
       setDiffClosing(true);
 
       const refreshRequest = beginSummaryRequest();
       linksRequestId.current += 1;
       historyRequestId.current += 1;
       try {
-        const [summaries, history, links] = await Promise.all([
+        const [summaries, history, links, timeline] = await Promise.all([
           rebuildMemoryArtifactSummaries(config, { signal: refreshRequest.controller.signal }),
           getPageHistory(config, { path: page.path, limit: 100 }, { signal: refreshRequest.controller.signal }),
           getPageLinks(config, { path: page.path, limit: 100, offset: 0 }, { signal: refreshRequest.controller.signal }),
+          readMemoryArtifactTimeline(config, restored.citations, { signal: refreshRequest.controller.signal }),
         ]);
         if (
           refreshRequest.controller.signal.aborted
@@ -1118,6 +1162,12 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
         setPageLinks(links);
         setLinkError(null);
         setLinksLoading(false);
+        const hydrated = { ...restored.artifact, timeline };
+        detailCache.current.set(hydrated);
+        if (selectedMetaRef.current?.path === page.path) {
+          setActiveDetail(hydrated);
+          setTimelineError(null);
+        }
       } catch (reason) {
         if (
           refreshRequest.controller.signal.aborted
@@ -1128,6 +1178,14 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
         setContentNotice(`Restored Maintenance edit. Related page data refresh failed: ${detail}`);
         setContentRefreshKey((key) => key + 1);
         void load();
+      } finally {
+        if (
+          restoreHydration.current?.path === restored.artifact.path
+          && restoreHydration.current.revision === restored.artifact.revision
+        ) {
+          restoreHydration.current = null;
+        }
+        if (selectedMetaRef.current?.path === page.path) setTimelineLoading(false);
       }
     } catch (reason) {
       if (!mountedRef.current || diffRestoreGeneration.current !== generation) return;
@@ -1906,6 +1964,9 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
               historyLoading={historyLoading || !inspectorDetailIsCurrent}
               linkError={inspectorDetailIsCurrent ? linkError : null}
               historyError={inspectorDetailIsCurrent ? historyError : null}
+              timelineLoading={timelineLoading || !inspectorDetailIsCurrent}
+              timelineError={inspectorDetailIsCurrent ? timelineError : null}
+              onRetryTimeline={() => setTimelineRefreshKey((key) => key + 1)}
               navigationDisabled={reviewPending || !inspectorDetailIsCurrent}
               titleForPath={titleForPath}
               onNavigate={navigateTo}

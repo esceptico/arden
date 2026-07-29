@@ -42,6 +42,7 @@ from arden.memory.facts.models import (
     FactEvent,
     FactLedgerCorruptionError,
     FactPlan,
+    FactReadSnapshot,
     FactValidationError,
 )
 from arden.memory.facts.state import (
@@ -145,6 +146,19 @@ class FactLedger:
             return self._snapshot().state[fact_id]
         except KeyError as exc:
             raise KeyError(f"unknown fact: {fact_id}") from exc
+
+    def read_snapshot(self) -> FactReadSnapshot:
+        """Read facts and their known scopes from one validated current snapshot."""
+
+        snapshot = self._snapshot()
+        scopes = set()
+        for event in snapshot.events:
+            payload = event.record["payload"]
+            if event.op != "create" and "scope" not in payload:
+                continue
+            scope_value = scope(payload["scope"])
+            scopes.add((scope_value["kind"], scope_value["key"]))
+        return FactReadSnapshot(MappingProxyType(snapshot.state), frozenset(scopes))
 
     def facts_at(self, revision: str | None) -> Mapping[str, Fact]:
         """Return the immutable fact state at one reachable revision.
@@ -304,14 +318,7 @@ class FactLedger:
     def known_scopes(self) -> frozenset[tuple[str, str | None]]:
         """Return every scope recorded in canonical fact history."""
 
-        scopes = set()
-        for event in self._snapshot().events:
-            payload = event.record["payload"]
-            if event.op != "create" and "scope" not in payload:
-                continue
-            scope_value = scope(payload["scope"])
-            scopes.add((scope_value["kind"], scope_value["key"]))
-        return frozenset(scopes)
+        return self.read_snapshot().known_scopes
 
     def validate_initialized(self) -> str:
         """Fully validate an initialized ledger and return its current head."""

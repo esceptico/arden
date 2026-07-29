@@ -79,6 +79,9 @@ export function MemoryInspector({
   historyLoading,
   linkError,
   historyError,
+  timelineLoading = false,
+  timelineError = null,
+  onRetryTimeline,
   navigationDisabled,
   titleForPath,
   onNavigate,
@@ -94,6 +97,9 @@ export function MemoryInspector({
   historyLoading: boolean;
   linkError: string | null;
   historyError: string | null;
+  timelineLoading?: boolean;
+  timelineError?: string | null;
+  onRetryTimeline?: () => void;
   navigationDisabled: boolean;
   titleForPath: (path: string) => string | undefined;
   onNavigate: (path: string, anchor: string | null) => void;
@@ -252,7 +258,14 @@ export function MemoryInspector({
 
         {pane === "records" && (
           <div>
-            {records.length === 0 ? (
+            {timelineError ? (
+              <>
+                <p role="alert" className="mw-ctx-empty">{timelineError}</p>
+                {onRetryTimeline && <button type="button" className="mw-recs-more" onClick={onRetryTimeline}>Retry</button>}
+              </>
+            ) : timelineLoading ? (
+              <p className="mw-ctx-empty">Loading…</p>
+            ) : records.length === 0 ? (
               <div className="mw-ctx-empty mw-page-records-empty">
                 <Database size={16} aria-hidden />
                 <span>No records on this page.</span>

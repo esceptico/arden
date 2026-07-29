@@ -23,6 +23,7 @@ from arden.memory.facts.plan_store import (
     FactPlanRequestConflictError,
 )
 from arden.memory.facts.service import (
+    BATCH_FACT_LIMIT,
     FactPrincipal,
     FactScopeError,
     FactService,
@@ -70,6 +71,10 @@ class WikiMaintenanceRestoreRequest(_Request):
 class PinnedFactRequest(_Request):
     request_id: str = Field(min_length=1, max_length=200)
     text: str = Field(min_length=1, max_length=20_000)
+
+
+class FactBatchReadRequest(_Request):
+    fact_ids: list[str] = Field(min_length=1, max_length=BATCH_FACT_LIMIT)
 
 
 def _json_value(value: object) -> object:
@@ -466,9 +471,13 @@ def wiki_page_links(page_id: str, request: Request) -> dict[str, object]:
 
 
 async def _fact_principal(service: FactService) -> FactPrincipal:
+    return _fact_principal_for_scopes(await service.known_scopes())
+
+
+def _fact_principal_for_scopes(scopes: frozenset[tuple[str, str | None]]) -> FactPrincipal:
     return FactPrincipal(
         owner_id="admin:facts",
-        readable_scopes=await service.known_scopes(),
+        readable_scopes=scopes,
         writable_scopes=frozenset(),
     )
 
@@ -660,6 +669,16 @@ async def search_facts(
             after_created_at=after_created_at,
             after_fact_id=after_fact_id,
         )
+    except Exception as exc:
+        raise _fact_error(exc) from exc
+
+
+@facts_router.post("/batch")
+async def read_facts_batch(body: FactBatchReadRequest, request: Request) -> dict[str, object]:
+    service = _fact_service(request)
+    try:
+        facts = await service.get_many_with_snapshot_principal(tuple(body.fact_ids), _fact_principal_for_scopes)
+        return {"facts": _json_value(facts)}
     except Exception as exc:
         raise _fact_error(exc) from exc
 

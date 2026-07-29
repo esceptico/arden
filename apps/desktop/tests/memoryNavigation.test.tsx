@@ -149,6 +149,41 @@ test("artifact cache bounds revision aliases and removes aliases for evicted det
   expect(cache.get("c.md", "listed-c")?.content).toBe("C");
 });
 
+test("a cited page renders prose before its single batched record request settles", async () => {
+  const me = summary("me.md", "Me");
+  const page = wikiPage(me, "# Me\n\nFast body.");
+  page.metadata = { fact_citations: [{ fact_id: "fact-1", version: "fact-1:v1" }] };
+  let resolveBatch: ((response: ReturnType<typeof ok>) => void) | null = null;
+  const batchGate = new Promise<ReturnType<typeof ok>>((resolve) => { resolveBatch = resolve; });
+  const bridge = installCanonicalMemoryBridge({
+    pages: [page],
+    facts: [{ factId: "fact-1", text: "Loaded afterwards" }],
+    onRequest: ({ path }) => path === "/admin/facts/batch" ? batchGate : undefined,
+  });
+  const { host, root } = setup("me.md");
+  localStorage.setItem("arden.desktop.memory.inspectorOpen", "true");
+  localStorage.setItem("arden.desktop.memory.ctxPane", "records");
+
+  await act(async () => root.render(<ArtifactMemoryView config={config} />));
+  await settleUntil(() => host.textContent?.includes("Fast body.") ?? false);
+  await settle(250);
+
+  expect(host.textContent).toContain("Fast body.");
+  expect(host.textContent).toContain("Loading…");
+  expect(bridge.requests.filter((request) => request.path === "/admin/facts/batch")).toHaveLength(1);
+  expect(bridge.requests.some((request) => request.path.startsWith("/admin/facts/fact-"))).toBe(false);
+
+  await act(async () => resolveBatch?.(ok({ facts: [{
+    fact_id: "fact-1", text: "Loaded afterwards", kind: "fact", labels: [], subjects: ["Me"],
+    scope: { kind: "user", key: null }, lifecycle: "durable", status: "active", certainty: "confirmed",
+    evidence_class: "direct", sources: [], created_at: "2026-07-13T08:00:00Z", reviewed_at: null,
+    review_at: null, expires_at: null, version: "fact-1:v1",
+  }] })));
+  await settleUntil(() => host.textContent?.includes("Loaded afterwards") ?? false);
+
+  expect(host.textContent).toContain("Loaded afterwards");
+});
+
 test("a refreshed Memory entry hydrates its active tab and note together", async () => {
   const index = summary("index.md", "Index");
   const me = summary("me.md", "Me");

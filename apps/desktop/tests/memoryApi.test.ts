@@ -8,6 +8,7 @@ import {
   listMemoryArtifactSummaries,
   previewPageEdit,
   readMemoryArtifactDetail,
+  readMemoryArtifactTimeline,
   rebuildMemoryArtifactSummaries,
 } from "@/api/memoryArtifacts";
 import {
@@ -83,10 +84,12 @@ test("canonical wiki pages map to the established notebook summary and detail co
     directories: ["topics"],
   });
 
-  const { artifact } = await readMemoryArtifactDetail(currentConfig, "topics/a.md");
+  const response = await readMemoryArtifactDetail(currentConfig, "topics/a.md");
+  const { artifact } = response;
   expect(artifact.content).toBe("# A\n\nOriginal\n");
   expect(artifact.editableContent).toBe(page().content);
-  expect(artifact.timeline).toEqual([{
+  expect(artifact.timeline).toEqual([]);
+  expect(await readMemoryArtifactTimeline(currentConfig, response.citations)).toEqual([{
     id: "fact-1",
     text: "A durable fact",
     kind: "fact",
@@ -100,6 +103,23 @@ test("canonical wiki pages map to the established notebook summary and detail co
     title: "A",
     labels: ["work"],
   });
+});
+
+test("citation timeline chunks batches at the server boundary and preserves order", async () => {
+  const currentConfig = config();
+  const facts = Array.from({ length: 101 }, (_, index) => ({
+    factId: `fact-${index}`,
+    text: `Fact ${index}`,
+  }));
+  const bridge = installCanonicalMemoryBridge({ facts });
+  const refs = facts.map((fact, index) => ({ factId: fact.factId, version: `cited-${index}` }));
+
+  const timeline = await readMemoryArtifactTimeline(currentConfig, refs);
+
+  const batches = bridge.requests.filter((request) => request.path === "/admin/facts/batch");
+  expect(batches.map((request) => (request.body as { fact_ids: string[] }).fact_ids.length)).toEqual([100, 1]);
+  expect(timeline.map((entry) => entry.id)).toEqual(refs.map((ref) => ref.factId));
+  expect(timeline.map((entry) => entry.src)).toEqual(refs.map((ref) => ref.version));
 });
 
 test("wiki health is visible through the notebook contract but remains read-only", async () => {
@@ -309,7 +329,8 @@ test("malformed metadata and missing cited facts surface instead of disappearing
   installCanonicalMemoryBridge({
     pages: [page({ metadata: { fact_citations: [{ fact_id: "missing", version: "missing:v1" }] } })],
   });
-  const missing = await readMemoryArtifactDetail(missingFactConfig, "topics/a.md").catch((reason) => reason);
+  const missingPage = await readMemoryArtifactDetail(missingFactConfig, "topics/a.md");
+  const missing = await readMemoryArtifactTimeline(missingFactConfig, missingPage.citations).catch((reason) => reason);
   expect(missing).toBeInstanceOf(ApiError);
   expect(missing.status).toBe(404);
 });

@@ -269,6 +269,20 @@ test("records pane renders the selected page timeline inside the peek", async ()
   expect(host.textContent).not.toContain("Older superseded guidance.");
 });
 
+test("records pane exposes a retryable citation timeline failure", async () => {
+  let retries = 0;
+  const { host, root } = setup();
+  await act(async () => root.render(inspectorElement({
+    activePane: "records",
+    timelineError: "Citation timeline unavailable",
+    onRetryTimeline: () => { retries += 1; },
+  })));
+
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain("Citation timeline unavailable");
+  await act(async () => (host.querySelector(".mw-recs-more") as HTMLButtonElement).click());
+  expect(retries).toBe(1);
+});
+
 test("activity pane previews eight events, expands to all, and opens an escapable diff overlay", async () => {
   const many: PageEditHistory = {
     total: 10, limit: 100, nextBeforeSequence: null,

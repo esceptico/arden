@@ -3,7 +3,7 @@
 import asyncio
 import hashlib
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -22,6 +22,7 @@ FactScope = tuple[str, str | None]
 FactOrder = tuple[datetime, str]
 _SCOPE_KINDS = frozenset({"user", "area", "global", "project", "integration"})
 DEFAULT_RESULT_LIMIT = 100
+BATCH_FACT_LIMIT = 100
 _logger = get_logger(__name__)
 
 
@@ -163,6 +164,34 @@ class FactService:
         fact = await asyncio.to_thread(self.ledger.get, fact_id)
         self._require_read(principal, _scope(fact))
         return fact
+
+    async def get_many_with_snapshot_principal(
+        self,
+        fact_ids: tuple[str, ...],
+        principal_from_scopes: Callable[[frozenset[FactScope]], FactPrincipal],
+    ) -> tuple[Fact, ...]:
+        """Read facts and construct their principal from one canonical snapshot."""
+
+        fact_ids = _fact_ids(fact_ids)
+        snapshot = await asyncio.to_thread(self.ledger.read_snapshot)
+        principal = principal_from_scopes(snapshot.known_scopes)
+        return self._read_many(principal, snapshot.facts, fact_ids)
+
+    @staticmethod
+    def _read_many(
+        principal: FactPrincipal,
+        facts_by_id: Mapping[str, Fact],
+        fact_ids: tuple[str, ...],
+    ) -> tuple[Fact, ...]:
+        facts = []
+        for fact_id in fact_ids:
+            try:
+                fact = facts_by_id[fact_id]
+            except KeyError as exc:
+                raise KeyError(f"unknown fact: {fact_id}") from exc
+            FactService._require_read(principal, _scope(fact))
+            facts.append(fact)
+        return tuple(facts)
 
     async def history(self, principal: FactPrincipal, fact_id: str) -> tuple[FactEvent, ...]:
         """Return the chain under its current canonical scope.
@@ -382,6 +411,16 @@ def _validated_scope(kind: object, key: object) -> FactScope:
 def _limit(value: int) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= DEFAULT_RESULT_LIMIT:
         raise ValueError(f"limit must be between 1 and {DEFAULT_RESULT_LIMIT}")
+    return value
+
+
+def _fact_ids(value: tuple[str, ...]) -> tuple[str, ...]:
+    if not 1 <= len(value) <= BATCH_FACT_LIMIT:
+        raise ValueError(f"fact_ids must contain between 1 and {BATCH_FACT_LIMIT} ids")
+    if any(not isinstance(fact_id, str) or not fact_id or "\0" in fact_id for fact_id in value):
+        raise ValueError("fact_ids must contain non-empty strings")
+    if len(set(value)) != len(value):
+        raise ValueError("fact_ids must not contain duplicates")
     return value
 
 

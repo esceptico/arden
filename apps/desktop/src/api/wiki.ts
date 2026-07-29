@@ -278,6 +278,8 @@ interface RawFactPage {
   next_after: { created_at: string; fact_id: string } | null;
 }
 
+export const FACT_BATCH_LIMIT = 100;
+
 function mapFact(fact: RawFact): Fact {
   return {
     factId: fact.fact_id,
@@ -326,6 +328,27 @@ export function readFact(config: AppConfig, factId: string, options: { signal?: 
   return apiWithConfig<{ fact: RawFact }>(config, `/admin/facts/${encodeURIComponent(factId)}`, {
     signal: options.signal,
   }).then(({ fact }) => mapFact(fact));
+}
+
+/** Read a bounded, ordered set of facts in one request. The server rejects
+ * duplicate or missing IDs atomically, so callers get either the complete
+ * requested set or the original error. */
+export function readFactBatch(
+  config: AppConfig,
+  factIds: string[],
+  options: { signal?: AbortSignal } = {},
+): Promise<Fact[]> {
+  if (factIds.length === 0 || factIds.length > FACT_BATCH_LIMIT) {
+    throw new Error(`Fact batch must contain between 1 and ${FACT_BATCH_LIMIT} IDs`);
+  }
+  if (new Set(factIds).size !== factIds.length) {
+    throw new Error("Fact batch IDs must be unique");
+  }
+  return apiWithConfig<{ facts: RawFact[] }>(config, "/admin/facts/batch", {
+    method: "POST",
+    body: JSON.stringify({ fact_ids: factIds }),
+    signal: options.signal,
+  }).then(({ facts }) => facts.map(mapFact));
 }
 
 export type WikiRenameApprovalStatus = "pending" | "applying" | "accepted" | "rejected" | "superseded";

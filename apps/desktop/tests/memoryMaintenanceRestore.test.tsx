@@ -269,6 +269,75 @@ test("successful Restore publishes page, history, links, and caches together", a
   expect(host.querySelector<HTMLButtonElement>('button[aria-label="Open links"] .mw-instrument-count')?.textContent).toBe("1");
 });
 
+test("Restore publishes prose first, hydrates changed citations, and caches only the hydrated page", async () => {
+  const currentConfig = config();
+  const commits: HistoryCommitFixture[] = [maintenanceCommit];
+  const restored = page({
+    title: "Original A",
+    content: "---\ntitle: Original A\n---\n# Original A\n\nOriginal notes.\n",
+    version: "note-r3",
+    repositoryHead: "restore-3",
+    metadata: { fact_citations: [{ fact_id: "new-fact", version: "new-fact:v1" }] },
+  });
+  const bridge = installCanonicalMemoryBridge({
+    pages: [
+      page({ metadata: { fact_citations: [{ fact_id: "old-fact", version: "old-fact:v1" }] } }),
+      page({ pageId: "page-b", path: "topics/b.md", title: "B", content: "# B\n", version: "note-b-r1" }),
+    ],
+    facts: [
+      { factId: "old-fact", text: "Old cited fact" },
+      { factId: "new-fact", text: "Restored cited fact" },
+    ],
+    history: { "page-a": commits },
+    onRequest: ({ path, method }, state) => {
+      if (path !== "/admin/wiki/pages/page-a/history/maintenance-2/restore" || method !== "POST") return undefined;
+      state.pages.set("page-a", restored);
+      commits.unshift({
+        commitId: "restore-3",
+        parentId: "maintenance-2",
+        actor: "user:desktop",
+        origin: "desktop.restore",
+        reason: "restore Maintenance commit maintenance-2",
+        changes: [{
+          action: "update",
+          before: { resourceId: "page-a", path: "topics/a.md", state: "active", versionId: "note-r2" },
+          after: { resourceId: "page-a", path: "topics/a.md", state: "active", versionId: "note-r3" },
+        }],
+      });
+      return ok(rawPage(restored));
+    },
+  });
+  const { host } = await renderView(currentConfig);
+  await openMaintenanceDiff(host);
+
+  await act(async () => Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
+    .find((button) => button.textContent === "Restore")!.click());
+  await settle(500);
+
+  const restoreIndex = bridge.requests.findIndex(({ path }) =>
+    path === "/admin/wiki/pages/page-a/history/maintenance-2/restore");
+  const postRestoreBatches = bridge.requests.slice(restoreIndex + 1)
+    .filter(({ path }) => path === "/admin/facts/batch");
+  expect(postRestoreBatches.map(({ body }) => body)).toEqual([{ fact_ids: ["new-fact"] }]);
+  expect(host.querySelector<HTMLElement>('[data-memory-note-path="topics/a.md"]')?.textContent).toContain("Original notes.");
+
+  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Open records"]')!.click());
+  await settle(250);
+  expect(host.textContent).toContain("Restored cited fact");
+  expect(host.textContent).not.toContain("Old cited fact");
+
+  const pageAReads = bridge.requests.filter(({ path }) => path === "/admin/wiki/pages/page-a").length;
+  const batchReads = bridge.requests.filter(({ path }) => path === "/admin/facts/batch").length;
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-memory-entry="topics/b.md"]')!.click());
+  await settle(250);
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-memory-entry="topics/a.md"]')!.click());
+  await settle(250);
+
+  expect(bridge.requests.filter(({ path }) => path === "/admin/wiki/pages/page-a")).toHaveLength(pageAReads);
+  expect(bridge.requests.filter(({ path }) => path === "/admin/facts/batch")).toHaveLength(batchReads);
+  expect(host.textContent).toContain("Restored cited fact");
+});
+
 test("a 409 keeps the current page and diff visible", async () => {
   const currentConfig = config();
   installCanonicalMemoryBridge({

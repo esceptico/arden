@@ -221,6 +221,14 @@ export function installCanonicalMemoryBridge(options: CanonicalMemoryBridgeOptio
           });
         }
         if (request.path.startsWith("/admin/facts/")) {
+          if (request.path === "/admin/facts/batch" && method === "POST") {
+            const factIds = (body as { fact_ids?: unknown })?.fact_ids;
+            if (!Array.isArray(factIds) || !factIds.every((factId): factId is string => typeof factId === "string")) {
+              return error(422, "fact_ids must be a string array");
+            }
+            const facts = factIds.map((factId) => state.facts.get(factId));
+            return facts.some((fact) => !fact) ? error(404, "fact not found") : ok({ facts: facts.map(rawFact) });
+          }
           const factId = decodeURIComponent(request.path.slice("/admin/facts/".length));
           const fact = state.facts.get(factId);
           return fact ? ok({ fact: rawFact(fact) }) : error(404, "fact not found");

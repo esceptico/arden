@@ -1,8 +1,9 @@
 import { ApiError, type AppConfig } from "@/api/core";
 import {
   archiveWikiPage,
+  FACT_BATCH_LIMIT,
   listWikiPages,
-  readFact,
+  readFactBatch,
   readWikiPage,
   readWikiPageDiff,
   readWikiPageHistory,
@@ -171,6 +172,11 @@ interface MemoryTimelineEntry {
   superseded: boolean;
 }
 
+export interface MemoryArtifactCitation {
+  factId: string;
+  version: string | null;
+}
+
 export interface MemoryArtifactSummary {
   path: string;
   title: string;
@@ -208,6 +214,7 @@ export interface MemoryArtifactSummariesResponse {
 
 export interface MemoryArtifactDetailResponse {
   artifact: MemoryArtifactDetail;
+  citations: MemoryArtifactCitation[];
 }
 
 interface StoredPreview {
@@ -292,7 +299,7 @@ function stringArray(value: unknown, field: string): string[] {
   return value;
 }
 
-function citations(metadata: Record<string, unknown>): Array<{ factId: string; version: string | null }> {
+function citations(metadata: Record<string, unknown>): MemoryArtifactCitation[] {
   const value = metadata.fact_citations;
   if (value === undefined) return [];
   if (!Array.isArray(value)) throw new Error("Wiki page metadata.fact_citations must be an array");
@@ -388,22 +395,39 @@ function timelineEntry(fact: Fact, citedVersion: string | null): MemoryTimelineE
   };
 }
 
-async function artifactDetail(
-  config: AppConfig,
-  page: WikiPage,
-  signal?: AbortSignal,
-): Promise<MemoryArtifactDetail> {
+function artifactDetail(page: WikiPage): MemoryArtifactDetailResponse {
   const refs = citations(page.metadata);
-  const loaded = await Promise.all(refs.map((ref) => readFact(config, ref.factId, { signal })));
-  const timeline = loaded.map((fact, index) => timelineEntry(fact, refs[index]?.version ?? null));
   return {
-    ...artifactSummary(page),
-    revision: page.version,
-    content: bodyOnly(page.content),
-    editableContent: page.path === "health.md" ? null : page.content,
-    timeline,
-    frontmatter: pageFrontmatter(page),
+    artifact: {
+      ...artifactSummary(page),
+      revision: page.version,
+      content: bodyOnly(page.content),
+      editableContent: page.path === "health.md" ? null : page.content,
+      timeline: [],
+      frontmatter: pageFrontmatter(page),
+    },
+    citations: refs,
   };
+}
+
+export async function readMemoryArtifactTimeline(
+  config: AppConfig,
+  refs: MemoryArtifactCitation[],
+  options: { signal?: AbortSignal } = {},
+): Promise<MemoryTimelineEntry[]> {
+  const factIds = [...new Set(refs.map((ref) => ref.factId))];
+  if (factIds.length === 0) return [];
+  const chunks: string[][] = [];
+  for (let index = 0; index < factIds.length; index += FACT_BATCH_LIMIT) {
+    chunks.push(factIds.slice(index, index + FACT_BATCH_LIMIT));
+  }
+  const facts = (await Promise.all(chunks.map((ids) => readFactBatch(config, ids, options)))).flat();
+  const factsById = new Map(facts.map((fact) => [fact.factId, fact]));
+  return refs.map((ref) => {
+    const fact = factsById.get(ref.factId);
+    if (!fact) throw new Error(`Fact batch response omitted cited fact: ${ref.factId}`);
+    return timelineEntry(fact, ref.version);
+  });
 }
 
 async function loadPages(config: AppConfig, signal?: AbortSignal): Promise<WikiPageSummary[]> {
@@ -507,7 +531,7 @@ export async function readMemoryArtifactDetail(
   const summary = await pageForPath(config, path, options.signal);
   const page = await readWikiPage(config, summary.pageId, { signal: options.signal });
   rememberPage(config, page);
-  return { artifact: await artifactDetail(config, page, options.signal) };
+  return artifactDetail(page);
 }
 
 export function rebuildMemoryArtifactSummaries(
@@ -627,7 +651,6 @@ export interface RestorePageMaintenanceChangeInput {
   commitId: string;
   expectedVersion: string;
   expectedHead: string;
-  current: MemoryArtifactDetail;
 }
 
 export async function restorePageMaintenanceChange(
@@ -648,9 +671,10 @@ export async function restorePageMaintenanceChange(
       revision: page.version,
       content: bodyOnly(page.content),
       editableContent: page.path === "health.md" ? null : page.content,
-      timeline: input.current.timeline,
+      timeline: [],
       frontmatter: pageFrontmatter(page),
     },
+    citations: citations(page.metadata),
   };
 }
 

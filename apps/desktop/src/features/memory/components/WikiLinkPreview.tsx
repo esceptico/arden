@@ -122,7 +122,10 @@ export function WikiLinkPreview({
       setPreview({ element, ...resolved, detail: null, loading: true, error: null, expectedRevision: revision });
       void loadDetail(resolved.path, controller.signal).then((detail) => {
         if (controller.signal.aborted || request.current !== controller) return;
-        cache.set(detail, revision ?? detail.revision);
+        // A cited page arrives before its record timeline. Keep that partial
+        // result out of the shared cache; the reading lane hydrates it before
+        // caching, while a no-citation page is already complete.
+        if (detail.recordCount === 0) cache.set(detail, revision ?? detail.revision);
         setPreview({ element, ...resolved, detail, loading: false, error: null, expectedRevision: revision });
       }).catch((reason) => {
         if (controller.signal.aborted || request.current !== controller) return;

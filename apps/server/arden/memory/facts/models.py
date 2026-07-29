@@ -51,6 +51,14 @@ class Fact:
 
 
 @dataclass(frozen=True)
+class FactReadSnapshot:
+    """One immutable current fact view and its canonical access scopes."""
+
+    facts: Mapping[str, Fact]
+    known_scopes: frozenset[tuple[str, str | None]]
+
+
+@dataclass(frozen=True)
 class FactEvent:
     event_id: str
     plan_id: str
