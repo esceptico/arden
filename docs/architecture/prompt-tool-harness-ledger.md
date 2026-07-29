@@ -153,3 +153,43 @@ Status:
   text; uncertain mutation completion; offloaded pagination; approval/scope
   separation; invalid workflow inputs; and ledger inventory completeness.
 - No desktop/UI source was changed.
+
+## 2026-07-30 — semantic directory contracts and page moves
+
+The later user decision supersedes the earlier omission of nested README files.
+Directory READMEs are semantic working contracts, never generated file lists.
+The first managed child creates every missing ancestor contract in the same
+wiki commit. Create, move, restore, generated publication, and approved rename
+share this invariant. Active children protect their contract from archival,
+and a fixed contract path cannot be moved or renamed.
+
+Adjusted agent surfaces:
+
+- `arden/core/prompts.py` — agents read an existing directory contract before
+  its pages; `move_wiki_page` is the explicit path-only operation.
+- `arden/automation/prompts.py` — every autonomous run reads the applicable
+  README and explicitly reads each named wiki input.
+- `skills/wiki-automation/SKILL.md` — documents first-write creation,
+  producer/consumer/privacy/retention refinement, explicit downstream inputs,
+  and optional move scope.
+- Wiki tool descriptions — explain atomic README creation, exact CAS inputs,
+  path-link rewriting, Area ownership, and actionable recovery.
+
+README-read compliance remains a direct prompt/skill contract. A run-scoped
+read gate was deliberately omitted: it cannot distinguish a newly created
+output from an input, makes first-write creation circular, and adds mutable
+harness state without improving trusted-agent behavior.
+
+Verification:
+
+- complete server suite: **2,300 passed**;
+- Ruff and format checks: passed across all Arden and test Python files;
+- wheel and source distribution: built; `wiki-automation`, wiki service, and
+  move tool are packaged;
+- adversarial review: create/move/restore/generated publication atomicity,
+  collisions, Synthesis crash replay, automation scope, Area binding, and
+  nested Coast creation passed;
+- one-time live cutover rehearsal: exact replay made no changes; an injected
+  database failure rolled back the database and a rerun completed from the
+  already committed wiki state;
+- no Desktop/UI source changed.
