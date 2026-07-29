@@ -35,7 +35,7 @@ function summary(path: string, extra: Partial<MemoryArtifactSummary> = {}): Memo
   };
 }
 
-test("machine-only paths never reach the workspace tree", () => {
+test("machine-only paths stay hidden while the readable health report remains visible", () => {
   const artifacts = [
     summary("README.md"),
     summary("topics/dex.md"),
@@ -45,9 +45,13 @@ test("machine-only paths never reach the workspace tree", () => {
     summary("health.md"),
   ];
   const tree = buildWorkspaceTree(artifacts);
-  expect(collectNotes(tree).map((artifact) => artifact.path)).toEqual(["README.md", "topics/dex.md"]);
+  expect(collectNotes(tree).map((artifact) => artifact.path)).toEqual([
+    "README.md",
+    "health.md",
+    "topics/dex.md",
+  ]);
   expect(isNotebookResourcePath("raw/topics/dex.md")).toBe(false);
-  expect(isNotebookResourcePath("health.md")).toBe(false);
+  expect(isNotebookResourcePath("health.md")).toBe(true);
 });
 
 test("tree mirrors the directory structure with empty directories included", () => {

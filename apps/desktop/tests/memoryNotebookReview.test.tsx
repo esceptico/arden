@@ -133,16 +133,15 @@ test("rail mirrors the plain directory structure with page titles and precise re
   // gating, no README/index shadowing.
   for (const path of [
     "lab/README.md", "lab/index.md", "lab/first.md", "lab/second.md", "lab/sub/nested.md",
-    "research/health.md", "research/AGENTS.md", "research/changelog/note.md", "topics/dex.md",
+    "research/health.md", "research/AGENTS.md", "research/changelog/note.md", "topics/dex.md", "health.md",
   ]) {
     expect(tree.querySelector(`[data-memory-entry="${path}"]`)).not.toBeNull();
   }
   // Rows are labelled by the page's frontmatter title.
   expect(tree.querySelector('[data-memory-entry="lab/first.md"]')?.textContent).toBe("First");
-  // Reserved paths never render: raw/ anywhere, engine files only at the root.
+  // Reserved raw paths never render.
   expect(tree.querySelector('[data-memory-entry="lab/raw/secret.md"]')).toBeNull();
   expect(tree.querySelector('[data-memory-directory="lab/raw/"]')).toBeNull();
-  expect(tree.querySelector('[data-memory-entry="health.md"]')).toBeNull();
 
   // Root order: name-sorted directories, then files with README.md first.
   const rootOrder = [
@@ -151,6 +150,7 @@ test("rail mirrors the plain directory structure with page titles and precise re
     '[data-memory-directory="topics/"]',
     '[data-memory-entry="README.md"]',
     '[data-memory-entry="alpha.md"]',
+    '[data-memory-entry="health.md"]',
     '[data-memory-entry="zeta.md"]',
   ].map((selector) => tree.querySelector<HTMLElement>(selector)!);
   for (let index = 1; index < rootOrder.length; index += 1) {

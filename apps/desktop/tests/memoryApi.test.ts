@@ -102,6 +102,29 @@ test("canonical wiki pages map to the established notebook summary and detail co
   });
 });
 
+test("wiki health is visible through the notebook contract but remains read-only", async () => {
+  const currentConfig = config();
+  installCanonicalMemoryBridge({
+    pages: [page({
+      pageId: "health",
+      path: "health.md",
+      title: "Wiki health",
+      content: "---\npage_id: health\ntitle: Wiki health\nlifecycle: active\n---\n# Wiki health\n",
+      metadata: {},
+    })],
+  });
+
+  const listed = await listMemoryArtifactSummaries(currentConfig);
+  expect(listed.artifacts[0]).toMatchObject({
+    path: "health.md",
+    editable: false,
+    readonlyReason: "Generated health report",
+  });
+
+  const { artifact } = await readMemoryArtifactDetail(currentConfig, "health.md");
+  expect(artifact.editableContent).toBeNull();
+});
+
 test("rebuild is a canonical list refresh, not a legacy rebuild command", async () => {
   const currentConfig = config();
   const bridge = installCanonicalMemoryBridge({ pages: [page()] });

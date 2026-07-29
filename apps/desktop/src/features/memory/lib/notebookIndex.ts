@@ -1,5 +1,5 @@
 const RESERVED_DIRECTORIES = new Set(["raw", ".arden", ".index", ".maintenance"]);
-const RESERVED_ROOT_FILES = new Set(["AGENTS.md", "health.md", "tooling.md"]);
+const RESERVED_ROOT_FILES = new Set(["AGENTS.md", "tooling.md"]);
 
 function pathParts(path: string): string[] {
   return path.split("/").filter(Boolean);

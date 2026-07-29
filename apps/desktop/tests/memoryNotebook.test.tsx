@@ -114,10 +114,10 @@ test("memory opens as a filesystem notebook with a plain tree, tabs, and titles"
   expect(rail?.querySelector<HTMLButtonElement>('[data-memory-entry="daily/2026-07-13.md"]')?.textContent).toBe("2026-07-13");
   expect(rail?.querySelector('[data-memory-entry="scratch.md"]')?.textContent).toBe("Scratch");
   expect(rail?.textContent).not.toContain("topics/dex.md");
-  // Reserved machine paths never surface as tree rows.
+  // Raw machine paths stay hidden; the readable health report remains visible.
   expect(rail?.querySelector('[data-memory-entry="raw/events/1.md"]')).toBeNull();
   expect(rail?.querySelector('[data-memory-entry=".arden/maintenance/state.md"]')).toBeNull();
-  expect(rail?.querySelector('[data-memory-entry="health.md"]')).toBeNull();
+  expect(rail?.querySelector('[data-memory-entry="health.md"]')?.textContent).toBe("Health");
 
   // The mock rail is intentionally bare: no pinned cluster or hidden toolbar.
   expect(rail?.querySelector(".mw-tree-pins")).toBeNull();
