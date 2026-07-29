@@ -74,6 +74,9 @@ class RunState:
     # task_id. Tools (schedule_wakeup, loop_done) read it to mutate the
     # right loop. None for ordinary user-initiated runs.
     loop_task_id: str | None = None
+    # Trusted automation identity supplied by the server-side dispatcher.
+    # Never infer this authority from a client-provided ID.
+    automation_id: str | None = None
     # Per-turn output-token ceiling parsed from a "+500k"-style directive in the
     # user's message (None = use the configured default). Threaded to create_agent
     # so the run's shared RunBudget caps spend; workflows read it via `budget`.

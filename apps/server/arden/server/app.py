@@ -291,6 +291,8 @@ async def lifespan(app: FastAPI):
         tool_scope: tuple[str, ...] | None = None,
         output_schema: type[BaseModel] | None = None,
         chat_model: str | None = None,
+        loop_task_id: str | None = None,
+        automation_id: str | None = None,
     ) -> str | None:
         if chat_model is None:
             chat_model = await runtime.resolve_session_chat_model(session_id)
@@ -306,6 +308,8 @@ async def lifespan(app: FastAPI):
             session_service=runtime.session_service,
             tool_scope=tool_scope,
             output_schema=output_schema,
+            loop_task_id=loop_task_id,
+            automation_id=automation_id,
         )
         return result.get("run_id") if isinstance(result, dict) else None
 
@@ -324,30 +328,52 @@ async def lifespan(app: FastAPI):
         manual, context = split_manual_flag(context)
         ctx_str = json.dumps(context) if isinstance(context, dict) else context
         area_id = automation.task_id.removeprefix("area:")
-        if is_custodian_task_id(automation.task_id):
-            record = await runtime.session_service.get_area(area_id)
-            attention = (record or {}).get("attention") or "ambient"
-            allowed, woken_by = runtime.automation.custodians.begin_run(area_id, attention=attention, manual=manual)
-            if not allowed:
-                raise RunSkipped("autonomous daily run cap reached")
-            parts = []
-            work_snapshot = await runtime.stores.area_work.snapshot(area_id)
-            parts.append(render_work_context(work_snapshot))
-            if woken_by:
-                parts.append("WOKEN BY (events since your last run):\n" + "\n".join(f"- {w}" for w in woken_by))
-            if automation.iteration_count == 0:
-                parts.append(INTAKE_ADDENDUM.strip())
-            if parts:
-                ctx_str = "\n\n".join(([ctx_str] if ctx_str else []) + parts)
+        iteration = automation.iteration_count + 1
+        client_id = f"loop:{automation.task_id}:{iteration}"
         message = AUTOMATION_PROMPT.render(prompt=automation.prompt, context=ctx_str) if ctx_str else automation.prompt
+        skip_approvals = automation.auto_approve
+        if is_custodian_task_id(automation.task_id):
+            delivery = runtime.automation.custodians.pending_delivery(area_id, iteration)
+            if delivery is None:
+                record = await runtime.session_service.get_area(area_id)
+                attention = (record or {}).get("attention") or "ambient"
+                work_snapshot = await runtime.stores.area_work.snapshot(area_id)
+
+                def build_message(woken_by: tuple[str, ...]) -> str:
+                    parts = [render_work_context(work_snapshot)]
+                    if woken_by:
+                        parts.append(
+                            "WOKEN BY (events since your last run):\n" + "\n".join(f"- {event}" for event in woken_by)
+                        )
+                    if iteration == 1:
+                        parts.append(INTAKE_ADDENDUM.strip())
+                    run_context = "\n\n".join(([ctx_str] if ctx_str else []) + parts)
+                    return AUTOMATION_PROMPT.render(prompt=automation.prompt, context=run_context)
+
+                allowed, delivery = runtime.automation.custodians.begin_or_resume_delivery(
+                    area_id,
+                    iteration=iteration,
+                    client_id=client_id,
+                    attention=attention,
+                    manual=manual,
+                    skip_approvals=skip_approvals,
+                    build_message=build_message,
+                )
+                if not allowed or delivery is None:
+                    raise RunSkipped("autonomous daily run cap reached")
+            client_id = delivery.client_id
+            message = delivery.message
+            skip_approvals = delivery.skip_approvals
         run_id = await _dispatch_session_message(
             _loop_target_id(automation) or "",
             message,
-            client_id=f"loop:{automation.task_id}:{automation.iteration_count + 1}",
-            skip_approvals=automation.auto_approve,
+            client_id=client_id,
+            skip_approvals=skip_approvals,
             tool_scope=_automation_tool_scope(automation),
             output_schema=resolve_output_schema(automation.output_schema),
             chat_model=await _automation_chat_model(runtime, automation),
+            loop_task_id=automation.task_id,
+            automation_id=automation.task_id,
         )
         if run_id is None:
             raise RuntimeError(f"Iteration automation {automation.task_id} did not start a chat run")

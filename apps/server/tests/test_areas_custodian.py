@@ -165,6 +165,93 @@ def test_state_persists_across_reload(tmp_path):
     assert reloaded.state("a1")["pending_events"] == ["chat filed"]
 
 
+def test_delivery_retries_exact_request_after_restart_without_consuming_new_wakes(tmp_path):
+    c = _store(tmp_path)
+    c.note_event("a1", "first wake", attention="ambient", paused=False, now=NOW)
+    rendered: list[tuple[str, ...]] = []
+
+    def render(woken_by: tuple[str, ...]) -> str:
+        rendered.append(woken_by)
+        return "run with: " + ", ".join(woken_by)
+
+    allowed, first = c.begin_or_resume_delivery(
+        "a1",
+        iteration=1,
+        client_id="loop:area:a1:1",
+        attention="ambient",
+        manual=False,
+        skip_approvals=True,
+        build_message=render,
+        now=NOW,
+    )
+    assert allowed and first is not None
+    assert rendered == [("first wake",)]
+
+    restarted = _store(tmp_path)
+    restarted.note_event("a1", "later wake", attention="ambient", paused=False, now=NOW)
+
+    def must_not_render(_: tuple[str, ...]) -> str:
+        raise AssertionError("retry must reuse the reserved message")
+
+    allowed, retry = restarted.begin_or_resume_delivery(
+        "a1",
+        iteration=1,
+        client_id="loop:area:a1:1",
+        attention="ambient",
+        manual=False,
+        skip_approvals=True,
+        build_message=must_not_render,
+        now=NOW,
+    )
+    assert allowed and retry == first
+    assert restarted.runs_today("a1", now=NOW) == 1
+    assert restarted.state("a1")["pending_events"] == ["later wake"]
+
+    allowed, second = restarted.begin_or_resume_delivery(
+        "a1",
+        iteration=2,
+        client_id="loop:area:a1:2",
+        attention="ambient",
+        manual=False,
+        skip_approvals=True,
+        build_message=render,
+        now=NOW,
+    )
+    assert allowed and second is not None
+    assert second.message == "run with: later wake"
+
+
+def test_stale_delivery_is_replaced_after_iteration_was_committed(tmp_path):
+    c = _store(tmp_path)
+    allowed, first = c.begin_or_resume_delivery(
+        "a1",
+        iteration=1,
+        client_id="loop:area:a1:1",
+        attention="ambient",
+        manual=False,
+        skip_approvals=True,
+        build_message=lambda _: "first",
+        now=NOW,
+    )
+    assert allowed and first is not None
+
+    # Simulate a crash after the scheduler incremented iteration_count but
+    # before it acknowledged the delivery reservation.
+    allowed, second = c.begin_or_resume_delivery(
+        "a1",
+        iteration=2,
+        client_id="loop:area:a1:2",
+        attention="ambient",
+        manual=False,
+        skip_approvals=True,
+        build_message=lambda _: "second",
+        now=NOW,
+    )
+    assert allowed and second is not None
+    assert second.iteration == 2
+    assert second.message == "second"
+
+
 def test_all_autonomous_runs_share_cap_while_manual_runs_bypass(tmp_path):
     c = _store(tmp_path)
     cap = AREA_ATTENTION_PRESETS["ambient"]["runs_per_day"]

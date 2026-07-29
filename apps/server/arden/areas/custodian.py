@@ -7,6 +7,8 @@ area_id — small, human-readable, and owned by the areas domain the same way
 asks are."""
 
 import json
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -27,6 +29,16 @@ EVENT_WAKE_DEBOUNCE_MINUTES = 10
 def _parse(ts: str) -> datetime:
     dt = datetime.fromisoformat(ts)
     return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt
+
+
+@dataclass(frozen=True)
+class CustodianDelivery:
+    """The exact chat request reserved for one custodian iteration."""
+
+    iteration: int
+    client_id: str
+    message: str
+    skip_approvals: bool
 
 
 class CustodianStore:
@@ -74,6 +86,26 @@ class CustodianStore:
             st["runs_day"] = day
             st["runs_today"] = 0
         st["runs_today"] += 1
+
+    @staticmethod
+    def _delivery(st: dict) -> CustodianDelivery | None:
+        pending = st.get("pending_delivery")
+        if pending is None:
+            return None
+        return CustodianDelivery(
+            iteration=pending["iteration"],
+            client_id=pending["client_id"],
+            message=pending["message"],
+            skip_approvals=pending["skip_approvals"],
+        )
+
+    def pending_delivery(self, area_id: str, iteration: int) -> CustodianDelivery | None:
+        delivery = self._delivery(self.state(area_id))
+        if delivery is None or delivery.iteration < iteration:
+            return None
+        if delivery.iteration > iteration:
+            raise RuntimeError(f"Custodian delivery iteration moved backwards for {area_id}")
+        return delivery
 
     # ── event wakes ─────────────────────────────────────────
 
@@ -124,6 +156,59 @@ class CustodianStore:
             self._count_run(area_id, now)
         self._flush()
         return True, woken_by
+
+    def begin_or_resume_delivery(
+        self,
+        area_id: str,
+        *,
+        iteration: int,
+        client_id: str,
+        attention: str,
+        manual: bool,
+        skip_approvals: bool,
+        build_message: Callable[[tuple[str, ...]], str],
+        now: datetime | None = None,
+    ) -> tuple[bool, CustodianDelivery | None]:
+        """Reserve one exact delivery, or replay its durable reservation.
+
+        The reservation shares the custodian state write that consumes wake
+        events and the daily budget. A retry therefore cannot re-render a
+        different request for the same loop iteration.
+        """
+
+        now = now or datetime.now(UTC)
+        st = self.state(area_id)
+        pending = self._delivery(st)
+        if pending is not None:
+            if pending.iteration == iteration:
+                return True, pending
+            if pending.iteration > iteration:
+                raise RuntimeError(f"Custodian delivery iteration moved backwards for {area_id}")
+            del st["pending_delivery"]
+
+        preset = AREA_ATTENTION_PRESETS.get(attention, AREA_ATTENTION_PRESETS["ambient"])
+        if not manual and self.runs_today(area_id, now) >= preset["runs_per_day"]:
+            return False, None
+        woken_by = tuple(st["pending_events"])
+        message = build_message(woken_by)
+        delivery = CustodianDelivery(
+            iteration=iteration,
+            client_id=client_id,
+            message=message,
+            skip_approvals=skip_approvals,
+        )
+        st["pending_events"] = []
+        st["last_woken_by"] = list(woken_by)
+        if not manual:
+            self._count_run(area_id, now)
+        st["pending_delivery"] = {
+            "iteration": delivery.iteration,
+            "client_id": delivery.client_id,
+            "message": delivery.message,
+            "skip_approvals": delivery.skip_approvals,
+        }
+        self._flush()
+        return True, delivery
 
     def record_page_write(self, area_id: str, digest: str) -> None:
         st = self.state(area_id)

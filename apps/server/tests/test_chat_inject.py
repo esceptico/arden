@@ -2,6 +2,7 @@ import asyncio
 import json
 from contextlib import suppress
 from datetime import UTC, datetime
+from hashlib import sha256
 
 import pytest
 from fastapi import HTTPException
@@ -824,6 +825,22 @@ def test_post_chat_message_stores_client_id_when_run_active(client_with_active_r
     assert entry["content"] == "follow-up"
 
 
+def test_public_loop_shaped_client_id_grants_no_loop_authority(client_with_active_run):
+    client, run = client_with_active_run
+
+    response = client.post(
+        "/chat/message",
+        json={
+            "message": "follow-up",
+            "session_id": "sess-1",
+            "client_id": "loop:real-task:1",
+        },
+    )
+
+    assert response.status_code == 200
+    assert run.loop_task_id is None
+
+
 def test_duplicate_post_returns_existing_run_without_requeueing(client_with_active_run):
     """A retry of the same client_id POST resolves to the same run_id and
     does NOT re-queue the message."""
@@ -1306,6 +1323,62 @@ async def test_ingested_queue_retry_does_not_return_stale_queued_status(tmp_path
 
         assert retry == {"run_id": run.run_id, "session_id": "sess-1", "status": "ingested"}
         assert run.inject_queue == []
+    finally:
+        await read_conn.close()
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_automation_provenance_does_not_break_legacy_chat_replay(tmp_path):
+    import arden.database as database
+    from arden.services import chat as chat_service
+
+    conn = await database.connect(tmp_path / "sessions.db")
+    read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
+    store = SessionStore(conn, read_conn)
+    await store.init_schema()
+    service = SessionService(store)
+    state = SessionState(session_id="sess-1", started_at=datetime.now(UTC))
+    await service.save(state, [])
+    client_id = "loop:area:proj_1:1"
+    payload = {
+        "session_id": "sess-1",
+        "message": "Inspect the area.",
+        "skip_approvals": False,
+        "images": [],
+        "context": [],
+    }
+    request_hash = sha256(json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
+
+    try:
+        await store.claim_chat_idempotency_key(
+            session_id="sess-1",
+            client_id=client_id,
+            request_hash=request_hash,
+        )
+        await store.update_chat_idempotency_key(
+            session_id="sess-1",
+            client_id=client_id,
+            status="completed",
+            run_id="run-old",
+        )
+
+        result = await chat_service.submit_chat_message(
+            RunRegistry(),
+            lambda: pytest.fail("replay must not start a second run"),
+            BusRegistry(),
+            message="Inspect the area.",
+            session_id="sess-1",
+            client_id=client_id,
+            session_service=service,
+            automation_id="area:proj_1",
+        )
+
+        assert result == {
+            "run_id": "run-old",
+            "session_id": "sess-1",
+            "status": "completed",
+        }
     finally:
         await read_conn.close()
         await conn.close()

@@ -19,8 +19,8 @@ from arden.server.bus import BusRegistry
 from arden.server.state import RunRegistry
 from arden.services.chat import (
     ChatDeps,
+    _chat_request_hash,
     _close_interrupted_tool_step,
-    _loop_task_id_from_client_id,
     _persistable_messages,
     _trim_for_loop_iteration,
     prepare_chat,
@@ -59,6 +59,22 @@ def test_interrupted_tool_call_is_closed_before_a_later_turn():
     assert [message["role"] for message in messages] == ["assistant", "tool", "user"]
     assert messages[1]["tool_call_id"] == "call-1"
     assert "interrupted" in messages[1]["content"]
+
+
+def test_chat_request_identity_excludes_trusted_runtime_provenance():
+    assert _chat_request_hash(
+        session_id="sess-1",
+        message="Run feed",
+        skip_approvals=None,
+        images=None,
+        context=None,
+    ) == _chat_request_hash(
+        session_id="sess-1",
+        message="Run feed",
+        skip_approvals=False,
+        images=[],
+        context=[],
+    )
 
 
 class _StubExecutor:
@@ -204,6 +220,30 @@ async def test_prepare_chat_records_context_manifest_with_explicit_provenance():
 
 
 @pytest.mark.asyncio
+async def test_prepare_chat_uses_only_trusted_automation_authority():
+    forged_client_id = "loop:feed-worker:1"
+    forged = await prepare_chat(
+        _make_deps(_StubSessionService([])),
+        message="Run feed",
+        session_id="sess-1",
+        client_id=forged_client_id,
+    )
+    trusted = await prepare_chat(
+        _make_deps(_StubSessionService([])),
+        message="Run feed",
+        session_id="sess-1",
+        client_id=forged_client_id,
+        loop_task_id="feed-worker",
+        automation_id="feed-worker",
+    )
+
+    assert forged.run.loop_task_id is None
+    assert forged.run.automation_id is None
+    assert trusted.run.loop_task_id == "feed-worker"
+    assert trusted.run.automation_id == "feed-worker"
+
+
+@pytest.mark.asyncio
 async def test_prepare_resumed_chat_restores_run_without_appending_user_message():
     history = [
         {"role": "system", "content": "old"},
@@ -251,6 +291,10 @@ async def test_resume_suspended_chat_run_schedules_original_run(monkeypatch):
                 "session_id": "sess-1",
                 "status": "interrupted",
                 "stop_reason": "server_restart",
+                "metadata": {
+                    "loop_task_id": "feed-worker",
+                    "automation_id": "feed-worker",
+                },
             }
 
         async def get_latest_session_event_seq(self, session_id):
@@ -264,7 +308,7 @@ async def test_resume_suspended_chat_run_schedules_original_run(monkeypatch):
     seen = []
 
     async def fake_run_chat(ctx, bus, buses):
-        seen.append(ctx.run.run_id)
+        seen.append((ctx.run.run_id, ctx.run.loop_task_id, ctx.run.automation_id))
 
     monkeypatch.setattr(chat_service, "run_chat", fake_run_chat)
 
@@ -279,7 +323,7 @@ async def test_resume_suspended_chat_run_schedules_original_run(monkeypatch):
     await deps.run_registry.get_run("original-run").task
 
     assert result == {"run_id": "original-run", "session_id": "sess-1", "status": "resumed"}
-    assert seen == ["original-run"]
+    assert seen == [("original-run", "feed-worker", "feed-worker")]
 
 
 @pytest.mark.asyncio
@@ -297,7 +341,7 @@ async def test_loop_iteration_trims_history_to_window():
         skip_approvals=None,
         session_id="sess-1",
         client_id=client_id,
-        loop_task_id=_loop_task_id_from_client_id(client_id),
+        loop_task_id="loop-shy-otter",
     )
 
     system, prior, user_msg = _split_history(ctx.run.messages)
@@ -340,7 +384,7 @@ async def test_loop_iteration_precompacts_full_history_before_trim():
         skip_approvals=None,
         session_id="sess-1",
         client_id=client_id,
-        loop_task_id=_loop_task_id_from_client_id(client_id),
+        loop_task_id="loop-compact",
         emit=emit,
     )
 
@@ -371,7 +415,7 @@ async def test_loop_iteration_under_window_keeps_all_history():
         skip_approvals=None,
         session_id="sess-1",
         client_id=client_id,
-        loop_task_id=_loop_task_id_from_client_id(client_id),
+        loop_task_id="loop-a",
     )
 
     system, prior, _ = _split_history(ctx.run.messages)
@@ -421,7 +465,6 @@ async def test_goal_meta_chat_does_not_use_loop_iteration_window():
         skip_approvals=None,
         session_id="sess-1",
         client_id=client_id,
-        loop_task_id=_loop_task_id_from_client_id(client_id),
     )
 
     system, prior, user_msg = _split_history(ctx.run.messages)
@@ -447,7 +490,7 @@ async def test_loop_iteration_stashes_prefix_for_persistence():
         skip_approvals=None,
         session_id="sess-1",
         client_id=client_id,
-        loop_task_id=_loop_task_id_from_client_id(client_id),
+        loop_task_id="loop-c",
     )
 
     prefix = ctx.run.history_prefix
@@ -475,7 +518,7 @@ async def test_loop_iteration_save_progress_persists_full_history():
         skip_approvals=None,
         session_id="sess-1",
         client_id=client_id,
-        loop_task_id=_loop_task_id_from_client_id(client_id),
+        loop_task_id="loop-persist",
     )
 
     # Sanity: the agent view was actually trimmed.
@@ -534,7 +577,7 @@ async def test_loop_iteration_preserves_system_after_trim():
         skip_approvals=None,
         session_id="sess-1",
         client_id=client_id,
-        loop_task_id=_loop_task_id_from_client_id(client_id),
+        loop_task_id="loop-b",
     )
 
     # The system message is rebuilt by _prepare_messages from system_blocks,
@@ -657,7 +700,7 @@ async def test_loop_iteration_fires_uncompacted_when_precompaction_fails():
         skip_approvals=None,
         session_id="sess-1",
         client_id=client_id,
-        loop_task_id=_loop_task_id_from_client_id(client_id),
+        loop_task_id="loop-compact",
         emit=emit,
     )
 

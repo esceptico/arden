@@ -252,10 +252,20 @@ async def _record_run_started(
     session_id: str,
     *,
     client_id: str | None = None,
+    loop_task_id: str | None = None,
+    automation_id: str | None = None,
 ) -> None:
     fn = getattr(service, "record_chat_run_started", None)
     if fn:
-        metadata = {"client_id": client_id} if client_id else None
+        metadata = {
+            key: value
+            for key, value in (
+                ("client_id", client_id),
+                ("loop_task_id", loop_task_id),
+                ("automation_id", automation_id),
+            )
+            if value is not None
+        }
         await fn(run_id, session_id, metadata=metadata)
 
 
@@ -675,6 +685,7 @@ async def prepare_chat(
     context: list[dict] | None = None,
     client_id: str | None = None,
     loop_task_id: str | None = None,
+    automation_id: str | None = None,
     emit: Callable[[object], Awaitable[None]] | None = None,
     tool_scope: tuple[str, ...] | None = None,
     output_schema: type[BaseModel] | None = None,
@@ -727,6 +738,8 @@ async def prepare_chat(
 
     run = registry.create_run(session_state.session_id, run_id=resume_run_id)
     run.token_budget = None if is_resume else parse_token_budget(message)
+    run.loop_task_id = loop_task_id
+    run.automation_id = automation_id
 
     tools = deps.executor.get_tools(scope=tool_scope) if tool_scope else deps.executor.get_tools()
     get_goal = getattr(deps.session_service, "get_goal", None)
@@ -797,20 +810,6 @@ async def prepare_chat(
         dispatch_session_message=deps.dispatch_session_message,
         output_schema=output_schema,
     )
-
-
-def _loop_task_id_from_client_id(client_id: str | None) -> str | None:
-    # Loop dispatcher stamps client_id="loop:<task_id>:<iteration>". The
-    # ":" lives inside the task_id (e.g. "loop-shy-otter") so split with
-    # maxsplit and rebuild — we want everything between "loop:" and the
-    # trailing ":<iteration>" suffix.
-    if not client_id or not client_id.startswith("loop:"):
-        return None
-    rest = client_id[len("loop:") :]
-    last_colon = rest.rfind(":")
-    if last_colon <= 0:
-        return None
-    return rest[:last_colon]
 
 
 def _run_input_boundary(run: RunState) -> tuple[str | None, int | None]:
@@ -887,6 +886,8 @@ async def submit_chat_message(
     session_service: SessionService | None = None,
     tool_scope: tuple[str, ...] | None = None,
     output_schema: type[BaseModel] | None = None,
+    loop_task_id: str | None = None,
+    automation_id: str | None = None,
 ) -> dict[str, str]:
     load_session = getattr(session_service, "load", None)
     if load_session is not None and await load_session(session_id) is None:
@@ -905,6 +906,8 @@ async def submit_chat_message(
             session_service=session_service,
             tool_scope=tool_scope,
             output_schema=output_schema,
+            loop_task_id=loop_task_id,
+            automation_id=automation_id,
         )
 
 
@@ -932,6 +935,11 @@ async def resume_suspended_chat_run(
         session_data = await session_service.load(session_id)
         if not session_data or not trailing_incomplete_tool_step(session_data.messages):
             return None
+        metadata = durable_run.get("metadata")
+        stored_loop_task_id = metadata.get("loop_task_id") if isinstance(metadata, dict) else None
+        loop_task_id = stored_loop_task_id if isinstance(stored_loop_task_id, str) else None
+        stored_automation_id = metadata.get("automation_id") if isinstance(metadata, dict) else None
+        automation_id = stored_automation_id if isinstance(stored_automation_id, str) else None
 
         await prime_bus_cursor_from_store(buses, session_id, session_service.store)
         bus = buses.get_or_create(session_id)
@@ -942,6 +950,8 @@ async def resume_suspended_chat_run(
             session_id=session_id,
             emit=bus.emit,
             resume_run_id=run_id,
+            loop_task_id=loop_task_id,
+            automation_id=automation_id,
         )
         task = asyncio.create_task(run_chat(ctx, bus, buses))
         ctx.run.task = task
@@ -965,8 +975,9 @@ async def _submit_chat_message_locked(
     session_service: SessionService | None = None,
     tool_scope: tuple[str, ...] | None = None,
     output_schema: type[BaseModel] | None = None,
+    loop_task_id: str | None = None,
+    automation_id: str | None = None,
 ) -> dict[str, str]:
-    loop_task_id = _loop_task_id_from_client_id(client_id)
     is_meta_client = _is_meta_client_id(client_id)
     request_hash = _chat_request_hash(
         session_id=session_id,
@@ -1062,10 +1073,16 @@ async def _submit_chat_message_locked(
         emit=bus.emit,
         tool_scope=tool_scope,
         output_schema=output_schema,
+        automation_id=automation_id,
     )
     try:
         await _record_run_started(
-            deps.session_service, ctx.run.run_id, ctx.session_state.session_id, client_id=client_id
+            deps.session_service,
+            ctx.run.run_id,
+            ctx.session_state.session_id,
+            client_id=client_id,
+            loop_task_id=loop_task_id,
+            automation_id=automation_id,
         )
         if client_id and session_service:
             await session_service.update_chat_idempotency_key(
@@ -1074,8 +1091,6 @@ async def _submit_chat_message_locked(
                 status="running",
                 run_id=ctx.run.run_id,
             )
-        if loop_task_id:
-            ctx.run.loop_task_id = loop_task_id
         if is_meta_client:
             ctx.run.is_meta_run = True
         # Persist the user message before the agent starts streaming. Without
@@ -1617,6 +1632,7 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
                 background_tasks=bg_registry,
                 loaded_tools=run.loaded_tools,
                 loop_task_id=run.loop_task_id,
+                automation_id=run.automation_id,
                 parent_tracker=tracker,
                 initial_input_tokens=ctx.initial_input_tokens,
                 run_registry=ctx.run_registry,
