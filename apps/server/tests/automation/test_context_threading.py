@@ -21,7 +21,7 @@ from arden.automation.models import Automation
 from arden.automation.scheduler import Scheduler
 from arden.automation.store import AutomationStore
 from arden.automation.triggers import TimeTrigger
-from arden.server.app import _automation_chat_model, _automation_tool_scope
+from arden.server.app import _automation_chat_model, _automation_tool_scope, _iteration_client_id
 
 
 @pytest_asyncio.fixture
@@ -70,6 +70,19 @@ def _capturing_dispatcher() -> tuple[list[tuple], object]:
         return "fake-run-id"
 
     return calls, dispatcher
+
+
+def test_recreated_automation_gets_a_fresh_iteration_idempotency_namespace():
+    first = _session_bound(task_id="area:proj_1")
+    recreated = replace(first, created_at=first.created_at + timedelta(seconds=1))
+
+    first_client_id = _iteration_client_id(first)
+    recreated_client_id = _iteration_client_id(recreated)
+
+    assert first_client_id != recreated_client_id
+    assert _iteration_client_id(recreated) == recreated_client_id
+    assert first_client_id.endswith(":1")
+    assert recreated_client_id.endswith(":1")
 
 
 @pytest.mark.asyncio

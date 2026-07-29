@@ -68,6 +68,13 @@ def _loop_target_id(automation: Automation) -> str | None:
     return automation.thread_id
 
 
+def _iteration_client_id(automation: Automation) -> str:
+    """Identify one delivery within one persisted automation incarnation."""
+
+    generation = automation.created_at.isoformat(timespec="microseconds")
+    return f"loop:{automation.task_id}:{generation}:{automation.iteration_count + 1}"
+
+
 def _automation_tool_scope(automation: Automation) -> tuple[str, ...] | None:
     """Return an automation's declared tool authority without widening it."""
 
@@ -329,7 +336,7 @@ async def lifespan(app: FastAPI):
         ctx_str = json.dumps(context) if isinstance(context, dict) else context
         area_id = automation.task_id.removeprefix("area:")
         iteration = automation.iteration_count + 1
-        client_id = f"loop:{automation.task_id}:{iteration}"
+        client_id = _iteration_client_id(automation)
         message = AUTOMATION_PROMPT.render(prompt=automation.prompt, context=ctx_str) if ctx_str else automation.prompt
         skip_approvals = automation.auto_approve
         if is_custodian_task_id(automation.task_id):

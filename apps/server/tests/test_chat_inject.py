@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+from arden.automation.models import Automation
 from arden.context.models import SessionData, SessionState
 from arden.context.store import SessionStore
 from arden.core.factory import AgentConfig
@@ -20,7 +21,7 @@ from arden.events.sse import (
     ThinkingEvent,
     ToolCallStartEvent,
 )
-from arden.server.app import app
+from arden.server.app import _iteration_client_id, app
 from arden.server.bus import BusRegistry, SessionBus, StreamRecord
 from arden.server.deps import get_bus_registry, require_run_registry
 from arden.server.routers.chat import (
@@ -1379,6 +1380,96 @@ async def test_automation_provenance_does_not_break_legacy_chat_replay(tmp_path)
             "session_id": "sess-1",
             "status": "completed",
         }
+    finally:
+        await read_conn.close()
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_recreated_automation_does_not_reuse_a_legacy_iteration_receipt(tmp_path):
+    import arden.database as database
+    from arden.services import chat as chat_service
+
+    conn = await database.connect(tmp_path / "sessions.db")
+    read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
+    store = SessionStore(conn, read_conn)
+    await store.init_schema()
+    service = SessionService(store)
+    state = SessionState(session_id="sess-1", started_at=datetime.now(UTC))
+    await service.save(state, [])
+    old_client_id = "loop:area:proj_1:1"
+    old_payload = {
+        "session_id": "sess-1",
+        "message": "Old incarnation prompt.",
+        "skip_approvals": False,
+        "images": [],
+        "context": [],
+    }
+    old_hash = sha256(json.dumps(old_payload, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
+    recreated = Automation(
+        task_id="area:proj_1",
+        name="Area agent",
+        prompt="New incarnation prompt.",
+        model=None,
+        triggers=[],
+        enabled=True,
+        created_at=datetime(2026, 7, 29, tzinfo=UTC),
+        next_run_at=None,
+        last_run_at=None,
+        last_result=None,
+        running_since=None,
+        auto_approve=False,
+        iteration_count=0,
+        thread_id="sess-1",
+        read_history=True,
+    )
+    new_client_id = _iteration_client_id(recreated)
+    registry = RunRegistry()
+    active_run = registry.create_run("sess-1")
+    active_run.status = RunStatus.RUNNING
+
+    try:
+        await store.claim_chat_idempotency_key(
+            session_id="sess-1",
+            client_id=old_client_id,
+            request_hash=old_hash,
+        )
+        await store.update_chat_idempotency_key(
+            session_id="sess-1",
+            client_id=old_client_id,
+            status="completed",
+            run_id="run-old",
+        )
+
+        accepted = await chat_service.submit_chat_message(
+            registry,
+            lambda: pytest.fail("active run must receive an injection"),
+            BusRegistry(),
+            message=recreated.prompt,
+            session_id="sess-1",
+            client_id=new_client_id,
+            session_service=service,
+            automation_id=recreated.task_id,
+        )
+        replay = await chat_service.submit_chat_message(
+            registry,
+            lambda: pytest.fail("idempotent replay must not start a run"),
+            BusRegistry(),
+            message=recreated.prompt,
+            session_id="sess-1",
+            client_id=new_client_id,
+            session_service=service,
+            automation_id=recreated.task_id,
+        )
+
+        assert new_client_id != old_client_id
+        assert accepted == {
+            "run_id": active_run.run_id,
+            "session_id": "sess-1",
+            "status": "queued",
+        }
+        assert replay == accepted
+        assert len(active_run.inject_queue) == 1
     finally:
         await read_conn.close()
         await conn.close()
