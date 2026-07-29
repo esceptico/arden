@@ -4,7 +4,8 @@ from arden.llm.base import CompletionClient
 from arden.memory.facts.maintenance.runner import FactMaintenanceDecision, FactMaintenancePreparedCluster
 
 _SYSTEM = """Review one prepared canonical-fact cluster using only the supplied evidence.
-Return no_change when evidence is weak or ambiguous. You may only:
+Return no_change when evidence is weak or ambiguous.
+For no_change, leave every action field null. You may only:
 - amend metadata on the changed fact: kind, labels, subjects, lifecycle, or evidence class;
 - merge two genuine duplicate claims from this cluster while preserving one as survivor.
 - normalize one exact subject of the changed fact to the title of a supplied canonical wiki page.

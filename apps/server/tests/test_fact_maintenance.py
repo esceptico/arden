@@ -30,6 +30,7 @@ def _create(
     fact_id: str,
     text: str,
     *,
+    labels: list[str] | None = None,
     subjects: list[str] | None = None,
     scope: dict[str, str | None] | None = None,
     evidence_class: str = "direct",
@@ -39,7 +40,7 @@ def _create(
         "fact_id": fact_id,
         "text": text,
         "kind": "fact",
-        "labels": [],
+        "labels": labels or [],
         "subjects": subjects or ["Alpha"],
         "scope": scope or {"kind": "user", "key": None},
         "sources": [{"kind": "test", "ref": fact_id}],
@@ -172,7 +173,7 @@ async def test_one_maintenance_plan_amends_and_merges_then_advances_before_its_o
                 reason="Correct classification.",
                 target_token=cluster.target_token,
                 kind="note",
-                labels=["Reviewed"],
+                labels=[],
                 subjects=["Corrected"],
                 lifecycle="temporary",
                 evidence_class="inferred",
@@ -196,7 +197,12 @@ async def test_one_maintenance_plan_amends_and_merges_then_advances_before_its_o
         await _baseline(ledger, consumers)
         input_revision = _commit(
             ledger,
-            _create("metadata", "Metadata correction", subjects=["Wrong"]),
+            _create(
+                "metadata",
+                "Metadata correction",
+                labels=["Stale"],
+                subjects=["Wrong"],
+            ),
             _create("duplicate", "Duplicate claim", subjects=["Duplicate"]),
         )
 
@@ -209,7 +215,7 @@ async def test_one_maintenance_plan_amends_and_merges_then_advances_before_its_o
 
         metadata = ledger.get("metadata")
         assert metadata.kind == "note"
-        assert metadata.labels == ("Reviewed",)
+        assert metadata.labels == ()
         assert metadata.subjects == ("Corrected",)
         assert metadata.lifecycle == "temporary"
         assert metadata.evidence_class == "inferred"

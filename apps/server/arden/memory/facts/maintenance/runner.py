@@ -174,7 +174,14 @@ class FactMaintenanceDecision(BaseModel):
         metadata = (self.kind, self.labels, self.subjects, self.lifecycle, self.evidence_class)
         normalization = (self.old_topic, self.canonical_page_token)
         if self.outcome == "no_change":
-            if self.target_token is not None or any(value is not None for value in metadata):
+            if (
+                self.target_token is not None
+                or self.kind is not None
+                or bool(self.labels)
+                or self.subjects is not None
+                or self.lifecycle is not None
+                or self.evidence_class is not None
+            ):
                 raise ValueError("no_change must not include an amendment")
             if self.discard_token is not None or self.survivor_token is not None:
                 raise ValueError("no_change must not include a merge")
