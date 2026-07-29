@@ -257,6 +257,11 @@ INSERT OR REPLACE INTO scheduled_tasks ({_COLUMNS})
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
+_SQL_INSERT = f"""
+INSERT INTO scheduled_tasks ({_COLUMNS})
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
 _SQL_GET_BY_ID = f"SELECT {_COLUMNS} FROM scheduled_tasks WHERE task_id = ?"
 
 _SQL_LIST_ALL = f"SELECT {_COLUMNS} FROM scheduled_tasks ORDER BY created_at"
@@ -462,6 +467,14 @@ _SQL_LATEST_RUNS = (
 _SQL_DELETE = "DELETE FROM scheduled_tasks WHERE task_id = ?"
 
 _SQL_SET_ENABLED = "UPDATE scheduled_tasks SET enabled = ? WHERE task_id = ?"
+_SQL_SET_ENABLED_IF_CLAIM = """
+UPDATE scheduled_tasks
+SET enabled = ?
+WHERE task_id = ?
+  AND enabled = ?
+  AND idempotency_key = ?
+  AND idempotency_scope = 'global'
+"""
 _SQL_DISABLE_AND_CLEAR_NEXT_RUN = "UPDATE scheduled_tasks SET enabled = 0, next_run_at = NULL WHERE task_id = ?"
 
 _SQL_DISABLE_BY_PARENT = """
@@ -1778,6 +1791,21 @@ class AutomationStore:
         await self.conn.execute(_SQL_SET_ENABLED, (int(enabled), task_id))
         await self.conn.commit()
 
+    async def set_enabled_if_claim(
+        self,
+        task_id: str,
+        claim_key: str,
+        *,
+        expected: bool,
+        enabled: bool,
+    ) -> bool:
+        cursor = await self.conn.execute(
+            _SQL_SET_ENABLED_IF_CLAIM,
+            (int(enabled), task_id, int(expected), claim_key),
+        )
+        await self.conn.commit()
+        return cursor.rowcount > 0
+
     async def disable_and_clear_next_run(self, task_id: str) -> None:
         await self.conn.execute(_SQL_DISABLE_AND_CLEAR_NEXT_RUN, (task_id,))
         await self.conn.commit()
@@ -2008,7 +2036,7 @@ class AutomationStore:
                 await self.conn.rollback()
                 return False
             await self.conn.execute(
-                _SQL_SAVE,
+                _SQL_INSERT,
                 (
                     automation.task_id,
                     automation.name,

@@ -50,6 +50,7 @@ from arden.server.state import RunRegistry
 from arden.server.stores import Stores
 from arden.server.wiki_health import dangling_fact_citation_issues
 from arden.services.session import SessionService
+from arden.services.wiki_producers import WikiProducerProvisioner
 from arden.skills.registry import SkillRegistry
 from arden.skills.service import SkillService, get_skills_dirs
 from arden.tools.connections import ConnectionService
@@ -124,6 +125,7 @@ class Runtime:
         self.wiki_page_projection: WikiPageIndexProjection | None = None
         self.fact_index_projection: FactIndexProjection | None = None
         self.wiki_rename_coordinator: WikiRenameApprovalCoordinator | None = None
+        self.wiki_producer: WikiProducerProvisioner | None = None
         self._wiki_approval_conn: database.aiosqlite.Connection | None = None
         self._wiki_maintenance_store: WikiMaintenanceStore | None = None
         self._wiki_curator_store: WikiEditCuratorQueueStore | None = None
@@ -220,6 +222,8 @@ class Runtime:
         if self.wiki_service is not None:
             services["wiki"] = self.wiki_service
             services[WIKI_POST_COMMIT_SERVICE] = self.project_wiki_change_after_commit
+        if self.wiki_producer is not None:
+            services["wiki_producer"] = self.wiki_producer
         if self.automation:
             services["area_custodians"] = self.automation.custodians
             if self.automation.fact_maintenance_review is not None:
@@ -278,6 +282,7 @@ class Runtime:
 
         if self.executor:
             self.executor = self._create_executor(config)
+            self._init_wiki_producer()
 
     # --- Connect / close ---
 
@@ -327,6 +332,7 @@ class Runtime:
             )
         await self._init_mcp()
         self._init_tools()
+        self._init_wiki_producer()
         if self.wiki_curator_worker is not None:
             self.wiki_curator_worker.start()
 
@@ -828,6 +834,22 @@ class Runtime:
     def _init_tools(self) -> None:
         self.executor = self._create_executor()
 
+    def _init_wiki_producer(self) -> None:
+        if (
+            self.wiki_service is None
+            or self.automation_service is None
+            or self.session_service is None
+            or self.executor is None
+        ):
+            self.wiki_producer = None
+            return
+        self.wiki_producer = WikiProducerProvisioner(
+            wiki=self.wiki_service,
+            automation=self.automation_service,
+            sessions=self.session_service,
+            registered_tool_names=self.executor.registry.tools,
+        )
+
     async def close(self) -> None:
         self._closing = True
 
@@ -865,6 +887,7 @@ class Runtime:
         self.fact_index_projection = None
         self.wiki_context = None
         self.wiki_page_projection = None
+        self.wiki_producer = None
         self.knowledge.set_fact_service(None)
         if self._wiki_approval_conn:
             await self._wiki_approval_conn.close()

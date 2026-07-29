@@ -425,11 +425,11 @@ async def test_create_rolls_back_claim_on_save_failure(service: AutomationServic
     """If the automation row write fails inside save_with_claim, the claim
     must also rollback so a retry under the same key can succeed."""
     # Simulate the INSERT INTO scheduled_tasks step failing by patching the
-    # connection's execute to raise on _SQL_SAVE only.
+    # connection's execute to raise on the scheduled-task insert only.
     real_execute = store.conn.execute
 
     async def flaky_execute(sql, *args, **kwargs):
-        if "INSERT OR REPLACE INTO scheduled_tasks" in sql:
+        if "INSERT INTO scheduled_tasks" in sql:
             raise RuntimeError("simulated disk error")
         return await real_execute(sql, *args, **kwargs)
 
@@ -468,7 +468,7 @@ async def test_create_loop_rolls_back_claim_on_save_failure(
     real_execute = store.conn.execute
 
     async def flaky_execute(sql, *args, **kwargs):
-        if "INSERT OR REPLACE INTO scheduled_tasks" in sql:
+        if "INSERT INTO scheduled_tasks" in sql:
             raise RuntimeError("simulated disk error")
         return await real_execute(sql, *args, **kwargs)
 

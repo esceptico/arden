@@ -132,9 +132,12 @@ async def test_runtime_wires_canonical_facts_and_survives_restart(tmp_path) -> N
         assert maintenance_store is not None
         assert runtime.knowledge.tool_services()[FACT_SERVICE] is runtime.fact_service
         assert runtime.tool_services["wiki"] is runtime.wiki_service
+        assert runtime.wiki_producer is not None
+        assert runtime.tool_services["wiki_producer"] is runtime.wiki_producer
         assert runtime.executor is not None
         names = {schema["function"]["name"] for schema in runtime.executor.get_tools()}
         assert {"search_facts", "get_fact", "plan_fact_changes", "commit_fact_changes", "list_wiki_pages"} <= names
+        assert "provision_wiki_producer" in names
         assert "remember" not in names
 
         principal = FactPrincipal("session:test", frozenset({USER_SCOPE}), frozenset({USER_SCOPE}))

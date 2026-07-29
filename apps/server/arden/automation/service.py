@@ -151,6 +151,15 @@ class AutomationService:
             contains=payload.get("contains") or [],
         )
 
+    async def resolve_message_trigger(self, payload: dict) -> MessageTrigger:
+        """Resolve a producer trigger before any durable producer state is written."""
+        return await self._resolve_message_trigger(payload)
+
+    @staticmethod
+    def normalize_model(model: str | None) -> str | None:
+        """Validate the model before callers begin multi-store provisioning."""
+        return _normalize_and_validate_model(model)
+
     async def _resolve_message_triggers(self, triggers: list[dict] | None) -> list[dict] | None:
         """Replace name-based message-trigger dicts with resolved, ID-form dicts
         so the shared parse/build path stores Slack IDs."""
@@ -443,6 +452,8 @@ class AutomationService:
         attempt_n: int | None = None,
         tool_scope: list[str] | None = None,
         task_id: str | None = None,
+        enabled: bool = True,
+        triggers_resolved: bool = False,
     ) -> Automation | None:
         prompt = self._normalize_prompt(prompt)
         display_description, description_source = await self._resolve_description(
@@ -450,7 +461,8 @@ class AutomationService:
             prompt=prompt,
             description=description,
         )
-        triggers = await self._resolve_message_triggers(triggers)
+        if not triggers_resolved:
+            triggers = await self._resolve_message_triggers(triggers)
         parsed_triggers, next_run = _build_trigger_and_next_run(
             trigger_type=trigger_type,
             at=at,
@@ -494,7 +506,7 @@ class AutomationService:
             prompt=prompt,
             model=_normalize_and_validate_model(model),
             triggers=parsed_triggers,
-            enabled=True,
+            enabled=enabled,
             created_at=now,
             next_run_at=next_run,
             last_run_at=None,

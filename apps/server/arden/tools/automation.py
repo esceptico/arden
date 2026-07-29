@@ -1,5 +1,4 @@
 from datetime import UTC, datetime, timedelta
-from difflib import get_close_matches
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -11,8 +10,8 @@ from arden.events.triggers import EVENT_APPROACHING
 from arden.tools.core import EmptyInput, ToolResult, tool
 from arden.tools.core.collections import format_timestamp
 from arden.tools.core.context import ToolExecution
-from arden.tools.core.scope import matches_scope
 from arden.tools.core.types import ApprovalInfo, ToolAction, ToolPolicy, ToolScope
+from arden.tools.tool_scope import validate_tool_scope
 
 # --- Descriptions ---
 
@@ -379,23 +378,16 @@ async def approve_create_automation(execution: ToolExecution, args: CreateAutoma
 
 
 def _tool_scope_error(execution: ToolExecution, patterns: list[str]) -> ToolResult | None:
-    """A scope pattern that matches no registered tool is a typo, not a grant.
-    Fail loudly with candidates instead of storing an allowlist that silently
-    strips the automation of the tool its author meant."""
-    names = tuple(execution.ctx.registry.tools)
-    bad = [p for p in patterns if not any(matches_scope((p,), name) for name in names)]
-    if not bad:
-        return None
-    hints = []
-    for pattern in bad:
-        close = get_close_matches(pattern.rstrip("*"), names, n=3, cutoff=0.5)
-        hints.append(f"'{pattern}'" + (f" (did you mean: {', '.join(close)}?)" if close else ""))
-    return ToolResult.failure(
-        code="invalid_arguments",
-        message=f"tool_scope patterns match no registered tool: {'; '.join(hints)}",
-        preview="Unknown tools in scope",
-        recovery_action="Use exact registered tool names or prefix patterns like 'slack_*', then retry.",
-    )
+    try:
+        validate_tool_scope(patterns, execution.ctx.registry.tools)
+    except ValueError as exc:
+        return ToolResult.failure(
+            code="invalid_arguments",
+            message=str(exc),
+            preview="Unknown tools in scope",
+            recovery_action="Use exact registered tool names or prefix patterns like 'slack_*', then retry.",
+        )
+    return None
 
 
 async def create_automation(execution: ToolExecution, args: CreateAutomationInput) -> ToolResult:

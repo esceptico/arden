@@ -124,6 +124,37 @@ class SessionService:
         await self._publish(SessionCreatedEvent(session=session_row(state, 0)))
         return state
 
+    async def provision_if_absent(
+        self,
+        name: str | None = None,
+        session_type: Literal["chat", "channel", "agent"] = "chat",
+        origin_automation_id: str | None = None,
+        session_id: str | None = None,
+        parent_session_id: str | None = None,
+        parent_tool_call_id: str | None = None,
+        agent_type: str | None = None,
+        agent_status: str | None = None,
+        area_id: str | None = None,
+        chat_model: str | None = None,
+    ) -> tuple[SessionState, bool]:
+        """Create a session only if its deterministic id is still unclaimed."""
+        state = self.create(
+            name=name,
+            session_type=session_type,
+            origin_automation_id=origin_automation_id,
+            session_id=session_id,
+            parent_session_id=parent_session_id,
+            parent_tool_call_id=parent_tool_call_id,
+            agent_type=agent_type,
+            agent_status=agent_status,
+            area_id=area_id,
+            chat_model=chat_model,
+        )
+        created = await self.store.create_session_if_absent(state)
+        if created:
+            await self._publish(SessionCreatedEvent(session=session_row(state, 0)))
+        return state, created
+
     async def provision_state(self, state: SessionState, messages: list[dict] | None = None) -> SessionState:
         rows = messages or []
         await self.save(state, rows)

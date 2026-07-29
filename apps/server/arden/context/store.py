@@ -374,6 +374,16 @@ ON CONFLICT(session_id) DO UPDATE SET
     chat_model = excluded.chat_model
 """
 
+SQL_INSERT_SESSION_IF_ABSENT = """
+INSERT INTO sessions (
+    session_id, started_at, last_activity, messages, metadata, name,
+    session_type, origin_automation_id, parent_session_id, parent_tool_call_id,
+    agent_type, agent_status, area_id, chat_model
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(session_id) DO NOTHING
+"""
+
 SQL_GET_LATEST = """
 SELECT session_id FROM sessions
 WHERE archived_at IS NULL
@@ -3475,6 +3485,47 @@ class SessionStore:
             )
             await self._mirror_session_messages(state.session_id, serializable_messages)
             await self.conn.commit()
+
+    async def create_session_if_absent(
+        self,
+        state: SessionState,
+        messages: list[dict | Any] | None = None,
+        metadata: dict | None = None,
+    ) -> bool:
+        """Insert a new session without replacing a row created by a racing owner."""
+        lock = await self._session_write_lock(state.session_id)
+        async with lock:
+            serializable_messages = self._to_serializable_messages(messages or [])
+            now = datetime.now(UTC).isoformat()
+            self._stamp_messages(serializable_messages, now)
+            meta = metadata or {}
+            messages_json, metadata_json = await asyncio.to_thread(
+                lambda: (json.dumps(serializable_messages, default=str), json.dumps(meta))
+            )
+            cursor = await self.conn.execute(
+                SQL_INSERT_SESSION_IF_ABSENT,
+                (
+                    state.session_id,
+                    state.started_at.isoformat(),
+                    state.last_activity.isoformat(),
+                    messages_json,
+                    metadata_json,
+                    state.name,
+                    state.session_type,
+                    state.origin_automation_id,
+                    state.parent_session_id,
+                    state.parent_tool_call_id,
+                    state.agent_type,
+                    state.agent_status,
+                    state.area_id,
+                    state.chat_model,
+                ),
+            )
+            created = cursor.rowcount > 0
+            if created:
+                await self._mirror_session_messages(state.session_id, serializable_messages)
+            await self.conn.commit()
+            return created
 
     async def load_session(self, session_id: str) -> SessionData | None:
         rows = await self.read_conn.execute_fetchall(SQL_LOAD_SESSION, (session_id,))

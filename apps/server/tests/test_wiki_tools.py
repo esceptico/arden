@@ -431,7 +431,16 @@ async def test_wiki_tools_require_the_wiki_capability(tmp_path: Path) -> None:
 
 def test_wiki_read_boundary_has_its_own_core_integration() -> None:
     assert WIKI in CORE_INTEGRATIONS
-    assert set(WIKI.tools) == {"list_wiki_pages", "read_wiki_page", "wiki_links", "publish_wiki_generated"}
+    assert set(WIKI.tools) == {
+        "list_wiki_pages",
+        "read_wiki_page",
+        "wiki_links",
+        "publish_wiki_generated",
+        "provision_wiki_producer",
+    }
     assert {tool.policy.action.value for tool in WIKI.tools.values()} == {"read", "write"}
-    assert {tool.policy.permissions for tool in WIKI.tools.values()} == {frozenset({"wiki"})}
+    assert WIKI.tools["provision_wiki_producer"].policy.permissions == frozenset({"automation", "wiki"})
+    assert {tool.policy.permissions for name, tool in WIKI.tools.items() if name != "provision_wiki_producer"} == {
+        frozenset({"wiki"})
+    }
     assert publish_wiki_generated_tool.policy.idempotent is False
