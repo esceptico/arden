@@ -892,6 +892,65 @@ async def test_hard_total_prompt_budget_creates_durable_ask(tmp_path: Path, monk
 
 
 @pytest.mark.asyncio
+async def test_normal_multi_page_commit_fits_the_bounded_review_report(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    pages = tuple(
+        create_page(
+            page_id=f"page-{index}",
+            title=f"Page {index}",
+            body=(("old " * 1_000) + "\n").encode(),
+        )
+        for index in range(18)
+    )
+    seed = repo.commit(
+        ChangeSet(
+            operations=tuple(Create(page.page_id, f"{page.page_id}.md", page.to_bytes()) for page in pages),
+            actor="Synthesis",
+            origin="memory.synthesis",
+            reason="initial synthesis",
+            idempotency_key="initial-synthesis",
+        )
+    ).commit_id
+    versions = {page.page_id: repo.get(page.page_id) for page in pages}
+    source = repo.commit(
+        ChangeSet(
+            operations=tuple(
+                Update(
+                    page.page_id,
+                    versions[page.page_id].version_id,
+                    create_page(
+                        page_id=page.page_id,
+                        title=page.title,
+                        body=(("new " * 1_000) + "\n").encode(),
+                    ).to_bytes(),
+                )
+                for page in pages
+            ),
+            actor="Synthesis",
+            origin="memory.synthesis",
+            reason="refresh synthesis",
+            idempotency_key="refresh-synthesis",
+            expected_head=seed,
+        )
+    ).commit_id
+    store = await WikiMaintenanceStore.open(tmp_path / "state.sqlite")
+    reviewer = _Reviewer(WikiMaintenanceDecision(outcome="no_change"))
+    try:
+        await store.apply_run(
+            expected_revision=None,
+            ordered_commit_ids=(seed,),
+            reviewed_through=seed,
+        )
+        result = await WikiMaintenance(store, WikiService(repo), reviewer).run()
+
+        assert result.complete and result.processed_through_revision == source
+        assert 256 * 1024 < len(reviewer.reports[0].markdown.encode()) < 512 * 1024
+        assert await store.list_pending() == []
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
 async def test_store_failure_propagates_to_the_scheduler(tmp_path: Path, monkeypatch) -> None:
     repo = _repo(tmp_path)
     _seed(repo)
