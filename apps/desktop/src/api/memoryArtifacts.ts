@@ -235,13 +235,31 @@ function idKey(config: AppConfig, pageId: string): string {
 }
 
 function rememberPage(config: AppConfig, page: WikiPageSummary): void {
+  const existing = pageById.get(idKey(config, page.pageId));
+  if (existing && existing.path !== page.path) {
+    pageByPath.delete(pathKey(config, existing.path));
+  }
   pageByPath.set(pathKey(config, page.path), page);
   pageById.set(idKey(config, page.pageId), page);
 }
 
 function forgetPage(config: AppConfig, page: WikiPageSummary): void {
+  const key = idKey(config, page.pageId);
+  const current = pageById.get(key);
   pageByPath.delete(pathKey(config, page.path));
-  pageById.delete(idKey(config, page.pageId));
+  if (current) pageByPath.delete(pathKey(config, current.path));
+  pageById.delete(key);
+}
+
+function replacePages(config: AppConfig, pages: WikiPageSummary[]): void {
+  const prefix = `${configKey(config)}\0`;
+  for (const key of pageByPath.keys()) {
+    if (key.startsWith(prefix)) pageByPath.delete(key);
+  }
+  for (const key of pageById.keys()) {
+    if (key.startsWith(prefix)) pageById.delete(key);
+  }
+  pages.forEach((page) => rememberPage(config, page));
 }
 
 function canonicalArtifactPath(path: string): string {
@@ -387,7 +405,7 @@ async function artifactDetail(
 
 async function loadPages(config: AppConfig, signal?: AbortSignal): Promise<WikiPageSummary[]> {
   const pages = await listWikiPages(config, { signal });
-  pages.forEach((page) => rememberPage(config, page));
+  replacePages(config, pages);
   return pages;
 }
 

@@ -10,6 +10,7 @@ import { resolveWikiTarget } from "@/features/memory/lib/wikiResolution";
 import type { MemoryArtifactDetail, MemoryArtifactSummary, PageLinks } from "@/features/memory/lib/notebookTypes";
 import { useStore } from "@/stores";
 import {
+  error,
   installCanonicalMemoryBridge,
   ok,
   type LinkFixture,
@@ -185,7 +186,72 @@ test("wikilink resolution follows the server result including aliases, headings,
   expect(resolveWikiTarget(links, "Dex alias#Decisions")).toEqual({ path: "topics/dex.md", anchor: "Decisions" });
   expect(resolveWikiTarget(links, "Shared")).toBeNull();
   expect(resolveWikiTarget(links, "topics/dex")).toBeNull();
+  expect(resolveWikiTarget(links, " Dex alias # Decisions ")).toEqual({ path: "topics/dex.md", anchor: "Decisions" });
   expect(resolveWikiTarget({ ...links, stale: true }, "Dex alias#Decisions")).toBeNull();
+});
+
+test("availability-check failures stay retryable without blocking the memory workspace", async () => {
+  const note = summary("note.md", "Note");
+  let renameChecks = 0;
+  let maintenanceChecks = 0;
+  installCanonicalMemoryBridge({
+    pages: [wikiPage(note, "Note body")],
+    onRequest: ({ path }) => {
+      if (path === "/admin/wiki/rename-approvals") {
+        renameChecks += 1;
+        return error(503, "rename service unavailable");
+      }
+      if (path === "/admin/wiki/maintenance-reviews") {
+        maintenanceChecks += 1;
+        return error(503, "maintenance service unavailable");
+      }
+      return undefined;
+    },
+  });
+  const { host, root } = setup("note.md");
+  await act(async () => root.render(<ArtifactMemoryView config={config} />));
+  await settle(300);
+
+  expect(host.querySelector("h1")?.textContent).toBe("Note");
+  expect(host.querySelector("[data-wiki-rename-status]")).toBeNull();
+  expect(host.querySelector("[data-wiki-maintenance-status]")).toBeNull();
+  expect(host.querySelector("[data-memory-availability-error]")?.textContent).toContain("rename service unavailable");
+
+  await act(async () => host.querySelector<HTMLButtonElement>("[data-memory-availability-error] button")?.click());
+  await settle();
+  expect(renameChecks).toBeGreaterThan(1);
+  expect(maintenanceChecks).toBeGreaterThan(1);
+});
+
+test("a persisted rename approval still blocks the memory workspace", async () => {
+  const note = summary("note.md", "Note");
+  installCanonicalMemoryBridge({
+    pages: [wikiPage(note, "Note body")],
+    onRequest: ({ path }) => path === "/admin/wiki/rename-approvals" ? ok({
+      approvals: [{
+        approval_id: "approval-1",
+        old_path: "note.md",
+        new_path: "topics/note.md",
+        old_title: "Note",
+        new_title: "Renamed note",
+        link_count: 1,
+        page_count: 1,
+        generation: 1,
+        status: "pending",
+        created_at: "2026-07-29T00:00:00Z",
+        resolved_at: null,
+        commit_id: null,
+        resolution: null,
+        replacement_approval_id: null,
+      }],
+    }) : undefined,
+  });
+  const { host, root } = setup("note.md");
+  await act(async () => root.render(<ArtifactMemoryView config={config} />));
+  await settle(300);
+
+  expect(host.querySelector("[data-wiki-rename-approval]")).not.toBeNull();
+  expect(host.querySelector("[data-memory-availability-error]")).toBeNull();
 });
 
 test("preview delays hover and focus, bridges into the tooltip, and exposes its description", async () => {

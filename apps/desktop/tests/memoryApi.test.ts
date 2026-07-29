@@ -125,6 +125,21 @@ test("wiki health is visible through the notebook contract but remains read-only
   expect(artifact.editableContent).toBeNull();
 });
 
+test("a refreshed page list evicts renamed paths before the next detail read", async () => {
+  const currentConfig = config();
+  const bridge = installCanonicalMemoryBridge({ pages: [page({ metadata: {} })] });
+
+  await listMemoryArtifactSummaries(currentConfig);
+  bridge.updatePage(page({ path: "topics/renamed.md", metadata: {} }));
+  const refreshed = await listMemoryArtifactSummaries(currentConfig);
+
+  expect(refreshed.artifacts.map((artifact) => artifact.path)).toEqual(["topics/renamed.md"]);
+  const oldPath = await readMemoryArtifactDetail(currentConfig, "topics/a.md").catch((reason) => reason);
+  expect(oldPath).toBeInstanceOf(ApiError);
+  expect(oldPath.status).toBe(404);
+  expect((await readMemoryArtifactDetail(currentConfig, "topics/renamed.md")).artifact.path).toBe("topics/renamed.md");
+});
+
 test("rebuild is a canonical list refresh, not a legacy rebuild command", async () => {
   const currentConfig = config();
   const bridge = installCanonicalMemoryBridge({ pages: [page()] });
@@ -316,6 +331,10 @@ test("archive uses canonical identity and both version guards", async () => {
       expected_head: "wiki-head-1",
     },
   });
+
+  const archived = await readMemoryArtifactDetail(currentConfig, "topics/a.md").catch((reason) => reason);
+  expect(archived).toBeInstanceOf(ApiError);
+  expect(archived.status).toBe(404);
 });
 
 test("artifact APIs reject non-canonical paths before transport", async () => {

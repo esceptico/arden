@@ -546,9 +546,16 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     refresh: refreshMaintenance,
     resolve: resolveMaintenance,
   } = useWikiMaintenanceReviews(config);
-  const renameBlocked = renameDraft != null || activeRenameApproval != null || renameVerification !== "ready";
-  const maintenanceBlocked = maintenanceReview != null || maintenanceVerification !== "ready";
-  const maintenanceVisible = maintenanceBlocked && !renameBlocked;
+  const renameBlocked = renameDraft != null || activeRenameApproval != null;
+  const maintenanceVisible = maintenanceReview != null && !renameBlocked;
+  const availabilityError = [
+    renameVerification === "error" ? renameError : null,
+    maintenanceVerification === "error" ? maintenanceError : null,
+  ].filter((message): message is string => message != null).join(" ");
+  const retryAvailabilityChecks = () => {
+    if (renameVerification === "error") void reconcileRename();
+    if (maintenanceVerification === "error") void refreshMaintenance(true);
+  };
   const maintenanceKey = maintenanceReview
     ? `${maintenanceReview.reviewId}:${maintenanceReview.generation}`
     : "";
@@ -1545,6 +1552,12 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       </nav>
 
       <div data-memory-zone="workspace" className="mw-doc">
+        {availabilityError && !renameBlocked && !maintenanceReview && (
+          <div data-memory-availability-error role="alert" className="memory-edit-review__error">
+            <span>{availabilityError}</span>{" "}
+            <button type="button" onClick={retryAvailabilityChecks}>Retry checks</button>
+          </div>
+        )}
         {tabs.length > 0 && (
           <MemoryDocumentTabs
             paths={tabs}
