@@ -6,143 +6,43 @@ import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Annotated, Any, Literal, Protocol, Self
+from typing import Any, Literal, Protocol, Self
 
-import aiosqlite
-from pydantic import BaseModel, ConfigDict, Field, StrictStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from arden.constants import BUILTIN_MEMORY_CONSOLIDATE_ID
+from arden.llm.base import CompletionClient
 from arden.memory.facts.consumer_store import FactConsumerStore
+from arden.memory.facts.maintenance.store import (
+    CONSUMER_ID,
+    FactMaintenanceError,
+    FactMaintenanceIntentStore,
+    MaintenanceIntent,
+    NormalizedFactIntent,
+)
 from arden.memory.facts.models import Fact, FactChangeFeed, FactConflictError
 from arden.memory.facts.service import FactPrincipal, FactService
 from arden.wiki.models import WikiMaintenancePageUpdate, WikiPageRecord, WikiSnapshot
 from arden.wiki.service import WikiService
 
-CONSUMER_ID = "memory.maintenance"
 ORIGIN = "memory.maintenance"
 _ACTOR = f"automation:{BUILTIN_MEMORY_CONSOLIDATE_ID}"
 _MAX_FACT_TEXT = 4_000
 _MAX_REASON = 1_000
-_INTENT_SCHEMA = """
-CREATE TABLE IF NOT EXISTS fact_maintenance_intents (
-    consumer_id TEXT PRIMARY KEY,
-    from_revision TEXT,
-    through_revision TEXT NOT NULL,
-    plan_id TEXT NOT NULL,
-    bindings_json TEXT NOT NULL,
-    normalized_facts_json TEXT NOT NULL
-);
+_REVIEW_SYSTEM_PROMPT = """Review one prepared canonical-fact cluster using only the supplied evidence.
+Return no_change when evidence is weak or ambiguous.
+For no_change, leave every action field null. You may only:
+- amend metadata on the changed fact: kind, labels, subjects, lifecycle, or evidence class;
+- merge two genuine duplicate claims from this cluster while preserving one as survivor.
+- normalize one exact subject of the changed fact to the title of a supplied canonical wiki page.
+
+Never create or rewrite fact text. Never review, expire, retract, age-archive, or perform
+general evidence-based supersession. Never edit wiki prose. An inferred fact cannot replace
+a direct fact. For normalize_topic, copy old_topic exactly from the changed fact and select
+the canonical page only with its opaque P### token. Never return a page ID, path, or invented
+page name. Do not normalize when the relationship is ambiguous or the old topic already has
+its own page. Use only the opaque F### and P### tokens shown in the cluster.
 """
-
-
-class FactMaintenanceError(RuntimeError):
-    """A maintenance decision could not be applied safely."""
-
-
-type _NonEmptyText = Annotated[StrictStr, Field(min_length=1)]
-
-
-class _NormalizedFactIntent(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    fact_id: _NonEmptyText
-    before_subjects: tuple[_NonEmptyText, ...] = Field(min_length=1)
-    after_subjects: tuple[_NonEmptyText, ...] = Field(min_length=1)
-
-
-class _MaintenanceIntent(BaseModel):
-    """Strict representation of one intent persisted in SQLite."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    from_revision: StrictStr | None
-    through_revision: _NonEmptyText
-    plan_id: _NonEmptyText
-    bindings: tuple[tuple[_NonEmptyText, _NonEmptyText, _NonEmptyText], ...] = Field(min_length=1)
-    normalized_facts: tuple[_NormalizedFactIntent, ...] = Field(min_length=1)
-
-
-class _FactMaintenanceIntentStore:
-    """One durable cross-ledger intent for the maintenance watermark."""
-
-    def __init__(self, conn: aiosqlite.Connection) -> None:
-        self._conn = conn
-        self._lock = asyncio.Lock()
-
-    async def init_schema(self) -> None:
-        async with self._lock:
-            await self._conn.executescript(_INTENT_SCHEMA)
-            await self._conn.commit()
-
-    async def get(self) -> _MaintenanceIntent | None:
-        async with self._lock:
-            rows = await self._conn.execute_fetchall(
-                """
-                SELECT from_revision, through_revision, plan_id, bindings_json, normalized_facts_json
-                FROM fact_maintenance_intents
-                WHERE consumer_id = ?
-                """,
-                (CONSUMER_ID,),
-            )
-        return None if not rows else self._decode(rows[0])
-
-    async def save(self, intent: _MaintenanceIntent) -> None:
-        bindings = json.dumps(intent.bindings, ensure_ascii=True, separators=(",", ":"))
-        normalized = json.dumps(
-            [[item.fact_id, list(item.before_subjects), list(item.after_subjects)] for item in intent.normalized_facts],
-            ensure_ascii=True,
-            separators=(",", ":"),
-        )
-        async with self._lock:
-            cursor = await self._conn.execute(
-                """
-                INSERT OR IGNORE INTO fact_maintenance_intents (
-                    consumer_id, from_revision, through_revision, plan_id,
-                    bindings_json, normalized_facts_json
-                ) VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    CONSUMER_ID,
-                    intent.from_revision,
-                    intent.through_revision,
-                    intent.plan_id,
-                    bindings,
-                    normalized,
-                ),
-            )
-            await self._conn.commit()
-        if cursor.rowcount:
-            return
-        if await self.get() != intent:
-            raise FactMaintenanceError("another topic-normalization intent is already pending")
-
-    async def delete(self, plan_id: str) -> None:
-        async with self._lock:
-            await self._conn.execute(
-                "DELETE FROM fact_maintenance_intents WHERE consumer_id = ? AND plan_id = ?",
-                (CONSUMER_ID, plan_id),
-            )
-            await self._conn.commit()
-
-    @staticmethod
-    def _decode(row) -> _MaintenanceIntent:
-        try:
-            return _MaintenanceIntent(
-                from_revision=row["from_revision"],
-                through_revision=row["through_revision"],
-                plan_id=row["plan_id"],
-                bindings=json.loads(row["bindings_json"]),
-                normalized_facts=[
-                    {
-                        "fact_id": fact_id,
-                        "before_subjects": before,
-                        "after_subjects": after,
-                    }
-                    for fact_id, before, after in json.loads(row["normalized_facts_json"])
-                ],
-            )
-        except (KeyError, TypeError, ValueError) as exc:
-            raise FactMaintenanceError("persisted topic-normalization intent is invalid") from exc
 
 
 class FactMaintenanceCandidateProvider(Protocol):
@@ -226,6 +126,30 @@ class FactMaintenancePreparedCluster:
     wiki_page_tokens: Mapping[str, str]
 
 
+async def review_fact_maintenance(
+    client: CompletionClient,
+    model: str,
+    cluster: FactMaintenancePreparedCluster,
+    *,
+    reasoning_effort: str | None = None,
+) -> FactMaintenanceDecision:
+    response = await client.completion(
+        model=model,
+        messages=[
+            {"role": "system", "content": _REVIEW_SYSTEM_PROMPT},
+            {"role": "user", "content": cluster.markdown},
+        ],
+        response_format=FactMaintenanceDecision,
+        reasoning_effort=reasoning_effort,
+    )
+    if not response.choices or response.choices[0].message.content is None:
+        raise ValueError("fact maintenance reviewer returned no decision")
+    content = response.choices[0].message.content
+    if isinstance(content, FactMaintenanceDecision):
+        return content
+    return FactMaintenanceDecision.model_validate_json(content)
+
+
 FactMaintenanceReviewer = Callable[[FactMaintenancePreparedCluster], Awaitable[FactMaintenanceDecision]]
 
 
@@ -267,7 +191,7 @@ class FactMaintenance:
         self._wiki = wiki
         self._candidate_provider = candidate_provider
         self._candidate_limit = candidate_limit
-        self._intents = _FactMaintenanceIntentStore(service.plans.conn)
+        self._intents = FactMaintenanceIntentStore(service.plans.conn)
 
     async def run(self) -> FactMaintenanceResult:
         await self._intents.init_schema()
@@ -333,13 +257,13 @@ class FactMaintenance:
                 for change in topic_changes:
                     fact_id = change["fact_id"]
                     normalized.append(
-                        _NormalizedFactIntent(
+                        NormalizedFactIntent(
                             fact_id=fact_id,
                             before_subjects=facts[fact_id].subjects,
                             after_subjects=tuple(change["subjects"]),
                         )
                     )
-                intent = _MaintenanceIntent(
+                intent = MaintenanceIntent(
                     from_revision=feed.from_revision,
                     through_revision=feed.through_revision,
                     plan_id=preview.plan_id,
@@ -361,7 +285,7 @@ class FactMaintenance:
 
     async def _resume_intent(
         self,
-        intent: _MaintenanceIntent,
+        intent: MaintenanceIntent,
         feed: FactChangeFeed,
         *,
         reviewed_clusters: int = 0,
@@ -403,7 +327,7 @@ class FactMaintenance:
             advanced=True,
         )
 
-    async def _ensure_topic_aliases(self, intent: _MaintenanceIntent) -> bool:
+    async def _ensure_topic_aliases(self, intent: MaintenanceIntent) -> bool:
         """Publish missing aliases from current wiki truth, or defer on collision."""
 
         snapshot = await asyncio.to_thread(self._wiki.snapshot)
@@ -467,7 +391,7 @@ class FactMaintenance:
                 return False
         return True
 
-    async def _converge_committed_normalization(self, intent: _MaintenanceIntent) -> None:
+    async def _converge_committed_normalization(self, intent: MaintenanceIntent) -> None:
         """Align facts to one binding state observed before and after correction."""
 
         for _attempt in range(8):
@@ -481,7 +405,7 @@ class FactMaintenance:
 
     async def _align_normalized_facts(
         self,
-        intent: _MaintenanceIntent,
+        intent: MaintenanceIntent,
         *,
         use_canonical: bool,
     ) -> None:
@@ -532,7 +456,7 @@ class FactMaintenance:
 
     async def _normalized_facts_match(
         self,
-        intent: _MaintenanceIntent,
+        intent: MaintenanceIntent,
         *,
         use_canonical: bool,
     ) -> bool:

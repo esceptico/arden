@@ -1,7 +1,10 @@
 import pytest
 
-from arden.wiki.maintenance.completion import review_wiki_maintenance
-from arden.wiki.maintenance.runner import WikiMaintenanceDecision, WikiMaintenancePreparedReport
+from arden.wiki.maintenance.runner import (
+    WikiMaintenanceDecision,
+    WikiMaintenancePreparedReport,
+    review_wiki_maintenance,
+)
 from tests.conftest import completion_response
 
 

@@ -1,8 +1,11 @@
 import pytest
 from pydantic import ValidationError
 
-from arden.memory.facts.maintenance.completion import review_fact_maintenance
-from arden.memory.facts.maintenance.runner import FactMaintenanceDecision, FactMaintenancePreparedCluster
+from arden.memory.facts.maintenance.runner import (
+    FactMaintenanceDecision,
+    FactMaintenancePreparedCluster,
+    review_fact_maintenance,
+)
 from tests.conftest import completion_response
 
 _NO_CHANGE_WITH_EMPTY_LABELS = """{

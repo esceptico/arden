@@ -29,9 +29,8 @@ from arden.memory.facts.consumer_store import FactConsumerStore
 from arden.memory.facts.dream import FactDream
 from arden.memory.facts.index import FactIndexProjection
 from arden.memory.facts.ledger import FactLedger
-from arden.memory.facts.maintenance.completion import review_fact_maintenance
 from arden.memory.facts.maintenance.runner import CONSUMER_ID as FACT_MAINTENANCE_CONSUMER_ID
-from arden.memory.facts.maintenance.runner import FactMaintenance
+from arden.memory.facts.maintenance.runner import FactMaintenance, review_fact_maintenance
 from arden.memory.facts.plan_store import FactPlanStore
 from arden.memory.facts.service import FactService
 from arden.memory.facts.synthesis import CONSUMER_ID as FACT_SYNTHESIS_CONSUMER_ID
@@ -71,8 +70,7 @@ from arden.wiki.health import (
     WikiHealthProjector,
     WikiHealthWorker,
 )
-from arden.wiki.maintenance.completion import review_wiki_maintenance
-from arden.wiki.maintenance.runner import WikiMaintenance
+from arden.wiki.maintenance.runner import WikiMaintenance, review_wiki_maintenance
 from arden.wiki.maintenance.store import WikiMaintenanceStore
 from arden.wiki.models import WikiChangesReport
 from arden.wiki.service import WikiService
