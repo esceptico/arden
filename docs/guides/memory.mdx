@@ -1,123 +1,58 @@
 ---
 title: "Memory"
-description: "How arden remembers, maintains, and recalls what matters."
+description: "How Arden uses canonical facts and managed wiki pages."
 ---
 
 ## Overview
 
-Arden keeps long-term memory as one flat pool of small, self-contained
-**records**. Each record is a single durable statement, typed by what it does:
+Arden's long-term memory has two canonical layers:
 
-- **directive** — a rule or procedure that should steer how arden behaves.
-- **fact** — a durable statement about you or your world. Preferences and
-  project facts are facts; they just live in different scopes.
-- **source** — a captured reference or receipt from a connected integration or
-  tool.
+- **Facts** are the durable, source-backed correctness layer. A fact has a
+  stable ID, current lifecycle, provenance, and immutable event history.
+- **Wiki pages** are the readable, versioned Markdown layer. They organize
+  subject context, links, and generated summaries without replacing the facts
+  they cite.
 
-There is no separate graph, claim, or lens layer. Records are atomic; lineage is
-a single line (a corrected record is *superseded* by its replacement); pinned
-records survive cleanup.
+The [Areas](/guides/areas) surface is backed by managed wiki pages.
 
-Records with a shared subject are periodically **synthesized** into readable
-**topic pages** — one markdown file per person, project, or life domain, with
-prose, open loops, and wikilinks to related pages. The topic pages are what the
-[Areas](/guides/areas) surface is built on: an area *is* a topic page, watched
-by a standing agent.
+## Facts
 
-## Records
+Facts are not edited or deleted through a generic record API. To add or correct
+knowledge, Arden first prepares an exact change plan, then commits that plan if
+the affected facts have not changed. A plan can create, review, amend,
+supersede, expire, or retract facts; history and provenance remain available for
+inspection.
 
-A record carries its text, an optional source reference, timestamps, a scope, a
-pinned flag, and lifecycle state. It should answer one question on its own:
-"what concrete, durable thing should arden know?"
+Use facts for explicit, durable knowledge: preferences, decisions,
+relationships, reusable procedures, and significant events. Do not infer facts
+from silence or store temporary operational noise.
 
-Examples:
+For exact evidence, Arden searches facts and can read a fact or its event
+history. Facts due for evidence-based review are listed separately; a review
+does not change a fact by itself.
 
-- "The user prefers direct, concise engineering feedback." *(fact)*
-- "Always branch and open a PR; never push to main." *(directive)*
-- "Daily morning-briefing automation runs at 08:00." *(fact)*
+## Wiki context
 
-Records are searchable and editable, but a record is not automatically shown to
-the agent on every turn just because it mentions you — see [Recall](#recall).
+Arden automatically receives a bounded resident wiki context from `README.md`,
+`directives.md`, `me.md`, and `profile.md`, when those pages are present. For a
+substantive prompt, it may also receive a small set of relevant indexed wiki
+pages.
 
-### Scopes
+The agent can browse the managed wiki by directory, read one page by an exact
+ID, path, title, or alias, and inspect its outgoing links and backlinks. Wiki
+pages are versioned, so reads identify both the page version and repository
+head.
 
-Every record has a scope that controls where it is visible by default:
+Only an explicit automation may use `publish_wiki_generated` to update a page's
+generated region. It must first read the page and provide the exact version and
+repository head; it cannot overwrite user-managed prose.
 
-- **global** — always visible (directives live here).
-- **user** — durable facts about you.
-- **project** — scoped to an active project.
-- **session** / **integration** — scoped to a conversation or a connected source,
-  so transient or source-specific writes don't pollute your standing memory.
+## Desktop and API
 
-Scopes are visibility metadata, not folders or a hierarchy.
-
-## How memory is written
-
-arden writes memory two ways:
-
-1. **The Curator** runs in the background after a conversation and periodically.
-   It reads the new turns, compares them against your existing similar records,
-   and adds, updates, or supersedes records accordingly. Because it reconciles
-   against what already exists, it avoids minting duplicates.
-2. **The `remember` tool** lets the agent store a single durable statement on the
-   spot during a chat. Anything it over-captures is reconciled later by
-   consolidation.
-
-## Maintenance (consolidation and the LINT)
-
-Memory is meant to stay small and current, not grow forever. A background
-**consolidation** pass periodically reviews recently-changed records and their
-neighbours and can:
-
-- merge near-duplicates onto a single survivor,
-- supersede stale or contradicted records into a newer one,
-- reclassify a record to its correct kind,
-- drop genuine orphans,
-- fold near-duplicate labels into one spelling.
-
-It never invents new facts. Pinned records are never merged or superseded away.
-
-Each pass finishes with the **LINT** (`prune`): superseded records are
-hard-deleted, the labels they leave behind are dropped, and the search index is
-reconciled so recall can never surface dead content. You can trigger it manually
-via the API (see the [Memory API](/api-reference/memory)).
-
-## Recall
-
-For every prompt, arden combines two layers:
-
-1. **Resident profile** — a small, always-on `## Profile` block injected into the
-   system prompt for both chat and automation runs. It contains your directives,
-   durable user facts, and anything you've pinned (within the visible scopes),
-   under a fixed character budget so it stays compact.
-2. **On-demand recall** — the agent uses the `recall` tool to pull deeper memory
-   relevant to the current query. Recall is hybrid (keyword + semantic) search
-   over the record pool and defaults to directives and facts.
-
-This keeps the always-on context small while still allowing context-specific
-lookups when the conversation needs them.
-
-## Pinning
-
-Pinning a record marks it as something to always keep. Pinned records ride along
-in the resident profile and are never touched by consolidation or the LINT.
-
-## Desktop Memory UI
-
-Open the Memory view in the desktop app to inspect and control memory.
-
-![Memory topic pages in the desktop app](../images/memory-patterns.png)
-
-- **Browse** the generated topic pages (the **Files** view) and the underlying
-  records (the **Records** view).
-- **Search** by keyword or meaning, inspect scope, source, and lifecycle.
-- **Capture** a new record, and **pin** the ones you want to keep permanently.
+The desktop Memory view reads managed wiki pages and the facts they cite. The
+[Facts and Wiki API](/api-reference/memory) exposes read-only fact access and
+versioned wiki-page management for administrative clients.
 
 ## Agent tools
 
-- `remember` — store a single durable record.
-- `recall` — search long-term memory (read-only).
-- `forget` — remove the best-matching remembered record.
-- `memory_tree` / `memory_read` / `memory_search` — browse the generated
-  markdown projection of memory.
-</content>
+See [Tools](/guides/tools#facts) for the canonical Facts and Wiki tool set.

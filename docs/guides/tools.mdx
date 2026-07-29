@@ -51,13 +51,35 @@ Deferred group: `calendar`.
 | `edit_calendar_event` | Edit an event | 🔒 |
 | `delete_calendar_event` | Delete an event | 🔒 |
 
-## Memory
+## Facts
+
+Facts are the canonical, source-backed correctness layer. Change them through
+an exact plan and commit; do not use a generic memory-record mutation tool.
 
 | Tool | Description | Approval |
 |------|-------------|----------|
-| `remember` | Store a fact | 🔒 |
-| `recall` | Search stored knowledge | — |
-| `forget` | Delete facts by query | 🔒 |
+| `search_facts` | Search visible canonical facts; returns stable `fact_id` values. | — |
+| `get_fact` | Read one fact, including lifecycle and saved provenance. | — |
+| `get_fact_history` | Read a fact's immutable event history and provenance. | — |
+| `get_due_fact_reviews` | List facts due for evidence-based review. | — |
+| `plan_fact_changes` | Validate creates, reviews, amendments, supersessions, expiries, or retractions without publishing them. | — |
+| `commit_fact_changes` | Commit one exact returned plan if its facts remain at their planned versions. | — |
+
+`plan_fact_changes` returns the preview and `plan_id`; `commit_fact_changes`
+accepts only that `plan_id`. The server derives authority and provenance from
+the active session and Area.
+
+## Wiki
+
+Wiki pages are the readable, managed projection. Use the read tools to discover
+and inspect pages; generated publishing is reserved for an explicit automation.
+
+| Tool | Description | Approval |
+|------|-------------|----------|
+| `list_wiki_pages` | List active pages and direct child directories in one managed directory. | — |
+| `read_wiki_page` | Read one active page by exact ID, path, title, or alias. | — |
+| `wiki_links` | Read a page's outgoing links and backlinks. | — |
+| `publish_wiki_generated` | Update only an existing page's generated region using its exact version and repository head. | 🔒 |
 
 ## Web
 
@@ -209,10 +231,12 @@ Settings → Tools can override individual tools:
 An automation can carry a **tool scope**: an allowlist of tool-name patterns that bounds what its runs may touch, applied as a hard outer gate before any other selection. Patterns are `*` (everything), an exact name, or a `prefix*` wildcard.
 
 ```json
-"tool_scope": ["memory_*", "recall", "web_search"]
+"tool_scope": ["search_facts", "get_fact", "get_fact_history", "list_wiki_pages", "read_wiki_page", "wiki_links", "web_search"]
 ```
 
-This is how [area agents](/guides/areas) stay observe-only. They get the read and memory-write tools they need and nothing that acts on the outside world, regardless of other flags. A scope of `null` (the default) is unrestricted.
+This is how [area agents](/guides/areas) stay observe-only: they get bounded
+fact and wiki reads, but no fact commits, generated-page publishing, or external
+actions. A scope of `null` (the default) is unrestricted.
 
 ## Structured output
 
