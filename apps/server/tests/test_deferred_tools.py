@@ -754,7 +754,7 @@ async def test_agent_continues_after_provider_only_tool_search_loads_names():
             first,
             make_tool_response(
                 "read_wiki_page",
-                {"query": "feeds/email-updates.md"},
+                {"query": "automations/email-updates.md"},
                 call_id="call_wiki",
                 model="gpt-5.5",
             ),

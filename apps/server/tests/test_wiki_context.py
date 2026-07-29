@@ -77,7 +77,7 @@ async def test_wiki_index_tracks_active_pages_and_context_keeps_residents_separa
     )
     feed = wiki.create_page(
         page_id="feed",
-        path="feeds/current.md",
+        path="automations/current.md",
         title="Current Feed",
         body=b"Producer-owned content.\n",
         metadata={
@@ -100,7 +100,7 @@ async def test_wiki_index_tracks_active_pages_and_context_keeps_residents_separa
         "freshness": "stale",
     }
     assert index.store.items["feed"][2] == {
-        "resource_path": "feeds/current.md",
+        "resource_path": "automations/current.md",
         "resource_version": feed.resource.version_id,
         "role": "common",
         "freshness": "current",

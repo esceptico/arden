@@ -39,9 +39,12 @@ substantive prompt, it may also receive a small set of relevant indexed wiki
 pages.
 
 The agent can browse the managed wiki by directory, read one page by an exact
-ID, path, title, or alias, and inspect its outgoing links and backlinks. Wiki
-pages are versioned, so reads identify both the page version and repository
-head.
+ID, path, title, or alias, inspect links, create common pages, replace a page
+body, and recoverably archive a page. Writes require the exact repository head
+and page version from a fresh read.
+
+Scheduled automations can use those generic writes only below `automations/`.
+Interactive agents can write other ordinary pages after approval.
 
 Only an explicit automation may use `publish_wiki_generated` to update a page's
 generated region. It must first read the page and provide the exact version and

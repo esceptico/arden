@@ -1,5 +1,6 @@
-"""Stable identities shared by wiki producers and projections."""
+"""Stable identities shared by wiki tools and projections."""
 
+AUTOMATIONS_PATH_PREFIX = "automations/"
 README_FILENAME = "README.md"
 READ_WIKI_PAGE_TOOL_NAME = "read_wiki_page"
 PUBLISH_WIKI_GENERATED_TOOL_NAME = "publish_wiki_generated"
