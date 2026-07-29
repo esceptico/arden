@@ -17,6 +17,15 @@ CLEAN_FILES = (
 FORBIDDEN_CALLS = {"getattr", "setattr", "hasattr"}
 
 
+def imported_modules(source: Path) -> tuple[str, ...]:
+    tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+    direct = [alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names]
+    from_imports = [
+        node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module is not None
+    ]
+    return (*direct, *from_imports)
+
+
 def test_production_imports_are_absolute_and_annotations_are_eager() -> None:
     relative_imports: list[str] = []
     future_imports: list[str] = []
@@ -59,9 +68,7 @@ def test_revision_repository_facade_keeps_query_and_maintenance_ownership_split(
 
     assert len(facade.read_text(encoding="utf-8").splitlines()) < 1_000
     for source in extracted:
-        tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
-        imported_modules = [node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)]
-        assert all(module is None or not module.startswith(forbidden_prefixes) for module in imported_modules), source
+        assert not any(module.startswith(forbidden_prefixes) for module in imported_modules(source)), source
 
     from arden.revisions import ManagedFileRepository
     from arden.revisions.errors import RevisionConflictError
@@ -77,9 +84,7 @@ def test_fact_ledger_facade_keeps_codec_and_state_ownership_split() -> None:
 
     assert len(facade.read_text(encoding="utf-8").splitlines()) < 1_000
     for source in extracted:
-        tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
-        imported_modules = [node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)]
-        assert all(module is None or not module.startswith(forbidden_prefixes) for module in imported_modules), source
+        assert not any(module.startswith(forbidden_prefixes) for module in imported_modules(source)), source
 
     from arden.memory.facts.event_codec import decode_event, parse_event_file
     from arden.memory.facts.ledger import FactLedger
@@ -89,3 +94,78 @@ def test_fact_ledger_facade_keeps_codec_and_state_ownership_split() -> None:
     assert decode_event.__name__ == "decode_event"
     assert parse_event_file.__name__ == "parse_event_file"
     assert state_from.__name__ == "state_from"
+
+
+def test_wiki_service_facade_keeps_domain_ownership_split() -> None:
+    facade = ARDEN / "wiki" / "service.py"
+    extracted = (
+        ARDEN / "wiki" / "snapshots.py",
+        ARDEN / "wiki" / "changes.py",
+        ARDEN / "wiki" / "rename.py",
+        ARDEN / "wiki" / "exceptions.py",
+    )
+    forbidden_prefixes = (
+        "arden.automation",
+        "arden.memory",
+        "arden.server",
+        "arden.services",
+        "arden.tools",
+    )
+
+    assert len(facade.read_text(encoding="utf-8").splitlines()) < 1_000
+    for source in extracted:
+        assert not any(module.startswith(forbidden_prefixes) for module in imported_modules(source)), source
+
+    from arden.wiki.service import (
+        GeneratedRegionConflictError,
+        WikiAmbiguityError,
+        WikiMaintenanceEvidenceLimitError,
+        WikiService,
+        WikiSnapshotChangedError,
+        WikiValidationError,
+    )
+
+    assert WikiService.__name__ == "WikiService"
+    assert WikiValidationError.__name__ == "WikiValidationError"
+    assert WikiAmbiguityError.__name__ == "WikiAmbiguityError"
+    assert WikiSnapshotChangedError.__name__ == "WikiSnapshotChangedError"
+    assert GeneratedRegionConflictError.__name__ == "GeneratedRegionConflictError"
+    assert WikiMaintenanceEvidenceLimitError.__name__ == "WikiMaintenanceEvidenceLimitError"
+
+
+def test_scheduler_facade_keeps_dispatch_and_execution_ownership_split() -> None:
+    facade = ARDEN / "automation" / "scheduler.py"
+    extracted = (
+        ARDEN / "automation" / "event_dispatch.py",
+        ARDEN / "automation" / "run_execution.py",
+    )
+    forbidden_prefixes = (
+        "arden.server",
+        "arden.services",
+        "arden.tools",
+        "arden.wiki",
+    )
+
+    assert len(facade.read_text(encoding="utf-8").splitlines()) < 1_000
+    for source in extracted:
+        assert not any(module.startswith(forbidden_prefixes) for module in imported_modules(source)), source
+
+    from arden.automation.scheduler import (
+        AUTOMATION_BUS_KEY,
+        CompletedAgentRun,
+        DetachedRun,
+        DetachedRunBindingPending,
+        RunDeferred,
+        RunSkipped,
+        Scheduler,
+        split_manual_flag,
+    )
+
+    assert AUTOMATION_BUS_KEY == "automation:events"
+    assert Scheduler.__name__ == "Scheduler"
+    assert CompletedAgentRun.__name__ == "CompletedAgentRun"
+    assert DetachedRun.__name__ == "DetachedRun"
+    assert DetachedRunBindingPending.__name__ == "DetachedRunBindingPending"
+    assert RunDeferred.__name__ == "RunDeferred"
+    assert RunSkipped.__name__ == "RunSkipped"
+    assert split_manual_flag.__name__ == "split_manual_flag"

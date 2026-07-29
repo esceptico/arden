@@ -1,13 +1,13 @@
 # Wiki and memory dependency graph
 
-Generated from static Python imports on 2026-07-28. Scope:
+Generated from static Python imports and reverified on 2026-07-29. Scope:
 
 - `arden.revisions`
 - `arden.memory.facts`
 - `arden.wiki`
 - their direct runtime, router, tool, and Area consumers
 
-The final AST graph covers all 315 `arden` modules and 1,200 import edges. It
+The current AST graph covers all 330 `arden` modules and 1,213 import edges. It
 has no strongly connected component. Production and tests contain no
 `TYPE_CHECKING` or postponed-annotation imports.
 
@@ -132,7 +132,8 @@ order and package ownership should make runtime annotations valid directly.
 1. Replace internal barrel imports with leaf imports.
 2. Move maintenance siblings into cohesive `maintenance/` packages.
 3. Move the wiki curator siblings into one `curation/` package.
-4. Split the four files above 1,000 lines along read/write/domain ownership.
+4. **Complete:** split the four files above 1,000 lines along
+   read/write/domain ownership.
 5. Promote typing-only imports and remove redundant future imports.
 6. Replace duck-typed required-service lookup and swallowed invariant failures
    with typed dependencies and explicit errors.
@@ -184,7 +185,33 @@ forbidden reflection and relative-import patterns.
 - Static architecture tests enforce absolute/eager imports and prohibit
   reflection in the refactored packages.
 
-Proof: the graph reports 315 modules, 1,200 edges, and zero strongly connected
-components. Ruff checks all 498 server/test Python files; the full suite passes
-2,112 tests. The three existing warnings are `aiosqlite` worker-thread teardown
-warnings after pytest closes an event loop.
+Proof at this milestone: the graph reported 315 modules, 1,200 edges, and zero
+strongly connected components. Ruff checked all 498 server/test Python files;
+the full suite passed 2,112 tests. The three existing warnings were
+`aiosqlite` worker-thread teardown warnings after pytest closed an event loop.
+
+## 2026-07-29 core ownership split completion
+
+The final large facades now retain orchestration while deterministic concerns
+have direct module owners:
+
+- `revisions/repository.py` (706 lines) delegates queries to `query.py` (266)
+  and storage/integrity collection to `maintenance.py` (323).
+- `memory/facts/ledger.py` (992) delegates JSONL and boundary validation to
+  `event_codec.py` (474), and replay/lifecycle invariants to `state.py` (416).
+- `wiki/service.py` (625) delegates pinned indexing and links to
+  `snapshots.py` (171), history/evidence/restoration to `changes.py` (652), and
+  parsed-link rename planning to `rename.py` (158). Public domain errors live
+  in `exceptions.py` (47) and remain importable from `service.py`.
+- `automation/scheduler.py` (935) keeps live task, reservation, wake, and tick
+  ownership. `event_dispatch.py` (112) owns durable trigger delivery and retry
+  timing; `run_execution.py` (344) owns execution and durable settlement
+  outcomes.
+
+The split uses explicit values and function arguments. It adds no mixin,
+compatibility shim, second cache, reflection, relative import, deferred
+annotation, or runtime reach-back. Static guards enforce facade sizes,
+extracted-module direction, and stable public imports.
+
+The recomputed graph contains 330 production modules and 1,213 unique internal
+import edges, with zero cycles.
