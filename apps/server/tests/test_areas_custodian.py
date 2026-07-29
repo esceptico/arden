@@ -74,7 +74,16 @@ def test_material_progress_resets_decay_without_an_ask(tmp_path):
 
 def test_active_work_can_request_short_bounded_continuation(tmp_path):
     c = _store(tmp_path)
-    c.begin_run("a1", attention="ambient", manual=False, now=NOW)
+    c.begin_or_resume_delivery(
+        "a1",
+        iteration=1,
+        client_id="loop:area:a1:1",
+        attention="ambient",
+        manual=False,
+        skip_approvals=True,
+        build_message=lambda _: "run",
+        now=NOW,
+    )
 
     nxt = c.record_run(
         "a1",
@@ -96,8 +105,17 @@ def test_active_work_can_request_short_bounded_continuation(tmp_path):
 
 def test_continuation_falls_back_when_daily_cap_is_spent(tmp_path):
     c = _store(tmp_path)
-    for _ in range(AREA_ATTENTION_PRESETS["ambient"]["runs_per_day"]):
-        c.begin_run("a1", attention="ambient", manual=False, now=NOW)
+    for iteration in range(1, AREA_ATTENTION_PRESETS["ambient"]["runs_per_day"] + 1):
+        c.begin_or_resume_delivery(
+            "a1",
+            iteration=iteration,
+            client_id=f"loop:area:a1:{iteration}",
+            attention="ambient",
+            manual=False,
+            skip_approvals=True,
+            build_message=lambda _: "run",
+            now=NOW,
+        )
 
     nxt = c.record_run(
         "a1",
@@ -130,14 +148,34 @@ def test_events_coalesce_and_respect_budget_and_pause(tmp_path):
     c.note_event("a1", "chat filed", attention="ambient", paused=False, now=NOW)
     c.note_event("a1", "page edited", attention="ambient", paused=False, now=NOW)
     assert c.state("a1")["pending_events"] == ["chat filed", "page edited"]
-    allowed, woken = c.begin_run("a1", attention="ambient", manual=False, now=NOW)
-    assert allowed and woken == ["chat filed", "page edited"]
+    allowed, delivery = c.begin_or_resume_delivery(
+        "a1",
+        iteration=1,
+        client_id="loop:area:a1:1",
+        attention="ambient",
+        manual=False,
+        skip_approvals=True,
+        build_message=lambda events: "\n".join(events),
+        now=NOW,
+    )
+    assert allowed and delivery is not None
+    assert delivery.message == "chat filed\npage edited"
     assert c.state("a1")["pending_events"] == []
     # Paused: noted, never wakes.
     assert c.note_event("a1", "x", attention="ambient", paused=True, now=NOW) is None
     # Budget: ambient allows 3 runs/day; burn them, then events stop waking.
-    assert c.begin_run("a1", attention="ambient", manual=False, now=NOW)[0]
-    assert c.begin_run("a1", attention="ambient", manual=False, now=NOW)[0]
+    for iteration in (2, 3):
+        allowed, _ = c.begin_or_resume_delivery(
+            "a1",
+            iteration=iteration,
+            client_id=f"loop:area:a1:{iteration}",
+            attention="ambient",
+            manual=False,
+            skip_approvals=True,
+            build_message=lambda _: "run",
+            now=NOW,
+        )
+        assert allowed
     assert c.runs_today("a1", now=NOW) == 3
     assert c.note_event("a1", "y", attention="ambient", paused=False, now=NOW) is None
     # ...but the event is still noted for the heartbeat run.
@@ -256,13 +294,40 @@ def test_all_autonomous_runs_share_cap_while_manual_runs_bypass(tmp_path):
     c = _store(tmp_path)
     cap = AREA_ATTENTION_PRESETS["ambient"]["runs_per_day"]
 
-    for _ in range(cap):
-        allowed, _ = c.begin_run("a1", attention="ambient", manual=False, now=NOW)
+    for iteration in range(1, cap + 1):
+        allowed, _ = c.begin_or_resume_delivery(
+            "a1",
+            iteration=iteration,
+            client_id=f"loop:area:a1:{iteration}",
+            attention="ambient",
+            manual=False,
+            skip_approvals=True,
+            build_message=lambda _: "run",
+            now=NOW,
+        )
         assert allowed
 
-    allowed, _ = c.begin_run("a1", attention="ambient", manual=False, now=NOW)
+    allowed, _ = c.begin_or_resume_delivery(
+        "a1",
+        iteration=cap + 1,
+        client_id=f"loop:area:a1:{cap + 1}",
+        attention="ambient",
+        manual=False,
+        skip_approvals=True,
+        build_message=lambda _: "run",
+        now=NOW,
+    )
     assert not allowed
-    manual, _ = c.begin_run("a1", attention="ambient", manual=True, now=NOW)
+    manual, _ = c.begin_or_resume_delivery(
+        "a1",
+        iteration=cap + 1,
+        client_id=f"loop:area:a1:{cap + 1}",
+        attention="ambient",
+        manual=True,
+        skip_approvals=True,
+        build_message=lambda _: "run",
+        now=NOW,
+    )
     assert manual
     assert c.runs_today("a1", now=NOW) == cap
 

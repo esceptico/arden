@@ -135,28 +135,6 @@ class CustodianStore:
             return None
         return now + timedelta(minutes=EVENT_WAKE_DEBOUNCE_MINUTES)
 
-    def begin_run(
-        self,
-        area_id: str,
-        *,
-        attention: str,
-        manual: bool,
-        now: datetime | None = None,
-    ) -> tuple[bool, list[str]]:
-        """Atomically gate and begin a run before autonomous dispatch."""
-        now = now or datetime.now(UTC)
-        preset = AREA_ATTENTION_PRESETS.get(attention, AREA_ATTENTION_PRESETS["ambient"])
-        if not manual and self.runs_today(area_id, now) >= preset["runs_per_day"]:
-            return False, []
-        st = self.state(area_id)
-        woken_by = st["pending_events"]
-        st["pending_events"] = []
-        st["last_woken_by"] = woken_by
-        if not manual:
-            self._count_run(area_id, now)
-        self._flush()
-        return True, woken_by
-
     def begin_or_resume_delivery(
         self,
         area_id: str,
