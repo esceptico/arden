@@ -390,7 +390,7 @@ def test_roles_use_only_stable_id_path_or_folder_contracts(
     assert revision.role is role
 
 
-def test_orphan_warnings_skip_fixed_navigation_roles_but_not_insights(tmp_path: Path) -> None:
+def test_disconnected_pages_do_not_create_orphan_warnings(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     pages = (
         ("me", "me.md"),
@@ -409,7 +409,5 @@ def test_orphan_warnings_skip_fixed_navigation_roles_but_not_insights(tmp_path: 
         ),
     )
 
-    orphans = {
-        warning.target for warning in WikiService(repo).changes_since(None).warnings if warning.code == "orphan_page"
-    }
-    assert orphans == {"nested/README.md", "insights/2026-07.md", "notes/common.md"}
+    warnings = WikiService(repo).changes_since(None).warnings
+    assert all(warning.code != "orphan_page" for warning in warnings)

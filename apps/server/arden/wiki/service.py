@@ -1442,7 +1442,7 @@ class WikiService:
     ) -> tuple[WikiChangeWarning, ...]:
         warnings: list[WikiChangeWarning] = []
         for record in records:
-            outgoing, backlinks = links[record.page.page_id]
+            outgoing, _backlinks = links[record.page.page_id]
             for reference in outgoing:
                 if reference.status is LinkStatus.RESOLVED:
                     continue
@@ -1454,19 +1454,6 @@ class WikiService:
                         f"{target} ({', '.join(reference.candidates)})" if reference.candidates else target,
                     )
                 )
-            role = self._role(record.resource.resource_id, record.resource.path)
-            if (
-                record.page.lifecycle == "active"
-                and role
-                not in {
-                    WikiInfrastructureRole.README,
-                    WikiInfrastructureRole.ME,
-                    WikiInfrastructureRole.ACTIVE_WORK,
-                    WikiInfrastructureRole.DAILY,
-                }
-                and not backlinks
-            ):
-                warnings.append(WikiChangeWarning("orphan_page", record.resource.path, record.page.page_id))
         return tuple(warnings)
 
     def _revision_for(
