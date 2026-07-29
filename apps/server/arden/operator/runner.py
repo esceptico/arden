@@ -2,6 +2,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 
 from arden.agent import Agent, Result, Role, Usage
+from arden.automation.prompts import AUTOMATION_SUFFIX
 from arden.context.models import SessionState
 from arden.core.factory import AgentConfig, create_agent
 from arden.core.ids import generate_run_id
@@ -38,7 +39,6 @@ class RunRequest:
     prompt: str
     auto_approve: bool
     source_id: str
-    prompt_suffix: str = ""
     model: str | None = None
     skip_approvals: bool = False
     automation_id: str | None = None
@@ -101,7 +101,8 @@ async def _prepare(deps: OperatorDeps, request: RunRequest) -> tuple[Agent, list
         deferred_tools_context=deferred_tools_context,
         native_deferred_tools=native_deferred_tools,
     )
-    system_prompt += request.prompt_suffix
+    if request.automation_id is not None:
+        system_prompt += AUTOMATION_SUFFIX
 
     agent = create_agent(
         executor=executor,

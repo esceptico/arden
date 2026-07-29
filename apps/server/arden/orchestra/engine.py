@@ -7,6 +7,7 @@ from arden.constants import AGENT_MAX_CONCURRENT
 from arden.core.agent_types import resolve_agent_type
 from arden.core.isolation import IsolationLevel
 from arden.core.llm_client import llm_client
+from arden.core.prompts import UNTRUSTED_DATA_RULE
 from arden.logging import get_logger
 from arden.observability import observed_trace
 from arden.orchestra.schema import model_from_schema
@@ -30,12 +31,12 @@ _WORKFLOW_EXCLUDE_TOOLS = frozenset({"workflow", "research", "background"})
 WORKFLOW_AGENT_PROMPT = (
     "You are a focused worker agent inside a deterministic workflow. "
     "Do exactly the task you are given, using tools as needed, then return a "
-    "concise final answer."
+    "concise final answer. " + UNTRUSTED_DATA_RULE
 )
 
 _FORMATTER_PROMPT = (
     "Convert the provided worker answer into the requested structured result. "
-    "Preserve the worker's facts. Do not invent missing fields."
+    "Preserve the worker's facts. Do not invent missing fields. " + UNTRUSTED_DATA_RULE
 )
 
 Thunk = Callable[[], Awaitable[Any]]

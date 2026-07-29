@@ -66,6 +66,18 @@ def test_stateful_spawns_do_not_leak_into_read_only_schema():
     assert "research" not in read_names
 
 
+def test_all_external_state_changes_require_approval():
+    unsafe = [
+        name
+        for name, registered in ToolExecutor().registry.tools.items()
+        if registered.policy.scope is ToolScope.EXTERNAL
+        and registered.policy.action is not ToolAction.READ
+        and not registered.policy.requires_approval
+    ]
+
+    assert unsafe == []
+
+
 def test_directives_group_exposes_read_before_replace_pair():
     assert set(DIRECTIVES.tools) == {"get_directives", "set_directives"}
 
@@ -74,6 +86,13 @@ def test_shared_spawn_guidance_reaches_each_spawn_surface():
     executor = ToolExecutor()
     for name in ("research", "background", "workflow", "create_automation", "create_loop"):
         assert SPAWN_SURFACE_GUIDANCE in executor.registry.get(name).description
+
+
+def test_create_automation_description_keeps_scope_and_approval_distinct():
+    description = ToolExecutor().registry.get("create_automation").description
+
+    assert "Grant required action tools with tool_scope" in description
+    assert "auto_approve=true only skips approvals" in description
 
 
 def test_cross_tool_parameter_names_are_canonical():

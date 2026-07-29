@@ -22,7 +22,8 @@ The automation prompt must:
 
 1. Gather its source data.
 2. Call `list_wiki_pages` with the root directory (`directory=""`) for a fresh
-   repository head. A missing target directory is normal before its first page.
+   repository head. A `not_found` result while probing a missing target directory
+   is normal before its first page; retain the fresh root head for creation.
 3. Read the exact target page when it exists.
 4. Call `create_wiki_page` when absent, or `edit_wiki_page` with the returned page version and head when present.
 5. Retry a revision conflict only after another fresh list/read.

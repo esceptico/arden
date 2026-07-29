@@ -19,7 +19,8 @@ The user wants to capture the work in this conversation as a reusable scheduled 
 Call `create_automation` exactly once with:
 
 - **`name`**: a short imperative phrase, max 60 chars. Example: `"Morning standup digest"`.
-- **`description`**: the full prompt the automation should run on each tick. Stand-alone — the future agent has no memory of this conversation. Be explicit about what to do, which sources to check, what output to produce.
+- **`prompt`**: the full instructions the automation should run on each tick. Stand-alone — the future agent has no memory of this conversation. Be explicit about what to do, which sources to check, and what output to produce.
+- **`description`** (optional): a concise display summary, at most 220 characters. Omit it to generate one from the prompt.
 - **`trigger_type`**: `"time"` for scheduled/recurring work, `"event"` for a clear event hook (e.g. calendar approaching), or `"message"` to react to new Slack messages. If the user wants to **catch / watch / triage Slack messages**, the trigger is `"message"` — never model a Slack watcher as a recurring time scan.
 - **For schedule-style time triggers** (specific clock time):
   - `at`: `"HH:MM"` (24h)
@@ -33,7 +34,8 @@ Call `create_automation` exactly once with:
   - `from_user` (optional): only react to messages from this sender.
   - `contains` (optional): keyword filters, matched any-of and case-insensitive, e.g. `["bug", "error", "broken"]`.
   - Detection is near-real-time (~1 min) and reads via the bot token. A time/interval "scan Slack" is the wrong shape and may not even work without a user token.
-- **`auto_approve`** (default false): set true ONLY if the automation must run autonomously (enables write tools, skips approvals). For a Slack watcher acting on untrusted messages, also set `from_user` as a sender gate.
+- **`tool_scope`** (optional): list only the write/action tools the standalone prompt needs. Read-only tools are always available; `auto_approve` does not grant tools by itself.
+- **`auto_approve`** (default false): set true ONLY if the automation must run autonomously. It skips per-run approvals for tools already in `tool_scope`. For a Slack watcher acting on untrusted messages, also set `from_user` as a sender gate.
 
 ## Before calling — say what and why
 
@@ -47,7 +49,7 @@ The user reads your prose first, then sees the structured args in the approval c
 
 - **One proposal only.** Pick the highest-value one if there are multiple candidates.
 - **Grounded.** Your prose rationale MUST reference what actually happened in this session — specific tool calls, results, decisions. No generic "users often want to…" boilerplate.
-- **`description` is what runs without you.** It must stand alone. Be explicit.
+- **`prompt` is what runs without you.** It must stand alone. Be explicit.
 - **Schedule must be specific.** Don't propose `"every hour"` if the work is clearly daily; don't propose `"daily"` if it's clearly a one-off.
 - **Slack watchers use message triggers, not scans.** "Catch / watch / triage Slack messages" → `trigger_type="message"` with `channels` (+ optional `from_user` / `contains`). Never substitute a recurring time scan. If no channel was named, ask which channel(s) before proposing — don't guess a cadence.
 

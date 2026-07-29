@@ -228,10 +228,10 @@ def _read_file_sync(args: ReadFileInput, cwd: str | None = None) -> ToolResult:
             preview="Denied",
             recovery_action="Choose a readable path or request the required filesystem access.",
         )
-    except Exception as e:
+    except OSError:
         return ToolResult.failure(
             code="read_failed",
-            message=f"Error reading file: {e}",
+            message=f"Could not read file: {args.path}",
             preview="Read failed",
             retryable=True,
             recovery_action="Retry the read or inspect the path with list_files.",
@@ -312,10 +312,10 @@ def _list_files_sync(args: ListFilesInput, cwd: str | None = None) -> ToolResult
             preview="Denied",
             recovery_action="Choose a readable directory or request filesystem access.",
         )
-    except OSError as e:
+    except OSError:
         return ToolResult.failure(
             code="read_failed",
-            message=f"Error listing directory: {e}",
+            message=f"Could not list directory: {args.path}",
             preview="List failed",
             retryable=True,
             recovery_action="Retry or inspect the parent directory.",
@@ -400,10 +400,10 @@ def _find_files_with_rg(root: Path, args: FindFilesInput) -> list[dict]:
     return matches
 
 
-def _find_files_failed(root: Path, args: FindFilesInput, error: Exception) -> ToolResult:
+def _find_files_failed(root: Path, args: FindFilesInput) -> ToolResult:
     return ToolResult.failure(
         code="search_failed",
-        message=f"Error finding files with ripgrep: {error}",
+        message="File-name search with ripgrep failed.",
         preview="Find failed",
         data={"path": str(root), "pattern": args.pattern, "matches": []},
         retryable=True,
@@ -449,8 +449,8 @@ def _find_files_sync(args: FindFilesInput, cwd: str | None = None) -> ToolResult
     try:
         matches = _find_files_with_rg(root, args)
         return _format_find_files_result(root, args, matches, cwd)
-    except (OSError, RuntimeError) as e:
-        return _find_files_failed(root, args, e)
+    except (OSError, RuntimeError):
+        return _find_files_failed(root, args)
 
 
 async def find_files(execution: ToolExecution, args: FindFilesInput) -> ToolResult:
@@ -525,10 +525,10 @@ def _search_text_with_rg(root: Path, args: SearchTextInput) -> list[dict]:
     return matches
 
 
-def _search_text_failed(root: Path, args: SearchTextInput, error: Exception) -> ToolResult:
+def _search_text_failed(root: Path, args: SearchTextInput) -> ToolResult:
     return ToolResult.failure(
         code="search_failed",
-        message=f"Error searching files with ripgrep: {error}",
+        message="Text search with ripgrep failed.",
         preview="Search failed",
         data={"path": str(root), "query": args.query, "matches": []},
         retryable=True,
@@ -568,8 +568,8 @@ def _search_text_sync(args: SearchTextInput, cwd: str | None = None) -> ToolResu
     try:
         matches = _search_text_with_rg(root, args)
         return _format_search_text_result(root, args, matches)
-    except (OSError, RuntimeError, KeyError, json.JSONDecodeError) as e:
-        return _search_text_failed(root, args, e)
+    except (OSError, RuntimeError, KeyError, json.JSONDecodeError):
+        return _search_text_failed(root, args)
 
 
 async def search_text(execution: ToolExecution, args: SearchTextInput) -> ToolResult:
@@ -633,10 +633,10 @@ def _write_file_sync(args: WriteFileInput, cwd: str | None = None) -> ToolResult
             preview="Denied",
             recovery_action="Choose a writable path or request filesystem access.",
         )
-    except OSError as e:
+    except OSError:
         return ToolResult.failure(
             code="write_failed",
-            message=f"Error writing file: {e}",
+            message=f"Could not write file: {args.path}",
             preview="Write failed",
             retryable=True,
             recovery_action="Inspect the path and retry after resolving the filesystem error.",
@@ -753,10 +753,10 @@ def _edit_file_sync(args: EditFileInput, cwd: str | None = None) -> ToolResult:
             preview="Denied",
             recovery_action="Choose a writable file or request filesystem access.",
         )
-    except OSError as e:
+    except OSError:
         return ToolResult.failure(
             code="write_failed",
-            message=f"Error editing file: {e}",
+            message=f"Could not edit file: {args.path}",
             preview="Edit failed",
             retryable=True,
             recovery_action="Inspect the path and retry after resolving the filesystem error.",

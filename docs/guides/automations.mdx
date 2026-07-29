@@ -7,7 +7,10 @@ description: "Schedule tasks that run autonomously."
 
 Automations let arden act on its own — daily summaries, inbox monitoring, reminders, or any task you'd otherwise forget to do manually.
 
-Each automation has one or more **triggers** (when to run), a **description** (what to do in natural language), and optional notification behavior through configured notifiers. When multiple triggers are defined, the automation fires when **any** trigger condition is met.
+Each automation has one or more **triggers** (when to run), a standalone
+**prompt** (what to do), an optional short **description** for display, and
+optional notification behavior through configured notifiers. Multiple triggers
+use OR logic.
 
 ![Automations viewer](../images/automations.png)
 
@@ -41,7 +44,8 @@ Trigger before calendar events:
 
 ### Idle
 
-Fire once after a period of user inactivity. Resets when the user sends a new message.
+Fire once after a period of user inactivity. Resets when the user sends a new
+message.
 
 ```
 After 5 minutes idle → "Extract facts from recent conversation"
@@ -55,6 +59,12 @@ Fire every N user messages in a session. The counter resets per session.
 Every 10 turns → "Extract durable facts from the conversation"
 ```
 
+### Slack message
+
+React to new Slack messages in named channels. Use this for a watcher instead
+of polling Slack on a timer. Add a sender filter when an auto-approved
+automation must not be driven by arbitrary senders.
+
 ## Automation channels
 
 Each normal automation gets a new durable **channel session** by default. Its
@@ -63,11 +73,14 @@ it always attaches the current chat instead of creating a channel.
 
 ## Tool scoping
 
-An automation can carry a **tool scope**: an allowlist of tool-name patterns (`*`, an exact name, or `prefix*`) that bounds what its runs may touch, applied as a hard outer gate. An area agent uses this to stay observe-only. See [tool scoping](/guides/tools#per-automation-tool-scoping).
+An automation can carry a **tool scope**: an allowlist of exact names or prefix
+patterns such as `slack_*`. It grants write/action tools on top of the normal
+read-only floor; use the narrowest scope that performs the task. `auto_approve`
+skips approval only for tools already granted by that scope. See [tool scoping](/guides/tools#per-automation-tool-scoping).
 
 ## Area agents
 
-[Area agents](/guides/areas) are channel automations seeded one per delegated area. Their explicit tool scope includes one terminal `submit_area_report` action that validates and commits work, evidence, asks, and the next-check cadence inside the normal agent loop.
+[Area agents](/guides/areas) are channel automations seeded one per delegated area. Their explicit tool scope includes the terminal `submit_area_report` action that validates and commits work, evidence, asks, and the next-check cadence.
 
 ## Builtin automations
 
@@ -93,14 +106,15 @@ curl -X POST http://localhost:6877/automations \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Morning briefing",
-    "description": "Summarize unread emails and today's calendar events",
+    "prompt": "Summarize unread emails and today's calendar events. Report the briefing in the automation channel.",
+    "description": "Weekday morning briefing",
     "trigger_type": "time",
     "at": "09:00",
     "days": "weekdays"
-  }'
+}'
 ```
 
-Multi-trigger:
+Multiple triggers:
 
 ```bash
 curl -X POST http://localhost:6877/automations \
@@ -108,7 +122,8 @@ curl -X POST http://localhost:6877/automations \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Extract conversation facts",
-    "description": "Extract durable facts from recent conversation",
+    "prompt": "Extract durable facts from recent conversation.",
+    "description": "Conversation fact extraction",
     "triggers": [
       {"type": "count", "every_n": 5},
       {"type": "idle", "idle_minutes": 10}
@@ -118,7 +133,9 @@ curl -X POST http://localhost:6877/automations \
 
 ## Approvals and permissions
 
-By default, mutating or external actions still require approval. Toggle **auto-approve** only for automations you trust to run headlessly without per-call approval.
+By default, mutating or external actions still require approval. Grant only the
+needed actions through `tool_scope`; toggle **auto-approve** only when those
+already-granted actions must run headlessly without per-call approval.
 
 Examples that may need auto-approve:
 

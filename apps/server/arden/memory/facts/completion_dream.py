@@ -4,8 +4,19 @@ from datetime import date
 
 from pydantic import BaseModel, ConfigDict
 
+from arden.core.prompts import UNTRUSTED_DATA_RULE
 from arden.llm.base import CompletionClient
 from arden.memory.facts.dream import DreamEvidence, DreamInsight
+
+_DREAM_SYSTEM_PROMPT = (
+    "Find up to five useful, non-obvious connections across the user's canonical facts. "
+    "Each connection is provisional: use only supplied evidence, cite at least two distinct "
+    "fact tokens whose explicit subjects differ, and do not restate a single fact. "
+    f"{UNTRUSTED_DATA_RULE} "
+    "Return exactly one JSON object shaped as "
+    '{"insights":[{"claim":"one concise claim, at most 600 characters",'
+    '"fact_tokens":["F001","F002"]}]}. Return an empty insights list when evidence is weak.'
+)
 
 
 class _InsightPayload(BaseModel):
@@ -42,14 +53,7 @@ class CompletionFactDreamRenderer:
             messages=[
                 {
                     "role": "system",
-                    "content": (
-                        "Find up to five useful, non-obvious connections across the user's canonical facts. "
-                        "Each connection is provisional: use only supplied evidence, cite at least two distinct "
-                        "fact tokens whose explicit subjects differ, and do not restate a single fact. "
-                        "Return exactly one JSON object shaped as "
-                        '{"insights":[{"claim":"one concise claim, at most 600 characters",'
-                        '"fact_tokens":["F001","F002"]}]}. Return an empty insights list when evidence is weak.'
-                    ),
+                    "content": _DREAM_SYSTEM_PROMPT,
                 },
                 {
                     "role": "user",

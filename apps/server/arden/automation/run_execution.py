@@ -7,7 +7,7 @@ from typing import Literal, Protocol
 
 from arden.automation.event_dispatch import event_retry_at, failure_retry_at
 from arden.automation.models import Automation
-from arden.automation.prompts import AUTOMATION_PROMPT, AUTOMATION_SUFFIX
+from arden.automation.prompts import AUTOMATION_PROMPT
 from arden.automation.store import AutomationStore
 from arden.automation.triggers import TimeTrigger
 from arden.events.sse import AutomationProgressEvent, SSEEvent
@@ -146,7 +146,6 @@ async def run_agent_execution(
     context_text = json.dumps(context) if isinstance(context, dict) else context
     request = RunRequest(
         prompt=AUTOMATION_PROMPT.render(prompt=automation.prompt, context=context_text),
-        prompt_suffix=AUTOMATION_SUFFIX,
         auto_approve=automation.auto_approve,
         source_id=automation.task_id,
         model=automation.model,

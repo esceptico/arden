@@ -2,6 +2,7 @@ from pydantic import BaseModel, Field
 
 from arden.constants import BACKGROUND_AGENT_TIMEOUT
 from arden.core.agent_types import SPAWN_SURFACE_GUIDANCE
+from arden.core.prompts import UNTRUSTED_DATA_RULE
 from arden.events.sse import BackgroundTaskEvent
 from arden.tools.core import ToolResult, tool
 from arden.tools.core.context import ToolExecution
@@ -12,7 +13,7 @@ BACKGROUND_SYSTEM_PROMPT = (
     "then return a concise, self-contained report. Be thorough but focused. "
     "Include any relevant source names, IDs, links, or evidence directly in your final report. "
     "Do not refer to separate files, hidden messages, or context outside your final report. "
-    "You are read-only — report what you find, the caller decides what to do with it."
+    "You are read-only — report what you find, the caller decides what to do with it. " + UNTRUSTED_DATA_RULE
 )
 
 BACKGROUND_DESCRIPTION = (

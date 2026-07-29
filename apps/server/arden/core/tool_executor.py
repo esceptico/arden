@@ -30,6 +30,7 @@ from arden.tools.executor import ToolExecutor
 # stays deduped — it is a cursor-keyed transcript read.
 LIVE_READ_TOOLS = frozenset({"list_recent_sessions"})
 AUDIT_PREVIEW_MAX_CHARS = 500
+OFFLOAD_CONTINUATION_FIELDS = frozenset({"has_more", "next_cursor", "next_offset"})
 _logger = logging.get_logger(__name__)
 
 
@@ -198,12 +199,16 @@ class ArdenToolExecutor:
             )
             finish_preview = result.preview
             raise
-        except Exception as exc:
+        except Exception:
             finish_status = "error"
+            diagnostic_ref = f"tool-call:{tool_call_id}"
             result = ToolResult.failure(
                 code="internal_error",
-                message=f"Tool execution failed: {type(exc).__name__}",
-                preview=f"Failed: {type(exc).__name__}",
+                message="Tool execution failed unexpectedly.",
+                preview="Tool execution failed",
+                status=ToolOutcomeStatus.UNCERTAIN,
+                recovery_action="Check the target's current state before retrying.",
+                diagnostic_ref=diagnostic_ref,
             )
             finish_preview = result.preview
             raise
@@ -408,10 +413,11 @@ class ArdenToolExecutor:
             **blob.to_internal_data(),
         }
         if isinstance(result.data, dict):
-            next_cursor = result.data.get("next_cursor")
-            if isinstance(next_cursor, (str, int, float, bool)) or next_cursor is None:
-                if "next_cursor" in result.data:
-                    data["next_cursor"] = next_cursor
+            for key, value in result.data.items():
+                if key not in OFFLOAD_CONTINUATION_FIELDS:
+                    continue
+                if isinstance(value, str | int | float | bool) or value is None:
+                    data[key] = value
             public_keys = sorted(key for key in result.data if not key.startswith("_"))[:50]
             if public_keys:
                 data["data_summary"] = {"keys": public_keys}

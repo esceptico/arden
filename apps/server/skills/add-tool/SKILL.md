@@ -90,7 +90,12 @@ from arden.integrations.slack.client import SlackClient
 async def search_slack(execution: ToolExecution, args: MyInput) -> ToolResult:
     client = execution.ctx.get_client("slack", SlackClient)
     if client is None:
-        return ToolResult(content="Slack is not configured.", preview="Missing service", is_error=True)
+        return ToolResult.failure(
+            code="not_configured",
+            message="Slack is not connected.",
+            preview="Slack unavailable",
+            recovery_action="Ask the user to connect Slack, then retry.",
+        )
     results = await client.search_messages(args.query)
     lines = [f"{item.title}: {item.content}" for item in results]
     return ToolResult(content="\n".join(lines), preview=f"{len(results)} results")
@@ -113,8 +118,8 @@ tools = {
 ### Generic service lookup
 
 ```python
-async def recall_memory(execution: ToolExecution, args: MyInput) -> ToolResult:
-    memory = execution.ctx.services["memory"]
+async def read_facts(execution: ToolExecution, args: MyInput) -> ToolResult:
+    facts = execution.ctx.services["facts"]
 ```
 
 ## Available services
@@ -126,15 +131,20 @@ Keys for `policy.permissions` and `execution.ctx.services`:
 | `gmail` | `MultiGmailSource` | Email read/search/send |
 | `calendar` | `MultiCalendarSource` | Calendar events CRUD |
 | `web` | `WebClient` | Web search and content fetch |
-| `memory` | `MemoryService` | Long-term memory service |
+| `facts` | `FactService` | Canonical fact read, planning, and commit operations |
 | `automation` | `AutomationService` | Scheduled automation management |
+| `wiki` | `WikiService` | Managed wiki reads; use the built-in wiki mutation tools for page writes |
+| `session` | `SessionService` | Current and recent chat sessions |
 | `skill_registry` | `SkillRegistry` | Skill lookup and loading |
+| `skill_service` | `SkillService` | Global skill creation and management |
 | `search_index` | `SearchIndex` | Vector search across indexed sources |
 | `slack` | `SlackClient` | Slack search/read APIs |
 | `mcp` | `MCPManager` | Connected MCP tools |
 | `notifiers` | `NotifierService` | Configured notifiers |
+| `connections` | `ConnectionService` | Integration connection requests |
+| `app_control` | `AppControlService` | Chat and app navigation actions |
 
-Use `execution.ctx.get_client("service_id", ClientType)` for integration clients when you can import the concrete client type. Use `execution.ctx.services["key"]` for internal services such as `memory` and `automation`.
+Use `execution.ctx.get_client("service_id", ClientType)` for integration clients when you can import the concrete client type. Use `execution.ctx.services["key"]` for internal services such as `facts` and `automation`. Add the matching permission key so unavailable services hide the tool instead of failing at runtime.
 
 ## `tool(...)` arguments
 

@@ -1003,6 +1003,7 @@ async def test_spawn_returns_salvage_when_inner_agent_fails(monkeypatch):
     class FakeLLM:
         def __init__(self):
             self.complete_calls = 0
+            self.complete_messages = None
 
         async def stream(self, messages, model, tools, tool_choice=None, reasoning_effort=None, prompt_cache_key=None):
             # The inner agent's first model call simulates a fatal LLM error.
@@ -1011,6 +1012,7 @@ async def test_spawn_returns_salvage_when_inner_agent_fails(monkeypatch):
 
         async def complete(self, model, messages, **kwargs):
             self.complete_calls += 1
+            self.complete_messages = messages
             return CompletionResponse(
                 choices=[
                     Choice(
@@ -1052,8 +1054,11 @@ async def test_spawn_returns_salvage_when_inner_agent_fails(monkeypatch):
     )
 
     assert "[partial — sub-agent errored:" in result.text
+    assert "oops" not in result.text
     assert salvage_text in result.text
     assert fake.complete_calls == 1
+    assert "oops" not in str(fake.complete_messages)
+    assert "RuntimeError" in str(fake.complete_messages)
     task_events = [event for event in emitted if isinstance(event, (TaskStartedEvent, TaskFinishedEvent))]
     assert [event.type.value for event in task_events] == ["task_started", "task_finished"]
     assert task_events[1].status == "failed"

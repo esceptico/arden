@@ -110,6 +110,7 @@ async def test_list_wiki_pages_replaces_folder_index_pages(tmp_path: Path) -> No
     assert root.data == {
         "head": wiki.repository.head,
         "directory": "",
+        "offset": 0,
         "entries": [
             {"kind": "directory", "path": "topics/"},
             {
@@ -123,6 +124,7 @@ async def test_list_wiki_pages_replaces_folder_index_pages(tmp_path: Path) -> No
         ],
         "total": 2,
         "has_more": False,
+        "next_offset": None,
     }
 
     topics = await list_wiki_pages_tool.execute(run, directory="topics")
@@ -136,6 +138,15 @@ async def test_list_wiki_pages_replaces_folder_index_pages(tmp_path: Path) -> No
     capped = await list_wiki_pages_tool.execute(run, directory="topics", limit=1)
     assert capped.data["has_more"] is True
     assert len(capped.data["entries"]) == 1
+    assert capped.data["next_offset"] == 1
+    continued = await list_wiki_pages_tool.execute(
+        run,
+        directory="topics",
+        offset=capped.data["next_offset"],
+        limit=1,
+    )
+    assert continued.data["entries"][0]["path"] == "topics/interaction-lab.md"
+    assert continued.data["next_offset"] == 2
 
     for directory in (".", "./topics", "topics/.", "../topics", "topics//labs", "/topics", r"topics\labs"):
         invalid = await list_wiki_pages_tool.execute(run, directory=directory)
@@ -159,6 +170,28 @@ async def test_list_wiki_pages_reports_byte_budget_truncation(tmp_path: Path, mo
     assert result.data["entries"] == []
     assert result.data["total"] == 2
     assert result.data["has_more"] is True
+    assert result.data["next_offset"] is None
+
+
+@pytest.mark.asyncio
+async def test_list_wiki_pages_continues_after_byte_budget_page(tmp_path: Path, monkeypatch) -> None:
+    wiki = _wiki(tmp_path)
+    first = wiki_tools._listing_page_data(wiki.read_page("interaction-lab"))
+    monkeypatch.setattr(
+        wiki_tools,
+        "_MAX_LIST_DATA_BYTES",
+        len(json.dumps(first, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) + 1,
+    )
+
+    first_page = await list_wiki_pages_tool.execute(_execution(wiki), directory="topics")
+
+    assert [entry["path"] for entry in first_page.data["entries"]] == ["topics/interaction-lab.md"]
+    assert first_page.data["next_offset"] == 1
+    second_page = await list_wiki_pages_tool.execute(
+        _execution(wiki), directory="topics", offset=first_page.data["next_offset"]
+    )
+    assert [entry["path"] for entry in second_page.data["entries"]] == ["topics/peer.md"]
+    assert second_page.data["has_more"] is False
 
 
 @pytest.mark.asyncio
@@ -318,6 +351,30 @@ async def test_agent_wiki_writes_are_cas_safe_and_semantically_idempotent(tmp_pa
     conflict = await create_wiki_page_tool.execute(execution, **{**create_args, "body": "Different.\n"})
     assert conflict.is_error
     assert conflict.outcome.error.code == "revision_conflict"
+
+    name_conflict = await create_wiki_page_tool.execute(
+        execution,
+        **{
+            **create_args,
+            "page_id": "daily-note-copy",
+            "path": "daily/2026-07-29-copy.md",
+            "expected_head": wiki.repository.head,
+        },
+    )
+    assert name_conflict.is_error
+    assert name_conflict.outcome.error.code == "name_conflict"
+    assert name_conflict.outcome.error.recovery_action is not None
+
+    missing = await edit_wiki_page_tool.execute(
+        execution,
+        page_id="missing",
+        body="No.",
+        expected_version="a" * 64,
+        expected_head=wiki.repository.head,
+    )
+    assert missing.is_error
+    assert missing.outcome.error.code == "not_found"
+    assert missing.outcome.error.recovery_action is not None
 
     record = wiki.read_page("daily-note")
     edit_args = {
@@ -500,6 +557,7 @@ async def test_agent_wiki_writes_preserve_backend_and_producer_boundaries(tmp_pa
     )
     assert health.is_error
     assert health.outcome.error.code == "invalid_page"
+    assert health.outcome.error.recovery_action is not None
 
     producer = wiki.create_page(
         page_id="producer",
@@ -605,6 +663,7 @@ async def test_generated_publisher_rejects_nonproducer_and_stale_pages(tmp_path:
     )
     assert rejected.is_error
     assert rejected.outcome.error.code == "not_producer_page"
+    assert rejected.outcome.error.recovery_action is not None
 
     feed = wiki.create_page(page_id="feed", path="automations/current.md", title="Current")
     stale = await publish_wiki_generated_tool.execute(
@@ -637,6 +696,7 @@ async def test_generated_publisher_requires_the_registered_automation_owner(tmp_
     )
     assert no_automation.is_error
     assert no_automation.outcome.error.code == "automation_required"
+    assert no_automation.outcome.error.recovery_action is not None
 
     wrong_owner = await publish_wiki_generated_tool.execute(
         _execution(wiki, automation_id="intruder"),
@@ -647,6 +707,7 @@ async def test_generated_publisher_requires_the_registered_automation_owner(tmp_
     )
     assert wrong_owner.is_error
     assert wrong_owner.outcome.error.code == "producer_mismatch"
+    assert wrong_owner.outcome.error.recovery_action is not None
 
 
 @pytest.mark.asyncio

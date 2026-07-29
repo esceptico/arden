@@ -1,4 +1,6 @@
+import ast
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -8,6 +10,8 @@ from arden.context.models import SessionState
 from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.registry import ToolRegistry
 from arden.tools.notify import NotifyInput, notify
+
+ARDEN_ROOT = Path(__file__).parents[1] / "arden"
 
 
 def _execution(*, services=None) -> ToolExecution:
@@ -39,6 +43,23 @@ def test_tool_result_rejects_contradictory_error_and_outcome_status():
             is_error=True,
             outcome=ToolOutcome(status=ToolOutcomeStatus.SUCCEEDED),
         )
+
+
+def test_agent_facing_tool_failures_always_include_recovery_guidance():
+    missing: list[str] = []
+    for path in ARDEN_ROOT.rglob("*.py"):
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            if node.func.attr != "failure" or not isinstance(node.func.value, ast.Name):
+                continue
+            if node.func.value.id != "ToolResult":
+                continue
+            if "recovery_action" not in {keyword.arg for keyword in node.keywords}:
+                missing.append(f"{path.relative_to(ARDEN_ROOT)}:{node.lineno}")
+
+    assert missing == []
 
 
 @pytest.mark.asyncio

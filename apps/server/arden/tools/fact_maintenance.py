@@ -45,6 +45,7 @@ def _service(execution: ToolExecution) -> FactMaintenanceReviewService | ToolRes
             code="forbidden",
             message="Fact maintenance review is reserved for Memory Maintenance.",
             preview="Not available",
+            recovery_action="Use this tool only inside the built-in Memory Maintenance run.",
         )
     service = execution.ctx.services.get(FACT_MAINTENANCE_SERVICE)
     if isinstance(service, FactMaintenanceReviewService):
@@ -53,6 +54,7 @@ def _service(execution: ToolExecution) -> FactMaintenanceReviewService | ToolRes
         code="not_running",
         message="Memory Maintenance is not currently running.",
         preview="Maintenance unavailable",
+        recovery_action="Start or retry the Memory Maintenance automation before calling this tool.",
     )
 
 

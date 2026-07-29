@@ -271,10 +271,6 @@ class ToolResult:
         return replace(self, outcome=outcome)
 
     @staticmethod
-    def error(message: str) -> "ToolResult":
-        return ToolResult.failure(code="internal_error", message=message, preview="Error")
-
-    @staticmethod
     def failure(
         *,
         code: str,

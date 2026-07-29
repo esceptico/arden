@@ -724,10 +724,11 @@ def create_spawn_fn(
                     exc,
                 )
                 stream_failed = True
-                summary = await _salvage_summary(child_model, child_messages, str(exc), task)
+                failure_label = type(exc).__name__
+                summary = await _salvage_summary(child_model, child_messages, failure_label, task)
                 if summary:
-                    return f"[partial — sub-agent errored: {exc}]\n\n{summary}"
-                return _deterministic_salvage(child_messages, str(exc))
+                    return f"[partial — sub-agent errored: {failure_label}]\n\n{summary}"
+                return _deterministic_salvage(child_messages, failure_label)
 
         def _settle_with(text: str, *, status: str = "completed") -> SpawnResult:
             """Build the final SpawnResult for the caller."""

@@ -1,6 +1,13 @@
 # panel(question, n?, criteria?) — diverge -> judge -> synthesize.
 question = args.get("question", "")
-n = int(args.get("n", 3))
+if not isinstance(question, str) or not question.strip():
+    raise ValueError("panel requires a non-empty args['question'].")
+raw_n = args.get("n", 3)
+if isinstance(raw_n, bool) or not isinstance(raw_n, int):
+    raise ValueError("panel args['n'] must be an integer from 1 to 5.")
+n = raw_n
+if not 1 <= n <= 5:
+    raise ValueError("panel args['n'] must be an integer from 1 to 5.")
 criteria = args.get("criteria") or ["correctness / fit", "simplicity", "risk"]
 gen_model = args.get("gen_model")
 synth_model = args.get("synth_model")

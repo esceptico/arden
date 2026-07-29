@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from arden.automation.prompts import AUTOMATION_SUFFIX
 from arden.constants import LOOP_ITERATION_HISTORY_WINDOW
 from arden.context.models import SessionData, SessionState
 from arden.core.factory import AgentConfig
@@ -244,6 +245,20 @@ async def test_prepare_chat_uses_only_trusted_automation_authority():
     assert forged.run.automation_id is None
     assert trusted.run.loop_task_id == "feed-worker"
     assert trusted.run.automation_id == "feed-worker"
+
+
+@pytest.mark.asyncio
+async def test_prepare_chat_adds_autonomous_guard_for_session_bound_loop():
+    ctx = await prepare_chat(
+        _make_deps(_StubSessionService([])),
+        message="Process this event context",
+        session_id="sess-1",
+        loop_task_id="feed-worker",
+        automation_id="feed-worker",
+    )
+
+    system_blocks = ctx.run.messages[0]["content"]
+    assert sum(block["text"].count(AUTOMATION_SUFFIX) for block in system_blocks) == 1
 
 
 @pytest.mark.asyncio

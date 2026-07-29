@@ -7,9 +7,11 @@ from dataclasses import dataclass
 from arden.agent.tools.executor import AgentToolExecutor
 from arden.agent.types.events import ToolCompleted, ToolStarted
 from arden.agent.types.tool_call import PendingToolCall
-from arden.agent.types.tools import ToolResult, normalize_source_refs
+from arden.agent.types.tools import ToolOutcomeStatus, ToolResult, normalize_source_refs
+from arden.logging import get_logger
 
 _SENTINEL = object()
+_logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -69,12 +71,25 @@ class ToolRunner:
             result = await self._executor.execute(rc.call.name, rc.call.args, rc.call.tool_call.id)
             result = result.with_default_outcome()
             return result, _ms_now() - start_ms
-        except Exception as e:
+        except Exception:
+            diagnostic_ref = f"tool-call:{rc.call.tool_call.id}"
+            _logger.exception(
+                "Unhandled tool execution failed",
+                tool_name=rc.call.name,
+                tool_call_id=rc.call.tool_call.id,
+                diagnostic_ref=diagnostic_ref,
+            )
             return (
                 ToolResult.failure(
                     code="internal_error",
-                    message=f"Error: {type(e).__name__}: {e}",
-                    preview=f"Failed: {type(e).__name__}",
+                    message=(f"Tool execution failed unexpectedly. Diagnostic reference: {diagnostic_ref}."),
+                    preview="Tool execution failed",
+                    status=ToolOutcomeStatus.UNCERTAIN,
+                    recovery_action=(
+                        "Check the target's current state before retrying. If state cannot be verified, "
+                        "report the diagnostic reference for server-side investigation."
+                    ),
+                    diagnostic_ref=diagnostic_ref,
                 ),
                 _ms_now() - start_ms,
             )

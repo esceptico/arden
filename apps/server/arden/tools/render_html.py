@@ -46,9 +46,11 @@ async def render_html(execution: ToolExecution, args: RenderHtmlInput) -> ToolRe
         return ToolResult(content=f"Rendered HTML {label}.", preview=label, data=data)
     envelope = await execution.request_input(html=args.html, title=args.title)
     if envelope is None:
-        return ToolResult.error(
-            'No interactive client connected — render_html mode="input" requires an active desktop session. '
-            'Use mode="display" or ask in plain text instead.'
+        return ToolResult.failure(
+            code="interactive_client_required",
+            message='No interactive client connected for render_html mode="input".',
+            preview="Interactive client required",
+            recovery_action='Use mode="display" or ask the question in plain text.',
         )
     return ToolResult(content=envelope, preview=label, data=data)
 

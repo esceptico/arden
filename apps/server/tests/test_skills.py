@@ -1,11 +1,14 @@
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from arden.server.app import app
 from arden.server.deps import require_skill_service
 from arden.skills.registry import SkillRegistry
 from arden.skills.service import SkillService, get_skills_dirs
+from arden.skills.tool import CreateSkillInput, UseSkillInput, create_skill, use_skill
 
 
 def _write_skill(root: Path, name: str, frontmatter: str, body: str = "# Body\n") -> None:
@@ -75,6 +78,24 @@ def test_registry_renders_skill_xml_with_arguments(tmp_path):
     assert rendered.startswith(f'<skill name="research-helper" path="{tmp_path / "research-helper"}">')
     assert f"Use {tmp_path / 'research-helper'} for local assets." in rendered
     assert "ARGUMENTS: Current user request: audit it" in rendered
+
+
+@pytest.mark.asyncio
+async def test_skill_tools_return_typed_actionable_failures():
+    empty_registry = SkillRegistry()
+    use_execution = SimpleNamespace(ctx=SimpleNamespace(services={"skill_registry": empty_registry}))
+
+    missing = await use_skill(use_execution, UseSkillInput(skill="missing"))
+    unavailable = await create_skill(
+        SimpleNamespace(ctx=SimpleNamespace(services={})),
+        CreateSkillInput(name="new-skill", description="Reusable procedure", body="# Procedure"),
+    )
+
+    for result, code in ((missing, "not_found"), (unavailable, "not_configured")):
+        assert result.is_error
+        assert result.outcome is not None and result.outcome.error is not None
+        assert result.outcome.error.code == code
+        assert result.outcome.error.recovery_action
 
 
 def test_skill_service_governance_report_marks_cleanup_candidates(tmp_path):

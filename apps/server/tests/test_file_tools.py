@@ -65,6 +65,24 @@ async def test_read_file_missing_is_typed_failure(tmp_path):
     assert result.outcome.error.code == "not_found"
 
 
+@pytest.mark.asyncio
+async def test_read_file_does_not_expose_raw_filesystem_errors(tmp_path, monkeypatch):
+    note = tmp_path / "private.md"
+    note.write_text("content", encoding="utf-8")
+
+    def fail_read(_path):
+        raise OSError("secret mount detail")
+
+    monkeypatch.setattr(file_tools_module, "read_file_snapshot", fail_read)
+    result = await read_file_tool.execute(_make_execution("read_file"), path=str(note))
+
+    assert result.is_error
+    assert "secret mount detail" not in result.content
+    assert result.outcome is not None and result.outcome.error is not None
+    assert result.outcome.error.code == "read_failed"
+    assert result.outcome.error.recovery_action
+
+
 def test_atomic_compare_and_swap_preserves_old_file_when_replace_fails(tmp_path, monkeypatch):
     target = tmp_path / "note.txt"
     target.write_text("old", encoding="utf-8")

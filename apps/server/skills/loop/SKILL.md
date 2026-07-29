@@ -9,7 +9,7 @@ The user wants a repeating task scoped to THIS conversation. Parse their input a
 
 ## Parsing (in priority order)
 
-1. **Leading token interval**: if the first whitespace-separated token matches `^\d+[smhd]$` (e.g. `5m`, `2h`, `1h30m`), that's the interval; the remainder is the prompt.
+1. **Leading token interval**: if the first whitespace-separated token is a positive `d`/`h`/`m` duration (e.g. `5m`, `2h`, `1h30m`, `2d12h`), that's the interval; the remainder is the prompt.
 2. **Trailing "every" clause**: otherwise, if the input ends with `every <N><unit>` or `every <N> <unit-word>` (e.g. `every 20m`, `every 5 minutes`, `every 2 hours`), extract that as the interval and strip it from the prompt. Only match when what follows "every" is a time expression — `check every PR` has no interval.
 3. **Default**: if neither matches, default the interval to `10m` and use the whole input as the prompt.
 
@@ -21,7 +21,7 @@ Examples:
 - `check every PR` → `every=10m`, `prompt=check every PR` ("every" isn't followed by time)
 - empty input → don't call anything; ask the user what to loop on
 
-Minimum interval is `1m`. If parsing yields something shorter, round up to `1m` and tell the user.
+Intervals support days, hours, and minutes only; the minimum is `1m`. If the user asks for seconds or another shorter interval, explain that `1m` is the minimum and use it only when the requested task is otherwise unambiguous.
 
 ## Self-paced loops
 

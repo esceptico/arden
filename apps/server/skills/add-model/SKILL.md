@@ -41,7 +41,8 @@ Only include `api_key_env` if the user provided one. Only include `max_output_to
 ### After adding
 
 - The model is available as `model-id`
-- Set it in `.env` as `ARDEN_CHAT_MODEL=model-id` (or `ARDEN_MEMORY_MODEL`, `ARDEN_RESEARCH_MODEL`)
+- Set it in `.env` as `ARDEN_CHAT_MODEL=model-id`, or select it in Settings
+- Configure role-specific model choices in Settings; do not invent role-specific environment variables
 - If they specified an `api_key_env`, remind them to set that environment variable
 
 ## Embedding models

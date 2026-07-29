@@ -5,10 +5,11 @@ description: Use this skill when the user wants to create a new skill or remove 
 
 # Add / Remove a Skill
 
-Skills are discovered from three places:
-- **Builtin**: shipped with arden, don't touch
-- **Project**: `.skills/` under the server working directory
-- **Global**: `~/.arden/skills/` — user skills, create here
+Skills are discovered from these locations, in order:
+- **Builtin**: shipped with arden; don't touch
+- **Project**: `agent/skills/`, `.agents/skills/`, or `.skills/` under the server working directory
+- **Global**: `~/.arden/skills/` — user skills; create here by default
+- **Shared global**: `~/.agents/skills/`
 
 A skill is a directory containing at minimum a `SKILL.md` file.
 
@@ -36,13 +37,13 @@ Step-by-step instructions...
 ```
 
 ### Frontmatter rules
-- `name`: lowercase, hyphens only, must match directory name, max 64 chars
+- `name`: lowercase, letters/digits/hyphens only, starts with a letter, matches directory name, max 48 chars
 - `description`: max 1024 chars — include keywords that match user intent
 - Both fields are required
 
 ## Creating a skill
 
-1. Ask whether the skill should be global (`~/.arden/skills/<name>/`) or project-local (`.skills/<name>/`). Default to global unless the user asks for project-local behavior.
+1. Ask whether the skill should be global (`~/.arden/skills/<name>/`) or project-local. For project-local, preserve the repository convention; otherwise use `.agents/skills/<name>/`. Default to global unless the user asks for project-local behavior.
 2. `mkdir -p <target>/<name>/scripts`
 3. Write `SKILL.md` with frontmatter + instructions
 4. Add any scripts/assets/references only when needed — reference them with `<skill_path>/...` in SKILL.md
@@ -56,7 +57,8 @@ Delete the directory. Only project/global skills can be removed (not builtins).
 
 ```bash
 ls ~/.arden/skills/
-ls /Users/escept1co/src/arden/skills/
+ls agent/skills/ .agents/skills/ .skills/ 2>/dev/null
+ls ~/.agents/skills/
 ```
 
 ## After creating

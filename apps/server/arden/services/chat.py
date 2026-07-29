@@ -11,6 +11,7 @@ from arden.agent import Agent, Role, ToolOutcome, ToolOutcomeStatus, ToolResult
 from arden.agent.llm.parsing import trailing_incomplete_tool_step
 from arden.agent.types.events import Result, ToolCompleted
 from arden.agent.types.tool_call import PendingToolCall
+from arden.automation.prompts import AUTOMATION_SUFFIX
 from arden.constants import CONVERSATION_GAP_THRESHOLD, LOOP_ITERATION_HISTORY_WINDOW
 from arden.context.models import AreaContext, SessionData, SessionState
 from arden.core.content import (
@@ -503,6 +504,7 @@ async def _prepare_messages(
     todo_override: dict | None = None,
     append_user: bool = True,
     context_manifest: list[ContextManifestEntry] | None = None,
+    automation_id: str | None = None,
 ) -> list[dict]:
     wiki_context = deps.wiki_context
     wiki_resident = await wiki_context.resident_context() if wiki_context is not None else None
@@ -540,6 +542,8 @@ async def _prepare_messages(
         context_manifest=context_manifest,
         retrieval_context=wiki_retrieval,
     )
+    if automation_id is not None:
+        system_blocks.append({"type": "text", "text": AUTOMATION_SUFFIX})
 
     messages = _retain_user_content(messages)
 
@@ -764,6 +768,7 @@ async def prepare_chat(
         todo_override=todo_override,
         append_user=not is_resume,
         context_manifest=context_manifest,
+        automation_id=automation_id,
     )
 
     run.messages = messages

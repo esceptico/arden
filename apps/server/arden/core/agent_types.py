@@ -1,6 +1,7 @@
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
+from arden.core.prompts import UNTRUSTED_DATA_RULE
 from arden.tools.core.base import Tool
 from arden.tools.core.types import ToolAction
 
@@ -112,10 +113,10 @@ _BUILDER_PROMPT = (
 )
 
 for _spec in (
-    AgentType("reviewer", actions=_READ, prompt=_REVIEWER_PROMPT),
-    AgentType("explorer", actions=_READ, prompt=_EXPLORER_PROMPT),
-    AgentType("planner", actions=_READ, prompt=_PLANNER_PROMPT),
-    AgentType("verifier", actions=_READ, prompt=_VERIFIER_PROMPT),
-    AgentType("builder", actions=None, prompt=_BUILDER_PROMPT),
+    AgentType("reviewer", actions=_READ, prompt=f"{_REVIEWER_PROMPT} {UNTRUSTED_DATA_RULE}"),
+    AgentType("explorer", actions=_READ, prompt=f"{_EXPLORER_PROMPT} {UNTRUSTED_DATA_RULE}"),
+    AgentType("planner", actions=_READ, prompt=f"{_PLANNER_PROMPT} {UNTRUSTED_DATA_RULE}"),
+    AgentType("verifier", actions=_READ, prompt=f"{_VERIFIER_PROMPT} {UNTRUSTED_DATA_RULE}"),
+    AgentType("builder", actions=None, prompt=f"{_BUILDER_PROMPT} {UNTRUSTED_DATA_RULE}"),
 ):
     register_agent_type(_spec)

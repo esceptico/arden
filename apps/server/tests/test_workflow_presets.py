@@ -4,10 +4,12 @@ import ast
 import textwrap
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from arden.context.models import SessionState
+from arden.orchestra.dynamic import run_script
 from arden.skills.registry import SkillRegistry
 from arden.skills.service import BUILTIN_SKILLS_DIR
 from arden.tools.core.context import (
@@ -70,6 +72,33 @@ def test_builtin_workflow_presets_compile():
     for script in scripts:
         source = f"async def __workflow__():\n{textwrap.indent(script.read_text().strip(), '    ')}\n"
         ast.parse(source, str(script), "exec")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "args, expected_message",
+    [
+        ({}, "panel requires a non-empty args['question']."),
+        ({"question": "Choose a cache", "n": 0}, "panel args['n'] must be an integer from 1 to 5."),
+        ({"question": "Choose a cache", "n": True}, "panel args['n'] must be an integer from 1 to 5."),
+        ({"question": "Choose a cache", "n": 2.9}, "panel args['n'] must be an integer from 1 to 5."),
+        ({"question": "Choose a cache", "n": "many"}, "panel args['n'] must be an integer from 1 to 5."),
+    ],
+)
+async def test_panel_preset_rejects_invalid_inputs_before_spawning(args, expected_message):
+    script = (BUILTIN_SKILLS_DIR / "panel" / "workflow.py").read_text()
+    orchestra = SimpleNamespace(
+        agent=None,
+        parallel=None,
+        pipeline=None,
+        phase=None,
+        log=None,
+        budget_view=None,
+    )
+
+    with pytest.raises(ValueError) as error:
+        await run_script(orchestra, script, args)
+    assert str(error.value) == expected_message
 
 
 def test_load_workflow_script_only_for_workflow_kind(registry: SkillRegistry):

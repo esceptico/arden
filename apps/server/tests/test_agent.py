@@ -104,7 +104,8 @@ async def test_tool_error_handled():
     assert result.text == "Tool failed, sorry."
     tool_msg = [m for m in messages if m["role"] == "tool"]
     assert len(tool_msg) == 1
-    assert "Error" in tool_msg[0]["content"]
+    assert "tool crashed" not in tool_msg[0]["content"]
+    assert "Diagnostic reference:" in tool_msg[0]["content"]
 
 
 @pytest.mark.asyncio

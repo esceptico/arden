@@ -627,7 +627,8 @@ async def test_tool_exception_wrapped_as_error_result():
     assert result.text == "recovered"
     tool_msgs = [m for m in messages if m["role"] == "tool"]
     assert len(tool_msgs) == 1
-    assert "kaboom" in tool_msgs[0]["content"]
+    assert "kaboom" not in tool_msgs[0]["content"]
+    assert "Diagnostic reference:" in tool_msgs[0]["content"]
 
 
 # ============================================================

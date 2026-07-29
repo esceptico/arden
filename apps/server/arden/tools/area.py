@@ -77,7 +77,7 @@ def _write_failure(exc: Exception) -> ToolResult:
             preview="Write conflict",
             recovery_action="Read the Area page again, recompute the edit, and retry.",
         )
-    if isinstance(exc, (WikiValidationError, ValueError, UnicodeError)):
+    if isinstance(exc, WikiValidationError | ValueError | UnicodeError):
         return ToolResult.failure(
             code="invalid_input",
             message=f"The Area page edit is invalid: {exc}",
@@ -89,6 +89,7 @@ def _write_failure(exc: Exception) -> ToolResult:
         message="The Area page could not be updated.",
         preview="Page update failed",
         retryable=True,
+        recovery_action="Read the Area page again and retry once; report the failure if it persists.",
     )
 
 
@@ -258,17 +259,24 @@ async def area_run_automation(execution: ToolExecution, args: AreaAutomationRunI
             code="not_configured",
             message="Area automation service unavailable.",
             preview="Unavailable",
+            recovery_action="End the run and report that Area automation is unavailable.",
         )
     try:
         await service.run_now(args.task_id)
     except KeyError:
-        return ToolResult.failure(code="not_found", message="Area automation not found.", preview="Not found")
+        return ToolResult.failure(
+            code="not_found",
+            message="Area automation not found.",
+            preview="Not found",
+            recovery_action="Retry with an exact child automation ID from the current Area.",
+        )
     except RuntimeError:
         return ToolResult.failure(
             code="temporarily_unavailable",
             message="The Area automation could not be started.",
             preview="Unavailable",
             retryable=True,
+            recovery_action="Wait for the current Area run to settle, then retry once.",
         )
     return ToolResult(content=f"Started Area automation {args.task_id}.", preview="Area automation started")
 
@@ -280,6 +288,7 @@ async def submit_area_report(execution: ToolExecution, report: AreaCustodianRepo
             code="forbidden",
             message="Area reports are accepted only from the current Area custodian run.",
             preview="Report not accepted",
+            recovery_action="Call this tool only as the final action of the current Area custodian run.",
         )
     store = execution.ctx.get_client(AREA_WORK_SERVICE, AreaWorkStore)
     if store is None:
@@ -287,6 +296,7 @@ async def submit_area_report(execution: ToolExecution, report: AreaCustodianRepo
             code="not_configured",
             message="Area work storage is unavailable.",
             preview="Report unavailable",
+            recovery_action="End the run and report that Area work storage is unavailable.",
         )
     try:
         applied = await store.apply_report(area_id, f"run:{execution.ctx.run.run_id}", report)

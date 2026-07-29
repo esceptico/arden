@@ -144,6 +144,33 @@ async def test_runner_projects_invalid_arguments_as_typed_failure_without_execut
     assert completed.outcome.error.code == "invalid_tool_arguments"
 
 
+@pytest.mark.asyncio
+async def test_runner_sanitizes_uncaught_tool_exception_and_returns_diagnostic_ref():
+    class _ExplodingExecutor:
+        def get_meta(self, name: str) -> ToolMeta | None:
+            return ToolMeta(name=name, display_name="Exploding tool")
+
+        async def execute(self, name: str, args: dict, tool_call_id: str) -> ToolResult:
+            del name, args, tool_call_id
+            raise RuntimeError("provider secret")
+
+    events = [
+        event
+        async for event in ToolRunner(_ExplodingExecutor(), depth=0, parent_id=None).execute_all(
+            [_make_call("call-secret", "explode")]
+        )
+    ]
+
+    completed = next(event for event in events if isinstance(event, ToolCompleted))
+    assert completed.is_error
+    assert "provider secret" not in completed.result
+    assert completed.outcome is not None and completed.outcome.error is not None
+    assert completed.outcome.status == ToolOutcomeStatus.UNCERTAIN
+    assert completed.outcome.error.code == "internal_error"
+    assert completed.outcome.error.diagnostic_ref == "tool-call:call-secret"
+    assert "before retrying" in completed.outcome.error.recovery_action
+
+
 def test_append_results_uses_normal_missing_fallback():
     messages: list[dict] = []
     tool_calls = [

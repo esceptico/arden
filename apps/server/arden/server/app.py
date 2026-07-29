@@ -17,7 +17,7 @@ from arden.areas.projection import area_automation_match
 from arden.areas.service import AreaService
 from arden.areas.work_models import AreaWorkSnapshot
 from arden.automation.models import Automation
-from arden.automation.prompts import AUTOMATION_PROMPT, AUTOMATION_SUFFIX
+from arden.automation.prompts import AUTOMATION_PROMPT
 from arden.automation.scheduler import (
     AUTOMATION_BUS_KEY,
     CompletedAgentRun,
@@ -490,7 +490,6 @@ async def lifespan(app: FastAPI):
             prompt = AUTOMATION_PROMPT.render(prompt=automation.prompt, context=ctx_str)
             request = RunRequest(
                 prompt=prompt,
-                prompt_suffix=AUTOMATION_SUFFIX,
                 auto_approve=automation.auto_approve,
                 source_id=automation.task_id,
                 model=automation.model,

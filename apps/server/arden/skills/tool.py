@@ -27,10 +27,11 @@ async def use_skill(execution: ToolExecution, args: UseSkillInput) -> ToolResult
     content = registry.render_skill_xml(args.skill, args.args)
     if meta is None or content is None:
         available = ", ".join(registry.names)
-        return ToolResult(
-            content=f"Unknown skill: {args.skill}. Available: {available}",
+        return ToolResult.failure(
+            code="not_found",
+            message=f"Unknown skill: {args.skill}. Available: {available}",
             preview=f"Unknown skill: {args.skill}",
-            is_error=True,
+            recovery_action="Retry with one exact skill name from the available list.",
         )
 
     return ToolResult(content=content, preview=f"Loaded skill: {args.skill}")
@@ -93,13 +94,28 @@ async def approve_create_skill(execution: ToolExecution, args: CreateSkillInput)
 async def create_skill(execution: ToolExecution, args: CreateSkillInput) -> ToolResult:
     svc = execution.ctx.services.get("skill_service")
     if svc is None:
-        return ToolResult(content="Skill service unavailable.", preview="Unavailable", is_error=True)
+        return ToolResult.failure(
+            code="not_configured",
+            message="Skill service unavailable.",
+            preview="Skill service unavailable",
+            recovery_action="Enable the skill service before retrying.",
+        )
     try:
         meta = svc.create(args.name, args.description, args.body)
     except ValueError as e:
-        return ToolResult(content=f"Error: {e}", preview="Failed", is_error=True)
-    except FileExistsError as e:
-        return ToolResult(content=f"Conflict: {e}", preview="Already exists", is_error=True)
+        return ToolResult.failure(
+            code="invalid_skill",
+            message=str(e),
+            preview="Invalid skill",
+            recovery_action="Correct the skill name, description, or body and retry.",
+        )
+    except FileExistsError:
+        return ToolResult.failure(
+            code="name_conflict",
+            message=f"Skill '{args.name}' already exists.",
+            preview="Skill already exists",
+            recovery_action="Choose a unique skill name or use the existing skill.",
+        )
 
     return ToolResult(
         content=f"Created skill '{meta.name}' at {meta.path}/SKILL.md. Available as /{meta.name}.",

@@ -5,6 +5,8 @@ from pathlib import Path
 import pytest
 
 from arden.agent import Result, StopReason, Usage
+from arden.automation.prompts import AUTOMATION_SUFFIX
+from arden.constants import BUILTIN_MEMORY_CONSOLIDATE_ID, BUILTIN_WIKI_MAINTENANCE_ID
 from arden.context.models import SessionState
 from arden.core.factory import AgentConfig
 from arden.events.internal import RunCompleted
@@ -187,6 +189,32 @@ async def test_prepare_stamps_server_owned_automation_identity(monkeypatch):
 
     assert captured["session_state"].origin_automation_id == "builtin-memory-retention"
     assert captured["automation_id"] == "builtin-memory-retention"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("source_id", "automation_id"),
+    [
+        ("scheduled-digest", "scheduled-digest"),
+        ("post-digest", "post-digest"),
+        (BUILTIN_MEMORY_CONSOLIDATE_ID, BUILTIN_MEMORY_CONSOLIDATE_ID),
+        (BUILTIN_WIKI_MAINTENANCE_ID, BUILTIN_WIKI_MAINTENANCE_ID),
+    ],
+)
+async def test_prepare_adds_autonomous_guard_for_every_automation_run(monkeypatch, source_id, automation_id):
+    monkeypatch.setattr(runner, "create_agent", lambda **kwargs: object())
+
+    _, messages, _, _ = await runner._prepare(
+        _deps(None),
+        RunRequest(
+            prompt="follow the automation instructions",
+            auto_approve=True,
+            source_id=source_id,
+            automation_id=automation_id,
+        ),
+    )
+
+    assert messages[0]["content"].count(AUTOMATION_SUFFIX) == 1
 
 
 @pytest.mark.asyncio

@@ -44,7 +44,7 @@ async def validate_arguments(call: ToolCall, next_call: ToolNext) -> ToolResult:
         return await next_call(call)
 
     try:
-        validated = call.tool.input_model(**call.arguments)
+        validated = call.tool.input_model.model_validate(call.arguments, extra="forbid")
     except ValidationError as e:
         errors = "; ".join(
             f"{'.'.join(str(l) for l in err['loc'])}: {err['msg']}" for err in e.errors() if err.get("loc")

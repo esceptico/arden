@@ -285,6 +285,7 @@ async def test_approve_create_automation_shows_tool_scope(store_and_svc):
     info = await approve_create_automation(execution, args)
 
     assert info is not None
+    assert "Auto-approve: yes (skips approval for granted tools; does not grant access)" in (info.preview or "")
     assert "Tools: slack_search, slack_post_message" in (info.preview or "")
 
 

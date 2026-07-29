@@ -20,6 +20,6 @@ runners-up. Beats one-shot reasoning when the solution space is wide.
 
 **args**
 - `question` (str) — the decision to make.
-- `n` (int, default 3) — number of proposals.
+- `n` (int, 1-5, default 3) — number of proposals.
 - `criteria` (list[str], optional) — scoring axes; defaults to correctness/simplicity/risk.
 - `gen_model` / `synth_model` (str, optional) — model overrides; omit to inherit the run's model.

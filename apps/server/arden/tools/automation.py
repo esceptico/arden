@@ -27,7 +27,8 @@ CREATE_AUTOMATION_DESCRIPTION = (
     "Time triggers support two modes: schedule ('at' a specific time) or interval ('every' N hours/minutes). "
     "Optional model override per automation (falls back to default chat model when omitted). "
     "Each automation gets its own dedicated channel for results; use create_loop to repeat work in this chat. "
-    "Read-only by default, set auto_approve=true for autonomous memory/note writes (skips approvals)."
+    "Runs are read-only by default. Grant required action tools with tool_scope; auto_approve=true only skips "
+    "approvals for tools already granted by that scope."
     f" {SPAWN_SURFACE_GUIDANCE}"
 )
 
@@ -333,7 +334,7 @@ async def approve_create_automation(execution: ToolExecution, args: CreateAutoma
     if args.model:
         lines.append(f"Model: {args.model}")
     if args.auto_approve:
-        lines.append("Auto-approve: yes (autonomous writes, skips approvals)")
+        lines.append("Auto-approve: yes (skips approval for granted tools; does not grant access)")
     lines.append(f"Tools: {', '.join(args.tool_scope)}" if args.tool_scope else "Tools: read-only (no scope grant)")
     lines.append("Results: dedicated automation channel")
     try:

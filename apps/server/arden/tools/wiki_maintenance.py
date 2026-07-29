@@ -37,6 +37,7 @@ def _service(execution: ToolExecution) -> WikiMaintenanceReviewService | ToolRes
             code="forbidden",
             message="Wiki maintenance review is reserved for Wiki Maintenance.",
             preview="Not available",
+            recovery_action="Use this tool only inside the built-in Wiki Maintenance run.",
         )
     service = execution.ctx.services.get(WIKI_MAINTENANCE_SERVICE)
     if isinstance(service, WikiMaintenanceReviewService):
@@ -45,6 +46,7 @@ def _service(execution: ToolExecution) -> WikiMaintenanceReviewService | ToolRes
         code="not_running",
         message="Wiki Maintenance is not currently running.",
         preview="Maintenance unavailable",
+        recovery_action="Start or retry the Wiki Maintenance automation before calling this tool.",
     )
 
 

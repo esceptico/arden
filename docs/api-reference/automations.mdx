@@ -1,6 +1,6 @@
 ---
 title: "Automations"
-description: "Create and manage scheduled, event, idle, and count-triggered automations."
+description: "Create and manage scheduled, event, idle, count, and message automations."
 ---
 
 ## Create automation
@@ -11,7 +11,8 @@ curl -X POST http://localhost:6877/automations \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Morning briefing",
-    "description": "Summarize unread emails and today calendar",
+    "prompt": "Summarize unread emails and today's calendar. Report the briefing in the automation channel.",
+    "description": "Weekday morning briefing",
     "trigger_type": "time",
     "at": "09:00",
     "days": "weekdays"
@@ -24,35 +25,36 @@ Notifier configuration is separate from automation creation. Use the notificatio
 
 **Scheduled:**
 ```json
-{"type": "time", "at": "09:00", "days": "weekdays"}
-{"type": "time", "at": "22:00", "days": "mon,wed,fri"}
-{"type": "time", "at": "08:00"}
+{"trigger_type": "time", "at": "09:00", "days": "weekdays"}
+{"trigger_type": "time", "at": "22:00", "days": "mon,wed,fri"}
+{"trigger_type": "time", "at": "08:00"}
 ```
 
 **Interval:**
 ```json
-{"type": "time", "every": "2h"}
-{"type": "time", "every": "30m", "start": "09:00", "end": "18:00"}
+{"trigger_type": "time", "every": "2h"}
+{"trigger_type": "time", "every": "30m", "start": "09:00", "end": "18:00"}
 ```
 
 **Event-driven:**
 ```json
-{"type": "event", "event_type": "event_approaching", "lead_minutes": 15}
+{"trigger_type": "event", "event_type": "event_approaching", "lead_minutes": 15}
 ```
 
 **Idle:**
 ```json
-{"type": "idle", "idle_minutes": 5}
+{"trigger_type": "idle", "idle_minutes": 5}
 ```
 
 **Count:**
 ```json
-{"type": "count", "every_n": 3}
+{"trigger_type": "count", "every_n": 3}
 ```
 
-## Multi-trigger
+## Multiple and message triggers
 
-Pass a `triggers` array to combine multiple triggers with OR logic:
+Pass a `triggers` array to combine triggers with OR logic. Each item uses
+`type`, not the top-level `trigger_type` field:
 
 ```bash
 curl -X POST http://localhost:6877/automations \
@@ -60,7 +62,8 @@ curl -X POST http://localhost:6877/automations \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Extract facts",
-    "description": "Extract facts from recent conversation",
+    "prompt": "Extract durable facts from recent conversation.",
+    "description": "Conversation fact extraction",
     "triggers": [
       {"type": "count", "every_n": 5},
       {"type": "idle", "idle_minutes": 10}
@@ -68,6 +71,31 @@ curl -X POST http://localhost:6877/automations \
     "cooldown_minutes": 10
   }'
 ```
+
+Slack message triggers also use `triggers`. Supply channel names; Arden
+resolves and stores stable Slack IDs when it saves the automation.
+
+```json
+{
+  "triggers": [{
+    "type": "message",
+    "source": "slack",
+    "channels": ["alerts"],
+    "from_user": "incident-bot",
+    "contains": ["incident"]
+  }]
+}
+```
+
+## Tool scoping and approval
+
+`tool_scope` grants only the write/action tools an automation needs; read-only
+tools remain available. `auto_approve=true` skips per-run approvals for those
+already-granted tools and never expands the scope.
+
+For example, a wiki-producing automation can use
+`"tool_scope": ["create_wiki_page", "edit_wiki_page"]` with
+`"auto_approve": true`.
 
 ## List automations
 
@@ -89,7 +117,7 @@ curl http://localhost:6877/automations/1 \
 curl -X PATCH http://localhost:6877/automations/1 \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"description": "New task description"}'
+  -d '{"prompt": "New standalone task instructions"}'
 ```
 
 ## Toggle enable/disable
@@ -101,7 +129,8 @@ curl -X POST http://localhost:6877/automations/1/toggle \
 
 ## Toggle auto-approve
 
-Allow a headless automation to skip per-call approval for mutating/external tools that would normally require user approval:
+Allow a headless automation to skip per-call approval for mutating/external
+tools already granted by its `tool_scope`. This setting does not grant tools:
 
 ```bash
 curl -X POST http://localhost:6877/automations/1/auto-approve \

@@ -73,6 +73,7 @@ class ListWikiPagesInput(BaseModel):
         max_length=4096,
         description="Exact wiki directory, such as 'topics'. Empty means the wiki root.",
     )
+    offset: int = Field(default=0, ge=0, description="Zero-based entry offset from a prior list result.")
     limit: int = Field(default=100, ge=1, le=_MAX_LIST_ENTRIES)
 
 
@@ -229,7 +230,12 @@ def _revision_conflict(error: RevisionConflictError) -> ToolResult:
 
 
 def _invalid_page(error: ValueError) -> ToolResult:
-    return ToolResult.failure(code="invalid_page", message=str(error), preview="Invalid wiki page")
+    return ToolResult.failure(
+        code="invalid_page",
+        message=str(error),
+        preview="Invalid wiki page",
+        recovery_action="Correct the page path, title, aliases, or Markdown body and retry.",
+    )
 
 
 def _directory(value: str) -> str | None:
@@ -296,9 +302,19 @@ def _resolve(wiki: WikiService, selector: WikiPageSelector) -> tuple[WikiPageRec
     try:
         snapshot = wiki.snapshot()
     except WikiAmbiguityError as exc:
-        return ToolResult.failure(code="ambiguous_ref", message=str(exc), preview="Ambiguous wiki reference")
+        return ToolResult.failure(
+            code="ambiguous_ref",
+            message=str(exc),
+            preview="Ambiguous wiki reference",
+            recovery_action="Call list_wiki_pages and retry with an exact page_id or path.",
+        )
     except WikiValidationError as exc:
-        return ToolResult.failure(code="invalid_ref", message=str(exc), preview="Invalid wiki reference")
+        return ToolResult.failure(
+            code="invalid_ref",
+            message=str(exc),
+            preview="Invalid wiki reference",
+            recovery_action="Call list_wiki_pages and retry with one exact returned reference.",
+        )
 
     pages = tuple(record for record in snapshot.pages if record.page.lifecycle == "active")
     if field == "page_id":
@@ -315,6 +331,7 @@ def _resolve(wiki: WikiService, selector: WikiPageSelector) -> tuple[WikiPageRec
             code="not_found",
             message=f"No active wiki page has {field} {value!r}.",
             preview="Wiki page not found",
+            recovery_action="Call list_wiki_pages and retry with an exact active page reference.",
         )
     if len(matches) != 1:
         return ToolResult.failure(
@@ -322,6 +339,7 @@ def _resolve(wiki: WikiService, selector: WikiPageSelector) -> tuple[WikiPageRec
             message=f"Wiki {field} {value!r} matches multiple active pages.",
             preview="Ambiguous wiki reference",
             data={"candidates": [_page_data(record, snapshot.head) for record in matches]},
+            recovery_action="Retry with one exact candidate page_id from this result.",
         )
     return matches[0], snapshot.head
 
@@ -409,13 +427,24 @@ async def list_wiki_pages(execution: ToolExecution, args: ListWikiPagesInput) ->
             code="invalid_directory",
             message="Wiki directory must be a relative POSIX path without '.' or '..'.",
             preview="Invalid wiki directory",
+            recovery_action="Retry with a relative POSIX directory such as 'topics', or empty for the root.",
         )
     try:
         snapshot = await asyncio.to_thread(wiki.snapshot)
     except WikiAmbiguityError as exc:
-        return ToolResult.failure(code="ambiguous_ref", message=str(exc), preview="Ambiguous wiki reference")
+        return ToolResult.failure(
+            code="ambiguous_ref",
+            message=str(exc),
+            preview="Ambiguous wiki reference",
+            recovery_action="List the wiki root, then retry with one exact child directory.",
+        )
     except WikiValidationError as exc:
-        return ToolResult.failure(code="invalid_ref", message=str(exc), preview="Invalid wiki reference")
+        return ToolResult.failure(
+            code="invalid_ref",
+            message=str(exc),
+            preview="Invalid wiki reference",
+            recovery_action="List the wiki root, then retry with one exact child directory.",
+        )
     pages = tuple(record for record in snapshot.pages if record.page.lifecycle == "active")
     entries = _listing_entries(pages, directory)
     if directory and not entries:
@@ -423,8 +452,9 @@ async def list_wiki_pages(execution: ToolExecution, args: ListWikiPagesInput) ->
             code="not_found",
             message=f"No active wiki directory exists at {directory!r}.",
             preview="Wiki directory not found",
+            recovery_action="List its parent directory, or create the first page under this directory.",
         )
-    visible = _bounded_listing(entries, args.limit)
+    visible = _bounded_listing(entries[args.offset :], args.limit)
     lines = []
     for entry in visible:
         if entry["kind"] == "directory":
@@ -433,9 +463,15 @@ async def list_wiki_pages(execution: ToolExecution, args: ListWikiPagesInput) ->
             lines.append(f"[page] {entry['path']} — {entry['title']} ({entry['page_id']})")
     if not lines:
         lines.append("No wiki entries.")
-    has_more = len(visible) < len(entries)
+    next_offset = args.offset + len(visible)
+    has_more = next_offset < len(entries)
     if has_more:
-        lines.append("More entries exist; list a narrower directory.")
+        if visible:
+            lines.append(f"More entries exist; retry with offset={next_offset}.")
+        else:
+            lines.append(
+                "More entries exist, but the result budget cannot fit the next entry. List a narrower directory."
+            )
     label = "/" if not directory else f"/{directory}/"
     return ToolResult(
         content=f"Wiki {label}\n" + "\n".join(lines),
@@ -443,9 +479,11 @@ async def list_wiki_pages(execution: ToolExecution, args: ListWikiPagesInput) ->
         data={
             "head": snapshot.head,
             "directory": directory,
+            "offset": args.offset,
             "entries": visible,
             "total": len(entries),
             "has_more": has_more,
+            "next_offset": next_offset if has_more and visible else None,
         },
     )
 
@@ -497,6 +535,7 @@ async def wiki_links(execution: ToolExecution, args: WikiLinksInput) -> ToolResu
             code="result_too_large",
             message="The wiki page identity exceeds the link-result budget.",
             preview="Wiki page identity too large",
+            recovery_action="Read the page directly; report malformed page metadata if this persists.",
         )
     remaining = _MAX_LINK_DATA_BYTES - static_size
     outgoing_budget = remaining // 2 if report.backlinks else remaining
@@ -530,6 +569,7 @@ async def wiki_links(execution: ToolExecution, args: WikiLinksInput) -> ToolResu
                 code="result_too_large",
                 message="The wiki link metadata exceeds the result budget.",
                 preview="Wiki links too large",
+                recovery_action="Read the page directly and inspect a narrower set of links.",
             )
         data["links_truncated"] = True
     return ToolResult(
@@ -590,7 +630,12 @@ async def create_wiki_page(execution: ToolExecution, args: CreateWikiPageInput) 
     except RevisionConflictError as error:
         return _revision_conflict(error)
     except WikiAmbiguityError as error:
-        return ToolResult.failure(code="name_conflict", message=str(error), preview="Wiki name already exists")
+        return ToolResult.failure(
+            code="name_conflict",
+            message=str(error),
+            preview="Wiki name already exists",
+            recovery_action="List the target directory, choose a unique path/title/alias, and retry.",
+        )
     except (PageValidationError, WikiValidationError) as error:
         return _invalid_page(error)
 
@@ -625,6 +670,7 @@ async def edit_wiki_page(execution: ToolExecution, args: EditWikiPageInput) -> T
                 code="not_found",
                 message=f"No active wiki page has page_id {args.page_id!r}.",
                 preview="Wiki page not found",
+                recovery_action="Call list_wiki_pages or read_wiki_page and retry with an exact active page_id.",
             )
         if error := _automation_path_error(execution, record.resource.path):
             return error
@@ -688,12 +734,14 @@ async def archive_wiki_page(execution: ToolExecution, args: ArchiveWikiPageInput
                     code="not_found",
                     message=f"No wiki page has page_id {args.page_id!r}.",
                     preview="Wiki page not found",
+                    recovery_action="Call list_wiki_pages and retry with an exact page_id.",
                 )
             if resource.state is not ResourceState.ARCHIVED:
                 return ToolResult.failure(
                     code="not_found",
                     message=f"No active wiki page has page_id {args.page_id!r}.",
                     preview="Wiki page not found",
+                    recovery_action="Call list_wiki_pages and retry with an exact active page_id.",
                 )
             if error := _automation_path_error(execution, resource.path):
                 return error
@@ -797,6 +845,7 @@ async def publish_wiki_generated(execution: ToolExecution, args: PublishWikiGene
                 code="not_found",
                 message=f"No active wiki page has page_id {args.page_id!r}.",
                 preview="Wiki page not found",
+                recovery_action="Call list_wiki_pages or read_wiki_page and retry with an exact active page_id.",
             )
         if record.resource.version_id != args.expected_version:
             raise RevisionConflictError(f"resource {args.page_id} changed: expected {args.expected_version}")
@@ -807,6 +856,7 @@ async def publish_wiki_generated(execution: ToolExecution, args: PublishWikiGene
                 code="not_producer_page",
                 message="Only registered automation or insight producer pages can be updated with this tool.",
                 preview="Page is not producer-owned",
+                recovery_action="Use edit_wiki_page for an ordinary page, or select a registered producer page.",
             )
         automation_id = execution.ctx.run.automation_id
         if automation_id is None:
@@ -814,6 +864,7 @@ async def publish_wiki_generated(execution: ToolExecution, args: PublishWikiGene
                 code="automation_required",
                 message="Generated wiki publishing is available only to a scheduled automation run.",
                 preview="Automation required",
+                recovery_action="Use edit_wiki_page interactively, or run the owning scheduled automation.",
             )
         producer_automation_id = record.page.metadata.get("producer_automation_id")
         if producer_automation_id != automation_id:
@@ -824,6 +875,7 @@ async def publish_wiki_generated(execution: ToolExecution, args: PublishWikiGene
                     f"{producer_automation_id!r}, not {automation_id!r}."
                 ),
                 preview="Different producer owns this page",
+                recovery_action="Run the registered owning automation, or publish to a page owned by this automation.",
             )
         if extract_generated_region(record.content, expected_page_id=record.page.page_id) == generated:
             return ToolResult(
@@ -879,7 +931,12 @@ async def publish_wiki_generated(execution: ToolExecution, args: PublishWikiGene
             recovery_action="Read the page again; do not overwrite user changes.",
         )
     except WikiValidationError as exc:
-        return ToolResult.failure(code="invalid_page", message=str(exc), preview="Invalid wiki page")
+        return ToolResult.failure(
+            code="invalid_page",
+            message=str(exc),
+            preview="Invalid wiki page",
+            recovery_action="Read the page again and retry with valid generated Markdown.",
+        )
 
     published_head = commit.commit_id if commit is not None else snapshot.head
     updated = await asyncio.to_thread(wiki.read_page, args.page_id, at=published_head)

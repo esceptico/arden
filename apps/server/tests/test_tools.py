@@ -645,6 +645,42 @@ async def test_update_todos_rejects_multiple_in_progress_items():
     assert result.outcome.error.code == "invalid_arguments"
 
 
+@pytest.mark.asyncio
+async def test_tool_validation_rejects_unknown_arguments_even_for_legacy_models():
+    class LegacyInput(BaseModel):
+        value: str
+
+    called = False
+
+    async def execute(execution: ToolExecution, args: LegacyInput) -> ToolResult:
+        nonlocal called
+        called = True
+        return ToolResult(content=args.value, preview=args.value)
+
+    registry = ToolRegistry()
+    registry.register(
+        "legacy",
+        tool(
+            description="Legacy model.",
+            input_model=LegacyInput,
+            execute=execute,
+            policy=READ_INTERNAL_POLICY,
+        ),
+    )
+
+    result = await registry.execute(
+        "legacy",
+        _make_execution("legacy"),
+        {"value": "expected", "ignored_typo": "must fail"},
+    )
+
+    assert called is False
+    assert result.is_error
+    assert result.outcome is not None and result.outcome.error is not None
+    assert result.outcome.error.code == "invalid_arguments"
+    assert "ignored_typo" in result.content
+
+
 # --- Function tools ---
 
 
@@ -1248,7 +1284,16 @@ async def test_arden_tool_executor_policy_offload_false_keeps_retrieval_pointer(
 @pytest.mark.asyncio
 async def test_arden_tool_executor_bounds_large_structured_data():
     async def large_result(execution: ToolExecution, args: EmptyInput) -> ToolResult:
-        return ToolResult(content="summary", preview="large", data={"rows": [{"body": "x" * 100_000}]})
+        return ToolResult(
+            content="summary",
+            preview="large",
+            data={
+                "rows": [{"body": "x" * 100_000}],
+                "has_more": True,
+                "next_offset": 100,
+                "next_secret": "must-not-escape",
+            },
+        )
 
     registry = ToolRegistry()
     registry.register(
@@ -1266,6 +1311,9 @@ async def test_arden_tool_executor_bounds_large_structured_data():
     assert len(json.dumps(result.data)) < 5_000
     assert result.data["truncated"] is True
     assert result.data["raw_ref"].startswith("sha256:")
+    assert result.data["has_more"] is True
+    assert result.data["next_offset"] == 100
+    assert "next_secret" not in result.data
     assert "read_file" in result.content
     emitted = json.dumps({"content": result.content, "data": result.data, "model_content": result.model_content})
     assert len(emitted) < 20_000
@@ -1723,8 +1771,10 @@ async def test_arden_tool_executor_audits_internal_failure_outcome(session_store
 
     row = (await session_store.list_tool_calls(run_id="run-1"))[0]
     assert row["status"] == "error"
-    assert row["outcome"]["status"] == "failed"
+    assert row["outcome"]["status"] == "uncertain"
     assert row["outcome"]["error"]["code"] == "internal_error"
+    assert row["outcome"]["error"]["diagnostic_ref"] == "tool-call:call-1"
+    assert "before retrying" in row["outcome"]["error"]["recovery_action"]
 
 
 @pytest.mark.asyncio
