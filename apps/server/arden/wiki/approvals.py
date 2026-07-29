@@ -1,10 +1,12 @@
 """Durable approval coordination for snapshot-pinned wiki renames."""
 
+import asyncio
 import base64
 import binascii
 import hashlib
 import json
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from typing import Any
@@ -12,6 +14,7 @@ from uuid import uuid4
 
 from arden.revisions.errors import RevisionConflictError
 from arden.wiki.approval_store import WikiRenameApproval, WikiRenameApprovalStatus, WikiRenameApprovalStore
+from arden.wiki.exceptions import WikiRenameApplyAmbiguousError
 from arden.wiki.models import LinkReference, LinkStatus, RenamePlan, RenameRewrite
 from arden.wiki.service import WikiService, WikiValidationError
 from arden.wiki.wikilinks import WikilinkNode
@@ -50,6 +53,13 @@ _WIKILINK_NODE_FIELDS = frozenset(
         "raw",
     }
 )
+_CLAIM_RENEW_INTERVAL_SECONDS = 30
+_AMBIGUOUS_APPLY_RESOLUTION = "rename outcome is uncertain; retry accept to finish"
+_FAILED_APPLY_RESOLUTION = "rename was not applied; fix the reported error, then retry or reject"
+_OUTSIDE_HISTORY_RESOLUTION = (
+    "managed wiki files changed outside revision history; repair the drift, then retry or reject"
+)
+_STALE_REPLAN_RESOLUTION = "stale rename plan could not be regenerated; retry or reject"
 
 
 class RenamePolicy(StrEnum):
@@ -112,6 +122,8 @@ class WikiRenameApprovalCoordinator:
     def __init__(self, service: WikiService, store: WikiRenameApprovalStore) -> None:
         self.service = service
         self.store = store
+        self._apply_lock = asyncio.Lock()
+        self._claim_owner = str(uuid4())
 
     async def request_rename(
         self,
@@ -151,15 +163,14 @@ class WikiRenameApprovalCoordinator:
     ) -> WikiRenameCoordinatorResult:
         """Apply a verified pending plan, or replace it after a head conflict."""
 
-        approval = await self._required_approval(approval_id)
-        if approval.status is WikiRenameApprovalStatus.ACCEPTED:
-            return WikiRenameCoordinatorResult(status="accepted", approval=approval, commit_id=approval.commit_id)
-        if approval.status not in {WikiRenameApprovalStatus.PENDING, WikiRenameApprovalStatus.APPLYING}:
-            return WikiRenameCoordinatorResult(status=approval.status, approval=approval)
-        plan = _verified_plan(approval)
-        if approval.status is WikiRenameApprovalStatus.PENDING:
-            claimed = await self.store.claim_accept(approval_id)
-            if not claimed:
+        async with self._apply_lock:
+            approval = await self._required_approval(approval_id)
+            if approval.status is WikiRenameApprovalStatus.ACCEPTED:
+                return WikiRenameCoordinatorResult(status="accepted", approval=approval, commit_id=approval.commit_id)
+            if approval.status not in {WikiRenameApprovalStatus.PENDING, WikiRenameApprovalStatus.APPLYING}:
+                return WikiRenameCoordinatorResult(status=approval.status, approval=approval)
+            plan = _verified_plan(approval)
+            if not await self.store.claim_accept(approval_id, owner=self._claim_owner):
                 current = await self._required_approval(approval_id)
                 return WikiRenameCoordinatorResult(
                     status=current.status,
@@ -168,51 +179,7 @@ class WikiRenameApprovalCoordinator:
                     replacement_approval_id=current.replacement_approval_id,
                 )
             approval = await self._required_approval(approval_id)
-            if approval.status is not WikiRenameApprovalStatus.APPLYING:
-                raise CorruptWikiRenameApprovalError("accepted rename claim was not persisted")
-        try:
-            commit = await self._apply(plan, apply_plan)
-        except RevisionConflictError as error:
-            if self.service.repository.head == plan.base_head:
-                await self.store.release_accept(
-                    approval.approval_id,
-                    resolution=f"managed wiki files changed outside revision history: {error}",
-                )
-                current = await self._required_approval(approval.approval_id)
-                return WikiRenameCoordinatorResult(status=current.status, approval=current)
-            try:
-                replacement = await self._replace_after_conflict(approval, plan)
-            except (KeyError, RevisionConflictError, WikiValidationError) as error:
-                await self.store.release_accept(
-                    approval.approval_id,
-                    resolution=f"stale plan could not be regenerated: {error}",
-                )
-                current = await self._required_approval(approval.approval_id)
-                if current.replacement_approval_id:
-                    replacement = await self._required_approval(current.replacement_approval_id)
-                    return WikiRenameCoordinatorResult(
-                        status="pending",
-                        approval=replacement,
-                        replacement_approval_id=replacement.approval_id,
-                    )
-                return WikiRenameCoordinatorResult(
-                    status=current.status,
-                    approval=current,
-                    commit_id=current.commit_id,
-                )
-            return WikiRenameCoordinatorResult(
-                status="pending",
-                approval=replacement,
-                replacement_approval_id=replacement.approval_id,
-            )
-        accepted = await self.store.accept(approval.approval_id, commit_id=commit.commit_id, resolution="applied")
-        if not accepted:
-            current = await self._required_approval(approval.approval_id)
-            if current.status is WikiRenameApprovalStatus.ACCEPTED and current.commit_id == commit.commit_id:
-                return WikiRenameCoordinatorResult(status="accepted", approval=current, commit_id=commit.commit_id)
-            raise CorruptWikiRenameApprovalError("approval was resolved while its rename was committed")
-        current = await self._required_approval(approval.approval_id)
-        return WikiRenameCoordinatorResult(status="accepted", approval=current, commit_id=commit.commit_id)
+            return await self._apply_claimed(approval, plan, apply_plan)
 
     async def reject(self, approval_id: str, *, resolution: str | None = None) -> WikiRenameCoordinatorResult:
         """Terminally reject a pending approval without committing it."""
@@ -264,6 +231,7 @@ class WikiRenameApprovalCoordinator:
             new_path=fresh.new_path,
             link_count=fresh.link_count,
             page_count=fresh.page_count,
+            owner=self._claim_owner,
             resolution="base head changed",
         )
         if replacement is None:
@@ -279,6 +247,154 @@ class WikiRenameApprovalCoordinator:
         if approval is None:
             raise KeyError(f"unknown wiki rename approval: {approval_id}")
         return approval
+
+    async def _apply_claimed(
+        self,
+        approval: WikiRenameApproval,
+        plan: RenamePlan,
+        apply_plan: Callable[[RenamePlan], Awaitable[object]] | None,
+    ) -> WikiRenameCoordinatorResult:
+        claim_lost = asyncio.Event()
+        renewal_task = asyncio.create_task(
+            self._renew_claim_until_done(approval.approval_id, claim_lost),
+            name=f"wiki-rename-claim:{approval.approval_id}",
+        )
+        try:
+            return await self._apply_claimed_with_lease(approval, plan, apply_plan, claim_lost)
+        finally:
+            renewal_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await renewal_task
+
+    async def _renew_claim_until_done(self, approval_id: str, claim_lost: asyncio.Event) -> None:
+        while True:
+            await asyncio.sleep(_CLAIM_RENEW_INTERVAL_SECONDS)
+            try:
+                renewed = await self.store.renew_claim(approval_id, owner=self._claim_owner)
+            except Exception:
+                claim_lost.set()
+                return
+            if not renewed:
+                claim_lost.set()
+                return
+
+    async def _apply_claimed_with_lease(
+        self,
+        approval: WikiRenameApproval,
+        plan: RenamePlan,
+        apply_plan: Callable[[RenamePlan], Awaitable[object]] | None,
+        claim_lost: asyncio.Event,
+    ) -> WikiRenameCoordinatorResult:
+        try:
+            commit = await self._apply(plan, apply_plan)
+        except WikiRenameApplyAmbiguousError:
+            await self._retain_after_ambiguous_apply(approval.approval_id)
+            raise
+        except BaseExceptionGroup:
+            await self._retain_after_ambiguous_apply(approval.approval_id)
+            raise
+        except RevisionConflictError:
+            if self.service.repository.head == plan.base_head:
+                await self._release_after_precommit(
+                    approval.approval_id,
+                    resolution=_OUTSIDE_HISTORY_RESOLUTION,
+                )
+                current = await self._required_approval(approval.approval_id)
+                return WikiRenameCoordinatorResult(status=current.status, approval=current)
+            try:
+                replacement = await self._replace_after_conflict(approval, plan)
+            except (KeyError, RevisionConflictError, WikiValidationError):
+                await self._release_after_precommit(
+                    approval.approval_id,
+                    resolution=_STALE_REPLAN_RESOLUTION,
+                )
+                current = await self._required_approval(approval.approval_id)
+                if current.replacement_approval_id:
+                    replacement = await self._required_approval(current.replacement_approval_id)
+                    return WikiRenameCoordinatorResult(
+                        status="pending",
+                        approval=replacement,
+                        replacement_approval_id=replacement.approval_id,
+                    )
+                return WikiRenameCoordinatorResult(
+                    status=current.status,
+                    approval=current,
+                    commit_id=current.commit_id,
+                )
+            return WikiRenameCoordinatorResult(
+                status="pending",
+                approval=replacement,
+                replacement_approval_id=replacement.approval_id,
+            )
+        except asyncio.CancelledError:
+            await self._retain_after_ambiguous_apply(approval.approval_id)
+            raise
+        except Exception as error:
+            try:
+                unapplied = self._plan_is_unapplied(plan)
+            except Exception as state_error:
+                await self._retain_after_ambiguous_apply(approval.approval_id)
+                raise ExceptionGroup(
+                    "rename apply failed and its state could not be verified",
+                    [error, state_error],
+                ) from None
+            if unapplied:
+                await self._release_after_precommit(approval.approval_id, resolution=_FAILED_APPLY_RESOLUTION)
+            else:
+                await self._retain_after_ambiguous_apply(approval.approval_id)
+            raise
+        if claim_lost.is_set():
+            await self._retain_after_ambiguous_apply(approval.approval_id)
+            raise CorruptWikiRenameApprovalError("wiki rename apply claim was lost before completion")
+        try:
+            accepted = await self.store.accept(
+                approval.approval_id,
+                owner=self._claim_owner,
+                commit_id=commit.commit_id,
+                resolution="applied",
+            )
+        except BaseException:
+            await self._retain_after_ambiguous_apply(approval.approval_id)
+            raise
+        if not accepted:
+            current = await self._required_approval(approval.approval_id)
+            if current.status is WikiRenameApprovalStatus.ACCEPTED and current.commit_id == commit.commit_id:
+                return WikiRenameCoordinatorResult(status="accepted", approval=current, commit_id=commit.commit_id)
+            await self._retain_after_ambiguous_apply(
+                approval.approval_id,
+            )
+            raise CorruptWikiRenameApprovalError("approval persistence did not confirm the committed rename")
+        current = await self._required_approval(approval.approval_id)
+        return WikiRenameCoordinatorResult(status="accepted", approval=current, commit_id=commit.commit_id)
+
+    async def _retain_after_ambiguous_apply(self, approval_id: str) -> None:
+        """Do not make a rename rejectable once its core commit may have run."""
+
+        retained = await self.store.retain_applying(
+            approval_id,
+            owner=self._claim_owner,
+            resolution=_AMBIGUOUS_APPLY_RESOLUTION,
+        )
+        if not retained:
+            raise CorruptWikiRenameApprovalError("approval applying state was lost after a possible commit")
+
+    async def _release_after_precommit(self, approval_id: str, *, resolution: str) -> None:
+        released = await self.store.release_accept(approval_id, owner=self._claim_owner, resolution=resolution)
+        if not released:
+            raise CorruptWikiRenameApprovalError(
+                "approval applying state was lost before a failed rename could be released"
+            )
+
+    def _plan_is_unapplied(self, plan: RenamePlan) -> bool:
+        """Return true only when the exact reviewed page and head remain live."""
+
+        current = self.service.read_page(plan.page_id)
+        return (
+            self.service.repository.head == plan.base_head
+            and current.resource.version_id == plan.expected_version
+            and current.resource.path == plan.old_path
+            and current.page.title == plan.old_title
+        )
 
     async def _apply(
         self,

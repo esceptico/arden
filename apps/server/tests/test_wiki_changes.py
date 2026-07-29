@@ -373,7 +373,7 @@ def test_change_feed_page_metadata_is_deeply_immutable(tmp_path: Path) -> None:
         ("me", "custom.md", WikiInfrastructureRole.ME),
         ("other", "active-work.md", WikiInfrastructureRole.ACTIVE_WORK),
         ("readme", "README.md", WikiInfrastructureRole.README),
-        ("nested-readme", "projects/README.md", WikiInfrastructureRole.COMMON),
+        ("nested-readme", "projects/README.md", WikiInfrastructureRole.README),
         ("daily", "daily/2026-07-28.md", WikiInfrastructureRole.DAILY),
         ("insight", "insights/july.md", WikiInfrastructureRole.INSIGHT),
         ("ordinary", "projects/one.md", WikiInfrastructureRole.COMMON),

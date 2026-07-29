@@ -15,6 +15,7 @@ from arden.server.runtime import Runtime
 from arden.wiki.approval_store import WikiRenameApprovalStore
 from arden.wiki.approvals import WikiRenameApprovalCoordinator
 from arden.wiki.constants import WIKI_MAINTENANCE_FACT_DUPLICATE_EVIDENCE_PREFIX
+from arden.wiki.exceptions import WikiRenameApplyAmbiguousError
 from arden.wiki.maintenance.store import WikiMaintenanceReviewInput, WikiMaintenanceStore
 from arden.wiki.pages import create_page
 from arden.wiki.service import WikiService
@@ -111,6 +112,9 @@ async def wiki_client(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_rename_request_is_safe_idempotent_and_default_ask(wiki_client):
     client, service, store, _maintenance_store = wiki_client
+    client.app.state.area_pages = SimpleNamespace(
+        validate_rename_request=client.app.state.area_pages.validate_rename_request,
+    )
     response = client.post(
         "/admin/wiki/rename-approvals",
         json={"page_id": "target", "new_path": "new.md", "new_title": "New"},
@@ -178,6 +182,88 @@ def test_rename_request_rejects_an_invalid_bound_area_path_before_approval(wiki_
     assert response.status_code == 422
     assert service.repository.get("target").path == "old.md"
     assert not client.get("/admin/wiki/rename-approvals").json()["approvals"]
+
+
+def test_rename_request_rejects_a_nested_directory_readme_before_approval(wiki_client):
+    client, service, _store, _maintenance_store = wiki_client
+    page = create_page(page_id="notes-readme", title="Notes guide")
+    service.repository.commit(
+        ChangeSet(
+            operations=(Create("notes-readme", "notes/README.md", page.to_bytes()),),
+            actor="test",
+            origin="test",
+            reason="seed directory contract",
+            idempotency_key="seed-notes-readme",
+        )
+    )
+
+    response = client.post(
+        "/admin/wiki/rename-approvals",
+        json={"page_id": "notes-readme", "new_path": "notes/guide.md", "new_title": "Notes guide"},
+    )
+
+    assert response.status_code == 422
+    assert "README paths are fixed" in response.json()["detail"]
+    assert not client.get("/admin/wiki/rename-approvals").json()["approvals"]
+
+
+@pytest.mark.asyncio
+async def test_rename_accept_releases_a_failed_area_applier_for_rejection(wiki_client):
+    client, service, store, _maintenance_store = wiki_client
+    approval = client.post(
+        "/admin/wiki/rename-approvals",
+        json={"page_id": "target", "new_path": "new.md", "new_title": "New"},
+    ).json()["approval"]
+
+    async def fail_for_area_name_collision(_plan):
+        raise ValueError("An active Area with that name already exists")
+
+    client.app.state.area_pages.apply_rename_plan = fail_for_area_name_collision
+    failed = client.post(f"/admin/wiki/rename-approvals/{approval['approval_id']}/accept")
+
+    assert failed.status_code == 422
+    persisted = await store.get(approval["approval_id"])
+    assert persisted is not None
+    assert persisted.status.value == "pending"
+    assert persisted.resolution == "rename was not applied; fix the reported error, then retry or reject"
+    rejected = client.post(
+        f"/admin/wiki/rename-approvals/{approval['approval_id']}/reject",
+        json={"resolution": "keep the existing Area"},
+    )
+    assert rejected.status_code == 200
+    assert rejected.json()["status"] == "rejected"
+    assert service.repository.get("target").path == "old.md"
+
+
+@pytest.mark.asyncio
+async def test_rename_accept_returns_retryable_error_for_an_ambiguous_applier(wiki_client):
+    client, service, store, _maintenance_store = wiki_client
+    approval = client.post(
+        "/admin/wiki/rename-approvals",
+        json={"page_id": "target", "new_path": "new.md", "new_title": "New"},
+    ).json()["approval"]
+
+    async def commit_then_lose_response(plan):
+        service.apply_rename(plan)
+        raise WikiRenameApplyAmbiguousError("response lost")
+
+    client.app.state.area_pages.apply_rename_plan = commit_then_lose_response
+    ambiguous = client.post(f"/admin/wiki/rename-approvals/{approval['approval_id']}/accept")
+    assert ambiguous.status_code == 503
+    assert "retry accept" in ambiguous.json()["detail"]
+    applying = await store.get(approval["approval_id"])
+    assert applying is not None
+    assert applying.status.value == "applying"
+    assert applying.resolution == "rename outcome is uncertain; retry accept to finish"
+    assert "response lost" not in applying.resolution
+
+    async def apply(plan):
+        return service.apply_rename(plan)
+
+    client.app.state.area_pages.apply_rename_plan = apply
+    accepted = client.post(f"/admin/wiki/rename-approvals/{approval['approval_id']}/accept")
+    assert accepted.status_code == 200
+    assert accepted.json()["status"] == "accepted"
 
 
 def test_rename_approval_list_accept_and_reject(wiki_client):

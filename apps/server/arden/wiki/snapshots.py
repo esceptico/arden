@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from arden.revisions.errors import RevisionConflictError
 from arden.revisions.models import ResourceVersion
 from arden.revisions.repository import ManagedFileRepository
-from arden.wiki.constants import WIKI_HEALTH_PATH, WIKI_HEALTH_RESOURCE_ID
+from arden.wiki.constants import README_FILENAME, WIKI_HEALTH_PATH, WIKI_HEALTH_RESOURCE_ID
 from arden.wiki.exceptions import WikiAmbiguityError, WikiValidationError
 from arden.wiki.models import LinkReference, LinkStatus, WikiLinkReport, WikiPageRecord, WikiSnapshot
 from arden.wiki.pages import PageValidationError, WikiPage, parse_page
@@ -153,6 +153,14 @@ def require_markdown_path(path: str) -> None:
         or any(part in {"", ".", ".."} for part in path.split("/"))
     ):
         raise WikiValidationError("wiki pages must use a .md path")
+
+
+def require_ordinary_page_path(path: str) -> None:
+    """Reject nested directory contracts from public page operations."""
+
+    require_markdown_path(path)
+    if "/" in path and path.rsplit("/", 1)[-1].casefold() == README_FILENAME.casefold():
+        raise WikiValidationError("nested README.md paths are reserved for automatic directory contracts")
 
 
 def require_head(actual: str | None, requested: str | None) -> None:

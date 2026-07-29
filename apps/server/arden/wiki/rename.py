@@ -4,6 +4,7 @@ from dataclasses import replace
 from hashlib import sha256
 
 from arden.revisions.errors import RevisionConflictError
+from arden.revisions.models import Commit, ResourceChange, ResourceState
 from arden.revisions.repository import ManagedFileRepository
 from arden.wiki.constants import WIKI_HEALTH_RESOURCE_ID
 from arden.wiki.exceptions import WikiValidationError
@@ -13,8 +14,10 @@ from arden.wiki.pages import create_page as build_page
 from arden.wiki.snapshots import (
     assert_new_names,
     index,
+    parse,
     reference,
-    require_markdown_path,
+    require_ordinary_page_path,
+    snapshot,
 )
 from arden.wiki.wikilinks import WikilinkNode, parse_wikilinks, rewrite_page_targets
 
@@ -29,7 +32,7 @@ def prepare_plan(
     expected_version: str,
     rewrite_links: bool,
 ) -> RenamePlan:
-    require_markdown_path(new_path)
+    require_ordinary_page_path(new_path)
     page_index = index(snapshot)
     record = page_index.pages.get(page_id)
     if record is None or record.page.lifecycle != "active":
@@ -156,3 +159,67 @@ def rename_key(
             repr(("rename", base_head, page_id, expected_version, new_path, new_title, rewrite_links)).encode()
         ).hexdigest()
     )
+
+
+def is_exact_generated_rewrite(
+    repository: ManagedFileRepository,
+    commit: Commit,
+    source_change: ResourceChange,
+    page_id: str,
+) -> bool:
+    """Whether one commit changes a generated region only by exact moved-link rewrites."""
+
+    before = source_change.before
+    after = source_change.after
+    if (
+        commit.parent_id is None
+        or before is None
+        or after is None
+        or before.state is not ResourceState.ACTIVE
+        or after.state is not ResourceState.ACTIVE
+    ):
+        return False
+    prior = snapshot(repository, strict_names=True, at=commit.parent_id)
+    page_index = index(prior)
+    source = page_index.pages.get(page_id)
+    if source is None or source.resource != before:
+        return False
+
+    moved: dict[str, tuple[str, str, str]] = {}
+    for change in commit.changes:
+        if change.action != "move" or change.before is None or change.after is None:
+            continue
+        if change.before.state is not ResourceState.ACTIVE or change.after.state is not ResourceState.ACTIVE:
+            continue
+        target = page_index.pages.get(change.before.resource_id)
+        if target is None or target.resource != change.before:
+            return False
+        after_page = parse(change.after, repository.read_version(change.after))
+        moved[change.before.resource_id] = (change.after.path, target.page.title, after_page.title)
+    if not moved:
+        return False
+
+    references = tuple(
+        item
+        for node in parse_wikilinks(source.page.body.decode("utf-8"))
+        if (item := reference(page_index, page_id, node)).status is LinkStatus.RESOLVED and item.target_page_id in moved
+    )
+    if not references:
+        return False
+    targets: dict[WikilinkNode, str] = {}
+    for item in references:
+        new_path, old_title, new_title = moved[item.target_page_id]
+        if old_title != new_title:
+            targets[item.node] = rename_target(item.node, new_path, new_title)
+        elif item.node.page is not None and ("/" in item.node.page or item.node.page.casefold().endswith(".md")):
+            targets[item.node] = new_path if item.node.page.casefold().endswith(".md") else new_path[:-3]
+    if not targets:
+        return False
+    rewritten_body = rewrite_page_targets(source.page.body.decode("utf-8"), targets).encode("utf-8")
+    if source_change.action == "move":
+        after_page = parse(after, repository.read_version(after))
+        expected = after_page.with_body(rewritten_body).to_bytes()
+    else:
+        prefix_size = len(source.content) - len(source.page.body)
+        expected = source.content[:prefix_size] + rewritten_body
+    return repository.read_version(after) == expected

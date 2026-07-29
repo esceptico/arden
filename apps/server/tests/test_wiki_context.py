@@ -68,13 +68,6 @@ async def test_wiki_index_tracks_active_pages_and_context_keeps_residents_separa
     wiki.create_page(page_id="home", path="README.md", title="Home", body=b"Start here.\n")
     wiki.create_page(page_id="directives", path="directives.md", title="Directives", body=b"Be concise.\n")
     wiki.create_page(page_id="me", path="me.md", title="Profile", body=b"Likes tea.\n")
-    wiki.create_page(page_id="topics-readme", path="topics/README.md", title="Topics", body=b"Topic notes.\n")
-    wiki.create_page(
-        page_id="automations-readme",
-        path="automations/README.md",
-        title="Automation outputs",
-        body=b"Scheduled output.\n",
-    )
     topic = wiki.create_page(
         page_id="topic",
         path="topics/topic.md",
@@ -92,6 +85,10 @@ async def test_wiki_index_tracks_active_pages_and_context_keeps_residents_separa
             "producer_automation_id": "feed-worker",
         },
     )
+    topics_readme = next(record for record in wiki.snapshot().pages if record.resource.path == "topics/README.md")
+    automations_readme = next(
+        record for record in wiki.snapshot().pages if record.resource.path == "automations/README.md"
+    )
     index = _Index()
     projection = WikiPageIndexProjection(wiki, lambda: index, _fact_revision)
     await projection.sync()
@@ -100,8 +97,8 @@ async def test_wiki_index_tracks_active_pages_and_context_keeps_residents_separa
         "home",
         "directives",
         "me",
-        "topics-readme",
-        "automations-readme",
+        topics_readme.page.page_id,
+        automations_readme.page.page_id,
         "topic",
         "feed",
     }
@@ -120,6 +117,8 @@ async def test_wiki_index_tracks_active_pages_and_context_keeps_residents_separa
         "role": "common",
         "freshness": "current",
     }
+    assert index.store.items[topics_readme.page.page_id][2]["role"] == "readme"
+    assert index.store.items[automations_readme.page.page_id][2]["role"] == "readme"
 
     current = wiki.read_page("topic")
     wiki.apply_maintenance_updates(
@@ -136,6 +135,7 @@ async def test_wiki_index_tracks_active_pages_and_context_keeps_residents_separa
     retrieved = await builder.retrieval_context("tell me about this topic")
     assert resident is not None
     assert "Home" in resident and "Directives" in resident and "Profile" in resident
+    assert "Topics" not in resident and "Automation outputs" not in resident
     assert retrieved is not None
     assert "Renamed topic" in retrieved
     assert "Role: common; freshness: stale" in retrieved
@@ -145,7 +145,6 @@ async def test_wiki_index_tracks_active_pages_and_context_keeps_residents_separa
 @pytest.mark.asyncio
 async def test_wiki_index_marks_malformed_fact_provenance_invalid(tmp_path) -> None:
     wiki = WikiService(ManagedFileRepository(tmp_path / "pages", history_root=tmp_path / "history"))
-    wiki.create_page(page_id="topics-readme", path="topics/README.md", title="Topics", body=b"Topic notes.\n")
     wiki.create_page(
         page_id="invalid",
         path="topics/invalid.md",

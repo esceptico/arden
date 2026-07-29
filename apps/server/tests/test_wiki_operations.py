@@ -558,15 +558,14 @@ def test_directory_readmes_are_created_atomically_and_protected_while_children_a
     assert b"today.md" not in digest_readme.content
     assert not digest_readme.page.title.startswith("Directory:")
 
-    rename = service.prepare_rename(
-        digest_readme_id,
-        new_path="automations/digest/guide.md",
-        new_title="Digest contract",
-        expected_version=digest_readme.resource.version_id,
-        base_head=repo.head,
-    )
     with pytest.raises(WikiValidationError, match="README paths are fixed"):
-        service.apply_rename(rename)
+        service.prepare_rename(
+            digest_readme_id,
+            new_path="automations/digest/guide.md",
+            new_title="Digest contract",
+            expected_version=digest_readme.resource.version_id,
+            base_head=repo.head,
+        )
     assert service.read_page(digest_readme_id).resource.path == "automations/digest/README.md"
 
     with pytest.raises(WikiValidationError, match="active pages remain"):
@@ -597,3 +596,56 @@ def test_directory_readmes_are_created_atomically_and_protected_while_children_a
     )
     assert service.read_page(digest_readme_id).content == restored_content
     assert {change.action for change in repo.history(limit=1)[0].changes} == {"create", "restore"}
+
+
+def test_root_readme_remains_an_ordinary_home_page(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    service = WikiService(repo)
+    home = service.create_page(
+        path="README.md",
+        title="Home",
+        page_id="home",
+        expected_head=None,
+    )
+    service.create_page(
+        path="topics/one.md",
+        title="One",
+        page_id="one",
+        expected_head=repo.head,
+    )
+
+    moved, commit_id = service.move_page(
+        "home",
+        new_path="home.md",
+        expected_version=home.resource.version_id,
+        expected_head=repo.head,
+    )
+
+    assert commit_id is not None
+    assert moved.resource.path == "home.md"
+
+
+def test_ordinary_operations_cannot_claim_nested_directory_readme_paths(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    service = WikiService(repo)
+    page = service.create_page(path="one.md", title="One", page_id="one", expected_head=None)
+
+    with pytest.raises(WikiValidationError, match="reserved for automatic directory contracts"):
+        service.create_page(path="notes/README.md", title="Notes", page_id="notes-readme", expected_head=repo.head)
+    with pytest.raises(WikiValidationError, match="reserved for automatic directory contracts"):
+        service.move_page(
+            "one",
+            new_path="notes/README.md",
+            expected_version=page.resource.version_id,
+            expected_head=repo.head,
+        )
+    with pytest.raises(WikiValidationError, match="reserved for automatic directory contracts"):
+        service.prepare_rename(
+            "one",
+            new_path="notes/Readme.md",
+            new_title="Notes",
+            expected_version=page.resource.version_id,
+            base_head=repo.head,
+        )
+
+    assert service.read_page("one").resource.path == "one.md"

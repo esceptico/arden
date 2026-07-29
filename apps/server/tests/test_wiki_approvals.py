@@ -146,12 +146,152 @@ async def test_accept_commits_then_retries_same_approval(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
+async def test_concurrent_accepts_have_one_applier(tmp_path: Path) -> None:
+    service, coordinator, conn = await _coordinator(tmp_path)
+    _seed(service.repository, ("target", "old.md", create_page(title="Old", page_id="target")))
+    requested = await coordinator.request_rename(**_request(service))
+    assert requested.approval is not None
+    started = asyncio.Event()
+    finish = asyncio.Event()
+    calls = 0
+
+    async def apply_once(plan):
+        nonlocal calls
+        calls += 1
+        started.set()
+        await finish.wait()
+        return service.apply_rename(plan)
+
+    first = asyncio.create_task(coordinator.accept(requested.approval.approval_id, apply_plan=apply_once))
+    await started.wait()
+    second = asyncio.create_task(coordinator.accept(requested.approval.approval_id, apply_plan=apply_once))
+    finish.set()
+    accepted, duplicate = await asyncio.gather(first, second)
+
+    assert calls == 1
+    assert accepted.status == duplicate.status == "accepted"
+    await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_second_runtime_does_not_steal_an_active_apply(tmp_path: Path) -> None:
+    service, first, first_conn = await _coordinator(tmp_path)
+    second_service = WikiService(_repo(tmp_path))
+    second_conn = await database.connect(tmp_path / "approvals.db")
+    second_store = WikiRenameApprovalStore(second_conn)
+    await second_store.init_schema()
+    second = WikiRenameApprovalCoordinator(second_service, second_store)
+    _seed(service.repository, ("target", "old.md", create_page(title="Old", page_id="target")))
+    requested = await first.request_rename(**_request(service))
+    assert requested.approval is not None
+    started = asyncio.Event()
+    finish = asyncio.Event()
+    calls = 0
+
+    async def apply_once(plan):
+        nonlocal calls
+        calls += 1
+        started.set()
+        await finish.wait()
+        return service.apply_rename(plan)
+
+    active = asyncio.create_task(first.accept(requested.approval.approval_id, apply_plan=apply_once))
+    await started.wait()
+    duplicate = await second.accept(requested.approval.approval_id)
+    assert duplicate.status == "applying"
+    assert calls == 1
+    finish.set()
+    assert (await active).status == "accepted"
+    await first_conn.close()
+    await second_conn.close()
+
+
+@pytest.mark.asyncio
+async def test_accept_persistence_failure_keeps_a_committed_rename_applying_until_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, coordinator, conn = await _coordinator(tmp_path)
+    _seed(service.repository, ("target", "old.md", create_page(title="Old", page_id="target")))
+    requested = await coordinator.request_rename(**_request(service))
+    assert requested.approval is not None
+    persist = coordinator.store.accept
+    failed = False
+
+    async def fail_once(*args, **kwargs):
+        nonlocal failed
+        if not failed:
+            failed = True
+            raise OSError("approval database unavailable")
+        return await persist(*args, **kwargs)
+
+    monkeypatch.setattr(coordinator.store, "accept", fail_once)
+    with pytest.raises(OSError, match="database unavailable"):
+        await coordinator.accept(requested.approval.approval_id)
+
+    applying = await coordinator.store.get(requested.approval.approval_id)
+    assert applying is not None and applying.status is WikiRenameApprovalStatus.APPLYING
+    assert (await coordinator.reject(requested.approval.approval_id)).status == "applying"
+    accepted = await coordinator.accept(requested.approval.approval_id)
+    assert accepted.status == "accepted"
+    assert service.repository.get("target").path == "new.md"
+    await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_accept_after_commit_stays_unrejectable_and_retries(tmp_path: Path) -> None:
+    service, coordinator, conn = await _coordinator(tmp_path)
+    _seed(service.repository, ("target", "old.md", create_page(title="Old", page_id="target")))
+    requested = await coordinator.request_rename(**_request(service))
+    assert requested.approval is not None
+
+    async def commit_then_cancel(plan):
+        service.apply_rename(plan)
+        raise asyncio.CancelledError("response lost after commit")
+
+    with pytest.raises(asyncio.CancelledError):
+        await coordinator.accept(requested.approval.approval_id, apply_plan=commit_then_cancel)
+
+    applying = await coordinator.store.get(requested.approval.approval_id)
+    assert applying is not None and applying.status is WikiRenameApprovalStatus.APPLYING
+    assert (await coordinator.reject(requested.approval.approval_id)).status == "applying"
+    assert (await coordinator.accept(requested.approval.approval_id)).status == "accepted"
+    await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_error_after_commit_stays_unrejectable_and_retries(tmp_path: Path) -> None:
+    service, coordinator, conn = await _coordinator(tmp_path)
+    _seed(service.repository, ("target", "old.md", create_page(title="Old", page_id="target")))
+    requested = await coordinator.request_rename(**_request(service))
+    assert requested.approval is not None
+
+    async def commit_then_fail(plan):
+        service.apply_rename(plan)
+        raise RuntimeError("response lost after commit")
+
+    with pytest.raises(RuntimeError, match="response lost"):
+        await coordinator.accept(requested.approval.approval_id, apply_plan=commit_then_fail)
+
+    applying = await coordinator.store.get(requested.approval.approval_id)
+    assert applying is not None and applying.status is WikiRenameApprovalStatus.APPLYING
+    assert (await coordinator.reject(requested.approval.approval_id)).status == "applying"
+    assert (await coordinator.accept(requested.approval.approval_id)).status == "accepted"
+    await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_preclaimed_applying_approval_retries_after_restart(tmp_path: Path) -> None:
     service, coordinator, conn = await _coordinator(tmp_path)
     _seed(service.repository, ("target", "old.md", create_page(title="Old", page_id="target")))
     requested = await coordinator.request_rename(**_request(service))
     assert requested.approval is not None
-    assert await coordinator.store.claim_accept(requested.approval.approval_id) is True
+    assert (
+        await coordinator.store.claim_accept(
+            requested.approval.approval_id,
+            owner=coordinator._claim_owner,
+        )
+        is True
+    )
     applying = await coordinator.store.get(requested.approval.approval_id)
     assert applying is not None and applying.status is WikiRenameApprovalStatus.APPLYING
     assert [item.approval_id for item in await coordinator.list_pending()] == [requested.approval.approval_id]
@@ -161,6 +301,11 @@ async def test_preclaimed_applying_approval_retries_after_restart(tmp_path: Path
     store = WikiRenameApprovalStore(reopened)
     await store.init_schema()
     restarted = WikiRenameApprovalCoordinator(service, store)
+    await store.conn.execute(
+        "UPDATE wiki_rename_approvals SET claim_expires_at = ? WHERE approval_id = ?",
+        ("2000-01-01T00:00:00+00:00", requested.approval.approval_id),
+    )
+    await store.conn.commit()
     accepted = await restarted.accept(requested.approval.approval_id)
     assert accepted.status == "accepted"
     assert service.repository.get("target").path == "new.md"
@@ -256,7 +401,7 @@ async def test_replan_race_returns_to_pending_for_retry(tmp_path: Path, monkeypa
     assert stale.approval is not None
     assert stale.approval.status is WikiRenameApprovalStatus.PENDING
     assert stale.approval.resolution is not None
-    assert "head changed during replan" in stale.approval.resolution
+    assert stale.approval.resolution == "stale rename plan could not be regenerated; retry or reject"
     await conn.close()
 
 
@@ -277,6 +422,48 @@ async def test_external_file_drift_does_not_create_endless_approval_generations(
     assert conflicted.approval.resolution is not None
     assert "outside revision history" in conflicted.approval.resolution
     assert await coordinator.list_pending() == [conflicted.approval]
+    await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_failed_applier_releases_claim_for_retry_or_rejection(tmp_path: Path) -> None:
+    service, coordinator, conn = await _coordinator(tmp_path)
+    _seed(service.repository, ("target", "old.md", create_page(title="Old", page_id="target")))
+    requested = await coordinator.request_rename(**_request(service))
+    assert requested.approval is not None
+
+    async def fail_for_area_name_collision(_plan: object) -> object:
+        raise ValueError("An active Area with that name already exists")
+
+    with pytest.raises(ValueError, match="active Area"):
+        await coordinator.accept(requested.approval.approval_id, apply_plan=fail_for_area_name_collision)
+
+    pending = await coordinator.store.get(requested.approval.approval_id)
+    assert pending is not None
+    assert pending.status is WikiRenameApprovalStatus.PENDING
+    assert pending.resolution == "rename was not applied; fix the reported error, then retry or reject"
+    rejected = await coordinator.reject(requested.approval.approval_id, resolution="keep the existing Area")
+    assert rejected.status is WikiRenameApprovalStatus.REJECTED
+    await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_failed_applier_never_persists_backend_error_text(tmp_path: Path) -> None:
+    service, coordinator, conn = await _coordinator(tmp_path)
+    _seed(service.repository, ("target", "old.md", create_page(title="Old", page_id="target")))
+    requested = await coordinator.request_rename(**_request(service))
+    assert requested.approval is not None
+
+    async def fail_with_secret(_plan: object) -> object:
+        raise RuntimeError("postgres://agent:secret@db.internal/arden")
+
+    with pytest.raises(RuntimeError, match="secret"):
+        await coordinator.accept(requested.approval.approval_id, apply_plan=fail_with_secret)
+
+    approval = await coordinator.store.get(requested.approval.approval_id)
+    assert approval is not None
+    assert approval.resolution == "rename was not applied; fix the reported error, then retry or reject"
+    assert "secret" not in approval.resolution
     await conn.close()
 
 

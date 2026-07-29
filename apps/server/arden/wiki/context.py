@@ -247,11 +247,19 @@ def _normalized_query(value: str) -> str | None:
 def _is_resident(record: WikiPageRecord) -> bool:
     path = record.resource.path.casefold()
     page_id = record.page.page_id.casefold()
-    return path in {README_FILENAME.casefold(), "directives.md", "me.md", "profile.md"} or page_id in {
-        "directives",
-        "me",
-        "profile",
-    }
+    # Directory READMEs are infrastructure pages, but only the root README is
+    # the resident Home context. Directory README content remains retrievable.
+    is_home = path == README_FILENAME.casefold()
+    return (
+        is_home
+        or path in {"directives.md", "me.md", "profile.md"}
+        or page_id
+        in {
+            "directives",
+            "me",
+            "profile",
+        }
+    )
 
 
 def _render_pages(header: str, pages: list[WikiPageRecord], fact_revision: str | None, budget: int) -> str | None:

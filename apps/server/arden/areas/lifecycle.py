@@ -1,6 +1,8 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 
+from arden.revisions import RevisionConflictError
+from arden.wiki.exceptions import WikiRenameApplyAmbiguousError
 from arden.wiki.models import RenamePlan
 from arden.wiki.service import WikiService, WikiValidationError
 
@@ -230,7 +232,8 @@ class AreaPageService:
     async def _apply_bound_rename_plan(self, plan: RenamePlan, area: dict, area_patch: dict):
         if not plan.rewrite_links:
             raise WikiValidationError("Area page renames must rewrite incoming links")
-        if area["page_path"] != plan.old_path:
+        already_renamed = area["page_path"] == plan.new_path
+        if area["page_path"] not in {plan.old_path, plan.new_path}:
             raise ValueError("Area page binding needs repair before it can be renamed")
         owner = await self._sessions.find_area_by_name(plan.new_title)
         if owner is not None and owner["area_id"] != area["area_id"]:
@@ -242,6 +245,9 @@ class AreaPageService:
             origin="area.rename",
             reason=f"rename Area page {plan.old_path} to {plan.new_path}",
         )
+        current = await asyncio.to_thread(self._wiki.read_page, plan.page_id)
+        if current.resource.path != plan.new_path:
+            raise RevisionConflictError("Area rename commit is no longer current; prepare a fresh plan")
         try:
             await self._lifecycle.update_after_page_change(
                 area,
@@ -251,11 +257,20 @@ class AreaPageService:
                 page_id=plan.page_id,
             )
         except Exception as error:
+            latest = await self._sessions.get_area(area["area_id"])
+            if already_renamed or (latest is not None and latest.get("page_path") == plan.new_path):
+                # The page commit was a prior partial success.  Leave it in
+                # place so the same idempotent plan can finish the Area row.
+                raise WikiRenameApplyAmbiguousError("Area update may have completed after the page rename") from error
             try:
                 await asyncio.to_thread(self._rollback_bound_rename, plan)
             except Exception as rollback_error:
                 raise ExceptionGroup("Area page rename rollback failed", [error, rollback_error]) from None
-            raise
+            # The original idempotency key now names a forward commit that is
+            # no longer HEAD.  Force a fresh snapshot and plan on retry.
+            raise RevisionConflictError(
+                "Area update failed after rename and was rolled back; prepare a fresh plan"
+            ) from error
         return commit
 
     def _rollback_bound_rename(self, plan) -> None:

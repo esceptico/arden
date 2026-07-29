@@ -5,6 +5,7 @@ import pytest
 
 from arden.areas.lifecycle import AreaLifecycleService, AreaPageService, AreaWikiUnavailable
 from arden.revisions import ManagedFileRepository, RevisionConflictError
+from arden.wiki.exceptions import WikiRenameApplyAmbiguousError
 from arden.wiki.service import WikiService, WikiValidationError
 
 
@@ -446,6 +447,82 @@ async def test_bound_page_rename_plan_syncs_its_area(tmp_path) -> None:
     assert updated["page_path"] == "topics/arden.md"
     assert updated["page_id"] == attached["page_id"]
     assert all(record.page.lifecycle != "redirect" for record in wiki.list_pages())
+
+
+@pytest.mark.asyncio
+async def test_bound_rename_retries_when_area_write_completed_but_response_was_lost(tmp_path) -> None:
+    areas = FakeAreas()
+    area_lifecycle = lifecycle(areas)
+    area = await area_lifecycle.create(name="Dex")
+    area_pages = pages(tmp_path, areas, area_lifecycle)
+    attached = await area_pages.create(area["area_id"])
+    wiki = area_pages._wiki
+    current = wiki.read_page(attached["page_id"])
+    plan = wiki.prepare_rename(
+        attached["page_id"],
+        new_path="topics/arden.md",
+        new_title="Arden",
+        expected_version=current.resource.version_id,
+        base_head=wiki.repository.head,
+    )
+    update = area_lifecycle.update_after_page_change
+    lost = True
+
+    async def update_then_lose_response(before, **patch):
+        nonlocal lost
+        result = await update(before, **patch)
+        if lost:
+            lost = False
+            raise RuntimeError("Area update response lost")
+        return result
+
+    area_lifecycle.update_after_page_change = update_then_lose_response
+    with pytest.raises(WikiRenameApplyAmbiguousError, match="may have completed"):
+        await area_pages.apply_rename_plan(plan)
+
+    assert (await areas.get_area(area["area_id"]))["page_path"] == "topics/arden.md"
+    assert wiki.read_page(attached["page_id"]).resource.path == "topics/arden.md"
+    await area_pages.apply_rename_plan(plan)
+
+
+@pytest.mark.asyncio
+async def test_bound_rename_rollback_forces_a_fresh_plan(tmp_path) -> None:
+    areas = FakeAreas()
+    area_lifecycle = lifecycle(areas)
+    area = await area_lifecycle.create(name="Dex")
+    area_pages = pages(tmp_path, areas, area_lifecycle)
+    attached = await area_pages.create(area["area_id"])
+    wiki = area_pages._wiki
+    current = wiki.read_page(attached["page_id"])
+    plan = wiki.prepare_rename(
+        attached["page_id"],
+        new_path="topics/arden.md",
+        new_title="Arden",
+        expected_version=current.resource.version_id,
+        base_head=wiki.repository.head,
+    )
+
+    update = area_lifecycle.update_after_page_change
+
+    async def fail_area_update(*_args, **_kwargs):
+        raise RuntimeError("Area database unavailable")
+
+    area_lifecycle.update_after_page_change = fail_area_update
+    with pytest.raises(RevisionConflictError, match="was rolled back"):
+        await area_pages.apply_rename_plan(plan)
+
+    restored = wiki.read_page(attached["page_id"])
+    assert restored.resource.path == "topics/dex.md"
+    fresh = wiki.prepare_rename(
+        attached["page_id"],
+        new_path="topics/arden.md",
+        new_title="Arden",
+        expected_version=restored.resource.version_id,
+        base_head=wiki.repository.head,
+    )
+    area_lifecycle.update_after_page_change = update
+    await area_pages.apply_rename_plan(fresh)
+    assert wiki.read_page(attached["page_id"]).resource.path == "topics/arden.md"
 
 
 @pytest.mark.asyncio

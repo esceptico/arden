@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from arden.revisions import Archive, ChangeSet, Create, ManagedFileRepository, RevisionConflictError, Update
+from arden.revisions import Archive, ChangeSet, Create, ManagedFileRepository, Move, RevisionConflictError, Update
 from arden.wiki.models import GeneratedPageTarget
 from arden.wiki.pages import extract_generated_region, parse_page, update_generated_region
 from arden.wiki.service import (
@@ -56,6 +56,20 @@ def test_publish_generated_creates_a_readme_for_a_new_directory(tmp_path: Path) 
     assert b"shared context" in readme.content
 
 
+def test_publish_generated_cannot_claim_a_nested_directory_readme(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    service = _service(repo)
+
+    with pytest.raises(WikiValidationError, match="reserved for automatic directory contracts"):
+        service.publish_generated(
+            (_target("notes-readme", path="notes/README.md"),),
+            source_revision="facts-1",
+            base_head=None,
+        )
+
+    assert repo.head is None
+
+
 def test_publish_generated_creates_multiple_pages_in_one_commit(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     service = _service(repo)
@@ -100,6 +114,200 @@ def test_publish_generated_preserves_user_notes_after_synthesis(tmp_path: Path) 
     content = repo.read("topic")
     assert extract_generated_region(content, expected_page_id="topic") == b"New facts.\n"
     assert content.endswith(b"\n## User notes\nKeep this.\n")
+
+
+def test_publish_generated_accepts_a_move_rewrite_inside_another_pages_generated_region(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    service = _service(repo)
+    target = service.create_page(path="topics/old.md", title="Old", page_id="target", expected_head=None)
+    service.publish_generated(
+        (_target("source", generated=b"See [[topics/old]].\n"),),
+        source_revision="facts-1",
+        base_head=repo.head,
+    )
+
+    service.move_page(
+        "target",
+        new_path="archive/new.md",
+        expected_version=target.resource.version_id,
+        expected_head=repo.head,
+    )
+
+    service.publish_generated(
+        (_target("source", generated=b"Updated facts.\n"),),
+        source_revision="facts-2",
+        base_head=repo.head,
+    )
+
+    assert extract_generated_region(repo.read("source"), expected_page_id="source") == b"Updated facts.\n"
+
+
+def test_publish_generated_accepts_an_area_style_redirect_free_rename_rewrite(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    service = _service(repo)
+    target = service.create_page(path="topics/old.md", title="Old", page_id="target", expected_head=None)
+    service.publish_generated(
+        (_target("source", generated=b"See [[Old]].\n"),),
+        source_revision="facts-1",
+        base_head=repo.head,
+    )
+    plan = service.prepare_rename(
+        "target",
+        new_path="topics/new.md",
+        new_title="New",
+        expected_version=target.resource.version_id,
+        base_head=repo.head,
+    )
+
+    service.apply_rename_without_redirect(
+        plan,
+        actor="user:area",
+        origin="area.rename",
+        reason="rename Area page topics/old.md to topics/new.md",
+    )
+    service.publish_generated(
+        (_target("source", generated=b"Updated facts.\n"),),
+        source_revision="facts-2",
+        base_head=repo.head,
+    )
+
+    assert extract_generated_region(repo.read("source"), expected_page_id="source") == b"Updated facts.\n"
+
+
+def test_publish_generated_rejects_a_move_commit_that_changes_generated_content_beyond_its_rewrite(
+    tmp_path: Path,
+) -> None:
+    repo = _repo(tmp_path)
+    service = _service(repo)
+    target = service.create_page(path="topics/old.md", title="Old", page_id="target", expected_head=None)
+    service.publish_generated(
+        (_target("source", generated=b"See [[topics/old]].\n"),),
+        source_revision="facts-1",
+        base_head=repo.head,
+    )
+    source = service.read_page("source")
+    tampered = update_generated_region(
+        source.content,
+        expected_page_id="source",
+        generated=b"Tampered facts.\n",
+    )
+    repo.commit(
+        ChangeSet(
+            operations=(
+                Move("target", target.resource.version_id, "archive/new.md"),
+                Update("source", source.resource.version_id, tampered),
+            ),
+            actor="Wiki Move",
+            origin="wiki.move",
+            reason="move page",
+            idempotency_key="tampered-move",
+            expected_head=repo.head,
+        )
+    )
+
+    with pytest.raises(GeneratedRegionConflictError, match="generated region"):
+        service.publish_generated(
+            (_target("source", generated=b"Updated facts.\n"),),
+            source_revision="facts-2",
+            base_head=repo.head,
+        )
+
+
+def test_publish_generated_accepts_a_generated_pages_redirect_free_rename_and_self_link_rewrite(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    service = _service(repo)
+    service.publish_generated(
+        (_target("source", title="Source", generated=b"See [[Source]] and [[topics/source]].\n"),),
+        source_revision="facts-1",
+        base_head=None,
+    )
+    source = service.read_page("source")
+    plan = service.prepare_rename(
+        "source",
+        new_path="topics/renamed.md",
+        new_title="Renamed",
+        expected_version=source.resource.version_id,
+        base_head=repo.head,
+    )
+
+    service.apply_rename_without_redirect(
+        plan,
+        actor="user:area",
+        origin="area.rename",
+        reason="rename Area page topics/source.md to topics/renamed.md",
+    )
+    service.publish_generated(
+        (_target("source", path="topics/renamed.md", title="Renamed", generated=b"Updated facts.\n"),),
+        source_revision="facts-2",
+        base_head=repo.head,
+    )
+
+    assert extract_generated_region(repo.read("source"), expected_page_id="source") == b"Updated facts.\n"
+
+
+def test_publish_generated_accepts_moving_a_generated_page_without_generated_link_rewrites(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    service = _service(repo)
+    service.publish_generated(
+        (_target("source", generated=b"Facts without links.\n"),),
+        source_revision="facts-1",
+        base_head=None,
+    )
+    source = service.read_page("source")
+
+    service.move_page(
+        "source",
+        new_path="archive/source.md",
+        expected_version=source.resource.version_id,
+        expected_head=repo.head,
+    )
+    service.publish_generated(
+        (_target("source", path="archive/source.md", generated=b"Updated facts.\n"),),
+        source_revision="facts-2",
+        base_head=repo.head,
+    )
+
+    assert extract_generated_region(repo.read("source"), expected_page_id="source") == b"Updated facts.\n"
+
+
+def test_publish_generated_accepts_one_exact_rewrite_for_multiple_moves(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    service = _service(repo)
+    first = service.create_page(path="topics/first.md", title="First", page_id="first", expected_head=None)
+    second = service.create_page(path="topics/second.md", title="Second", page_id="second", expected_head=repo.head)
+    service.publish_generated(
+        (_target("source", generated=b"See [[topics/first]] and [[topics/second]].\n"),),
+        source_revision="facts-1",
+        base_head=repo.head,
+    )
+    source = service.read_page("source")
+    rewritten = update_generated_region(
+        source.content,
+        expected_page_id="source",
+        generated=b"See [[archive/first]] and [[archive/second]].\n",
+    )
+    repo.commit(
+        ChangeSet(
+            operations=(
+                Move("first", first.resource.version_id, "archive/first.md"),
+                Move("second", second.resource.version_id, "archive/second.md"),
+                Update("source", source.resource.version_id, rewritten),
+            ),
+            actor="bulk move",
+            origin="migration",
+            reason="move both targets",
+            idempotency_key="move-two-targets",
+            expected_head=repo.head,
+        )
+    )
+
+    service.publish_generated(
+        (_target("source", generated=b"Updated facts.\n"),),
+        source_revision="facts-2",
+        base_head=repo.head,
+    )
+
+    assert extract_generated_region(repo.read("source"), expected_page_id="source") == b"Updated facts.\n"
 
 
 def test_generated_edit_conflicts_for_the_whole_batch(tmp_path: Path) -> None:

@@ -11,6 +11,8 @@ from arden.wiki.approval_store import (
     WikiRenameApprovalStore,
 )
 
+_CLAIM_OWNER = "test-owner"
+
 
 @pytest_asyncio.fixture
 async def store(tmp_path: Path):
@@ -57,7 +59,7 @@ async def _replace(
         "page_count": 4,
     }
     fields.update(changes)
-    return await store.replace_pending(old_approval_id, **fields)  # type: ignore[arg-type]
+    return await store.replace_pending(old_approval_id, owner=_CLAIM_OWNER, **fields)  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
@@ -81,6 +83,45 @@ async def test_persists_canonical_opaque_plan_across_reconnect(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
+async def test_schema_migration_adds_durable_apply_claim_columns(tmp_path: Path) -> None:
+    path = tmp_path / "wiki-approvals.db"
+    conn = await database.connect(path)
+    await conn.execute(
+        """
+        CREATE TABLE wiki_rename_approvals (
+            approval_id TEXT PRIMARY KEY,
+            request_key TEXT NOT NULL,
+            request_fingerprint TEXT NOT NULL,
+            generation INTEGER NOT NULL,
+            base_head TEXT,
+            plan_json TEXT NOT NULL,
+            old_path TEXT NOT NULL,
+            new_path TEXT NOT NULL,
+            link_count INTEGER NOT NULL,
+            page_count INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            resolved_at TEXT,
+            commit_id TEXT,
+            replacement_approval_id TEXT,
+            resolution TEXT
+        )
+        """
+    )
+    await conn.commit()
+    await conn.close()
+    first_conn = await database.connect(path)
+    second_conn = await database.connect(path)
+    first = WikiRenameApprovalStore(first_conn)
+    second = WikiRenameApprovalStore(second_conn)
+    await asyncio.gather(first.init_schema(), second.init_schema())
+    columns = {row["name"] for row in await first_conn.execute_fetchall("PRAGMA table_info(wiki_rename_approvals)")}
+    assert {"claim_owner", "claim_expires_at"} <= columns
+    await first_conn.close()
+    await second_conn.close()
+
+
+@pytest.mark.asyncio
 async def test_same_pending_request_and_fingerprint_is_reused(store: WikiRenameApprovalStore) -> None:
     original = await _create(store)
     repeated = await _create(store, "different-id", generation=9, plan_json={"different": "payload"})
@@ -100,7 +141,7 @@ async def test_different_pending_fingerprint_is_not_silently_replaced(store: Wik
 @pytest.mark.asyncio
 async def test_applying_request_remains_unique_and_reusable(store: WikiRenameApprovalStore) -> None:
     original = await _create(store)
-    assert await store.claim_accept(original.approval_id) is True
+    assert await store.claim_accept(original.approval_id, owner=_CLAIM_OWNER) is True
 
     reused = await _create(store, "approval-2")
     assert reused.status is WikiRenameApprovalStatus.APPLYING
@@ -112,10 +153,9 @@ async def test_applying_request_remains_unique_and_reusable(store: WikiRenameApp
 async def test_accept_is_atomic_with_commit_and_same_commit_retries(store: WikiRenameApprovalStore) -> None:
     await _create(store)
 
-    assert await store.claim_accept("approval-1") is True
-    assert await store.accept("approval-1", commit_id="commit-1", resolution="applied") is True
-    assert await store.record_commit("approval-1", commit_id="commit-1") is True
-    assert await store.accept("approval-1", commit_id="commit-2") is False
+    assert await store.claim_accept("approval-1", owner=_CLAIM_OWNER) is True
+    assert await store.accept("approval-1", owner=_CLAIM_OWNER, commit_id="commit-1", resolution="applied") is True
+    assert await store.accept("approval-1", owner=_CLAIM_OWNER, commit_id="commit-2") is False
 
     approval = await store.get("approval-1")
     assert approval is not None
@@ -129,26 +169,38 @@ async def test_accept_is_atomic_with_commit_and_same_commit_retries(store: WikiR
 async def test_accept_requires_applying_claim(store: WikiRenameApprovalStore) -> None:
     pending = await _create(store)
 
-    assert await store.accept("approval-1", commit_id="commit-1") is False
+    assert await store.accept("approval-1", owner=_CLAIM_OWNER, commit_id="commit-1") is False
     assert await store.get("approval-1") == pending
 
 
 @pytest.mark.asyncio
 async def test_failed_apply_claim_returns_to_pending_and_can_be_rejected(store: WikiRenameApprovalStore) -> None:
     await _create(store)
-    assert await store.claim_accept("approval-1") is True
+    assert await store.claim_accept("approval-1", owner=_CLAIM_OWNER) is True
 
-    assert await store.release_accept("approval-1", resolution="replan unavailable") is True
+    assert await store.release_accept("approval-1", owner=_CLAIM_OWNER, resolution="replan unavailable") is True
     pending = await store.get("approval-1")
     assert pending is not None
     assert pending.status is WikiRenameApprovalStatus.PENDING
     assert pending.resolution == "replan unavailable"
 
-    assert await store.claim_accept("approval-1") is True
+    assert await store.claim_accept("approval-1", owner=_CLAIM_OWNER) is True
     applying = await store.get("approval-1")
     assert applying is not None and applying.resolution is None
-    assert await store.release_accept("approval-1", resolution="still unavailable") is True
+    assert await store.release_accept("approval-1", owner=_CLAIM_OWNER, resolution="still unavailable") is True
     assert await store.reject("approval-1", resolution="user rejected") is True
+
+
+@pytest.mark.asyncio
+async def test_released_apply_claim_reuses_the_pending_request(store: WikiRenameApprovalStore) -> None:
+    original = await _create(store)
+    assert await store.claim_accept(original.approval_id, owner=_CLAIM_OWNER) is True
+    assert await store.release_accept(original.approval_id, owner=_CLAIM_OWNER, resolution="applier failed") is True
+
+    reused = await _create(store, approval_id="different-approval-id")
+    assert reused.approval_id == original.approval_id
+    assert reused.status is WikiRenameApprovalStatus.PENDING
+    assert await store.reject(reused.approval_id, resolution="user rejected") is True
 
 
 @pytest.mark.asyncio
@@ -157,7 +209,7 @@ async def test_reject_uses_pending_compare_and_swap(store: WikiRenameApprovalSto
 
     assert await store.reject("approval-1", resolution="stale preview") is True
     assert await store.reject("approval-1", resolution="again") is False
-    assert await store.accept("approval-1", commit_id="commit-1") is False
+    assert await store.accept("approval-1", owner=_CLAIM_OWNER, commit_id="commit-1") is False
 
     approval = await store.get("approval-1")
     assert approval is not None
@@ -212,7 +264,7 @@ async def test_replace_pending_atomically_creates_same_request_successor(store: 
 @pytest.mark.asyncio
 async def test_replace_pending_can_supersede_applying_plan(store: WikiRenameApprovalStore) -> None:
     await _create(store)
-    assert await store.claim_accept("approval-1") is True
+    assert await store.claim_accept("approval-1", owner=_CLAIM_OWNER) is True
 
     replacement = await _replace(store)
 
@@ -261,7 +313,7 @@ async def test_concurrent_claim_and_reject_have_one_compare_and_swap_winner(stor
     await _create(store)
 
     claimed, rejected = await asyncio.gather(
-        store.claim_accept("approval-1"),
+        store.claim_accept("approval-1", owner=_CLAIM_OWNER),
         store.reject("approval-1"),
     )
 
@@ -271,20 +323,20 @@ async def test_concurrent_claim_and_reject_have_one_compare_and_swap_winner(stor
     if claimed:
         assert approval.status is WikiRenameApprovalStatus.APPLYING
         assert await store.reject("approval-1") is False
-        assert await store.accept("approval-1", commit_id="commit-1") is True
+        assert await store.accept("approval-1", owner=_CLAIM_OWNER, commit_id="commit-1") is True
     else:
         assert approval.status is WikiRenameApprovalStatus.REJECTED
-        assert await store.claim_accept("approval-1") is False
+        assert await store.claim_accept("approval-1", owner=_CLAIM_OWNER) is False
 
 
 @pytest.mark.asyncio
-async def test_applying_claim_survives_reopen_and_is_retryable(tmp_path: Path) -> None:
+async def test_unexpired_applying_claim_survives_reopen_without_being_stolen(tmp_path: Path) -> None:
     path = tmp_path / "wiki-approvals.db"
     conn = await database.connect(path)
     store = WikiRenameApprovalStore(conn)
     await store.init_schema()
     applying = await _create(store)
-    assert await store.claim_accept(applying.approval_id) is True
+    assert await store.claim_accept(applying.approval_id, owner=_CLAIM_OWNER) is True
     await conn.close()
 
     reopened = await database.connect(path)
@@ -294,8 +346,7 @@ async def test_applying_claim_survives_reopen_and_is_retryable(tmp_path: Path) -
 
     assert len(open_approvals) == 1
     assert open_approvals[0].status is WikiRenameApprovalStatus.APPLYING
-    assert await restored.claim_accept(applying.approval_id) is True
-    assert await restored.record_commit(applying.approval_id, commit_id="commit-after-restart") is True
+    assert await restored.claim_accept(applying.approval_id, owner="different-owner") is False
     await reopened.close()
 
 

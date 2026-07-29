@@ -26,6 +26,7 @@ from arden.wiki.approvals import (
     rename_plan_fingerprint,
 )
 from arden.wiki.constants import WIKI_MAINTENANCE_FACT_DUPLICATE_EVIDENCE_PREFIX
+from arden.wiki.exceptions import WikiRenameApplyAmbiguousError
 from arden.wiki.maintenance.runner import (
     WikiMaintenanceError,
     parse_maintenance_proposal,
@@ -547,7 +548,6 @@ async def request_rename(request: Request, body: WikiRenameRequest):
             expected_version=current.resource.version_id,
             base_head=coordinator.service.repository.head,
             policy=RenamePolicy.ASK,
-            apply_plan=request.app.state.area_pages.apply_rename_plan,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="wiki page not found") from exc
@@ -578,6 +578,10 @@ async def accept_rename(request: Request, approval_id: str):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except CorruptWikiRenameApprovalError as exc:
         raise HTTPException(status_code=503, detail="wiki rename approval is corrupt") from exc
+    except WikiRenameApplyAmbiguousError as exc:
+        raise HTTPException(status_code=503, detail="wiki rename is still applying; retry accept") from exc
+    except BaseExceptionGroup as exc:
+        raise HTTPException(status_code=503, detail="wiki rename is still applying; retry accept") from exc
     except (WikiValidationError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     projection_pending = await _project_wiki_after_commit(request, result.commit_id)

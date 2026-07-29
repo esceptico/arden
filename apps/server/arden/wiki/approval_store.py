@@ -8,7 +8,7 @@ import asyncio
 import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any
 
@@ -41,6 +41,8 @@ class WikiRenameApproval:
     commit_id: str | None
     replacement_approval_id: str | None
     resolution: str | None
+    claim_owner: str | None
+    claim_expires_at: datetime | None
 
 
 class PendingWikiRenameApprovalConflictError(ValueError):
@@ -65,6 +67,8 @@ CREATE TABLE IF NOT EXISTS wiki_rename_approvals (
     commit_id TEXT,
     replacement_approval_id TEXT REFERENCES wiki_rename_approvals(approval_id),
     resolution TEXT,
+    claim_owner TEXT,
+    claim_expires_at TEXT,
     CHECK (status != 'accepted' OR commit_id IS NOT NULL)
 );
 
@@ -75,6 +79,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_wiki_rename_approvals_open_request
 CREATE INDEX IF NOT EXISTS idx_wiki_rename_approvals_open_created
     ON wiki_rename_approvals(status, created_at);
 """
+
+_CLAIM_LEASE = timedelta(minutes=2)
 
 
 def _required_text(name: str, value: str) -> str:
@@ -131,6 +137,8 @@ def _row_to_approval(row: aiosqlite.Row) -> WikiRenameApproval:
         commit_id=row["commit_id"],
         replacement_approval_id=row["replacement_approval_id"],
         resolution=row["resolution"],
+        claim_owner=row["claim_owner"],
+        claim_expires_at=datetime.fromisoformat(row["claim_expires_at"]) if row["claim_expires_at"] else None,
     )
 
 
@@ -142,7 +150,19 @@ class WikiRenameApprovalStore:
     async def init_schema(self) -> None:
         async with self._lock:
             await self.conn.executescript(_SCHEMA)
-            await self.conn.commit()
+            await self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                columns = {
+                    row["name"] for row in await self.conn.execute_fetchall("PRAGMA table_info(wiki_rename_approvals)")
+                }
+                if "claim_owner" not in columns:
+                    await self.conn.execute("ALTER TABLE wiki_rename_approvals ADD COLUMN claim_owner TEXT")
+                if "claim_expires_at" not in columns:
+                    await self.conn.execute("ALTER TABLE wiki_rename_approvals ADD COLUMN claim_expires_at TEXT")
+                await self.conn.commit()
+            except BaseException:
+                await self.conn.rollback()
+                raise
 
     async def create_pending(
         self,
@@ -283,43 +303,97 @@ class WikiRenameApprovalStore:
             )
             return [_row_to_approval(row) for row in rows]
 
-    async def claim_accept(self, approval_id: str) -> bool:
+    async def claim_accept(self, approval_id: str, *, owner: str) -> bool:
         """Claim the right to apply a pending plan before its core commit."""
 
         _required_text("approval_id", approval_id)
+        _required_text("owner", owner)
         async with self._lock:
+            now = datetime.now(UTC)
             cursor = await self.conn.execute(
                 """
                 UPDATE wiki_rename_approvals
-                SET status = 'applying', resolution = NULL
-                WHERE approval_id = ? AND status = 'pending'
+                SET status = 'applying', resolution = NULL, claim_owner = ?, claim_expires_at = ?
+                WHERE approval_id = ?
+                  AND (
+                    status = 'pending'
+                    OR (
+                        status = 'applying'
+                        AND (
+                            claim_owner = ?
+                            OR claim_expires_at IS NULL
+                            OR claim_expires_at <= ?
+                        )
+                    )
+                  )
                 """,
-                (approval_id,),
+                (owner, (now + _CLAIM_LEASE).isoformat(), approval_id, owner, now.isoformat()),
             )
             await self.conn.commit()
-            if cursor.rowcount:
-                return True
-            existing = await self._get(approval_id)
-            return bool(existing and existing.status is WikiRenameApprovalStatus.APPLYING)
+            return cursor.rowcount > 0
 
-    async def release_accept(self, approval_id: str, *, resolution: str) -> bool:
+    async def renew_claim(self, approval_id: str, *, owner: str) -> bool:
+        """Extend this coordinator's active apply claim."""
+
+        _required_text("approval_id", approval_id)
+        _required_text("owner", owner)
+        async with self._lock:
+            expires_at = (datetime.now(UTC) + _CLAIM_LEASE).isoformat()
+            cursor = await self.conn.execute(
+                """
+                UPDATE wiki_rename_approvals
+                SET claim_expires_at = ?
+                WHERE approval_id = ? AND status = 'applying' AND claim_owner = ?
+                """,
+                (expires_at, approval_id, owner),
+            )
+            await self.conn.commit()
+            return cursor.rowcount > 0
+
+    async def release_accept(self, approval_id: str, *, owner: str, resolution: str) -> bool:
         """Return a failed apply claim to a user-resolvable pending state."""
 
         _required_text("approval_id", approval_id)
+        _required_text("owner", owner)
         _required_text("resolution", resolution)
         async with self._lock:
             cursor = await self.conn.execute(
                 """
                 UPDATE wiki_rename_approvals
-                SET status = 'pending', resolution = ?
-                WHERE approval_id = ? AND status = 'applying'
+                SET status = 'pending', resolution = ?, claim_owner = NULL, claim_expires_at = NULL
+                WHERE approval_id = ? AND status = 'applying' AND claim_owner = ?
                 """,
-                (resolution, approval_id),
+                (resolution, approval_id, owner),
             )
             await self.conn.commit()
             return cursor.rowcount > 0
 
-    async def accept(self, approval_id: str, *, commit_id: str, resolution: str | None = None) -> bool:
+    async def retain_applying(self, approval_id: str, *, owner: str, resolution: str) -> bool:
+        """Keep a possibly committed rename unrejectable until an idempotent retry finishes it."""
+
+        _required_text("approval_id", approval_id)
+        _required_text("owner", owner)
+        _required_text("resolution", resolution)
+        async with self._lock:
+            cursor = await self.conn.execute(
+                """
+                UPDATE wiki_rename_approvals
+                SET resolution = ?
+                WHERE approval_id = ? AND status = 'applying' AND claim_owner = ?
+                """,
+                (resolution, approval_id, owner),
+            )
+            await self.conn.commit()
+            return cursor.rowcount > 0
+
+    async def accept(
+        self,
+        approval_id: str,
+        *,
+        owner: str,
+        commit_id: str,
+        resolution: str | None = None,
+    ) -> bool:
         """Atomically record a completed core commit and accept its approval.
 
         Retrying with the same commit id is successful; a different decision
@@ -327,6 +401,7 @@ class WikiRenameApprovalStore:
         """
 
         _required_text("approval_id", approval_id)
+        _required_text("owner", owner)
         _required_text("commit_id", commit_id)
         _optional_text("resolution", resolution)
         async with self._lock:
@@ -334,10 +409,11 @@ class WikiRenameApprovalStore:
             cursor = await self.conn.execute(
                 """
                 UPDATE wiki_rename_approvals
-                SET status = 'accepted', resolved_at = ?, commit_id = ?, resolution = ?
-                WHERE approval_id = ? AND status = 'applying'
+                SET status = 'accepted', resolved_at = ?, commit_id = ?, resolution = ?,
+                    claim_owner = NULL, claim_expires_at = NULL
+                WHERE approval_id = ? AND status = 'applying' AND claim_owner = ?
                 """,
-                (now, commit_id, resolution, approval_id),
+                (now, commit_id, resolution, approval_id, owner),
             )
             await self.conn.commit()
             if cursor.rowcount:
@@ -346,11 +422,6 @@ class WikiRenameApprovalStore:
             return bool(
                 existing and existing.status is WikiRenameApprovalStatus.ACCEPTED and existing.commit_id == commit_id
             )
-
-    async def record_commit(self, approval_id: str, *, commit_id: str, resolution: str | None = None) -> bool:
-        """Compatibility name for the atomic commit/accept transition."""
-
-        return await self.accept(approval_id, commit_id=commit_id, resolution=resolution)
 
     async def reject(self, approval_id: str, *, resolution: str | None = None) -> bool:
         async with self._lock:
@@ -396,6 +467,7 @@ class WikiRenameApprovalStore:
         new_path: str,
         link_count: int,
         page_count: int,
+        owner: str | None = None,
         resolution: str | None = None,
     ) -> WikiRenameApproval | None:
         """Atomically supersede a pending approval with its same-request successor.
@@ -417,6 +489,7 @@ class WikiRenameApprovalStore:
         _required_text("new_path", new_path)
         _nonnegative("link_count", link_count)
         _nonnegative("page_count", page_count)
+        _optional_text("owner", owner)
         _optional_text("resolution", resolution)
         canonical_plan = _canonical_plan_json(plan_json)
 
@@ -424,7 +497,13 @@ class WikiRenameApprovalStore:
             await self.conn.execute("BEGIN IMMEDIATE")
             try:
                 old = await self._get(old_approval_id)
-                if old is None or old.status not in {
+                if old is None:
+                    await self.conn.rollback()
+                    return None
+                if old.status is WikiRenameApprovalStatus.APPLYING and old.claim_owner != owner:
+                    await self.conn.rollback()
+                    return None
+                if old.status not in {
                     WikiRenameApprovalStatus.PENDING,
                     WikiRenameApprovalStatus.APPLYING,
                 }:
@@ -439,7 +518,8 @@ class WikiRenameApprovalStore:
                 cursor = await self.conn.execute(
                     """
                     UPDATE wiki_rename_approvals
-                    SET status = 'superseded', resolved_at = ?, resolution = ?
+                    SET status = 'superseded', resolved_at = ?, resolution = ?,
+                        claim_owner = NULL, claim_expires_at = NULL
                     WHERE approval_id = ? AND status IN ('pending', 'applying')
                     """,
                     (now, resolution, old_approval_id),

@@ -193,3 +193,25 @@ Verification:
   database failure rolled back the database and a rerun completed from the
   already committed wiki state;
 - no Desktop/UI source changed.
+
+### Post-implementation hardening
+
+- The root `README.md` remains the ordinary Home page. Only nested
+  `*/README.md` paths are reserved directory contracts.
+- Public create, move, rename, and generated-publication operations cannot
+  claim a nested README path. The service alone creates or restores contracts.
+- Exact link rewrites caused by page moves no longer invalidate a producer's
+  generated-region history.
+- Rename approvals use renewable, durable owner leases. A second live runtime
+  cannot steal an active apply; an expired crash claim remains retryable.
+- Approval-list responses retain stable recovery guidance without persisting
+  backend exception text.
+
+Verification:
+
+- complete server suite: **2,323 passed**;
+- focused README and approval adversarial suites: passed;
+- Ruff, format, and `git diff --check`: passed;
+- wheel and source distribution: built with the wiki service, approval
+  coordinator, move tool, and `wiki-automation` skill;
+- no Desktop/UI source changed.

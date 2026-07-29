@@ -557,7 +557,7 @@ def role(resource_id: str, path: str) -> WikiInfrastructureRole:
         return WikiInfrastructureRole.ME
     if resource_id == "active-work" or path == "active-work.md":
         return WikiInfrastructureRole.ACTIVE_WORK
-    if path == README_FILENAME:
+    if path.rsplit("/", 1)[-1] == README_FILENAME:
         return WikiInfrastructureRole.README
     if path.startswith("daily/"):
         return WikiInfrastructureRole.DAILY

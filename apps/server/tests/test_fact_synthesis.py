@@ -618,12 +618,6 @@ async def test_archived_project_scope_blocks_differently_named_recreation(tmp_pa
     ledger, consumers, wiki, synthesis = await _service(tmp_path)
     try:
         wiki.create_page(
-            path="retired/README.md",
-            title="Retired",
-            body=b"Purpose: retired test pages.\nProducer: tests.\nConsumers: tests.\nRetention: test lifetime.\n",
-            page_id="retired-readme",
-        )
-        wiki.create_page(
             path="retired/custom.md",
             title="Retired Custom Page",
             page_id="retired-custom",

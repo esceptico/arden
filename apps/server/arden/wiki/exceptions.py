@@ -15,6 +15,10 @@ class WikiSnapshotChangedError(RevisionConflictError):
     """A pinned wiki read became stale before it completed."""
 
 
+class WikiRenameApplyAmbiguousError(RuntimeError):
+    """A rename may have committed, but a coupled write did not confirm."""
+
+
 class GeneratedRegionConflictError(WikiValidationError):
     """A user changed a producer-owned generated region."""
 

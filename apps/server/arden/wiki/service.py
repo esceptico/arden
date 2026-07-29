@@ -176,7 +176,7 @@ class WikiService:
         reason: str = "create page",
         idempotency_key: str | None = None,
     ) -> WikiPageRecord:
-        snapshots.require_markdown_path(path)
+        snapshots.require_ordinary_page_path(path)
         if page_id == WIKI_HEALTH_RESOURCE_ID or path.casefold() == WIKI_HEALTH_PATH:
             raise WikiValidationError("health page is backend-managed")
         snapshot = self.snapshot()
@@ -224,7 +224,7 @@ class WikiService:
     ) -> tuple[WikiPageRecord, str | None]:
         """Move one page and rewrite only resolved path-style wiki links."""
 
-        snapshots.require_markdown_path(new_path)
+        snapshots.require_ordinary_page_path(new_path)
         snapshot = self.snapshot()
         snapshots.require_head(snapshot.head, expected_head)
         page_index = snapshots.index(snapshot)
@@ -370,7 +370,7 @@ class WikiService:
         if len(target_ids) != len(set(target_ids)):
             raise WikiValidationError("generated targets must not repeat a page_id")
         for target in targets:
-            snapshots.require_markdown_path(target.path)
+            snapshots.require_ordinary_page_path(target.path)
         new_targets = tuple(target for target in targets if target.page_id not in records)
         reserved_names = {
             snapshots.normal(name)
@@ -702,9 +702,12 @@ class WikiService:
         base_head: str | None,
         rewrite_links: bool = True,
     ) -> RenamePlan:
-        snapshots.require_markdown_path(new_path)
+        snapshots.require_ordinary_page_path(new_path)
         snapshot = self.snapshot()
         snapshots.require_head(snapshot.head, base_head)
+        record = snapshots.index(snapshot).pages.get(page_id)
+        if record is not None:
+            self._reject_readme_move(record)
         return rename.prepare_plan(
             self.repository,
             snapshot,
@@ -827,14 +830,7 @@ class WikiService:
                 trusted_exists = True
                 trusted = after
                 continue
-            if (
-                trusted_exists
-                and commit.actor == WIKI_RENAME_ACTOR
-                and commit.origin == WIKI_RENAME_ORIGIN
-                and commit.reason == WIKI_RENAME_REASON
-                and change.before is not None
-                and change.before.state is ResourceState.ACTIVE
-            ):
+            if trusted_exists and rename.is_exact_generated_rewrite(self.repository, commit, change, page_id):
                 before = extract_generated_region(self.repository.read_version(change.before), expected_page_id=page_id)
                 if before == trusted:
                     trusted = after
@@ -931,7 +927,7 @@ class WikiService:
     @staticmethod
     def _require_empty_directory_readme(snapshot: WikiSnapshot, record: WikiPageRecord) -> None:
         path = record.resource.path
-        if path.rsplit("/", 1)[-1] != README_FILENAME:
+        if "/" not in path or path.rsplit("/", 1)[-1] != README_FILENAME:
             return
         directory, _separator, _filename = path.rpartition("/")
         prefix = f"{directory}/" if directory else ""
@@ -947,7 +943,7 @@ class WikiService:
 
     @staticmethod
     def _reject_readme_move(record: WikiPageRecord) -> None:
-        if record.resource.path.rsplit("/", 1)[-1] == README_FILENAME:
+        if "/" in record.resource.path and record.resource.path.rsplit("/", 1)[-1] == README_FILENAME:
             raise WikiValidationError("directory README paths are fixed; edit or archive the README instead")
 
     @staticmethod
