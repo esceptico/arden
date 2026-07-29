@@ -93,15 +93,62 @@ export function plural(n: number, word: string): string {
   return n === 1 ? word : `${word}s`;
 }
 
-export function PhaseSparkline({ agents }: { agents: WorkflowAgent[] }) {
-  if (agents.length === 0) return null;
-  const settled = agents.filter((agent) => TERMINAL_AGENT.has(agent.status)).length;
+function agentSegmentClass(status: WorkflowAgent["status"]): string {
+  if (status === "completed") return "bg-ok";
+  if (status === "failed") return "bg-bad";
+  if (status === "cancelled" || status === "interrupted") return "bg-line-strong";
+  return "bg-accent"; // running / cancel_requested — still in flight
+}
+
+/** The marks column: 87px fits ten 6px marks per row, and two rows are
+ *  reserved so every phase keeps the same height. Size is fixed — shrinking
+ *  marks to fit a wide phase would make size carry meaning it does not have. */
+const MARKS_WIDTH_PX = 87;
+const MARK_GAP_PX = 3;
+const MARK_PX = 6;
+const MARK_ROWS = 2;
+
+/** One mark per agent, coloured by that agent's own state. Identical at one
+ *  agent or thirty — where a proportional-length bar had to switch
+ *  representation partway and made a lone agent a speck beside a wide phase.
+ *
+ *  Two rows of ten covers the realistic ceiling; a wider phase simply wraps
+ *  on and makes its row taller rather than hiding agents behind an
+ *  indicator. */
+export function PhaseScale({ agents }: { agents: WorkflowAgent[] }) {
+  const done = agents.filter((agent) => TERMINAL_AGENT.has(agent.status)).length;
+
   return (
     <span
-      className="shrink-0 text-2xs tabular-nums text-faint"
-      aria-label={`${settled} of ${agents.length} agents settled`}
+      className="flex shrink-0 flex-wrap content-center items-center gap-[2px]"
+      // minHeight, not height: two rows are reserved so short phases keep the
+      // list's rhythm, and a phase past twenty grows instead of clipping.
+      style={{ width: MARKS_WIDTH_PX, minHeight: MARK_ROWS * MARK_PX + MARK_GAP_PX }}
+      title={agents.length === 0 ? "No agents started yet" : `${done}/${agents.length} agents done`}
     >
-      {settled}/{agents.length}
+      {agents.length === 0 ? (
+        // Hollow: "nothing has started", which an empty column could not
+        // distinguish from "no data".
+        <span
+          aria-hidden
+          className="block rounded-[1.5px] border border-line-strong"
+          style={{ width: MARK_PX, height: MARK_PX }}
+        />
+      ) : (
+        <>
+          {agents.map((agent) => (
+            <span
+              key={agent.taskId}
+              aria-hidden
+              className={clsx(
+                "block rounded-[1.5px] transition-colors duration-trace ease-out",
+                agentSegmentClass(agent.status),
+              )}
+              style={{ width: MARK_PX, height: MARK_PX }}
+            />
+          ))}
+        </>
+      )}
     </span>
   );
 }
@@ -130,6 +177,10 @@ export function WorkflowProgressCard({
   useTimeTicker(running ? 1000 : 60_000);
 
   const phases = Object.values(workflow.phasesByName);
+  // Named only when there is more than one phase: with a single phase the
+  // caption would just restate the workflow's own title.
+  const runningPhase =
+    phases.length > 1 ? phases.find((phase) => phase.status === "running")?.name ?? null : null;
   const total = workflow.totalAgents || countAgents(workflow);
   const done = settledAgents(workflow);
   const durationMs = (workflow.completedAt ?? Date.now()) - workflow.startedAt;
@@ -161,7 +212,7 @@ export function WorkflowProgressCard({
         }
       }}
       title={workflow.description ?? `${workflow.name ?? "Workflow"} — open`}
-      className="group/workflow flex w-full flex-col gap-1.5 rounded-[var(--r-house)] border border-line bg-surface-sunken px-2.5 py-2 text-left transition-[background-color,border-color,scale] duration-row ease-out hover:border-line-strong hover:bg-surface-soft active:scale-[0.985]"
+      className="group/workflow flex w-full flex-col gap-1.5 rounded-[var(--r-panel)] border border-line bg-surface-sunken px-2.5 py-2 text-left transition-[background-color,border-color,scale] duration-row ease-out hover:border-line-strong hover:bg-surface-soft active:scale-[var(--press-scale)]"
     >
       <div className="flex min-w-0 items-center gap-2">
         <span
@@ -202,7 +253,10 @@ export function WorkflowProgressCard({
               e.stopPropagation();
               void stopRun();
             }}
-            className="grid place-items-center w-5 h-5 shrink-0 rounded text-faint transition-[background-color,color,scale] duration-check ease-out hover:bg-bad-soft hover:text-bad active:scale-[0.97]"
+            // --r-icon, like every other 20px control on this row. A bare
+            // `rounded` is Tailwind's 4px and ignored the corner profile, so
+            // this sat square next to the round workflow glyph.
+            className="grid place-items-center w-5 h-5 shrink-0 rounded-[var(--r-icon)] text-faint transition-[background-color,color,scale] duration-check ease-out hover:bg-bad-soft hover:text-bad active:scale-[var(--press-scale)]"
           >
             <Stop size={ICON.XS} />
           </button>
@@ -218,31 +272,35 @@ export function WorkflowProgressCard({
         />
       </div>
       {(phases.length > 0 || meta) && (
+        // Bar first, then a caption row. The running phase used to float
+        // `absolute bottom-full` over its own segment: shrink-to-fit, so its
+        // `truncate` never engaged, and it landed in the title row — or
+        // outside the card entirely — as soon as the phase name got long.
+        // In flow it truncates against the card and can collide with nothing.
         <div className="grid gap-1">
-          <div className="flex items-center gap-2.5">
-            {phases.length > 0 ? (
-              <span className="flex flex-1 items-center gap-[2px]" aria-hidden>
-                {phases.map((phase) => (
-                  <span key={phase.name} className="relative flex-1 min-w-[2px]">
-                    {phase.status === "running" && phases.length > 1 && (
-                      <span className="absolute bottom-full mb-0.5 left-0 text-2xs text-faint truncate whitespace-nowrap">
-                        <BlurSwap swapKey={phase.name} blur={2}>{phase.name}</BlurSwap>
-                      </span>
-                    )}
-                    <span
-                      className={clsx(
-                        "block h-[3px] w-full rounded-[var(--r-control)] transition-colors duration-trace ease-out",
-                        phaseSegmentClass(phase.status),
-                      )}
-                    />
-                  </span>
-                ))}
+          {phases.length > 0 && (
+            <span className="flex items-center gap-[2px]" aria-hidden>
+              {phases.map((phase) => (
+                <span
+                  key={phase.name}
+                  className={clsx(
+                    "block h-[5px] flex-1 min-w-[3px] rounded-[var(--r-control)] transition-colors duration-trace ease-out",
+                    phaseSegmentClass(phase.status),
+                  )}
+                />
+              ))}
+            </span>
+          )}
+          {(runningPhase || meta) && (
+            <div className="flex items-baseline gap-2.5 text-xs">
+              <span className="min-w-0 flex-1 truncate text-faint">
+                {runningPhase && (
+                  <BlurSwap swapKey={runningPhase} blur={2}>{runningPhase}</BlurSwap>
+                )}
               </span>
-            ) : (
-              <span className="flex-1" />
-            )}
-            {meta && <span className="shrink-0 text-2xs tabular-nums text-muted">{meta}</span>}
-          </div>
+              {meta && <span className="shrink-0 tabular-nums text-muted">{meta}</span>}
+            </div>
+          )}
         </div>
       )}
     </div>

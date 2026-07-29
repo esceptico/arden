@@ -31,12 +31,20 @@ function labelForItem(item: ActivityItem): WorkingLabel {
  *  naming the completed read would be stating something untrue. With nothing
  *  ongoing — before the first tool, or in the gap between two — it falls back
  *  to the generic label, which is exactly the no-signal window the strip
- *  exists to cover. */
+ *  exists to cover.
+ *
+ *  Only top-level calls are eligible. A workflow or subagent runs its own
+ *  tools at depth ≥ 1, and surfacing those puts a nested agent's private step
+ *  on the composer — the user sees "Tracing …" from somewhere inside a
+ *  workflow instead of the workflow itself. The trace panel is where that
+ *  detail belongs; the strip answers what the agent you are talking to is
+ *  doing. */
 export function workingLabel(activityMessage: UiMessage | null | undefined): WorkingLabel {
   const items = activityMessage?.activity?.items;
   if (!items?.length) return GENERIC;
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index]!;
+    if ((item.depth ?? 0) > 0) continue;
     if (activityItemStatus(item) === "ongoing") return labelForItem(item);
   }
   return GENERIC;

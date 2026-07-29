@@ -63,3 +63,20 @@ test("status is inferred when the server omitted it", () => {
     call({ displayTitle: "Running tests" }),
   ]))).toEqual({ verb: "Running", target: "tests" });
 });
+
+test("a workflow's nested calls never reach the strip", () => {
+  // A workflow runs its own agents' tools at depth >= 1. Surfacing those puts
+  // a private step from inside the workflow on the composer instead of the
+  // workflow itself; the trace panel is where that detail belongs.
+  const label = workingLabel(message([
+    call({ id: "wf", status: "ongoing", displayTitle: "Inspect updated automation harness" }),
+    call({ id: "nested", status: "ongoing", depth: 1, displayTitle: "Tracing harness architecture" }),
+  ]));
+  expect(label).toEqual({ verb: "Inspect", target: "updated automation harness" });
+});
+
+test("with only nested calls running, the strip stays generic", () => {
+  expect(workingLabel(message([
+    call({ status: "ongoing", depth: 2, displayTitle: "Reading areas.md" }),
+  ]))).toEqual({ verb: "Working", target: "" });
+});

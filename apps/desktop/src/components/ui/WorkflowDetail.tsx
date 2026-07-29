@@ -13,7 +13,7 @@ import { highlight } from "@/lib/highlight";
 import { BlurSwap } from "@/components/ui/BlurSwap";
 import { CopyGlyph } from "@/components/ui/CopyGlyph";
 import { isActiveWorkflow, type Workflow, type WorkflowAgent, type WorkflowPhase } from "@/stores/workflow-domain";
-import { formatTokens, PhaseSparkline, WorkflowProgressCard } from "@/components/ui/WorkflowProgress";
+import { formatTokens, PhaseScale, WorkflowProgressCard } from "@/components/ui/WorkflowProgress";
 
 // A workflow card that expands IN PLACE to reveal its phases → agents — used in
 // both the chat trace and the sidebar hub, each with its own local expand state.
@@ -100,15 +100,15 @@ function WorkflowSource({ parentToolCallId }: { parentToolCallId?: string }) {
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
-          className="group/src flex min-w-0 flex-1 items-center gap-1.5 py-0.5 text-left bg-transparent border-0 rounded hover:bg-surface-soft transition-[background-color,scale] duration-row ease-out active:scale-[0.985]"
+          className="group/src flex min-w-0 flex-1 items-center gap-1.5 py-0.5 text-left bg-transparent border-0 rounded-[var(--r-row)] hover:bg-surface-soft transition-[background-color,scale] duration-row ease-out active:scale-[var(--press-scale)]"
         >
           <ChevronDown
             size={ICON.XS}
             strokeWidth={2}
-            className={clsx("shrink-0 text-faint transition-transform duration-row", !open && "-rotate-90")}
+            className={clsx("shrink-0 text-faint transition-transform duration-row ease-out", !open && "-rotate-90")}
           />
           <Code2 size={ICON.XS} strokeWidth={2} className="shrink-0 text-faint" />
-          <span className="shrink-0 text-2xs font-medium text-ink">Source</span>
+          <span className="shrink-0 text-xs font-medium text-ink">Source</span>
         </button>
         {open && (
           <motion.button
@@ -119,7 +119,7 @@ function WorkflowSource({ parentToolCallId }: { parentToolCallId?: string }) {
             onClick={() => void onCopy()}
             aria-label={copied ? "Copied" : "Copy script"}
             className={clsx(
-              "shrink-0 inline-flex items-center gap-1 h-5 px-1.5 rounded-[var(--r-control)] text-2xs font-medium transition-[background-color,color,scale] duration-row ease-out active:scale-[0.97]",
+              "shrink-0 inline-flex items-center gap-1 h-5 px-1.5 rounded-[var(--r-control)] text-xs font-medium transition-[background-color,color,scale] duration-row ease-out active:scale-[var(--press-scale)]",
               copied ? "text-accent-strong bg-accent-soft" : "text-faint hover:bg-surface-soft hover:text-ink",
             )}
           >
@@ -172,7 +172,7 @@ export function WorkflowDetail({
   const summary = !isActiveWorkflow(workflow) && workflow.summary ? (
     <div
       className={clsx(
-        "px-2 py-1 text-2xs break-words",
+        "px-2 py-1 text-xs break-words",
         workflow.status === "failed" ? "text-bad" : "text-muted",
       )}
     >
@@ -183,7 +183,7 @@ export function WorkflowDetail({
   if (phases.length === 0) {
     return (
       <div className="py-1.5">
-        <div className="px-2 text-2xs text-muted">
+        <div className="px-2 text-xs text-muted">
           {isActiveWorkflow(workflow) ? "Spinning up agents…" : "No agents ran."}
         </div>
         {summary}
@@ -192,10 +192,17 @@ export function WorkflowDetail({
   }
 
   return (
-    <div className="mt-0.5 space-y-1">
+    // The trace artifact that wraps this has a 23px radius and no padding, so
+    // an unpadded list puts the last row's corner inside the curve.
+    <div className="mt-0.5 space-y-0.5 px-1 pb-1.5">
       {summary}
-      {phases.map((phase) => (
-        <PhaseGroup key={phase.name} phase={phase} onOpenAgent={onOpenAgent} />
+      {phases.map((phase, index) => (
+        <PhaseGroup
+          key={phase.name}
+          phase={phase}
+          index={index}
+          onOpenAgent={onOpenAgent}
+        />
       ))}
     </div>
   );
@@ -203,32 +210,64 @@ export function WorkflowDetail({
 
 function PhaseGroup({
   phase,
+  index,
   onOpenAgent,
 }: {
   phase: WorkflowPhase;
+  /** Position in the list — only used to stagger its arrival. */
+  index: number;
   onOpenAgent: (childSessionId: string) => void;
 }) {
   const agents = Object.values(phase.agentsByTaskId);
-  // Default OPEN: the user expanded the card specifically to see the subagents.
-  // The phase chevron is then a further collapse, not a gate.
-  const [expanded, setExpanded] = useState(true);
+  // Default CLOSED: expanding the card shows the SHAPE of the run — every
+  // phase and its counts on one screen. Opening a phase is then a deliberate
+  // drill into one of them, not something to scroll past.
+  const [expanded, setExpanded] = useState(false);
 
   return (
-    <div>
+    // Rows arrive down the list rather than all at once. 24ms apart: eight
+    // phases land inside 200ms, so it reads as one gesture with direction
+    // instead of a block appearing.
+    <motion.div
+      initial={{ opacity: 0, transform: "translateY(3px)" }}
+      animate={{ opacity: 1, transform: "translateY(0px)" }}
+      transition={{ duration: MOTION.row, ease: EASE_OUT, delay: Math.min(index, 8) * 0.024 }}
+    >
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
-        className="group/phase flex w-full items-center gap-1.5 px-1.5 py-0.5 text-left bg-transparent border-0 rounded hover:bg-surface-soft transition-[background-color,scale] duration-row ease-out active:scale-[0.985]"
+        className="group/phase flex w-full items-center gap-1.5 px-1.5 py-0.5 text-left bg-transparent border-0 rounded-[var(--r-row)] hover:bg-surface-soft transition-[background-color,scale] duration-row ease-out active:scale-[var(--press-scale)]"
       >
+        {/* Reserved, not drawn: eight chevrons at rest were the loudest thing
+            in the panel, before anyone asked to open one. */}
         <ChevronDown
           size={ICON.XS}
           strokeWidth={2}
-          className={clsx("shrink-0 text-faint transition-transform duration-row", !expanded && "-rotate-90")}
+          className={clsx(
+            "shrink-0 text-faint transition-[transform,opacity] duration-row ease-out",
+            !expanded && "-rotate-90",
+            !expanded && "opacity-0 group-hover/phase:opacity-100 group-focus-visible/phase:opacity-100",
+          )}
         />
-        <span className="shrink-0 text-2xs font-medium text-ink">{phase.name}</span>
-        <PhaseSparkline agents={agents} />
-        <span className="flex-1" />
-        <span className="shrink-0 text-2xs tabular-nums text-faint">{agents.length}</span>
+        {/* Bad ink is reserved for the PHASE failing. One agent failing out of
+            six is not the phase failing — that is what its own red mark says,
+            and colouring the whole name overstates it. */}
+        {/* The live phase is the brightest, but a settled phase still outranks
+            any agent under it — dropping them to text-muted put phase names at
+            the same weight as their own children and the two levels merged. */}
+        <span
+          className={clsx(
+            "min-w-0 flex-1 truncate text-xs font-semibold tracking-[-0.005em] transition-colors duration-trace ease-out",
+            phase.status === "failed"
+              ? "text-bad"
+              : phase.status === "running"
+                ? "text-ink"
+                : "text-ink-soft",
+          )}
+        >
+          {phase.name}
+        </span>
+        <PhaseScale agents={agents} />
       </button>
       {/* Unbounded agent list — snap the height, rise the content. */}
       <AnimatePresence initial={false}>
@@ -240,7 +279,7 @@ function PhaseGroup({
             transition={{ duration: MOTION.row, ease: EASE_OUT }}
           >
             {agents.length === 0 ? (
-              <div className="pl-6 py-0.5 text-2xs text-muted">No agents yet.</div>
+              <div className="pl-6 py-0.5 text-xs text-muted">No agents yet.</div>
             ) : (
               agents.map((agent) => (
                 <AgentRow key={agent.taskId} agent={agent} onOpenAgent={onOpenAgent} />
@@ -249,7 +288,7 @@ function PhaseGroup({
           </motion.div>
         )}
       </AnimatePresence>
-    </div>
+    </motion.div>
   );
 }
 
@@ -276,9 +315,11 @@ function AgentRow({
         : agent.status;
   const body = (
     <>
+      {/* Fixed column: "failed" is wider than "done", so an auto-width status
+          pushed every agent name to a different x and the list lost its spine. */}
       <span
         className={clsx(
-          "shrink-0 text-2xs",
+          "w-12 shrink-0 text-xs",
           running
             ? "text-accent"
             : agent.status === "failed"
@@ -302,8 +343,8 @@ function AgentRow({
       >
         {agent.name ?? agent.taskId}
       </span>
-      {tokens > 0 && <span className="shrink-0 text-2xs tabular-nums text-muted">{formatTokens(tokens)}</span>}
-      {elapsedLabel && <span className="shrink-0 text-2xs tabular-nums text-muted">{elapsedLabel}</span>}
+      {tokens > 0 && <span className="shrink-0 text-xs tabular-nums text-muted">{formatTokens(tokens)}</span>}
+      {elapsedLabel && <span className="shrink-0 text-xs tabular-nums text-muted">{elapsedLabel}</span>}
     </>
   );
 
@@ -315,7 +356,7 @@ function AgentRow({
       type="button"
       onClick={() => onOpenAgent(childSessionId)}
       title={`Open ${agent.name ?? "agent"} — watch its tool calls live`}
-      className="group/agent flex w-full items-center gap-2 pl-6 pr-1.5 py-0.5 text-xs text-left bg-transparent border-0 rounded hover:bg-surface-soft transition-[background-color,scale] duration-row ease-out active:scale-[0.985]"
+      className="group/agent flex w-full items-center gap-2 pl-6 pr-1.5 py-0.5 text-xs text-left bg-transparent border-0 rounded-[var(--r-row)] hover:bg-surface-soft transition-[background-color,scale] duration-row ease-out active:scale-[var(--press-scale)]"
     >
       {body}
     </button>
