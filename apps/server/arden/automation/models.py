@@ -45,7 +45,7 @@ class Automation:
     idempotency_scope: str | None = None
     # Display copy and executable instructions are separate contracts. A
     # migrated row may intentionally have no display description until the
-    # user asks the cheap model to generate one.
+    # user asks the configured auxiliary model to generate one.
     description: str | None = None
     description_source: AutomationDescriptionSource | None = None
 

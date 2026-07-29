@@ -1,10 +1,9 @@
 import json
+from typing import Literal
 
 from pydantic import BaseModel
 
-from arden.logging import get_logger
-
-_logger = get_logger(__name__)
+from arden.llm.base import CompletionClient
 
 TRIAGE_SYSTEM = """You file a just-started chat into the user's existing \
 workspace. You are given the opening exchange of a conversation and a list of \
@@ -29,32 +28,34 @@ class TriageTarget(BaseModel):
 
 
 class TriageDecision(BaseModel):
-    decision: str  # "move" | "create" | "none"
+    decision: Literal["move", "create", "none"]
     target: TriageTarget | None = None
     new_title: str | None = None
     rationale: str = ""
 
 
-async def triage_chat(*, transcript: str, candidates: list[dict], cheap_llm, model) -> TriageDecision:
-    """One cheap classify: file this chat into an existing home, propose a new
-    one, or stay silent. Any failure degrades to `none` — triage is additive,
-    a broken call must never surface anything."""
+async def triage_chat(
+    *,
+    transcript: str,
+    candidates: list[dict],
+    client: CompletionClient,
+    model: str,
+    reasoning_effort: str | None,
+) -> TriageDecision:
+    """Use the configured auxiliary model to classify a new chat."""
     homes = [{"key": c["key"], "title": c["title"]} for c in candidates]
     payload = json.dumps({"conversation": transcript, "homes": homes}, ensure_ascii=False)
-    try:
-        response = await cheap_llm.completion(
-            messages=[
-                {"role": "system", "content": TRIAGE_SYSTEM},
-                {"role": "user", "content": payload},
-            ],
-            model=model,
-            response_format=TriageDecision,
-        )
-        content = response.choices[0].message.content
-        decision = content if isinstance(content, TriageDecision) else TriageDecision.model_validate_json(content)
-    except Exception as e:
-        _logger.warning("Chat triage failed; treating as none: %s", e)
-        return TriageDecision(decision="none")
+    response = await client.completion(
+        messages=[
+            {"role": "system", "content": TRIAGE_SYSTEM},
+            {"role": "user", "content": payload},
+        ],
+        model=model,
+        reasoning_effort=reasoning_effort,
+        response_format=TriageDecision,
+    )
+    content = response.choices[0].message.content
+    decision = content if isinstance(content, TriageDecision) else TriageDecision.model_validate_json(content)
     return _validated(decision, candidates)
 
 
@@ -66,8 +67,7 @@ def _validated(decision: TriageDecision, candidates: list[dict]) -> TriageDecisi
         by_key = {c["key"]: c for c in candidates}
         home = by_key.get(decision.target.key) if decision.target else None
         if home is None:
-            _logger.warning("Triage proposed unknown home; dropped to none")
-            return TriageDecision(decision="none")
+            raise ValueError("Triage proposed an unknown home")
         return TriageDecision(
             decision="move",
             target=TriageTarget(key=home["key"], title=home["title"]),
@@ -76,6 +76,6 @@ def _validated(decision: TriageDecision, candidates: list[dict]) -> TriageDecisi
     if decision.decision == "create":
         title = (decision.new_title or "").strip()
         if not title:
-            return TriageDecision(decision="none")
+            raise ValueError("Triage create decision requires a title")
         return TriageDecision(decision="create", new_title=title, rationale=decision.rationale)
-    return TriageDecision(decision="none")
+    return decision

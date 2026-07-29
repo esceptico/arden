@@ -32,6 +32,7 @@ async def test_models_endpoint_includes_canonical_group_labels(monkeypatch):
             research_model="openai-codex/test",
             workflow_model="openai-codex/test",
             memory_model="openai-codex/test",
+            auxiliary_model="openai-codex/test",
         )
     )
 
@@ -75,6 +76,7 @@ async def test_models_endpoint_lists_connected_providers_only(monkeypatch):
             # An active selection survives its provider's disconnect so the
             # picker can still label it.
             memory_model="gemini-3-flash-preview",
+            auxiliary_model="openai-codex/test",
         )
     )
 

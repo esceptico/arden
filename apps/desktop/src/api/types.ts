@@ -122,7 +122,7 @@ export interface ServerConfig {
   reasoning_effort: string | null;
   reasoning_efforts: string[];
   model_reasoning_efforts: Record<string, string>;
-  /** Per-role setup, keyed by role (research | workflow | memory). A role's
+  /** Per-role setup, keyed by role (research | workflow | auxiliary | memory). A role's
    *  effort overrides the per-model map, which every role pointed at the same
    *  model would otherwise share. */
   /** Absent on a server older than the role split — the Models tab says so

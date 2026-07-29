@@ -75,7 +75,7 @@ MODEL_DEFAULTS = {
 OPENAI_CODEX_DEFAULT_CHAT = "openai-codex/gpt-5.5"
 OPENAI_CODEX_DEFAULT_MEMORY = "openai-codex/gpt-5.4-mini"
 
-ROLE_NAMES = ("research", "workflow", "memory")
+ROLE_NAMES = ("research", "workflow", "memory", "auxiliary")
 
 
 class RoleModelSetup(BaseModel):
@@ -86,9 +86,9 @@ class RoleModelSetup(BaseModel):
     that. One object per role means the next knob (output ceiling, provider
     routing, a thinking budget) lands in one place for all of them.
 
-    Effort here overrides the per-model map: research, workflows and memory
-    routinely share a model, and sharing its single effort entry made the three
-    settings rows move together.
+    Effort here overrides the per-model map: research, workflows, auxiliary
+    tasks, and memory routinely share a model, and sharing its single effort
+    entry made the role rows move together.
     """
 
     model: str | None = None
@@ -154,7 +154,8 @@ class Config(BaseSettings):
 
     # Model IDs
     chat_model: str | None = None
-    # Per-role setup (research | workflow | memory). The `<role>_model` and
+    # Per-role setup (research | workflow | memory | auxiliary). The
+    # `<role>_model` and
     # `<role>_reasoning_effort` properties below read out of here, so the rest
     # of the codebase never learned about the move.
     model_roles: dict[str, RoleModelSetup] = Field(default_factory=dict)
@@ -234,6 +235,10 @@ class Config(BaseSettings):
             if not isinstance(existing, dict):
                 existing = existing.model_dump()
             roles[role] = {**carried, **{k: v for k, v in existing.items() if v is not None}}
+        if "auxiliary" not in roles and (memory := roles.get("memory")):
+            memory_model = RoleModelSetup.model_validate(memory).model
+            if memory_model:
+                roles["auxiliary"] = {"model": memory_model}
         if roles:
             data["model_roles"] = roles
         return data
@@ -258,10 +263,14 @@ class Config(BaseSettings):
     def memory_model(self) -> str | None:
         return self.role_setup("memory").model
 
+    @property
+    def auxiliary_model(self) -> str | None:
+        return self.role_setup("auxiliary").model
+
     @model_validator(mode="after")
     def _resolve_model_defaults(self) -> Self:
         self._resolve_chat_model()
-        self._fill_model_fallbacks()
+        self._resolve_role_defaults()
         self._resolve_embedding_model()
         return self
 
@@ -279,12 +288,14 @@ class Config(BaseSettings):
                 self._set_role_model("memory", OPENAI_CODEX_DEFAULT_MEMORY)
             object.__setattr__(self, "chat_model", OPENAI_CODEX_DEFAULT_CHAT)
 
-    def _fill_model_fallbacks(self) -> None:
+    def _resolve_role_defaults(self) -> None:
         if not self.chat_model:
             return
-        for role in ROLE_NAMES:
+        for role in ("research", "workflow", "memory"):
             if not self.role_setup(role).model:
                 self._set_role_model(role, self.chat_model)
+        if not self.auxiliary_model:
+            self._set_role_model("auxiliary", self.memory_model)
 
     def _resolve_embedding_model(self) -> None:
         if self.embedding_model or "embedding_model" in self.model_fields_set:
@@ -381,8 +392,8 @@ class Config(BaseSettings):
 
     def reasoning_effort_for_role(self, role: str, model_id: str | None) -> str | None:
         """A background role's effort: its own override when set and valid for the
-        model, else whatever the per-model map says. `role` is research | workflow
-        | memory."""
+        model, else whatever the per-model map says. `role` is research |
+        workflow | memory | auxiliary."""
         if not model_id:
             return None
         override = self.role_setup(role).reasoning_effort

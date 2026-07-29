@@ -200,7 +200,13 @@ async def get_models(runtime: Runtime = Depends(get_runtime)):
     config = runtime.config
     all_models = get_models_fn()
     connected = connected_providers(config)
-    active = {config.chat_model, config.research_model, config.workflow_model, config.memory_model}
+    active = {
+        config.chat_model,
+        config.research_model,
+        config.workflow_model,
+        config.memory_model,
+        config.auxiliary_model,
+    }
     # Pickers list connected providers only; an actively configured model stays
     # visible even if its provider was disconnected, so the selection keeps its
     # label until the user picks a reachable one.
@@ -290,20 +296,10 @@ async def create_custom_model(
 @router.delete("/models/custom/{model_id:path}")
 async def delete_custom_model(
     model_id: str,
-    runtime: Runtime = Depends(get_runtime),
     cfg_svc: ConfigService = Depends(require_config_service),
 ):
-    config = runtime.config
     try:
-        await cfg_svc.delete_custom_model(
-            model_id,
-            active_models={
-                "chat_model": config.chat_model,
-                "research_model": config.research_model,
-                "workflow_model": config.workflow_model,
-                "memory_model": config.memory_model,
-            },
-        )
+        await cfg_svc.delete_custom_model(model_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

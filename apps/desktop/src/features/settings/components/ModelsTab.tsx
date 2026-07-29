@@ -15,11 +15,11 @@ import { SettingsTabSkeleton } from "@/features/settings/components/SettingsTabS
 import { Button } from "@/components/ui/Button";
 
 /** One row per background role. Model and effort live together in the role's
- *  own setup, so effort stops being keyed by model alone — these three roles
- *  routinely share a model, and sharing its single effort entry made all three
+ *  own setup, so effort stops being keyed by model alone — these roles
+ *  routinely share a model, and sharing its single effort entry made the
  *  rows move at once. A role falls back to the per-model value until it names
  *  its own. */
-type ModelKind = "research" | "workflow" | "memory";
+type ModelKind = "research" | "workflow" | "auxiliary" | "memory";
 
 const KIND_LABELS: Record<ModelKind, { title: string; description: string }> = {
   research: {
@@ -30,13 +30,17 @@ const KIND_LABELS: Record<ModelKind, { title: string; description: string }> = {
     title: "Workflows",
     description: "Default for workflow agents; a script's explicit per-agent model still wins.",
   },
+  auxiliary: {
+    title: "Auxiliary",
+    description: "Chat filing suggestions and generated automation descriptions.",
+  },
   memory: {
     title: "Memory",
     description: "Knowledge reflection, activation, and retention.",
   },
 };
 
-const SETTINGS_MODEL_KINDS: ModelKind[] = ["research", "workflow", "memory"];
+const SETTINGS_MODEL_KINDS: ModelKind[] = ["research", "workflow", "auxiliary", "memory"];
 
 export function ModelsTab() {
   const connected = useStore((s) => s.connected);

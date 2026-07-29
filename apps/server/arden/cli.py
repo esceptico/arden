@@ -53,6 +53,7 @@ def status():
     console.print()
     console.print(f"Database dir: [cyan]{config.db_dir}[/cyan]")
     console.print(f"Chat model: {config.chat_model or '[dim]not set[/dim]'}")
+    console.print(f"Auxiliary model: {config.auxiliary_model or '[dim]not set[/dim]'}")
     console.print(f"Memory model: {config.memory_model or '[dim]not set[/dim]'}")
     console.print(f"Embedding model: {config.embedding_model or '[dim]not set[/dim]'}")
 

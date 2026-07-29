@@ -16,6 +16,7 @@ from arden.constants import (
 from arden.core.factory import AgentConfig
 from arden.integrations import ALL_INTEGRATIONS, IntegrationRegistry
 from arden.integrations.slack.client import SlackClient
+from arden.llm.base import CompletionClient
 from arden.llm.openai_codex_catalog import refresh_codex_models
 from arden.llm.router import close as llm_close
 from arden.llm.router import get_completion_client
@@ -159,6 +160,16 @@ class Runtime:
 
     def config_status(self) -> dict[str, int | str]:
         return self.config_runtime.status()
+
+    def auxiliary_completion(self) -> tuple[CompletionClient, str, str | None]:
+        model = self.config.auxiliary_model
+        if model is None:
+            raise RuntimeError("Auxiliary model is not configured")
+        return (
+            get_completion_client(model),
+            model,
+            self.config.reasoning_effort_for_role("auxiliary", model),
+        )
 
     @property
     def session_service(self) -> SessionService | None:
@@ -668,8 +679,7 @@ class Runtime:
             build_operator_deps=self.build_operator_deps,
             get_calendar_source=lambda: self.integrations.get_client("calendar"),
             get_slack_client=lambda: self.integrations.get_client("slack"),
-            get_cheap_llm=lambda: get_completion_client(self.config.memory_model) if self.config.memory_model else None,
-            cheap_model=self.config.memory_model,
+            resolve_auxiliary_completion=self.auxiliary_completion,
             get_fact_dream=self._get_fact_dream,
             get_fact_maintenance=self._create_fact_maintenance,
             get_fact_synthesis=self._get_fact_synthesis,

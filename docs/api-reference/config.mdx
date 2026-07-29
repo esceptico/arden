@@ -13,8 +13,12 @@ curl http://localhost:6877/config \
 ```json
 {
   "chat_model": "claude-sonnet-4-6",
-  "research_model": "claude-sonnet-4-6",
-  "memory_model": "claude-sonnet-4-6",
+  "model_roles": {
+    "research": {"model": "claude-sonnet-4-6", "reasoning_effort": null},
+    "workflow": {"model": "claude-sonnet-4-6", "reasoning_effort": null},
+    "auxiliary": {"model": "claude-haiku-4-5", "reasoning_effort": null},
+    "memory": {"model": "claude-haiku-4-5", "reasoning_effort": null}
+  },
   "embedding_model": "text-embedding-3-small",
   "integrations": {
     "google": {"enabled": true, "connected": true},
@@ -35,7 +39,7 @@ curl -X PATCH http://localhost:6877/config \
 
 ## Models
 
-### List chat/research/memory models
+### List chat and role models
 
 ```bash
 curl http://localhost:6877/models \

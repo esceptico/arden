@@ -123,8 +123,11 @@ async def test_config_service_deletes_custom_model_and_clears_active_fields(monk
     persisted = {
         "custom_model_keys": {"local/test": "secret", "other": "keep"},
         "chat_model": "local/test",
-        "research_model": "local/test",
-        "memory_model": "other",
+        "model_roles": {
+            "research": {"model": "local/test", "reasoning_effort": "high"},
+            "auxiliary": {"model": "local/test", "reasoning_effort": None},
+            "memory": {"model": "other", "reasoning_effort": None},
+        },
         "model_reasoning_efforts": {"local/test": "high", "other": "low"},
     }
     removed: list[str] = []
@@ -147,19 +150,14 @@ async def test_config_service_deletes_custom_model_and_clears_active_fields(monk
 
     service = ConfigService(on_config_change=reload_config)
 
-    await service.delete_custom_model(
-        "local/test",
-        active_models={
-            "chat_model": "local/test",
-            "research_model": "local/test",
-            "memory_model": "other",
-        },
-    )
+    await service.delete_custom_model("local/test")
 
     assert removed == ["local/test"]
     assert persisted == {
         "custom_model_keys": {"other": "keep"},
-        "memory_model": "other",
+        "model_roles": {
+            "memory": {"model": "other", "reasoning_effort": None},
+        },
         "model_reasoning_efforts": {"other": "low"},
     }
     assert reload_seen == [persisted]

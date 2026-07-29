@@ -832,18 +832,22 @@ async def triage_session(
 ):
     """Classify a just-started chat against existing homes and return a filing
     proposal (move / create / none). Read-only — the client runs the chosen
-    action. Degrades to `none` whenever the cheap model is unavailable or the
-    chat has no substance yet."""
+    action."""
     data = await svc.load(session_id)
     if not data:
         raise HTTPException(status_code=404, detail="Session not found")
-    cheap_llm = runtime.automation.get_cheap_llm()
-    model = runtime.automation.cheap_model
     transcript = _goal_proposal_context(data.messages)
-    if cheap_llm is None or not model or not transcript:
+    if not transcript:
         return TriageDecision(decision="none")
+    client, model, reasoning_effort = runtime.auxiliary_completion()
     candidates = await _triage_candidates(svc)
-    return await triage_chat(transcript=transcript, candidates=candidates, cheap_llm=cheap_llm, model=model)
+    return await triage_chat(
+        transcript=transcript,
+        candidates=candidates,
+        client=client,
+        model=model,
+        reasoning_effort=reasoning_effort,
+    )
 
 
 @router.post("/sessions/{session_id}/auto")

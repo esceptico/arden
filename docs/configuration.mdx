@@ -97,9 +97,12 @@ Desktop clients store the key locally and encrypt it with OS-backed storage when
 ```json
 {
   "chat_model": "claude-sonnet-4-6",
-  "research_model": "claude-sonnet-4-6",
-  "workflow_model": "claude-sonnet-4-6",
-  "memory_model": "claude-haiku-4-5",
+  "model_roles": {
+    "research": {"model": "claude-sonnet-4-6"},
+    "workflow": {"model": "claude-sonnet-4-6"},
+    "auxiliary": {"model": "claude-haiku-4-5"},
+    "memory": {"model": "claude-haiku-4-5"}
+  },
   "embedding_model": "text-embedding-3-small",
   "api_key_hash": "a1b2c3:..."
 }

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 import arden.database as database
-from arden.automation.descriptions import AutomationDescriptionDraft
+from arden.automation.descriptions import AutomationDescriptionDraft, AutomationDescriptionGenerator
 from arden.automation.models import Automation
 from arden.automation.scheduler import CompletedAgentRun, Scheduler
 from arden.automation.service import AutomationService
@@ -46,8 +46,9 @@ async def test_service_generates_display_copy_and_preserves_manual_copy_on_promp
         store=store,
         scheduler=scheduler,
         session_service=object(),
-        get_cheap_llm=lambda: llm,
-        description_model="cheap-model",
+        description_generator=AutomationDescriptionGenerator(
+            lambda: (llm, "auxiliary-model", "low"),
+        ),
     )
 
     created = await service.create(
@@ -76,6 +77,8 @@ async def test_service_generates_display_copy_and_preserves_manual_copy_on_promp
     assert kept.description_source == "manual"
     assert kept.prompt == "Use a different inbox procedure."
     assert len(llm.calls) == 2
+    assert {call["model"] for call in llm.calls} == {"auxiliary-model"}
+    assert {call["reasoning_effort"] for call in llm.calls} == {"low"}
     await conn.close()
 
 

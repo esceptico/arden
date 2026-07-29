@@ -38,6 +38,36 @@ def report() -> AreaCustodianReport:
 
 
 @pytest.mark.asyncio
+async def test_runtime_wires_auxiliary_model_into_automation_descriptions(tmp_path: Path) -> None:
+    calls: list[dict] = []
+
+    class AuxiliaryClient:
+        async def completion(self, **kwargs):
+            calls.append(kwargs)
+            content = {"description": "Summarizes the configured work."}
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(content)))])
+
+    runtime = AutomationRuntime(
+        stores=SimpleNamespace(automations=object(), sessions=object(), outbox=object()),
+        config=SimpleNamespace(arden_dir=tmp_path),
+        build_operator_deps=lambda: None,
+        get_calendar_source=lambda: None,
+        get_slack_client=lambda: None,
+        resolve_auxiliary_completion=lambda: (AuxiliaryClient(), "auxiliary-model", "low"),
+    )
+
+    description, source = await runtime.automation_service._resolve_description(
+        name="Configured work",
+        prompt="Summarize it.",
+        description=None,
+    )
+
+    assert (description, source) == ("Summarizes the configured work.", "generated")
+    assert calls[0]["model"] == "auxiliary-model"
+    assert calls[0]["reasoning_effort"] == "low"
+
+
+@pytest.mark.asyncio
 async def test_work_report_commits_before_asks(tmp_path: Path) -> None:
     calls: list[str] = []
 

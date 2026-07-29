@@ -17,6 +17,7 @@ If you have an OpenAI subscription/account and do not want to use an API key, co
 - Tokens are stored locally at `~/.arden/openai-codex-auth.json`.
 - Default chat model: `openai-codex/gpt-5.5`.
 - Default memory model: `openai-codex/gpt-5.4-mini`.
+- The Auxiliary role starts on the memory model and can be changed independently in Settings.
 - Tool-using reasoning calls use the Responses API shape internally (`reasoning: { effort: ... }`) so GPT reasoning models can call tools without hitting Chat Completions compatibility limits.
 
 Use the regular **OpenAI** provider instead when you want API-key billing, embeddings, or direct platform API behavior.

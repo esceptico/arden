@@ -1,6 +1,4 @@
-"""Chat triage: classify a just-started chat into an existing home, propose a
-new one, or stay silent — validated at the boundary so a hallucinated home or
-a broken call can never reach the UI."""
+"""Chat triage uses the explicit auxiliary model and validates its result."""
 
 import json
 
@@ -19,7 +17,7 @@ class _FakeLLM:
         self._payload = payload
         self._raises = raises
 
-    async def completion(self, *, messages, model, response_format):
+    async def completion(self, *, messages, model, reasoning_effort, response_format):
         if self._raises:
             raise RuntimeError("model unavailable")
 
@@ -39,8 +37,9 @@ async def _run(payload=None, raises=False, candidates=CANDIDATES):
     return await triage_chat(
         transcript="user: my visa interview is next week",
         candidates=candidates,
-        cheap_llm=_FakeLLM(payload, raises),
-        model="cheap",
+        client=_FakeLLM(payload, raises),
+        model="auxiliary-model",
+        reasoning_effort="low",
     )
 
 
@@ -59,20 +58,21 @@ async def test_move_restamps_from_catalog_not_model_echo():
 
 
 @pytest.mark.asyncio
-async def test_move_to_unknown_home_drops_to_none():
-    d = await _run({"decision": "move", "target": {"key": "ghost", "title": "Ghost"}})
-    assert d.decision == "none"
+async def test_move_to_unknown_home_fails_explicitly():
+    with pytest.raises(ValueError, match="unknown home"):
+        await _run({"decision": "move", "target": {"key": "ghost", "title": "Ghost"}})
 
 
 @pytest.mark.asyncio
-async def test_create_trims_title_and_empty_drops_to_none():
+async def test_create_trims_title_and_rejects_empty_title():
     ok = await _run({"decision": "create", "new_title": "  Tax Filing  ", "rationale": "New arc."})
     assert ok.decision == "create" and ok.new_title == "Tax Filing"
-    empty = await _run({"decision": "create", "new_title": "   "})
-    assert empty.decision == "none"
+    with pytest.raises(ValueError, match="requires a title"):
+        await _run({"decision": "create", "new_title": "   "})
 
 
 @pytest.mark.asyncio
-async def test_none_passthrough_and_failure_is_silent():
+async def test_none_passthrough_and_model_failure_surfaces():
     assert (await _run({"decision": "none", "rationale": "throwaway"})).decision == "none"
-    assert (await _run(raises=True)).decision == "none"
+    with pytest.raises(RuntimeError, match="model unavailable"):
+        await _run(raises=True)

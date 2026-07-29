@@ -348,23 +348,24 @@ async def test_anthropic_stream_emits_tool_search_before_loaded_tool_call():
 
 
 def test_roles_sharing_a_model_no_longer_share_its_effort():
-    """Research, workflows and memory routinely point at one model. Effort keyed
-    by model alone meant three settings rows writing a single value, so changing
-    one visibly moved the other two."""
+    """Each configured role keeps its own reasoning effort."""
     config = Config(
         memory=False,
         chat_model="gpt-5.2",
         research_model="gpt-5.2",
         workflow_model="gpt-5.2",
         memory_model="gpt-5.2",
+        auxiliary_model="gpt-5.2",
         model_reasoning_efforts={"gpt-5.2": "low"},
         research_reasoning_effort="high",
+        auxiliary_reasoning_effort="medium",
     )
 
     assert config.reasoning_effort_for_role("research", "gpt-5.2") == "high"
     # The other two keep following the model until they are given their own.
     assert config.reasoning_effort_for_role("workflow", "gpt-5.2") == "low"
     assert config.reasoning_effort_for_role("memory", "gpt-5.2") == "low"
+    assert config.reasoning_effort_for_role("auxiliary", "gpt-5.2") == "medium"
     # And chat is untouched by any of it.
     assert config.reasoning_effort_for("gpt-5.2") == "low"
 
@@ -391,10 +392,11 @@ def test_role_patch_is_validated_against_its_own_role_model():
     fields = {"model_roles": {"research": {"reasoning_effort": "high"}}}
     _validate_reasoning_patch(fields, config)
     # The patch merges onto stored setup: research keeps its model and the other
-    # two roles come through untouched rather than being blanked.
+    # roles come through untouched rather than being blanked.
     assert fields["model_roles"]["research"] == {"model": "gpt-5.2", "reasoning_effort": "high"}
     assert fields["model_roles"]["workflow"]["reasoning_effort"] is None
     assert fields["model_roles"]["memory"]["model"] == "gpt-5.2"
+    assert fields["model_roles"]["auxiliary"]["model"] == "gpt-5.2"
 
 
 def test_unknown_role_in_a_patch_is_rejected():
@@ -420,6 +422,7 @@ def test_legacy_flat_role_keys_migrate_into_role_setups():
     assert config.role_setup("workflow").reasoning_effort is None
     # The flat names still read, so the 40-odd call sites never had to change.
     assert config.memory_model == "gpt-5.2"
+    assert config.auxiliary_model == "gpt-5.2"
 
 
 def test_roles_unset_still_fall_back_to_the_chat_model():
@@ -428,3 +431,21 @@ def test_roles_unset_still_fall_back_to_the_chat_model():
     assert config.research_model == "gpt-5.2"
     assert config.workflow_model == "gpt-5.2"
     assert config.memory_model == "gpt-5.2"
+    assert config.auxiliary_model == "gpt-5.2"
+
+
+def test_auxiliary_model_starts_from_memory_but_remains_independent():
+    inherited = Config(
+        memory=False,
+        chat_model="gpt-5.2",
+        memory_model="claude-sonnet-4-6",
+    )
+    explicit = Config(
+        memory=False,
+        chat_model="gpt-5.2",
+        memory_model="claude-sonnet-4-6",
+        auxiliary_model="gpt-5.2",
+    )
+
+    assert inherited.auxiliary_model == "claude-sonnet-4-6"
+    assert explicit.auxiliary_model == "gpt-5.2"

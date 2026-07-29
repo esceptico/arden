@@ -17,6 +17,7 @@ from arden.automation.builtins import (
     WIKI_MAINTENANCE_TOOL_SCOPE,
     seed_builtins,
 )
+from arden.automation.descriptions import AutomationDescriptionGenerator
 from arden.automation.models import Automation
 from arden.automation.scheduler import CompletedAgentRun, Scheduler
 from arden.automation.service import AutomationService
@@ -35,6 +36,7 @@ from arden.constants import (
 from arden.events.internal import RunCompleted, RunCompletionRejected
 from arden.events.sse import AreasChangedEvent, MemoryChangedEvent
 from arden.integrations.calendar.client import MultiCalendarSource
+from arden.llm.base import CompletionClient
 from arden.logging import get_logger
 from arden.memory.facts.maintenance.agent import FactMaintenanceReviewService
 from arden.memory.facts.maintenance.runner import FactMaintenance, FactMaintenanceReviewer
@@ -63,8 +65,7 @@ class AutomationRuntime:
         build_operator_deps: Callable[[], OperatorDeps],
         get_calendar_source: Callable[[], object | None],
         get_slack_client: Callable[[], object | None],
-        get_cheap_llm: Callable[[], object | None],
-        cheap_model: str | None,
+        resolve_auxiliary_completion: Callable[[], tuple[CompletionClient, str, str | None]],
         get_fact_dream: Callable[[], object | None] = lambda: None,
         get_fact_maintenance: Callable[[FactMaintenanceReviewer], FactMaintenance | None] = lambda _reviewer: None,
         get_fact_synthesis: Callable[[], object | None] = lambda: None,
@@ -101,8 +102,7 @@ class AutomationRuntime:
             scheduler=self.scheduler,
             session_service=stores.sessions,
             get_slack_client=self.get_slack_client,
-            get_cheap_llm=get_cheap_llm,
-            description_model=cheap_model,
+            description_generator=AutomationDescriptionGenerator(resolve_auxiliary_completion),
         )
         self.outbox_runtime = RuntimeOutbox(
             outbox_store=stores.outbox,

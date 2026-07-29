@@ -74,9 +74,7 @@ class ConfigService:
             else:
                 settings["provider_keys"] = provider_keys
 
-            for key in ("chat_model", "research_model", "workflow_model", "memory_model"):
-                if (val := settings.get(key)) and val in provider_models:
-                    settings.pop(key)
+            _remove_model_selections(settings, set(provider_models))
             _remove_model_reasoning_settings(settings, set(provider_models))
 
         await self._with_rollback(mutate)
@@ -85,9 +83,7 @@ class ConfigService:
         provider_models = get_models_by_provider(provider)
 
         def mutate(settings: dict) -> None:
-            for key in ("chat_model", "research_model", "workflow_model", "memory_model"):
-                if (val := settings.get(key)) and val in provider_models:
-                    settings.pop(key)
+            _remove_model_selections(settings, set(provider_models))
             _remove_model_reasoning_settings(settings, set(provider_models))
 
         await self._with_rollback(mutate)
@@ -203,19 +199,19 @@ class ConfigService:
         except Exception:
             _logger.exception("Failed to reload runtime after reverting custom model creation")
 
-    async def delete_custom_model(self, model_id: str, *, active_models: dict[str, str | None]) -> None:
+    async def delete_custom_model(self, model_id: str) -> None:
         existing = get_models_by_provider(Provider.CUSTOM).get(model_id)
         if existing is None:
             raise ValueError(f"Not a custom model: {model_id}")
 
         remove_custom_model(model_id)
         try:
-            await self._remove_custom_model_settings(model_id, active_models=active_models)
+            await self._remove_custom_model_settings(model_id)
         except Exception:
             await self._restore_custom_model_after_failed_delete(existing)
             raise
 
-    async def _remove_custom_model_settings(self, model_id: str, *, active_models: dict[str, str | None]) -> None:
+    async def _remove_custom_model_settings(self, model_id: str) -> None:
         def mutate(settings: dict) -> None:
             custom_keys = settings.get("custom_model_keys", {})
             custom_keys.pop(model_id, None)
@@ -224,9 +220,7 @@ class ConfigService:
             else:
                 settings.pop("custom_model_keys", None)
 
-            for key in ("chat_model", "research_model", "workflow_model", "memory_model"):
-                if active_models.get(key) == model_id:
-                    settings.pop(key, None)
+            _remove_model_selections(settings, {model_id})
             _remove_model_reasoning_settings(settings, {model_id})
 
         await self._with_rollback(mutate)
@@ -244,6 +238,25 @@ class ConfigService:
             await self._on_config_change()
         except Exception:
             _logger.exception("Failed to reload runtime after restoring custom model deletion")
+
+
+def _remove_model_selections(settings: dict, model_ids: set[str]) -> None:
+    if settings.get("chat_model") in model_ids:
+        settings.pop("chat_model")
+    for role in ROLE_NAMES:
+        legacy_key = f"{role}_model"
+        if settings.get(legacy_key) in model_ids:
+            settings.pop(legacy_key)
+
+    roles = settings.get("model_roles")
+    if roles is None:
+        return
+    for role in ROLE_NAMES:
+        setup = roles.get(role)
+        if setup is not None and setup.get("model") in model_ids:
+            roles.pop(role)
+    if not roles:
+        settings.pop("model_roles")
 
 
 def _remove_model_reasoning_settings(settings: dict, model_ids: set[str]) -> None:

@@ -3,7 +3,6 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
-from arden.automation.descriptions import AutomationDescriptionUnavailableError
 from arden.automation.models import Automation
 from arden.automation.service import AutomationService
 from arden.notifiers.service import NotifierService
@@ -83,8 +82,6 @@ async def create_automation(
             tool_scope=request.tool_scope,
             output_schema=request.output_schema,
         )
-    except AutomationDescriptionUnavailableError as e:
-        raise HTTPException(status_code=503, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return _automation_to_dict(automation)
@@ -212,8 +209,6 @@ async def generate_automation_description(
         automation = await svc.generate_description(task_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="Automation not found")
-    except AutomationDescriptionUnavailableError as e:
-        raise HTTPException(status_code=503, detail=str(e))
     return _automation_to_dict(automation)
 
 
@@ -286,8 +281,6 @@ async def update_automation(
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="Automation not found")
-    except AutomationDescriptionUnavailableError as e:
-        raise HTTPException(status_code=503, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return _automation_to_dict(automation)

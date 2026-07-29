@@ -95,9 +95,8 @@ class AutomationService:
         store: AutomationStore,
         scheduler: Scheduler,
         session_service: SessionService,
+        description_generator: AutomationDescriptionGenerator | None = None,
         get_slack_client: Callable[[], SlackClient | None] | None = None,
-        get_cheap_llm: Callable[[], object | None] | None = None,
-        description_model: str | None = None,
     ):
         self.store = store
         self.scheduler = scheduler
@@ -106,10 +105,7 @@ class AutomationService:
         # (mirrors get_calendar_source wiring). Lets save-time message-trigger
         # resolution reach Slack without a new global; None until Slack connects.
         self._get_slack_client = get_slack_client
-        self._description_generator = AutomationDescriptionGenerator(
-            get_cheap_llm=get_cheap_llm or (lambda: None),
-            model=description_model,
-        )
+        self._description_generator = description_generator
 
     def _slack(self) -> SlackClient:
         client = self._get_slack_client() if self._get_slack_client else None
@@ -200,7 +196,12 @@ class AutomationService:
     async def _resolve_description(self, *, name: str, prompt: str, description: str | None) -> tuple[str, str]:
         if description is not None:
             return self._normalize_description(description), "manual"
-        return await self._description_generator.generate(name=name, prompt=prompt), "generated"
+        return await self._generate_description(name=name, prompt=prompt), "generated"
+
+    async def _generate_description(self, *, name: str, prompt: str) -> str:
+        if self._description_generator is None:
+            raise RuntimeError("Automation description generator is not configured")
+        return await self._description_generator.generate(name=name, prompt=prompt)
 
     async def generate_description(self, task_id: str) -> Automation:
         """Generate display copy for a migrated or generated automation.
@@ -212,7 +213,7 @@ class AutomationService:
         if task.description_source == "manual" and task.description:
             return task
         prompt = self._normalize_prompt(task.prompt)
-        description = await self._description_generator.generate(name=task.name, prompt=prompt)
+        description = await self._generate_description(name=task.name, prompt=prompt)
         updated = replace(task, description=description, description_source="generated", prompt=prompt)
         await self.store.update_metadata(updated)
         return updated
@@ -362,7 +363,7 @@ class AutomationService:
             normalized_description = self._normalize_description(description)
             description_source = "manual"
         elif normalized_prompt is not None and task.description_source != "manual":
-            normalized_description = await self._description_generator.generate(
+            normalized_description = await self._generate_description(
                 name=name if name is not None else task.name,
                 prompt=normalized_prompt,
             )
