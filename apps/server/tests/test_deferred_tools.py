@@ -403,6 +403,27 @@ async def test_deferred_middleware_hides_then_reveals_loaded_tools():
 @pytest.mark.asyncio
 async def test_deferred_middleware_uses_native_loading_for_supported_models():
     registry = _registry()
+    registry.register(
+        "read_wiki_page",
+        tool(
+            description="Read one wiki page",
+            input_model=SearchInput,
+            policy=READ_INTERNAL_POLICY,
+            execute=fake_search,
+        ),
+        source="_wiki",
+    )
+    registry.register(
+        "publish_wiki_generated",
+        tool(
+            description="Publish one generated wiki region",
+            input_model=SearchInput,
+            policy=WRITE_INTERNAL_POLICY,
+            approval=fake_approval,
+            execute=fake_search,
+        ),
+        source="_wiki",
+    )
     run = RunContext(run_id="run", deferred_tools_enabled=True)
     middleware = DeferredToolsModelRequestMiddleware(registry=registry, run=run, get_services=dict)
 
@@ -414,7 +435,11 @@ async def test_deferred_middleware_uses_native_loading_for_supported_models():
     assert "tool_search" in names
     assert "echo" in names
     assert "slack_search" not in names
+    assert "read_wiki_page" not in names
+    assert "publish_wiki_generated" not in names
     assert "slack_search" in deferred_names
+    assert "read_wiki_page" in deferred_names
+    assert "publish_wiki_generated" in deferred_names
     assert run.deferred_tool_loader == "tool_search"
 
 
@@ -672,6 +697,27 @@ async def test_agent_marks_provider_searched_deferred_tools_loaded_for_next_step
 @pytest.mark.asyncio
 async def test_agent_continues_after_provider_only_tool_search_loads_names():
     registry = _registry()
+    registry.register(
+        "read_wiki_page",
+        tool(
+            description="Read one wiki page",
+            input_model=SearchInput,
+            policy=READ_INTERNAL_POLICY,
+            execute=fake_search,
+        ),
+        source="_wiki",
+    )
+    registry.register(
+        "publish_wiki_generated",
+        tool(
+            description="Publish one generated wiki region",
+            input_model=SearchInput,
+            policy=WRITE_INTERNAL_POLICY,
+            approval=fake_approval,
+            execute=fake_search,
+        ),
+        source="_wiki",
+    )
     run = RunContext(run_id="run", deferred_tools_enabled=True)
     ctx = ToolContext(
         session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
@@ -692,8 +738,8 @@ async def test_agent_continues_after_provider_only_tool_search_loads_names():
                         ProviderToolCall(
                             id="tsc_1",
                             name="tool_search",
-                            arguments='{"tools":["slack_search"]}',
-                            result="Matched tools: slack_search",
+                            arguments='{"tools":["read_wiki_page"]}',
+                            result="Matched tools: read_wiki_page",
                         )
                     ],
                 ),
@@ -706,12 +752,17 @@ async def test_agent_continues_after_provider_only_tool_search_loads_names():
     llm = MockCompletionClient(
         [
             first,
-            make_tool_response("slack_search", {"query": "hello"}, call_id="call_slack", model="gpt-5.5"),
+            make_tool_response(
+                "read_wiki_page",
+                {"query": "feeds/email-updates.md"},
+                call_id="call_wiki",
+                model="gpt-5.5",
+            ),
             make_text_response("done", model="gpt-5.5"),
         ]
     )
     agent = Agent(
-        tools=registry.get_schemas(),
+        tools=registry.get_schemas(scope=("read_wiki_page", "publish_wiki_generated")),
         client=MockLLMClient(llm),
         executor=ArdenToolExecutor(executor, ctx),
         model="gpt-5.5",
@@ -724,11 +775,15 @@ async def test_agent_continues_after_provider_only_tool_search_loads_names():
         ),
     )
 
-    result = await agent.run([{"role": "system", "content": "test"}, {"role": "user", "content": "search slack"}])
+    result = await agent.run([{"role": "system", "content": "test"}, {"role": "user", "content": "read wiki page"}])
 
     assert result.text == "done"
-    assert "slack_search" in run.loaded_tools
-    assert "slack_search" in {t["function"]["name"] for t in llm.calls[1]["tools"]}
+    assert "read_wiki_page" in run.loaded_tools
+    first_deferred = {tool["function"]["name"] for tool in llm.calls[0]["deferred_tools"]}
+    second_tools = {tool["function"]["name"] for tool in llm.calls[1]["tools"]}
+    assert first_deferred == {"read_wiki_page", "publish_wiki_generated"}
+    assert "read_wiki_page" in second_tools
+    assert "publish_wiki_generated" not in second_tools
 
 
 @pytest.mark.asyncio
@@ -874,6 +929,16 @@ async def test_load_group_respects_run_allowed_names():
 
 def test_deferred_prompt_lists_groups_and_tools():
     registry = _registry()
+    registry.register(
+        "read_wiki_page",
+        tool(
+            description="Read one wiki page",
+            input_model=SearchInput,
+            policy=READ_INTERNAL_POLICY,
+            execute=fake_search,
+        ),
+        source="_wiki",
+    )
     prompt = build_deferred_tools_prompt(registry, frozenset())
     assert prompt is not None
     assert 'name="slack"' in prompt
@@ -887,6 +952,8 @@ def test_deferred_prompt_lists_groups_and_tools():
     assert 'name="files"' in prompt
     assert "write_file" in prompt
     assert "edit_file" in prompt
+    assert 'name="wiki"' in prompt
+    assert "read_wiki_page" in prompt
     assert "load_tools" in prompt
     assert 'load_tools(group="slack")' in prompt
     assert "Do not use filesystem/time/no-op tool calls" in prompt

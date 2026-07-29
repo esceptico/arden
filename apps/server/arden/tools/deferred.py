@@ -14,6 +14,7 @@ DEFERRED_SOURCES = frozenset(
         "gmail",
         "calendar",
         "google_drive",
+        "_wiki",
         "slack",
         "_automation",
         "_background",
@@ -42,6 +43,7 @@ GROUP_ALIASES: dict[str, str] = {
     "docs": "google_drive",
     "sheets": "google_drive",
     "spreadsheets": "google_drive",
+    "wiki": "_wiki",
     "slack": "slack",
     "automations": "_automation",
     "automation": "_automation",
@@ -74,6 +76,7 @@ GROUP_DESCRIPTIONS: dict[str, str] = {
     "gmail": "Search/list/read/send Gmail messages. Use for inbox, emails, Gmail, sending/replying, or communication history.",
     "calendar": "Search/create/edit/delete calendar events. Use for meetings, schedule, availability, appointments, reminders, or rescheduling.",
     "google_drive": "Search/read/create/edit Google Docs and Sheets. Use for Drive documents, spreadsheets, tables, ranges, and rows.",
+    "_wiki": "List and read managed wiki pages, inspect their links, and publish automation-owned generated regions.",
     "slack": "Search Slack and read channels, DMs, threads, image files, and user profiles. Use for Slack messages, workspace history, coworkers, channels, DMs, threads, screenshots, images, or file IDs.",
     "_automation": "Create/list/update/delete/run autonomous scheduled or event-triggered tasks. Use for reminders, recurring checks, notifications, scheduled agents, or automation management.",
     "_background": "Stop a running agent you spawned. Spawning uses the always-available background() tool; its result arrives automatically, and read_session shows its work.",
@@ -88,6 +91,7 @@ DEFERRED_GROUP_ORDER = (
     "gmail",
     "calendar",
     "google_drive",
+    "_wiki",
     "slack",
     "_automation",
     "_background",
@@ -100,6 +104,7 @@ DEFERRED_GROUP_ORDER = (
 DEFERRED_GROUP_LABELS = {
     "gmail": "email",
     "google_drive": "google_drive",
+    "_wiki": "wiki",
     "_automation": "automations",
     "_background": "background",
     "_notifications": "notifications",
@@ -135,7 +140,7 @@ Connected MCP servers:
 </deferred_tool_group>
 {% endif %}""")
 
-_NATIVE_DEFERRED_TOOLS_TEMPLATE = _env.from_string("""Some integration/action tools are deferred to reduce prompt noise. Use native tool search by exact tool name before calling these tools. For direct requests about email, calendar, Slack, automations, notifications, directives, file edits, or MCP-backed apps, search the relevant listed names before using memory, local files, or current_time unless the user asked for those sources.
+_NATIVE_DEFERRED_TOOLS_TEMPLATE = _env.from_string("""Some integration/action tools are deferred to reduce prompt noise. Use native tool search by exact tool name before calling these tools. For direct requests about email, calendar, Slack, wiki pages, automations, notifications, directives, file edits, or MCP-backed apps, search the relevant listed names before using memory, local files, or current_time unless the user asked for those sources.
 MANDATORY PREREQUISITE: call `tool_search(query="select:<tool_name>")` before calling a listed deferred tool. Loading tools does not execute them; it only makes selected tools callable on the next model step. Do not use filesystem/time/no-op tool calls to discover or unlock deferred tools.
 
 {% for group in groups %}
@@ -359,7 +364,7 @@ def append_deferred_tools_prompt(
 class LoadToolsInput(BaseModel):
     group: str | None = Field(
         default=None,
-        description="Deferred group to load, e.g. 'email', 'calendar', 'slack', 'automations', 'background', 'notifications', 'directives', 'files', 'app', or 'mcp:obsidian'.",
+        description="Deferred group to load, e.g. 'email', 'calendar', 'wiki', 'slack', 'automations', 'background', 'notifications', 'directives', 'files', 'app', or 'mcp:obsidian'.",
     )
     names: list[str] | None = Field(
         default=None,
