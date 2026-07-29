@@ -70,6 +70,9 @@ async def wiki_client(tmp_path: Path):
     async def project_wiki_health() -> None:
         runtime.health_calls += 1
 
+    async def project_wiki_state() -> None:
+        await runtime.project_wiki_health()
+
     async def notify_wiki_maintenance_reviews_changed(revision: str) -> None:
         runtime.maintenance_review_notifications.append(revision)
 
@@ -77,6 +80,7 @@ async def wiki_client(tmp_path: Path):
         runtime.maintenance_resume_requests += 1
 
     runtime.project_wiki_health = project_wiki_health
+    runtime.project_wiki_state = project_wiki_state
     runtime.request_wiki_maintenance = request_wiki_maintenance
     runtime.notify_wiki_maintenance_reviews_changed = notify_wiki_maintenance_reviews_changed
     app.state.runtime = runtime
@@ -178,7 +182,7 @@ def test_rename_approval_list_accept_and_reject(wiki_client):
     assert client.app.state.runtime.health_calls == 1
 
 
-def test_rename_accept_surfaces_health_projection_failures(wiki_client):
+def test_rename_accept_keeps_committed_result_when_projection_fails(wiki_client):
     client, service, _store, _maintenance_store = wiki_client
     approval = client.post(
         "/admin/wiki/rename-approvals",
@@ -189,9 +193,11 @@ def test_rename_accept_surfaces_health_projection_failures(wiki_client):
         raise RuntimeError("health projector unavailable")
 
     client.app.state.runtime.project_wiki_health = fail_health_projection
-    with pytest.raises(RuntimeError, match="health projector unavailable"):
-        client.post(f"/admin/wiki/rename-approvals/{approval['approval_id']}/accept")
+    response = client.post(f"/admin/wiki/rename-approvals/{approval['approval_id']}/accept")
 
+    assert response.status_code == 200
+    assert response.json()["status"] == "accepted"
+    assert response.json()["projection_pending"] is True
     assert service.repository.get("target").path == "new.md"
 
 

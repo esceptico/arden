@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,7 +12,8 @@ from arden.events.sse import MemoryChangedEvent
 from arden.memory.facts.consumer_store import FactConsumerStore
 from arden.memory.facts.dream import FactDreamResult
 from arden.memory.facts.ledger import FactLedger
-from arden.memory.facts.maintenance.runner import FactMaintenanceResult
+from arden.memory.facts.maintenance.runner import FactMaintenance, FactMaintenanceDecision, FactMaintenanceResult
+from arden.memory.facts.maintenance.store import FactMaintenanceError
 from arden.memory.facts.service import FactPrincipal
 from arden.memory.facts.synthesis import (
     CONSUMER_ID as FACT_SYNTHESIS_CONSUMER_ID,
@@ -19,6 +21,7 @@ from arden.memory.facts.synthesis import (
 from arden.memory.facts.synthesis import (
     FactSynthesisResult,
 )
+from arden.operator.runner import RunResult
 from arden.server.runtime import core as runtime_core
 from arden.server.runtime.core import Runtime
 from arden.tools.facts import FACT_SERVICE
@@ -307,12 +310,120 @@ async def test_fact_commit_syncs_index_and_requests_synthesis(tmp_path, monkeypa
                     "b" * 64, reviewed_clusters=2, amended_facts=1, merged_facts=1, advanced=True
                 )
 
-        monkeypatch.setattr(runtime.automation, "get_fact_maintenance", lambda: _Maintenance())
-        assert await runtime.automation._run_fact_maintenance(None) == (
-            "fact maintenance: reviewed 2; amended 1; merged 1"
-        )
+        monkeypatch.setattr(runtime.automation, "get_fact_maintenance", lambda _reviewer: _Maintenance())
+
+        requests = []
+
+        async def run_maintenance_agent(_deps, request):
+            requests.append(request)
+            assert runtime.automation.fact_maintenance_review is not None
+            await runtime.automation.fact_maintenance_review.next()
+            return RunResult(run_id="maintenance-run", output=None, usage=Usage())
+
+        monkeypatch.setattr("arden.server.runtime.automation.run_agent", run_maintenance_agent)
+        result = await runtime.automation._run_fact_maintenance(None)
+        assert result.run_id == "maintenance-run"
+        assert result.result == "fact maintenance: reviewed 2; amended 1; merged 1"
+        assert requests[0].model == config.memory_model
+        assert requests[0].automation_id == "builtin-memory-consolidate"
+        assert requests[0].tool_scope == ("fact_maintenance_review",)
+
+        async def stop_early(*_args, **_kwargs):
+            return RunResult(run_id="maintenance-run", output=None, usage=Usage())
+
+        monkeypatch.setattr("arden.server.runtime.automation.run_agent", stop_early)
+        with pytest.raises(FactMaintenanceError, match="before completing"):
+            await runtime.automation._run_fact_maintenance(None)
     finally:
         await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_fact_maintenance_continues_in_a_fresh_agent_after_progress(tmp_path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    _seed_fact(config)
+    runtime = Runtime(config)
+    await runtime.connect()
+    try:
+        assert runtime.automation is not None
+
+        class _Maintenance:
+            def __init__(self, reviewer) -> None:
+                self.reviewer = reviewer
+
+            async def run(self) -> FactMaintenanceResult:
+                cluster = SimpleNamespace(
+                    target_token="F000",
+                    markdown="cluster",
+                    fact_tokens={"F000": SimpleNamespace(fact_id="seed")},
+                )
+                await self.reviewer(cluster)
+                await self.reviewer(cluster)
+                return FactMaintenanceResult("b" * 64, reviewed_clusters=2, advanced=True)
+
+        monkeypatch.setattr(
+            runtime.automation,
+            "get_fact_maintenance",
+            lambda reviewer: _Maintenance(reviewer),
+        )
+        monkeypatch.setattr(FactMaintenance, "validate_cluster_decision", lambda *_args: None)
+        run_ids: list[str] = []
+
+        async def run_one_segment(_deps, _request):
+            review = runtime.automation.fact_maintenance_review
+            assert review is not None
+            await review.next()
+            await review.decide(FactMaintenanceDecision(outcome="no_change", reason="No duplicate."))
+            run_id = f"maintenance-run-{len(run_ids) + 1}"
+            run_ids.append(run_id)
+            return RunResult(run_id=run_id, output=None, usage=Usage())
+
+        monkeypatch.setattr("arden.server.runtime.automation.run_agent", run_one_segment)
+
+        result = await runtime.automation._run_fact_maintenance(None)
+
+        assert run_ids == ["maintenance-run-1", "maintenance-run-2"]
+        assert result.run_id == "maintenance-run-2"
+        assert result.result == "fact maintenance: reviewed 2; amended 0; merged 0"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_wiki_state_projection_syncs_index_before_health(tmp_path, monkeypatch) -> None:
+    runtime = Runtime(_config(tmp_path))
+    calls: list[str] = []
+
+    class _Projection:
+        async def sync(self) -> None:
+            calls.append("index")
+
+    async def health() -> None:
+        calls.append("health")
+
+    runtime.wiki_page_projection = _Projection()
+    monkeypatch.setattr(runtime, "project_wiki_health", health)
+
+    await runtime.project_wiki_state()
+
+    assert calls == ["index", "health"]
+
+
+@pytest.mark.asyncio
+async def test_any_automation_reconciles_a_wiki_head_it_changed(tmp_path, monkeypatch) -> None:
+    runtime = Runtime(_config(tmp_path))
+    runtime.wiki_service = SimpleNamespace(repository=SimpleNamespace(head="new"))
+    runtime.wiki_page_projection = SimpleNamespace(last_state=SimpleNamespace(wiki_head="old"))
+    calls: list[str] = []
+
+    async def project() -> None:
+        calls.append("project")
+
+    monkeypatch.setattr(runtime, "project_wiki_state", project)
+
+    await runtime._after_automation_finished("email-feed", True)
+
+    assert calls == ["project"]
 
 
 @pytest.mark.asyncio
@@ -349,13 +460,25 @@ async def test_wiki_maintenance_waits_for_synthesis_then_notifies_review(tmp_pat
             return True
 
         class _Maintenance:
+            def __init__(self, reviewer) -> None:
+                self.reviewer = reviewer
+
             async def run(self):
                 return WikiMaintenanceResult("c" * 64, "b" * 64, blocked=True, reviewed_commits=1)
 
         monkeypatch.setattr(runtime.automation, "synthesis_is_current", current)
-        monkeypatch.setattr(runtime.automation, "get_wiki_maintenance", lambda: _Maintenance())
+        monkeypatch.setattr(runtime.automation, "get_wiki_maintenance", _Maintenance)
         monkeypatch.setattr(runtime.automation.scheduler, "emit_automation_event", emit)
-        assert await handler(None) == "wiki maintenance: needs user review; reviewed 1; updated 0"
+
+        async def run_review_agent(_deps, _request):
+            assert runtime.automation.wiki_maintenance_review is not None
+            await runtime.automation.wiki_maintenance_review.next()
+            return RunResult(run_id="wiki-maintenance-run", output=None, usage=Usage())
+
+        monkeypatch.setattr("arden.server.runtime.automation.run_agent", run_review_agent)
+        result = await handler(None)
+        assert result.run_id == "wiki-maintenance-run"
+        assert result.result == "wiki maintenance: needs user review; reviewed 1; updated 0"
         assert emitted[0].review_required is True
     finally:
         await runtime.close()
@@ -374,11 +497,7 @@ async def test_fact_synthesis_leaves_health_projection_to_completion_callback(tm
                 calls.append("synthesis")
                 return FactSynthesisResult("a" * 64, published_pages=1, advanced=True)
 
-        async def health() -> None:
-            calls.append("health")
-
         monkeypatch.setattr(runtime.automation, "get_fact_synthesis", lambda: _Synthesis())
-        monkeypatch.setattr(runtime.automation, "project_wiki_health", health)
 
         result = await runtime.automation._run_memory_synthesis(None)
 
@@ -389,7 +508,7 @@ async def test_fact_synthesis_leaves_health_projection_to_completion_callback(tm
 
 
 @pytest.mark.asyncio
-async def test_memory_dream_refreshes_health(tmp_path, monkeypatch) -> None:
+async def test_memory_dream_leaves_wiki_projection_to_completion_callback(tmp_path, monkeypatch) -> None:
     runtime = Runtime(_config(tmp_path))
     await runtime.connect()
     try:
@@ -401,16 +520,12 @@ async def test_memory_dream_refreshes_health(tmp_path, monkeypatch) -> None:
                 calls.append("dream")
                 return FactDreamResult("a" * 64, insight_count=2, published=True)
 
-        async def health() -> None:
-            calls.append("health")
-
         monkeypatch.setattr(runtime.automation, "get_fact_dream", lambda: _Dream())
-        monkeypatch.setattr(runtime.automation, "project_wiki_health", health)
 
         result = await runtime.automation._run_memory_dream(None)
 
         assert result == "memory dream: 2 insight(s); published"
-        assert calls == ["dream", "health"]
+        assert calls == ["dream"]
     finally:
         await runtime.close()
 
@@ -426,22 +541,32 @@ async def test_wiki_maintenance_runs_a_second_pass_after_reload(tmp_path, monkey
         async def current() -> bool:
             return True
 
+        results = [
+            WikiMaintenanceResult("a" * 64, "a" * 64, reload_required=True),
+            WikiMaintenanceResult("b" * 64, "b" * 64, empty=True),
+        ]
+
         class _Maintenance:
-            def __init__(self) -> None:
-                self.results = [
-                    WikiMaintenanceResult("a" * 64, "a" * 64, reload_required=True),
-                    WikiMaintenanceResult("b" * 64, "b" * 64, empty=True),
-                ]
+            def __init__(self, reviewer) -> None:
+                self.reviewer = reviewer
 
             async def run(self) -> WikiMaintenanceResult:
                 calls.append("maintenance")
-                return self.results.pop(0)
+                return results.pop(0)
 
-        maintenance = _Maintenance()
         monkeypatch.setattr(runtime.automation, "synthesis_is_current", current)
-        monkeypatch.setattr(runtime.automation, "get_wiki_maintenance", lambda: maintenance)
+        monkeypatch.setattr(runtime.automation, "get_wiki_maintenance", _Maintenance)
 
-        assert await runtime.automation._run_wiki_maintenance(None) == ("wiki maintenance: idle; reviewed 0; updated 0")
+        async def run_review_agent(_deps, _request):
+            assert runtime.automation.wiki_maintenance_review is not None
+            await runtime.automation.wiki_maintenance_review.next()
+            return RunResult(run_id=f"wiki-maintenance-run-{len(calls)}", output=None, usage=Usage())
+
+        monkeypatch.setattr("arden.server.runtime.automation.run_agent", run_review_agent)
+
+        result = await runtime.automation._run_wiki_maintenance(None)
+        assert result.run_id == "wiki-maintenance-run-2"
+        assert result.result == "wiki maintenance: idle; reviewed 0; updated 0"
         assert calls == ["maintenance", "maintenance"]
     finally:
         await runtime.close()

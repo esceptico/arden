@@ -1059,6 +1059,42 @@ async def test_concurrent_wiki_commit_reloads_feed_without_skipping(tmp_path: Pa
 
 
 @pytest.mark.asyncio
+async def test_maintenance_write_conflict_reloads_without_advancing_the_watermark(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _seed(repo)
+    store = await WikiMaintenanceStore.open(tmp_path / "state.sqlite")
+
+    class _RacingReviewer:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def __call__(self, _report) -> WikiMaintenanceDecision:
+            self.calls += 1
+            if self.calls == 1:
+                _update(repo, "page-one", b"Concurrent\n", key="concurrent-write")
+                return WikiMaintenanceDecision(
+                    outcome="updates",
+                    updates=[WikiMaintenanceUpdateDraft(page_token="P001", title="One", aliases=[], body="Fixed\n")],
+                )
+            return WikiMaintenanceDecision(outcome="no_change")
+
+    reviewer = _RacingReviewer()
+    maintenance = WikiMaintenance(store, WikiService(repo), reviewer)
+    try:
+        first = await maintenance.run()
+        assert first.reload_required and not first.complete
+        assert first.processed_through_revision is None
+        assert await store.get_watermark() is None
+
+        second = await maintenance.run()
+        assert second.complete and not second.reload_required
+        assert second.processed_through_revision == repo.head
+        assert (await store.get_watermark()).revision == repo.head
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
 async def test_repeated_maintenance_feed_conflict_surfaces(tmp_path: Path, monkeypatch) -> None:
     repo = _repo(tmp_path)
     _seed(repo)

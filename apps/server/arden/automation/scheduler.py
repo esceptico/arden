@@ -815,7 +815,11 @@ class Scheduler:
             await self._start_next_queued_event_if_idle(automation.task_id)
         _logger.info("Completed automation %s", automation.task_id)
 
-    async def _run_handler(self, automation: Automation, context: str | dict | None = None) -> str | None:
+    async def _run_handler(
+        self,
+        automation: Automation,
+        context: str | dict | None = None,
+    ) -> str | CompletedAgentRun | None:
         handler = self._handlers.get(automation.handler)
         if not handler:
             raise RuntimeError(f"No handler registered for '{automation.handler}'")

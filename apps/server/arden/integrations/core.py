@@ -6,6 +6,7 @@ belong to an Integration, including the ones arden ships out of the box.
 """
 
 from arden.integrations.base import Integration
+from arden.memory.facts.maintenance import FACT_MAINTENANCE_REVIEW_TOOL_NAME
 from arden.skills.tool import create_skill_tool, use_skill_tool
 from arden.tools.app_control import (
     archive_session_tool,
@@ -31,6 +32,7 @@ from arden.tools.bash import bash_tool
 from arden.tools.connections import request_connection_tool
 from arden.tools.deferred import load_tools_tool, tool_search_tool
 from arden.tools.directives import get_directives_tool, set_directives_tool
+from arden.tools.fact_maintenance import fact_maintenance_review_tool
 from arden.tools.facts import (
     commit_fact_changes_tool,
     get_due_fact_reviews_tool,
@@ -60,7 +62,9 @@ from arden.tools.sessions import (
 from arden.tools.time import current_time_tool
 from arden.tools.todos import update_todos_tool
 from arden.tools.wiki import list_wiki_pages_tool, publish_wiki_generated_tool, read_wiki_page_tool, wiki_links_tool
+from arden.tools.wiki_maintenance import wiki_maintenance_review_tool
 from arden.tools.workflow import workflow_tool
+from arden.wiki.constants import WIKI_MAINTENANCE_REVIEW_TOOL_NAME
 
 SYSTEM = Integration(
     id="_system",
@@ -179,6 +183,18 @@ AREA = Integration(
     },
 )
 
+FACT_MAINTENANCE = Integration(
+    id="_fact_maintenance",
+    label="Fact maintenance",
+    tools={FACT_MAINTENANCE_REVIEW_TOOL_NAME: fact_maintenance_review_tool},
+)
+
+WIKI_MAINTENANCE = Integration(
+    id="_wiki_maintenance",
+    label="Wiki maintenance",
+    tools={WIKI_MAINTENANCE_REVIEW_TOOL_NAME: wiki_maintenance_review_tool},
+)
+
 FACTS = Integration(
     id="_facts",
     label="Facts",
@@ -215,6 +231,8 @@ CORE_INTEGRATIONS = [
     SESSIONS,
     APP_CONTROL,
     AREA,
+    FACT_MAINTENANCE,
+    WIKI_MAINTENANCE,
     FACTS,
     WIKI,
 ]

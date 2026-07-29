@@ -7,6 +7,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
+from arden.logging import get_logger
 from arden.revisions import (
     CorruptRepositoryError,
     RevisionConflictError,
@@ -33,6 +34,7 @@ from arden.wiki.maintenance.store import (
 from arden.wiki.service import WikiValidationError
 
 router = APIRouter(prefix="/admin/wiki", tags=["wiki"])
+_logger = get_logger(__name__)
 
 
 class WikiRenameRequest(BaseModel):
@@ -69,6 +71,7 @@ class WikiRenameResultResponse(BaseModel):
     approval: WikiRenameApprovalResponse | None
     commit_id: str | None
     replacement_approval_id: str | None
+    projection_pending: bool = False
 
 
 class WikiRenameApprovalListResponse(BaseModel):
@@ -200,19 +203,25 @@ def _approval_response(approval: WikiRenameApproval) -> WikiRenameApprovalRespon
     )
 
 
-def _result_response(result) -> WikiRenameResultResponse:
+def _result_response(result, *, projection_pending: bool = False) -> WikiRenameResultResponse:
     return WikiRenameResultResponse(
         status=result.status,
         approval=_approval_response(result.approval) if result.approval else None,
         commit_id=result.commit_id,
         replacement_approval_id=result.replacement_approval_id,
+        projection_pending=projection_pending,
     )
 
 
-async def _project_health_after_commit(request: Request, commit_id: str | None) -> None:
+async def _project_wiki_after_commit(request: Request, commit_id: str | None) -> bool:
     if commit_id is None:
-        return
-    await get_runtime(request).project_wiki_health()
+        return False
+    try:
+        await get_runtime(request).project_wiki_state()
+    except Exception:
+        _logger.exception("Wiki projection failed after a committed rename", commit_id=commit_id)
+        return True
+    return False
 
 
 async def _request_maintenance_after_decision(request: Request) -> None:
@@ -517,8 +526,8 @@ async def request_rename(request: Request, body: WikiRenameRequest):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (WikiValidationError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    await _project_health_after_commit(request, result.commit_id)
-    return _result_response(result)
+    projection_pending = await _project_wiki_after_commit(request, result.commit_id)
+    return _result_response(result, projection_pending=projection_pending)
 
 
 @router.get("/rename-approvals", response_model=WikiRenameApprovalListResponse)
@@ -539,8 +548,8 @@ async def accept_rename(request: Request, approval_id: str):
         raise HTTPException(status_code=503, detail="wiki rename approval is corrupt") from exc
     except (WikiValidationError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    await _project_health_after_commit(request, result.commit_id)
-    return _result_response(result)
+    projection_pending = await _project_wiki_after_commit(request, result.commit_id)
+    return _result_response(result, projection_pending=projection_pending)
 
 
 @router.post("/rename-approvals/{approval_id}/reject", response_model=WikiRenameResultResponse)

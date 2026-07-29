@@ -1,7 +1,6 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import datetime
-from functools import partial
 
 from fastapi import HTTPException, Request
 
@@ -30,7 +29,7 @@ from arden.memory.facts.dream import FactDream
 from arden.memory.facts.index import FactIndexProjection
 from arden.memory.facts.ledger import FactLedger
 from arden.memory.facts.maintenance.runner import CONSUMER_ID as FACT_MAINTENANCE_CONSUMER_ID
-from arden.memory.facts.maintenance.runner import FactMaintenance, review_fact_maintenance
+from arden.memory.facts.maintenance.runner import FactMaintenance, FactMaintenanceReviewer
 from arden.memory.facts.plan_store import FactPlanStore
 from arden.memory.facts.service import FactService
 from arden.memory.facts.synthesis import CONSUMER_ID as FACT_SYNTHESIS_CONSUMER_ID
@@ -70,7 +69,7 @@ from arden.wiki.health import (
     WikiHealthProjector,
     WikiHealthWorker,
 )
-from arden.wiki.maintenance.runner import WikiMaintenance, review_wiki_maintenance
+from arden.wiki.maintenance.runner import WikiMaintenance, WikiMaintenanceReviewer
 from arden.wiki.maintenance.store import WikiMaintenanceStore
 from arden.wiki.models import WikiChangesReport
 from arden.wiki.service import WikiService
@@ -207,6 +206,10 @@ class Runtime:
             services["wiki"] = self.wiki_service
         if self.automation:
             services["area_custodians"] = self.automation.custodians
+            if self.automation.fact_maintenance_review is not None:
+                services["fact_maintenance"] = self.automation.fact_maintenance_review
+            if self.automation.wiki_maintenance_review is not None:
+                services["wiki_maintenance"] = self.automation.wiki_maintenance_review
         services.update(self.knowledge.tool_services())
         if self.automation_service:
             services["automation"] = self.automation_service
@@ -422,11 +425,19 @@ class Runtime:
                 await self.project_wiki_health()
 
     async def _after_automation_finished(self, task_id: str, success: bool) -> None:
-        if task_id not in _HEALTH_PHASE_IDS:
+        wiki_changed = (
+            self.wiki_service is not None
+            and self.wiki_page_projection is not None
+            and self.wiki_service.repository.head != self.wiki_page_projection.last_state.wiki_head
+        )
+        if task_id not in _HEALTH_PHASE_IDS and not wiki_changed:
             return
         if success and task_id == BUILTIN_MEMORY_RETENTION_ID:
             await self._record_retention_checkpoint()
-        await self.project_wiki_health()
+        if wiki_changed:
+            await self.project_wiki_state()
+        else:
+            await self.project_wiki_health()
 
     async def _record_retention_checkpoint(self) -> None:
         """Persist Retention coverage only after the backend proves no review remains due."""
@@ -473,37 +484,22 @@ class Runtime:
             timezone_name=self.config.memory_timezone,
         )
 
-    def _get_fact_maintenance(self) -> FactMaintenance | None:
+    def _create_fact_maintenance(self, reviewer: FactMaintenanceReviewer) -> FactMaintenance | None:
         model = self.config.memory_model
         if self.fact_service is None or self._fact_consumer_store is None or self.wiki_service is None or not model:
             return None
         return FactMaintenance(
             self.fact_service,
             self._fact_consumer_store,
-            partial(
-                review_fact_maintenance,
-                get_completion_client(model),
-                model,
-                reasoning_effort=self.knowledge._memory_reasoning_effort(model),
-            ),
+            reviewer,
             wiki=self.wiki_service,
             candidate_provider=self.fact_index_projection,
         )
 
-    def _get_wiki_maintenance(self) -> WikiMaintenance | None:
-        model = self.config.memory_model
-        if self._wiki_maintenance_store is None or self.wiki_service is None or not model:
+    def _create_wiki_maintenance(self, reviewer: WikiMaintenanceReviewer) -> WikiMaintenance | None:
+        if self._wiki_maintenance_store is None or self.wiki_service is None or not self.config.memory_model:
             return None
-        return WikiMaintenance(
-            self._wiki_maintenance_store,
-            self.wiki_service,
-            partial(
-                review_wiki_maintenance,
-                get_completion_client(model),
-                model,
-                reasoning_effort=self.knowledge._memory_reasoning_effort(model),
-            ),
-        )
+        return WikiMaintenance(self._wiki_maintenance_store, self.wiki_service, reviewer)
 
     async def _synthesis_is_current(self) -> bool:
         if self.fact_service is None or self._fact_consumer_store is None:
@@ -624,6 +620,13 @@ class Runtime:
                         continue
                     raise
 
+    async def project_wiki_state(self) -> None:
+        """Converge the rebuildable page index before rendering health."""
+
+        if self.wiki_page_projection is not None:
+            await self.wiki_page_projection.sync()
+        await self.project_wiki_health()
+
     @staticmethod
     def _semantic_wiki_revision(report: WikiChangesReport) -> str | None:
         return next(
@@ -667,11 +670,10 @@ class Runtime:
             get_cheap_llm=lambda: get_completion_client(self.config.memory_model) if self.config.memory_model else None,
             cheap_model=self.config.memory_model,
             get_fact_dream=self._get_fact_dream,
-            get_fact_maintenance=self._get_fact_maintenance,
+            get_fact_maintenance=self._create_fact_maintenance,
             get_fact_synthesis=self._get_fact_synthesis,
-            get_wiki_maintenance=self._get_wiki_maintenance,
+            get_wiki_maintenance=self._create_wiki_maintenance,
             synthesis_is_current=self._synthesis_is_current,
-            project_wiki_health=self.project_wiki_health,
             on_automation_finished=self._after_automation_finished,
             get_wiki_service=lambda: self.wiki_service,
             get_notifiers=lambda: self.notifier_service,

@@ -16,6 +16,8 @@ from arden.constants import (
     MEMORY_RETENTION_AT,
 )
 from arden.logging import get_logger
+from arden.memory.facts.maintenance import FACT_MAINTENANCE_REVIEW_TOOL_NAME
+from arden.wiki.constants import WIKI_MAINTENANCE_REVIEW_TOOL_NAME
 
 _logger = get_logger(__name__)
 
@@ -56,12 +58,15 @@ _FACT_RETENTION_PROMPT = (
     "every change first and commit only the returned plan."
 )
 _FACT_MAINTENANCE_DESCRIPTION = "Reconcile duplicate and misclassified canonical facts."
-_FACT_MAINTENANCE_PROMPT = (
-    "Review changed canonical facts using prepared, version-pinned candidates. "
-    "Merge only genuine duplicates, correct only kind, labels, subjects, lifecycle, "
-    "or evidence class, and make no change when evidence is weak. Never create or "
-    "rewrite fact text, manage review or expiry, perform general supersession, or "
-    "edit wiki prose. Inferred evidence cannot replace direct evidence."
+FACT_MAINTENANCE_TOOL_SCOPE = [FACT_MAINTENANCE_REVIEW_TOOL_NAME]
+FACT_MAINTENANCE_PROMPT = (
+    "Run Memory Maintenance to completion. Start with fact_maintenance_review action='next'. "
+    "For each prepared, version-pinned cluster, merge only genuine duplicates, correct only "
+    "kind, labels, subjects, lifecycle, or evidence class, and choose no_change whenever the "
+    "evidence is weak or ambiguous. Never create or rewrite fact text, manage age-based expiry, "
+    "perform general supersession, edit wiki prose, or let inferred evidence replace direct "
+    "evidence. If the tool rejects a decision, correct that same cluster and retry. Continue "
+    "until the tool reports completion; never use another tool or stop early."
 )
 _FACT_SYNTHESIS_DESCRIPTION = "Publish fact-backed wiki pages from canonical facts."
 _FACT_SYNTHESIS_PROMPT = (
@@ -71,9 +76,15 @@ _FACT_SYNTHESIS_PROMPT = (
     "or uncertain facts out of publication."
 )
 _WIKI_MAINTENANCE_DESCRIPTION = "Reconcile cross-page wiki consistency from managed revision evidence."
-_WIKI_MAINTENANCE_PROMPT = (
-    "Review managed wiki commits and their linked-page evidence for cross-page consistency. "
-    "Preserve user-owned content and never invent facts or citations."
+WIKI_MAINTENANCE_TOOL_SCOPE = [WIKI_MAINTENANCE_REVIEW_TOOL_NAME]
+WIKI_MAINTENANCE_PROMPT = (
+    "Run Wiki Maintenance to completion. Start with wiki_maintenance_review action='next'. "
+    "For each prepared, version-pinned report, preserve user intent and use only the supplied evidence. "
+    "Choose no_change unless a targeted title, alias, or ordinary body edit is necessary for cross-page consistency. "
+    "Never do any of the following: invent facts or citations, read raw facts, rename, move, archive, merge, "
+    "redirect, or edit generated regions. "
+    "Use needs_review when a durable user decision is required. If the tool rejects a decision, correct that same report "
+    "and retry. Continue until the tool reports completion; never use another tool or stop early."
 )
 
 BUILTINS = [
@@ -81,10 +92,11 @@ BUILTINS = [
         task_id=BUILTIN_MEMORY_CONSOLIDATE_ID,
         name="Memory Maintenance",
         description=_FACT_MAINTENANCE_DESCRIPTION,
-        prompt=_FACT_MAINTENANCE_PROMPT,
+        prompt=FACT_MAINTENANCE_PROMPT,
         triggers=[TimeTrigger(at=MEMORY_CONSOLIDATE_AT, days="daily")],
         handler="memory_maintenance",
         auto_approve=True,
+        tool_scope=list(FACT_MAINTENANCE_TOOL_SCOPE),
     ),
     BuiltinSpec(
         task_id=BUILTIN_MEMORY_SYNTHESIZE_ID,
@@ -109,10 +121,11 @@ BUILTINS = [
         task_id=BUILTIN_WIKI_MAINTENANCE_ID,
         name="Wiki Maintenance",
         description=_WIKI_MAINTENANCE_DESCRIPTION,
-        prompt=_WIKI_MAINTENANCE_PROMPT,
+        prompt=WIKI_MAINTENANCE_PROMPT,
         triggers=[TimeTrigger(every="6h")],
         handler="wiki_maintenance",
         auto_approve=True,
+        tool_scope=list(WIKI_MAINTENANCE_TOOL_SCOPE),
     ),
     BuiltinSpec(
         task_id=BUILTIN_MEMORY_DREAM_ID,

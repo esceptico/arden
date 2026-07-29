@@ -11,7 +11,6 @@ from typing import Any, Literal, Protocol, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from arden.constants import BUILTIN_MEMORY_CONSOLIDATE_ID
-from arden.llm.base import CompletionClient
 from arden.memory.facts.consumer_store import FactConsumerStore
 from arden.memory.facts.maintenance.store import (
     CONSUMER_ID,
@@ -29,26 +28,6 @@ ORIGIN = "memory.maintenance"
 _ACTOR = f"automation:{BUILTIN_MEMORY_CONSOLIDATE_ID}"
 _MAX_FACT_TEXT = 4_000
 _MAX_REASON = 1_000
-_REVIEW_SYSTEM_PROMPT = """Review one prepared canonical-fact cluster using only the supplied evidence.
-Return no_change when evidence is weak or ambiguous.
-Return exactly one outcome with only its action fields populated:
-- no_change: every action field must be null.
-- amend_metadata: target_token plus kind, labels, subjects, lifecycle, or evidence_class;
-  every merge and normalization field must be null.
-- merge_duplicate: distinct discard_token and survivor_token; every amendment and
-  normalization field must be null.
-- normalize_topic: old_topic and canonical_page_token; every amendment and merge
-  field must be null.
-
-Never create or rewrite fact text. Never review, expire, retract, age-archive, or perform
-general evidence-based supersession. Never edit wiki prose. An inferred fact cannot replace
-a direct fact. For normalize_topic, copy old_topic exactly from the changed fact and select
-the canonical page only with its opaque P### token. Never return a page ID, path, or invented
-page name. Do not normalize when the relationship is ambiguous or the old topic already has
-its own page. Use only the opaque F### and P### tokens shown in the cluster.
-"""
-
-
 class FactMaintenanceCandidateProvider(Protocol):
     """Optional semantic fallback over a rebuildable fact index."""
 
@@ -128,30 +107,6 @@ class FactMaintenancePreparedCluster:
     exact_text_tokens: tuple[str, ...]
     semantic_tokens: tuple[str, ...]
     wiki_page_tokens: Mapping[str, str]
-
-
-async def review_fact_maintenance(
-    client: CompletionClient,
-    model: str,
-    cluster: FactMaintenancePreparedCluster,
-    *,
-    reasoning_effort: str | None = None,
-) -> FactMaintenanceDecision:
-    response = await client.completion(
-        model=model,
-        messages=[
-            {"role": "system", "content": _REVIEW_SYSTEM_PROMPT},
-            {"role": "user", "content": cluster.markdown},
-        ],
-        response_format=FactMaintenanceDecision,
-        reasoning_effort=reasoning_effort,
-    )
-    if not response.choices or response.choices[0].message.content is None:
-        raise ValueError("fact maintenance reviewer returned no decision")
-    content = response.choices[0].message.content
-    if isinstance(content, FactMaintenanceDecision):
-        return content
-    return FactMaintenanceDecision.model_validate_json(content)
 
 
 FactMaintenanceReviewer = Callable[[FactMaintenancePreparedCluster], Awaitable[FactMaintenanceDecision]]
@@ -600,38 +555,7 @@ class FactMaintenance:
         self,
         reviewed: Sequence[_ReviewedDecision],
     ) -> tuple[list[dict[str, Any]], int, int, tuple[str, ...]]:
-        amendments: dict[str, tuple[Fact, dict[str, Any]]] = {}
-        merges: dict[str, tuple[Fact, Fact, str]] = {}
-        reasons: list[str] = []
-        for item in reviewed:
-            decision = item.decision
-            self._validate_cluster_decision(item.cluster, item.target, decision)
-            if decision.outcome == "no_change":
-                continue
-            if decision.outcome == "amend_metadata":
-                reasons.append(decision.reason)
-                target = self._token_fact(item.cluster, decision.target_token)
-                metadata = self._changed_metadata(target, decision)
-                if metadata:
-                    amendments[target.fact_id] = (target, metadata)
-                continue
-            if decision.outcome == "normalize_topic":
-                continue
-
-            reasons.append(decision.reason)
-            discard = self._token_fact(item.cluster, decision.discard_token)
-            survivor = self._token_fact(item.cluster, decision.survivor_token)
-            existing = merges.get(discard.fact_id)
-            if existing is not None and existing[1].fact_id != survivor.fact_id:
-                raise FactMaintenanceError("one fact cannot have multiple duplicate survivors")
-            merges[discard.fact_id] = (discard, survivor, decision.reason)
-
-        discarded = set(merges)
-        survivors = {survivor.fact_id for _discard, survivor, _reason in merges.values()}
-        if discarded.intersection(survivors):
-            raise FactMaintenanceError("duplicate merge chains are not allowed in one maintenance plan")
-        if set(amendments).intersection(discarded | survivors):
-            raise FactMaintenanceError("one maintenance plan cannot both amend and merge a fact")
+        amendments, merges, reasons = self._collect_changes(reviewed)
 
         changes: list[dict[str, Any]] = []
         for fact_id in sorted(amendments):
@@ -658,6 +582,58 @@ class FactMaintenance:
                 }
             )
         return changes, len(amendments), len(merges), tuple(dict.fromkeys(reasons))
+
+    @classmethod
+    def validate_accepted_decisions(
+        cls,
+        decisions: Sequence[tuple[FactMaintenancePreparedCluster, FactMaintenanceDecision]],
+    ) -> None:
+        """Reject a decision set that cannot become one maintenance plan."""
+
+        reviewed = tuple(
+            _ReviewedDecision(cls._token_fact(cluster, cluster.target_token), cluster, decision)
+            for cluster, decision in decisions
+        )
+        cls._collect_changes(reviewed)
+
+    @classmethod
+    def _collect_changes(
+        cls,
+        reviewed: Sequence[_ReviewedDecision],
+    ) -> tuple[dict[str, tuple[Fact, dict[str, Any]]], dict[str, tuple[Fact, Fact, str]], list[str]]:
+        amendments: dict[str, tuple[Fact, dict[str, Any]]] = {}
+        merges: dict[str, tuple[Fact, Fact, str]] = {}
+        reasons: list[str] = []
+        for item in reviewed:
+            decision = item.decision
+            cls._validate_cluster_decision(item.cluster, item.target, decision)
+            if decision.outcome == "no_change":
+                continue
+            if decision.outcome == "amend_metadata":
+                reasons.append(decision.reason)
+                target = cls._token_fact(item.cluster, decision.target_token)
+                metadata = cls._changed_metadata(target, decision)
+                if metadata:
+                    amendments[target.fact_id] = (target, metadata)
+                continue
+            if decision.outcome == "normalize_topic":
+                continue
+
+            reasons.append(decision.reason)
+            discard = cls._token_fact(item.cluster, decision.discard_token)
+            survivor = cls._token_fact(item.cluster, decision.survivor_token)
+            existing = merges.get(discard.fact_id)
+            if existing is not None and existing[1].fact_id != survivor.fact_id:
+                raise FactMaintenanceError("one fact cannot have multiple duplicate survivors")
+            merges[discard.fact_id] = (discard, survivor, decision.reason)
+
+        discarded = set(merges)
+        survivors = {survivor.fact_id for _discard, survivor, _reason in merges.values()}
+        if discarded.intersection(survivors):
+            raise FactMaintenanceError("duplicate merge chains are not allowed in one maintenance plan")
+        if set(amendments).intersection(discarded | survivors):
+            raise FactMaintenanceError("one maintenance plan cannot both amend and merge a fact")
+        return amendments, merges, reasons
 
     @classmethod
     def validate_cluster_decision(

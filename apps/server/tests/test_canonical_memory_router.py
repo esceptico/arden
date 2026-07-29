@@ -4,7 +4,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -53,12 +52,16 @@ def _client(tmp_path: Path) -> TestClient:
     )
     ledger.commit(plan)
     queued: list[str] = []
+    projected: list[str | None] = []
 
     async def enqueue_wiki_user_edit(commit_id: str) -> None:
         queued.append(commit_id)
 
     def require_wiki_user_edit_queue() -> None:
         return None
+
+    async def project_wiki_state() -> None:
+        projected.append(wiki.repository.head)
 
     app = FastAPI()
     runtime = SimpleNamespace(
@@ -68,6 +71,8 @@ def _client(tmp_path: Path) -> TestClient:
         require_wiki_user_edit_queue=require_wiki_user_edit_queue,
         enqueue_wiki_user_edit=enqueue_wiki_user_edit,
         queued_wiki_edits=queued,
+        project_wiki_state=project_wiki_state,
+        projected_wiki_heads=projected,
         facts_connection=None,
     )
     app.state.runtime = runtime
@@ -218,6 +223,13 @@ def test_wiki_crud_history_diff_links_and_recursive_metadata(tmp_path: Path) -> 
         )
         assert restored.status_code == 200
         assert restored.json()["content"] == candidate
+        assert client.app.state.runtime.projected_wiki_heads == [
+            one["repository_head"],
+            linked.json()["repository_head"],
+            current["repository_head"],
+            archived_page["repository_head"],
+            restored.json()["repository_head"],
+        ]
 
 
 def test_fact_list_search_detail_and_seek_pagination(tmp_path: Path) -> None:
@@ -332,7 +344,7 @@ def test_wiki_update_rejects_before_commit_when_curator_queue_is_unavailable(tmp
         assert current["version"] == created["version"]
 
 
-def test_wiki_update_surfaces_enqueue_failure_after_commit(tmp_path: Path) -> None:
+def test_wiki_update_reports_committed_edit_when_curator_enqueue_fails(tmp_path: Path) -> None:
     with _client(tmp_path) as client:
         created = client.post(
             "/admin/wiki/pages",
@@ -344,14 +356,33 @@ def test_wiki_update_surfaces_enqueue_failure_after_commit(tmp_path: Path) -> No
 
         client.app.state.runtime.enqueue_wiki_user_edit = fail_enqueue
         replacement = created["content"] + "Committed before queue failure.\n"
-        with pytest.raises(RuntimeError, match="curator queue write failed"):
-            client.put(
-                "/admin/wiki/pages/one",
-                json={
-                    "content": replacement,
-                    "expected_version": created["version"],
-                    "expected_head": created["repository_head"],
-                },
-            )
+        response = client.put(
+            "/admin/wiki/pages/one",
+            json={
+                "content": replacement,
+                "expected_version": created["version"],
+                "expected_head": created["repository_head"],
+            },
+        )
 
+        assert response.status_code == 200
+        assert response.json()["content"] == replacement
+        assert response.json()["curation_pending"] is True
         assert client.get("/admin/wiki/pages/one").json()["content"] == replacement
+        assert client.app.state.runtime.projected_wiki_heads[-1] == response.json()["repository_head"]
+
+
+def test_wiki_create_reports_committed_page_when_projection_fails(tmp_path: Path) -> None:
+    with _client(tmp_path) as client:
+        async def fail_projection() -> None:
+            raise RuntimeError("wiki projection failed")
+
+        client.app.state.runtime.project_wiki_state = fail_projection
+        response = client.post(
+            "/admin/wiki/pages",
+            json={"path": "one.md", "title": "One", "page_id": "one", "expected_head": None},
+        )
+
+        assert response.status_code == 201
+        assert response.json()["projection_pending"] is True
+        assert client.get("/admin/wiki/pages/one").status_code == 200

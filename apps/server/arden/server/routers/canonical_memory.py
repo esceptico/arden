@@ -11,6 +11,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
+from arden.logging import get_logger
 from arden.memory.facts.models import (
     FactConflictError,
     FactLedgerCorruptionError,
@@ -33,6 +34,7 @@ from arden.wiki.service import WikiService, WikiValidationError
 
 wiki_router = APIRouter(prefix="/admin/wiki", tags=["wiki"])
 facts_router = APIRouter(prefix="/admin/facts", tags=["facts"])
+_logger = get_logger(__name__)
 
 
 class _Request(BaseModel):
@@ -189,6 +191,17 @@ def _wiki_error(service: WikiService, page_id: str, exc: Exception) -> HTTPExcep
     raise exc
 
 
+async def _project_committed_wiki_change(request: Request, revision: str | None) -> bool:
+    if revision is None:
+        return False
+    try:
+        await get_runtime(request).project_wiki_state()
+    except Exception:
+        _logger.exception("Wiki projection failed after a committed user change", revision=revision)
+        return True
+    return False
+
+
 @wiki_router.get("/pages")
 def list_wiki_pages(
     request: Request,
@@ -224,7 +237,7 @@ def read_wiki_page(page_id: str, request: Request) -> dict[str, object]:
 
 
 @wiki_router.post("/pages", status_code=201)
-def create_wiki_page(body: WikiCreateRequest, request: Request) -> dict[str, object]:
+async def create_wiki_page(body: WikiCreateRequest, request: Request) -> dict[str, object]:
     service = _wiki_service(request)
     try:
         actual_head = service.repository.head
@@ -243,12 +256,16 @@ def create_wiki_page(body: WikiCreateRequest, request: Request) -> dict[str, obj
             reason="create wiki page",
         )
         head, record = _page_snapshot(service, created.page.page_id)
-        return _page_json(
+        projection_pending = await _project_committed_wiki_change(request, head)
+        result = _page_json(
             record,
             head,
             content=True,
             timestamps=_page_timestamps(service, head, {record.page.page_id}),
         )
+        if projection_pending:
+            result["projection_pending"] = True
+        return result
     except Exception as exc:
         raise _wiki_error(service, body.page_id or "", exc) from exc
 
@@ -270,20 +287,37 @@ async def update_wiki_page(page_id: str, body: WikiUpdateRequest, request: Reque
             expected_head=body.expected_head,
         )
         if commit_id is not None:
-            await runtime.enqueue_wiki_user_edit(commit_id)
+            try:
+                await runtime.enqueue_wiki_user_edit(commit_id)
+                curation_pending = False
+            except Exception:
+                curation_pending = True
+                _logger.exception(
+                    "Wiki edit committed but curator enqueue failed; startup reconciliation will retry",
+                    commit_id=commit_id,
+                )
+            projection_pending = await _project_committed_wiki_change(request, commit_id)
+        else:
+            curation_pending = False
+            projection_pending = False
         head, record = _page_snapshot(service, page_id)
-        return _page_json(
+        result = _page_json(
             record,
             head,
             content=True,
             timestamps=_page_timestamps(service, head, {page_id}),
         )
+        if curation_pending:
+            result["curation_pending"] = True
+        if projection_pending:
+            result["projection_pending"] = True
+        return result
     except Exception as exc:
         raise _wiki_error(service, page_id, exc) from exc
 
 
 @wiki_router.post("/pages/{page_id}/archive")
-def archive_wiki_page(page_id: str, body: WikiVersionRequest, request: Request) -> dict[str, object]:
+async def archive_wiki_page(page_id: str, body: WikiVersionRequest, request: Request) -> dict[str, object]:
     service = _wiki_service(request)
     try:
         service.archive_page(
@@ -295,20 +329,24 @@ def archive_wiki_page(page_id: str, body: WikiVersionRequest, request: Request) 
             reason="archive wiki page",
         )
         head = service.repository.head
+        projection_pending = await _project_committed_wiki_change(request, head)
         resource = service.repository.get(page_id, at=head)
-        return {
+        result = {
             "page_id": page_id,
             "path": resource.path,
             "resource_state": resource.state.value,
             "version": resource.version_id,
             "repository_head": head,
         }
+        if projection_pending:
+            result["projection_pending"] = True
+        return result
     except Exception as exc:
         raise _wiki_error(service, page_id, exc) from exc
 
 
 @wiki_router.post("/pages/{page_id}/restore")
-def restore_wiki_page(page_id: str, body: WikiVersionRequest, request: Request) -> dict[str, object]:
+async def restore_wiki_page(page_id: str, body: WikiVersionRequest, request: Request) -> dict[str, object]:
     service = _wiki_service(request)
     try:
         service.restore_page(
@@ -320,12 +358,16 @@ def restore_wiki_page(page_id: str, body: WikiVersionRequest, request: Request) 
             reason="restore wiki page",
         )
         head, record = _page_snapshot(service, page_id)
-        return _page_json(
+        projection_pending = await _project_committed_wiki_change(request, head)
+        result = _page_json(
             record,
             head,
             content=True,
             timestamps=_page_timestamps(service, head, {page_id}),
         )
+        if projection_pending:
+            result["projection_pending"] = True
+        return result
     except Exception as exc:
         raise _wiki_error(service, page_id, exc) from exc
 

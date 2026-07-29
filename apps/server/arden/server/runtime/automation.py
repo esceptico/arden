@@ -9,9 +9,15 @@ from arden.areas.agent import AreaCustodianReport, custodian_contract, record_ar
 from arden.areas.asks import AskStore
 from arden.areas.custodian import CustodianStore
 from arden.areas.models import Area, areas_from_records
-from arden.automation.builtins import seed_builtins
+from arden.automation.builtins import (
+    FACT_MAINTENANCE_PROMPT,
+    FACT_MAINTENANCE_TOOL_SCOPE,
+    WIKI_MAINTENANCE_PROMPT,
+    WIKI_MAINTENANCE_TOOL_SCOPE,
+    seed_builtins,
+)
 from arden.automation.models import Automation
-from arden.automation.scheduler import Scheduler
+from arden.automation.scheduler import CompletedAgentRun, Scheduler
 from arden.automation.service import AutomationService
 from arden.automation.triggers import TimeTrigger
 from arden.config import Config
@@ -21,6 +27,7 @@ from arden.constants import (
     AREA_ASK_IGNORED_DAYS,
     AREAS_AGENT_STATE_FILE,
     AREAS_STATE_FILE,
+    BUILTIN_MEMORY_CONSOLIDATE_ID,
     BUILTIN_MEMORY_SYNTHESIZE_ID,
     BUILTIN_WIKI_MAINTENANCE_ID,
 )
@@ -28,14 +35,18 @@ from arden.events.internal import RunCompleted
 from arden.events.sse import AreasChangedEvent, MemoryChangedEvent
 from arden.integrations.calendar.client import MultiCalendarSource
 from arden.logging import get_logger
+from arden.memory.facts.maintenance.agent import FactMaintenanceReviewService
+from arden.memory.facts.maintenance.runner import FactMaintenance, FactMaintenanceReviewer
 from arden.monitor.calendar import CalendarMonitor
 from arden.monitor.service import Monitor
 from arden.notifiers.service import NotifierService
-from arden.operator.runner import OperatorDeps
+from arden.operator.runner import OperatorDeps, RunRequest, run_agent
 from arden.outbox import AutomationSettled
 from arden.server.runtime.outbox import RuntimeOutbox
 from arden.server.stores import Stores
 from arden.wiki.constants import PUBLISH_WIKI_GENERATED_TOOL_NAME, READ_WIKI_PAGE_TOOL_NAME
+from arden.wiki.maintenance.agent import WikiMaintenanceReviewService
+from arden.wiki.maintenance.runner import WikiMaintenance, WikiMaintenanceReviewer
 from arden.wiki.service import WikiService
 
 _logger = get_logger(__name__)
@@ -54,11 +65,10 @@ class AutomationRuntime:
         get_cheap_llm: Callable[[], object | None],
         cheap_model: str | None,
         get_fact_dream: Callable[[], object | None] = lambda: None,
-        get_fact_maintenance: Callable[[], object | None] = lambda: None,
+        get_fact_maintenance: Callable[[FactMaintenanceReviewer], FactMaintenance | None] = lambda _reviewer: None,
         get_fact_synthesis: Callable[[], object | None] = lambda: None,
-        get_wiki_maintenance: Callable[[], object | None] = lambda: None,
+        get_wiki_maintenance: Callable[[WikiMaintenanceReviewer], WikiMaintenance | None] = lambda _reviewer: None,
         synthesis_is_current: Callable[[], Awaitable[bool]] | None = None,
-        project_wiki_health: Callable[[], Awaitable[None]] | None = None,
         on_automation_finished: Callable[[str, bool], Awaitable[None]] | None = None,
         get_wiki_service: Callable[[], WikiService | None] = lambda: None,
         get_notifiers: Callable[[], NotifierService | None] = lambda: None,
@@ -69,10 +79,11 @@ class AutomationRuntime:
         self.get_slack_client = get_slack_client
         self.get_fact_dream = get_fact_dream
         self.get_fact_maintenance = get_fact_maintenance
+        self.fact_maintenance_review: FactMaintenanceReviewService | None = None
         self.get_fact_synthesis = get_fact_synthesis
         self.get_wiki_maintenance = get_wiki_maintenance
+        self.wiki_maintenance_review: WikiMaintenanceReviewService | None = None
         self.synthesis_is_current = synthesis_is_current
-        self.project_wiki_health = project_wiki_health
         self.on_automation_finished = on_automation_finished
         self.get_wiki_service = get_wiki_service
         self.build_operator_deps = build_operator_deps
@@ -319,17 +330,43 @@ class AutomationRuntime:
         self.scheduler.start()
         self.outbox_runtime.start()
 
-    async def _run_fact_maintenance(self, context: dict | None) -> str | None:
-        maintenance = self.get_fact_maintenance()
-        if maintenance is None:
+    async def _run_fact_maintenance(self, context: dict | None) -> str | CompletedAgentRun:
+        review = FactMaintenanceReviewService.create(self.get_fact_maintenance)
+        self.fact_maintenance_review = review
+        if review is None:
             return "fact maintenance unavailable (no memory model configured)"
-        result = await maintenance.run()
-        if result.empty:
-            return "fact maintenance idle"
-        return (
-            f"fact maintenance: reviewed {result.reviewed_clusters}; "
-            f"amended {result.amended_facts}; merged {result.merged_facts}"
-        )
+        try:
+            model = self.config.memory_model
+            if not model:
+                return "fact maintenance unavailable (no memory model configured)"
+            request = RunRequest(
+                prompt=FACT_MAINTENANCE_PROMPT,
+                auto_approve=True,
+                source_id=BUILTIN_MEMORY_CONSOLIDATE_ID,
+                model=model,
+                skip_approvals=True,
+                automation_id=BUILTIN_MEMORY_CONSOLIDATE_ID,
+                tool_scope=tuple(FACT_MAINTENANCE_TOOL_SCOPE),
+            )
+            agent_run = None
+            while not review.done:
+                prior_decisions = review.accepted_decisions
+                agent_run = await run_agent(self.build_operator_deps(), request)
+                if not review.done and review.accepted_decisions == prior_decisions:
+                    await review.require_completed()
+            if agent_run is None:
+                raise RuntimeError("fact maintenance agent did not start")
+            result = await review.require_completed()
+            if result.empty:
+                return CompletedAgentRun(agent_run.run_id, "fact maintenance idle")
+            return CompletedAgentRun(
+                agent_run.run_id,
+                f"fact maintenance: reviewed {result.reviewed_clusters}; "
+                f"amended {result.amended_facts}; merged {result.merged_facts}",
+            )
+        finally:
+            await review.aclose()
+            self.fact_maintenance_review = None
 
     async def _run_memory_synthesis(self, context: dict | None) -> str | None:
         synthesis = self.get_fact_synthesis()
@@ -344,36 +381,56 @@ class AutomationRuntime:
         )
 
     async def _run_memory_dream(self, context: dict | None) -> str:
-        try:
-            dream = self.get_fact_dream()
-            if dream is None:
-                return "memory dream unavailable (no memory model configured)"
-            result = await dream.run()
-            if result.empty:
-                return "memory dream idle"
-            state = "published" if result.published else "unchanged"
-            return f"memory dream: {result.insight_count} insight(s); {state}"
-        finally:
-            if self.project_wiki_health is not None:
-                await self.project_wiki_health()
+        dream = self.get_fact_dream()
+        if dream is None:
+            return "memory dream unavailable (no memory model configured)"
+        result = await dream.run()
+        if result.empty:
+            return "memory dream idle"
+        state = "published" if result.published else "unchanged"
+        return f"memory dream: {result.insight_count} insight(s); {state}"
 
-    async def _run_wiki_maintenance(self, context: dict | None) -> str:
+    async def _run_wiki_maintenance(self, context: dict | None) -> str | CompletedAgentRun:
         if self.synthesis_is_current is None or not await self.synthesis_is_current():
             task_id = context["task_id"] if context else None
             if task_id == BUILTIN_WIKI_MAINTENANCE_ID:
                 await self.scheduler.request_delayed_run(task_id, _WIKI_MAINTENANCE_RETRY_DELAY)
             return "wiki maintenance deferred: synthesis is behind"
 
-        maintenance = self.get_wiki_maintenance()
-        if maintenance is None:
+        model = self.config.memory_model
+        if not model:
             return "wiki maintenance unavailable (no memory model configured)"
-
+        request = RunRequest(
+            prompt=WIKI_MAINTENANCE_PROMPT,
+            auto_approve=True,
+            source_id=BUILTIN_WIKI_MAINTENANCE_ID,
+            model=model,
+            skip_approvals=True,
+            automation_id=BUILTIN_WIKI_MAINTENANCE_ID,
+            tool_scope=tuple(WIKI_MAINTENANCE_TOOL_SCOPE),
+        )
         results = []
+        agent_run = None
         for _ in range(2):
-            result = await maintenance.run()
-            results.append(result)
-            if not result.reload_required:
+            review = WikiMaintenanceReviewService.create(self.get_wiki_maintenance)
+            self.wiki_maintenance_review = review
+            if review is None:
+                return "wiki maintenance unavailable (no memory model configured)"
+            try:
+                while not review.done:
+                    prior_decisions = review.accepted_decisions
+                    agent_run = await run_agent(self.build_operator_deps(), request)
+                    if not review.done and review.accepted_decisions == prior_decisions:
+                        await review.require_completed()
+                results.append(await review.require_completed())
+            finally:
+                await review.aclose()
+                self.wiki_maintenance_review = None
+            if not results[-1].reload_required:
                 break
+
+        if agent_run is None:
+            raise RuntimeError("wiki maintenance agent did not start")
 
         reviewed = sum(result.reviewed_commits for result in results)
         updated = sum(result.updated_pages for result in results)
@@ -390,7 +447,9 @@ class AutomationRuntime:
             state = "incomplete"
         if final.blocked:
             await self.notify_wiki_maintenance_reviews_changed(final.feed_target_revision)
-        return f"wiki maintenance: {state}; reviewed {reviewed}; updated {updated}"
+        if final.reload_required:
+            await self.scheduler.request_delayed_run(BUILTIN_WIKI_MAINTENANCE_ID, _WIKI_MAINTENANCE_RETRY_DELAY)
+        return CompletedAgentRun(agent_run.run_id, f"wiki maintenance: {state}; reviewed {reviewed}; updated {updated}")
 
     @staticmethod
     def _area_run_at(index: int) -> str:
