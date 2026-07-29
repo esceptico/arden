@@ -64,10 +64,14 @@
 .md.typeset :where(a) { color: inherit; font-weight: 500; text-decoration-line: underline; text-decoration-color: color-mix(in oklab, currentColor 30%, transparent); }
 .md.typeset :where(a):hover { text-decoration-color: currentColor; }
 .md.typeset :where(a):focus-visible { border-radius: .125em; outline: 2px solid var(--accent); outline-offset: 2px; }
-.md.typeset :where(.external-link__icon) { position: relative; width: 1em; height: 1em; margin-inline-end: .3em; display: inline-flex; align-items: center; justify-content: center; color: var(--typeset-muted); vertical-align: -.14em; }
-.md.typeset :where(.external-link__favicon) { position: absolute; inset: 0; width: 1em; height: 1em; margin: 0; display: block; border-radius: .18em; object-fit: contain; }
-.md.typeset :where(.external-link__fallback) { width: .9em; height: .9em; }
-.md.typeset :where(.external-link__icon[data-favicon="loaded"] .external-link__fallback) { display: none; }
+/* Scoped to `.md`, not `.md.typeset`: the markup is emitted by the shared
+   Anchor whenever a surface opts into externalLinkFavicons, so its sizing has
+   to reach every one of them. Under the narrower selector the wiki view got
+   the img with none of the rules and rendered it at natural size. */
+.md :where(.external-link__icon) { position: relative; width: 1em; height: 1em; margin-inline-end: .3em; display: inline-flex; align-items: center; justify-content: center; color: var(--typeset-muted); vertical-align: -.14em; }
+.md :where(.external-link__favicon) { position: absolute; inset: 0; width: 1em; height: 1em; margin: 0; display: block; border-radius: .18em; object-fit: contain; }
+.md :where(.external-link__fallback) { width: .9em; height: .9em; }
+.md :where(.external-link__icon[data-favicon="loaded"] .external-link__fallback) { display: none; }
 .md.typeset :where(:is(h1, h2, h3, h4, h5, h6) a) { font-weight: inherit; }
 .md.typeset :where(mark) { padding: .05em .15em; border-radius: .2em; color: inherit; background-color: color-mix(in oklab, oklch(.86 .17 95) 40%, transparent); }
 .md.typeset :where(abbr[title]) { cursor: help; text-decoration-line: underline; text-decoration-style: dotted; text-underline-offset: .2em; }

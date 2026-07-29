@@ -104,7 +104,11 @@ export function MemoryNote({
               <>
                 <WikiLinkContext.Provider value={wikiHandlers}>
                   <div className="mw-prose">
-                    <Markdown content={withoutTitleHeading(stripCites(content), title)} className="memory-doc max-w-none" />
+                    <Markdown
+                      content={withoutTitleHeading(stripCites(content), title)}
+                      className="memory-doc max-w-none"
+                      externalLinkFavicons
+                    />
                   </div>
                 </WikiLinkContext.Provider>
               </>
