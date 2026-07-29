@@ -9,6 +9,7 @@ from arden.constants import (
     BUILTIN_MEMORY_CONSOLIDATE_ID,
     BUILTIN_MEMORY_DREAM_ID,
     BUILTIN_MEMORY_RETENTION_ID,
+    BUILTIN_MEMORY_STORAGE_MAINTENANCE_ID,
     BUILTIN_MEMORY_SYNTHESIZE_ID,
     BUILTIN_WIKI_MAINTENANCE_ID,
     MEMORY_CONSOLIDATE_AT,
@@ -78,6 +79,7 @@ _FACT_SYNTHESIS_PROMPT = (
     "or uncertain facts out of publication."
 )
 _WIKI_MAINTENANCE_DESCRIPTION = "Reconcile cross-page wiki consistency from managed revision evidence."
+_MEMORY_STORAGE_MAINTENANCE_DESCRIPTION = "Collect expired unreachable managed-history objects."
 WIKI_MAINTENANCE_TOOL_SCOPE = [WIKI_MAINTENANCE_REVIEW_TOOL_NAME]
 WIKI_MAINTENANCE_PROMPT = (
     "Run Wiki Maintenance to completion. Start with wiki_maintenance_review action='next'. "
@@ -143,10 +145,24 @@ BUILTINS = [
         enabled=False,
         auto_approve=True,
     ),
+    BuiltinSpec(
+        task_id=BUILTIN_MEMORY_STORAGE_MAINTENANCE_ID,
+        name="Memory Storage Maintenance",
+        description=_MEMORY_STORAGE_MAINTENANCE_DESCRIPTION,
+        prompt="Collect expired unreachable managed-history objects.",
+        triggers=[TimeTrigger(every="7d")],
+        handler="managed_history_collection",
+        auto_approve=True,
+    ),
 ]
 
 
-async def seed_builtins(store: AutomationStore, *, memory_model: str) -> None:
+async def seed_builtins(
+    store: AutomationStore,
+    *,
+    memory_model: str | None,
+    include_managed_history_collection: bool = False,
+) -> None:
     for task_id in RETIRED_BUILTIN_AUTOMATION_IDS:
         existing = await store.get(task_id)
         if existing is not None and existing.builtin:
@@ -154,6 +170,14 @@ async def seed_builtins(store: AutomationStore, *, memory_model: str) -> None:
             _logger.info("Removed retired builtin automation: %s", existing.name)
 
     for spec in BUILTINS:
+        if memory_model is None and spec.task_id != BUILTIN_MEMORY_STORAGE_MAINTENANCE_ID:
+            continue
+        if spec.task_id == BUILTIN_MEMORY_STORAGE_MAINTENANCE_ID and not include_managed_history_collection:
+            existing = await store.get(spec.task_id)
+            if existing is not None and existing.builtin:
+                await store.delete(spec.task_id)
+                _logger.info("Removed managed-history builtin without canonical memory: %s", existing.name)
+            continue
         desired_model = memory_model if spec.uses_memory_model else None
         existing = await store.get(spec.task_id)
         if existing:

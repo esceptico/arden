@@ -41,7 +41,7 @@ from arden.notifiers.base import NotifierContext
 from arden.notifiers.service import NotifierService
 from arden.observability import init_tracing, shutdown_tracing
 from arden.operator.runner import OperatorDeps
-from arden.revisions import ManagedFileRepository, RevisionConflictError
+from arden.revisions import CollectionReport, ManagedFileRepository, RevisionConflictError
 from arden.server.app_control import AppControlService
 from arden.server.runtime.automation import AutomationRuntime
 from arden.server.runtime.config import RuntimeConfig
@@ -765,6 +765,9 @@ class Runtime:
         await self.notifier_service.rebuild()
 
     def _init_automation(self) -> None:
+        collect_managed_history = (
+            self._collect_managed_history if self._fact_ledger is not None and self.wiki_service is not None else None
+        )
         self.automation = AutomationRuntime(
             stores=self.stores,
             config=self.config,
@@ -781,7 +784,28 @@ class Runtime:
             on_automation_finished=self._after_automation_finished,
             get_wiki_service=lambda: self.wiki_service,
             get_notifiers=lambda: self.notifier_service,
+            collect_managed_history=collect_managed_history,
         )
+
+    def _collect_managed_history(self) -> tuple[CollectionReport, CollectionReport]:
+        if self._fact_ledger is None or self.wiki_service is None:
+            raise RuntimeError("managed-history collection requires canonical facts and wiki")
+        reports: list[CollectionReport] = []
+        errors: list[Exception] = []
+        failed: list[str] = []
+        for name, collect in (
+            ("facts", self._fact_ledger.collect_history),
+            ("wiki", self.wiki_service.repository.collect),
+        ):
+            try:
+                reports.append(collect())
+            except Exception as error:
+                failed.append(name)
+                errors.append(error)
+        if errors:
+            raise ExceptionGroup(f"managed-history collection failed: {', '.join(failed)}", errors)
+        facts, wiki = reports
+        return facts, wiki
 
     async def _init_mcp(self) -> None:
         if self.config.mcp_servers:

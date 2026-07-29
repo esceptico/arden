@@ -238,3 +238,116 @@ async def test_overdue_wiki_maintenance_catches_up_once(store: AutomationStore):
     for task in list(sched._running):
         await task
     assert started == ["wiki_maintenance"]
+
+
+@pytest.mark.asyncio
+async def test_overdue_managed_history_collection_catches_up_once(store: AutomationStore):
+    from arden.automation.builtins import seed_builtins
+    from arden.constants import BUILTIN_MEMORY_STORAGE_MAINTENANCE_ID
+
+    await seed_builtins(store, memory_model="memory-model", include_managed_history_collection=True)
+    collection = await store.get(BUILTIN_MEMORY_STORAGE_MAINTENANCE_ID)
+    assert collection is not None
+    last_run = datetime.now(UTC) - timedelta(days=14)
+    await store.save(
+        replace(
+            collection,
+            last_run_at=last_run,
+            next_run_at=last_run + timedelta(days=7),
+        )
+    )
+    await seed_builtins(store, memory_model="memory-model", include_managed_history_collection=True)
+
+    started: list[str] = []
+
+    async def managed_history_collection(_ctx):
+        started.append("managed_history_collection")
+        return "collected"
+
+    sched = Scheduler(store=store, build_deps=lambda: None)
+    sched.register_handler("managed_history_collection", managed_history_collection)
+    await sched._reconcile()
+
+    reconciled = await store.get(BUILTIN_MEMORY_STORAGE_MAINTENANCE_ID)
+    assert reconciled is not None
+    assert reconciled.next_run_at == last_run + timedelta(days=7)
+
+    await sched._tick()
+    for task in list(sched._running):
+        await task
+    assert started == ["managed_history_collection"]
+
+    completed = await store.get(BUILTIN_MEMORY_STORAGE_MAINTENANCE_ID)
+    assert completed is not None
+    assert completed.last_run_at is not None
+    assert completed.last_result == "collected"
+    assert completed.next_run_at is not None
+    assert completed.next_run_at > datetime.now(UTC)
+    runs = await store.list_runs(BUILTIN_MEMORY_STORAGE_MAINTENANCE_ID)
+    assert [run["status"] for run in runs] == ["completed"]
+
+    await sched._tick()
+    assert started == ["managed_history_collection"]
+
+
+@pytest.mark.asyncio
+async def test_ordinary_overdue_interval_advances_without_catch_up(store: AutomationStore):
+    due = datetime.now(UTC) - timedelta(days=8)
+    await store.save(
+        _auto(
+            task_id="ordinary",
+            builtin=False,
+            handler=None,
+            triggers=[TimeTrigger(every="7d")],
+            created_at=due - timedelta(days=7),
+            next_run_at=due,
+        )
+    )
+
+    sched = Scheduler(store=store, build_deps=lambda: None)
+    await sched._reconcile()
+
+    ordinary = await store.get("ordinary")
+    assert ordinary is not None
+    assert ordinary.next_run_at is not None
+    assert ordinary.next_run_at > datetime.now(UTC)
+    assert await store.list_runs("ordinary") == []
+
+
+@pytest.mark.asyncio
+async def test_failed_managed_history_collection_records_retry_without_advancing_success(
+    store: AutomationStore,
+):
+    from arden.automation.builtins import seed_builtins
+    from arden.constants import BUILTIN_MEMORY_STORAGE_MAINTENANCE_ID
+
+    await seed_builtins(store, memory_model=None, include_managed_history_collection=True)
+    collection = await store.get(BUILTIN_MEMORY_STORAGE_MAINTENANCE_ID)
+    assert collection is not None
+    last_success = datetime.now(UTC) - timedelta(days=14)
+    await store.save(
+        replace(
+            collection,
+            last_run_at=last_success,
+            next_run_at=last_success + timedelta(days=7),
+        )
+    )
+
+    async def managed_history_collection(_ctx):
+        raise ExceptionGroup("managed-history collection failed: facts", [OSError("unavailable")])
+
+    sched = Scheduler(store=store, build_deps=lambda: None)
+    sched.register_handler("managed_history_collection", managed_history_collection)
+    await sched._tick()
+    for task in list(sched._running):
+        await task
+
+    failed = await store.get(BUILTIN_MEMORY_STORAGE_MAINTENANCE_ID)
+    assert failed is not None
+    assert failed.last_run_at == last_success
+    assert failed.next_run_at is not None
+    retry_delay = failed.next_run_at - datetime.now(UTC)
+    assert timedelta(seconds=20) < retry_delay <= timedelta(seconds=30)
+    runs = await store.list_runs(BUILTIN_MEMORY_STORAGE_MAINTENANCE_ID)
+    assert [run["status"] for run in runs] == ["failed"]
+    assert "ExceptionGroup: managed-history collection failed: facts" in runs[0]["error"]

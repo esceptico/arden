@@ -6,8 +6,14 @@ import pytest
 
 from arden.agent import Usage
 from arden.automation.models import Automation
+from arden.automation.triggers import TimeTrigger
 from arden.config import Config
-from arden.constants import BUILTIN_MEMORY_RETENTION_ID, BUILTIN_MEMORY_SYNTHESIZE_ID, BUILTIN_WIKI_MAINTENANCE_ID
+from arden.constants import (
+    BUILTIN_MEMORY_RETENTION_ID,
+    BUILTIN_MEMORY_STORAGE_MAINTENANCE_ID,
+    BUILTIN_MEMORY_SYNTHESIZE_ID,
+    BUILTIN_WIKI_MAINTENANCE_ID,
+)
 from arden.events.internal import RunCompleted
 from arden.events.sse import MemoryChangedEvent
 from arden.memory.facts.consumer_store import FactConsumerStore
@@ -23,6 +29,7 @@ from arden.memory.facts.synthesis import (
     FactSynthesisResult,
 )
 from arden.operator.runner import RunResult
+from arden.revisions.models import CollectionReport
 from arden.server.runtime import core as runtime_core
 from arden.server.runtime.core import Runtime
 from arden.tools.facts import FACT_SERVICE
@@ -746,6 +753,102 @@ async def test_memory_dream_leaves_wiki_projection_to_completion_callback(tmp_pa
 
         assert result == "memory dream: 2 insight(s); published"
         assert calls == ["dream"]
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_managed_history_collection_reports_both_repositories(tmp_path, monkeypatch) -> None:
+    runtime = Runtime(_config(tmp_path))
+    await runtime.connect()
+    try:
+        assert runtime.automation is not None
+        assert runtime._fact_ledger is not None
+        assert runtime.wiki_service is not None
+        callback = runtime.automation.collect_managed_history
+        assert callback is not None
+        assert callback.__self__ is runtime
+
+        calls: list[str] = []
+        facts = CollectionReport(scanned=5, removed=2, retained=3, bytes_removed=17)
+        wiki = CollectionReport(scanned=7, removed=1, retained=6, bytes_removed=19)
+        monkeypatch.setattr(
+            runtime._fact_ledger,
+            "collect_history",
+            lambda: calls.append("facts") or facts,
+        )
+        monkeypatch.setattr(
+            runtime.wiki_service.repository,
+            "collect",
+            lambda: calls.append("wiki") or wiki,
+        )
+
+        result = await runtime.automation._run_managed_history_collection(None)
+
+        assert calls == ["facts", "wiki"]
+        assert result == (
+            "managed history collection: facts scanned 5, removed 2, retained 3, bytes removed 17; "
+            "wiki scanned 7, removed 1, retained 6, bytes removed 19"
+        )
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_managed_history_collection_attempts_both_and_propagates_partial_failure(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime = Runtime(_config(tmp_path))
+    await runtime.connect()
+    try:
+        assert runtime.automation is not None
+        assert runtime._fact_ledger is not None
+        assert runtime.wiki_service is not None
+        calls: list[str] = []
+        wiki = CollectionReport(scanned=7, removed=1, retained=6, bytes_removed=19)
+
+        def fail_facts() -> CollectionReport:
+            calls.append("facts")
+            raise OSError("fact history is unavailable")
+
+        monkeypatch.setattr(runtime._fact_ledger, "collect_history", fail_facts)
+        monkeypatch.setattr(
+            runtime.wiki_service.repository,
+            "collect",
+            lambda: calls.append("wiki") or wiki,
+        )
+
+        with pytest.raises(ExceptionGroup, match="managed-history collection failed: facts") as caught:
+            await runtime.automation._run_managed_history_collection(None)
+
+        assert calls == ["facts", "wiki"]
+        assert len(caught.value.exceptions) == 1
+        assert isinstance(caught.value.exceptions[0], OSError)
+        assert str(caught.value.exceptions[0]) == "fact history is unavailable"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_without_memory_model_seeds_non_llm_history_collection(tmp_path) -> None:
+    config = _config(tmp_path).model_copy(update={"model_roles": {}})
+    assert config.memory_model is None
+    runtime = Runtime(config)
+    await runtime.connect()
+    try:
+        assert runtime.automation is not None
+        assert runtime.automation.collect_managed_history is not None
+
+        await runtime.start_scheduler()
+
+        storage = await runtime.stores.automations.get(BUILTIN_MEMORY_STORAGE_MAINTENANCE_ID)
+        assert storage is not None
+        assert storage.model is None
+        assert storage.handler == "managed_history_collection"
+        assert storage.triggers == [TimeTrigger(every="7d")]
+        status = await runtime.automation.scheduler.get_status()
+        assert "managed_history_collection" in status["registered_handlers"]
     finally:
         await runtime.close()
 

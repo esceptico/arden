@@ -42,6 +42,7 @@ from arden.monitor.service import Monitor
 from arden.notifiers.service import NotifierService
 from arden.operator.runner import OperatorDeps, RunRequest, run_agent
 from arden.outbox import AutomationSettled
+from arden.revisions.models import CollectionReport
 from arden.server.runtime.outbox import RuntimeOutbox
 from arden.server.stores import Stores
 from arden.wiki.constants import PUBLISH_WIKI_GENERATED_TOOL_NAME, READ_WIKI_PAGE_TOOL_NAME
@@ -72,6 +73,7 @@ class AutomationRuntime:
         on_automation_finished: Callable[[str, bool], Awaitable[None]] | None = None,
         get_wiki_service: Callable[[], WikiService | None] = lambda: None,
         get_notifiers: Callable[[], NotifierService | None] = lambda: None,
+        collect_managed_history: Callable[[], tuple[CollectionReport, CollectionReport]] | None = None,
     ):
         self.stores = stores
         self.config = config
@@ -90,6 +92,7 @@ class AutomationRuntime:
         self.area_asks = AskStore(config.arden_dir / AREAS_STATE_FILE)
         self.custodians = CustodianStore(config.arden_dir / AREAS_AGENT_STATE_FILE)
         self.get_notifiers = get_notifiers
+        self.collect_managed_history = collect_managed_history
         self.scheduler = Scheduler(
             store=stores.automations,
             build_deps=build_operator_deps,
@@ -356,10 +359,13 @@ class AutomationRuntime:
         self.scheduler.register_handler("memory_synthesize", self._run_memory_synthesis)
         self.scheduler.register_handler("memory_dream", self._run_memory_dream)
         self.scheduler.register_handler("wiki_maintenance", self._run_wiki_maintenance)
+        self.scheduler.register_handler("managed_history_collection", self._run_managed_history_collection)
         memory_model = self.config.memory_model
-        if memory_model is None:
-            raise RuntimeError("Memory model is required for builtin automations")
-        await seed_builtins(self.stores.automations, memory_model=memory_model)
+        await seed_builtins(
+            self.stores.automations,
+            memory_model=memory_model,
+            include_managed_history_collection=self.collect_managed_history is not None,
+        )
         await self._seed_area_automations()
         await compile_schedules_to_automations(".", self.stores.automations)
         await self.automation_service.backfill_channels()
@@ -425,6 +431,18 @@ class AutomationRuntime:
             return "memory dream idle"
         state = "published" if result.published else "unchanged"
         return f"memory dream: {result.insight_count} insight(s); {state}"
+
+    async def _run_managed_history_collection(self, context: dict | None) -> str:
+        if self.collect_managed_history is None:
+            raise RuntimeError("managed-history collection is unavailable without canonical facts and wiki")
+        facts, wiki = await asyncio.to_thread(self.collect_managed_history)
+        return (
+            "managed history collection: "
+            f"facts scanned {facts.scanned}, removed {facts.removed}, retained {facts.retained}, "
+            f"bytes removed {facts.bytes_removed}; "
+            f"wiki scanned {wiki.scanned}, removed {wiki.removed}, retained {wiki.retained}, "
+            f"bytes removed {wiki.bytes_removed}"
+        )
 
     async def _run_wiki_maintenance(self, context: dict | None) -> str | CompletedAgentRun:
         if self.synthesis_is_current is None or not await self.synthesis_is_current():

@@ -1033,18 +1033,28 @@ async def test_seed_builtins_seeds_required_workers_and_optional_dream(automatio
         BUILTIN_MEMORY_CONSOLIDATE_ID,
         BUILTIN_MEMORY_DREAM_ID,
         BUILTIN_MEMORY_RETENTION_ID,
+        BUILTIN_MEMORY_STORAGE_MAINTENANCE_ID,
         BUILTIN_MEMORY_SYNTHESIZE_ID,
         BUILTIN_WIKI_MAINTENANCE_ID,
     )
 
-    await seed_builtins(automation_store, memory_model="memory-model")
-    await seed_builtins(automation_store, memory_model="memory-model")
+    await seed_builtins(
+        automation_store,
+        memory_model="memory-model",
+        include_managed_history_collection=True,
+    )
+    await seed_builtins(
+        automation_store,
+        memory_model="memory-model",
+        include_managed_history_collection=True,
+    )
 
     rows = {row.task_id: row for row in await automation_store.list_all()}
     assert set(rows) == {
         BUILTIN_MEMORY_CONSOLIDATE_ID,
         BUILTIN_MEMORY_DREAM_ID,
         BUILTIN_MEMORY_RETENTION_ID,
+        BUILTIN_MEMORY_STORAGE_MAINTENANCE_ID,
         BUILTIN_MEMORY_SYNTHESIZE_ID,
         BUILTIN_WIKI_MAINTENANCE_ID,
     }
@@ -1083,7 +1093,44 @@ async def test_seed_builtins_seeds_required_workers_and_optional_dream(automatio
     assert dream.enabled is False
     assert dream.next_run_at is None
 
+    storage = rows[BUILTIN_MEMORY_STORAGE_MAINTENANCE_ID]
+    assert storage.handler == "managed_history_collection"
+    assert storage.model is None
+    assert storage.triggers == [TimeTrigger(every="7d")]
+
     assert all(row.next_run_at is not None for row in rows.values() if row.enabled)
+
+
+@pytest.mark.asyncio
+async def test_seed_builtins_skips_storage_maintenance_without_canonical_memory(
+    automation_store: AutomationStore,
+) -> None:
+    from arden.automation.builtins import seed_builtins
+    from arden.constants import BUILTIN_MEMORY_STORAGE_MAINTENANCE_ID
+
+    await seed_builtins(automation_store, memory_model="memory-model")
+
+    assert await automation_store.get(BUILTIN_MEMORY_STORAGE_MAINTENANCE_ID) is None
+
+
+@pytest.mark.asyncio
+async def test_seed_builtins_without_memory_model_still_seeds_storage_maintenance(
+    automation_store: AutomationStore,
+) -> None:
+    from arden.automation.builtins import seed_builtins
+    from arden.constants import BUILTIN_MEMORY_STORAGE_MAINTENANCE_ID
+
+    await seed_builtins(
+        automation_store,
+        memory_model=None,
+        include_managed_history_collection=True,
+    )
+
+    rows = await automation_store.list_all()
+    assert [row.task_id for row in rows] == [BUILTIN_MEMORY_STORAGE_MAINTENANCE_ID]
+    assert rows[0].handler == "managed_history_collection"
+    assert rows[0].model is None
+    assert rows[0].triggers == [TimeTrigger(every="7d")]
 
 
 @pytest.mark.asyncio

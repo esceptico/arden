@@ -10,6 +10,7 @@ from arden.automation.store import AutomationStore
 from arden.automation.triggers import CountTrigger, EventTrigger, IdleTrigger, MessageTrigger, TimeTrigger
 from arden.constants import (
     BUILTIN_MEMORY_RETENTION_ID,
+    BUILTIN_MEMORY_STORAGE_MAINTENANCE_ID,
     BUILTIN_MEMORY_SYNTHESIZE_ID,
     BUILTIN_WIKI_MAINTENANCE_ID,
     DETACHED_RUN_MAX_AGE,
@@ -39,6 +40,7 @@ _CATCH_UP_CADENCE = timedelta(hours=24)
 _MEMORY_RETENTION_BACKSTOP = TimeTrigger(at=MEMORY_RETENTION_AT, days="daily")
 _FACT_SYNTHESIS_BACKSTOP = TimeTrigger(every="6h")
 _WIKI_MAINTENANCE_BACKSTOP = TimeTrigger(every="6h")
+_MANAGED_HISTORY_COLLECTION_BACKSTOP = TimeTrigger(every="7d")
 
 
 IterationDispatcher = Callable[[Automation, str | dict | None, int], Awaitable[str]]
@@ -330,10 +332,9 @@ class Scheduler:
     def _should_catch_up_missed(automation: Automation, now: datetime) -> bool:
         """Whether an overdue built-in must run now rather than skip ahead.
 
-        Daily maintenance keeps its explicit catch-up policy. The
-        canonical fact synthesis interval is also a reliability backstop, so
-        an offline migration must not turn an already-due publication into a
-        future six-hour slot during startup reconciliation.
+        Builtin maintenance keeps an explicit catch-up policy. An offline
+        interval must not turn an already-due required operation into a
+        future slot during startup reconciliation.
         """
         is_fact_synthesis_backstop = (
             automation.builtin
@@ -354,10 +355,18 @@ class Scheduler:
             and automation.cooldown_minutes is None
             and automation.triggers == [_WIKI_MAINTENANCE_BACKSTOP]
         )
+        is_managed_history_collection_backstop = (
+            automation.builtin
+            and automation.task_id == BUILTIN_MEMORY_STORAGE_MAINTENANCE_ID
+            and automation.handler == "managed_history_collection"
+            and automation.cooldown_minutes is None
+            and automation.triggers == [_MANAGED_HISTORY_COLLECTION_BACKSTOP]
+        )
         if not (
             is_fact_synthesis_backstop
             or is_memory_retention_backstop
             or is_wiki_maintenance_backstop
+            or is_managed_history_collection_backstop
             or (automation.builtin and automation.handler in _CATCH_UP_HANDLERS)
         ):
             return False

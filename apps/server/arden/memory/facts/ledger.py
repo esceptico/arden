@@ -30,7 +30,7 @@ from arden.revisions.errors import (
     IdempotencyConflictError,
     RevisionConflictError,
 )
-from arden.revisions.models import ChangeSet, Commit, Create, ResourceState, Update
+from arden.revisions.models import ChangeSet, CollectionReport, Commit, Create, ResourceState, Update
 from arden.revisions.repository import ManagedFileRepository
 
 _VERSION = 1
@@ -320,6 +320,11 @@ class FactLedger:
         """Current validated canonical ledger head."""
 
         return self._snapshot().head
+
+    def collect_history(self) -> CollectionReport:
+        """Collect unreachable fact-history objects using the repository grace period."""
+
+        return self._repository.collect()
 
     def get(self, fact_id: str) -> Fact:
         try:

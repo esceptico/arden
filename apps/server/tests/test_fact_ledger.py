@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -11,7 +12,7 @@ import pytest
 
 from arden.memory.facts.ledger import FactLedger
 from arden.memory.facts.models import FactConflictError, FactLedgerCorruptionError, FactValidationError
-from arden.revisions import ChangeSet, Update
+from arden.revisions import ChangeSet, CollectionReport, Update
 
 JULY = datetime(2026, 7, 28, 12, tzinfo=UTC)
 
@@ -1137,3 +1138,37 @@ def test_managed_month_rewrite_violates_append_only_prefix(tmp_path: Path) -> No
     )
     with pytest.raises(FactLedgerCorruptionError, match="append-only prefix"):
         ledger.search()
+
+
+def test_collect_history_delegates_without_overriding_repository_grace(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    ledger = _ledger(tmp_path)
+    expected = CollectionReport(scanned=5, removed=2, retained=3, bytes_removed=17)
+    calls: list[dict[str, object]] = []
+
+    def collect(**kwargs) -> CollectionReport:
+        calls.append(kwargs)
+        return expected
+
+    monkeypatch.setattr(ledger._repository, "collect", collect)
+
+    assert ledger.collect_history() == expected
+    assert calls == [{}]
+
+
+def test_collect_history_keeps_the_repository_thirty_day_grace(tmp_path: Path) -> None:
+    ledger = _ledger(tmp_path)
+    young = ledger._repository._storage.write_blob(b"young orphan")
+    expired = ledger._repository._storage.write_blob(b"expired orphan")
+    blobs = ledger._repository.history_root / "objects" / "blobs"
+    now = datetime.now(UTC)
+    os.utime(blobs / young, (now.timestamp() - timedelta(days=29).total_seconds(),) * 2)
+    os.utime(blobs / expired, (now.timestamp() - timedelta(days=31).total_seconds(),) * 2)
+
+    report = ledger.collect_history()
+
+    assert (blobs / young).exists()
+    assert not (blobs / expired).exists()
+    assert report.removed == 1

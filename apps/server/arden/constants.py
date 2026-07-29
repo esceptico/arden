@@ -150,6 +150,7 @@ MEMORY_DREAM_AT = "04:00"
 BUILTIN_MEMORY_SYNTHESIZE_ID = "builtin-memory-synthesize"
 BUILTIN_WIKI_MAINTENANCE_ID = "builtin-wiki-maintenance"
 BUILTIN_MEMORY_RETENTION_ID = "builtin-memory-retention"
+BUILTIN_MEMORY_STORAGE_MAINTENANCE_ID = "builtin-memory-storage-maintenance"
 MEMORY_RETENTION_AT = "03:45"
 RETIRED_BUILTIN_AUTOMATION_IDS = (
     "builtin-area-suggester",
