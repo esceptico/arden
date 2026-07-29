@@ -10,7 +10,3 @@ WIKI_HEALTH_REASON = "project wiki health"
 
 WIKI_MAINTENANCE_ACTOR = "Wiki Maintenance"
 WIKI_MAINTENANCE_ORIGIN = "wiki.maintenance"
-
-WIKI_NAVIGATION_ACTOR = "Wiki Navigation"
-WIKI_NAVIGATION_ORIGIN = "wiki.navigation"
-WIKI_NAVIGATION_REASON = "project deterministic README navigation"

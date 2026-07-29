@@ -25,6 +25,8 @@ from arden.wiki.service import (
 WIKI_SERVICE = "wiki"
 _MAX_PAGE_LINES = 4_000
 _MAX_CONTENT_CHARS = 40_000
+_MAX_LIST_ENTRIES = 200
+_MAX_LIST_DATA_BYTES = 40_000
 _MAX_LINKS = 500
 _MAX_LINK_DATA_BYTES = 40_000
 _MAX_LINK_FIELD_CHARS = 2_000
@@ -52,6 +54,17 @@ class WikiPageSelector(BaseModel):
 class ReadWikiPageInput(WikiPageSelector):
     offset: int = Field(default=1, ge=1)
     limit: int = Field(default=500, ge=1, le=_MAX_PAGE_LINES)
+
+
+class ListWikiPagesInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    directory: str = Field(
+        default="",
+        max_length=4096,
+        description="Exact wiki directory, such as 'topics'. Empty means the wiki root.",
+    )
+    limit: int = Field(default=100, ge=1, le=_MAX_LIST_ENTRIES)
 
 
 class WikiLinksInput(WikiPageSelector):
@@ -110,6 +123,65 @@ def _page_ref(record: WikiPageRecord) -> ToolSourceRef:
         ref=record.page.page_id,
         title=record.page.title,
     )
+
+
+def _directory(value: str) -> str | None:
+    if not value:
+        return ""
+    if value.startswith("/") or "\\" in value:
+        return None
+    directory = value.removesuffix("/")
+    if not directory or any(part in {"", ".", ".."} for part in directory.split("/")):
+        return None
+    return directory
+
+
+def _listing_page_data(record: WikiPageRecord) -> dict[str, object]:
+    return {
+        "kind": "page",
+        "page_id": record.page.page_id,
+        "path": record.resource.path,
+        "title": record.page.title,
+        "lifecycle": record.page.lifecycle,
+        "version": record.resource.version_id,
+    }
+
+
+def _listing_entries(
+    pages: tuple[WikiPageRecord, ...],
+    directory: str,
+) -> list[dict[str, object]]:
+    prefix = f"{directory}/" if directory else ""
+    directories: set[str] = set()
+    entries: list[dict[str, object]] = []
+    for record in pages:
+        path = record.resource.path
+        if not path.startswith(prefix):
+            continue
+        relative = path[len(prefix) :]
+        if not relative:
+            continue
+        child, separator, _remainder = relative.partition("/")
+        if separator:
+            directories.add(f"{prefix}{child}/")
+            continue
+        entries.append(_listing_page_data(record))
+    return [
+        *({"kind": "directory", "path": path} for path in sorted(directories)),
+        *sorted(entries, key=lambda entry: str(entry["path"])),
+    ]
+
+
+def _bounded_listing(entries: list[dict[str, object]], limit: int) -> list[dict[str, object]]:
+    visible: list[dict[str, object]] = []
+    used = 0
+    for entry in entries[:limit]:
+        size = len(json.dumps(entry, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) + 1
+        if used + size > _MAX_LIST_DATA_BYTES:
+            break
+        visible.append(entry)
+        used += size
+    return visible
 
 
 def _resolve(wiki: WikiService, selector: WikiPageSelector) -> tuple[WikiPageRecord, str | None] | ToolResult:
@@ -212,6 +284,57 @@ def _bounded_links(
         used += size
         fields_truncated = fields_truncated or truncated
     return result, used, fields_truncated
+
+
+async def list_wiki_pages(execution: ToolExecution, args: ListWikiPagesInput) -> ToolResult:
+    wiki = _wiki(execution)
+    if isinstance(wiki, ToolResult):
+        return wiki
+    directory = _directory(args.directory)
+    if directory is None:
+        return ToolResult.failure(
+            code="invalid_directory",
+            message="Wiki directory must be a relative POSIX path without '.' or '..'.",
+            preview="Invalid wiki directory",
+        )
+    try:
+        snapshot = await asyncio.to_thread(wiki.snapshot)
+    except WikiAmbiguityError as exc:
+        return ToolResult.failure(code="ambiguous_ref", message=str(exc), preview="Ambiguous wiki reference")
+    except WikiValidationError as exc:
+        return ToolResult.failure(code="invalid_ref", message=str(exc), preview="Invalid wiki reference")
+    pages = tuple(record for record in snapshot.pages if record.page.lifecycle == "active")
+    entries = _listing_entries(pages, directory)
+    if directory and not entries:
+        return ToolResult.failure(
+            code="not_found",
+            message=f"No active wiki directory exists at {directory!r}.",
+            preview="Wiki directory not found",
+        )
+    visible = _bounded_listing(entries, args.limit)
+    lines = []
+    for entry in visible:
+        if entry["kind"] == "directory":
+            lines.append(f"[directory] {entry['path']}")
+        else:
+            lines.append(f"[page] {entry['path']} — {entry['title']} ({entry['page_id']})")
+    if not lines:
+        lines.append("No wiki entries.")
+    has_more = len(visible) < len(entries)
+    if has_more:
+        lines.append("More entries exist; list a narrower directory.")
+    label = "/" if not directory else f"/{directory}/"
+    return ToolResult(
+        content=f"Wiki {label}\n" + "\n".join(lines),
+        preview=f"{len(visible)} wiki entries" + (" (capped)" if has_more else ""),
+        data={
+            "head": snapshot.head,
+            "directory": directory,
+            "entries": visible,
+            "total": len(entries),
+            "has_more": has_more,
+        },
+    )
 
 
 async def read_wiki_page(execution: ToolExecution, args: ReadWikiPageInput) -> ToolResult:
@@ -320,11 +443,7 @@ async def publish_wiki_generated(execution: ToolExecution, args: PublishWikiGene
             )
         if record.resource.version_id != args.expected_version:
             raise RevisionConflictError(f"resource {args.page_id} changed: expected {args.expected_version}")
-        if (
-            record.resource.path.endswith("/README.md")
-            or not record.resource.path.startswith(("feeds/", "insights/"))
-            or "fact_citations" in record.page.metadata
-        ):
+        if not record.resource.path.startswith(("feeds/", "insights/")) or "fact_citations" in record.page.metadata:
             return ToolResult.failure(
                 code="not_producer_page",
                 message="Only registered feed or insight producer pages can be updated with this tool.",
@@ -422,6 +541,20 @@ async def approve_publish_wiki_generated(
         diff=(f"Expected page version: {args.expected_version}\nExpected repository head: {args.expected_head}"),
     )
 
+
+list_wiki_pages_tool = tool(
+    display_name="ListWikiPages",
+    display_description="List one managed wiki directory.",
+    description="List direct child directories and active pages in one managed wiki directory.",
+    input_model=ListWikiPagesInput,
+    policy=ToolPolicy(
+        action=ToolAction.READ,
+        scope=ToolScope.INTERNAL,
+        permissions=_WIKI_PERMISSION,
+        max_result_chars=_MAX_LIST_DATA_BYTES,
+    ),
+    execute=list_wiki_pages,
+)
 
 read_wiki_page_tool = tool(
     display_name="ReadWikiPage",

@@ -21,7 +21,6 @@ from arden.server.runtime.core import Runtime
 from arden.tools.facts import FACT_SERVICE
 from arden.wiki.maintenance.runner import WikiMaintenanceResult
 from arden.wiki.maintenance.store import WikiMaintenanceStore
-from arden.wiki.navigation.store import WikiNavigationStore
 
 MIGRATED_AT = datetime(2026, 7, 28, 12, tzinfo=UTC)
 USER_SCOPE = ("user", None)
@@ -69,7 +68,6 @@ async def test_runtime_wires_canonical_facts_and_survives_restart(tmp_path) -> N
     plan_connection = runtime._fact_plan_conn
     consumer_store = runtime._fact_consumer_store
     maintenance_store = runtime._wiki_maintenance_store
-    navigation_store = runtime._wiki_navigation_store
     try:
         assert runtime.fact_service is not None
         assert runtime.wiki_service is not None
@@ -77,12 +75,11 @@ async def test_runtime_wires_canonical_facts_and_survives_restart(tmp_path) -> N
         assert plan_connection is not None
         assert consumer_store is not None
         assert maintenance_store is not None
-        assert navigation_store is not None
         assert runtime.knowledge.tool_services()[FACT_SERVICE] is runtime.fact_service
         assert runtime.tool_services["wiki"] is runtime.wiki_service
         assert runtime.executor is not None
         names = {schema["function"]["name"] for schema in runtime.executor.get_tools()}
-        assert {"search_facts", "get_fact", "plan_fact_changes", "commit_fact_changes"} <= names
+        assert {"search_facts", "get_fact", "plan_fact_changes", "commit_fact_changes", "list_wiki_pages"} <= names
         assert "remember" not in names
 
         principal = FactPrincipal("session:test", frozenset({USER_SCOPE}), frozenset({USER_SCOPE}))
@@ -115,9 +112,6 @@ async def test_runtime_wires_canonical_facts_and_survives_restart(tmp_path) -> N
         await consumer_store._conn.execute("SELECT 1")
     with pytest.raises(ValueError, match="no active connection"):
         await maintenance_store._conn.execute("SELECT 1")
-    with pytest.raises(ValueError, match="no active connection"):
-        await navigation_store._conn.execute("SELECT 1")
-
     restarted = Runtime(config)
     await restarted.connect()
     try:
@@ -179,49 +173,6 @@ async def test_failed_wiki_maintenance_store_init_closes_fact_connections(tmp_pa
         await plan_connections[0].execute("SELECT 1")
     with pytest.raises(ValueError, match="no active connection"):
         await consumer_stores[0]._conn.execute("SELECT 1")
-
-
-@pytest.mark.asyncio
-async def test_failed_wiki_navigation_store_init_closes_wiki_approval_connection(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    config = _config(tmp_path)
-    runtime = Runtime(config)
-    connections = []
-    original_connect = runtime_core.database.connect
-
-    async def tracked_connect(*args, **kwargs):
-        connection = await original_connect(*args, **kwargs)
-        connections.append(connection)
-        return connection
-
-    async def failed_navigation_open(cls, path):
-        raise RuntimeError("navigation schema unavailable")
-
-    monkeypatch.setattr(runtime_core.database, "connect", tracked_connect)
-    monkeypatch.setattr(WikiNavigationStore, "open", classmethod(failed_navigation_open))
-
-    with pytest.raises(RuntimeError, match="navigation schema unavailable"):
-        await runtime._init_wiki()
-
-    with pytest.raises(ValueError, match="no active connection"):
-        await connections[0].execute("SELECT 1")
-
-
-@pytest.mark.asyncio
-async def test_wiki_navigation_is_available_without_fact_memory(tmp_path) -> None:
-    runtime = Runtime(_config(tmp_path))
-    await runtime._init_wiki()
-    try:
-        await runtime._init_facts(None)
-        assert runtime.fact_service is None
-        assert runtime._get_wiki_navigation() is not None
-    finally:
-        assert runtime._wiki_navigation_store is not None
-        await runtime._wiki_navigation_store.close()
-        assert runtime._wiki_approval_conn is not None
-        await runtime._wiki_approval_conn.close()
 
 
 @pytest.mark.asyncio
@@ -322,34 +273,7 @@ async def test_wiki_maintenance_waits_for_synthesis_then_notifies_review(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_wiki_maintenance_runs_navigation_without_memory_model_or_reviewer(tmp_path, monkeypatch) -> None:
-    runtime = Runtime(_config(tmp_path))
-    await runtime.connect()
-    try:
-        assert runtime.automation is not None
-        runs: list[str] = []
-
-        async def current() -> bool:
-            return True
-
-        class _Navigation:
-            async def run(self) -> None:
-                runs.append("navigation")
-
-        monkeypatch.setattr(runtime.automation, "synthesis_is_current", current)
-        monkeypatch.setattr(runtime.automation, "get_wiki_navigation", lambda: _Navigation())
-        monkeypatch.setattr(runtime.automation, "get_wiki_maintenance", lambda: None)
-
-        assert await runtime.automation._build_wiki_maintenance_handler()(None) == (
-            "wiki maintenance unavailable (no memory model configured)"
-        )
-        assert runs == ["navigation"]
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_fact_synthesis_converges_navigation_before_health(tmp_path, monkeypatch) -> None:
+async def test_fact_synthesis_refreshes_health(tmp_path, monkeypatch) -> None:
     runtime = Runtime(_config(tmp_path))
     await runtime.connect()
     try:
@@ -361,27 +285,22 @@ async def test_fact_synthesis_converges_navigation_before_health(tmp_path, monke
                 calls.append("synthesis")
                 return FactSynthesisResult("a" * 64, published_pages=1, advanced=True)
 
-        class _Navigation:
-            async def run(self) -> None:
-                calls.append("navigation")
-
         async def health() -> None:
             calls.append("health")
 
         monkeypatch.setattr(runtime.automation, "get_fact_synthesis", lambda: _Synthesis())
-        monkeypatch.setattr(runtime.automation, "get_wiki_navigation", lambda: _Navigation())
         monkeypatch.setattr(runtime.automation, "project_wiki_health", health)
 
         result = await runtime.automation._build_memory_synthesize_handler()(None)
 
         assert result == "fact synthesis: 1 page(s) published; archived 0; under threshold 0"
-        assert calls == ["synthesis", "navigation", "health"]
+        assert calls == ["synthesis", "health"]
     finally:
         await runtime.close()
 
 
 @pytest.mark.asyncio
-async def test_memory_dream_converges_navigation_before_health(tmp_path, monkeypatch) -> None:
+async def test_memory_dream_refreshes_health(tmp_path, monkeypatch) -> None:
     runtime = Runtime(_config(tmp_path))
     await runtime.connect()
     try:
@@ -393,53 +312,22 @@ async def test_memory_dream_converges_navigation_before_health(tmp_path, monkeyp
                 calls.append("dream")
                 return FactDreamResult("a" * 64, insight_count=2, published=True)
 
-        class _Navigation:
-            async def run(self) -> None:
-                calls.append("navigation")
-
         async def health() -> None:
             calls.append("health")
 
         monkeypatch.setattr(runtime.automation, "get_fact_dream", lambda: _Dream())
-        monkeypatch.setattr(runtime.automation, "get_wiki_navigation", lambda: _Navigation())
         monkeypatch.setattr(runtime.automation, "project_wiki_health", health)
 
         result = await runtime.automation._build_memory_dream_handler()(None)
 
         assert result == "memory dream: 2 insight(s); published"
-        assert calls == ["dream", "navigation", "health"]
+        assert calls == ["dream", "health"]
     finally:
         await runtime.close()
 
 
 @pytest.mark.asyncio
-async def test_wiki_maintenance_runs_navigation_before_the_synthesis_gate(tmp_path, monkeypatch) -> None:
-    runtime = Runtime(_config(tmp_path))
-    await runtime.connect()
-    try:
-        assert runtime.automation is not None
-        runs: list[str] = []
-
-        async def behind() -> bool:
-            return False
-
-        class _Navigation:
-            async def run(self) -> None:
-                runs.append("navigation")
-
-        monkeypatch.setattr(runtime.automation, "synthesis_is_current", behind)
-        monkeypatch.setattr(runtime.automation, "get_wiki_navigation", lambda: _Navigation())
-
-        assert await runtime.automation._build_wiki_maintenance_handler()(None) == (
-            "wiki maintenance deferred: synthesis is behind"
-        )
-        assert runs == ["navigation"]
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_wiki_maintenance_reruns_navigation_after_reload(tmp_path, monkeypatch) -> None:
+async def test_wiki_maintenance_runs_a_second_pass_after_reload(tmp_path, monkeypatch) -> None:
     runtime = Runtime(_config(tmp_path))
     await runtime.connect()
     try:
@@ -448,10 +336,6 @@ async def test_wiki_maintenance_reruns_navigation_after_reload(tmp_path, monkeyp
 
         async def current() -> bool:
             return True
-
-        class _Navigation:
-            async def run(self) -> None:
-                calls.append("navigation")
 
         class _Maintenance:
             def __init__(self) -> None:
@@ -466,44 +350,12 @@ async def test_wiki_maintenance_reruns_navigation_after_reload(tmp_path, monkeyp
 
         maintenance = _Maintenance()
         monkeypatch.setattr(runtime.automation, "synthesis_is_current", current)
-        monkeypatch.setattr(runtime.automation, "get_wiki_navigation", lambda: _Navigation())
         monkeypatch.setattr(runtime.automation, "get_wiki_maintenance", lambda: maintenance)
 
         assert await runtime.automation._build_wiki_maintenance_handler()(None) == (
             "wiki maintenance: idle; reviewed 0; updated 0"
         )
-        assert calls == ["navigation", "maintenance", "navigation", "maintenance"]
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_wiki_maintenance_surfaces_navigation_failure(tmp_path, monkeypatch) -> None:
-    runtime = Runtime(_config(tmp_path))
-    await runtime.connect()
-    try:
-        assert runtime.automation is not None
-        maintenance_runs: list[None] = []
-
-        async def current() -> bool:
-            return True
-
-        class _Navigation:
-            async def run(self) -> None:
-                raise RuntimeError("navigation failed")
-
-        class _Maintenance:
-            async def run(self) -> WikiMaintenanceResult:
-                maintenance_runs.append(None)
-                return WikiMaintenanceResult(None, None, empty=True)
-
-        monkeypatch.setattr(runtime.automation, "synthesis_is_current", current)
-        monkeypatch.setattr(runtime.automation, "get_wiki_navigation", lambda: _Navigation())
-        monkeypatch.setattr(runtime.automation, "get_wiki_maintenance", lambda: _Maintenance())
-
-        with pytest.raises(RuntimeError, match="navigation failed"):
-            await runtime.automation._build_wiki_maintenance_handler()(None)
-        assert maintenance_runs == []
+        assert calls == ["maintenance", "maintenance"]
     finally:
         await runtime.close()
 

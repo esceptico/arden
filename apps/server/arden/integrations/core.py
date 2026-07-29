@@ -59,7 +59,7 @@ from arden.tools.sessions import (
 )
 from arden.tools.time import current_time_tool
 from arden.tools.todos import update_todos_tool
-from arden.tools.wiki import publish_wiki_generated_tool, read_wiki_page_tool, wiki_links_tool
+from arden.tools.wiki import list_wiki_pages_tool, publish_wiki_generated_tool, read_wiki_page_tool, wiki_links_tool
 from arden.tools.workflow import workflow_tool
 
 SYSTEM = Integration(
@@ -196,6 +196,7 @@ WIKI = Integration(
     id="_wiki",
     label="Wiki",
     tools={
+        "list_wiki_pages": list_wiki_pages_tool,
         "read_wiki_page": read_wiki_page_tool,
         "wiki_links": wiki_links_tool,
         "publish_wiki_generated": publish_wiki_generated_tool,

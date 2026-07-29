@@ -813,5 +813,4 @@ async def test_runtime_uses_wiki_paths_and_a_separate_sessions_db_connection(tmp
         finally:
             await check.close()
     finally:
-        await runtime._wiki_navigation_store.close()
         await runtime._wiki_approval_conn.close()

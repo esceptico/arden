@@ -14,11 +14,6 @@ from arden.wiki.maintenance.runner import (
 )
 from arden.wiki.maintenance.store import WikiMaintenanceReviewAction, WikiMaintenanceReviewInput, WikiMaintenanceStore
 from arden.wiki.models import WikiMaintenancePageUpdate
-from arden.wiki.navigation.projection import (
-    WIKI_NAVIGATION_ACTOR,
-    WIKI_NAVIGATION_ORIGIN,
-    WIKI_NAVIGATION_REASON,
-)
 from arden.wiki.pages import create_page
 from arden.wiki.service import WikiMaintenanceEvidenceLimitError, WikiService, WikiSnapshotChangedError
 
@@ -171,100 +166,6 @@ async def test_runner_advances_backend_health_projection_without_model_review(tm
         assert result.reviewed_commits == 1
         assert reviewer.reports == []
         assert (await store.get_watermark()).revision == commit.commit_id
-    finally:
-        await store.close()
-
-
-@pytest.mark.asyncio
-async def test_runner_advances_exact_navigation_projection_without_loading_details(tmp_path: Path, monkeypatch) -> None:
-    repo = _repo(tmp_path)
-    page = create_page(page_id="navigation-readme", title="Home", body=b"## Navigation\n")
-    commit = repo.commit(
-        ChangeSet(
-            operations=(Create("navigation-readme", "README.md", page.to_bytes()),),
-            actor=WIKI_NAVIGATION_ACTOR,
-            origin=WIKI_NAVIGATION_ORIGIN,
-            reason=WIKI_NAVIGATION_REASON,
-            idempotency_key="navigation-projection",
-        )
-    )
-    service = WikiService(repo)
-    store = await WikiMaintenanceStore.open(tmp_path / "state.sqlite")
-    reviewer = _Reviewer()
-
-    def fail_details(*_args, **_kwargs):
-        raise AssertionError("navigation projection must not load maintenance details")
-
-    monkeypatch.setattr(service, "maintenance_details", fail_details)
-    try:
-        result = await WikiMaintenance(store, service, reviewer).run()
-
-        assert result.advanced and result.complete
-        assert result.reviewed_commits == 1
-        assert reviewer.reports == []
-        assert (await store.get_watermark()).revision == commit.commit_id
-    finally:
-        await store.close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("reason", "path"),
-    [
-        ("different navigation reason", "README.md"),
-        (WIKI_NAVIGATION_REASON, "near-navigation.md"),
-    ],
-)
-async def test_navigation_contract_mismatch_is_loaded_for_review(
-    tmp_path: Path,
-    reason: str,
-    path: str,
-) -> None:
-    repo = _repo(tmp_path)
-    page = create_page(page_id="near-navigation", title="Near navigation", body=b"Ordinary page.\n")
-    repo.commit(
-        ChangeSet(
-            operations=(Create("near-navigation", path, page.to_bytes()),),
-            actor=WIKI_NAVIGATION_ACTOR,
-            origin=WIKI_NAVIGATION_ORIGIN,
-            reason=reason,
-            idempotency_key="near-navigation",
-        )
-    )
-    store = await WikiMaintenanceStore.open(tmp_path / "state.sqlite")
-    reviewer = _Reviewer(WikiMaintenanceDecision(outcome="no_change"))
-    try:
-        result = await WikiMaintenance(store, WikiService(repo), reviewer).run()
-
-        assert result.advanced and result.complete
-        assert len(reviewer.reports) == 1
-    finally:
-        await store.close()
-
-
-@pytest.mark.asyncio
-async def test_navigation_commit_with_non_markdown_change_is_loaded_for_review(tmp_path: Path) -> None:
-    repo = _repo(tmp_path)
-    page = create_page(page_id="navigation-page", title="Navigation page", body=b"Ordinary page.\n")
-    repo.commit(
-        ChangeSet(
-            operations=(
-                Create("navigation-page", "navigation-page.md", page.to_bytes()),
-                Create("navigation-asset", "navigation-asset.bin", b"asset"),
-            ),
-            actor=WIKI_NAVIGATION_ACTOR,
-            origin=WIKI_NAVIGATION_ORIGIN,
-            reason=WIKI_NAVIGATION_REASON,
-            idempotency_key="navigation-with-asset",
-        )
-    )
-    store = await WikiMaintenanceStore.open(tmp_path / "state.sqlite")
-    reviewer = _Reviewer(WikiMaintenanceDecision(outcome="no_change"))
-    try:
-        result = await WikiMaintenance(store, WikiService(repo), reviewer).run()
-
-        assert result.advanced and result.complete
-        assert len(reviewer.reports) == 1
     finally:
         await store.close()
 

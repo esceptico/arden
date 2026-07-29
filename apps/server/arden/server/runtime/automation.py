@@ -51,7 +51,6 @@ class AutomationRuntime:
         get_fact_dream: Callable[[], object | None] = lambda: None,
         get_fact_maintenance: Callable[[], object | None] = lambda: None,
         get_fact_synthesis: Callable[[], object | None] = lambda: None,
-        get_wiki_navigation: Callable[[], object | None] = lambda: None,
         get_wiki_maintenance: Callable[[], object | None] = lambda: None,
         synthesis_is_current: Callable[[], Awaitable[bool]] | None = None,
         project_wiki_health: Callable[[], Awaitable[None]] | None = None,
@@ -65,7 +64,6 @@ class AutomationRuntime:
         self.get_fact_dream = get_fact_dream
         self.get_fact_maintenance = get_fact_maintenance
         self.get_fact_synthesis = get_fact_synthesis
-        self.get_wiki_navigation = get_wiki_navigation
         self.get_wiki_maintenance = get_wiki_maintenance
         self.synthesis_is_current = synthesis_is_current
         self.project_wiki_health = project_wiki_health
@@ -317,9 +315,6 @@ class AutomationRuntime:
                 if synthesis is None:
                     return "fact synthesis unavailable (no memory model configured)"
                 result = await synthesis.run()
-                navigation = self.get_wiki_navigation()
-                if navigation is not None:
-                    await navigation.run()
                 if result.empty:
                     return "fact synthesis idle"
                 return (
@@ -338,9 +333,6 @@ class AutomationRuntime:
                 if dream is None:
                     return "memory dream unavailable (no memory model configured)"
                 result = await dream.run()
-                navigation = self.get_wiki_navigation()
-                if navigation is not None:
-                    await navigation.run()
                 if result.empty:
                     return "memory dream idle"
                 state = "published" if result.published else "unchanged"
@@ -354,10 +346,6 @@ class AutomationRuntime:
         async def handler(context: dict | None) -> str:
             refresh_health = False
             try:
-                navigation = self.get_wiki_navigation()
-                if navigation is not None:
-                    await navigation.run()
-
                 if self.synthesis_is_current is None or not await self.synthesis_is_current():
                     task_id = context.get("task_id") if isinstance(context, dict) else None
                     if task_id == BUILTIN_WIKI_MAINTENANCE_ID:
@@ -369,11 +357,7 @@ class AutomationRuntime:
                     return "wiki maintenance unavailable (no memory model configured)"
 
                 results = []
-                for pass_index in range(2):
-                    if pass_index:
-                        navigation = self.get_wiki_navigation()
-                        if navigation is not None:
-                            await navigation.run()
+                for _ in range(2):
                     result = await maintenance.run()
                     results.append(result)
                     if not result.reload_required:

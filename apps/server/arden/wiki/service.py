@@ -1559,7 +1559,7 @@ class WikiService:
             return WikiInfrastructureRole.ME
         if resource_id == "active-work" or path == "active-work.md":
             return WikiInfrastructureRole.ACTIVE_WORK
-        if path == README_FILENAME or path.endswith(f"/{README_FILENAME}"):
+        if path == README_FILENAME:
             return WikiInfrastructureRole.README
         if path.startswith("daily/"):
             return WikiInfrastructureRole.DAILY

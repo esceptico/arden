@@ -75,8 +75,6 @@ from arden.wiki.maintenance.completion import review_wiki_maintenance
 from arden.wiki.maintenance.runner import WikiMaintenance
 from arden.wiki.maintenance.store import WikiMaintenanceStore
 from arden.wiki.models import WikiChangesReport
-from arden.wiki.navigation.projection import WikiNavigationProjection
-from arden.wiki.navigation.store import WikiNavigationStore
 from arden.wiki.service import WikiService
 
 _logger = get_logger(__name__)
@@ -134,7 +132,6 @@ class Runtime:
         self.fact_service: FactService | None = None
         self._fact_plan_conn: database.aiosqlite.Connection | None = None
         self._fact_consumer_store: FactConsumerStore | None = None
-        self._wiki_navigation_store: WikiNavigationStore | None = None
         self._fact_ledger: FactLedger | None = None
 
         self._connected = False
@@ -325,13 +322,11 @@ class Runtime:
         try:
             approval_store = WikiRenameApprovalStore(approval_conn)
             await approval_store.init_schema()
-            navigation_store = await WikiNavigationStore.open(self.config.memory_db_path)
         except BaseException:
             await approval_conn.close()
             raise
         self._wiki_approval_conn = approval_conn
         self.wiki_rename_coordinator = WikiRenameApprovalCoordinator(self.wiki_service, approval_store)
-        self._wiki_navigation_store = navigation_store
 
     async def _init_facts(self, ledger: FactLedger | None) -> None:
         self.fact_service = None
@@ -512,11 +507,6 @@ class Runtime:
             ),
         )
 
-    def _get_wiki_navigation(self) -> WikiNavigationProjection | None:
-        if self._wiki_navigation_store is None or self.wiki_service is None:
-            return None
-        return WikiNavigationProjection(self.wiki_service, self._wiki_navigation_store)
-
     async def _synthesis_is_current(self) -> bool:
         if self.fact_service is None or self._fact_consumer_store is None:
             return False
@@ -683,7 +673,6 @@ class Runtime:
             get_fact_maintenance=self._get_fact_maintenance,
             get_fact_synthesis=self._get_fact_synthesis,
             get_wiki_maintenance=self._get_wiki_maintenance,
-            get_wiki_navigation=self._get_wiki_navigation,
             synthesis_is_current=self._synthesis_is_current,
             project_wiki_health=self.project_wiki_health,
             on_automation_finished=self._after_automation_finished,
@@ -721,9 +710,6 @@ class Runtime:
         if self._wiki_maintenance_store:
             await self._wiki_maintenance_store.close()
             self._wiki_maintenance_store = None
-        if self._wiki_navigation_store:
-            await self._wiki_navigation_store.close()
-            self._wiki_navigation_store = None
         if self._wiki_curator_store:
             await self._wiki_curator_store.close()
             self._wiki_curator_store = None

@@ -179,7 +179,7 @@ forbidden reflection and relative-import patterns.
 - Maintenance completion wrappers are direct functions. Runner failures
   propagate except for the explicit oversized-evidence path that creates a
   durable user review.
-- Shared README, health, maintenance, and navigation identities live in
+- Shared README, health, and maintenance identities live in
   `arden.wiki.constants`.
 - Static architecture tests enforce absolute/eager imports and prohibit
   reflection in the refactored packages.

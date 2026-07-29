@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+import arden.tools.wiki as wiki_tools
 from arden.context.models import SessionState
 from arden.integrations.core import CORE_INTEGRATIONS, WIKI
 from arden.revisions import ManagedFileRepository
@@ -12,6 +13,7 @@ from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContex
 from arden.tools.core.registry import ToolRegistry
 from arden.tools.wiki import (
     ReadWikiPageInput,
+    list_wiki_pages_tool,
     publish_wiki_generated_tool,
     read_wiki_page_tool,
     wiki_links_tool,
@@ -58,6 +60,89 @@ def _wiki(root: Path) -> WikiService:
         reason="seed",
     )
     return wiki
+
+
+@pytest.mark.asyncio
+async def test_list_wiki_pages_replaces_folder_index_pages(tmp_path: Path) -> None:
+    wiki = _wiki(tmp_path)
+    run = _execution(wiki)
+    wiki.create_page(
+        path="about.md",
+        title="About",
+        page_id="about",
+        expected_head=wiki.repository.head,
+    )
+    wiki.create_page(
+        path="topics/labs/deep.md",
+        title="Deep",
+        page_id="deep",
+        expected_head=wiki.repository.head,
+    )
+    archived = wiki.create_page(
+        path="topics/retired.md",
+        title="Retired",
+        page_id="retired",
+        expected_head=wiki.repository.head,
+    )
+    wiki.archive_page(
+        "retired",
+        expected_version=archived.resource.version_id,
+        base_head=wiki.repository.head,
+    )
+
+    root = await list_wiki_pages_tool.execute(run)
+    assert root.data == {
+        "head": wiki.repository.head,
+        "directory": "",
+        "entries": [
+            {"kind": "directory", "path": "topics/"},
+            {
+                "kind": "page",
+                "page_id": "about",
+                "path": "about.md",
+                "title": "About",
+                "lifecycle": "active",
+                "version": wiki.read_page("about").resource.version_id,
+            },
+        ],
+        "total": 2,
+        "has_more": False,
+    }
+
+    topics = await list_wiki_pages_tool.execute(run, directory="topics")
+    assert [(entry["kind"], entry["path"], entry.get("title")) for entry in topics.data["entries"]] == [
+        ("directory", "topics/labs/", None),
+        ("page", "topics/interaction-lab.md", "Interaction Lab"),
+        ("page", "topics/peer.md", "Peer"),
+    ]
+    assert "README.md" not in topics.content and "retired.md" not in topics.content
+
+    capped = await list_wiki_pages_tool.execute(run, directory="topics", limit=1)
+    assert capped.data["has_more"] is True
+    assert len(capped.data["entries"]) == 1
+
+    for directory in (".", "./topics", "topics/.", "../topics", "topics//labs", "/topics", r"topics\labs"):
+        invalid = await list_wiki_pages_tool.execute(run, directory=directory)
+        assert invalid.is_error
+        assert invalid.outcome is not None and invalid.outcome.error is not None
+        assert invalid.outcome.error.code == "invalid_directory"
+
+    missing = await list_wiki_pages_tool.execute(run, directory="missing")
+    assert missing.is_error
+    assert missing.outcome is not None and missing.outcome.error is not None
+    assert missing.outcome.error.code == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_list_wiki_pages_reports_byte_budget_truncation(tmp_path: Path, monkeypatch) -> None:
+    wiki = _wiki(tmp_path)
+    monkeypatch.setattr(wiki_tools, "_MAX_LIST_DATA_BYTES", 1)
+
+    result = await list_wiki_pages_tool.execute(_execution(wiki), directory="topics")
+
+    assert result.data["entries"] == []
+    assert result.data["total"] == 2
+    assert result.data["has_more"] is True
 
 
 @pytest.mark.asyncio
@@ -331,16 +416,19 @@ async def test_generated_publisher_exposes_an_exact_approval_preview(tmp_path: P
 @pytest.mark.asyncio
 async def test_wiki_tools_require_the_wiki_capability(tmp_path: Path) -> None:
     del tmp_path
-    result = await read_wiki_page_tool.execute(_execution(None), page_id="missing")
+    execution = _execution(None)
+    result = await read_wiki_page_tool.execute(execution, page_id="missing")
+    listing = await list_wiki_pages_tool.execute(execution)
 
     assert result.is_error
+    assert listing.is_error
     assert result.outcome is not None and result.outcome.error is not None
     assert result.outcome.error.code == "not_configured"
 
 
 def test_wiki_read_boundary_has_its_own_core_integration() -> None:
     assert WIKI in CORE_INTEGRATIONS
-    assert set(WIKI.tools) == {"read_wiki_page", "wiki_links", "publish_wiki_generated"}
+    assert set(WIKI.tools) == {"list_wiki_pages", "read_wiki_page", "wiki_links", "publish_wiki_generated"}
     assert {tool.policy.action.value for tool in WIKI.tools.values()} == {"read", "write"}
     assert {tool.policy.permissions for tool in WIKI.tools.values()} == {frozenset({"wiki"})}
     assert publish_wiki_generated_tool.policy.idempotent is False

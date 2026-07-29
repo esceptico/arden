@@ -372,7 +372,7 @@ def test_change_feed_page_metadata_is_deeply_immutable(tmp_path: Path) -> None:
         ("me", "custom.md", WikiInfrastructureRole.ME),
         ("other", "active-work.md", WikiInfrastructureRole.ACTIVE_WORK),
         ("readme", "README.md", WikiInfrastructureRole.README),
-        ("nested-readme", "projects/README.md", WikiInfrastructureRole.README),
+        ("nested-readme", "projects/README.md", WikiInfrastructureRole.COMMON),
         ("daily", "daily/2026-07-28.md", WikiInfrastructureRole.DAILY),
         ("insight", "insights/july.md", WikiInfrastructureRole.INSIGHT),
         ("ordinary", "projects/one.md", WikiInfrastructureRole.COMMON),
@@ -395,7 +395,8 @@ def test_orphan_warnings_skip_fixed_navigation_roles_but_not_insights(tmp_path: 
     pages = (
         ("me", "me.md"),
         ("active-work", "active-work.md"),
-        ("readme", "nested/README.md"),
+        ("readme", "README.md"),
+        ("nested-readme", "nested/README.md"),
         ("daily", "daily/2026-07-28.md"),
         ("insight", "insights/2026-07.md"),
         ("common", "notes/common.md"),
@@ -411,4 +412,4 @@ def test_orphan_warnings_skip_fixed_navigation_roles_but_not_insights(tmp_path: 
     orphans = {
         warning.target for warning in WikiService(repo).changes_since(None).warnings if warning.code == "orphan_page"
     }
-    assert orphans == {"insights/2026-07.md", "notes/common.md"}
+    assert orphans == {"nested/README.md", "insights/2026-07.md", "notes/common.md"}
