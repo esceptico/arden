@@ -23,6 +23,7 @@ from arden.context.models import SessionData, SessionState
 from arden.core import spawner as spawner_module
 from arden.core.spawner import create_spawn_fn
 from arden.core.usage_tracker import UsageTracker
+from arden.events.internal import RunFailed
 from arden.events.sse import (
     ApprovalNeededEvent,
     AutomationProgressEvent,
@@ -2851,7 +2852,7 @@ async def test_backgrounded_completion_is_not_acknowledged_when_direct_save_fail
 
 @pytest.mark.asyncio
 async def test_backgrounded_drain_stream_failure_records_error_not_completed():
-    run = RunState(run_id="run-1", session_id="sess-1", backgrounded=True)
+    run = RunState(run_id="run-1", session_id="sess-1", backgrounded=True, loop_task_id="loop-1")
     session_state = SessionState(session_id="sess-1", started_at=datetime.now(UTC))
 
     class RecordingSessionService:
@@ -2891,6 +2892,11 @@ async def test_backgrounded_drain_stream_failure_records_error_not_completed():
     service = RecordingSessionService()
     registry = RunRegistry()
     registry._runs[run.run_id] = run
+    failures: list[RunFailed] = []
+
+    async def enqueue_failed(event: RunFailed) -> None:
+        failures.append(event)
+
     ctx = ChatContext(
         run=run,
         session_state=session_state,
@@ -2902,6 +2908,7 @@ async def test_backgrounded_drain_stream_failure_records_error_not_completed():
         integration_errors={},
         session_service=service,
         run_registry=registry,
+        enqueue_run_failed=enqueue_failed,
     )
 
     await _drain_backgrounded(
@@ -2919,6 +2926,14 @@ async def test_backgrounded_drain_stream_failure_records_error_not_completed():
     assert "backgrounded run failed" in service.statuses[-1]["error_message"]
     assert all(entry["status"] != RunStatus.COMPLETED.value for entry in service.statuses)
     assert run.status == RunStatus.ERROR
+    assert failures == [
+        RunFailed(
+            run_id="run-1",
+            session_id="sess-1",
+            error="The backgrounded run failed while finishing. Please retry.",
+            automation_task_id="loop-1",
+        )
+    ]
 
 
 @pytest.mark.asyncio

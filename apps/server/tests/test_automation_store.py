@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import replace as dc_replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -10,6 +11,13 @@ from arden.automation.models import Automation
 from arden.automation.scheduler import Scheduler
 from arden.automation.store import AutomationStore
 from arden.automation.triggers import TimeTrigger, parse_triggers
+from arden.outbox import (
+    OUTBOX_AUTOMATION_SETTLED,
+    AutomationSettled,
+    OutboxStore,
+    automation_settled_from_payload,
+)
+from arden.server.runtime.outbox import RuntimeOutbox
 
 
 @pytest_asyncio.fixture
@@ -21,27 +29,43 @@ async def automation_store(tmp_path: Path):
     await conn.close()
 
 
-async def test_finalize_latest_run_settles_only_in_flight_rows(automation_store: AutomationStore):
-    """Detached (fire-and-accept) runs leave their row status='running';
-    finalize settles it with the real report. Already-terminal rows are
-    never rewritten — the guard is what makes late/duplicate outbox
-    deliveries safe."""
-    t0 = datetime(2026, 1, 1, tzinfo=UTC)
-    done_id = await automation_store.record_run_start("loop-1", t0)
-    await automation_store.record_run_finish(done_id, status="completed", result="old report", error=None, ended_at=t0)
-    # settled row → no-op
-    assert not await automation_store.finalize_latest_run("loop-1", "late duplicate", t0)
-    runs = await automation_store.list_runs("loop-1")
-    assert runs[0]["result"] == "old report"
+@pytest_asyncio.fixture
+async def automation_store_with_outbox(tmp_path: Path):
+    path = tmp_path / "automation-outbox.db"
+    conn = await database.connect(path)
+    settlement_conn = await database.connect(path)
+    outbox = OutboxStore(conn)
+    await outbox.init_schema()
+    settlement_outbox = OutboxStore(settlement_conn)
+    store = AutomationStore(conn, settlement_outbox, settlement_conn=settlement_conn)
+    await store.init_schema()
+    yield store, outbox
+    await settlement_conn.close()
+    await conn.close()
 
-    # in-flight row → settled with report + end time + completed status
-    await automation_store.record_run_start("loop-1", t0 + timedelta(hours=1))
-    done = datetime(2026, 1, 1, 1, 2, tzinfo=UTC)
-    assert await automation_store.finalize_latest_run("loop-1", "two emails need replies", done)
-    runs = await automation_store.list_runs("loop-1")
-    assert runs[0]["status"] == "completed"
-    assert runs[0]["result"] == "two emails need replies"
-    assert runs[0]["ended_at"] == done.isoformat()
+
+async def _finish_run(
+    store: AutomationStore,
+    task_id: str,
+    run_id: int,
+    *,
+    status: str,
+    result: str | None,
+    error: str | None,
+    ended_at: datetime,
+) -> None:
+    clipped_result = result if result is None or len(result) <= 4000 else result[:4000] + "…"
+    clipped_error = error if error is None or len(error) <= 4000 else error[:4000] + "…"
+    cursor = await store.conn.execute(
+        """
+        UPDATE automation_runs
+        SET ended_at = ?, status = ?, result = ?, error = ?
+        WHERE id = ? AND task_id = ? AND status = 'running'
+        """,
+        (ended_at.isoformat(), status, clipped_result, clipped_error, run_id, task_id),
+    )
+    await store.conn.commit()
+    assert cursor.rowcount == 1
 
 
 async def test_orphaned_running_rows_fail_terminal(automation_store: AutomationStore):
@@ -55,17 +79,6 @@ async def test_orphaned_running_rows_fail_terminal(automation_store: AutomationS
         runs = await automation_store.list_runs(task)
         assert runs[0]["status"] == "failed"
         assert runs[0]["error"] == "interrupted by server restart"
-
-
-async def test_fail_latest_running_run_targets_one_task(automation_store: AutomationStore):
-    t0 = datetime(2026, 1, 1, tzinfo=UTC)
-    await automation_store.record_run_start("loop-1", t0)
-    await automation_store.record_run_start("loop-2", t0)
-
-    assert await automation_store.fail_latest_running_run("loop-1", t0 + timedelta(hours=3), "run never reported back")
-    assert not await automation_store.fail_latest_running_run("loop-1", t0 + timedelta(hours=4), "late duplicate")
-    assert (await automation_store.list_runs("loop-1"))[0]["status"] == "failed"
-    assert (await automation_store.list_runs("loop-2"))[0]["status"] == "running"
 
 
 async def test_update_last_run_preserve_result(automation_store: AutomationStore):
@@ -141,7 +154,9 @@ async def test_run_history_records_start_then_finish(automation_store: Automatio
     assert runs[0]["status"] == "running"
     assert runs[0]["ended_at"] is None
 
-    await automation_store.record_run_finish(
+    await _finish_run(
+        automation_store,
+        "task-1",
         run_id,
         status="completed",
         result="did the thing",
@@ -166,10 +181,16 @@ async def test_run_history_newest_first_and_limited(automation_store: Automation
 async def test_recent_run_statuses_newest_first_per_task(automation_store: AutomationStore):
     base = datetime(2026, 1, 1, tzinfo=UTC)
     r1 = await automation_store.record_run_start("A", base)
-    await automation_store.record_run_finish(r1, status="completed", result="ok", error=None, ended_at=base)
+    await _finish_run(automation_store, "A", r1, status="completed", result="ok", error=None, ended_at=base)
     r2 = await automation_store.record_run_start("A", base + timedelta(minutes=1))
-    await automation_store.record_run_finish(
-        r2, status="failed", result=None, error="x", ended_at=base + timedelta(minutes=1)
+    await _finish_run(
+        automation_store,
+        "A",
+        r2,
+        status="failed",
+        result=None,
+        error="x",
+        ended_at=base + timedelta(minutes=1),
     )
     await automation_store.record_run_start("A", base + timedelta(minutes=2))  # still running
     await automation_store.record_run_start("B", base)
@@ -191,7 +212,9 @@ async def test_recent_run_statuses_respects_per_task_cap(automation_store: Autom
 async def test_latest_completed_runs_ignores_newer_failed_and_running_attempts(automation_store: AutomationStore):
     base = datetime(2026, 1, 1, tzinfo=UTC)
     completed = await automation_store.record_run_start("A", base)
-    await automation_store.record_run_finish(
+    await _finish_run(
+        automation_store,
+        "A",
         completed,
         status="completed",
         result="ok",
@@ -199,7 +222,9 @@ async def test_latest_completed_runs_ignores_newer_failed_and_running_attempts(a
         ended_at=base + timedelta(minutes=1),
     )
     failed = await automation_store.record_run_start("A", base + timedelta(minutes=2))
-    await automation_store.record_run_finish(
+    await _finish_run(
+        automation_store,
+        "A",
         failed,
         status="failed",
         result=None,
@@ -213,7 +238,9 @@ async def test_latest_completed_runs_ignores_newer_failed_and_running_attempts(a
 
 async def test_run_history_truncates_long_result(automation_store: AutomationStore):
     rid = await automation_store.record_run_start("task-3", datetime(2026, 1, 1, tzinfo=UTC))
-    await automation_store.record_run_finish(
+    await _finish_run(
+        automation_store,
+        "task-3",
         rid,
         status="failed",
         result="x" * 5000,
@@ -224,6 +251,204 @@ async def test_run_history_truncates_long_result(automation_store: AutomationSto
     assert runs[0]["status"] == "failed"
     assert runs[0]["error"] == "boom"
     assert len(runs[0]["result"]) <= 4001  # 4000 chars + ellipsis
+
+
+@pytest.mark.asyncio
+async def test_settle_run_commits_one_automation_settled_event(automation_store_with_outbox):
+    store, outbox = automation_store_with_outbox
+    ended_at = datetime(2026, 1, 1, tzinfo=UTC)
+    next_run = ended_at + timedelta(hours=6)
+    await store.save(_automation("task-1", next_run_at=next_run))
+    assert await store.try_mark_running("task-1", ended_at)
+    run_id = await store.record_run_start("task-1", ended_at)
+
+    assert await store.settle_run(
+        task_id="task-1",
+        run_id=run_id,
+        status="completed",
+        result="done",
+        error=None,
+        ended_at=ended_at,
+        next_run=next_run,
+        expected_next_run=None,
+        preserve_external_reschedule=False,
+        preserve_result=False,
+        disable_one_shot=False,
+    )
+    assert not await store.settle_run(
+        task_id="task-1",
+        run_id=run_id,
+        status="failed",
+        result=None,
+        error="late duplicate",
+        ended_at=ended_at,
+        next_run=next_run,
+        expected_next_run=None,
+        preserve_external_reschedule=False,
+        preserve_result=False,
+        disable_one_shot=False,
+    )
+
+    events = await outbox.claim_batch(worker_id="test", limit=10)
+    assert len(events) == 1
+    assert events[0].event_type == OUTBOX_AUTOMATION_SETTLED
+    event = automation_settled_from_payload(events[0].payload)
+    assert event.automation_run_id == run_id
+    assert event.task_id == "task-1"
+    assert event.success is True
+    assert await store.latest_completed_runs(("task-1",)) == {"task-1": ended_at}
+
+
+@pytest.mark.asyncio
+async def test_settlement_observer_retries_after_committed_run(automation_store_with_outbox):
+    store, outbox = automation_store_with_outbox
+    ended_at = datetime(2026, 1, 1, tzinfo=UTC)
+    await store.save(_automation("task-1"))
+    assert await store.try_mark_running("task-1", ended_at)
+    run_id = await store.record_run_start("task-1", ended_at)
+    assert await store.settle_run(
+        task_id="task-1",
+        run_id=run_id,
+        status="completed",
+        result="done",
+        error=None,
+        ended_at=ended_at,
+        next_run=None,
+        expected_next_run=None,
+        preserve_external_reschedule=False,
+        preserve_result=False,
+        disable_one_shot=False,
+    )
+
+    attempts = 0
+    observed: list[dict[str, datetime]] = []
+
+    async def observe(event: AutomationSettled) -> None:
+        nonlocal attempts
+        attempts += 1
+        observed.append(await store.latest_completed_runs((event.task_id,)))
+        if attempts == 1:
+            raise RuntimeError("health unavailable")
+
+    runtime_outbox = RuntimeOutbox(
+        outbox_store=outbox,
+        scheduler=Scheduler(store=store, build_deps=lambda: None),
+        on_automation_settled=observe,
+    )
+    runtime_outbox.worker.retry_base_seconds = 0
+    runtime_outbox.worker.retry_max_seconds = 0
+
+    assert await runtime_outbox.worker.process_once()
+    assert await runtime_outbox.worker.process_once()
+    assert observed == [{"task-1": ended_at}, {"task-1": ended_at}]
+    assert (await store.list_runs("task-1"))[0]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_settle_run_rolls_back_when_outbox_insert_fails(tmp_path: Path):
+    class FailingOutbox(OutboxStore):
+        async def enqueue_automation_settled_in_transaction(
+            self,
+            *,
+            automation_run_id: int,
+            task_id: str,
+            success: bool,
+        ) -> bool:
+            raise RuntimeError("outbox unavailable")
+
+    conn = await database.connect(tmp_path / "failed-settlement.db")
+    outbox = FailingOutbox(conn)
+    await outbox.init_schema()
+    store = AutomationStore(conn, outbox)
+    await store.init_schema()
+    ended_at = datetime(2026, 1, 1, tzinfo=UTC)
+    await store.save(_automation("task-1"))
+    assert await store.try_mark_running("task-1", ended_at)
+    run_id = await store.record_run_start("task-1", ended_at)
+
+    try:
+        with pytest.raises(RuntimeError, match="outbox unavailable"):
+            await store.settle_run(
+                task_id="task-1",
+                run_id=run_id,
+                status="completed",
+                result="done",
+                error=None,
+                ended_at=ended_at,
+                next_run=None,
+                expected_next_run=None,
+                preserve_external_reschedule=False,
+                preserve_result=False,
+                disable_one_shot=False,
+            )
+
+        assert (await store.list_runs("task-1"))[0]["status"] == "running"
+        automation = await store.get("task-1")
+        assert automation is not None
+        assert automation.running_since is not None
+        assert automation.last_run_at is None
+        assert await conn.execute_fetchall("SELECT id FROM outbox_events") == []
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_settlement_transaction_cannot_be_committed_by_another_store(
+    automation_store_with_outbox,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    store, outbox = automation_store_with_outbox
+    started_at = datetime(2026, 1, 1, tzinfo=UTC)
+    await store.save(_automation("task-1"))
+    assert await store.try_mark_running("task-1", started_at)
+    run_id = await store.record_run_start("task-1", started_at)
+
+    cadence_started = asyncio.Event()
+    release_cadence = asyncio.Event()
+
+    async def fail_after_run_update(*_args) -> None:
+        cadence_started.set()
+        await release_cadence.wait()
+        raise RuntimeError("forced settlement rollback")
+
+    monkeypatch.setattr(store, "_record_successful_cadence", fail_after_run_update)
+    settlement = asyncio.create_task(
+        store.settle_run(
+            task_id="task-1",
+            run_id=run_id,
+            status="completed",
+            result="done",
+            error=None,
+            ended_at=started_at,
+            next_run=None,
+            expected_next_run=None,
+            preserve_external_reschedule=False,
+            preserve_result=False,
+            disable_one_shot=False,
+        )
+    )
+    await cadence_started.wait()
+
+    unrelated_write = asyncio.create_task(
+        outbox.enqueue(
+            event_type="test.unrelated",
+            payload={},
+            idempotency_key="test.unrelated:1",
+        )
+    )
+    await asyncio.sleep(0)
+    assert not unrelated_write.done()
+
+    release_cadence.set()
+    with pytest.raises(RuntimeError, match="forced settlement rollback"):
+        await settlement
+    assert await unrelated_write
+
+    assert (await store.list_runs("task-1"))[0]["status"] == "running"
+    automation = await store.get("task-1")
+    assert automation is not None and automation.running_since is not None
+    events = await outbox.claim_batch(worker_id="test", limit=10)
+    assert [event.event_type for event in events] == ["test.unrelated"]
 
 
 def _automation(
@@ -845,7 +1070,9 @@ async def test_seed_builtins_enforces_system_timing_but_preserves_pause_and_hist
             )
         )
     run_id = await automation_store.record_run_start(BUILTIN_MEMORY_SYNTHESIZE_ID, last_run)
-    await automation_store.record_run_finish(
+    await _finish_run(
+        automation_store,
+        BUILTIN_MEMORY_SYNTHESIZE_ID,
         run_id,
         status="completed",
         result="Historical synthesis result.",

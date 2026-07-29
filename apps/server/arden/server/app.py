@@ -18,7 +18,7 @@ from arden.areas.work_models import AreaWorkSnapshot
 from arden.automation.models import Automation
 from arden.automation.output_schemas import resolve_output_schema
 from arden.automation.prompts import AUTOMATION_PROMPT, AUTOMATION_SUFFIX
-from arden.automation.scheduler import AUTOMATION_BUS_KEY, RunSkipped, split_manual_flag
+from arden.automation.scheduler import AUTOMATION_BUS_KEY, CompletedAgentRun, RunSkipped, split_manual_flag
 from arden.core.tool_result_files import prune_offload_store
 from arden.events.sse import AreasChangedEvent
 from arden.llm.openai_codex_catalog import refresh_codex_models
@@ -49,7 +49,6 @@ from arden.server.routers.skills import router as skills_router
 from arden.server.routers.wiki import router as wiki_router
 from arden.server.runtime import Runtime
 from arden.services.chat import resume_suspended_chat_run, submit_chat_message
-from arden.tools.core.scope import with_read_floor
 
 _logger = get_logger(__name__)
 
@@ -67,6 +66,20 @@ async def _create_bus_registry(runtime: Runtime) -> BusRegistry:
 def _loop_target_id(automation: Automation) -> str | None:
     """Resolve the session id a loop targets for writes/gating."""
     return automation.thread_id
+
+
+def _automation_tool_scope(automation: Automation) -> tuple[str, ...] | None:
+    """Return an automation's declared tool authority without widening it."""
+
+    return None if not automation.tool_scope else tuple(automation.tool_scope)
+
+
+async def _automation_chat_model(runtime: Runtime, automation: Automation) -> str | None:
+    """Prefer the scheduled automation's explicit model over its channel default."""
+
+    if automation.model is not None:
+        return automation.model
+    return await runtime.resolve_session_chat_model(_loop_target_id(automation))
 
 
 def _get_or_create_session_lock(locks: dict[str, asyncio.Lock], session_id: str) -> asyncio.Lock:
@@ -277,8 +290,10 @@ async def lifespan(app: FastAPI):
         images: list[dict] | None = None,
         tool_scope: tuple[str, ...] | None = None,
         output_schema: type[BaseModel] | None = None,
+        chat_model: str | None = None,
     ) -> str | None:
-        chat_model = await runtime.resolve_session_chat_model(session_id)
+        if chat_model is None:
+            chat_model = await runtime.resolve_session_chat_model(session_id)
         result = await submit_chat_message(
             runtime.run_registry,
             lambda: runtime.build_chat_deps(chat_model=chat_model),
@@ -294,15 +309,7 @@ async def lifespan(app: FastAPI):
         )
         return result.get("run_id") if isinstance(result, dict) else None
 
-    def _automation_tool_scope(automation: Automation) -> tuple[str, ...] | None:
-        if not automation.tool_scope:
-            return None
-        # Custodian contracts are curated permission domains — no floor.
-        if is_custodian_task_id(automation.task_id):
-            return tuple(automation.tool_scope)
-        return with_read_floor(automation.tool_scope, runtime.executor.registry.read_only_names())
-
-    async def _dispatch_iteration(automation: Automation, context: str | dict | None = None) -> str | None:
+    async def _dispatch_iteration(automation: Automation, context: str | dict | None = None) -> str:
         # Iteration loops are autonomous: the user already approved the
         # loop at creation (via the create_loop approval card), so
         # subsequent iterations should skip per-tool approvals. Matches
@@ -333,14 +340,18 @@ async def lifespan(app: FastAPI):
             if parts:
                 ctx_str = "\n\n".join(([ctx_str] if ctx_str else []) + parts)
         message = AUTOMATION_PROMPT.render(prompt=automation.prompt, context=ctx_str) if ctx_str else automation.prompt
-        return await _dispatch_session_message(
+        run_id = await _dispatch_session_message(
             _loop_target_id(automation) or "",
             message,
             client_id=f"loop:{automation.task_id}:{automation.iteration_count + 1}",
             skip_approvals=automation.auto_approve,
             tool_scope=_automation_tool_scope(automation),
             output_schema=resolve_output_schema(automation.output_schema),
+            chat_model=await _automation_chat_model(runtime, automation),
         )
+        if run_id is None:
+            raise RuntimeError(f"Iteration automation {automation.task_id} did not start a chat run")
+        return run_id
 
     runtime.scheduler.set_iteration_dispatcher(_dispatch_iteration)
     app.state.request_area_wake = runtime.automation.request_area_wake
@@ -364,7 +375,7 @@ async def lifespan(app: FastAPI):
 
     runtime.resume_suspended_chat_run = _resume_suspended_chat_run
 
-    async def _dispatch_post(automation: Automation, context: str | dict | None = None) -> str | None:
+    async def _dispatch_post(automation: Automation, context: str | dict | None = None) -> CompletedAgentRun:
         # Post mode: run the agent fresh (no session history), then write
         # the agent's final text into the target session as an assistant
         # message. The chat UI picks it up on the next history fetch —
@@ -376,10 +387,10 @@ async def lifespan(app: FastAPI):
         # progress writes per session, so post-vs-chat history writes share
         # the same one-writer-at-a-time model.
         if not runtime.session_service:
-            return None
+            raise RuntimeError("Post automation session service is unavailable")
         target_id = _loop_target_id(automation)
         if not target_id:
-            return None
+            raise RuntimeError(f"Post automation {automation.task_id} has no target session")
 
         async with _get_or_create_session_lock(session_write_locks, target_id):
             _, context = split_manual_flag(context)
@@ -406,16 +417,13 @@ async def lifespan(app: FastAPI):
             else:
                 run_result = await run_agent(deps, request)
             text = run_result.output
-            if not text:
-                return None
-
-            # Append as an assistant message into the target session.
-            data = await runtime.session_service.load(target_id)
-            if data is None:
-                return text
-            data.messages.append({"role": Role.ASSISTANT, "content": text})
-            await runtime.session_service.save_progress(data.state, data.messages)
-            return text
+            if text:
+                # Append as an assistant message into the target session.
+                data = await runtime.session_service.load(target_id)
+                if data is not None:
+                    data.messages.append({"role": Role.ASSISTANT, "content": text})
+                    await runtime.session_service.save_progress(data.state, data.messages)
+            return CompletedAgentRun(run_result.run_id, text)
 
     runtime.scheduler.set_post_dispatcher(_dispatch_post)
 

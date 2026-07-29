@@ -14,14 +14,16 @@ from arden.services.session import SessionService
 class Stores:
     """Database connections and all stores sharing them.
 
-    Uses two connections to sessions.db:
-    - conn: for writes (single writer, SQLite requirement)
+    Uses three connections to sessions.db:
+    - conn: for ordinary writes
+    - automation_settlement_conn: isolated atomic run/outbox settlement
     - read_conn: for reads (concurrent with writes in WAL mode)
     """
 
     def __init__(
         self,
         conn: database.aiosqlite.Connection,
+        automation_settlement_conn: database.aiosqlite.Connection,
         read_conn: database.aiosqlite.Connection,
         sessions: SessionService,
         automations: AutomationStore,
@@ -31,6 +33,7 @@ class Stores:
         area_work: AreaWorkStore,
     ):
         self.conn = conn
+        self.automation_settlement_conn = automation_settlement_conn
         self.read_conn = read_conn
         self.sessions = sessions
         self.automations = automations
@@ -43,6 +46,7 @@ class Stores:
     async def connect(cls, config: Config) -> Self:
         config.db_dir.mkdir(exist_ok=True)
         conn = await database.connect(config.sessions_db_path)
+        automation_settlement_conn = await database.connect(config.sessions_db_path)
         read_conn = await database.connect(config.sessions_db_path, readonly=True)
 
         session_store = SessionStore(conn, read_conn)
@@ -53,7 +57,15 @@ class Stores:
         await session_store.mark_interrupted_background_agent_runs()
         await session_store.mark_interrupted_agent_sessions()
 
-        automations = AutomationStore(conn)
+        outbox = OutboxStore(conn)
+        await outbox.init_schema()
+        settlement_outbox = OutboxStore(automation_settlement_conn)
+
+        automations = AutomationStore(
+            conn,
+            settlement_outbox,
+            settlement_conn=automation_settlement_conn,
+        )
         await automations.init_schema()
 
         area_work = AreaWorkStore(conn, read_conn)
@@ -65,11 +77,9 @@ class Stores:
         monitor = MonitorStateStore(conn)
         await monitor.init_schema()
 
-        outbox = OutboxStore(conn)
-        await outbox.init_schema()
-
         return cls(
             conn=conn,
+            automation_settlement_conn=automation_settlement_conn,
             read_conn=read_conn,
             sessions=SessionService(session_store),
             automations=automations,
@@ -81,4 +91,5 @@ class Stores:
 
     async def close(self) -> None:
         await self.read_conn.close()
+        await self.automation_settlement_conn.close()
         await self.conn.close()

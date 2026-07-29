@@ -1,6 +1,8 @@
 """Stable identities shared by wiki producers and projections."""
 
 README_FILENAME = "README.md"
+READ_WIKI_PAGE_TOOL_NAME = "read_wiki_page"
+PUBLISH_WIKI_GENERATED_TOOL_NAME = "publish_wiki_generated"
 
 WIKI_HEALTH_RESOURCE_ID = "health"
 WIKI_HEALTH_PATH = "health.md"

@@ -179,6 +179,31 @@ async def test_fact_synthesis_stays_due_through_startup_reconciliation(store: Au
 
 
 @pytest.mark.asyncio
+async def test_overdue_memory_retention_stays_due_through_startup_reconciliation(store: AutomationStore):
+    from arden.automation.builtins import seed_builtins
+    from arden.constants import BUILTIN_MEMORY_RETENTION_ID
+
+    await seed_builtins(store)
+    retention = await store.get(BUILTIN_MEMORY_RETENTION_ID)
+    assert retention is not None
+    last_run = datetime.now(UTC) - timedelta(days=2)
+    await store.save(
+        replace(
+            retention,
+            last_run_at=last_run,
+            next_run_at=last_run + timedelta(days=1),
+        )
+    )
+
+    sched = Scheduler(store=store, build_deps=lambda: None)
+    await sched._reconcile()
+
+    reconciled = await store.get(BUILTIN_MEMORY_RETENTION_ID)
+    assert reconciled is not None
+    assert reconciled.next_run_at == last_run + timedelta(days=1)
+
+
+@pytest.mark.asyncio
 async def test_overdue_wiki_maintenance_catches_up_once(store: AutomationStore):
     from arden.automation.builtins import seed_builtins
     from arden.constants import BUILTIN_WIKI_MAINTENANCE_ID

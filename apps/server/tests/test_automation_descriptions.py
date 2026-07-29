@@ -7,7 +7,7 @@ import pytest
 import arden.database as database
 from arden.automation.descriptions import AutomationDescriptionDraft
 from arden.automation.models import Automation
-from arden.automation.scheduler import Scheduler
+from arden.automation.scheduler import CompletedAgentRun, Scheduler
 from arden.automation.service import AutomationService
 from arden.automation.store import AutomationStore
 from arden.automation.triggers import TimeTrigger
@@ -102,12 +102,12 @@ async def test_scheduler_executes_prompt_not_display_description(tmp_path: Path,
 
     async def _run_agent(_deps, request):
         captured["prompt"] = request.prompt
-        return SimpleNamespace(output="done")
+        return SimpleNamespace(run_id="agent-run", output="done")
 
     monkeypatch.setattr("arden.automation.scheduler.run_agent", _run_agent)
     scheduler = Scheduler(store=store, build_deps=lambda: object())
 
-    assert await scheduler._run_agent(automation) == "done"
+    assert await scheduler._run_agent(automation) == CompletedAgentRun("agent-run", "done")
     assert "Read all inbox messages and produce a detailed urgent-only briefing." in captured["prompt"]
     assert "Checks urgent inbox updates." not in captured["prompt"]
     await conn.close()

@@ -9,6 +9,7 @@ assert the dispatcher is invoked positionally as `(automation, context)` with
 the context preserved end-to-end.
 """
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from arden.automation.models import Automation
 from arden.automation.scheduler import Scheduler
 from arden.automation.store import AutomationStore
 from arden.automation.triggers import TimeTrigger
+from arden.server.app import _automation_chat_model, _automation_tool_scope
 
 
 @pytest_asyncio.fixture
@@ -145,6 +147,43 @@ async def test_only_iteration_dispatcher_receives_context_for_iteration_run(stor
     assert post_calls == []
     assert len(iteration_calls) == 1
     assert iteration_calls[0][0][1] == "ctx for iteration"
+
+
+@pytest.mark.asyncio
+async def test_session_bound_email_feed_honors_its_model_and_exact_tool_scope(store: AutomationStore):
+    """The scheduler's channel path must not inherit a stale chat model or read floor."""
+
+    automation = replace(
+        _session_bound(task_id="congenial-caracal", thread_id="email-feed-channel"),
+        model="openai-codex/gpt-5.6-luna",
+        tool_scope=["emails", "read_email", "read_wiki_page", "publish_wiki_generated"],
+    )
+    await store.save(automation)
+
+    class _Runtime:
+        calls: list[str | None] = []
+
+        async def resolve_session_chat_model(self, session_id: str | None) -> str:
+            self.calls.append(session_id)
+            return "openai-codex/gpt-5.4-mini"
+
+    runtime = _Runtime()
+    observed: dict[str, object] = {}
+
+    async def dispatcher(auto: Automation, _context: str | dict | None) -> str:
+        observed["model"] = await _automation_chat_model(runtime, auto)
+        observed["tool_scope"] = _automation_tool_scope(auto)
+        return "dispatched"
+
+    scheduler = Scheduler(store=store, build_deps=lambda: None)
+    scheduler.set_iteration_dispatcher(dispatcher)
+    await scheduler._run_and_finalize(automation)
+
+    assert observed == {
+        "model": "openai-codex/gpt-5.6-luna",
+        "tool_scope": ("emails", "read_email", "read_wiki_page", "publish_wiki_generated"),
+    }
+    assert runtime.calls == []
 
 
 @pytest.mark.asyncio

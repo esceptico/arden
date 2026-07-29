@@ -2,8 +2,11 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from arden.agent import Usage
+from arden.automation.models import Automation
 from arden.config import Config
 from arden.constants import BUILTIN_MEMORY_RETENTION_ID, BUILTIN_MEMORY_SYNTHESIZE_ID, BUILTIN_WIKI_MAINTENANCE_ID
+from arden.events.internal import RunCompleted
 from arden.events.sse import MemoryChangedEvent
 from arden.memory.facts.consumer_store import FactConsumerStore
 from arden.memory.facts.dream import FactDreamResult
@@ -57,6 +60,26 @@ def _seed_fact(config: Config) -> FactLedger:
         )
     )
     return ledger
+
+
+def _wiki_producer() -> Automation:
+    return Automation(
+        task_id="producer",
+        name="Producer",
+        prompt="Update one feed.",
+        model="test",
+        triggers=[],
+        enabled=True,
+        created_at=MIGRATED_AT,
+        next_run_at=None,
+        last_run_at=None,
+        last_result=None,
+        running_since=None,
+        auto_approve=True,
+        thread_id="producer-session",
+        read_history=True,
+        tool_scope=["read_wiki_page", "publish_wiki_generated"],
+    )
 
 
 @pytest.mark.asyncio
@@ -140,6 +163,72 @@ async def test_runtime_wires_canonical_facts_and_survives_restart(tmp_path) -> N
 
 
 @pytest.mark.asyncio
+async def test_wiki_producer_completion_requires_a_successful_page_read(tmp_path) -> None:
+    runtime = Runtime(_config(tmp_path))
+    await runtime.connect()
+    try:
+        assert runtime.automation is not None
+        assert runtime.wiki_service is not None
+        runtime.wiki_service.create_page(
+            path="feeds/email-updates.md",
+            title="Email Updates",
+            body=b"",
+            page_id="feed-email-updates",
+            expected_head=runtime.wiki_service.repository.head,
+            actor="test",
+            origin="test",
+            reason="seed producer page",
+            metadata={"producer_automation_id": "producer"},
+        )
+        event = RunCompleted(
+            run_id="producer-run",
+            session_id="producer-session",
+            messages=(),
+            usage=Usage(),
+            result="No rewrite.",
+        )
+
+        with pytest.raises(RuntimeError, match="without successfully reading"):
+            await runtime.automation._validate_completed_run(_wiki_producer(), event.run_id)
+
+        await runtime.stores.sessions.store.record_tool_call_started(
+            run_id=event.run_id,
+            session_id=event.session_id,
+            tool_call_id="read-page",
+            tool_name="read_wiki_page",
+            action="read",
+            scope="internal",
+        )
+        await runtime.stores.sessions.store.record_tool_call_finished(
+            run_id=event.run_id,
+            tool_call_id="read-page",
+            status="success",
+            result_preview="Another Page",
+        )
+        with pytest.raises(RuntimeError, match="owned page"):
+            await runtime.automation._validate_completed_run(_wiki_producer(), event.run_id)
+
+        await runtime.stores.sessions.store.record_tool_call_started(
+            run_id=event.run_id,
+            session_id=event.session_id,
+            tool_call_id="read-owned-page",
+            tool_name="read_wiki_page",
+            action="read",
+            scope="internal",
+        )
+        await runtime.stores.sessions.store.record_tool_call_finished(
+            run_id=event.run_id,
+            tool_call_id="read-owned-page",
+            status="success",
+            result_preview="Email Updates",
+        )
+
+        await runtime.automation._validate_completed_run(_wiki_producer(), event.run_id)
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_failed_wiki_maintenance_store_init_closes_fact_connections(tmp_path, monkeypatch) -> None:
     config = _config(tmp_path)
     ledger = _seed_fact(config)
@@ -219,7 +308,7 @@ async def test_fact_commit_syncs_index_and_requests_synthesis(tmp_path, monkeypa
                 )
 
         monkeypatch.setattr(runtime.automation, "get_fact_maintenance", lambda: _Maintenance())
-        assert await runtime.automation._build_fact_maintenance_handler()(None) == (
+        assert await runtime.automation._run_fact_maintenance(None) == (
             "fact maintenance: reviewed 2; amended 1; merged 1"
         )
     finally:
@@ -245,7 +334,7 @@ async def test_wiki_maintenance_waits_for_synthesis_then_notifies_review(tmp_pat
 
         monkeypatch.setattr(runtime.automation, "synthesis_is_current", behind)
         monkeypatch.setattr(runtime.automation.scheduler, "request_delayed_run", retry)
-        handler = runtime.automation._build_wiki_maintenance_handler()
+        handler = runtime.automation._run_wiki_maintenance
         assert (
             await handler({"task_id": BUILTIN_WIKI_MAINTENANCE_ID}) == "wiki maintenance deferred: synthesis is behind"
         )
@@ -273,7 +362,7 @@ async def test_wiki_maintenance_waits_for_synthesis_then_notifies_review(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_fact_synthesis_refreshes_health(tmp_path, monkeypatch) -> None:
+async def test_fact_synthesis_leaves_health_projection_to_completion_callback(tmp_path, monkeypatch) -> None:
     runtime = Runtime(_config(tmp_path))
     await runtime.connect()
     try:
@@ -291,10 +380,10 @@ async def test_fact_synthesis_refreshes_health(tmp_path, monkeypatch) -> None:
         monkeypatch.setattr(runtime.automation, "get_fact_synthesis", lambda: _Synthesis())
         monkeypatch.setattr(runtime.automation, "project_wiki_health", health)
 
-        result = await runtime.automation._build_memory_synthesize_handler()(None)
+        result = await runtime.automation._run_memory_synthesis(None)
 
         assert result == "fact synthesis: 1 page(s) published; archived 0; under threshold 0"
-        assert calls == ["synthesis", "health"]
+        assert calls == ["synthesis"]
     finally:
         await runtime.close()
 
@@ -318,7 +407,7 @@ async def test_memory_dream_refreshes_health(tmp_path, monkeypatch) -> None:
         monkeypatch.setattr(runtime.automation, "get_fact_dream", lambda: _Dream())
         monkeypatch.setattr(runtime.automation, "project_wiki_health", health)
 
-        result = await runtime.automation._build_memory_dream_handler()(None)
+        result = await runtime.automation._run_memory_dream(None)
 
         assert result == "memory dream: 2 insight(s); published"
         assert calls == ["dream", "health"]
@@ -352,27 +441,8 @@ async def test_wiki_maintenance_runs_a_second_pass_after_reload(tmp_path, monkey
         monkeypatch.setattr(runtime.automation, "synthesis_is_current", current)
         monkeypatch.setattr(runtime.automation, "get_wiki_maintenance", lambda: maintenance)
 
-        assert await runtime.automation._build_wiki_maintenance_handler()(None) == (
-            "wiki maintenance: idle; reviewed 0; updated 0"
-        )
+        assert await runtime.automation._run_wiki_maintenance(None) == ("wiki maintenance: idle; reviewed 0; updated 0")
         assert calls == ["maintenance", "maintenance"]
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_automation_surfaces_wiki_health_projection_failure(tmp_path, monkeypatch) -> None:
-    runtime = Runtime(_config(tmp_path))
-    await runtime.connect()
-    try:
-        assert runtime.automation is not None
-
-        async def fail_health() -> None:
-            raise RuntimeError("health projection failed")
-
-        monkeypatch.setattr(runtime.automation, "project_wiki_health", fail_health)
-        with pytest.raises(RuntimeError, match="health projection failed"):
-            await runtime.automation._refresh_wiki_health()
     finally:
         await runtime.close()
 

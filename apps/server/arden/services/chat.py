@@ -65,6 +65,7 @@ from arden.tools.deferred import (
 )
 from arden.tools.directives import load_directives
 from arden.tools.executor import ToolExecutor
+from arden.wiki.context import WikiContextBuilder
 
 _logger = get_logger(__name__)
 
@@ -226,7 +227,7 @@ class ChatDeps:
         ]
         | None
     ) = None
-    wiki_context: object | None = None
+    wiki_context: WikiContextBuilder | None = None
     skill_registry: SkillRegistry | None = None
     notifier_service: NotifierService | None = None
 
@@ -470,13 +471,10 @@ def _is_meta_client_id(client_id: str | None) -> bool:
     return bool(client_id and client_id.startswith(("loop:", "bg:", "goal:")))
 
 
-async def _load_area_page_context(wiki_context: object | None, area_record: dict | None) -> dict | None:
+async def _load_area_page_context(wiki_context: WikiContextBuilder | None, area_record: dict | None) -> dict | None:
     if not area_record or not area_record.get("page_path") or wiki_context is None:
         return None
-    page_context = getattr(wiki_context, "page_context", None)
-    if page_context is None:
-        return None
-    return await page_context(area_record["page_path"], title=area_record.get("name"))
+    return await wiki_context.page_context(area_record["page_path"], title=area_record.get("name"))
 
 
 # Below this many chars of user input there is nothing worth a scoped recall
@@ -1294,6 +1292,15 @@ async def _drain_backgrounded(
                     error_message=safe_message,
                 )
                 await _update_run_client_idempotency(ctx.session_service, ctx.run, RunStatus.ERROR.value)
+                if ctx.enqueue_run_failed:
+                    await ctx.enqueue_run_failed(
+                        RunFailed(
+                            run_id=ctx.run.run_id,
+                            session_id=ctx.session_state.session_id,
+                            error=safe_message,
+                            automation_task_id=ctx.run.loop_task_id,
+                        )
+                    )
                 return
             if ctx.run.usage.total_tokens:
                 await ctx.session_service.update_goal(
@@ -1317,6 +1324,7 @@ async def _drain_backgrounded(
                             result=drain_result.text if drain_result else None,
                             source_refs=tuple(ctx.run.source_refs),
                             structured_output=drain_result.output if drain_result else None,
+                            automation_task_id=ctx.run.loop_task_id,
                         )
                     )
                 except Exception:
@@ -1848,6 +1856,7 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
                         run_id=run.run_id,
                         session_id=session_state.session_id,
                         error=safe_message,
+                        automation_task_id=run.loop_task_id,
                     )
                 )
             except Exception:
@@ -1911,6 +1920,7 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
                         result=result,
                         source_refs=tuple(run.source_refs),
                         structured_output=run.structured_output,
+                        automation_task_id=run.loop_task_id,
                     )
                     if run_finished_event is not None:
                         await bus.emit(run_finished_event)

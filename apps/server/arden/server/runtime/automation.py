@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 
@@ -9,6 +10,7 @@ from arden.areas.asks import AskStore
 from arden.areas.custodian import CustodianStore
 from arden.areas.models import Area, areas_from_records
 from arden.automation.builtins import seed_builtins
+from arden.automation.models import Automation
 from arden.automation.scheduler import Scheduler
 from arden.automation.service import AutomationService
 from arden.automation.triggers import TimeTrigger
@@ -22,15 +24,19 @@ from arden.constants import (
     BUILTIN_MEMORY_SYNTHESIZE_ID,
     BUILTIN_WIKI_MAINTENANCE_ID,
 )
+from arden.events.internal import RunCompleted
 from arden.events.sse import AreasChangedEvent, MemoryChangedEvent
 from arden.integrations.calendar.client import MultiCalendarSource
 from arden.logging import get_logger
 from arden.monitor.calendar import CalendarMonitor
 from arden.monitor.service import Monitor
+from arden.notifiers.service import NotifierService
 from arden.operator.runner import OperatorDeps
-from arden.server.indexer import Indexer
+from arden.outbox import AutomationSettled
 from arden.server.runtime.outbox import RuntimeOutbox
 from arden.server.stores import Stores
+from arden.wiki.constants import PUBLISH_WIKI_GENERATED_TOOL_NAME, READ_WIKI_PAGE_TOOL_NAME
+from arden.wiki.service import WikiService
 
 _logger = get_logger(__name__)
 _WIKI_MAINTENANCE_RETRY_DELAY = timedelta(minutes=1)
@@ -47,7 +53,6 @@ class AutomationRuntime:
         get_slack_client: Callable[[], object | None],
         get_cheap_llm: Callable[[], object | None],
         cheap_model: str | None,
-        indexer: Indexer | None,
         get_fact_dream: Callable[[], object | None] = lambda: None,
         get_fact_maintenance: Callable[[], object | None] = lambda: None,
         get_fact_synthesis: Callable[[], object | None] = lambda: None,
@@ -55,7 +60,8 @@ class AutomationRuntime:
         synthesis_is_current: Callable[[], Awaitable[bool]] | None = None,
         project_wiki_health: Callable[[], Awaitable[None]] | None = None,
         on_automation_finished: Callable[[str, bool], Awaitable[None]] | None = None,
-        get_notifiers: Callable[[], object | None] = lambda: None,
+        get_wiki_service: Callable[[], WikiService | None] = lambda: None,
+        get_notifiers: Callable[[], NotifierService | None] = lambda: None,
     ):
         self.stores = stores
         self.config = config
@@ -67,6 +73,8 @@ class AutomationRuntime:
         self.get_wiki_maintenance = get_wiki_maintenance
         self.synthesis_is_current = synthesis_is_current
         self.project_wiki_health = project_wiki_health
+        self.on_automation_finished = on_automation_finished
+        self.get_wiki_service = get_wiki_service
         self.build_operator_deps = build_operator_deps
         self.area_asks = AskStore(config.arden_dir / AREAS_STATE_FILE)
         self.custodians = CustodianStore(config.arden_dir / AREAS_AGENT_STATE_FILE)
@@ -74,7 +82,7 @@ class AutomationRuntime:
         self.scheduler = Scheduler(
             store=stores.automations,
             build_deps=build_operator_deps,
-            on_run_finished=on_automation_finished,
+            validate_completed_run=self._validate_completed_run,
         )
         self.automation_service = AutomationService(
             store=stores.automations,
@@ -86,12 +94,42 @@ class AutomationRuntime:
         )
         self.outbox_runtime = RuntimeOutbox(
             outbox_store=stores.outbox,
-            automation_store=stores.automations,
             scheduler=self.scheduler,
-            indexer=indexer,
             on_area_run=self._on_area_run_completed,
+            on_automation_settled=self._on_automation_settled,
         )
         self.monitor: Monitor | None = None
+
+    async def _on_automation_settled(self, event: AutomationSettled) -> None:
+        if self.on_automation_finished is not None:
+            await self.on_automation_finished(event.task_id, event.success)
+
+    async def _validate_completed_run(self, automation: Automation, run_id: str | None) -> None:
+        scope = automation.tool_scope or ()
+        if PUBLISH_WIKI_GENERATED_TOOL_NAME not in scope:
+            return
+        if run_id is None:
+            raise RuntimeError("wiki producer did not expose a chat run for completion proof")
+        wiki = self.get_wiki_service()
+        if wiki is None:
+            raise RuntimeError("wiki producer completion proof is unavailable")
+        snapshot = await asyncio.to_thread(wiki.snapshot)
+        owned_titles = {
+            record.page.title
+            for record in snapshot.pages
+            if record.page.metadata.get("producer_automation_id") == automation.task_id
+        }
+        if not owned_titles:
+            raise RuntimeError("wiki producer has no owned page")
+        calls = await self.stores.sessions.store.list_tool_calls(run_id=run_id)
+        if any(
+            call["tool_name"] == READ_WIKI_PAGE_TOOL_NAME
+            and call["status"] == "success"
+            and call["result_preview"] in owned_titles
+            for call in calls
+        ):
+            return
+        raise RuntimeError("wiki producer finished without successfully reading its owned page")
 
     async def load_areas(self) -> list[Area]:
         """Areas are the capability-bearing areas (unification: one
@@ -131,7 +169,7 @@ class AutomationRuntime:
             )
         )
 
-    async def _on_area_run_completed(self, run_completed) -> None:
+    async def _on_area_run_completed(self, run_completed: RunCompleted) -> None:
         """Ask sync for area channel runs: when a completed run's session
         belongs to an area:* automation, every run re-decides the area's one
         ask (record_area_run parses the fenced nomination; silence retires
@@ -209,7 +247,7 @@ class AutomationRuntime:
         if not to_send:
             return
         service = self.get_notifiers()
-        if service is None or not getattr(service, "notifiers", None):
+        if service is None or not service.notifiers:
             return
         for ask in to_send:
             subject = f"arden · {area_.title}: {ask.kind}"
@@ -270,22 +308,10 @@ class AutomationRuntime:
             await self.stores.automations.set_enabled(task_id, False)
 
     async def start_scheduler(self) -> None:
-        self.scheduler.register_handler(
-            "memory_maintenance",
-            self._build_fact_maintenance_handler(),
-        )
-        self.scheduler.register_handler(
-            "memory_synthesize",
-            self._build_memory_synthesize_handler(),
-        )
-        self.scheduler.register_handler(
-            "memory_dream",
-            self._build_memory_dream_handler(),
-        )
-        self.scheduler.register_handler(
-            "wiki_maintenance",
-            self._build_wiki_maintenance_handler(),
-        )
+        self.scheduler.register_handler("memory_maintenance", self._run_fact_maintenance)
+        self.scheduler.register_handler("memory_synthesize", self._run_memory_synthesis)
+        self.scheduler.register_handler("memory_dream", self._run_memory_dream)
+        self.scheduler.register_handler("wiki_maintenance", self._run_wiki_maintenance)
         await seed_builtins(self.stores.automations)
         await self._seed_area_automations()
         await compile_schedules_to_automations(".", self.stores.automations)
@@ -293,105 +319,78 @@ class AutomationRuntime:
         self.scheduler.start()
         self.outbox_runtime.start()
 
-    def _build_fact_maintenance_handler(self):
-        async def handler(context: dict | None) -> str | None:
-            maintenance = self.get_fact_maintenance()
-            if maintenance is None:
-                return "fact maintenance unavailable (no memory model configured)"
-            result = await maintenance.run()
+    async def _run_fact_maintenance(self, context: dict | None) -> str | None:
+        maintenance = self.get_fact_maintenance()
+        if maintenance is None:
+            return "fact maintenance unavailable (no memory model configured)"
+        result = await maintenance.run()
+        if result.empty:
+            return "fact maintenance idle"
+        return (
+            f"fact maintenance: reviewed {result.reviewed_clusters}; "
+            f"amended {result.amended_facts}; merged {result.merged_facts}"
+        )
+
+    async def _run_memory_synthesis(self, context: dict | None) -> str | None:
+        synthesis = self.get_fact_synthesis()
+        if synthesis is None:
+            return "fact synthesis unavailable (no memory model configured)"
+        result = await synthesis.run()
+        if result.empty:
+            return "fact synthesis idle"
+        return (
+            f"fact synthesis: {result.published_pages} page(s) published"
+            f"; archived {result.skipped_archived}; under threshold {result.skipped_under_threshold}"
+        )
+
+    async def _run_memory_dream(self, context: dict | None) -> str:
+        try:
+            dream = self.get_fact_dream()
+            if dream is None:
+                return "memory dream unavailable (no memory model configured)"
+            result = await dream.run()
             if result.empty:
-                return "fact maintenance idle"
-            return (
-                f"fact maintenance: reviewed {result.reviewed_clusters}; "
-                f"amended {result.amended_facts}; merged {result.merged_facts}"
-            )
+                return "memory dream idle"
+            state = "published" if result.published else "unchanged"
+            return f"memory dream: {result.insight_count} insight(s); {state}"
+        finally:
+            if self.project_wiki_health is not None:
+                await self.project_wiki_health()
 
-        return handler
+    async def _run_wiki_maintenance(self, context: dict | None) -> str:
+        if self.synthesis_is_current is None or not await self.synthesis_is_current():
+            task_id = context["task_id"] if context else None
+            if task_id == BUILTIN_WIKI_MAINTENANCE_ID:
+                await self.scheduler.request_delayed_run(task_id, _WIKI_MAINTENANCE_RETRY_DELAY)
+            return "wiki maintenance deferred: synthesis is behind"
 
-    def _build_memory_synthesize_handler(self):
-        async def handler(context: dict | None) -> str | None:
-            try:
-                synthesis = self.get_fact_synthesis()
-                if synthesis is None:
-                    return "fact synthesis unavailable (no memory model configured)"
-                result = await synthesis.run()
-                if result.empty:
-                    return "fact synthesis idle"
-                return (
-                    f"fact synthesis: {result.published_pages} page(s) published"
-                    f"; archived {result.skipped_archived}; under threshold {result.skipped_under_threshold}"
-                )
-            finally:
-                await self._refresh_wiki_health()
+        maintenance = self.get_wiki_maintenance()
+        if maintenance is None:
+            return "wiki maintenance unavailable (no memory model configured)"
 
-        return handler
+        results = []
+        for _ in range(2):
+            result = await maintenance.run()
+            results.append(result)
+            if not result.reload_required:
+                break
 
-    def _build_memory_dream_handler(self):
-        async def handler(context: dict | None) -> str:
-            try:
-                dream = self.get_fact_dream()
-                if dream is None:
-                    return "memory dream unavailable (no memory model configured)"
-                result = await dream.run()
-                if result.empty:
-                    return "memory dream idle"
-                state = "published" if result.published else "unchanged"
-                return f"memory dream: {result.insight_count} insight(s); {state}"
-            finally:
-                await self._refresh_wiki_health()
-
-        return handler
-
-    def _build_wiki_maintenance_handler(self):
-        async def handler(context: dict | None) -> str:
-            refresh_health = False
-            try:
-                if self.synthesis_is_current is None or not await self.synthesis_is_current():
-                    task_id = context.get("task_id") if isinstance(context, dict) else None
-                    if task_id == BUILTIN_WIKI_MAINTENANCE_ID:
-                        await self.scheduler.request_delayed_run(task_id, _WIKI_MAINTENANCE_RETRY_DELAY)
-                    return "wiki maintenance deferred: synthesis is behind"
-
-                maintenance = self.get_wiki_maintenance()
-                if maintenance is None:
-                    return "wiki maintenance unavailable (no memory model configured)"
-
-                results = []
-                for _ in range(2):
-                    result = await maintenance.run()
-                    results.append(result)
-                    if not result.reload_required:
-                        break
-
-                reviewed = sum(result.reviewed_commits for result in results)
-                updated = sum(result.updated_pages for result in results)
-                final = results[-1]
-                if final.blocked:
-                    state = "needs user review"
-                elif final.reload_required:
-                    state = "fresh-feed continuation deferred"
-                elif final.empty:
-                    state = "idle"
-                elif final.complete:
-                    state = "current"
-                else:
-                    state = "incomplete"
-                if final.blocked:
-                    # The review row is durable, but no vault file changed. Notify an
-                    # already-open desktop to refetch its review list immediately.
-                    await self.notify_wiki_maintenance_reviews_changed(final.feed_target_revision)
-                refresh_health = final.complete or final.empty
-                return f"wiki maintenance: {state}; reviewed {reviewed}; updated {updated}"
-            finally:
-                if refresh_health:
-                    await self._refresh_wiki_health()
-
-        return handler
-
-    async def _refresh_wiki_health(self) -> None:
-        if self.project_wiki_health is None:
-            return
-        await self.project_wiki_health()
+        reviewed = sum(result.reviewed_commits for result in results)
+        updated = sum(result.updated_pages for result in results)
+        final = results[-1]
+        if final.blocked:
+            state = "needs user review"
+        elif final.reload_required:
+            state = "fresh-feed continuation deferred"
+        elif final.empty:
+            state = "idle"
+        elif final.complete:
+            state = "current"
+        else:
+            state = "incomplete"
+        if final.blocked:
+            await self.notify_wiki_maintenance_reviews_changed(final.feed_target_revision)
+        return f"wiki maintenance: {state}; reviewed {reviewed}; updated {updated}"
 
     @staticmethod
     def _area_run_at(index: int) -> str:

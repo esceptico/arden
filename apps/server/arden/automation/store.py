@@ -1,3 +1,4 @@
+import asyncio
 import json
 from datetime import UTC, datetime
 
@@ -6,6 +7,7 @@ import aiosqlite
 from arden.automation.models import Automation, IdempotencyClaim
 from arden.automation.triggers import parse_triggers
 from arden.logging import get_logger
+from arden.outbox.store import OutboxStore
 
 _logger = get_logger(__name__)
 
@@ -354,6 +356,13 @@ SET last_run_at = ?,
 WHERE task_id = ?
 """
 
+_SQL_RECORD_RUN_FAILURE = """
+UPDATE scheduled_tasks
+SET next_run_at = ?,
+    last_result = ?
+WHERE task_id = ? AND enabled = 1
+"""
+
 _SQL_SET_LAST_RESULT = """
 UPDATE scheduled_tasks SET last_result = ? WHERE task_id = ?
 """
@@ -369,17 +378,16 @@ WHERE task_id = ?
 _SQL_CLEAR_RUNNING = "UPDATE scheduled_tasks SET running_since = NULL WHERE task_id = ?"
 
 _SQL_INSERT_RUN = "INSERT INTO automation_runs (task_id, started_at, status) VALUES (?, ?, 'running')"
-_SQL_FINISH_RUN = "UPDATE automation_runs SET ended_at = ?, status = ?, result = ?, error = ? WHERE id = ?"
-_SQL_FINALIZE_LATEST_RUN = (
-    "UPDATE automation_runs SET status = 'completed', result = ?, ended_at = ? "
-    "WHERE id = (SELECT id FROM automation_runs WHERE task_id = ? ORDER BY id DESC LIMIT 1) "
-    "AND status = 'running'"
+_SQL_LATEST_RUNNING_RUN_ID = (
+    "SELECT id FROM automation_runs WHERE task_id = ? AND status = 'running' ORDER BY id DESC LIMIT 1"
 )
+_SQL_SETTLE_RUN = """
+UPDATE automation_runs
+SET ended_at = ?, status = ?, result = ?, error = ?
+WHERE id = ? AND task_id = ? AND status = 'running'
+"""
 _SQL_FAIL_ORPHANED_RUNS = (
     "UPDATE automation_runs SET status = 'failed', error = ?, ended_at = ? WHERE status = 'running'"
-)
-_SQL_FAIL_LATEST_RUNNING_RUN = (
-    "UPDATE automation_runs SET status = 'failed', error = ?, ended_at = ? WHERE task_id = ? AND status = 'running'"
 )
 _SQL_LIST_RUNS = (
     "SELECT id, task_id, started_at, ended_at, status, result, error "
@@ -394,6 +402,7 @@ _SQL_LATEST_RUNS = (
 _SQL_DELETE = "DELETE FROM scheduled_tasks WHERE task_id = ?"
 
 _SQL_SET_ENABLED = "UPDATE scheduled_tasks SET enabled = ? WHERE task_id = ?"
+_SQL_DISABLE_AND_CLEAR_NEXT_RUN = "UPDATE scheduled_tasks SET enabled = 0, next_run_at = NULL WHERE task_id = ?"
 
 _SQL_DISABLE_BY_PARENT = """
 UPDATE scheduled_tasks SET enabled = 0
@@ -429,6 +438,12 @@ ORDER BY created_at
 _SQL_LIST_SESSION_BOUND_BY_SESSION = f"""
 SELECT {_COLUMNS} FROM scheduled_tasks
 WHERE thread_id = ? AND enabled = 1
+ORDER BY created_at
+"""
+
+_SQL_LIST_ALL_SESSION_BOUND_BY_SESSION = f"""
+SELECT {_COLUMNS} FROM scheduled_tasks
+WHERE thread_id = ?
 ORDER BY created_at
 """
 
@@ -494,6 +509,14 @@ _SQL_CLAIM_EVENT_QUEUE_ROW = """
 UPDATE automation_event_queue
 SET claimed_at = ?
 WHERE id = ? AND claimed_at IS NULL
+"""
+
+_SQL_GET_CLAIMED_EVENT = """
+SELECT id, attempt_count
+FROM automation_event_queue
+WHERE task_id = ? AND claimed_at IS NOT NULL
+ORDER BY id
+LIMIT 1
 """
 
 _SQL_COMPLETE_EVENT = "DELETE FROM automation_event_queue WHERE id = ?"
@@ -1181,8 +1204,19 @@ async def _migrate(conn: aiosqlite.Connection) -> None:
 
 
 class AutomationStore:
-    def __init__(self, conn: aiosqlite.Connection):
+    def __init__(
+        self,
+        conn: aiosqlite.Connection,
+        outbox: OutboxStore | None = None,
+        *,
+        settlement_conn: aiosqlite.Connection | None = None,
+    ):
+        self._settlement_conn = settlement_conn or conn
+        if outbox is not None and outbox.conn is not self._settlement_conn:
+            raise ValueError("automation settlement outbox must use the settlement database connection")
         self.conn = conn
+        self.outbox = outbox
+        self._settlement_lock = asyncio.Lock()
 
     async def init_schema(self) -> None:
         # _SCHEMA must run first: it CREATEs tables (idempotent for both
@@ -1337,34 +1371,144 @@ class AutomationStore:
         await self.conn.commit()
         return int(cursor.lastrowid or 0)
 
-    async def record_run_finish(
+    async def settle_run(
         self,
-        run_id: int,
         *,
+        task_id: str,
+        run_id: int | None,
         status: str,
         result: str | None,
         error: str | None,
         ended_at: datetime,
-    ) -> None:
-        # Bound stored text so a chatty run can't bloat the history table.
-        clip = lambda s: s if s is None or len(s) <= 4000 else s[:4000] + "…"  # noqa: E731
-        await self.conn.execute(
-            _SQL_FINISH_RUN,
-            (ended_at.isoformat(), status, clip(result), clip(error), run_id),
-        )
-        await self.conn.commit()
+        next_run: datetime | None,
+        expected_next_run: datetime | None,
+        preserve_external_reschedule: bool,
+        preserve_result: bool,
+        disable_one_shot: bool,
+        event_queue_id: int | None = None,
+        event_retry_at: datetime | None = None,
+    ) -> bool:
+        """Persist one terminal run and all scheduler state as one transaction.
 
-    async def finalize_latest_run(self, task_id: str, result: str | None, ended_at: datetime) -> bool:
-        """Settle the newest IN-FLIGHT run row with the run's real outcome.
-        Iteration loops dispatch fire-and-accept, so their row stays
-        status='running' until the detached run's RunCompleted arrives here.
-        The status guard makes this idempotent — an already-settled (or
-        restart-failed) row is never rewritten. Returns whether a row was
-        settled."""
-        clipped = result if result is None or len(result) <= 4000 else result[:4000] + "…"
-        cursor = await self.conn.execute(_SQL_FINALIZE_LATEST_RUN, (clipped, ended_at.isoformat(), task_id))
-        await self.conn.commit()
-        return cursor.rowcount > 0
+        ``event_retry_at`` applies only to failed queued events. ``None`` then
+        means the event is terminal and must be dead-lettered.
+        """
+
+        if status not in {"completed", "failed"}:
+            raise ValueError(f"unsupported automation run status: {status}")
+        if status == "failed" and next_run is None and event_queue_id is None:
+            raise ValueError("failed automation settlement requires a retry time")
+        if status == "completed" and event_retry_at is not None:
+            raise ValueError("completed queued events cannot have a retry time")
+        if event_queue_id is None and event_retry_at is not None:
+            raise ValueError("event retry time requires a queued event")
+
+        clipped_result = result if result is None or len(result) <= 4000 else result[:4000] + "…"
+        clipped_error = error if error is None or len(error) <= 4000 else error[:4000] + "…"
+        conn = self._settlement_conn
+        async with self._settlement_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                settled_run_id = run_id
+                if settled_run_id is None:
+                    rows = await conn.execute_fetchall(_SQL_LATEST_RUNNING_RUN_ID, (task_id,))
+                    if not rows:
+                        await conn.rollback()
+                        return False
+                    settled_run_id = int(rows[0]["id"])
+                cursor = await conn.execute(
+                    _SQL_SETTLE_RUN,
+                    (
+                        ended_at.isoformat(),
+                        status,
+                        clipped_result,
+                        clipped_error,
+                        settled_run_id,
+                        task_id,
+                    ),
+                )
+                if cursor.rowcount == 0:
+                    await conn.rollback()
+                    return False
+                if status == "completed":
+                    await self._record_successful_cadence(
+                        conn,
+                        task_id,
+                        ended_at,
+                        next_run,
+                        expected_next_run,
+                        preserve_external_reschedule,
+                        clipped_result,
+                        preserve_result,
+                    )
+                    if disable_one_shot:
+                        await conn.execute(_SQL_SET_ENABLED, (False, task_id))
+                elif next_run is not None:
+                    await conn.execute(
+                        _SQL_RECORD_RUN_FAILURE,
+                        (next_run.isoformat(), clipped_error, task_id),
+                    )
+
+                await conn.execute(_SQL_CLEAR_RUNNING, (task_id,))
+
+                if event_queue_id is not None:
+                    if status == "completed":
+                        await conn.execute(_SQL_COMPLETE_EVENT, (event_queue_id,))
+                    elif event_retry_at is None:
+                        await conn.execute(
+                            _SQL_DEAD_LETTER_EVENT,
+                            (ended_at.isoformat(), clipped_error or "automation failed", event_queue_id),
+                        )
+                        await conn.execute(_SQL_COMPLETE_EVENT, (event_queue_id,))
+                    else:
+                        await conn.execute(
+                            _SQL_FAIL_EVENT,
+                            (clipped_error or "automation failed", event_retry_at.isoformat(), event_queue_id),
+                        )
+                if self.outbox is not None:
+                    await self.outbox.enqueue_automation_settled_in_transaction(
+                        automation_run_id=settled_run_id,
+                        task_id=task_id,
+                        success=status == "completed",
+                    )
+                await conn.commit()
+                return True
+            except BaseException:
+                await conn.rollback()
+                raise
+
+    async def _record_successful_cadence(
+        self,
+        conn: aiosqlite.Connection,
+        task_id: str,
+        ended_at: datetime,
+        next_run: datetime | None,
+        expected_next_run: datetime | None,
+        preserve_external_reschedule: bool,
+        result: str | None,
+        preserve_result: bool,
+    ) -> None:
+        if preserve_external_reschedule:
+            params = (
+                ended_at.isoformat(),
+                expected_next_run.isoformat() if expected_next_run else None,
+                next_run.isoformat() if next_run else None,
+            )
+            if preserve_result:
+                await conn.execute(_SQL_UPDATE_LAST_RUN_KEEP_RESULT_IF_NEXT_RUN, (*params, task_id))
+            else:
+                await conn.execute(_SQL_UPDATE_LAST_RUN_IF_NEXT_RUN, (*params, result, task_id))
+            return
+        if preserve_result:
+            await conn.execute(
+                _SQL_UPDATE_LAST_RUN_KEEP_RESULT,
+                (ended_at.isoformat(), next_run.isoformat() if next_run else None, task_id),
+            )
+            return
+        await conn.execute(
+            _SQL_UPDATE_LAST_RUN,
+            (ended_at.isoformat(), next_run.isoformat() if next_run else None, result, task_id),
+        )
 
     async def fail_orphaned_runs(self, ended_at: datetime, error: str) -> int:
         """Boot-time sweep: any row still 'running' belongs to a run the
@@ -1373,11 +1517,6 @@ class AutomationStore:
         cursor = await self.conn.execute(_SQL_FAIL_ORPHANED_RUNS, (error, ended_at.isoformat()))
         await self.conn.commit()
         return cursor.rowcount
-
-    async def fail_latest_running_run(self, task_id: str, ended_at: datetime, error: str) -> bool:
-        cursor = await self.conn.execute(_SQL_FAIL_LATEST_RUNNING_RUN, (error, ended_at.isoformat(), task_id))
-        await self.conn.commit()
-        return cursor.rowcount > 0
 
     async def recent_run_statuses(self, task_ids: list[str], per_task: int = 4) -> dict[str, list[str]]:
         """Newest-first run statuses per task (for the card's sparkline/pip).
@@ -1457,6 +1596,10 @@ class AutomationStore:
         await self.conn.execute(_SQL_SET_ENABLED, (int(enabled), task_id))
         await self.conn.commit()
 
+    async def disable_and_clear_next_run(self, task_id: str) -> None:
+        await self.conn.execute(_SQL_DISABLE_AND_CLEAR_NEXT_RUN, (task_id,))
+        await self.conn.commit()
+
     async def disable_by_parent(self, parent_id: str) -> int:
         cursor = await self.conn.execute(_SQL_DISABLE_BY_PARENT, (parent_id,))
         await self.conn.commit()
@@ -1500,11 +1643,14 @@ class AutomationStore:
         rows = await self.conn.execute_fetchall(_SQL_LIST_LOOPS_BY_SESSION, (session_id,))
         return [_row_to_automation(row) for row in rows]
 
-    async def list_session_bound_by_session(self, session_id: str) -> list[Automation]:
+    async def list_session_bound_by_session(
+        self, session_id: str, *, include_disabled: bool = False
+    ) -> list[Automation]:
         """Kind-agnostic: any automation that targets `session_id` via
         thread_id. Used by the scheduler's run-completed fast path to fire
         deferred session-bound work the moment the session goes idle."""
-        rows = await self.conn.execute_fetchall(_SQL_LIST_SESSION_BOUND_BY_SESSION, (session_id,))
+        query = _SQL_LIST_ALL_SESSION_BOUND_BY_SESSION if include_disabled else _SQL_LIST_SESSION_BOUND_BY_SESSION
+        rows = await self.conn.execute_fetchall(query, (session_id,))
         return [_row_to_automation(row) for row in rows]
 
     async def list_by_parent(self, parent_automation_id: str) -> list[Automation]:
@@ -1765,6 +1911,12 @@ class AutomationStore:
     async def complete_event(self, queue_id: int) -> None:
         await self.conn.execute(_SQL_COMPLETE_EVENT, (queue_id,))
         await self.conn.commit()
+
+    async def get_claimed_event(self, task_id: str) -> tuple[int, int] | None:
+        rows = await self.conn.execute_fetchall(_SQL_GET_CLAIMED_EVENT, (task_id,))
+        if not rows:
+            return None
+        return int(rows[0]["id"]), int(rows[0]["attempt_count"])
 
     async def fail_event(self, queue_id: int, error: str, next_attempt_at: datetime) -> None:
         await self.conn.execute(

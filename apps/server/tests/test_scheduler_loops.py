@@ -8,10 +8,11 @@ import pytest_asyncio
 import arden.database as database
 from arden.agent import Usage
 from arden.automation.models import Automation
-from arden.automation.scheduler import Scheduler
+from arden.automation.scheduler import CompletedAgentRun, InFlightDetachedRun, Scheduler
 from arden.automation.service import AutomationService
 from arden.automation.store import AutomationStore
 from arden.automation.triggers import MessageTrigger, TimeTrigger
+from arden.constants import SCHEDULER_EVENT_RETRY_BASE_SECONDS
 from arden.events.internal import RunCompleted, RunFailed
 from arden.events.sse import AutomationFinishedEvent, AutomationProgressEvent, SSEEvent
 from arden.events.triggers import MessageReceived
@@ -177,22 +178,34 @@ async def test_start_next_queued_event_clears_running_when_claim_fails(store: Au
 
 
 @pytest.mark.asyncio
-async def test_run_finalize_keeps_detached_running_when_result_write_fails(store: AutomationStore):
-    """Detached (iteration) dispatches keep the running flag on purpose —
-    the run is genuinely in flight; RunCompleted (or the reaper) releases
-    it. A failed last-run bookkeeping write must not change that."""
+async def test_queued_event_releases_claim_when_run_history_start_fails(
+    store: AutomationStore,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    auto = _loop()
+    await store.save(auto)
+    await store.enqueue_event(auto.task_id, "event-1", "{}", datetime.now(UTC))
+
+    async def fail_run_start(_task_id: str, _started_at: datetime) -> int:
+        raise RuntimeError("run history unavailable")
+
+    monkeypatch.setattr(store, "record_run_start", fail_run_start)
+    scheduler, _dispatched = _make_scheduler(store)
+    await scheduler._start_next_queued_event_if_idle(auto.task_id)
+    task = next(iter(scheduler._running))
+    with pytest.raises(RuntimeError, match="run history unavailable"):
+        await task
+
+    reloaded = await store.get(auto.task_id)
+    assert reloaded is not None and reloaded.running_since is None
+    rows = await store.conn.execute_fetchall("SELECT claimed_at FROM automation_event_queue")
+    assert len(rows) == 1 and rows[0]["claimed_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_detached_dispatch_waits_for_completion_before_advancing_cadence(store: AutomationStore):
     auto = _loop(running_since=datetime.now(UTC))
     await store.save(auto)
-    await store.conn.execute(
-        """
-        CREATE TRIGGER fail_last_run_update
-        BEFORE UPDATE OF last_run_at ON scheduled_tasks
-        BEGIN
-            SELECT RAISE(ABORT, 'last run update failed');
-        END
-        """
-    )
-    await store.conn.commit()
     sched, dispatched = _make_scheduler(store)
 
     await sched._run_and_finalize(auto)
@@ -201,12 +214,12 @@ async def test_run_finalize_keeps_detached_running_when_result_write_fails(store
     reloaded = await store.get(auto.task_id)
     assert reloaded is not None
     assert reloaded.running_since is not None
-    assert auto.task_id in sched._detached_task_ids
+    assert reloaded.last_run_at is None
+    assert auto.task_id in sched._detached_runs
 
 
-async def test_run_finalize_clears_running_for_post_mode_when_result_write_fails(store: AutomationStore):
-    """Post-mode loops await their run — the old invariant holds: a failed
-    bookkeeping write must not leave a zombie running flag."""
+@pytest.mark.asyncio
+async def test_run_finalize_surfaces_result_settlement_failure(store: AutomationStore):
     auto = _loop(running_since=datetime.now(UTC), read_history=False)
     await store.save(auto)
     await store.conn.execute(
@@ -221,12 +234,100 @@ async def test_run_finalize_clears_running_for_post_mode_when_result_write_fails
     await store.conn.commit()
     sched, dispatched, _results = _make_post_scheduler(store)
 
-    await sched._run_and_finalize(auto)
+    with pytest.raises(Exception, match="last run update failed"):
+        await sched._run_and_finalize(auto)
 
     assert len(dispatched) == 1
     reloaded = await store.get(auto.task_id)
     assert reloaded is not None
+    assert reloaded.running_since is not None
+    assert (await store.list_runs(auto.task_id))[0]["status"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_run_finished_event_follows_durable_settlement(store: AutomationStore, monkeypatch):
+    auto = _loop(read_history=False)
+    await store.save(auto)
+    sched, _dispatched, _results = _make_post_scheduler(store)
+    events: list[SSEEvent] = []
+
+    async def emit(event: SSEEvent) -> None:
+        if isinstance(event, AutomationFinishedEvent):
+            task = await store.get(auto.task_id)
+            runs = await store.list_runs(auto.task_id)
+            assert task is not None and task.running_since is None
+            assert runs[0]["status"] == "completed"
+        events.append(event)
+
+    monkeypatch.setattr(sched, "emit_automation_event", emit)
+
+    await sched._run_and_finalize(auto)
+
+    assert isinstance(events[-1], AutomationFinishedEvent)
+
+
+@pytest.mark.asyncio
+async def test_failed_execution_retries_without_advancing_success_cadence(store: AutomationStore):
+    auto = _loop(read_history=False)
+    await store.save(auto)
+    sched = Scheduler(store=store, build_deps=lambda: None)
+
+    async def failing_dispatcher(_auto: Automation, context: str | dict | None = None) -> str | None:
+        raise RuntimeError("provider unavailable")
+
+    sched.set_post_dispatcher(failing_dispatcher)
+
+    before_first = datetime.now(UTC)
+    await sched._start_run(auto)
+    await next(iter(sched._running))
+    first = await store.get(auto.task_id)
+    assert first is not None
+    assert first.last_run_at is None
+    assert first.running_since is None
+    assert first.next_run_at is not None
+    assert first.next_run_at >= before_first + timedelta(seconds=SCHEDULER_EVENT_RETRY_BASE_SECONDS - 1)
+    assert (await store.list_runs(auto.task_id))[0]["status"] == "failed"
+
+    await store.set_next_run(auto.task_id, datetime.now(UTC) - timedelta(seconds=1))
+    before_second = datetime.now(UTC)
+    second_attempt = await store.get(auto.task_id)
+    assert second_attempt is not None
+    await sched._start_run(second_attempt)
+    await next(iter(sched._running))
+    second = await store.get(auto.task_id)
+    assert second is not None and second.next_run_at is not None
+    assert second.last_run_at is None
+    assert second.next_run_at >= before_second + timedelta(seconds=2 * SCHEDULER_EVENT_RETRY_BASE_SECONDS - 1)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_run_settles_failure_and_releases_running_state(store: AutomationStore):
+    auto = _loop(read_history=False)
+    await store.save(auto)
+    started = asyncio.Event()
+
+    async def wait_forever(_automation: Automation, _context: str | dict | None):
+        started.set()
+        await asyncio.Event().wait()
+
+    scheduler = Scheduler(store=store, build_deps=lambda: None)
+    scheduler.set_post_dispatcher(wait_forever)
+    await scheduler._start_run(auto)
+    await started.wait()
+
+    task = next(iter(scheduler._running))
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    reloaded = await store.get(auto.task_id)
+    assert reloaded is not None
     assert reloaded.running_since is None
+    assert reloaded.last_run_at is None
+    assert reloaded.next_run_at is not None and reloaded.next_run_at > datetime.now(UTC)
+    run = (await store.list_runs(auto.task_id))[0]
+    assert run["status"] == "failed"
+    assert run["error"] == "CancelledError: automation run cancelled"
 
 
 @pytest.mark.asyncio
@@ -259,7 +360,7 @@ async def test_run_finalize_does_not_silently_complete_when_clear_running_fails(
     await asyncio.wait_for(started.wait(), timeout=1)
     task = next(iter(sched._running))
     release.set()
-    with pytest.raises(RuntimeError, match="Failed to clear running flag"):
+    with pytest.raises(Exception, match="clear running failed"):
         await task
 
     reloaded = await store.get(auto.task_id)
@@ -311,6 +412,7 @@ async def test_pending_running_claim_is_not_cleared_before_task_is_tracked(store
 async def test_successful_queued_event_settlement_failure_does_not_release_for_retry(store: AutomationStore):
     auto = _loop()
     await store.save(auto)
+    await store.set_next_run(auto.task_id, datetime.now(UTC) + timedelta(hours=1))
     await store.enqueue_event(auto.task_id, "event-1", "{}", datetime.now(UTC))
     await store.conn.execute(
         """
@@ -326,13 +428,28 @@ async def test_successful_queued_event_settlement_failure_does_not_release_for_r
 
     await sched._start_next_queued_event_if_idle(auto.task_id)
     task = next(iter(sched._running))
-    with pytest.raises(RuntimeError, match="Failed to settle queued automation event"):
+    with pytest.raises(Exception, match="event delete failed"):
         await task
 
     assert len(dispatched) == 1
     rows = await store.conn.execute_fetchall("SELECT claimed_at FROM automation_event_queue")
     assert len(rows) == 1
     assert rows[0]["claimed_at"] is not None
+
+    await store.conn.execute("DROP TRIGGER fail_event_delete")
+    await store.conn.commit()
+    await sched._tick()
+
+    rows = await store.conn.execute_fetchall(
+        "SELECT claimed_at, attempt_count, next_attempt_at FROM automation_event_queue"
+    )
+    assert len(rows) == 1
+    assert rows[0]["claimed_at"] is None
+    assert rows[0]["attempt_count"] == 1
+    assert datetime.fromisoformat(rows[0]["next_attempt_at"]) > datetime.now(UTC)
+    recovered = await store.get(auto.task_id)
+    assert recovered is not None and recovered.running_since is None
+    assert (await store.list_runs(auto.task_id))[0]["status"] == "failed"
 
 
 @pytest.mark.asyncio
@@ -700,6 +817,39 @@ async def test_loop_fire_gate_allows_when_session_idle(store: AutomationStore):
     assert len(dispatched) == 1
     reloaded = await store.get("loop-1")
     assert reloaded.iteration_count == 1
+
+
+@pytest.mark.asyncio
+async def test_same_session_iteration_automations_run_one_at_a_time(store: AutomationStore):
+    await store.save(_loop(task_id="loop-1", session_id="shared"))
+    await store.save(_loop(task_id="loop-2", session_id="shared"))
+    dispatched: list[Automation] = []
+
+    async def dispatcher(automation: Automation, _context: str | dict | None = None) -> str:
+        dispatched.append(automation)
+        return f"run-{automation.task_id}"
+
+    sched = Scheduler(store=store, build_deps=lambda: None)
+    sched.set_iteration_dispatcher(dispatcher)
+
+    await sched._tick()
+    await asyncio.gather(*tuple(sched._running))
+
+    assert len(dispatched) == 1
+    active = dispatched[0]
+    await sched.handle_run_completed(
+        RunCompleted(
+            run_id=f"run-{active.task_id}",
+            session_id="shared",
+            messages=(),
+            usage=Usage(),
+            result="done",
+            automation_task_id=active.task_id,
+        )
+    )
+    await asyncio.gather(*tuple(sched._running))
+
+    assert {automation.task_id for automation in dispatched} == {"loop-1", "loop-2"}
 
 
 @pytest.mark.asyncio
@@ -1509,11 +1659,12 @@ async def test_detached_run_settles_on_run_completed(store: AutomationStore):
 
     await sched.handle_run_completed(
         RunCompleted(
-            run_id="run-1",
+            run_id="fake-run-id",
             session_id=auto.thread_id,
             messages=(),
             usage=Usage(),
             result="two emails need replies",
+            automation_task_id=auto.task_id,
         )
     )
 
@@ -1524,7 +1675,7 @@ async def test_detached_run_settles_on_run_completed(store: AutomationStore):
     settled = await store.get(auto.task_id)
     assert settled.running_since is None
     assert settled.last_result == "two emails need replies"
-    assert auto.task_id not in sched._detached_task_ids
+    assert auto.task_id not in sched._detached_runs
 
 
 @pytest.mark.asyncio
@@ -1536,14 +1687,132 @@ async def test_detached_run_fails_immediately_on_chat_error(store: AutomationSto
     await sched._run_and_finalize(auto)
 
     await sched.handle_run_failed(
-        RunFailed(run_id="run-1", session_id=auto.thread_id, error="provider rejected history")
+        RunFailed(
+            run_id="fake-run-id",
+            session_id=auto.thread_id,
+            error="provider rejected history",
+            automation_task_id=auto.task_id,
+        )
     )
 
     runs = await store.list_runs(auto.task_id)
     assert runs[0]["status"] == "failed"
     assert runs[0]["error"] == "provider rejected history"
-    assert (await store.get(auto.task_id)).running_since is None
-    assert auto.task_id not in sched._detached_task_ids
+    failed = await store.get(auto.task_id)
+    assert failed is not None
+    assert failed.running_since is None
+    assert failed.last_run_at is None
+    assert failed.next_run_at is not None
+    assert failed.next_run_at > datetime.now(UTC)
+    assert auto.task_id not in sched._detached_runs
+
+
+@pytest.mark.asyncio
+async def test_detached_completion_validation_failure_retries_without_completion(store: AutomationStore, monkeypatch):
+    auto = _loop()
+    await store.save(auto)
+    assert await store.try_mark_running(auto.task_id, datetime.now(UTC))
+    events: list[SSEEvent] = []
+
+    async def reject(_automation: Automation, _run_id: str | None) -> None:
+        raise RuntimeError("missing publish proof")
+
+    async def dispatcher(_automation: Automation, _context: str | dict | None) -> str:
+        return "fake-run-id"
+
+    async def emit(event: SSEEvent) -> None:
+        events.append(event)
+
+    sched = Scheduler(store=store, build_deps=lambda: None, validate_completed_run=reject)
+    sched.set_iteration_dispatcher(dispatcher)
+    monkeypatch.setattr(sched, "emit_automation_event", emit)
+    await sched._run_and_finalize(auto)
+
+    await sched.handle_run_completed(
+        RunCompleted(
+            run_id="fake-run-id",
+            session_id=auto.thread_id,
+            messages=(),
+            usage=Usage(),
+            result="published",
+            automation_task_id=auto.task_id,
+        ),
+    )
+
+    run = (await store.list_runs(auto.task_id))[0]
+    task = await store.get(auto.task_id)
+    assert run["status"] == "failed"
+    assert run["error"] == "RuntimeError: missing publish proof"
+    assert task is not None and task.last_run_at is None and task.running_since is None
+    assert not any(isinstance(event, AutomationFinishedEvent) and event.result == "published" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_post_completion_is_validated_before_settlement(store: AutomationStore):
+    auto = _loop(read_history=False)
+    await store.save(auto)
+    observed: list[str | None] = []
+
+    async def validate(_automation: Automation, run_id: str | None) -> None:
+        observed.append(run_id)
+
+    async def post(_automation: Automation, _context: str | dict | None) -> CompletedAgentRun:
+        return CompletedAgentRun("post-run-id", "published")
+
+    scheduler = Scheduler(store=store, build_deps=lambda: None, validate_completed_run=validate)
+    scheduler.set_post_dispatcher(post)
+    await scheduler._run_and_finalize(auto)
+
+    assert observed == ["post-run-id"]
+    assert (await store.list_runs(auto.task_id))[0]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_detached_completion_requires_exact_task_and_chat_run(store: AutomationStore):
+    auto = _loop()
+    await store.save(auto)
+    assert await store.try_mark_running(auto.task_id, datetime.now(UTC))
+    sched, _dispatched = _make_scheduler(store)
+    await sched._run_and_finalize(auto)
+    for event in (
+        RunCompleted("fake-run-id", auto.thread_id, (), Usage(), "wrong task", automation_task_id="other"),
+        RunCompleted("other-run", auto.thread_id, (), Usage(), "wrong run", automation_task_id=auto.task_id),
+        RunCompleted("fake-run-id", "other-session", (), Usage(), "wrong session", automation_task_id=auto.task_id),
+    ):
+        await sched.handle_run_completed(event)
+        assert (await store.list_runs(auto.task_id))[0]["status"] == "running"
+
+    exact = RunCompleted(
+        "fake-run-id",
+        auto.thread_id,
+        (),
+        Usage(),
+        "done",
+        automation_task_id=auto.task_id,
+    )
+    await sched.handle_run_completed(exact)
+    await sched.handle_run_completed(exact)
+
+    assert (await store.list_runs(auto.task_id))[0]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_detached_failure_requires_exact_task_and_chat_run(store: AutomationStore):
+    auto = _loop()
+    await store.save(auto)
+    assert await store.try_mark_running(auto.task_id, datetime.now(UTC))
+    sched, _dispatched = _make_scheduler(store)
+    await sched._run_and_finalize(auto)
+
+    await sched.handle_run_failed(
+        RunFailed("other-run", auto.thread_id, "unrelated", automation_task_id=auto.task_id),
+    )
+    assert (await store.list_runs(auto.task_id))[0]["status"] == "running"
+
+    await sched.handle_run_failed(
+        RunFailed("fake-run-id", auto.thread_id, "provider failed", automation_task_id=auto.task_id),
+    )
+    assert (await store.list_runs(auto.task_id))[0]["status"] == "failed"
 
 
 @pytest.mark.asyncio
@@ -1557,7 +1826,11 @@ async def test_detached_run_reaped_when_completion_never_arrives(store: Automati
     await sched._run_and_finalize(auto)
 
     # Backdate the dispatch past the max age — RunCompleted was lost.
-    sched._detached_task_ids[auto.task_id] = datetime.now(UTC) - DETACHED_RUN_MAX_AGE - timedelta(minutes=1)
+    sched._detached_runs[auto.task_id] = InFlightDetachedRun(
+        run_id="fake-run-id",
+        session_id=auto.thread_id,
+        dispatched_at=datetime.now(UTC) - DETACHED_RUN_MAX_AGE - timedelta(minutes=1),
+    )
     await sched._release_untracked_running()
 
     runs = await store.list_runs(auto.task_id)
@@ -1565,7 +1838,7 @@ async def test_detached_run_reaped_when_completion_never_arrives(store: Automati
     assert runs[0]["error"] == "run never reported back"
     reaped = await store.get(auto.task_id)
     assert reaped.running_since is None
-    assert auto.task_id not in sched._detached_task_ids
+    assert auto.task_id not in sched._detached_runs
 
 
 # ---------------------------------------------------------------------------
@@ -1602,7 +1875,14 @@ async def test_iteration_dispatch_announces_start_not_finish(store: AutomationSt
 
     events.clear()
     await sched.handle_run_completed(
-        RunCompleted(run_id="run-x", session_id="sess-1", messages=(), usage=Usage(), result="wrote 3 notes")
+        RunCompleted(
+            run_id="fake-run-id",
+            session_id="sess-1",
+            messages=(),
+            usage=Usage(),
+            result="wrote 3 notes",
+            automation_task_id="loop-1",
+        )
     )
 
     finished = [e for e in events if isinstance(e, AutomationFinishedEvent)]

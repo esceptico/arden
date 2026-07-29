@@ -8,10 +8,13 @@ import arden.database as database
 from arden.agent import Usage
 from arden.events.internal import RunCompleted, RunFailed
 from arden.outbox import (
+    OUTBOX_AUTOMATION_SETTLED,
     OUTBOX_RUN_COMPLETED,
     OUTBOX_RUN_FAILED,
+    AutomationSettled,
     OutboxStore,
     OutboxWorker,
+    automation_settled_from_payload,
     run_completed_from_payload,
     run_failed_from_payload,
 )
@@ -28,6 +31,7 @@ def _run_completed(run_id: str = "run-1") -> RunCompleted:
         usage=Usage(prompt_tokens=3, completion_tokens=5, cache_read_tokens=7, cache_write_tokens=11),
         result="done",
         source_refs=({"kind": "tool", "ref": "memory:1"},),
+        automation_task_id="loop-1",
     )
 
 
@@ -61,7 +65,12 @@ async def test_enqueue_run_completed_is_idempotent_and_claims_payload(outbox_sto
 
 @pytest.mark.asyncio
 async def test_enqueue_run_failed_is_idempotent_and_claims_payload(outbox_store: OutboxStore):
-    event = RunFailed(run_id="run-1", session_id="session-1", error="provider rejected history")
+    event = RunFailed(
+        run_id="run-1",
+        session_id="session-1",
+        error="provider rejected history",
+        automation_task_id="loop-1",
+    )
 
     assert await outbox_store.enqueue_run_failed(event) is True
     assert await outbox_store.enqueue_run_failed(event) is False
@@ -69,6 +78,42 @@ async def test_enqueue_run_failed_is_idempotent_and_claims_payload(outbox_store:
     claimed = await outbox_store.claim_batch(worker_id="test-worker", limit=10)
     assert claimed[0].event_type == OUTBOX_RUN_FAILED
     assert run_failed_from_payload(claimed[0].payload) == event
+
+
+@pytest.mark.asyncio
+async def test_enqueue_automation_settled_uses_callers_transaction(outbox_store: OutboxStore):
+    await outbox_store.conn.execute("BEGIN")
+
+    assert (
+        await outbox_store.enqueue_automation_settled_in_transaction(
+            automation_run_id=42,
+            task_id="daily-summary",
+            success=True,
+        )
+        is True
+    )
+    assert (
+        await outbox_store.enqueue_automation_settled_in_transaction(
+            automation_run_id=42,
+            task_id="daily-summary",
+            success=True,
+        )
+        is False
+    )
+    assert outbox_store.conn.in_transaction
+
+    await outbox_store.conn.commit()
+    claimed = await outbox_store.claim_batch(worker_id="test-worker", limit=10)
+
+    assert len(claimed) == 1
+    assert claimed[0].event_type == OUTBOX_AUTOMATION_SETTLED
+    assert claimed[0].aggregate_type == "automation_run"
+    assert claimed[0].aggregate_id == "42"
+    assert automation_settled_from_payload(claimed[0].payload) == AutomationSettled(
+        automation_run_id=42,
+        task_id="daily-summary",
+        success=True,
+    )
 
 
 @pytest.mark.asyncio

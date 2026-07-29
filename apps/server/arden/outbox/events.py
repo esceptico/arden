@@ -1,10 +1,18 @@
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 
 from arden.agent import Usage
 from arden.events.internal import RunCompleted, RunFailed
 
 OUTBOX_RUN_COMPLETED = "run.completed"
 OUTBOX_RUN_FAILED = "run.failed"
+OUTBOX_AUTOMATION_SETTLED = "automation.settled"
+
+
+@dataclass(frozen=True)
+class AutomationSettled:
+    automation_run_id: int
+    task_id: str
+    success: bool
 
 
 def run_completed_payload(event: RunCompleted) -> dict:
@@ -16,6 +24,7 @@ def run_completed_payload(event: RunCompleted) -> dict:
         "result": event.result,
         "source_refs": list(event.source_refs),
         "structured_output": event.structured_output,
+        "automation_task_id": event.automation_task_id,
     }
 
 
@@ -34,6 +43,7 @@ def run_completed_from_payload(payload: dict) -> RunCompleted:
         result=payload.get("result"),
         source_refs=tuple(payload.get("source_refs") or ()),
         structured_output=payload.get("structured_output"),
+        automation_task_id=payload.get("automation_task_id"),
     )
 
 
@@ -42,6 +52,7 @@ def run_failed_payload(event: RunFailed) -> dict:
         "run_id": event.run_id,
         "session_id": event.session_id,
         "error": event.error,
+        "automation_task_id": event.automation_task_id,
     }
 
 
@@ -50,4 +61,21 @@ def run_failed_from_payload(payload: dict) -> RunFailed:
         run_id=payload["run_id"],
         session_id=payload["session_id"],
         error=payload["error"],
+        automation_task_id=payload.get("automation_task_id"),
+    )
+
+
+def automation_settled_payload(event: AutomationSettled) -> dict:
+    return {
+        "automation_run_id": event.automation_run_id,
+        "task_id": event.task_id,
+        "success": event.success,
+    }
+
+
+def automation_settled_from_payload(payload: dict) -> AutomationSettled:
+    return AutomationSettled(
+        automation_run_id=payload["automation_run_id"],
+        task_id=payload["task_id"],
+        success=payload["success"],
     )

@@ -5,8 +5,11 @@ import aiosqlite
 
 from arden.events.internal import RunCompleted, RunFailed
 from arden.outbox.events import (
+    OUTBOX_AUTOMATION_SETTLED,
     OUTBOX_RUN_COMPLETED,
     OUTBOX_RUN_FAILED,
+    AutomationSettled,
+    automation_settled_payload,
     run_completed_payload,
     run_failed_payload,
 )
@@ -223,6 +226,27 @@ class OutboxStore:
         aggregate_id: str | None = None,
         available_at: datetime | None = None,
     ) -> bool:
+        inserted = await self.enqueue_without_commit(
+            event_type=event_type,
+            payload=payload,
+            idempotency_key=idempotency_key,
+            aggregate_type=aggregate_type,
+            aggregate_id=aggregate_id,
+            available_at=available_at,
+        )
+        await self.conn.commit()
+        return inserted
+
+    async def enqueue_without_commit(
+        self,
+        *,
+        event_type: str,
+        payload: dict,
+        idempotency_key: str,
+        aggregate_type: str | None = None,
+        aggregate_id: str | None = None,
+        available_at: datetime | None = None,
+    ) -> bool:
         now = _now()
         available = available_at or now
         cursor = await self.conn.execute(
@@ -238,7 +262,6 @@ class OutboxStore:
                 _format_dt(now),
             ),
         )
-        await self.conn.commit()
         return cursor.rowcount > 0
 
     async def enqueue_run_completed(self, event: RunCompleted) -> bool:
@@ -257,6 +280,26 @@ class OutboxStore:
             aggregate_id=event.run_id,
             payload=run_failed_payload(event),
             idempotency_key=f"{OUTBOX_RUN_FAILED}:{event.run_id}",
+        )
+
+    async def enqueue_automation_settled_in_transaction(
+        self,
+        *,
+        automation_run_id: int,
+        task_id: str,
+        success: bool,
+    ) -> bool:
+        event = AutomationSettled(
+            automation_run_id=automation_run_id,
+            task_id=task_id,
+            success=success,
+        )
+        return await self.enqueue_without_commit(
+            event_type=OUTBOX_AUTOMATION_SETTLED,
+            aggregate_type="automation_run",
+            aggregate_id=str(automation_run_id),
+            payload=automation_settled_payload(event),
+            idempotency_key=f"{OUTBOX_AUTOMATION_SETTLED}:{automation_run_id}",
         )
 
     async def claim_batch(self, *, worker_id: str, limit: int, now: datetime | None = None) -> list[OutboxEvent]:

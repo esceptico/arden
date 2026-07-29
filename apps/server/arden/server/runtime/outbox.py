@@ -2,17 +2,19 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 
 from arden.automation.scheduler import Scheduler
-from arden.automation.store import AutomationStore
+from arden.events.internal import RunCompleted
 from arden.outbox import (
+    OUTBOX_AUTOMATION_SETTLED,
     OUTBOX_RUN_COMPLETED,
     OUTBOX_RUN_FAILED,
+    AutomationSettled,
     OutboxEvent,
     OutboxWorker,
+    automation_settled_from_payload,
     run_completed_from_payload,
     run_failed_from_payload,
 )
 from arden.outbox.store import OutboxStore
-from arden.server.indexer import Indexer
 
 
 class RuntimeOutbox:
@@ -20,17 +22,15 @@ class RuntimeOutbox:
         self,
         *,
         outbox_store: OutboxStore,
-        automation_store: AutomationStore,
         scheduler: Scheduler,
-        indexer: Indexer | None,
-        on_area_run: Callable[[object], Awaitable[None]] | None = None,
+        on_area_run: Callable[[RunCompleted], Awaitable[None]] | None = None,
+        on_automation_settled: Callable[[AutomationSettled], Awaitable[None]] | None = None,
     ):
         self.worker = OutboxWorker(outbox_store)
         self.outbox_store = outbox_store
-        self.automation_store = automation_store
         self.scheduler = scheduler
-        self.indexer = indexer
         self._on_area_run = on_area_run
+        self._on_automation_settled_callback = on_automation_settled
         self._register_handlers()
 
     def start(self) -> None:
@@ -40,6 +40,7 @@ class RuntimeOutbox:
         await self.worker.stop()
 
     def _register_handlers(self) -> None:
+        self.worker.register_handler(OUTBOX_AUTOMATION_SETTLED, self._on_automation_settled)
         self.worker.register_handler(OUTBOX_RUN_COMPLETED, self._on_run_completed)
         self.worker.register_handler(OUTBOX_RUN_FAILED, self._on_run_failed)
 
@@ -51,6 +52,11 @@ class RuntimeOutbox:
 
     async def _on_run_failed(self, event: OutboxEvent) -> None:
         await self.scheduler.handle_run_failed(run_failed_from_payload(event.payload))
+
+    async def _on_automation_settled(self, event: OutboxEvent) -> None:
+        if self._on_automation_settled_callback is None:
+            return
+        await self._on_automation_settled_callback(automation_settled_from_payload(event.payload))
 
     async def get_status(self) -> dict:
         worker_running = self.worker.is_running

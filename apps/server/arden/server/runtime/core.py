@@ -666,7 +666,6 @@ class Runtime:
             get_slack_client=lambda: self.integrations.get_client("slack"),
             get_cheap_llm=lambda: get_completion_client(self.config.memory_model) if self.config.memory_model else None,
             cheap_model=self.config.memory_model,
-            indexer=self.indexer,
             get_fact_dream=self._get_fact_dream,
             get_fact_maintenance=self._get_fact_maintenance,
             get_fact_synthesis=self._get_fact_synthesis,
@@ -674,6 +673,7 @@ class Runtime:
             synthesis_is_current=self._synthesis_is_current,
             project_wiki_health=self.project_wiki_health,
             on_automation_finished=self._after_automation_finished,
+            get_wiki_service=lambda: self.wiki_service,
             get_notifiers=lambda: self.notifier_service,
         )
 
