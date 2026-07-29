@@ -1,13 +1,36 @@
 import asyncio
-import json
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from arden.automation.event_dispatch import (
+    claim_next_queued_event,
+    enqueue_matching_events,
+    event_retry_at,
+    failure_retry_at,
+    matching_event_automations,
+    matching_message_automations,
+    message_trigger_passes,
+    retry_delay_seconds,
+)
 from arden.automation.models import Automation
-from arden.automation.prompts import AUTOMATION_PROMPT, AUTOMATION_SUFFIX
+from arden.automation.run_execution import (
+    AUTOMATION_BUS_KEY,
+    MANUAL_RUN_CONTEXT_KEY,
+    CompletedAgentRun,
+    DetachedRun,
+    DetachedRunBindingPending,
+    ExecutionDependencies,
+    RunCompletionValidator,
+    RunDeferred,
+    RunSkipped,
+    execute_and_settle,
+    run_agent_execution,
+    run_handler,
+    run_session_bound,
+    split_manual_flag,
+)
 from arden.automation.store import AutomationStore
-from arden.automation.triggers import CountTrigger, EventTrigger, IdleTrigger, MessageTrigger, TimeTrigger
+from arden.automation.triggers import CountTrigger, IdleTrigger, MessageTrigger, TimeTrigger
 from arden.constants import (
     BUILTIN_MEMORY_RETENTION_ID,
     BUILTIN_MEMORY_STORAGE_MAINTENANCE_ID,
@@ -15,23 +38,28 @@ from arden.constants import (
     BUILTIN_WIKI_MAINTENANCE_ID,
     DETACHED_RUN_MAX_AGE,
     MEMORY_RETENTION_AT,
-    MESSAGE_RECEIVED,
-    SCHEDULER_DEDUP_TTL,
-    SCHEDULER_EVENT_MAX_RETRIES,
     SCHEDULER_EVENT_RETRY_BASE_SECONDS,
-    SCHEDULER_EVENT_RETRY_MAX_SECONDS,
     SCHEDULER_POLL_INTERVAL,
 )
 from arden.events.internal import RunCompleted, RunFailed
-from arden.events.sse import AutomationFinishedEvent, AutomationProgressEvent, SSEEvent
-from arden.events.triggers import EVENT_APPROACHING, EventApproaching, MessageReceived, TriggerEvent
+from arden.events.sse import AutomationFinishedEvent, SSEEvent
+from arden.events.triggers import MessageReceived, TriggerEvent
 from arden.logging import get_logger
-from arden.operator.runner import OperatorDeps, RunRequest, run_agent, run_agent_streaming
+from arden.operator.runner import OperatorDeps, run_agent, run_agent_streaming
 from arden.server.bus import BusRegistry
 
-AUTOMATION_BUS_KEY = "automation:events"
-
 _logger = get_logger(__name__)
+
+__all__ = (
+    "AUTOMATION_BUS_KEY",
+    "CompletedAgentRun",
+    "DetachedRun",
+    "DetachedRunBindingPending",
+    "RunDeferred",
+    "RunSkipped",
+    "Scheduler",
+    "split_manual_flag",
+)
 
 # Builtin daily memory maintenance phases. When one is overdue after
 # sleep/offline time, catch it up on boot.
@@ -43,63 +71,6 @@ _WIKI_MAINTENANCE_BACKSTOP = TimeTrigger(every="6h")
 _MANAGED_HISTORY_COLLECTION_BACKSTOP = TimeTrigger(every="7d")
 
 
-IterationDispatcher = Callable[[Automation, str | dict | None, int], Awaitable[str]]
-"""Fire a session-bound automation in iteration mode (read_history=True):
-re-enter the target session with the loop prompt; the agent sees the full
-session history. `context` is the triggering event's rendered context (None
-for non-event runs)."""
-
-PostDispatcher = Callable[[Automation, str | dict | None], Awaitable["CompletedAgentRun"]]
-"""Fire a session-bound automation in post mode (read_history=False): run
-the agent fresh (no session history), then post the result back into the
-target session as an assistant message. `context` is the triggering event's
-rendered context (None for non-event runs)."""
-
-# Manual "run now" rides the context dict under this key. It is transport,
-# not content: every prompt/handler consumer must split it back out via
-# split_manual_flag before rendering.
-MANUAL_RUN_CONTEXT_KEY = "_arden_manual_run"
-
-
-def split_manual_flag(context: str | dict | None) -> tuple[bool, str | dict | None]:
-    """Pop the manual-run marker off an automation context."""
-    if isinstance(context, dict):
-        manual = bool(context.get(MANUAL_RUN_CONTEXT_KEY))
-        rest = {k: v for k, v in context.items() if k != MANUAL_RUN_CONTEXT_KEY}
-        return manual, rest or None
-    return False, context
-
-
-@dataclass(frozen=True)
-class DetachedRun:
-    """Marker returned by fire-and-accept dispatches (iteration loops): the
-    agent run continues detached, so the scheduler must NOT settle the run
-    row / running flag — RunCompleted does that in handle_run_completed."""
-
-    handle: str
-
-
-class DetachedRunBindingPending(RuntimeError):
-    """A terminal chat event arrived before its automation run was bound."""
-
-
-@dataclass(frozen=True)
-class CompletedAgentRun:
-    """A completed agent result with the durable chat run used for proof."""
-
-    run_id: str
-    result: str | None
-
-
-class RunSkipped(Exception):
-    """Raised by a dispatcher that declined to run (e.g. autonomous cap).
-    The scheduler records the skip without consuming an iteration."""
-
-
-class RunDeferred(Exception):
-    """Raised when a session-bound run must wait for its target to become idle."""
-
-
 # True ⇒ ok to fire this loop right now; False ⇒ defer to next tick. Used
 # to keep loop iterations from being injected mid-turn into a user's
 # active conversation — they should render as fresh turns once the
@@ -107,7 +78,8 @@ class RunDeferred(Exception):
 # would re-enter mid-conversation, post would race the in-flight run on
 # session_service writes.
 LoopFireGate = Callable[[Automation], bool]
-RunCompletionValidator = Callable[[Automation, str | None], Awaitable[None]]
+IterationDispatcher = Callable[[Automation, str | dict | None, int], Awaitable[str]]
+PostDispatcher = Callable[[Automation, str | dict | None], Awaitable[CompletedAgentRun]]
 
 
 class Scheduler:
@@ -781,175 +753,75 @@ class Scheduler:
         prewritten_next_run: datetime | None = None,
         has_prewritten_next_run: bool = False,
     ) -> None:
-        result: str | CompletedAgentRun | DetachedRun | None = None
-        success = False
-        error_message = ""
-        cancelled = False
         try:
-            await self.emit_automation_event(
-                AutomationProgressEvent(task_id=automation.task_id, status="starting..."),
-            )
-            if run_id is None:
-                run_id = await self.store.record_run_start(automation.task_id, datetime.now(UTC))
-            if self._is_session_bound(automation):
-                result = await self._run_session_bound(automation, run_id, context)
-            elif automation.handler:
-                result = await self._run_handler(automation, context)
-            else:
-                result = await self._run_agent(automation, context)
-            if self._validate_completed_run is not None and not isinstance(result, DetachedRun):
-                proof_run_id = result.run_id if isinstance(result, CompletedAgentRun) else None
-                await self._validate_completed_run(automation, proof_run_id)
-            success = True
-        except RunDeferred as deferred:
-            now = datetime.now(UTC)
-            discarded = await self.store.defer_run(
-                task_id=automation.task_id,
-                run_id=run_id,
-                retry_at=now if has_prewritten_next_run else None,
-                expected_next_run=prewritten_next_run if has_prewritten_next_run else None,
+            outcome = await execute_and_settle(
+                automation,
+                context,
                 event_queue_id=event_queue_id,
+                event_attempt_count=event_attempt_count,
+                run_id=run_id,
+                prewritten_next_run=prewritten_next_run,
+                has_prewritten_next_run=has_prewritten_next_run,
+                dependencies=ExecutionDependencies(
+                    store=self.store,
+                    build_deps=self._build_deps,
+                    bus_registry=self._bus_registry,
+                    handlers=self._handlers,
+                    iteration_dispatcher=self._iteration_dispatcher,
+                    post_dispatcher=self._post_dispatcher,
+                    validate_completed_run=self._validate_completed_run,
+                    event_emitter=self.emit_automation_event,
+                    agent_runner=run_agent,
+                    streaming_agent_runner=run_agent_streaming,
+                ),
             )
+        except BaseException:
             self._release_session(automation)
-            if not discarded:
-                raise RuntimeError(f"automation run {run_id} was already settled") from deferred
-            self._schedule_wake(now + timedelta(seconds=SCHEDULER_EVENT_RETRY_BASE_SECONDS))
-            await self.emit_automation_event(
-                AutomationFinishedEvent(task_id=automation.task_id, result=None),
-            )
-            _logger.info("Deferred automation %s: %s", automation.task_id, deferred)
+            raise
+        if outcome.state == "detached":
             return
-        except asyncio.CancelledError:
-            cancelled = True
-            error_message = "CancelledError: automation run cancelled"
-        except Exception as e:
-            error_message = f"{type(e).__name__}: {e}"
-            _logger.exception("Failed to execute automation %s", automation.task_id)
-        if run_id is None:
-            if event_queue_id is not None:
-                await self.store.release_event_claim(event_queue_id)
-            await self.store.clear_running(automation.task_id)
-            self._release_session(automation)
-            if cancelled:
-                raise asyncio.CancelledError
-            raise RuntimeError(error_message or "automation run did not start")
-        detached = isinstance(result, DetachedRun)
-        if detached and success:
-            # The run row stays 'running' and the flag stays set until
-            # RunCompleted settles both — the automation IS running.
-            if event_queue_id is not None:
-                await self.store.complete_event_and_bind_detached_chat_run(
-                    queue_id=event_queue_id,
-                    automation_run_id=run_id,
-                    task_id=automation.task_id,
-                    chat_run_id=result.handle,
-                    chat_session_id=automation.thread_id or "",
-                )
-            else:
-                await self.store.bind_detached_chat_run(
-                    automation_run_id=run_id,
-                    task_id=automation.task_id,
-                    chat_run_id=result.handle,
-                    chat_session_id=automation.thread_id or "",
-                )
-            return
-
-        now = datetime.now(UTC)
-        if isinstance(result, CompletedAgentRun):
-            result_text = result.result
-        elif detached:
-            result_text = None
-        else:
-            result_text = result
-        status = "completed" if success else "failed"
-        retry_at = None
-        if not success and event_queue_id is None:
-            retry_at = await self._failure_retry_at(automation.task_id, now)
-        event_retry_at = (
-            self._event_retry_at(event_attempt_count, now) if event_queue_id is not None and not success else None
-        )
-        settled = await self.store.settle_run(
-            task_id=automation.task_id,
-            run_id=run_id,
-            status=status,
-            result=result_text,
-            error=error_message or None,
-            ended_at=now,
-            next_run=self._advance_to_future(automation, now) if success and automation.enabled else retry_at,
-            expected_next_run=prewritten_next_run if has_prewritten_next_run else None,
-            preserve_external_reschedule=has_prewritten_next_run,
-            preserve_result=False,
-            disable_one_shot=success and any(t.one_shot for t in automation.triggers),
-            event_queue_id=event_queue_id,
-            event_retry_at=event_retry_at,
-        )
-        if not settled:
-            raise RuntimeError(f"automation run {run_id} was already settled")
+        if outcome.release_event_claim and event_queue_id is not None:
+            await self.store.release_event_claim(event_queue_id)
         self._release_session(automation)
-        if retry_at is not None:
-            self._schedule_wake(retry_at)
-        if event_retry_at is not None:
-            self._schedule_wake(event_retry_at)
-        await self.emit_automation_event(
-            AutomationFinishedEvent(task_id=automation.task_id, result=result_text),
-        )
-        if cancelled:
+        if outcome.state == "unstarted":
+            await self.store.clear_running(automation.task_id)
+            if outcome.cancelled:
+                raise asyncio.CancelledError
+            raise RuntimeError(outcome.failure_message or "automation run did not start")
+        if outcome.state == "deferred":
+            self._schedule_wake(datetime.now(UTC) + timedelta(seconds=SCHEDULER_EVENT_RETRY_BASE_SECONDS))
+            await self.emit_automation_event(AutomationFinishedEvent(task_id=automation.task_id, result=None))
+            return
+        if outcome.retry_at is not None:
+            self._schedule_wake(outcome.retry_at)
+        if outcome.event_retry_at is not None:
+            self._schedule_wake(outcome.event_retry_at)
+        await self.emit_automation_event(AutomationFinishedEvent(task_id=automation.task_id, result=outcome.result))
+        if outcome.cancelled:
             raise asyncio.CancelledError
-        if automation.handler in _CATCH_UP_HANDLERS:
+        if outcome.wake_catch_up:
             self._wake_event.set()
-        if event_queue_id is not None:
+        if outcome.start_next_event:
             await self._start_next_queued_event_if_idle(automation.task_id)
-        _logger.info("Completed automation %s", automation.task_id)
+        if outcome.failure_message is None:
+            _logger.info("Completed automation %s", automation.task_id)
 
     async def _run_handler(
         self,
         automation: Automation,
         context: str | dict | None = None,
-    ) -> str | CompletedAgentRun | None:
-        handler = self._handlers.get(automation.handler)
-        if not handler:
-            raise RuntimeError(f"No handler registered for '{automation.handler}'")
-        _logger.info("Executing internal automation %s: %s", automation.task_id, automation.name)
-        _, context = split_manual_flag(context)
-        if isinstance(context, dict):
-            ctx = context
-        elif context:
-            try:
-                ctx = json.loads(context)
-            except json.JSONDecodeError:
-                ctx = {"event_context": context}
-        else:
-            ctx = {}
-        # Handlers shared by multiple automation instances (e.g. one "area_agent"
-        # handler backing every area:{key} automation) need to know which
-        # instance fired; singleton builtin handlers just ignore the extra key.
-        ctx["task_id"] = automation.task_id
-        return await handler(ctx)
+    ) -> str | None:
+        return await run_handler(automation, context, self._handlers)
 
     async def _run_agent(self, automation: Automation, context: str | dict | None = None) -> CompletedAgentRun:
-        _, context = split_manual_flag(context)
-        ctx_str = json.dumps(context) if isinstance(context, dict) else context
-        prompt = AUTOMATION_PROMPT.render(prompt=automation.prompt, context=ctx_str)
-
-        _logger.info("Executing automation %s: %s", automation.task_id, automation.name)
-        request = RunRequest(
-            prompt=prompt,
-            prompt_suffix=AUTOMATION_SUFFIX,
-            auto_approve=automation.auto_approve,
-            source_id=automation.task_id,
-            model=automation.model,
-            skip_approvals=automation.auto_approve,
-            automation_id=automation.task_id,
-            tool_scope=tuple(automation.tool_scope) if automation.tool_scope else None,
+        return await run_agent_execution(
+            automation,
+            context,
+            build_deps=self._build_deps,
+            bus_registry=self._bus_registry,
+            agent_runner=run_agent,
+            streaming_agent_runner=run_agent_streaming,
         )
-
-        if self._bus_registry:
-            bus = self._bus_registry.get_or_create(AUTOMATION_BUS_KEY)
-            result = await run_agent_streaming(self._build_deps(), request, bus, automation.task_id)
-        else:
-            result = await run_agent(self._build_deps(), request)
-
-        return CompletedAgentRun(result.run_id, result.output)
 
     async def _run_session_bound(
         self,
@@ -957,126 +829,31 @@ class Scheduler:
         automation_run_id: int,
         context: str | dict | None = None,
     ) -> str | CompletedAgentRun | DetachedRun | None:
-        """Fire a session-bound automation.
-
-        Two modes, picked by `automation.read_history`:
-          • True  → iteration mode: re-enter the target session via the
-            iteration dispatcher; the agent sees full history.
-          • False → post mode: run the agent fresh and post its result
-            back into the target session as an assistant message.
-
-        Both modes honor aged_out / max_iterations / iteration_count.
-        """
-        if not automation.prompt:
-            raise RuntimeError(f"Automation {automation.task_id} missing prompt")
-        # Aged-out check is mode-agnostic — disable before reaching for
-        # a dispatcher.
-        if automation.aged_out(datetime.now(UTC)):
-            await self.store.disable_and_clear_next_run(automation.task_id)
-            # Mutate the snapshot so _run_and_finalize's finally block sees
-            # the disabled state and skips writing a future next_run_at.
-            automation.enabled = False
-            _logger.info("Loop %s aged out (max_age_days=%d), disabling", automation.task_id, automation.max_age_days)
-            return f"Loop aged out after {automation.max_age_days} days"
-        if automation.read_history:
-            dispatcher = self._iteration_dispatcher
-            mode = "iteration"
-            # Iteration mode re-enters via `thread_id`.
-            if not automation.thread_id:
-                raise RuntimeError(f"Iteration loop {automation.task_id} missing thread_id")
-        else:
-            dispatcher = self._post_dispatcher
-            mode = "post"
-            # Post mode writes into `thread_id`.
-            if not automation.thread_id:
-                raise RuntimeError(f"Post loop {automation.task_id} missing thread_id")
-        if dispatcher is None:
-            raise RuntimeError(f"{mode} dispatcher not wired")
-        _logger.info(
-            "Firing %s loop %s (iter %d) into session %s",
-            mode,
-            automation.task_id,
-            automation.iteration_count + 1,
-            automation.thread_id,
+        outcome = await run_session_bound(
+            automation,
+            automation_run_id,
+            context,
+            store=self.store,
+            iteration_dispatcher=self._iteration_dispatcher,
+            post_dispatcher=self._post_dispatcher,
         )
-        try:
-            if automation.read_history:
-                dispatched = await dispatcher(automation, context, automation_run_id)
-            else:
-                dispatched = await dispatcher(automation, context)
-        except RunSkipped as skip:
-            # The run never happened — no iteration consumed, so the intake
-            # first-run trigger and max_iterations accounting stay truthful.
-            _logger.info("Loop %s skipped: %s", automation.task_id, skip)
-            return f"Skipped: {skip}"
-        if automation.read_history and not dispatched:
-            raise RuntimeError(f"Iteration automation {automation.task_id} did not return a chat run id")
-        # Post mode awaited the run and returns its text; iteration mode is
-        # fire-and-accept — the returned value is only the run-id slug, so
-        # hand back a DetachedRun marker instead of a fake result.
-        result: CompletedAgentRun | DetachedRun = DetachedRun(dispatched) if automation.read_history else dispatched
-        await self.store.increment_iteration(automation.task_id)
-        # Disable after max_iterations is hit. iteration_count was already
-        # incremented in the store; compare against the in-memory value + 1
-        # since `automation` is a snapshot taken before the increment.
-        if automation.max_iterations is not None and (automation.iteration_count + 1) >= automation.max_iterations:
-            await self.store.disable_and_clear_next_run(automation.task_id)
-            automation.enabled = False
-            _logger.info("Loop %s reached max_iterations=%d, disabling", automation.task_id, automation.max_iterations)
-        return result
+        return outcome.result
 
     async def fire_event(self, event: TriggerEvent) -> None:
         now = datetime.now(UTC)
-        cutoff = datetime.now(UTC) - timedelta(seconds=SCHEDULER_DEDUP_TTL)
-        await self.store.evict_event_claims_older_than(cutoff)
-        event_type = event.event_type
-        event_key = event.event_key
-        context = event.format_context()
-        automations = await self._matching_event_automations(event)
-        for automation in automations:
-            # Check lead_minutes for event_approaching triggers
-            if event_type == EVENT_APPROACHING and isinstance(event, EventApproaching):
-                matching_triggers = [
-                    t for t in automation.triggers if isinstance(t, EventTrigger) and t.event_type == EVENT_APPROACHING
-                ]
-                if matching_triggers:
-                    trigger = matching_triggers[0]
-                    if trigger.lead_minutes is not None and event.minutes_until > int(trigger.lead_minutes):
-                        continue
-
-            claimed = await self.store.claim_and_enqueue_event(automation.task_id, event_key, context, now)
-            if not claimed:
-                continue
-            _logger.info("Event %s matched automation %s (%s)", event_type, automation.task_id, event_key)
-            await self._start_next_queued_event_if_idle(automation.task_id)
+        for task_id in await enqueue_matching_events(self.store, event, now):
+            _logger.info("Event %s matched automation %s (%s)", event.event_type, task_id, event.event_key)
+            await self._start_next_queued_event_if_idle(task_id)
 
     async def _matching_event_automations(self, event: TriggerEvent) -> list[Automation]:
-        if event.event_type == MESSAGE_RECEIVED and isinstance(event, MessageReceived):
-            return await self._matching_message_automations(event)
-        return await self.store.list_event_triggered(event.event_type)
+        return await matching_event_automations(self.store, event)
 
     async def _matching_message_automations(self, event: MessageReceived) -> list[Automation]:
-        automations = await self.store.list_message_triggered(event.source, event.channel_id)
-        matched: list[Automation] = []
-        for automation in automations:
-            triggers = [
-                t
-                for t in automation.triggers
-                if isinstance(t, MessageTrigger) and t.source == event.source and event.channel_id in t.channel_ids
-            ]
-            if any(self._message_trigger_passes(t, event) for t in triggers):
-                matched.append(automation)
-        return matched
+        return await matching_message_automations(self.store, event)
 
     @staticmethod
     def _message_trigger_passes(trigger: MessageTrigger, event: MessageReceived) -> bool:
-        if trigger.from_user_id is not None and trigger.from_user_id != event.user_id:
-            return False
-        if trigger.contains:
-            text = event.text.lower()
-            if not any(keyword.lower() in text for keyword in trigger.contains):
-                return False
-        return True
+        return message_trigger_passes(trigger, event)
 
     def schedule_run(self, task_id: str) -> None:
         execution = asyncio.create_task(self._manual_run(task_id))
@@ -1110,20 +887,19 @@ class Scheduler:
         self._pending_running_task_ids.add(task_id)
 
         try:
-            next_event = await self.store.claim_next_event(task_id, now)
+            next_event = await claim_next_queued_event(self.store, task_id, now)
             if next_event is None:
                 await self.store.clear_running(task_id)
                 self._pending_running_task_ids.discard(task_id)
                 self._release_session(automation)
                 return
 
-            queue_id, context, attempt_count = next_event
             execution = asyncio.create_task(
                 self._run_and_finalize(
                     automation,
-                    context,
-                    event_queue_id=queue_id,
-                    event_attempt_count=attempt_count,
+                    next_event.context,
+                    event_queue_id=next_event.queue_id,
+                    event_attempt_count=next_event.attempt_count,
                 )
             )
             self._track(execution, automation.task_id)
@@ -1135,27 +911,15 @@ class Scheduler:
             raise
 
     async def _failure_retry_at(self, task_id: str, now: datetime) -> datetime:
-        """Retry failed task executions without treating them as completed cadence."""
-
-        failures = 0
-        for run in await self.store.list_runs(task_id, limit=SCHEDULER_EVENT_MAX_RETRIES):
-            if run["status"] == "running":
-                continue
-            if run["status"] != "failed":
-                break
-            failures += 1
-        return now + timedelta(seconds=self._retry_delay_seconds(failures))
+        return await failure_retry_at(self.store, task_id, now)
 
     @staticmethod
     def _event_retry_at(attempt_count: int, now: datetime) -> datetime | None:
-        if attempt_count + 1 >= SCHEDULER_EVENT_MAX_RETRIES:
-            return None
-        return now + timedelta(seconds=Scheduler._retry_delay_seconds(attempt_count))
+        return event_retry_at(attempt_count, now)
 
     @staticmethod
     def _retry_delay_seconds(attempt_count: int) -> int:
-        backoff = SCHEDULER_EVENT_RETRY_BASE_SECONDS * (2 ** max(attempt_count, 0))
-        return min(SCHEDULER_EVENT_RETRY_MAX_SECONDS, backoff)
+        return retry_delay_seconds(attempt_count)
 
     async def get_status(self) -> dict:
         now = datetime.now(UTC)

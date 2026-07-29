@@ -948,6 +948,35 @@ async def test_busy_iteration_is_deferred_without_history_or_duplicate_delivery(
 
 
 @pytest.mark.asyncio
+async def test_deferred_cas_failure_releases_session_reservation(
+    store: AutomationStore, monkeypatch: pytest.MonkeyPatch
+):
+    auto = _loop()
+    await store.save(auto)
+
+    async def defer_dispatcher(
+        _automation: Automation,
+        _context: str | dict | None,
+        _automation_run_id: int,
+    ) -> str:
+        raise RunDeferred("target session is busy")
+
+    async def reject_defer_run(**_kwargs: object) -> bool:
+        return False
+
+    scheduler = Scheduler(store=store, build_deps=lambda: None)
+    scheduler.set_iteration_dispatcher(defer_dispatcher)
+    monkeypatch.setattr(store, "defer_run", reject_defer_run)
+
+    await scheduler._start_run(auto)
+    task = next(iter(scheduler._running))
+    with pytest.raises(RuntimeError, match="already settled"):
+        await task
+
+    assert auto.thread_id not in scheduler._reserved_session_ids
+
+
+@pytest.mark.asyncio
 async def test_automation_completion_does_not_reset_idle_activity(store: AutomationStore):
     scheduler = Scheduler(store=store, build_deps=lambda: None)
     last_activity = datetime.now(UTC) - timedelta(hours=2)
