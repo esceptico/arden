@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from arden.agent.types.tools import ToolSourceRef
 from arden.revisions.errors import RevisionConflictError
 from arden.revisions.models import ResourceState, ResourceVersion
+from arden.services.session import SessionService
 from arden.tools.core import ToolResult, tool
 from arden.tools.core.context import ToolExecution
 from arden.tools.core.formatting import format_lines_with_pagination
@@ -43,6 +44,7 @@ _MAX_LINK_CANDIDATES = 20
 _CONTENT_TRUNCATION = "\n[truncated at 40000 characters]"
 _WIKI_PERMISSION = frozenset({WIKI_SERVICE})
 _WIKI_WRITE_PERMISSIONS = frozenset({WIKI_SERVICE, WIKI_POST_COMMIT_SERVICE})
+_WIKI_MOVE_PERMISSIONS = frozenset({WIKI_SERVICE, WIKI_POST_COMMIT_SERVICE, "session"})
 
 
 class WikiPageSelector(BaseModel):
@@ -121,6 +123,19 @@ class ArchiveWikiPageInput(BaseModel):
     expected_version: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
     expected_head: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
     reason: str = Field(default="archive wiki page", min_length=1, max_length=500)
+
+
+class MoveWikiPageInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    page_id: str = Field(min_length=1, max_length=512)
+    new_path: str = Field(
+        min_length=4,
+        max_length=4096,
+        description="New relative POSIX .md path. The page title, identity, aliases, body, and metadata stay unchanged.",
+    )
+    expected_version: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    expected_head: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
 
 
 class PublishWikiGeneratedInput(BaseModel):
@@ -790,6 +805,81 @@ async def archive_wiki_page(execution: ToolExecution, args: ArchiveWikiPageInput
     )
 
 
+async def move_wiki_page(execution: ToolExecution, args: MoveWikiPageInput) -> ToolResult:
+    wiki = _wiki(execution)
+    if isinstance(wiki, ToolResult):
+        return wiki
+    try:
+        snapshot = await asyncio.to_thread(wiki.snapshot)
+        record = next(
+            (item for item in snapshot.pages if item.page.page_id == args.page_id and item.page.lifecycle == "active"),
+            None,
+        )
+        if record is None:
+            return ToolResult.failure(
+                code="not_found",
+                message=f"No active wiki page has page_id {args.page_id!r}.",
+                preview="Wiki page not found",
+                recovery_action="Call list_wiki_pages or read_wiki_page and retry with an exact active page_id.",
+            )
+        if error := _automation_path_error(execution, record.resource.path):
+            return error
+        if error := _automation_path_error(execution, args.new_path):
+            return error
+        if error := _producer_page_error(execution, record):
+            return error
+        if record.page.page_id == WIKI_HEALTH_RESOURCE_ID:
+            return _invalid_page(WikiValidationError("health page is backend-managed"))
+        sessions: SessionService = execution.ctx.services["session"]
+        area = await sessions.find_area_by_page_id(args.page_id)
+        if area is not None:
+            return ToolResult.failure(
+                code="area_page_bound",
+                message=f"Wiki page {record.resource.path} is bound to Area {area['name']!r}.",
+                preview="Area page must move with its Area",
+                recovery_action="Rename the Area instead; it moves the bound page and keeps the custodian synchronized.",
+            )
+        actor, origin = _write_identity(execution)
+        moved, commit_id = await asyncio.to_thread(
+            wiki.move_page,
+            args.page_id,
+            new_path=args.new_path,
+            expected_version=args.expected_version,
+            expected_head=args.expected_head,
+            actor=actor,
+            origin=origin,
+            reason=f"move wiki page {record.resource.path} to {args.new_path}",
+        )
+    except RevisionConflictError as error:
+        return _revision_conflict(error)
+    except WikiAmbiguityError as error:
+        return ToolResult.failure(
+            code="name_conflict",
+            message=str(error),
+            preview="Wiki path already exists",
+            recovery_action="List the destination directory and retry with an unused path.",
+        )
+    except (PageValidationError, WikiValidationError) as error:
+        return _invalid_page(error)
+
+    projection_pending = await execution.ctx.services[WIKI_POST_COMMIT_SERVICE]() if commit_id is not None else False
+    return ToolResult(
+        content=(
+            f"Moved {record.resource.path} to {moved.resource.path}."
+            if commit_id is not None
+            else f"{moved.resource.path} is already at the requested path."
+        ),
+        preview="Wiki page moved" if commit_id is not None else "Wiki page unchanged",
+        source_refs=(_page_ref(moved),),
+        data={
+            "page": _page_data(moved, wiki.repository.head),
+            "commit_id": commit_id,
+            "changed": commit_id is not None,
+            "projection_pending": projection_pending,
+        },
+    )
+
+
 async def approve_create_wiki_page(
     _execution: ToolExecution,
     args: CreateWikiPageInput,
@@ -819,6 +909,17 @@ async def approve_archive_wiki_page(
     return ApprovalInfo(
         description=f"Archive wiki page {args.page_id}",
         preview=args.reason,
+        diff=f"Expected page version: {args.expected_version}\nExpected repository head: {args.expected_head}",
+    )
+
+
+async def approve_move_wiki_page(
+    _execution: ToolExecution,
+    args: MoveWikiPageInput,
+) -> ApprovalInfo:
+    return ApprovalInfo(
+        description=f"Move wiki page {args.page_id} to {args.new_path}",
+        preview="Path-style wiki links to this page will be rewritten; title-style links will stay unchanged.",
         diff=f"Expected page version: {args.expected_version}\nExpected repository head: {args.expected_head}",
     )
 
@@ -985,6 +1086,7 @@ create_wiki_page_tool = tool(
     display_description="Create one managed wiki page.",
     description=(
         "Create one common managed wiki page from a stable page ID, path, title, aliases, and Markdown body. "
+        "Missing ancestor directories receive semantic README.md contracts in the same commit. "
         "List the wiki root first and provide its exact repository head. "
         f"Scheduled automations can create pages only under {AUTOMATIONS_PATH_PREFIX}."
     ),
@@ -1044,6 +1146,29 @@ archive_wiki_page_tool = tool(
     ),
     approval=approve_archive_wiki_page,
     execute=archive_wiki_page,
+)
+
+move_wiki_page_tool = tool(
+    display_name="MoveWikiPage",
+    display_description="Move one managed wiki page without renaming it.",
+    description=(
+        "Move one active managed wiki page to a new path without changing its identity, title, aliases, body, or metadata. "
+        "Missing destination directory README.md contracts are created in the same commit. "
+        "Path-style wikilinks that resolve to the page are updated atomically; title-style links remain unchanged. "
+        "Read the page first and provide its exact page ID, version, and repository head."
+    ),
+    input_model=MoveWikiPageInput,
+    policy=ToolPolicy(
+        action=ToolAction.WRITE,
+        scope=ToolScope.INTERNAL,
+        requires_approval=True,
+        permissions=_WIKI_MOVE_PERMISSIONS,
+        max_result_chars=4_000,
+        destructive=False,
+        idempotent=True,
+    ),
+    approval=approve_move_wiki_page,
+    execute=move_wiki_page,
 )
 
 read_wiki_page_tool = tool(

@@ -5,11 +5,20 @@ import pytest
 from arden.revisions import Archive, ChangeSet, Create, ManagedFileRepository, RevisionConflictError, Update
 from arden.wiki.models import GeneratedPageTarget
 from arden.wiki.pages import extract_generated_region, parse_page, update_generated_region
-from arden.wiki.service import GeneratedRegionConflictError, WikiAmbiguityError, WikiService, WikiValidationError
+from arden.wiki.service import (
+    GeneratedRegionConflictError,
+    WikiAmbiguityError,
+    WikiService,
+    WikiValidationError,
+)
 
 
 def _repo(tmp_path: Path) -> ManagedFileRepository:
     return ManagedFileRepository(tmp_path / "wiki")
+
+
+def _service(repo: ManagedFileRepository) -> WikiService:
+    return WikiService(repo)
 
 
 def _target(
@@ -31,18 +40,34 @@ def _target(
     )
 
 
+def test_publish_generated_creates_a_readme_for_a_new_directory(tmp_path: Path) -> None:
+    service = WikiService(_repo(tmp_path))
+
+    commit = service.publish_generated((_target("topic"),), source_revision="facts-1", base_head=None)
+
+    assert commit is not None
+    assert {change.after.path for change in commit.changes if change.after is not None} == {
+        "topics/README.md",
+        "topics/topic.md",
+    }
+    readme = next(record for record in service.snapshot().pages if record.resource.path == "topics/README.md")
+    assert b"## Purpose" in readme.content
+    assert b"## Consumers" in readme.content
+    assert b"shared context" in readme.content
+
+
 def test_publish_generated_creates_multiple_pages_in_one_commit(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
-    service = WikiService(repo)
+    service = _service(repo)
 
     commit = service.publish_generated(
         (_target("first"), _target("second", generated=b"Second facts.\n")),
         source_revision="facts-1",
-        base_head=None,
+        base_head=repo.head,
     )
 
     assert commit is not None
-    assert len(commit.changes) == 2
+    assert len(commit.changes) == 3
     assert repo.head == commit.commit_id
     assert extract_generated_region(repo.read("first"), expected_page_id="first") == b"Facts.\n"
     assert extract_generated_region(repo.read("second"), expected_page_id="second") == b"Second facts.\n"
@@ -50,8 +75,8 @@ def test_publish_generated_creates_multiple_pages_in_one_commit(tmp_path: Path) 
 
 def test_publish_generated_preserves_user_notes_after_synthesis(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
-    service = WikiService(repo)
-    first = service.publish_generated((_target("topic"),), source_revision="facts-1", base_head=None)
+    service = _service(repo)
+    first = service.publish_generated((_target("topic"),), source_revision="facts-1", base_head=repo.head)
     assert first is not None
     current = repo.get("topic")
     user_content = repo.read("topic") + b"\n## User notes\nKeep this.\n"
@@ -79,8 +104,8 @@ def test_publish_generated_preserves_user_notes_after_synthesis(tmp_path: Path) 
 
 def test_generated_edit_conflicts_for_the_whole_batch(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
-    service = WikiService(repo)
-    service.publish_generated((_target("existing"),), source_revision="facts-1", base_head=None)
+    service = _service(repo)
+    service.publish_generated((_target("existing"),), source_revision="facts-1", base_head=repo.head)
     current = repo.get("existing")
     user_content = update_generated_region(
         repo.read("existing"), expected_page_id="existing", generated=b"User changed this.\n"
@@ -110,8 +135,8 @@ def test_generated_edit_conflicts_for_the_whole_batch(tmp_path: Path) -> None:
 
 def test_generated_baseline_rejects_spoofed_origin_without_synthesis_actor(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
-    service = WikiService(repo)
-    service.publish_generated((_target("topic"),), source_revision="facts-1", base_head=None)
+    service = _service(repo)
+    service.publish_generated((_target("topic"),), source_revision="facts-1", base_head=repo.head)
     current = repo.get("topic")
     spoofed = update_generated_region(
         repo.read("topic"),
@@ -137,9 +162,10 @@ def test_generated_baseline_rejects_spoofed_origin_without_synthesis_actor(tmp_p
         )
 
 
-def test_publish_generated_compares_an_empty_head_exactly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_publish_generated_compares_its_pinned_head_exactly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path)
-    service = WikiService(repo)
+    service = _service(repo)
+    base_head = repo.head
     publish = repo.commit
 
     def publish_after_a_concurrent_first_commit(change_set: ChangeSet):
@@ -156,17 +182,17 @@ def test_publish_generated_compares_an_empty_head_exactly(tmp_path: Path, monkey
 
     monkeypatch.setattr(repo, "commit", publish_after_a_concurrent_first_commit)
 
-    with pytest.raises(RevisionConflictError, match="expected None"):
-        service.publish_generated((_target("topic"),), source_revision="facts-1", base_head=None)
+    with pytest.raises(RevisionConflictError, match="current head changed"):
+        service.publish_generated((_target("topic"),), source_revision="facts-1", base_head=base_head)
 
     assert repo.find_by_path("topics/topic.md") is None
 
 
 def test_publish_generated_is_a_noop_when_final_content_is_unchanged(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
-    service = WikiService(repo)
+    service = _service(repo)
     target = _target("topic", metadata={"fact_ids": ["fact-1"]})
-    first = service.publish_generated((target,), source_revision="facts-1", base_head=None)
+    first = service.publish_generated((target,), source_revision="facts-1", base_head=repo.head)
     assert first is not None
 
     assert service.publish_generated((target,), source_revision="facts-1", base_head=repo.head) is None
@@ -175,9 +201,9 @@ def test_publish_generated_is_a_noop_when_final_content_is_unchanged(tmp_path: P
 
 def test_noop_publication_rejects_a_stale_pinned_head(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
-    service = WikiService(repo)
+    service = _service(repo)
     target = _target("topic")
-    first = service.publish_generated((target,), source_revision="facts-1", base_head=None)
+    first = service.publish_generated((target,), source_revision="facts-1", base_head=repo.head)
     assert first is not None
     pinned_head = repo.head
     repo.commit(
@@ -195,11 +221,12 @@ def test_noop_publication_rejects_a_stale_pinned_head(tmp_path: Path) -> None:
         service.publish_generated((target,), source_revision="facts-1", base_head=pinned_head)
 
 
-def test_publish_generated_retries_from_its_pinned_empty_head_after_later_commits(tmp_path: Path) -> None:
+def test_publish_generated_retries_from_its_pinned_head_after_later_commits(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
-    service = WikiService(repo)
+    service = _service(repo)
     target = _target("topic")
-    first = service.publish_generated((target,), source_revision="facts-1", base_head=None)
+    base_head = repo.head
+    first = service.publish_generated((target,), source_revision="facts-1", base_head=base_head)
     assert first is not None
     repo.commit(
         ChangeSet(
@@ -212,14 +239,14 @@ def test_publish_generated_retries_from_its_pinned_empty_head_after_later_commit
         )
     )
 
-    assert service.publish_generated((target,), source_revision="facts-1", base_head=None) == first
+    assert service.publish_generated((target,), source_revision="facts-1", base_head=base_head) == first
 
 
 @pytest.mark.parametrize("reuse", ["page_id", "path", "title"])
 def test_publish_generated_does_not_recreate_archived_pages(tmp_path: Path, reuse: str) -> None:
     repo = _repo(tmp_path)
-    service = WikiService(repo)
-    created = service.publish_generated((_target("topic"),), source_revision="facts-1", base_head=None)
+    service = _service(repo)
+    created = service.publish_generated((_target("topic"),), source_revision="facts-1", base_head=repo.head)
     assert created is not None
     service.archive_page("topic", base_head=repo.head)
 
@@ -255,7 +282,8 @@ def test_archived_non_wiki_resources_do_not_block_generated_publication(tmp_path
         )
     )
 
-    commit = WikiService(repo).publish_generated(
+    service = _service(repo)
+    commit = service.publish_generated(
         (_target("topic"),),
         source_revision="facts-1",
         base_head=repo.head,
@@ -266,13 +294,13 @@ def test_archived_non_wiki_resources_do_not_block_generated_publication(tmp_path
 
 def test_publish_generated_records_fact_provenance_without_changing_page_identity(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
-    service = WikiService(repo)
+    service = _service(repo)
     target = _target(
         "topic",
         metadata={"fact_ids": ["fact-1", "fact-2"], "fact_citations": {"fact-1": ["source-a"]}},
     )
 
-    service.publish_generated((target,), source_revision="facts-9", base_head=None)
+    service.publish_generated((target,), source_revision="facts-9", base_head=repo.head)
     page = parse_page(repo.read("topic"), expected_page_id="topic")
 
     assert page.title == "Topic"
@@ -295,10 +323,12 @@ def test_publish_generated_rejects_target_collisions_without_a_partial_commit(
 ) -> None:
     repo = _repo(tmp_path)
 
+    service = _service(repo)
+    before = repo.head
     with pytest.raises(WikiAmbiguityError):
-        WikiService(repo).publish_generated(targets, source_revision="facts-1", base_head=None)
+        service.publish_generated(targets, source_revision="facts-1", base_head=repo.head)
 
-    assert repo.head is None
+    assert repo.head == before
 
 
 def _page(page_id: str, title: str) -> bytes:

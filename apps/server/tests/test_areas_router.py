@@ -48,6 +48,7 @@ class _FakeAreaStore:
             "area_id": f"p{self._n}",
             "name": name,
             "page_path": page_path,
+            "page_id": None,
             "autonomy": autonomy,
             "knowledge_scope": f"area:p{self._n}",
             "created_at": "2026-07-10T00:00:00+00:00",
@@ -613,10 +614,19 @@ def test_patch_area_runtime_failure_is_not_reported_as_success(client):
     async def disable(_area_id: str) -> None:
         return None
 
+    async def project_wiki_state() -> bool:
+        return False
+
     c.app.state.area_lifecycle = AreaLifecycleService(
         sessions=areas,
         sync_custodian=fail_sync,
         disable_custodian=disable,
+    )
+    c.app.state.area_pages = AreaPageService(
+        wiki=None,
+        sessions=areas,
+        lifecycle=c.app.state.area_lifecycle,
+        project_wiki_state=project_wiki_state,
     )
     failed_client = TestClient(c.app, raise_server_exceptions=False)
     try:
@@ -625,6 +635,38 @@ def test_patch_area_runtime_failure_is_not_reported_as_success(client):
         failed_client.close()
 
     assert response.status_code == 500
+    assert areas._rows[o1a]["name"] == "O-1A"
+    assert emitted == []
+
+
+def test_patch_bound_area_reports_unavailable_wiki_as_503(client):
+    c, _, emitted, o1a, areas = client
+    areas._rows[o1a]["page_id"] = "page-o1a"
+
+    async def sync(_area: dict) -> None:
+        return None
+
+    async def disable(_area_id: str) -> None:
+        return None
+
+    async def project_wiki_state() -> bool:
+        return False
+
+    c.app.state.area_lifecycle = AreaLifecycleService(
+        sessions=areas,
+        sync_custodian=sync,
+        disable_custodian=disable,
+    )
+    c.app.state.area_pages = AreaPageService(
+        wiki=None,
+        sessions=areas,
+        lifecycle=c.app.state.area_lifecycle,
+        project_wiki_state=project_wiki_state,
+    )
+
+    response = c.patch(f"/areas/{o1a}", json={"name": "O-1B"})
+
+    assert response.status_code == 503
     assert areas._rows[o1a]["name"] == "O-1A"
     assert emitted == []
 

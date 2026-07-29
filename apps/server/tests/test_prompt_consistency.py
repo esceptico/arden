@@ -45,6 +45,12 @@ def test_prompts_that_consume_runtime_data_share_the_untrusted_data_rule():
     assert all(UNTRUSTED_DATA_RULE in prompt for prompt in prompts)
 
 
+def test_agent_and_automation_prompts_require_directory_contract_reads():
+    assert "Read an existing directory's README.md before processing its pages" in BASE_SYSTEM_PROMPT
+    assert "read its README.md before its pages" in AUTOMATION_SUFFIX
+    assert "Explicitly list or read every named wiki input" in AUTOMATION_SUFFIX
+
+
 def test_prompt_and_skill_ledger_covers_the_runtime_inventory():
     ledger = LEDGER.read_text()
     prompt_modules = (

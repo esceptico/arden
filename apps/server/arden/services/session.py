@@ -581,6 +581,9 @@ class SessionService:
     async def update_area(self, area_id: str, **kwargs) -> dict | None:
         return await self.store.update_area(area_id, **kwargs)
 
+    async def find_area_by_page_id(self, page_id: str) -> dict | None:
+        return await self.store.find_area_by_page_id(page_id)
+
     async def archive_area(self, area_id: str) -> bool:
         return await self.store.archive_area(area_id)
 

@@ -1,4 +1,5 @@
 from dataclasses import replace
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -153,6 +154,13 @@ def test_ordinary_page_operations_cannot_take_over_backend_health(tmp_path: Path
             expected_version=health.resource.version_id,
             base_head=service.repository.head,
         )
+    with pytest.raises(WikiValidationError, match="backend-managed"):
+        service.move_page(
+            "health",
+            new_path="other.md",
+            expected_version=health.resource.version_id,
+            expected_head=service.repository.head,
+        )
 
 
 def test_backlinks_resolve_title_alias_and_path_and_exclude_hidden_contexts(tmp_path: Path) -> None:
@@ -195,34 +203,134 @@ def test_rename_is_atomic_and_preserves_link_bytes(tmp_path: Path) -> None:
         page_id="source",
         body=b"before ![[ Old #part|shown ]] and [[notes/old.md#frag|alias]]\r\n",
     )
-    _seed(repo, ("target", "notes/old.md", target), ("source", "source.md", source))
+    readme = create_page(title="Notes", page_id="notes-readme", body=b"Purpose: test notes.\n")
+    _seed(
+        repo,
+        ("notes-readme", "notes/README.md", readme),
+        ("target", "notes/old.md", target),
+        ("source", "source.md", source),
+    )
     service = WikiService(repo)
     target_record = service.read_page("target")
     plan = service.prepare_rename(
         "target",
-        new_path="notes/new.md",
+        new_path="archive/new.md",
         new_title="New",
         expected_version=target_record.resource.version_id,
         base_head=repo.head,
     )
     assert (plan.link_count, plan.page_count) == (3, 2)
     commit = service.apply_rename(plan)
-    assert len(commit.changes) == 3
+    assert len(commit.changes) == 4
 
-    assert repo.get("target").path == "notes/new.md"
+    assert repo.get("target").path == "archive/new.md"
+    assert any(record.resource.path == "archive/README.md" for record in service.snapshot().pages)
     redirect = service.read_page(plan.redirect_page_id)
     assert redirect.page.lifecycle == "redirect"
     assert redirect.page.redirect_to == "target"
     rewritten = repo.read("source")
     assert b"![[ New #part|shown ]]" in rewritten
-    assert b"[[notes/new.md#frag|alias]]\r\n" in rewritten
+    assert b"[[archive/new.md#frag|alias]]\r\n" in rewritten
     assert b"[[New]]" in repo.read("target")
     assert len(repo.history(resource_id="target")) == 2
     assert service.apply_rename(plan) == commit
     report = service.link_report_for_path("notes/old.md")
     assert report.head == commit.commit_id
-    assert report.page.resource.path == "notes/new.md"
+    assert report.page.resource.path == "archive/new.md"
     assert plan.redirect_page_id in {page.page.page_id for page in report.pages}
+
+
+def test_move_preserves_identity_and_rewrites_only_resolved_path_links(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    target = create_page(
+        title="Old",
+        page_id="target",
+        aliases=("Alias",),
+        metadata={"source": "test"},
+        body=b"Self [[notes/old]] [[Old]] [[notes/old.md]]\n",
+    )
+    source = create_page(
+        title="Source",
+        page_id="source",
+        body=b"[[notes/old]] [[notes/old.md#part|shown]] [[Old]] [[Alias]]\n",
+    )
+    readme = create_page(title="Notes", page_id="notes-readme", body=b"Purpose: test notes.\n")
+    _seed(
+        repo,
+        ("notes-readme", "notes/README.md", readme),
+        ("target", "notes/old.md", target),
+        ("source", "source.md", source),
+    )
+    service = WikiService(repo)
+    before = service.read_page("target")
+
+    moved, commit_id = service.move_page(
+        "target",
+        new_path="archive/new.md",
+        expected_version=before.resource.version_id,
+        expected_head=repo.head,
+    )
+
+    assert commit_id == repo.head
+    assert moved.page.page_id == "target"
+    assert moved.page.title == "Old"
+    assert moved.page.aliases == ("Alias",)
+    assert moved.page.metadata["source"] == "test"
+    assert moved.resource.path == "archive/new.md"
+    assert b"[[archive/new]] [[Old]] [[archive/new.md]]" in moved.content
+    assert service.read_page("source").page.body == b"[[archive/new]] [[archive/new.md#part|shown]] [[Old]] [[Alias]]\n"
+    assert service.read_page("directory-readme-" + sha256(b"archive/README.md").hexdigest()[:16])
+    assert all(page.page.lifecycle != "redirect" for page in service.list_pages(include_redirects=True))
+
+    replayed, replay_commit = service.move_page(
+        "target",
+        new_path="archive/new.md",
+        expected_version=before.resource.version_id,
+        expected_head=repo.head,
+    )
+    assert replayed == moved
+    assert replay_commit is None
+
+
+def test_move_rejects_stale_or_colliding_destination_without_changes(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    target = create_page(title="Target", page_id="target")
+    collision = create_page(title="Collision", page_id="collision")
+    _seed(repo, ("target", "target.md", target), ("collision", "collision.md", collision))
+    service = WikiService(repo)
+    target_record = service.read_page("target")
+    head = repo.head
+
+    with pytest.raises(WikiAmbiguityError, match="path already exists"):
+        service.move_page(
+            "target",
+            new_path="collision.md",
+            expected_version=target_record.resource.version_id,
+            expected_head=head,
+        )
+    assert repo.head == head
+
+    repo.commit(
+        ChangeSet(
+            operations=(
+                Update(
+                    "collision", service.read_page("collision").resource.version_id, collision.to_bytes() + b"later\n"
+                ),
+            ),
+            actor="test",
+            origin="test",
+            reason="concurrent edit",
+            idempotency_key="move-concurrent-edit",
+            expected_head=head,
+        )
+    )
+    with pytest.raises(RevisionConflictError, match="current head changed"):
+        service.move_page(
+            "target",
+            new_path="moved.md",
+            expected_version=target_record.resource.version_id,
+            expected_head=head,
+        )
 
 
 def test_root_title_link_uses_new_title_not_lowercase_path(tmp_path: Path) -> None:
@@ -327,7 +435,7 @@ def test_rename_collision_stale_head_and_opt_out_are_all_or_nothing(tmp_path: Pa
 def test_archive_restore_and_reject_dangling_or_cyclic_redirects(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     page = create_page(title="One", page_id="one")
-    _seed(repo, ("one", "one.md", page))
+    _seed(repo, ("one", "notes/one.md", page))
     service = WikiService(repo)
     initial_version = service.read_page("one").resource.version_id
     service.archive_page("one", expected_version=initial_version, base_head=repo.head)
@@ -335,6 +443,8 @@ def test_archive_restore_and_reject_dangling_or_cyclic_redirects(tmp_path: Path)
     assert archived.state.value == "archived"
     restored = service.restore_page("one", expected_version=archived.version_id, base_head=repo.head)
     assert restored.page.page_id == "one"
+    assert {change.action for change in repo.history(limit=1)[0].changes} == {"create", "restore"}
+    assert any(record.resource.path == "notes/README.md" for record in service.snapshot().pages)
 
     repo = _repo(tmp_path / "redirects")
     broken = create_page(title="Broken", page_id="broken", lifecycle="redirect", redirect_to="missing")
@@ -418,3 +528,72 @@ def test_rename_requires_current_version_and_safe_path(tmp_path: Path) -> None:
             expected_version="stale",
             base_head=repo.head,
         )
+
+
+def test_directory_readmes_are_created_atomically_and_protected_while_children_are_active(
+    tmp_path: Path,
+) -> None:
+    repo = _repo(tmp_path)
+    service = WikiService(repo)
+    created = service.create_page(
+        path="automations/digest/today.md",
+        title="Today",
+        page_id="today",
+        expected_head=None,
+    )
+    root_readme_id = "directory-readme-" + sha256(b"automations/README.md").hexdigest()[:16]
+    digest_readme_id = "directory-readme-" + sha256(b"automations/digest/README.md").hexdigest()[:16]
+    root_readme = service.read_page(root_readme_id)
+    digest_readme = service.read_page(digest_readme_id)
+
+    assert {change.after.path for change in repo.history(limit=1)[0].changes if change.after is not None} == {
+        "automations/README.md",
+        "automations/digest/README.md",
+        "automations/digest/today.md",
+    }
+    assert b"## Purpose" in root_readme.content
+    assert b"## Producers" in digest_readme.content
+    assert b"## Consumers" in digest_readme.content
+    assert b"## Retention" in digest_readme.content
+    assert b"today.md" not in digest_readme.content
+    assert not digest_readme.page.title.startswith("Directory:")
+
+    rename = service.prepare_rename(
+        digest_readme_id,
+        new_path="automations/digest/guide.md",
+        new_title="Digest contract",
+        expected_version=digest_readme.resource.version_id,
+        base_head=repo.head,
+    )
+    with pytest.raises(WikiValidationError, match="README paths are fixed"):
+        service.apply_rename(rename)
+    assert service.read_page(digest_readme_id).resource.path == "automations/digest/README.md"
+
+    with pytest.raises(WikiValidationError, match="active pages remain"):
+        service.archive_page(
+            digest_readme_id,
+            expected_version=service.read_page(digest_readme_id).resource.version_id,
+            base_head=repo.head,
+        )
+    with pytest.raises(WikiValidationError, match="README paths are fixed"):
+        service.move_page(
+            digest_readme_id,
+            new_path="automations/digest/guide.md",
+            expected_version=service.read_page(digest_readme_id).resource.version_id,
+            expected_head=repo.head,
+        )
+    service.archive_page("today", expected_version=created.resource.version_id, base_head=repo.head)
+    service.archive_page(
+        digest_readme_id,
+        expected_version=service.read_page(digest_readme_id).resource.version_id,
+        base_head=repo.head,
+    )
+    restored_content = digest_readme.content
+    service.create_page(
+        path="automations/digest/tomorrow.md",
+        title="Tomorrow",
+        page_id="tomorrow",
+        expected_head=repo.head,
+    )
+    assert service.read_page(digest_readme_id).content == restored_content
+    assert {change.action for change in repo.history(limit=1)[0].changes} == {"create", "restore"}

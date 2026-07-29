@@ -26,6 +26,10 @@ def _repo(tmp_path: Path) -> ManagedFileRepository:
     return ManagedFileRepository(tmp_path / "wiki")
 
 
+def _topics_readme(service: WikiService) -> None:
+    service.create_page(page_id="topics-readme", path="topics/README.md", title="Topics", body=b"Topic notes.\n")
+
+
 def _input(service: WikiService, *, fact: str | None = "facts-1", index: str | None = None) -> WikiHealthInput:
     report = service.changes_since(None)
     observed = next((commit.commit_id for commit in reversed(report.commits) if commit.origin != "wiki.health"), None)
@@ -127,6 +131,7 @@ def test_health_retention_checkpoint_is_behind_when_a_due_review_exists(tmp_path
 
 def test_generated_health_does_not_claim_the_personal_health_topic_name(tmp_path: Path) -> None:
     service = WikiService(_repo(tmp_path))
+    _topics_readme(service)
     service.create_page(path="topics/health.md", title="Health", page_id="personal-health")
     service.create_page(
         path="source.md",
@@ -137,7 +142,7 @@ def test_generated_health_does_not_claim_the_personal_health_topic_name(tmp_path
 
     WikiHealthProjector(service).project(_input(service))
 
-    assert len(service.snapshot().pages) == 3
+    assert len(service.snapshot().pages) == 4
     outgoing = service.link_report("source").outgoing
     assert [reference.target_page_id for reference in outgoing] == ["personal-health", "health"]
 
@@ -186,6 +191,7 @@ def test_health_maps_ambiguous_links_to_unresolved_link_issues(tmp_path: Path) -
 
 def test_health_emits_stale_fact_page_with_revision_evidence(tmp_path: Path) -> None:
     service = WikiService(_repo(tmp_path))
+    _topics_readme(service)
     service.create_page(
         path="topics/stale.md",
         title="Stale",
@@ -206,6 +212,7 @@ def test_health_emits_stale_fact_page_with_revision_evidence(tmp_path: Path) -> 
 
 def test_health_does_not_duplicate_invalid_provenance_as_stale(tmp_path: Path) -> None:
     service = WikiService(_repo(tmp_path))
+    _topics_readme(service)
     service.create_page(
         path="topics/invalid.md",
         title="Invalid",

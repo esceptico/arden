@@ -10,6 +10,7 @@ import arden.tools.wiki as wiki_tools
 from arden.context.models import SessionState
 from arden.integrations.core import CORE_INTEGRATIONS, WIKI
 from arden.revisions import ManagedFileRepository
+from arden.services.session import SessionService
 from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.registry import ToolRegistry
 from arden.tools.wiki import (
@@ -18,6 +19,7 @@ from arden.tools.wiki import (
     create_wiki_page_tool,
     edit_wiki_page_tool,
     list_wiki_pages_tool,
+    move_wiki_page_tool,
     publish_wiki_generated_tool,
     read_wiki_page_tool,
     wiki_links_tool,
@@ -33,6 +35,7 @@ def _execution(
     *,
     automation_id: str | None = None,
     post_commit: Callable[[], Awaitable[bool]] | None = None,
+    session: SessionService | None = None,
 ) -> ToolExecution:
     services = {} if wiki is None else {"wiki": wiki}
     if wiki is not None:
@@ -41,6 +44,8 @@ def _execution(
             return False
 
         services[WIKI_POST_COMMIT_SERVICE] = post_commit or project_wiki
+    if session is not None:
+        services["session"] = session
     context = ToolContext(
         session_state=SessionState(session_id="wiki-tools", started_at=datetime.now(UTC)),
         registry=ToolRegistry(),
@@ -50,6 +55,14 @@ def _execution(
         background_tasks=BackgroundTaskRegistry(session_id="wiki-tools"),
     )
     return ToolExecution(tool_id="wiki-1", tool_name="read_wiki_page", ctx=context)
+
+
+class _AreaStore:
+    def __init__(self, area: dict | None = None) -> None:
+        self.area = area
+
+    async def find_area_by_page_id(self, _page_id: str) -> dict | None:
+        return self.area
 
 
 def _wiki(root: Path) -> WikiService:
@@ -130,10 +143,11 @@ async def test_list_wiki_pages_replaces_folder_index_pages(tmp_path: Path) -> No
     topics = await list_wiki_pages_tool.execute(run, directory="topics")
     assert [(entry["kind"], entry["path"], entry.get("title")) for entry in topics.data["entries"]] == [
         ("directory", "topics/labs/", None),
+        ("page", "topics/README.md", "Topics guide"),
         ("page", "topics/interaction-lab.md", "Interaction Lab"),
         ("page", "topics/peer.md", "Peer"),
     ]
-    assert "README.md" not in topics.content and "retired.md" not in topics.content
+    assert "topics/README.md" in topics.content and "retired.md" not in topics.content
 
     capped = await list_wiki_pages_tool.execute(run, directory="topics", limit=1)
     assert capped.data["has_more"] is True
@@ -145,7 +159,7 @@ async def test_list_wiki_pages_replaces_folder_index_pages(tmp_path: Path) -> No
         offset=capped.data["next_offset"],
         limit=1,
     )
-    assert continued.data["entries"][0]["path"] == "topics/interaction-lab.md"
+    assert continued.data["entries"][0]["path"] == "topics/README.md"
     assert continued.data["next_offset"] == 2
 
     for directory in (".", "./topics", "topics/.", "../topics", "topics//labs", "/topics", r"topics\labs"):
@@ -168,7 +182,7 @@ async def test_list_wiki_pages_reports_byte_budget_truncation(tmp_path: Path, mo
     result = await list_wiki_pages_tool.execute(_execution(wiki), directory="topics")
 
     assert result.data["entries"] == []
-    assert result.data["total"] == 2
+    assert result.data["total"] == 3
     assert result.data["has_more"] is True
     assert result.data["next_offset"] is None
 
@@ -176,7 +190,9 @@ async def test_list_wiki_pages_reports_byte_budget_truncation(tmp_path: Path, mo
 @pytest.mark.asyncio
 async def test_list_wiki_pages_continues_after_byte_budget_page(tmp_path: Path, monkeypatch) -> None:
     wiki = _wiki(tmp_path)
-    first = wiki_tools._listing_page_data(wiki.read_page("interaction-lab"))
+    first = wiki_tools._listing_page_data(
+        next(record for record in wiki.snapshot().pages if record.resource.path == "topics/README.md")
+    )
     monkeypatch.setattr(
         wiki_tools,
         "_MAX_LIST_DATA_BYTES",
@@ -185,13 +201,21 @@ async def test_list_wiki_pages_continues_after_byte_budget_page(tmp_path: Path, 
 
     first_page = await list_wiki_pages_tool.execute(_execution(wiki), directory="topics")
 
-    assert [entry["path"] for entry in first_page.data["entries"]] == ["topics/interaction-lab.md"]
+    assert [entry["path"] for entry in first_page.data["entries"]] == ["topics/README.md"]
     assert first_page.data["next_offset"] == 1
     second_page = await list_wiki_pages_tool.execute(
         _execution(wiki), directory="topics", offset=first_page.data["next_offset"]
     )
-    assert [entry["path"] for entry in second_page.data["entries"]] == ["topics/peer.md"]
-    assert second_page.data["has_more"] is False
+    assert [entry["path"] for entry in second_page.data["entries"]] == ["topics/interaction-lab.md"]
+    assert second_page.data["next_offset"] == 2
+    third_page = await list_wiki_pages_tool.execute(
+        _execution(wiki),
+        directory="topics",
+        offset=second_page.data["next_offset"],
+        limit=1,
+    )
+    assert [entry["path"] for entry in third_page.data["entries"]] == ["topics/peer.md"]
+    assert third_page.data["has_more"] is False
 
 
 @pytest.mark.asyncio
@@ -324,6 +348,38 @@ async def test_wiki_links_bounds_the_complete_structured_payload(tmp_path: Path)
     assert result.data["links_truncated"] is True
     assert result.data["fields_truncated"] is True
     assert len(json.dumps(result.data, ensure_ascii=False, separators=(",", ":")).encode()) <= 40_000
+
+
+@pytest.mark.asyncio
+async def test_create_wiki_page_creates_directory_readmes_with_the_first_child(tmp_path: Path) -> None:
+    wiki = WikiService(ManagedFileRepository(tmp_path / "wiki"))
+    execution = _execution(wiki)
+    child = {
+        "page_id": "coast-2026-07-30",
+        "path": "automations/coast/2026-07-30.md",
+        "title": "Coast digest 2026-07-30",
+        "aliases": [],
+        "body": "Digest.\n",
+        "expected_head": None,
+    }
+
+    created = await create_wiki_page_tool.execute(execution, **child)
+    replayed = await create_wiki_page_tool.execute(execution, **child)
+
+    assert not created.is_error
+    assert created.data["changed"] is True
+    assert replayed.data["changed"] is False
+    assert {record.resource.path for record in wiki.snapshot().pages} == {
+        "automations/README.md",
+        "automations/coast/README.md",
+        "automations/coast/2026-07-30.md",
+    }
+    commit = wiki.repository.history(limit=1)[0]
+    assert len(commit.changes) == 3
+    coast_readme = next(
+        record for record in wiki.snapshot().pages if record.resource.path == "automations/coast/README.md"
+    )
+    assert b"## Purpose" in coast_readme.content
 
 
 @pytest.mark.asyncio
@@ -743,6 +799,85 @@ async def test_wiki_tools_require_the_wiki_capability(tmp_path: Path) -> None:
     assert result.outcome.error.code == "not_configured"
 
 
+@pytest.mark.asyncio
+async def test_move_wiki_page_is_atomic_scoped_and_area_safe(tmp_path: Path) -> None:
+    wiki = _wiki(tmp_path)
+    record = wiki.read_page("interaction-lab")
+    session = SessionService(_AreaStore())
+    execution = _execution(wiki, session=session)
+
+    moved = await move_wiki_page_tool.execute(
+        execution,
+        page_id="interaction-lab",
+        new_path="topics/renamed-location.md",
+        expected_version=record.resource.version_id,
+        expected_head=wiki.repository.head,
+    )
+    assert not moved.is_error
+    assert moved.data["changed"] is True
+    assert wiki.read_page("interaction-lab").resource.path == "topics/renamed-location.md"
+    assert wiki.read_page("interaction-lab").page.title == "Interaction Lab"
+    assert b"[[Lab]]" in wiki.read_page("peer").content
+    assert all(page.page.lifecycle != "redirect" for page in wiki.list_pages(include_redirects=True))
+
+    replayed = await move_wiki_page_tool.execute(
+        execution,
+        page_id="interaction-lab",
+        new_path="topics/renamed-location.md",
+        expected_version=record.resource.version_id,
+        expected_head=wiki.repository.head,
+    )
+    assert replayed.data["changed"] is False
+
+    automation = _execution(wiki, automation_id="daily", session=session)
+    denied = await move_wiki_page_tool.execute(
+        automation,
+        page_id="interaction-lab",
+        new_path="automations/daily.md",
+        expected_version=wiki.read_page("interaction-lab").resource.version_id,
+        expected_head=wiki.repository.head,
+    )
+    assert denied.outcome is not None and denied.outcome.error is not None
+    assert denied.outcome.error.code == "automation_path_denied"
+
+    automation_page = wiki.create_page(
+        path="automations/daily.md",
+        title="Daily output",
+        page_id="daily-output",
+        expected_head=wiki.repository.head,
+    )
+    destination_denied = await move_wiki_page_tool.execute(
+        automation,
+        page_id="daily-output",
+        new_path="topics/daily.md",
+        expected_version=automation_page.resource.version_id,
+        expected_head=wiki.repository.head,
+    )
+    assert destination_denied.outcome is not None and destination_denied.outcome.error is not None
+    assert destination_denied.outcome.error.code == "automation_path_denied"
+
+    stale = await move_wiki_page_tool.execute(
+        execution,
+        page_id="interaction-lab",
+        new_path="topics/stale.md",
+        expected_version=record.resource.version_id,
+        expected_head=record.resource.version_id,
+    )
+    assert stale.outcome is not None and stale.outcome.error is not None
+    assert stale.outcome.error.code == "revision_conflict"
+
+    bound = _execution(wiki, session=SessionService(_AreaStore({"name": "Research"})))
+    blocked = await move_wiki_page_tool.execute(
+        bound,
+        page_id="interaction-lab",
+        new_path="topics/blocked.md",
+        expected_version=wiki.read_page("interaction-lab").resource.version_id,
+        expected_head=wiki.repository.head,
+    )
+    assert blocked.outcome is not None and blocked.outcome.error is not None
+    assert blocked.outcome.error.code == "area_page_bound"
+
+
 def test_wiki_read_boundary_has_its_own_core_integration() -> None:
     assert WIKI in CORE_INTEGRATIONS
     assert set(WIKI.tools) == {
@@ -752,6 +887,7 @@ def test_wiki_read_boundary_has_its_own_core_integration() -> None:
         "create_wiki_page",
         "edit_wiki_page",
         "archive_wiki_page",
+        "move_wiki_page",
         "publish_wiki_generated",
     }
     assert {tool.policy.action.value for tool in WIKI.tools.values()} == {"read", "write"}
@@ -760,9 +896,16 @@ def test_wiki_read_boundary_has_its_own_core_integration() -> None:
     }
     assert {
         WIKI.tools[name].policy.permissions
-        for name in ("create_wiki_page", "edit_wiki_page", "archive_wiki_page", "publish_wiki_generated")
+        for name in (
+            "create_wiki_page",
+            "edit_wiki_page",
+            "archive_wiki_page",
+            "publish_wiki_generated",
+        )
     } == {frozenset({"wiki", WIKI_POST_COMMIT_SERVICE})}
+    assert WIKI.tools["move_wiki_page"].policy.permissions == frozenset({"wiki", WIKI_POST_COMMIT_SERVICE, "session"})
     assert create_wiki_page_tool.policy.idempotent is True
     assert edit_wiki_page_tool.policy.idempotent is True
     assert archive_wiki_page_tool.policy.idempotent is True
+    assert move_wiki_page_tool.policy.idempotent is True
     assert publish_wiki_generated_tool.policy.idempotent is False

@@ -594,6 +594,9 @@ async def test_concurrent_wiki_projection_notifies_one_head_once(tmp_path, monke
             notifications.append((paths, revision, source_areas_by_path))
             await asyncio.sleep(0)
 
+        async def request_fact_synthesis(self) -> bool:
+            return True
+
     async def health() -> str:
         return "new-head"
 
@@ -699,6 +702,9 @@ async def test_failed_wiki_projection_keeps_watermark_for_retry(tmp_path, monkey
         async def notify_wiki_changed(self, paths, revision, *, source_areas_by_path) -> None:
             notifications.append(paths)
 
+        async def request_fact_synthesis(self) -> bool:
+            return True
+
     revisions: list[tuple[str | None, str]] = []
 
     class _Watermarks:
@@ -731,6 +737,70 @@ async def test_failed_wiki_projection_keeps_watermark_for_retry(tmp_path, monkey
     assert notifications == [["topics/dex.md"]]
     assert revisions == [("old-head", "new-head")]
     assert runtime._wiki_change_head == "new-head"
+
+
+@pytest.mark.asyncio
+async def test_new_common_page_requests_fact_synthesis_but_automation_and_readme_pages_do_not(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime = Runtime(_config(tmp_path))
+    commits = (
+        SimpleNamespace(
+            actor="agent",
+            origin="wiki.agent",
+            changes=(
+                SimpleNamespace(before=None, after=SimpleNamespace(path="topics/alpha.md")),
+                SimpleNamespace(before=None, after=SimpleNamespace(path="topics/README.md")),
+                SimpleNamespace(
+                    before=None,
+                    after=SimpleNamespace(path="automations/digest/2026-07-30.md"),
+                ),
+            ),
+        ),
+    )
+
+    class _Repository:
+        head = "new-head"
+
+        def history(self, *, start, stop_before):
+            assert (start, stop_before) == ("new-head", "old-head")
+            return commits
+
+    class _Projection:
+        last_state = SimpleNamespace(wiki_head="new-head")
+
+        async def sync(self) -> None:
+            return None
+
+    requested = 0
+
+    class _Automation:
+        async def notify_wiki_changed(self, paths, revision, *, source_areas_by_path) -> None:
+            return None
+
+        async def request_fact_synthesis(self) -> bool:
+            nonlocal requested
+            requested += 1
+            return True
+
+    class _Watermarks:
+        async def record_projection_revision(self, *, expected_revision, revision) -> None:
+            return None
+
+    async def health() -> str:
+        return "new-head"
+
+    runtime.wiki_service = SimpleNamespace(repository=_Repository())
+    runtime.wiki_page_projection = _Projection()
+    runtime.automation = _Automation()
+    runtime._wiki_change_head = "old-head"
+    runtime._wiki_maintenance_store = _Watermarks()
+    monkeypatch.setattr(runtime, "project_wiki_health", health)
+
+    await runtime.project_wiki_change()
+
+    assert requested == 1
 
 
 @pytest.mark.asyncio

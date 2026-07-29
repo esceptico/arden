@@ -1,10 +1,11 @@
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 
 import pytest
 
 from arden.areas.lifecycle import AreaLifecycleService, AreaPageService, AreaWikiUnavailable
-from arden.revisions import ManagedFileRepository
-from arden.wiki.service import WikiService
+from arden.revisions import ManagedFileRepository, RevisionConflictError
+from arden.wiki.service import WikiService, WikiValidationError
 
 
 class FakeAreas:
@@ -20,6 +21,7 @@ class FakeAreas:
             "area_id": area_id,
             "name": values["name"],
             "page_path": values.get("page_path"),
+            "page_id": None,
             "autonomy": values.get("autonomy"),
             "paused_at": None,
             "attention": "ambient",
@@ -33,6 +35,9 @@ class FakeAreas:
 
     async def find_area_by_name(self, name: str) -> dict | None:
         return next((dict(row) for row in self.rows.values() if row["name"].casefold() == name.casefold()), None)
+
+    async def find_area_by_page_id(self, page_id: str) -> dict | None:
+        return next((dict(row) for row in self.rows.values() if row["page_id"] == page_id), None)
 
     async def get_area(self, area_id: str) -> dict | None:
         row = self.rows.get(area_id)
@@ -137,7 +142,7 @@ async def test_page_creation_keeps_attachment_when_projection_is_pending(tmp_pat
     created = await service.create(area["area_id"])
 
     assert created["page_path"] == "topics/dex.md"
-    assert [page.resource.path for page in wiki.list_pages()] == ["topics/dex.md"]
+    assert sorted(page.resource.path for page in wiki.list_pages()) == ["topics/README.md", "topics/dex.md"]
 
 
 @pytest.mark.asyncio
@@ -338,10 +343,237 @@ async def test_create_page_writes_safe_topic_and_attaches_it(tmp_path) -> None:
     updated = await area_pages.create(area["area_id"])
 
     assert updated["page_path"] == "topics/o-1a-visa.md"
-    page = area_pages._wiki.list_pages()[0].page
+    page = next(
+        record.page for record in area_pages._wiki.list_pages() if record.resource.path == "topics/o-1a-visa.md"
+    )
     text = page.to_bytes().decode()
     assert "title: O-1A / Visa" in text
     assert "## Open loops" in text
+
+
+@pytest.mark.asyncio
+async def test_area_rename_moves_its_bound_page_without_a_redirect_and_rewrites_links(tmp_path) -> None:
+    areas = FakeAreas()
+    synced: list[dict] = []
+
+    async def sync(area: dict) -> None:
+        synced.append(dict(area))
+
+    area_lifecycle = lifecycle(areas, sync=sync)
+    area = await area_lifecycle.create(name="Dex", autonomy="observe")
+    area_pages = pages(tmp_path, areas, area_lifecycle)
+    attached = await area_pages.create(area["area_id"])
+    wiki = area_pages._wiki
+    head = wiki.snapshot().head
+    wiki.create_page(
+        path="topics/related.md",
+        title="Related",
+        body=b"# Related\n\n[[Dex]]\n",
+        expected_head=head,
+    )
+
+    renamed = await area_pages.update(area["area_id"], name="Arden")
+
+    assert renamed["name"] == "Arden"
+    assert renamed["page_path"] == "topics/arden.md"
+    assert renamed["page_id"] == attached["page_id"]
+    assert sorted(record.resource.path for record in wiki.list_pages()) == [
+        "topics/README.md",
+        "topics/arden.md",
+        "topics/related.md",
+    ]
+    related = next(record for record in wiki.list_pages() if record.resource.path == "topics/related.md")
+    assert "[[Arden]]" in wiki.read_page(related.page.page_id).page.body.decode()
+    assert synced[-1]["name"] == "Arden"
+
+
+@pytest.mark.asyncio
+async def test_stale_bound_page_rename_does_not_change_the_area(tmp_path) -> None:
+    areas = FakeAreas()
+    area_lifecycle = lifecycle(areas)
+    area = await area_lifecycle.create(name="Dex")
+    area_pages = pages(tmp_path, areas, area_lifecycle)
+    attached = await area_pages.create(area["area_id"])
+    wiki = area_pages._wiki
+    plan = wiki.prepare_rename(
+        attached["page_id"],
+        new_path="topics/arden.md",
+        new_title="Arden",
+        expected_version=next(
+            record for record in wiki.list_pages() if record.page.page_id == attached["page_id"]
+        ).resource.version_id,
+        base_head=wiki.repository.head,
+    )
+    current = wiki.read_page(attached["page_id"])
+    wiki.update_page(
+        attached["page_id"],
+        content=current.content + b"\nLater edit.\n",
+        expected_version=current.resource.version_id,
+        expected_head=wiki.repository.head,
+    )
+
+    with pytest.raises(RevisionConflictError):
+        await area_pages.apply_rename_plan(plan)
+
+    unchanged = await areas.get_area(area["area_id"])
+    assert unchanged is not None
+    assert unchanged["name"] == "Dex"
+    assert unchanged["page_path"] == "topics/dex.md"
+
+
+@pytest.mark.asyncio
+async def test_bound_page_rename_plan_syncs_its_area(tmp_path) -> None:
+    areas = FakeAreas()
+    area_lifecycle = lifecycle(areas)
+    area = await area_lifecycle.create(name="Dex")
+    area_pages = pages(tmp_path, areas, area_lifecycle)
+    attached = await area_pages.create(area["area_id"])
+    wiki = area_pages._wiki
+    current = wiki.read_page(attached["page_id"])
+    plan = wiki.prepare_rename(
+        attached["page_id"],
+        new_path="topics/arden.md",
+        new_title="Arden",
+        expected_version=current.resource.version_id,
+        base_head=wiki.repository.head,
+    )
+
+    await area_pages.apply_rename_plan(plan)
+
+    updated = await areas.get_area(area["area_id"])
+    assert updated is not None
+    assert updated["name"] == "Arden"
+    assert updated["page_path"] == "topics/arden.md"
+    assert updated["page_id"] == attached["page_id"]
+    assert all(record.page.lifecycle != "redirect" for record in wiki.list_pages())
+
+
+@pytest.mark.asyncio
+async def test_bound_page_rejects_a_path_not_derived_from_its_area_name(tmp_path) -> None:
+    areas = FakeAreas()
+    area_lifecycle = lifecycle(areas)
+    area = await area_lifecycle.create(name="Dex")
+    area_pages = pages(tmp_path, areas, area_lifecycle)
+    attached = await area_pages.create(area["area_id"])
+    wiki = area_pages._wiki
+    current = wiki.read_page(attached["page_id"])
+    plan = wiki.prepare_rename(
+        attached["page_id"],
+        new_path="projects/arden.md",
+        new_title="Arden",
+        expected_version=current.resource.version_id,
+        base_head=wiki.repository.head,
+    )
+
+    with pytest.raises(ValueError, match="name determines"):
+        await area_pages.validate_rename_request(attached["page_id"], plan.new_path, plan.new_title)
+    with pytest.raises(ValueError, match="name determines"):
+        await area_pages.apply_rename_plan(plan)
+
+    unchanged = await areas.get_area(area["area_id"])
+    assert unchanged is not None
+    assert unchanged["name"] == "Dex"
+    assert wiki.read_page(attached["page_id"]).resource.path == "topics/dex.md"
+
+
+@pytest.mark.asyncio
+async def test_path_only_area_keeps_existing_name_update_behavior(tmp_path) -> None:
+    areas = FakeAreas()
+    area_lifecycle = lifecycle(areas)
+    area = await area_lifecycle.create(name="Legacy", page_path="topics/legacy.md")
+    area_pages = pages(tmp_path, areas, area_lifecycle)
+
+    updated = await area_pages.update(area["area_id"], name="Current")
+
+    assert updated["name"] == "Current"
+    assert updated["page_path"] == "topics/legacy.md"
+    assert updated["page_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_bound_page_rename_rejects_tampered_and_no_rewrite_plans(tmp_path) -> None:
+    areas = FakeAreas()
+    area_lifecycle = lifecycle(areas)
+    area = await area_lifecycle.create(name="Dex")
+    area_pages = pages(tmp_path, areas, area_lifecycle)
+    attached = await area_pages.create(area["area_id"])
+    wiki = area_pages._wiki
+    current = wiki.read_page(attached["page_id"])
+    plan = wiki.prepare_rename(
+        attached["page_id"],
+        new_path="topics/arden.md",
+        new_title="Arden",
+        expected_version=current.resource.version_id,
+        base_head=wiki.repository.head,
+    )
+
+    with pytest.raises(WikiValidationError, match="pinned snapshot"):
+        await area_pages.apply_rename_plan(replace(plan, moved_content=plan.moved_content + b"\nTampered."))
+
+    no_rewrite = wiki.prepare_rename(
+        attached["page_id"],
+        new_path="topics/arden.md",
+        new_title="Arden",
+        expected_version=current.resource.version_id,
+        base_head=wiki.repository.head,
+        rewrite_links=False,
+    )
+    with pytest.raises(WikiValidationError, match="must rewrite"):
+        await area_pages.apply_rename_plan(no_rewrite)
+
+    unchanged = await areas.get_area(area["area_id"])
+    assert unchanged is not None
+    assert unchanged["name"] == "Dex"
+    assert unchanged["page_path"] == "topics/dex.md"
+
+
+@pytest.mark.asyncio
+async def test_area_rename_applies_other_patch_fields_and_projects_once(tmp_path) -> None:
+    areas = FakeAreas()
+    synced: list[dict] = []
+    projected: list[str] = []
+
+    async def sync(area: dict) -> None:
+        synced.append(dict(area))
+
+    async def project() -> bool:
+        projected.append("projected")
+        return False
+
+    area_lifecycle = lifecycle(areas, sync=sync)
+    area = await area_lifecycle.create(name="Dex")
+    area_pages = AreaPageService(
+        wiki=WikiService(ManagedFileRepository(tmp_path / "wiki")),
+        sessions=areas,
+        lifecycle=area_lifecycle,
+        project_wiki_state=project,
+    )
+    await area_pages.create(area["area_id"])
+    projected.clear()
+
+    updated = await area_pages.update(
+        area["area_id"],
+        name="Arden",
+        autonomy="observe",
+        attention="active",
+    )
+
+    assert updated["name"] == "Arden"
+    assert updated["autonomy"] == "observe"
+    assert updated["attention"] == "active"
+    assert len(synced) == 1
+    assert projected == ["projected"]
+
+    current = area_pages._wiki.read_page(updated["page_id"])
+    reverse = area_pages._wiki.prepare_rename(
+        updated["page_id"],
+        new_path="topics/dex.md",
+        new_title="Dex",
+        expected_version=current.resource.version_id,
+        base_head=area_pages._wiki.repository.head,
+    )
+    await area_pages.apply_rename_plan(reverse)
+    assert projected == ["projected"]
 
 
 @pytest.mark.asyncio

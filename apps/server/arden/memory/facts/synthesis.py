@@ -13,11 +13,13 @@ from arden.memory.facts.consumer_store import FactConsumerStore
 from arden.memory.facts.ledger import FactLedger
 from arden.memory.facts.models import Fact, FactChangeFeed
 from arden.revisions.models import ResourceState
+from arden.wiki.constants import AUTOMATIONS_PATH_PREFIX, README_FILENAME
 from arden.wiki.models import GeneratedPageTarget, WikiPageRecord
-from arden.wiki.pages import extract_user_body, parse_page
+from arden.wiki.pages import extract_generated_region, extract_user_body, parse_page
 from arden.wiki.service import WikiService
 
 CONSUMER_ID = "memory.synthesis"
+NO_ADDITIONAL_FACTS = "<!-- synthesis: supplied facts already exist in authored content -->"
 _CITATION_GROUP = re.compile(r"\(fact:(F\d{3,})(?:\s*,\s*fact:(F\d{3,}))*\)")
 _TOKEN = re.compile(r"F\d{3,}")
 
@@ -126,7 +128,14 @@ class FactSynthesis:
             await self._consumers.advance(CONSUMER_ID, feed=feed, ledger=self._ledger)
         return FactSynthesisResult(
             feed.through_revision,
-            published_pages=0 if commit is None else len(commit.changes),
+            published_pages=(
+                0
+                if commit is None
+                else sum(
+                    change.after is not None and change.after.path.rsplit("/", 1)[-1] != README_FILENAME
+                    for change in commit.changes
+                )
+            ),
             advanced=bool(feed.events),
             skipped_archived=skipped_archived,
             skipped_under_threshold=skipped_under_threshold,
@@ -197,6 +206,19 @@ class FactSynthesis:
                 continue
             record = next(record for record in active if record.page.page_id == page_id)
             page_routes[page_id] = _without_keys(_existing_route(record))
+
+        # A page can be created after its matching facts were already
+        # synthesized. Reconcile those declared topics on every run so the
+        # six-hour backstop covers a missed creation notification too.
+        for key in grouped:
+            if key[0] != "topic":
+                continue
+            record = _match_topic(active, key[1])
+            if record is None or not _needs_reconciliation(record, facts):
+                continue
+            route = _at_key(_existing_route(record), key)
+            existing = page_routes.get(route.page_id)
+            page_routes[route.page_id] = route if existing is None else _merge_route(existing, route)
 
         # Retain only routes affected by this feed, while each selected route later
         # receives every currently eligible fact assigned to it.
@@ -438,11 +460,14 @@ class FactSynthesis:
             if not commit.changes:
                 continue
             valid = True
+            published_page = False
             for change in commit.changes:
                 after = change.after
                 if after is None or after.state is not ResourceState.ACTIVE or not after.path.endswith(".md"):
                     valid = False
                     break
+                if after.path.rsplit("/", 1)[-1] == README_FILENAME:
+                    continue
                 page = self._wiki.repository.read(after.resource_id, at=commit.commit_id)
                 if (
                     parse_page(page, expected_page_id=after.resource_id).metadata.get("generated_from_revision")
@@ -450,7 +475,8 @@ class FactSynthesis:
                 ):
                     valid = False
                     break
-            if valid:
+                published_page = True
+            if valid and published_page:
                 return True
         return False
 
@@ -588,13 +614,25 @@ def _match_topic(pages: Sequence[WikiPageRecord], subject: str) -> WikiPageRecor
     wanted = _normal(subject)
     by_id = {record.page.page_id: record for record in pages}
     for record in pages:
+        if record.resource.path.rsplit("/", 1)[-1] == README_FILENAME:
+            continue
+        if record.resource.path.startswith(AUTOMATIONS_PATH_PREFIX):
+            continue
+        if record.page.metadata.get("producer_automation_id") is not None:
+            continue
         names = {_normal(record.page.title), *(_normal(alias) for alias in record.page.aliases)}
         if wanted not in names:
             continue
         if record.page.lifecycle == "active":
             return record
         if record.page.lifecycle == "redirect" and record.page.redirect_to in by_id:
-            return by_id[record.page.redirect_to]
+            target = by_id[record.page.redirect_to]
+            if (
+                target.resource.path.rsplit("/", 1)[-1] != README_FILENAME
+                and not target.resource.path.startswith(AUTOMATIONS_PATH_PREFIX)
+                and (target.page.metadata.get("producer_automation_id") is None)
+            ):
+                return target
     return None
 
 
@@ -683,6 +721,8 @@ def _source_summary(fact: Fact) -> str:
 def _validate_and_humanize(prose: object, tokens: Mapping[str, Fact]) -> tuple[bytes, tuple[tuple[str, str], ...]]:
     if not isinstance(prose, str):
         raise FactSynthesisError("renderer must return a string")
+    if prose.strip() == NO_ADDITIONAL_FACTS:
+        return (NO_ADDITIONAL_FACTS + "\n").encode(), ()
     cited: list[str] = []
     for line in prose.splitlines():
         if not line.strip():
@@ -728,6 +768,21 @@ def _validate_and_humanize(prose: object, tokens: Mapping[str, Fact]) -> tuple[b
 
 def _citation_ids(record: WikiPageRecord) -> set[str]:
     return {fact_id for fact_id, _version in _citation_entries(record)}
+
+
+def _needs_reconciliation(record: WikiPageRecord, facts: Mapping[str, Fact]) -> bool:
+    generated = extract_generated_region(record.content, expected_page_id=record.page.page_id)
+    citations = _citation_entries(record)
+    if generated is not None and generated.strip() == NO_ADDITIONAL_FACTS.encode():
+        return bool(citations)
+    if not generated:
+        return True
+    if not citations:
+        return True
+    return any(
+        fact_id not in facts or facts[fact_id].version != version or not _eligible(facts[fact_id])
+        for fact_id, version in citations
+    )
 
 
 def _citation_entries(record: WikiPageRecord) -> tuple[tuple[str, str], ...]:

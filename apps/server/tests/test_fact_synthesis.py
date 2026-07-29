@@ -6,7 +6,12 @@ import pytest
 
 from arden.memory.facts.consumer_store import FactConsumerStore
 from arden.memory.facts.ledger import FactLedger
-from arden.memory.facts.synthesis import FactSynthesis, FactSynthesisError, SynthesisFact
+from arden.memory.facts.synthesis import (
+    NO_ADDITIONAL_FACTS,
+    FactSynthesis,
+    FactSynthesisError,
+    SynthesisFact,
+)
 from arden.revisions import (
     ChangeSet,
     CorruptRepositoryError,
@@ -113,7 +118,7 @@ async def test_synthesis_passes_only_authored_body_to_renderer(tmp_path: Path) -
             ledger.plan([_change("one", "First"), _change("two", "Second")], actor="test", origin="test", reason="seed")
         )
         await synthesis.run()
-        page = wiki.list_pages()[0]
+        page = next(page for page in wiki.list_pages() if page.page.title == "Alpha")
         current = wiki.repository.get(page.page.page_id)
         wiki.repository.commit(
             ChangeSet(
@@ -138,9 +143,10 @@ async def test_synthesis_passes_only_authored_body_to_renderer(tmp_path: Path) -
 async def test_empty_feed_does_not_write_or_advance(tmp_path: Path) -> None:
     _ledger, consumers, wiki, synthesis = await _service(tmp_path)
     try:
+        head = wiki.repository.head
         result = await synthesis.run()
         assert result.empty and not result.advanced
-        assert wiki.repository.head is None
+        assert wiki.repository.head == head
         assert await consumers.get("memory.synthesis") is None
     finally:
         await consumers.close()
@@ -237,6 +243,128 @@ async def test_routes_temporary_me_project_and_existing_alias(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+async def test_reconciles_new_topic_page_with_preexisting_fact_and_preserves_authored_body(tmp_path: Path) -> None:
+    renderer = _Renderer()
+    ledger, consumers, wiki, synthesis = await _service(tmp_path, renderer)
+    try:
+        ledger.commit(ledger.plan([_change("one", "First")], actor="test", origin="test", reason="seed"))
+        initial = await synthesis.run()
+        assert initial.skipped_under_threshold == 1
+
+        wiki.create_page(
+            page_id="alpha",
+            path="topics/alpha.md",
+            title="Alpha",
+            body=b"## Notes\nKeep this.\n",
+        )
+        result = await synthesis.run()
+
+        page = wiki.read_page("alpha")
+        assert result.published_pages == 1
+        assert renderer.calls[-1][2] == "## Notes\nKeep this.\n"
+        assert b"First (from chat)" in extract_generated_region(page.content, expected_page_id="alpha")
+        assert page.content.endswith(b"## Notes\nKeep this.\n")
+    finally:
+        await consumers.close()
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_skips_topic_page_without_matching_facts(tmp_path: Path) -> None:
+    renderer = _Renderer()
+    ledger, consumers, wiki, synthesis = await _service(tmp_path, renderer)
+    try:
+        ledger.commit(ledger.plan([_change("one", "First")], actor="test", origin="test", reason="seed"))
+        await synthesis.run()
+        wiki.create_page(page_id="beta", path="topics/beta.md", title="Beta")
+        head = wiki.repository.head
+
+        result = await synthesis.run()
+
+        assert result.empty
+        assert result.published_pages == 0
+        assert wiki.repository.head == head
+        assert not renderer.calls
+    finally:
+        await consumers.close()
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_does_not_rewrite_current_projection(tmp_path: Path) -> None:
+    renderer = _Renderer()
+    ledger, consumers, wiki, synthesis = await _service(tmp_path, renderer)
+    try:
+        ledger.commit(ledger.plan([_change("one", "First")], actor="test", origin="test", reason="seed"))
+        await synthesis.run()
+        wiki.create_page(page_id="alpha", path="topics/alpha.md", title="Alpha")
+        await synthesis.run()
+        head = wiki.repository.head
+        calls = len(renderer.calls)
+
+        result = await synthesis.run()
+
+        assert result.empty
+        assert wiki.repository.head == head
+        assert len(renderer.calls) == calls
+    finally:
+        await consumers.close()
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_records_that_authored_body_already_covers_facts(tmp_path: Path) -> None:
+    renderer = _Renderer(invalid=NO_ADDITIONAL_FACTS)
+    ledger, consumers, wiki, synthesis = await _service(tmp_path, renderer)
+    try:
+        ledger.commit(ledger.plan([_change("one", "First")], actor="test", origin="test", reason="seed"))
+        await synthesis.run()
+        wiki.create_page(
+            page_id="alpha",
+            path="topics/alpha.md",
+            title="Alpha",
+            body=b"First is already documented here.\n",
+        )
+
+        first = await synthesis.run()
+        page = wiki.read_page("alpha")
+        first_head = wiki.repository.head
+        calls = len(renderer.calls)
+        second = await synthesis.run()
+
+        assert first.published_pages == 1
+        assert extract_generated_region(page.content, expected_page_id="alpha") == (NO_ADDITIONAL_FACTS + "\n").encode()
+        assert page.page.metadata["fact_citations"] == ()
+        assert second.empty
+        assert wiki.repository.head == first_head
+        assert len(renderer.calls) == calls
+    finally:
+        await consumers.close()
+
+
+@pytest.mark.asyncio
+async def test_existing_projection_refreshes_when_its_fact_changes(tmp_path: Path) -> None:
+    renderer = _Renderer()
+    ledger, consumers, wiki, synthesis = await _service(tmp_path, renderer)
+    try:
+        ledger.commit(
+            ledger.plan(
+                [_change("one", "First"), _change("two", "Second")],
+                actor="test",
+                origin="test",
+                reason="seed",
+            )
+        )
+        await synthesis.run()
+        ledger.commit(ledger.plan([_change("three", "Third")], actor="test", origin="test", reason="refresh"))
+
+        result = await synthesis.run()
+
+        page = wiki.read_page("topic-" + __import__("hashlib").sha256(b"topic\0alpha").hexdigest()[:12])
+        assert result.published_pages == 1
+        assert b"Third (from chat)" in extract_generated_region(page.content, expected_page_id=page.page.page_id)
+    finally:
+        await consumers.close()
+
+
+@pytest.mark.asyncio
 async def test_threshold_archived_and_stale_route_are_safe(tmp_path: Path) -> None:
     ledger, consumers, wiki, synthesis = await _service(tmp_path)
     try:
@@ -277,12 +405,13 @@ async def test_threshold_archived_and_stale_route_are_safe(tmp_path: Path) -> No
 async def test_invalid_renderer_never_publishes_or_advances(tmp_path: Path, bad: str) -> None:
     ledger, consumers, wiki, synthesis = await _service(tmp_path, _Renderer(invalid=bad))
     try:
+        head = wiki.repository.head
         ledger.commit(
             ledger.plan([_change("one", "First"), _change("two", "Second")], actor="test", origin="test", reason="seed")
         )
         with pytest.raises(FactSynthesisError):
             await synthesis.run()
-        assert wiki.repository.head is None
+        assert wiki.repository.head == head
         assert await consumers.get("memory.synthesis") is None
     finally:
         await consumers.close()
@@ -300,7 +429,12 @@ async def test_user_generated_edit_blocks_whole_synthesis_and_prior_publish_repl
         routes, _, _, _ = synthesis._targets(feed, facts)
         targets = await synthesis._render_targets(routes, facts, None)
         reason = f"synthesize facts start..{feed.through_revision}"
-        wiki.publish_generated(targets, source_revision=feed.through_revision or "", base_head=None, reason=reason)
+        wiki.publish_generated(
+            targets,
+            source_revision=feed.through_revision or "",
+            base_head=wiki.repository.head,
+            reason=reason,
+        )
         page = wiki.read_page(targets[0].page_id)
         current = wiki.repository.get(page.page.page_id)
         changed = update_generated_region(page.content, expected_page_id=page.page.page_id, generated=b"User edit\n")
@@ -341,12 +475,13 @@ async def test_live_fact_conflict_never_publishes(tmp_path: Path) -> None:
     ledger, consumers, wiki, _ = await _service(tmp_path)
     synthesis = FactSynthesis(ledger, consumers, wiki, _ChangingRenderer())
     try:
+        head = wiki.repository.head
         ledger.commit(
             ledger.plan([_change("one", "First"), _change("two", "Second")], actor="test", origin="test", reason="seed")
         )
         with pytest.raises(FactSynthesisError, match="changed"):
             await synthesis.run()
-        assert wiki.repository.head is None
+        assert wiki.repository.head == head
     finally:
         await consumers.close()
 
@@ -364,7 +499,7 @@ async def test_casefolded_topics_share_threshold_and_one_page(tmp_path: Path) ->
             )
         )
         await synthesis.run()
-        pages = wiki.list_pages()
+        pages = tuple(page for page in wiki.list_pages() if not page.resource.path.endswith("/README.md"))
         assert len(pages) == 1
         assert pages[0].page.title == "Alpha"
         assert {item["fact_id"] for item in pages[0].page.metadata["fact_citations"]} == {
@@ -407,7 +542,9 @@ async def test_project_scope_keys_remain_exact_case_sensitive_identities(tmp_pat
             )
         )
         await synthesis.run()
-        projects = {page.page.metadata["scope"]["key"]: page for page in wiki.list_pages()}
+        projects = {
+            page.page.metadata["scope"]["key"]: page for page in wiki.list_pages() if "scope" in page.page.metadata
+        }
         assert set(projects) == {"Arden", "arden", " Arden "}
         assert projects["Arden"].page.page_id != projects["arden"].page.page_id
         assert projects["Arden"].page.page_id != projects[" Arden "].page.page_id
@@ -422,6 +559,7 @@ async def test_project_scope_keys_remain_exact_case_sensitive_identities(tmp_pat
 async def test_no_missing_route_page_is_created_without_assigned_facts(tmp_path: Path) -> None:
     ledger, consumers, wiki, synthesis = await _service(tmp_path)
     try:
+        head = wiki.repository.head
         ledger.commit(
             ledger.plan(
                 [
@@ -442,7 +580,7 @@ async def test_no_missing_route_page_is_created_without_assigned_facts(tmp_path:
         )
         result = await synthesis.run()
         assert result.advanced and result.published_pages == 0
-        assert wiki.repository.head is None
+        assert wiki.repository.head == head
     finally:
         await consumers.close()
 
@@ -468,7 +606,9 @@ async def test_archived_fixed_page_identities_are_never_recreated(tmp_path: Path
         )
         result = await synthesis.run()
         assert result.skipped_archived == 2
-        assert [page.resource.path for page in wiki.list_pages()] == ["daily/2026-07-28.md"]
+        assert [page.resource.path for page in wiki.list_pages() if not page.resource.path.endswith("/README.md")] == [
+            "daily/2026-07-28.md"
+        ]
     finally:
         await consumers.close()
 
@@ -477,6 +617,12 @@ async def test_archived_fixed_page_identities_are_never_recreated(tmp_path: Path
 async def test_archived_project_scope_blocks_differently_named_recreation(tmp_path: Path) -> None:
     ledger, consumers, wiki, synthesis = await _service(tmp_path)
     try:
+        wiki.create_page(
+            path="retired/README.md",
+            title="Retired",
+            body=b"Purpose: retired test pages.\nProducer: tests.\nConsumers: tests.\nRetention: test lifetime.\n",
+            page_id="retired-readme",
+        )
         wiki.create_page(
             path="retired/custom.md",
             title="Retired Custom Page",
@@ -504,7 +650,7 @@ async def test_archived_project_scope_blocks_differently_named_recreation(tmp_pa
 
         assert result.skipped_archived == 1
         assert result.published_pages == 0
-        assert wiki.list_pages() == ()
+        assert "retired/README.md" in {record.resource.path for record in wiki.list_pages()}
     finally:
         await consumers.close()
 
@@ -522,7 +668,7 @@ async def test_unique_citation_keeps_user_renamed_page_and_one_fact_one_page(tmp
             )
         )
         await synthesis.run()
-        page = wiki.list_pages()[0]
+        page = next(page for page in wiki.list_pages() if page.page.title == "Alpha")
         current = wiki.repository.get(page.page.page_id)
         renamed = update_page_title(
             page.content,
@@ -548,7 +694,7 @@ async def test_unique_citation_keeps_user_renamed_page_and_one_fact_one_page(tmp
             )
         )
         await synthesis.run()
-        pages = wiki.list_pages()
+        pages = tuple(page for page in wiki.list_pages() if not page.resource.path.endswith("/README.md"))
         assert len(pages) == 1
         assert pages[0].page.page_id == page.page.page_id
         citations = [item["fact_id"] for record in pages for item in record.page.metadata.get("fact_citations", [])]
@@ -571,7 +717,7 @@ async def test_a_to_b_to_c_feed_clears_every_stale_existing_route(tmp_path: Path
             )
         )
         await synthesis.run()
-        alpha = wiki.list_pages()[0]
+        alpha = next(page for page in wiki.list_pages() if page.page.title == "Alpha")
         wiki.create_page(path="beta.md", title="Beta", page_id="beta")
         ledger.commit(
             ledger.plan(
@@ -615,6 +761,7 @@ async def test_a_to_b_to_c_feed_clears_every_stale_existing_route(tmp_path: Path
 async def test_headings_reject_opaque_or_malformed_fact_syntax(tmp_path: Path, heading: str) -> None:
     ledger, consumers, wiki, synthesis = await _service(tmp_path, _Renderer(invalid=heading))
     try:
+        head = wiki.repository.head
         ledger.commit(
             ledger.plan(
                 [_change("one", "First"), _change("two", "Second")],
@@ -625,7 +772,7 @@ async def test_headings_reject_opaque_or_malformed_fact_syntax(tmp_path: Path, h
         )
         with pytest.raises(FactSynthesisError, match="headings"):
             await synthesis.run()
-        assert wiki.repository.head is None
+        assert wiki.repository.head == head
     finally:
         await consumers.close()
 
@@ -634,6 +781,7 @@ async def test_headings_reject_opaque_or_malformed_fact_syntax(tmp_path: Path, h
 async def test_renderer_exception_is_atomic(tmp_path: Path) -> None:
     ledger, consumers, wiki, synthesis = await _service(tmp_path, _FailingRenderer())
     try:
+        head = wiki.repository.head
         ledger.commit(
             ledger.plan(
                 [_change("one", "First"), _change("two", "Second")],
@@ -644,7 +792,7 @@ async def test_renderer_exception_is_atomic(tmp_path: Path) -> None:
         )
         with pytest.raises(FactSynthesisError, match="renderer failed"):
             await synthesis.run()
-        assert wiki.repository.head is None
+        assert wiki.repository.head == head
         assert await consumers.get("memory.synthesis") is None
     finally:
         await consumers.close()
@@ -743,7 +891,9 @@ async def test_intervening_wiki_edit_rejects_pinned_publication(tmp_path: Path) 
         with pytest.raises(RevisionConflictError):
             await synthesis.run()
         assert wiki.repository.find_by_path("user.md") is not None
-        assert len(wiki.list_pages()) == 1
+        assert [page.page.page_id for page in wiki.list_pages() if not page.resource.path.endswith("/README.md")] == [
+            "user"
+        ]
         assert await consumers.get("memory.synthesis") is None
     finally:
         await consumers.close()

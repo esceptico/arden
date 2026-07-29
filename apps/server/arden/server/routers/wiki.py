@@ -534,6 +534,11 @@ async def request_rename(request: Request, body: WikiRenameRequest):
         # the file so it can create its old-path redirect safely.
         if body.new_path == current.resource.path:
             raise WikiValidationError("title edits must not use the rename endpoint")
+        await request.app.state.area_pages.validate_rename_request(
+            body.page_id,
+            body.new_path,
+            body.new_title,
+        )
         result = await coordinator.request_rename(
             request_key=f"wiki-rename:{body.page_id}",
             page_id=body.page_id,
@@ -542,6 +547,7 @@ async def request_rename(request: Request, body: WikiRenameRequest):
             expected_version=current.resource.version_id,
             base_head=coordinator.service.repository.head,
             policy=RenamePolicy.ASK,
+            apply_plan=request.app.state.area_pages.apply_rename_plan,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="wiki page not found") from exc
@@ -562,7 +568,10 @@ async def list_rename_approvals(request: Request):
 @router.post("/rename-approvals/{approval_id}/accept", response_model=WikiRenameResultResponse)
 async def accept_rename(request: Request, approval_id: str):
     try:
-        result = await _coordinator(request).accept(approval_id)
+        result = await _coordinator(request).accept(
+            approval_id,
+            apply_plan=request.app.state.area_pages.apply_rename_plan,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="wiki rename approval not found") from exc
     except RevisionConflictError as exc:

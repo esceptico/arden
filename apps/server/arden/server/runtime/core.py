@@ -62,7 +62,13 @@ from arden.tools.connections import ConnectionService
 from arden.tools.executor import ToolExecutor
 from arden.wiki.approval_store import WikiRenameApprovalStore
 from arden.wiki.approvals import WikiRenameApprovalCoordinator
-from arden.wiki.constants import WIKI_HEALTH_ORIGIN, WIKI_MAINTENANCE_ACTOR, WIKI_POST_COMMIT_SERVICE
+from arden.wiki.constants import (
+    AUTOMATIONS_PATH_PREFIX,
+    README_FILENAME,
+    WIKI_HEALTH_ORIGIN,
+    WIKI_MAINTENANCE_ACTOR,
+    WIKI_POST_COMMIT_SERVICE,
+)
 from arden.wiki.context import WikiContextBuilder, WikiPageIndexProjection
 from arden.wiki.curation.completion import CompletionWikiEditCuratorReviewer
 from arden.wiki.curation.engine import WikiEditCurator
@@ -89,7 +95,7 @@ from arden.wiki.maintenance.store import (
     WikiMaintenanceStore,
 )
 from arden.wiki.models import WikiChangesReport
-from arden.wiki.service import WikiService
+from arden.wiki.service import WIKI_RENAME_ORIGIN, WikiService
 
 _logger = get_logger(__name__)
 
@@ -759,6 +765,7 @@ class Runtime:
             paths: set[str] = set()
             attributed_paths: set[str] = set()
             source_areas_by_path: dict[str, set[str]] = {}
+            common_page_created = False
             for commit in commits:
                 if commit.origin == WIKI_HEALTH_ORIGIN:
                     continue
@@ -768,6 +775,15 @@ class Runtime:
                     if candidate and ":" not in candidate:
                         source_area_id = candidate
                 for change in commit.changes:
+                    if (
+                        commit.origin not in {FACT_SYNTHESIS_CONSUMER_ID, WIKI_RENAME_ORIGIN}
+                        and change.before is None
+                        and change.after is not None
+                        and change.after.path.endswith(".md")
+                        and not change.after.path.startswith(AUTOMATIONS_PATH_PREFIX)
+                        and change.after.path.rsplit("/", 1)[-1] != README_FILENAME
+                    ):
+                        common_page_created = True
                     for path in (
                         None if change.before is None else change.before.path,
                         None if change.after is None else change.after.path,
@@ -786,6 +802,8 @@ class Runtime:
                     final_head,
                     source_areas_by_path=source_areas_by_path,
                 )
+                if common_page_created:
+                    await self.automation.request_fact_synthesis()
             if final_head is not None:
                 await self._wiki_maintenance_store.record_projection_revision(
                     expected_revision=previous_head,

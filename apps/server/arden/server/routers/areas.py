@@ -198,9 +198,11 @@ async def detach_area_page(request: Request, area_id: str):
 
 @router.patch("/{area_id}", response_model=AreaResponse)
 async def update_area(request: Request, area_id: str, req: UpdateAreaRequest):
-    patch = {key: getattr(req, key) for key in req.model_fields_set}
+    patch = req.model_dump(exclude_unset=True)
     try:
-        area = await _lifecycle(request).update(area_id, **patch)
+        area = await _pages(request).update(area_id, **patch)
+    except AreaWikiUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except KeyError as exc:

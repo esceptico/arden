@@ -388,6 +388,7 @@ class AreaResponse(BaseModel):
     instructions: str | None = None
     knowledge_scope: str
     page_path: str | None = None
+    page_id: str | None = None
     autonomy: str | None = None
     attention: str = "ambient"
     interrupts: str = "asks"

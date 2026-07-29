@@ -68,6 +68,13 @@ async def test_wiki_index_tracks_active_pages_and_context_keeps_residents_separa
     wiki.create_page(page_id="home", path="README.md", title="Home", body=b"Start here.\n")
     wiki.create_page(page_id="directives", path="directives.md", title="Directives", body=b"Be concise.\n")
     wiki.create_page(page_id="me", path="me.md", title="Profile", body=b"Likes tea.\n")
+    wiki.create_page(page_id="topics-readme", path="topics/README.md", title="Topics", body=b"Topic notes.\n")
+    wiki.create_page(
+        page_id="automations-readme",
+        path="automations/README.md",
+        title="Automation outputs",
+        body=b"Scheduled output.\n",
+    )
     topic = wiki.create_page(
         page_id="topic",
         path="topics/topic.md",
@@ -89,7 +96,15 @@ async def test_wiki_index_tracks_active_pages_and_context_keeps_residents_separa
     projection = WikiPageIndexProjection(wiki, lambda: index, _fact_revision)
     await projection.sync()
 
-    assert set(index.store.items) == {"home", "directives", "me", "topic", "feed"}
+    assert set(index.store.items) == {
+        "home",
+        "directives",
+        "me",
+        "topics-readme",
+        "automations-readme",
+        "topic",
+        "feed",
+    }
     assert projection.last_state == WikiPageIndexState(wiki.repository.head, "ready")
     with pytest.raises(FrozenInstanceError):
         projection.last_state.status = "error"  # type: ignore[misc]
@@ -130,6 +145,7 @@ async def test_wiki_index_tracks_active_pages_and_context_keeps_residents_separa
 @pytest.mark.asyncio
 async def test_wiki_index_marks_malformed_fact_provenance_invalid(tmp_path) -> None:
     wiki = WikiService(ManagedFileRepository(tmp_path / "pages", history_root=tmp_path / "history"))
+    wiki.create_page(page_id="topics-readme", path="topics/README.md", title="Topics", body=b"Topic notes.\n")
     wiki.create_page(
         page_id="invalid",
         path="topics/invalid.md",

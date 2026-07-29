@@ -72,6 +72,7 @@ from arden.tools.wiki import (
     create_wiki_page_tool,
     edit_wiki_page_tool,
     list_wiki_pages_tool,
+    move_wiki_page_tool,
     publish_wiki_generated_tool,
     read_wiki_page_tool,
     wiki_links_tool,
@@ -233,6 +234,7 @@ WIKI = Integration(
         "create_wiki_page": create_wiki_page_tool,
         "edit_wiki_page": edit_wiki_page_tool,
         "archive_wiki_page": archive_wiki_page_tool,
+        "move_wiki_page": move_wiki_page_tool,
         "publish_wiki_generated": publish_wiki_generated_tool,
     },
 )

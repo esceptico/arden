@@ -1,14 +1,25 @@
 """Public facade for snapshot-pinned wiki lifecycle operations."""
 
+from dataclasses import replace
 from hashlib import sha256
 
 import arden.wiki.changes as changes
 import arden.wiki.rename as rename
 import arden.wiki.snapshots as snapshots
 from arden.revisions.errors import CorruptRepositoryError, RevisionConflictError
-from arden.revisions.models import Archive, ChangeSet, Commit, Create, Move, ResourceState, Restore, Update
+from arden.revisions.models import (
+    Archive,
+    ChangeSet,
+    Commit,
+    Create,
+    Move,
+    ResourceState,
+    Restore,
+    Update,
+)
 from arden.revisions.repository import ManagedFileRepository
 from arden.wiki.constants import (
+    README_FILENAME,
     WIKI_HEALTH_ACTOR,
     WIKI_HEALTH_ORIGIN,
     WIKI_HEALTH_PATH,
@@ -27,6 +38,7 @@ from arden.wiki.exceptions import (
 from arden.wiki.models import (
     GeneratedPageTarget,
     LinkReference,
+    LinkStatus,
     RenamePlan,
     WikiChangesReport,
     WikiLinkReport,
@@ -39,6 +51,7 @@ from arden.wiki.models import (
 )
 from arden.wiki.pages import PageValidationError, WikiPage, extract_generated_region, update_generated_region
 from arden.wiki.pages import create_page as build_page
+from arden.wiki.wikilinks import parse_wikilinks, rewrite_page_targets
 
 __all__ = [
     "GeneratedRegionConflictError",
@@ -52,6 +65,46 @@ __all__ = [
 WIKI_RENAME_ACTOR = "Wiki Rename"
 WIKI_RENAME_ORIGIN = "wiki.rename"
 WIKI_RENAME_REASON = "rename page"
+WIKI_MOVE_ACTOR = "Wiki Move"
+WIKI_MOVE_ORIGIN = "wiki.move"
+WIKI_MOVE_REASON = "move page"
+_DIRECTORY_README_CONTRACTS = {
+    "topics": (
+        "Topics guide",
+        "Durable pages about people, organizations, products, projects, and concepts.",
+        "Agents and Synthesis create and maintain these pages.",
+        "All Arden agents may use these pages as shared context.",
+        "Keep durable topics until the user explicitly archives them.",
+    ),
+    "daily": (
+        "Daily notes guide",
+        "Dated summaries and daily context.",
+        "Synthesis and authorized agents create and maintain these pages.",
+        "Agents and briefings may use relevant dated context.",
+        "Keep daily notes until the user explicitly archives them.",
+    ),
+    "automations": (
+        "Automation outputs guide",
+        "Managed outputs written by scheduled automations.",
+        "Each scheduled automation owns the pages named in its prompt.",
+        "Agents and automations may use only outputs they explicitly read.",
+        "Keep outputs according to their directory contract; never hard-delete them.",
+    ),
+    "insights": (
+        "Insights guide",
+        "Provisional connections and hypotheses, not canonical facts.",
+        "Dream and authorized agents create and maintain these pages.",
+        "Agents may use them as leads after checking their evidence.",
+        "Keep insights until they are promoted, superseded, or explicitly archived.",
+    ),
+    "projects": (
+        "Projects guide",
+        "Durable context grouped by exact project scope.",
+        "Synthesis and authorized agents create and maintain these pages.",
+        "Agents working in the named project scope may use them.",
+        "Keep project pages until the user explicitly archives them.",
+    ),
+}
 
 
 class WikiService:
@@ -129,11 +182,22 @@ class WikiService:
         snapshot = self.snapshot()
         snapshots.require_head(snapshot.head, expected_head)
         page = build_page(title=title, body=body, page_id=page_id, aliases=aliases, metadata=metadata)
+        reserved_names = {snapshots.normal(name) for name in snapshots.names_for_page(page, path)}
+        _readmes, readme_operations = self._directory_readme_changes(
+            snapshot,
+            (path,),
+            reserved_names=reserved_names,
+            reserved_page_ids={page.page_id},
+        )
         snapshots.assert_new_names(snapshot, page, path)
         key = idempotency_key or self._key("create", snapshot.head, page.page_id, path, page.to_bytes())
+        operations = [
+            *readme_operations,
+            Create(page.page_id, path, page.to_bytes()),
+        ]
         self.repository.commit(
             ChangeSet(
-                (Create(page.page_id, path, page.to_bytes()),),
+                tuple(operations),
                 actor,
                 origin,
                 reason,
@@ -146,6 +210,90 @@ class WikiService:
 
     def update_page(self, page_id: str, **kwargs: object) -> WikiPageRecord:
         return self.update_page_with_commit(page_id, **kwargs)[0]
+
+    def move_page(
+        self,
+        page_id: str,
+        *,
+        new_path: str,
+        expected_version: str,
+        expected_head: str,
+        actor: str = WIKI_MOVE_ACTOR,
+        origin: str = WIKI_MOVE_ORIGIN,
+        reason: str = WIKI_MOVE_REASON,
+    ) -> tuple[WikiPageRecord, str | None]:
+        """Move one page and rewrite only resolved path-style wiki links."""
+
+        snapshots.require_markdown_path(new_path)
+        snapshot = self.snapshot()
+        snapshots.require_head(snapshot.head, expected_head)
+        page_index = snapshots.index(snapshot)
+        record = page_index.pages.get(page_id)
+        if record is None or record.page.lifecycle != "active":
+            raise KeyError(f"unknown active wiki page: {page_id}")
+        if page_id == WIKI_HEALTH_RESOURCE_ID:
+            raise WikiValidationError("health page is backend-managed")
+        if record.resource.path == new_path:
+            return record, None
+        if record.resource.version_id != expected_version:
+            raise RevisionConflictError(f"resource {page_id} changed: expected {expected_version}")
+        self._reject_readme_move(record)
+        remaining = tuple(item for item in snapshot.pages if item.page.page_id != page_id)
+        snapshots.assert_new_names(WikiSnapshot(snapshot.head, remaining), record.page, new_path)
+
+        rewritten: dict[str, bytes] = {}
+        replacement_body = record.page.body
+        for source in snapshot.pages:
+            if source.page.lifecycle != "active":
+                continue
+            references = tuple(
+                reference
+                for node in parse_wikilinks(source.page.body.decode("utf-8"))
+                if (reference := snapshots.reference(page_index, source.page.page_id, node)).status
+                is LinkStatus.RESOLVED
+                and reference.target_page_id == page_id
+                and reference.node.page is not None
+                and ("/" in reference.node.page or reference.node.page.casefold().endswith(".md"))
+            )
+            if not references:
+                continue
+            targets = {
+                reference.node: new_path if reference.node.page.casefold().endswith(".md") else new_path[:-3]
+                for reference in references
+            }
+            body = rewrite_page_targets(source.page.body.decode("utf-8"), targets).encode("utf-8")
+            if source.page.page_id == page_id:
+                replacement_body = body
+                continue
+            prefix_size = len(source.content) - len(source.page.body)
+            rewritten[source.page.page_id] = source.content[:prefix_size] + body
+
+        moved_content = record.page.with_body(replacement_body).to_bytes()
+        reserved_names = {snapshots.normal(name) for name in snapshots.names_for_page(record.page, new_path)}
+        readmes, readme_operations = self._directory_readme_changes(
+            snapshot,
+            (new_path,),
+            reserved_names=reserved_names,
+            reserved_page_ids={page_id},
+        )
+
+        operations = [*readme_operations, Move(page_id, expected_version, new_path, moved_content)]
+        operations.extend(
+            Update(resource_id, page_index.pages[resource_id].resource.version_id, content)
+            for resource_id, content in rewritten.items()
+        )
+        key = self._key(
+            "move",
+            snapshot.head,
+            page_id,
+            expected_version,
+            new_path,
+            moved_content,
+            tuple(sorted(rewritten)),
+            tuple((readme_path, content) for _page, readme_path, content in readmes),
+        )
+        commit = self.repository.commit(ChangeSet(tuple(operations), actor, origin, reason, key, snapshot.head))
+        return self.read_page(page_id), commit.commit_id
 
     def update_page_with_commit(
         self,
@@ -221,6 +369,20 @@ class WikiService:
         target_ids = [target.page_id for target in targets]
         if len(target_ids) != len(set(target_ids)):
             raise WikiValidationError("generated targets must not repeat a page_id")
+        for target in targets:
+            snapshots.require_markdown_path(target.path)
+        new_targets = tuple(target for target in targets if target.page_id not in records)
+        reserved_names = {
+            snapshots.normal(name)
+            for target in new_targets
+            for name in snapshots.names_for_target(target.title, target.aliases, target.path)
+        }
+        readmes, readme_operations = self._directory_readme_changes(
+            snapshot,
+            tuple(target.path for target in targets),
+            reserved_names=reserved_names,
+            reserved_page_ids=set(target_ids),
+        )
         archived_names: set[str] = set()
         if base_head is not None:
             for resource in self.repository.list_resources(at=base_head, include_archived=True):
@@ -234,8 +396,11 @@ class WikiService:
             for record in snapshot.pages
             for name in snapshots.names_for_page(record.page, record.resource.path)
         }
+        for readme, readme_path, _content in readmes:
+            prospective_names.update(
+                (snapshots.normal(name), readme.page_id) for name in snapshots.names_for_page(readme, readme_path)
+            )
         for target in sorted(targets, key=lambda item: item.page_id):
-            snapshots.require_markdown_path(target.path)
             record = records.get(target.page_id)
             metadata = {**target.metadata, "generated_from_revision": source_revision}
             if record is None:
@@ -281,13 +446,16 @@ class WikiService:
                     record.content, expected_page_id=target.page_id, generated=target.generated, metadata=metadata
                 )
             finals.append((target, record, content))
-        operations = tuple(
-            Create(target.page_id, target.path, content)
-            if record is None
-            else Update(target.page_id, record.resource.version_id, content)
-            for target, record, content in finals
-            if record is None or content != record.content
-        )
+        operations = [
+            *readme_operations,
+            *(
+                Create(target.page_id, target.path, content)
+                if record is None
+                else Update(target.page_id, record.resource.version_id, content)
+                for target, record, content in finals
+                if record is None or content != record.content
+            ),
+        ]
         if not operations:
             if self.repository.head != base_head:
                 raise RevisionConflictError(
@@ -299,10 +467,17 @@ class WikiService:
             base_head,
             source_revision,
             tuple((target.page_id, content) for target, _record, content in finals),
+            tuple((readme_path, content) for _page, readme_path, content in readmes),
         )
         return self.repository.commit(
             ChangeSet(
-                operations, actor, origin, reason or "publish generated wiki pages", key, base_head, base_head is None
+                tuple(operations),
+                actor,
+                origin,
+                reason or "publish generated wiki pages",
+                key,
+                base_head,
+                base_head is None,
             )
         )
 
@@ -464,6 +639,7 @@ class WikiService:
             raise KeyError(f"unknown active wiki page: {page_id}")
         if page_id == WIKI_HEALTH_RESOURCE_ID:
             raise WikiValidationError("health page is backend-managed")
+        self._require_empty_directory_readme(snapshot, record)
         snapshots.validate_prospective(snapshot, tuple(item for item in snapshot.pages if item.page.page_id != page_id))
         version = expected_version or record.resource.version_id
         key = idempotency_key or self._key("archive", snapshot.head, page_id, version)
@@ -490,11 +666,30 @@ class WikiService:
         content = self.repository.read_version(resource)
         page = snapshots.parse(resource, content)
         active = snapshots.snapshot(self.repository, strict_names=True, at=head)
+        reserved_names = {snapshots.normal(name) for name in snapshots.names_for_page(page, resource.path)}
+        readmes, readme_operations = self._directory_readme_changes(
+            active,
+            (resource.path,),
+            reserved_names=reserved_names,
+            reserved_page_ids={page_id},
+        )
         snapshots.assert_new_names(active, page, resource.path)
-        snapshots.validate_prospective(active, (*active.pages, WikiPageRecord(resource, page, content)))
+        restored_resource = replace(resource, state=ResourceState.ACTIVE)
+        snapshots.validate_prospective(
+            active,
+            (*active.pages, WikiPageRecord(restored_resource, page, content)),
+        )
         version = expected_version or resource.version_id
-        key = idempotency_key or self._key("restore", head, page_id, version)
-        self.repository.commit(ChangeSet((Restore(page_id, version),), actor, origin, reason, key, head))
+        key = idempotency_key or self._key(
+            "restore",
+            head,
+            page_id,
+            version,
+            tuple((readme_path, readme_content) for _page, readme_path, readme_content in readmes),
+        )
+        self.repository.commit(
+            ChangeSet((*readme_operations, Restore(page_id, version)), actor, origin, reason, key, head)
+        )
         return self.read_page(page_id)
 
     def prepare_rename(
@@ -528,11 +723,68 @@ class WikiService:
         origin: str = WIKI_RENAME_ORIGIN,
         reason: str = WIKI_RENAME_REASON,
     ) -> Commit:
+        redirect_page = build_page(
+            page_id=plan.redirect_page_id, title=plan.old_title, lifecycle="redirect", redirect_to=plan.page_id
+        )
+        return self._commit_rename(plan, actor, origin, reason, redirect_page)
+
+    def apply_rename_without_redirect(
+        self,
+        plan: RenamePlan,
+        *,
+        actor: str,
+        origin: str,
+        reason: str,
+    ) -> Commit:
+        return self._commit_rename(plan, actor, origin, reason, None)
+
+    def _commit_rename(
+        self,
+        plan: RenamePlan,
+        actor: str,
+        origin: str,
+        reason: str,
+        redirect_page: WikiPage | None,
+    ) -> Commit:
+        snapshot, record = self._validate_rename_plan(plan)
+        moved_page = snapshots.parse(replace(record.resource, path=plan.new_path), plan.moved_content)
+        pages = [(moved_page, plan.new_path)]
+        reserved_page_ids = {plan.page_id}
+        if redirect_page is not None:
+            pages.append((redirect_page, plan.old_path))
+            reserved_page_ids.add(redirect_page.page_id)
+        reserved_names = {
+            snapshots.normal(name) for page, path in pages for name in snapshots.names_for_page(page, path)
+        }
+        _readmes, readme_operations = self._directory_readme_changes(
+            snapshot,
+            (plan.new_path,),
+            reserved_names=reserved_names,
+            reserved_page_ids=reserved_page_ids,
+        )
+        operations = [
+            *readme_operations,
+            Move(plan.page_id, plan.expected_version, plan.new_path, plan.moved_content),
+        ]
+        if redirect_page is not None:
+            operations.append(Create(redirect_page.page_id, plan.old_path, redirect_page.to_bytes()))
+        operations.extend(Update(item.resource_id, item.expected_version, item.content) for item in plan.rewrites)
+        idempotency_key = (
+            plan.idempotency_key
+            if redirect_page is not None
+            else self._key("rename-without-redirect", plan.idempotency_key)
+        )
+        return self.repository.commit(
+            ChangeSet(tuple(operations), actor, origin, reason, idempotency_key, plan.base_head)
+        )
+
+    def _validate_rename_plan(self, plan: RenamePlan) -> tuple[WikiSnapshot, WikiPageRecord]:
         if not isinstance(plan, RenamePlan):
             raise TypeError("plan must be a RenamePlan")
+        snapshot = snapshots.snapshot(self.repository, strict_names=True, at=plan.base_head)
         canonical = rename.prepare_plan(
             self.repository,
-            snapshots.snapshot(self.repository, strict_names=True, at=plan.base_head),
+            snapshot,
             page_id=plan.page_id,
             new_path=plan.new_path,
             new_title=plan.new_title,
@@ -541,17 +793,12 @@ class WikiService:
         )
         if plan != canonical:
             raise WikiValidationError("rename plan does not match its pinned snapshot")
-        redirect = build_page(
-            page_id=plan.redirect_page_id, title=plan.old_title, lifecycle="redirect", redirect_to=plan.page_id
-        ).to_bytes()
-        operations = [
-            Move(plan.page_id, plan.expected_version, plan.new_path, plan.moved_content),
-            Create(plan.redirect_page_id, plan.old_path, redirect),
-        ]
-        operations.extend(Update(item.resource_id, item.expected_version, item.content) for item in plan.rewrites)
-        return self.repository.commit(
-            ChangeSet(tuple(operations), actor, origin, reason, plan.idempotency_key, plan.base_head)
-        )
+        record = snapshots.index(snapshot).pages.get(plan.page_id)
+        if record is None:
+            raise KeyError(f"unknown active wiki page: {plan.page_id}")
+        if plan.old_path != plan.new_path:
+            self._reject_readme_move(record)
+        return snapshot, record
 
     def _last_generated_region(
         self, page_id: str, actor: str, origin: str, base_head: str
@@ -592,6 +839,116 @@ class WikiService:
                 if before == trusted:
                     trusted = after
         return trusted_exists, trusted
+
+    @staticmethod
+    def _directory_readme_paths(path: str) -> tuple[str, ...]:
+        directory, _separator, filename = path.rpartition("/")
+        if not directory:
+            return ()
+        parts = directory.split("/")
+        if filename == README_FILENAME:
+            parts = parts[:-1]
+        return tuple("/".join((*parts[:index], README_FILENAME)) for index in range(1, len(parts) + 1))
+
+    def _directory_readme_changes(
+        self,
+        snapshot: WikiSnapshot,
+        paths: tuple[str, ...],
+        *,
+        reserved_names: set[str],
+        reserved_page_ids: set[str],
+    ) -> tuple[tuple[tuple[WikiPage, str, bytes], ...], tuple[Create | Restore, ...]]:
+        active_paths = {record.resource.path for record in snapshot.pages if record.page.lifecycle == "active"}
+        required = sorted(
+            {
+                readme_path
+                for path in paths
+                for readme_path in self._directory_readme_paths(path)
+                if readme_path not in active_paths
+            },
+            key=lambda path: (path.count("/"), path),
+        )
+        occupied_names = set(snapshots.index(snapshot).names)
+        occupied_page_ids = {record.page.page_id for record in snapshot.pages}
+        readmes: list[tuple[WikiPage, str, bytes]] = []
+        operations: list[Create | Restore] = []
+        for path in required:
+            archived = (
+                None
+                if snapshot.head is None
+                else self.repository.find_by_path(path, at=snapshot.head, include_archived=True)
+            )
+            if archived is None:
+                page = self._directory_readme_page(path)
+                content = page.to_bytes()
+                operation: Create | Restore = Create(page.page_id, path, content)
+            else:
+                if archived.state is not ResourceState.ARCHIVED:
+                    raise WikiValidationError(f"wiki directory README state changed: {path}")
+                content = self.repository.read_version(archived)
+                page = snapshots.parse(archived, content)
+                if page.lifecycle != "active":
+                    raise WikiValidationError(f"archived directory README is not an active page: {path}")
+                operation = Restore(page.page_id, archived.version_id)
+            if page.page_id in reserved_page_ids or page.page_id in occupied_page_ids:
+                raise WikiAmbiguityError(f"wiki page_id already exists: {page.page_id}")
+            names = {snapshots.normal(name) for name in snapshots.names_for_page(page, path)}
+            conflict = names & (reserved_names | occupied_names)
+            if conflict:
+                raise WikiAmbiguityError(f"wiki name already exists: {min(conflict)}")
+            readmes.append((page, path, content))
+            operations.append(operation)
+            occupied_names.update(names)
+            occupied_page_ids.add(page.page_id)
+        return tuple(readmes), tuple(operations)
+
+    @staticmethod
+    def _directory_readme_page(path: str) -> WikiPage:
+        directory = path.removesuffix(f"/{README_FILENAME}")
+        page_id = "directory-readme-" + sha256(path.encode()).hexdigest()[:16]
+        contract = _DIRECTORY_README_CONTRACTS.get(directory)
+        if contract is None:
+            label = directory.rsplit("/", 1)[-1].replace("-", " ").replace("_", " ").title()
+            contract = (
+                f"{label} guide",
+                f"Managed wiki pages grouped under `{directory}/`.",
+                "Only agents or automations whose task explicitly names this directory should write here.",
+                "Read this README, then read the exact relevant pages before using this directory as input.",
+                "Retain pages until an explicit policy archives them; never hard-delete managed output.",
+            )
+        title, purpose, producers, consumers, retention = contract
+        body = (
+            f"# {title}\n\n"
+            "This page is the working contract for the directory. It is not a file listing.\n\n"
+            f"## Purpose\n\n{purpose}\n\n"
+            f"## Producers\n\n{producers}\n\n"
+            f"## Consumers\n\n{consumers}\n"
+            "Before processing pages here, read this contract and then the exact relevant pages.\n\n"
+            f"## Retention\n\n{retention}\n"
+        ).encode()
+        return build_page(page_id=page_id, title=title, body=body)
+
+    @staticmethod
+    def _require_empty_directory_readme(snapshot: WikiSnapshot, record: WikiPageRecord) -> None:
+        path = record.resource.path
+        if path.rsplit("/", 1)[-1] != README_FILENAME:
+            return
+        directory, _separator, _filename = path.rpartition("/")
+        prefix = f"{directory}/" if directory else ""
+        children = [
+            item.resource.path
+            for item in snapshot.pages
+            if item.page.lifecycle == "active"
+            and item.page.page_id != record.page.page_id
+            and item.resource.path.startswith(prefix)
+        ]
+        if children:
+            raise WikiValidationError(f"cannot archive {path}: active pages remain in {directory or 'the wiki root'}")
+
+    @staticmethod
+    def _reject_readme_move(record: WikiPageRecord) -> None:
+        if record.resource.path.rsplit("/", 1)[-1] == README_FILENAME:
+            raise WikiValidationError("directory README paths are fixed; edit or archive the README instead")
 
     @staticmethod
     def _generated_region_is_safe(

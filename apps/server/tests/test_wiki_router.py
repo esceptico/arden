@@ -90,6 +90,17 @@ async def wiki_client(tmp_path: Path):
     runtime.request_fact_maintenance = request_fact_maintenance
     runtime.notify_wiki_maintenance_reviews_changed = notify_wiki_maintenance_reviews_changed
     app.state.runtime = runtime
+
+    async def apply_rename_plan(plan):
+        return service.apply_rename(plan)
+
+    async def validate_rename_request(_page_id: str, _new_path: str, _new_title: str) -> None:
+        return None
+
+    app.state.area_pages = SimpleNamespace(
+        apply_rename_plan=apply_rename_plan,
+        validate_rename_request=validate_rename_request,
+    )
     app.include_router(wiki_router)
     with TestClient(app) as client:
         yield client, service, store, maintenance_store
@@ -150,6 +161,23 @@ async def test_rename_request_is_safe_idempotent_and_default_ask(wiki_client):
     )
     assert bypass.status_code == 422
     assert service.repository.get("other").path == "other.md"
+
+
+def test_rename_request_rejects_an_invalid_bound_area_path_before_approval(wiki_client):
+    client, service, _store, _maintenance_store = wiki_client
+
+    async def reject_bound_path(_page_id: str, _new_path: str, _new_title: str) -> None:
+        raise ValueError("An attached Area name determines its page path")
+
+    client.app.state.area_pages.validate_rename_request = reject_bound_path
+    response = client.post(
+        "/admin/wiki/rename-approvals",
+        json={"page_id": "target", "new_path": "projects/new.md", "new_title": "New"},
+    )
+
+    assert response.status_code == 422
+    assert service.repository.get("target").path == "old.md"
+    assert not client.get("/admin/wiki/rename-approvals").json()["approvals"]
 
 
 def test_rename_approval_list_accept_and_reject(wiki_client):

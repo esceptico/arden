@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS areas (
     instructions TEXT,
     knowledge_scope TEXT,
     page_path TEXT,
+    page_id TEXT,
     autonomy TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -688,6 +689,18 @@ class SessionStore:
         if rows:
             raise ValueError("That page is already attached to another Area")
 
+    async def _assert_area_page_id_available(self, page_id: str | None, *, exclude_area_id: str | None = None) -> None:
+        if page_id is None:
+            return
+        sql = "SELECT area_id FROM areas WHERE page_id = ?"
+        params: list[object] = [page_id]
+        if exclude_area_id is not None:
+            sql += " AND area_id != ?"
+            params.append(exclude_area_id)
+        rows = await self.read_conn.execute_fetchall(sql, tuple(params))
+        if rows:
+            raise ValueError("That page is already attached to another Area")
+
     @staticmethod
     def _area_payload(row: aiosqlite.Row) -> dict:
         return {
@@ -696,11 +709,12 @@ class SessionStore:
             "default_cwd": (json.loads(row["default_cwds"] or "[]") or [None])[0],
             "instructions": row["instructions"],
             "knowledge_scope": row["knowledge_scope"] or f"area:{row['area_id']}",
-            "page_path": dict(row).get("page_path"),
-            "autonomy": dict(row).get("autonomy"),
-            "attention": dict(row).get("attention") or "ambient",
-            "interrupts": dict(row).get("interrupts") or "asks",
-            "paused_at": dict(row).get("paused_at"),
+            "page_path": row["page_path"],
+            "page_id": row["page_id"],
+            "autonomy": row["autonomy"],
+            "attention": row["attention"] or "ambient",
+            "interrupts": row["interrupts"] or "asks",
+            "paused_at": row["paused_at"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
             "archived_at": row["archived_at"],
@@ -731,6 +745,7 @@ class SessionStore:
         for col in (
             "name_key TEXT",
             "page_path TEXT",
+            "page_id TEXT",
             "autonomy TEXT",
             "attention TEXT",
             "interrupts TEXT",
@@ -749,6 +764,9 @@ class SessionStore:
             )
             await self.conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_areas_page_path ON areas(page_path) WHERE page_path IS NOT NULL"
+            )
+            await self.conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_areas_page_id ON areas(page_id) WHERE page_id IS NOT NULL"
             )
         except aiosqlite.IntegrityError as exc:
             raise RuntimeError(
@@ -819,9 +837,9 @@ class SessionStore:
             """
             INSERT INTO areas (
                 area_id, name, name_key, default_cwds, instructions, knowledge_scope,
-                page_path, autonomy, created_at, updated_at, archived_at
+                page_path, page_id, autonomy, created_at, updated_at, archived_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+            VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL)
             """,
             (
                 area_id,
@@ -851,6 +869,13 @@ class SessionStore:
         )
         return self._area_payload(rows[0]) if rows else None
 
+    async def find_area_by_page_id(self, page_id: str) -> dict | None:
+        rows = await self.read_conn.execute_fetchall(
+            "SELECT * FROM areas WHERE page_id = ? AND archived_at IS NULL",
+            (page_id,),
+        )
+        return self._area_payload(rows[0]) if rows else None
+
     async def list_areas(self) -> list[dict]:
         rows = await self.read_conn.execute_fetchall(
             """
@@ -870,6 +895,7 @@ class SessionStore:
         instructions: str | None | object = _AREA_PATCH_UNSET,
         knowledge_scope: str | None | object = _AREA_PATCH_UNSET,
         page_path: str | None | object = _AREA_PATCH_UNSET,
+        page_id: str | None | object = _AREA_PATCH_UNSET,
         autonomy: str | None | object = _AREA_PATCH_UNSET,
         attention: str | object = _AREA_PATCH_UNSET,
         interrupts: str | object = _AREA_PATCH_UNSET,
@@ -904,6 +930,12 @@ class SessionStore:
             await self._assert_area_page_available(normalized_page_path, exclude_area_id=area_id)
             assignments.append("page_path = ?")
             params.append(normalized_page_path)
+        if page_id is not _AREA_PATCH_UNSET:
+            if page_id is not None and (not isinstance(page_id, str) or not page_id.strip()):
+                raise ValueError("page_id must be a nonempty string")
+            await self._assert_area_page_id_available(page_id, exclude_area_id=area_id)
+            assignments.append("page_id = ?")
+            params.append(page_id)
         if autonomy is not _AREA_PATCH_UNSET:
             assignments.append("autonomy = ?")
             params.append(autonomy if isinstance(autonomy, str) else None)

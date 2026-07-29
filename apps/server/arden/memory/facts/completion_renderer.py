@@ -2,13 +2,14 @@
 
 from arden.core.prompts import UNTRUSTED_DATA_RULE
 from arden.llm.base import CompletionClient
-from arden.memory.facts.synthesis import SynthesisFact
+from arden.memory.facts.synthesis import NO_ADDITIONAL_FACTS, SynthesisFact
 
 _SYNTHESIS_SYSTEM_PROMPT = (
     "Write a concise Markdown synthesis for one wiki page. "
     "Use only the supplied facts. Every non-heading claim line must end with one or more "
     "exact citations like `(fact:F001)` or `(fact:F001, fact:F002)`. "
     "The existing authored body is context only: do not repeat, paraphrase, or cite claims already present there. "
+    f"If every supplied fact is already present in the authored body, return exactly `{NO_ADDITIONAL_FACTS}`. "
     f"{UNTRUSTED_DATA_RULE} "
     "Never put fact tokens in headings, never invent tokens, and return Markdown only."
 )

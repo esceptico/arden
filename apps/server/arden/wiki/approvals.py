@@ -4,6 +4,7 @@ import base64
 import binascii
 import hashlib
 import json
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from typing import Any
@@ -122,6 +123,7 @@ class WikiRenameApprovalCoordinator:
         expected_version: str,
         base_head: str | None,
         policy: RenamePolicy | str = RenamePolicy.ASK,
+        apply_plan: Callable[[RenamePlan], Awaitable[object]] | None = None,
     ) -> WikiRenameCoordinatorResult:
         """Prepare and either commit or durably request a rename approval."""
 
@@ -136,12 +138,17 @@ class WikiRenameApprovalCoordinator:
             rewrite_links=rewrite_links,
         )
         if selected is not RenamePolicy.ASK:
-            commit = self.service.apply_rename(plan)
+            commit = await self._apply(plan, apply_plan)
             return WikiRenameCoordinatorResult(status="committed", commit_id=commit.commit_id)
         approval = await self._create_pending(request_key, plan, generation=0)
         return WikiRenameCoordinatorResult(status="pending", approval=approval)
 
-    async def accept(self, approval_id: str) -> WikiRenameCoordinatorResult:
+    async def accept(
+        self,
+        approval_id: str,
+        *,
+        apply_plan: Callable[[RenamePlan], Awaitable[object]] | None = None,
+    ) -> WikiRenameCoordinatorResult:
         """Apply a verified pending plan, or replace it after a head conflict."""
 
         approval = await self._required_approval(approval_id)
@@ -164,7 +171,7 @@ class WikiRenameApprovalCoordinator:
             if approval.status is not WikiRenameApprovalStatus.APPLYING:
                 raise CorruptWikiRenameApprovalError("accepted rename claim was not persisted")
         try:
-            commit = self.service.apply_rename(plan)
+            commit = await self._apply(plan, apply_plan)
         except RevisionConflictError as error:
             if self.service.repository.head == plan.base_head:
                 await self.store.release_accept(
@@ -272,6 +279,15 @@ class WikiRenameApprovalCoordinator:
         if approval is None:
             raise KeyError(f"unknown wiki rename approval: {approval_id}")
         return approval
+
+    async def _apply(
+        self,
+        plan: RenamePlan,
+        apply_plan: Callable[[RenamePlan], Awaitable[object]] | None,
+    ):
+        if apply_plan is None:
+            return self.service.apply_rename(plan)
+        return await apply_plan(plan)
 
 
 def _verified_plan(approval: WikiRenameApproval) -> RenamePlan:

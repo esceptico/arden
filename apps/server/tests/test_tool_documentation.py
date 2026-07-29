@@ -53,6 +53,7 @@ def test_builtin_skill_docs_match_current_automation_and_tool_contracts():
     assert "`ReadFile`" not in mermaid
     assert "`read_file`" in mermaid
     assert "`not_found` result" in wiki
+    assert "read the directory README before its pages" in wiki
 
 
 def test_automation_docs_use_current_prompt_and_trigger_contracts():
