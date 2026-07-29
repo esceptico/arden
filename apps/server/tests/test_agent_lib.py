@@ -7,7 +7,6 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
-from pydantic import BaseModel, ValidationError
 
 from arden.agent import (
     Agent,
@@ -1377,74 +1376,3 @@ async def test_agent_mutates_caller_messages_list_in_place():
     assert len(messages) > original_len
     assert any(m["role"] == "assistant" for m in messages)
     assert any(m["role"] == "tool" for m in messages)
-
-
-# ============================================================
-# Structured output — output_schema adds one constrained final step
-# ============================================================
-
-
-class _Verdict(BaseModel):
-    ok: bool
-    note: str
-
-
-@pytest.mark.asyncio
-async def test_output_schema_runs_constrained_final_step():
-    llm = FakeLLM(
-        [
-            _response(tool_calls=[_tc("1", "t", {})]),
-            _response(text="prose report"),
-            _response(text='{"ok": true, "note": "fine"}'),  # the constrained step
-        ]
-    )
-    executor = FakeExecutor({"t": ToolResult(content="r", preview="r")})
-    agent = _make_agent(llm, executor, output_schema=_Verdict)
-    result = await agent.run(_msgs())
-    assert result.stop_reason == StopReason.END_TURN
-    assert result.text == "prose report"
-    assert result.output == {"ok": True, "note": "fine"}
-    # The constrained step saw the whole conversation plus the instruction.
-    assert llm.last_messages is not None
-
-
-@pytest.mark.asyncio
-async def test_output_schema_validation_failure_gets_one_repair():
-    llm = FakeLLM(
-        [
-            _response(text="prose report"),
-            _response(text="not json at all"),
-            _response(text='{"ok": true, "note": "repaired"}'),
-        ]
-    )
-    agent = _make_agent(llm, FakeExecutor({}), output_schema=_Verdict)
-    result = await agent.run(_msgs())
-    assert result.stop_reason == StopReason.END_TURN
-    assert result.text == "prose report"
-    assert result.output == {"ok": True, "note": "repaired"}
-    assert llm.call_count == 3
-    assert "structured result above is invalid" in llm.last_messages[-1]["content"]
-
-
-@pytest.mark.asyncio
-async def test_output_schema_repair_failure_is_not_reported_as_success():
-    llm = FakeLLM(
-        [
-            _response(text="prose report"),
-            _response(text="not json at all"),
-            _response(text="still not json"),
-        ]
-    )
-    agent = _make_agent(llm, FakeExecutor({}), output_schema=_Verdict)
-
-    with pytest.raises(ValidationError):
-        await agent.run(_msgs())
-
-
-@pytest.mark.asyncio
-async def test_no_output_schema_means_no_extra_llm_call():
-    llm = FakeLLM([_response(text="done")])
-    agent = _make_agent(llm, FakeExecutor({}))
-    result = await agent.run(_msgs())
-    assert result.output is None
-    assert llm.call_count == 1

@@ -24,8 +24,10 @@ from arden.core.raw_tool_results import (
     read_raw_tool_result,
     strip_internal_raw_tool_result_data,
 )
+from arden.events.internal import RunCompleted, RunFailed
 from arden.events.sse import event_from_payload
 from arden.logging import get_logger
+from arden.outbox.store import OutboxStore
 from arden.server.bus import StreamRecord
 
 _logger = get_logger(__name__)
@@ -452,9 +454,15 @@ _AREA_PATCH_UNSET = object()
 
 
 class SessionStore:
-    def __init__(self, conn: aiosqlite.Connection, read_conn: aiosqlite.Connection | None = None):
+    def __init__(
+        self,
+        conn: aiosqlite.Connection,
+        read_conn: aiosqlite.Connection | None = None,
+        chat_completion_conn: aiosqlite.Connection | None = None,
+    ):
         self.conn = conn
         self.read_conn = read_conn or conn
+        self.chat_completion_conn = chat_completion_conn
         self._background_event_lock = asyncio.Lock()
         self._session_locks_guard = asyncio.Lock()
         self._session_write_locks: dict[str, asyncio.Lock] = {}
@@ -1912,6 +1920,90 @@ class SessionStore:
             (status, stop_reason, now, ended_at, last_seq, error_code, error_message, run_id),
         )
         await self.conn.commit()
+
+    async def record_chat_run_completed_with_outbox(
+        self,
+        event: RunCompleted,
+        *,
+        stop_reason: str | None,
+        last_seq: int | None,
+    ) -> None:
+        if self.chat_completion_conn is None:
+            raise RuntimeError("chat completion connection is not configured")
+        now = datetime.now(UTC).isoformat()
+        conn = self.chat_completion_conn
+        await conn.execute("BEGIN IMMEDIATE")
+        try:
+            cursor = await conn.execute(
+                """
+                UPDATE chat_runs
+                SET status = 'completed',
+                    stop_reason = ?,
+                    updated_at = ?,
+                    ended_at = ?,
+                    last_seq = COALESCE(?, last_seq),
+                    error_code = NULL,
+                    error_message = NULL
+                WHERE run_id = ?
+                """,
+                (stop_reason, now, now, last_seq, event.run_id),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(f"unknown chat run: {event.run_id}")
+            outbox = OutboxStore(conn)
+            await outbox.enqueue_run_completed_in_transaction(event)
+            await conn.commit()
+        except BaseException:
+            await conn.rollback()
+            raise
+
+    async def record_chat_run_failed_with_outbox(
+        self,
+        event: RunFailed,
+        *,
+        status: str,
+        stop_reason: str,
+        last_seq: int | None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        if self.chat_completion_conn is None:
+            raise RuntimeError("chat completion connection is not configured")
+        now = datetime.now(UTC).isoformat()
+        conn = self.chat_completion_conn
+        await conn.execute("BEGIN IMMEDIATE")
+        try:
+            cursor = await conn.execute(
+                """
+                UPDATE chat_runs
+                SET status = ?,
+                    stop_reason = ?,
+                    updated_at = ?,
+                    ended_at = ?,
+                    last_seq = COALESCE(?, last_seq),
+                    error_code = ?,
+                    error_message = ?
+                WHERE run_id = ?
+                """,
+                (
+                    status,
+                    stop_reason,
+                    now,
+                    now,
+                    last_seq,
+                    error_code,
+                    error_message,
+                    event.run_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(f"unknown chat run: {event.run_id}")
+            outbox = OutboxStore(conn)
+            await outbox.enqueue_run_failed_in_transaction(event)
+            await conn.commit()
+        except BaseException:
+            await conn.rollback()
+            raise
 
     async def get_chat_run(self, run_id: str) -> dict | None:
         rows = await self.read_conn.execute_fetchall("SELECT * FROM chat_runs WHERE run_id = ?", (run_id,))

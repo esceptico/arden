@@ -11,6 +11,8 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from arden.areas.agent import AREA_REPORT_TOOL_NAME
+from arden.areas.lifecycle import AreaWikiUnavailable
 from arden.areas.work_store import AreaWorkConflict
 from arden.server.schemas import (
     AreaResponse,
@@ -172,6 +174,8 @@ async def create_area_page(request: Request, area_id: str):
         area = await _pages(request).create(area_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Area not found") from exc
+    except AreaWikiUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
@@ -276,9 +280,11 @@ async def reply_to_ask(request: Request, ask_id: str, body: ReplyBody):
         if automation is None or not automation.thread_id:
             raise HTTPException(status_code=409, detail="Reply channel unavailable")
         target = automation.thread_id
-        # The reply turn runs under the same permission contract as the
-        # custodian's own runs — the allowlist is dispatch-borne.
-        tool_scope = tuple(automation.tool_scope) if automation.tool_scope else None
+        tool_scope = (
+            tuple(name for name in automation.tool_scope if name != AREA_REPORT_TOOL_NAME)
+            if automation.tool_scope
+            else None
+        )
     await dispatch(
         target,
         f"REPLY TO ASK [{ask.id}]\n{body.message.strip()}",

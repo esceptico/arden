@@ -4,6 +4,7 @@ coalescing with budget/pause gating, and the ignored-asks attention signal."""
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from arden.areas.agent import AreaCustodianReport
 from arden.areas.custodian import EVENT_WAKE_DEBOUNCE_MINUTES, CustodianStore
 from arden.constants import AREA_ATTENTION_PRESETS
 
@@ -15,63 +16,99 @@ def _store(tmp_path: Path) -> CustodianStore:
 
 
 def _nom(asks, hours, reason="r", report="did things", **extra):
-    return {
-        "asks": asks,
-        "report": report,
-        "next_check_hours": hours,
-        "next_check_reason": reason,
-        **extra,
-    }
+    asks = (
+        [
+            {
+                "key": "active",
+                "text": "Needs attention",
+                "kind": "question",
+                "salience": 4,
+                "why_now": "Work is active",
+                "what_next": "Continue after the answer",
+            }
+        ]
+        if asks
+        else []
+    )
+    return AreaCustodianReport.model_validate(
+        {
+            "asks": asks,
+            "report": report,
+            "next_check_hours": hours,
+            "next_check_reason": reason,
+            "made_progress": False,
+            "work_remaining": False,
+            **extra,
+        }
+    )
 
 
 def test_next_check_clamped_to_attention_bounds(tmp_path):
     c = _store(tmp_path)
     active = AREA_ATTENTION_PRESETS["active"]
     # Too eager → floor.
-    nxt = c.record_run("a1", _nom([{"k": 1}], hours=0.1), attention="active", now=NOW)
+    nxt = c.record_run("a1", _nom([{"k": 1}], hours=0.1), run_ref="run:1", attention="active", now=NOW)
     assert nxt == NOW + timedelta(hours=active["min_hours"])
     # Too lazy → ceiling.
-    nxt = c.record_run("a1", _nom([{"k": 1}], hours=10_000), attention="active", now=NOW)
+    nxt = c.record_run("a1", _nom([{"k": 1}], hours=336), run_ref="run:2", attention="active", now=NOW)
     assert nxt == NOW + timedelta(hours=active["max_hours"])
-
-
-def test_missing_nomination_falls_back_to_ceiling_never_a_tight_loop(tmp_path):
-    c = _store(tmp_path)
-    nxt = c.record_run("a1", None, attention="ambient", now=NOW)
-    assert nxt == NOW + timedelta(hours=AREA_ATTENTION_PRESETS["ambient"]["max_hours"])
 
 
 def test_intake_is_only_needed_before_first_successful_report(tmp_path):
     c = _store(tmp_path)
 
     assert c.needs_intake("a1")
-    c.record_run("a1", _nom([], hours=24), attention="ambient", now=NOW)
+    c.record_run("a1", _nom([], hours=24), run_ref="run:1", attention="ambient", now=NOW)
     assert not c.needs_intake("a1")
 
 
 def test_quiet_streak_decays_cadence_and_activity_resets_it(tmp_path):
     c = _store(tmp_path)
     # 1st quiet run: agent's choice honored (24h within ambient bounds).
-    first = c.record_run("a1", _nom([], hours=24), attention="ambient", now=NOW)
+    first = c.record_run("a1", _nom([], hours=24), run_ref="run:1", attention="ambient", now=NOW)
     assert first == NOW + timedelta(hours=24)
     # 2nd consecutive quiet run: stretched ×1.5.
-    second = c.record_run("a1", _nom([], hours=24), attention="ambient", now=NOW)
+    second = c.record_run("a1", _nom([], hours=24), run_ref="run:2", attention="ambient", now=NOW)
     assert second == NOW + timedelta(hours=36)
     # Activity (an ask) resets the streak; choice honored again.
-    third = c.record_run("a1", _nom([{"k": 1}], hours=24), attention="ambient", now=NOW)
+    third = c.record_run("a1", _nom([{"k": 1}], hours=24), run_ref="run:3", attention="ambient", now=NOW)
     assert third == NOW + timedelta(hours=24)
     assert c.state("a1")["last_report"] == "did things"
     assert c.state("a1")["next_check_reason"] == "r"
 
 
+def test_report_projection_replay_is_idempotent(tmp_path):
+    c = _store(tmp_path)
+    report = _nom([], hours=24)
+
+    first = c.record_run(
+        "a1",
+        report,
+        run_ref="run:1",
+        attention="ambient",
+        now=NOW,
+    )
+    replay = c.record_run(
+        "a1",
+        report,
+        run_ref="run:1",
+        attention="ambient",
+        now=NOW + timedelta(hours=1),
+    )
+
+    assert replay == first
+    assert c.state("a1")["quiet_streak"] == 1
+
+
 def test_material_progress_resets_decay_without_an_ask(tmp_path):
     c = _store(tmp_path)
-    c.record_run("a1", _nom([], hours=24), attention="ambient", now=NOW)
-    c.record_run("a1", _nom([], hours=24), attention="ambient", now=NOW)
+    c.record_run("a1", _nom([], hours=24), run_ref="run:1", attention="ambient", now=NOW)
+    c.record_run("a1", _nom([], hours=24), run_ref="run:2", attention="ambient", now=NOW)
 
     nxt = c.record_run(
         "a1",
         _nom([], hours=24, made_progress=True, work_remaining=True),
+        run_ref="run:3",
         attention="ambient",
         now=NOW,
     )
@@ -103,6 +140,7 @@ def test_active_work_can_request_short_bounded_continuation(tmp_path):
             continuation_minutes=5,
             continuation_reason="finish comparing labs",
         ),
+        run_ref="run:1",
         attention="ambient",
         now=NOW,
     )
@@ -129,6 +167,7 @@ def test_continuation_falls_back_when_daily_cap_is_spent(tmp_path):
     nxt = c.record_run(
         "a1",
         _nom([], hours=24, made_progress=True, work_remaining=True, continuation_minutes=5),
+        run_ref="run:1",
         attention="ambient",
         now=NOW,
     )
@@ -141,6 +180,7 @@ def test_paused_area_never_schedules_short_continuation(tmp_path):
     nxt = c.record_run(
         "a1",
         _nom([], hours=24, made_progress=True, work_remaining=True, continuation_minutes=5),
+        run_ref="run:1",
         attention="ambient",
         paused=True,
         now=NOW,
@@ -196,12 +236,12 @@ def test_events_coalesce_and_respect_budget_and_pause(tmp_path):
 
 def test_ignored_asks_three_strikes_steps_attention_down(tmp_path):
     c = _store(tmp_path)
-    assert c.note_ignored_asks("a1", True) is False
-    assert c.note_ignored_asks("a1", True) is False
-    assert c.note_ignored_asks("a1", True) is True  # 3rd strike
+    assert c.note_ignored_asks("a1", True, attention="active", run_ref="run:1") is None
+    assert c.note_ignored_asks("a1", True, attention="active", run_ref="run:2") is None
+    assert c.note_ignored_asks("a1", True, attention="active", run_ref="run:3") == "ambient"
     assert c.state("a1")["unanswered_streak"] == 0  # reset after the signal
-    c.note_ignored_asks("a1", True)
-    assert c.note_ignored_asks("a1", False) is False  # answering resets
+    c.note_ignored_asks("a1", True, attention="ambient", run_ref="run:4")
+    assert c.note_ignored_asks("a1", False, attention="ambient", run_ref="run:5") is None
     assert c.state("a1")["unanswered_streak"] == 0
 
 
@@ -243,14 +283,17 @@ def test_delivery_retries_exact_request_after_restart_without_consuming_new_wake
     allowed, retry = restarted.begin_or_resume_delivery(
         "a1",
         iteration=1,
-        client_id="loop:area:a1:1",
+        client_id="loop:area:a1:1:attempt-2",
         attention="ambient",
         manual=False,
         skip_approvals=True,
         build_message=must_not_render,
         now=NOW,
     )
-    assert allowed and retry == first
+    assert allowed and retry is not None
+    assert retry.client_id == "loop:area:a1:1:attempt-2"
+    assert retry.message == first.message
+    assert retry.skip_approvals == first.skip_approvals
     assert restarted.runs_today("a1", now=NOW) == 1
     assert restarted.state("a1")["pending_events"] == ["later wake"]
 
@@ -339,15 +382,6 @@ def test_all_autonomous_runs_share_cap_while_manual_runs_bypass(tmp_path):
     )
     assert manual
     assert c.runs_today("a1", now=NOW) == cap
-
-
-def test_exact_page_write_digest_is_consumed_once(tmp_path):
-    c = _store(tmp_path)
-    c.record_page_write("a1", "digest-1")
-
-    assert not c.consume_self_write("a1", "different")
-    assert c.consume_self_write("a1", "digest-1")
-    assert not c.consume_self_write("a1", "digest-1")
 
 
 def test_partial_legacy_state_recovers_without_blocking_startup(tmp_path):

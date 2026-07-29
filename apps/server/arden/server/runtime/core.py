@@ -5,6 +5,7 @@ from datetime import datetime
 from fastapi import HTTPException, Request
 
 import arden.database as database
+from arden.areas.agent import CUSTODIAN_ACTOR_PREFIX
 from arden.automation.builtins import BUILTINS
 from arden.config import Config, get_config
 from arden.constants import (
@@ -54,7 +55,7 @@ from arden.tools.connections import ConnectionService
 from arden.tools.executor import ToolExecutor
 from arden.wiki.approval_store import WikiRenameApprovalStore
 from arden.wiki.approvals import WikiRenameApprovalCoordinator
-from arden.wiki.constants import WIKI_HEALTH_ORIGIN, WIKI_MAINTENANCE_ACTOR
+from arden.wiki.constants import WIKI_HEALTH_ORIGIN, WIKI_MAINTENANCE_ACTOR, WIKI_POST_COMMIT_SERVICE
 from arden.wiki.context import WikiContextBuilder, WikiPageIndexProjection
 from arden.wiki.curation.completion import CompletionWikiEditCuratorReviewer
 from arden.wiki.curation.engine import WikiEditCurator
@@ -127,6 +128,8 @@ class Runtime:
         self._wiki_curator_store: WikiEditCuratorQueueStore | None = None
         self.wiki_curator_worker: WikiEditCuratorWorker | None = None
         self._wiki_health_lock = asyncio.Lock()
+        self._wiki_projection_lock = asyncio.Lock()
+        self._wiki_change_head: str | None = None
         self.fact_service: FactService | None = None
         self._fact_plan_conn: database.aiosqlite.Connection | None = None
         self._fact_consumer_store: FactConsumerStore | None = None
@@ -215,12 +218,15 @@ class Runtime:
         services["connections"] = self.connection_service
         if self.wiki_service is not None:
             services["wiki"] = self.wiki_service
+            services[WIKI_POST_COMMIT_SERVICE] = self.project_wiki_change_after_commit
         if self.automation:
             services["area_custodians"] = self.automation.custodians
             if self.automation.fact_maintenance_review is not None:
                 services["fact_maintenance"] = self.automation.fact_maintenance_review
             if self.automation.wiki_maintenance_review is not None:
                 services["wiki_maintenance"] = self.automation.wiki_maintenance_review
+        if self.stores is not None:
+            services["area_work"] = self.stores.area_work
         services.update(self.knowledge.tool_services())
         if self.automation_service:
             services["automation"] = self.automation_service
@@ -301,10 +307,23 @@ class Runtime:
             self.wiki_page_projection = projection
             self.wiki_context = WikiContextBuilder(self.wiki_service, projection, self.fact_service.revision)
             await projection.sync()
+        if self._wiki_maintenance_store is not None:
+            self._wiki_change_head = await self._wiki_maintenance_store.get_projection_revision()
         self._init_skills()
         await self._init_notifiers()
         self._init_automation()
         await self.project_wiki_health()
+        if (
+            self.wiki_service is not None
+            and self._wiki_maintenance_store is not None
+            and self._wiki_change_head is None
+            and self.wiki_service.repository.head is not None
+        ):
+            self._wiki_change_head = self.wiki_service.repository.head
+            await self._wiki_maintenance_store.record_projection_revision(
+                expected_revision=None,
+                revision=self._wiki_change_head,
+            )
         await self._init_mcp()
         self._init_tools()
         if self.wiki_curator_worker is not None:
@@ -437,11 +456,7 @@ class Runtime:
                 await self.project_wiki_health()
 
     async def _after_automation_finished(self, task_id: str, success: bool) -> None:
-        wiki_changed = (
-            self.wiki_service is not None
-            and self.wiki_page_projection is not None
-            and self.wiki_service.repository.head != self.wiki_page_projection.last_state.wiki_head
-        )
+        wiki_changed = self.wiki_service is not None and self.wiki_service.repository.head != self._wiki_change_head
         if task_id not in _HEALTH_PHASE_IDS and not wiki_changed:
             return
         if success and task_id == BUILTIN_MEMORY_RETENTION_ID:
@@ -525,7 +540,7 @@ class Runtime:
             return watermark is None
         return watermark is not None and watermark.revision == before
 
-    async def project_wiki_health(self) -> None:
+    async def project_wiki_health(self) -> str | None:
         """Refresh the derived health page and surface projection failures."""
 
         if (
@@ -536,7 +551,7 @@ class Runtime:
             or self.wiki_service is None
             or self.wiki_page_projection is None
         ):
-            return
+            return None if self.wiki_service is None else self.wiki_service.repository.head
         async with self._wiki_health_lock:
             for attempt in range(2):
                 try:
@@ -625,19 +640,96 @@ class Runtime:
                             WikiHealthPendingReview(item.review_id, item.summary) for item in pending
                         ),
                     )
-                    await asyncio.to_thread(WikiHealthProjector(self.wiki_service).project, value)
-                    return
+                    result = await asyncio.to_thread(WikiHealthProjector(self.wiki_service).project, value)
+                    return report.through_revision if result.commit is None else result.commit.commit_id
                 except RevisionConflictError:
                     if attempt == 0:
                         continue
                     raise
 
     async def project_wiki_state(self) -> None:
-        """Converge the rebuildable page index before rendering health."""
+        await self.project_wiki_change()
 
-        if self.wiki_page_projection is not None:
-            await self.wiki_page_projection.sync()
-        await self.project_wiki_health()
+    async def project_wiki_change_after_commit(self) -> bool:
+        """Project a committed write now or durably queue its retry."""
+
+        try:
+            await self.project_wiki_change()
+        except Exception:
+            if self.stores is None or self.wiki_service is None:
+                raise RuntimeError("managed wiki projection retry is unavailable")
+            revision = self.wiki_service.repository.head
+            if revision is None:
+                raise RuntimeError("committed wiki projection has no revision")
+            await self.stores.outbox.enqueue_wiki_projection(revision)
+            _logger.exception(
+                "Wiki projection deferred after committed write",
+                revision=revision,
+            )
+            return True
+        return False
+
+    async def project_wiki_change(self) -> None:
+        """Publish one canonical wiki-head transition to every derived consumer."""
+
+        if self.wiki_service is None or self.wiki_page_projection is None or self._wiki_maintenance_store is None:
+            raise RuntimeError("managed wiki projection is unavailable")
+        async with self._wiki_projection_lock:
+            previous_head = self._wiki_change_head
+            final_head = None
+            for _attempt in range(3):
+                await self.wiki_page_projection.sync()
+                await self.project_wiki_health()
+                await self.wiki_page_projection.sync()
+                final_head = await self.project_wiki_health()
+                if self.wiki_service.repository.head == final_head:
+                    break
+            else:
+                raise RevisionConflictError("wiki changed during every projection attempt")
+
+            if final_head == previous_head:
+                return
+            commits = await asyncio.to_thread(
+                self.wiki_service.repository.history,
+                start=final_head,
+                stop_before=previous_head,
+            )
+            paths: set[str] = set()
+            attributed_paths: set[str] = set()
+            source_areas_by_path: dict[str, set[str]] = {}
+            for commit in commits:
+                if commit.origin == WIKI_HEALTH_ORIGIN:
+                    continue
+                source_area_id = None
+                if commit.origin == "area.page" and commit.actor.startswith(CUSTODIAN_ACTOR_PREFIX):
+                    candidate = commit.actor.removeprefix(CUSTODIAN_ACTOR_PREFIX)
+                    if candidate and ":" not in candidate:
+                        source_area_id = candidate
+                for change in commit.changes:
+                    for path in (
+                        None if change.before is None else change.before.path,
+                        None if change.after is None else change.after.path,
+                    ):
+                        if path is None:
+                            continue
+                        paths.add(path)
+                        if path in attributed_paths:
+                            continue
+                        attributed_paths.add(path)
+                        if source_area_id is not None:
+                            source_areas_by_path.setdefault(path, set()).add(source_area_id)
+            if paths and self.automation is not None:
+                await self.automation.notify_wiki_changed(
+                    sorted(paths),
+                    final_head,
+                    source_areas_by_path=source_areas_by_path,
+                )
+            if final_head is not None:
+                await self._wiki_maintenance_store.record_projection_revision(
+                    expected_revision=previous_head,
+                    revision=final_head,
+                )
+            self._wiki_change_head = final_head
 
     @staticmethod
     def _semantic_wiki_revision(report: WikiChangesReport) -> str | None:
@@ -680,6 +772,7 @@ class Runtime:
             get_calendar_source=lambda: self.integrations.get_client("calendar"),
             get_slack_client=lambda: self.integrations.get_client("slack"),
             resolve_auxiliary_completion=self.auxiliary_completion,
+            project_wiki_state=self.project_wiki_state,
             get_fact_dream=self._get_fact_dream,
             get_fact_maintenance=self._create_fact_maintenance,
             get_fact_synthesis=self._get_fact_synthesis,
@@ -773,8 +866,6 @@ class Runtime:
             available_integrations=self.get_available_integrations(),
             integration_errors=self.get_integration_errors(),
             connection_catalog=tuple(self.integrations.list_connections()),
-            enqueue_run_completed=self.stores.outbox.enqueue_run_completed if self.stores else None,
-            enqueue_run_failed=self.stores.outbox.enqueue_run_failed if self.stores else None,
             dispatch_session_message=self.dispatch_session_message,
             wiki_context=self.wiki_context,
             skill_registry=self.skill_registry,
@@ -809,6 +900,8 @@ class Runtime:
         if not self.automation:
             raise RuntimeError("Automation runtime is not initialized")
         await self.automation.start_scheduler()
+        if self.wiki_service is not None:
+            await self.project_wiki_state()
 
     def start_monitor(self) -> None:
         if not self.automation:

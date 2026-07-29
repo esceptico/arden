@@ -73,6 +73,7 @@ the active session and Area.
 
 Wiki pages are the readable, managed projection. Use the read tools to discover
 and inspect pages; generated publishing is reserved for an explicit automation.
+This group is deferred: load it with `load_tools(group="wiki")`.
 
 | Tool | Description | Approval |
 |------|-------------|----------|
@@ -199,6 +200,7 @@ Follow the same sequence for source-of-truth work: **search → inspect → prev
 | Search Gmail | `load_tools(group="email")` |
 | Read or edit calendar | `load_tools(group="calendar")` |
 | Search Slack | `load_tools(group="slack")` |
+| Browse or publish managed wiki pages | `load_tools(group="wiki")` |
 | Manage automations | `load_tools(group="automations")` |
 | Spawn or inspect background work | `load_tools(group="background")` |
 | Send a notification | `load_tools(group="notifications")` |
@@ -238,11 +240,9 @@ This is how [area agents](/guides/areas) stay observe-only: they get bounded
 fact and wiki reads, but no fact commits, generated-page publishing, or external
 actions. A scope of `null` (the default) is unrestricted.
 
-## Structured output
-
-An agent run can return a validated object instead of just prose. Pass a schema, and after the normal tool loop finishes, the run spends one extra constrained step producing an object that matches it. The text and the structured result come back separately.
-
-Automations reference a named schema (`output_schema`), resolved on the server. This is the mechanism behind an area agent's one-ask nomination: rather than parsing free-form text for an ask, the run returns `{ ask: {...} | null }` as a guaranteed-shaped object.
+Area custodians finish by calling `submit_area_report`. Invalid or stale reports
+return a tool error inside the same agent loop, so the custodian can correct the
+report before the automation is allowed to settle.
 
 ## User-defined tools
 

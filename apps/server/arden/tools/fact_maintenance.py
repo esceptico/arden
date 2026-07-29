@@ -1,8 +1,8 @@
 """The only mutation surface available to the Memory Maintenance agent."""
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 from arden.constants import BUILTIN_MEMORY_CONSOLIDATE_ID
 from arden.memory.facts.maintenance import FACT_MAINTENANCE_REVIEW_TOOL_NAME
@@ -16,19 +16,27 @@ from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
 FACT_MAINTENANCE_SERVICE = "fact_maintenance"
 
 
-class FactMaintenanceReviewInput(BaseModel):
+class FactMaintenanceReviewNext(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    action: Literal["next", "decide"]
-    decision: FactMaintenanceDecision | None = None
+    action: Literal["next"]
 
-    @model_validator(mode="after")
-    def validate_action(self):
-        if self.action == "decide" and self.decision is None:
-            raise ValueError("decide requires a decision")
-        if self.action == "next" and self.decision is not None:
-            raise ValueError("next must not include a decision")
-        return self
+
+class FactMaintenanceReviewDecide(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["decide"]
+    decision: FactMaintenanceDecision
+
+
+FactMaintenanceReviewAction = Annotated[
+    FactMaintenanceReviewNext | FactMaintenanceReviewDecide,
+    Field(discriminator="action"),
+]
+
+
+class FactMaintenanceReviewInput(RootModel[FactMaintenanceReviewAction]):
+    """The complete, mutually exclusive review-tool contract."""
 
 
 def _service(execution: ToolExecution) -> FactMaintenanceReviewService | ToolResult:
@@ -77,7 +85,11 @@ async def fact_maintenance_review(execution: ToolExecution, args: FactMaintenanc
     if isinstance(service, ToolResult):
         return service
     try:
-        state = await service.next() if args.action == "next" else await service.decide(args.decision)
+        match args.root:
+            case FactMaintenanceReviewNext():
+                state = await service.next()
+            case FactMaintenanceReviewDecide(decision=decision):
+                state = await service.decide(decision)
         return _result(state)
     except FactMaintenanceError as exc:
         return ToolResult.failure(

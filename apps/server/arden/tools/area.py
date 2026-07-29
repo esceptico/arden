@@ -1,18 +1,21 @@
 import asyncio
 import json
-from hashlib import sha256
 
 from pydantic import BaseModel, Field
 
 from arden.agent.types.tools import ToolEffect, ToolOutcome, ToolOutcomeStatus
+from arden.areas.agent import CUSTODIAN_ACTOR_PREFIX, AreaCustodianReport
+from arden.areas.work_store import AreaWorkReportError, AreaWorkStore
 from arden.revisions import RevisionConflictError
 from arden.tools.core import ToolResult, tool
 from arden.tools.core.context import ToolExecution
 from arden.tools.core.formatting import format_lines_with_pagination
 from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
+from arden.wiki.constants import WIKI_POST_COMMIT_SERVICE
 from arden.wiki.service import WikiService, WikiValidationError
 
 WIKI_SERVICE = "wiki"
+AREA_WORK_SERVICE = "area_work"
 
 
 class AreaPageReadInput(BaseModel):
@@ -89,15 +92,12 @@ def _write_failure(exc: Exception) -> ToolResult:
     )
 
 
-def _record_write(execution: ToolExecution, content: bytes) -> None:
-    """Mark only the active Custodian's exact self-write for watcher deduplication."""
-
+def _custodian_area_id(execution: ToolExecution) -> str | None:
     area = execution.ctx.area
-    if area is None or execution.ctx.run.loop_task_id != f"area:{area.area_id}":
-        return
-    provenance = execution.ctx.services.get("area_custodians")
-    if provenance is not None:
-        provenance.record_page_write(area.area_id, sha256(content).hexdigest())
+    task_id = f"area:{area.area_id}" if area is not None else None
+    if task_id is None or execution.ctx.run.loop_task_id != task_id or execution.ctx.run.automation_id != task_id:
+        return None
+    return area.area_id
 
 
 async def area_page_read(execution: ToolExecution, args: AreaPageReadInput) -> ToolResult:
@@ -142,6 +142,7 @@ async def area_page_patch(execution: ToolExecution, args: AreaPagePatchInput) ->
             recovery_action="Read the page and include enough exact surrounding text for one match.",
         )
     content = raw.replace(args.old_text, args.new_text, 1).encode()
+    custodian_area_id = _custodian_area_id(execution)
     try:
         updated = await asyncio.to_thread(
             wiki.update_page,
@@ -149,14 +150,25 @@ async def area_page_patch(execution: ToolExecution, args: AreaPagePatchInput) ->
             content=content,
             expected_version=args.expected_version,
             expected_head=args.expected_head,
-            actor=f"automation:{execution.ctx.run.automation_id or 'area'}",
+            actor=(
+                f"{CUSTODIAN_ACTOR_PREFIX}{custodian_area_id}"
+                if custodian_area_id is not None
+                else f"automation:{execution.ctx.run.automation_id or 'area'}"
+            ),
             origin="area.page",
             reason="update attached Area page",
         )
     except Exception as exc:
         return _write_failure(exc)
-    _record_write(execution, updated.content)
-    return _updated_result(record, updated, wiki.repository.head, "Patched this Area's wiki page.", "Area page patched")
+    projection_pending = await execution.ctx.services[WIKI_POST_COMMIT_SERVICE]()
+    return _updated_result(
+        record,
+        updated,
+        wiki.repository.head,
+        "Patched this Area's wiki page.",
+        "Area page patched",
+        projection_pending=projection_pending,
+    )
 
 
 async def area_page_write(execution: ToolExecution, args: AreaPageWriteInput) -> ToolResult:
@@ -167,6 +179,7 @@ async def area_page_write(execution: ToolExecution, args: AreaPageWriteInput) ->
     if record.resource.version_id != args.expected_version or head != args.expected_head:
         return _write_failure(RevisionConflictError("Area page revision changed"))
     content = record.page.with_body((args.content.rstrip() + "\n").encode()).to_bytes()
+    custodian_area_id = _custodian_area_id(execution)
     try:
         updated = await asyncio.to_thread(
             wiki.update_page,
@@ -174,17 +187,36 @@ async def area_page_write(execution: ToolExecution, args: AreaPageWriteInput) ->
             content=content,
             expected_version=args.expected_version,
             expected_head=args.expected_head,
-            actor=f"automation:{execution.ctx.run.automation_id or 'area'}",
+            actor=(
+                f"{CUSTODIAN_ACTOR_PREFIX}{custodian_area_id}"
+                if custodian_area_id is not None
+                else f"automation:{execution.ctx.run.automation_id or 'area'}"
+            ),
             origin="area.page",
             reason="replace attached Area page body",
         )
     except Exception as exc:
         return _write_failure(exc)
-    _record_write(execution, updated.content)
-    return _updated_result(record, updated, wiki.repository.head, "Updated this Area's wiki page.", "Area page updated")
+    projection_pending = await execution.ctx.services[WIKI_POST_COMMIT_SERVICE]()
+    return _updated_result(
+        record,
+        updated,
+        wiki.repository.head,
+        "Updated this Area's wiki page.",
+        "Area page updated",
+        projection_pending=projection_pending,
+    )
 
 
-def _updated_result(before, after, head: str | None, content: str, preview: str) -> ToolResult:
+def _updated_result(
+    before,
+    after,
+    head: str | None,
+    content: str,
+    preview: str,
+    *,
+    projection_pending: bool,
+) -> ToolResult:
     metadata = {
         "page_id": after.page.page_id,
         "page_path": after.resource.path,
@@ -192,6 +224,8 @@ def _updated_result(before, after, head: str | None, content: str, preview: str)
         "head": head,
         "size": len(after.content),
     }
+    if projection_pending:
+        metadata["projection_pending"] = True
     return ToolResult(
         content=(f"{content}\nArea page metadata: {json.dumps(metadata, ensure_ascii=False, separators=(',', ':'))}"),
         preview=preview,
@@ -239,6 +273,37 @@ async def area_run_automation(execution: ToolExecution, args: AreaAutomationRunI
     return ToolResult(content=f"Started Area automation {args.task_id}.", preview="Area automation started")
 
 
+async def submit_area_report(execution: ToolExecution, report: AreaCustodianReport) -> ToolResult:
+    area_id = _custodian_area_id(execution)
+    if area_id is None:
+        return ToolResult.failure(
+            code="forbidden",
+            message="Area reports are accepted only from the current Area custodian run.",
+            preview="Report not accepted",
+        )
+    store = execution.ctx.get_client(AREA_WORK_SERVICE, AreaWorkStore)
+    if store is None:
+        return ToolResult.failure(
+            code="not_configured",
+            message="Area work storage is unavailable.",
+            preview="Report unavailable",
+        )
+    try:
+        applied = await store.apply_report(area_id, f"run:{execution.ctx.run.run_id}", report)
+    except AreaWorkReportError as exc:
+        return ToolResult.failure(
+            code="invalid_area_report",
+            message=str(exc),
+            preview="Report rejected",
+            recovery_action="Refresh current Area work, correct the report, and retry.",
+        )
+    return ToolResult(
+        content="Area report accepted. End this run." if applied else "Area report was already accepted. End this run.",
+        preview="Area report accepted",
+        data={"accepted": True},
+    )
+
+
 _WIKI_PERMISSION = frozenset({WIKI_SERVICE})
 
 area_page_read_tool = tool(
@@ -255,7 +320,11 @@ area_page_patch_tool = tool(
     display_description="Patch the current Area wiki page.",
     description="Replace one exact block in the attached managed page using its version and wiki head.",
     input_model=AreaPagePatchInput,
-    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=_WIKI_PERMISSION),
+    policy=ToolPolicy(
+        action=ToolAction.WRITE,
+        scope=ToolScope.INTERNAL,
+        permissions=frozenset({WIKI_SERVICE, WIKI_POST_COMMIT_SERVICE}),
+    ),
     execute=area_page_patch,
 )
 
@@ -264,7 +333,11 @@ area_page_write_tool = tool(
     display_description="Replace the current Area wiki page body.",
     description="Replace only the Markdown body of the attached managed page using exact version tokens.",
     input_model=AreaPageWriteInput,
-    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=_WIKI_PERMISSION),
+    policy=ToolPolicy(
+        action=ToolAction.WRITE,
+        scope=ToolScope.INTERNAL,
+        permissions=frozenset({WIKI_SERVICE, WIKI_POST_COMMIT_SERVICE}),
+    ),
     execute=area_page_write,
 )
 
@@ -275,4 +348,21 @@ area_run_automation_tool = tool(
     input_model=AreaAutomationRunInput,
     policy=ToolPolicy(action=ToolAction.EXECUTE, scope=ToolScope.INTERNAL, permissions=frozenset({"automation"})),
     execute=area_run_automation,
+)
+
+submit_area_report_tool = tool(
+    display_name="SubmitAreaReport",
+    display_description="Commit the current Area custodian report.",
+    description=(
+        "Submit exactly one final Area report. State conflicts are returned for correction in this run. "
+        "After acceptance, end the run."
+    ),
+    input_model=AreaCustodianReport,
+    policy=ToolPolicy(
+        action=ToolAction.WRITE,
+        scope=ToolScope.INTERNAL,
+        permissions=frozenset({AREA_WORK_SERVICE}),
+        idempotent=True,
+    ),
+    execute=submit_area_report,
 )

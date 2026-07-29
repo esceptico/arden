@@ -172,7 +172,10 @@ def client(tmp_path: Path):
         async def get(self, task_id: str):
             if task_id != f"area:{o1a['area_id']}":
                 return None
-            return SimpleNamespace(thread_id="custodian-thread", tool_scope=["area_page_read", "recall"])
+            return SimpleNamespace(
+                thread_id="custodian-thread",
+                tool_scope=["submit_area_report", "area_page_read", "search_facts"],
+            )
 
     dispatched: list[tuple] = []
 
@@ -202,6 +205,7 @@ def client(tmp_path: Path):
         wiki=WikiService(ManagedFileRepository(tmp_path / "wiki")),
         sessions=areas,
         lifecycle=test_app.state.area_lifecycle,
+        project_wiki_state=_hydrate_area_snapshot,
     )
     test_app.state.emit_areas_changed = _emit_areas_changed
 
@@ -395,9 +399,9 @@ def test_reply_posts_linked_message_to_custodian_channel(client):
 
     assert res.status_code == 200
     assert res.json()["resolution"] == "replied"
-    # The reply turn runs under the custodian's own permission contract.
+    # Reply turns keep read/edit permissions but cannot submit a custodian report.
     assert c.app.state.dispatched == [
-        ("custodian-thread", f"REPLY TO ASK [agent:{o1a}:dose]\nUse 5 mg.", ("area_page_read", "recall"))
+        ("custodian-thread", f"REPLY TO ASK [agent:{o1a}:dose]\nUse 5 mg.", ("area_page_read", "search_facts"))
     ]
     assert emitted == [[o1a]]
 
@@ -563,6 +567,22 @@ def test_create_and_detach_area_page(client):
     detached = c.delete(f"/areas/{plain['area_id']}/page")
     assert detached.status_code == 200
     assert detached.json()["page_path"] is None
+
+
+def test_create_area_page_returns_503_when_wiki_is_disabled(client):
+    c, _, _, _, areas = client
+    plain = areas._seed(name="Design")
+    c.app.state.area_pages = AreaPageService(
+        wiki=None,
+        sessions=areas,
+        lifecycle=c.app.state.area_lifecycle,
+        project_wiki_state=c.app.state.hydrate_area_snapshot,
+    )
+
+    response = c.post(f"/areas/{plain['area_id']}/page")
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Managed wiki is unavailable"
 
 
 def test_detach_area_page_rejects_delegated_area(client):

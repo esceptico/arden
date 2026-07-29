@@ -141,7 +141,7 @@ async def test_fact_synthesis_stays_due_through_startup_reconciliation(store: Au
     from arden.automation.builtins import seed_builtins
     from arden.constants import BUILTIN_MEMORY_SYNTHESIZE_ID
 
-    await seed_builtins(store)
+    await seed_builtins(store, memory_model="memory-model")
     synthesis = await store.get(BUILTIN_MEMORY_SYNTHESIZE_ID)
     assert synthesis is not None
     last_run = datetime.now(UTC) - timedelta(hours=12)
@@ -152,7 +152,7 @@ async def test_fact_synthesis_stays_due_through_startup_reconciliation(store: Au
             next_run_at=last_run + timedelta(days=1),
         )
     )
-    await seed_builtins(store)
+    await seed_builtins(store, memory_model="memory-model")
 
     migrated = await store.get(BUILTIN_MEMORY_SYNTHESIZE_ID)
     assert migrated is not None
@@ -183,7 +183,7 @@ async def test_overdue_memory_retention_stays_due_through_startup_reconciliation
     from arden.automation.builtins import seed_builtins
     from arden.constants import BUILTIN_MEMORY_RETENTION_ID
 
-    await seed_builtins(store)
+    await seed_builtins(store, memory_model="memory-model")
     retention = await store.get(BUILTIN_MEMORY_RETENTION_ID)
     assert retention is not None
     last_run = datetime.now(UTC) - timedelta(days=2)
@@ -208,7 +208,7 @@ async def test_overdue_wiki_maintenance_catches_up_once(store: AutomationStore):
     from arden.automation.builtins import seed_builtins
     from arden.constants import BUILTIN_WIKI_MAINTENANCE_ID
 
-    await seed_builtins(store)
+    await seed_builtins(store, memory_model="memory-model")
     maintenance = await store.get(BUILTIN_WIKI_MAINTENANCE_ID)
     assert maintenance is not None
     last_run = datetime.now(UTC) - timedelta(hours=12)

@@ -9,11 +9,14 @@ import pytest
 import pytest_asyncio
 
 import arden.database as database
+from arden.agent import Usage
 from arden.constants import RAW_TOOL_RESULT_INLINE_MAX_BYTES
 from arden.context.models import SessionState
 from arden.context.store import SessionStore
 from arden.core.raw_tool_results import RAW_TOOL_RESULT_DATA_KEY, persist_raw_tool_result
+from arden.events.internal import RunCompleted, RunFailed
 from arden.events.sse import ThinkingEvent, ToolCallResultEvent
+from arden.outbox.store import OutboxStore
 from arden.server.bus import StreamRecord
 from arden.services.session import SessionService
 
@@ -21,11 +24,14 @@ from arden.services.session import SessionService
 @pytest_asyncio.fixture
 async def store(tmp_path: Path):
     conn = await database.connect(tmp_path / "sessions.db")
+    completion_conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
-    s = SessionStore(conn, read_conn)
+    s = SessionStore(conn, read_conn, completion_conn)
     await s.init_schema()
+    await OutboxStore(completion_conn).init_schema()
     yield s
     await read_conn.close()
+    await completion_conn.close()
     await conn.close()
 
 
@@ -301,6 +307,122 @@ async def test_chat_run_and_queued_message_ledger(store: SessionStore):
     assert queued[0]["status"] == "ingested"
     assert queued[0]["ingested_seq"] == 42
     assert queued[0]["ingested_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_completed_chat_run_and_outbox_commit_together(store: SessionStore):
+    await store.record_chat_run_started("run-complete", "sess-1")
+    event = RunCompleted("run-complete", "sess-1", (), Usage(), "done")
+
+    await store.record_chat_run_completed_with_outbox(event, stop_reason="end_turn", last_seq=12)
+
+    completed = await store.get_chat_run("run-complete")
+    assert completed is not None
+    assert completed["status"] == "completed"
+    assert completed["stop_reason"] == "end_turn"
+    assert completed["last_seq"] == 12
+    rows = await store.conn.execute_fetchall(
+        "SELECT event_type, aggregate_id FROM outbox_events WHERE aggregate_id = ?",
+        ("run-complete",),
+    )
+    assert [(row["event_type"], row["aggregate_id"]) for row in rows] == [("run.completed", "run-complete")]
+
+
+@pytest.mark.asyncio
+async def test_completed_chat_run_rolls_back_when_outbox_insert_fails(store: SessionStore):
+    await store.record_chat_run_started("run-rollback", "sess-1")
+    await store.chat_completion_conn.execute(
+        """
+        CREATE TRIGGER fail_chat_completion_outbox
+        AFTER INSERT ON outbox_events
+        BEGIN
+            SELECT RAISE(ABORT, 'outbox unavailable');
+        END
+        """
+    )
+    await store.chat_completion_conn.commit()
+
+    event = RunCompleted("run-rollback", "sess-1", (), Usage(), "done")
+    with pytest.raises(Exception, match="outbox unavailable"):
+        await store.record_chat_run_completed_with_outbox(event, stop_reason="end_turn", last_seq=12)
+
+    run = await store.get_chat_run("run-rollback")
+    assert run is not None
+    assert run["status"] == "pending"
+    rows = await store.conn.execute_fetchall("SELECT id FROM outbox_events WHERE aggregate_id = ?", ("run-rollback",))
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_completed_chat_run_rejects_unknown_run_without_outbox(store: SessionStore):
+    event = RunCompleted("missing", "sess-1", (), Usage(), "done")
+
+    with pytest.raises(KeyError, match="unknown chat run"):
+        await store.record_chat_run_completed_with_outbox(event, stop_reason="end_turn", last_seq=12)
+
+    rows = await store.conn.execute_fetchall("SELECT id FROM outbox_events WHERE aggregate_id = ?", ("missing",))
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_failed_chat_run_and_outbox_commit_together(store: SessionStore):
+    await store.record_chat_run_started("run-failed", "sess-1")
+    event = RunFailed("run-failed", "sess-1", "provider failed", automation_task_id="loop-1")
+
+    await store.record_chat_run_failed_with_outbox(
+        event,
+        status="error",
+        stop_reason="provider failed",
+        last_seq=8,
+        error_code="provider_error",
+        error_message="Provider failed.",
+    )
+
+    failed = await store.get_chat_run("run-failed")
+    assert failed is not None
+    assert failed["status"] == "error"
+    assert failed["last_seq"] == 8
+    assert failed["error_code"] == "provider_error"
+    rows = await store.conn.execute_fetchall(
+        "SELECT event_type, payload FROM outbox_events WHERE aggregate_id = ?",
+        ("run-failed",),
+    )
+    assert len(rows) == 1
+    assert rows[0]["event_type"] == "run.failed"
+    assert json.loads(rows[0]["payload"])["automation_task_id"] == "loop-1"
+
+
+@pytest.mark.asyncio
+async def test_failed_chat_run_rolls_back_when_outbox_insert_fails(store: SessionStore):
+    await store.record_chat_run_started("run-failed-rollback", "sess-1")
+    await store.chat_completion_conn.execute(
+        """
+        CREATE TRIGGER fail_chat_failure_outbox
+        AFTER INSERT ON outbox_events
+        BEGIN
+            SELECT RAISE(ABORT, 'outbox unavailable');
+        END
+        """
+    )
+    await store.chat_completion_conn.commit()
+
+    event = RunFailed("run-failed-rollback", "sess-1", "provider failed", automation_task_id="loop-1")
+    with pytest.raises(Exception, match="outbox unavailable"):
+        await store.record_chat_run_failed_with_outbox(
+            event,
+            status="error",
+            stop_reason="provider failed",
+            last_seq=8,
+        )
+
+    run = await store.get_chat_run("run-failed-rollback")
+    assert run is not None
+    assert run["status"] == "pending"
+    rows = await store.conn.execute_fetchall(
+        "SELECT id FROM outbox_events WHERE aggregate_id = ?",
+        ("run-failed-rollback",),
+    )
+    assert rows == []
 
 
 @pytest.mark.asyncio

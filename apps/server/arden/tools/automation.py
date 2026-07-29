@@ -794,7 +794,13 @@ async def schedule_wakeup(execution: ToolExecution, args: ScheduleWakeupInput) -
     if svc is None:
         return _automation_unavailable()
     next_run = datetime.now(UTC) + timedelta(seconds=args.delay_seconds)
-    await svc.store.set_next_run(task_id, next_run)
+    if not await svc.scheduler.reschedule_run(task_id, next_run):
+        return ToolResult.failure(
+            code="automation_unavailable",
+            message=f"Loop {task_id} is missing or disabled.",
+            preview="Loop unavailable",
+            recovery_action="Create or enable the loop before scheduling its next iteration.",
+        )
     return ToolResult(
         content=f"Next iteration scheduled in {args.delay_seconds}s ({format_timestamp(next_run)}).",
         preview=f"Wake in {args.delay_seconds}s",

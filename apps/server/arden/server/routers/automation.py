@@ -50,7 +50,6 @@ def _automation_to_dict(a: Automation, recent_statuses: list[str] | None = None)
         "builtin": a.builtin,
         "cooldown_minutes": a.cooldown_minutes,
         "tool_scope": a.tool_scope,
-        "output_schema": a.output_schema,
         "kind": a.kind,
         "read_history": a.read_history,
     }
@@ -80,7 +79,6 @@ async def create_automation(
             triggers=request.triggers,
             cooldown_minutes=request.cooldown_minutes,
             tool_scope=request.tool_scope,
-            output_schema=request.output_schema,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -277,7 +275,6 @@ async def update_automation(
             triggers=request.triggers,
             cooldown_minutes=request.cooldown_minutes,
             tool_scope=request.tool_scope,
-            output_schema=request.output_schema,
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="Automation not found")

@@ -109,7 +109,6 @@ def _row_to_automation(row: dict) -> Automation:
         idempotency_key=row["idempotency_key"],
         idempotency_scope=row["idempotency_scope"],
         tool_scope=json.loads(row["tool_scope"]) if dict(row).get("tool_scope") else None,
-        output_schema=dict(row).get("output_schema"),
     )
 
 
@@ -147,8 +146,7 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
     parent_automation_id TEXT,
     idempotency_key TEXT,
     idempotency_scope TEXT,
-    tool_scope TEXT,
-    output_schema TEXT
+    tool_scope TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run ON scheduled_tasks(next_run_at);
@@ -160,6 +158,8 @@ CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_enabled ON scheduled_tasks(enable
 CREATE TABLE IF NOT EXISTS automation_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id TEXT NOT NULL,
+    chat_run_id TEXT,
+    chat_session_id TEXT,
     started_at TEXT NOT NULL,
     ended_at TEXT,
     status TEXT NOT NULL DEFAULT 'running',
@@ -249,12 +249,12 @@ _COLUMNS = (
     "created_at, last_run_at, next_run_at, last_result, running_since, "
     "auto_approve, handler, builtin, cooldown_minutes, "
     "kind, max_iterations, iteration_count, stop_when, max_age_days, "
-    "thread_id, read_history, parent_automation_id, idempotency_key, idempotency_scope, tool_scope, output_schema"
+    "thread_id, read_history, parent_automation_id, idempotency_key, idempotency_scope, tool_scope"
 )
 
 _SQL_SAVE = f"""
 INSERT OR REPLACE INTO scheduled_tasks ({_COLUMNS})
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 _SQL_GET_BY_ID = f"SELECT {_COLUMNS} FROM scheduled_tasks WHERE task_id = ?"
@@ -335,6 +335,14 @@ _SQL_SET_NEXT_RUN_IF_ENABLED = """
 UPDATE scheduled_tasks SET next_run_at = ? WHERE task_id = ? AND enabled = 1
 """
 
+_SQL_SET_EARLIER_NEXT_RUN_IF_ENABLED = """
+UPDATE scheduled_tasks
+SET next_run_at = ?
+WHERE task_id = ?
+  AND enabled = 1
+  AND (next_run_at IS NULL OR next_run_at > ?)
+"""
+
 _SQL_COMPARE_AND_SET_NEXT_RUN = """
 UPDATE scheduled_tasks
 SET next_run_at = ?
@@ -378,24 +386,76 @@ WHERE task_id = ?
 _SQL_CLEAR_RUNNING = "UPDATE scheduled_tasks SET running_since = NULL WHERE task_id = ?"
 
 _SQL_INSERT_RUN = "INSERT INTO automation_runs (task_id, started_at, status) VALUES (?, ?, 'running')"
+_SQL_DELETE_UNSTARTED_RUN = """
+DELETE FROM automation_runs
+WHERE id = ? AND task_id = ? AND status = 'running' AND chat_run_id IS NULL
+"""
+_SQL_DEFER_TASK = """
+UPDATE scheduled_tasks
+SET running_since = NULL,
+    next_run_at = CASE WHEN next_run_at IS ? THEN ? ELSE next_run_at END
+WHERE task_id = ?
+"""
+_SQL_BIND_DETACHED_CHAT_RUN = """
+UPDATE automation_runs
+SET chat_run_id = ?, chat_session_id = ?
+WHERE id = ? AND task_id = ? AND status = 'running'
+"""
+_SQL_BIND_INTERRUPTED_CHAT_RUN = """
+UPDATE automation_runs
+SET chat_run_id = ?, chat_session_id = ?
+WHERE id = (
+    SELECT id
+    FROM automation_runs
+    WHERE task_id = ? AND status = 'running' AND chat_run_id IS NULL
+    ORDER BY id DESC
+    LIMIT 1
+)
+  AND task_id = ?
+  AND status = 'running'
+  AND chat_run_id IS NULL
+"""
+_SQL_REFRESH_DETACHED_CHAT_RUN = """
+UPDATE automation_runs
+SET started_at = ?
+WHERE task_id = ?
+  AND chat_run_id = ?
+  AND chat_session_id = ?
+  AND status = 'running'
+"""
 _SQL_LATEST_RUNNING_RUN_ID = (
     "SELECT id FROM automation_runs WHERE task_id = ? AND status = 'running' ORDER BY id DESC LIMIT 1"
 )
+_SQL_RUNNING_DETACHED_CHAT_RUN = """
+SELECT chat_run_id, chat_session_id, started_at
+FROM automation_runs
+WHERE task_id = ? AND status = 'running' AND chat_run_id IS NOT NULL
+ORDER BY id DESC
+LIMIT 1
+"""
+_SQL_HAS_UNBOUND_RUNNING_RUN = """
+SELECT 1
+FROM automation_runs
+WHERE task_id = ? AND status = 'running' AND chat_run_id IS NULL
+LIMIT 1
+"""
 _SQL_SETTLE_RUN = """
 UPDATE automation_runs
 SET ended_at = ?, status = ?, result = ?, error = ?
 WHERE id = ? AND task_id = ? AND status = 'running'
 """
-_SQL_FAIL_ORPHANED_RUNS = (
-    "UPDATE automation_runs SET status = 'failed', error = ?, ended_at = ? WHERE status = 'running'"
-)
+_SQL_FAIL_ORPHANED_RUNS = """
+UPDATE automation_runs
+SET status = 'failed', error = ?, ended_at = ?
+WHERE status = 'running' AND chat_run_id IS NULL
+"""
 _SQL_LIST_RUNS = (
-    "SELECT id, task_id, started_at, ended_at, status, result, error "
+    "SELECT id, task_id, chat_run_id, chat_session_id, started_at, ended_at, status, result, error "
     "FROM automation_runs WHERE task_id = ? ORDER BY started_at DESC, id DESC LIMIT ?"
 )
 _SQL_RECENT_STATUSES = "SELECT status FROM automation_runs WHERE task_id = ? ORDER BY started_at DESC, id DESC LIMIT ?"
 _SQL_LATEST_RUNS = (
-    "SELECT id, task_id, started_at, ended_at, status, result, error "
+    "SELECT id, task_id, chat_run_id, chat_session_id, started_at, ended_at, status, result, error "
     "FROM automation_runs WHERE id IN (SELECT max(id) FROM automation_runs GROUP BY task_id)"
 )
 
@@ -419,8 +479,7 @@ SET name = ?, description = ?, description_source = ?, prompt = ?, model = ?, tr
     max_iterations = ?, stop_when = ?,
     max_age_days = ?,
     thread_id = ?, read_history = ?,
-    parent_automation_id = ?, idempotency_key = ?, idempotency_scope = ?, tool_scope = ?,
-    output_schema = ?
+    parent_automation_id = ?, idempotency_key = ?, idempotency_scope = ?, tool_scope = ?
 WHERE task_id = ?
 """
 
@@ -459,7 +518,16 @@ SET iteration_count = iteration_count + 1
 WHERE task_id = ?
 """
 
-_SQL_CLEAR_ALL_RUNNING = "UPDATE scheduled_tasks SET running_since = NULL WHERE running_since IS NOT NULL"
+_SQL_CLEAR_ORPHANED_RUNNING = """
+UPDATE scheduled_tasks
+SET running_since = NULL
+WHERE running_since IS NOT NULL
+  AND task_id NOT IN (
+      SELECT task_id
+      FROM automation_runs
+      WHERE status = 'running' AND chat_run_id IS NOT NULL
+  )
+"""
 
 _SQL_CLAIM_EVENT = """
 INSERT OR IGNORE INTO automation_event_dedupe (task_id, event_key, seen_at)
@@ -670,7 +738,7 @@ CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run ON scheduled_tasks(next_
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_enabled ON scheduled_tasks(enabled);
 """
 
-CURRENT_SCHEMA_VERSION = 14
+CURRENT_SCHEMA_VERSION = 15
 
 _LOOP_COLUMNS: tuple[tuple[str, str], ...] = (
     ("kind", "TEXT NOT NULL DEFAULT 'automation'"),
@@ -774,13 +842,8 @@ async def _migrate_v2(conn: aiosqlite.Connection) -> None:
 
 
 async def _get_schema_version(conn: aiosqlite.Connection) -> int:
-    try:
-        rows = await conn.execute_fetchall("SELECT value FROM automation_meta WHERE key = 'schema_version'")
-        if rows:
-            return int(rows[0]["value"])
-    except Exception:
-        pass
-    return 0
+    rows = await conn.execute_fetchall("SELECT value FROM automation_meta WHERE key = 'schema_version'")
+    return int(rows[0]["value"]) if rows else 0
 
 
 async def _set_schema_version(conn: aiosqlite.Connection, version: int) -> None:
@@ -840,8 +903,7 @@ async def _migrate_v14(conn: aiosqlite.Connection) -> None:
                 parent_automation_id TEXT,
                 idempotency_key TEXT,
                 idempotency_scope TEXT,
-                tool_scope TEXT,
-                output_schema TEXT
+                tool_scope TEXT
             );
 
             INSERT INTO scheduled_tasks (
@@ -851,7 +913,7 @@ async def _migrate_v14(conn: aiosqlite.Connection) -> None:
                 cooldown_minutes, kind, max_iterations, iteration_count,
                 stop_when, max_age_days, thread_id, read_history,
                 parent_automation_id, idempotency_key, idempotency_scope,
-                tool_scope, output_schema
+                tool_scope
             )
             SELECT
                 task_id, name, NULL, NULL, description, model,
@@ -860,7 +922,7 @@ async def _migrate_v14(conn: aiosqlite.Connection) -> None:
                 cooldown_minutes, kind, max_iterations, iteration_count,
                 stop_when, max_age_days, thread_id, read_history,
                 parent_automation_id, idempotency_key, idempotency_scope,
-                tool_scope, output_schema
+                tool_scope
             FROM scheduled_tasks_v14_old;
 
             DROP TABLE scheduled_tasks_v14_old;
@@ -882,33 +944,18 @@ async def _migrate(conn: aiosqlite.Connection) -> None:
 
     if version < 1:
         # Check if old schema exists (has 'trigger' column instead of 'triggers')
-        try:
-            rows = await conn.execute_fetchall("PRAGMA table_info(scheduled_tasks)")
-            columns = {row["name"] for row in rows}
-            if "trigger" in columns and "triggers" not in columns:
-                _logger.info("Migrating automation store to v1 (trigger -> triggers)")
-                await conn.executescript(_MIGRATION_V1)
-                await _set_schema_version(conn, 1)
-                await conn.commit()
-            elif "triggers" in columns:
-                # Already on new schema, just ensure meta table and version
-                await conn.execute(
-                    "CREATE TABLE IF NOT EXISTS automation_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
-                )
-                await _set_schema_version(conn, 1)
-                await conn.commit()
-            else:
-                pass
-        except Exception:
-            pass
+        rows = await conn.execute_fetchall("PRAGMA table_info(scheduled_tasks)")
+        columns = {row["name"] for row in rows}
+        if "trigger" in columns and "triggers" not in columns:
+            _logger.info("Migrating automation store to v1 (trigger -> triggers)")
+            await conn.executescript(_MIGRATION_V1)
+        await _set_schema_version(conn, 1)
+        await conn.commit()
 
     if version < 2:
-        try:
-            await _migrate_v2(conn)
-            await _set_schema_version(conn, 2)
-            await conn.commit()
-        except Exception:
-            pass
+        await _migrate_v2(conn)
+        await _set_schema_version(conn, 2)
+        await conn.commit()
 
     if version < 4:
         rows = await conn.execute_fetchall("PRAGMA table_info(scheduled_tasks)")
@@ -1188,19 +1235,24 @@ async def _migrate(conn: aiosqlite.Connection) -> None:
         _logger.info("Migrated automation store to v12 (tool_scope allowlist)")
 
     if version < 13:
-        cursor = await conn.execute("PRAGMA table_info(scheduled_tasks)")
-        existing = {row[1] for row in await cursor.fetchall()}
-        if "output_schema" not in existing:
-            await conn.execute("ALTER TABLE scheduled_tasks ADD COLUMN output_schema TEXT")
         await _set_schema_version(conn, 13)
         await conn.commit()
-        _logger.info("Migrated automation store to v13 (output_schema)")
 
     if version < 14:
         await _migrate_v14(conn)
         await _set_schema_version(conn, 14)
         await conn.commit()
         _logger.info("Migrated automation store to v14 (prompt and display-description split)")
+
+    if version < 15:
+        columns = {row["name"] for row in await conn.execute_fetchall("PRAGMA table_info(automation_runs)")}
+        if "chat_run_id" not in columns:
+            await conn.execute("ALTER TABLE automation_runs ADD COLUMN chat_run_id TEXT")
+        if "chat_session_id" not in columns:
+            await conn.execute("ALTER TABLE automation_runs ADD COLUMN chat_session_id TEXT")
+        await _set_schema_version(conn, 15)
+        await conn.commit()
+        _logger.info("Migrated automation store to v15 (durable detached chat run identity)")
 
 
 class AutomationStore:
@@ -1262,7 +1314,6 @@ class AutomationStore:
                 automation.idempotency_key,
                 automation.idempotency_scope,
                 json.dumps(automation.tool_scope) if automation.tool_scope else None,
-                automation.output_schema,
             ),
         )
         await self.conn.commit()
@@ -1370,6 +1421,135 @@ class AutomationStore:
         cursor = await self.conn.execute(_SQL_INSERT_RUN, (task_id, started_at.isoformat()))
         await self.conn.commit()
         return int(cursor.lastrowid or 0)
+
+    async def defer_run(
+        self,
+        *,
+        task_id: str,
+        run_id: int,
+        retry_at: datetime | None,
+        expected_next_run: datetime | None,
+        event_queue_id: int | None,
+    ) -> bool:
+        """Discard an attempt that never entered its target chat."""
+
+        conn = self._settlement_conn
+        async with self._settlement_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await conn.execute(_SQL_DELETE_UNSTARTED_RUN, (run_id, task_id))
+                if cursor.rowcount == 0:
+                    await conn.rollback()
+                    return False
+                await conn.execute(
+                    _SQL_DEFER_TASK,
+                    (
+                        expected_next_run.isoformat() if expected_next_run else None,
+                        retry_at.isoformat() if retry_at else None,
+                        task_id,
+                    ),
+                )
+                if event_queue_id is not None:
+                    await conn.execute(
+                        "UPDATE automation_event_queue SET claimed_at = NULL WHERE id = ?",
+                        (event_queue_id,),
+                    )
+                await conn.commit()
+                return True
+            except BaseException:
+                await conn.rollback()
+                raise
+
+    async def bind_detached_chat_run(
+        self,
+        automation_run_id: int,
+        task_id: str,
+        chat_run_id: str,
+        chat_session_id: str,
+    ) -> None:
+        async with self._settlement_lock:
+            cursor = await self._settlement_conn.execute(
+                _SQL_BIND_DETACHED_CHAT_RUN,
+                (chat_run_id, chat_session_id, automation_run_id, task_id),
+            )
+            if cursor.rowcount == 0:
+                await self._settlement_conn.rollback()
+                raise RuntimeError(f"automation run {automation_run_id} was not running")
+            await self._settlement_conn.commit()
+
+    async def bind_interrupted_chat_run(
+        self,
+        task_id: str,
+        chat_run_id: str,
+        chat_session_id: str,
+    ) -> bool:
+        async with self._settlement_lock:
+            cursor = await self._settlement_conn.execute(
+                _SQL_BIND_INTERRUPTED_CHAT_RUN,
+                (
+                    chat_run_id,
+                    chat_session_id,
+                    task_id,
+                    task_id,
+                ),
+            )
+            await self._settlement_conn.commit()
+            return cursor.rowcount == 1
+
+    async def refresh_detached_chat_run(
+        self,
+        task_id: str,
+        chat_run_id: str,
+        chat_session_id: str,
+        started_at: datetime,
+    ) -> bool:
+        async with self._settlement_lock:
+            cursor = await self._settlement_conn.execute(
+                _SQL_REFRESH_DETACHED_CHAT_RUN,
+                (
+                    started_at.isoformat(),
+                    task_id,
+                    chat_run_id,
+                    chat_session_id,
+                ),
+            )
+            await self._settlement_conn.commit()
+            return cursor.rowcount == 1
+
+    async def complete_event_and_bind_detached_chat_run(
+        self,
+        queue_id: int,
+        automation_run_id: int,
+        task_id: str,
+        chat_run_id: str,
+        chat_session_id: str,
+    ) -> None:
+        conn = self._settlement_conn
+        async with self._settlement_lock:
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                await conn.execute(_SQL_COMPLETE_EVENT, (queue_id,))
+                cursor = await conn.execute(
+                    _SQL_BIND_DETACHED_CHAT_RUN,
+                    (chat_run_id, chat_session_id, automation_run_id, task_id),
+                )
+                if cursor.rowcount == 0:
+                    raise RuntimeError(f"automation run {automation_run_id} was not running")
+                await conn.commit()
+            except BaseException:
+                await conn.rollback()
+                raise
+
+    async def get_running_detached_chat_run(self, task_id: str) -> tuple[str, str, datetime] | None:
+        rows = await self.conn.execute_fetchall(_SQL_RUNNING_DETACHED_CHAT_RUN, (task_id,))
+        if not rows:
+            return None
+        row = rows[0]
+        return row["chat_run_id"], row["chat_session_id"], datetime.fromisoformat(row["started_at"])
+
+    async def has_unbound_running_run(self, task_id: str) -> bool:
+        rows = await self.conn.execute_fetchall(_SQL_HAS_UNBOUND_RUNNING_RUN, (task_id,))
+        return bool(rows)
 
     async def settle_run(
         self,
@@ -1511,9 +1691,11 @@ class AutomationStore:
         )
 
     async def fail_orphaned_runs(self, ended_at: datetime, error: str) -> int:
-        """Boot-time sweep: any row still 'running' belongs to a run the
-        previous process never settled — mark it failed so history stays
-        terminal."""
+        """Fail unbound runs left by the previous process.
+
+        Detached chat runs are completed by their durable run-completed
+        outbox event, so they must remain running until that event settles.
+        """
         cursor = await self.conn.execute(_SQL_FAIL_ORPHANED_RUNS, (error, ended_at.isoformat()))
         await self.conn.commit()
         return cursor.rowcount
@@ -1633,7 +1815,6 @@ class AutomationStore:
                 automation.idempotency_key,
                 automation.idempotency_scope,
                 json.dumps(automation.tool_scope) if automation.tool_scope else None,
-                automation.output_schema,
                 automation.task_id,
             ),
         )
@@ -1661,8 +1842,8 @@ class AutomationStore:
         await self.conn.execute(_SQL_INCREMENT_ITERATION, (task_id,))
         await self.conn.commit()
 
-    async def clear_all_running(self) -> int:
-        cursor = await self.conn.execute(_SQL_CLEAR_ALL_RUNNING)
+    async def clear_orphaned_running(self) -> int:
+        cursor = await self.conn.execute(_SQL_CLEAR_ORPHANED_RUNNING)
         await self.conn.commit()
         return cursor.rowcount
 
@@ -1672,6 +1853,15 @@ class AutomationStore:
 
     async def set_next_run_if_enabled(self, task_id: str, next_run: datetime) -> bool:
         cursor = await self.conn.execute(_SQL_SET_NEXT_RUN_IF_ENABLED, (next_run.isoformat(), task_id))
+        await self.conn.commit()
+        return cursor.rowcount > 0
+
+    async def set_earlier_next_run_if_enabled(self, task_id: str, next_run: datetime) -> bool:
+        serialized = next_run.isoformat()
+        cursor = await self.conn.execute(
+            _SQL_SET_EARLIER_NEXT_RUN_IF_ENABLED,
+            (serialized, task_id, serialized),
+        )
         await self.conn.commit()
         return cursor.rowcount > 0
 
@@ -1848,7 +2038,6 @@ class AutomationStore:
                     automation.idempotency_key,
                     automation.idempotency_scope,
                     json.dumps(automation.tool_scope) if automation.tool_scope else None,
-                    automation.output_schema,
                 ),
             )
             await self.conn.commit()

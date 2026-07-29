@@ -1,4 +1,5 @@
 import asyncio
+import json
 from dataclasses import replace as dc_replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -79,6 +80,37 @@ async def test_orphaned_running_rows_fail_terminal(automation_store: AutomationS
         runs = await automation_store.list_runs(task)
         assert runs[0]["status"] == "failed"
         assert runs[0]["error"] == "interrupted by server restart"
+
+
+async def test_restart_binds_latest_unbound_automation_run_to_interrupted_chat(
+    automation_store: AutomationStore,
+):
+    started_at = datetime(2026, 1, 1, tzinfo=UTC)
+    await automation_store.save(_automation("area:health"))
+    assert await automation_store.try_mark_running("area:health", started_at)
+    await automation_store.record_run_start("area:health", started_at)
+
+    assert await automation_store.bind_interrupted_chat_run(
+        "area:health",
+        "chat-run",
+        "area-session",
+    )
+    assert not await automation_store.bind_interrupted_chat_run(
+        "area:health",
+        "other-chat-run",
+        "area-session",
+    )
+    refreshed_at = started_at + timedelta(hours=4)
+    assert await automation_store.refresh_detached_chat_run(
+        "area:health",
+        "chat-run",
+        "area-session",
+        refreshed_at,
+    )
+    bound = await automation_store.get_running_detached_chat_run("area:health")
+    assert bound is not None
+    assert bound[:2] == ("chat-run", "area-session")
+    assert bound[2] == refreshed_at
 
 
 async def test_update_last_run_preserve_result(automation_store: AutomationStore):
@@ -954,6 +986,24 @@ async def test_migration_is_idempotent(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_migration_surfaces_invalid_trigger_json(tmp_path: Path):
+    conn = await database.connect(tmp_path / "invalid-migration.db")
+    store = AutomationStore(conn)
+    await store.init_schema()
+    await store.save(_automation("invalid-trigger"))
+    await conn.execute("UPDATE scheduled_tasks SET triggers = '{' WHERE task_id = 'invalid-trigger'")
+    await conn.execute("UPDATE automation_meta SET value = '1' WHERE key = 'schema_version'")
+    await conn.commit()
+
+    with pytest.raises(json.JSONDecodeError):
+        await store.init_schema()
+
+    rows = await conn.execute_fetchall("SELECT value FROM automation_meta WHERE key = 'schema_version'")
+    assert rows[0]["value"] == "1"
+    await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_v5_indexes_created(automation_store: AutomationStore):
     """The three new v5 indexes must exist after init_schema."""
     rows = await automation_store.conn.execute_fetchall("SELECT name FROM sqlite_master WHERE type = 'index'")
@@ -987,8 +1037,8 @@ async def test_seed_builtins_seeds_required_workers_and_optional_dream(automatio
         BUILTIN_WIKI_MAINTENANCE_ID,
     )
 
-    await seed_builtins(automation_store)
-    await seed_builtins(automation_store)
+    await seed_builtins(automation_store, memory_model="memory-model")
+    await seed_builtins(automation_store, memory_model="memory-model")
 
     rows = {row.task_id: row for row in await automation_store.list_all()}
     assert set(rows) == {
@@ -1005,6 +1055,7 @@ async def test_seed_builtins_seeds_required_workers_and_optional_dream(automatio
 
     retention = rows[BUILTIN_MEMORY_RETENTION_ID]
     assert retention.handler is None
+    assert retention.model == "memory-model"
     assert retention.triggers == [TimeTrigger(at="03:45", days="daily")]
     assert retention.tool_scope == [
         "search_facts",
@@ -1036,6 +1087,20 @@ async def test_seed_builtins_seeds_required_workers_and_optional_dream(automatio
 
 
 @pytest.mark.asyncio
+async def test_seed_builtins_removes_retired_system_workers(automation_store: AutomationStore):
+    from arden.automation.builtins import seed_builtins
+    from arden.constants import RETIRED_BUILTIN_AUTOMATION_IDS
+
+    for task_id in RETIRED_BUILTIN_AUTOMATION_IDS:
+        await automation_store.save(dc_replace(_automation(task_id), builtin=True))
+
+    await seed_builtins(automation_store, memory_model="memory-model")
+
+    retired = [await automation_store.get(task_id) for task_id in RETIRED_BUILTIN_AUTOMATION_IDS]
+    assert retired == [None, None]
+
+
+@pytest.mark.asyncio
 async def test_seed_builtins_enforces_system_timing_but_preserves_pause_and_history(
     automation_store: AutomationStore,
 ):
@@ -1048,7 +1113,7 @@ async def test_seed_builtins_enforces_system_timing_but_preserves_pause_and_hist
         BUILTIN_WIKI_MAINTENANCE_ID,
     )
 
-    await seed_builtins(automation_store)
+    await seed_builtins(automation_store, memory_model="memory-model")
     last_run = datetime(2026, 6, 17, 9, tzinfo=UTC)
     for task_id in (
         BUILTIN_MEMORY_CONSOLIDATE_ID,
@@ -1080,7 +1145,7 @@ async def test_seed_builtins_enforces_system_timing_but_preserves_pause_and_hist
         ended_at=last_run,
     )
 
-    await seed_builtins(automation_store)
+    await seed_builtins(automation_store, memory_model="memory-model")
 
     expected = {
         BUILTIN_MEMORY_CONSOLIDATE_ID: [TimeTrigger(at="03:00", days="daily")],
@@ -1107,26 +1172,12 @@ async def test_seed_builtins_preserves_user_enabled_optional_dream(automation_st
     from arden.automation.builtins import seed_builtins
     from arden.constants import BUILTIN_MEMORY_DREAM_ID
 
-    await seed_builtins(automation_store)
+    await seed_builtins(automation_store, memory_model="memory-model")
     await automation_store.set_enabled(BUILTIN_MEMORY_DREAM_ID, True)
 
-    await seed_builtins(automation_store)
+    await seed_builtins(automation_store, memory_model="memory-model")
 
     dream = await automation_store.get(BUILTIN_MEMORY_DREAM_ID)
     assert dream is not None
     assert dream.enabled is True
     assert dream.next_run_at is not None
-
-
-@pytest.mark.asyncio
-async def test_output_schema_round_trips(automation_store: AutomationStore):
-    from arden.automation.output_schemas import resolve_output_schema
-
-    auto = dc_replace(_automation("with-schema"), output_schema="area_ask")
-    await automation_store.save(auto)
-    loaded = await automation_store.get("with-schema")
-    assert loaded.output_schema == "area_ask"
-    assert resolve_output_schema("area_ask") is not None
-    assert resolve_output_schema(None) is None
-    with pytest.raises(ValueError, match="area_ask"):
-        resolve_output_schema("nope")

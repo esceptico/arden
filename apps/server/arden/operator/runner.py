@@ -1,8 +1,5 @@
-import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
-
-from pydantic import BaseModel
 
 from arden.agent import Agent, Result, Role, Usage
 from arden.context.models import SessionState
@@ -52,10 +49,6 @@ class RunRequest:
     # gate over the registry. For detached runs, None means read-only; an
     # explicit scope is the only arbitrary write/execute capability grant.
     tool_scope: tuple[str, ...] | None = None
-    # Pydantic schema for AI SDK-style structured output: the run ends with
-    # one constrained completion whose validated dump rides RunResult.structured
-    # and RunCompleted.structured_output.
-    output_schema: type[BaseModel] | None = None
 
 
 @dataclass(frozen=True)
@@ -63,7 +56,6 @@ class RunResult:
     run_id: str
     output: str | None
     usage: Usage
-    structured: dict | None = None
 
 
 async def _prepare(deps: OperatorDeps, request: RunRequest) -> tuple[Agent, list[dict], str, str]:
@@ -119,7 +111,6 @@ async def _prepare(deps: OperatorDeps, request: RunRequest) -> tuple[Agent, list
         run_id=run_id,
         approval_controls=ApprovalControls(skip_approvals=request.skip_approvals),
         automation_id=request.automation_id,
-        output_schema=request.output_schema,
     )
 
     messages = [
@@ -137,7 +128,7 @@ async def _publish_completed(
     messages: list,
     usage: Usage,
     result: str | None,
-    structured_output: dict | None = None,
+    automation_id: str | None,
 ) -> None:
     event = RunCompleted(
         run_id=run_id,
@@ -145,7 +136,7 @@ async def _publish_completed(
         messages=tuple(messages),
         usage=usage,
         result=result,
-        structured_output=structured_output,
+        automation_task_id=automation_id,
     )
     if deps.enqueue_run_completed:
         await deps.enqueue_run_completed(event)
@@ -163,10 +154,16 @@ async def run_agent(deps: OperatorDeps, request: RunRequest) -> RunResult:
 
     agent_result = await _run_agent(agent, messages, session_id, request.source_id)
     await _publish_completed(
-        deps, run_id, session_id, messages, agent_result.usage, agent_result.text, agent_result.output
+        deps,
+        run_id,
+        session_id,
+        messages,
+        agent_result.usage,
+        agent_result.text,
+        request.automation_id,
     )
 
-    return RunResult(run_id=run_id, output=agent_result.text, usage=agent_result.usage, structured=agent_result.output)
+    return RunResult(run_id=run_id, output=agent_result.text, usage=agent_result.usage)
 
 
 @observed_trace("automation", tags="automation")
@@ -177,30 +174,24 @@ async def _consume_agent_stream(
     task_id: str,
     session_id: str,
     source_id: str,
-) -> tuple[str | None, Usage, dict | None]:
+) -> tuple[str | None, Usage]:
     activate_tracing(session_id, tags=["automation", source_id])
     result_text: str | None = None
     usage = Usage()
-    structured: dict | None = None
-    gen = agent.stream(messages)
-    try:
-        async for item in gen:
-            if isinstance(item, Result):
-                result_text = item.text
-                usage = item.usage
-                structured = item.output
-            else:
-                sse = agent_event_to_sse(item)
-                if isinstance(sse, ToolCallStartEvent):
-                    label = sse.display_name or sse.tool_call_name
-                    await bus.emit(AutomationProgressEvent(task_id=task_id, status=f"{label}..."))
-                elif isinstance(sse, ToolCallResultEvent):
-                    label = sse.display_name or sse.name
-                    status = f"{label}: {sse.preview}" if sse.preview else label
-                    await bus.emit(AutomationProgressEvent(task_id=task_id, status=status))
-    except asyncio.CancelledError:
-        pass
-    return result_text, usage, structured
+    async for item in agent.stream(messages):
+        if isinstance(item, Result):
+            result_text = item.text
+            usage = item.usage
+        else:
+            sse = agent_event_to_sse(item)
+            if isinstance(sse, ToolCallStartEvent):
+                label = sse.display_name or sse.tool_call_name
+                await bus.emit(AutomationProgressEvent(task_id=task_id, status=f"{label}..."))
+            elif isinstance(sse, ToolCallResultEvent):
+                label = sse.display_name or sse.name
+                status = f"{label}: {sse.preview}" if sse.preview else label
+                await bus.emit(AutomationProgressEvent(task_id=task_id, status=status))
+    return result_text, usage
 
 
 async def run_agent_streaming(
@@ -212,10 +203,8 @@ async def run_agent_streaming(
     agent, messages, run_id, session_id = await _prepare(deps, request)
     activate_tracing(session_id, tags=["automation", request.source_id])
 
-    result_text, usage, structured = await _consume_agent_stream(
-        agent, messages, bus, task_id, session_id, request.source_id
-    )
+    result_text, usage = await _consume_agent_stream(agent, messages, bus, task_id, session_id, request.source_id)
 
-    await _publish_completed(deps, run_id, session_id, messages, usage, result_text, structured)
+    await _publish_completed(deps, run_id, session_id, messages, usage, result_text, request.automation_id)
 
-    return RunResult(run_id=run_id, output=result_text, usage=usage, structured=structured)
+    return RunResult(run_id=run_id, output=result_text, usage=usage)

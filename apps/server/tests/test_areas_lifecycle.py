@@ -2,7 +2,7 @@ from collections.abc import Awaitable, Callable
 
 import pytest
 
-from arden.areas.lifecycle import AreaLifecycleService, AreaPageService
+from arden.areas.lifecycle import AreaLifecycleService, AreaPageService, AreaWikiUnavailable
 from arden.revisions import ManagedFileRepository
 from arden.wiki.service import WikiService
 
@@ -82,11 +82,82 @@ def lifecycle(
 
 
 def pages(tmp_path, areas: FakeAreas, area_lifecycle: AreaLifecycleService) -> AreaPageService:
+    async def project_wiki_state() -> bool:
+        return False
+
     return AreaPageService(
         wiki=WikiService(ManagedFileRepository(tmp_path / "wiki")),
         sessions=areas,
         lifecycle=area_lifecycle,
+        project_wiki_state=project_wiki_state,
     )
+
+
+@pytest.mark.asyncio
+async def test_page_creation_projects_the_committed_wiki_head(tmp_path) -> None:
+    areas = FakeAreas()
+    area_lifecycle = lifecycle(areas)
+    area = await area_lifecycle.create(name="Dex")
+    projected: list[str] = []
+
+    async def project_wiki_state() -> bool:
+        projected.append("projected")
+        return False
+
+    service = AreaPageService(
+        wiki=WikiService(ManagedFileRepository(tmp_path / "wiki")),
+        sessions=areas,
+        lifecycle=area_lifecycle,
+        project_wiki_state=project_wiki_state,
+    )
+
+    created = await service.create(area["area_id"])
+
+    assert created["page_path"] == "topics/dex.md"
+    assert projected == ["projected"]
+
+
+@pytest.mark.asyncio
+async def test_page_creation_keeps_attachment_when_projection_is_pending(tmp_path) -> None:
+    areas = FakeAreas()
+    area_lifecycle = lifecycle(areas)
+    area = await area_lifecycle.create(name="Dex")
+    wiki = WikiService(ManagedFileRepository(tmp_path / "wiki"))
+
+    async def defer_projection() -> bool:
+        return True
+
+    service = AreaPageService(
+        wiki=wiki,
+        sessions=areas,
+        lifecycle=area_lifecycle,
+        project_wiki_state=defer_projection,
+    )
+
+    created = await service.create(area["area_id"])
+
+    assert created["page_path"] == "topics/dex.md"
+    assert [page.resource.path for page in wiki.list_pages()] == ["topics/dex.md"]
+
+
+@pytest.mark.asyncio
+async def test_page_creation_reports_disabled_wiki() -> None:
+    areas = FakeAreas()
+    area_lifecycle = lifecycle(areas)
+    area = await area_lifecycle.create(name="Dex")
+
+    async def project_wiki_state() -> bool:
+        return False
+
+    service = AreaPageService(
+        wiki=None,
+        sessions=areas,
+        lifecycle=area_lifecycle,
+        project_wiki_state=project_wiki_state,
+    )
+
+    with pytest.raises(AreaWikiUnavailable, match="Managed wiki is unavailable"):
+        await service.create(area["area_id"])
 
 
 @pytest.mark.asyncio

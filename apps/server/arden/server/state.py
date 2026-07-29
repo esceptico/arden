@@ -67,9 +67,6 @@ class RunState:
     accepting_injections: bool = True
     drain_task: asyncio.Task | None = None
     stop_reason: str | None = None
-    # Validated dump of the run's output_schema (Agent structured output),
-    # captured from the Result event so RunCompleted can carry it.
-    structured_output: dict | None = None
     # When the run was triggered by a loop, this is the loop's automation
     # task_id. Tools (schedule_wakeup, loop_done) read it to mutate the
     # right loop. None for ordinary user-initiated runs.

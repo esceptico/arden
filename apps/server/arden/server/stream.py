@@ -87,7 +87,6 @@ async def run_agent_loop(ctx: ChatContext, agent: Agent, bus: SessionBus) -> tup
                     break
                 result = item.text
                 ctx.run.stop_reason = item.stop_reason.value
-                ctx.run.structured_output = item.output
             else:
                 for sse in agent_events_to_sse(item):
                     if isinstance(sse, TextMessageEndEvent):

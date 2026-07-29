@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 OutcomeStatus = Literal["active", "paused", "completed", "cancelled"]
 OutcomeSource = Literal["inferred", "user", "migration"]
@@ -58,6 +58,8 @@ class AreaWorkSnapshot(BaseModel):
 
 
 class OutcomeChange(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     op: Literal["create", "update", "complete", "cancel"]
     key: str = Field(min_length=1, max_length=80, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     title: str | None = Field(default=None, min_length=1, max_length=300)
@@ -77,6 +79,8 @@ class OutcomeChange(BaseModel):
 
 
 class WorkChange(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     op: Literal["create", "update", "complete", "cancel"]
     key: str = Field(min_length=1, max_length=80, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     outcome_key: str | None = Field(default=None, min_length=1, max_length=80, pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -101,6 +105,8 @@ class WorkChange(BaseModel):
 
 
 class EvidenceDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     target_type: Literal["area", "outcome", "work"]
     target_key: str | None = Field(default=None, min_length=1, max_length=80, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     event_type: Literal["created", "progress", "completed", "blocked", "updated", "cancelled"]

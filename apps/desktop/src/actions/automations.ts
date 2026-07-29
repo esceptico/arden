@@ -63,7 +63,6 @@ export function duplicateAutomationPayload(source: Automation): CreateAutomation
     triggers: duplicateableTriggers.map(duplicateTrigger),
     cooldown_minutes: source.cooldown_minutes,
     tool_scope: source.tool_scope,
-    output_schema: source.output_schema,
   };
 }
 

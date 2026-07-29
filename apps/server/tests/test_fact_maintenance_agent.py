@@ -15,7 +15,11 @@ from arden.memory.facts.maintenance.store import FactMaintenanceError
 from arden.memory.facts.models import Fact
 from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.registry import ToolRegistry
-from arden.tools.fact_maintenance import FACT_MAINTENANCE_SERVICE, fact_maintenance_review_tool
+from arden.tools.fact_maintenance import (
+    FACT_MAINTENANCE_SERVICE,
+    FactMaintenanceReviewInput,
+    fact_maintenance_review_tool,
+)
 
 
 def _fact(fact_id: str) -> Fact:
@@ -230,8 +234,8 @@ async def test_agent_rejects_amend_then_merge_conflict_without_losing_the_curren
     await review.aclose()
 
 
-def test_decision_rejects_nonempty_labels_for_no_change() -> None:
-    with pytest.raises(ValidationError, match="no_change must not include an amendment"):
+def test_decision_rejects_amendment_fields_for_no_change() -> None:
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         FactMaintenanceDecision(
             outcome="no_change",
             reason="Contradictory decision.",
@@ -239,8 +243,8 @@ def test_decision_rejects_nonempty_labels_for_no_change() -> None:
         )
 
 
-def test_decision_rejects_nonempty_labels_for_topic_normalization() -> None:
-    with pytest.raises(ValidationError, match="normalize_topic must not include an amendment"):
+def test_decision_rejects_amendment_fields_for_topic_normalization() -> None:
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         FactMaintenanceDecision(
             outcome="normalize_topic",
             reason="Contradictory decision.",
@@ -248,3 +252,32 @@ def test_decision_rejects_nonempty_labels_for_topic_normalization() -> None:
             old_topic="Dex",
             canonical_page_token="P000",
         )
+
+
+def test_decision_schema_exposes_mutually_exclusive_outcomes() -> None:
+    schema = FactMaintenanceDecision.model_json_schema()
+
+    assert schema["discriminator"]["propertyName"] == "outcome"
+    mapping = schema["discriminator"]["mapping"]
+    assert set(mapping) == {
+        "no_change",
+        "amend_metadata",
+        "merge_duplicate",
+        "normalize_topic",
+    }
+    no_change_name = mapping["no_change"].removeprefix("#/$defs/")
+    no_change = schema["$defs"][no_change_name]
+    assert no_change["additionalProperties"] is False
+    assert "labels" not in no_change["properties"]
+
+
+def test_review_input_schema_requires_a_complete_action_shape() -> None:
+    schema = FactMaintenanceReviewInput.model_json_schema()
+
+    assert schema["discriminator"]["propertyName"] == "action"
+    next_name = schema["discriminator"]["mapping"]["next"].removeprefix("#/$defs/")
+    assert "decision" not in schema["$defs"][next_name]["properties"]
+    with pytest.raises(ValidationError, match="Field required"):
+        FactMaintenanceReviewInput(action="decide")
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        FactMaintenanceReviewInput(action="next", decision={"outcome": "no_change", "reason": "None."})

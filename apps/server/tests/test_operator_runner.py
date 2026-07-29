@@ -1,12 +1,16 @@
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
+from arden.agent import Result, StopReason, Usage
 from arden.context.models import SessionState
 from arden.core.factory import AgentConfig
+from arden.events.internal import RunCompleted
 from arden.operator import runner
 from arden.operator.runner import OperatorDeps, RunRequest
+from arden.server.bus import SessionBus
 from arden.skills.registry import SkillRegistry
 
 
@@ -52,7 +56,7 @@ class RecordingExecutor:
         return []
 
 
-def _deps(skill_registry: SkillRegistry | None, executor=None) -> OperatorDeps:
+def _deps(skill_registry: SkillRegistry | None, executor=None, enqueue_run_completed=None) -> OperatorDeps:
     return OperatorDeps(
         executor=executor if executor is not None else FakeExecutor(),
         config=AgentConfig(model="test-model", research_model=None, max_depth=1, deferred_tools=False),
@@ -63,8 +67,73 @@ def _deps(skill_registry: SkillRegistry | None, executor=None) -> OperatorDeps:
             name="test",
         ),
         notifiers=[],
+        enqueue_run_completed=enqueue_run_completed,
         skill_registry=skill_registry,
     )
+
+
+@pytest.mark.asyncio
+async def test_streaming_completion_preserves_automation_identity(monkeypatch):
+    events: list[RunCompleted] = []
+
+    async def enqueue(event: RunCompleted) -> bool:
+        events.append(event)
+        return True
+
+    class Agent:
+        async def stream(self, messages):
+            yield Result(text="done", stop_reason=StopReason.END_TURN, steps=1, usage=Usage())
+
+    monkeypatch.setattr(runner, "create_agent", lambda **kwargs: Agent())
+    request = RunRequest(
+        prompt="do it",
+        auto_approve=True,
+        source_id="automation-1",
+        automation_id="automation-1",
+    )
+
+    result = await runner.run_agent_streaming(
+        _deps(None, enqueue_run_completed=enqueue),
+        request,
+        SessionBus(session_id="automation:events"),
+        "automation-1",
+    )
+
+    assert result.output == "done"
+    assert len(events) == 1
+    assert events[0].automation_task_id == "automation-1"
+
+
+@pytest.mark.asyncio
+async def test_streaming_cancellation_is_not_published_as_completion(monkeypatch):
+    events: list[RunCompleted] = []
+
+    async def enqueue(event: RunCompleted) -> bool:
+        events.append(event)
+        return True
+
+    class Agent:
+        async def stream(self, messages):
+            raise asyncio.CancelledError
+            yield
+
+    monkeypatch.setattr(runner, "create_agent", lambda **kwargs: Agent())
+    request = RunRequest(
+        prompt="do it",
+        auto_approve=True,
+        source_id="automation-1",
+        automation_id="automation-1",
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await runner.run_agent_streaming(
+            _deps(None, enqueue_run_completed=enqueue),
+            request,
+            SessionBus(session_id="automation:events"),
+            "automation-1",
+        )
+
+    assert events == []
 
 
 @pytest.mark.asyncio

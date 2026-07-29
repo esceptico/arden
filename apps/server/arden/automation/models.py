@@ -36,10 +36,6 @@ class Automation:
     # automation's runs may use; None = unrestricted. Applied as the hard
     # outer gate in ToolRegistry.get_schemas.
     tool_scope: list[str] | None = None
-    # Name of a registered output schema (see automation/output_schemas.py);
-    # the run ends with one constrained completion producing that object,
-    # delivered on RunCompleted.structured_output. None = prose only.
-    output_schema: str | None = None
     parent_automation_id: str | None = None
     idempotency_key: str | None = None
     idempotency_scope: str | None = None

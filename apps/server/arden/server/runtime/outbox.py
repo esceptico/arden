@@ -1,12 +1,14 @@
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 
+from arden.agent import Usage
 from arden.automation.scheduler import Scheduler
 from arden.events.internal import RunCompleted, RunCompletionRejected, RunFailed
 from arden.outbox import (
     OUTBOX_AUTOMATION_SETTLED,
     OUTBOX_RUN_COMPLETED,
     OUTBOX_RUN_FAILED,
+    OUTBOX_WIKI_PROJECTION_REQUESTED,
     AutomationSettled,
     OutboxEvent,
     OutboxWorker,
@@ -23,14 +25,18 @@ class RuntimeOutbox:
         *,
         outbox_store: OutboxStore,
         scheduler: Scheduler,
-        on_area_run: Callable[[RunCompleted], Awaitable[None]] | None = None,
+        on_area_run: Callable[[RunCompleted], Awaitable[bool]] | None = None,
+        on_area_run_failed: Callable[[RunFailed], Awaitable[bool]] | None = None,
         on_automation_settled: Callable[[AutomationSettled], Awaitable[None]] | None = None,
+        on_wiki_projection: Callable[[], Awaitable[None]] | None = None,
     ):
         self.worker = OutboxWorker(outbox_store)
         self.outbox_store = outbox_store
         self.scheduler = scheduler
         self._on_area_run = on_area_run
+        self._on_area_run_failed = on_area_run_failed
         self._on_automation_settled_callback = on_automation_settled
+        self._on_wiki_projection_callback = on_wiki_projection
         self._register_handlers()
 
     def start(self) -> None:
@@ -43,12 +49,17 @@ class RuntimeOutbox:
         self.worker.register_handler(OUTBOX_AUTOMATION_SETTLED, self._on_automation_settled)
         self.worker.register_handler(OUTBOX_RUN_COMPLETED, self._on_run_completed)
         self.worker.register_handler(OUTBOX_RUN_FAILED, self._on_run_failed)
+        self.worker.register_handler(
+            OUTBOX_WIKI_PROJECTION_REQUESTED,
+            self._on_wiki_projection,
+        )
 
     async def _on_run_completed(self, event: OutboxEvent) -> None:
         run_completed = run_completed_from_payload(event.payload)
+        preserve_next_run = False
         if self._on_area_run:
             try:
-                await self._on_area_run(run_completed)
+                preserve_next_run = await self._on_area_run(run_completed)
             except RunCompletionRejected as exc:
                 await self.scheduler.handle_run_failed(
                     RunFailed(
@@ -59,15 +70,41 @@ class RuntimeOutbox:
                     )
                 )
                 return
-        await self.scheduler.handle_run_completed(run_completed)
+        await self.scheduler.handle_run_completed(
+            run_completed,
+            preserve_next_run=preserve_next_run,
+        )
 
     async def _on_run_failed(self, event: OutboxEvent) -> None:
-        await self.scheduler.handle_run_failed(run_failed_from_payload(event.payload))
+        await self.handle_run_failed(run_failed_from_payload(event.payload))
+
+    async def handle_run_failed(self, run_failed: RunFailed) -> None:
+        if self._on_area_run_failed is not None:
+            accepted_report = await self._on_area_run_failed(run_failed)
+            if accepted_report:
+                await self.scheduler.handle_run_completed(
+                    RunCompleted(
+                        run_id=run_failed.run_id,
+                        session_id=run_failed.session_id,
+                        messages=(),
+                        usage=Usage(),
+                        result="Area report accepted before chat finalization failed.",
+                        automation_task_id=run_failed.automation_task_id,
+                    ),
+                    preserve_next_run=True,
+                )
+                return
+        await self.scheduler.handle_run_failed(run_failed)
 
     async def _on_automation_settled(self, event: OutboxEvent) -> None:
         if self._on_automation_settled_callback is None:
             return
         await self._on_automation_settled_callback(automation_settled_from_payload(event.payload))
+
+    async def _on_wiki_projection(self, _event: OutboxEvent) -> None:
+        if self._on_wiki_projection_callback is None:
+            raise RuntimeError("wiki projection outbox handler is unavailable")
+        await self._on_wiki_projection_callback()
 
     async def get_status(self) -> dict:
         worker_running = self.worker.is_running

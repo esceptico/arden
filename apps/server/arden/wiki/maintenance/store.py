@@ -19,7 +19,7 @@ from uuid import uuid4
 import aiosqlite
 
 from arden.database import connect
-from arden.wiki.constants import WIKI_MAINTENANCE_ORIGIN
+from arden.wiki.constants import WIKI_MAINTENANCE_ORIGIN, WIKI_PROJECTION_CONSUMER_ID
 
 CONSUMER_ID = WIKI_MAINTENANCE_ORIGIN
 
@@ -83,6 +83,10 @@ class WikiMaintenanceReviewAction(StrEnum):
 
 class WikiMaintenanceWatermarkConflictError(RuntimeError):
     """The checkpoint changed before this caller could advance it."""
+
+
+class WikiProjectionWatermarkConflictError(RuntimeError):
+    """The derived wiki projection checkpoint changed before advance."""
 
 
 class WikiMaintenanceReviewConflictError(RuntimeError):
@@ -259,6 +263,45 @@ class WikiMaintenanceStore:
             (CONSUMER_ID,),
         )
         return None if not rows else _watermark_row(rows[0])
+
+    async def get_projection_revision(self) -> str | None:
+        rows = await self._conn.execute_fetchall(
+            "SELECT revision FROM wiki_maintenance_watermarks WHERE consumer_id = ?",
+            (WIKI_PROJECTION_CONSUMER_ID,),
+        )
+        return None if not rows else _revision("revision", rows[0]["revision"])
+
+    async def record_projection_revision(
+        self,
+        *,
+        expected_revision: str | None,
+        revision: str,
+    ) -> None:
+        if expected_revision is not None:
+            expected_revision = _revision("expected_revision", expected_revision)
+        revision = _revision("revision", revision)
+        now = datetime.now(UTC).isoformat()
+        async with self._lock:
+            if expected_revision is None:
+                cursor = await self._conn.execute(
+                    """
+                    INSERT INTO wiki_maintenance_watermarks (consumer_id, revision, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(consumer_id) DO NOTHING
+                    """,
+                    (WIKI_PROJECTION_CONSUMER_ID, revision, now),
+                )
+            else:
+                cursor = await self._conn.execute(
+                    """
+                    UPDATE wiki_maintenance_watermarks
+                    SET revision = ?, updated_at = ?
+                    WHERE consumer_id = ? AND revision = ?
+                    """,
+                    (revision, now, WIKI_PROJECTION_CONSUMER_ID, expected_revision),
+                )
+            if cursor.rowcount != 1:
+                raise WikiProjectionWatermarkConflictError("wiki projection watermark changed before advance")
 
     async def get_review(self, review_id: str) -> WikiMaintenanceReview | None:
         review_id = _text("review_id", review_id)

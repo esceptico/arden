@@ -11,6 +11,7 @@ from arden.outbox import (
     OUTBOX_AUTOMATION_SETTLED,
     OUTBOX_RUN_COMPLETED,
     OUTBOX_RUN_FAILED,
+    OUTBOX_WIKI_PROJECTION_REQUESTED,
     AutomationSettled,
     OutboxEvent,
     OutboxStore,
@@ -73,22 +74,31 @@ class _Scheduler:
     def __init__(self):
         self.completed = []
         self.failed = []
+        self.preserved_next_runs = []
 
-    async def handle_run_completed(self, event):
+    async def handle_run_completed(self, event, *, preserve_next_run=False):
         self.completed.append(event)
+        self.preserved_next_runs.append(preserve_next_run)
 
     async def handle_run_failed(self, event):
         self.failed.append(event)
 
 
-def _runtime_outbox(on_area_run=None, on_automation_settled=None):
+def _runtime_outbox(
+    on_area_run=None,
+    on_area_run_failed=None,
+    on_automation_settled=None,
+    on_wiki_projection=None,
+):
     outbox_store = _OutboxStore()
     scheduler = _Scheduler()
     runtime_outbox = RuntimeOutbox(
         outbox_store=outbox_store,
         scheduler=scheduler,
         on_area_run=on_area_run,
+        on_area_run_failed=on_area_run_failed,
         on_automation_settled=on_automation_settled,
+        on_wiki_projection=on_wiki_projection,
     )
     return runtime_outbox, outbox_store, scheduler
 
@@ -117,6 +127,7 @@ async def test_runtime_outbox_routes_run_completed_to_area_hook_before_scheduler
 
     async def on_area_run(run_completed):
         seen.append(f"area:{run_completed.run_id}")
+        return True
 
     runtime_outbox, _, scheduler = _runtime_outbox(on_area_run=on_area_run)
     payload = run_completed_payload(
@@ -133,6 +144,7 @@ async def test_runtime_outbox_routes_run_completed_to_area_hook_before_scheduler
 
     assert seen == ["area:run-1"]
     assert [event.run_id for event in scheduler.completed] == ["run-1"]
+    assert scheduler.preserved_next_runs == [True]
 
 
 @pytest.mark.asyncio
@@ -172,9 +184,7 @@ async def test_runtime_outbox_fails_run_when_area_report_is_rejected():
         automation_task_id="area:health",
     )
 
-    await runtime_outbox._on_run_completed(
-        _event(OUTBOX_RUN_COMPLETED, run_completed_payload(completed))
-    )
+    await runtime_outbox._on_run_completed(_event(OUTBOX_RUN_COMPLETED, run_completed_payload(completed)))
 
     assert scheduler.completed == []
     assert scheduler.failed == [
@@ -198,6 +208,51 @@ async def test_runtime_outbox_routes_run_failed_to_scheduler():
 
 
 @pytest.mark.asyncio
+async def test_runtime_outbox_completes_run_when_failed_chat_already_submitted_area_report():
+    seen: list[str] = []
+
+    async def project_accepted_report(failed: RunFailed) -> bool:
+        seen.append(failed.run_id)
+        return True
+
+    runtime_outbox, _, scheduler = _runtime_outbox(on_area_run_failed=project_accepted_report)
+    failed = RunFailed(
+        run_id="run-1",
+        session_id="area-session",
+        error="chat finalization failed",
+        automation_task_id="area:health",
+    )
+
+    await runtime_outbox.handle_run_failed(failed)
+
+    assert seen == ["run-1"]
+    assert scheduler.failed == []
+    assert len(scheduler.completed) == 1
+    assert scheduler.completed[0].run_id == "run-1"
+    assert scheduler.completed[0].automation_task_id == "area:health"
+    assert scheduler.preserved_next_runs == [True]
+
+
+@pytest.mark.asyncio
+async def test_runtime_outbox_fails_run_when_failed_chat_has_no_area_report():
+    async def no_report(_failed: RunFailed) -> bool:
+        return False
+
+    runtime_outbox, _, scheduler = _runtime_outbox(on_area_run_failed=no_report)
+    failed = RunFailed(
+        run_id="run-1",
+        session_id="area-session",
+        error="provider error",
+        automation_task_id="area:health",
+    )
+
+    await runtime_outbox.handle_run_failed(failed)
+
+    assert scheduler.completed == []
+    assert scheduler.failed == [failed]
+
+
+@pytest.mark.asyncio
 async def test_runtime_outbox_routes_automation_settled_to_callback():
     seen: list[AutomationSettled] = []
 
@@ -210,6 +265,21 @@ async def test_runtime_outbox_routes_automation_settled_to_callback():
     await runtime_outbox._on_automation_settled(_event(OUTBOX_AUTOMATION_SETTLED, automation_settled_payload(settled)))
 
     assert seen == [settled]
+
+
+@pytest.mark.asyncio
+async def test_runtime_outbox_routes_durable_wiki_projection_request():
+    calls = 0
+
+    async def project() -> None:
+        nonlocal calls
+        calls += 1
+
+    runtime_outbox, _, _ = _runtime_outbox(on_wiki_projection=project)
+
+    await runtime_outbox._on_wiki_projection(_event(OUTBOX_WIKI_PROJECTION_REQUESTED, {"revision": "a" * 64}))
+
+    assert calls == 1
 
 
 @pytest.mark.asyncio

@@ -226,7 +226,6 @@ export interface Automation {
   /** Server-owned execution boundary. Preserved when duplicating a visible
    * automation so a copy does not silently gain broader tool access. */
   tool_scope?: string[] | null;
-  output_schema?: string | null;
   /** "automation" for standard scheduled tasks; "loop" for self-paced /loop
    *  and post-mode tasks. The composer already surfaces loops in a chip, so
    *  the desktop hides kind=loop from the main automation list. */
@@ -256,7 +255,6 @@ export interface CreateAutomationPayload {
   triggers?: AutomationTrigger[];
   cooldown_minutes?: number | null;
   tool_scope?: string[] | null;
-  output_schema?: string | null;
 }
 
 export type UpdateAutomationPayload = Partial<

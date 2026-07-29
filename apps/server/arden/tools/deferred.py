@@ -415,6 +415,7 @@ def _names_for_group(
         groups = [
             "email",
             "calendar",
+            "wiki",
             "slack",
             "automations",
             "background",

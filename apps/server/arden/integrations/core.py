@@ -15,7 +15,13 @@ from arden.tools.app_control import (
     request_attention_tool,
     send_message_tool,
 )
-from arden.tools.area import area_page_patch_tool, area_page_read_tool, area_page_write_tool, area_run_automation_tool
+from arden.tools.area import (
+    area_page_patch_tool,
+    area_page_read_tool,
+    area_page_write_tool,
+    area_run_automation_tool,
+    submit_area_report_tool,
+)
 from arden.tools.automation import (
     create_automation_tool,
     create_loop_tool,
@@ -176,6 +182,7 @@ AREA = Integration(
     id="_area",
     label="Area",
     tools={
+        "submit_area_report": submit_area_report_tool,
         "area_page_read": area_page_read_tool,
         "area_page_patch": area_page_patch_tool,
         "area_page_write": area_page_write_tool,

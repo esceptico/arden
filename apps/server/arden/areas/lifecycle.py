@@ -4,6 +4,10 @@ from collections.abc import Awaitable, Callable
 from arden.wiki.service import WikiService
 
 
+class AreaWikiUnavailable(RuntimeError):
+    pass
+
+
 class AreaLifecycleService:
     def __init__(
         self,
@@ -85,15 +89,19 @@ class AreaPageService:
     def __init__(
         self,
         *,
-        wiki: WikiService,
+        wiki: WikiService | None,
         sessions,
         lifecycle: AreaLifecycleService,
+        project_wiki_state: Callable[[], Awaitable[bool]],
     ) -> None:
         self._wiki = wiki
         self._sessions = sessions
         self._lifecycle = lifecycle
+        self._project_wiki_state = project_wiki_state
 
     async def create(self, area_id: str) -> dict:
+        if self._wiki is None:
+            raise AreaWikiUnavailable("Managed wiki is unavailable")
         area = await self._sessions.get_area(area_id)
         if area is None:
             raise KeyError(area_id)
@@ -120,7 +128,7 @@ class AreaPageService:
             reason=f"attach wiki page to Area {area_id}",
         )
         try:
-            return await self._lifecycle.update(area_id, page_path=page_path)
+            updated = await self._lifecycle.update(area_id, page_path=page_path)
         except Exception:
             await asyncio.to_thread(
                 self._wiki.archive_page,
@@ -132,6 +140,8 @@ class AreaPageService:
                 reason=f"rollback failed Area page attachment {area_id}",
             )
             raise
+        await self._project_wiki_state()
+        return updated
 
     async def detach(self, area_id: str) -> dict:
         area = await self._sessions.get_area(area_id)

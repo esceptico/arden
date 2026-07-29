@@ -8,6 +8,7 @@ from arden.outbox.events import (
     OUTBOX_AUTOMATION_SETTLED,
     OUTBOX_RUN_COMPLETED,
     OUTBOX_RUN_FAILED,
+    OUTBOX_WIKI_PROJECTION_REQUESTED,
     AutomationSettled,
     automation_settled_payload,
     run_completed_payload,
@@ -273,6 +274,15 @@ class OutboxStore:
             idempotency_key=f"{OUTBOX_RUN_COMPLETED}:{event.run_id}",
         )
 
+    async def enqueue_run_completed_in_transaction(self, event: RunCompleted) -> bool:
+        return await self.enqueue_without_commit(
+            event_type=OUTBOX_RUN_COMPLETED,
+            aggregate_type="run",
+            aggregate_id=event.run_id,
+            payload=run_completed_payload(event),
+            idempotency_key=f"{OUTBOX_RUN_COMPLETED}:{event.run_id}",
+        )
+
     async def enqueue_run_failed(self, event: RunFailed) -> bool:
         return await self.enqueue(
             event_type=OUTBOX_RUN_FAILED,
@@ -280,6 +290,24 @@ class OutboxStore:
             aggregate_id=event.run_id,
             payload=run_failed_payload(event),
             idempotency_key=f"{OUTBOX_RUN_FAILED}:{event.run_id}",
+        )
+
+    async def enqueue_run_failed_in_transaction(self, event: RunFailed) -> bool:
+        return await self.enqueue_without_commit(
+            event_type=OUTBOX_RUN_FAILED,
+            aggregate_type="run",
+            aggregate_id=event.run_id,
+            payload=run_failed_payload(event),
+            idempotency_key=f"{OUTBOX_RUN_FAILED}:{event.run_id}",
+        )
+
+    async def enqueue_wiki_projection(self, revision: str) -> bool:
+        return await self.enqueue(
+            event_type=OUTBOX_WIKI_PROJECTION_REQUESTED,
+            aggregate_type="wiki",
+            aggregate_id=revision,
+            payload={"revision": revision},
+            idempotency_key=f"{OUTBOX_WIKI_PROJECTION_REQUESTED}:{revision}",
         )
 
     async def enqueue_automation_settled_in_transaction(

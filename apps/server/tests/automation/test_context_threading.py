@@ -72,17 +72,18 @@ def _capturing_dispatcher() -> tuple[list[tuple], object]:
     return calls, dispatcher
 
 
-def test_recreated_automation_gets_a_fresh_iteration_idempotency_namespace():
+def test_iteration_idempotency_namespace_includes_incarnation_and_run_attempt():
     first = _session_bound(task_id="area:proj_1")
     recreated = replace(first, created_at=first.created_at + timedelta(seconds=1))
 
-    first_client_id = _iteration_client_id(first)
-    recreated_client_id = _iteration_client_id(recreated)
+    first_client_id = _iteration_client_id(first, 41)
+    recreated_client_id = _iteration_client_id(recreated, 41)
 
     assert first_client_id != recreated_client_id
-    assert _iteration_client_id(recreated) == recreated_client_id
-    assert first_client_id.endswith(":1")
-    assert recreated_client_id.endswith(":1")
+    assert _iteration_client_id(first, 42) != first_client_id
+    assert _iteration_client_id(recreated, 41) == recreated_client_id
+    assert first_client_id.endswith(":1:41")
+    assert recreated_client_id.endswith(":1:41")
 
 
 @pytest.mark.asyncio
@@ -119,9 +120,10 @@ async def test_dispatcher_called_as_automation_then_context_positionally(store: 
 
     args, kwargs = calls[0]
     assert kwargs == {}
-    assert len(args) == 2
+    assert len(args) == 3
     assert args[0] is automation
     assert args[1] == "ctx block"
+    assert args[2] == 1
 
 
 @pytest.mark.asyncio
@@ -183,7 +185,7 @@ async def test_session_bound_email_feed_honors_its_model_and_exact_tool_scope(st
     runtime = _Runtime()
     observed: dict[str, object] = {}
 
-    async def dispatcher(auto: Automation, _context: str | dict | None) -> str:
+    async def dispatcher(auto: Automation, _context: str | dict | None, _run_id: int) -> str:
         observed["model"] = await _automation_chat_model(runtime, auto)
         observed["tool_scope"] = _automation_tool_scope(auto)
         return "dispatched"

@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from uuid import uuid4
 
 from judgeval import Tracer
-from pydantic import BaseModel, ValidationError
 
 from arden.agent.hooks import AgentHooks
 from arden.agent.llm.client import LLMClient
@@ -124,7 +123,6 @@ class Agent:
         clock: Callable[[], float] = time.monotonic,
         started_at: float | None = None,
         budget: RunBudget | None = None,
-        output_schema: type[BaseModel] | None = None,
     ):
         if max_cost is not None and cost_calculator is None and cost_getter is None:
             raise ValueError("max_cost requires cost_calculator or cost_getter")
@@ -149,8 +147,6 @@ class Agent:
         self._clock = clock
         self._started_at = started_at
         self._budget = budget or RunBudget()
-        self.output_schema = output_schema
-        self._output: dict | None = None
         self._executor = executor
         self._runner = ToolRunner(executor=executor, depth=current_depth, parent_id=parent_id)
         self._last_response: CompletionResponse | None = None
@@ -256,8 +252,6 @@ class Agent:
                     if len(messages) > before:
                         continue
                     result_text = (response_message.content or "").strip()
-                    if self.output_schema is not None:
-                        self._output = await self._generate_output(messages)
                     yield self._result(result_text, StopReason.END_TURN, step)
                     return
 
@@ -338,46 +332,7 @@ class Agent:
     def _result(self, text: str, reason: StopReason, step: int, messages: list[dict] | None = None) -> Result:
         if messages is not None and reason != StopReason.END_TURN and not text.strip():
             text = self._fallback_result_text(messages, reason) or text
-        return Result(text=text, stop_reason=reason, steps=step, usage=self._usage, output=self._output)
-
-    async def _generate_output(self, messages: list[dict]) -> dict | None:
-        """Generate a validated structured result, with one bounded repair."""
-        assert self.output_schema is not None
-        instruction = "Return the structured result for this run now."
-        response = await self.client.complete(
-            self.model,
-            # A USER message, not SYSTEM: Anthropic hoists system content
-            # out of the message list, leaving the conversation ending on
-            # the assistant turn — which newer Claude models reject as
-            # unsupported prefill. Every provider accepts a trailing user turn.
-            [*messages, {"role": Role.USER, "content": instruction}],
-            response_format=self.output_schema,
-        )
-        content = response.choices[0].message.content
-        try:
-            parsed = (
-                content if isinstance(content, self.output_schema) else self.output_schema.model_validate_json(content)
-            )
-        except ValidationError as error:
-            response = await self.client.complete(
-                self.model,
-                [
-                    *messages,
-                    {"role": Role.USER, "content": instruction},
-                    {"role": Role.ASSISTANT, "content": str(content or "")},
-                    {
-                        "role": Role.USER,
-                        "content": f"The structured result above is invalid:\n{error}\n"
-                        "Return one corrected structured result now.",
-                    },
-                ],
-                response_format=self.output_schema,
-            )
-            content = response.choices[0].message.content
-            parsed = (
-                content if isinstance(content, self.output_schema) else self.output_schema.model_validate_json(content)
-            )
-        return parsed.model_dump()
+        return Result(text=text, stop_reason=reason, steps=step, usage=self._usage)
 
     def _mark_provider_loaded_tools(
         self,

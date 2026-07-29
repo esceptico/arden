@@ -13,6 +13,7 @@ from arden.wiki.maintenance.store import (
     WikiMaintenanceReviewStatus,
     WikiMaintenanceStore,
     WikiMaintenanceWatermarkConflictError,
+    WikiProjectionWatermarkConflictError,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -79,6 +80,28 @@ async def test_review_and_watermark_survive_restart(tmp_path) -> None:
         assert (await second.get_watermark()).revision == _revision("a")
     finally:
         await second.close()
+
+
+async def test_projection_watermark_advances_with_compare_and_swap(tmp_path) -> None:
+    store = await WikiMaintenanceStore.open(tmp_path / "maintenance.sqlite")
+    first = _revision("a")
+    second = _revision("b")
+    try:
+        assert await store.get_projection_revision() is None
+        await store.record_projection_revision(expected_revision=None, revision=first)
+        assert await store.get_projection_revision() == first
+
+        with pytest.raises(WikiProjectionWatermarkConflictError, match="before advance"):
+            await store.record_projection_revision(
+                expected_revision=_revision("c"),
+                revision=second,
+            )
+
+        assert await store.get_projection_revision() == first
+        await store.record_projection_revision(expected_revision=first, revision=second)
+        assert await store.get_projection_revision() == second
+    finally:
+        await store.close()
 
 
 async def test_system_clear_is_generation_guarded_and_survives_restart(tmp_path) -> None:

@@ -79,6 +79,52 @@ def _stream_context(run: RunState, registry: RunRegistry | None = None) -> Simpl
     return SimpleNamespace(run=run, run_registry=registry or _RunRegistryStub(run))
 
 
+class _ChatCompletionMixin:
+    failed_event: RunFailed | None = None
+
+    async def record_chat_run_status(self, run_id, status, **kwargs):
+        return None
+
+    async def record_chat_run_completed_with_outbox(self, event, stop_reason, last_seq):
+        await self.record_chat_run_status(
+            event.run_id,
+            RunStatus.COMPLETED.value,
+            stop_reason=stop_reason,
+            last_seq=last_seq,
+        )
+
+    async def record_chat_run_failed_with_outbox(
+        self,
+        event,
+        *,
+        status,
+        stop_reason,
+        last_seq,
+        error_code=None,
+        error_message=None,
+    ):
+        self.failed_event = event
+        if error_code is None and error_message is None:
+            await self.record_chat_run_status(
+                event.run_id,
+                status,
+                stop_reason=stop_reason,
+                last_seq=last_seq,
+            )
+            return
+        await self.record_chat_run_status(
+            event.run_id,
+            status,
+            stop_reason=stop_reason,
+            last_seq=last_seq,
+            error_code=error_code,
+            error_message=error_message,
+        )
+
+    async def record_run_evidence(self, *, run_id, session_id, source_refs):
+        return {}
+
+
 def test_text_boundary_events_convert_to_sse():
     (start,) = agent_events_to_sse(TextStarted(message_id="text-1"))
     (content,) = agent_events_to_sse(TextDelta(message_id="text-1", content="hello"))
@@ -1271,7 +1317,7 @@ async def test_run_chat_keeps_backgrounded_run_active_until_drain_finishes(monke
         async def get_background_agent_result(self, session_id, task_id):
             return None
 
-    class RecordingSessionService:
+    class RecordingSessionService(_ChatCompletionMixin):
         store = Store()
 
         async def save(self, session_state, messages, metadata=None):
@@ -1415,9 +1461,10 @@ async def test_run_agent_loop_hard_task_cancel_emits_terminal_cancelled():
 async def test_run_chat_emits_cancelled_when_task_cancelled_before_agent_loop():
     registry = RunRegistry()
     run = registry.create_run("sess-1")
+    run.loop_task_id = "loop-1"
     session_state = SessionState(session_id="sess-1", started_at=datetime.now(UTC))
 
-    class NoopSessionService:
+    class NoopSessionService(_ChatCompletionMixin):
         async def save(self, session_state, messages, metadata=None):
             return None
 
@@ -1434,6 +1481,7 @@ async def test_run_chat_emits_cancelled_when_task_cancelled_before_agent_loop():
     queue = bus.subscribe()
     registry = RunRegistry()
     registry._runs[run.run_id] = run
+    service = NoopSessionService()
     ctx = ChatContext(
         run=run,
         session_state=session_state,
@@ -1443,7 +1491,7 @@ async def test_run_chat_emits_cancelled_when_task_cancelled_before_agent_loop():
         config=SimpleNamespace(approval_timeout_seconds=300),
         available_integrations=[],
         integration_errors={},
-        session_service=NoopSessionService(),
+        session_service=service,
         run_registry=registry,
     )
 
@@ -1461,6 +1509,12 @@ async def test_run_chat_emits_cancelled_when_task_cancelled_before_agent_loop():
     assert run.cancel_terminal_emitted is True
     assert run.status == RunStatus.CANCELLED
     assert registry.get_active_run("sess-1") is None
+    assert service.failed_event == RunFailed(
+        run_id=run.run_id,
+        session_id="sess-1",
+        error="chat run cancelled",
+        automation_task_id="loop-1",
+    )
 
 
 @pytest.mark.asyncio
@@ -1475,7 +1529,7 @@ async def test_run_chat_persists_budget_stop_reason(monkeypatch):
         async def get_background_agent_result(self, session_id, task_id):
             return None
 
-    class RecordingSessionService:
+    class RecordingSessionService(_ChatCompletionMixin):
         def __init__(self):
             self.store = Store()
             self.statuses = []
@@ -1533,7 +1587,7 @@ async def test_run_chat_records_durable_message_count_for_trimmed_loop(monkeypat
         async def get_background_agent_result(self, session_id, task_id):
             return None
 
-    class RecordingSessionService:
+    class RecordingSessionService(_ChatCompletionMixin):
         def __init__(self):
             self.store = Store()
             self.saved_metadata = None
@@ -1585,13 +1639,14 @@ async def test_run_chat_final_save_failure_emits_error_not_finished(monkeypatch)
 
     registry = RunRegistry()
     run = registry.create_run("sess-1")
+    run.loop_task_id = "loop-1"
     session_state = SessionState(session_id="sess-1", started_at=datetime.now(UTC))
 
     class Store:
         async def get_background_agent_result(self, session_id, task_id):
             return None
 
-    class FailingFinalSaveService:
+    class FailingFinalSaveService(_ChatCompletionMixin):
         def __init__(self):
             self.store = Store()
             self.statuses = []
@@ -1650,10 +1705,16 @@ async def test_run_chat_final_save_failure_emits_error_not_finished(monkeypatch)
     assert registry.get_run(run.run_id).status == RunStatus.ERROR
     assert service.statuses[-1]["status"] == RunStatus.ERROR.value
     assert service.statuses[-1]["error_code"] == "run_finalization_failed"
+    assert service.failed_event == RunFailed(
+        run_id=run.run_id,
+        session_id="sess-1",
+        error="The run finished but failed to save its final state. Please retry.",
+        automation_task_id="loop-1",
+    )
 
 
 @pytest.mark.asyncio
-async def test_run_chat_completed_outbox_failure_does_not_reclassify_run(monkeypatch):
+async def test_run_chat_completed_outbox_failure_does_not_persist_completion(monkeypatch):
     from arden.services import chat as chat_service
 
     registry = RunRegistry()
@@ -1664,7 +1725,7 @@ async def test_run_chat_completed_outbox_failure_does_not_reclassify_run(monkeyp
         async def get_background_agent_result(self, session_id, task_id):
             return None
 
-    class RecordingSessionService:
+    class RecordingSessionService(_ChatCompletionMixin):
         def __init__(self):
             self.store = Store()
             self.statuses = []
@@ -1687,6 +1748,9 @@ async def test_run_chat_completed_outbox_failure_does_not_reclassify_run(monkeyp
         ):
             self.statuses.append({"status": status, "error_code": error_code, "error_message": error_message})
 
+        async def record_chat_run_completed_with_outbox(self, event, stop_reason, last_seq):
+            raise RuntimeError("outbox down")
+
     class FakeAgent:
         def __init__(self):
             self.hooks = SimpleNamespace(on_response=None, on_step_finish=None, get_pending_messages=None)
@@ -1695,9 +1759,6 @@ async def test_run_chat_completed_outbox_failure_does_not_reclassify_run(monkeyp
 
         async def stream(self, messages):
             yield Result(text="done", stop_reason=StopReason.END_TURN, steps=0, usage=Usage())
-
-    async def failing_enqueue(_event):
-        raise RuntimeError("outbox down")
 
     service = RecordingSessionService()
     monkeypatch.setattr(chat_service, "create_agent", lambda **_kwargs: FakeAgent())
@@ -1713,7 +1774,6 @@ async def test_run_chat_completed_outbox_failure_does_not_reclassify_run(monkeyp
         integration_errors={},
         session_service=service,
         run_registry=registry,
-        enqueue_run_completed=failing_enqueue,
     )
 
     await run_chat(ctx, bus, BusRegistry())
@@ -1722,9 +1782,73 @@ async def test_run_chat_completed_outbox_failure_does_not_reclassify_run(monkeyp
     thinking = next(record.event for record in bus._recent if record.event.type.value == "thinking")
     assert thinking.session_id == "sess-1"
     assert thinking.run_id == run.run_id
-    assert "RUN_ERROR" not in event_types
-    assert "RUN_FINISHED" in event_types
-    assert service.statuses[-1]["status"] == RunStatus.COMPLETED.value
+    assert "RUN_ERROR" in event_types
+    assert "RUN_FINISHED" not in event_types
+    assert all(status["status"] != RunStatus.COMPLETED.value for status in service.statuses)
+    assert service.statuses[-1]["status"] == RunStatus.ERROR.value
+    assert registry.get_run(run.run_id).status == RunStatus.ERROR
+
+
+@pytest.mark.asyncio
+async def test_run_chat_uses_atomic_completion_before_finished_event(monkeypatch):
+    from arden.services import chat as chat_service
+
+    registry = RunRegistry()
+    run = registry.create_run("sess-1")
+    session_state = SessionState(session_id="sess-1", started_at=datetime.now(UTC))
+    completed = []
+
+    class Store:
+        async def get_background_agent_result(self, session_id, task_id):
+            return None
+
+    class RecordingSessionService(_ChatCompletionMixin):
+        def __init__(self):
+            self.store = Store()
+
+        async def save(self, session_state, messages, metadata=None):
+            return None
+
+        async def save_progress(self, session_state, messages):
+            return None
+
+        async def record_chat_run_completed_with_outbox(self, event, stop_reason, last_seq):
+            completed.append((event, stop_reason, last_seq))
+
+    class FakeAgent:
+        def __init__(self):
+            self.hooks = SimpleNamespace(on_response=None, on_step_finish=None, get_pending_messages=None)
+            self.tools = []
+            self._last_response = None
+
+        async def stream(self, messages):
+            yield Result(text="done", stop_reason=StopReason.END_TURN, steps=0, usage=Usage())
+
+    monkeypatch.setattr(chat_service, "create_agent", lambda **_kwargs: FakeAgent())
+    bus = SessionBus(session_id="sess-1")
+    await run_chat(
+        ChatContext(
+            run=run,
+            session_state=session_state,
+            is_init=False,
+            executor=SimpleNamespace(),
+            tools=[],
+            config=SimpleNamespace(approval_timeout_seconds=300),
+            available_integrations=[],
+            integration_errors={},
+            session_service=RecordingSessionService(),
+            run_registry=registry,
+        ),
+        bus,
+        BusRegistry(),
+    )
+
+    assert len(completed) == 1
+    event, stop_reason, last_seq = completed[0]
+    assert event.run_id == run.run_id
+    assert stop_reason == StopReason.END_TURN
+    assert last_seq is not None
+    assert any(record.event.type.value == "RUN_FINISHED" for record in bus._recent)
     assert registry.get_run(run.run_id).status == RunStatus.COMPLETED
 
 
@@ -1740,7 +1864,7 @@ async def test_run_chat_completed_bus_failure_does_not_reclassify_run(monkeypatc
         async def get_background_agent_result(self, session_id, task_id):
             return None
 
-    class RecordingSessionService:
+    class RecordingSessionService(_ChatCompletionMixin):
         def __init__(self):
             self.store = Store()
             self.statuses = []
@@ -1817,7 +1941,7 @@ async def test_run_chat_emits_live_token_usage_after_model_response(monkeypatch)
         async def get_background_agent_result(self, session_id, task_id):
             return None
 
-    class RecordingSessionService:
+    class RecordingSessionService(_ChatCompletionMixin):
         def __init__(self):
             self.store = Store()
 
@@ -1896,7 +2020,7 @@ async def test_active_goal_dispatches_hidden_continuation_after_user_turn(monkey
         async def get_background_agent_result(self, session_id, task_id):
             return None
 
-    class GoalSessionService:
+    class GoalSessionService(_ChatCompletionMixin):
         store = Store()
 
         async def save(self, session_state, messages, metadata=None):
@@ -1979,7 +2103,7 @@ async def test_goal_meta_run_dispatches_followup_even_without_tool_activity(monk
         async def get_background_agent_result(self, session_id, task_id):
             return None
 
-    class GoalSessionService:
+    class GoalSessionService(_ChatCompletionMixin):
         store = Store()
 
         async def save(self, session_state, messages, metadata=None):
@@ -2048,7 +2172,7 @@ async def test_run_chat_does_not_overwrite_error_status(monkeypatch):
         async def get_background_agent_result(self, session_id, task_id):
             return None
 
-    class RecordingSessionService:
+    class RecordingSessionService(_ChatCompletionMixin):
         def __init__(self):
             self.store = Store()
             self.statuses = []
@@ -2056,7 +2180,16 @@ async def test_run_chat_does_not_overwrite_error_status(monkeypatch):
         async def save(self, session_state, messages, metadata=None):
             return None
 
-        async def record_chat_run_status(self, run_id, status, *, stop_reason=None, last_seq=None):
+        async def record_chat_run_status(
+            self,
+            run_id,
+            status,
+            *,
+            stop_reason=None,
+            last_seq=None,
+            error_code=None,
+            error_message=None,
+        ):
             self.statuses.append((status, stop_reason))
 
     service = RecordingSessionService()
@@ -2101,7 +2234,7 @@ async def test_run_chat_surfaces_context_length_provider_error(monkeypatch):
         async def get_background_agent_result(self, session_id, task_id):
             return None
 
-    class RecordingSessionService:
+    class RecordingSessionService(_ChatCompletionMixin):
         def __init__(self):
             self.store = Store()
             self.statuses = []
@@ -2185,7 +2318,7 @@ async def test_run_chat_final_save_failure_preserves_provider_error(monkeypatch)
         async def get_background_agent_result(self, session_id, task_id):
             return None
 
-    class FailingFinalSaveService:
+    class FailingFinalSaveService(_ChatCompletionMixin):
         def __init__(self):
             self.store = Store()
             self.statuses = []
@@ -2357,7 +2490,7 @@ async def test_run_chat_compacts_and_retries_context_length_provider_error(monke
         async def get_background_agent_result(self, session_id, task_id):
             return None
 
-    class RecordingSessionService:
+    class RecordingSessionService(_ChatCompletionMixin):
         def __init__(self):
             self.store = Store()
             self.statuses = []
@@ -2471,7 +2604,7 @@ async def test_context_retry_compacts_loop_prefix_into_persisted_summary(monkeyp
         async def get_background_agent_result(self, session_id, task_id):
             return None
 
-    class RecordingSessionService:
+    class RecordingSessionService(_ChatCompletionMixin):
         def __init__(self):
             self.store = Store()
             self.saved = []
@@ -2540,7 +2673,7 @@ async def test_cancelled_run_finally_drops_pending_without_persisting():
     run.queue_injection({"role": "user", "content": "dead follow-up", "client_id": "cid-dead"})
     session_state = SessionState(session_id="sess-1", started_at=datetime.now(UTC))
 
-    class RecordingSessionService:
+    class RecordingSessionService(_ChatCompletionMixin):
         def __init__(self):
             self.saved: list[list[dict]] = []
 
@@ -2584,7 +2717,7 @@ async def test_cancelled_run_finally_does_not_clear_newer_replay_events():
     run = registry.create_run("sess-1")
     session_state = SessionState(session_id="sess-1", started_at=datetime.now(UTC))
 
-    class NoopSessionService:
+    class NoopSessionService(_ChatCompletionMixin):
         async def save(self, session_state, messages, metadata=None):
             return None
 
@@ -2638,7 +2771,7 @@ async def test_background_result_after_cancel_is_ignored_for_cancelled_run(monke
         async def record_background_agent_finished(self, **kwargs):
             return None
 
-    class NoopSessionService:
+    class NoopSessionService(_ChatCompletionMixin):
         store = NoopStore()
 
         async def save(self, session_state, messages, metadata=None):
@@ -2682,12 +2815,12 @@ async def test_background_result_after_cancel_is_ignored_for_cancelled_run(monke
 
 @pytest.mark.asyncio
 async def test_backgrounded_drain_cancel_does_not_save_merged_output():
-    run = RunState(run_id="run-1", session_id="sess-1", backgrounded=True)
+    run = RunState(run_id="run-1", session_id="sess-1", backgrounded=True, loop_task_id="loop-1")
     session_state = SessionState(session_id="sess-1", started_at=datetime.now(UTC))
     started = asyncio.Event()
     release = asyncio.Event()
 
-    class RecordingSessionService:
+    class RecordingSessionService(_ChatCompletionMixin):
         def __init__(self):
             self.saved: list[list[dict]] = []
             self.statuses: list[tuple[str, str | None]] = []
@@ -2720,7 +2853,7 @@ async def test_backgrounded_drain_cancel_does_not_save_merged_output():
         available_integrations=[],
         integration_errors={},
         session_service=service,
-        run_registry=RunRegistry(),
+        run_registry=registry,
     )
     task = asyncio.create_task(
         _drain_backgrounded(
@@ -2740,6 +2873,12 @@ async def test_backgrounded_drain_cancel_does_not_save_merged_output():
 
     assert ctx.session_service.saved == []
     assert ctx.session_service.statuses[-1] == (RunStatus.CANCELLED.value, "cancelled")
+    assert service.failed_event == RunFailed(
+        run_id="run-1",
+        session_id="sess-1",
+        error="chat run cancelled",
+        automation_task_id="loop-1",
+    )
 
 
 @pytest.mark.asyncio
@@ -2749,7 +2888,7 @@ async def test_backgrounded_drain_persists_budget_stop_reason():
     source = ToolSourceRef(provider="slack", kind="message", ref="C1:1.0", title="Decision")
     duplicate = ToolSourceRef(provider="slack", kind="message", ref="C1:1.0", title="Duplicate")
 
-    class RecordingSessionService:
+    class RecordingSessionService(_ChatCompletionMixin):
         def __init__(self):
             self.statuses: list[tuple[str, str | None]] = []
 
@@ -2808,7 +2947,7 @@ async def test_backgrounded_completion_is_not_acknowledged_when_direct_save_fail
     run = RunState(run_id="run-1", session_id="sess-1", backgrounded=True)
     session_state = SessionState(session_id="sess-1", started_at=datetime.now(UTC))
 
-    class FailingInjectedSaveService:
+    class FailingInjectedSaveService(_ChatCompletionMixin):
         async def load(self, session_id=None):
             return SessionData(state=session_state, messages=[])
 
@@ -2855,7 +2994,7 @@ async def test_backgrounded_drain_stream_failure_records_error_not_completed():
     run = RunState(run_id="run-1", session_id="sess-1", backgrounded=True, loop_task_id="loop-1")
     session_state = SessionState(session_id="sess-1", started_at=datetime.now(UTC))
 
-    class RecordingSessionService:
+    class RecordingSessionService(_ChatCompletionMixin):
         def __init__(self):
             self.statuses: list[dict] = []
             self.saved: list[list[dict]] = []
@@ -2892,11 +3031,6 @@ async def test_backgrounded_drain_stream_failure_records_error_not_completed():
     service = RecordingSessionService()
     registry = RunRegistry()
     registry._runs[run.run_id] = run
-    failures: list[RunFailed] = []
-
-    async def enqueue_failed(event: RunFailed) -> None:
-        failures.append(event)
-
     ctx = ChatContext(
         run=run,
         session_state=session_state,
@@ -2908,7 +3042,6 @@ async def test_backgrounded_drain_stream_failure_records_error_not_completed():
         integration_errors={},
         session_service=service,
         run_registry=registry,
-        enqueue_run_failed=enqueue_failed,
     )
 
     await _drain_backgrounded(
@@ -2926,22 +3059,20 @@ async def test_backgrounded_drain_stream_failure_records_error_not_completed():
     assert "backgrounded run failed" in service.statuses[-1]["error_message"]
     assert all(entry["status"] != RunStatus.COMPLETED.value for entry in service.statuses)
     assert run.status == RunStatus.ERROR
-    assert failures == [
-        RunFailed(
-            run_id="run-1",
-            session_id="sess-1",
-            error="The backgrounded run failed while finishing. Please retry.",
-            automation_task_id="loop-1",
-        )
-    ]
+    assert service.failed_event == RunFailed(
+        run_id="run-1",
+        session_id="sess-1",
+        error="The backgrounded run failed while finishing. Please retry.",
+        automation_task_id="loop-1",
+    )
 
 
 @pytest.mark.asyncio
 async def test_backgrounded_drain_final_save_failure_records_error():
-    run = RunState(run_id="run-1", session_id="sess-1", backgrounded=True)
+    run = RunState(run_id="run-1", session_id="sess-1", backgrounded=True, loop_task_id="loop-1")
     session_state = SessionState(session_id="sess-1", started_at=datetime.now(UTC))
 
-    class FailingSaveSessionService:
+    class FailingSaveSessionService(_ChatCompletionMixin):
         def __init__(self):
             self.statuses = []
 
@@ -2995,6 +3126,12 @@ async def test_backgrounded_drain_final_save_failure_records_error():
     assert service.statuses[-1]["error_code"] == "run_finalization_failed"
     assert "final state" in service.statuses[-1]["error_message"]
     assert run.status == RunStatus.ERROR
+    assert service.failed_event == RunFailed(
+        run_id="run-1",
+        session_id="sess-1",
+        error="The run finished but failed to save its final state. Please retry.",
+        automation_task_id="loop-1",
+    )
 
 
 @pytest.mark.asyncio

@@ -2,14 +2,11 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 
-from pydantic import ValidationError
-
 from arden.agent_surface.schedules import compile_schedules_to_automations
 from arden.areas.agent import AreaCustodianReport, custodian_contract, record_area_run
 from arden.areas.asks import AskStore
 from arden.areas.custodian import CustodianStore
 from arden.areas.models import Area, areas_from_records
-from arden.areas.work_store import AreaWorkReportError
 from arden.automation.builtins import (
     FACT_MAINTENANCE_PROMPT,
     FACT_MAINTENANCE_TOOL_SCOPE,
@@ -33,7 +30,7 @@ from arden.constants import (
     BUILTIN_MEMORY_SYNTHESIZE_ID,
     BUILTIN_WIKI_MAINTENANCE_ID,
 )
-from arden.events.internal import RunCompleted, RunCompletionRejected
+from arden.events.internal import RunCompleted, RunCompletionRejected, RunFailed
 from arden.events.sse import AreasChangedEvent, MemoryChangedEvent
 from arden.integrations.calendar.client import MultiCalendarSource
 from arden.llm.base import CompletionClient
@@ -66,6 +63,7 @@ class AutomationRuntime:
         get_calendar_source: Callable[[], object | None],
         get_slack_client: Callable[[], object | None],
         resolve_auxiliary_completion: Callable[[], tuple[CompletionClient, str, str | None]],
+        project_wiki_state: Callable[[], Awaitable[None]],
         get_fact_dream: Callable[[], object | None] = lambda: None,
         get_fact_maintenance: Callable[[FactMaintenanceReviewer], FactMaintenance | None] = lambda _reviewer: None,
         get_fact_synthesis: Callable[[], object | None] = lambda: None,
@@ -108,7 +106,9 @@ class AutomationRuntime:
             outbox_store=stores.outbox,
             scheduler=self.scheduler,
             on_area_run=self._on_area_run_completed,
+            on_area_run_failed=self._on_area_run_failed,
             on_automation_settled=self._on_automation_settled,
+            on_wiki_projection=project_wiki_state,
         )
         self.monitor: Monitor | None = None
 
@@ -181,15 +181,56 @@ class AutomationRuntime:
             )
         )
 
-    async def _on_area_run_completed(self, run_completed: RunCompleted) -> None:
-        """Ask sync for area channel runs: when a completed run's session
-        belongs to an area:* automation, every run re-decides the area's one
-        ask (record_area_run parses the fenced nomination; silence retires
-        the previous one). Rides the outbox — the designed post-run pipeline
-        — instead of a scheduler special case."""
-        autos = await self.stores.automations.list_session_bound_by_session(run_completed.session_id)
+    async def notify_wiki_changed(
+        self,
+        paths: list[str],
+        revision: str | None,
+        *,
+        source_areas_by_path: dict[str, set[str]],
+    ) -> None:
+        await self.scheduler.emit_automation_event(
+            MemoryChangedEvent(paths=paths, revision=revision, review_required=False)
+        )
+        changed = set(paths)
+        for record in await self.stores.sessions.list_areas():
+            page_path = record.get("page_path")
+            if (
+                page_path is None
+                or page_path not in changed
+                or record["area_id"] in source_areas_by_path.get(page_path, set())
+            ):
+                continue
+            await self.request_area_wake(record["area_id"], f"topic page edited ({page_path})")
+
+    async def _on_area_run_completed(self, run_completed: RunCompleted) -> bool:
+        """Project one trusted custodian report after durable chat completion."""
+        return await self._project_area_report(
+            run_id=run_completed.run_id,
+            session_id=run_completed.session_id,
+            automation_task_id=run_completed.automation_task_id,
+            required=True,
+        )
+
+    async def _on_area_run_failed(self, run_failed: RunFailed) -> bool:
+        """Finish projecting any report accepted before chat finalization failed."""
+        return await self._project_area_report(
+            run_id=run_failed.run_id,
+            session_id=run_failed.session_id,
+            automation_task_id=run_failed.automation_task_id,
+            required=False,
+        )
+
+    async def _project_area_report(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        automation_task_id: str | None,
+        required: bool,
+    ) -> bool:
+        autos = await self.stores.automations.list_session_bound_by_session(session_id)
         for auto in autos:
-            if not auto.task_id.startswith("area:"):
+            if not auto.task_id.startswith("area:") or automation_task_id != auto.task_id:
                 continue
             key = auto.task_id.removeprefix("area:")
             area_ = next((s for s in await self.load_areas() if s.key == key), None)
@@ -200,11 +241,19 @@ class AutomationRuntime:
             # decaying attention on the very next run).
             stale_cutoff = (datetime.now(UTC) - timedelta(days=AREA_ASK_IGNORED_DAYS)).isoformat()
             ignored = any(a.source == "agent" and a.created_at <= stale_cutoff for a in self.area_asks.list(key))
-            created = await self._commit_area_report(
+            run_ref = f"run:{run_id}"
+            report_data = await self.stores.area_work.report(run_ref)
+            if report_data is None:
+                if required:
+                    raise RunCompletionRejected("Area custodian ended without submitting a report")
+                return False
+            report = AreaCustodianReport.model_validate(report_data)
+            created = record_area_run(
+                self.area_asks,
                 key,
                 area_.page_path,
-                run_completed.structured_output,
-                run_ref=f"run:{run_completed.run_id}",
+                report,
+                run_ref=run_ref,
             )
             record = await self.stores.sessions.get_area(key)
             attention = (record or {}).get("attention") or "ambient"
@@ -212,44 +261,29 @@ class AutomationRuntime:
             # quiet-decayed) replaces the pre-run trigger advance.
             next_run = self.custodians.record_run(
                 key,
-                run_completed.structured_output,
+                report,
+                run_ref=run_ref,
                 attention=attention,
                 paused=bool((record or {}).get("paused_at")),
             )
-            await self.stores.automations.set_next_run(auto.task_id, next_run)
-            if self.custodians.note_ignored_asks(key, ignored):
-                stepped = {"active": "ambient", "ambient": "dormant"}.get(attention)
-                if stepped:
-                    await self.stores.sessions.update_area(key, attention=stepped)
-                    _logger.info("Area %s attention stepped down to %s (asks unanswered)", key, stepped)
+            await self.scheduler.reschedule_run(auto.task_id, next_run)
+            lowered_attention = self.custodians.note_ignored_asks(
+                key,
+                ignored,
+                attention=attention,
+                run_ref=run_ref,
+            )
+            if lowered_attention is not None:
+                await self.stores.sessions.update_area(key, attention=lowered_attention)
+                _logger.info(
+                    "Area %s attention stepped down to %s (asks unanswered)",
+                    key,
+                    lowered_attention,
+                )
             await self._notify_asks(area_, record, created)
             await self.scheduler.emit_automation_event(AreasChangedEvent(keys=[key]))
-
-    async def _commit_area_report(
-        self,
-        area_id: str,
-        page_path: str,
-        structured_output: dict | None,
-        run_ref: str,
-    ) -> list:
-        """Commit canonical work before deriving asks from the same report."""
-        if structured_output is None:
-            return []
-        try:
-            report = AreaCustodianReport.model_validate(structured_output)
-        except ValidationError as exc:
-            raise RunCompletionRejected(f"{type(exc).__name__}: {exc}") from exc
-        try:
-            await self.stores.area_work.apply_report(area_id, run_ref, report)
-        except AreaWorkReportError as exc:
-            raise RunCompletionRejected(f"{type(exc).__name__}: {exc}") from exc
-        return record_area_run(
-            self.area_asks,
-            area_id,
-            page_path,
-            report.model_dump(mode="json"),
-            run_ref=run_ref,
-        )
+            return True
+        return False
 
     async def _notify_asks(self, area_, record: dict | None, created: list) -> None:
         """Push newly nominated asks through the user's notifiers, gated by
@@ -293,11 +327,7 @@ class AutomationRuntime:
         if deadline is None:
             return
         task_id = f"area:{area_id}"
-        auto = await self.stores.automations.get(task_id)
-        if auto is None or not auto.enabled:
-            return
-        if auto.next_run_at is None or auto.next_run_at > deadline:
-            await self.stores.automations.set_next_run(task_id, deadline)
+        if await self.scheduler.reschedule_run(task_id, deadline, only_if_earlier=True):
             _logger.info("Area %s wake requested (%s), due %s", area_id, description, deadline.isoformat())
 
     async def sync_area_custodian(self, area: dict) -> None:
@@ -326,7 +356,10 @@ class AutomationRuntime:
         self.scheduler.register_handler("memory_synthesize", self._run_memory_synthesis)
         self.scheduler.register_handler("memory_dream", self._run_memory_dream)
         self.scheduler.register_handler("wiki_maintenance", self._run_wiki_maintenance)
-        await seed_builtins(self.stores.automations)
+        memory_model = self.config.memory_model
+        if memory_model is None:
+            raise RuntimeError("Memory model is required for builtin automations")
+        await seed_builtins(self.stores.automations, memory_model=memory_model)
         await self._seed_area_automations()
         await compile_schedules_to_automations(".", self.stores.automations)
         await self.automation_service.backfill_channels()
@@ -504,7 +537,6 @@ class AutomationRuntime:
                 triggers=[trigger],
                 auto_approve=contract.auto_approve,
                 tool_scope=contract.tool_scope,
-                output_schema="area_custodian",
                 thread_id=channel.session_id,
                 read_history=True,
             )
@@ -548,7 +580,6 @@ class AutomationRuntime:
             or needs_description_source
             or existing.auto_approve != contract.auto_approve
             or existing.tool_scope != contract.tool_scope
-            or existing.output_schema != "area_custodian"
             or existing.enabled != desired_enabled
         )
         if not changed:
@@ -566,7 +597,6 @@ class AutomationRuntime:
         existing.prompt = contract.description
         existing.auto_approve = contract.auto_approve
         existing.tool_scope = contract.tool_scope
-        existing.output_schema = "area_custodian"
         existing.enabled = desired_enabled
         await self.stores.automations.update_metadata(existing)
 

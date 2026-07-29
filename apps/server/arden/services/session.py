@@ -7,6 +7,7 @@ from arden.context.models import SessionData, SessionState
 from arden.context.store import AREA_FILTER_UNSET, SessionStore
 from arden.core.compactor import compact_messages, compactable_range
 from arden.core.tool_result_files import purge_session_results
+from arden.events.internal import RunCompleted, RunFailed
 from arden.events.sse import SessionActivityEvent, SessionCreatedEvent, SSEEvent
 from arden.logging import get_logger
 
@@ -240,6 +241,63 @@ class SessionService:
         except Exception as e:
             _logger.warning("Failed to record chat run status: %s", e)
             raise
+
+    async def record_chat_run_completed_with_outbox(
+        self,
+        event: RunCompleted,
+        stop_reason: str | None,
+        last_seq: int | None,
+    ) -> None:
+        await self.store.record_chat_run_completed_with_outbox(
+            event,
+            stop_reason=stop_reason,
+            last_seq=last_seq,
+        )
+
+    async def record_chat_run_failed_with_outbox(
+        self,
+        event: RunFailed,
+        *,
+        status: str,
+        stop_reason: str,
+        last_seq: int | None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        await self.store.record_chat_run_failed_with_outbox(
+            event,
+            status=status,
+            stop_reason=stop_reason,
+            last_seq=last_seq,
+            error_code=error_code,
+            error_message=error_message,
+        )
+
+    async def record_run_evidence(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        source_refs: list[dict],
+    ) -> dict:
+        return await self.store.record_run_evidence(
+            run_id=run_id,
+            session_id=session_id,
+            source_refs=source_refs,
+        )
+
+    async def record_run_context_manifest(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        manifest: list[dict],
+    ) -> None:
+        await self.store.record_run_context_manifest(
+            run_id=run_id,
+            session_id=session_id,
+            manifest=manifest,
+        )
 
     async def record_chat_queued_message(
         self,

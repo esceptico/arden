@@ -9,12 +9,15 @@ Trimming is runtime-only — disk history is untouched.
 """
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 
 from arden.constants import LOOP_ITERATION_HISTORY_WINDOW
 from arden.context.models import SessionData, SessionState
 from arden.core.factory import AgentConfig
+from arden.events.internal import RunFailed
+from arden.server.app import _recover_interrupted_chat_runs
 from arden.server.bus import BusRegistry
 from arden.server.state import RunRegistry
 from arden.services.chat import (
@@ -324,6 +327,112 @@ async def test_resume_suspended_chat_run_schedules_original_run(monkeypatch):
 
     assert result == {"run_id": "original-run", "session_id": "sess-1", "status": "resumed"}
     assert seen == [("original-run", "feed-worker", "feed-worker")]
+
+
+@pytest.mark.asyncio
+async def test_restart_settles_automation_chat_that_cannot_resume():
+    interrupted = {
+        "run_id": "run-1",
+        "session_id": "area-session",
+        "metadata": {
+            "loop_task_id": "area:health",
+            "automation_id": "area:health",
+        },
+    }
+    failures: list[RunFailed] = []
+    sequence: list[str] = []
+
+    class Store:
+        async def list_interrupted_chat_runs(self):
+            return [interrupted]
+
+    class Outbox:
+        async def handle_run_failed(self, event: RunFailed) -> None:
+            failures.append(event)
+
+    class Automations:
+        async def bind_interrupted_chat_run(
+            self,
+            task_id: str,
+            run_id: str,
+            session_id: str,
+        ) -> bool:
+            sequence.append(f"bind:{task_id}:{run_id}:{session_id}")
+            return True
+
+    runtime = SimpleNamespace(
+        session_service=SimpleNamespace(store=Store()),
+        stores=SimpleNamespace(automations=Automations()),
+        automation=SimpleNamespace(outbox_runtime=Outbox()),
+    )
+
+    async def cannot_resume(_run_id: str, _session_id: str):
+        sequence.append("resume")
+        return None
+
+    await _recover_interrupted_chat_runs(runtime, cannot_resume)
+
+    assert failures == [
+        RunFailed(
+            run_id="run-1",
+            session_id="area-session",
+            error="chat run could not resume after server restart",
+            automation_task_id="area:health",
+        )
+    ]
+    assert sequence == ["bind:area:health:run-1:area-session", "resume"]
+
+
+@pytest.mark.asyncio
+async def test_restart_binds_automation_before_resuming_chat():
+    interrupted = {
+        "run_id": "run-1",
+        "session_id": "area-session",
+        "metadata": {
+            "loop_task_id": "area:health",
+            "automation_id": "area:health",
+        },
+    }
+    sequence: list[str] = []
+    failures: list[RunFailed] = []
+
+    class Store:
+        async def list_interrupted_chat_runs(self):
+            return [interrupted]
+
+    class Automations:
+        async def bind_interrupted_chat_run(self, task_id, run_id, session_id):
+            sequence.append("bind")
+            return True
+
+        async def refresh_detached_chat_run(
+            self,
+            task_id,
+            run_id,
+            session_id,
+            started_at,
+        ):
+            sequence.append("refresh")
+            return True
+
+    class Outbox:
+        async def handle_run_failed(self, event: RunFailed) -> None:
+            failures.append(event)
+
+    runtime = SimpleNamespace(
+        session_service=SimpleNamespace(store=Store()),
+        stores=SimpleNamespace(automations=Automations()),
+        automation=SimpleNamespace(outbox_runtime=Outbox()),
+    )
+
+    async def resume(run_id: str, session_id: str):
+        sequence.append("resume")
+        return {"run_id": run_id, "session_id": session_id, "status": "resumed"}
+
+    await _recover_interrupted_chat_runs(runtime, resume)
+
+    assert sequence == ["bind", "resume", "refresh"]
+    assert failures == []
 
 
 @pytest.mark.asyncio

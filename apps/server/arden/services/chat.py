@@ -7,8 +7,6 @@ from datetime import UTC, datetime
 from inspect import Parameter, signature
 from uuid import uuid4
 
-from pydantic import BaseModel
-
 from arden.agent import Agent, Role, ToolOutcome, ToolOutcomeStatus, ToolResult
 from arden.agent.llm.parsing import trailing_incomplete_tool_step
 from arden.agent.types.events import Result, ToolCompleted
@@ -218,8 +216,6 @@ class ChatDeps:
     available_integrations: list[str]
     integration_errors: dict[str, str]
     connection_catalog: tuple[object, ...] = ()
-    enqueue_run_completed: Callable[[RunCompleted], Awaitable[bool]] | None = None
-    enqueue_run_failed: Callable[[RunFailed], Awaitable[bool]] | None = None
     dispatch_session_message: (
         Callable[
             [str, str, str | None, bool | None, list[dict] | None],
@@ -688,7 +684,6 @@ async def prepare_chat(
     automation_id: str | None = None,
     emit: Callable[[object], Awaitable[None]] | None = None,
     tool_scope: tuple[str, ...] | None = None,
-    output_schema: type[BaseModel] | None = None,
     resume_run_id: str | None = None,
 ) -> ChatContext:
     registry = deps.run_registry
@@ -805,10 +800,7 @@ async def prepare_chat(
         goal_id=goal_context["goal_id"] if goal_context else None,
         session_name_task=session_name_task,
         area_context=area_context,
-        enqueue_run_completed=deps.enqueue_run_completed,
-        enqueue_run_failed=deps.enqueue_run_failed,
         dispatch_session_message=deps.dispatch_session_message,
-        output_schema=output_schema,
     )
 
 
@@ -885,12 +877,11 @@ async def submit_chat_message(
     client_id: str | None = None,
     session_service: SessionService | None = None,
     tool_scope: tuple[str, ...] | None = None,
-    output_schema: type[BaseModel] | None = None,
     loop_task_id: str | None = None,
     automation_id: str | None = None,
+    queue_if_busy: bool = True,
 ) -> dict[str, str]:
-    load_session = getattr(session_service, "load", None)
-    if load_session is not None and await load_session(session_id) is None:
+    if session_service is not None and await session_service.load(session_id) is None:
         raise ChatSessionNotFound(session_id)
     async with run_registry.session_lock(session_id):
         return await _submit_chat_message_locked(
@@ -905,9 +896,9 @@ async def submit_chat_message(
             client_id=client_id,
             session_service=session_service,
             tool_scope=tool_scope,
-            output_schema=output_schema,
             loop_task_id=loop_task_id,
             automation_id=automation_id,
+            queue_if_busy=queue_if_busy,
         )
 
 
@@ -955,7 +946,7 @@ async def resume_suspended_chat_run(
         )
         task = asyncio.create_task(run_chat(ctx, bus, buses))
         ctx.run.task = task
-        _install_cancel_fallback(ctx.run, bus, run_registry, task)
+        _install_cancel_fallback(ctx.run, bus, run_registry, task, session_service)
         if ctx.run.client_id:
             run_registry.register_otid(session_id, ctx.run.client_id, run_id)
         return {"run_id": run_id, "session_id": session_id, "status": "resumed"}
@@ -974,10 +965,13 @@ async def _submit_chat_message_locked(
     client_id: str | None = None,
     session_service: SessionService | None = None,
     tool_scope: tuple[str, ...] | None = None,
-    output_schema: type[BaseModel] | None = None,
     loop_task_id: str | None = None,
     automation_id: str | None = None,
+    queue_if_busy: bool = True,
 ) -> dict[str, str]:
+    if not queue_if_busy and run_registry.get_accepting_run(session_id) is not None:
+        return {"run_id": "", "session_id": session_id, "status": "busy"}
+
     is_meta_client = _is_meta_client_id(client_id)
     request_hash = _chat_request_hash(
         session_id=session_id,
@@ -1038,18 +1032,16 @@ async def _submit_chat_message_locked(
             active_run = None
         elif entry.get("client_id") and session_service:
             queued_client_id = str(entry["client_id"])
-            update_idempotency = getattr(session_service, "update_chat_idempotency_key", None)
-            if update_idempotency:
-                try:
-                    await update_idempotency(
-                        session_id=session_id,
-                        client_id=queued_client_id,
-                        status="queued",
-                        run_id=active_run.run_id,
-                    )
-                except BaseException:
-                    active_run.cancel_injection(queued_client_id)
-                    raise
+            try:
+                await session_service.update_chat_idempotency_key(
+                    session_id=session_id,
+                    client_id=queued_client_id,
+                    status="queued",
+                    run_id=active_run.run_id,
+                )
+            except BaseException:
+                active_run.cancel_injection(queued_client_id)
+                raise
         if active_run is not None:
             if loop_task_id and not active_run.loop_task_id:
                 active_run.loop_task_id = loop_task_id
@@ -1072,7 +1064,6 @@ async def _submit_chat_message_locked(
         loop_task_id=loop_task_id,
         emit=bus.emit,
         tool_scope=tool_scope,
-        output_schema=output_schema,
         automation_id=automation_id,
     )
     try:
@@ -1100,46 +1091,49 @@ async def _submit_chat_message_locked(
         # the pre-submit history and the SSE replay carries agent events, not
         # the user message itself.
         await deps.session_service.save_progress(ctx.session_state, _persistable_messages(ctx.run))
-        store = getattr(deps.session_service, "store", None)
-        record_manifest = getattr(store, "record_run_context_manifest", None)
-        if record_manifest:
-            await record_manifest(
-                run_id=ctx.run.run_id,
-                session_id=ctx.run.session_id,
-                manifest=ctx.run.context_manifest,
-            )
-    except BaseException:
+        await deps.session_service.record_run_context_manifest(
+            run_id=ctx.run.run_id,
+            session_id=ctx.run.session_id,
+            manifest=ctx.run.context_manifest,
+        )
+    except BaseException as exc:
         ctx.run_registry.error_run(ctx.run.run_id)
-        try:
-            await _record_run_status(
-                deps.session_service,
-                ctx.run.run_id,
-                RunStatus.ERROR.value,
-                stop_reason="pre_task_setup_failed",
-                error_code="run_preparation_failed",
-                error_message="The run failed before streaming could start. Please retry.",
-            )
-        except Exception:
-            _logger.warning("Failed to record run preparation error status", exc_info=True)
+        safe_message = "The run failed before streaming could start. Please retry."
+        event = RunFailed(
+            run_id=ctx.run.run_id,
+            session_id=ctx.run.session_id,
+            error=safe_message,
+            automation_task_id=ctx.run.loop_task_id,
+        )
+        await deps.session_service.record_chat_run_failed_with_outbox(
+            event,
+            status=RunStatus.ERROR.value,
+            stop_reason=str(exc) or "pre_task_setup_failed",
+            last_seq=bus.next_seq - 1,
+            error_code="run_preparation_failed",
+            error_message=safe_message,
+        )
         if client_id and session_service:
-            try:
-                await session_service.update_chat_idempotency_key(
-                    session_id=session_id,
-                    client_id=client_id,
-                    status=RunStatus.ERROR.value,
-                    run_id=ctx.run.run_id,
-                )
-            except Exception:
-                _logger.warning("Failed to mark chat idempotency error after pre-task setup failure", exc_info=True)
+            await session_service.update_chat_idempotency_key(
+                session_id=session_id,
+                client_id=client_id,
+                status=RunStatus.ERROR.value,
+                run_id=ctx.run.run_id,
+            )
         raise
     if ctx.run.cancelled:
         ctx.run.accepting_injections = False
         await bus.emit(RunCancelledEvent(run_id=ctx.run.run_id))
         run_registry.finish_cancelled(ctx.run.run_id)
-        await _record_run_status(
-            deps.session_service,
-            ctx.run.run_id,
-            RunStatus.CANCELLED.value,
+        event = RunFailed(
+            run_id=ctx.run.run_id,
+            session_id=ctx.run.session_id,
+            error="chat run cancelled",
+            automation_task_id=ctx.run.loop_task_id,
+        )
+        await deps.session_service.record_chat_run_failed_with_outbox(
+            event,
+            status=RunStatus.CANCELLED.value,
             stop_reason="cancelled",
             last_seq=bus.next_seq - 1,
         )
@@ -1150,7 +1144,7 @@ async def _submit_chat_message_locked(
     activate_tracing(ctx.session_state.session_id, tags="chat")
     task = asyncio.create_task(run_chat(ctx, bus, buses))
     ctx.run.task = task
-    _install_cancel_fallback(ctx.run, bus, run_registry, task)
+    _install_cancel_fallback(ctx.run, bus, run_registry, task, deps.session_service)
     if client_id:
         run_registry.register_otid(session_id, client_id, ctx.run.run_id)
 
@@ -1161,9 +1155,27 @@ async def _submit_chat_message_locked(
     }
 
 
-async def _emit_cancelled_terminal_fallback(run: RunState, bus: SessionBus, run_registry: RunRegistry) -> None:
+async def _emit_cancelled_terminal_fallback(
+    run: RunState,
+    bus: SessionBus,
+    run_registry: RunRegistry,
+    session_service: SessionService,
+) -> None:
     if run.cancel_terminal_emitted:
         return
+    event = RunFailed(
+        run_id=run.run_id,
+        session_id=run.session_id,
+        error="chat run cancelled",
+        automation_task_id=run.loop_task_id,
+    )
+    await session_service.record_chat_run_failed_with_outbox(
+        event,
+        status=RunStatus.CANCELLED.value,
+        stop_reason="cancelled",
+        last_seq=bus.next_seq - 1,
+    )
+    await _update_run_client_idempotency(session_service, run, RunStatus.CANCELLED.value)
     await bus.emit(RunCancelledEvent(run_id=run.run_id))
     run_registry.finish_cancelled(run.run_id)
 
@@ -1173,6 +1185,7 @@ def _install_cancel_fallback(
     bus: SessionBus,
     run_registry: RunRegistry,
     task: asyncio.Task,
+    session_service: SessionService,
 ) -> None:
     loop = asyncio.get_running_loop()
 
@@ -1180,29 +1193,21 @@ def _install_cancel_fallback(
         if not done.cancelled() or run.cancel_terminal_emitted:
             return
         run.cancelled = True
-        loop.create_task(_emit_cancelled_terminal_fallback(run, bus, run_registry))
+        loop.create_task(_emit_cancelled_terminal_fallback(run, bus, run_registry, session_service))
 
     task.add_done_callback(_on_done)
 
 
-async def _record_completed_run(ctx: ChatContext, *, last_seq: int | None) -> None:
-    store = getattr(ctx.session_service, "store", None)
-    record_evidence = getattr(store, "record_run_evidence", None)
-    if record_evidence:
-        try:
-            await record_evidence(
-                run_id=ctx.run.run_id,
-                session_id=ctx.run.session_id,
-                source_refs=list(ctx.run.source_refs),
-            )
-        except Exception:
-            _logger.warning("Failed to record run evidence sidecar", exc_info=True)
-    await _record_run_status(
-        ctx.session_service,
-        ctx.run.run_id,
-        RunStatus.COMPLETED.value,
-        stop_reason=ctx.run.stop_reason,
-        last_seq=last_seq,
+async def _record_completed_run(ctx: ChatContext, event: RunCompleted, *, last_seq: int | None) -> None:
+    await ctx.session_service.record_run_evidence(
+        run_id=ctx.run.run_id,
+        session_id=ctx.run.session_id,
+        source_refs=list(ctx.run.source_refs),
+    )
+    await ctx.session_service.record_chat_run_completed_with_outbox(
+        event,
+        ctx.run.stop_reason,
+        last_seq,
     )
     await _update_run_client_idempotency(ctx.session_service, ctx.run, RunStatus.COMPLETED.value)
     ctx.run_registry.complete_run(ctx.run.run_id)
@@ -1239,18 +1244,20 @@ async def _drain_backgrounded(
                 ctx.run.stop_reason = item.stop_reason.value
     except asyncio.CancelledError:
         if ctx.run.cancelled:
-            try:
-                await _record_run_status(
-                    ctx.session_service,
-                    ctx.run.run_id,
-                    RunStatus.CANCELLED.value,
-                    stop_reason="cancelled",
-                    last_seq=None,
-                )
-                await _update_run_client_idempotency(ctx.session_service, ctx.run, RunStatus.CANCELLED.value)
-                ctx.run_registry.finish_cancelled(ctx.run.run_id)
-            except Exception:
-                _logger.warning("Failed to persist backgrounded cancellation status", exc_info=True)
+            event = RunFailed(
+                run_id=ctx.run.run_id,
+                session_id=ctx.session_state.session_id,
+                error="chat run cancelled",
+                automation_task_id=ctx.run.loop_task_id,
+            )
+            await ctx.session_service.record_chat_run_failed_with_outbox(
+                event,
+                status=RunStatus.CANCELLED.value,
+                stop_reason="cancelled",
+                last_seq=None,
+            )
+            await _update_run_client_idempotency(ctx.session_service, ctx.run, RunStatus.CANCELLED.value)
+            ctx.run_registry.finish_cancelled(ctx.run.run_id)
         return
     except Exception as exc:
         drain_error = exc
@@ -1297,25 +1304,21 @@ async def _drain_backgrounded(
                 ctx.run_registry.error_run(ctx.run.run_id)
                 error_code = "background_drain_failed"
                 safe_message = "The backgrounded run failed while finishing. Please retry."
-                await _record_run_status(
-                    ctx.session_service,
-                    ctx.run.run_id,
-                    RunStatus.ERROR.value,
+                event = RunFailed(
+                    run_id=ctx.run.run_id,
+                    session_id=ctx.session_state.session_id,
+                    error=safe_message,
+                    automation_task_id=ctx.run.loop_task_id,
+                )
+                await ctx.session_service.record_chat_run_failed_with_outbox(
+                    event,
+                    status=RunStatus.ERROR.value,
                     stop_reason=str(drain_error) or error_code,
                     last_seq=None,
                     error_code=error_code,
                     error_message=safe_message,
                 )
                 await _update_run_client_idempotency(ctx.session_service, ctx.run, RunStatus.ERROR.value)
-                if ctx.enqueue_run_failed:
-                    await ctx.enqueue_run_failed(
-                        RunFailed(
-                            run_id=ctx.run.run_id,
-                            session_id=ctx.session_state.session_id,
-                            error=safe_message,
-                            automation_task_id=ctx.run.loop_task_id,
-                        )
-                    )
                 return
             if ctx.run.usage.total_tokens:
                 await ctx.session_service.update_goal(
@@ -1324,44 +1327,39 @@ async def _drain_backgrounded(
                     tokens_used_delta=ctx.run.usage.total_tokens,
                     time_used_seconds_delta=max(0, int((datetime.now(UTC) - ctx.run.created_at).total_seconds())),
                 )
-            await _record_completed_run(ctx, last_seq=None)
-            if ctx.enqueue_run_completed:
-                try:
-                    await ctx.enqueue_run_completed(
-                        RunCompleted(
-                            run_id=ctx.run.run_id,
-                            session_id=ctx.session_state.session_id,
-                            messages=tuple(ctx.run.messages),
-                            usage=ctx.run.usage,
-                            # drain_result is the agent's Result object — passing it
-                            # whole made the payload non-JSON-serializable, so every
-                            # backgrounded run silently lost its run-completed event.
-                            result=drain_result.text if drain_result else None,
-                            source_refs=tuple(ctx.run.source_refs),
-                            structured_output=drain_result.output if drain_result else None,
-                            automation_task_id=ctx.run.loop_task_id,
-                        )
-                    )
-                except Exception:
-                    _logger.warning("Failed to enqueue backgrounded run-completed side effect", exc_info=True)
+            event = RunCompleted(
+                run_id=ctx.run.run_id,
+                session_id=ctx.session_state.session_id,
+                messages=tuple(ctx.run.messages),
+                usage=ctx.run.usage,
+                # drain_result is the agent's Result object — passing it
+                # whole made the payload non-JSON-serializable, so every
+                # backgrounded run silently lost its run-completed event.
+                result=drain_result.text if drain_result else None,
+                source_refs=tuple(ctx.run.source_refs),
+                automation_task_id=ctx.run.loop_task_id,
+            )
+            await _record_completed_run(ctx, event, last_seq=None)
     except Exception as exc:
         _logger.exception("Backgrounded final save failed (run_id=%s)", ctx.run.run_id)
         ctx.run_registry.error_run(ctx.run.run_id)
         error_code = "run_finalization_failed"
         safe_message = "The run finished but failed to save its final state. Please retry."
-        try:
-            await _record_run_status(
-                ctx.session_service,
-                ctx.run.run_id,
-                RunStatus.ERROR.value,
-                stop_reason=str(exc) or error_code,
-                last_seq=None,
-                error_code=error_code,
-                error_message=safe_message,
-            )
-            await _update_run_client_idempotency(ctx.session_service, ctx.run, RunStatus.ERROR.value)
-        except Exception:
-            _logger.warning("Failed to persist backgrounded finalization error status", exc_info=True)
+        event = RunFailed(
+            run_id=ctx.run.run_id,
+            session_id=ctx.session_state.session_id,
+            error=safe_message,
+            automation_task_id=ctx.run.loop_task_id,
+        )
+        await ctx.session_service.record_chat_run_failed_with_outbox(
+            event,
+            status=RunStatus.ERROR.value,
+            stop_reason=str(exc) or error_code,
+            last_seq=None,
+            error_code=error_code,
+            error_message=safe_message,
+        )
+        await _update_run_client_idempotency(ctx.session_service, ctx.run, RunStatus.ERROR.value)
 
 
 async def _emit_ingested_for_client_entries(
@@ -1533,6 +1531,23 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
         await bus.emit(RunCancelledEvent(run_id=run.run_id))
         ctx.run_registry.finish_cancelled(run.run_id)
 
+    async def _record_cancelled_run() -> None:
+        nonlocal terminal_status_recorded
+        event = RunFailed(
+            run_id=run.run_id,
+            session_id=session_state.session_id,
+            error="chat run cancelled",
+            automation_task_id=run.loop_task_id,
+        )
+        await ctx.session_service.record_chat_run_failed_with_outbox(
+            event,
+            status=RunStatus.CANCELLED.value,
+            stop_reason="cancelled",
+            last_seq=bus.next_seq - 1,
+        )
+        terminal_status_recorded = True
+        await _update_run_client_idempotency(ctx.session_service, run, RunStatus.CANCELLED.value)
+
     try:
         await bus.emit(
             RunStartedEvent(
@@ -1639,7 +1654,6 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
                 area_context=ctx.area_context,
                 token_budget=run.token_budget,
                 child_io_factory=child_io_factory,
-                output_schema=ctx.output_schema,
             )
 
         async def _track_response(response) -> None:
@@ -1784,7 +1798,8 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
             return
 
         if result is None:
-            return  # Cancelled
+            await _record_cancelled_run()
+            return
 
         run.usage = tracker.usage
 
@@ -1807,15 +1822,7 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
     except asyncio.CancelledError:
         run.cancelled = True
         await _emit_cancelled_terminal()
-        await _record_run_status(
-            ctx.session_service,
-            run.run_id,
-            RunStatus.CANCELLED.value,
-            stop_reason="cancelled",
-            last_seq=bus.next_seq - 1,
-        )
-        terminal_status_recorded = True
-        await _update_run_client_idempotency(ctx.session_service, run, RunStatus.CANCELLED.value)
+        await _record_cancelled_run()
         return
 
     except Exception as e:
@@ -1847,11 +1854,16 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
             )
         )
         ctx.run_registry.error_run(run.run_id)
+        event = RunFailed(
+            run_id=run.run_id,
+            session_id=session_state.session_id,
+            error=safe_message,
+            automation_task_id=run.loop_task_id,
+        )
         try:
-            await _record_run_status(
-                ctx.session_service,
-                run.run_id,
-                RunStatus.ERROR.value,
+            await ctx.session_service.record_chat_run_failed_with_outbox(
+                event,
+                status=RunStatus.ERROR.value,
                 stop_reason=str(e) or error_code,
                 last_seq=bus.next_seq - 1,
                 error_code=error_code,
@@ -1865,19 +1877,6 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
             await _update_run_client_idempotency(ctx.session_service, run, RunStatus.ERROR.value)
         except Exception:
             _logger.warning("Failed to update terminal error idempotency for run %s", run.run_id, exc_info=True)
-        if ctx.enqueue_run_failed:
-            try:
-                await ctx.enqueue_run_failed(
-                    RunFailed(
-                        run_id=run.run_id,
-                        session_id=session_state.session_id,
-                        error=safe_message,
-                        automation_task_id=run.loop_task_id,
-                    )
-                )
-            except Exception:
-                _logger.warning("Failed to enqueue run-failed side effect", exc_info=True)
-
     finally:
         if not run.backgrounded:
             if run.cancelled:
@@ -1926,8 +1925,6 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
                                 f"Failed to record terminal error status for run {run.run_id}"
                             ) from terminal_status_error
                         return
-                    await _record_completed_run(ctx, last_seq=bus.next_seq - 1)
-                    terminal_status_recorded = True
                     event = RunCompleted(
                         run_id=run.run_id,
                         session_id=session_state.session_id,
@@ -1935,16 +1932,12 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
                         usage=run.usage,
                         result=result,
                         source_refs=tuple(run.source_refs),
-                        structured_output=run.structured_output,
                         automation_task_id=run.loop_task_id,
                     )
+                    await _record_completed_run(ctx, event, last_seq=bus.next_seq - 1)
+                    terminal_status_recorded = True
                     if run_finished_event is not None:
                         await bus.emit(run_finished_event)
-                    if ctx.enqueue_run_completed:
-                        try:
-                            await ctx.enqueue_run_completed(event)
-                        except Exception:
-                            _logger.warning("Failed to enqueue run-completed side effect", exc_info=True)
                     try:
                         await _maybe_dispatch_goal_continuation(ctx, run, run_failed=run_failed)
                     except Exception:
@@ -1977,11 +1970,16 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
                                 debug_id=debug_id,
                             )
                         )
+                    event = RunFailed(
+                        run_id=run.run_id,
+                        session_id=session_state.session_id,
+                        error=safe_message,
+                        automation_task_id=run.loop_task_id,
+                    )
                     try:
-                        await _record_run_status(
-                            ctx.session_service,
-                            run.run_id,
-                            RunStatus.ERROR.value,
+                        await ctx.session_service.record_chat_run_failed_with_outbox(
+                            event,
+                            status=RunStatus.ERROR.value,
                             stop_reason=str(exc) or error_code,
                             last_seq=bus.next_seq - 1,
                             error_code=error_code,

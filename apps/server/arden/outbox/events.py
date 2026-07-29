@@ -6,6 +6,7 @@ from arden.events.internal import RunCompleted, RunFailed
 OUTBOX_RUN_COMPLETED = "run.completed"
 OUTBOX_RUN_FAILED = "run.failed"
 OUTBOX_AUTOMATION_SETTLED = "automation.settled"
+OUTBOX_WIKI_PROJECTION_REQUESTED = "wiki.projection.requested"
 
 
 @dataclass(frozen=True)
@@ -23,7 +24,6 @@ def run_completed_payload(event: RunCompleted) -> dict:
         "usage": asdict(event.usage),
         "result": event.result,
         "source_refs": list(event.source_refs),
-        "structured_output": event.structured_output,
         "automation_task_id": event.automation_task_id,
     }
 
@@ -42,7 +42,6 @@ def run_completed_from_payload(payload: dict) -> RunCompleted:
         ),
         result=payload.get("result"),
         source_refs=tuple(payload.get("source_refs") or ()),
-        structured_output=payload.get("structured_output"),
         automation_task_id=payload.get("automation_task_id"),
     )
 

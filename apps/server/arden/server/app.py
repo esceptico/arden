@@ -1,12 +1,13 @@
 import asyncio
 import json
 import signal
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from importlib.metadata import version
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 
 from arden.agent import Role
 from arden.areas.agent import INTAKE_ADDENDUM, is_custodian_task_id, render_work_context
@@ -16,10 +17,16 @@ from arden.areas.projection import area_automation_match
 from arden.areas.service import AreaService
 from arden.areas.work_models import AreaWorkSnapshot
 from arden.automation.models import Automation
-from arden.automation.output_schemas import resolve_output_schema
 from arden.automation.prompts import AUTOMATION_PROMPT, AUTOMATION_SUFFIX
-from arden.automation.scheduler import AUTOMATION_BUS_KEY, CompletedAgentRun, RunSkipped, split_manual_flag
+from arden.automation.scheduler import (
+    AUTOMATION_BUS_KEY,
+    CompletedAgentRun,
+    RunDeferred,
+    RunSkipped,
+    split_manual_flag,
+)
 from arden.core.tool_result_files import prune_offload_store
+from arden.events.internal import RunFailed
 from arden.events.sse import AreasChangedEvent
 from arden.llm.openai_codex_catalog import refresh_codex_models
 from arden.logging import get_logger
@@ -68,11 +75,11 @@ def _loop_target_id(automation: Automation) -> str | None:
     return automation.thread_id
 
 
-def _iteration_client_id(automation: Automation) -> str:
-    """Identify one delivery within one persisted automation incarnation."""
+def _iteration_client_id(automation: Automation, automation_run_id: int) -> str:
+    """Identify one durable scheduler attempt."""
 
     generation = automation.created_at.isoformat(timespec="microseconds")
-    return f"loop:{automation.task_id}:{generation}:{automation.iteration_count + 1}"
+    return f"loop:{automation.task_id}:{generation}:{automation.iteration_count + 1}:{automation_run_id}"
 
 
 def _automation_tool_scope(automation: Automation) -> tuple[str, ...] | None:
@@ -95,6 +102,49 @@ def _get_or_create_session_lock(locks: dict[str, asyncio.Lock], session_id: str)
         lock = asyncio.Lock()
         locks[session_id] = lock
     return lock
+
+
+async def _recover_interrupted_chat_runs(
+    runtime: Runtime,
+    resume: Callable[[str, str], Awaitable[dict[str, str] | None]],
+) -> None:
+    for interrupted_run in await runtime.session_service.store.list_interrupted_chat_runs():
+        metadata = interrupted_run["metadata"]
+        automation_task_id = metadata.get("automation_id")
+        is_automation_run = bool(automation_task_id) and metadata.get("loop_task_id") == automation_task_id
+        if is_automation_run:
+            await runtime.stores.automations.bind_interrupted_chat_run(
+                automation_task_id,
+                interrupted_run["run_id"],
+                interrupted_run["session_id"],
+            )
+        try:
+            resumed = await resume(
+                interrupted_run["run_id"],
+                interrupted_run["session_id"],
+            )
+        except Exception:
+            _logger.exception("Failed to resume interrupted run %s", interrupted_run["run_id"])
+            resumed = None
+        if resumed is not None and resumed["run_id"] == interrupted_run["run_id"]:
+            if is_automation_run and not await runtime.stores.automations.refresh_detached_chat_run(
+                automation_task_id,
+                interrupted_run["run_id"],
+                interrupted_run["session_id"],
+                datetime.now(UTC),
+            ):
+                raise RuntimeError(f"resumed automation chat {interrupted_run['run_id']} has no detached run binding")
+            continue
+        if not is_automation_run:
+            continue
+        await runtime.automation.outbox_runtime.handle_run_failed(
+            RunFailed(
+                run_id=interrupted_run["run_id"],
+                session_id=interrupted_run["session_id"],
+                error="chat run could not resume after server restart",
+                automation_task_id=automation_task_id,
+            )
+        )
 
 
 def _install_shutdown_handlers(runtime: Runtime, bus_registry: BusRegistry) -> None:
@@ -163,6 +213,7 @@ async def lifespan(app: FastAPI):
         wiki=runtime.wiki_service,
         sessions=runtime.session_service,
         lifecycle=app.state.area_lifecycle,
+        project_wiki_state=runtime.project_wiki_change_after_commit,
     )
 
     def _area_get_page(page_path: str):
@@ -296,10 +347,10 @@ async def lifespan(app: FastAPI):
         skip_approvals: bool | None = False,
         images: list[dict] | None = None,
         tool_scope: tuple[str, ...] | None = None,
-        output_schema: type[BaseModel] | None = None,
         chat_model: str | None = None,
         loop_task_id: str | None = None,
         automation_id: str | None = None,
+        queue_if_busy: bool = True,
     ) -> str | None:
         if chat_model is None:
             chat_model = await runtime.resolve_session_chat_model(session_id)
@@ -314,13 +365,21 @@ async def lifespan(app: FastAPI):
             client_id=client_id,
             session_service=runtime.session_service,
             tool_scope=tool_scope,
-            output_schema=output_schema,
             loop_task_id=loop_task_id,
             automation_id=automation_id,
+            queue_if_busy=queue_if_busy,
         )
-        return result.get("run_id") if isinstance(result, dict) else None
+        if result.get("status") == "busy":
+            raise RunDeferred(f"target session {session_id} is busy")
+        if not isinstance(result, dict) or result.get("status") != "running":
+            return None
+        return result.get("run_id")
 
-    async def _dispatch_iteration(automation: Automation, context: str | dict | None = None) -> str:
+    async def _dispatch_iteration(
+        automation: Automation,
+        context: str | dict | None,
+        automation_run_id: int,
+    ) -> str:
         # Iteration loops are autonomous: the user already approved the
         # loop at creation (via the create_loop approval card), so
         # subsequent iterations should skip per-tool approvals. Matches
@@ -336,7 +395,7 @@ async def lifespan(app: FastAPI):
         ctx_str = json.dumps(context) if isinstance(context, dict) else context
         area_id = automation.task_id.removeprefix("area:")
         iteration = automation.iteration_count + 1
-        client_id = _iteration_client_id(automation)
+        client_id = _iteration_client_id(automation, automation_run_id)
         message = AUTOMATION_PROMPT.render(prompt=automation.prompt, context=ctx_str) if ctx_str else automation.prompt
         skip_approvals = automation.auto_approve
         if is_custodian_task_id(automation.task_id):
@@ -377,10 +436,10 @@ async def lifespan(app: FastAPI):
             client_id=client_id,
             skip_approvals=skip_approvals,
             tool_scope=_automation_tool_scope(automation),
-            output_schema=resolve_output_schema(automation.output_schema),
             chat_model=await _automation_chat_model(runtime, automation),
             loop_task_id=automation.task_id,
             automation_id=automation.task_id,
+            queue_if_busy=False,
         )
         if run_id is None:
             raise RuntimeError(f"Iteration automation {automation.task_id} did not start a chat run")
@@ -438,7 +497,6 @@ async def lifespan(app: FastAPI):
                 skip_approvals=automation.auto_approve,
                 automation_id=automation.task_id,
                 tool_scope=_automation_tool_scope(automation),
-                output_schema=resolve_output_schema(automation.output_schema),
             )
 
             deps = runtime.build_operator_deps()
@@ -478,13 +536,9 @@ async def lifespan(app: FastAPI):
         return active is None
 
     runtime.scheduler.set_loop_fire_gate(_loop_can_fire)
+    await _recover_interrupted_chat_runs(runtime, _resume_suspended_chat_run)
     await runtime.start_scheduler()
     runtime.start_monitor()
-    for interrupted_run in await runtime.session_service.store.list_interrupted_chat_runs():
-        try:
-            await _resume_suspended_chat_run(interrupted_run["run_id"], interrupted_run["session_id"])
-        except Exception:
-            _logger.exception("Failed to resume interrupted run %s", interrupted_run["run_id"])
     for completion in await runtime.session_service.store.list_undelivered_background_completions():
         try:
             session_id = completion["session_id"]

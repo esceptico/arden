@@ -151,6 +151,10 @@ BUILTIN_MEMORY_SYNTHESIZE_ID = "builtin-memory-synthesize"
 BUILTIN_WIKI_MAINTENANCE_ID = "builtin-wiki-maintenance"
 BUILTIN_MEMORY_RETENTION_ID = "builtin-memory-retention"
 MEMORY_RETENTION_AT = "03:45"
+RETIRED_BUILTIN_AUTOMATION_IDS = (
+    "builtin-area-suggester",
+    "builtin-automation-suggester-daily",
+)
 # --- Monitor ---
 
 MONITOR_POLL_INTERVAL = 300  # 5 minutes

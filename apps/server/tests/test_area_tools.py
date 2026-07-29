@@ -3,7 +3,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
+from arden.areas.agent import AreaCustodianReport
+from arden.areas.work_store import AreaWorkReportError, AreaWorkStore
 from arden.context.models import AreaContext, SessionState
 from arden.revisions import ManagedFileRepository
 from arden.tools.area import (
@@ -15,9 +18,11 @@ from arden.tools.area import (
     area_page_read,
     area_page_write,
     area_run_automation,
+    submit_area_report,
 )
 from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.registry import ToolRegistry
+from arden.wiki.constants import WIKI_POST_COMMIT_SERVICE
 from arden.wiki.service import WikiService
 
 
@@ -25,26 +30,67 @@ def execution(
     wiki: WikiService,
     page_path: str | None = "topics/health.md",
     loop_task_id: str | None = "area:area_health",
+    automation_id: str | None = None,
+    services: dict | None = None,
+    post_commit=None,
 ) -> ToolExecution:
+    async def noop_post_commit() -> bool:
+        return False
+
     area = AreaContext(area_id="area_health", name="Health", page_path=page_path)
     ctx = ToolContext(
         session_state=SessionState(session_id="custodian", started_at=datetime.now(UTC), area_id=area.area_id),
         registry=ToolRegistry(),
-        run=RunContext(run_id="run-1", loop_task_id=loop_task_id),
+        run=RunContext(run_id="run-1", loop_task_id=loop_task_id, automation_id=automation_id),
         io=IOBridge(),
-        services={"wiki": wiki},
+        services={
+            "wiki": wiki,
+            WIKI_POST_COMMIT_SERVICE: post_commit or noop_post_commit,
+            **(services or {}),
+        },
         background_tasks=BackgroundTaskRegistry(session_id="custodian"),
         area=area,
     )
     return ToolExecution(tool_id="t1", tool_name="area_page", ctx=ctx)
 
 
-class WriteProvenance:
-    def __init__(self) -> None:
-        self.writes: list[tuple[str, str]] = []
+def report() -> AreaCustodianReport:
+    return AreaCustodianReport.model_validate(
+        {
+            "asks": [],
+            "report": "Checked current work.",
+            "next_check_hours": 24,
+            "next_check_reason": "No earlier event is expected.",
+            "made_progress": False,
+            "work_remaining": True,
+        }
+    )
 
-    def record_page_write(self, area_id: str, digest: str) -> None:
-        self.writes.append((area_id, digest))
+
+def test_area_report_rejects_unknown_nested_fields() -> None:
+    payload = report().model_dump()
+    payload["outcome_changes"] = [
+        {
+            "op": "create",
+            "key": "health",
+            "title": "Health",
+            "success_criteria": "Stable",
+            "priority": 1,
+            "unexpected": True,
+        }
+    ]
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        AreaCustodianReport.model_validate(payload)
+
+
+class ProjectionRecorder:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def __call__(self) -> bool:
+        self.calls += 1
+        return False
 
 
 def wiki_at(root: Path) -> WikiService:
@@ -131,11 +177,10 @@ async def test_area_page_write_preserves_frontmatter(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_area_page_writes_record_exact_post_write_digest(tmp_path: Path) -> None:
+async def test_custodian_page_write_projects_without_self_wake(tmp_path: Path) -> None:
     wiki = seed(tmp_path)
-    run = execution(wiki)
-    provenance = WriteProvenance()
-    run.ctx.services["area_custodians"] = provenance
+    projection = ProjectionRecorder()
+    run = execution(wiki, automation_id="area:area_health", post_commit=projection)
     before = wiki.read_page("area-health-page")
     head = wiki.repository.head
     assert head is not None
@@ -151,18 +196,15 @@ async def test_area_page_writes_record_exact_post_write_digest(tmp_path: Path) -
     )
 
     assert not result.is_error
-    assert provenance.writes[0][0] == "area_health"
-    assert len(provenance.writes[0][1]) == 64
+    assert projection.calls == 1
+    assert wiki.repository.history(limit=1)[0].actor == "automation:area:area_health"
 
 
 @pytest.mark.asyncio
-async def test_non_custodian_page_writes_record_no_digest(tmp_path: Path) -> None:
-    """A user-directed assistant edit in the room must still wake the
-    Custodian — only the Custodian's own runs record self-write digests."""
+async def test_non_custodian_page_write_projects_as_external_area_change(tmp_path: Path) -> None:
     wiki = seed(tmp_path)
-    run = execution(wiki, loop_task_id=None)  # ordinary room chat, not a custodian run
-    provenance = WriteProvenance()
-    run.ctx.services["area_custodians"] = provenance
+    projection = ProjectionRecorder()
+    run = execution(wiki, loop_task_id=None, post_commit=projection)
     before = wiki.read_page("area-health-page")
     head = wiki.repository.head
     assert head is not None
@@ -178,7 +220,33 @@ async def test_non_custodian_page_writes_record_no_digest(tmp_path: Path) -> Non
     )
 
     assert not result.is_error
-    assert provenance.writes == []
+    assert projection.calls == 1
+    assert wiki.repository.history(limit=1)[0].actor == "automation:area"
+
+
+@pytest.mark.asyncio
+async def test_area_page_write_stays_successful_when_projection_is_pending(tmp_path: Path) -> None:
+    wiki = seed(tmp_path)
+    before = wiki.read_page("area-health-page")
+    head = wiki.repository.head
+    assert head is not None
+
+    async def defer_projection() -> bool:
+        return True
+
+    result = await area_page_patch(
+        execution(wiki, post_commit=defer_projection),
+        AreaPagePatchInput(
+            old_text="Old status",
+            new_text="Current status",
+            expected_version=before.resource.version_id,
+            expected_head=head,
+        ),
+    )
+
+    assert not result.is_error
+    assert result.data is not None and result.data["projection_pending"] is True
+    assert b"Current status" in wiki.read_page("area-health-page").content
 
 
 @pytest.mark.asyncio
@@ -239,3 +307,54 @@ async def test_area_automation_run_is_locked_to_owned_children(tmp_path: Path) -
     assert not allowed.is_error
     assert foreign.is_error and recursive.is_error
     assert calls == ["area:area_health:daily"]
+
+
+@pytest.mark.asyncio
+async def test_area_report_is_committed_inside_the_trusted_custodian_run(tmp_path: Path) -> None:
+    class Work(AreaWorkStore):
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, AreaCustodianReport]] = []
+
+        async def apply_report(self, area_id: str, run_ref: str, submitted: AreaCustodianReport) -> bool:
+            self.calls.append((area_id, run_ref, submitted))
+            return True
+
+    work = Work()
+    run = execution(
+        wiki_at(tmp_path),
+        automation_id="area:area_health",
+        services={"area_work": work},
+    )
+
+    result = await submit_area_report(run, report())
+
+    assert not result.is_error
+    assert result.data == {"accepted": True}
+    assert work.calls == [("area_health", "run:run-1", report())]
+
+
+@pytest.mark.asyncio
+async def test_area_report_rejects_untrusted_identity_and_state_conflicts(tmp_path: Path) -> None:
+    class Work(AreaWorkStore):
+        def __init__(self) -> None:
+            pass
+
+        async def apply_report(self, area_id: str, run_ref: str, submitted: AreaCustodianReport) -> bool:
+            raise AreaWorkReportError("Outcome changed since the run started")
+
+    work = Work()
+    untrusted = await submit_area_report(
+        execution(wiki_at(tmp_path), services={"area_work": work}),
+        report(),
+    )
+    conflict = await submit_area_report(
+        execution(
+            wiki_at(tmp_path),
+            automation_id="area:area_health",
+            services={"area_work": work},
+        ),
+        report(),
+    )
+
+    assert untrusted.is_error and "only from the current Area custodian" in untrusted.content
+    assert conflict.is_error and "changed since the run started" in conflict.content

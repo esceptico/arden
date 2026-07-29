@@ -40,6 +40,16 @@ def _nom(asks, report="tended", hours=24.0, reason="routine"):
     return {"asks": asks, "report": report, "next_check_hours": hours, "next_check_reason": reason}
 
 
+def _report(asks, report="tended", hours=24.0, reason="routine"):
+    return AreaCustodianReport.model_validate(
+        {
+            **_nom(asks, report, hours, reason),
+            "made_progress": bool(asks),
+            "work_remaining": False,
+        }
+    )
+
+
 def _draft(text, kind, salience=4):
     return {
         "key": "deadline",
@@ -111,7 +121,7 @@ def test_record_area_run_nominates_and_supersedes(tmp_path):
         store,
         "o-1a",
         "topics/o-1a.md",
-        _nom([_draft("First ask", "review")]),
+        _report([_draft("First ask", "review")]),
         run_ref="run:r1",
     )
     first = store.list("o-1a")
@@ -122,7 +132,7 @@ def test_record_area_run_nominates_and_supersedes(tmp_path):
         store,
         "o-1a",
         "topics/o-1a.md",
-        _nom([_draft("Second ask", "question")]),
+        _report([_draft("Second ask", "question")]),
         run_ref="run:r2",
     )
     active = store.list("o-1a")
@@ -135,7 +145,7 @@ def test_record_area_run_salience_threshold_and_notify_expiry(tmp_path):
         store,
         "o-1a",
         "topics/o-1a.md",
-        _nom(
+        _report(
             [
                 _draft("Big thing", "notify", salience=4),
                 _draft("Marginal thing", "notify", salience=2),  # below threshold → page only
@@ -150,7 +160,7 @@ def test_record_area_run_salience_threshold_and_notify_expiry(tmp_path):
         store,
         "o-1a",
         "topics/o-1a.md",
-        _nom([_draft("Needs you", "question", salience=5)]),
+        _report([_draft("Needs you", "question", salience=5)]),
         run_ref="run:r2",
     )
     q = store.list("o-1a")[0]
@@ -163,22 +173,20 @@ def test_quiet_or_malformed_run_preserves_unresolved_decision(tmp_path):
         store,
         "o-1a",
         "topics/o-1a.md",
-        _nom([_draft("Old ask", "review")]),
+        _report([_draft("Old ask", "review")]),
         run_ref="run:r1",
     )
-    record_area_run(store, "o-1a", "topics/o-1a.md", _nom([]), run_ref="run:r2")
-    assert [ask.text for ask in store.list("o-1a")] == ["Old ask"]
-    record_area_run(store, "o-1a", "topics/o-1a.md", None, run_ref="run:r4")
+    record_area_run(store, "o-1a", "topics/o-1a.md", _report([]), run_ref="run:r2")
     assert [ask.text for ask in store.list("o-1a")] == ["Old ask"]
 
 
 def test_repeated_stable_nomination_updates_without_becoming_new(tmp_path):
     store = AskStore(tmp_path / "state.json")
     first = record_area_run(
-        store, "o-1a", "topics/o-1a.md", _nom([_draft("First wording", "question")]), run_ref="run:r1"
+        store, "o-1a", "topics/o-1a.md", _report([_draft("First wording", "question")]), run_ref="run:r1"
     )
     repeated = record_area_run(
-        store, "o-1a", "topics/o-1a.md", _nom([_draft("Clearer wording", "question")]), run_ref="run:r2"
+        store, "o-1a", "topics/o-1a.md", _report([_draft("Clearer wording", "question")]), run_ref="run:r2"
     )
 
     assert len(first) == 1
@@ -187,6 +195,7 @@ def test_repeated_stable_nomination_updates_without_becoming_new(tmp_path):
 
 
 def test_observe_scope_is_area_locked_and_uses_canonical_facts():
+    assert matches_scope(tuple(OBSERVE_TOOL_SCOPE), "submit_area_report")
     assert matches_scope(tuple(OBSERVE_TOOL_SCOPE), "area_page_patch")
     assert matches_scope(tuple(OBSERVE_TOOL_SCOPE), "area_page_write")
     assert matches_scope(tuple(OBSERVE_TOOL_SCOPE), "search_facts")
@@ -244,7 +253,6 @@ async def test_runtime_reconciles_permission_downgrades_in_place():
         prompt="old execution instructions",
         auto_approve=True,
         tool_scope=None,
-        output_schema=None,
         enabled=True,
         last_result="A completed area report.",
         last_run_at=object(),
@@ -273,17 +281,9 @@ async def test_runtime_reconciles_permission_downgrades_in_place():
     assert automation.description == "A custom area summary."
     assert automation.description_source == "manual"
     assert "observe" in automation.prompt
-    assert automation.output_schema == "area_custodian"
     assert automation.last_result == "A completed area report."
     assert automation.last_run_at is not None
     assert automation.next_run_at is not None
-
-
-def test_custodian_report_is_the_registered_runtime_schema():
-    from arden.automation.output_schemas import resolve_output_schema
-
-    assert resolve_output_schema("area_custodian") is AreaCustodianReport
-    assert resolve_output_schema("area_ask") is AreaCustodianReport
 
 
 def test_system_blocks_include_area_block():

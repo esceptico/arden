@@ -1,3 +1,4 @@
+import asyncio
 import json
 import re
 from datetime import UTC, datetime, timedelta
@@ -72,6 +73,7 @@ ON area_work_events(area_id, created_at DESC);
 CREATE TABLE IF NOT EXISTS area_work_reports (
     run_ref TEXT PRIMARY KEY,
     area_id TEXT NOT NULL REFERENCES areas(area_id) ON DELETE CASCADE,
+    report_json TEXT,
     applied_at TEXT NOT NULL
 );
 """
@@ -99,10 +101,23 @@ class AreaWorkStore:
     def __init__(self, conn: aiosqlite.Connection, read_conn: aiosqlite.Connection | None = None) -> None:
         self.conn = conn
         self.read_conn = read_conn or conn
+        self._report_lock = asyncio.Lock()
 
     async def init_schema(self) -> None:
         await self.conn.executescript(_SCHEMA)
+        columns = await self.conn.execute_fetchall("PRAGMA table_info(area_work_reports)")
+        if "report_json" not in {row["name"] for row in columns}:
+            await self.conn.execute("ALTER TABLE area_work_reports ADD COLUMN report_json TEXT")
         await self.conn.commit()
+
+    async def report(self, run_ref: str) -> dict | None:
+        rows = await self.read_conn.execute_fetchall(
+            "SELECT report_json FROM area_work_reports WHERE run_ref = ?",
+            (run_ref,),
+        )
+        if not rows or rows[0]["report_json"] is None:
+            return None
+        return json.loads(rows[0]["report_json"])
 
     async def snapshot(self, area_id: str) -> AreaWorkSnapshot:
         outcomes = await self.read_conn.execute_fetchall(
@@ -288,11 +303,18 @@ class AreaWorkStore:
         return await self._get_work_item(area_id, stable_key)
 
     async def apply_report(self, area_id: str, run_ref: str, report) -> bool:
+        async with self._report_lock:
+            return await self._apply_report(area_id, run_ref, report)
+
+    async def _apply_report(self, area_id: str, run_ref: str, report) -> bool:
+        report_json = report.model_dump_json()
         prior = await self.read_conn.execute_fetchall(
-            "SELECT 1 FROM area_work_reports WHERE run_ref = ?",
+            "SELECT area_id, report_json FROM area_work_reports WHERE run_ref = ?",
             (run_ref,),
         )
         if prior:
+            if prior[0]["area_id"] != area_id or prior[0]["report_json"] != report_json:
+                raise AreaWorkReportError(f"Run '{run_ref}' already submitted a different report")
             return False
 
         outcome_changes: list[OutcomeChange] = list(report.outcome_changes)
@@ -337,8 +359,8 @@ class AreaWorkStore:
         await self.conn.execute("SAVEPOINT area_work_report")
         try:
             await self.conn.execute(
-                "INSERT INTO area_work_reports (run_ref, area_id, applied_at) VALUES (?, ?, ?)",
-                (run_ref, area_id, now),
+                "INSERT INTO area_work_reports (run_ref, area_id, report_json, applied_at) VALUES (?, ?, ?, ?)",
+                (run_ref, area_id, report_json, now),
             )
             for change in outcome_changes:
                 await self._apply_outcome_change(area_id, change, now)
@@ -348,6 +370,18 @@ class AreaWorkStore:
                 await self._append_evidence(area_id, run_ref, index, draft, now)
             await self.conn.execute("RELEASE SAVEPOINT area_work_report")
             await self.conn.commit()
+        except aiosqlite.IntegrityError:
+            await self.conn.execute("ROLLBACK TO SAVEPOINT area_work_report")
+            await self.conn.execute("RELEASE SAVEPOINT area_work_report")
+            prior = await self.read_conn.execute_fetchall(
+                "SELECT area_id, report_json FROM area_work_reports WHERE run_ref = ?",
+                (run_ref,),
+            )
+            if not prior:
+                raise
+            if prior[0]["area_id"] != area_id or prior[0]["report_json"] != report_json:
+                raise AreaWorkReportError(f"Run '{run_ref}' already submitted a different report") from None
+            return False
         except Exception:
             await self.conn.execute("ROLLBACK TO SAVEPOINT area_work_report")
             await self.conn.execute("RELEASE SAVEPOINT area_work_report")

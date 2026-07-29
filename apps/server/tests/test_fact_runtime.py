@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -416,25 +417,223 @@ async def test_wiki_state_projection_syncs_index_before_health(tmp_path, monkeyp
     calls: list[str] = []
 
     class _Projection:
+        last_state = SimpleNamespace(wiki_head=None)
+
         async def sync(self) -> None:
             calls.append("index")
 
     async def health() -> None:
         calls.append("health")
 
+    runtime.wiki_service = SimpleNamespace(repository=SimpleNamespace(head=None))
     runtime.wiki_page_projection = _Projection()
+    runtime._wiki_maintenance_store = SimpleNamespace(record_projection_revision=None)
     monkeypatch.setattr(runtime, "project_wiki_health", health)
 
     await runtime.project_wiki_state()
 
-    assert calls == ["index", "health"]
+    assert calls == ["index", "health", "index", "health"]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_wiki_projection_notifies_one_head_once(tmp_path, monkeypatch) -> None:
+    runtime = Runtime(_config(tmp_path))
+    change = SimpleNamespace(before=None, after=SimpleNamespace(path="topics/dex.md"))
+    commit = SimpleNamespace(
+        actor="automation:area:dex",
+        origin="area.page",
+        changes=(change,),
+    )
+
+    class _Repository:
+        head = "new-head"
+
+        def history(self, *, start, stop_before):
+            assert (start, stop_before) == ("new-head", "old-head")
+            return (commit,)
+
+    class _Projection:
+        def __init__(self) -> None:
+            self.last_state = SimpleNamespace(wiki_head="old-head")
+
+        async def sync(self) -> None:
+            await asyncio.sleep(0)
+            self.last_state = SimpleNamespace(wiki_head="new-head")
+
+    notifications: list[tuple[list[str], str | None, dict[str, set[str]]]] = []
+
+    class _Automation:
+        async def notify_wiki_changed(self, paths, revision, *, source_areas_by_path) -> None:
+            notifications.append((paths, revision, source_areas_by_path))
+            await asyncio.sleep(0)
+
+    async def health() -> str:
+        return "new-head"
+
+    runtime.wiki_service = SimpleNamespace(repository=_Repository())
+    runtime.wiki_page_projection = _Projection()
+    runtime.automation = _Automation()
+    runtime._wiki_change_head = "old-head"
+    revisions: list[tuple[str | None, str]] = []
+
+    class _Watermarks:
+        async def record_projection_revision(self, *, expected_revision, revision) -> None:
+            revisions.append((expected_revision, revision))
+
+    runtime._wiki_maintenance_store = _Watermarks()
+    monkeypatch.setattr(runtime, "project_wiki_health", health)
+
+    await asyncio.gather(
+        runtime.project_wiki_change(),
+        runtime.project_wiki_change(),
+    )
+
+    assert notifications == [(["topics/dex.md"], "new-head", {"topics/dex.md": {"dex"}})]
+    assert revisions == [("old-head", "new-head")]
+
+
+@pytest.mark.asyncio
+async def test_latest_external_page_edit_is_not_suppressed_by_older_self_edit(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime = Runtime(_config(tmp_path))
+    change = SimpleNamespace(
+        before=SimpleNamespace(path="topics/dex.md"),
+        after=SimpleNamespace(path="topics/dex.md"),
+    )
+    external = SimpleNamespace(actor="user", origin="desktop", changes=(change,))
+    older_self_edit = SimpleNamespace(
+        actor="automation:area:dex",
+        origin="area.page",
+        changes=(change,),
+    )
+
+    class _Repository:
+        head = "new-head"
+
+        def history(self, *, start, stop_before):
+            assert (start, stop_before) == ("new-head", "old-head")
+            return (external, older_self_edit)
+
+    class _Projection:
+        last_state = SimpleNamespace(wiki_head="new-head")
+
+        async def sync(self) -> None:
+            return None
+
+    notifications: list[dict[str, set[str]]] = []
+
+    class _Automation:
+        async def notify_wiki_changed(self, paths, revision, *, source_areas_by_path) -> None:
+            notifications.append(source_areas_by_path)
+
+    class _Watermarks:
+        async def record_projection_revision(self, *, expected_revision, revision) -> None:
+            return None
+
+    async def health() -> str:
+        return "new-head"
+
+    runtime.wiki_service = SimpleNamespace(repository=_Repository())
+    runtime.wiki_page_projection = _Projection()
+    runtime.automation = _Automation()
+    runtime._wiki_change_head = "old-head"
+    runtime._wiki_maintenance_store = _Watermarks()
+    monkeypatch.setattr(runtime, "project_wiki_health", health)
+
+    await runtime.project_wiki_change()
+
+    assert notifications == [{}]
+
+
+@pytest.mark.asyncio
+async def test_failed_wiki_projection_keeps_watermark_for_retry(tmp_path, monkeypatch) -> None:
+    runtime = Runtime(_config(tmp_path))
+    change = SimpleNamespace(before=None, after=SimpleNamespace(path="topics/dex.md"))
+    commit = SimpleNamespace(actor="user", origin="user", changes=(change,))
+
+    class _Repository:
+        head = "new-head"
+
+        def history(self, *, start, stop_before):
+            assert (start, stop_before) == ("new-head", "old-head")
+            return (commit,)
+
+    class _Projection:
+        last_state = SimpleNamespace(wiki_head="old-head")
+
+        async def sync(self) -> None:
+            self.last_state = SimpleNamespace(wiki_head="new-head")
+
+    notifications: list[list[str]] = []
+
+    class _Automation:
+        async def notify_wiki_changed(self, paths, revision, *, source_areas_by_path) -> None:
+            notifications.append(paths)
+
+    revisions: list[tuple[str | None, str]] = []
+
+    class _Watermarks:
+        async def record_projection_revision(self, *, expected_revision, revision) -> None:
+            revisions.append((expected_revision, revision))
+
+    async def failed_health() -> str:
+        raise RuntimeError("health projection failed")
+
+    runtime.wiki_service = SimpleNamespace(repository=_Repository())
+    runtime.wiki_page_projection = _Projection()
+    runtime.automation = _Automation()
+    runtime._wiki_change_head = "old-head"
+    runtime._wiki_maintenance_store = _Watermarks()
+    monkeypatch.setattr(runtime, "project_wiki_health", failed_health)
+
+    with pytest.raises(RuntimeError, match="health projection failed"):
+        await runtime.project_wiki_change()
+
+    assert runtime._wiki_change_head == "old-head"
+    assert notifications == []
+    assert revisions == []
+
+    async def healthy() -> str:
+        return "new-head"
+
+    monkeypatch.setattr(runtime, "project_wiki_health", healthy)
+    await runtime.project_wiki_change()
+
+    assert notifications == [["topics/dex.md"]]
+    assert revisions == [("old-head", "new-head")]
+    assert runtime._wiki_change_head == "new-head"
+
+
+@pytest.mark.asyncio
+async def test_committed_wiki_projection_failure_is_durably_queued(tmp_path, monkeypatch) -> None:
+    runtime = Runtime(_config(tmp_path))
+    revision = "a" * 64
+    queued: list[str] = []
+
+    class _Outbox:
+        async def enqueue_wiki_projection(self, value: str) -> bool:
+            queued.append(value)
+            return True
+
+    runtime.stores = SimpleNamespace(outbox=_Outbox())
+    runtime.wiki_service = SimpleNamespace(repository=SimpleNamespace(head=revision))
+
+    async def fail_projection() -> None:
+        raise RuntimeError("notifier unavailable")
+
+    monkeypatch.setattr(runtime, "project_wiki_change", fail_projection)
+
+    assert await runtime.project_wiki_change_after_commit() is True
+    assert queued == [revision]
 
 
 @pytest.mark.asyncio
 async def test_any_automation_reconciles_a_wiki_head_it_changed(tmp_path, monkeypatch) -> None:
     runtime = Runtime(_config(tmp_path))
     runtime.wiki_service = SimpleNamespace(repository=SimpleNamespace(head="new"))
-    runtime.wiki_page_projection = SimpleNamespace(last_state=SimpleNamespace(wiki_head="old"))
+    runtime._wiki_change_head = "old"
     calls: list[str] = []
 
     async def project() -> None:

@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from arden.areas.asks import AskStore
 from arden.areas.models import Area, Ask
@@ -13,7 +13,12 @@ from arden.areas.work_models import AreaWorkSnapshot, EvidenceDraft, OutcomeChan
 # (visible and editable on the automation itself) instead of a code-side
 # toolset hack. Read/search surfaces + the memory tools that edit the
 # area's own page — nothing that acts on the outside world.
+AREA_REPORT_TOOL_NAME = "submit_area_report"
+CUSTODIAN_TASK_PREFIX = "area:"
+CUSTODIAN_ACTOR_PREFIX = "automation:area:"
+
 OBSERVE_TOOL_SCOPE = [
+    AREA_REPORT_TOOL_NAME,
     "area_page_read",
     "area_page_patch",
     "area_page_write",
@@ -71,6 +76,8 @@ NOTIFY_ASK_TTL_HOURS = 72
 
 
 class AreaAskDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     key: str = Field(min_length=1, max_length=80, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     text: str
     # notify = FYI (no decision, expires quietly); question = blocked on the
@@ -84,11 +91,9 @@ class AreaAskDraft(BaseModel):
 
 
 class AreaAskNomination(BaseModel):
-    """The run's structured output (registered as "area_ask"): the run's
-    findings triaged into at most a few asks (empty on a quiet day), plus the
-    self-paced next check. Schema-validated by the constrained final step, so
-    the transcript stays prose and the nomination arrives as a guaranteed-
-    shaped object."""
+    """Findings triaged into asks plus the self-paced next check."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     asks: list[AreaAskDraft] = Field(default_factory=list, max_length=MAX_ASKS_PER_RUN)
     # One line the room shows as "what the agent did this run".
@@ -125,10 +130,11 @@ def area_agent_instructions(area: Area) -> str:
         "should change, and return explicit outcome/work operations plus evidence. "
         "Never remove work by omission. For every non-create operation, copy its "
         "expected_updated_at value from CURRENT AREA WORK exactly.\n"
-        "End with a short prose report. Afterwards you will be asked for a structured "
-        "report: atomic outcome/work/evidence changes, findings triaged into at most "
-        "three asks, whether material progress happened, whether work remains, and when "
-        "to continue. A short continuation is for executable work, not external waiting.\n"
+        f"As your final action, call {AREA_REPORT_TOOL_NAME} exactly once with atomic "
+        "outcome/work/evidence changes, findings triaged into at most three asks, "
+        "whether material progress happened, whether work remains, and when to continue. "
+        "Correct a rejected report and retry before ending. A short continuation is for "
+        "executable work, not external waiting.\n"
         "Ask kinds — pick the dimmest that's true:\n"
         "- notify: an FYI worth a glance; no decision needed. Expires on its own.\n"
         "- question: you are blocked on the user's judgment and cannot proceed without it.\n"
@@ -210,8 +216,8 @@ def is_custodian_task_id(task_id: str) -> bool:
     """Custodian runs are exactly `area:{id}`. Colon-suffixed children
     (`area:{id}:{slug}`) are ordinary automations — no cap, no intake, and
     user-scope semantics (read floor) instead of the curated contract."""
-    suffix = task_id.removeprefix("area:")
-    return task_id.startswith("area:") and ":" not in suffix
+    suffix = task_id.removeprefix(CUSTODIAN_TASK_PREFIX)
+    return task_id.startswith(CUSTODIAN_TASK_PREFIX) and ":" not in suffix
 
 
 def custodian_contract(area: Area) -> CustodianContract:
@@ -241,37 +247,31 @@ def record_area_run(
     asks: AskStore,
     area_key: str,
     page_path: str,
-    structured_output: dict | None,
+    report: AreaCustodianReport,
     run_ref: str,
 ) -> list[Ask]:
-    """Post-run ask sync (called from the outbox run-completed pipeline):
-    every run re-decides the area's agent asks — silence retires previous
-    nominations just like new ones supersede them. `structured_output` is the
-    schema-validated AreaAskNomination dump (or None when the constrained
-    step failed — treated as silence)."""
-    if structured_output is None:
-        return []
-    nominated = structured_output.get("asks") or []
+    """Sync the accepted report's asks from the outbox completion pipeline."""
+    nominated = report.asks
     if not nominated:
         return []
     now = datetime.now(UTC)
     created: list[Ask] = []
-    kept = [n for n in nominated if n.get("salience", 0) >= SALIENCE_THRESHOLD]
+    kept = [draft for draft in nominated if draft.salience >= SALIENCE_THRESHOLD]
     for n in kept[:MAX_ASKS_PER_RUN]:
-        expires = (now + timedelta(hours=NOTIFY_ASK_TTL_HOURS)).isoformat() if n["kind"] == "notify" else None
-        stable_key = n["key"]
+        expires = (now + timedelta(hours=NOTIFY_ASK_TTL_HOURS)).isoformat() if n.kind == "notify" else None
+        stable_key = n.key
         ask = Ask(
             id=f"agent:{area_key}:{stable_key}",
             area_key=area_key,
-            text=n["text"],
-            kind=n["kind"],
+            text=n.text,
+            kind=n.kind,
             source="agent",
             actions=[{"verb": "open_page", "ref": page_path}],
             state="active",
             created_at=now.isoformat(),
             provenance=run_ref,
-            why_now=n.get("why_now"),
-            what_next=n.get("what_next"),
+            why_now=n.why_now,
+            what_next=n.what_next,
             expires_at=expires,
             stable_key=stable_key,
         )

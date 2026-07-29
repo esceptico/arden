@@ -14,6 +14,7 @@ from arden.constants import (
     MEMORY_CONSOLIDATE_AT,
     MEMORY_DREAM_AT,
     MEMORY_RETENTION_AT,
+    RETIRED_BUILTIN_AUTOMATION_IDS,
 )
 from arden.logging import get_logger
 from arden.memory.facts.maintenance import FACT_MAINTENANCE_REVIEW_TOOL_NAME
@@ -34,6 +35,7 @@ class BuiltinSpec:
     auto_approve: bool = False
     cooldown_minutes: int | None = None
     tool_scope: list[str] | None = None
+    uses_memory_model: bool = False
 
 
 _FACT_RETENTION_TOOL_SCOPE = [
@@ -116,6 +118,7 @@ BUILTINS = [
         handler=None,
         auto_approve=True,
         tool_scope=list(_FACT_RETENTION_TOOL_SCOPE),
+        uses_memory_model=True,
     ),
     BuiltinSpec(
         task_id=BUILTIN_WIKI_MAINTENANCE_ID,
@@ -143,8 +146,15 @@ BUILTINS = [
 ]
 
 
-async def seed_builtins(store: AutomationStore) -> None:
+async def seed_builtins(store: AutomationStore, *, memory_model: str) -> None:
+    for task_id in RETIRED_BUILTIN_AUTOMATION_IDS:
+        existing = await store.get(task_id)
+        if existing is not None and existing.builtin:
+            await store.delete(task_id)
+            _logger.info("Removed retired builtin automation: %s", existing.name)
+
     for spec in BUILTINS:
+        desired_model = memory_model if spec.uses_memory_model else None
         existing = await store.get(spec.task_id)
         if existing:
             changes: dict = {}
@@ -157,6 +167,8 @@ async def seed_builtins(store: AutomationStore) -> None:
                 changes["description_source"] = "manual"
             if existing.prompt != spec.prompt:
                 changes["prompt"] = spec.prompt
+            if existing.model != desired_model:
+                changes["model"] = desired_model
             if existing.handler != spec.handler:
                 changes["handler"] = spec.handler
             if existing.auto_approve != spec.auto_approve:
@@ -188,7 +200,7 @@ async def seed_builtins(store: AutomationStore) -> None:
                 description=spec.description,
                 description_source="manual",
                 prompt=spec.prompt,
-                model=None,
+                model=desired_model,
                 triggers=spec.triggers,
                 enabled=spec.enabled,
                 created_at=now,

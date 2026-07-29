@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -227,14 +228,75 @@ def report(**overrides) -> AreaCustodianReport:
 @pytest.mark.asyncio
 async def test_report_applies_atomically_once_with_evidence(work_env) -> None:
     _conn, _sessions, work, health, _visa = work_env
+    submitted = report()
 
-    assert await work.apply_report(health["area_id"], "run:r1", report())
-    assert not await work.apply_report(health["area_id"], "run:r1", report())
+    assert await work.apply_report(health["area_id"], "run:r1", submitted)
+    assert not await work.apply_report(health["area_id"], "run:r1", submitted)
+    assert await work.report("run:r1") == submitted.model_dump(mode="json")
 
     snapshot = await work.snapshot(health["area_id"])
     assert [row.stable_key for row in snapshot.outcomes] == ["labs-normal"]
     assert [row.stable_key for row in snapshot.work_items] == ["book-labs"]
     assert [row.summary for row in snapshot.events] == ["Found the correct lab and opening hours"]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_duplicate_report_is_idempotent(work_env, tmp_path: Path) -> None:
+    conn, _sessions, work, health, _visa = work_env
+    first_read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
+    second_conn = await database.connect(tmp_path / "sessions.db")
+    second_read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
+    ready = 0
+    both_read = asyncio.Event()
+    ready_lock = asyncio.Lock()
+
+    class BarrierReadConnection:
+        def __init__(self, read_conn) -> None:
+            self.read_conn = read_conn
+            self.waited = False
+
+        async def execute_fetchall(self, sql, parameters=()):
+            nonlocal ready
+            rows = await self.read_conn.execute_fetchall(sql, parameters)
+            if "FROM area_work_reports WHERE run_ref" not in sql or rows or self.waited:
+                return rows
+            self.waited = True
+            async with ready_lock:
+                ready += 1
+                if ready == 2:
+                    both_read.set()
+            await both_read.wait()
+            return rows
+
+    first = AreaWorkStore(conn, BarrierReadConnection(first_read_conn))
+    second = AreaWorkStore(second_conn, BarrierReadConnection(second_read_conn))
+    submitted = report()
+    try:
+        results = await asyncio.gather(
+            first.apply_report(health["area_id"], "run:concurrent", submitted),
+            second.apply_report(health["area_id"], "run:concurrent", submitted),
+        )
+    finally:
+        await first_read_conn.close()
+        await second_read_conn.close()
+        await second_conn.close()
+
+    assert sorted(results) == [False, True]
+    snapshot = await work.snapshot(health["area_id"])
+    assert [row.stable_key for row in snapshot.outcomes] == ["labs-normal"]
+    assert [row.stable_key for row in snapshot.work_items] == ["book-labs"]
+    assert [row.summary for row in snapshot.events] == ["Found the correct lab and opening hours"]
+
+
+@pytest.mark.asyncio
+async def test_report_rejects_a_different_payload_for_the_same_run(work_env) -> None:
+    _conn, _sessions, work, health, _visa = work_env
+    submitted = report()
+    changed = submitted.model_copy(update={"report": "different"})
+    assert await work.apply_report(health["area_id"], "run:r1", submitted)
+
+    with pytest.raises(AreaWorkReportError, match="already submitted a different report"):
+        await work.apply_report(health["area_id"], "run:r1", changed)
 
 
 @pytest.mark.asyncio

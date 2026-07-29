@@ -63,17 +63,13 @@ An automation can own a durable **channel session**. Its runs land in a real ses
 
 An automation can carry a **tool scope**: an allowlist of tool-name patterns (`*`, an exact name, or `prefix*`) that bounds what its runs may touch, applied as a hard outer gate. An area agent uses this to stay observe-only. See [tool scoping](/guides/tools#per-automation-tool-scoping).
 
-## Structured output
-
-An automation can declare a named **output schema**, so its run returns a validated object alongside its prose. See [structured output](/guides/tools#structured-output).
-
 ## Area agents
 
-[Area agents](/guides/areas) are ordinary automations, seeded one per area, with a channel, an observe-only tool scope, and the `area_ask` output schema. They appear under **Area agents** in the Active tab and can be edited, paused, rescheduled, or run like any other automation.
+[Area agents](/guides/areas) are channel automations seeded one per delegated area. Their explicit tool scope includes one terminal `submit_area_report` action that validates and commits work, evidence, asks, and the next-check cadence inside the normal agent loop.
 
 ## Builtin automations
 
-Arden ships with system automations that run automatically, such as memory consolidation, synthesis, and the area suggester. They appear in the **System** tab. What they do is fixed, but their schedule is yours: adjust the cadence, pause, or run now.
+Arden ships with Memory Maintenance, Memory Retention, Memory Synthesis, Wiki Maintenance, and optional Memory Dream. They appear in the **System** tab. Their responsibilities are fixed; you can pause them, adjust their cadence, or run them now.
 
 ## Creating automations
 

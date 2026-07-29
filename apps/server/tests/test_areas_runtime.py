@@ -4,11 +4,13 @@ from types import SimpleNamespace
 
 import pytest
 
+from arden.agent import Usage
 from arden.areas.agent import AreaCustodianReport, render_work_context
 from arden.areas.asks import AskStore
+from arden.areas.custodian import CustodianStore
+from arden.areas.models import Area
 from arden.areas.work_models import AreaOutcome, AreaWorkEvent, AreaWorkItem, AreaWorkSnapshot
-from arden.areas.work_store import AreaWorkReportError
-from arden.events.internal import RunCompletionRejected
+from arden.events.internal import RunCompleted, RunCompletionRejected
 from arden.server.runtime.automation import AutomationRuntime
 
 
@@ -47,6 +49,9 @@ async def test_runtime_wires_auxiliary_model_into_automation_descriptions(tmp_pa
             content = {"description": "Summarizes the configured work."}
             return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(content)))])
 
+    async def project_wiki_state() -> None:
+        return None
+
     runtime = AutomationRuntime(
         stores=SimpleNamespace(automations=object(), sessions=object(), outbox=object()),
         config=SimpleNamespace(arden_dir=tmp_path),
@@ -54,6 +59,7 @@ async def test_runtime_wires_auxiliary_model_into_automation_descriptions(tmp_pa
         get_calendar_source=lambda: None,
         get_slack_client=lambda: None,
         resolve_auxiliary_completion=lambda: (AuxiliaryClient(), "auxiliary-model", "low"),
+        project_wiki_state=project_wiki_state,
     )
 
     description, source = await runtime.automation_service._resolve_description(
@@ -68,47 +74,113 @@ async def test_runtime_wires_auxiliary_model_into_automation_descriptions(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_work_report_commits_before_asks(tmp_path: Path) -> None:
-    calls: list[str] = []
-
-    class Work:
-        async def apply_report(self, area_id, run_ref, structured):
-            calls.append("work")
-            raise RuntimeError("work commit failed")
+async def test_manual_area_chat_does_not_settle_custodian_state(tmp_path: Path) -> None:
+    class Automations:
+        async def list_session_bound_by_session(self, session_id: str):
+            return [SimpleNamespace(task_id="area:health")]
 
     runtime = AutomationRuntime.__new__(AutomationRuntime)
-    runtime.stores = SimpleNamespace(area_work=Work())
+    runtime.stores = SimpleNamespace(automations=Automations())
     runtime.area_asks = AskStore(tmp_path / "asks.json")
 
-    with pytest.raises(RuntimeError, match="work commit failed"):
-        await runtime._commit_area_report("area_health", "topics/health.md", report().model_dump(), "run:r1")
-
-    assert calls == ["work"]
-    assert runtime.area_asks.list("area_health") == []
+    await runtime._on_area_run_completed(RunCompleted("chat-run", "area-channel", (), Usage(), "User chat completed"))
 
 
 @pytest.mark.asyncio
-async def test_invalid_work_report_rejects_run_completion(tmp_path: Path) -> None:
+async def test_custodian_completion_requires_an_accepted_report(tmp_path: Path) -> None:
+    class Automations:
+        async def list_session_bound_by_session(self, session_id: str):
+            return [SimpleNamespace(task_id="area:health")]
+
     class Work:
-        async def apply_report(self, area_id, run_ref, structured):
-            raise AreaWorkReportError("terminal item")
+        async def report(self, run_ref: str):
+            return None
 
     runtime = AutomationRuntime.__new__(AutomationRuntime)
-    runtime.stores = SimpleNamespace(area_work=Work())
+    runtime.stores = SimpleNamespace(automations=Automations(), area_work=Work())
     runtime.area_asks = AskStore(tmp_path / "asks.json")
 
-    with pytest.raises(RunCompletionRejected, match="AreaWorkReportError: terminal item"):
-        await runtime._commit_area_report("area_health", "topics/health.md", report().model_dump(), "run:r1")
+    async def load_areas():
+        return [Area(key="health", title="Health", page_path="topics/health.md", autonomy="observe")]
+
+    runtime.load_areas = load_areas
+
+    with pytest.raises(RunCompletionRejected, match="without submitting a report"):
+        await runtime._on_area_run_completed(
+            RunCompleted(
+                "custodian-run",
+                "area-channel",
+                (),
+                Usage(),
+                "Done",
+                automation_task_id="area:health",
+            )
+        )
 
 
 @pytest.mark.asyncio
-async def test_malformed_report_rejects_run_completion(tmp_path: Path) -> None:
-    runtime = AutomationRuntime.__new__(AutomationRuntime)
-    runtime.stores = SimpleNamespace()
-    runtime.area_asks = AskStore(tmp_path / "asks.json")
+async def test_wiki_change_does_not_wake_its_originating_custodian(tmp_path: Path) -> None:
+    wakes: list[tuple[str, str]] = []
+    emitted: list[object] = []
 
-    with pytest.raises(RunCompletionRejected, match="ValidationError"):
-        await runtime._commit_area_report("area_health", "topics/health.md", {}, "run:r1")
+    class Sessions:
+        async def list_areas(self):
+            return [
+                {"area_id": "dex", "page_path": "topics/dex.md"},
+                {"area_id": "visa", "page_path": "topics/visa.md"},
+            ]
+
+    class Scheduler:
+        async def emit_automation_event(self, event) -> None:
+            emitted.append(event)
+
+    runtime = AutomationRuntime.__new__(AutomationRuntime)
+    runtime.stores = SimpleNamespace(sessions=Sessions())
+    runtime.scheduler = Scheduler()
+
+    async def request_area_wake(area_id: str, reason: str) -> None:
+        wakes.append((area_id, reason))
+
+    runtime.request_area_wake = request_area_wake
+
+    await runtime.notify_wiki_changed(
+        ["topics/dex.md", "topics/visa.md"],
+        "revision",
+        source_areas_by_path={"topics/dex.md": {"dex"}},
+    )
+
+    assert len(emitted) == 1
+    assert wakes == [("visa", "topic page edited (topics/visa.md)")]
+
+
+@pytest.mark.asyncio
+async def test_area_event_reschedules_and_wakes_the_scheduler(tmp_path: Path) -> None:
+    calls: list[tuple[str, object, bool]] = []
+
+    class Sessions:
+        async def get_area(self, area_id: str):
+            return {
+                "area_id": area_id,
+                "autonomy": "observe",
+                "attention": "ambient",
+                "paused_at": None,
+            }
+
+    class Scheduler:
+        async def reschedule_run(self, task_id, deadline, *, only_if_earlier=False):
+            calls.append((task_id, deadline, only_if_earlier))
+            return True
+
+    runtime = AutomationRuntime.__new__(AutomationRuntime)
+    runtime.stores = SimpleNamespace(sessions=Sessions())
+    runtime.scheduler = Scheduler()
+    runtime.custodians = CustodianStore(tmp_path / "custodians.json")
+
+    await runtime.request_area_wake("dex", "new evidence")
+
+    assert len(calls) == 1
+    assert calls[0][0] == "area:dex"
+    assert calls[0][2] is True
 
 
 def test_work_context_uses_report_keys_instead_of_internal_ids() -> None:

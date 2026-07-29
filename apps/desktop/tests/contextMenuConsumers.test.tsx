@@ -282,7 +282,6 @@ test("Automation duplicate payload retains the real trigger and capability bound
   const payload = duplicateAutomationPayload({
     ...automation,
     tool_scope: ["calendar.read"],
-    output_schema: "daily_brief",
     triggers: [{
       type: "message",
       source: "slack",
@@ -306,7 +305,6 @@ test("Automation duplicate payload retains the real trigger and capability bound
     }],
     cooldown_minutes: null,
     tool_scope: ["calendar.read"],
-    output_schema: "daily_brief",
   });
 });
 

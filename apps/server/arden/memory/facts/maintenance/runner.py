@@ -6,9 +6,9 @@ import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Literal, Protocol, Self
+from typing import Annotated, Any, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
 
 from arden.constants import BUILTIN_MEMORY_CONSOLIDATE_ID
 from arden.memory.facts.consumer_store import FactConsumerStore
@@ -36,66 +36,63 @@ class FactMaintenanceCandidateProvider(Protocol):
     async def semantic_candidates(self, fact: Fact, *, limit: int) -> Sequence[str]: ...
 
 
-class FactMaintenanceDecision(BaseModel):
-    """One constrained decision addressed only by run-local opaque tokens."""
+class _FactMaintenanceDecision(BaseModel):
+    """Shared fields for one constrained, token-addressed decision."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    outcome: Literal["no_change", "amend_metadata", "merge_duplicate", "normalize_topic"]
     reason: str = Field(min_length=1, max_length=_MAX_REASON)
-    target_token: str | None = None
+
+
+class FactMaintenanceNoChange(_FactMaintenanceDecision):
+    outcome: Literal["no_change"]
+
+
+class FactMaintenanceMetadataAmendment(_FactMaintenanceDecision):
+    outcome: Literal["amend_metadata"]
+    target_token: str = Field(min_length=1)
     kind: str | None = Field(default=None, min_length=1, max_length=200)
     labels: list[str] | None = Field(default=None, max_length=100)
     subjects: list[str] | None = Field(default=None, min_length=1, max_length=100)
     lifecycle: Literal["durable", "temporary"] | None = None
     evidence_class: Literal["direct", "inferred"] | None = None
-    discard_token: str | None = None
-    survivor_token: str | None = None
-    old_topic: str | None = Field(default=None, min_length=1, max_length=_MAX_FACT_TEXT)
-    canonical_page_token: str | None = None
 
     @model_validator(mode="after")
-    def _validate_outcome_shape(self) -> Self:
-        metadata = (self.kind, self.labels, self.subjects, self.lifecycle, self.evidence_class)
-        incompatible_metadata = (
-            self.kind,
-            self.labels or None,
-            self.subjects,
-            self.lifecycle,
-            self.evidence_class,
-        )
-        normalization = (self.old_topic, self.canonical_page_token)
-        if self.outcome == "no_change":
-            if self.target_token is not None or any(value is not None for value in incompatible_metadata):
-                raise ValueError("no_change must not include an amendment")
-            if self.discard_token is not None or self.survivor_token is not None:
-                raise ValueError("no_change must not include a merge")
-            if any(value is not None for value in normalization):
-                raise ValueError("no_change must not include topic normalization")
-        elif self.outcome == "amend_metadata":
-            if self.target_token is None or all(value is None for value in metadata):
-                raise ValueError("amend_metadata requires a target and metadata")
-            if self.discard_token is not None or self.survivor_token is not None:
-                raise ValueError("amend_metadata must not include a merge")
-            if any(value is not None for value in normalization):
-                raise ValueError("amend_metadata must not include topic normalization")
-        elif self.outcome == "merge_duplicate":
-            if self.discard_token is None or self.survivor_token is None:
-                raise ValueError("merge_duplicate requires both fact tokens")
-            if self.discard_token == self.survivor_token:
-                raise ValueError("merge_duplicate tokens must be different")
-            if self.target_token is not None or any(value is not None for value in incompatible_metadata):
-                raise ValueError("merge_duplicate must not include an amendment")
-            if any(value is not None for value in normalization):
-                raise ValueError("merge_duplicate must not include topic normalization")
-        else:
-            if self.old_topic is None or self.canonical_page_token is None:
-                raise ValueError("normalize_topic requires an old topic and canonical page token")
-            if self.target_token is not None or any(value is not None for value in incompatible_metadata):
-                raise ValueError("normalize_topic must not include an amendment")
-            if self.discard_token is not None or self.survivor_token is not None:
-                raise ValueError("normalize_topic must not include a merge")
+    def _require_metadata(self) -> "FactMaintenanceMetadataAmendment":
+        if all(value is None for value in (self.kind, self.labels, self.subjects, self.lifecycle, self.evidence_class)):
+            raise ValueError("amend_metadata requires metadata")
         return self
+
+
+class FactMaintenanceDuplicateMerge(_FactMaintenanceDecision):
+    outcome: Literal["merge_duplicate"]
+    discard_token: str = Field(min_length=1)
+    survivor_token: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _require_distinct_facts(self) -> "FactMaintenanceDuplicateMerge":
+        if self.discard_token == self.survivor_token:
+            raise ValueError("merge_duplicate tokens must be different")
+        return self
+
+
+class FactMaintenanceTopicNormalization(_FactMaintenanceDecision):
+    outcome: Literal["normalize_topic"]
+    old_topic: str = Field(min_length=1, max_length=_MAX_FACT_TEXT)
+    canonical_page_token: str = Field(min_length=1)
+
+
+FactMaintenanceDecisionValue = Annotated[
+    FactMaintenanceNoChange
+    | FactMaintenanceMetadataAmendment
+    | FactMaintenanceDuplicateMerge
+    | FactMaintenanceTopicNormalization,
+    Field(discriminator="outcome"),
+]
+
+
+class FactMaintenanceDecision(RootModel[FactMaintenanceDecisionValue]):
+    """A schema-discriminated fact-maintenance decision."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -607,18 +604,18 @@ class FactMaintenance:
         merges: dict[str, tuple[Fact, Fact, str]] = {}
         reasons: list[str] = []
         for item in reviewed:
-            decision = item.decision
+            decision = item.decision.root
             cls._validate_cluster_decision(item.cluster, item.target, decision)
-            if decision.outcome == "no_change":
+            if isinstance(decision, FactMaintenanceNoChange):
                 continue
-            if decision.outcome == "amend_metadata":
+            if isinstance(decision, FactMaintenanceMetadataAmendment):
                 reasons.append(decision.reason)
                 target = cls._token_fact(item.cluster, decision.target_token)
                 metadata = cls._changed_metadata(target, decision)
                 if metadata:
                     amendments[target.fact_id] = (target, metadata)
                 continue
-            if decision.outcome == "normalize_topic":
+            if isinstance(decision, FactMaintenanceTopicNormalization):
                 continue
 
             reasons.append(decision.reason)
@@ -644,23 +641,23 @@ class FactMaintenance:
         decision: FactMaintenanceDecision,
     ) -> None:
         """Reject a decision that is invalid for its current pinned cluster."""
-        cls._validate_cluster_decision(cluster, cls._token_fact(cluster, cluster.target_token), decision)
+        cls._validate_cluster_decision(cluster, cls._token_fact(cluster, cluster.target_token), decision.root)
 
     @classmethod
     def _validate_cluster_decision(
         cls,
         cluster: FactMaintenancePreparedCluster,
         target: Fact,
-        decision: FactMaintenanceDecision,
+        decision: FactMaintenanceDecisionValue,
     ) -> None:
-        if decision.outcome == "no_change":
+        if isinstance(decision, FactMaintenanceNoChange):
             return
-        if decision.outcome == "amend_metadata":
+        if isinstance(decision, FactMaintenanceMetadataAmendment):
             if decision.target_token != cluster.target_token:
                 raise FactMaintenanceError("metadata amendment must target the changed fact")
             cls._token_fact(cluster, decision.target_token)
             return
-        if decision.outcome == "normalize_topic":
+        if isinstance(decision, FactMaintenanceTopicNormalization):
             if decision.old_topic not in target.subjects:
                 raise FactMaintenanceError("topic normalization must use an exact subject of the changed fact")
             if decision.canonical_page_token not in cluster.wiki_page_tokens:
@@ -701,11 +698,9 @@ class FactMaintenance:
         selections: dict[str, WikiPageRecord] = {}
         reasons: dict[str, str] = {}
         for item in reviewed:
-            decision = item.decision
-            if decision.outcome != "normalize_topic":
+            decision = item.decision.root
+            if not isinstance(decision, FactMaintenanceTopicNormalization):
                 continue
-            assert decision.old_topic is not None
-            assert decision.canonical_page_token is not None
             if decision.old_topic not in item.target.subjects:
                 raise FactMaintenanceError("topic normalization must use an exact subject of the changed fact")
             try:
@@ -826,7 +821,7 @@ class FactMaintenance:
             raise FactMaintenanceError("maintenance decision used an unknown fact token") from exc
 
     @staticmethod
-    def _changed_metadata(target: Fact, decision: FactMaintenanceDecision) -> dict[str, Any]:
+    def _changed_metadata(target: Fact, decision: FactMaintenanceMetadataAmendment) -> dict[str, Any]:
         result: dict[str, Any] = {}
         if decision.kind is not None and decision.kind != target.kind:
             result["kind"] = decision.kind

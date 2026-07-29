@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from arden.areas.agent import AreaCustodianReport
 from arden.areas.paths import atomic_write_text
 from arden.constants import (
     AREA_ATTENTION_PRESETS,
@@ -68,7 +69,6 @@ class CustodianStore:
                 "last_woken_by": [],
                 "runs_day": None,
                 "runs_today": 0,
-                "page_write_digests": [],
             },
         )
 
@@ -162,7 +162,17 @@ class CustodianStore:
         pending = self._delivery(st)
         if pending is not None:
             if pending.iteration == iteration:
-                return True, pending
+                if pending.client_id == client_id:
+                    return True, pending
+                replacement = CustodianDelivery(
+                    iteration=pending.iteration,
+                    client_id=client_id,
+                    message=pending.message,
+                    skip_approvals=pending.skip_approvals,
+                )
+                st["pending_delivery"]["client_id"] = client_id
+                self._flush()
+                return True, replacement
             if pending.iteration > iteration:
                 raise RuntimeError(f"Custodian delivery iteration moved backwards for {area_id}")
             del st["pending_delivery"]
@@ -191,87 +201,78 @@ class CustodianStore:
         self._flush()
         return True, delivery
 
-    def record_page_write(self, area_id: str, digest: str) -> None:
-        st = self.state(area_id)
-        digests = st.setdefault("page_write_digests", [])
-        st["page_write_digests"] = (digests + [digest])[-8:]
-        self._flush()
-
-    def consume_self_write(self, area_id: str, digest: str) -> bool:
-        st = self.state(area_id)
-        digests = st.setdefault("page_write_digests", [])
-        if digest not in digests:
-            return False
-        digests.remove(digest)
-        self._flush()
-        return True
-
     # ── attention decay on ignored asks ─────────────────────
 
-    def note_ignored_asks(self, area_id: str, ignored: bool) -> bool:
+    def note_ignored_asks(
+        self,
+        area_id: str,
+        ignored: bool,
+        *,
+        attention: str,
+        run_ref: str,
+    ) -> str | None:
         """Track consecutive runs whose previous asks went unanswered.
-        Returns True when attention should step down one level (3 strikes)
+        Returns the exact lower attention when three strikes are reached
         — attention is the budget signal: an area the user stops answering
         decays instead of shouting louder."""
         st = self.state(area_id)
+        if st.get("last_ignored_run_ref") == run_ref:
+            return st.get("last_ignored_attention")
         st["unanswered_streak"] = st.get("unanswered_streak", 0) + 1 if ignored else 0
-        self._flush()
+        lowered_attention = None
         if st["unanswered_streak"] >= 3:
             st["unanswered_streak"] = 0
-            self._flush()
-            return True
-        return False
+            lowered_attention = {"active": "ambient", "ambient": "dormant"}.get(attention)
+        st["last_ignored_run_ref"] = run_ref
+        st["last_ignored_attention"] = lowered_attention
+        self._flush()
+        return lowered_attention
 
     # ── self-paced heartbeat ────────────────────────────────
 
     def record_run(
         self,
         area_id: str,
-        structured_output: dict | None,
+        report: AreaCustodianReport,
         *,
+        run_ref: str,
         attention: str,
         paused: bool = False,
         now: datetime | None = None,
     ) -> datetime:
-        """Digest a completed run: persist the report + reason for the room,
-        update the quiet streak, and return the clamped-and-decayed next
-        check time. A missing/failed nomination falls back to the attention
-        ceiling (never a tight loop)."""
+        """Digest one accepted report and return its bounded next check."""
         now = now or datetime.now(UTC)
-        preset = AREA_ATTENTION_PRESETS.get(attention, AREA_ATTENTION_PRESETS["ambient"])
-        so = structured_output or {}
+        preset = AREA_ATTENTION_PRESETS[attention]
         st = self.state(area_id)
+        if st.get("last_processed_run_ref") == run_ref:
+            return datetime.fromisoformat(st["last_next_run_at"])
         st.pop("pending_delivery", None)
 
-        made_progress = bool(so.get("made_progress"))
-        quiet = not so.get("asks") and not made_progress
+        made_progress = report.made_progress
+        quiet = not report.asks and not made_progress
         st["quiet_streak"] = st["quiet_streak"] + 1 if quiet else 0
-        st["last_report"] = so.get("report") or st["last_report"]
-        continuation = so.get("continuation_minutes")
+        st["last_report"] = report.report
+        continuation = report.continuation_minutes
         may_continue = (
             made_progress
-            and bool(so.get("work_remaining"))
-            and isinstance(continuation, int)
-            and 5 <= continuation <= 240
+            and report.work_remaining
+            and continuation is not None
             and not paused
             and self.runs_today(area_id, now) < preset["runs_per_day"]
         )
         st["next_check_reason"] = (
-            so.get("continuation_reason")
-            if may_continue and so.get("continuation_reason")
-            else so.get("next_check_reason")
+            report.continuation_reason if may_continue and report.continuation_reason else report.next_check_reason
         )
 
-        hours = so.get("next_check_hours")
-        if not isinstance(hours, (int, float)) or hours <= 0:
-            hours = preset["max_hours"]
+        hours = report.next_check_hours
         # Decay: from the 2nd consecutive quiet run on, stretch the interval
         # regardless of what the agent asked for — cadence is earned by
         # activity, not claimed (self-importance drift is measured at ~1/3).
         if st["quiet_streak"] >= 2:
             hours *= AREA_QUIET_DECAY_FACTOR ** (st["quiet_streak"] - 1)
         hours = max(preset["min_hours"], min(hours, preset["max_hours"]))
+        next_run = now + timedelta(minutes=continuation) if may_continue else now + timedelta(hours=hours)
+        st["last_processed_run_ref"] = run_ref
+        st["last_next_run_at"] = next_run.isoformat()
         self._flush()
-        if may_continue:
-            return now + timedelta(minutes=continuation)
-        return now + timedelta(hours=hours)
+        return next_run

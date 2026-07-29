@@ -1,11 +1,11 @@
 ---
 title: "Areas"
-description: "Life domains mapped to memory pages, each watched by a standing agent that raises at most one ask."
+description: "Life domains attached to managed wiki pages, each watched by a standing custodian."
 ---
 
 ## Overview
 
-An area is a domain of your life: an apartment hunt, your health, a side project, your finances. Each area is backed by a memory topic page and watched by a standing agent. The agent runs on a schedule, keeps the page up to date, and raises at most one ask when something actually needs your judgment.
+An area is a domain of your life: an apartment hunt, your health, a side project, your finances. It may attach one managed wiki page and delegate a standing custodian. The custodian runs on its own cadence, keeps structured work and the page current, and raises only salient asks.
 
 Home is the desktop app's landing surface. It has a composer, the focus set (each area's current ask, gathered into one list), and a strip of your areas.
 
@@ -25,7 +25,7 @@ Open an area to get its room:
 
 ![An area room](../images/area-room.png)
 
-- The one ask, if there is one, with a Discuss button that opens a chat scoped to it.
+- Its active asks, with a Discuss action that replies in the custodian channel.
 - Open loops: the unresolved threads the agent parses from the page's `## Open loops` section.
 - The agent's status: whether it's running now, a summary of its last run, or that it hasn't run yet. That line opens the agent's channel transcript, with a Run now button next to it.
 - Related areas, from the page's wikilinks.
@@ -37,10 +37,10 @@ Open an area to get its room:
 An area agent is a normal automation. You'll find it in the Automations panel under Area agents, and you can edit, pause, reschedule, or run it like any other. What makes it an area agent is data on the automation, not a separate code path:
 
 - It runs as a channel automation, so a durable session owns its runs and the full transcript is visible and replyable in the room.
-- Its tool scope is an observe-only allowlist: read plus its own memory-page writes, nothing that acts on the outside world. See [tool scoping](/guides/tools#per-automation-tool-scoping).
-- Its output schema makes each run return a validated one-ask nomination (`ask`, or none) instead of free-form text. See [structured output](/guides/tools#structured-output).
+- Its tool scope is an observe-only allowlist: reads plus edits to its attached managed page, nothing that acts on the outside world. See [tool scoping](/guides/tools#per-automation-tool-scoping).
+- Its final `submit_area_report` action validates and atomically commits work changes, evidence, up to three salient asks, and its next-check cadence.
 
-Every run re-decides the area's ask. A new nomination replaces the old one, and silence retires it, so the focus set always reflects the latest read of each domain rather than a growing backlog.
+Every run re-decides the area's active asks. Stable ask keys update the same decision instead of creating a growing duplicate backlog.
 
 ### Observe vs act
 
@@ -50,5 +50,5 @@ Area agents run in observe mode by default: they read anything and update their 
 
 Areas sit on top of two systems that already exist:
 
-- [Memory](/guides/memory) is the substrate. An area is a topic page, and the agent's edits are ordinary memory writes. The Memory view shows the same pages the areas read from.
-- [Automations](/guides/automations) is the engine. Area agents are seeded automations with a tool scope and an output schema. There's nothing special-cased about them.
+- [Memory](/guides/memory) is the substrate. An area may attach one managed wiki page, and the Memory view shows the same page the custodian reads and edits.
+- [Automations](/guides/automations) is the engine. Area custodians are seeded channel automations with an explicit tool scope and a trusted report action.
