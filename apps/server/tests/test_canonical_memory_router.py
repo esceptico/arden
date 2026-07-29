@@ -14,6 +14,7 @@ from arden.memory.facts.service import FactService
 from arden.revisions import ManagedFileRepository
 from arden.server.app import app as server_app
 from arden.server.routers.canonical_memory import facts_router, wiki_router
+from arden.wiki.models import WikiMaintenancePageUpdate
 from arden.wiki.service import WikiService
 
 
@@ -101,6 +102,7 @@ def test_canonical_routes_are_registered_on_server_app() -> None:
         "/admin/wiki/pages/{page_id}/archive",
         "/admin/wiki/pages/{page_id}/restore",
         "/admin/wiki/pages/{page_id}/history",
+        "/admin/wiki/pages/{page_id}/history/{commit_id}/restore",
         "/admin/wiki/pages/{page_id}/diff",
         "/admin/wiki/pages/{page_id}/links",
         "/admin/facts",
@@ -387,3 +389,61 @@ def test_wiki_create_reports_committed_page_when_projection_fails(tmp_path: Path
         assert response.status_code == 201
         assert response.json()["projection_pending"] is True
         assert client.get("/admin/wiki/pages/one").status_code == 200
+
+
+def test_wiki_maintenance_history_restore_commits_and_reports_projection_pending(tmp_path: Path) -> None:
+    with _client(tmp_path) as client:
+        created = client.post(
+            "/admin/wiki/pages",
+            json={"path": "one.md", "title": "Original", "page_id": "one", "expected_head": None},
+        ).json()
+        service = client.app.state.runtime.wiki_service
+        record = service.read_page("one")
+        maintenance_base = service.repository.head
+        assert maintenance_base is not None
+        maintenance_commit_id = service.apply_maintenance_updates(
+            (
+                WikiMaintenancePageUpdate(
+                    "one",
+                    record.resource.version_id,
+                    "Maintained",
+                    (),
+                    b"Maintained body.\n",
+                ),
+            ),
+            base_head=maintenance_base,
+            reason="rewrite page",
+        )
+        maintained = service.read_page("one")
+
+        async def fail_projection() -> None:
+            raise RuntimeError("wiki projection failed")
+
+        client.app.state.runtime.project_wiki_state = fail_projection
+        response = client.post(
+            f"/admin/wiki/pages/one/history/{maintenance_commit_id}/restore",
+            json={
+                "expected_version": maintained.resource.version_id,
+                "expected_head": maintenance_commit_id,
+            },
+        )
+
+        assert response.status_code == 200
+        restored = response.json()
+        assert restored["title"] == "Original"
+        assert restored["content"] == created["content"]
+        assert restored["projection_pending"] is True
+        restore_commit = service.repository.history(start=restored["repository_head"], limit=1)[0]
+        assert (restore_commit.actor, restore_commit.origin) == ("user:desktop", "desktop.restore")
+        assert restore_commit.reason == f"restore Maintenance commit {maintenance_commit_id}"
+
+        stale = client.post(
+            f"/admin/wiki/pages/one/history/{maintenance_commit_id}/restore",
+            json={
+                "expected_version": maintained.resource.version_id,
+                "expected_head": restored["repository_head"],
+            },
+        )
+        assert stale.status_code == 409
+        assert stale.json()["detail"]["error"] == "page_revision_conflict"
+        assert stale.json()["detail"]["current_revision"] == restored["version"]

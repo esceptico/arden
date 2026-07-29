@@ -20,6 +20,7 @@ import {
   previewPageEdit,
   readMemoryArtifactDetail,
   rebuildMemoryArtifactSummaries,
+  restorePageMaintenanceChange,
 } from "@/api/memoryArtifacts";
 import type { DiffReviewDecision, DiffReviewOperation } from "@/components/ui/diffReviewTypes";
 import { listMemoryItems, type MemoryItem } from "@/api/memoryItems";
@@ -39,7 +40,7 @@ import {
 } from "@/features/memory/components/MemoryInspector";
 import { MemoryEditor } from "@/features/memory/components/MemoryEditor";
 import { MemoryEditReview, type MemoryConflict } from "@/features/memory/components/MemoryEditReview";
-import { MemoryDiffOverlay } from "@/features/memory/components/MemoryDiffOverlay";
+import { canRestorePageEdit, MemoryDiffOverlay } from "@/features/memory/components/MemoryDiffOverlay";
 import { MemoryQuickSwitcher } from "@/features/memory/components/MemoryQuickSwitcher";
 import { MemoryDocumentTabs } from "@/features/memory/components/MemoryDocumentTabs";
 import { WikiLinkPreview } from "@/features/memory/components/WikiLinkPreview";
@@ -285,6 +286,8 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const [pageHistoryPath, setPageHistoryPath] = useState<string | null>(null);
   const [diffEvent, setDiffEvent] = useState<PageEditEvent | null>(null);
   const [diffClosing, setDiffClosing] = useState(false);
+  const [diffRestorePending, setDiffRestorePending] = useState(false);
+  const [diffRestoreError, setDiffRestoreError] = useState<string | null>(null);
   const [editing, setEditing] = useState<EditingSession | null>(null);
   const [editReview, setEditReview] = useState<ReviewState | null>(null);
   const [reviewClosing, setReviewClosing] = useState(false);
@@ -330,6 +333,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const reviewExitAction = useRef<(() => void) | null>(null);
   const reviewGeneration = useRef(0);
   const applyGeneration = useRef(0);
+  const diffRestoreGeneration = useRef(0);
   const mutationPendingRef = useRef(false);
   const memoryVaultChangesRef = useRef(useStore.getState().memoryVaultChanges);
   const processedMemoryChangeSeqs = useRef(new Set<number>());
@@ -462,13 +466,16 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       historyRequestId.current += 1;
       recordsRequestId.current += 1;
       editRequestGeneration.current += 1;
+      diffRestoreGeneration.current += 1;
       editPreviewController.current?.abort();
     };
   }, []);
 
   const openDiff = useCallback((event: PageEditEvent, trigger: HTMLElement) => {
+    if (mutationPendingRef.current) return;
     if (!diffEvent) diffReturnFocus.current = trigger;
     setDiffClosing(false);
+    setDiffRestoreError(null);
     setDiffEvent(event);
   }, [diffEvent]);
 
@@ -1042,6 +1049,110 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const inspectorDetail = visibleDetail
     ?? (selectedMeta ? retainedInspectorDetail.current : null);
   const inspectorDetailIsCurrent = inspectorDetail?.path === selectedMeta?.path;
+
+  const restoreMaintenanceEdit = useCallback(async () => {
+    const event = diffEvent;
+    const page = visibleDetail;
+    if (
+      !event
+      || !page
+      || page.path !== event.path
+      || page.repositoryHead == null
+      || !canRestorePageEdit(event, page.revision)
+      || mutationPendingRef.current
+    ) return;
+
+    const generation = ++diffRestoreGeneration.current;
+    mutationPendingRef.current = true;
+    setPageMutationPending(true);
+    setDiffRestorePending(true);
+    setDiffRestoreError(null);
+    try {
+      const restored = await restorePageMaintenanceChange(config, {
+        path: page.path,
+        commitId: event.id,
+        expectedVersion: page.revision,
+        expectedHead: page.repositoryHead,
+        current: page,
+      });
+      if (!mountedRef.current || diffRestoreGeneration.current !== generation) return;
+
+      detailCache.current.invalidatePath(page.path);
+      detailCache.current.set(restored.artifact);
+      setArtifacts((current) => current.map((artifact) => {
+        if (artifact.path !== page.path) return artifact;
+        const {
+          content: _content,
+          editableContent: _editableContent,
+          timeline: _timeline,
+          frontmatter: _frontmatter,
+          ...summary
+        } = restored.artifact;
+        return summary;
+      }));
+      setActiveDetail(restored.artifact);
+      setContentError(null);
+      setContentNotice("Restored Maintenance edit.");
+      setDiffClosing(true);
+
+      const refreshRequest = beginSummaryRequest();
+      linksRequestId.current += 1;
+      historyRequestId.current += 1;
+      try {
+        const [summaries, history, links] = await Promise.all([
+          rebuildMemoryArtifactSummaries(config, { signal: refreshRequest.controller.signal }),
+          getPageHistory(config, { path: page.path, limit: 100 }, { signal: refreshRequest.controller.signal }),
+          getPageLinks(config, { path: page.path, limit: 100, offset: 0 }, { signal: refreshRequest.controller.signal }),
+        ]);
+        if (
+          refreshRequest.controller.signal.aborted
+          || !isCurrentSummaryRequest(refreshRequest)
+          || diffRestoreGeneration.current !== generation
+        ) return;
+
+        acceptSummaries(summaries.artifacts, summaries.directories);
+        setPageHistory(history);
+        setPageHistoryPath(page.path);
+        setHistoryError(null);
+        setHistoryLoading(false);
+        setPageLinks(links);
+        setLinkError(null);
+        setLinksLoading(false);
+      } catch (reason) {
+        if (
+          refreshRequest.controller.signal.aborted
+          || !isCurrentSummaryRequest(refreshRequest)
+          || diffRestoreGeneration.current !== generation
+        ) return;
+        const detail = reason instanceof Error ? reason.message : String(reason);
+        setContentNotice(`Restored Maintenance edit. Related page data refresh failed: ${detail}`);
+        setContentRefreshKey((key) => key + 1);
+        void load();
+      }
+    } catch (reason) {
+      if (!mountedRef.current || diffRestoreGeneration.current !== generation) return;
+      setDiffRestoreError(
+        reason instanceof ApiError && reason.status === 409
+          ? "A newer edit prevents automatic restoration."
+          : reason instanceof Error ? reason.message : String(reason),
+      );
+    } finally {
+      if (diffRestoreGeneration.current === generation) {
+        mutationPendingRef.current = false;
+        if (mountedRef.current) {
+          setPageMutationPending(false);
+          setDiffRestorePending(false);
+        }
+      }
+    }
+  }, [
+    acceptSummaries,
+    beginSummaryRequest,
+    config,
+    diffEvent,
+    isCurrentSummaryRequest,
+    visibleDetail,
+  ]);
 
   const beginEditing = useCallback(() => {
     const detail = activeDetail;
@@ -1830,10 +1941,17 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
           event={diffEvent}
           path={diffEvent.path}
           open={!diffClosing}
+          currentPageVersion={visibleDetail?.path === diffEvent.path ? visibleDetail.revision : null}
+          restorePending={diffRestorePending}
+          restoreError={diffRestoreError}
+          onRestore={visibleDetail?.path === diffEvent.path && visibleDetail.repositoryHead != null
+            ? () => { void restoreMaintenanceEdit(); }
+            : undefined}
           onOpenChange={(open) => setDiffClosing(!open)}
           onExitComplete={() => {
             setDiffEvent(null);
             setDiffClosing(false);
+            setDiffRestoreError(null);
           }}
         />
       )}

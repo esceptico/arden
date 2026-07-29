@@ -367,6 +367,13 @@ export interface ArchiveWikiPageInput {
   expectedHead: string;
 }
 
+export interface RestoreWikiMaintenanceChangeInput {
+  pageId: string;
+  commitId: string;
+  expectedVersion: string;
+  expectedHead: string;
+}
+
 interface RawWikiRenameApproval {
   approval_id: string;
   old_path: string;
@@ -480,4 +487,22 @@ export function archiveWikiPage(config: AppConfig, input: ArchiveWikiPageInput):
     method: "POST",
     body: JSON.stringify({ expected_version: input.expectedVersion, expected_head: input.expectedHead }),
   }).then(() => undefined);
+}
+
+/** Restores one still-current Maintenance edit through the guarded server path. */
+export function restoreWikiMaintenanceChange(
+  config: AppConfig,
+  input: RestoreWikiMaintenanceChangeInput,
+): Promise<WikiPage> {
+  return apiWithConfig<RawWikiPage>(
+    config,
+    `/admin/wiki/pages/${encodeURIComponent(input.pageId)}/history/${encodeURIComponent(input.commitId)}/restore`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        expected_version: input.expectedVersion,
+        expected_head: input.expectedHead,
+      }),
+    },
+  ).then(mapWikiPage);
 }

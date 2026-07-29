@@ -7,6 +7,7 @@ import {
   readWikiPageDiff,
   readWikiPageHistory,
   readWikiPageLinks,
+  restoreWikiMaintenanceChange,
   updateWikiPage,
   type Fact,
   type WikiHistoryCommit,
@@ -89,6 +90,8 @@ interface PageEditEvent {
   sequence: number;
   actor: string;
   origin: "desktop" | "external" | "agent" | "synthesis";
+  rawOrigin: string;
+  reason: string;
   path: string;
   baseRevision: string;
   resultRevision: string;
@@ -584,6 +587,8 @@ export async function applyPageEdit(
       sequence: 0,
       actor: preview.actor,
       origin: "desktop",
+      rawOrigin: "desktop",
+      reason: "edit wiki page",
       path: page.path,
       baseRevision: preview.baseRevision,
       resultRevision: page.version,
@@ -617,6 +622,38 @@ export async function archiveMemoryArtifact(
   forgetPage(config, page);
 }
 
+export interface RestorePageMaintenanceChangeInput {
+  path: string;
+  commitId: string;
+  expectedVersion: string;
+  expectedHead: string;
+  current: MemoryArtifactDetail;
+}
+
+export async function restorePageMaintenanceChange(
+  config: AppConfig,
+  input: RestorePageMaintenanceChangeInput,
+): Promise<MemoryArtifactDetailResponse> {
+  const summary = await pageForPath(config, input.path);
+  const page = await restoreWikiMaintenanceChange(config, {
+    pageId: summary.pageId,
+    commitId: input.commitId,
+    expectedVersion: input.expectedVersion,
+    expectedHead: input.expectedHead,
+  });
+  rememberPage(config, page);
+  return {
+    artifact: {
+      ...artifactSummary(page),
+      revision: page.version,
+      content: bodyOnly(page.content),
+      editableContent: page.path === "health.md" ? null : page.content,
+      timeline: input.current.timeline,
+      frontmatter: pageFrontmatter(page),
+    },
+  };
+}
+
 export interface PageHistoryParams {
   path?: string;
   limit?: number;
@@ -642,6 +679,8 @@ export async function getPageHistory(
       sequence: commits.length - index,
       actor: commit.actor,
       origin: origin(commit.origin),
+      rawOrigin: commit.origin,
+      reason: commit.reason,
       path: change?.after?.path ?? change?.before?.path ?? page.path,
       baseRevision: change?.before?.versionId ?? "",
       resultRevision: change?.after?.versionId ?? "",

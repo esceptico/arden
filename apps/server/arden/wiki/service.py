@@ -933,6 +933,93 @@ class WikiService:
         )
         return commit.commit_id
 
+    def restore_maintenance_change(
+        self,
+        page_id: str,
+        maintenance_commit_id: str,
+        *,
+        expected_version: str,
+        expected_head: str,
+    ) -> tuple[WikiPageRecord, str]:
+        """Reverse one exact Maintenance update without overwriting later edits."""
+
+        current_head = self.repository.head
+        if current_head != expected_head:
+            raise RevisionConflictError(
+                f"current head changed: expected {expected_head!r}, found {current_head!r}"
+            )
+        snapshot = self._snapshot(strict_names=True, at=expected_head)
+        current = self._index(snapshot).pages.get(page_id)
+        if current is None or current.page.lifecycle != "active":
+            raise KeyError(f"unknown active wiki page: {page_id}")
+        if page_id == WIKI_HEALTH_RESOURCE_ID:
+            raise WikiValidationError("health page is backend-managed")
+        if current.resource.version_id != expected_version:
+            raise RevisionConflictError(f"resource {page_id} changed: expected {expected_version}")
+
+        page_history = self.repository.history(resource_id=page_id, start=expected_head)
+        commit = next(
+            (candidate for candidate in page_history if candidate.commit_id == maintenance_commit_id),
+            None,
+        )
+        if commit is None:
+            raise KeyError(f"Maintenance commit is not a reachable change for page {page_id}: {maintenance_commit_id}")
+        if commit.origin != WIKI_MAINTENANCE_ORIGIN:
+            raise WikiValidationError(f"commit is not a Wiki Maintenance change: {maintenance_commit_id}")
+        matching = tuple(
+            change
+            for change in commit.changes
+            if (change.after or change.before) is not None
+            and (change.after or change.before).resource_id == page_id
+        )
+        if len(matching) != 1:
+            raise WikiValidationError(
+                f"commit must contain exactly one page update with before and after versions: {page_id}"
+            )
+        change = matching[0]
+        before_version = change.before
+        after_version = change.after
+        if change.action != "update" or before_version is None or after_version is None:
+            raise WikiValidationError(
+                f"commit must contain exactly one page update with before and after versions: {page_id}"
+            )
+        if not page_history or page_history[0].commit_id != maintenance_commit_id:
+            raise RevisionConflictError(
+                f"resource {page_id} changed after Maintenance commit {maintenance_commit_id}"
+            )
+        if current.resource.version_id != after_version.version_id:
+            raise RevisionConflictError(
+                f"resource {page_id} changed after Maintenance commit {maintenance_commit_id}"
+            )
+
+        before = self._parse(before_version, self.repository.read_version(before_version))
+        reason = f"restore Maintenance commit {maintenance_commit_id}"
+        restored_commit_id = self.apply_maintenance_updates(
+            (
+                WikiMaintenancePageUpdate(
+                    page_id=page_id,
+                    expected_version=expected_version,
+                    title=before.title,
+                    aliases=before.aliases,
+                    body=before.body,
+                ),
+            ),
+            base_head=expected_head,
+            reason=reason,
+            idempotency_key=self._key(
+                "maintenance-restore",
+                page_id,
+                maintenance_commit_id,
+                expected_version,
+                expected_head,
+            ),
+            actor="user:desktop",
+            origin="desktop.restore",
+        )
+        if restored_commit_id == expected_head:
+            raise WikiValidationError(f"Maintenance commit has no restorable page fields: {maintenance_commit_id}")
+        return self.read_page(page_id), restored_commit_id
+
     def publish_health(self, *, body: bytes, base_head: str | None) -> Commit | None:
         """Publish the single backend-owned, read-only health page.
 

@@ -17,6 +17,13 @@ export function patchStat(patch: string): string {
   return `+${added} −${removed}`;
 }
 
+export function canRestorePageEdit(event: PageEditEvent, currentPageVersion: string | null): boolean {
+  return event.rawOrigin === "wiki.maintenance"
+    && event.baseRevision.length > 0
+    && event.resultRevision.length > 0
+    && event.resultRevision === currentPageVersion;
+}
+
 type DiffKind = "add" | "del" | "ctx" | "hunk";
 
 interface DiffSegment {
@@ -277,12 +284,20 @@ export function MemoryDiffOverlay({
   open,
   onOpenChange,
   onExitComplete,
+  currentPageVersion = null,
+  restorePending = false,
+  restoreError = null,
+  onRestore,
 }: {
   event: PageEditEvent;
   path: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onExitComplete: () => void;
+  currentPageVersion?: string | null;
+  restorePending?: boolean;
+  restoreError?: string | null;
+  onRestore?: () => void;
 }) {
   const overlayRef = useRef<HTMLElement>(null);
   const panelRef = useRef<HTMLElement>(null);
@@ -366,6 +381,7 @@ export function MemoryDiffOverlay({
 
   const when = event.occurredAt.slice(0, 16).replace("T", " ");
   const title = (path.split("/").at(-1)?.replace(/\.md$/i, "") || path).replace(/[-_]+/g, " ");
+  const restoreEligible = onRestore != null && canRestorePageEdit(event, currentPageVersion);
 
   return createPortal(
     <section
@@ -384,9 +400,12 @@ export function MemoryDiffOverlay({
         aria-label="Close page edit diff"
         onClick={requestClose}
       />
-      <aside ref={panelRef} className="sheet3 mw-dv" tabIndex={-1}>
+      <aside ref={panelRef} className="sheet3 mw-dv" tabIndex={-1} aria-busy={restorePending || undefined}>
         <div className="sheet3-head mw-dv-head">
-          <span className="pc mw-dv-title" title={path}>{when} · {event.actor} / <b>{title}</b></span>
+          <span className="pc mw-dv-title" title={path}>
+            {when} · {event.actor} / <b>{title}</b>
+            {event.reason ? <> · {event.reason}</> : null}
+          </span>
           <span className="s3d mw-dv-meta">{patchStat(event.patch)}</span>
         </div>
         <div className="sheet3-body mw-dv-body scroll-fade">
@@ -409,7 +428,13 @@ export function MemoryDiffOverlay({
           ))}
         </div>
         <footer className="mw-dv-foot">
+          {restoreError && <span role="alert" className="s3d">{restoreError}</span>}
           <Button variant="quiet" size="md" onClick={requestClose}>Close</Button>
+          {restoreEligible && (
+            <Button variant="primary" size="md" disabled={restorePending} onClick={onRestore}>
+              {restorePending ? "Restoring…" : "Restore"}
+            </Button>
+          )}
         </footer>
       </aside>
     </section>,

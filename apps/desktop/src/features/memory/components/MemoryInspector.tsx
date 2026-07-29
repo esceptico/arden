@@ -317,6 +317,7 @@ export function MemoryInspector({
           event={localDiffEvent}
           path={page.path}
           open={localDiffOpen}
+          currentPageVersion={page.revision}
           onOpenChange={setLocalDiffOpen}
           onExitComplete={() => setLocalDiffEvent(null)}
         />

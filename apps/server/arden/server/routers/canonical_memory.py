@@ -62,6 +62,11 @@ class WikiVersionRequest(_Request):
     expected_head: str = Field(min_length=1, max_length=128)
 
 
+class WikiMaintenanceRestoreRequest(_Request):
+    expected_version: str = Field(min_length=1, max_length=128)
+    expected_head: str = Field(min_length=1, max_length=128)
+
+
 class PinnedFactRequest(_Request):
     request_id: str = Field(min_length=1, max_length=200)
     text: str = Field(min_length=1, max_length=20_000)
@@ -384,6 +389,37 @@ def wiki_page_history(
         service.repository.get(page_id, at=head)
         commits = service.repository.history(resource_id=page_id, start=head, limit=limit)
         return {"page_id": page_id, "repository_head": head, "commits": _json_value(commits)}
+    except Exception as exc:
+        raise _wiki_error(service, page_id, exc) from exc
+
+
+@wiki_router.post("/pages/{page_id}/history/{commit_id}/restore")
+async def restore_wiki_maintenance_change(
+    page_id: str,
+    commit_id: str,
+    body: WikiMaintenanceRestoreRequest,
+    request: Request,
+) -> dict[str, object]:
+    service = _wiki_service(request)
+    try:
+        _record, restored_commit_id = await asyncio.to_thread(
+            service.restore_maintenance_change,
+            page_id,
+            commit_id,
+            expected_version=body.expected_version,
+            expected_head=body.expected_head,
+        )
+        projection_pending = await _project_committed_wiki_change(request, restored_commit_id)
+        head, record = _page_snapshot(service, page_id)
+        result = _page_json(
+            record,
+            head,
+            content=True,
+            timestamps=_page_timestamps(service, head, {page_id}),
+        )
+        if projection_pending:
+            result["projection_pending"] = True
+        return result
     except Exception as exc:
         raise _wiki_error(service, page_id, exc) from exc
 
