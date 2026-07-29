@@ -1282,6 +1282,7 @@ class AutomationStore:
         self.conn = conn
         self.outbox = outbox
         self._settlement_lock = asyncio.Lock()
+        self._idempotency_lock = asyncio.Lock()
 
     async def init_schema(self) -> None:
         # _SCHEMA must run first: it CREATEs tables (idempotent for both
@@ -2014,65 +2015,66 @@ class AutomationStore:
             parent_fire_at=parent_fire_at,
             attempt_n=attempt_n,
         )
-        # aiosqlite defaults to autocommit-ish behavior via implicit transactions
-        # on DML. We open one explicit transaction so the claim and the row
-        # share atomicity.
-        await self.conn.execute("BEGIN")
-        try:
-            cursor = await self.conn.execute(
-                _SQL_TRY_CLAIM_IDEMPOTENCY,
-                (
-                    claim_id,
-                    scope,
-                    key,
-                    parent_automation_id,
-                    parent_fire_at,
-                    attempt_n,
-                    (claimed_at or datetime.now(UTC)).isoformat(),
-                    automation.task_id,
-                ),
-            )
-            if cursor.rowcount == 0:
+        # aiosqlite serializes statements, not transactions. Keep this paired
+        # claim/insert transaction intact when concurrent tool calls share the
+        # same store connection.
+        async with self._idempotency_lock:
+            await self.conn.execute("BEGIN")
+            try:
+                cursor = await self.conn.execute(
+                    _SQL_TRY_CLAIM_IDEMPOTENCY,
+                    (
+                        claim_id,
+                        scope,
+                        key,
+                        parent_automation_id,
+                        parent_fire_at,
+                        attempt_n,
+                        (claimed_at or datetime.now(UTC)).isoformat(),
+                        automation.task_id,
+                    ),
+                )
+                if cursor.rowcount == 0:
+                    await self.conn.rollback()
+                    return False
+                await self.conn.execute(
+                    _SQL_INSERT,
+                    (
+                        automation.task_id,
+                        automation.name,
+                        automation.description,
+                        automation.description_source,
+                        automation.prompt,
+                        automation.model,
+                        _serialize_triggers(automation.triggers),
+                        int(automation.enabled),
+                        automation.created_at.isoformat(),
+                        automation.last_run_at.isoformat() if automation.last_run_at else None,
+                        automation.next_run_at.isoformat() if automation.next_run_at else None,
+                        automation.last_result,
+                        automation.running_since.isoformat() if automation.running_since else None,
+                        int(automation.auto_approve),
+                        automation.handler,
+                        int(automation.builtin),
+                        automation.cooldown_minutes,
+                        automation.kind,
+                        automation.max_iterations,
+                        int(automation.iteration_count),
+                        automation.stop_when,
+                        automation.max_age_days,
+                        automation.thread_id,
+                        int(automation.read_history),
+                        automation.parent_automation_id,
+                        automation.idempotency_key,
+                        automation.idempotency_scope,
+                        json.dumps(automation.tool_scope) if automation.tool_scope else None,
+                    ),
+                )
+                await self.conn.commit()
+                return True
+            except BaseException:
                 await self.conn.rollback()
-                return False
-            await self.conn.execute(
-                _SQL_INSERT,
-                (
-                    automation.task_id,
-                    automation.name,
-                    automation.description,
-                    automation.description_source,
-                    automation.prompt,
-                    automation.model,
-                    _serialize_triggers(automation.triggers),
-                    int(automation.enabled),
-                    automation.created_at.isoformat(),
-                    automation.last_run_at.isoformat() if automation.last_run_at else None,
-                    automation.next_run_at.isoformat() if automation.next_run_at else None,
-                    automation.last_result,
-                    automation.running_since.isoformat() if automation.running_since else None,
-                    int(automation.auto_approve),
-                    automation.handler,
-                    int(automation.builtin),
-                    automation.cooldown_minutes,
-                    automation.kind,
-                    automation.max_iterations,
-                    int(automation.iteration_count),
-                    automation.stop_when,
-                    automation.max_age_days,
-                    automation.thread_id,
-                    int(automation.read_history),
-                    automation.parent_automation_id,
-                    automation.idempotency_key,
-                    automation.idempotency_scope,
-                    json.dumps(automation.tool_scope) if automation.tool_scope else None,
-                ),
-            )
-            await self.conn.commit()
-            return True
-        except BaseException:
-            await self.conn.rollback()
-            raise
+                raise
 
     async def list_claims_for_parent(self, parent_automation_id: str) -> list[IdempotencyClaim]:
         rows = await self.conn.execute_fetchall(_SQL_LIST_CLAIMS_FOR_PARENT, (parent_automation_id,))

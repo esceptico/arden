@@ -37,7 +37,9 @@ async def session_service(tmp_path: Path):
     conn = await database.connect(tmp_path / "sessions.db")
     s = SessionStore(conn)
     await s.init_schema()
-    yield SessionService(s)
+    service = SessionService(s)
+    await service.provision(name="active chat", session_id="sess-1")
+    yield service
     await conn.close()
 
 
@@ -800,6 +802,19 @@ async def test_create_loop_rejects_empty_prompt(store: AutomationStore, session_
 
     with pytest.raises(ValueError, match="prompt"):
         await svc.create_loop(session_id="s", prompt="   ", every="5m")
+
+
+@pytest.mark.asyncio
+async def test_create_loop_rejects_missing_or_archived_session(store: AutomationStore, session_service):
+    sched, _ = _make_scheduler(store)
+    svc = AutomationService(store=store, scheduler=sched, session_service=session_service)
+
+    with pytest.raises(ValueError, match="unavailable"):
+        await svc.create_loop(session_id="missing", prompt="watch CI", every="5m")
+
+    assert await session_service.archive("sess-1")
+    with pytest.raises(ValueError, match="unavailable"):
+        await svc.create_loop(session_id="sess-1", prompt="watch CI", every="5m")
 
 
 @pytest.mark.asyncio
@@ -1771,6 +1786,7 @@ async def test_create_loop_sets_thread_id_and_read_history(store: AutomationStor
     with full history)."""
     sched, _ = _make_scheduler(store)
     svc = AutomationService(store=store, scheduler=sched, session_service=session_service)
+    await session_service.provision(name="canonical chat", session_id="sess-canon")
 
     loop = await svc.create_loop(
         session_id="sess-canon",

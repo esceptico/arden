@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
+from pydantic import ValidationError
 
 import arden.database as database
 from arden.automation.models import Automation
@@ -47,6 +48,7 @@ async def store_and_svc(tmp_path: Path):
     session_store = SessionStore(session_conn)
     await session_store.init_schema()
     session_service = SessionService(session_store)
+    await session_service.provision(name="active chat", session_id="sess-1")
     sched = Scheduler(store=store, build_deps=lambda: None)
     svc = AutomationService(store=store, scheduler=sched, session_service=session_service)
     now = datetime.now(UTC)
@@ -96,9 +98,9 @@ def _registry() -> ToolRegistry:
     return registry
 
 
-def _execution(svc: AutomationService, loop_task_id: str | None) -> ToolExecution:
+def _execution(svc: AutomationService, loop_task_id: str | None, session_id: str = "sess-1") -> ToolExecution:
     ctx = ToolContext(
-        session_state=SessionState(session_id="sess-1", started_at=datetime.now(UTC)),
+        session_state=SessionState(session_id=session_id, started_at=datetime.now(UTC)),
         registry=_registry(),
         run=RunContext(run_id="run-1", loop_task_id=loop_task_id),
         io=IOBridge(),
@@ -179,12 +181,19 @@ def test_automation_display_description_is_bounded():
         UpdateAutomationInput(task_id="bounded", description="x" * 221)
 
 
+def test_create_automation_schema_does_not_expose_session_binding():
+    properties = CreateAutomationInput.model_json_schema()["properties"]
+
+    assert "thread_id" not in properties
+    assert "read_history" not in properties
+
+
 # --- create_automation / create_loop tool wiring for channel-aware fields ---
 
 
 @pytest.mark.asyncio
 async def test_create_automation_idempotency_claim_dedupes(store_and_svc):
-    _, svc = store_and_svc
+    store, svc = store_and_svc
     execution = _execution(svc, loop_task_id=None)
 
     args = CreateAutomationInput(
@@ -209,36 +218,54 @@ async def test_create_automation_idempotency_claim_dedupes(store_and_svc):
     assert not second.is_error
     assert "Skipped" in second.content
 
+    created = next(a for a in await store.list_all() if a.name == "daily brief")
+    channels = [
+        session
+        for session in await svc.session_service.list_sessions(limit=10)
+        if session["origin_automation_id"] == created.task_id
+    ]
+    assert len(channels) == 1
+    assert channels[0]["session_id"] == created.thread_id
+
 
 @pytest.mark.asyncio
-async def test_create_automation_passes_thread_id_and_read_history(store_and_svc):
+async def test_create_automation_cannot_bind_an_arbitrary_session(store_and_svc):
     store, svc = store_and_svc
     execution = _execution(svc, loop_task_id=None)
 
-    args = CreateAutomationInput(
-        name="thread automation",
-        description="Posts into a specific thread.",
-        prompt="Post into a specific thread.",
-        trigger_type="time",
-        every="1h",
-    )
-    result = await create_automation(
-        execution,
-        args.model_copy(
-            update={
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        CreateAutomationInput.model_validate(
+            {
+                "name": "channel automation",
+                "description": "Posts into its own channel.",
+                "prompt": "Post into its own channel.",
+                "trigger_type": "time",
+                "every": "1h",
                 "thread_id": "sess-target",
                 "read_history": True,
                 "tool_scope": ["slack_search", "slack_post_message"],
             }
-        ),
+        )
+    args = CreateAutomationInput(
+        name="channel automation",
+        description="Posts into its own channel.",
+        prompt="Post into its own channel.",
+        trigger_type="time",
+        every="1h",
+        tool_scope=["slack_search", "slack_post_message"],
     )
+    result = await create_automation(execution, args)
     assert not result.is_error
 
     rows = await store.list_all()
-    created = next(a for a in rows if a.name == "thread automation")
-    assert created.thread_id == "sess-target"
+    created = next(a for a in rows if a.name == "channel automation")
+    assert created.thread_id != "sess-target"
     assert created.read_history is True
     assert created.tool_scope == ["slack_search", "slack_post_message"]
+    channel = await svc.session_service.load(created.thread_id)
+    assert channel is not None
+    assert channel.state.session_type == "channel"
+    assert channel.state.origin_automation_id == created.task_id
 
 
 @pytest.mark.asyncio
@@ -440,6 +467,42 @@ async def test_create_loop_explicit_parent_overrides_ctx(store_and_svc):
     rows = await store.list_all()
     child = next(a for a in rows if a.prompt == "watch CI yet again")
     assert child.parent_automation_id == "explicit-parent"
+
+
+@pytest.mark.asyncio
+async def test_create_loop_attaches_the_exact_current_chat(store_and_svc):
+    store, svc = store_and_svc
+    await svc.session_service.provision(name="other chat", session_id="sess-other")
+    execution = _execution(svc, loop_task_id=None, session_id="sess-1")
+
+    result = await create_loop(execution, CreateLoopInput(prompt="watch CI", every="5m"))
+
+    assert not result.is_error
+    loop = next(a for a in await store.list_all() if a.kind == "loop" and a.prompt == "watch CI")
+    assert loop.thread_id == "sess-1"
+
+
+@pytest.mark.asyncio
+async def test_create_loop_rejects_missing_current_chat(store_and_svc):
+    _, svc = store_and_svc
+    execution = _execution(svc, loop_task_id=None, session_id="missing-chat")
+
+    result = await create_loop(execution, CreateLoopInput(prompt="watch CI", every="5m"))
+
+    assert result.is_error
+    assert result.outcome.error.code == "invalid_arguments"
+
+
+@pytest.mark.asyncio
+async def test_create_loop_rejects_archived_current_chat(store_and_svc):
+    _, svc = store_and_svc
+    assert await svc.session_service.archive("sess-1")
+    execution = _execution(svc, loop_task_id=None)
+
+    result = await create_loop(execution, CreateLoopInput(prompt="watch CI", every="5m"))
+
+    assert result.is_error
+    assert result.outcome.error.code == "invalid_arguments"
 
 
 @pytest.mark.asyncio

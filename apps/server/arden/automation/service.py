@@ -1,3 +1,4 @@
+import hashlib
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
@@ -14,6 +15,9 @@ from arden.context.models import SessionState
 from arden.integrations.slack.client import SlackClient
 from arden.llm.models import get_models
 from arden.services.session import SessionService
+
+_AUTOMATION_CHANNEL_SUFFIX = ":channel"
+_IDEMPOTENT_AUTOMATION_PREFIX = "automation-"
 
 
 def _build_trigger_and_next_run(
@@ -174,16 +178,66 @@ class AutomationService:
                 resolved.append(t)
         return resolved
 
-    async def _provision_channel(self, name: str, task_id: str, area_id: str | None = None) -> SessionState:
+    async def _provision_channel(
+        self,
+        name: str,
+        task_id: str,
+        area_id: str | None = None,
+        *,
+        announce: bool = True,
+    ) -> tuple[SessionState, bool]:
         """Create the durable channel session that owns an automation's
         activity. SessionService.provision announces it (SESSION_CREATED) so
         connected desktops add the sidebar row live instead of after reload."""
-        return await self.session_service.provision(
+        channel_id = f"{task_id}{_AUTOMATION_CHANNEL_SUFFIX}"
+        _candidate, created = await self.session_service.provision_if_absent(
             name=name,
             session_type="channel",
             origin_automation_id=task_id,
             area_id=area_id,
+            session_id=channel_id,
+            announce=False,
         )
+        existing = await self.session_service.store.load_session(channel_id)
+        if existing is None:
+            raise RuntimeError(f"automation channel {channel_id!r} disappeared during provisioning")
+        state = existing.state
+        if state.session_type != "channel" or state.origin_automation_id != task_id:
+            raise ValueError(f"automation channel {channel_id!r} belongs to another owner")
+        restored = False
+        if await self.session_service.is_archived(channel_id):
+            if not await self.session_service.restore(channel_id):
+                raise RuntimeError(f"automation channel {channel_id!r} could not be restored")
+            restored = True
+        if announce and (created or restored):
+            await self.session_service.announce_created(state, len(existing.messages))
+        return state, created
+
+    async def _require_active_session(self, session_id: str) -> None:
+        if await self.session_service.store.load_session(session_id) is None or await self.session_service.is_archived(
+            session_id
+        ):
+            raise ValueError(f"session {session_id!r} is unavailable")
+
+    @staticmethod
+    def _idempotent_task_id(
+        scope: str,
+        key: str,
+        parent_automation_id: str | None,
+        parent_fire_at: str | None,
+        attempt_n: int | None,
+    ) -> str:
+        claim = "\x1f".join(
+            (
+                scope,
+                key,
+                parent_automation_id or "\x00",
+                parent_fire_at or "\x00",
+                str(attempt_n) if attempt_n is not None else "\x00",
+            )
+        )
+        digest = hashlib.sha256(claim.encode()).hexdigest()[:16]
+        return f"{_IDEMPOTENT_AUTOMATION_PREFIX}{digest}"
 
     @staticmethod
     def _normalize_prompt(prompt: str) -> str:
@@ -478,23 +532,40 @@ class AutomationService:
         )
 
         now = datetime.now(UTC)
+        if idempotency_key is not None and idempotency_scope is None:
+            raise ValueError("idempotency_scope required when idempotency_key is set")
+
         # Stable ids (e.g. area:{key}) let seeding find its rows across boots.
         # Area-owned children mint under area:{key}:{slug} — that prefix IS
         # the ownership boundary area_run_automation enforces. Everything
         # else gets a random slug.
         if task_id is None:
-            slug = generate_slug(2)
-            task_id = f"area:{area_id}:{slug}" if area_id else slug
+            if idempotency_key is not None:
+                task_id = self._idempotent_task_id(
+                    idempotency_scope,
+                    idempotency_key,
+                    parent_automation_id,
+                    parent_fire_at,
+                    attempt_n,
+                )
+                if area_id is not None:
+                    task_id = f"area:{area_id}:{task_id}"
+            else:
+                slug = generate_slug(2)
+                task_id = f"area:{area_id}:{slug}" if area_id else slug
 
-        if idempotency_key is not None and idempotency_scope is None:
-            raise ValueError("idempotency_scope required when idempotency_key is set")
-
-        # Auto-provision a durable "channel" session that owns this
-        # automation's activity. Binding thread_id routes the automation
-        # through the existing session-bound iteration path (no new
-        # execution path), which persists the full turn and emits live SSE.
-        if thread_id is None:
-            channel = await self._provision_channel(name, task_id, area_id=area_id)
+        # Agent-created automations always get a dedicated channel. Its stable
+        # id makes an idempotent retry reuse the original channel rather than
+        # creating an orphan before the idempotency claim is resolved.
+        dedicated_channel = thread_id is None
+        channel_created = False
+        if dedicated_channel:
+            channel, channel_created = await self._provision_channel(
+                name,
+                task_id,
+                area_id=area_id,
+                announce=False,
+            )
             thread_id = channel.session_id
             read_history = True
 
@@ -522,20 +593,51 @@ class AutomationService:
             tool_scope=tool_scope,
         )
 
-        if idempotency_key is not None:
-            claimed = await self.store.save_with_claim(
-                automation,
-                scope=idempotency_scope,
-                key=idempotency_key,
-                parent_automation_id=parent_automation_id,
-                parent_fire_at=parent_fire_at,
-                attempt_n=attempt_n,
-                claimed_at=now,
+        try:
+            if idempotency_key is not None:
+                claimed = await self.store.save_with_claim(
+                    automation,
+                    scope=idempotency_scope,
+                    key=idempotency_key,
+                    parent_automation_id=parent_automation_id,
+                    parent_fire_at=parent_fire_at,
+                    attempt_n=attempt_n,
+                    claimed_at=now,
+                )
+                if not claimed:
+                    existing = await self.store.get(task_id)
+                    if channel_created and existing is None:
+                        if not await self.session_service.archive(thread_id):
+                            raise RuntimeError(f"automation channel {thread_id!r} could not be archived")
+                        existing = await self.store.get(task_id)
+                    if dedicated_channel and existing is not None:
+                        await self._provision_channel(existing.name, task_id, area_id=area_id)
+                    return None
+            else:
+                await self.store.save(automation)
+        except BaseException as error:
+            if not channel_created or await self.store.get(task_id) is not None:
+                raise
+            try:
+                archived = await self.session_service.archive(thread_id)
+                if not archived:
+                    raise RuntimeError(f"automation channel {thread_id!r} could not be archived")
+            except BaseException as compensation_error:
+                raise ExceptionGroup(
+                    "automation creation and channel compensation failed",
+                    [error, compensation_error],
+                ) from error
+            if winner := await self.store.get(task_id):
+                await self._provision_channel(winner.name, task_id, area_id=area_id)
+            raise
+        if dedicated_channel:
+            channel, _ = await self._provision_channel(
+                name,
+                task_id,
+                area_id=area_id,
+                announce=False,
             )
-            if not claimed:
-                return None
-        else:
-            await self.store.save(automation)
+            await self.session_service.announce_created(channel)
         return automation
 
     async def backfill_channels(self) -> int:
@@ -546,7 +648,7 @@ class AutomationService:
         for task in await self.store.list_all():
             if task.handler is not None or task.kind == "loop" or task.thread_id is not None:
                 continue
-            channel = await self._provision_channel(task.name, task.task_id)
+            channel, _created = await self._provision_channel(task.name, task.task_id)
             updated = replace(task, thread_id=channel.session_id, read_history=True)
             await self.store.update_metadata(updated)
             count += 1
@@ -594,6 +696,7 @@ class AutomationService:
             raise ValueError("prompt required")
         if not session_id:
             raise ValueError("session_id required")
+        await self._require_active_session(session_id)
 
         triggers, _ = _build_trigger_and_next_run(
             trigger_type="time",

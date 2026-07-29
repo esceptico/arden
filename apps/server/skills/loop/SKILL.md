@@ -5,7 +5,7 @@ description: Use when the user types /loop or asks to repeat/poll/babysit someth
 
 # /loop — schedule a recurring prompt in this chat
 
-The user wants a repeating task scoped to THIS conversation. Parse their input, call `create_loop` once, then **execute the parsed prompt inline yourself** so the user sees a first iteration immediately instead of waiting for the next scheduler tick.
+The user wants a repeating task scoped to THIS conversation. Parse their input and call `create_loop` once. It attaches the current active chat automatically; it cannot target another chat.
 
 ## Parsing (in priority order)
 
@@ -40,6 +40,8 @@ Call `create_loop` once with:
 - `max_iterations` (optional): if the user implied a bounded duration ("for the next hour", "10 times").
 - `max_age_days` (optional): if the user implied a deadline ("for the next week", "today only").
 - `stop_when` (optional): natural-language predicate when there's a clear stop condition.
+
+`create_loop` always attaches this current chat. Do not create a separate channel or use `create_automation` when the user asked for a loop here.
 
 ## After create_loop succeeds — confirm and stop
 

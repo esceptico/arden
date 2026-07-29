@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -27,7 +28,9 @@ async def session_service(tmp_path: Path):
     conn = await database.connect(tmp_path / "sessions.db")
     store = SessionStore(conn)
     await store.init_schema()
-    yield SessionService(store)
+    service = SessionService(store)
+    await service.provision(name="active chat", session_id="sess-1")
+    yield service
     await conn.close()
 
 
@@ -51,6 +54,24 @@ async def test_global_claim_ignores_parent(store: AutomationStore):
     # Global scope: same key conflicts regardless of which parent.
     assert await store.try_claim_idempotency(scope="global", key="news-7", automation_task_id="child-a")
     assert not await store.try_claim_idempotency(scope="global", key="news-7", automation_task_id="child-b")
+
+
+@pytest.mark.asyncio
+async def test_idempotent_area_child_keeps_area_ownership_prefix(service: AutomationService):
+    area = await service.session_service.create_area(name="Health")
+    child = await service.create(
+        name="daily evidence",
+        description="Collects evidence for the Area.",
+        prompt="Collect the next evidence.",
+        trigger_type="time",
+        every="1d",
+        area_id=area["area_id"],
+        idempotency_key="daily-evidence",
+        idempotency_scope="global",
+    )
+
+    assert child is not None
+    assert child.task_id.startswith(f"area:{area['area_id']}:")
 
 
 @pytest.mark.asyncio
@@ -341,6 +362,31 @@ async def test_create_run_scope_isolated_per_fire(service: AutomationService):
 
 
 @pytest.mark.asyncio
+async def test_concurrent_idempotent_creates_share_one_channel(service: AutomationService):
+    async def create() -> object:
+        return await service.create(
+            name="daily brief",
+            description="Posts the daily brief.",
+            prompt="Post the daily brief.",
+            trigger_type="time",
+            at="09:00",
+            idempotency_key="daily-brief",
+            idempotency_scope="global",
+        )
+
+    results = await asyncio.gather(create(), create())
+
+    created = [automation for automation in results if automation is not None]
+    assert len(created) == 1
+    channels = [
+        session
+        for session in await service.session_service.list_sessions(limit=10)
+        if session["origin_automation_id"] == created[0].task_id
+    ]
+    assert len(channels) == 1
+
+
+@pytest.mark.asyncio
 async def test_create_loop_with_idempotency(service: AutomationService):
     first = await service.create_loop(
         session_id="sess-1",
@@ -445,6 +491,12 @@ async def test_create_rolls_back_claim_on_save_failure(service: AutomationServic
             idempotency_key="item-99",
             idempotency_scope="global",
         )
+    archived_channels = [
+        session
+        for session in await service.session_service.list_archived(limit=10)
+        if session["origin_automation_id"] is not None
+    ]
+    assert len(archived_channels) == 1
 
     # Restore and retry — claim should have rolled back so this must succeed.
     monkeypatch.setattr(store.conn, "execute", real_execute)
@@ -459,12 +511,74 @@ async def test_create_rolls_back_claim_on_save_failure(service: AutomationServic
     )
     assert retry is not None
     assert retry.idempotency_key == "item-99"
+    channels = [
+        session
+        for session in await service.session_service.list_sessions(limit=10)
+        if session["origin_automation_id"] == retry.task_id
+    ]
+    assert len(channels) == 1
+    assert channels[0]["session_id"] == retry.thread_id
+
+
+@pytest.mark.asyncio
+async def test_concurrent_failed_creator_cannot_archive_winning_channel(
+    service: AutomationService,
+    store: AutomationStore,
+    monkeypatch,
+):
+    first_at_save = asyncio.Event()
+    second_at_save = asyncio.Event()
+    channel_archived = asyncio.Event()
+    original_save_with_claim = store.save_with_claim
+    original_archive = service.session_service.archive
+    save_calls = 0
+
+    async def racing_save_with_claim(automation, **kwargs):
+        nonlocal save_calls
+        save_calls += 1
+        if save_calls == 1:
+            first_at_save.set()
+            await second_at_save.wait()
+            raise RuntimeError("simulated first-writer failure")
+        second_at_save.set()
+        await channel_archived.wait()
+        return await original_save_with_claim(automation, **kwargs)
+
+    async def signaling_archive(session_id: str) -> bool:
+        archived = await original_archive(session_id)
+        channel_archived.set()
+        return archived
+
+    monkeypatch.setattr(store, "save_with_claim", racing_save_with_claim)
+    monkeypatch.setattr(service.session_service, "archive", signaling_archive)
+
+    kwargs = {
+        "name": "shared work",
+        "description": "Runs shared work.",
+        "prompt": "Run shared work.",
+        "trigger_type": "time",
+        "every": "1h",
+        "idempotency_key": "shared-work",
+        "idempotency_scope": "global",
+    }
+    first = asyncio.create_task(service.create(**kwargs))
+    await first_at_save.wait()
+    second = asyncio.create_task(service.create(**kwargs))
+    results = await asyncio.gather(first, second, return_exceptions=True)
+
+    winner = next(result for result in results if not isinstance(result, BaseException))
+    failure = next(result for result in results if isinstance(result, BaseException))
+    assert isinstance(failure, RuntimeError)
+    assert winner is not None
+    assert winner.thread_id is not None
+    assert not await service.session_service.is_archived(winner.thread_id)
 
 
 @pytest.mark.asyncio
 async def test_create_loop_rolls_back_claim_on_save_failure(
     service: AutomationService, store: AutomationStore, monkeypatch
 ):
+    await service.session_service.provision(name="retry chat", session_id="sess-x")
     real_execute = store.conn.execute
 
     async def flaky_execute(sql, *args, **kwargs):

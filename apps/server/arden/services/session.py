@@ -136,6 +136,7 @@ class SessionService:
         agent_status: str | None = None,
         area_id: str | None = None,
         chat_model: str | None = None,
+        announce: bool = True,
     ) -> tuple[SessionState, bool]:
         """Create a session only if its deterministic id is still unclaimed."""
         state = self.create(
@@ -151,8 +152,8 @@ class SessionService:
             chat_model=chat_model,
         )
         created = await self.store.create_session_if_absent(state)
-        if created:
-            await self._publish(SessionCreatedEvent(session=session_row(state, 0)))
+        if created and announce:
+            await self.announce_created(state)
         return state, created
 
     async def provision_state(self, state: SessionState, messages: list[dict] | None = None) -> SessionState:
@@ -210,6 +211,9 @@ class SessionService:
         """Push a sidebar row delta for a metadata change (rename) the client has
         no other live signal for."""
         await self._publish(SessionActivityEvent(session=session_row(session_state, message_count)))
+
+    async def announce_created(self, session_state: SessionState, message_count: int = 0) -> None:
+        await self._publish(SessionCreatedEvent(session=session_row(session_state, message_count)))
 
     async def record_chat_run_started(self, run_id: str, session_id: str, metadata: dict | None = None) -> None:
         try:

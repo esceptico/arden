@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from arden.automation.models import Automation
 from arden.automation.triggers import build_trigger
@@ -26,6 +26,7 @@ CREATE_AUTOMATION_DESCRIPTION = (
     "substitute a scheduled scan. "
     "Time triggers support two modes: schedule ('at' a specific time) or interval ('every' N hours/minutes). "
     "Optional model override per automation (falls back to default chat model when omitted). "
+    "Each automation gets its own dedicated channel for results; use create_loop to repeat work in this chat. "
     "Read-only by default, set auto_approve=true for autonomous memory/note writes (skips approvals)."
     f" {SPAWN_SURFACE_GUIDANCE}"
 )
@@ -132,6 +133,8 @@ def _automation_label(automation: Automation) -> str:
 
 
 class CreateAutomationInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(description="Short human-readable label (e.g. 'morning briefing', 'pre-meeting prep')")
     prompt: str = Field(description="Full instructions the automation executes on each run.", min_length=1)
     description: str | None = Field(
@@ -200,22 +203,6 @@ class CreateAutomationInput(BaseModel):
             "Tool-name allowlist patterns (exact names or prefixes like 'slack_*') granting tools ON TOP of the "
             "always-available read-only toolset. List the write/action tools the prompt needs; read tools are "
             "always there. Omit for read-only access."
-        ),
-    )
-    thread_id: str | None = Field(
-        default=None,
-        description=(
-            "Target session/channel the automation posts into when it fires. "
-            "Use a channel session_id (see create_session). When omitted, the run "
-            "is unattached (no chat surface)."
-        ),
-    )
-    read_history: bool = Field(
-        default=False,
-        description=(
-            "Only meaningful with thread_id. When true the automation reads the "
-            "target session's history as iteration context; false means it just "
-            "posts a fresh run."
         ),
     )
     parent_automation_id: str | None = Field(
@@ -348,9 +335,7 @@ async def approve_create_automation(execution: ToolExecution, args: CreateAutoma
     if args.auto_approve:
         lines.append("Auto-approve: yes (autonomous writes, skips approvals)")
     lines.append(f"Tools: {', '.join(args.tool_scope)}" if args.tool_scope else "Tools: read-only (no scope grant)")
-    if args.thread_id:
-        mode = "iteration" if args.read_history else "post"
-        lines.append(f"Target session: {args.thread_id} ({mode} mode)")
+    lines.append("Results: dedicated automation channel")
     try:
         inferred_parent, _ = await _resolve_parent_context(execution, args.parent_automation_id, args.idempotency_scope)
         parent_conflict: str | None = None
@@ -433,8 +418,6 @@ async def create_automation(execution: ToolExecution, args: CreateAutomationInpu
             start=args.start,
             end=args.end,
             model=args.model,
-            thread_id=args.thread_id,
-            read_history=args.read_history,
             parent_automation_id=parent_automation_id,
             idempotency_key=args.idempotency_key,
             idempotency_scope=args.idempotency_scope,
@@ -463,8 +446,7 @@ async def create_automation(execution: ToolExecution, args: CreateAutomationInpu
     if automation.model:
         lines.append(f"Model: {automation.model}")
     if automation.thread_id:
-        mode = "iteration" if automation.read_history else "post"
-        lines.append(f"Target session: {automation.thread_id} ({mode} mode)")
+        lines.append(f"Channel: {automation.thread_id}")
     if automation.parent_automation_id:
         lines.append(f"Parent: {automation.parent_automation_id}")
     if automation.next_run_at:
@@ -958,7 +940,6 @@ async def create_loop(execution: ToolExecution, args: CreateLoopInput) -> ToolRe
     svc = execution.ctx.services.get("automation")
     if svc is None:
         return _automation_unavailable()
-
     try:
         parent_automation_id, parent_fire_at = await _resolve_parent_context(
             execution, args.parent_automation_id, args.idempotency_scope

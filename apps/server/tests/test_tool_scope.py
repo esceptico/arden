@@ -159,6 +159,18 @@ def test_registry_read_only_names_lists_only_read_tools():
     assert set(reg.read_only_names()) == {"slack_search", "read_file"}
 
 
+def test_executor_scope_adds_read_floor_without_unrelated_writes():
+    from arden.tools.executor import ToolExecutor
+
+    executor = ToolExecutor(get_services=lambda: {"wiki": object(), "wiki_post_commit": object()})
+    names = {schema["function"]["name"] for schema in executor.get_tools(scope=("create_wiki_page",))}
+
+    assert {"create_wiki_page", "list_wiki_pages", "read_wiki_page", "wiki_links"} <= names
+    assert "edit_wiki_page" not in names
+    assert "archive_wiki_page" not in names
+    assert "send_email" not in names
+
+
 def test_is_custodian_task_id_matches_only_bare_area_tasks():
     from arden.areas.agent import is_custodian_task_id
 

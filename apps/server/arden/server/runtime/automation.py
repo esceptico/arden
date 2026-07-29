@@ -546,7 +546,6 @@ class AutomationRuntime:
         channel_name = f"{area_.title} agent"
         display_description = self._area_display_description(area_)
         if existing is None:
-            channel = await self.automation_service._provision_channel(channel_name, task_id, area_id=area_.key)
             await self.automation_service.create(
                 task_id=task_id,
                 name=channel_name,
@@ -555,8 +554,7 @@ class AutomationRuntime:
                 triggers=[trigger],
                 auto_approve=contract.auto_approve,
                 tool_scope=contract.tool_scope,
-                thread_id=channel.session_id,
-                read_history=True,
+                area_id=area_.key,
             )
             if paused:
                 await self.stores.automations.set_enabled(task_id, False)
@@ -565,7 +563,11 @@ class AutomationRuntime:
 
         repaired = False
         if existing.handler == AREA_AGENT_HANDLER or existing.thread_id is None:
-            channel = await self.automation_service._provision_channel(channel_name, task_id, area_id=area_.key)
+            channel, _ = await self.automation_service._provision_channel(
+                channel_name,
+                task_id,
+                area_id=area_.key,
+            )
             existing.handler = None
             existing.thread_id = channel.session_id
             existing.read_history = True

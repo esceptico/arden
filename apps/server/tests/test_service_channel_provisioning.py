@@ -99,6 +99,66 @@ async def test_create_emits_session_created_on_automation_bus(store: AutomationS
 
 
 @pytest.mark.asyncio
+async def test_failed_create_does_not_announce_transient_channel(
+    store: AutomationStore,
+    session_service: SessionService,
+    monkeypatch,
+):
+    registry = BusRegistry()
+    bus = registry.get_or_create(AUTOMATION_BUS_KEY)
+    session_service.set_event_sink(bus.emit)
+    service = AutomationService(
+        store=store,
+        scheduler=Scheduler(store=store, build_deps=lambda: None),
+        session_service=session_service,
+    )
+    queue = bus.subscribe()
+
+    async def fail_save(_automation):
+        raise RuntimeError("simulated save failure")
+
+    monkeypatch.setattr(store, "save", fail_save)
+
+    with pytest.raises(RuntimeError, match="simulated save failure"):
+        await service.create(
+            name="broken work",
+            description="Fails before becoming durable.",
+            prompt="Fail.",
+            trigger_type="time",
+            every="1h",
+        )
+
+    with pytest.raises(asyncio.QueueEmpty):
+        queue.get_nowait()
+
+
+@pytest.mark.asyncio
+async def test_restored_deterministic_channel_is_announced(
+    store: AutomationStore,
+    session_service: SessionService,
+):
+    registry = BusRegistry()
+    bus = registry.get_or_create(AUTOMATION_BUS_KEY)
+    session_service.set_event_sink(bus.emit)
+    service = AutomationService(
+        store=store,
+        scheduler=Scheduler(store=store, build_deps=lambda: None),
+        session_service=session_service,
+    )
+    channel, _ = await service._provision_channel("restored work", "restore-me")
+    queue = bus.subscribe()
+    assert await session_service.archive(channel.session_id)
+
+    restored, created = await service._provision_channel("restored work", "restore-me")
+
+    assert not created
+    assert restored.session_id == channel.session_id
+    record = queue.get_nowait()
+    assert record.event.type == EventType.SESSION_CREATED
+    assert record.event.session["session_id"] == channel.session_id
+
+
+@pytest.mark.asyncio
 async def test_channel_content_save_emits_session_activity(session_service: SessionService):
     registry = BusRegistry()
     bus = registry.get_or_create(AUTOMATION_BUS_KEY)

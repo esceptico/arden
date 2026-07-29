@@ -286,6 +286,86 @@ async def test_runtime_reconciles_permission_downgrades_in_place():
     assert automation.next_run_at is not None
 
 
+@pytest.mark.asyncio
+async def test_runtime_seeds_area_through_dedicated_channel_creation():
+    calls: list[dict] = []
+
+    class Automations:
+        async def get(self, task_id):
+            return None
+
+        async def set_enabled(self, task_id, enabled):
+            raise AssertionError("active Area should not be paused")
+
+    class AutomationService:
+        async def create(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(task_id=kwargs["task_id"])
+
+    from arden.server.runtime.automation import AutomationRuntime
+
+    runtime = AutomationRuntime.__new__(AutomationRuntime)
+    runtime.stores = SimpleNamespace(automations=Automations(), sessions=object())
+    runtime.automation_service = AutomationService()
+
+    await runtime._sync_area_automation(AREA, paused=False, index=0)
+
+    assert len(calls) == 1
+    assert calls[0]["task_id"] == "area:o-1a"
+    assert calls[0]["area_id"] == "o-1a"
+    assert "thread_id" not in calls[0]
+
+
+@pytest.mark.asyncio
+async def test_runtime_repairs_legacy_area_channel_with_tuple_result():
+    automation = SimpleNamespace(
+        task_id="area:o-1a",
+        handler="area_agent",
+        thread_id=None,
+        name="old",
+        description=None,
+        description_source=None,
+        prompt="old",
+        auto_approve=True,
+        tool_scope=None,
+        enabled=True,
+        last_result="old result",
+        triggers=[],
+        next_run_at=None,
+    )
+    updated: list[object] = []
+
+    class Automations:
+        async def get(self, task_id):
+            return automation
+
+        async def update_metadata(self, value):
+            updated.append(value)
+
+    class Sessions:
+        async def rename(self, session_id, name):
+            return None
+
+        async def rename_if_empty(self, session_id, name):
+            return None
+
+    class AutomationService:
+        async def _provision_channel(self, name, task_id, area_id=None):
+            return SimpleNamespace(session_id="area:o-1a:channel"), False
+
+    from arden.server.runtime.automation import AutomationRuntime
+
+    runtime = AutomationRuntime.__new__(AutomationRuntime)
+    runtime.stores = SimpleNamespace(automations=Automations(), sessions=Sessions())
+    runtime.automation_service = AutomationService()
+
+    await runtime._sync_area_automation(AREA, paused=False, index=0)
+
+    assert automation.thread_id == "area:o-1a:channel"
+    assert automation.handler is None
+    assert updated == [automation]
+
+
 def test_system_blocks_include_area_block():
     from arden.core.prompts import build_system_blocks
 

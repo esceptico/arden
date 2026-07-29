@@ -55,9 +55,11 @@ Fire every N user messages in a session. The counter resets per session.
 Every 10 turns → "Extract durable facts from the conversation"
 ```
 
-## Channel automations
+## Automation channels
 
-An automation can own a durable **channel session**. Its runs land in a real session whose transcript you can open, read, and reply to, and where approvals surface in-session. This is how iteration-style monitors and [area agents](/guides/areas) keep run-to-run memory instead of starting fresh each fire.
+Each normal automation gets a new durable **channel session** by default. Its
+runs land in a transcript you can open, read, and reply to. A loop is different:
+it always attaches the current chat instead of creating a channel.
 
 ## Tool scoping
 
@@ -124,6 +126,8 @@ Examples that may need auto-approve:
 - posting to Slack
 - creating calendar events
 - writing files or updating external systems
+- creating, editing, or archiving results below `automations/` in the managed
+  wiki
 
 ## Notifications
 
