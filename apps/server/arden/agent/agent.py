@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from uuid import uuid4
 
 from judgeval import Tracer
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from arden.agent.hooks import AgentHooks
 from arden.agent.llm.client import LLMClient
@@ -341,31 +341,43 @@ class Agent:
         return Result(text=text, stop_reason=reason, steps=step, usage=self._usage, output=self._output)
 
     async def _generate_output(self, messages: list[dict]) -> dict | None:
-        """AI SDK-style structured output: ONE extra constrained completion
-        over the finished conversation (their `output` option — the docs'
-        `stopWhen + 1` step). Text and object stay separate: the transcript
-        keeps its prose, the caller gets a schema-validated dump. The model's
-        constrained response is a trust boundary — a failure here degrades to
-        no output, never a crash of the run that already produced its text."""
+        """Generate a validated structured result, with one bounded repair."""
         assert self.output_schema is not None
+        instruction = "Return the structured result for this run now."
+        response = await self.client.complete(
+            self.model,
+            # A USER message, not SYSTEM: Anthropic hoists system content
+            # out of the message list, leaving the conversation ending on
+            # the assistant turn — which newer Claude models reject as
+            # unsupported prefill. Every provider accepts a trailing user turn.
+            [*messages, {"role": Role.USER, "content": instruction}],
+            response_format=self.output_schema,
+        )
+        content = response.choices[0].message.content
         try:
+            parsed = (
+                content if isinstance(content, self.output_schema) else self.output_schema.model_validate_json(content)
+            )
+        except ValidationError as error:
             response = await self.client.complete(
                 self.model,
-                # A USER message, not SYSTEM: Anthropic hoists system content
-                # out of the message list, leaving the conversation ending on
-                # the assistant turn — which newer Claude models reject as
-                # unsupported prefill. Every provider accepts a trailing user turn.
-                [*messages, {"role": Role.USER, "content": "Return the structured result for this run now."}],
+                [
+                    *messages,
+                    {"role": Role.USER, "content": instruction},
+                    {"role": Role.ASSISTANT, "content": str(content or "")},
+                    {
+                        "role": Role.USER,
+                        "content": f"The structured result above is invalid:\n{error}\n"
+                        "Return one corrected structured result now.",
+                    },
+                ],
                 response_format=self.output_schema,
             )
             content = response.choices[0].message.content
             parsed = (
                 content if isinstance(content, self.output_schema) else self.output_schema.model_validate_json(content)
             )
-            return parsed.model_dump()
-        except Exception:
-            _logger.warning("Structured output step failed for schema %s", self.output_schema.__name__, exc_info=True)
-            return None
+        return parsed.model_dump()
 
     def _mark_provider_loaded_tools(
         self,

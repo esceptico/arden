@@ -7,7 +7,7 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from arden.agent import (
     Agent,
@@ -103,7 +103,12 @@ class FakeLLM:
         yield item
 
     async def complete(self, model, messages, **kwargs):
-        return self._queue.pop(0)
+        self.call_count += 1
+        self.last_messages = list(messages)
+        item = self._queue.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
 
 
 class FakeExecutor:
@@ -1404,18 +1409,36 @@ async def test_output_schema_runs_constrained_final_step():
 
 
 @pytest.mark.asyncio
-async def test_output_schema_failure_degrades_to_none():
+async def test_output_schema_validation_failure_gets_one_repair():
     llm = FakeLLM(
         [
             _response(text="prose report"),
             _response(text="not json at all"),
+            _response(text='{"ok": true, "note": "repaired"}'),
         ]
     )
     agent = _make_agent(llm, FakeExecutor({}), output_schema=_Verdict)
     result = await agent.run(_msgs())
     assert result.stop_reason == StopReason.END_TURN
     assert result.text == "prose report"
-    assert result.output is None
+    assert result.output == {"ok": True, "note": "repaired"}
+    assert llm.call_count == 3
+    assert "structured result above is invalid" in llm.last_messages[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_output_schema_repair_failure_is_not_reported_as_success():
+    llm = FakeLLM(
+        [
+            _response(text="prose report"),
+            _response(text="not json at all"),
+            _response(text="still not json"),
+        ]
+    )
+    agent = _make_agent(llm, FakeExecutor({}), output_schema=_Verdict)
+
+    with pytest.raises(ValidationError):
+        await agent.run(_msgs())
 
 
 @pytest.mark.asyncio
