@@ -31,7 +31,13 @@ from arden.memory.facts.plan_store import (
     FactPlanOwnershipError,
     FactPlanRequestConflictError,
 )
-from arden.memory.facts.service import DueFactReview, FactPrincipal, FactScopeError, FactService
+from arden.memory.facts.service import (
+    DueFactReview,
+    FactPostCommitError,
+    FactPrincipal,
+    FactScopeError,
+    FactService,
+)
 from arden.tools.core import ToolResult, tool
 from arden.tools.core.context import ToolExecution
 from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
@@ -236,11 +242,8 @@ async def _sources(execution: ToolExecution, scope: tuple[str, str | None]) -> l
     sessions = execution.ctx.services.get("session")
     if sessions is None:
         return sources
-    try:
-        page = await sessions.list_messages(session_id, limit=20)
-        messages = page.get("messages", []) if isinstance(page, dict) else []
-    except Exception:
-        return sources
+    page = await sessions.list_messages(session_id, limit=20)
+    messages = page.get("messages", []) if isinstance(page, dict) else []
     row = next((item for item in reversed(messages) if item.get("role") == "user" and item.get("message_id")), None)
     if row is None:
         return sources
@@ -639,6 +642,23 @@ def _fact_refs(facts: tuple[Fact, ...] | list[Fact]) -> tuple[ToolSourceRef, ...
 
 
 def _failure(exc: Exception) -> ToolResult:
+    if isinstance(exc, FactPostCommitError):
+        return ToolResult.failure(
+            code="post_commit_failed",
+            message=(
+                f"Fact plan {exc.result.plan_id} committed, but derived memory state did not refresh. "
+                "Retry commit_fact_changes with the same plan_id."
+            ),
+            preview="Facts committed; refresh failed",
+            retryable=True,
+            recovery_action="Retry commit_fact_changes with the same plan_id.",
+            data={
+                "plan_id": exc.result.plan_id,
+                "committed": True,
+                "events": [_event_data(event) for event in exc.result.events],
+                "facts": [_fact_data(fact, include_sources=True) for fact in exc.result.facts],
+            },
+        )
     if isinstance(exc, FactScopeError | FactPlanOwnershipError):
         return ToolResult.failure(
             code="permission_denied",

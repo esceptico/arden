@@ -7,7 +7,14 @@ import pytest
 from arden.memory.facts.consumer_store import FactConsumerStore
 from arden.memory.facts.ledger import FactLedger
 from arden.memory.facts.synthesis import FactSynthesis, FactSynthesisError, SynthesisFact
-from arden.revisions import ChangeSet, Create, ManagedFileRepository, RevisionConflictError, Update
+from arden.revisions import (
+    ChangeSet,
+    CorruptRepositoryError,
+    Create,
+    ManagedFileRepository,
+    RevisionConflictError,
+    Update,
+)
 from arden.wiki.pages import create_page, extract_generated_region, update_generated_region, update_page_title
 from arden.wiki.service import WikiService
 
@@ -753,6 +760,42 @@ async def test_trusted_replay_skips_newer_invalid_candidate(tmp_path: Path) -> N
 
         assert result.replayed and result.advanced
         assert wiki.read_page(page.page.page_id).page.metadata["generated_from_revision"] == "wrong"
+    finally:
+        await consumers.close()
+
+
+@pytest.mark.asyncio
+async def test_trusted_replay_surfaces_corrupt_published_page(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ledger, consumers, wiki, synthesis = await _service(tmp_path)
+    try:
+        ledger.commit(
+            ledger.plan(
+                [_change("one", "First"), _change("two", "Second")],
+                actor="test",
+                origin="test",
+                reason="seed",
+            )
+        )
+        feed = ledger.changes_since(None)
+        facts = ledger.facts_at(feed.through_revision)
+        routes, _, _, base_head = synthesis._targets(feed, facts)
+        targets = await synthesis._render_targets(routes, facts)
+        reason = f"synthesize facts start..{feed.through_revision}"
+        wiki.publish_generated(
+            targets,
+            source_revision=feed.through_revision or "",
+            base_head=base_head,
+            reason=reason,
+        )
+
+        def corrupt_read(_resource_id: str, *, at: str | None = None) -> bytes:
+            assert at is not None
+            raise CorruptRepositoryError("published page blob is corrupt")
+
+        monkeypatch.setattr(wiki.repository, "read", corrupt_read)
+
+        with pytest.raises(CorruptRepositoryError, match="published page blob is corrupt"):
+            synthesis._has_trusted_publication(feed, reason)
     finally:
         await consumers.close()
 

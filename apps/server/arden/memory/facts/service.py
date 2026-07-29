@@ -83,6 +83,18 @@ class FactScopeError(PermissionError):
     """A fact operation falls outside the principal's readable/writeable scopes."""
 
 
+class FactPostCommitError(RuntimeError):
+    """A committed plan could not notify its derived-state consumers.
+
+    The canonical commit is durable. Retry :meth:`FactService.commit` with the
+    same plan id to repeat the idempotent notification.
+    """
+
+    def __init__(self, result: FactCommitResult) -> None:
+        super().__init__(f"fact plan {result.plan_id} committed but post-commit processing failed")
+        self.result = result
+
+
 @dataclass
 class FactService:
     """Facts API: durable plan workflow state above canonical append-only facts."""
@@ -261,16 +273,18 @@ class FactService:
             await self.plans.release(plan_id, owner_id=principal.owner_id)
             raise
         await self.plans.mark_committed(plan_id, owner_id=principal.owner_id)
-        # Notification is deliberately at-least-once. A replay after an
-        # uncertain callback must be able to re-arm the idempotent debounce.
+        fact_ids = tuple(dict.fromkeys(event.fact_id for event in events))
+        facts = tuple(await asyncio.gather(*(asyncio.to_thread(self.ledger.get, fact_id) for fact_id in fact_ids)))
+        result = FactCommitResult(plan_id, events, facts)
+        # Notification is deliberately at-least-once. A replay after a failed
+        # callback re-arms the idempotent debounce without rewriting the facts.
         if self.post_commit is not None:
             try:
                 await self.post_commit()
-            except Exception:
+            except Exception as exc:
                 _logger.warning("post-commit fact notification failed", exc_info=True)
-        fact_ids = tuple(dict.fromkeys(event.fact_id for event in events))
-        facts = tuple(await asyncio.gather(*(asyncio.to_thread(self.ledger.get, fact_id) for fact_id in fact_ids)))
-        return FactCommitResult(plan_id, events, facts)
+                raise FactPostCommitError(result) from exc
+        return result
 
     async def _stored_plan(self, stored: StoredFactPlan) -> FactPlan:
         plan = stored.plan()

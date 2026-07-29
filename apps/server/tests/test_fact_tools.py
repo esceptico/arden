@@ -152,6 +152,61 @@ async def test_plan_and_commit_use_server_derived_identity_scope_and_provenance(
         await connection.close()
 
 
+async def test_commit_reports_durable_fact_when_post_commit_refresh_fails(tmp_path: Path) -> None:
+    service, connection = await _service(tmp_path)
+
+    async def fail_refresh() -> None:
+        raise RuntimeError("projection unavailable")
+
+    service.post_commit = fail_refresh
+    try:
+        plan = await plan_fact_changes_tool.execute(
+            _execution(service, tool_id="plan-1", tool_name="plan_fact_changes"),
+            changes=[_create(fact_id="one", text="One fact")],
+            reason="User stated this.",
+        )
+
+        result = await commit_fact_changes_tool.execute(
+            _execution(service, tool_id="commit-1", tool_name="commit_fact_changes"),
+            plan_id=plan.data["plan_id"],
+        )
+
+        assert result.is_error
+        assert result.outcome is not None and result.outcome.error is not None
+        assert result.outcome.error.code == "post_commit_failed"
+        assert result.outcome.error.retryable is True
+        assert result.data["committed"] is True
+        assert result.data["facts"][0]["fact_id"] == "one"
+        assert service.ledger.get("one").text == "One fact"
+    finally:
+        await connection.close()
+
+
+async def test_planning_surfaces_an_available_session_service_failure(tmp_path: Path) -> None:
+    service, connection = await _service(tmp_path)
+
+    class _FailingSessionService:
+        async def list_messages(self, _session_id: str, *, limit: int) -> dict[str, object]:
+            raise RuntimeError("session store unavailable")
+
+    try:
+        execution = _execution(service, tool_id="plan-1", tool_name="plan_fact_changes")
+        execution.ctx.services["session"] = _FailingSessionService()
+
+        result = await plan_fact_changes_tool.execute(
+            execution,
+            changes=[_create(fact_id="one", text="One fact")],
+            reason="User stated this.",
+        )
+
+        assert result.is_error
+        assert result.outcome is not None and result.outcome.error is not None
+        assert result.outcome.error.code == "fact_service_error"
+        assert result.outcome.error.retryable is True
+    finally:
+        await connection.close()
+
+
 async def test_fact_source_time_normalizes_utc_without_false_precision() -> None:
     assert source_time("2026-07-28") == ("2026-07-28", "day")
     assert source_time("2026-07-28T12:00:00+04:00") == ("2026-07-28T12:00:00+04:00", "second")

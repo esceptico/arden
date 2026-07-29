@@ -21,7 +21,7 @@ from arden.memory.facts.plan_store import (
     deserialize_fact_plan,
     serialize_fact_plan,
 )
-from arden.memory.facts.service import FactPrincipal, FactScopeError, FactService
+from arden.memory.facts.service import FactPostCommitError, FactPrincipal, FactScopeError, FactService
 
 pytestmark = pytest.mark.asyncio
 
@@ -128,22 +128,31 @@ async def test_post_commit_is_at_least_once_and_only_after_durable_commit(tmp_pa
         await conn.close()
 
 
-async def test_post_commit_failure_does_not_undo_a_fact_commit(tmp_path: Path) -> None:
+async def test_post_commit_failure_surfaces_a_retryable_committed_result(tmp_path: Path) -> None:
     service, plans, conn, _ = await _service(tmp_path)
     principal = _principal()
+    attempts = 0
 
     async def fail() -> None:
-        raise RuntimeError("scheduler unavailable")
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("scheduler unavailable")
 
     service.post_commit = fail
     try:
         preview = await _plan(service, principal)
 
-        result = await service.commit(principal, preview.plan_id)
+        with pytest.raises(FactPostCommitError) as raised:
+            await service.commit(principal, preview.plan_id)
 
-        assert [fact.fact_id for fact in result.facts] == ["a"]
+        assert [fact.fact_id for fact in raised.value.result.facts] == ["a"]
         assert service.ledger.get("a").text == "One"
         assert (await plans.get(preview.plan_id, owner_id=principal.owner_id)).status is FactPlanStatus.COMMITTED
+
+        retried = await service.commit(principal, preview.plan_id)
+        assert [fact.fact_id for fact in retried.facts] == ["a"]
+        assert attempts == 2
     finally:
         await conn.close()
 

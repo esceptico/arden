@@ -427,15 +427,11 @@ class FactSynthesis:
                 if after is None or after.state is not ResourceState.ACTIVE or not after.path.endswith(".md"):
                     valid = False
                     break
-                try:
-                    page = self._wiki.repository.read(after.resource_id, at=commit.commit_id)
-                    if (
-                        parse_page(page, expected_page_id=after.resource_id).metadata.get("generated_from_revision")
-                        != through
-                    ):
-                        valid = False
-                        break
-                except Exception:
+                page = self._wiki.repository.read(after.resource_id, at=commit.commit_id)
+                if (
+                    parse_page(page, expected_page_id=after.resource_id).metadata.get("generated_from_revision")
+                    != through
+                ):
                     valid = False
                     break
             if valid:
