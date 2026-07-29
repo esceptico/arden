@@ -374,6 +374,7 @@ def test_wiki_update_reports_committed_edit_when_curator_enqueue_fails(tmp_path:
 
 def test_wiki_create_reports_committed_page_when_projection_fails(tmp_path: Path) -> None:
     with _client(tmp_path) as client:
+
         async def fail_projection() -> None:
             raise RuntimeError("wiki projection failed")
 

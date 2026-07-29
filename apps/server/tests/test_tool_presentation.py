@@ -19,7 +19,7 @@ def test_search_tools_carry_no_grouping_noun():
         ("slack_search", "slack"),
         ("calendar", "calendar"),
         ("search_transcripts", "_sessions"),
-        ("memory_search", "_memory"),
+        ("search_facts", "_facts"),
         ("search_text", "_system"),
         ("tool_search", "_system"),
         ("search_google_drive", "google_drive"),

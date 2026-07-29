@@ -11,7 +11,6 @@ from arden.automation.service import AutomationService
 from arden.automation.store import AutomationStore
 from arden.automation.triggers import TimeTrigger
 from arden.context.models import SessionState
-from arden.services.chat import _loop_task_id_from_client_id
 from arden.tools.automation import (
     CreateAutomationInput,
     CreateLoopInput,
@@ -73,6 +72,7 @@ async def store_and_svc(tmp_path: Path):
     try:
         yield store, svc
     finally:
+        await session_conn.close()
         await conn.close()
 
 
@@ -106,16 +106,6 @@ def _execution(svc: AutomationService, loop_task_id: str | None) -> ToolExecutio
         background_tasks=BackgroundTaskRegistry(session_id="sess-1"),
     )
     return ToolExecution(tool_id="t1", tool_name="schedule_wakeup", ctx=ctx)
-
-
-def test_loop_task_id_parsing():
-    assert _loop_task_id_from_client_id("loop:loop-shy-otter:3") == "loop-shy-otter"
-    # task_id can itself contain dashes; only the trailing iter is stripped.
-    assert _loop_task_id_from_client_id("loop:loop-a-b-c:42") == "loop-a-b-c"
-    assert _loop_task_id_from_client_id(None) is None
-    assert _loop_task_id_from_client_id("user-1234") is None
-    # Malformed: no iter suffix.
-    assert _loop_task_id_from_client_id("loop:onlytaskid") is None
 
 
 @pytest.mark.asyncio
@@ -345,6 +335,7 @@ async def test_create_automation_message_trigger_resolves_channels(tmp_path: Pat
     assert trigger.channel_ids == ["C-feel-good-inc", "C-eng-bugs"]
     assert trigger.from_user_id == "U-sam"
     assert trigger.contains == ["bug", "error"]
+    await session_conn.close()
     await conn.close()
 
 
@@ -391,6 +382,7 @@ async def test_update_automation_to_message_trigger_resolves_channels(tmp_path: 
     assert len(msg) == 1
     assert msg[0].channel_ids == ["C-eng-bugs"]
     assert msg[0].contains == ["bug"]
+    await session_conn.close()
     await conn.close()
 
 

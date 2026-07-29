@@ -61,14 +61,6 @@ _BY_NAME: dict[str, tuple[str, str | None]] = {
     "create_google_sheet": ("table", None),
     "update_google_sheet": ("table", None),
     "append_google_sheet_rows": ("table", None),
-    # Memory
-    "memory_search": ("brain", None),
-    "recall": ("brain", None),
-    "remember": ("brain", None),
-    "forget": ("brain", None),
-    "memory_read": ("brain", None),
-    "memory_patch": ("brain", None),
-    "memory_tree": ("brain", None),
     # Sessions
     "search_transcripts": ("history", None),
     "read_session": ("history", None),
@@ -82,7 +74,10 @@ _BY_SOURCE: dict[str, str] = {
     "calendar": "calendar",
     "google_drive": "folder",
     "web": "globe",
-    "_memory": "brain",
+    "_facts": "brain",
+    "_wiki": "brain",
+    "_fact_maintenance": "brain",
+    "_wiki_maintenance": "brain",
     "_sessions": "history",
 }
 

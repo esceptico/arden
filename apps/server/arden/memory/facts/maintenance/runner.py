@@ -28,6 +28,8 @@ ORIGIN = "memory.maintenance"
 _ACTOR = f"automation:{BUILTIN_MEMORY_CONSOLIDATE_ID}"
 _MAX_FACT_TEXT = 4_000
 _MAX_REASON = 1_000
+
+
 class FactMaintenanceCandidateProvider(Protocol):
     """Optional semantic fallback over a rebuildable fact index."""
 
