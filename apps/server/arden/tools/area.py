@@ -1,4 +1,5 @@
 import asyncio
+import json
 from hashlib import sha256
 
 from pydantic import BaseModel, Field
@@ -106,17 +107,21 @@ async def area_page_read(execution: ToolExecution, args: AreaPageReadInput) -> T
     _wiki, head, record = target
     raw = record.content.decode("utf-8")
     content = format_lines_with_pagination(raw, args.offset, args.limit)
+    metadata = {
+        "page_id": record.page.page_id,
+        "page_path": record.resource.path,
+        "offset": args.offset,
+        "version": record.resource.version_id,
+        "head": head,
+        "size": len(record.content),
+    }
     return ToolResult(
-        content=content,
+        content=(
+            f"Area page metadata: {json.dumps(metadata, ensure_ascii=False, separators=(',', ':'))}\n\n"
+            f"Area page content:\n{content}"
+        ),
         preview=record.page.title,
-        data={
-            "page_id": record.page.page_id,
-            "page_path": record.resource.path,
-            "offset": args.offset,
-            "version": record.resource.version_id,
-            "head": head,
-            "size": len(record.content),
-        },
+        data=metadata,
     )
 
 
@@ -180,16 +185,17 @@ async def area_page_write(execution: ToolExecution, args: AreaPageWriteInput) ->
 
 
 def _updated_result(before, after, head: str | None, content: str, preview: str) -> ToolResult:
+    metadata = {
+        "page_id": after.page.page_id,
+        "page_path": after.resource.path,
+        "version": after.resource.version_id,
+        "head": head,
+        "size": len(after.content),
+    }
     return ToolResult(
-        content=content,
+        content=(f"{content}\nArea page metadata: {json.dumps(metadata, ensure_ascii=False, separators=(',', ':'))}"),
         preview=preview,
-        data={
-            "page_id": after.page.page_id,
-            "page_path": after.resource.path,
-            "version": after.resource.version_id,
-            "head": head,
-            "size": len(after.content),
-        },
+        data=metadata,
         outcome=ToolOutcome(
             status=ToolOutcomeStatus.SUCCEEDED,
             effect=ToolEffect(

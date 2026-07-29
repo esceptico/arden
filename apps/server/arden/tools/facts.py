@@ -910,7 +910,7 @@ async def plan_fact_changes(execution: ToolExecution, args: PlanFactChangesInput
             reason=args.reason,
         )
         return ToolResult(
-            content=preview.preview,
+            content=f"Fact change plan ID: {preview.plan_id}\n\n{preview.preview}",
             preview=f"{len(preview.events)} planned event(s)",
             data={
                 "plan_id": preview.plan_id,

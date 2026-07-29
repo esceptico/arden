@@ -160,6 +160,9 @@ async def test_read_wiki_page_resolves_each_exact_identity_and_returns_revision_
 
         assert not result.is_error
         assert "[" in result.content and "lines" in result.content
+        assert f'"version":"{wiki.read_page("interaction-lab").resource.version_id}"' in result.content
+        assert f'"head":"{wiki.repository.head}"' in result.content
+        assert "Wiki page content:" in result.content
         assert result.data["page"] == {
             "page_id": "interaction-lab",
             "path": "topics/interaction-lab.md",

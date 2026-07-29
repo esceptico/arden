@@ -136,8 +136,11 @@ async def test_plan_and_commit_use_server_derived_identity_scope_and_provenance(
         assert event["payload"]["scope"] == {"kind": "area", "key": "project"}
         assert event["sources"]["items"][0]["kind"] == "tool_call"
 
+        plan_id = plan.content.splitlines()[0].removeprefix("Fact change plan ID: ")
+        assert plan_id == plan.data["plan_id"]
         committed = await commit_fact_changes_tool.execute(
-            _execution(service, tool_id="commit-1", tool_name="commit_fact_changes"), plan_id=plan.data["plan_id"]
+            _execution(service, tool_id="commit-1", tool_name="commit_fact_changes"),
+            plan_id=plan_id,
         )
         assert not committed.is_error
         json.dumps(committed.data)

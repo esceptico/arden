@@ -219,11 +219,17 @@ def _resolve(wiki: WikiService, selector: WikiPageSelector) -> tuple[WikiPageRec
     return matches[0], snapshot.head
 
 
-def _bounded_content(content: str, *, offset: int, limit: int) -> tuple[str, bool]:
+def _bounded_content(
+    content: str,
+    *,
+    offset: int,
+    limit: int,
+    max_chars: int = _MAX_CONTENT_CHARS,
+) -> tuple[str, bool]:
     rendered = format_lines_with_pagination(content, offset, limit)
-    if len(rendered) <= _MAX_CONTENT_CHARS:
+    if len(rendered) <= max_chars:
         return rendered, False
-    return rendered[: _MAX_CONTENT_CHARS - len(_CONTENT_TRUNCATION)] + _CONTENT_TRUNCATION, True
+    return rendered[: max_chars - len(_CONTENT_TRUNCATION)] + _CONTENT_TRUNCATION, True
 
 
 def _bounded_text(value: str | None, limit: int) -> tuple[str | None, bool]:
@@ -345,13 +351,22 @@ async def read_wiki_page(execution: ToolExecution, args: ReadWikiPageInput) -> T
     if isinstance(resolved, ToolResult):
         return resolved
     record, head = resolved
-    content, truncated = _bounded_content(record.content.decode("utf-8"), offset=args.offset, limit=args.limit)
+    page = _page_data(record, head)
+    prefix = (
+        f"Wiki page metadata: {json.dumps(page, ensure_ascii=False, separators=(',', ':'))}\n\nWiki page content:\n"
+    )
+    content, truncated = _bounded_content(
+        record.content.decode("utf-8"),
+        offset=args.offset,
+        limit=args.limit,
+        max_chars=_MAX_CONTENT_CHARS - len(prefix),
+    )
     return ToolResult(
-        content=content,
+        content=prefix + content,
         preview=record.page.title,
         source_refs=(_page_ref(record),),
         data={
-            "page": _page_data(record, head),
+            "page": page,
             "offset": args.offset,
             "limit": args.limit,
             "content_truncated": truncated,

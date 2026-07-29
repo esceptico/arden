@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -86,18 +87,21 @@ async def test_area_page_tools_are_locked_to_active_area_page(tmp_path: Path) ->
     run = execution(wiki)
 
     read = await area_page_read(run, AreaPageReadInput())
+    metadata = json.loads(read.content.splitlines()[0].removeprefix("Area page metadata: "))
     patched = await area_page_patch(
         run,
         AreaPagePatchInput(
             old_text="Old status",
             new_text="Current status",
-            expected_version=read.data["version"],
-            expected_head=read.data["head"],
+            expected_version=metadata["version"],
+            expected_head=metadata["head"],
         ),
     )
 
     assert not read.is_error and "Old status" in read.content
     assert not patched.is_error and b"Current status" in wiki.read_page("area-health-page").content
+    assert f'"version":"{wiki.read_page("area-health-page").resource.version_id}"' in patched.content
+    assert f'"head":"{wiki.repository.head}"' in patched.content
     assert wiki.read_page("visa").page.body == b"Visa secret\n"
 
 
