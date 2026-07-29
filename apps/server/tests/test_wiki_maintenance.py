@@ -2,21 +2,18 @@ import json
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
 
 import arden.wiki.maintenance.runner as maintenance_module
 import arden.wiki.service as wiki_service_module
 from arden.revisions import ChangeSet, Create, ManagedFileRepository, Move, Update
+from arden.wiki.constants import WIKI_MAINTENANCE_FACT_DUPLICATE_EVIDENCE_PREFIX
 from arden.wiki.maintenance.runner import (
     WikiMaintenance,
     WikiMaintenanceConcernDraft,
     WikiMaintenanceDecision,
-    WikiMaintenanceMergeDraft,
     WikiMaintenanceUpdateDraft,
-    record_page_collision_review,
 )
 from arden.wiki.maintenance.store import (
-    TOPIC_PAGE_COLLISION_EVIDENCE_PREFIX,
     WikiMaintenanceReviewAction,
     WikiMaintenanceReviewInput,
     WikiMaintenanceStore,
@@ -129,331 +126,27 @@ async def test_pending_identical_evidence_is_not_asked_again_then_rejection_adva
 
 
 @pytest.mark.asyncio
-async def test_accepted_page_merge_uses_the_durable_maintenance_review_flow(tmp_path: Path) -> None:
+async def test_fact_duplicate_ask_survives_wiki_maintenance_review(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
-    canonical = create_page(page_id="arden", title="Arden", body=b"Canonical note.\n")
-    loser = create_page(page_id="old", title="Ntrp / Arden", body=b"Legacy note.\n")
-    source = create_page(page_id="source", title="Source", body=b"[[old]]\n")
-    source_commit = repo.commit(
-        ChangeSet(
-            operations=(
-                Create("arden", "arden.md", canonical.to_bytes()),
-                Create("old", "old.md", loser.to_bytes()),
-                Create("source", "source.md", source.to_bytes()),
-            ),
-            actor="User",
-            origin="desktop",
-            reason="create duplicate pages",
-            idempotency_key="seed-merge",
-        )
-    ).commit_id
+    source = _seed(repo)
     store = await WikiMaintenanceStore.open(tmp_path / "state.sqlite")
-    reviewer = _Reviewer(
-        WikiMaintenanceDecision(
-            outcome="needs_review",
-            concern=WikiMaintenanceConcernDraft(
-                key="duplicate-page", summary="Merge duplicate pages", proposal="Keep Arden and merge the legacy note."
-            ),
-            merge=WikiMaintenanceMergeDraft(canonical_page_token="P001", loser_page_token="P002"),
-        )
-    )
-    maintenance = WikiMaintenance(store, WikiService(repo), reviewer)
+    reviewer = _Reviewer(WikiMaintenanceDecision(outcome="no_change"))
     try:
-        pending_result = await maintenance.run()
-        assert pending_result.blocked
-        pending = (await store.list_pending())[0]
-        assert pending.proposal_json is not None and '"kind":"page_merge"' in pending.proposal_json
-        assert (await maintenance.run()).blocked
-        assert len(reviewer.reports) == 1
-        await store.resolve(
-            pending.review_id,
-            expected_generation=pending.generation,
-            action=WikiMaintenanceReviewAction.ACCEPT,
+        fact_ask = await store.record_fact_duplicate_review(
+            WikiMaintenanceReviewInput(
+                blocking_commit_id=source,
+                evidence_key=f"{WIKI_MAINTENANCE_FACT_DUPLICATE_EVIDENCE_PREFIX}first:second",
+                evidence_fingerprint="a" * 64,
+                summary="Duplicate pages block fact topic normalization.",
+            )
         )
 
-        applied = await maintenance.run()
-        assert applied.reload_required and applied.updated_pages == 1
-        assert (await store.get_watermark()).revision == source_commit
-        assert repo.get("old").state.value == "archived"
-        assert b"[[Arden]]" in repo.read("source")
-        assert not [
-            record
-            for record in WikiService(repo).list_pages(include_redirects=True)
-            if record.page.lifecycle == "redirect"
-        ]
-    finally:
-        await store.close()
+        result = await WikiMaintenance(store, WikiService(repo), reviewer).run()
 
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("canonical_kwargs", "loser_kwargs", "error"),
-    (
-        (
-            {"metadata": {"scope": "private"}},
-            {"metadata": {"scope": "shared"}},
-            "metadata conflict: scope",
-        ),
-        (
-            {
-                "body": b"<!-- generated -->\nCanonical facts.\n<!-- /generated -->\n",
-                "metadata": {"generated_from_revision": "a" * 64},
-            },
-            {
-                "body": b"<!-- generated -->\nLegacy facts.\n<!-- /generated -->\n",
-                "metadata": {"generated_from_revision": "b" * 64},
-            },
-            "matching valid generated provenance",
-        ),
-    ),
-    ids=("metadata-conflict", "generated-region-conflict"),
-)
-async def test_unsafe_model_merge_becomes_manual_non_executable_ask(
-    tmp_path: Path,
-    canonical_kwargs: dict[str, object],
-    loser_kwargs: dict[str, object],
-    error: str,
-) -> None:
-    repo = _repo(tmp_path)
-    canonical = create_page(page_id="canonical", title="Canonical", **canonical_kwargs)
-    loser = create_page(page_id="loser", title="Legacy", **loser_kwargs)
-    source = repo.commit(
-        ChangeSet(
-            operations=(
-                Create("canonical", "canonical.md", canonical.to_bytes()),
-                Create("loser", "legacy.md", loser.to_bytes()),
-            ),
-            actor="User",
-            origin="desktop",
-            reason="create duplicate pages",
-            idempotency_key=f"unsafe-merge-{error}",
-        )
-    ).commit_id
-    reviewer_calls = []
-
-    async def reviewer(report) -> WikiMaintenanceDecision:
-        reviewer_calls.append(report)
-        tokens = {record.page.page_id: token for token, record in report.page_tokens.items()}
-        return WikiMaintenanceDecision(
-            outcome="needs_review",
-            concern=WikiMaintenanceConcernDraft(
-                key="duplicate-page", summary="Merge duplicate pages", proposal="Keep the canonical page."
-            ),
-            merge=WikiMaintenanceMergeDraft(
-                canonical_page_token=tokens["canonical"],
-                loser_page_token=tokens["loser"],
-            ),
-        )
-
-    store = await WikiMaintenanceStore.open(tmp_path / "state.sqlite")
-    maintenance = WikiMaintenance(store, WikiService(repo), reviewer)
-    try:
-        blocked = await maintenance.run()
-
-        assert blocked.blocked and not blocked.reload_required
-        pending = (await store.list_pending())[0]
-        assert pending.proposal_json is None
-        assert error in pending.summary
-        assert "Manual reconciliation required" in pending.summary
-        assert repo.head == source
-        assert repo.get("canonical").state.value == "active"
-        assert repo.get("loser").state.value == "active"
-
-        await store.resolve(
-            pending.review_id,
-            expected_generation=pending.generation,
-            action=WikiMaintenanceReviewAction.RESOLVE_MANUAL,
-            decision_note="Resolved outside Wiki Maintenance.",
-        )
-        advanced = await maintenance.run()
-
-        assert advanced.complete and advanced.updated_pages == 0
+        assert result.advanced
         assert (await store.get_watermark()).revision == source
-        assert len(reviewer_calls) == 1
-        assert repo.head == source
-    finally:
-        await store.close()
-
-
-@pytest.mark.asyncio
-async def test_multiple_collision_asks_can_share_a_head_with_an_ordinary_ask(tmp_path: Path) -> None:
-    repo = _repo(tmp_path)
-    head = repo.commit(
-        ChangeSet(
-            operations=tuple(
-                Create(page_id, path, create_page(page_id=page_id, title=title).to_bytes())
-                for page_id, path, title in (
-                    ("a", "a.md", "A"),
-                    ("a-old", "a-old.md", "Old A"),
-                    ("b", "b.md", "B"),
-                    ("b-old", "b-old.md", "Old B"),
-                )
-            ),
-            actor="User",
-            origin="desktop",
-            reason="create duplicate page pairs",
-            idempotency_key="seed-simultaneous-collisions",
-        )
-    ).commit_id
-    service = WikiService(repo)
-    store = await WikiMaintenanceStore.open(tmp_path / "state.sqlite")
-    try:
-        await store.apply_run(
-            expected_revision=None,
-            ordered_commit_ids=(head,),
-            reviewed_through=head,
-            reviews=(
-                WikiMaintenanceReviewInput(
-                    blocking_commit_id=head,
-                    evidence_key="ordinary-question",
-                    evidence_fingerprint="a" * 64,
-                    summary="An ordinary semantic question is already open.",
-                ),
-            ),
-        )
-        await record_page_collision_review(
-            store,
-            service,
-            canonical_page_id="a",
-            loser_page_id="a-old",
-        )
-        await record_page_collision_review(
-            store,
-            service,
-            canonical_page_id="b",
-            loser_page_id="b-old",
-        )
-
-        pending = await store.list_pending()
-        assert len(pending) == 3
-        assert sum(row.evidence_key.startswith(TOPIC_PAGE_COLLISION_EVIDENCE_PREFIX) for row in pending) == 2
-        assert {row.evidence_key for row in pending} >= {"ordinary-question"}
-    finally:
-        await store.close()
-
-
-def test_model_concern_cannot_spoof_page_collision_evidence() -> None:
-    with pytest.raises(ValidationError, match="reserved backend prefix"):
-        WikiMaintenanceConcernDraft(
-            key=f"{TOPIC_PAGE_COLLISION_EVIDENCE_PREFIX}forged",
-            summary="Pretend this is trusted.",
-            proposal="Block the collision queue.",
-        )
-
-
-@pytest.mark.asyncio
-async def test_stale_accepted_collision_review_reopens_same_ask_at_a_new_generation(tmp_path: Path) -> None:
-    repo = _repo(tmp_path)
-    repo.commit(
-        ChangeSet(
-            operations=(
-                Create("arden", "arden.md", create_page(page_id="arden", title="Arden").to_bytes()),
-                Create("old", "old.md", create_page(page_id="old", title="Old Arden").to_bytes()),
-            ),
-            actor="User",
-            origin="desktop",
-            reason="create duplicate pages",
-            idempotency_key="seed-stale-collision",
-        )
-    )
-    service = WikiService(repo)
-    store = await WikiMaintenanceStore.open(tmp_path / "state.sqlite")
-    try:
-        result = await record_page_collision_review(
-            store,
-            service,
-            canonical_page_id="arden",
-            loser_page_id="old",
-        )
-        assert result.status.value == "needs_review"
-        original = (await store.list_pending())[0]
-        await store.resolve(
-            original.review_id,
-            expected_generation=original.generation,
-            action=WikiMaintenanceReviewAction.ACCEPT,
-        )
-        service.create_page(path="later.md", title="Later", page_id="later", expected_head=repo.head)
-        current_head = repo.head
-
-        result = await WikiMaintenance(store, service, _Reviewer()).run()
-
-        assert result.blocked and not result.reload_required
-        refreshed = (await store.list_pending())[0]
-        assert refreshed.review_id == original.review_id
-        assert refreshed.generation == original.generation + 1
-        assert refreshed.blocking_commit_id == current_head
-        assert repo.get("old").state.value == "active"
-    finally:
-        await store.close()
-
-
-@pytest.mark.asyncio
-async def test_archived_newer_collision_does_not_starve_older_accepted_merge(tmp_path: Path) -> None:
-    repo = _repo(tmp_path)
-    repo.commit(
-        ChangeSet(
-            operations=tuple(
-                Create(page_id, path, create_page(page_id=page_id, title=title).to_bytes())
-                for page_id, path, title in (
-                    ("a", "a.md", "A"),
-                    ("a-old", "a-old.md", "Old A"),
-                    ("b", "b.md", "B"),
-                    ("b-old", "b-old.md", "Old B"),
-                )
-            ),
-            actor="User",
-            origin="desktop",
-            reason="create duplicate page pairs",
-            idempotency_key="seed-two-collisions",
-        )
-    )
-    service = WikiService(repo)
-    store = await WikiMaintenanceStore.open(tmp_path / "state.sqlite")
-    try:
-        await record_page_collision_review(
-            store,
-            service,
-            canonical_page_id="a",
-            loser_page_id="a-old",
-        )
-        older = (await store.list_pending())[0]
-        await store.resolve(
-            older.review_id,
-            expected_generation=older.generation,
-            action=WikiMaintenanceReviewAction.ACCEPT,
-        )
-        await record_page_collision_review(
-            store,
-            service,
-            canonical_page_id="b",
-            loser_page_id="b-old",
-        )
-        newer = (await store.list_pending())[0]
-        service.archive_page(
-            "b-old",
-            expected_version=repo.get("b-old").version_id,
-            base_head=repo.head,
-        )
-
-        refreshed = await WikiMaintenance(store, service, _Reviewer()).run()
-
-        assert refreshed.blocked and not refreshed.reload_required
-        cleared_newer = await store.get_review(newer.review_id)
-        refreshed_older = await store.get_review(older.review_id)
-        assert cleared_newer is not None and cleared_newer.status.value == "cleared"
-        assert refreshed_older is not None
-        assert refreshed_older.status.value == "needs_review"
-        assert refreshed_older.generation == older.generation + 1
-
-        await store.resolve(
-            refreshed_older.review_id,
-            expected_generation=refreshed_older.generation,
-            action=WikiMaintenanceReviewAction.ACCEPT,
-        )
-        applied = await WikiMaintenance(store, service, _Reviewer()).run()
-
-        assert applied.reload_required and applied.updated_pages == 1
-        assert repo.get("a-old").state.value == "archived"
+        assert await store.get_review(fact_ask.review_id) == fact_ask
+        assert len(await store.list_history()) == 1
     finally:
         await store.close()
 

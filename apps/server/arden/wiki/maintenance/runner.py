@@ -14,20 +14,13 @@ from arden.wiki.constants import (
     WIKI_HEALTH_REASON,
     WIKI_HEALTH_RESOURCE_ID,
     WIKI_MAINTENANCE_ACTOR,
+    WIKI_MAINTENANCE_FACT_DUPLICATE_EVIDENCE_PREFIX,
     WIKI_MAINTENANCE_ORIGIN,
-)
-from arden.wiki.exceptions import WikiValidationError
-from arden.wiki.maintenance.collisions import (
-    manual_page_collision_review,
-    page_collision_review,
-    record_page_collision_review,
 )
 from arden.wiki.maintenance.proposals import (
     WikiMaintenanceConcernDraft,
     WikiMaintenanceDecision,
     WikiMaintenanceError,
-    WikiMaintenanceExecutableMerge,
-    WikiMaintenanceMergeDraft,
     WikiMaintenanceUpdateDraft,
     fingerprint,
     parse_maintenance_proposal,
@@ -40,7 +33,6 @@ from arden.wiki.maintenance.store import (
     WikiMaintenanceWatermarkConflictError,
 )
 from arden.wiki.models import (
-    PageMergePlan,
     WikiChangeCommit,
     WikiChangesReport,
     WikiMaintenanceCommit,
@@ -56,14 +48,11 @@ __all__ = (
     "WikiMaintenanceConcernDraft",
     "WikiMaintenanceDecision",
     "WikiMaintenanceError",
-    "WikiMaintenanceExecutableMerge",
-    "WikiMaintenanceMergeDraft",
     "WikiMaintenancePreparedReport",
     "WikiMaintenanceResult",
     "WikiMaintenanceReviewer",
     "WikiMaintenanceUpdateDraft",
     "parse_maintenance_proposal",
-    "record_page_collision_review",
 )
 
 _PAGE_ID_LINE = re.compile(r"(?m)^([+-]?\s*page_id:\s*).*$")
@@ -142,8 +131,6 @@ class WikiMaintenance:
     ) -> None:
         if decision.outcome == "updates":
             self._updates(prepared, decision.updates)
-        if decision.merge is not None:
-            self._merge_records(prepared, decision.merge)
 
     async def run(self) -> WikiMaintenanceResult:
         watermark = await self._store.get_watermark()
@@ -159,17 +146,6 @@ class WikiMaintenance:
                 self._wiki.maintenance_feed,
                 expected,
             )
-        try:
-            collision_result = await self._resume_page_collision(feed, expected, initial)
-        except (WikiSnapshotChangedError, RevisionConflictError):
-            return self._result(
-                feed.through_revision,
-                expected,
-                initial,
-                reload_required=True,
-            )
-        if collision_result is not None:
-            return collision_result
         if not feed.commits:
             return self._result(feed.through_revision, expected, initial, empty=True)
 
@@ -197,9 +173,10 @@ class WikiMaintenance:
                 )
                 commit = detail.commit
                 rows = await self._store.list_for_commit(commit.commit_id)
+                ordinary_rows = [row for row in rows if not self._is_fact_duplicate_ask(row)]
                 prepared = self._prepare(detail, commit)
-                matching = [row for row in rows if row.evidence_fingerprint == prepared.evidence_fingerprint]
-                open_rows = [row for row in rows if row.status is WikiMaintenanceReviewStatus.NEEDS_REVIEW]
+                matching = [row for row in ordinary_rows if row.evidence_fingerprint == prepared.evidence_fingerprint]
+                open_rows = [row for row in ordinary_rows if row.status is WikiMaintenanceReviewStatus.NEEDS_REVIEW]
                 if len(open_rows) > 1:
                     raise WikiMaintenanceError("multiple open reviews block one wiki commit")
                 accepted = [row for row in matching if row.status is WikiMaintenanceReviewStatus.ACCEPTED]
@@ -215,7 +192,7 @@ class WikiMaintenance:
 
                 stale_open = [
                     row
-                    for row in rows
+                    for row in ordinary_rows
                     if row.status is WikiMaintenanceReviewStatus.NEEDS_REVIEW
                     and row.evidence_fingerprint != prepared.evidence_fingerprint
                 ]
@@ -273,13 +250,6 @@ class WikiMaintenance:
                 if decision.outcome == "needs_review":
                     if decision.concern is None:
                         raise WikiMaintenanceError("needs_review decision has no concern")
-                    try:
-                        proposal = self._proposal(prepared, decision)
-                    except WikiValidationError as error:
-                        proposal = None
-                        summary = f"{decision.concern.summary} Manual reconciliation required: {error}"
-                    else:
-                        summary = decision.concern.summary
                     await self._clear_stale(stale_open)
                     await self._store.apply_run(
                         expected_revision=expected,
@@ -292,8 +262,8 @@ class WikiMaintenance:
                                 blocking_commit_id=commit.commit_id,
                                 evidence_key=decision.concern.key,
                                 evidence_fingerprint=prepared.evidence_fingerprint,
-                                summary=summary,
-                                proposal_json=proposal,
+                                summary=decision.concern.summary,
+                                proposal_json=self._proposal(prepared, decision),
                             ),
                         ),
                     )
@@ -371,105 +341,6 @@ class WikiMaintenance:
             replayed=replayed,
         )
 
-    async def _resume_page_collision(
-        self,
-        feed: WikiMaintenanceFeed,
-        expected: str | None,
-        initial: str | None,
-    ) -> WikiMaintenanceResult | None:
-        rows = await self._store.list_page_collision_reviews()
-        for row in reversed(rows):
-            if row.status not in {
-                WikiMaintenanceReviewStatus.NEEDS_REVIEW,
-                WikiMaintenanceReviewStatus.ACCEPTED,
-            }:
-                continue
-            if row.proposal_json is None:
-                if row.status is WikiMaintenanceReviewStatus.NEEDS_REVIEW:
-                    return self._result(
-                        feed.through_revision,
-                        expected,
-                        initial,
-                        blocked=True,
-                    )
-                raise WikiMaintenanceError("accepted page collision review has no executable proposal")
-            proposal = parse_maintenance_proposal(row.proposal_json)
-            if not isinstance(proposal, WikiMaintenanceExecutableMerge):
-                raise WikiMaintenanceError("page collision review is not a page merge")
-            collision_head = self._wiki.repository.head
-            try:
-                plan = await asyncio.to_thread(
-                    self._wiki.prepare_current_maintenance_merge,
-                    canonical_page_id=proposal.canonical_page_id,
-                    loser_page_id=proposal.loser_page_id,
-                )
-            except KeyError:
-                if row.status is WikiMaintenanceReviewStatus.NEEDS_REVIEW:
-                    await self._store.clear(row.review_id, expected_generation=row.generation)
-                continue
-            except WikiValidationError as error:
-                records = {record.page.page_id: record for record in await asyncio.to_thread(self._wiki.readable_pages)}
-                if collision_head is None or self._wiki.repository.head != collision_head:
-                    raise RevisionConflictError("wiki changed before unsafe page collision review")
-                try:
-                    canonical = records[proposal.canonical_page_id]
-                    loser = records[proposal.loser_page_id]
-                except KeyError:
-                    if row.status is WikiMaintenanceReviewStatus.NEEDS_REVIEW:
-                        await self._store.clear(row.review_id, expected_generation=row.generation)
-                    continue
-                await self._store.refresh_page_collision_review(
-                    row.review_id,
-                    expected_generation=row.generation,
-                    expected_status=row.status,
-                    review=manual_page_collision_review(
-                        base_head=collision_head,
-                        canonical=canonical,
-                        loser=loser,
-                        error=error,
-                    ),
-                )
-                return self._result(
-                    feed.through_revision,
-                    expected,
-                    initial,
-                    blocked=True,
-                )
-            fresh = page_collision_review(plan)
-            if row.evidence_fingerprint != fresh.evidence_fingerprint:
-                await self._store.refresh_page_collision_review(
-                    row.review_id,
-                    expected_generation=row.generation,
-                    expected_status=row.status,
-                    review=fresh,
-                )
-                return self._result(
-                    feed.through_revision,
-                    expected,
-                    initial,
-                    blocked=True,
-                )
-            if row.status is WikiMaintenanceReviewStatus.NEEDS_REVIEW:
-                return self._result(
-                    feed.through_revision,
-                    expected,
-                    initial,
-                    blocked=True,
-                )
-            await asyncio.to_thread(
-                self._wiki.apply_maintenance_merge,
-                plan,
-                reason=proposal.reason,
-            )
-            return self._result(
-                feed.through_revision,
-                expected,
-                initial,
-                updated=1,
-                reload_required=True,
-            )
-        return None
-
     async def _advance(self, expected: str | None, commits: Sequence[str], through: str) -> None:
         result = await self._store.apply_run(
             expected_revision=expected,
@@ -497,10 +368,11 @@ class WikiMaintenance:
         """Persist or honor the one durable manual decision for bounded evidence."""
 
         rows = await self._store.list_for_commit(commit.commit_id)
+        ordinary_rows = [row for row in rows if not self._is_fact_duplicate_ask(row)]
         existing = await self._store.get_by_evidence(commit.commit_id, "evidence-too-large")
         stale = [
             row
-            for row in rows
+            for row in ordinary_rows
             if row.status is WikiMaintenanceReviewStatus.NEEDS_REVIEW
             and (
                 existing is None or row.review_id != existing.review_id or row.evidence_fingerprint != error.fingerprint
@@ -615,10 +487,9 @@ class WikiMaintenance:
             (
                 "# Wiki maintenance review",
                 "Only the supplied Markdown evidence is available. User edits are authoritative: preserve their "
-                "intent, make no speculative insights, and never edit a generated region. A duplicate-page "
-                "merge must use needs_review with a nested merge object containing canonical_page_token and "
-                "loser_page_token; it is the only allowed lifecycle operation and is applied atomically only "
-                "after durable user acceptance.",
+                "intent, make no speculative insights, and never edit a generated region. Do not rename, move, "
+                "archive, or combine pages. If two pages may describe the same subject, return needs_review with "
+                "a clear persistent question for the user.",
                 f"Commit: {commit.commit_id[:12]}",
                 f"Actor: {commit.actor}; origin: {commit.origin}; reason: {commit.reason}",
             )
@@ -867,31 +738,13 @@ class WikiMaintenance:
         )
         return len(updates)
 
-    def _merge(self, prepared: WikiMaintenancePreparedReport, draft: WikiMaintenanceMergeDraft) -> PageMergePlan:
-        canonical, loser = self._merge_records(prepared, draft)
-        return self._wiki.prepare_maintenance_merge(
-            canonical_page_id=canonical.page.page_id,
-            canonical_expected_version=canonical.resource.version_id,
-            loser_page_id=loser.page.page_id,
-            loser_expected_version=loser.resource.version_id,
-            base_head=prepared.base_head,
-        )
-
-    @staticmethod
-    def _merge_records(
-        prepared: WikiMaintenancePreparedReport, draft: WikiMaintenanceMergeDraft
-    ) -> tuple[WikiPageRecord, WikiPageRecord]:
-        canonical = prepared.page_tokens.get(draft.canonical_page_token)
-        loser = prepared.page_tokens.get(draft.loser_page_token)
-        if canonical is None or loser is None:
-            raise WikiMaintenanceError("maintenance merge named an unknown page token")
-        if canonical.page.page_id == loser.page.page_id:
-            raise WikiMaintenanceError("maintenance merge requires distinct page tokens")
-        return canonical, loser
-
     async def _clear_stale(self, reviews: Sequence[WikiMaintenanceReview]) -> None:
         for row in reviews:
             await self._store.clear(row.review_id, expected_generation=row.generation)
+
+    @staticmethod
+    def _is_fact_duplicate_ask(review: WikiMaintenanceReview) -> bool:
+        return review.evidence_key.startswith(WIKI_MAINTENANCE_FACT_DUPLICATE_EVIDENCE_PREFIX)
 
     @staticmethod
     def _has_markdown_changes(commit: WikiMaintenanceCommit) -> bool:
@@ -925,25 +778,6 @@ class WikiMaintenance:
         concern = decision.concern
         if concern is None:
             raise WikiMaintenanceError("needs_review decision has no concern")
-        if decision.merge is not None:
-            merge = self._merge(prepared, decision.merge)
-            canonical = prepared.page_tokens[decision.merge.canonical_page_token]
-            loser = prepared.page_tokens[decision.merge.loser_page_token]
-            return {
-                "kind": "page_merge",
-                "reason": self._reason(prepared),
-                "replay_fingerprint": prepared.replay_fingerprint,
-                "summary": concern.proposal,
-                "canonical_page_id": merge.canonical_page_id,
-                "canonical_expected_version": merge.canonical_expected_version,
-                "canonical_title": canonical.page.title,
-                "loser_page_id": merge.loser_page_id,
-                "loser_expected_version": merge.loser_expected_version,
-                "loser_title": loser.page.title,
-                "link_count": merge.link_count,
-                "page_count": merge.page_count,
-                "redirect_count": 0,
-            }
         if not decision.updates:
             return None
         return {
@@ -969,16 +803,6 @@ class WikiMaintenance:
         proposal = parse_maintenance_proposal(row.proposal_json)
         if proposal.reason != self._reason(prepared) or proposal.replay_fingerprint != prepared.replay_fingerprint:
             raise WikiMaintenanceError("accepted maintenance proposal does not match current evidence")
-        if isinstance(proposal, WikiMaintenanceExecutableMerge):
-            plan = self._wiki.prepare_maintenance_merge(
-                canonical_page_id=proposal.canonical_page_id,
-                canonical_expected_version=proposal.canonical_expected_version,
-                loser_page_id=proposal.loser_page_id,
-                loser_expected_version=proposal.loser_expected_version,
-                base_head=prepared.base_head,
-            )
-            await asyncio.to_thread(self._wiki.apply_maintenance_merge, plan, reason=self._reason(prepared))
-            return 1
         await asyncio.to_thread(
             self._wiki.apply_maintenance_updates,
             proposal.updates,

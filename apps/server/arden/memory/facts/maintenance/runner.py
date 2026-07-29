@@ -5,7 +5,6 @@ import hashlib
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from enum import StrEnum
 from types import MappingProxyType
 from typing import Annotated, Any, Literal, Protocol
 
@@ -22,6 +21,7 @@ from arden.memory.facts.maintenance.store import (
 )
 from arden.memory.facts.models import Fact, FactChangeFeed, FactConflictError
 from arden.memory.facts.service import FactPrincipal, FactService
+from arden.wiki.constants import WIKI_MAINTENANCE_FACT_DUPLICATE_EVIDENCE_PREFIX
 from arden.wiki.models import WikiMaintenancePageUpdate, WikiPageRecord, WikiSnapshot
 from arden.wiki.service import WikiService
 
@@ -112,17 +112,51 @@ class FactMaintenancePreparedCluster:
 FactMaintenanceReviewer = Callable[[FactMaintenancePreparedCluster], Awaitable[FactMaintenanceDecision]]
 
 
-class TopicPageCollisionDisposition(StrEnum):
-    """How Fact Maintenance should handle one durable page-merge decision."""
+@dataclass(frozen=True, slots=True)
+class FactMaintenanceDuplicatePageAsk:
+    """Pinned evidence for a user decision before normalizing a colliding topic."""
 
-    BLOCKED = "blocked"
-    DECLINED = "declined"
+    wiki_head: str
+    old_topic: str
+    canonical_page_id: str
+    canonical_version: str
+    canonical_title: str
+    existing_page_id: str
+    existing_version: str
+    existing_title: str
+    normalization_intent: str
+
+    @property
+    def evidence_key(self) -> str:
+        first, second = sorted((self.canonical_page_id, self.existing_page_id))
+        return f"{WIKI_MAINTENANCE_FACT_DUPLICATE_EVIDENCE_PREFIX}{first}:{second}"
+
+    @property
+    def evidence_fingerprint(self) -> str:
+        payload = {
+            "canonical_page_id": self.canonical_page_id,
+            "canonical_version": self.canonical_version,
+            "canonical_title": self.canonical_title,
+            "existing_page_id": self.existing_page_id,
+            "existing_version": self.existing_version,
+            "existing_title": self.existing_title,
+        }
+        return hashlib.sha256(
+            json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+
+    @property
+    def summary(self) -> str:
+        return (
+            f"Possible duplicate pages block topic normalization {self.old_topic!r} → {self.canonical_title!r}. "
+            f"Wiki head {self.wiki_head}; canonical {self.canonical_title!r} "
+            f"(id {self.canonical_page_id}, version {self.canonical_version}); existing owner "
+            f"{self.existing_title!r} (id {self.existing_page_id}, version {self.existing_version}). "
+            f"Intent: {self.normalization_intent}"
+        )
 
 
-TopicPageCollisionRecorder = Callable[
-    [str, str],
-    Awaitable[TopicPageCollisionDisposition],
-]
+DuplicatePageAskRecorder = Callable[[FactMaintenanceDuplicatePageAsk], Awaitable[bool]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,12 +176,6 @@ class _ReviewedDecision:
     decision: FactMaintenanceDecision
 
 
-@dataclass(frozen=True, slots=True)
-class _TopicPageCollisionReview:
-    reviewed: tuple[_ReviewedDecision, ...]
-    blocked: bool
-
-
 class FactMaintenance:
     """Review changed facts and publish one version-pinned maintenance plan."""
 
@@ -160,7 +188,7 @@ class FactMaintenance:
         wiki: WikiService,
         candidate_provider: FactMaintenanceCandidateProvider | None = None,
         candidate_limit: int = 12,
-        record_topic_page_collision: TopicPageCollisionRecorder | None = None,
+        record_duplicate_page_ask: DuplicatePageAskRecorder | None = None,
     ) -> None:
         if not 1 <= candidate_limit <= 100:
             raise ValueError("candidate_limit must be between 1 and 100")
@@ -170,7 +198,7 @@ class FactMaintenance:
         self._wiki = wiki
         self._candidate_provider = candidate_provider
         self._candidate_limit = candidate_limit
-        self._record_topic_page_collision = record_topic_page_collision
+        self._record_duplicate_page_ask = record_duplicate_page_ask
         self._intents = FactMaintenanceIntentStore(service.plans.conn)
 
     async def run(self) -> FactMaintenanceResult:
@@ -208,21 +236,20 @@ class FactMaintenance:
             cluster = await self._prepare_cluster(target, facts, wiki_pages)
             decision = await self._reviewer(cluster)
             reviewed.append(_ReviewedDecision(target, cluster, decision))
-        collision_review = await self._record_topic_page_collisions(reviewed, wiki_snapshot, wiki_pages)
-        if collision_review.blocked:
-            return FactMaintenanceResult(
-                feed.through_revision,
-                reviewed_clusters=len(reviewed),
-            )
-        reviewed = list(collision_review.reviewed)
-
-        changes, amended, merged, reasons = self._prepare_changes(reviewed)
-        topic_changes, topic_bindings, topic_reasons = self._prepare_topic_normalizations(
+        topic_changes, topic_bindings, topic_reasons, duplicate_asks = self._prepare_topic_normalizations(
             reviewed,
             facts,
             wiki_snapshot,
             wiki_pages,
         )
+        if duplicate_asks:
+            if self._record_duplicate_page_ask is None:
+                raise FactMaintenanceError("duplicate page review recorder is unavailable")
+            for ask in duplicate_asks:
+                if not await self._record_duplicate_page_ask(ask):
+                    return FactMaintenanceResult(feed.through_revision, reviewed_clusters=len(reviewed))
+
+        changes, amended, merged, reasons = self._prepare_changes(reviewed)
         changes = self._merge_topic_changes(changes, topic_changes)
         amended = sum(change["op"] == "amend" for change in changes)
         if changes:
@@ -269,40 +296,6 @@ class FactMaintenance:
             merged_facts=merged,
             advanced=True,
         )
-
-    async def _record_topic_page_collisions(
-        self,
-        reviewed: Sequence[_ReviewedDecision],
-        wiki_snapshot: WikiSnapshot,
-        wiki_pages: Mapping[str, WikiPageRecord],
-    ) -> _TopicPageCollisionReview:
-        if self._record_topic_page_collision is None:
-            return _TopicPageCollisionReview(tuple(reviewed), False)
-        retained: list[_ReviewedDecision] = []
-        blocked = False
-        for item in reviewed:
-            decision = item.decision.root
-            if not isinstance(decision, FactMaintenanceTopicNormalization):
-                retained.append(item)
-                continue
-            canonical = wiki_pages.get(decision.canonical_page_token)
-            if canonical is None:
-                raise FactMaintenanceError("topic normalization used an unknown wiki page token")
-            owner = self._wiki.resolve_topic_name(decision.old_topic, snapshot=wiki_snapshot)
-            if owner is None or owner.page.lifecycle != "active" or owner.page.page_id == canonical.page.page_id:
-                retained.append(item)
-                continue
-            disposition = await self._record_topic_page_collision(
-                canonical.page.page_id,
-                owner.page.page_id,
-            )
-            if disposition is TopicPageCollisionDisposition.BLOCKED:
-                blocked = True
-                retained.append(item)
-                continue
-            if disposition is not TopicPageCollisionDisposition.DECLINED:
-                raise FactMaintenanceError("topic page collision recorder returned an invalid disposition")
-        return _TopicPageCollisionReview(tuple(retained), blocked)
 
     async def _resume_intent(
         self,
@@ -757,6 +750,7 @@ class FactMaintenance:
         list[dict[str, Any]],
         tuple[tuple[str, str, str], ...],
         tuple[str, ...],
+        tuple[FactMaintenanceDuplicatePageAsk, ...],
     ]:
         selections: dict[str, WikiPageRecord] = {}
         reasons: dict[str, str] = {}
@@ -781,14 +775,29 @@ class FactMaintenance:
 
         accepted: dict[str, WikiPageRecord] = {}
         pending_alias_owners: dict[str, str] = {}
+        duplicate_asks: list[FactMaintenanceDuplicatePageAsk] = []
         for old_topic, page in sorted(selections.items()):
             canonical_title = page.page.title
             if old_topic == canonical_title:
                 continue
             owner = self._wiki.resolve_topic_name(old_topic, snapshot=wiki_snapshot)
             if owner is not None and owner.page.page_id != page.page.page_id:
-                # A distinct page already owns this topic. Page reconciliation
-                # belongs to Wiki Maintenance; fact subjects remain unchanged.
+                if owner.page.lifecycle == "active":
+                    if wiki_snapshot.head is None:
+                        raise FactMaintenanceError("duplicate page review requires a committed wiki snapshot")
+                    duplicate_asks.append(
+                        FactMaintenanceDuplicatePageAsk(
+                            wiki_head=wiki_snapshot.head,
+                            old_topic=old_topic,
+                            canonical_page_id=page.page.page_id,
+                            canonical_version=page.resource.version_id,
+                            canonical_title=page.page.title,
+                            existing_page_id=owner.page.page_id,
+                            existing_version=owner.resource.version_id,
+                            existing_title=owner.page.title,
+                            normalization_intent=reasons[old_topic],
+                        )
+                    )
                 continue
             accepted[old_topic] = page
             if owner is not None:
@@ -829,7 +838,7 @@ class FactMaintenance:
         bindings = tuple(
             (topic, accepted[topic].page.page_id, accepted[topic].page.title) for topic in sorted(used_topics)
         )
-        return changes, bindings, tuple(reasons[topic] for topic in sorted(used_topics))
+        return changes, bindings, tuple(reasons[topic] for topic in sorted(used_topics)), tuple(duplicate_asks)
 
     @staticmethod
     def _merge_topic_changes(

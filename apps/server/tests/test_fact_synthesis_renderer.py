@@ -26,6 +26,7 @@ async def test_completion_renderer_exposes_only_pinned_opaque_tokens() -> None:
         await renderer.render(
             title="Alpha",
             facts=(SynthesisFact("F001", "Pinned fact", "chat"),),
+            existing_body="# Alpha\n\nAlready known.",
         )
         == "- Kept claim (fact:F001)"
     )
@@ -34,6 +35,7 @@ async def test_completion_renderer_exposes_only_pinned_opaque_tokens() -> None:
     assert call["model"] == "test-memory"
     assert call["reasoning_effort"] == "medium"
     assert "F001: Pinned fact" in call["messages"][1]["content"]
+    assert "Already known." in call["messages"][1]["content"]
     assert "fact:F001" in call["messages"][0]["content"]
 
 
@@ -45,4 +47,5 @@ async def test_completion_renderer_rejects_missing_content() -> None:
         await CompletionFactSynthesisRenderer(client, "test-memory").render(
             title="Alpha",
             facts=(SynthesisFact("F001", "Pinned fact", "chat"),),
+            existing_body="",
         )

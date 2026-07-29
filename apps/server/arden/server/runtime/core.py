@@ -35,8 +35,8 @@ from arden.memory.facts.maintenance.runner import (
 )
 from arden.memory.facts.maintenance.runner import (
     FactMaintenance,
+    FactMaintenanceDuplicatePageAsk,
     FactMaintenanceReviewer,
-    TopicPageCollisionDisposition,
 )
 from arden.memory.facts.plan_store import FactPlanStore
 from arden.memory.facts.service import FactService
@@ -81,9 +81,13 @@ from arden.wiki.health import (
 from arden.wiki.maintenance.runner import (
     WikiMaintenance,
     WikiMaintenanceReviewer,
-    record_page_collision_review,
 )
-from arden.wiki.maintenance.store import WikiMaintenanceReviewStatus, WikiMaintenanceStore
+from arden.wiki.maintenance.store import (
+    WikiMaintenanceReviewConflictError,
+    WikiMaintenanceReviewInput,
+    WikiMaintenanceReviewStatus,
+    WikiMaintenanceStore,
+)
 from arden.wiki.models import WikiChangesReport
 from arden.wiki.service import WikiService
 
@@ -456,6 +460,10 @@ class Runtime:
         if self.automation is not None:
             await self.automation.request_wiki_maintenance()
 
+    async def request_fact_maintenance(self) -> None:
+        if self.automation is not None:
+            await self.automation.request_fact_maintenance()
+
     async def _after_fact_commit(self) -> None:
         try:
             if self.fact_index_projection is not None:
@@ -524,7 +532,13 @@ class Runtime:
 
     def _create_fact_maintenance(self, reviewer: FactMaintenanceReviewer) -> FactMaintenance | None:
         model = self.config.memory_model
-        if self.fact_service is None or self._fact_consumer_store is None or self.wiki_service is None or not model:
+        if (
+            self.fact_service is None
+            or self._fact_consumer_store is None
+            or self.wiki_service is None
+            or self._wiki_maintenance_store is None
+            or not model
+        ):
             return None
         return FactMaintenance(
             self.fact_service,
@@ -532,30 +546,32 @@ class Runtime:
             reviewer,
             wiki=self.wiki_service,
             candidate_provider=self.fact_index_projection,
-            record_topic_page_collision=self._record_topic_page_collision,
+            record_duplicate_page_ask=self._record_duplicate_page_ask,
         )
 
-    async def _record_topic_page_collision(
-        self,
-        canonical_page_id: str,
-        loser_page_id: str,
-    ) -> TopicPageCollisionDisposition:
-        if self._wiki_maintenance_store is None or self.wiki_service is None:
+    async def _record_duplicate_page_ask(self, ask: FactMaintenanceDuplicatePageAsk) -> bool:
+        if self._wiki_maintenance_store is None:
             raise RuntimeError("wiki maintenance review service is unavailable")
-        result = await record_page_collision_review(
-            self._wiki_maintenance_store,
-            self.wiki_service,
-            canonical_page_id=canonical_page_id,
-            loser_page_id=loser_page_id,
-        )
-        if result.status in {
+        try:
+            review = await self._wiki_maintenance_store.record_fact_duplicate_review(
+                WikiMaintenanceReviewInput(
+                    blocking_commit_id=ask.wiki_head,
+                    evidence_key=ask.evidence_key,
+                    evidence_fingerprint=ask.evidence_fingerprint,
+                    summary=ask.summary,
+                )
+            )
+        except WikiMaintenanceReviewConflictError:
+            return False
+        if review.status is WikiMaintenanceReviewStatus.NEEDS_REVIEW:
+            await self.notify_wiki_maintenance_reviews_changed(review.blocking_commit_id)
+            return False
+        if review.status in {
             WikiMaintenanceReviewStatus.REJECTED,
             WikiMaintenanceReviewStatus.RESOLVED_MANUAL,
         }:
-            return TopicPageCollisionDisposition.DECLINED
-        await self.notify_wiki_maintenance_reviews_changed(result.blocking_commit_id)
-        await self.request_wiki_maintenance()
-        return TopicPageCollisionDisposition.BLOCKED
+            return True
+        raise RuntimeError("duplicate page review has an invalid resolution")
 
     def _create_wiki_maintenance(self, reviewer: WikiMaintenanceReviewer) -> WikiMaintenance | None:
         if self._wiki_maintenance_store is None or self.wiki_service is None or not self.config.memory_model:

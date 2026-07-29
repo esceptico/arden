@@ -165,6 +165,14 @@ class AutomationRuntime:
             timedelta(minutes=5),
         )
 
+    async def request_fact_maintenance(self) -> bool:
+        """Resume blocked fact maintenance after its durable user decision."""
+
+        return await self.scheduler.request_delayed_run(
+            BUILTIN_MEMORY_CONSOLIDATE_ID,
+            timedelta(0),
+        )
+
     async def request_wiki_maintenance(self) -> bool:
         """Resume durable maintenance immediately after a user decision."""
 

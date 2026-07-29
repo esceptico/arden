@@ -19,7 +19,12 @@ from arden.events.sse import MemoryChangedEvent
 from arden.memory.facts.consumer_store import FactConsumerStore
 from arden.memory.facts.dream import FactDreamResult
 from arden.memory.facts.ledger import FactLedger
-from arden.memory.facts.maintenance.runner import FactMaintenance, FactMaintenanceDecision, FactMaintenanceResult
+from arden.memory.facts.maintenance.runner import (
+    FactMaintenance,
+    FactMaintenanceDecision,
+    FactMaintenanceDuplicatePageAsk,
+    FactMaintenanceResult,
+)
 from arden.memory.facts.maintenance.store import FactMaintenanceError
 from arden.memory.facts.service import FactPrincipal
 from arden.memory.facts.synthesis import (
@@ -34,7 +39,7 @@ from arden.server.runtime import core as runtime_core
 from arden.server.runtime.core import Runtime
 from arden.tools.facts import FACT_SERVICE
 from arden.wiki.maintenance.runner import WikiMaintenanceResult
-from arden.wiki.maintenance.store import WikiMaintenanceStore
+from arden.wiki.maintenance.store import WikiMaintenanceReviewInput, WikiMaintenanceStore
 
 MIGRATED_AT = datetime(2026, 7, 28, 12, tzinfo=UTC)
 USER_SCOPE = ("user", None)
@@ -91,6 +96,38 @@ def _wiki_producer() -> Automation:
         read_history=True,
         tool_scope=["read_wiki_page", "publish_wiki_generated"],
     )
+
+
+@pytest.mark.asyncio
+async def test_runtime_duplicate_ask_yields_to_an_existing_ordinary_review(tmp_path) -> None:
+    runtime = Runtime(_config(tmp_path))
+    store = await WikiMaintenanceStore.open(tmp_path / "maintenance.sqlite")
+    runtime._wiki_maintenance_store = store
+    ask = FactMaintenanceDuplicatePageAsk(
+        wiki_head="a" * 64,
+        old_topic="Bike",
+        canonical_page_id="bicycle-page",
+        canonical_version="b" * 64,
+        canonical_title="Bicycle",
+        existing_page_id="bike-page",
+        existing_version="c" * 64,
+        existing_title="Bike",
+        normalization_intent="Normalize Bike to Bicycle.",
+    )
+    try:
+        ordinary = await store.record_review(
+            WikiMaintenanceReviewInput(
+                blocking_commit_id=ask.wiki_head,
+                evidence_key="ordinary-question",
+                evidence_fingerprint="d" * 64,
+                summary="An ordinary maintenance question is already open.",
+            )
+        )
+
+        assert not await runtime._record_duplicate_page_ask(ask)
+        assert await store.list_pending() == [ordinary]
+    finally:
+        await store.close()
 
 
 @pytest.mark.asyncio

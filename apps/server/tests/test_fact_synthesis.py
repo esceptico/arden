@@ -24,17 +24,17 @@ NOW = datetime(2026, 7, 28, 12, tzinfo=UTC)
 class _Renderer:
     def __init__(self, *, invalid: str | None = None) -> None:
         self.invalid = invalid
-        self.calls: list[tuple[str, tuple[SynthesisFact, ...]]] = []
+        self.calls: list[tuple[str, tuple[SynthesisFact, ...], str]] = []
 
-    async def render(self, *, title: str, facts: tuple[SynthesisFact, ...]) -> str:
-        self.calls.append((title, facts))
+    async def render(self, *, title: str, facts: tuple[SynthesisFact, ...], existing_body: str) -> str:
+        self.calls.append((title, facts, existing_body))
         if self.invalid is not None:
             return self.invalid
         return "\n".join(f"- {fact.text} (fact:{fact.token})" for fact in facts)
 
 
 class _FailingRenderer(_Renderer):
-    async def render(self, *, title: str, facts: tuple[SynthesisFact, ...]) -> str:
+    async def render(self, *, title: str, facts: tuple[SynthesisFact, ...], existing_body: str) -> str:
         raise RuntimeError("offline")
 
 
@@ -100,6 +100,36 @@ async def test_synthesis_uses_pinned_facts_and_advances_after_atomic_publish(tmp
             ledger.plan([_change("later", "Later", subjects=["Later"])], actor="test", origin="test", reason="later")
         )
         assert b"Later" not in page.content
+    finally:
+        await consumers.close()
+
+
+@pytest.mark.asyncio
+async def test_synthesis_passes_only_authored_body_to_renderer(tmp_path: Path) -> None:
+    renderer = _Renderer()
+    ledger, consumers, wiki, synthesis = await _service(tmp_path, renderer)
+    try:
+        ledger.commit(
+            ledger.plan([_change("one", "First"), _change("two", "Second")], actor="test", origin="test", reason="seed")
+        )
+        await synthesis.run()
+        page = wiki.list_pages()[0]
+        current = wiki.repository.get(page.page.page_id)
+        wiki.repository.commit(
+            ChangeSet(
+                (Update(page.page.page_id, current.version_id, page.content + b"\n## Notes\nKeep this.\n"),),
+                "user",
+                "wiki.user",
+                "add authored notes",
+                "add-authored-notes",
+                wiki.repository.head,
+            )
+        )
+        ledger.commit(ledger.plan([_change("three", "Third")], actor="test", origin="test", reason="new fact"))
+
+        await synthesis.run()
+
+        assert renderer.calls[-1][2] == b"\n## Notes\nKeep this.\n".decode()
     finally:
         await consumers.close()
 
@@ -268,7 +298,7 @@ async def test_user_generated_edit_blocks_whole_synthesis_and_prior_publish_repl
         feed = ledger.changes_since(None)
         facts = ledger.facts_at(feed.through_revision)
         routes, _, _, _ = synthesis._targets(feed, facts)
-        targets = await synthesis._render_targets(routes, facts)
+        targets = await synthesis._render_targets(routes, facts, None)
         reason = f"synthesize facts start..{feed.through_revision}"
         wiki.publish_generated(targets, source_revision=feed.through_revision or "", base_head=None, reason=reason)
         page = wiki.read_page(targets[0].page_id)
@@ -297,7 +327,7 @@ async def test_user_generated_edit_blocks_whole_synthesis_and_prior_publish_repl
 @pytest.mark.asyncio
 async def test_live_fact_conflict_never_publishes(tmp_path: Path) -> None:
     class _ChangingRenderer(_Renderer):
-        async def render(self, *, title: str, facts: tuple[SynthesisFact, ...]) -> str:
+        async def render(self, *, title: str, facts: tuple[SynthesisFact, ...], existing_body: str) -> str:
             ledger.commit(
                 ledger.plan(
                     [{"op": "amend", "fact_id": "one", "labels": ["changed"]}],
@@ -306,7 +336,7 @@ async def test_live_fact_conflict_never_publishes(tmp_path: Path) -> None:
                     reason="race",
                 )
             )
-            return await super().render(title=title, facts=facts)
+            return await super().render(title=title, facts=facts, existing_body=existing_body)
 
     ledger, consumers, wiki, _ = await _service(tmp_path)
     synthesis = FactSynthesis(ledger, consumers, wiki, _ChangingRenderer())
@@ -660,8 +690,8 @@ async def test_stale_clearing_fact_race_is_rejected(tmp_path: Path) -> None:
         )
 
         class _RacingSynthesis(FactSynthesis):
-            async def _render_targets(self, routes, facts):
-                rendered = await super()._render_targets(routes, facts)
+            async def _render_targets(self, routes, facts, base_head):
+                rendered = await super()._render_targets(routes, facts, base_head)
                 ledger.commit(
                     ledger.plan(
                         [{"op": "amend", "fact_id": "one", "labels": ["raced"]}],
@@ -686,7 +716,7 @@ async def test_intervening_wiki_edit_rejects_pinned_publication(tmp_path: Path) 
     ledger, consumers, wiki, _synthesis = await _service(tmp_path)
 
     class _WikiRacingRenderer(_Renderer):
-        async def render(self, *, title: str, facts: tuple[SynthesisFact, ...]) -> str:
+        async def render(self, *, title: str, facts: tuple[SynthesisFact, ...], existing_body: str) -> str:
             if wiki.repository.find_by_path("user.md") is None:
                 wiki.repository.commit(
                     ChangeSet(
@@ -698,7 +728,7 @@ async def test_intervening_wiki_edit_rejects_pinned_publication(tmp_path: Path) 
                         wiki.repository.head,
                     )
                 )
-            return await super().render(title=title, facts=facts)
+            return await super().render(title=title, facts=facts, existing_body=existing_body)
 
     synthesis = FactSynthesis(ledger, consumers, wiki, _WikiRacingRenderer())
     try:
@@ -734,7 +764,7 @@ async def test_trusted_replay_skips_newer_invalid_candidate(tmp_path: Path) -> N
         feed = ledger.changes_since(None)
         facts = ledger.facts_at(feed.through_revision)
         routes, _, _, base_head = synthesis._targets(feed, facts)
-        targets = await synthesis._render_targets(routes, facts)
+        targets = await synthesis._render_targets(routes, facts, base_head)
         reason = f"synthesize facts start..{feed.through_revision}"
         wiki.publish_generated(
             targets,
@@ -779,7 +809,7 @@ async def test_trusted_replay_surfaces_corrupt_published_page(tmp_path: Path, mo
         feed = ledger.changes_since(None)
         facts = ledger.facts_at(feed.through_revision)
         routes, _, _, base_head = synthesis._targets(feed, facts)
-        targets = await synthesis._render_targets(routes, facts)
+        targets = await synthesis._render_targets(routes, facts, base_head)
         reason = f"synthesize facts start..{feed.through_revision}"
         wiki.publish_generated(
             targets,
@@ -807,7 +837,7 @@ async def test_new_unrelated_facts_after_pinned_feed_remain_for_next_run(tmp_pat
     class _AppendingRenderer(_Renderer):
         appended = False
 
-        async def render(self, *, title: str, facts: tuple[SynthesisFact, ...]) -> str:
+        async def render(self, *, title: str, facts: tuple[SynthesisFact, ...], existing_body: str) -> str:
             if not self.appended:
                 self.appended = True
                 ledger.commit(
@@ -821,7 +851,7 @@ async def test_new_unrelated_facts_after_pinned_feed_remain_for_next_run(tmp_pat
                         reason="arrived during synthesis",
                     )
                 )
-            return await super().render(title=title, facts=facts)
+            return await super().render(title=title, facts=facts, existing_body=existing_body)
 
     synthesis = FactSynthesis(ledger, consumers, wiki, _AppendingRenderer())
     try:

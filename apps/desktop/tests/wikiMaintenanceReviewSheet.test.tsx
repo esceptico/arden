@@ -91,32 +91,6 @@ test("maintenance update question is blocking and routes explicit answers", asyn
   expect(resolves).toEqual([{ action: "reject" }, { action: "accept" }]);
 });
 
-test("page merge question shows its effects and remains answerable", async () => {
-  const { app, resolves } = await mount({
-    review: review({
-      summary: "These pages describe the same topic.",
-      proposal: {
-        kind: "page_merge",
-        summary: "Keep Arden and merge Ntrp Arden into it.",
-        canonicalPageId: "topic-ntrp",
-        canonicalTitle: "Arden",
-        loserPageId: "topic-ntrp-arden",
-        loserTitle: "Ntrp Arden",
-        linkCount: 3,
-        pageCount: 2,
-        redirectCount: 0,
-      },
-    }),
-  });
-
-  expect(app.textContent).toContain("Ntrp Arden → Arden");
-  expect(app.textContent).toContain("update 3 links across 2 pages");
-  expect(app.textContent).toContain("Redirects: 0");
-
-  await act(async () => { button("Accept merge").click(); });
-  expect(resolves).toEqual([{ action: "accept" }]);
-});
-
 test("initial check error remains blocking and retryable", async () => {
   const app = document.createElement("div");
   app.id = "app";

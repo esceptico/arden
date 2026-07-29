@@ -16,4 +16,4 @@ WIKI_HEALTH_REASON = "project wiki health"
 
 WIKI_MAINTENANCE_ACTOR = "Wiki Maintenance"
 WIKI_MAINTENANCE_ORIGIN = "wiki.maintenance"
-TOPIC_PAGE_COLLISION_EVIDENCE_PREFIX = "topic-page-collision:"
+WIKI_MAINTENANCE_FACT_DUPLICATE_EVIDENCE_PREFIX = "fact-normalization-duplicate-page:"

@@ -4,7 +4,6 @@ import sqlite3
 import pytest
 
 from arden.database import connect
-from arden.wiki.constants import TOPIC_PAGE_COLLISION_EVIDENCE_PREFIX
 from arden.wiki.maintenance.store import (
     CONSUMER_ID,
     WikiMaintenanceReview,
@@ -102,45 +101,6 @@ async def test_non_executable_review_cannot_be_accepted(tmp_path) -> None:
         unchanged = await store.get_review(created.review_id)
         assert unchanged is not None
         assert unchanged.status is WikiMaintenanceReviewStatus.NEEDS_REVIEW
-    finally:
-        await store.close()
-
-
-async def test_page_collision_refresh_cannot_overwrite_user_decision(tmp_path) -> None:
-    store = await WikiMaintenanceStore.open(tmp_path / "maintenance.sqlite")
-    review = _review(key=f"{TOPIC_PAGE_COLLISION_EVIDENCE_PREFIX}pair")
-    try:
-        created = await store.record_page_collision_review(review)
-        rejected = await store.resolve(
-            created.review_id,
-            expected_generation=created.generation,
-            action=WikiMaintenanceReviewAction.REJECT,
-        )
-        with pytest.raises(WikiMaintenanceReviewConflictError, match="before evidence refresh"):
-            await store.refresh_page_collision_review(
-                created.review_id,
-                expected_generation=created.generation,
-                expected_status=WikiMaintenanceReviewStatus.NEEDS_REVIEW,
-                review=_review(
-                    key=review.evidence_key,
-                    fingerprint=_revision("2"),
-                ),
-            )
-        unchanged = await store.get_review(created.review_id)
-        assert unchanged == rejected
-    finally:
-        await store.close()
-
-
-async def test_normal_run_cannot_persist_reserved_collision_evidence(tmp_path) -> None:
-    store = await WikiMaintenanceStore.open(tmp_path / "maintenance.sqlite")
-    try:
-        with pytest.raises(ValueError, match="trusted collision API"):
-            await _persist_review(
-                store,
-                _review(key=f"{TOPIC_PAGE_COLLISION_EVIDENCE_PREFIX}forged"),
-            )
-        assert await store.list_pending() == []
     finally:
         await store.close()
 

@@ -14,7 +14,7 @@ from arden.server.routers.wiki import router as wiki_router
 from arden.server.runtime import Runtime
 from arden.wiki.approval_store import WikiRenameApprovalStore
 from arden.wiki.approvals import WikiRenameApprovalCoordinator
-from arden.wiki.maintenance.runner import WikiMaintenance, record_page_collision_review
+from arden.wiki.constants import WIKI_MAINTENANCE_FACT_DUPLICATE_EVIDENCE_PREFIX
 from arden.wiki.maintenance.store import WikiMaintenanceReviewInput, WikiMaintenanceStore
 from arden.wiki.pages import create_page
 from arden.wiki.service import WikiService
@@ -65,6 +65,7 @@ async def wiki_client(tmp_path: Path):
         wiki_service=service,
         health_calls=0,
         maintenance_resume_requests=0,
+        fact_maintenance_resume_requests=0,
         maintenance_review_notifications=[],
     )
 
@@ -80,9 +81,13 @@ async def wiki_client(tmp_path: Path):
     async def request_wiki_maintenance() -> None:
         runtime.maintenance_resume_requests += 1
 
+    async def request_fact_maintenance() -> None:
+        runtime.fact_maintenance_resume_requests += 1
+
     runtime.project_wiki_health = project_wiki_health
     runtime.project_wiki_state = project_wiki_state
     runtime.request_wiki_maintenance = request_wiki_maintenance
+    runtime.request_fact_maintenance = request_fact_maintenance
     runtime.notify_wiki_maintenance_reviews_changed = notify_wiki_maintenance_reviews_changed
     app.state.runtime = runtime
     app.include_router(wiki_router)
@@ -280,19 +285,20 @@ async def _pending_maintenance_review(
     key: str,
     proposal: dict | None,
 ):
+    review = WikiMaintenanceReviewInput(
+        blocking_commit_id=commit,
+        evidence_key=key,
+        evidence_fingerprint="f" * 64,
+        summary="Needs a human decision.",
+        proposal_json=proposal,
+    )
+    if key.startswith(WIKI_MAINTENANCE_FACT_DUPLICATE_EVIDENCE_PREFIX):
+        return await store.record_fact_duplicate_review(review)
     result = await store.apply_run(
         expected_revision=None,
         ordered_commit_ids=(commit,),
         reviewed_through=commit,
-        reviews=(
-            WikiMaintenanceReviewInput(
-                blocking_commit_id=commit,
-                evidence_key=key,
-                evidence_fingerprint="f" * 64,
-                summary="Needs a human decision.",
-                proposal_json=proposal,
-            ),
-        ),
+        reviews=(review,),
     )
     return result.reviews[0]
 
@@ -383,27 +389,6 @@ async def test_maintenance_review_routes_sanitize_proposals_and_resolve_with_gen
             "limit_bytes": 100,
         },
     )
-    merge_review = await _pending_maintenance_review(
-        store,
-        commit="9" * 64,
-        key="page-merge",
-        proposal={
-            "kind": "page_merge",
-            "reason": f"wiki maintenance {'9' * 64} {'8' * 64}",
-            "replay_fingerprint": "8" * 64,
-            "summary": "Merge Old Arden into Arden.",
-            "canonical_page_id": "arden",
-            "canonical_expected_version": "7" * 64,
-            "canonical_title": "Arden",
-            "loser_page_id": "old-arden",
-            "loser_expected_version": "6" * 64,
-            "loser_title": "Old Arden",
-            "link_count": 3,
-            "page_count": 2,
-            "redirect_count": 0,
-        },
-    )
-
     pending = client.get("/admin/wiki/maintenance-reviews")
     assert pending.status_code == 200
     reviews = {review["review_id"]: review for review in pending.json()["reviews"]}
@@ -423,19 +408,6 @@ async def test_maintenance_review_routes_sanitize_proposals_and_resolve_with_gen
         "actualBytesAtLeast": False,
         "limitBytes": 100,
     }
-    assert reviews[merge_review.review_id]["proposal"] == {
-        "kind": "page_merge",
-        "summary": "Merge Old Arden into Arden.",
-        "canonicalPageId": "arden",
-        "canonicalTitle": "Arden",
-        "loserPageId": "old-arden",
-        "loserTitle": "Old Arden",
-        "linkCount": 3,
-        "pageCount": 2,
-        "redirectCount": 0,
-    }
-    assert "expected_version" not in str(reviews[merge_review.review_id]["proposal"])
-
     for non_executable in (manual, empty):
         response = client.post(
             f"/admin/wiki/maintenance-reviews/{non_executable.review_id}/accept",
@@ -489,6 +461,7 @@ async def test_maintenance_review_routes_sanitize_proposals_and_resolve_with_gen
     assert manual_response.json()["decision_note"] == "checked externally"
     assert client.app.state.runtime.health_calls == 0
     assert client.app.state.runtime.maintenance_resume_requests == 4
+    assert client.app.state.runtime.fact_maintenance_resume_requests == 0
     assert client.app.state.runtime.maintenance_review_notifications == [
         "a" * 64,
         "f" * 64,
@@ -530,48 +503,23 @@ async def test_maintenance_decision_surfaces_resume_request_failures(wiki_client
 
 
 @pytest.mark.asyncio
-async def test_http_accept_schedules_then_runner_applies_page_merge(wiki_client):
-    client, service, _rename_store, store = wiki_client
-    service.create_page(path="arden.md", title="Arden", page_id="arden")
-    service.create_page(
-        path="old-arden.md",
-        title="Old Arden",
-        page_id="old-arden",
-        body=b"Legacy note.\n",
-    )
-    service.create_page(
-        path="source.md",
-        title="Source",
-        page_id="source",
-        body=b"[[old-arden]]\n",
-    )
-    review = await record_page_collision_review(
+async def test_duplicate_page_decision_resumes_fact_maintenance(wiki_client):
+    client, _service, _rename_store, store = wiki_client
+    review = await _pending_maintenance_review(
         store,
-        service,
-        canonical_page_id="arden",
-        loser_page_id="old-arden",
+        commit="d" * 64,
+        key=f"{WIKI_MAINTENANCE_FACT_DUPLICATE_EVIDENCE_PREFIX}first:second",
+        proposal=None,
     )
-    head_before_decision = service.repository.head
 
     response = client.post(
-        f"/admin/wiki/maintenance-reviews/{review.review_id}/accept",
+        f"/admin/wiki/maintenance-reviews/{review.review_id}/reject",
         json={"generation": review.generation},
     )
 
     assert response.status_code == 200
-    assert response.json()["status"] == "accepted"
     assert client.app.state.runtime.maintenance_resume_requests == 1
-    assert service.repository.head == head_before_decision
-
-    async def unexpected_review(_report):
-        raise AssertionError("an accepted collision must resume without another completion")
-
-    result = await WikiMaintenance(store, service, unexpected_review).run()
-
-    assert result.reload_required and result.updated_pages == 1
-    assert service.repository.get("old-arden").state.value == "archived"
-    assert b"[[Arden]]" in service.repository.read("source")
-    assert not [page for page in service.list_pages(include_redirects=True) if page.page.lifecycle == "redirect"]
+    assert client.app.state.runtime.fact_maintenance_resume_requests == 1
 
 
 @pytest.mark.asyncio

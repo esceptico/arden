@@ -3,7 +3,6 @@
 from hashlib import sha256
 
 import arden.wiki.changes as changes
-import arden.wiki.merge as page_merge
 import arden.wiki.rename as rename
 import arden.wiki.snapshots as snapshots
 from arden.revisions.errors import CorruptRepositoryError, RevisionConflictError
@@ -28,7 +27,6 @@ from arden.wiki.exceptions import (
 from arden.wiki.models import (
     GeneratedPageTarget,
     LinkReference,
-    PageMergePlan,
     RenamePlan,
     WikiChangesReport,
     WikiLinkReport,
@@ -370,76 +368,6 @@ class WikiService:
             tuple((item.page_id, item.expected_version, item.title, item.aliases, item.body) for item in updates),
         )
         return self.repository.commit(ChangeSet(tuple(operations), actor, origin, reason, key, base_head)).commit_id
-
-    def prepare_maintenance_merge(
-        self,
-        *,
-        canonical_page_id: str,
-        canonical_expected_version: str,
-        loser_page_id: str,
-        loser_expected_version: str,
-        base_head: str,
-    ) -> PageMergePlan:
-        snapshots.require_head(self.repository.head, base_head)
-        snapshot = snapshots.snapshot(self.repository, strict_names=False, at=base_head)
-        return page_merge.prepare_plan(
-            snapshot,
-            canonical_page_id=canonical_page_id,
-            canonical_expected_version=canonical_expected_version,
-            loser_page_id=loser_page_id,
-            loser_expected_version=loser_expected_version,
-        )
-
-    def prepare_current_maintenance_merge(
-        self,
-        *,
-        canonical_page_id: str,
-        loser_page_id: str,
-    ) -> PageMergePlan:
-        snapshot = snapshots.snapshot(self.repository, strict_names=False)
-        if snapshot.head is None:
-            raise WikiValidationError("page merge requires a committed wiki snapshot")
-        records = snapshots.index(snapshot, strict_names=False).pages
-        canonical = records.get(canonical_page_id)
-        loser = records.get(loser_page_id)
-        if canonical is None or canonical.page.lifecycle != "active":
-            raise KeyError(f"unknown active wiki page: {canonical_page_id}")
-        if loser is None or loser.page.lifecycle != "active":
-            raise KeyError(f"unknown active wiki page: {loser_page_id}")
-        return page_merge.prepare_plan(
-            snapshot,
-            canonical_page_id=canonical_page_id,
-            canonical_expected_version=canonical.resource.version_id,
-            loser_page_id=loser_page_id,
-            loser_expected_version=loser.resource.version_id,
-        )
-
-    def apply_maintenance_merge(
-        self,
-        plan: PageMergePlan,
-        *,
-        reason: str,
-        actor: str = WIKI_MAINTENANCE_ACTOR,
-        origin: str = WIKI_MAINTENANCE_ORIGIN,
-    ) -> str:
-        snapshot = snapshots.snapshot(self.repository, strict_names=False, at=plan.base_head)
-        canonical = page_merge.prepare_plan(
-            snapshot,
-            canonical_page_id=plan.canonical_page_id,
-            canonical_expected_version=plan.canonical_expected_version,
-            loser_page_id=plan.loser_page_id,
-            loser_expected_version=plan.loser_expected_version,
-        )
-        if plan != canonical:
-            raise WikiValidationError("page merge plan does not match its pinned snapshot")
-        canonical_record = snapshots.index(snapshot, strict_names=False).pages[plan.canonical_page_id]
-        operations = [Archive(plan.loser_page_id, plan.loser_expected_version)]
-        if plan.canonical_content != canonical_record.content:
-            operations.append(Update(plan.canonical_page_id, plan.canonical_expected_version, plan.canonical_content))
-        operations.extend(Update(item.resource_id, item.expected_version, item.content) for item in plan.rewrites)
-        return self.repository.commit(
-            ChangeSet(tuple(operations), actor, origin, reason, plan.idempotency_key, plan.base_head)
-        ).commit_id
 
     def restore_maintenance_change(
         self, page_id: str, maintenance_commit_id: str, *, expected_version: str, expected_head: str

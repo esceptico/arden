@@ -96,10 +96,8 @@ wiki_maintenance_review_tool = tool(
     display_description="Advance one constrained Wiki Maintenance review.",
     description=(
         "Start with action='next'. Review exactly one prepared, version-pinned wiki change report. "
-        "Submit one decision. Duplicate pages may be proposed only as outcome='needs_review' with a concern and a nested "
-        "merge object containing canonical_page_token and loser_page_token; the backend applies it only after durable "
-        "user acceptance. Correct any rejected "
-        "decision and continue until completion. "
+        "Submit one decision. If pages may describe the same subject, use outcome='needs_review' with a clear concern; "
+        "this workflow never combines or archives pages. Correct any rejected decision and continue until completion. "
         "This is the only mutation surface for Wiki Maintenance."
     ),
     input_model=WikiMaintenanceReviewInput,

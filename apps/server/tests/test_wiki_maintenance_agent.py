@@ -3,7 +3,6 @@ from datetime import UTC, datetime
 import pytest
 
 from arden.agent import Usage
-from arden.automation.builtins import WIKI_MAINTENANCE_PROMPT
 from arden.config import Config
 from arden.constants import BUILTIN_WIKI_MAINTENANCE_ID
 from arden.context.models import SessionState
@@ -14,16 +13,12 @@ from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContex
 from arden.tools.core.registry import ToolRegistry
 from arden.tools.wiki_maintenance import (
     WIKI_MAINTENANCE_SERVICE,
-    WikiMaintenanceReviewInput,
     wiki_maintenance_review_tool,
 )
 from arden.wiki.maintenance.agent import WikiMaintenanceReviewService
 from arden.wiki.maintenance.runner import (
-    WikiMaintenance,
-    WikiMaintenanceConcernDraft,
     WikiMaintenanceDecision,
     WikiMaintenanceError,
-    WikiMaintenanceMergeDraft,
     WikiMaintenancePreparedReport,
     WikiMaintenanceResult,
 )
@@ -56,43 +51,6 @@ def _report() -> WikiMaintenancePreparedReport:
     )
 
 
-def _merge_report() -> WikiMaintenancePreparedReport:
-    canonical = WikiPageRecord(
-        page=WikiPage(
-            page_id="canonical",
-            title="Canonical",
-            aliases=(),
-            lifecycle="active",
-            redirect_to=None,
-            body=b"Canonical note",
-            metadata={},
-        ),
-        resource=ResourceVersion("canonical", "canonical.md", "a" * 64, ResourceState.ACTIVE, "b" * 64),
-        content=b"---\ntitle: Canonical\n---\nCanonical note",
-    )
-    loser = WikiPageRecord(
-        page=WikiPage(
-            page_id="loser",
-            title="Legacy",
-            aliases=(),
-            lifecycle="active",
-            redirect_to=None,
-            body=b"Legacy note",
-            metadata={},
-        ),
-        resource=ResourceVersion("loser", "legacy.md", "c" * 64, ResourceState.ACTIVE, "d" * 64),
-        content=b"---\ntitle: Legacy\n---\nLegacy note",
-    )
-    return WikiMaintenancePreparedReport(
-        commit_id="c" * 64,
-        base_head="d" * 64,
-        evidence_fingerprint="e" * 64,
-        replay_fingerprint="f" * 64,
-        markdown="# Wiki maintenance review\n\nP001 and P002",
-        page_tokens={"P001": canonical, "P002": loser},
-    )
-
-
 class _Maintenance:
     def __init__(self, reviewer, report: WikiMaintenancePreparedReport) -> None:
         self.reviewer = reviewer
@@ -106,16 +64,6 @@ class _Maintenance:
 
     async def run(self) -> WikiMaintenanceResult:
         await self.reviewer(self.report)
-        return WikiMaintenanceResult("a" * 64, "a" * 64, reviewed_commits=1, complete=True)
-
-
-class _MergeValidationMaintenance(WikiMaintenance):
-    def __init__(self, reviewer, report: WikiMaintenancePreparedReport) -> None:
-        super().__init__(object(), object(), reviewer)
-        self.report = report
-
-    async def run(self) -> WikiMaintenanceResult:
-        await self._reviewer(self.report)
         return WikiMaintenanceResult("a" * 64, "a" * 64, reviewed_commits=1, complete=True)
 
 
@@ -187,54 +135,6 @@ async def test_maintenance_tool_rejects_invalid_decision_without_advancing() -> 
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("canonical_page_token", "loser_page_token", "error"),
-    (
-        ("P404", "P002", "unknown page token"),
-        ("P001", "P001", "distinct page tokens"),
-    ),
-)
-async def test_review_service_rejects_bad_merge_tokens_and_accepts_corrected_decision(
-    canonical_page_token: str,
-    loser_page_token: str,
-    error: str,
-) -> None:
-    report = _merge_report()
-    review = WikiMaintenanceReviewService.create(lambda reviewer: _MergeValidationMaintenance(reviewer, report))
-    assert review is not None
-
-    pending = await review.next()
-    assert pending.report == report
-    concern = WikiMaintenanceConcernDraft(
-        key="duplicate-page", summary="Merge duplicate pages", proposal="Keep the canonical page."
-    )
-    with pytest.raises(WikiMaintenanceError, match=error):
-        await review.decide(
-            WikiMaintenanceDecision(
-                outcome="needs_review",
-                concern=concern,
-                merge=WikiMaintenanceMergeDraft(
-                    canonical_page_token=canonical_page_token,
-                    loser_page_token=loser_page_token,
-                ),
-            )
-        )
-
-    assert review.accepted_decisions == 0
-    assert (await review.next()).report == report
-    completed = await review.decide(
-        WikiMaintenanceDecision(
-            outcome="needs_review",
-            concern=concern,
-            merge=WikiMaintenanceMergeDraft(canonical_page_token="P001", loser_page_token="P002"),
-        )
-    )
-
-    assert completed.result is not None and completed.result.complete
-    assert review.accepted_decisions == 1
-
-
-@pytest.mark.asyncio
 async def test_runtime_uses_the_exact_wiki_agent_scope_and_rejects_early_exit(tmp_path, monkeypatch) -> None:
     config = Config(
         arden_dir=tmp_path,
@@ -289,18 +189,6 @@ async def test_runtime_uses_the_exact_wiki_agent_scope_and_rejects_early_exit(tm
             await runtime.automation._run_wiki_maintenance(None)
     finally:
         await runtime.close()
-
-
-def test_runtime_prompt_and_tool_schema_expose_durable_page_merge_proposals() -> None:
-    schema = WikiMaintenanceReviewInput.model_json_schema()
-    serialized = str(schema)
-
-    assert "canonical_page_token" in serialized
-    assert "loser_page_token" in serialized
-    assert "page merge" in WIKI_MAINTENANCE_PROMPT.lower()
-    assert "zero redirects" in WIKI_MAINTENANCE_PROMPT
-    assert "nested merge object" in WIKI_MAINTENANCE_PROMPT
-    assert "nested merge object" in wiki_maintenance_review_tool.description
 
 
 @pytest.mark.asyncio

@@ -14,7 +14,7 @@ from arden.memory.facts.ledger import FactLedger
 from arden.memory.facts.models import Fact, FactChangeFeed
 from arden.revisions.models import ResourceState
 from arden.wiki.models import GeneratedPageTarget, WikiPageRecord
-from arden.wiki.pages import parse_page
+from arden.wiki.pages import extract_user_body, parse_page
 from arden.wiki.service import WikiService
 
 CONSUMER_ID = "memory.synthesis"
@@ -36,7 +36,7 @@ class SynthesisFact:
 class FactSynthesisRenderer(Protocol):
     """Renders cited Markdown from opaque fact tokens only."""
 
-    async def render(self, *, title: str, facts: tuple[SynthesisFact, ...]) -> str: ...
+    async def render(self, *, title: str, facts: tuple[SynthesisFact, ...], existing_body: str) -> str: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,7 +113,7 @@ class FactSynthesis:
                 skipped_under_threshold=skipped_under_threshold,
                 empty=not feed.events,
             )
-        rendered = await self._render_targets(targets, facts)
+        rendered = await self._render_targets(targets, facts, base_head)
         commit = await asyncio.to_thread(
             self._validate_and_publish,
             feed,
@@ -332,7 +332,10 @@ class FactSynthesis:
         return candidate, None
 
     async def _render_targets(
-        self, routes: tuple[_Route, ...], facts: Mapping[str, Fact]
+        self,
+        routes: tuple[_Route, ...],
+        facts: Mapping[str, Fact],
+        base_head: str | None,
     ) -> tuple[GeneratedPageTarget, ...]:
         rendered: list[GeneratedPageTarget] = []
         for route in routes:
@@ -346,7 +349,11 @@ class FactSynthesis:
                 tokens = {f"F{index:03d}": fact for index, fact in enumerate(assigned, 1)}
                 prompt = tuple(SynthesisFact(token, fact.text, _source_summary(fact)) for token, fact in tokens.items())
                 try:
-                    prose = await self._renderer.render(title=route.title, facts=prompt)
+                    prose = await self._renderer.render(
+                        title=route.title,
+                        facts=prompt,
+                        existing_body=self._existing_user_body(route.page_id, base_head),
+                    )
                 except Exception as exc:
                     raise FactSynthesisError(f"renderer failed for {route.page_id}") from exc
                 generated, citations = _validate_and_humanize(prose, tokens)
@@ -360,6 +367,15 @@ class FactSynthesis:
                 GeneratedPageTarget(route.page_id, route.path, route.title, route.aliases, generated, metadata)
             )
         return tuple(rendered)
+
+    def _existing_user_body(self, page_id: str, base_head: str | None) -> str:
+        if base_head is None:
+            return ""
+        try:
+            record = self._wiki.read_page(page_id, at=base_head)
+        except KeyError:
+            return ""
+        return extract_user_body(record.content, expected_page_id=page_id).decode()
 
     def _validate_and_publish(
         self,
