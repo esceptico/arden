@@ -31,10 +31,14 @@ _MAX_FACT_TEXT = 4_000
 _MAX_REASON = 1_000
 _REVIEW_SYSTEM_PROMPT = """Review one prepared canonical-fact cluster using only the supplied evidence.
 Return no_change when evidence is weak or ambiguous.
-For no_change, leave every action field null. You may only:
-- amend metadata on the changed fact: kind, labels, subjects, lifecycle, or evidence class;
-- merge two genuine duplicate claims from this cluster while preserving one as survivor.
-- normalize one exact subject of the changed fact to the title of a supplied canonical wiki page.
+Return exactly one outcome with only its action fields populated:
+- no_change: every action field must be null.
+- amend_metadata: target_token plus kind, labels, subjects, lifecycle, or evidence_class;
+  every merge and normalization field must be null.
+- merge_duplicate: distinct discard_token and survivor_token; every amendment and
+  normalization field must be null.
+- normalize_topic: old_topic and canonical_page_token; every amendment and merge
+  field must be null.
 
 Never create or rewrite fact text. Never review, expire, retract, age-archive, or perform
 general evidence-based supersession. Never edit wiki prose. An inferred fact cannot replace
@@ -72,16 +76,16 @@ class FactMaintenanceDecision(BaseModel):
     @model_validator(mode="after")
     def _validate_outcome_shape(self) -> Self:
         metadata = (self.kind, self.labels, self.subjects, self.lifecycle, self.evidence_class)
+        incompatible_metadata = (
+            self.kind,
+            self.labels or None,
+            self.subjects,
+            self.lifecycle,
+            self.evidence_class,
+        )
         normalization = (self.old_topic, self.canonical_page_token)
         if self.outcome == "no_change":
-            if (
-                self.target_token is not None
-                or self.kind is not None
-                or bool(self.labels)
-                or self.subjects is not None
-                or self.lifecycle is not None
-                or self.evidence_class is not None
-            ):
+            if self.target_token is not None or any(value is not None for value in incompatible_metadata):
                 raise ValueError("no_change must not include an amendment")
             if self.discard_token is not None or self.survivor_token is not None:
                 raise ValueError("no_change must not include a merge")
@@ -99,14 +103,14 @@ class FactMaintenanceDecision(BaseModel):
                 raise ValueError("merge_duplicate requires both fact tokens")
             if self.discard_token == self.survivor_token:
                 raise ValueError("merge_duplicate tokens must be different")
-            if self.target_token is not None or any(value is not None for value in metadata):
+            if self.target_token is not None or any(value is not None for value in incompatible_metadata):
                 raise ValueError("merge_duplicate must not include an amendment")
             if any(value is not None for value in normalization):
                 raise ValueError("merge_duplicate must not include topic normalization")
         else:
             if self.old_topic is None or self.canonical_page_token is None:
                 raise ValueError("normalize_topic requires an old topic and canonical page token")
-            if self.target_token is not None or any(value is not None for value in metadata):
+            if self.target_token is not None or any(value is not None for value in incompatible_metadata):
                 raise ValueError("normalize_topic must not include an amendment")
             if self.discard_token is not None or self.survivor_token is not None:
                 raise ValueError("normalize_topic must not include a merge")
@@ -601,12 +605,11 @@ class FactMaintenance:
         reasons: list[str] = []
         for item in reviewed:
             decision = item.decision
+            self._validate_cluster_decision(item.cluster, item.target, decision)
             if decision.outcome == "no_change":
                 continue
             if decision.outcome == "amend_metadata":
                 reasons.append(decision.reason)
-                if decision.target_token != item.cluster.target_token:
-                    raise FactMaintenanceError("metadata amendment must target the changed fact")
                 target = self._token_fact(item.cluster, decision.target_token)
                 metadata = self._changed_metadata(target, decision)
                 if metadata:
@@ -618,12 +621,6 @@ class FactMaintenance:
             reasons.append(decision.reason)
             discard = self._token_fact(item.cluster, decision.discard_token)
             survivor = self._token_fact(item.cluster, decision.survivor_token)
-            if item.target.fact_id not in {discard.fact_id, survivor.fact_id}:
-                raise FactMaintenanceError("duplicate merge must include the changed fact")
-            if discard.scope != survivor.scope:
-                raise FactMaintenanceError("duplicate merge cannot cross fact scopes")
-            if discard.evidence_class == "direct" and survivor.evidence_class == "inferred":
-                raise FactMaintenanceError("inferred evidence cannot replace direct evidence")
             existing = merges.get(discard.fact_id)
             if existing is not None and existing[1].fact_id != survivor.fact_id:
                 raise FactMaintenanceError("one fact cannot have multiple duplicate survivors")
@@ -661,6 +658,44 @@ class FactMaintenance:
                 }
             )
         return changes, len(amendments), len(merges), tuple(dict.fromkeys(reasons))
+
+    @classmethod
+    def validate_cluster_decision(
+        cls,
+        cluster: FactMaintenancePreparedCluster,
+        decision: FactMaintenanceDecision,
+    ) -> None:
+        """Reject a decision that is invalid for its current pinned cluster."""
+        cls._validate_cluster_decision(cluster, cls._token_fact(cluster, cluster.target_token), decision)
+
+    @classmethod
+    def _validate_cluster_decision(
+        cls,
+        cluster: FactMaintenancePreparedCluster,
+        target: Fact,
+        decision: FactMaintenanceDecision,
+    ) -> None:
+        if decision.outcome == "no_change":
+            return
+        if decision.outcome == "amend_metadata":
+            if decision.target_token != cluster.target_token:
+                raise FactMaintenanceError("metadata amendment must target the changed fact")
+            cls._token_fact(cluster, decision.target_token)
+            return
+        if decision.outcome == "normalize_topic":
+            if decision.old_topic not in target.subjects:
+                raise FactMaintenanceError("topic normalization must use an exact subject of the changed fact")
+            if decision.canonical_page_token not in cluster.wiki_page_tokens:
+                raise FactMaintenanceError("topic normalization used an unknown wiki page token")
+            return
+        discard = cls._token_fact(cluster, decision.discard_token)
+        survivor = cls._token_fact(cluster, decision.survivor_token)
+        if target.fact_id not in {discard.fact_id, survivor.fact_id}:
+            raise FactMaintenanceError("duplicate merge must include the changed fact")
+        if discard.scope != survivor.scope:
+            raise FactMaintenanceError("duplicate merge cannot cross fact scopes")
+        if discard.evidence_class == "direct" and survivor.evidence_class == "inferred":
+            raise FactMaintenanceError("inferred evidence cannot replace direct evidence")
 
     @staticmethod
     def _wiki_page_tokens(snapshot: WikiSnapshot) -> Mapping[str, WikiPageRecord]:
