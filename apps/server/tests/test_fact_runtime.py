@@ -86,6 +86,27 @@ def _wiki_producer() -> Automation:
 
 
 @pytest.mark.asyncio
+async def test_runtime_does_not_initialize_canonical_memory_when_disabled(tmp_path) -> None:
+    config = _config(tmp_path).model_copy(update={"memory": False})
+    runtime = Runtime(config)
+
+    await runtime.connect()
+    try:
+        assert runtime.fact_service is None
+        assert runtime.wiki_repository is None
+        assert runtime.wiki_service is None
+        assert runtime.wiki_rename_coordinator is None
+        assert "wiki" not in runtime.tool_services
+
+        assert runtime.executor is not None
+        names = {schema["function"]["name"] for schema in runtime.executor.get_tools()}
+        assert "search_facts" not in names
+        assert "list_wiki_pages" not in names
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_runtime_wires_canonical_facts_and_survives_restart(tmp_path) -> None:
     config = _config(tmp_path)
     _seed_fact(config)

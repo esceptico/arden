@@ -271,7 +271,8 @@ class Runtime:
         init_tracing()
         llm_init(self.config)
         self.stores = await Stores.connect(self.config)
-        await self._init_wiki()
+        if self.config.memory:
+            await self._init_wiki()
         await self._init_facts(fact_ledger)
         await self._init_wiki_curator()
         await self.knowledge.connect(self.stores)
