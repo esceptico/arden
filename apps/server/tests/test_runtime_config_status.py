@@ -60,7 +60,6 @@ def test_update_config_request_rejects_non_positive_max_depth():
         ("max_messages", 1001),
         ("compression_keep_ratio", 1.01),
         ("summary_max_tokens", 8001),
-        ("consolidation_interval", 501),
     ],
 )
 def test_config_and_patch_share_the_settings_slider_bounds(field, value):

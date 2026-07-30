@@ -35,7 +35,6 @@ const CONFIG: ServerConfig = {
   max_messages: 100,
   compression_keep_ratio: 0.5,
   summary_max_tokens: 500,
-  consolidation_interval: 60,
   memory_enabled: true,
   integrations: {},
   tool_overrides: {},

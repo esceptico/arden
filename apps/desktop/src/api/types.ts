@@ -133,7 +133,6 @@ export interface ServerConfig {
   max_messages: number;
   compression_keep_ratio: number;
   summary_max_tokens: number;
-  consolidation_interval: number;
   memory_enabled: boolean;
   integrations: Record<string, Record<string, unknown>>;
   tool_overrides: Record<string, ToolOverrideDecision>;

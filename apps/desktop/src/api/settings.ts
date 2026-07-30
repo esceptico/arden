@@ -455,7 +455,6 @@ export type ServerConfigPatch = Partial<{
   max_messages: number;
   compression_keep_ratio: number;
   summary_max_tokens: number;
-  consolidation_interval: number;
   web_search: "auto" | "exa" | "ddgs" | "none";
   tool_overrides: Record<string, ToolOverrideDecision>;
   integrations: Partial<Record<GoogleIntegrationId, boolean | null>> & {

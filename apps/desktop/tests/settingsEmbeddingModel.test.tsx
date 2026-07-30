@@ -29,7 +29,6 @@ const CONFIG = {
   max_messages: 100,
   compression_keep_ratio: 0.5,
   summary_max_tokens: 1_000,
-  consolidation_interval: 10,
   memory_enabled: true,
   integrations: {},
   tool_overrides: {},

@@ -11,11 +11,7 @@ import { SettingsSection } from "@/features/settings/components/SettingsPage";
 
 type Draft = Pick<
   ServerConfig,
-  | "compression_threshold"
-  | "max_messages"
-  | "compression_keep_ratio"
-  | "summary_max_tokens"
-  | "consolidation_interval"
+  "compression_threshold" | "max_messages" | "compression_keep_ratio" | "summary_max_tokens"
 >;
 
 const KEYS: Array<keyof Draft> = [
@@ -23,7 +19,6 @@ const KEYS: Array<keyof Draft> = [
   "max_messages",
   "compression_keep_ratio",
   "summary_max_tokens",
-  "consolidation_interval",
 ];
 
 export function ContextTab({ serverConfig }: { serverConfig: ServerConfig | null }) {
@@ -39,13 +34,12 @@ export function ContextTab({ serverConfig }: { serverConfig: ServerConfig | null
       max_messages: serverConfig.max_messages,
       compression_keep_ratio: serverConfig.compression_keep_ratio,
       summary_max_tokens: serverConfig.summary_max_tokens,
-      consolidation_interval: serverConfig.consolidation_interval,
     });
   }, [serverConfig]);
 
   if (!serverConfig || !draft) {
     if (!connected) return <SettingsConnectionHint />;
-    return <SettingsTabSkeleton rows={5} label="Loading context settings…" />;
+    return <SettingsTabSkeleton rows={4} label="Loading context settings…" />;
   }
 
   const dirty = KEYS.some((k) => draft[k] !== serverConfig[k]);
@@ -118,17 +112,6 @@ export function ContextTab({ serverConfig }: { serverConfig: ServerConfig | null
             max={8000}
             step={64}
             onChange={(n) => update({ summary_max_tokens: n })}
-          />
-
-          <NumberField
-            label="Reflection interval"
-            suffix="messages"
-            help="How many user messages between knowledge reflection passes."
-            value={draft.consolidation_interval}
-            min={1}
-            max={500}
-            step={5}
-            onChange={(n) => update({ consolidation_interval: n })}
           />
         </div>
 

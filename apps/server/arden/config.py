@@ -104,7 +104,6 @@ PERSIST_KEYS = frozenset(
         "embedding_model",
         "memory",
         "memory_timezone",
-        "consolidation_interval",
         "integration_states",
         "gmail_days",
         "max_depth",
@@ -164,7 +163,6 @@ class Config(BaseSettings):
     # Memory
     memory: bool = True
     memory_timezone: str = Field(default_factory=lambda: _local_timezone_name())
-    consolidation_interval: int = Field(default=30, ge=1, le=500)
 
     # Integrations
     integration_states: dict[str, bool] = Field(default_factory=dict)

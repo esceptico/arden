@@ -520,7 +520,6 @@ class UpdateConfigRequest(BaseModel):
     max_messages: int | None = Field(default=None, ge=10, le=1000)
     compression_keep_ratio: float | None = Field(default=None, ge=0, le=1)
     summary_max_tokens: int | None = Field(default=None, ge=256, le=8000)
-    consolidation_interval: int | None = Field(default=None, ge=1, le=500)
     web_search: Literal["auto", "exa", "ddgs", "none"] | None = None
     tool_overrides: dict[str, ToolOverrideDecision] | None = None
     integrations: IntegrationToggles | None = None
